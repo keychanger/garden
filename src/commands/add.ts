@@ -1,13 +1,14 @@
+// Registers a new project by name and path in the garden config.
 import path from "node:path";
 import fs from "node:fs";
 import { loadConfig, saveConfig } from "../config.js";
 
-export async function add(args: string[]): Promise<void> {
+export async function register(args: string[]): Promise<void> {
   const name = args[0];
   const rawPath = args[1];
 
   if (!name || !rawPath) {
-    throw new Error("Usage: garden add <name> <path>");
+    throw new Error("Usage: garden register <name> <path>");
   }
 
   const resolved = path.resolve(rawPath);
@@ -22,5 +23,5 @@ export async function add(args: string[]): Promise<void> {
 
   config.projects[name] = { path: resolved };
   saveConfig(config);
-  console.log(`Added project '${name}' at ${resolved}`);
+  console.log(`Registered project '${name}' at ${resolved}`);
 }

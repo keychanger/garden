@@ -1,3 +1,4 @@
+// Initializes the ~/.garden directory, config file, and verifies tmux is installed.
 import fs from "node:fs";
 import { CONFIG_PATH, GARDEN_DIR, SESSIONS_DIR, saveConfig, loadConfig } from "../config.js";
 import { checkTmux } from "../session.js";
