@@ -1,9 +1,10 @@
-import { execFileSync, execSync } from "node:child_process";
+// Internal task loop that runs inside tmux, dispatching tasks to Claude Code sessions.
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { readState, writeState, getLogPath } from "./session.js";
-import { SESSIONS_DIR } from "./config.js";
-import { nextTask, getTask, markInProgress, markDone, type Task } from "./tasks.js";
+import { readState, writeState } from "./session.js";
+import { SESSIONS_DIR, GARDEN_DIR } from "./config.js";
+import { nextTask, getTask, markInProgress, type Task } from "./tasks.js";
 import { emit } from "./events.js";
 import { notify } from "./notify.js";
 
@@ -28,12 +29,11 @@ if (!name || !projectPath) {
   process.exit(1);
 }
 
-const logFile = getLogPath(name);
-
 function updateState(updates: Record<string, unknown>): void {
   const current = readState(name) ?? {
     mode,
     currentTaskId: null,
+    lastTaskId: null,
     startedAt: new Date().toISOString(),
     completedTasks: 0,
     pid: process.pid,
@@ -41,61 +41,94 @@ function updateState(updates: Record<string, unknown>): void {
   writeState(name, { ...current, ...updates });
 }
 
-function buildContext(task: Task): string {
-  // Build the garden context that gets injected into Claude's system prompt
-  const lines: string[] = [];
-  lines.push(`You are working in a garden-managed project called "${name}".`);
-  lines.push("");
-  lines.push("When you complete your task, run this command in the shell:");
-  lines.push(`  garden tasks done ${task.id}`);
-  lines.push("");
-  lines.push("If you get stuck and cannot complete the task, run:");
-  lines.push(`  garden tasks block ${task.id} "reason you are stuck"`);
-  lines.push("");
-  lines.push("If you discover additional work, add new tasks:");
-  lines.push(`  garden tasks add "description of new task"`);
-  lines.push("");
-  lines.push("Do not edit .garden/tasks.json directly — always use the garden CLI.");
-  return lines.join("\n");
+function loadRulesFile(filePath: string): string {
+  if (fs.existsSync(filePath)) {
+    return fs.readFileSync(filePath, "utf-8").trim();
+  }
+  return "";
 }
 
-function runClaude(task: Task): boolean {
-  console.log(`\n--- Task ${task.id}: ${task.description} ---\n`);
-  const context = buildContext(task);
+function buildContext(task: Task): string {
+  const sections: string[] = [];
 
-  // Write context to a temp file to avoid shell escaping issues
-  const contextFile = path.join(SESSIONS_DIR, `${name}.context`);
-  fs.mkdirSync(path.dirname(contextFile), { recursive: true });
-  fs.writeFileSync(contextFile, context);
+  // Core garden instructions
+  sections.push(`You are working in a garden-managed project called "${name}".
 
-  try {
+## Task management
+
+When you complete your task, run:
+  garden tasks done ${task.id}
+
+If you cannot complete the task, run:
+  garden tasks block ${task.id} "specific reason you are blocked"
+
+If you discover additional work, run:
+  garden tasks add "description of new task"
+
+Do not edit .garden/tasks.json directly — always use the garden CLI.
+
+## Agent behavior
+
+Do not ask clarifying questions. You are running non-interactively.
+- Make your best judgment and proceed.
+- If you truly cannot proceed without more information, block the task with a specific description of what you need.
+- Never produce partial work and stop. Either complete the task fully or block it.
+- If a task is ambiguous, make a reasonable choice and document what you chose in the task notes: garden tasks update ${task.id} --note "chose X because Y"`);
+
+  // Global rules (~/.garden/rules.md)
+  const globalRules = loadRulesFile(path.join(GARDEN_DIR, "rules.md"));
+  if (globalRules) {
+    sections.push(`## Global rules\n\n${globalRules}`);
+  }
+
+  // Project rules (<project>/.garden/rules.md)
+  const projectRules = loadRulesFile(path.join(projectPath, ".garden", "rules.md"));
+  if (projectRules) {
+    sections.push(`## Project rules\n\n${projectRules}`);
+  }
+
+  // Task context
+  if (task.notes.length > 0) {
+    sections.push(`## Task notes\n\n${task.notes.map(n => `- ${n}`).join("\n")}`);
+  }
+
+  return sections.join("\n\n");
+}
+
+function runClaude(task: Task): Promise<boolean> {
+  return new Promise((resolve) => {
+    console.log(`\n--- Task ${task.id}: ${task.description} ---\n`);
+
+    const contextFile = path.join(SESSIONS_DIR, `${name}.context`);
+    fs.mkdirSync(path.dirname(contextFile), { recursive: true });
+    fs.writeFileSync(contextFile, buildContext(task));
+
+    const sessionName = `garden-${name}-${task.id}`;
     const args = [
       "-p",
       "--verbose",
       task.description,
+      "--name", sessionName,
       "--append-system-prompt-file", contextFile,
       "--allowedTools", "Bash", "Edit", "Write", "Read", "Glob", "Grep",
     ];
 
-    const output = execFileSync("claude", args, {
+    // Spawn claude in print mode — output streams to the tmux terminal
+    const child = spawn("claude", args, {
       cwd: projectPath,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-      maxBuffer: 50 * 1024 * 1024,
+      stdio: "inherit",
       env: { ...process.env, GARDEN_PROJECT: name },
     });
 
-    fs.mkdirSync(path.dirname(logFile), { recursive: true });
-    fs.writeFileSync(logFile, output);
-    console.log(output);
-    return true;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`Claude error: ${message}`);
-    fs.mkdirSync(path.dirname(logFile), { recursive: true });
-    fs.writeFileSync(logFile, `Error: ${message}`);
-    return false;
-  }
+    child.on("close", (code) => {
+      resolve(code === 0);
+    });
+
+    child.on("error", (err) => {
+      console.error(`Failed to start claude: ${err.message}`);
+      resolve(false);
+    });
+  });
 }
 
 function waitForSignal(): Promise<void> {
@@ -115,11 +148,10 @@ async function run(): Promise<void> {
   let completed = 0;
 
   while (true) {
-    // Get next task — either the explicitly requested one, or next pending
     let task: Task | null = null;
     if (startTaskId) {
       task = getTask(projectPath, startTaskId);
-      startTaskId = null; // only use this once
+      startTaskId = null;
     } else {
       task = nextTask(projectPath);
     }
@@ -133,16 +165,15 @@ async function run(): Promise<void> {
       continue;
     }
 
-    // Set task to in_progress
     markInProgress(projectPath, task.id);
     updateState({ currentTaskId: task.id });
     emit(name, "task_start", { taskId: task.id, description: task.description });
 
-    const ok = runClaude(task);
+    const ok = await runClaude(task);
 
-    // Check task status — Claude may have marked it done/blocked via CLI
+    // Check task status — Claude should have called garden tasks done/block
     const updatedTask = getTask(projectPath, task.id);
-    const finalStatus = updatedTask?.status ?? (ok ? "done" : "failed");
+    const finalStatus = updatedTask?.status ?? "in_progress";
 
     if (finalStatus === "done") {
       completed++;
@@ -152,19 +183,13 @@ async function run(): Promise<void> {
       const reason = updatedTask?.notes[updatedTask.notes.length - 1] ?? "";
       emit(name, "task_blocked", { taskId: task.id, description: task.description, reason });
       notify("Garden", `${name} blocked: ${task.description} — ${reason}`);
-    } else if (finalStatus === "in_progress" && ok) {
-      // Claude exited successfully but didn't explicitly mark done — auto-complete
-      markDone(projectPath, task.id);
-      completed++;
-      emit(name, "task_done", { taskId: task.id, description: task.description });
-      notify("Garden", `${name} finished: ${task.description}`);
     } else {
-      // Claude errored out or task still in_progress after failure
-      emit(name, "task_failed", { taskId: task.id, description: task.description });
-      notify("Garden", `${name} failed: ${task.description}`);
+      const eventType = ok ? "task_incomplete" : "task_failed";
+      emit(name, eventType, { taskId: task.id, description: task.description });
+      notify("Garden", `${name} ${ok ? "incomplete" : "failed"}: ${task.description}`);
     }
 
-    updateState({ currentTaskId: null, completedTasks: completed });
+    updateState({ currentTaskId: null, lastTaskId: task.id, completedTasks: completed });
 
     // Re-read mode from state file (garden pause may have changed it)
     const currentState = readState(name);

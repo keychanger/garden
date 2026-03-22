@@ -1,3 +1,4 @@
+// Manages tmux sessions and per-session state files for garden projects.
 import { execSync, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -6,6 +7,7 @@ import { SESSIONS_DIR } from "./config.js";
 export interface SessionState {
   mode: "paused" | "auto";
   currentTaskId: string | null;
+  lastTaskId: string | null;
   startedAt: string;
   completedTasks: number;
   pid: number | null;
@@ -13,10 +15,6 @@ export interface SessionState {
 
 function statePath(name: string): string {
   return path.join(SESSIONS_DIR, `${name}.state`);
-}
-
-function logPath(name: string): string {
-  return path.join(SESSIONS_DIR, `${name}.log`);
 }
 
 export function tmuxSessionName(name: string): string {
@@ -100,21 +98,6 @@ export function writeState(name: string, state: SessionState): void {
 export function clearState(name: string): void {
   const p = statePath(name);
   if (fs.existsSync(p)) fs.unlinkSync(p);
-}
-
-export function readLog(name: string): string {
-  const p = logPath(name);
-  if (!fs.existsSync(p)) return "(no log output)";
-  return fs.readFileSync(p, "utf-8");
-}
-
-export function clearLog(name: string): void {
-  const p = logPath(name);
-  if (fs.existsSync(p)) fs.unlinkSync(p);
-}
-
-export function getLogPath(name: string): string {
-  return logPath(name);
 }
 
 export function sendSignal(name: string): void {

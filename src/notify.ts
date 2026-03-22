@@ -1,3 +1,4 @@
+// Sends macOS desktop notifications via osascript.
 import { execFile } from "node:child_process";
 
 export function notify(title: string, message: string): void {

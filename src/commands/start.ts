@@ -1,6 +1,7 @@
+// Starts a new tmux session running the garden worker for a project.
 import path from "node:path";
 import fs from "node:fs";
-import { getProject } from "../config.js";
+import { resolveProjectFromArgs, loadConfig } from "../config.js";
 import {
   checkTmux,
   tmuxSessionExists,
@@ -12,13 +13,16 @@ import { addTask } from "../tasks.js";
 import { emit } from "../events.js";
 
 export async function start(args: string[]): Promise<void> {
-  const name = args[0];
-  if (!name) {
-    throw new Error("Usage: garden start <name> [--auto] [prompt]");
+  checkTmux();
+
+  if (args[0] === "--all" || args[0] === "-a") {
+    const auto = args.includes("--auto");
+    await startAll(auto);
+    return;
   }
 
-  checkTmux();
-  const project = getProject(name);
+  const { project, remainingArgs } = resolveProjectFromArgs(args);
+  const name = project.name;
 
   if (tmuxSessionExists(name)) {
     throw new Error(
@@ -26,11 +30,10 @@ export async function start(args: string[]): Promise<void> {
     );
   }
 
-  const remaining = args.slice(1);
   let auto = false;
   const promptParts: string[] = [];
 
-  for (const arg of remaining) {
+  for (const arg of remainingArgs) {
     if (arg === "--auto") {
       auto = true;
     } else {
@@ -73,6 +76,7 @@ export async function start(args: string[]): Promise<void> {
   writeState(name, {
     mode: auto ? "auto" : "paused",
     currentTaskId: null,
+    lastTaskId: null,
     startedAt: new Date().toISOString(),
     completedTasks: 0,
     pid: null,
@@ -81,9 +85,67 @@ export async function start(args: string[]): Promise<void> {
   createTmuxSession(name, command, project.path);
   emit(name, "session_start", { mode: auto ? "auto" : "paused" });
 
-  const modeLabel = auto ? "auto" : "paused";
-  const taskLabel = prompt ? `task: ${prompt}` : "picking up from task list";
-  console.log(`Started session '${name}' (${modeLabel}) — ${taskLabel}`);
+  const modeLabel = auto ? " (auto)" : "";
+  const detail = prompt ? ` — "${prompt}"` : "";
+  console.log(`Started ${name}${modeLabel}${detail}`);
+}
+
+async function startAll(auto: boolean): Promise<void> {
+  const config = loadConfig();
+  const projectNames = Object.keys(config.projects);
+  if (projectNames.length === 0) {
+    console.log("No projects registered.");
+    return;
+  }
+
+  let started = 0;
+  let skipped = 0;
+  for (const name of projectNames) {
+    if (tmuxSessionExists(name)) {
+      console.log(`Skipping '${name}' — already running.`);
+      skipped++;
+      continue;
+    }
+
+    const project = config.projects[name];
+    const workerArgs = ["_worker", name, project.path];
+    if (auto) workerArgs.push("--auto");
+
+    const gardenBin = path.resolve(process.argv[1]);
+    let runner: string;
+    if (gardenBin.endsWith(".ts")) {
+      const gardenRoot = path.dirname(path.dirname(gardenBin));
+      const tsxBin = path.join(gardenRoot, "node_modules", ".bin", "tsx");
+      runner = fs.existsSync(tsxBin) ? `${tsxBin} ${gardenBin}` : `npx tsx ${gardenBin}`;
+    } else {
+      runner = `node ${gardenBin}`;
+    }
+
+    const command = `GARDEN_PROJECT=${shellEscape(name)} ${runner} ${workerArgs.map(shellEscape).join(" ")}`;
+
+    if (process.env.GARDEN_DEBUG) {
+      console.error(`[debug] tmux command: ${command}`);
+    }
+
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    writeState(name, {
+      mode: auto ? "auto" : "paused",
+      currentTaskId: null,
+      lastTaskId: null,
+      startedAt: new Date().toISOString(),
+      completedTasks: 0,
+      pid: null,
+    });
+
+    createTmuxSession(name, command, project.path);
+    emit(name, "session_start", { mode: auto ? "auto" : "paused" });
+
+    const modeLabel = auto ? " (auto)" : "";
+    console.log(`Started ${name}${modeLabel}`);
+    started++;
+  }
+
+  console.log(`\nStarted ${started} session(s)${skipped > 0 ? `, skipped ${skipped} already running` : ""}.`);
 }
 
 function shellEscape(s: string): string {
