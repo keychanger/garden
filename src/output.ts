@@ -1,3 +1,4 @@
+// TTY-aware output helpers: pretty-prints for terminals, JSON for pipes.
 const isTTY = process.stdout.isTTY ?? false;
 
 export function output(data: unknown, pretty?: (data: unknown) => string): void {

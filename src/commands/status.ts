@@ -1,3 +1,4 @@
+// Shows session status for one or all projects.
 import { loadConfig, getProject } from "../config.js";
 import { tmuxSessionExists, readState } from "../session.js";
 import { output, outputLines } from "../output.js";

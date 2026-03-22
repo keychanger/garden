@@ -1,3 +1,4 @@
+// CRUD operations for per-project task lists stored in .garden/tasks.json.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -48,7 +49,23 @@ function writeTasks(projectPath: string, tasks: Task[]): void {
 
 export function nextTask(projectPath: string): Task | null {
   const tasks = readTasks(projectPath);
-  return tasks.find((t) => t.status === "pending") ?? null;
+  // Pick up interrupted tasks first, then pending
+  return tasks.find((t) => t.status === "in_progress")
+    ?? tasks.find((t) => t.status === "pending")
+    ?? null;
+}
+
+export function resetInProgress(projectPath: string): number {
+  const tasks = readTasks(projectPath);
+  let count = 0;
+  for (const task of tasks) {
+    if (task.status === "in_progress") {
+      task.status = "pending";
+      count++;
+    }
+  }
+  if (count > 0) writeTasks(projectPath, tasks);
+  return count;
 }
 
 export function addTask(projectPath: string, description: string): Task {
@@ -105,4 +122,13 @@ export function markBlocked(projectPath: string, id: string, reason?: string): T
 
 export function markInProgress(projectPath: string, id: string): Task {
   return updateTask(projectPath, id, { status: "in_progress" });
+}
+
+export function removeTask(projectPath: string, id: string): Task {
+  const tasks = readTasks(projectPath);
+  const idx = tasks.findIndex((t) => t.id === id);
+  if (idx === -1) throw new Error(`Task not found: ${id}`);
+  const [removed] = tasks.splice(idx, 1);
+  writeTasks(projectPath, tasks);
+  return removed;
 }

@@ -1,3 +1,4 @@
+// Displays the event log, optionally filtered by a --since time range.
 import { readEvents, type GardenEvent } from "../events.js";
 import { outputLines } from "../output.js";
 

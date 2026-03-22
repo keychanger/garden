@@ -1,3 +1,4 @@
+// Append-only event log (JSONL) for tracking session and task activity.
 import fs from "node:fs";
 import path from "node:path";
 import { GARDEN_DIR } from "./config.js";

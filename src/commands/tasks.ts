@@ -1,5 +1,6 @@
+// CLI interface for task management: list, add, done, block, update, and next.
 import { resolveProject } from "../config.js";
-import { readTasks, addTask, markDone, markBlocked, updateTask, nextTask, type Task } from "../tasks.js";
+import { readTasks, addTask, markDone, markBlocked, updateTask, nextTask, removeTask, type Task } from "../tasks.js";
 import { emit } from "../events.js";
 import { output, outputLines } from "../output.js";
 
@@ -40,6 +41,15 @@ export async function tasks(args: string[]): Promise<void> {
         const tk = t as Task;
         return `Blocked ${tk.id}: ${tk.description}${reason ? ` — ${reason}` : ""}`;
       });
+      return;
+    }
+
+    case "remove": {
+      const id = parsed.rest[0];
+      if (!id) throw new Error("Usage: garden tasks [name] remove <id>");
+      const task = removeTask(project.path, id);
+      emit(project.name, "task_remove", { taskId: id, description: task.description });
+      output(task, (t) => `Removed task ${(t as Task).id}: ${(t as Task).description}`);
       return;
     }
 
@@ -88,7 +98,7 @@ export async function tasks(args: string[]): Promise<void> {
   }
 }
 
-const SUBCOMMANDS = new Set(["add", "done", "block", "update", "next"]);
+const SUBCOMMANDS = new Set(["add", "done", "block", "remove", "update", "next"]);
 
 function parseTaskArgs(args: string[]): {
   projectName: string | undefined;

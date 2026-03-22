@@ -1,3 +1,4 @@
+// Outputs project context (tasks, session state) for agent bootstrapping.
 import { resolveProject } from "../config.js";
 import { readTasks, type Task } from "../tasks.js";
 import { readState } from "../session.js";

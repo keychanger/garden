@@ -1,3 +1,4 @@
+// Reads and writes the global garden config (~/.garden/config.yml) and resolves project names.
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
@@ -44,16 +45,70 @@ export function getProject(name: string): ProjectConfig & { name: string } {
   return { ...project, name };
 }
 
+export function tryGetProject(name: string): (ProjectConfig & { name: string }) | null {
+  try {
+    const config = loadConfig();
+    const project = config.projects[name];
+    return project ? { ...project, name } : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Resolve project name from argument or GARDEN_PROJECT env var.
- * Used by commands that can run inside a session (tasks, context).
+ * Resolve project from args for session commands.
+ * Tries first arg as a project name. If not a known project, falls back to
+ * GARDEN_PROJECT env var or cwd detection, treating all args as non-name args.
+ * Returns the resolved project and remaining args.
+ */
+export function resolveProjectFromArgs(args: string[]): {
+  project: ProjectConfig & { name: string };
+  remainingArgs: string[];
+} {
+  // Try first arg as a project name
+  if (args[0] && tryGetProject(args[0])) {
+    return {
+      project: getProject(args[0]),
+      remainingArgs: args.slice(1),
+    };
+  }
+  // Fall back to env var or cwd detection
+  return {
+    project: resolveProject(),
+    remainingArgs: args,
+  };
+}
+
+/**
+ * Resolve project name from (in priority order):
+ * 1. Explicit argument
+ * 2. GARDEN_PROJECT env var (set inside sessions)
+ * 3. Current working directory (matches against registered project paths)
  */
 export function resolveProject(nameArg?: string): ProjectConfig & { name: string } {
-  const name = nameArg || process.env.GARDEN_PROJECT;
+  const name = nameArg || process.env.GARDEN_PROJECT || detectProjectFromCwd();
   if (!name) {
     throw new Error(
-      "No project specified. Pass a project name or set GARDEN_PROJECT."
+      "No project specified. Pass a project name, set GARDEN_PROJECT, or cd into a registered project."
     );
   }
   return getProject(name);
+}
+
+/**
+ * Detect project name by matching cwd against registered project paths.
+ */
+function detectProjectFromCwd(): string | undefined {
+  try {
+    const config = loadConfig();
+    const cwd = process.cwd();
+    for (const [name, project] of Object.entries(config.projects)) {
+      if (cwd === project.path || cwd.startsWith(project.path + "/")) {
+        return name;
+      }
+    }
+  } catch {
+    // Config not initialized yet
+  }
+  return undefined;
 }
