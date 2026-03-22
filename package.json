@@ -1,0 +1,24 @@
+{
+  "name": "garden",
+  "version": "0.1.0",
+  "description": "A minimal CLI orchestrator for managing Claude Code sessions across multiple projects.",
+  "type": "module",
+  "bin": {
+    "garden": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --outfile=dist/cli.js --banner:js='#!/usr/bin/env node'",
+    "dev": "tsx src/cli.ts",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
