@@ -91,10 +91,13 @@ export async function tasks(args: string[]): Promise<void> {
     }
 
     default: {
-      // List all tasks
-      const taskList = readTasks(project.path);
+      const hideDone = !args.includes("--done");
+      let taskList = readTasks(project.path);
+      if (hideDone) {
+        taskList = taskList.filter((t) => t.status !== "done" && t.status !== "failed");
+      }
       if (taskList.length === 0) {
-        console.log(`No tasks. Add one with: garden tasks${parsed.projectName ? ` ${parsed.projectName}` : ""} add <description>`);
+        console.log(hideDone ? "No active tasks." : "No tasks.");
         return;
       }
       outputLines(taskList, (item) => {
@@ -159,7 +162,9 @@ async function listAllTasks(args: string[]): Promise<void> {
   const names = Object.keys(config.projects).sort();
 
   // Filter by status if provided: --all --pending, --all --blocked, etc.
-  const statusFilter = args.find(a => a !== "--all" && a.startsWith("--"))?.replace("--", "") || null;
+  const flags = args.filter(a => a.startsWith("--") && a !== "--all");
+  const statusFilter = flags.find(f => f !== "--done")?.replace("--", "") || null;
+  const showDone = flags.includes("--done");
 
   const allTasks: GlobalTask[] = [];
   for (const name of names) {
@@ -167,6 +172,7 @@ async function listAllTasks(args: string[]): Promise<void> {
     const tasks = readTasks(projectPath);
     for (const task of tasks) {
       if (statusFilter && task.status !== statusFilter) continue;
+      if (!showDone && !statusFilter && (task.status === "done" || task.status === "failed")) continue;
       allTasks.push({ ...task, project: name });
     }
   }
