@@ -7,115 +7,137 @@ Garden is a personal tool — opinionated toward a single developer managing man
 ## Core Concepts
 
 ### Project
-A named reference to a directory on disk where Claude Code can operate. Projects are registered in a single config file. Each project has its own task list and session lifecycle.
+A named reference to a directory on disk where Claude Code can operate. Projects are registered with `garden register <name> <path>`. Each project has its own task list and session lifecycle.
 
 ### Session
-A Claude Code process running inside a tmux session. Sessions run in the background whether you're watching or not. You can attach to interact with Claude directly, detach to let it keep working, or leave it running headlessly. A project has at most one active session at a time.
+A Claude Code process running inside a tmux session in `-p` (print) mode. Sessions run in the background invisibly. You dispatch tasks, check status, and review results — you never interact with tmux directly. A project has at most one active session at a time.
 
 ### Task List
-A per-project JSON file (`.garden/tasks.json`) that tracks work items. Tasks have IDs, statuses, descriptions, and notes. Agents interact with tasks exclusively through the `garden tasks` CLI — never by editing the JSON directly. The CLI renders tasks in a human-readable format for terminal display.
+A per-project JSON file (`.garden/tasks.json`) that tracks work items. Tasks have IDs, statuses, descriptions, and notes. Agents interact with tasks exclusively through the `garden tasks` CLI — never by editing the JSON directly. The CLI renders tasks in a human-readable format for terminal display and outputs JSON when piped.
+
+### Task Statuses
+- `backlog` — captured for later, not yet ready to work
+- `pending` — ready to be picked up by a session
+- `in_progress` — currently being worked by a session
+- `done` — completed
+- `blocked` — agent could not proceed, needs human input
+- `failed` — agent encountered an unrecoverable error
 
 ### Session Lifecycle
 A session runs a loop:
 
-1. Call `garden tasks next` to get the next pending task
-2. Launch `claude -p` with the task, injecting garden context via `--append-system-prompt`
-3. Claude works the task and calls `garden tasks done <id>` when finished (or `garden tasks block <id>` if stuck)
-4. Garden emits a `task_done` or `task_blocked` event to the event log
+1. Pick the next `in_progress` or `pending` task
+2. Launch `claude -p` with the task description, injecting context via `--append-system-prompt-file`
+3. Claude works the task, calls `garden tasks done <id>` or `garden tasks block <id>`
+4. Garden emits an event to the event log and sends a macOS notification
 5. **Paused mode (default):** wait for `garden next` signal before continuing
 6. **Auto mode:** immediately pick up the next task
 
-When there are no remaining tasks, the session idles and emits an event.
+Each task gets a fresh Claude session (no conversation carry-over between tasks). When there are no remaining tasks, the session idles and emits an event.
 
-A session can also be started with an explicit prompt (`garden start website "fix the bug"`) which creates a temporary task and runs it.
+### Rules System
+Agent behavior is controlled by layered rules files injected into every Claude session:
+
+1. **Global rules** (`~/.garden/rules.md`) — methodology, testing, git workflow, agent behavior
+2. **Project rules** (`<project>/.garden/rules.md`) — project-specific conventions
+3. **Task notes** — per-task context from the task's notes field
+
+Rules are plain markdown, concatenated into the system prompt. Edit them directly.
 
 ### Layers
 
 ```
 Orchestrator (human now, agent later)
-  ├── reads: garden status, garden tasks, garden events
-  ├── decides: what to start, when to next, how to handle blocked
-  └── acts: garden start, garden next, garden tasks add, garden attach
+  reads: garden status, garden tasks --all, garden events
+  decides: what to start, when to advance, how to handle blocked tasks
+  acts: garden start, garden next, garden add, garden stop
 
-Garden CLI (the API for both layers)
-  ├── event log (~/.garden/events.jsonl)
-  ├── project sessions
-  │     ├── website  (Claude — only sees its own tasks via garden tasks)
-  │     ├── api      (Claude — only sees its own tasks via garden tasks)
-  │     └── research (Claude — only sees its own tasks via garden tasks)
-  └── notifications (consumes event log → macOS notifications)
+Garden CLI
+  event log (~/.garden/events.jsonl)
+  project sessions (tmux, invisible)
+  notifications (macOS, from event log)
+
+Worker sessions (Claude in -p mode)
+  scoped to one project via GARDEN_PROJECT
+  interacts only via: garden tasks done/block/add
 ```
-
-The orchestrator and the worker agents use the same CLI. The only difference is scope: workers are scoped to one project via `GARDEN_PROJECT`, the orchestrator sees everything.
 
 ## Commands
 
-### Project Management
+### Projects
 ```
-garden init                        # Initialize ~/.garden, check prerequisites
-garden add <name> <path>           # Register a project
-garden remove <name>               # Unregister a project (does not delete files)
-garden list                        # List all registered projects and their session status
-```
-
-### Session Management
-```
-garden start <name> [prompt]       # Start a session. With prompt: run that task.
-                                   #   Without: pick up next task from task list.
-garden start <name> --auto         # Start in auto mode (churn through task list)
-garden stop <name>                 # Stop the session entirely
-garden attach <name>               # Attach to a running session (interactive)
-                                   #   Detach with ctrl-b d. Session keeps running.
-garden next <name>                 # Tell a paused session to move to the next task
-garden pause <name>                # Switch a running session from auto to paused
-                                   #   (waits after current task finishes)
-garden status [name]               # Show session status (all projects, or one)
-garden log <name>                  # Show output from the most recent task
+garden init                        # Initialize ~/.garden, check for tmux
+garden register <name> <path>      # Register a project
+garden unregister <name>           # Unregister a project
+garden list                        # List all projects and session status
 ```
 
-### Task Management
+### Sessions
 ```
-garden tasks [name]                # List tasks for a project
-garden tasks add <desc>            # Add a task (returns the new task ID)
-garden tasks done <id>             # Mark a task complete
-garden tasks block <id> [reason]   # Mark a task blocked
-garden tasks update <id> [fields]  # Update a task (--status, --note, --desc)
-garden tasks next                  # Show the next pending task
+garden start [name] [prompt]       # Start a session (project auto-detected from cwd)
+garden start [name] --auto         # Start in auto mode
+garden start --all [--auto]        # Start all projects
+garden stop [name]                 # Stop a session
+garden stop --all                  # Stop all sessions
+garden next [name]                 # Advance a paused session to the next task
+garden next [name] --auto          # Advance and switch to auto mode
+garden pause [name]                # Switch from auto to paused
+garden status [name]               # Show session status
+garden review [name] [taskId]      # Resume a task's Claude conversation for review
 ```
 
-When `GARDEN_PROJECT` is set (inside a session), the project name is optional for all task commands.
+### Tasks
+```
+garden add <desc>                  # Add a pending task (shortcut)
+garden backlog <desc>              # Add a backlog task (shortcut)
+garden done <id>                   # Mark task complete (shortcut)
+garden block <id> [reason]         # Mark task blocked (shortcut)
 
-### Agent Context
+garden tasks [name]                # List tasks (hides done/failed by default)
+garden tasks [name] --done         # Include completed tasks
+garden tasks --all                 # List tasks across all projects
+garden tasks --all --pending       # Filter by status across all projects
+garden tasks [name] add <desc>     # Add a task
+garden tasks [name] backlog <desc> # Add a backlog task
+garden tasks [name] done <id>      # Mark complete
+garden tasks [name] block <id>     # Mark blocked
+garden tasks [name] remove <id>    # Remove a task
+garden tasks [name] update <id>    # Update (--status, --note, --desc)
+garden tasks [name] next           # Show next pending task
 ```
-garden context [name]              # Output full project context for agent bootstrapping
-garden events [--since <time>]     # Tail the event log
+
+### Agent
 ```
+garden context [name]              # Output project context for agent bootstrapping
+garden events [--since <time>]     # Show event log (1h, 30m, 2d)
+```
+
+Project name is optional when `GARDEN_PROJECT` is set (inside sessions) or when cwd is inside a registered project.
 
 ## Output Format
 
-All read commands (status, list, tasks, log, context, events) detect whether stdout is a TTY:
-- **TTY (human in terminal):** pretty-printed, colored output
-- **Non-TTY (piped, agent):** JSON, one object per line where applicable
+All read commands detect whether stdout is a TTY:
+- **TTY:** pretty-printed for humans
+- **Non-TTY:** JSON, one object per line
 
-This means `garden status` looks good for you, and `garden status | jq .` works for an agent. No flags needed.
+## File Layout
 
-## Project Config
+```
+~/.garden/
+  config.yml              # Project registry
+  rules.md                # Global agent rules (symlinked from garden repo)
+  events.jsonl            # Global event log (append-only)
+  sessions/
+    <name>.state          # Session state (JSON)
+    <name>.context        # Current system prompt for worker
 
-Single file at `~/.garden/config.yml`:
-
-```yaml
-projects:
-  website:
-    path: /Users/joshua/code/keychange/website
-  garden:
-    path: /Users/joshua/code/keychange/garden
-  research:
-    path: /Users/joshua/code/research/llm-patterns
+<project-root>/
+  .garden/
+    tasks.json            # Task list (JSON, managed by CLI only)
+    rules.md              # Project-specific agent rules (optional)
 ```
 
 ## Task Format
-
-Per-project file at `<project-root>/.garden/tasks.json`:
 
 ```json
 {
@@ -126,188 +148,92 @@ Per-project file at `<project-root>/.garden/tasks.json`:
       "status": "pending",
       "notes": [],
       "created": "2026-03-22T10:00:00Z"
-    },
-    {
-      "id": "c3d4",
-      "description": "Add rate limiting to /v2 endpoints",
-      "status": "done",
-      "notes": ["Implemented with express-rate-limit"],
-      "created": "2026-03-22T10:05:00Z",
-      "completed": "2026-03-22T11:30:00Z"
-    },
-    {
-      "id": "e5f6",
-      "description": "Update schema for new user fields",
-      "status": "blocked",
-      "notes": ["Need database credentials from ops team"],
-      "created": "2026-03-22T10:10:00Z"
     }
   ]
 }
 ```
 
-Task statuses: `pending`, `in_progress`, `done`, `blocked`, `failed`
-
-IDs are short random hex strings (4 chars), assigned by garden on creation. The CLI is the only thing that writes this file.
+IDs are 4-char random hex strings assigned by garden on creation.
 
 ## Event Log
 
-Append-only file at `~/.garden/events.jsonl`:
+Append-only JSONL at `~/.garden/events.jsonl`:
 
 ```jsonl
-{"time":"2026-03-22T10:00:00Z","project":"website","event":"session_start","mode":"paused"}
-{"time":"2026-03-22T10:01:00Z","project":"website","event":"task_start","taskId":"a1b2","description":"Fix the auth timeout bug"}
-{"time":"2026-03-22T10:15:00Z","project":"website","event":"task_done","taskId":"a1b2","description":"Fix the auth timeout bug"}
-{"time":"2026-03-22T10:15:00Z","project":"website","event":"task_blocked","taskId":"e5f6","reason":"Need database credentials"}
-{"time":"2026-03-22T10:20:00Z","project":"website","event":"session_idle","reason":"no_pending_tasks"}
+{"time":"...","project":"website","event":"session_start","mode":"paused"}
+{"time":"...","project":"website","event":"task_start","taskId":"a1b2","description":"..."}
+{"time":"...","project":"website","event":"task_done","taskId":"a1b2","description":"..."}
+{"time":"...","project":"website","event":"session_idle","reason":"no_pending_tasks"}
 ```
 
-Events are the source of truth for what happened. Notifications (macOS) and future orchestrator agents consume this log.
+## Session Management
 
-## Architecture
+tmux is invisible plumbing. Sessions are named `garden-<project>`.
 
-```
-~/.garden/
-  config.yml              # Project registry
-  events.jsonl            # Global event log
-  sessions/
-    <name>.state          # Session state (JSON)
-    <name>.log            # Last task output
+- `garden start` creates a tmux session, runs the worker
+- `garden stop` kills the tmux session, resets `in_progress` tasks to `pending`
+- `garden status` queries tmux and reads state files
+- `garden next` sends SIGUSR1 to the worker process
 
-<project-root>/
-  .garden/
-    tasks.json            # Task list (JSON, managed by CLI)
-```
+## Worker
 
-### Session Management (tmux)
+The worker (`garden _worker`, internal) runs inside tmux:
 
-tmux is the session substrate. Garden never asks you to use tmux directly — it's plumbing.
+1. Read next task (prefers `in_progress`, then `pending`)
+2. Write system prompt to context file (garden instructions + global rules + project rules + task notes)
+3. Run `claude -p --verbose <task> --name garden-<project>-<taskId> --append-system-prompt-file <context> --allowedTools Bash Edit Write Read Glob Grep`
+4. Check task status after Claude exits
+5. Emit event, send notification
+6. In paused mode, wait for SIGUSR1; in auto mode, loop
 
-- `garden start <name>` creates a tmux session named `garden-<name>`, sets `GARDEN_PROJECT` env var, runs the worker
-- `garden attach <name>` calls `tmux attach -t garden-<name>`
-- `garden stop <name>` kills the tmux session, emits `session_stop` event
-- `garden status` queries tmux for session existence and reads state files
-- Detaching (ctrl-b d) returns you to your terminal; the session keeps running
+## Claude Integration
 
-Session state (`~/.garden/sessions/<name>.state`):
-```json
-{
-  "mode": "paused",
-  "currentTaskId": "a1b2",
-  "startedAt": "2026-03-22T10:00:00Z",
-  "completedTasks": 3,
-  "pid": 12345
-}
-```
+Each task runs in a fresh `claude -p` session configured with:
+- `--append-system-prompt-file` containing garden instructions, rules, and task context
+- `--name garden-<project>-<taskId>` for session resumption via `garden review`
+- `--allowedTools Bash Edit Write Read Glob Grep` for full tool access
+- `GARDEN_PROJECT` env var for scoped garden CLI commands
 
-### Worker
+## Technology
 
-The worker is an internal command (`garden _worker`) that runs inside the tmux session. It manages the task loop but does not manage task state — Claude does that by calling `garden tasks done/block`.
-
-```
-emit event: session_start
-while true:
-    task = garden tasks next (JSON)
-    if no task:
-        emit event: session_idle
-        wait for SIGUSR1
-        continue
-
-    set task to in_progress
-    emit event: task_start
-
-    run: claude -p "$task.description" \
-         --append-system-prompt "$(garden context)" \
-         --allowedTools "Bash(garden:*)"
-
-    # Claude calls garden tasks done/block during execution
-    # Worker reads task status after claude exits to confirm
-
-    emit event: task_done or task_failed
-
-    if mode == "paused":
-        wait for SIGUSR1
-```
-
-### Claude Integration
-
-When `garden start` launches a session, Claude is configured with:
-
-1. **`--append-system-prompt`** with output from `garden context`, which includes:
-   - The project name and current task
-   - Available garden commands (tasks add/done/block)
-   - Instructions to use the CLI for task management
-   - The task ID to mark done when finished
-
-2. **`GARDEN_PROJECT` env var** so garden commands inside the session are auto-scoped
-
-3. **`--allowedTools "Bash(garden:*)"`** to pre-authorize garden CLI calls
-
-### Notifications
-
-macOS native notifications via `osascript`. Triggered by events in the event log:
-- `task_done` — "{project} finished: {description}"
-- `task_blocked` — "{project} blocked: {description} — {reason}"
-- `session_idle` — "{project}: no remaining tasks"
-- `task_failed` — "{project} failed: {description}"
-
-### Technology
-
-- TypeScript, compiled via `esbuild`
-- tmux for session management (prerequisite, checked on `garden init`)
-- `osascript` for macOS notifications (built into macOS)
-- YAML parsing via `js-yaml` for config
-- No CLI framework — lightweight command dispatch
+- TypeScript, compiled via esbuild to a single `dist/cli.js`
+- tmux for background session persistence
+- macOS notifications via `osascript`
+- `js-yaml` for config parsing
+- No CLI framework — lightweight `process.argv` dispatch with aliases
 
 ## Principles
 
-1. **Agent-first.** Every interaction goes through the CLI. Structured data by default. If an agent can't do it, it's a bug.
-2. **Files over databases.** Everything is a readable file on disk — JSON, YAML, JSONL.
+1. **Agent-first.** CLI is the API. Structured output by default. If an agent can't do it, it's a bug.
+2. **Files over databases.** YAML, JSON, JSONL. All human-inspectable.
 3. **Shell out, don't abstract.** Call `claude` directly. Don't wrap the API.
-4. **Events over state.** The event log is the source of truth for what happened. State files are derived/ephemeral.
-5. **Grow by adding, not changing.** New commands, new event types, new task fields — avoid breaking what works.
+4. **Events over state.** The event log records what happened. State files are ephemeral.
+5. **Grow by adding, not changing.** New commands, new event types, new fields — avoid breaking what works.
 
 ## Example Workflow
 
 ```bash
-# Morning — dispatch work
-garden start website                    # picks up next pending task
-garden start research                   # same
-garden start api "add rate limiting"    # creates a task and runs it
+# Register projects
+garden register website ~/code/keychange/website
+garden register api ~/code/keychange/api
 
-# Dig into one interactively
-garden attach api                       # watch it work, give feedback
-# ctrl-b d to detach when it's on the right track
+# Add tasks
+garden add "Fix the auth timeout bug"
+garden add "Add rate limiting to /v2 endpoints"
+garden backlog "Refactor middleware layer"
 
-# Check on everything
+# Dispatch work
+garden start website
+garden start api --auto
+
+# Monitor
 garden status
-#  website    ● running   task: Fix auth timeout bug
-#  research   ● running   task: Survey embedding models
-#  api        ● running   task: Add rate limiting to /v2
-#  mobile     ○ stopped
-
-# Notification: "website finished: Fix auth timeout bug"
-garden attach website                   # review what it did
-garden next website                     # move to next task
-
-# Or let one churn
-garden start mobile --auto
-
-# Check events
+garden tasks --all --pending
 garden events --since 1h
-# 10:00 website  session_start (paused)
-# 10:01 website  task_start    Fix auth timeout bug
-# 10:15 website  task_done     Fix auth timeout bug
-# 10:16 api      task_blocked  Add rate limiting — need API docs
+
+# Review completed work
+garden review website
+
+# Stop everything
+garden stop --all
 ```
-
-## Future Considerations (Explicitly Deferred)
-
-- **Orchestrator agent** — agent that reads events and manages sessions automatically
-- **Global task view** — aggregate tasks across all projects
-- **Auto-discovery** — find projects by marker file instead of manual registration
-- **Session persistence** — auto-restart sessions on boot
-- **Inter-project coordination** — pass context between sessions
-- **Project templates** — `garden new` to scaffold a project
-- **TUI dashboard** — real-time multi-pane view of all sessions
-- **Actionable notifications** — buttons on macOS notifications
