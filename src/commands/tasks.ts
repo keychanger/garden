@@ -1,10 +1,16 @@
 // CLI interface for task management: list, add, done, block, update, and next.
-import { resolveProject } from "../config.js";
+import { resolveProject, loadConfig } from "../config.js";
 import { readTasks, addTask, markDone, markBlocked, updateTask, nextTask, removeTask, type Task } from "../tasks.js";
 import { emit } from "../events.js";
 import { output, outputLines } from "../output.js";
 
 export async function tasks(args: string[]): Promise<void> {
+  // Handle --all flag for global task view
+  if (args.includes("--all")) {
+    await listAllTasks(args);
+    return;
+  }
+
   // Detect subcommand: add, done, block, update, next — or list (default)
   // Format: garden tasks [name] [subcommand] [args...]
   // If GARDEN_PROJECT is set, name is optional
@@ -142,4 +148,45 @@ function parseUpdateFlags(args: string[]): Record<string, string> {
     }
   }
   return updates;
+}
+
+interface GlobalTask extends Task {
+  project: string;
+}
+
+async function listAllTasks(args: string[]): Promise<void> {
+  const config = loadConfig();
+  const names = Object.keys(config.projects).sort();
+
+  // Filter by status if provided: --all --pending, --all --blocked, etc.
+  const statusFilter = args.find(a => a !== "--all" && a.startsWith("--"))?.replace("--", "") || null;
+
+  const allTasks: GlobalTask[] = [];
+  for (const name of names) {
+    const projectPath = config.projects[name].path;
+    const tasks = readTasks(projectPath);
+    for (const task of tasks) {
+      if (statusFilter && task.status !== statusFilter) continue;
+      allTasks.push({ ...task, project: name });
+    }
+  }
+
+  if (allTasks.length === 0) {
+    console.log(statusFilter ? `No ${statusFilter} tasks across any project.` : "No tasks across any project.");
+    return;
+  }
+
+  outputLines(allTasks, (item) => {
+    const t = item as GlobalTask;
+    const statusIcon = {
+      backlog: "-",
+      pending: "○",
+      in_progress: "◐",
+      done: "●",
+      blocked: "✕",
+      failed: "✕",
+    }[t.status];
+    const notes = t.notes.length > 0 ? ` (${t.notes[t.notes.length - 1]})` : "";
+    return `  ${t.project.padEnd(14)} ${t.id}  ${statusIcon} ${t.status.padEnd(12)} ${t.description}${notes}`;
+  });
 }
