@@ -23,7 +23,7 @@ const aliases: Record<string, string> = {
 };
 
 // Top-level task shortcuts: garden add/done/block → garden tasks add/done/block
-const taskShortcuts = new Set(["add", "done", "block"]);
+const taskShortcuts = new Set(["add", "done", "block", "backlog"]);
 
 if (taskShortcuts.has(commandName)) {
   // Rewrite: garden add "desc" → garden tasks add "desc"
@@ -76,12 +76,14 @@ Sessions:
 
 Task shortcuts (project auto-detected from cwd):
   add <desc>                     Add a task
+  backlog <desc>                 Add a task to the backlog
   done <id>                      Mark a task complete
   block <id> [reason]            Mark a task blocked
 
 Full task commands:
   tasks [name]                   List all tasks
   tasks [name] add <desc>        Add a task
+  tasks [name] backlog <desc>    Add a task to the backlog
   tasks [name] done <id>         Mark a task complete
   tasks [name] block <id> [why]  Mark a task blocked
   tasks [name] remove <id>       Remove a task

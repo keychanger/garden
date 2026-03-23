@@ -22,6 +22,15 @@ export async function tasks(args: string[]): Promise<void> {
       return;
     }
 
+    case "backlog": {
+      const desc = parsed.rest.join(" ");
+      if (!desc) throw new Error("Usage: garden tasks [name] backlog <description>");
+      const task = addTask(project.path, desc, "backlog");
+      emit(project.name, "task_add", { taskId: task.id, description: desc, status: "backlog" });
+      output(task, (t) => `Backlog ${(t as Task).id}: ${(t as Task).description}`);
+      return;
+    }
+
     case "done": {
       const id = parsed.rest[0];
       if (!id) throw new Error("Usage: garden tasks [name] done <id>");
@@ -85,6 +94,7 @@ export async function tasks(args: string[]): Promise<void> {
       outputLines(taskList, (item) => {
         const t = item as Task;
         const statusIcon = {
+          backlog: "-",
           pending: "○",
           in_progress: "◐",
           done: "●",
@@ -98,7 +108,7 @@ export async function tasks(args: string[]): Promise<void> {
   }
 }
 
-const SUBCOMMANDS = new Set(["add", "done", "block", "remove", "update", "next"]);
+const SUBCOMMANDS = new Set(["add", "backlog", "done", "block", "remove", "update", "next"]);
 
 function parseTaskArgs(args: string[]): {
   projectName: string | undefined;

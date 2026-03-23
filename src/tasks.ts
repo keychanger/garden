@@ -6,7 +6,7 @@ import path from "node:path";
 const TASKS_DIR = ".garden";
 const TASKS_FILE = "tasks.json";
 
-export type TaskStatus = "pending" | "in_progress" | "done" | "blocked" | "failed";
+export type TaskStatus = "backlog" | "pending" | "in_progress" | "done" | "blocked" | "failed";
 
 export interface Task {
   id: string;
@@ -68,12 +68,12 @@ export function resetInProgress(projectPath: string): number {
   return count;
 }
 
-export function addTask(projectPath: string, description: string): Task {
+export function addTask(projectPath: string, description: string, status: TaskStatus = "pending"): Task {
   const tasks = readTasks(projectPath);
   const task: Task = {
     id: generateId(),
     description,
-    status: "pending",
+    status,
     notes: [],
     created: new Date().toISOString(),
   };
