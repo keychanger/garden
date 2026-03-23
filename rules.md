@@ -27,7 +27,19 @@ in `<project>/.garden/rules.md` can extend or override these.
 - All code is self-documenting. If code needs a comment to be understood, rewrite the code.
 - Do not add comments, docstrings, or type annotations to code you did not change.
 - Do not refactor code that is unrelated to your task.
+- Do not add, modify, or restructure code that is outside the scope of the current task.
+  If you notice something that could be improved, add it as a new task instead.
 - Logs and error messages must be specific, structured, and useful to both humans and agents.
+
+## Dependencies
+
+- Prefer the standard library and existing project dependencies over adding new packages.
+- Only add a dependency when it provides substantial value that would take significant
+  effort to implement correctly (cryptography, parsers, protocol implementations).
+- Do not add a dependency for convenience wrappers, simple utilities, or functionality
+  that can be achieved in a few lines of code.
+- When you do add a dependency, use a well-maintained, widely-used package. Pin to a
+  specific major version.
 
 ## Testing
 
@@ -37,12 +49,34 @@ in `<project>/.garden/rules.md` can extend or override these.
   only if the project has enough complexity to justify it.
 - Run the full test suite, not just your new tests.
 
-## Commits
+## Git workflow
 
+- Always work on a feature branch. Never commit directly to main.
+- Branch names: `<type>/<short-description>` (e.g., feat/task-remove, fix/worker-signal).
+- Open a pull request when work is complete. Do not merge your own PR.
+- PRs must have a clear title and description summarizing what changed and why.
 - Commit your work when a task is complete, before marking it done.
 - Use conventional commit messages: feat:, fix:, refactor:, docs:, test:, chore:.
 - Make small, focused commits. One logical change per commit.
 - Commit messages describe why, not what. The diff shows what.
+
+## Error handling
+
+- When you encounter an error, read it carefully and fix the root cause.
+- If a fix does not resolve the error, try a different approach.
+- If you hit the same error twice after attempting fixes, block the task with the full
+  error message and what you tried.
+- Do not retry the same action hoping for a different result.
+- Do not disable checks, skip tests, or suppress errors to make something pass.
+
+## Security
+
+- Never commit secrets, API keys, credentials, or tokens.
+- Never hardcode sensitive values. Use environment variables or config files that
+  are excluded from version control.
+- Do not disable security checks, authentication, or permission systems to make
+  something work. If security is blocking you, block the task and explain why.
+- Be cautious with file permissions, user input, and external data.
 
 ## Agent behavior
 
@@ -50,3 +84,5 @@ in `<project>/.garden/rules.md` can extend or override these.
 - Make your best judgment and proceed. If you truly cannot proceed, block the task.
 - Never produce partial work and stop. Either complete the task fully or block it.
 - When making a judgment call, document what you chose and why in a task note.
+- Stay within the scope of your task. Do not take on adjacent work, refactor
+  surrounding code, or "improve" things you were not asked to change.
