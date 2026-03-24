@@ -13,6 +13,7 @@ import { pause } from "./pause.js";
 import { review } from "./log.js";
 import { context } from "./context.js";
 import { events } from "./events.js";
+import { dashboard } from "./dashboard.js";
 
 type Command = (args: string[]) => Promise<void>;
 
@@ -31,4 +32,5 @@ export const commands: Record<string, Command> = {
   review,
   context,
   events,
+  dashboard,
 };

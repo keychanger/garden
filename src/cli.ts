@@ -12,6 +12,13 @@ if (commandName === "_worker") {
   process.exit(0);
 }
 
+// Internal command — launches claude with rules context for a directory
+if (commandName === "_dashboard-claude") {
+  const { launchDashboardClaude } = await import("./dashboard-claude.js");
+  await launchDashboardClaude(commandArgs);
+  process.exit(0);
+}
+
 if (!commandName || commandName === "help" || commandName === "--help") {
   printHelp();
   process.exit(0);
@@ -20,6 +27,7 @@ if (!commandName || commandName === "help" || commandName === "--help") {
 // Aliases
 const aliases: Record<string, string> = {
   ls: "list",
+  dash: "dashboard",
 };
 
 // Top-level task shortcuts: garden add/done/block → garden tasks add/done/block
@@ -89,6 +97,13 @@ Full task commands:
   tasks [name] remove <id>       Remove a task
   tasks [name] update <id> ...   Update a task (--status, --note, --desc)
   tasks [name] next              Show the next pending task
+
+Dashboard:
+  dashboard                      Open the dashboard (creates if needed)
+  dashboard exit                 Close the dashboard
+  dashboard open <project>       Add a shell pane to the grid
+  dashboard claude <project>     Add a Claude Code pane to the grid
+                                 ctrl-b z to zoom, ctrl-b arrows to navigate
 
 Agent:
   context [name]                 Output project context for agent bootstrapping

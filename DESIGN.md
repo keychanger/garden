@@ -106,6 +106,19 @@ garden tasks [name] update <id>    # Update (--status, --note, --desc)
 garden tasks [name] next           # Show next pending task
 ```
 
+### Dashboard
+```
+garden dashboard                   # Open the dashboard (creates if needed)
+garden dashboard open <project>    # Open a shell window for a project
+garden dashboard claude <project>  # Open a Claude Code window for a project
+```
+
+The dashboard is a tmux session (`garden-dashboard`) for viewing and managing all projects at once. Each project can have multiple windows (Claude instances, shells), visible as tabs in the tmux status bar. Windows are named `<project>/<type>-<N>` (e.g., `garden/claude-1`). Window 0 is a live status overview.
+
+Keybindings inside the dashboard:
+- `prefix + C` — new Claude Code window in current directory
+- `prefix + S` — new shell window in current directory
+
 ### Agent
 ```
 garden context [name]              # Output project context for agent bootstrapping

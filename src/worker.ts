@@ -3,8 +3,9 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { readState, writeState } from "./session.js";
-import { SESSIONS_DIR, GARDEN_DIR } from "./config.js";
+import { SESSIONS_DIR } from "./config.js";
 import { nextTask, getTask, markInProgress, type Task } from "./tasks.js";
+import { buildRulesContext } from "./rules.js";
 import { emit } from "./events.js";
 import { notify } from "./notify.js";
 
@@ -41,20 +42,14 @@ function updateState(updates: Record<string, unknown>): void {
   writeState(name, { ...current, ...updates });
 }
 
-function loadRulesFile(filePath: string): string {
-  if (fs.existsSync(filePath)) {
-    return fs.readFileSync(filePath, "utf-8").trim();
-  }
-  return "";
-}
-
 function buildContext(task: Task): string {
   const sections: string[] = [];
 
-  // Core garden instructions
-  sections.push(`You are working in a garden-managed project called "${name}".
+  // Rules context (shared with dashboard)
+  sections.push(buildRulesContext(name, projectPath));
 
-## Task management
+  // Task-specific garden instructions
+  sections.push(`## Task management
 
 When you complete your task, run:
   garden tasks done ${task.id}
@@ -74,18 +69,6 @@ Do not ask clarifying questions. You are running non-interactively.
 - If you truly cannot proceed without more information, block the task with a specific description of what you need.
 - Never produce partial work and stop. Either complete the task fully or block it.
 - If a task is ambiguous, make a reasonable choice and document what you chose in the task notes: garden tasks update ${task.id} --note "chose X because Y"`);
-
-  // Global rules (~/.garden/rules.md)
-  const globalRules = loadRulesFile(path.join(GARDEN_DIR, "rules.md"));
-  if (globalRules) {
-    sections.push(`## Global rules\n\n${globalRules}`);
-  }
-
-  // Project rules (<project>/.garden/rules.md)
-  const projectRules = loadRulesFile(path.join(projectPath, ".garden", "rules.md"));
-  if (projectRules) {
-    sections.push(`## Project rules\n\n${projectRules}`);
-  }
 
   // Task context
   if (task.notes.length > 0) {

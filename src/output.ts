@@ -1,5 +1,6 @@
 // TTY-aware output helpers: pretty-prints for terminals, JSON for pipes.
-const isTTY = process.stdout.isTTY ?? false;
+// GARDEN_PRETTY=1 forces pretty output (used by dashboard status pane).
+const isTTY = (process.stdout.isTTY ?? false) || process.env.GARDEN_PRETTY === "1";
 
 export function output(data: unknown, pretty?: (data: unknown) => string): void {
   if (isTTY && pretty) {

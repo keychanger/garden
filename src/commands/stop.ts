@@ -25,10 +25,8 @@ export async function stop(args: string[]): Promise<void> {
       if (projectPath) {
         stopOne(name, projectPath);
       } else {
-        killTmuxSession(name);
-        clearState(name);
-        emit(name, "session_stop");
-        console.log(`Stopped ${name}.`);
+        // Skip non-project sessions (e.g., dashboard)
+        continue;
       }
     }
     return;
