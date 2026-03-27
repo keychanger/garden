@@ -30,7 +30,14 @@ const aliases: Record<string, string> = {
   dash: "dashboard",
 };
 
-// Top-level task shortcuts: garden add/done/block → garden tasks add/done/block
+// Top-level shortcuts
+// garden exit → garden dashboard exit
+if (commandName === "exit") {
+  commandArgs.unshift("exit");
+  commandName = "dashboard";
+}
+
+// garden add/done/block → garden tasks add/done/block
 const taskShortcuts = new Set(["add", "done", "block", "backlog"]);
 
 if (taskShortcuts.has(commandName)) {
@@ -100,10 +107,8 @@ Full task commands:
 
 Dashboard:
   dashboard                      Open the dashboard (creates if needed)
-  dashboard exit                 Close the dashboard
-  dashboard open <project>       Add a shell pane to the grid
-  dashboard claude <project>     Add a Claude Code pane to the grid
-                                 ctrl-b z to zoom, ctrl-b arrows to navigate
+  dashboard exit, exit           Close the dashboard
+  keys                           Show dashboard keybindings
 
 Agent:
   context [name]                 Output project context for agent bootstrapping
