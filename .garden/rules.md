@@ -15,13 +15,12 @@ These extend the global rules in ~/.garden/rules.md.
 - Register new commands in src/commands/index.ts and update help text in src/cli.ts.
 - Use resolveProject() or resolveProjectFromArgs() for project resolution. Never parse project names manually.
 - Use output() and outputLines() from src/output.ts for all data output. Respect TTY detection.
-- Use emit() from src/events.ts for any state changes. Events are the record of what happened.
 - Shell-escape all user-provided strings passed to tmux or child processes.
 
 ## Testing
 
 - Test framework: vitest (when set up).
-- Test the CLI commands, task lifecycle, and worker behavior.
+- Test the CLI commands and dashboard behavior.
 - Do not test trivial getters or internal helpers unless they have complex logic.
 
 ## Documentation maintenance

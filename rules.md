@@ -28,7 +28,7 @@ in `<project>/.garden/rules.md` can extend or override these.
 - Do not add comments, docstrings, or type annotations to code you did not change.
 - Do not refactor code that is unrelated to your task.
 - Do not add, modify, or restructure code that is outside the scope of the current task.
-  If you notice something that could be improved, add it as a new task instead.
+  If you notice something that could be improved, note it but do not act on it.
 - Logs and error messages must be specific, structured, and useful to both humans and agents.
 
 ## Dependencies
@@ -43,8 +43,8 @@ in `<project>/.garden/rules.md` can extend or override these.
 
 ## Testing
 
-- All tests must pass before committing or marking a task done.
-- Test behavior, not implementation. Test the task lifecycle, not the config getter.
+- All tests must pass before committing.
+- Test behavior, not implementation.
 - Add tests for new functionality. If a test framework exists, use it. If not, set one up
   only if the project has enough complexity to justify it.
 - Run the full test suite, not just your new tests.
@@ -55,17 +55,13 @@ in `<project>/.garden/rules.md` can extend or override these.
 - Branch names: `<type>/<short-description>` (e.g., feat/task-remove, fix/worker-signal).
 - Open a pull request when work is complete. Do not merge your own PR.
 - PRs must have a clear title and description summarizing what changed and why.
-- After opening a PR, create a review task:
-  `garden tasks add "Review PR #<number>: <title> — <url>"`
-  This ensures a separate session reviews the work with fresh context.
-- Commit your work when a task is complete, before marking it done.
 - Use conventional commit messages: feat:, fix:, refactor:, docs:, test:, chore:.
 - Make small, focused commits. One logical change per commit.
 - Commit messages describe why, not what. The diff shows what.
 
 ## PR reviews
 
-When a task starts with "Review PR", you are reviewing someone else's work.
+When reviewing a PR:
 
 - Check out the PR branch and read the full diff.
 - Verify all tests pass.
@@ -73,16 +69,14 @@ When a task starts with "Review PR", you are reviewing someone else's work.
   no unnecessary dependencies, docs aligned with code.
 - Use `gh pr review` to approve or request changes.
 - If requesting changes, be specific. Say what to fix and where, not just what is wrong.
-- If approved, mark the task done. Do not merge — the author or a human merges.
-- If changes are needed, add a follow-up task:
-  `garden tasks add "Address review feedback on PR #<number>"`
+- Do not merge — the author or a human merges.
 
 ## Error handling
 
 - When you encounter an error, read it carefully and fix the root cause.
 - If a fix does not resolve the error, try a different approach.
-- If you hit the same error twice after attempting fixes, block the task with the full
-  error message and what you tried.
+- If you hit the same error twice after attempting fixes, stop and explain the full
+  error and what you tried.
 - Do not retry the same action hoping for a different result.
 - Do not disable checks, skip tests, or suppress errors to make something pass.
 
@@ -92,14 +86,13 @@ When a task starts with "Review PR", you are reviewing someone else's work.
 - Never hardcode sensitive values. Use environment variables or config files that
   are excluded from version control.
 - Do not disable security checks, authentication, or permission systems to make
-  something work. If security is blocking you, block the task and explain why.
+  something work. If security is blocking you, stop and explain why.
 - Be cautious with file permissions, user input, and external data.
 
 ## Agent behavior
 
-- Do not ask clarifying questions. You are running non-interactively.
-- Make your best judgment and proceed. If you truly cannot proceed, block the task.
-- Never produce partial work and stop. Either complete the task fully or block it.
-- When making a judgment call, document what you chose and why in a task note.
-- Stay within the scope of your task. Do not take on adjacent work, refactor
+- Make your best judgment and proceed. If you truly cannot proceed, stop and explain.
+- Never produce partial work and stop. Either complete the work fully or explain why you cannot.
+- When making a judgment call, document what you chose and why.
+- Stay within the scope of your work. Do not take on adjacent work, refactor
   surrounding code, or "improve" things you were not asked to change.
