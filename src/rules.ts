@@ -12,7 +12,7 @@ function loadRulesFile(filePath: string): string {
 
 /**
  * Build a rules context string from global and project rules.
- * Used by the worker (task sessions) and the dashboard (manual sessions).
+ * Used by the dashboard to inject rules into Claude sessions.
  */
 export function buildRulesContext(projectName: string, projectPath: string): string {
   const sections: string[] = [];

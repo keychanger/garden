@@ -4,19 +4,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR } from "./config.js";
 
-export interface SessionState {
-  mode: "paused" | "auto";
-  currentTaskId: string | null;
-  lastTaskId: string | null;
-  startedAt: string;
-  completedTasks: number;
-  pid: number | null;
-}
-
-function statePath(name: string): string {
-  return path.join(SESSIONS_DIR, `${name}.state`);
-}
-
 export function tmuxSessionName(name: string): string {
   return `garden-${name}`;
 }
@@ -53,19 +40,25 @@ export function createTmuxSession(
   command: string,
   cwd: string
 ): void {
+  const session = tmuxSessionName(name);
   execFileSync(
     "tmux",
     [
       "new-session",
       "-d",
       "-s",
-      tmuxSessionName(name),
+      session,
+      "-n",
+      name,
       "-c",
       cwd,
       command,
     ],
     { stdio: "ignore" }
   );
+  execFileSync("tmux", ["set-option", "-t", session, "mouse", "on"], {
+    stdio: "ignore",
+  });
 }
 
 export function killTmuxSession(name: string): void {
@@ -78,34 +71,6 @@ export function attachTmuxSession(name: string): void {
   execSync(`tmux attach -t ${tmuxSessionName(name)}`, {
     stdio: "inherit",
   });
-}
-
-export function readState(name: string): SessionState | null {
-  const p = statePath(name);
-  if (!fs.existsSync(p)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(p, "utf-8"));
-  } catch {
-    return null;
-  }
-}
-
-export function writeState(name: string, state: SessionState): void {
-  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  fs.writeFileSync(statePath(name), JSON.stringify(state, null, 2));
-}
-
-export function clearState(name: string): void {
-  const p = statePath(name);
-  if (fs.existsSync(p)) fs.unlinkSync(p);
-}
-
-export function sendSignal(name: string): void {
-  const state = readState(name);
-  if (!state?.pid) {
-    throw new Error(`No worker PID found for ${name}`);
-  }
-  process.kill(state.pid, "SIGUSR1");
 }
 
 export function checkTmux(): void {
@@ -142,6 +107,15 @@ export function createDashboardSession(command: string, cwd: string): void {
 }
 
 export function attachDashboardSession(): void {
+  if (process.env.TMUX) {
+    // Already inside tmux — try switch-client, fall back to attach if no active client
+    try {
+      execSync(`tmux switch-client -t ${DASHBOARD_SESSION}`, { stdio: "inherit" });
+      return;
+    } catch {
+      // TMUX env var is stale (session died) — fall through to attach
+    }
+  }
   execSync(`tmux attach -t ${DASHBOARD_SESSION}`, { stdio: "inherit" });
 }
 

@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --outfile=dist/cli.js --banner:js='#!/usr/bin/env node'",
+    "rebuild": "tmux kill-server 2>/dev/null; npm run build",
     "dev": "tsx src/cli.ts",
     "lint": "tsc --noEmit",
     "test": "vitest run",

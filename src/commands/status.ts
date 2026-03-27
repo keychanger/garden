@@ -1,72 +1,108 @@
-// Shows session status for one or all projects.
-import { loadConfig, getProject } from "../config.js";
-import { tmuxSessionExists, readState } from "../session.js";
-import { output, outputLines } from "../output.js";
+// Shows project status: registered projects, active workers, and their states.
+import { loadConfig } from "../config.js";
+import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
+import { output, isTTY } from "../output.js";
+import { readDashState } from "../dashboard/state.js";
+import {
+  getPanePid, getPaneTitle, getPaneLabel, getFirstPaneId,
+  getClaudeChildPid, hasChildProcesses, listHiddenWorkerWindows,
+} from "../dashboard/tmux.js";
 
-interface StatusInfo {
+interface WorkerInfo {
   name: string;
-  running: boolean;
-  mode: string | null;
-  currentTaskId: string | null;
-  completedTasks: number;
-  startedAt: string | null;
+  status: "working" | "waiting" | "exited";
+  activity: string | null;
+  active: boolean;
 }
 
-export async function status(args: string[]): Promise<void> {
-  const name = args[0];
+interface ProjectStatusInfo {
+  name: string;
+  index: number;
+  isActive: boolean;
+  workers: WorkerInfo[];
+}
 
-  if (name) {
-    getProject(name); // validates
-    const info = projectStatus(name);
-    output(info, (data) => {
-      const s = data as StatusInfo;
-      if (!s.running) return `${s.name}: stopped`;
-      const lines = [
-        `${s.name}: running`,
-        `  Mode:      ${s.mode}`,
-        `  Task:      ${s.currentTaskId ?? "(idle)"}`,
-        `  Completed: ${s.completedTasks}`,
-        `  Started:   ${s.startedAt}`,
-      ];
-      return lines.join("\n");
-    });
-    return;
-  }
-
+export async function status(_args: string[]): Promise<void> {
   const config = loadConfig();
   const names = Object.keys(config.projects);
+
   if (names.length === 0) {
     console.log("No projects registered.");
     return;
   }
 
-  const statuses = names.sort().map(projectStatus);
-  outputLines(statuses, (data) => {
-    const s = data as StatusInfo;
-    const icon = s.running ? "●" : "○";
-    let detail = "stopped";
-    if (s.running) {
-      if (s.currentTaskId) {
-        detail = `running  task: ${s.currentTaskId}`;
-      } else if (s.mode === "paused") {
-        detail = `paused   (${s.completedTasks} done)`;
-      } else {
-        detail = `running  (${s.completedTasks} done)`;
+  const dashState = readDashState();
+  const hasDashboard = dashboardExists();
+
+  const statuses: ProjectStatusInfo[] = names.map((name, i) => ({
+    name,
+    index: i + 1,
+    isActive: dashState.activeProject === name,
+    workers: hasDashboard ? getProjectWorkers(name, dashState) : [],
+  }));
+
+  if (!isTTY) {
+    output(statuses);
+    return;
+  }
+
+  for (const project of statuses) {
+    const marker = project.isActive ? " ◄" : "";
+    console.log(`  ${project.index}. ${project.name}${marker}`);
+
+    if (project.workers.length === 0) {
+      console.log("    (no workers)");
+    } else {
+      for (const worker of project.workers) {
+        const icon = worker.active ? "●" : "○";
+        const activity = worker.activity ? ` — ${worker.activity}` : "";
+        console.log(`    ${icon} ${worker.name}  ${worker.status}${activity}`);
       }
     }
-    return `  ${s.name.padEnd(16)} ${icon} ${detail}`;
-  });
+  }
 }
 
-function projectStatus(name: string): StatusInfo {
-  const running = tmuxSessionExists(name);
-  const state = readState(name);
-  return {
-    name,
-    running,
-    mode: running ? (state?.mode ?? null) : null,
-    currentTaskId: state?.currentTaskId ?? null,
-    completedTasks: state?.completedTasks ?? 0,
-    startedAt: state?.startedAt ?? null,
-  };
+function getProjectWorkers(projectName: string, dashState: { activeProject: string | null; activePaneId: string | null; activePaneType: string | null }): WorkerInfo[] {
+  const workers: WorkerInfo[] = [];
+
+  if (dashState.activeProject === projectName && dashState.activePaneId && dashState.activePaneType === "worker") {
+    const label = getPaneLabel(dashState.activePaneId) ?? "worker-1";
+    const paneInfo = detectPaneProcessStatus(dashState.activePaneId);
+    workers.push({ name: label, ...paneInfo, active: true });
+  }
+
+  const hiddenWindows = listHiddenWorkerWindows(projectName);
+  for (const win of hiddenWindows) {
+    const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${win}`);
+    if (paneId) {
+      const label = getPaneLabel(paneId) ?? win.replace(`_${projectName}-`, "");
+      const paneInfo = detectPaneProcessStatus(paneId);
+      workers.push({ name: label, ...paneInfo, active: false });
+    }
+  }
+
+  workers.sort((a, b) => {
+    const numA = parseInt(a.name.replace(/\D/g, ""), 10) || 0;
+    const numB = parseInt(b.name.replace(/\D/g, ""), 10) || 0;
+    return numA - numB;
+  });
+
+  return workers;
+}
+
+interface PaneInfo {
+  status: "working" | "waiting" | "exited";
+  activity: string | null;
+}
+
+function detectPaneProcessStatus(paneId: string): PaneInfo {
+  const pid = getPanePid(paneId);
+  if (!pid) return { status: "exited", activity: null };
+
+  const claudePid = getClaudeChildPid(pid);
+  if (!claudePid) return { status: "waiting", activity: null };
+
+  const activity = getPaneTitle(paneId);
+  const status = hasChildProcesses(claudePid) ? "working" : "waiting";
+  return { status, activity };
 }
