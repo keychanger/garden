@@ -186,7 +186,7 @@ export function buildWorktreeWorkerCommand(
   const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName);
   const claudeCmd = `claude --dangerously-skip-permissions --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   const postExit = `${gardenRunner} dashboard _post-exit ${shellEscape(workerName)} ${shellEscape(projectName)}`;
-  return `${claudeCmd}; ${postExit}; exec $SHELL`;
+  return `${claudeCmd}; ${postExit} 2>&1 || echo "[garden] post-exit failed (exit $?)"; exec $SHELL`;
 }
 
 export function buildReviewWorkerCommand(
@@ -194,14 +194,14 @@ export function buildReviewWorkerCommand(
   projectPath: string,
   branchName: string,
   prNumber: number,
-  sessionId: string,
   gardenRunner: string,
   reviewerName: string,
 ): string {
   const contextFile = writeReviewContextFile(projectName, projectPath, prNumber, branchName);
-  const claudeCmd = `claude --dangerously-skip-permissions --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const prompt = `Review PR #${prNumber} on branch ${branchName}. Follow the review workflow instructions in your system prompt.`;
+  const claudeCmd = `claude --dangerously-skip-permissions -p ${shellEscape(prompt)} --append-system-prompt-file ${shellEscape(contextFile)}`;
   const postExit = `${gardenRunner} dashboard _post-review ${shellEscape(reviewerName)} ${shellEscape(projectName)}`;
-  return `${claudeCmd}; ${postExit}; exec $SHELL`;
+  return `${claudeCmd}; ${postExit} 2>&1 || echo "[garden] post-review failed (exit $?)"; exec $SHELL`;
 }
 
 export function buildWorktreeResumeCommand(
@@ -215,7 +215,7 @@ export function buildWorktreeResumeCommand(
   const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName);
   const claudeCmd = `claude --dangerously-skip-permissions --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   const postExit = `${gardenRunner} dashboard _post-exit ${shellEscape(workerName)} ${shellEscape(projectName)}`;
-  return `${claudeCmd}; ${postExit}; exec $SHELL`;
+  return `${claudeCmd}; ${postExit} 2>&1 || echo "[garden] post-exit failed (exit $?)"; exec $SHELL`;
 }
 
 function writeContextFile(projectName: string, projectPath: string): string {

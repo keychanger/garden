@@ -1,5 +1,4 @@
 // Review cycle: post-exit handling, review worker spawning, and review loop.
-import crypto from "node:crypto";
 import { DASHBOARD_SESSION } from "../session.js";
 import { getProject } from "../config.js";
 import {
@@ -133,13 +132,12 @@ function spawnReviewWorker(
 ): void {
   const existingNames = getAllWorkerNames();
   const reviewerName = generateWorkerName(existingNames);
-  const sessionId = crypto.randomUUID();
   const branchName = parent.branchName ?? parent.name;
   const wtPath = parent.worktreePath ?? projectPath;
   const gardenRunner = resolveGardenRunner();
 
   const cmd = buildReviewWorkerCommand(
-    projectName, projectPath, branchName, prNumber, sessionId, gardenRunner, reviewerName,
+    projectName, projectPath, branchName, prNumber, gardenRunner, reviewerName,
   );
 
   const windowName = `_${projectName}-worker-${reviewerName}`;
@@ -151,7 +149,7 @@ function spawnReviewWorker(
 
   addWorker(projectName, {
     name: reviewerName,
-    sessionId,
+    sessionId: "",
     task: `reviewing PR #${prNumber}`,
     worktreePath: parent.worktreePath,
     branchName,
