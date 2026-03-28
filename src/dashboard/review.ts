@@ -14,7 +14,7 @@ import { refreshDashboard } from "./header.js";
 import { log } from "./log.js";
 import {
   getBranchPR, isPRMerged, getPRReviewDecision, getPRReviewFeedback,
-  removeWorktree, pruneWorktrees,
+  removeWorktree, pruneWorktrees, worktreeExists,
 } from "./git.js";
 import { enqueue, processMergeQueue, type MergeQueueEntry } from "./merge-queue.js";
 import {
@@ -54,6 +54,7 @@ export function handlePostExit(workerName: string, projectName: string): void {
 /**
  * Poll all workers for PR creation. Called from the status loop to detect
  * PRs without relying on Claude Code exiting (which may not happen).
+ * Quiet: no tmuxDisplay messages, minimal logging.
  */
 export function checkWorkerPRs(): void {
   const registry = readRegistry();
@@ -62,8 +63,17 @@ export function checkWorkerPRs(): void {
       if (entry.role === "reviewer") continue;
       if (entry.prNumber) continue;
       if (!entry.branchName) continue;
+      if (entry.worktreePath && !worktreeExists(entry.worktreePath)) continue;
 
-      handlePostExit(entry.name, projectName);
+      let project;
+      try { project = getProject(projectName); } catch { continue; }
+
+      const prNumber = getBranchPR(project.path, entry.branchName);
+      if (prNumber === null) continue;
+
+      updateWorkerFields(projectName, entry.name, { prNumber });
+      log.info("review", "poll detected PR, spawning review worker", { prNumber, workerName: entry.name });
+      spawnReviewWorker(projectName, project.path, entry, prNumber);
     }
   }
 }

@@ -15,7 +15,8 @@ import {
   tmux, tmuxOutput, tmuxSplit, setPaneTitle, setPaneLabel, setPaneVar,
   getFirstPaneId, shellEscape,
 } from "./tmux.js";
-import { readRegistry } from "./registry.js";
+import { readRegistry, removeWorker } from "./registry.js";
+import { worktreeExists } from "./git.js";
 import { log, truncateLog } from "./log.js";
 import { validateAndHeal } from "./validate.js";
 
@@ -116,6 +117,13 @@ export function ensureDashboard(): void {
 
     for (const entry of entries) {
       if (!entry.sessionId) continue;
+      if (entry.worktreePath && !worktreeExists(entry.worktreePath)) {
+        log.warn("dashboard", "skipping worker with missing worktree", {
+          worker: entry.name, worktreePath: entry.worktreePath,
+        });
+        removeWorker(projectName, entry.name);
+        continue;
+      }
       const workerCwd = entry.worktreePath ?? projectConfig.path;
       const resumeCmd = entry.worktreePath && entry.branchName
         ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, gardenRunner)
