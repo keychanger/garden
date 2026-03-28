@@ -61,6 +61,9 @@ Projects:
   remove <name>                  Remove a project
   list, ls                       List all projects
 
+Development:
+  test [project] [-- args]       Run project tests (npm test)
+
 Dashboard:
   dashboard                      Open the dashboard (creates if needed)
   dashboard exit, exit           Close the dashboard
