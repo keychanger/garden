@@ -7,6 +7,7 @@ import { status } from "./status.js";
 import { dashboard } from "./dashboard.js";
 import { keys } from "./keys.js";
 import { rebuild } from "./rebuild.js";
+import { reset } from "./reset.js";
 
 type Command = (args: string[]) => Promise<void>;
 
@@ -19,4 +20,5 @@ export const commands: Record<string, Command> = {
   dashboard,
   keys,
   rebuild,
+  reset,
 };
