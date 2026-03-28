@@ -21,6 +21,8 @@ if (!commandName || commandName === "help" || commandName === "--help") {
 const aliases: Record<string, string> = {
   ls: "list",
   dash: "dashboard",
+  register: "add",
+  unregister: "remove",
 };
 
 // Top-level shortcuts
@@ -55,8 +57,8 @@ Usage: garden <command> [args]
 
 Projects:
   init                           Initialize garden config
-  register <name> <path>         Register a project
-  unregister <name>              Unregister a project
+  add [path]                     Add a project (defaults to current directory)
+  remove <name>                  Remove a project
   list, ls                       List all projects
 
 Dashboard:
@@ -64,6 +66,8 @@ Dashboard:
   dashboard exit, exit           Close the dashboard
   keys                           Show dashboard keybindings
   status                         Show project and worker status
+  health                         Check dashboard state consistency
+  reset                          Clear the worker registry
   rebuild                        Rebuild garden and relaunch dashboard
 
 Output is JSON when piped, pretty-printed in a terminal.

@@ -13,7 +13,7 @@ export async function list(): Promise<void> {
   const names = Object.keys(config.projects);
 
   if (names.length === 0) {
-    console.log("No projects registered. Use 'garden register <name> <path>' to add one.");
+    console.log("No projects added. Use 'garden add [path]' to add one.");
     return;
   }
 

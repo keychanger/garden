@@ -39,7 +39,7 @@ export function getProject(name: string): ProjectConfig & { name: string } {
   const project = config.projects[name];
   if (!project) {
     throw new Error(
-      `Unknown project: ${name}. Run 'garden list' to see registered projects.`
+      `Unknown project: ${name}. Run 'garden list' to see projects.`
     );
   }
   return { ...project, name };
@@ -89,7 +89,7 @@ export function resolveProject(nameArg?: string): ProjectConfig & { name: string
   const name = nameArg || process.env.GARDEN_PROJECT || detectProjectFromCwd();
   if (!name) {
     throw new Error(
-      "No project specified. Pass a project name, set GARDEN_PROJECT, or cd into a registered project."
+      "No project specified. Pass a project name, set GARDEN_PROJECT, or cd into a project directory."
     );
   }
   return getProject(name);
