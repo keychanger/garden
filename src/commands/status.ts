@@ -15,6 +15,8 @@ interface WorkerInfo {
   status: "working" | "waiting" | "exited";
   activity: string | null;
   active: boolean;
+  prNumber?: number;
+  role?: "worker" | "reviewer";
 }
 
 interface QueueEntryInfo {
@@ -72,8 +74,9 @@ export async function status(_args: string[]): Promise<void> {
     } else {
       for (const worker of project.workers) {
         const icon = worker.active ? "●" : "○";
+        const prTag = worker.prNumber ? ` [PR #${worker.prNumber}]` : "";
         const suffix = worker.activity ? ` — ${worker.activity}` : worker.status === "waiting" ? " (no task)" : "";
-        console.log(`    ${icon} ${worker.name}  ${worker.status}${suffix}`);
+        console.log(`    ${icon} ${worker.name}${prTag}  ${worker.status}${suffix}`);
       }
       for (const entry of project.queue) {
         console.log(`    ⏳ PR #${entry.prNumber} (${entry.workerName}) ${entry.status}`);
@@ -87,12 +90,14 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
   const activeWindowName = dashState.activeWindowName ?? null;
   const registryEntries = getWorkers(projectName);
   const registryTaskByName = new Map(registryEntries.map(e => [e.name, e.task]));
+  const registryByName = new Map(registryEntries.map(e => [e.name, e]));
 
   if (dashState.activeProject === projectName && dashState.activePaneId && dashState.activePaneType === "worker") {
     const label = getPaneLabel(dashState.activePaneId) ?? "worker-1";
     const paneInfo = detectPaneProcessStatus(dashState.activePaneId);
     if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
-    workers.push({ name: label, ...paneInfo, active: true });
+    const regEntry = registryByName.get(label);
+    workers.push({ name: label, ...paneInfo, active: true, prNumber: regEntry?.prNumber, role: regEntry?.role });
   }
 
   const hiddenWindows = listHiddenWorkerWindows(projectName);
@@ -103,7 +108,8 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
       const label = getPaneLabel(paneId) ?? win.replace(`_${projectName}-`, "");
       const paneInfo = detectPaneProcessStatus(paneId);
       if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
-      workers.push({ name: label, ...paneInfo, active: false });
+      const regEntry = registryByName.get(label);
+      workers.push({ name: label, ...paneInfo, active: false, prNumber: regEntry?.prNumber, role: regEntry?.role });
     }
   }
 

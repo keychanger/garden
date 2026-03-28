@@ -146,7 +146,7 @@ function setHeaderVar(header: string): void {
 }
 
 export function buildStatusCommand(gardenRunner: string): string {
-  return `trap true USR1; sleep 1 & wait $!; prev=""; while true; do ${gardenRunner} dashboard _header >/dev/null 2>&1; cur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1); if [ "$cur" != "$prev" ]; then printf '\\033[H\\033[2J%s\\n' "$cur"; prev="$cur"; fi; sleep 5 & wait $!; done`;
+  return `trap true USR1; sleep 1 & wait $!; prev=""; while true; do ${gardenRunner} dashboard _header >/dev/null 2>&1; ${gardenRunner} dashboard _check-prs >/dev/null 2>&1; cur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1); if [ "$cur" != "$prev" ]; then printf '\\033[H\\033[2J%s\\n' "$cur"; prev="$cur"; fi; sleep 5 & wait $!; done`;
 }
 
 export function refreshStatusPane(): void {
