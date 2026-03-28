@@ -1,27 +1,36 @@
-// Registers a new project by name and path in the garden config.
+// Adds a project directory to the garden config. Name is derived from the directory basename.
 import path from "node:path";
 import fs from "node:fs";
 import { loadConfig, saveConfig } from "../config.js";
 
-export async function register(args: string[]): Promise<void> {
-  const name = args[0];
-  const rawPath = args[1];
-
-  if (!name || !rawPath) {
-    throw new Error("Usage: garden register <name> <path>");
-  }
-
+export async function add(args: string[]): Promise<void> {
+  const rawPath = args[0] ?? ".";
   const resolved = path.resolve(rawPath);
+
   if (!fs.existsSync(resolved)) {
     throw new Error(`Path does not exist: ${resolved}`);
   }
 
+  const stat = fs.statSync(resolved);
+  if (!stat.isDirectory()) {
+    throw new Error(`Not a directory: ${resolved}`);
+  }
+
+  const name = path.basename(resolved);
   const config = loadConfig();
+
   if (config.projects[name]) {
-    throw new Error(`Project '${name}' already exists.`);
+    const existing = config.projects[name].path;
+    if (existing === resolved) {
+      console.log(`Project '${name}' is already added.`);
+      return;
+    }
+    throw new Error(
+      `A project named '${name}' already exists at ${existing}. Remove it first.`
+    );
   }
 
   config.projects[name] = { path: resolved };
   saveConfig(config);
-  console.log(`Registered project '${name}' at ${resolved}`);
+  console.log(`Added project '${name}' (${resolved})`);
 }

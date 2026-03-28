@@ -1,10 +1,10 @@
-// Unregisters a project from the garden config.
+// Removes a project from the garden config.
 import { loadConfig, saveConfig } from "../config.js";
 
-export async function unregister(args: string[]): Promise<void> {
+export async function remove(args: string[]): Promise<void> {
   const name = args[0];
   if (!name) {
-    throw new Error("Usage: garden unregister <name>");
+    throw new Error("Usage: garden remove <name>");
   }
 
   const config = loadConfig();
@@ -14,5 +14,5 @@ export async function unregister(args: string[]): Promise<void> {
 
   delete config.projects[name];
   saveConfig(config);
-  console.log(`Unregistered project '${name}'`);
+  console.log(`Removed project '${name}'`);
 }

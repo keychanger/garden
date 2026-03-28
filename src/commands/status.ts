@@ -27,7 +27,7 @@ export async function status(_args: string[]): Promise<void> {
   const names = Object.keys(config.projects);
 
   if (names.length === 0) {
-    console.log("No projects registered.");
+    console.log("No projects added.");
     return;
   }
 
@@ -55,8 +55,8 @@ export async function status(_args: string[]): Promise<void> {
     } else {
       for (const worker of project.workers) {
         const icon = worker.active ? "●" : "○";
-        const activity = worker.activity ? ` — ${worker.activity}` : "";
-        console.log(`    ${icon} ${worker.name}  ${worker.status}${activity}`);
+        const suffix = worker.activity ? ` — ${worker.activity}` : worker.status === "waiting" ? " (no task)" : "";
+        console.log(`    ${icon} ${worker.name}  ${worker.status}${suffix}`);
       }
     }
   }
