@@ -37,7 +37,11 @@ export async function dashboard(args: string[]): Promise<void> {
   if (sub === "restart") {
     if (dashboardExists()) {
       log.info("dashboard", "restarting dashboard");
+      // Survive SIGHUP when killing our own tmux session from inside it
+      process.on("SIGHUP", () => {});
       killDashboardSession();
+      // Clear stale TMUX env so attach works from the now-detached terminal
+      delete process.env.TMUX;
       try { fs.unlinkSync(STATE_FILE); } catch { /* ignore */ }
       cleanupContextFiles();
     }
