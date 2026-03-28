@@ -123,14 +123,19 @@ export function killPane(): void {
     if (nameMatch) {
       const workerName = nameMatch[1];
       const entry = findWorkerByName(state.activeProject, workerName);
-      if (entry?.worktreePath) {
+      if (entry?.role === "reviewer") {
+        // Reviewers share the parent's worktree — only remove the registry entry
+        removeWorker(state.activeProject, workerName);
+      } else if (entry?.worktreePath) {
         const hasPR = getBranchPR(project.path, entry.branchName ?? workerName) !== null;
         removeWorktree(project.path, entry.worktreePath);
         if (!hasPR && entry.branchName) {
           deleteBranch(project.path, entry.branchName);
         }
+        removeWorker(state.activeProject, workerName);
+      } else {
+        removeWorker(state.activeProject, workerName);
       }
-      removeWorker(state.activeProject, workerName);
     }
   }
 
