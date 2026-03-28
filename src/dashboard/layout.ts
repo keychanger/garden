@@ -3,6 +3,7 @@
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, getFirstPaneId, windowExists, killWindowSafe, paneExists } from "./tmux.js";
 import type { DashboardState } from "./state.js";
+import { log } from "./log.js";
 
 /**
  * Park the visible right pane's content into a hidden window.
@@ -10,7 +11,13 @@ import type { DashboardState } from "./state.js";
  * Returns the temp pane ID now in the right slot.
  */
 export function parkToHidden(windowName: string, state: DashboardState): string | null {
-  if (!state.activePaneId || !paneExists(state.activePaneId)) return null;
+  if (!state.activePaneId || !paneExists(state.activePaneId)) {
+    log.warn("layout", "parkToHidden: active pane missing or dead", {
+      activePaneId: state.activePaneId,
+      windowName,
+    });
+    return null;
+  }
 
   if (windowExists(windowName)) {
     killWindowSafe(windowName);
@@ -18,10 +25,18 @@ export function parkToHidden(windowName: string, state: DashboardState): string 
 
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName);
   const tempPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
-  if (!tempPaneId) return null;
+  if (!tempPaneId) {
+    log.error("layout", "parkToHidden: failed to get pane ID for new window", { windowName });
+    return null;
+  }
 
   // Swap: active content goes to hidden window, temp comes to right slot
   tmux("swap-pane", "-s", state.activePaneId, "-t", tempPaneId);
+  log.debug("layout", "parkToHidden", {
+    windowName,
+    from: state.activePaneId,
+    to: tempPaneId,
+  });
   state.activePaneId = tempPaneId;
   state.activePaneType = null;
   state.activeWindowName = null;
@@ -34,10 +49,22 @@ export function parkToHidden(windowName: string, state: DashboardState): string 
  */
 export function restoreFromHidden(windowName: string, state: DashboardState): void {
   const targetPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
-  if (!targetPaneId || !state.activePaneId) return;
+  if (!targetPaneId || !state.activePaneId) {
+    log.warn("layout", "restoreFromHidden: missing pane", {
+      windowName,
+      targetPaneId,
+      activePaneId: state.activePaneId,
+    });
+    return;
+  }
 
   tmux("swap-pane", "-s", state.activePaneId, "-t", targetPaneId);
   killWindowSafe(windowName);
+  log.debug("layout", "restoreFromHidden", {
+    windowName,
+    from: state.activePaneId,
+    to: targetPaneId,
+  });
   state.activePaneId = targetPaneId;
 }
 

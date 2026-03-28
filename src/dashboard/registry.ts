@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR } from "../config.js";
+import { log } from "./log.js";
 
 export interface WorkerEntry {
   name: string;       // adjective-noun name, e.g. "swift-oak"
@@ -15,20 +16,25 @@ export interface WorkerRegistry {
 
 export const REGISTRY_FILE = path.join(SESSIONS_DIR, "dashboard.registry.json");
 
-const EMPTY_REGISTRY: WorkerRegistry = { workers: {} };
-
 export function readRegistry(): WorkerRegistry {
   try {
     if (fs.existsSync(REGISTRY_FILE)) {
       return JSON.parse(fs.readFileSync(REGISTRY_FILE, "utf-8"));
     }
-  } catch { /* ignore */ }
+  } catch (err) {
+    log.warn("registry", "failed to read registry, using empty", {
+      file: REGISTRY_FILE,
+      error: String(err),
+    });
+  }
   return { workers: {} };
 }
 
 export function writeRegistry(registry: WorkerRegistry): void {
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  fs.writeFileSync(REGISTRY_FILE, JSON.stringify(registry, null, 2));
+  const tmpFile = REGISTRY_FILE + ".tmp";
+  fs.writeFileSync(tmpFile, JSON.stringify(registry, null, 2));
+  fs.renameSync(tmpFile, REGISTRY_FILE);
 }
 
 export function addWorker(project: string, entry: WorkerEntry): void {

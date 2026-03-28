@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR } from "../config.js";
+import { log } from "./log.js";
 
 export interface DashboardState {
   activeProject: string | null;
@@ -30,11 +31,18 @@ export function readDashState(): DashboardState {
     if (fs.existsSync(STATE_FILE)) {
       return JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
     }
-  } catch { /* ignore */ }
+  } catch (err) {
+    log.warn("state", "failed to read state file, using defaults", {
+      file: STATE_FILE,
+      error: String(err),
+    });
+  }
   return { ...DEFAULT_STATE };
 }
 
 export function writeDashState(state: DashboardState): void {
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+  const tmpFile = STATE_FILE + ".tmp";
+  fs.writeFileSync(tmpFile, JSON.stringify(state, null, 2));
+  fs.renameSync(tmpFile, STATE_FILE);
 }
