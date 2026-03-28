@@ -89,11 +89,30 @@ This preserves all worker state across switches.
 Hidden windows follow the convention: `_<project>-worker-<N>` and `_<project>-shell`. When switching projects, the visible pane is parked as `_<project>-active`. The underscore prefix marks them as managed by garden — not user-facing.
 
 ### Worker Lifecycle
-1. `⌥n` creates a new worker pane, launches `claude` with project rules via `--append-system-prompt-file`
-2. The worker is interactive — you work with it directly
-3. `⌥]`/`⌥[` cycles between workers and shell
-4. `⌥x` kills the focused worker (shell is protected)
-5. Switching projects parks everything in hidden windows; switching back restores
+1. `⌥n` creates a git worktree at `~/.garden/worktrees/<project>/<worker-name>/` and a branch named after the worker
+2. Claude launches in the worktree with project rules and worktree workflow instructions
+3. The worker is interactive — you work with it directly
+4. `⌥]`/`⌥[` cycles between workers and shell
+5. `⌥x` kills the focused worker, removes its worktree (and branch if no PR exists)
+6. Switching projects parks everything in hidden windows; switching back restores
+
+### Automated PR Review Cycle
+When a worktree worker exits, a post-exit hook runs:
+1. Check if the worker opened a PR on its branch
+2. If yes: spawn a review worker in the same worktree
+3. The review worker reads the diff, runs tests, and either approves+merges or requests changes
+4. If merged: worktree is cleaned up, registry entries removed
+5. If changes requested: the original worker is resumed (via `claude --resume`) with its post-exit hook, creating a loop
+6. The cycle repeats until the PR is merged
+
+Review workers are registered with `role: "reviewer"` and `parentWorker` linking back to the original.
+
+### Worker Isolation Model
+- Every worker operates in its own git worktree — no shared working directory
+- The project shell (`⌥s`) stays on the main checkout for manual work
+- Branch name equals the worker name (e.g., `swift-oak`)
+- PR title is the human-readable description, not the branch name
+- Worktrees persist until the PR is merged, enabling the review cycle and manual inspection
 
 ## Worker Status Detection
 
@@ -140,7 +159,13 @@ All read commands detect whether stdout is a TTY:
   rules.md                # Global rules
   sessions/
     dashboard.state.json  # Dashboard pane state
+    dashboard.registry.json  # Worker registry (persists across restarts)
     dashboard-<project>.context  # System prompt for project's Claude sessions
+    dashboard-<project>-<branch>.context  # Worktree worker context
+    dashboard-<project>-review-<N>.context  # Review worker context
+  worktrees/
+    <project>/
+      <worker-name>/      # Git worktree for each worker
 
 <project-root>/
   .garden/

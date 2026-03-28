@@ -11,9 +11,10 @@ import {
   listHiddenWorkerWindows, killWindowSafe,
 } from "./tmux.js";
 import { generateWorkerName } from "./names.js";
-import { addWorker, removeWorker, getAllWorkerNames } from "./registry.js";
+import { addWorker, removeWorker, findWorkerByName, getAllWorkerNames } from "./registry.js";
 import { log } from "./log.js";
-import { buildWorkerCommand, createShellWindow } from "./create.js";
+import { buildWorktreeWorkerCommand, createShellWindow, resolveGardenRunner } from "./create.js";
+import { worktreePath, createWorktree, removeWorktree, deleteBranch, getBranchPR } from "./git.js";
 
 export function newWorker(): void {
   log.info("workers", "newWorker");
@@ -27,20 +28,41 @@ export function newWorker(): void {
   const existingNames = getAllWorkerNames();
   const workerName = generateWorkerName(existingNames);
   const sessionId = crypto.randomUUID();
-  const workerCmd = buildWorkerCommand(project.name, project.path, sessionId);
+  const branchName = workerName;
+  const wtPath = worktreePath(state.activeProject, workerName);
+
+  try {
+    createWorktree(project.path, wtPath, branchName);
+  } catch (err) {
+    log.error("workers", "failed to create worktree", { error: String(err) });
+    tmuxDisplay(`Failed to create worktree: ${err}`);
+    return;
+  }
+
+  const gardenRunner = resolveGardenRunner();
+  const workerCmd = buildWorktreeWorkerCommand(
+    project.name, project.path, workerName, branchName, sessionId, gardenRunner,
+  );
 
   const parkName = state.activeWindowName ?? `_${state.activeProject}-active`;
   parkToHidden(parkName, state);
 
   const workerWindowName = `_${state.activeProject}-worker-${workerName}`;
 
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
+  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", wtPath,
     "sh", "-c", workerCmd);
   const workerPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindowName}`);
   if (workerPaneId) setPaneLabel(workerPaneId, workerName);
   restoreFromHidden(workerWindowName, state);
 
-  addWorker(state.activeProject, { name: workerName, sessionId, task: "" });
+  addWorker(state.activeProject, {
+    name: workerName,
+    sessionId,
+    task: "",
+    worktreePath: wtPath,
+    branchName,
+    role: "worker",
+  });
 
   state.activePaneType = "worker";
   state.activeWindowName = workerWindowName;
@@ -98,7 +120,18 @@ export function killPane(): void {
 
   if (killedWindowName && state.activeProject) {
     const nameMatch = killedWindowName.match(/-worker-(.+)$/);
-    if (nameMatch) removeWorker(state.activeProject, nameMatch[1]);
+    if (nameMatch) {
+      const workerName = nameMatch[1];
+      const entry = findWorkerByName(state.activeProject, workerName);
+      if (entry?.worktreePath) {
+        const hasPR = getBranchPR(project.path, entry.branchName ?? workerName) !== null;
+        removeWorktree(project.path, entry.worktreePath);
+        if (!hasPR && entry.branchName) {
+          deleteBranch(project.path, entry.branchName);
+        }
+      }
+      removeWorker(state.activeProject, workerName);
+    }
   }
 
   writeDashState(state);

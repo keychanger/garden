@@ -28,6 +28,8 @@ npm run dev -- help    # run via tsx during development
   - `header.ts` — tmux status bar via `@garden_header` variable, instant refresh
   - `tmux.ts` — low-level tmux helpers (shared by dashboard and status command)
   - `validate.ts` — state/tmux consistency validation and self-healing
+  - `git.ts` — git/gh CLI wrappers for worktree and PR operations
+  - `review.ts` — review cycle: post-exit handling, review worker spawning, resume loop
   - `log.ts` — structured JSON logger to `~/.garden/sessions/dashboard.log`
   - `names.ts` — worker name generation (adjective-noun pairs)
 - `src/dashboard-claude.ts` — internal command: launches claude with rules context
@@ -61,7 +63,10 @@ Some commands are not user-facing — they're dispatched by the dashboard via tm
 
 - `_dashboard-claude` — launches claude with project rules context (used by dashboard workers)
 
-The dashboard also has internal subcommands (e.g., `dashboard _switch 1`, `dashboard _new-worker`) called by hotkeys. These are dispatched inside `src/dashboard/index.ts`.
+The dashboard also has internal subcommands (e.g., `dashboard _switch 1`, `dashboard _new-worker`) called by hotkeys. These are dispatched inside `src/dashboard/index.ts`:
+
+- `_post-exit <workerName> <projectName>` — runs after a worktree worker exits; checks for a PR and spawns a review worker
+- `_post-review <reviewerName> <projectName>` — runs after a review worker exits; merges, resumes original worker, or reports status
 
 ## Dashboard internals
 
@@ -77,13 +82,27 @@ The dashboard uses a permanent tmux layout with content swapped in and out of th
 - **Logging** (`src/dashboard/log.ts`): Structured JSON log to `~/.garden/sessions/dashboard.log`. Logs state mutations, swap operations, and validation results.
 - **Health check**: `garden health` diagnoses state/tmux divergence. `garden health --fix` runs the self-healing validator.
 
+## Worker isolation (worktrees)
+
+Every worker runs in its own git worktree, isolated from the main checkout and other workers:
+
+1. `opt-n` creates a worktree at `~/.garden/worktrees/<project>/<worker-name>/` on a branch named after the worker.
+2. The worker's system prompt includes instructions to commit incrementally and open a PR when done.
+3. After the worker exits, a **post-exit hook** checks for a PR on the branch:
+   - If PR found: a **review worker** spawns in the same worktree to review and merge (or request changes).
+   - If no PR: a message is displayed.
+4. The **review cycle** loops: if changes are requested, the original worker resumes with its session, addresses feedback, and the cycle repeats.
+5. Worktrees are cleaned up after the PR is merged.
+
+The project shell (`opt-s`) stays on the main checkout for manual work.
+
 ## Conventions
 
 - All read commands: JSON when piped, pretty in TTY. Use `src/output.ts`.
 - tmux sessions are named `garden-dashboard`.
 - `GARDEN_PROJECT` env var scopes commands inside sessions.
 - Project name is auto-detected from cwd when inside a registered project.
-- Dashboard workers are interactive Claude sessions, launched with project rules via `--append-system-prompt-file`.
+- Dashboard workers are interactive Claude sessions in isolated git worktrees, launched with project rules via `--append-system-prompt-file`.
 
 ## Rules system
 

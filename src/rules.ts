@@ -31,3 +31,33 @@ export function buildRulesContext(projectName: string, projectPath: string): str
 
   return sections.join("\n\n");
 }
+
+export function buildWorktreeRules(branchName: string): string {
+  return `## Worktree workflow
+
+You are working in an isolated git worktree on branch \`${branchName}\`.
+
+- Commit your work incrementally with clear, focused commit messages.
+- When your task is complete, open a pull request against main.
+  - Use a descriptive PR title summarizing what changed.
+  - Include a brief summary in the PR body.
+- After opening the PR, exit.`;
+}
+
+export function buildReviewRules(
+  prNumber: number,
+  branchName: string,
+): string {
+  return `## Review workflow
+
+You are reviewing PR #${prNumber} on branch \`${branchName}\`.
+
+- Read the full diff: \`gh pr diff ${prNumber}\`
+- Run the project's test suite if one exists.
+- Check for: correctness, scope discipline, no secrets, no unnecessary dependencies.
+- If the code is correct and tests pass:
+  - Approve and merge: \`gh pr review ${prNumber} --approve\` then \`gh pr merge ${prNumber} --squash --delete-branch\`
+- If changes are needed:
+  - Request changes with specific, actionable feedback: \`gh pr review ${prNumber} --request-changes --body "your feedback"\`
+- After completing your review action, exit.`;
+}

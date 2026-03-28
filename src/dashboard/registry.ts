@@ -8,6 +8,11 @@ export interface WorkerEntry {
   name: string;       // adjective-noun name, e.g. "swift-oak"
   sessionId: string;  // claude session UUID for direct resume
   task: string;       // last known task summary from pane title
+  worktreePath?: string;
+  branchName?: string;
+  prNumber?: number;
+  role?: "worker" | "reviewer";
+  parentWorker?: string;
 }
 
 export interface WorkerRegistry {
@@ -61,6 +66,27 @@ export function updateWorkerTask(project: string, workerName: string, task: stri
   if (!entry) return;
   entry.task = task;
   writeRegistry(registry);
+}
+
+export function updateWorkerFields(
+  project: string,
+  workerName: string,
+  fields: Partial<Omit<WorkerEntry, "name">>,
+): void {
+  const registry = readRegistry();
+  const entries = registry.workers[project];
+  if (!entries) return;
+  const entry = entries.find(e => e.name === workerName);
+  if (!entry) return;
+  Object.assign(entry, fields);
+  writeRegistry(registry);
+}
+
+export function findWorkerByName(
+  project: string,
+  workerName: string,
+): WorkerEntry | undefined {
+  return getWorkers(project).find(e => e.name === workerName);
 }
 
 export function getWorkers(project: string): WorkerEntry[] {

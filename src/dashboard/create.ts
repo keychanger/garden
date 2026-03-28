@@ -6,7 +6,7 @@ import {
   DASHBOARD_SESSION,
 } from "../session.js";
 import { loadConfig, tryGetProject, SESSIONS_DIR } from "../config.js";
-import { buildRulesContext } from "../rules.js";
+import { buildRulesContext, buildWorktreeRules, buildReviewRules } from "../rules.js";
 import { readDashState, writeDashState, STATE_FILE } from "./state.js";
 import { restoreFromHidden } from "./layout.js";
 import { setupKeybindings } from "./hotkeys.js";
@@ -116,10 +116,13 @@ export function ensureDashboard(): void {
 
     for (const entry of entries) {
       if (!entry.sessionId) continue;
-      const resumeCmd = buildResumeCommand(projectName, projectConfig.path, entry.sessionId);
+      const workerCwd = entry.worktreePath ?? projectConfig.path;
+      const resumeCmd = entry.worktreePath && entry.branchName
+        ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, gardenRunner)
+        : buildResumeCommand(projectName, projectConfig.path, entry.sessionId);
       const workerWindowName = `_${projectName}-worker-${entry.name}`;
 
-      tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", projectConfig.path,
+      tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", workerCwd,
         "sh", "-c", resumeCmd);
 
       const workerPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindowName}`);
@@ -172,9 +175,81 @@ export function buildResumeCommand(projectName: string, projectPath: string, ses
   return `${claudeCmd}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
 }
 
+export function buildWorktreeWorkerCommand(
+  projectName: string,
+  projectPath: string,
+  workerName: string,
+  branchName: string,
+  sessionId: string,
+  gardenRunner: string,
+): string {
+  const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName);
+  const claudeCmd = `claude --dangerously-skip-permissions --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const postExit = `${gardenRunner} dashboard _post-exit ${shellEscape(workerName)} ${shellEscape(projectName)}`;
+  return `${claudeCmd}; ${postExit}; exec $SHELL`;
+}
+
+export function buildReviewWorkerCommand(
+  projectName: string,
+  projectPath: string,
+  branchName: string,
+  prNumber: number,
+  sessionId: string,
+  gardenRunner: string,
+  reviewerName: string,
+): string {
+  const contextFile = writeReviewContextFile(projectName, projectPath, prNumber, branchName);
+  const claudeCmd = `claude --dangerously-skip-permissions --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const postExit = `${gardenRunner} dashboard _post-review ${shellEscape(reviewerName)} ${shellEscape(projectName)}`;
+  return `${claudeCmd}; ${postExit}; exec $SHELL`;
+}
+
+export function buildWorktreeResumeCommand(
+  projectName: string,
+  projectPath: string,
+  workerName: string,
+  branchName: string,
+  sessionId: string,
+  gardenRunner: string,
+): string {
+  const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName);
+  const claudeCmd = `claude --dangerously-skip-permissions --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const postExit = `${gardenRunner} dashboard _post-exit ${shellEscape(workerName)} ${shellEscape(projectName)}`;
+  return `${claudeCmd}; ${postExit}; exec $SHELL`;
+}
+
 function writeContextFile(projectName: string, projectPath: string): string {
   const context = buildRulesContext(projectName, projectPath);
   const contextFile = path.join(SESSIONS_DIR, `dashboard-${projectName}.context`);
+  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+  fs.writeFileSync(contextFile, context);
+  return contextFile;
+}
+
+function writeWorktreeContextFile(
+  projectName: string,
+  projectPath: string,
+  branchName: string,
+): string {
+  const base = buildRulesContext(projectName, projectPath);
+  const worktreeRules = buildWorktreeRules(branchName);
+  const context = `${base}\n\n${worktreeRules}`;
+  const contextFile = path.join(SESSIONS_DIR, `dashboard-${projectName}-${branchName}.context`);
+  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+  fs.writeFileSync(contextFile, context);
+  return contextFile;
+}
+
+function writeReviewContextFile(
+  projectName: string,
+  projectPath: string,
+  prNumber: number,
+  branchName: string,
+): string {
+  const base = buildRulesContext(projectName, projectPath);
+  const reviewRules = buildReviewRules(prNumber, branchName);
+  const context = `${base}\n\n${reviewRules}`;
+  const contextFile = path.join(SESSIONS_DIR, `dashboard-${projectName}-review-${prNumber}.context`);
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
   fs.writeFileSync(contextFile, context);
   return contextFile;

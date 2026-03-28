@@ -103,6 +103,93 @@ describe("updateWorkerTask", () => {
   });
 });
 
+describe("updateWorkerFields", () => {
+  it("updates specified fields on a worker", async () => {
+    const { addWorker, updateWorkerFields, getWorkers } = await importRegistry();
+    addWorker("proj", { name: "bold-ash", sessionId: "a", task: "" });
+    updateWorkerFields("proj", "bold-ash", {
+      worktreePath: "/tmp/wt",
+      branchName: "bold-ash",
+      prNumber: 42,
+    });
+    const worker = getWorkers("proj")[0];
+    expect(worker.worktreePath).toBe("/tmp/wt");
+    expect(worker.branchName).toBe("bold-ash");
+    expect(worker.prNumber).toBe(42);
+  });
+
+  it("preserves existing fields not in update", async () => {
+    const { addWorker, updateWorkerFields, getWorkers } = await importRegistry();
+    addWorker("proj", { name: "bold-ash", sessionId: "a", task: "original" });
+    updateWorkerFields("proj", "bold-ash", { prNumber: 10 });
+    const worker = getWorkers("proj")[0];
+    expect(worker.task).toBe("original");
+    expect(worker.sessionId).toBe("a");
+    expect(worker.prNumber).toBe(10);
+  });
+
+  it("is a no-op for unknown worker", async () => {
+    const { addWorker, updateWorkerFields, getWorkers } = await importRegistry();
+    addWorker("proj", { name: "bold-ash", sessionId: "a", task: "" });
+    updateWorkerFields("proj", "nonexistent", { prNumber: 5 });
+    expect(getWorkers("proj")[0].prNumber).toBeUndefined();
+  });
+
+  it("is a no-op for unknown project", async () => {
+    const { updateWorkerFields } = await importRegistry();
+    expect(() => updateWorkerFields("unknown", "any", { prNumber: 5 })).not.toThrow();
+  });
+
+  it("can set role and parentWorker", async () => {
+    const { addWorker, updateWorkerFields, getWorkers } = await importRegistry();
+    addWorker("proj", { name: "calm-bay", sessionId: "b", task: "" });
+    updateWorkerFields("proj", "calm-bay", {
+      role: "reviewer",
+      parentWorker: "bold-ash",
+    });
+    const worker = getWorkers("proj")[0];
+    expect(worker.role).toBe("reviewer");
+    expect(worker.parentWorker).toBe("bold-ash");
+  });
+});
+
+describe("findWorkerByName", () => {
+  it("finds a worker by name", async () => {
+    const { addWorker, findWorkerByName } = await importRegistry();
+    addWorker("proj", { name: "bold-ash", sessionId: "a", task: "fixing" });
+    const worker = findWorkerByName("proj", "bold-ash");
+    expect(worker).toBeDefined();
+    expect(worker!.sessionId).toBe("a");
+  });
+
+  it("returns undefined for unknown worker", async () => {
+    const { addWorker, findWorkerByName } = await importRegistry();
+    addWorker("proj", { name: "bold-ash", sessionId: "a", task: "" });
+    expect(findWorkerByName("proj", "nonexistent")).toBeUndefined();
+  });
+
+  it("returns undefined for unknown project", async () => {
+    const { findWorkerByName } = await importRegistry();
+    expect(findWorkerByName("unknown", "any")).toBeUndefined();
+  });
+});
+
+describe("backward compatibility", () => {
+  it("reads entries without new fields", async () => {
+    const { readRegistry, getWorkers, REGISTRY_FILE } = await importRegistry();
+    const oldFormat = {
+      workers: {
+        proj: [{ name: "bold-ash", sessionId: "a", task: "fix" }],
+      },
+    };
+    fs.writeFileSync(REGISTRY_FILE, JSON.stringify(oldFormat));
+    const workers = getWorkers("proj");
+    expect(workers).toHaveLength(1);
+    expect(workers[0].worktreePath).toBeUndefined();
+    expect(workers[0].role).toBeUndefined();
+  });
+});
+
 describe("getAllWorkerNames", () => {
   it("returns names across all projects", async () => {
     const { addWorker, getAllWorkerNames } = await importRegistry();

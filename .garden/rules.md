@@ -17,6 +17,16 @@ These extend the global rules in ~/.garden/rules.md.
 - Use output() and outputLines() from src/output.ts for all data output. Respect TTY detection.
 - Shell-escape all user-provided strings passed to tmux or child processes.
 
+## Dashboard architecture invariants
+
+- The right pane is permanent. Never destroy or recreate it. Move content via swap-pane only.
+- Hidden tmux windows use underscore-prefixed names (`_<project>-worker-N`, `_<project>-shell`).
+  Do not create, rename, or destroy underscore-prefixed windows outside of dashboard code.
+- All state file writes must be atomic: write to a temp file, then rename. Never write
+  directly to `dashboard.state.json` or `dashboard.registry.json`.
+- State files are the source of truth for dashboard logic. Tmux is the source of truth for
+  pane existence. When they disagree, the validator heals state to match tmux reality.
+
 ## Testing
 
 - Test framework: vitest (when set up).

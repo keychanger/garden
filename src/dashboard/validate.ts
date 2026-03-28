@@ -5,6 +5,7 @@ import { type DashboardState } from "./state.js";
 import { readRegistry, writeRegistry } from "./registry.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, killWindowSafe } from "./tmux.js";
 import { log } from "./log.js";
+import { worktreeExists, removeWorktree, pruneWorktrees, isPRMerged } from "./git.js";
 
 /**
  * Validate dashboard state against tmux reality and heal inconsistencies.
@@ -99,9 +100,39 @@ export function validateAndHeal(state: DashboardState): DashboardState {
     }
   }
 
+  // Validate worktrees for remaining registry entries
+  for (const [projectName, entries] of Object.entries(registry.workers)) {
+    for (const entry of entries) {
+      if (!entry.worktreePath) continue;
+      if (!worktreeExists(entry.worktreePath)) {
+        log.warn("validate", "worktree missing for worker", {
+          project: projectName,
+          worker: entry.name,
+          worktreePath: entry.worktreePath,
+        });
+        if (entry.prNumber && isPRMerged(entry.worktreePath, entry.prNumber)) {
+          log.info("validate", "PR already merged, cleaning registry entry", {
+            worker: entry.name,
+            prNumber: entry.prNumber,
+          });
+        }
+        entry.worktreePath = undefined;
+        registryChanged = true;
+      }
+    }
+  }
+
   if (registryChanged) {
     writeRegistry(registry);
   }
+
+  // Prune orphaned git worktrees
+  try {
+    const config = loadConfig();
+    for (const project of Object.values(config.projects)) {
+      pruneWorktrees(project.path);
+    }
+  } catch { /* best effort */ }
 
   // Clean stale context files
   cleanContextFiles();
