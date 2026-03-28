@@ -60,6 +60,9 @@ export function ensureDashboard(): void {
     "-x", cols, "-y", rows
   );
 
+  tmux("set-option", "-t", DASHBOARD_SESSION, "set-titles", "on");
+  tmux("set-option", "-t", DASHBOARD_SESSION, "set-titles-string", "garden");
+
   const gardenShellId = tmuxOutput(
     "display-message", "-t", `${DASHBOARD_SESSION}:main.0`, "-p", "#{pane_id}");
 
