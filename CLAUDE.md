@@ -29,6 +29,17 @@ npm run dev -- help    # run via tsx during development
 - `src/rules.ts` — assembles global + project rules for Claude sessions
 - `src/output.ts` — TTY detection for JSON vs pretty output
 
+## Project management
+
+Projects are added by directory path. The project name is always the directory basename.
+
+```bash
+garden add [path]      # defaults to cwd
+garden remove <name>   # name = directory basename
+```
+
+`register`/`unregister` are kept as aliases for backward compatibility.
+
 ## Adding a new command
 
 1. Create `src/commands/<name>.ts` exporting an async function that takes `args: string[]`

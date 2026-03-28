@@ -7,7 +7,7 @@ Garden is a personal tool — opinionated toward a single developer managing man
 ## Core Concepts
 
 ### Project
-A named reference to a directory on disk where Claude Code can operate. Projects are registered with `garden register <name> <path>`.
+A named reference to a directory on disk where Claude Code can operate. Projects are added with `garden add [path]` (name is derived from the directory basename).
 
 ### Dashboard
 A tmux session (`garden-dashboard`) that serves as the primary interface. The dashboard is a left/right split: project status and garden shell on the left, an active pane (worker or shell) on the right with a header bar. You never interact with tmux directly — garden sets up the layout, keybindings, and pane management.
@@ -110,8 +110,8 @@ Detection uses tmux's `pane_pid` to check process liveness and `pane_activity` t
 ### Projects
 ```
 garden init                        # Initialize ~/.garden, check for tmux
-garden register <name> <path>      # Register a project
-garden unregister <name>           # Unregister a project
+garden add [path]                  # Add a project (defaults to cwd, name = basename)
+garden remove <name>               # Remove a project
 garden list                        # List all projects
 ```
 
@@ -124,7 +124,7 @@ garden status                      # Show all projects and their workers
 garden rebuild                     # Rebuild garden and relaunch dashboard
 ```
 
-Project name is auto-detected from cwd when inside a registered project. `GARDEN_PROJECT` env var overrides.
+Project name is auto-detected from cwd when inside a project directory. `GARDEN_PROJECT` env var overrides.
 
 ## Output Format
 
@@ -167,9 +167,9 @@ All read commands detect whether stdout is a TTY:
 ```bash
 # One-time setup
 garden init
-garden register website ~/code/keychange/website
-garden register api ~/code/keychange/api
-garden register garden ~/code/keychange/garden
+cd ~/code/keychange/website && garden add
+cd ~/code/keychange/api && garden add
+cd ~/code/keychange/garden && garden add
 
 # Launch
 garden dashboard
