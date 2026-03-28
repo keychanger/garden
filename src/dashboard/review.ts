@@ -14,9 +14,10 @@ import { readDashState, writeDashState } from "./state.js";
 import { refreshDashboard } from "./header.js";
 import { log } from "./log.js";
 import {
-  getBranchPR, isPRMerged, getPRReviewFeedback,
-  removeWorktree, deleteBranch, pruneWorktrees,
+  getBranchPR, isPRMerged, getPRReviewDecision, getPRReviewFeedback,
+  removeWorktree, pruneWorktrees,
 } from "./git.js";
+import { enqueue, processMergeQueue, type MergeQueueEntry } from "./merge-queue.js";
 import {
   buildReviewWorkerCommand, buildWorktreeResumeCommand, resolveGardenRunner,
 } from "./create.js";
@@ -67,6 +68,7 @@ export function handlePostReview(reviewerName: string, projectName: string): voi
 
   removeWorker(projectName, reviewerName);
 
+  // Handle edge case: PR was merged externally
   if (isPRMerged(project.path, parent.prNumber)) {
     log.info("review", "PR merged, cleaning up", { prNumber: parent.prNumber });
     if (parent.worktreePath) {
@@ -79,6 +81,36 @@ export function handlePostReview(reviewerName: string, projectName: string): voi
     return;
   }
 
+  // Check if reviewer approved the PR
+  const decision = getPRReviewDecision(project.path, parent.prNumber);
+  if (decision === "APPROVED") {
+    log.info("review", "PR approved, enqueueing for merge", {
+      prNumber: parent.prNumber,
+      workerName: parent.name,
+    });
+    enqueue({
+      project: projectName,
+      prNumber: parent.prNumber,
+      workerName: parent.name,
+      branchName: parent.branchName ?? parent.name,
+      worktreePath: parent.worktreePath ?? project.path,
+      projectPath: project.path,
+      enqueuedAt: new Date().toISOString(),
+    });
+    tmuxDisplay(`PR #${parent.prNumber} approved. Queued for merge.`);
+    processMergeQueue(projectName, (entry) => {
+      resumeWorkerWithFeedback(projectName, project.path, {
+        name: entry.workerName,
+        sessionId: parent.sessionId,
+        worktreePath: entry.worktreePath,
+        branchName: entry.branchName,
+      });
+    });
+    refreshDashboard();
+    return;
+  }
+
+  // Check if reviewer requested changes
   const feedback = getPRReviewFeedback(project.path, parent.prNumber);
   if (feedback) {
     log.info("review", "changes requested, resuming worker", {

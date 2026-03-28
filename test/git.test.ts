@@ -28,6 +28,10 @@ import {
   isPRMerged,
   getPRReviewDecision,
   getPRReviewFeedback,
+  rebaseBranch,
+  abortRebase,
+  forcePushBranch,
+  mergePR,
   pruneWorktrees,
 } from "../src/dashboard/git.js";
 
@@ -218,6 +222,78 @@ describe("getPRReviewFeedback", () => {
       JSON.stringify({ reviews: [{ body: null }] }),
     );
     expect(getPRReviewFeedback("/repo", 42)).toBe("");
+  });
+});
+
+describe("rebaseBranch", () => {
+  it("returns true on successful rebase", () => {
+    expect(rebaseBranch("/tmp/wt")).toBe(true);
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["rebase", "main"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
+  it("returns false on conflict", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("conflict");
+    });
+    expect(rebaseBranch("/tmp/wt")).toBe(false);
+  });
+});
+
+describe("abortRebase", () => {
+  it("calls git rebase --abort", () => {
+    abortRebase("/tmp/wt");
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["rebase", "--abort"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
+  it("does not throw if not in rebase state", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("no rebase in progress");
+    });
+    expect(() => abortRebase("/tmp/wt")).not.toThrow();
+  });
+});
+
+describe("forcePushBranch", () => {
+  it("calls git push --force-with-lease", () => {
+    forcePushBranch("/tmp/wt");
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["push", "--force-with-lease"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
+  it("throws on failure", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("rejected");
+    });
+    expect(() => forcePushBranch("/tmp/wt")).toThrow();
+  });
+});
+
+describe("mergePR", () => {
+  it("calls gh pr merge with squash and delete-branch", () => {
+    mergePR("/repo", 42);
+    expect(mockExec).toHaveBeenCalledWith(
+      "gh",
+      ["pr", "merge", "42", "--squash", "--delete-branch"],
+      expect.objectContaining({ cwd: "/repo" }),
+    );
+  });
+
+  it("throws on failure", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("merge failed");
+    });
+    expect(() => mergePR("/repo", 42)).toThrow();
   });
 });
 

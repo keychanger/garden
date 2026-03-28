@@ -107,6 +107,24 @@ When a worktree worker exits, a post-exit hook runs:
 
 Review workers are registered with `role: "reviewer"` and `parentWorker` linking back to the original.
 
+### Merge Queue
+When a review worker approves a PR, it enters a per-project merge queue (`~/.garden/sessions/merge-queue.json`). The queue processes one PR at a time:
+1. Rebase the branch onto latest main
+2. Force-push the rebased branch
+3. Merge via `gh pr merge --squash --delete-branch`
+4. Clean up worktree and registry entries
+5. Process the next entry in the queue
+
+If rebase conflicts, the original worker is resumed to resolve the conflict. After resolution, the review cycle re-runs and re-queues.
+
+Projects don't block each other — each project's queue drains independently.
+
+The status pane shows queue state alongside workers:
+```
+  ⏳ PR #7 (swift-oak) merging
+  ⏳ PR #12 (bold-fern) queued
+```
+
 ### Worker Isolation Model
 - Every worker operates in its own git worktree — no shared working directory
 - The project shell (`⌥s`) stays on the main checkout for manual work
@@ -163,6 +181,7 @@ All read commands detect whether stdout is a TTY:
     dashboard-<project>.context  # System prompt for project's Claude sessions
     dashboard-<project>-<branch>.context  # Worktree worker context
     dashboard-<project>-review-<N>.context  # Review worker context
+    merge-queue.json        # Per-project sequential merge queue
   worktrees/
     <project>/
       <worker-name>/      # Git worktree for each worker

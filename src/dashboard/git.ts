@@ -141,6 +141,31 @@ export function getPRReviewFeedback(
   }
 }
 
+export function rebaseBranch(worktreePath: string): boolean {
+  try {
+    git(worktreePath, "rebase", "main");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function abortRebase(worktreePath: string): void {
+  try {
+    git(worktreePath, "rebase", "--abort");
+  } catch {
+    // may not be in a rebase state
+  }
+}
+
+export function forcePushBranch(worktreePath: string): void {
+  git(worktreePath, "push", "--force-with-lease");
+}
+
+export function mergePR(repoPath: string, prNumber: number): void {
+  gh(repoPath, "pr", "merge", String(prNumber), "--squash", "--delete-branch");
+}
+
 export function pruneWorktrees(repoPath: string): void {
   try {
     git(repoPath, "worktree", "prune");

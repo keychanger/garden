@@ -56,7 +56,8 @@ You are reviewing PR #${prNumber} on branch \`${branchName}\`.
 - Run the project's test suite if one exists.
 - Check for: correctness, scope discipline, no secrets, no unnecessary dependencies.
 - If the code is correct and tests pass:
-  - Approve and merge: \`gh pr review ${prNumber} --approve\` then \`gh pr merge ${prNumber} --squash --delete-branch\`
+  - Approve: \`gh pr review ${prNumber} --approve\`
+  - Do not merge. The merge queue handles merging.
 - If changes are needed:
   - Request changes with specific, actionable feedback: \`gh pr review ${prNumber} --request-changes --body "your feedback"\`
 - After completing your review action, exit.`;

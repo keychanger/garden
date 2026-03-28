@@ -104,10 +104,12 @@ describe("buildReviewRules", () => {
     expect(result).toContain("gh pr diff 42");
   });
 
-  it("instructs to merge on approval", async () => {
+  it("instructs to approve without merging", async () => {
     const { buildReviewRules } = await importRules();
     const result = buildReviewRules(42, "swift-oak");
-    expect(result).toContain("gh pr merge 42 --squash --delete-branch");
+    expect(result).toContain("gh pr review 42 --approve");
+    expect(result).toContain("Do not merge");
+    expect(result).not.toContain("gh pr merge");
   });
 
   it("instructs to request changes with feedback", async () => {

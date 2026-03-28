@@ -18,10 +18,16 @@ vi.mock("../src/dashboard/registry.js", () => ({
 vi.mock("../src/dashboard/git.js", () => ({
   getBranchPR: vi.fn(() => null),
   isPRMerged: vi.fn(() => false),
+  getPRReviewDecision: vi.fn(() => null),
   getPRReviewFeedback: vi.fn(() => ""),
   removeWorktree: vi.fn(),
   deleteBranch: vi.fn(),
   pruneWorktrees: vi.fn(),
+}));
+
+vi.mock("../src/dashboard/merge-queue.js", () => ({
+  enqueue: vi.fn(),
+  processMergeQueue: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/create.js", () => ({
@@ -64,9 +70,10 @@ vi.mock("../src/dashboard/log.js", () => ({
 
 import { handlePostExit, handlePostReview } from "../src/dashboard/review.js";
 import { findWorkerByName, addWorker, removeWorker, updateWorkerFields } from "../src/dashboard/registry.js";
-import { getBranchPR, isPRMerged, getPRReviewFeedback, removeWorktree, pruneWorktrees } from "../src/dashboard/git.js";
+import { getBranchPR, isPRMerged, getPRReviewDecision, getPRReviewFeedback, removeWorktree, pruneWorktrees } from "../src/dashboard/git.js";
 import { tmux, tmuxDisplay } from "../src/dashboard/tmux.js";
 import { buildReviewWorkerCommand, buildWorktreeResumeCommand } from "../src/dashboard/create.js";
+import { enqueue, processMergeQueue } from "../src/dashboard/merge-queue.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -208,6 +215,43 @@ describe("handlePostReview", () => {
     );
   });
 
+  it("enqueues and processes when PR is approved", () => {
+    vi.mocked(findWorkerByName)
+      .mockReturnValueOnce({
+        name: "keen-elm",
+        sessionId: "r1",
+        task: "",
+        role: "reviewer",
+        parentWorker: "swift-oak",
+      })
+      .mockReturnValueOnce({
+        name: "swift-oak",
+        sessionId: "abc",
+        task: "",
+        prNumber: 42,
+        worktreePath: "/tmp/wt",
+        branchName: "swift-oak",
+      });
+    vi.mocked(isPRMerged).mockReturnValue(false);
+    vi.mocked(getPRReviewDecision).mockReturnValue("APPROVED");
+
+    handlePostReview("keen-elm", "proj");
+
+    expect(removeWorker).toHaveBeenCalledWith("proj", "keen-elm");
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project: "proj",
+        prNumber: 42,
+        workerName: "swift-oak",
+        branchName: "swift-oak",
+      }),
+    );
+    expect(processMergeQueue).toHaveBeenCalledWith("proj", expect.any(Function));
+    expect(tmuxDisplay).toHaveBeenCalledWith(
+      expect.stringContaining("Queued for merge"),
+    );
+  });
+
   it("shows message when reviewer exits without action", () => {
     vi.mocked(findWorkerByName)
       .mockReturnValueOnce({
@@ -226,6 +270,7 @@ describe("handlePostReview", () => {
         branchName: "swift-oak",
       });
     vi.mocked(isPRMerged).mockReturnValue(false);
+    vi.mocked(getPRReviewDecision).mockReturnValue(null);
     vi.mocked(getPRReviewFeedback).mockReturnValue("");
 
     handlePostReview("keen-elm", "proj");

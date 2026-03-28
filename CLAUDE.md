@@ -30,6 +30,7 @@ npm run dev -- help    # run via tsx during development
   - `validate.ts` — state/tmux consistency validation and self-healing
   - `git.ts` — git/gh CLI wrappers for worktree and PR operations
   - `review.ts` — review cycle: post-exit handling, review worker spawning, resume loop
+  - `merge-queue.ts` — sequential PR merge queue, per-project, rebase-then-merge
   - `log.ts` — structured JSON logger to `~/.garden/sessions/dashboard.log`
   - `names.ts` — worker name generation (adjective-noun pairs)
 - `src/dashboard-claude.ts` — internal command: launches claude with rules context
@@ -89,10 +90,11 @@ Every worker runs in its own git worktree, isolated from the main checkout and o
 1. `opt-n` creates a worktree at `~/.garden/worktrees/<project>/<worker-name>/` on a branch named after the worker.
 2. The worker's system prompt includes instructions to commit incrementally and open a PR when done.
 3. After the worker exits, a **post-exit hook** checks for a PR on the branch:
-   - If PR found: a **review worker** spawns in the same worktree to review and merge (or request changes).
+   - If PR found: a **review worker** spawns in the same worktree to review (approve or request changes).
    - If no PR: a message is displayed.
 4. The **review cycle** loops: if changes are requested, the original worker resumes with its session, addresses feedback, and the cycle repeats.
-5. Worktrees are cleaned up after the PR is merged.
+5. If approved, the PR enters the **merge queue** (`src/dashboard/merge-queue.ts`). The queue processes PRs sequentially per project: rebase onto main, force-push, merge. If rebase conflicts, the original worker is resumed to resolve.
+6. Worktrees are cleaned up after the PR is merged.
 
 The project shell (`opt-s`) stays on the main checkout for manual work.
 

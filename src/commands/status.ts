@@ -4,6 +4,7 @@ import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState } from "../dashboard/state.js";
 import { getWorkers } from "../dashboard/registry.js";
+import { getProjectQueue } from "../dashboard/merge-queue.js";
 import {
   getPanePid, getPaneTitle, getPaneLabel, getFirstPaneId,
   getClaudeChildPid, hasChildProcesses, listHiddenWorkerWindows,
@@ -16,11 +17,18 @@ interface WorkerInfo {
   active: boolean;
 }
 
+interface QueueEntryInfo {
+  prNumber: number;
+  workerName: string;
+  status: "merging" | "queued";
+}
+
 interface ProjectStatusInfo {
   name: string;
   index: number;
   isActive: boolean;
   workers: WorkerInfo[];
+  queue: QueueEntryInfo[];
 }
 
 export async function status(_args: string[]): Promise<void> {
@@ -35,12 +43,20 @@ export async function status(_args: string[]): Promise<void> {
   const dashState = readDashState();
   const hasDashboard = dashboardExists();
 
-  const statuses: ProjectStatusInfo[] = names.map((name, i) => ({
-    name,
-    index: i + 1,
-    isActive: dashState.activeProject === name,
-    workers: hasDashboard ? getProjectWorkers(name, dashState) : [],
-  }));
+  const statuses: ProjectStatusInfo[] = names.map((name, i) => {
+    const queueEntries = getProjectQueue(name);
+    return {
+      name,
+      index: i + 1,
+      isActive: dashState.activeProject === name,
+      workers: hasDashboard ? getProjectWorkers(name, dashState) : [],
+      queue: queueEntries.map((e, qi) => ({
+        prNumber: e.prNumber,
+        workerName: e.workerName,
+        status: qi === 0 ? "merging" as const : "queued" as const,
+      })),
+    };
+  });
 
   if (!isTTY) {
     output(statuses);
@@ -51,13 +67,16 @@ export async function status(_args: string[]): Promise<void> {
     const marker = project.isActive ? " ◄" : "";
     console.log(`  ${project.index}. ${project.name}${marker}`);
 
-    if (project.workers.length === 0) {
+    if (project.workers.length === 0 && project.queue.length === 0) {
       console.log("    (no workers)");
     } else {
       for (const worker of project.workers) {
         const icon = worker.active ? "●" : "○";
         const suffix = worker.activity ? ` — ${worker.activity}` : worker.status === "waiting" ? " (no task)" : "";
         console.log(`    ${icon} ${worker.name}  ${worker.status}${suffix}`);
+      }
+      for (const entry of project.queue) {
+        console.log(`    ⏳ PR #${entry.prNumber} (${entry.workerName}) ${entry.status}`);
       }
     }
   }
