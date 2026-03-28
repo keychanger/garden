@@ -7,7 +7,7 @@ import {
 import { generateWorkerName } from "./names.js";
 import {
   addWorker, removeWorker, findWorkerByName,
-  updateWorkerFields, getAllWorkerNames,
+  updateWorkerFields, getAllWorkerNames, readRegistry,
 } from "./registry.js";
 import { readDashState, writeDashState } from "./state.js";
 import { refreshDashboard } from "./header.js";
@@ -31,6 +31,12 @@ export function handlePostExit(workerName: string, projectName: string): void {
     return;
   }
 
+  // Already has a PR and review spawned — idempotency guard
+  if (entry.prNumber) {
+    log.info("review", "worker already has PR, skipping", { workerName, prNumber: entry.prNumber });
+    return;
+  }
+
   const branchName = entry.branchName ?? workerName;
   const prNumber = getBranchPR(project.path, branchName);
 
@@ -43,6 +49,23 @@ export function handlePostExit(workerName: string, projectName: string): void {
   updateWorkerFields(projectName, workerName, { prNumber });
   log.info("review", "PR found, spawning review worker", { prNumber, workerName });
   spawnReviewWorker(projectName, project.path, entry, prNumber);
+}
+
+/**
+ * Poll all workers for PR creation. Called from the status loop to detect
+ * PRs without relying on Claude Code exiting (which may not happen).
+ */
+export function checkWorkerPRs(): void {
+  const registry = readRegistry();
+  for (const [projectName, entries] of Object.entries(registry.workers)) {
+    for (const entry of entries) {
+      if (entry.role === "reviewer") continue;
+      if (entry.prNumber) continue;
+      if (!entry.branchName) continue;
+
+      handlePostExit(entry.name, projectName);
+    }
+  }
 }
 
 export function handlePostReview(reviewerName: string, projectName: string): void {
