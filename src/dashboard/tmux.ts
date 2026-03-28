@@ -44,6 +44,15 @@ export function setPaneVar(paneId: string, name: string, value: string): void {
   } catch { /* ignore */ }
 }
 
+export function getPaneVar(paneId: string, name: string): string | null {
+  try {
+    const val = tmuxOutput("display-message", "-t", paneId, "-p", `#{@${name}}`);
+    return val || null;
+  } catch {
+    return null;
+  }
+}
+
 export function getFirstPaneId(target: string): string | null {
   try {
     return tmuxOutput("list-panes", "-t", target, "-F", "#{pane_id}").split("\n")[0] || null;

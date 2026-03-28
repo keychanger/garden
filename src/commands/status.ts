@@ -6,7 +6,7 @@ import { readDashState } from "../dashboard/state.js";
 import { getWorkers } from "../dashboard/registry.js";
 import { getProjectQueue } from "../dashboard/merge-queue.js";
 import {
-  getPanePid, getPaneTitle, getPaneLabel, getFirstPaneId,
+  getPanePid, getPaneTitle, getPaneLabel, getPaneVar, getFirstPaneId,
   getClaudeChildPid, hasChildProcesses, listHiddenWorkerWindows,
 } from "../dashboard/tmux.js";
 
@@ -124,7 +124,7 @@ function detectPaneProcessStatus(paneId: string): PaneInfo {
   const claudePid = getClaudeChildPid(pid);
   if (!claudePid) return { status: "waiting", activity: null };
 
-  const activity = getPaneTitle(paneId);
+  const activity = getPaneVar(paneId, "garden_task") ?? getPaneTitle(paneId);
   const status = hasChildProcesses(claudePid) ? "working" : "waiting";
   return { status, activity };
 }
