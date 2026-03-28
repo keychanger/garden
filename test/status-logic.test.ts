@@ -4,6 +4,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   getPanePid: vi.fn(),
   getPaneTitle: vi.fn(),
   getPaneLabel: vi.fn(),
+  getPaneVar: vi.fn(() => null),
   getFirstPaneId: vi.fn(),
   getClaudeChildPid: vi.fn(),
   hasChildProcesses: vi.fn(),
