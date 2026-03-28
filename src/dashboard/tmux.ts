@@ -38,6 +38,12 @@ export function setPaneLabel(paneId: string, label: string): void {
   } catch { /* ignore */ }
 }
 
+export function setPaneVar(paneId: string, name: string, value: string): void {
+  try {
+    tmux("set-option", "-p", "-t", paneId, `@${name}`, value);
+  } catch { /* ignore */ }
+}
+
 export function getFirstPaneId(target: string): string | null {
   try {
     return tmuxOutput("list-panes", "-t", target, "-F", "#{pane_id}").split("\n")[0] || null;
@@ -82,7 +88,7 @@ export function getPaneTitle(paneId: string): string | null {
   try {
     const raw = tmuxOutput("display-message", "-t", paneId, "-p", "#{pane_title}");
     if (!raw) return null;
-    const cleaned = raw.replace(/^[*\s]+/, "");
+    const cleaned = raw.replace(/^[^a-zA-Z0-9]+/, "").trim();
     return (cleaned && cleaned !== "Claude Code") ? cleaned : null;
   } catch {
     return null;
@@ -134,16 +140,6 @@ export function listHiddenWorkerWindows(project: string): string[] {
   } catch {
     return [];
   }
-}
-
-export function getNextWorkerNum(project: string): number {
-  const windows = listHiddenWorkerWindows(project);
-  let max = 0;
-  for (const w of windows) {
-    const match = w.match(/-worker-(\d+)$/);
-    if (match) max = Math.max(max, parseInt(match[1], 10));
-  }
-  return max + 1;
 }
 
 export function shellEscape(s: string): string {

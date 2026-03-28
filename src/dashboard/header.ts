@@ -1,8 +1,9 @@
 // Dashboard header and status bar: renders project info and hotkey hints
 // in the tmux status line.
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, paneExists, getPanePid, getPaneTitle, hasClaudeChild, listHiddenWorkerWindows } from "./tmux.js";
+import { tmux, paneExists, getPanePid, getPaneTitle, hasClaudeChild, listHiddenWorkerWindows, setPaneVar } from "./tmux.js";
 import { readDashState } from "./state.js";
+import { updateWorkerTask } from "./registry.js";
 
 export function setupStatusBar(gardenRunner: string): void {
   const target = DASHBOARD_SESSION;
@@ -18,7 +19,7 @@ export function setupStatusBar(gardenRunner: string): void {
     tmux("set-option", "-t", target, "window-status-format", "");
     tmux("set-option", "-t", target, "pane-border-status", "top");
     tmux("set-option", "-t", target, "pane-border-format",
-      " #{?@garden_name,#{@garden_name} - #{pane_title},#{pane_title}} ");
+      " #{?@garden_name,#{@garden_name}#{?@garden_task, - #{@garden_task},},#{pane_title}} ");
   } catch { /* ignore */ }
 }
 
@@ -43,6 +44,9 @@ export function printHeader(): void {
     currentWorkerIdx = allWorkers.indexOf(currentName) + 1;
   }
 
+  const workerNameMatch = (state.activeWindowName ?? "").match(/-worker-(.+)$/);
+  const workerLabel = workerNameMatch ? workerNameMatch[1] : null;
+
   let paneStatus = "";
   if (state.activePaneId && paneExists(state.activePaneId)) {
     if (state.activePaneType === "shell") {
@@ -51,9 +55,17 @@ export function printHeader(): void {
       const pid = getPanePid(state.activePaneId);
       if (pid && hasClaudeChild(pid)) {
         const title = getPaneTitle(state.activePaneId);
-        paneStatus = title ? "worker (working)" : "worker (waiting)";
+        paneStatus = title ? "working" : "waiting";
+        setPaneVar(state.activePaneId, "garden_task", title ?? "");
+        if (workerLabel && state.activeProject) {
+          updateWorkerTask(state.activeProject, workerLabel, title ?? "");
+        }
       } else {
-        paneStatus = "worker (exited)";
+        paneStatus = "exited";
+        setPaneVar(state.activePaneId, "garden_task", "");
+        if (workerLabel && state.activeProject) {
+          updateWorkerTask(state.activeProject, workerLabel, "");
+        }
       }
     }
   }
@@ -61,7 +73,8 @@ export function printHeader(): void {
   const parts: string[] = [projectName];
 
   if (isOnWorker && totalWorkers > 0) {
-    parts.push(`${currentWorkerIdx}/${totalWorkers} ${paneStatus}`);
+    const label = workerLabel ?? "worker";
+    parts.push(`${label} (${paneStatus}) [${currentWorkerIdx}/${totalWorkers}]`);
   } else if (paneStatus) {
     parts.push(paneStatus);
     if (totalWorkers > 0) {

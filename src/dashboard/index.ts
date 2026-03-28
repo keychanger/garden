@@ -2,6 +2,7 @@
 // worker management, and pane navigation.
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import {
   checkTmux,
   dashboardExists,
@@ -9,17 +10,19 @@ import {
   killDashboardSession,
   DASHBOARD_SESSION,
 } from "../session.js";
-import { loadConfig, getProject, SESSIONS_DIR } from "../config.js";
+import { loadConfig, getProject, tryGetProject, SESSIONS_DIR } from "../config.js";
 import { buildRulesContext } from "../rules.js";
 import { readDashState, writeDashState, STATE_FILE } from "./state.js";
 import { parkToHidden, restoreFromHidden, swapToHidden } from "./layout.js";
 import { setupKeybindings } from "./hotkeys.js";
 import { setupStatusBar, buildStatusCommand, printHeader, refreshStatusPane } from "./header.js";
 import {
-  tmux, tmuxOutput, tmuxSplit, tmuxDisplay, setPaneTitle, setPaneLabel,
+  tmux, tmuxOutput, tmuxSplit, tmuxDisplay, setPaneTitle, setPaneLabel, setPaneVar,
   getFirstPaneId, paneExists, windowExists, shellEscape,
-  listHiddenWorkerWindows, getNextWorkerNum, getPanePid,
+  listHiddenWorkerWindows, getPanePid,
 } from "./tmux.js";
+import { generateWorkerName } from "./names.js";
+import { addWorker, removeWorker, getAllWorkerNames, readRegistry } from "./registry.js";
 
 // --- Entry point ---
 
@@ -83,9 +86,12 @@ function ensureDashboard(): void {
   const firstProject = projectNames.length > 0 ? projectNames[0] : null;
   const firstPath = firstProject ? config.projects[firstProject].path : cwd;
 
+  const cols = String(process.stdout.columns || 200);
+  const rows = String(process.stdout.rows || 50);
+
   tmux(
     "new-session", "-d", "-s", DASHBOARD_SESSION, "-n", "main", "-c", cwd,
-    "-x", "200", "-y", "50"
+    "-x", cols, "-y", rows
   );
 
   const gardenShellId = tmuxOutput(
@@ -100,7 +106,10 @@ function ensureDashboard(): void {
 
   setPaneTitle(statusId, "status");
   setPaneTitle(gardenShellId, "garden");
-  if (firstProject) setPaneLabel(rightPaneId, "shell");
+  if (firstProject) {
+    setPaneLabel(rightPaneId, `shell-${firstProject}`);
+    setPaneTitle(rightPaneId, firstProject);
+  }
 
   setupStatusBar(gardenRunner);
 
@@ -115,13 +124,53 @@ function ensureDashboard(): void {
 
   if (!firstProject) {
     tmux("send-keys", "-t", rightPaneId,
-      `echo "No projects registered. Run: garden register <name> <path>"`, "Enter");
+      `echo "No projects added. Run: garden add [path]"`, "Enter");
+  }
+
+  // Resume workers from previous session
+  const registry = readRegistry();
+  let firstResumedWindow: string | null = null;
+
+  for (const [projectName, entries] of Object.entries(registry.workers)) {
+    const projectConfig = tryGetProject(projectName);
+    if (!projectConfig) continue;
+
+    for (const entry of entries) {
+      if (!entry.sessionId) continue; // skip legacy entries without session ID
+      const resumeCmd = buildResumeCommand(projectName, projectConfig.path, entry.sessionId);
+      const workerWindowName = `_${projectName}-worker-${entry.name}`;
+
+      tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", projectConfig.path,
+        "sh", "-c", resumeCmd);
+
+      const workerPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindowName}`);
+      if (workerPaneId) {
+        setPaneLabel(workerPaneId, entry.name);
+        if (entry.task) setPaneVar(workerPaneId, "garden_task", entry.task);
+      }
+
+      if (projectName === state.activeProject && !firstResumedWindow) {
+        firstResumedWindow = workerWindowName;
+      }
+    }
+  }
+
+  if (firstResumedWindow) {
+    restoreFromHidden(firstResumedWindow, state);
+    state.activePaneType = "worker";
+    state.activeWindowName = firstResumedWindow;
   }
 
   writeDashState(state);
   setupKeybindings(gardenRunner);
 
-  tmux("select-pane", "-t", gardenShellId);
+  // Focus the worker pane if we resumed one (so user can interact with
+  // Claude's resume picker), otherwise focus the garden shell.
+  if (firstResumedWindow && state.activePaneId) {
+    tmux("select-pane", "-t", state.activePaneId);
+  } else {
+    tmux("select-pane", "-t", gardenShellId);
+  }
 }
 
 // --- Project switching ---
@@ -157,9 +206,7 @@ function switchProject(indexArg: string): void {
     state.activePaneType = "shell";
     state.activeWindowName = `_${projectName}-shell`;
   } else {
-    tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", `_${projectName}-shell`, "-c", project.path);
-    const newShellPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:_${projectName}-shell`);
-    if (newShellPaneId) setPaneLabel(newShellPaneId, "shell");
+    createShellWindow(projectName, project.path);
     restoreFromHidden(`_${projectName}-shell`, state);
     state.activePaneType = "shell";
     state.activeWindowName = `_${projectName}-shell`;
@@ -181,19 +228,23 @@ function newWorker(): void {
   }
 
   const project = getProject(state.activeProject);
-  const workerCmd = buildWorkerCommand(project.name, project.path);
+  const existingNames = getAllWorkerNames();
+  const workerName = generateWorkerName(existingNames);
+  const sessionId = crypto.randomUUID();
+  const workerCmd = buildWorkerCommand(project.name, project.path, sessionId);
 
   const parkName = state.activeWindowName ?? `_${state.activeProject}-active`;
   parkToHidden(parkName, state);
 
-  const workerNum = getNextWorkerNum(state.activeProject);
-  const workerWindowName = `_${state.activeProject}-worker-${workerNum}`;
+  const workerWindowName = `_${state.activeProject}-worker-${workerName}`;
 
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
     "sh", "-c", workerCmd);
   const workerPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindowName}`);
-  if (workerPaneId) setPaneLabel(workerPaneId, `worker-${workerNum}`);
+  if (workerPaneId) setPaneLabel(workerPaneId, workerName);
   restoreFromHidden(workerWindowName, state);
+
+  addWorker(state.activeProject, { name: workerName, sessionId, task: "" });
 
   state.activePaneType = "worker";
   state.activeWindowName = workerWindowName;
@@ -209,7 +260,9 @@ function focusWorker(): void {
   }
 
   if (state.activePaneType === "worker") {
-    tmuxDisplay("Already on a worker.");
+    if (state.activePaneId && paneExists(state.activePaneId)) {
+      tmux("select-pane", "-t", state.activePaneId);
+    }
     return;
   }
 
@@ -236,7 +289,9 @@ function focusShell(): void {
   }
 
   if (state.activePaneType === "shell") {
-    tmuxDisplay("Already on shell.");
+    if (state.activePaneId && paneExists(state.activePaneId)) {
+      tmux("select-pane", "-t", state.activePaneId);
+    }
     return;
   }
 
@@ -244,9 +299,7 @@ function focusShell(): void {
   const shellWindowName = `_${state.activeProject}-shell`;
 
   if (!windowExists(shellWindowName)) {
-    tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", shellWindowName, "-c", project.path);
-    const shellPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${shellWindowName}`);
-    if (shellPaneId) setPaneLabel(shellPaneId, "shell");
+    createShellWindow(state.activeProject, project.path);
   }
 
   const parkName = state.activeWindowName ?? `_${state.activeProject}-active`;
@@ -327,6 +380,7 @@ function killPane(): void {
     return;
   }
 
+  const killedWindowName = state.activeWindowName;
   const workerWindows = listHiddenWorkerWindows(state.activeProject);
   const project = getProject(state.activeProject);
 
@@ -343,7 +397,7 @@ function killPane(): void {
   } else {
     const shellWindowName = `_${state.activeProject}-shell`;
     if (!windowExists(shellWindowName)) {
-      tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", shellWindowName, "-c", project.path);
+      createShellWindow(state.activeProject, project.path);
     }
     const shellPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${shellWindowName}`);
     if (shellPaneId) {
@@ -355,19 +409,47 @@ function killPane(): void {
     }
   }
 
+  if (killedWindowName && state.activeProject) {
+    const nameMatch = killedWindowName.match(/-worker-(.+)$/);
+    if (nameMatch) removeWorker(state.activeProject, nameMatch[1]);
+  }
+
   writeDashState(state);
   refreshStatusPane();
 }
 
 // --- Worker command builder ---
 
-function buildWorkerCommand(projectName: string, projectPath: string): string {
+function buildWorkerCommand(projectName: string, projectPath: string, sessionId: string): string {
+  const contextFile = writeContextFile(projectName, projectPath);
+  const claudeCmd = `claude --dangerously-skip-permissions --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  return `${claudeCmd}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
+}
+
+function buildResumeCommand(projectName: string, projectPath: string, sessionId: string): string {
+  const contextFile = writeContextFile(projectName, projectPath);
+  const claudeCmd = `claude --dangerously-skip-permissions --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  return `${claudeCmd}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
+}
+
+function writeContextFile(projectName: string, projectPath: string): string {
   const context = buildRulesContext(projectName, projectPath);
   const contextFile = path.join(SESSIONS_DIR, `dashboard-${projectName}.context`);
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
   fs.writeFileSync(contextFile, context);
-  const claudeCmd = `claude --dangerously-skip-permissions --append-system-prompt-file ${shellEscape(contextFile)}`;
-  return `${claudeCmd}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
+  return contextFile;
+}
+
+// --- Shell window creation ---
+
+function createShellWindow(projectName: string, projectPath: string): void {
+  const windowName = `_${projectName}-shell`;
+  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName, "-c", projectPath);
+  const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
+  if (paneId) {
+    setPaneLabel(paneId, `shell-${projectName}`);
+    setPaneTitle(paneId, projectName);
+  }
 }
 
 // --- Helpers ---
