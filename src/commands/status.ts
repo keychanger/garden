@@ -3,6 +3,7 @@ import { loadConfig } from "../config.js";
 import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState } from "../dashboard/state.js";
+import { getWorkers } from "../dashboard/registry.js";
 import {
   getPanePid, getPaneTitle, getPaneLabel, getFirstPaneId,
   getClaudeChildPid, hasChildProcesses, listHiddenWorkerWindows,
@@ -62,30 +63,32 @@ export async function status(_args: string[]): Promise<void> {
   }
 }
 
-function getProjectWorkers(projectName: string, dashState: { activeProject: string | null; activePaneId: string | null; activePaneType: string | null }): WorkerInfo[] {
+function getProjectWorkers(projectName: string, dashState: { activeProject: string | null; activePaneId: string | null; activePaneType: string | null; activeWindowName?: string | null }): WorkerInfo[] {
   const workers: WorkerInfo[] = [];
+  const activeWindowName = dashState.activeWindowName ?? null;
+  const registryEntries = getWorkers(projectName);
+  const registryTaskByName = new Map(registryEntries.map(e => [e.name, e.task]));
 
   if (dashState.activeProject === projectName && dashState.activePaneId && dashState.activePaneType === "worker") {
     const label = getPaneLabel(dashState.activePaneId) ?? "worker-1";
     const paneInfo = detectPaneProcessStatus(dashState.activePaneId);
+    if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
     workers.push({ name: label, ...paneInfo, active: true });
   }
 
   const hiddenWindows = listHiddenWorkerWindows(projectName);
   for (const win of hiddenWindows) {
+    if (win === activeWindowName) continue;
     const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${win}`);
     if (paneId) {
       const label = getPaneLabel(paneId) ?? win.replace(`_${projectName}-`, "");
       const paneInfo = detectPaneProcessStatus(paneId);
+      if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
       workers.push({ name: label, ...paneInfo, active: false });
     }
   }
 
-  workers.sort((a, b) => {
-    const numA = parseInt(a.name.replace(/\D/g, ""), 10) || 0;
-    const numB = parseInt(b.name.replace(/\D/g, ""), 10) || 0;
-    return numA - numB;
-  });
+  workers.sort((a, b) => a.name.localeCompare(b.name));
 
   return workers;
 }
