@@ -31,6 +31,11 @@ if (commandName === "exit") {
   commandArgs.unshift("exit");
   commandName = "dashboard";
 }
+// garden restart → garden dashboard restart
+if (commandName === "restart") {
+  commandArgs.unshift("restart");
+  commandName = "dashboard";
+}
 
 const resolved = aliases[commandName] ?? commandName;
 const command = commands[resolved];
@@ -64,6 +69,7 @@ Projects:
 Dashboard:
   dashboard                      Open the dashboard (creates if needed)
   dashboard exit, exit           Close the dashboard
+  dashboard restart, restart     Restart the dashboard (preserves workers)
   keys                           Show dashboard keybindings
   status                         Show project and worker status
   health                         Check dashboard state consistency

@@ -34,6 +34,20 @@ export async function dashboard(args: string[]): Promise<void> {
     return;
   }
 
+  if (sub === "restart") {
+    if (dashboardExists()) {
+      log.info("dashboard", "restarting dashboard");
+      killDashboardSession();
+      try { fs.unlinkSync(STATE_FILE); } catch { /* ignore */ }
+      cleanupContextFiles();
+    }
+    resizeTerminal();
+    ensureDashboard();
+    console.log("Attaching to dashboard... (detach with ctrl-b d)");
+    attachDashboardSession();
+    return;
+  }
+
   // Internal subcommands called by hotkeys
   if (sub === "_switch") return switchProject(args[1]);
   if (sub === "_new-worker") return newWorker();
@@ -70,6 +84,7 @@ garden dashboard — multi-project control center
 Usage:
   garden dashboard                 Open the dashboard (creates if needed)
   garden dashboard exit            Close the dashboard
+  garden dashboard restart         Restart (preserves workers)
 
 Layout:
   Left: project status (upper, auto-sized) + garden shell (lower).
