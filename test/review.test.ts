@@ -23,7 +23,7 @@ vi.mock("../src/dashboard/header.js", () => ({
 }));
 
 vi.mock("../src/dashboard/names.js", () => ({
-  generateWorkerName: vi.fn(() => "keen-elm"),
+  generateWorkerName: vi.fn(() => "keen-bright-elm"),
 }));
 
 vi.mock("../src/session.js", () => ({
@@ -50,7 +50,7 @@ describe("spawnReviewWorker", () => {
       branchName: "swift-oak",
     }, 42);
 
-    expect(name).toBe("keen-elm");
+    expect(name).toBe("keen-bright-elm");
   });
 
   it("spawns tmux window with review command", () => {
@@ -62,7 +62,7 @@ describe("spawnReviewWorker", () => {
 
     expect(tmux).toHaveBeenCalledWith(
       "new-window", "-d", "-t", "garden-dashboard",
-      "-n", "_proj-worker-keen-elm",
+      "-n", "_proj-worker-keen-bright-elm",
       "-c", "/tmp/wt",
       "sh", "-c", "review-cmd",
     );
@@ -78,7 +78,7 @@ describe("spawnReviewWorker", () => {
     expect(addWorker).toHaveBeenCalledWith(
       "proj",
       expect.objectContaining({
-        name: "keen-elm",
+        name: "keen-bright-elm",
         role: "reviewer",
         parentWorker: "swift-oak",
         prNumber: 42,
@@ -107,7 +107,7 @@ describe("spawnReviewWorker", () => {
 
     expect(tmux).toHaveBeenCalledWith(
       "new-window", "-d", "-t", "garden-dashboard",
-      "-n", "_proj-worker-keen-elm",
+      "-n", "_proj-worker-keen-bright-elm",
       "-c", "/repo/proj",
       "sh", "-c", "review-cmd",
     );
