@@ -1,9 +1,9 @@
 // Dashboard header and status bar: renders project info and hotkey hints
 // in the tmux status line.
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, paneExists, getPanePid, getPaneTitle, getPaneVar, hasClaudeChild, listHiddenWorkerWindows, setPaneVar } from "./tmux.js";
+import { tmux, paneExists, getPanePid, getPaneVar, hasClaudeChild, listHiddenWorkerWindows, setPaneVar } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
-import { updateWorkerTask } from "./registry.js";
+import { findWorkerByName } from "./registry.js";
 
 export function setupStatusBar(gardenRunner: string): void {
   const target = DASHBOARD_SESSION;
@@ -11,7 +11,7 @@ export function setupStatusBar(gardenRunner: string): void {
     tmux("set-option", "-t", target, "mouse", "on");
     tmux("set-option", "-t", target, "status-right-length", "120");
     tmux("set-option", "-t", target, "status-right", "#{@garden_header}");
-    tmux("set-option", "-t", target, "status-interval", "5");
+    tmux("set-option", "-t", target, "status-interval", "2");
     tmux("set-option", "-t", target, "status-left", "");
     tmux("set-option", "-t", target, "status-left-length", "0");
     tmux("set-option", "-t", target, "window-status-current-format", "garden");
@@ -60,12 +60,15 @@ export function printHeader(): void {
     } else {
       const pid = getPanePid(state.activePaneId);
       if (pid && hasClaudeChild(pid)) {
-        const title = getPaneVar(state.activePaneId!, "garden_task") ?? getPaneTitle(state.activePaneId);
-        paneStatus = title ? "working" : "waiting";
-        setPaneVar(state.activePaneId, "garden_task", title ?? "");
-        if (workerLabel && state.activeProject && title) {
-          updateWorkerTask(state.activeProject, workerLabel, title);
+        let title = getPaneVar(state.activePaneId!, "garden_task");
+        if (!title && workerLabel && state.activeProject) {
+          const entry = findWorkerByName(state.activeProject, workerLabel);
+          if (entry?.task) {
+            title = entry.task;
+            setPaneVar(state.activePaneId!, "garden_task", title);
+          }
         }
+        paneStatus = title ? "working" : "waiting";
       } else {
         paneStatus = "exited";
         setPaneVar(state.activePaneId, "garden_task", "");
@@ -146,7 +149,7 @@ function setHeaderVar(header: string): void {
 }
 
 export function buildStatusCommand(gardenRunner: string): string {
-  return `trap true USR1; sleep 1 & wait $!; prev=""; while true; do ${gardenRunner} dashboard _header >/dev/null 2>&1; ${gardenRunner} dashboard _check-prs >/dev/null 2>&1; cur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1); if [ "$cur" != "$prev" ]; then printf '\\033[H\\033[2J%s\\n' "$cur"; prev="$cur"; fi; sleep 5 & wait $!; done`;
+  return `trap true USR1; sleep 1 & wait $!; prev=""; while true; do ${gardenRunner} dashboard _header >/dev/null 2>&1; ${gardenRunner} dashboard _check-prs >/dev/null 2>&1; cur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1); if [ "$cur" != "$prev" ]; then printf '\\033[H\\033[2J%s\\n' "$cur"; prev="$cur"; fi; sleep 2 & wait $!; done`;
 }
 
 export function refreshStatusPane(): void {

@@ -4,6 +4,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
   tmuxDisplay: vi.fn(),
   setPaneLabel: vi.fn(),
+  setPaneVar: vi.fn(),
   getFirstPaneId: vi.fn(() => "%50"),
 }));
 
