@@ -2,7 +2,7 @@
 import { DASHBOARD_SESSION } from "../session.js";
 import { getProject } from "../config.js";
 import {
-  tmux, setPaneLabel, getFirstPaneId, tmuxDisplay,
+  tmux, setPaneLabel, setPaneVar, getFirstPaneId, tmuxDisplay,
 } from "./tmux.js";
 import { generateWorkerName } from "./names.js";
 import {
@@ -168,7 +168,10 @@ function spawnReviewWorker(
     "sh", "-c", cmd);
 
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
-  if (paneId) setPaneLabel(paneId, reviewerName);
+  if (paneId) {
+    setPaneLabel(paneId, reviewerName);
+    setPaneVar(paneId, "garden_task", `reviewing PR #${prNumber}`);
+  }
 
   addWorker(projectName, {
     name: reviewerName,
