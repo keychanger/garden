@@ -107,7 +107,7 @@ The project shell (`opt-s`) stays on the main checkout for manual work.
 - tmux sessions are named `garden-dashboard`.
 - `GARDEN_PROJECT` env var scopes commands inside sessions.
 - Project name is auto-detected from cwd when inside a registered project.
-- Dashboard workers are interactive Claude sessions in isolated git worktrees, launched with project rules via `--append-system-prompt-file`.
+- Dashboard workers are interactive Claude sessions in isolated git worktrees, launched with project rules via `--append-system-prompt-file`. Workers operate autonomously — they commit, push, and open PRs without asking for confirmation, since each worktree is fully isolated.
 
 ## Rules system
 
