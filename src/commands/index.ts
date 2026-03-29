@@ -9,6 +9,7 @@ import { keys } from "./keys.js";
 import { rebuild } from "./rebuild.js";
 import { reset } from "./reset.js";
 import { health } from "./health.js";
+import { test } from "./test.js";
 
 type Command = (args: string[]) => Promise<void>;
 
@@ -23,4 +24,5 @@ export const commands: Record<string, Command> = {
   rebuild,
   reset,
   health,
+  test,
 };
