@@ -166,7 +166,7 @@ describe("rebaseBranch", () => {
     expect(rebaseBranch("/tmp/wt")).toBe(true);
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["rebase", "main"],
+      ["rebase", "origin/main"],
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -216,11 +216,11 @@ describe("forcePushBranch", () => {
 });
 
 describe("mergePR", () => {
-  it("calls gh pr merge with squash and delete-branch", () => {
+  it("calls gh pr merge with squash", () => {
     mergePR("/repo", 42);
     expect(mockExec).toHaveBeenCalledWith(
       "gh",
-      ["pr", "merge", "42", "--squash", "--delete-branch"],
+      ["pr", "merge", "42", "--squash"],
       expect.objectContaining({ cwd: "/repo" }),
     );
   });

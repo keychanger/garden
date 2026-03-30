@@ -43,11 +43,13 @@ in `<project>/.garden/rules.md` can extend or override these.
 
 ## Testing
 
-- All tests must pass before committing.
+- All tests must pass before committing. Run the full test suite, not just your new tests.
 - Test behavior, not implementation.
-- Add tests for new functionality. If a test framework exists, use it. If not, set one up
-  only if the project has enough complexity to justify it.
-- Run the full test suite, not just your new tests.
+- Add tests for new functionality. Update tests for changed functionality. If you change
+  how a function behaves, its tests must reflect the new behavior. Leaving stale tests
+  is a bug.
+- If a test framework exists, use it. If not, set one up only if the project has enough
+  complexity to justify it.
 
 ## Git workflow
 
@@ -96,3 +98,5 @@ When reviewing a PR:
 - When making a judgment call, document what you chose and why.
 - Stay within the scope of your work. Do not take on adjacent work, refactor
   surrounding code, or "improve" things you were not asked to change.
+- Tests, documentation, and type-checking for code you changed are always in scope.
+  Passing `tsc --noEmit` and the full test suite is part of completing the task.

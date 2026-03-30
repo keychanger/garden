@@ -32,9 +32,14 @@ These extend the global rules in ~/.garden/rules.md.
 - Test framework: vitest (when set up).
 - Test the CLI commands and dashboard behavior.
 - Do not test trivial getters or internal helpers unless they have complex logic.
+- When you change a function's behavior, update its tests to match. Changing code without
+  updating its tests is a bug, not a scope decision.
+- Run `npx vitest run` and `npx tsc --noEmit` before committing. Both must pass clean.
 
 ## Documentation maintenance
 
+- Updating tests and documentation for code you changed is part of the task, not adjacent
+  work. Do not skip it for scope reasons.
 - If your changes affect commands, flags, file layout, or architecture, update both DESIGN.md and CLAUDE.md.
 - If your changes affect agent behavior or workflow, update rules.md.
 - DESIGN.md is the spec. CLAUDE.md is the quick-start for Claude sessions. Keep them in sync but not redundant.
