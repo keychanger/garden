@@ -15,7 +15,6 @@ interface WorkerInfo {
   activity: string | null;
   active: boolean;
   prNumber?: number;
-  role?: "worker" | "reviewer";
 }
 
 interface QueueEntryInfo {
@@ -47,11 +46,11 @@ export async function status(_args: string[]): Promise<void> {
   const statuses: ProjectStatusInfo[] = names.map((name, i) => {
     const registryEntries = getWorkers(name);
     const queue: QueueEntryInfo[] = registryEntries
-      .filter(e => e.prState === "merging" || e.prState === "approved")
+      .filter(e => e.prState === "merging")
       .map(e => ({
         prNumber: e.prNumber ?? 0,
         workerName: e.name,
-        status: e.prState === "merging" ? "merging" as const : "queued" as const,
+        status: "merging" as const,
       }));
     return {
       name,
@@ -99,7 +98,7 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
     const paneInfo = detectPaneProcessStatus(dashState.activePaneId);
     if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
     const regEntry = registryByName.get(label);
-    workers.push({ name: label, ...paneInfo, active: true, prNumber: regEntry?.prNumber, role: regEntry?.role });
+    workers.push({ name: label, ...paneInfo, active: true, prNumber: regEntry?.prNumber });
   }
 
   const hiddenWindows = listHiddenWorkerWindows(projectName);
@@ -111,7 +110,7 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
       const paneInfo = detectPaneProcessStatus(paneId);
       if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
       const regEntry = registryByName.get(label);
-      workers.push({ name: label, ...paneInfo, active: false, prNumber: regEntry?.prNumber, role: regEntry?.role });
+      workers.push({ name: label, ...paneInfo, active: false, prNumber: regEntry?.prNumber });
     }
   }
 

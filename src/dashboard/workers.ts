@@ -13,7 +13,6 @@ import {
 import { generateWorkerName } from "./names.js";
 import {
   addWorker, removeWorker, findWorkerByName, getAllWorkerNames,
-  updateWorkerFields,
 } from "./registry.js";
 import { log } from "./log.js";
 import { buildWorktreeWorkerCommand, createShellWindow, resolveGardenRunner } from "./create.js";
@@ -64,7 +63,6 @@ export function newWorker(): void {
     task: "",
     worktreePath: wtPath,
     branchName,
-    role: "worker",
   });
 
   state.activePaneType = "worker";
@@ -126,26 +124,11 @@ export function killPane(): void {
     if (nameMatch) {
       const workerName = nameMatch[1];
       const entry = findWorkerByName(state.activeProject, workerName);
-      if (entry?.role === "reviewer") {
-        // Reviewers share the parent's worktree — only remove the registry entry
-        // Reset parent worker's prState so poller spawns a new reviewer
-        if (entry.parentWorker) {
-          updateWorkerFields(state.activeProject, entry.parentWorker, {
-            prState: "open",
-            reviewerName: undefined,
-          });
-        }
-        removeWorker(state.activeProject, workerName);
-      } else if (entry?.worktreePath) {
+      if (entry?.worktreePath) {
         const hasPR = getBranchPR(project.path, entry.branchName ?? workerName) !== null;
         removeWorktree(project.path, entry.worktreePath);
         if (!hasPR && entry.branchName) {
           deleteBranch(project.path, entry.branchName);
-        }
-        // Clean up associated reviewer
-        if (entry.reviewerName) {
-          killWindowSafe(`_${state.activeProject}-worker-${entry.reviewerName}`);
-          removeWorker(state.activeProject, entry.reviewerName);
         }
         removeWorker(state.activeProject, workerName);
       } else {

@@ -30,7 +30,6 @@ npm run dev -- help    # run via tsx during development
   - `validate.ts` — state/tmux consistency validation and self-healing
   - `git.ts` — git/gh CLI wrappers for worktree and PR operations
   - `poller.ts` — PR poller: state machine driving review/merge lifecycle every 30s
-  - `review.ts` — review worker spawning
   - `log.ts` — structured JSON logger to `~/.garden/sessions/dashboard.log`
   - `names.ts` — worker name generation (adjective-noun pairs)
 - `src/dashboard-claude.ts` — internal command: launches claude with rules context
@@ -66,8 +65,7 @@ Some commands are not user-facing — they're dispatched by the dashboard via tm
 
 The dashboard also has internal subcommands (e.g., `dashboard _switch 1`, `dashboard _new-worker`) called by hotkeys. These are dispatched inside `src/dashboard/index.ts`:
 
-- `_post-exit <workerName> <projectName>` — runs after a worktree worker exits; checks for a PR and spawns a review worker
-- `_post-review <reviewerName> <projectName>` — runs after a review worker exits; merges, resumes original worker, or reports status
+- `_post-exit <workerName> <projectName>` — runs after a worktree worker exits
 
 ## Dashboard internals
 
@@ -89,14 +87,12 @@ Every worker runs in its own git worktree, isolated from the main checkout and o
 
 1. `opt-n` creates a worktree at `~/.garden/worktrees/<project>/<worker-name>/` on a branch named after the worker.
 2. The worker's system prompt includes instructions to commit incrementally and open a PR when done.
-3. A **PR poller** (`src/dashboard/poller.ts`) runs every 30s in a hidden tmux window, driving the full lifecycle:
+3. A **PR poller** (`src/dashboard/poller.ts`) runs every 30s in a hidden tmux window, driving the check/merge lifecycle:
    - Detects PRs on worker branches via GitHub CLI.
-   - Spawns review workers automatically when a PR is found.
-   - Relays review feedback to workers via `tmux send-keys` (no reliance on workers exiting).
-   - Debounces commits (30s quiet period) before re-triggering review.
-   - Manages draft/ready PR state transitions.
-   - Attempts rebase+merge on approval; notifies workers of conflicts.
-4. Workers and reviewers are killed only on successful merge or manual `opt-x`.
+   - Runs optional `checks` command (configured per project in `~/.garden/config.yml`).
+   - Attempts rebase+merge; notifies workers of check failures or conflicts via `tmux send-keys`.
+   - Debounces commits (30s quiet period) before retrying.
+4. Workers are killed on successful merge or manual `opt-x`.
 5. Worktrees are cleaned up after the PR is merged.
 
 The project shell (`opt-s`) stays on the main checkout for manual work.

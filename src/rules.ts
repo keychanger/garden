@@ -41,25 +41,6 @@ You are working in an isolated git worktree on branch \`${branchName}\`. Your wo
 - When your task is complete, you MUST open a pull request against main and then exit. This is not optional. Do not ask the user whether to open the PR — just do it.
   - Use a descriptive PR title summarizing what changed.
   - Include a brief summary in the PR body.
-- After opening the PR, wait for review feedback.
-- When addressing review feedback or resolving merge conflicts, commit and push all your changes in a single push when you are done.`;
-}
-
-export function buildReviewRules(
-  prNumber: number,
-  branchName: string,
-): string {
-  return `## Review workflow
-
-You are reviewing PR #${prNumber} on branch \`${branchName}\`.
-
-- Read the full diff: \`gh pr diff ${prNumber}\`
-- Run the project's test suite if one exists.
-- Check for: correctness, scope discipline, no secrets, no unnecessary dependencies.
-- If the code is correct and tests pass:
-  - Approve: \`gh pr review ${prNumber} --approve\`
-  - Do not merge. The merge queue handles merging.
-- If changes are needed:
-  - Request changes with specific, actionable feedback: \`gh pr review ${prNumber} --request-changes --body "your feedback"\`
-- After completing your review, wait for further instructions.`;
+- After opening the PR, the poller will run checks (if configured) and merge automatically.
+- If the poller notifies you of check failures or merge conflicts, fix the issues, commit, and push.`;
 }

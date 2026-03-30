@@ -26,8 +26,6 @@ import {
   deleteBranch,
   getBranchPR,
   isPRMerged,
-  getPRReviewDecision,
-  getPRReviewFeedback,
   rebaseBranch,
   abortRebase,
   forcePushBranch,
@@ -160,68 +158,6 @@ describe("isPRMerged", () => {
       throw new Error("not found");
     });
     expect(isPRMerged("/repo", 42)).toBe(false);
-  });
-});
-
-describe("getPRReviewDecision", () => {
-  it("returns decision when present", () => {
-    mockExec.mockReturnValue(JSON.stringify({ reviewDecision: "CHANGES_REQUESTED" }));
-    expect(getPRReviewDecision("/repo", 42)).toBe("CHANGES_REQUESTED");
-  });
-
-  it("returns null when no decision", () => {
-    mockExec.mockReturnValue(JSON.stringify({ reviewDecision: null }));
-    expect(getPRReviewDecision("/repo", 42)).toBeNull();
-  });
-
-  it("returns null when field missing", () => {
-    mockExec.mockReturnValue(JSON.stringify({}));
-    expect(getPRReviewDecision("/repo", 42)).toBeNull();
-  });
-
-  it("returns null on error", () => {
-    mockExec.mockImplementation(() => {
-      throw new Error("failed");
-    });
-    expect(getPRReviewDecision("/repo", 42)).toBeNull();
-  });
-});
-
-describe("getPRReviewFeedback", () => {
-  it("returns body of latest review", () => {
-    mockExec.mockReturnValue(
-      JSON.stringify({
-        reviews: [
-          { body: "first review" },
-          { body: "latest feedback" },
-        ],
-      }),
-    );
-    expect(getPRReviewFeedback("/repo", 42)).toBe("latest feedback");
-  });
-
-  it("returns empty string when no reviews", () => {
-    mockExec.mockReturnValue(JSON.stringify({ reviews: [] }));
-    expect(getPRReviewFeedback("/repo", 42)).toBe("");
-  });
-
-  it("returns empty string when reviews missing", () => {
-    mockExec.mockReturnValue(JSON.stringify({}));
-    expect(getPRReviewFeedback("/repo", 42)).toBe("");
-  });
-
-  it("returns empty string on error", () => {
-    mockExec.mockImplementation(() => {
-      throw new Error("failed");
-    });
-    expect(getPRReviewFeedback("/repo", 42)).toBe("");
-  });
-
-  it("returns empty string when body is null", () => {
-    mockExec.mockReturnValue(
-      JSON.stringify({ reviews: [{ body: null }] }),
-    );
-    expect(getPRReviewFeedback("/repo", 42)).toBe("");
   });
 });
 
