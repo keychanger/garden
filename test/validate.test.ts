@@ -6,6 +6,10 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   getFirstPaneId: vi.fn(() => "%99"),
   listHiddenWorkerWindows: vi.fn(() => []),
   killWindowSafe: vi.fn(),
+  tmuxSplit: vi.fn(() => "%50"),
+  setPaneTitle: vi.fn(),
+  setPaneLabel: vi.fn(),
+  tmux: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/registry.js", () => ({
@@ -31,6 +35,10 @@ vi.mock("../src/dashboard/create.js", () => ({
   resolveGardenRunner: vi.fn(() => "garden"),
 }));
 
+vi.mock("../src/dashboard/header.js", () => ({
+  buildStatusCommand: vi.fn(() => "echo status"),
+}));
+
 vi.mock("../src/dashboard/git.js", () => ({
   worktreeExists: vi.fn(() => true),
   removeWorktree: vi.fn(),
@@ -39,7 +47,7 @@ vi.mock("../src/dashboard/git.js", () => ({
 }));
 
 import { validateAndHeal } from "../src/dashboard/validate.js";
-import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows } from "../src/dashboard/tmux.js";
+import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, tmuxSplit } from "../src/dashboard/tmux.js";
 import { readRegistry, writeRegistry } from "../src/dashboard/registry.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 
@@ -71,11 +79,13 @@ describe("validateAndHeal", () => {
     expect(healed.gardenShellPaneId).toBe("%1");
   });
 
-  it("nulls stale statusPaneId", () => {
+  it("recreates status pane when missing and garden shell exists", () => {
     vi.mocked(paneExists).mockImplementation((id: string) => id !== "%0");
+    vi.mocked(tmuxSplit).mockReturnValue("%50");
     const state = makeState();
     const healed = validateAndHeal(state);
-    expect(healed.statusPaneId).toBeNull();
+    expect(healed.statusPaneId).toBe("%50");
+    expect(vi.mocked(tmuxSplit)).toHaveBeenCalled();
   });
 
   it("nulls stale gardenShellPaneId", () => {
