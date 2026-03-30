@@ -11,7 +11,7 @@ import {
   windowExists, killWindowSafe,
 } from "./tmux.js";
 import {
-  readRegistry, getWorkers, updateWorkerFields, removeWorker,
+  readRegistry, getWorkers, updateWorkerFields,
   type WorkerEntry,
 } from "./registry.js";
 import {
@@ -268,23 +268,8 @@ function handleFailing(
   }
 }
 
-const MERGED_TTL_MS = 5 * 60_000;
-
-function handleMerged(projectName: string, entry: WorkerEntry): void {
-  if (!entry.mergedAt) {
-    removeWorker(projectName, entry.name);
-    refreshDashboard();
-    return;
-  }
-  const mergedAt = new Date(entry.mergedAt).getTime();
-  if (Date.now() - mergedAt >= MERGED_TTL_MS) {
-    log.info("poller", "cleaning up stale merged entry", {
-      worker: entry.name,
-      mergedAt: entry.mergedAt,
-    });
-    removeWorker(projectName, entry.name);
-    refreshDashboard();
-  }
+function handleMerged(_projectName: string, _entry: WorkerEntry): void {
+  // No-op. Cleanup happens only on manual kill (opt-x) or garden reset.
 }
 
 function notifyWorker(
