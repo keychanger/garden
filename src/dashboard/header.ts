@@ -182,7 +182,26 @@ function setHeaderVar(header: string): void {
 }
 
 export function buildStatusCommand(gardenRunner: string): string {
-  return `printf '\\033[H\\033[2J\\033[3J'; trap true USR1; sleep 1 & wait $!; prev=""; while true; do ${gardenRunner} dashboard _header >/dev/null 2>&1; cur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1); if [ "$cur" != "$prev" ]; then printf '\\033[H\\033[2J\\033[3J%s\\n' "$cur"; prev="$cur"; fi; sleep 2 & wait $!; done`;
+  // The status pane is primarily signal-driven: refreshStatusPane() sends
+  // SIGUSR1 after every mutation (new worker, project switch, kill, etc.)
+  // which interrupts the `sleep & wait` immediately. A 5s background poll
+  // catches process status changes (working/waiting/exited) that have no
+  // event source. The trap on USR1 interrupts the sleep's wait, causing
+  // an immediate refresh.
+  return [
+    `printf '\\033[H\\033[2J\\033[3J'`,
+    `trap true USR1`,
+    `prev=""`,
+    `while true; do`,
+    `  ${gardenRunner} dashboard _header >/dev/null 2>&1`,
+    `  cur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1)`,
+    `  if [ "$cur" != "$prev" ]; then`,
+    `    printf '\\033[H\\033[2J\\033[3J%s\\n' "$cur"`,
+    `    prev="$cur"`,
+    `  fi`,
+    `  sleep 5 & wait $! 2>/dev/null`,
+    `done`,
+  ].join("; ");
 }
 
 export function refreshStatusPane(): void {
