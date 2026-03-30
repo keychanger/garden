@@ -122,7 +122,7 @@ export function forcePushBranch(worktreePath: string): void {
 }
 
 export function mergePR(repoPath: string, prNumber: number): void {
-  gh(repoPath, "pr", "merge", String(prNumber), "--squash", "--delete-branch");
+  gh(repoPath, "pr", "merge", String(prNumber), "--squash");
 }
 
 export interface PRInfo {
@@ -198,6 +198,7 @@ function git(cwd: string, ...args: string[]): string {
     cwd,
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: 60_000,
   }).trim();
 }
 
@@ -206,5 +207,6 @@ function gh(cwd: string, ...args: string[]): string {
     cwd,
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: 60_000,
   }).trim();
 }
