@@ -73,6 +73,7 @@ export function ensureDashboard(): void {
     "sh", "-c", statusCmd);
 
   try { tmux("resize-pane", "-t", statusId, "-y", String(statusHeight)); } catch { /* ignore */ }
+  try { tmux("set-option", "-t", statusId, "-p", "history-limit", "0"); } catch { /* ignore */ }
 
   setPaneTitle(statusId, "status");
   setPaneTitle(gardenShellId, "garden");
