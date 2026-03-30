@@ -3,29 +3,13 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { loadConfig, SESSIONS_DIR } from "./config.js";
+import { detectProjectFromPath, getProject, SESSIONS_DIR } from "./config.js";
 import { buildRulesContext } from "./rules.js";
-
-/**
- * Resolve a project name from a directory path by matching against registered projects.
- */
-function projectFromPath(dir: string): { name: string; path: string } | null {
-  try {
-    const config = loadConfig();
-    for (const [name, project] of Object.entries(config.projects)) {
-      if (dir === project.path || dir.startsWith(project.path + "/")) {
-        return { name, path: project.path };
-      }
-    }
-  } catch {
-    // Config not initialized
-  }
-  return null;
-}
 
 export async function launchDashboardClaude(args: string[]): Promise<void> {
   const dir = args[0] ?? process.cwd();
-  const project = projectFromPath(dir);
+  const projectName = detectProjectFromPath(dir);
+  const project = projectName ? { name: projectName, path: getProject(projectName).path } : null;
 
   const claudeArgs: string[] = [];
 
