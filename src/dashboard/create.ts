@@ -6,7 +6,7 @@ import {
   DASHBOARD_SESSION,
 } from "../session.js";
 import { loadConfig, tryGetProject, SESSIONS_DIR } from "../config.js";
-import { buildRulesContext, buildWorktreeRules, buildReviewRules } from "../rules.js";
+import { buildRulesContext, buildWorktreeRules } from "../rules.js";
 import { readDashState, writeDashState, STATE_FILE } from "./state.js";
 import { restoreFromHidden } from "./layout.js";
 import { setupKeybindings } from "./hotkeys.js";
@@ -191,20 +191,6 @@ export function buildWorktreeWorkerCommand(
   return `${claudeCmd}; exec $SHELL`;
 }
 
-export function buildReviewWorkerCommand(
-  projectName: string,
-  projectPath: string,
-  branchName: string,
-  prNumber: number,
-  gardenRunner: string,
-  reviewerName: string,
-): string {
-  const contextFile = writeReviewContextFile(projectName, projectPath, prNumber, branchName);
-  const prompt = `Review PR #${prNumber} on branch ${branchName}. Follow the review workflow instructions in your system prompt.`;
-  const claudeCmd = `claude --dangerously-skip-permissions -p ${shellEscape(prompt)} --append-system-prompt-file ${shellEscape(contextFile)}`;
-  return `${claudeCmd}; exec $SHELL`;
-}
-
 export function buildWorktreeResumeCommand(
   projectName: string,
   projectPath: string,
@@ -235,21 +221,6 @@ function writeWorktreeContextFile(
   const worktreeRules = buildWorktreeRules(branchName);
   const context = `${base}\n\n${worktreeRules}`;
   const contextFile = path.join(SESSIONS_DIR, `dashboard-${projectName}-${branchName}.context`);
-  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  fs.writeFileSync(contextFile, context);
-  return contextFile;
-}
-
-function writeReviewContextFile(
-  projectName: string,
-  projectPath: string,
-  prNumber: number,
-  branchName: string,
-): string {
-  const base = buildRulesContext(projectName, projectPath);
-  const reviewRules = buildReviewRules(prNumber, branchName);
-  const context = `${base}\n\n${reviewRules}`;
-  const contextFile = path.join(SESSIONS_DIR, `dashboard-${projectName}-review-${prNumber}.context`);
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
   fs.writeFileSync(contextFile, context);
   return contextFile;

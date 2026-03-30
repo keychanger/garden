@@ -78,49 +78,9 @@ describe("buildWorktreeRules", () => {
     expect(result).toContain("pull request against main");
   });
 
-  it("instructs to wait for feedback after PR", async () => {
+  it("instructs about poller auto-merge", async () => {
     const { buildWorktreeRules } = await importRules();
     const result = buildWorktreeRules("test-branch");
-    expect(result).toContain("After opening the PR, wait for review feedback");
-  });
-});
-
-describe("buildReviewRules", () => {
-  it("includes PR number", async () => {
-    const { buildReviewRules } = await importRules();
-    const result = buildReviewRules(42, "swift-oak");
-    expect(result).toContain("PR #42");
-  });
-
-  it("includes branch name", async () => {
-    const { buildReviewRules } = await importRules();
-    const result = buildReviewRules(42, "swift-oak");
-    expect(result).toContain("`swift-oak`");
-  });
-
-  it("instructs to read diff", async () => {
-    const { buildReviewRules } = await importRules();
-    const result = buildReviewRules(42, "swift-oak");
-    expect(result).toContain("gh pr diff 42");
-  });
-
-  it("instructs to approve without merging", async () => {
-    const { buildReviewRules } = await importRules();
-    const result = buildReviewRules(42, "swift-oak");
-    expect(result).toContain("gh pr review 42 --approve");
-    expect(result).toContain("Do not merge");
-    expect(result).not.toContain("gh pr merge");
-  });
-
-  it("instructs to request changes with feedback", async () => {
-    const { buildReviewRules } = await importRules();
-    const result = buildReviewRules(42, "swift-oak");
-    expect(result).toContain("gh pr review 42 --request-changes");
-  });
-
-  it("instructs to wait after review", async () => {
-    const { buildReviewRules } = await importRules();
-    const result = buildReviewRules(42, "swift-oak");
-    expect(result).toContain("After completing your review, wait for further instructions");
+    expect(result).toContain("poller will run checks");
   });
 });

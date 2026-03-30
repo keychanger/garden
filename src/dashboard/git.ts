@@ -99,48 +99,6 @@ export function isPRMerged(repoPath: string, prNumber: number): boolean {
   }
 }
 
-export function getPRReviewDecision(
-  repoPath: string,
-  prNumber: number,
-): string | null {
-  try {
-    const result = gh(
-      repoPath,
-      "pr",
-      "view",
-      String(prNumber),
-      "--json",
-      "reviewDecision",
-    );
-    const data = JSON.parse(result);
-    return data.reviewDecision ?? null;
-  } catch {
-    return null;
-  }
-}
-
-export function getPRReviewFeedback(
-  repoPath: string,
-  prNumber: number,
-): string {
-  try {
-    const result = gh(
-      repoPath,
-      "pr",
-      "view",
-      String(prNumber),
-      "--json",
-      "reviews",
-    );
-    const data = JSON.parse(result);
-    if (!Array.isArray(data.reviews) || data.reviews.length === 0) return "";
-    const latest = data.reviews[data.reviews.length - 1];
-    return latest.body ?? "";
-  } catch {
-    return "";
-  }
-}
-
 export function rebaseBranch(worktreePath: string): boolean {
   try {
     git(worktreePath, "rebase", "main");
@@ -168,9 +126,7 @@ export function mergePR(repoPath: string, prNumber: number): void {
 
 export interface PRInfo {
   state: string;
-  isDraft: boolean;
   headSha: string;
-  reviewDecision: string | null;
 }
 
 export function getPRInfo(
@@ -184,56 +140,13 @@ export function getPRInfo(
       "view",
       String(prNumber),
       "--json",
-      "state,isDraft,headRefOid,reviewDecision",
+      "state,headRefOid",
     );
     const data = JSON.parse(result);
     return {
       state: data.state,
-      isDraft: data.isDraft,
       headSha: data.headRefOid,
-      reviewDecision: data.reviewDecision ?? null,
     };
-  } catch {
-    return null;
-  }
-}
-
-export function convertToDraft(repoPath: string, prNumber: number): void {
-  gh(repoPath, "pr", "ready", String(prNumber), "--undo");
-}
-
-export function markReady(repoPath: string, prNumber: number): void {
-  gh(repoPath, "pr", "ready", String(prNumber));
-}
-
-export interface ReviewInfo {
-  id: string;
-  body: string;
-  state: string;
-}
-
-export function getLatestReview(
-  repoPath: string,
-  prNumber: number,
-): ReviewInfo | null {
-  try {
-    const result = gh(
-      repoPath,
-      "pr",
-      "view",
-      String(prNumber),
-      "--json",
-      "reviews",
-    );
-    const data = JSON.parse(result);
-    if (!Array.isArray(data.reviews) || data.reviews.length === 0) return null;
-    for (let i = data.reviews.length - 1; i >= 0; i--) {
-      const r = data.reviews[i];
-      if (r.body) {
-        return { id: r.id, body: r.body, state: r.state };
-      }
-    }
-    return null;
   } catch {
     return null;
   }

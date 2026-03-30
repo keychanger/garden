@@ -1,25 +1,22 @@
-// PR poller: watches GitHub PR state and drives the review/merge lifecycle.
+// PR poller: watches GitHub PR state and drives the check/merge lifecycle.
 // Runs as a hidden tmux window, invoked every 30s via `garden dashboard _poll`.
+import { execSync } from "node:child_process";
 import { execFileSync } from "node:child_process";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tryGetProject } from "../config.js";
 import {
   tmux, getFirstPaneId, getPanePid, hasClaudeChild,
-  windowExists, killWindowSafe, shellEscape,
+  windowExists, killWindowSafe,
 } from "./tmux.js";
 import {
-  readRegistry, getWorkers, updateWorkerFields, findWorkerByName,
+  readRegistry, getWorkers, updateWorkerFields,
   removeWorker, type WorkerEntry,
 } from "./registry.js";
 import {
-  getBranchPR, getPRInfo, convertToDraft, markReady,
-  getLatestReview, rebaseBranch, abortRebase,
+  getBranchPR, getPRInfo, rebaseBranch, abortRebase,
   forcePushBranch, mergePR, removeWorktree, pruneWorktrees,
   commentOnPR,
-  type PRInfo,
 } from "./git.js";
-import { spawnReviewWorker } from "./review.js";
-import { buildWorktreeResumeCommand, resolveGardenRunner } from "./create.js";
 import { refreshDashboard } from "./header.js";
 import { log } from "./log.js";
 
@@ -38,7 +35,6 @@ export function poll(): void {
     if (!project) continue;
 
     for (const entry of entries) {
-      if (entry.role === "reviewer") continue;
       try {
         pollWorker(projectName, project.path, entry);
       } catch (err) {
@@ -63,8 +59,6 @@ function pollWorker(
   if (state !== "working" && entry.prNumber) {
     const info = getPRInfo(projectPath, entry.prNumber);
     if (!info) {
-      // gh CLI failed (network, rate limit, etc.) — skip this cycle rather
-      // than assuming the PR is gone and destroying the worker.
       log.warn("poller", "getPRInfo failed, skipping cycle", {
         worker: entry.name,
         prNumber: entry.prNumber,
@@ -87,20 +81,18 @@ function pollWorker(
       return handleWorking(projectName, projectPath, entry);
     case "open":
       return handleOpen(projectName, projectPath, entry);
-    case "in-review":
-      return handleInReview(projectName, projectPath, entry);
-    case "changes-requested":
-      return handleChangesRequested(projectName, projectPath, entry);
-    case "updating":
-      return handleUpdating(projectName, projectPath, entry);
-    case "ready":
-      return handleReady(projectName, projectPath, entry);
-    case "approved":
-      return handleApproved(projectName, projectPath, entry);
     case "merging":
-      return; // merge in progress from a previous poll cycle, wait for it to finish
-    case "resolving":
-      return handleResolving(projectName, projectPath, entry);
+      return; // merge in progress from a previous poll cycle
+    case "failing":
+      return handleFailing(projectName, projectPath, entry);
+    default:
+      // Handle workers stuck in old states (in-review, approved, etc.)
+      log.warn("poller", "unknown state, resetting to open", {
+        worker: entry.name,
+        state,
+      });
+      updateWorkerFields(projectName, entry.name, { prState: "open" });
+      return;
   }
 }
 
@@ -126,174 +118,44 @@ function handleOpen(
   projectPath: string,
   entry: WorkerEntry,
 ): void {
-  // Don't double-spawn a reviewer
-  if (entry.reviewerName) {
-    if (windowExists(`_${projectName}-worker-${entry.reviewerName}`)) {
-      // Reviewer already exists, transition to in-review
-      updateWorkerFields(projectName, entry.name, { prState: "in-review" });
+  if (!entry.prNumber) return;
+
+  const project = tryGetProject(projectName);
+  if (!project) return;
+
+  // Run checks if configured
+  if (project.checks) {
+    const wtPath = entry.worktreePath ?? projectPath;
+    try {
+      execSync(project.checks, {
+        cwd: wtPath,
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 300_000,
+      });
+      log.info("poller", "checks passed", { worker: entry.name });
+    } catch (err: unknown) {
+      log.info("poller", "checks failed", { worker: entry.name });
+      const stderr = (err as { stderr?: Buffer })?.stderr?.toString() ?? "";
+      const truncated = stderr.slice(-500);
+      const message = `Checks failed for PR #${entry.prNumber}:\n\n${truncated}\n\nFix the issues and push again.`;
+      notifyWorker(projectName, entry, message);
+      prComment(projectPath, entry.prNumber, "Checks failed. Worker notified.");
+
+      const info = getPRInfo(projectPath, entry.prNumber);
+      updateWorkerFields(projectName, entry.name, {
+        prState: "failing",
+        lastSeenSha: info?.headSha,
+        lastShaChangeAt: new Date().toISOString(),
+      });
+      refreshDashboard();
       return;
     }
-    // Reviewer window is gone, clear the stale reference
-    updateWorkerFields(projectName, entry.name, { reviewerName: undefined });
   }
 
-  if (!entry.prNumber) return;
-
-  const reviewerName = spawnReviewWorker(
-    projectName,
-    projectPath,
-    entry,
-    entry.prNumber,
-  );
-
-  log.info("poller", "spawned reviewer", {
-    worker: entry.name,
-    reviewer: reviewerName,
-    prNumber: entry.prNumber,
-  });
-
-  prComment(projectPath, entry.prNumber, `Review started by \`${reviewerName}\`.`);
-
-  updateWorkerFields(projectName, entry.name, {
-    prState: "in-review",
-    reviewerName,
-  });
-  refreshDashboard();
+  attemptMerge(projectName, projectPath, entry);
 }
 
-function handleInReview(
-  projectName: string,
-  projectPath: string,
-  entry: WorkerEntry,
-): void {
-  if (!entry.prNumber) return;
-
-  // Check reviewer is still alive
-  if (entry.reviewerName && !windowExists(`_${projectName}-worker-${entry.reviewerName}`)) {
-    log.info("poller", "reviewer window gone, resetting to open", { worker: entry.name });
-    removeWorker(projectName, entry.reviewerName);
-    updateWorkerFields(projectName, entry.name, {
-      prState: "open",
-      reviewerName: undefined,
-    });
-    return;
-  }
-
-  const info = getPRInfo(projectPath, entry.prNumber);
-  if (!info) return;
-
-  if (info.reviewDecision === "APPROVED") {
-    log.info("poller", "PR approved", { worker: entry.name, prNumber: entry.prNumber });
-    updateWorkerFields(projectName, entry.name, { prState: "approved" });
-    refreshDashboard();
-    return;
-  }
-
-  if (info.reviewDecision === "CHANGES_REQUESTED") {
-    log.info("poller", "changes requested", { worker: entry.name, prNumber: entry.prNumber });
-    updateWorkerFields(projectName, entry.name, { prState: "changes-requested" });
-    refreshDashboard();
-  }
-}
-
-function handleChangesRequested(
-  projectName: string,
-  projectPath: string,
-  entry: WorkerEntry,
-): void {
-  if (!entry.prNumber) return;
-
-  // Convert to draft
-  try {
-    const info = getPRInfo(projectPath, entry.prNumber);
-    if (info && !info.isDraft) {
-      convertToDraft(projectPath, entry.prNumber);
-      log.info("poller", "converted PR to draft", { prNumber: entry.prNumber });
-    }
-  } catch (err) {
-    log.warn("poller", "failed to convert to draft", { error: String(err) });
-  }
-
-  // Get feedback and send to worker (avoid re-sending)
-  const review = getLatestReview(projectPath, entry.prNumber);
-  if (review && review.id !== entry.lastReviewId) {
-    const message = `The reviewer has requested changes on PR #${entry.prNumber}. Here is their feedback:\n\n${review.body}\n\nPlease address these changes. When you are done, commit and push all your changes in a single push.`;
-    sendMessage(projectName, entry, message);
-    prComment(projectPath, entry.prNumber, `Sending feedback to worker \`${entry.name}\`. PR converted to draft.`);
-    updateWorkerFields(projectName, entry.name, { lastReviewId: review.id });
-  }
-
-  // Record current SHA for debounce
-  const info = getPRInfo(projectPath, entry.prNumber);
-  updateWorkerFields(projectName, entry.name, {
-    prState: "updating",
-    lastSeenSha: info?.headSha ?? undefined,
-    lastShaChangeAt: new Date().toISOString(),
-  });
-  refreshDashboard();
-}
-
-function handleUpdating(
-  projectName: string,
-  projectPath: string,
-  entry: WorkerEntry,
-): void {
-  if (!entry.prNumber) return;
-
-  const info = getPRInfo(projectPath, entry.prNumber);
-  if (!info) return;
-
-  if (info.headSha !== entry.lastSeenSha) {
-    // New commits, reset debounce
-    updateWorkerFields(projectName, entry.name, {
-      lastSeenSha: info.headSha,
-      lastShaChangeAt: new Date().toISOString(),
-    });
-    return;
-  }
-
-  // Check debounce timeout
-  const changeAt = entry.lastShaChangeAt ? new Date(entry.lastShaChangeAt).getTime() : 0;
-  if (Date.now() - changeAt >= DEBOUNCE_MS) {
-    log.info("poller", "debounce complete, marking ready", { worker: entry.name });
-    updateWorkerFields(projectName, entry.name, { prState: "ready" });
-  }
-}
-
-function handleReady(
-  projectName: string,
-  projectPath: string,
-  entry: WorkerEntry,
-): void {
-  if (!entry.prNumber) return;
-
-  // Mark PR as ready for review
-  try {
-    const info = getPRInfo(projectPath, entry.prNumber);
-    if (info?.isDraft) {
-      markReady(projectPath, entry.prNumber);
-      log.info("poller", "marked PR ready", { prNumber: entry.prNumber });
-    }
-  } catch (err) {
-    log.warn("poller", "failed to mark ready", { error: String(err) });
-  }
-
-  prComment(projectPath, entry.prNumber, "Worker pushed updates. Re-requesting review.");
-
-  // Notify the reviewer to re-review
-  if (entry.reviewerName) {
-    const reviewer = findWorkerByName(projectName, entry.reviewerName);
-    if (reviewer) {
-      const message = `The author has pushed new changes to PR #${entry.prNumber}. Please re-review the PR:\n\n\`gh pr diff ${entry.prNumber}\``;
-      sendMessage(projectName, reviewer, message);
-    }
-  }
-
-  updateWorkerFields(projectName, entry.name, { prState: "in-review" });
-  refreshDashboard();
-}
-
-function handleApproved(
+function attemptMerge(
   projectName: string,
   projectPath: string,
   entry: WorkerEntry,
@@ -332,15 +194,15 @@ function handleApproved(
   if (!rebased) {
     log.info("poller", "rebase conflict", { worker: entry.name, prNumber: entry.prNumber });
     abortRebase(wtPath);
-    prComment(projectPath, entry.prNumber, `Merge conflict with main. Worker \`${entry.name}\` is resolving.`);
 
-    // Notify worker to resolve conflicts
-    const message = `Your PR #${entry.prNumber} has been approved but has merge conflicts with main. Please resolve the conflicts:\n\n1. Run: git rebase main\n2. Resolve any conflicts\n3. Run: git rebase --continue\n4. Push all changes when done.`;
-    sendMessage(projectName, entry, message);
+    const message = `Merge conflict with main on PR #${entry.prNumber}. Please resolve:\n\n1. git rebase main\n2. Resolve conflicts\n3. git rebase --continue\n4. Push when done.`;
+    notifyWorker(projectName, entry, message);
+    prComment(projectPath, entry.prNumber, `Merge conflict with main. Worker \`${entry.name}\` notified.`);
 
+    const info = getPRInfo(projectPath, entry.prNumber);
     updateWorkerFields(projectName, entry.name, {
-      prState: "resolving",
-      lastSeenSha: undefined,
+      prState: "failing",
+      lastSeenSha: info?.headSha,
       lastShaChangeAt: new Date().toISOString(),
     });
     refreshDashboard();
@@ -356,8 +218,8 @@ function handleApproved(
       prNumber: entry.prNumber,
       error: String(err),
     });
-    // Reset to approved so it retries next cycle
-    updateWorkerFields(projectName, entry.name, { prState: "approved" });
+    // Reset to open so it retries next cycle
+    updateWorkerFields(projectName, entry.name, { prState: "open" });
     refreshDashboard();
     return;
   }
@@ -367,7 +229,7 @@ function handleApproved(
   cleanupWorker(projectName, projectPath, entry);
 }
 
-function handleResolving(
+function handleFailing(
   projectName: string,
   projectPath: string,
   entry: WorkerEntry,
@@ -389,70 +251,28 @@ function handleResolving(
   // Check debounce timeout
   const changeAt = entry.lastShaChangeAt ? new Date(entry.lastShaChangeAt).getTime() : 0;
   if (Date.now() - changeAt >= DEBOUNCE_MS) {
-    log.info("poller", "conflict resolution debounce complete, retrying merge", {
-      worker: entry.name,
-    });
-    updateWorkerFields(projectName, entry.name, { prState: "approved" });
+    log.info("poller", "debounce complete, retrying", { worker: entry.name });
+    updateWorkerFields(projectName, entry.name, { prState: "open" });
   }
 }
 
-function sendMessage(
+function notifyWorker(
   projectName: string,
   entry: WorkerEntry,
   message: string,
 ): void {
   const windowName = `_${projectName}-worker-${entry.name}`;
-  if (!windowExists(windowName)) {
-    // Worker window is gone, need to resume
-    resumeWorkerWithMessage(projectName, entry, message);
-    return;
-  }
+  if (!windowExists(windowName)) return;
 
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
-  if (!paneId) {
-    resumeWorkerWithMessage(projectName, entry, message);
-    return;
-  }
+  if (!paneId) return;
 
   const pid = getPanePid(paneId);
-  if (pid && hasClaudeChild(pid)) {
-    // Claude is running, send keys
-    tmux("send-keys", "-t", paneId, "-l", message);
-    tmux("send-keys", "-t", paneId, "Enter");
-    log.info("poller", "sent message to running session", { worker: entry.name });
-  } else {
-    // Claude exited, resume the session
-    resumeWorkerWithMessage(projectName, entry, message);
-  }
-}
+  if (!pid || !hasClaudeChild(pid)) return;
 
-function resumeWorkerWithMessage(
-  projectName: string,
-  entry: WorkerEntry,
-  message: string,
-): void {
-  const project = tryGetProject(projectName);
-  if (!project) return;
-
-  const branchName = entry.branchName ?? entry.name;
-  const wtPath = entry.worktreePath ?? project.path;
-  const gardenRunner = resolveGardenRunner();
-  const windowName = `_${projectName}-worker-${entry.name}`;
-
-  // Kill existing window if any
-  killWindowSafe(windowName);
-
-  const resumeCmd = buildWorktreeResumeCommand(
-    projectName, project.path, entry.name, branchName, entry.sessionId, gardenRunner,
-  );
-
-  // Prepend message echo before the claude resume command
-  const fullCmd = `echo ${shellEscape(message)} | cat; ${resumeCmd}`;
-
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName, "-c", wtPath,
-    "sh", "-c", fullCmd);
-
-  log.info("poller", "resumed worker with message", { worker: entry.name });
+  tmux("send-keys", "-t", paneId, "-l", message);
+  tmux("send-keys", "-t", paneId, "Enter");
+  log.info("poller", "notified worker", { worker: entry.name });
 }
 
 function cleanupWorker(
@@ -460,22 +280,13 @@ function cleanupWorker(
   projectPath: string,
   entry: WorkerEntry,
 ): void {
-  // Kill worker window
   killWindowSafe(`_${projectName}-worker-${entry.name}`);
 
-  // Kill reviewer window
-  if (entry.reviewerName) {
-    killWindowSafe(`_${projectName}-worker-${entry.reviewerName}`);
-    removeWorker(projectName, entry.reviewerName);
-  }
-
-  // Clean up worktree
   if (entry.worktreePath) {
     removeWorktree(projectPath, entry.worktreePath);
   }
   pruneWorktrees(projectPath);
 
-  // Remove from registry
   removeWorker(projectName, entry.name);
   refreshDashboard();
 }

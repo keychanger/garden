@@ -96,41 +96,46 @@ Hidden windows follow the convention: `_<project>-worker-<N>` and `_<project>-sh
 5. `⌥x` kills the focused worker, removes its worktree (and branch if no PR exists)
 6. Switching projects parks everything in hidden windows; switching back restores
 
-### PR Poller and Review Cycle
-A background poller (`_garden-pr-poller`) runs every 30 seconds in a hidden tmux window. It drives the entire PR lifecycle without relying on workers to exit or run specific commands.
+### PR Poller and Auto-Merge
+A background poller (`_garden-pr-poller`) runs every 30 seconds in a hidden tmux window. It drives the PR lifecycle: detecting PRs, running optional local checks, and merging automatically.
 
 **State machine per worker:**
 ```
-working -> open -> in-review -> approved -> (merge + cleanup)
-                      |                        |
-                      v                        v (conflict)
-               changes-requested -> updating -> ready -> in-review
-                                                   approved -> resolving -> approved (retry)
+working -> open -> merging -> (cleanup)
+              |        |
+              v        v (conflict)
+           failing <---+
+              |
+              v (new commits + 30s debounce)
+            open (retry)
 ```
 
 1. **working**: Worker is active, no PR yet. Poller checks for PRs via `gh pr list`.
-2. **open**: PR detected. Poller spawns a review worker.
-3. **in-review**: Reviewer is active. Poller watches for `APPROVED` or `CHANGES_REQUESTED`.
-4. **changes-requested**: Poller converts PR to draft, sends review feedback to worker via `tmux send-keys`.
-5. **updating**: Worker is pushing fixes. Poller debounces commits (30s of no new pushes).
-6. **ready**: Debounce complete. Poller marks PR ready and notifies the same reviewer to re-review.
-7. **approved**: Poller attempts rebase onto main, force-push, and merge.
-8. On successful merge: both worker and reviewer are killed, worktrees cleaned up.
-9. On rebase conflict (**resolving**): worker is notified to resolve, then merge is retried (no re-review needed).
-
-Review workers are registered with `role: "reviewer"` and `parentWorker` linking back to the original. The same reviewer persists across review rounds.
+2. **open**: PR detected. If a `checks` command is configured for the project, the poller runs it in the worktree. Pass (or no checks configured) transitions to merging. Fail transitions to failing, and the worker is notified via `tmux send-keys`.
+3. **merging**: Poller fetches main, rebases, force-pushes, and squash-merges. On conflict, the worker is notified and state moves to failing. On merge error, state resets to open for retry.
+4. **failing**: Checks failed or merge conflict. Poller watches for new commits via SHA tracking. After 30s of no new pushes, state transitions back to open for retry.
 
 If a PR is closed or merged externally, the poller detects this and cleans up from any state.
 
+### Checks Configuration
+Projects can optionally define a `checks` command in `~/.garden/config.yml`:
+
+```yaml
+projects:
+  garden:
+    path: /Users/joshua/code/keychange/garden
+    checks: npm run build && npm test
+```
+
+The poller runs this command in the worker's worktree before attempting to merge. No checks configured means merge immediately on PR detection.
+
 ### Merge Handling
-When the poller detects an approved PR, it processes merges sequentially per project:
+Merges are serialized per project (one at a time). The merge sequence:
 1. Fetch latest main
 2. Rebase the branch onto main
 3. Force-push the rebased branch
 4. Merge via `gh pr merge --squash --delete-branch`
-5. Kill worker and reviewer windows, clean up worktrees and registry
-
-If rebase conflicts, the worker is notified to resolve. After the worker pushes a fix (debounced), the merge is retried directly without re-review since the PR was already approved.
+5. Kill worker window, clean up worktree and registry
 
 Projects don't block each other — each project's queue drains independently.
 
@@ -189,7 +194,6 @@ All read commands detect whether stdout is a TTY:
     dashboard.registry.json  # Worker registry (persists across restarts)
     dashboard-<project>.context  # System prompt for project's Claude sessions
     dashboard-<project>-<branch>.context  # Worktree worker context
-    dashboard-<project>-review-<N>.context  # Review worker context
     dashboard.log           # Structured JSON log
   worktrees/
     <project>/
