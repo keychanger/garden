@@ -13,7 +13,7 @@ import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
 import { newWorker, killPane } from "./workers.js";
 import { switchProject, focusWorker, focusShell, focusGarden, cyclePane } from "./navigate.js";
-import { handlePostExit, handlePostReview, checkWorkerPRs } from "./review.js";
+import { poll } from "./poller.js";
 
 export async function dashboard(args: string[]): Promise<void> {
   checkTmux();
@@ -57,9 +57,7 @@ export async function dashboard(args: string[]): Promise<void> {
   if (sub === "_focus-garden") return focusGarden();
   if (sub === "_cycle-pane") return cyclePane(args[1] === "prev" ? -1 : 1);
   if (sub === "_kill-pane") return killPane();
-  if (sub === "_post-exit") return handlePostExit(args[1], args[2]);
-  if (sub === "_post-review") return handlePostReview(args[1], args[2]);
-  if (sub === "_check-prs") return checkWorkerPRs();
+  if (sub === "_poll") return poll();
   if (sub === "_header") return printHeader();
 
   if (sub === "help") {

@@ -41,7 +41,8 @@ You are working in an isolated git worktree on branch \`${branchName}\`.
 - When your task is complete, open a pull request against main.
   - Use a descriptive PR title summarizing what changed.
   - Include a brief summary in the PR body.
-- After opening the PR, exit.`;
+- After opening the PR, wait for review feedback.
+- When addressing review feedback or resolving merge conflicts, commit and push all your changes in a single push when you are done.`;
 }
 
 export function buildReviewRules(
@@ -60,5 +61,5 @@ You are reviewing PR #${prNumber} on branch \`${branchName}\`.
   - Do not merge. The merge queue handles merging.
 - If changes are needed:
   - Request changes with specific, actionable feedback: \`gh pr review ${prNumber} --request-changes --body "your feedback"\`
-- After completing your review action, exit.`;
+- After completing your review, wait for further instructions.`;
 }

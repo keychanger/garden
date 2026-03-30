@@ -18,6 +18,7 @@ import {
 import { readRegistry } from "./registry.js";
 import { log, truncateLog } from "./log.js";
 import { validateAndHeal } from "./validate.js";
+import { startPoller } from "./poller.js";
 
 const DASHBOARD_COLS = 200;
 const DASHBOARD_ROWS = 50;
@@ -145,6 +146,7 @@ export function ensureDashboard(): void {
 
   writeDashState(state);
   setupKeybindings(gardenRunner);
+  startPoller(gardenRunner);
 
   if (firstResumedWindow && state.activePaneId) {
     tmux("select-pane", "-t", state.activePaneId);
@@ -185,8 +187,7 @@ export function buildWorktreeWorkerCommand(
 ): string {
   const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName);
   const claudeCmd = `claude --dangerously-skip-permissions --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
-  const postExit = `${gardenRunner} dashboard _post-exit ${shellEscape(workerName)} ${shellEscape(projectName)}`;
-  return `${claudeCmd}; ${postExit} 2>&1 || echo "[garden] post-exit failed (exit $?)"; exec $SHELL`;
+  return `${claudeCmd}; exec $SHELL`;
 }
 
 export function buildReviewWorkerCommand(
@@ -200,8 +201,7 @@ export function buildReviewWorkerCommand(
   const contextFile = writeReviewContextFile(projectName, projectPath, prNumber, branchName);
   const prompt = `Review PR #${prNumber} on branch ${branchName}. Follow the review workflow instructions in your system prompt.`;
   const claudeCmd = `claude --dangerously-skip-permissions -p ${shellEscape(prompt)} --append-system-prompt-file ${shellEscape(contextFile)}`;
-  const postExit = `${gardenRunner} dashboard _post-review ${shellEscape(reviewerName)} ${shellEscape(projectName)}`;
-  return `${claudeCmd}; ${postExit} 2>&1 || echo "[garden] post-review failed (exit $?)"; exec $SHELL`;
+  return `${claudeCmd}; exec $SHELL`;
 }
 
 export function buildWorktreeResumeCommand(
@@ -214,8 +214,7 @@ export function buildWorktreeResumeCommand(
 ): string {
   const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName);
   const claudeCmd = `claude --dangerously-skip-permissions --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
-  const postExit = `${gardenRunner} dashboard _post-exit ${shellEscape(workerName)} ${shellEscape(projectName)}`;
-  return `${claudeCmd}; ${postExit} 2>&1 || echo "[garden] post-exit failed (exit $?)"; exec $SHELL`;
+  return `${claudeCmd}; exec $SHELL`;
 }
 
 function writeContextFile(projectName: string, projectPath: string): string {

@@ -26,10 +26,6 @@ vi.mock("../src/dashboard/registry.js", () => ({
   getWorkers: vi.fn(() => []),
 }));
 
-vi.mock("../src/dashboard/merge-queue.js", () => ({
-  getProjectQueue: vi.fn(() => []),
-}));
-
 vi.mock("../src/session.js", () => ({
   dashboardExists: vi.fn(() => true),
   DASHBOARD_SESSION: "garden-dashboard",

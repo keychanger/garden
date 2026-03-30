@@ -22,6 +22,22 @@ vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+vi.mock("../src/dashboard/poller.js", () => ({
+  startPoller: vi.fn(),
+  pollerRunning: vi.fn(() => true),
+}));
+
+vi.mock("../src/dashboard/create.js", () => ({
+  resolveGardenRunner: vi.fn(() => "garden"),
+}));
+
+vi.mock("../src/dashboard/git.js", () => ({
+  worktreeExists: vi.fn(() => true),
+  removeWorktree: vi.fn(),
+  pruneWorktrees: vi.fn(),
+  isPRMerged: vi.fn(() => false),
+}));
+
 import { validateAndHeal } from "../src/dashboard/validate.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows } from "../src/dashboard/tmux.js";
 import { readRegistry, writeRegistry } from "../src/dashboard/registry.js";

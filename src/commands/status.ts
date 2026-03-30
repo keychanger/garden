@@ -4,7 +4,6 @@ import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState } from "../dashboard/state.js";
 import { getWorkers } from "../dashboard/registry.js";
-import { getProjectQueue } from "../dashboard/merge-queue.js";
 import {
   getPanePid, getPaneLabel, getPaneVar, getFirstPaneId,
   getClaudeChildPid, hasChildProcesses, listHiddenWorkerWindows,
@@ -46,17 +45,20 @@ export async function status(_args: string[]): Promise<void> {
   const hasDashboard = dashboardExists();
 
   const statuses: ProjectStatusInfo[] = names.map((name, i) => {
-    const queueEntries = getProjectQueue(name);
+    const registryEntries = getWorkers(name);
+    const queue: QueueEntryInfo[] = registryEntries
+      .filter(e => e.prState === "merging" || e.prState === "approved")
+      .map(e => ({
+        prNumber: e.prNumber ?? 0,
+        workerName: e.name,
+        status: e.prState === "merging" ? "merging" as const : "queued" as const,
+      }));
     return {
       name,
       index: i + 1,
       isActive: dashState.activeProject === name,
       workers: hasDashboard ? getProjectWorkers(name, dashState) : [],
-      queue: queueEntries.map((e, qi) => ({
-        prNumber: e.prNumber,
-        workerName: e.workerName,
-        status: qi === 0 ? "merging" as const : "queued" as const,
-      })),
+      queue,
     };
   });
 
