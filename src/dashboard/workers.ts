@@ -16,7 +16,7 @@ import {
 } from "./registry.js";
 import { log } from "./log.js";
 import { buildWorktreeWorkerCommand, createShellWindow } from "./create.js";
-import { worktreePath, createWorktree, removeWorktree, deleteBranch, getBranchPR, installPollTriggerHook, installClaudeHook } from "./git.js";
+import { worktreePath, createWorktree, removeWorktree, deleteBranch, getBranchPR, installPollTriggerHook, installClaudeHook, fastForwardMain } from "./git.js";
 
 export function newWorker(): void {
   log.info("workers", "newWorker");
@@ -34,6 +34,7 @@ export function newWorker(): void {
   const wtPath = worktreePath(state.activeProject, workerName);
 
   try {
+    fastForwardMain(project.path);
     createWorktree(project.path, wtPath, branchName);
     installPollTriggerHook(wtPath);
     installClaudeHook(wtPath);

@@ -15,9 +15,10 @@ import {
 } from "./registry.js";
 import {
   getBranchPR, getPRInfo, rebaseBranch, abortRebase,
-  forcePushBranch, mergePR, commentOnPR,
+  forcePushBranch, mergePR, commentOnPR, fastForwardMain,
 } from "./git.js";
 import { refreshDashboard } from "./header.js";
+import { healStatusPane } from "./validate.js";
 import { log } from "./log.js";
 
 const DEBOUNCE_MS = 30_000;
@@ -29,6 +30,7 @@ function prComment(projectPath: string, prNumber: number, message: string): void
 }
 
 export function poll(): void {
+  healStatusPane();
   const registry = readRegistry();
 
   for (const [projectName, entries] of Object.entries(registry.workers)) {
@@ -233,6 +235,7 @@ function attemptMerge(
 
   log.info("poller", "PR merged", { worker: entry.name, prNumber: entry.prNumber });
   prComment(projectPath, entry.prNumber, "Merged successfully.");
+  fastForwardMain(projectPath);
   updateWorkerFields(projectName, entry.name, {
     prState: "merged",
     mergedAt: new Date().toISOString(),

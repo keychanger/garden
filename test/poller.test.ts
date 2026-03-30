@@ -65,6 +65,10 @@ vi.mock("../src/dashboard/registry.js", () => {
   };
 });
 
+vi.mock("../src/dashboard/validate.js", () => ({
+  healStatusPane: vi.fn(),
+}));
+
 vi.mock("../src/dashboard/git.js", () => ({
   getBranchPR: vi.fn(() => null),
   getPRInfo: vi.fn(() => ({ state: "OPEN", headSha: "abc123" })),
@@ -73,6 +77,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   forcePushBranch: vi.fn(),
   mergePR: vi.fn(),
   commentOnPR: vi.fn(),
+  fastForwardMain: vi.fn(),
 }));
 
 import { poll } from "../src/dashboard/poller.js";
