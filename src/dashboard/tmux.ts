@@ -63,8 +63,8 @@ export function getFirstPaneId(target: string): string | null {
 
 export function paneExists(paneId: string): boolean {
   try {
-    tmuxOutput("display-message", "-t", paneId, "-p", "#{pane_id}");
-    return true;
+    const result = tmuxOutput("display-message", "-t", paneId, "-p", "#{pane_id}");
+    return result === paneId;
   } catch {
     return false;
   }

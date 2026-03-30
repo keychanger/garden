@@ -201,15 +201,15 @@ export function buildStatusCommand(gardenRunner: string): string {
     `trap true USR1`,
     `prev=""`,
     `while true; do`,
-    `  ${gardenRunner} dashboard _header >/dev/null 2>&1`,
-    `  cur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1)`,
+    `  ${gardenRunner} dashboard _header >/dev/null 2>&1;`,
+    `  cur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1);`,
     `  if [ "$cur" != "$prev" ]; then`,
-    `    printf '\\033[H\\033[2J\\033[3J%s\\n' "$cur"`,
-    `    prev="$cur"`,
-    `  fi`,
-    `  sleep 5 & wait $! 2>/dev/null`,
+    `    printf '\\033[H\\033[2J\\033[3J%s\\n' "$cur";`,
+    `    prev="$cur";`,
+    `  fi;`,
+    `  sleep 5 & wait $! 2>/dev/null;`,
     `done`,
-  ].join("; ");
+  ].join("\n");
 }
 
 export function refreshStatusPane(): void {
