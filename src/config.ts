@@ -32,7 +32,9 @@ export function loadConfig(): GardenConfig {
 
 export function saveConfig(config: GardenConfig): void {
   fs.mkdirSync(GARDEN_DIR, { recursive: true });
-  fs.writeFileSync(CONFIG_PATH, yaml.dump(config, { lineWidth: -1 }));
+  const tmpFile = CONFIG_PATH + ".tmp";
+  fs.writeFileSync(tmpFile, yaml.dump(config, { lineWidth: -1 }));
+  fs.renameSync(tmpFile, CONFIG_PATH);
 }
 
 export function getProject(name: string): ProjectConfig & { name: string } {
@@ -87,7 +89,7 @@ export function resolveProjectFromArgs(args: string[]): {
  * 3. Current working directory (matches against registered project paths)
  */
 export function resolveProject(nameArg?: string): ProjectConfig & { name: string } {
-  const name = nameArg || process.env.GARDEN_PROJECT || detectProjectFromCwd();
+  const name = nameArg || process.env.GARDEN_PROJECT || detectProjectFromPath();
   if (!name) {
     throw new Error(
       "No project specified. Pass a project name, set GARDEN_PROJECT, or cd into a project directory."
@@ -97,14 +99,15 @@ export function resolveProject(nameArg?: string): ProjectConfig & { name: string
 }
 
 /**
- * Detect project name by matching cwd against registered project paths.
+ * Detect project name by matching a directory against registered project paths.
+ * Defaults to cwd when no directory is provided.
  */
-function detectProjectFromCwd(): string | undefined {
+export function detectProjectFromPath(dir?: string): string | undefined {
   try {
     const config = loadConfig();
-    const cwd = process.cwd();
+    const target = dir ?? process.cwd();
     for (const [name, project] of Object.entries(config.projects)) {
-      if (cwd === project.path || cwd.startsWith(project.path + "/")) {
+      if (target === project.path || target.startsWith(project.path + "/")) {
         return name;
       }
     }

@@ -15,7 +15,7 @@ import {
   addWorker, removeWorker, findWorkerByName, getAllWorkerNames,
 } from "./registry.js";
 import { log } from "./log.js";
-import { buildWorktreeWorkerCommand, createShellWindow, resolveGardenRunner } from "./create.js";
+import { buildWorktreeWorkerCommand, createShellWindow } from "./create.js";
 import { worktreePath, createWorktree, removeWorktree, deleteBranch, getBranchPR, installPollTriggerHook, installClaudeHook } from "./git.js";
 
 export function newWorker(): void {
@@ -43,9 +43,8 @@ export function newWorker(): void {
     return;
   }
 
-  const gardenRunner = resolveGardenRunner();
   const workerCmd = buildWorktreeWorkerCommand(
-    project.name, project.path, workerName, branchName, sessionId, gardenRunner,
+    project.name, project.path, workerName, branchName, sessionId,
   );
 
   const parkName = state.activeWindowName ?? `_${state.activeProject}-active`;

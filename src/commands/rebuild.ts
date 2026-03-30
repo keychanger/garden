@@ -1,8 +1,9 @@
 // Kills tmux server and rebuilds garden. Useful for dev iteration.
 // Works from inside the dashboard — spawns a detached process that survives the tmux kill.
-import { execSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
+import { shellEscape } from "../dashboard/tmux.js";
 
 export async function rebuild(_args: string[]): Promise<void> {
   const gardenRoot = findGardenRoot();
@@ -63,7 +64,3 @@ function findGardenRoot(): string | null {
   return null;
 }
 
-function shellEscape(s: string): string {
-  if (/^[a-zA-Z0-9_./:=-]+$/.test(s)) return s;
-  return `'${s.replace(/'/g, "'\\''")}'`;
-}

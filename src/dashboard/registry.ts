@@ -15,6 +15,8 @@ export interface WorkerEntry {
   lastSeenSha?: string;
   lastShaChangeAt?: string;
   mergedAt?: string;
+  role?: string;
+  parentWorker?: string;
 }
 
 export interface WorkerRegistry {

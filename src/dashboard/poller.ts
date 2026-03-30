@@ -1,7 +1,6 @@
 // PR poller: watches GitHub PR state and drives the check/merge lifecycle.
 // Runs as a hidden tmux window. Wakes on signal via FIFO or 30s timeout.
-import { execSync } from "node:child_process";
-import { execFileSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DASHBOARD_SESSION } from "../session.js";

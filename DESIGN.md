@@ -79,11 +79,11 @@ Requires terminal setup: iTerm2 → Profiles → Keys → Left Option key → "E
 ### Swapping Mechanism
 Each project's workers and shell live in hidden tmux windows when not active. When you switch projects:
 
-1. The current active pane is parked in a hidden window via `break-pane`
-2. The target project's last-active pane (or shell) is brought in via `join-pane`
+1. A temporary hidden window is created, and the current active pane is swapped into it via `swap-pane`
+2. The target project's pane is swapped from its hidden window into the right slot via `swap-pane`, then the hidden window is killed
 3. The status pane and header update to reflect the new state
 
-This preserves all worker state across switches.
+This preserves both the layout tree (the right pane slot is never destroyed) and all worker state across switches.
 
 ### Hidden Window Naming
 Hidden windows follow the convention: `_<project>-worker-<N>` and `_<project>-shell`. When switching projects, the visible pane is parked as `_<project>-active`. The underscore prefix marks them as managed by garden — not user-facing.
@@ -134,8 +134,10 @@ Merges are serialized per project (one at a time). The merge sequence:
 1. Fetch latest main
 2. Rebase the branch onto main
 3. Force-push the rebased branch
-4. Merge via `gh pr merge --squash --delete-branch`
-5. Kill worker window, clean up worktree and registry
+4. Merge via `gh pr merge --squash`
+5. Mark the worker as merged in the registry
+
+The worker and its worktree are not automatically cleaned up on merge. Cleanup happens only when the user kills the worker with `opt-x` or runs `garden reset`. This allows inspecting merged work before disposal.
 
 Projects don't block each other — each project's queue drains independently.
 

@@ -66,7 +66,7 @@ export function printHeader(): void {
     } else {
       const pid = getPanePid(state.activePaneId);
       if (pid && hasClaudeChild(pid)) {
-        let title = getPaneVar(state.activePaneId!, "garden_task");
+        let title = getPaneVar(state.activePaneId, "garden_task");
         if (!title && workerLabel && state.activeProject) {
           const entry = findWorkerByName(state.activeProject, workerLabel);
           if (entry?.task) {
@@ -74,10 +74,10 @@ export function printHeader(): void {
           }
         }
         if (!title) {
-          title = getPaneTitle(state.activePaneId!) ?? null;
+          title = getPaneTitle(state.activePaneId) ?? null;
         }
         if (title) {
-          setPaneVar(state.activePaneId!, "garden_task", title);
+          setPaneVar(state.activePaneId, "garden_task", title);
           if (workerLabel && state.activeProject) {
             updateWorkerTask(state.activeProject, workerLabel, title);
           }
@@ -182,7 +182,26 @@ function setHeaderVar(header: string): void {
 }
 
 export function buildStatusCommand(gardenRunner: string): string {
-  return `printf '\\033[H\\033[2J\\033[3J'; trap true USR1; sleep 1 & wait $!; prev=""; while true; do ${gardenRunner} dashboard _header >/dev/null 2>&1; cur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1); if [ "$cur" != "$prev" ]; then printf '\\033[H\\033[2J\\033[3J%s\\n' "$cur"; prev="$cur"; fi; sleep 2 & wait $!; done`;
+  // The status pane is primarily signal-driven: refreshStatusPane() sends
+  // SIGUSR1 after every mutation (new worker, project switch, kill, etc.)
+  // which interrupts the `sleep & wait` immediately. A 5s background poll
+  // catches process status changes (working/waiting/exited) that have no
+  // event source. The trap on USR1 interrupts the sleep's wait, causing
+  // an immediate refresh.
+  return [
+    `printf '\\033[H\\033[2J\\033[3J'`,
+    `trap true USR1`,
+    `prev=""`,
+    `while true; do`,
+    `  ${gardenRunner} dashboard _header >/dev/null 2>&1`,
+    `  cur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1)`,
+    `  if [ "$cur" != "$prev" ]; then`,
+    `    printf '\\033[H\\033[2J\\033[3J%s\\n' "$cur"`,
+    `    prev="$cur"`,
+    `  fi`,
+    `  sleep 5 & wait $! 2>/dev/null`,
+    `done`,
+  ].join("; ");
 }
 
 export function refreshStatusPane(): void {
