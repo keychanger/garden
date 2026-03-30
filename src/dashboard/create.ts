@@ -84,7 +84,8 @@ export function ensureDashboard(): void {
     setPaneTitle(rightPaneId, firstProject);
   }
 
-  // Clear garden shell scrollback created by resize events during split setup
+  // Clear scrollback created by resize events during split setup
+  try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
   tmux("send-keys", "-t", gardenShellId, "clear", "Enter");
 
   setupStatusBar(gardenRunner);
