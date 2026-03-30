@@ -141,7 +141,7 @@ export function ensureDashboard(): void {
       }
       const workerCwd = entry.worktreePath ?? projectConfig.path;
       const resumeCmd = entry.worktreePath && entry.branchName
-        ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, gardenRunner)
+        ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId)
         : buildResumeCommand(projectName, projectConfig.path, entry.sessionId);
       const workerWindowName = `_${projectName}-worker-${entry.name}`;
 
@@ -205,7 +205,6 @@ export function buildWorktreeWorkerCommand(
   workerName: string,
   branchName: string,
   sessionId: string,
-  gardenRunner: string,
 ): string {
   const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName);
   const claudeCmd = `claude --dangerously-skip-permissions --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
@@ -218,7 +217,6 @@ export function buildWorktreeResumeCommand(
   workerName: string,
   branchName: string,
   sessionId: string,
-  gardenRunner: string,
 ): string {
   const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName);
   const claudeCmd = `claude --dangerously-skip-permissions --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
