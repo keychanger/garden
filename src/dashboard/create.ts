@@ -41,7 +41,9 @@ export function ensureDashboard(): void {
     const config = loadConfig();
     const projectCount = Object.keys(config.projects).length;
     const statusHeight = Math.max(4, projectCount * 2 + 2);
-    try { tmux("resize-pane", "-t", healed.statusPaneId, "-y", String(statusHeight)); } catch { /* pane may be gone */ }
+    if (healed.statusPaneId) {
+      try { tmux("resize-pane", "-t", healed.statusPaneId, "-y", String(statusHeight)); } catch { /* pane may be gone */ }
+    }
 
     return;
   }
