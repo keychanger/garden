@@ -122,7 +122,7 @@ export function forcePushBranch(worktreePath: string): void {
 }
 
 export function mergePR(repoPath: string, prNumber: number): void {
-  gh(repoPath, "pr", "merge", String(prNumber), "--squash", "--no-delete-branch");
+  gh(repoPath, "pr", "merge", String(prNumber), "--squash");
 }
 
 export interface PRInfo {
