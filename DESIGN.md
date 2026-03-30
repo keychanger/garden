@@ -190,7 +190,7 @@ All read commands detect whether stdout is a TTY:
     dashboard-<project>.context  # System prompt for project's Claude sessions
     dashboard-<project>-<branch>.context  # Worktree worker context
     dashboard-<project>-review-<N>.context  # Review worker context
-    merge-queue.json        # Per-project sequential merge queue
+    dashboard.log           # Structured JSON log
   worktrees/
     <project>/
       <worker-name>/      # Git worktree for each worker

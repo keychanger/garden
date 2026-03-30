@@ -83,6 +83,8 @@ function pollWorker(
       return handleReady(projectName, projectPath, entry);
     case "approved":
       return handleApproved(projectName, projectPath, entry);
+    case "merging":
+      return; // merge in progress from a previous poll cycle, wait for it to finish
     case "resolving":
       return handleResolving(projectName, projectPath, entry);
   }
@@ -279,6 +281,22 @@ function handleApproved(
 ): void {
   if (!entry.prNumber) return;
 
+  // Serialize merges: only one PR per project can merge at a time
+  const projectWorkers = getWorkers(projectName);
+  const alreadyMerging = projectWorkers.some(
+    w => w.name !== entry.name && w.prState === "merging",
+  );
+  if (alreadyMerging) {
+    log.info("poller", "another PR is merging, waiting", {
+      worker: entry.name,
+      prNumber: entry.prNumber,
+    });
+    return;
+  }
+
+  updateWorkerFields(projectName, entry.name, { prState: "merging" });
+  refreshDashboard();
+
   const wtPath = entry.worktreePath ?? projectPath;
 
   // Fetch latest main before rebase
@@ -318,6 +336,8 @@ function handleApproved(
       prNumber: entry.prNumber,
       error: String(err),
     });
+    // Reset to approved so it retries next cycle
+    updateWorkerFields(projectName, entry.name, { prState: "approved" });
     refreshDashboard();
     return;
   }

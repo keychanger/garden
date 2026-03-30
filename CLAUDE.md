@@ -31,7 +31,7 @@ npm run dev -- help    # run via tsx during development
   - `git.ts` — git/gh CLI wrappers for worktree and PR operations
   - `poller.ts` — PR poller: state machine driving review/merge lifecycle every 30s
   - `review.ts` — review worker spawning
-    - `log.ts` — structured JSON logger to `~/.garden/sessions/dashboard.log`
+  - `log.ts` — structured JSON logger to `~/.garden/sessions/dashboard.log`
   - `names.ts` — worker name generation (adjective-noun pairs)
 - `src/dashboard-claude.ts` — internal command: launches claude with rules context
 - `src/config.ts` — reads/writes `~/.garden/config.yml`, project resolution
