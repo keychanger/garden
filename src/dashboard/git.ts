@@ -184,13 +184,13 @@ export function getPRInfo(
       "view",
       String(prNumber),
       "--json",
-      "state,isDraft,headOid,reviewDecision",
+      "state,isDraft,headRefOid,reviewDecision",
     );
     const data = JSON.parse(result);
     return {
       state: data.state,
       isDraft: data.isDraft,
-      headSha: data.headOid,
+      headSha: data.headRefOid,
       reviewDecision: data.reviewDecision ?? null,
     };
   } catch {
