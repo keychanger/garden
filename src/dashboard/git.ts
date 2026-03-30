@@ -183,7 +183,7 @@ export function installClaudeHook(wtPath: string): void {
       PostToolUse: [
         {
           matcher: "Bash",
-          command: `echo "$TOOL_INPUT" | grep -q 'gh pr create' && echo > '${signalFifo}' 2>/dev/null; exit 0`,
+          command: `echo "$TOOL_INPUT" | grep -q 'gh pr create' && (echo > '${signalFifo}') >/dev/null 2>&1 & exit 0`,
         },
       ],
     },
@@ -202,7 +202,7 @@ export function installPollTriggerHook(wtPath: string): void {
     "#!/bin/sh",
     `FIFO="${signalFifo}"`,
     `if [ -p "$FIFO" ]; then`,
-    `  (sleep 3 && echo > "$FIFO" 2>/dev/null) &`,
+    `  (echo > "$FIFO") </dev/null >/dev/null 2>&1 &`,
     `fi`,
     `exit 0`,
     "",
