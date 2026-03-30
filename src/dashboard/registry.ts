@@ -12,6 +12,7 @@ export interface WorkerEntry {
   branchName?: string;
   prNumber?: number;
   prState?: string;
+  mergeCount?: number;
   lastSeenSha?: string;
   lastShaChangeAt?: string;
   mergedAt?: string;
