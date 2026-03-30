@@ -14,6 +14,7 @@ export interface WorkerEntry {
   prState?: string;
   lastSeenSha?: string;
   lastShaChangeAt?: string;
+  mergedAt?: string;
 }
 
 export interface WorkerRegistry {
