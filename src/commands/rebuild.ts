@@ -18,8 +18,8 @@ export async function rebuild(_args: string[]): Promise<void> {
     tmux kill-server 2>/dev/null
     sleep 0.3
 
-    # Build
-    cd ${shellEscape(gardenRoot)} && npm run build
+    # Pull latest and build
+    cd ${shellEscape(gardenRoot)} && git pull && npm run build
 
     # Relaunch iTerm with dashboard
     osascript -e '
