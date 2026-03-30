@@ -7,19 +7,25 @@ import { findWorkerByName } from "./registry.js";
 
 export function setupStatusBar(gardenRunner: string): void {
   const target = DASHBOARD_SESSION;
-  try {
-    tmux("set-option", "-t", target, "mouse", "on");
-    tmux("set-option", "-t", target, "status-right-length", "120");
-    tmux("set-option", "-t", target, "status-right", "#{@garden_header}");
-    tmux("set-option", "-t", target, "status-interval", "2");
-    tmux("set-option", "-t", target, "status-left", "");
-    tmux("set-option", "-t", target, "status-left-length", "0");
-    tmux("set-option", "-t", target, "window-status-current-format", "garden");
-    tmux("set-option", "-t", target, "window-status-format", "");
-    tmux("set-option", "-t", target, "pane-border-status", "top");
-    tmux("set-option", "-t", target, "pane-border-format",
-      " #{?@garden_name,#{@garden_name}#{?@garden_task, - #{@garden_task},},#{pane_title}} ");
-  } catch { /* ignore */ }
+  const mainWindow = `${DASHBOARD_SESSION}:main`;
+  const opts: Array<[string[], string]> = [
+    // Session options
+    [["-t", target, "mouse", "on"], "mouse"],
+    [["-t", target, "status-right-length", "120"], "status-right-length"],
+    [["-t", target, "status-right", "#{@garden_header}"], "status-right"],
+    [["-t", target, "status-interval", "2"], "status-interval"],
+    [["-t", target, "status-left", ""], "status-left"],
+    [["-t", target, "status-left-length", "0"], "status-left-length"],
+    // Window options — target main window directly to override user globals
+    [["-t", mainWindow, "window-status-current-format", "garden"], "window-status-current-format"],
+    [["-t", mainWindow, "window-status-format", ""], "window-status-format"],
+    [["-t", mainWindow, "pane-border-status", "top"], "pane-border-status"],
+    [["-t", mainWindow, "pane-border-format",
+      "#{?@garden_name, #{@garden_name}#{?@garden_task, - #{@garden_task},} ,}"], "pane-border-format"],
+  ];
+  for (const [args] of opts) {
+    try { tmux("set-option", ...args); } catch { /* ignore */ }
+  }
 }
 
 /**
