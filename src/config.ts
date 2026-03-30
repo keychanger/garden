@@ -32,7 +32,9 @@ export function loadConfig(): GardenConfig {
 
 export function saveConfig(config: GardenConfig): void {
   fs.mkdirSync(GARDEN_DIR, { recursive: true });
-  fs.writeFileSync(CONFIG_PATH, yaml.dump(config, { lineWidth: -1 }));
+  const tmpFile = CONFIG_PATH + ".tmp";
+  fs.writeFileSync(tmpFile, yaml.dump(config, { lineWidth: -1 }));
+  fs.renameSync(tmpFile, CONFIG_PATH);
 }
 
 export function getProject(name: string): ProjectConfig & { name: string } {
