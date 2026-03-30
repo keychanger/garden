@@ -186,7 +186,7 @@ export function installClaudeHook(wtPath: string): void {
           hooks: [
             {
               type: "command",
-              command: `echo "$TOOL_INPUT" | grep -q 'gh pr create' && (echo > '${signalFifo}') >/dev/null 2>&1 & exit 0`,
+              command: `grep -q 'gh pr create' && (echo > '${signalFifo}') >/dev/null 2>&1 & exit 0`,
             },
           ],
         },
