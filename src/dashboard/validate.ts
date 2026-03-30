@@ -6,6 +6,8 @@ import { readRegistry, writeRegistry } from "./registry.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, killWindowSafe } from "./tmux.js";
 import { log } from "./log.js";
 import { worktreeExists, removeWorktree, pruneWorktrees, isPRMerged } from "./git.js";
+import { startPoller, pollerRunning } from "./poller.js";
+import { resolveGardenRunner } from "./create.js";
 
 /**
  * Validate dashboard state against tmux reality and heal inconsistencies.
@@ -136,6 +138,12 @@ export function validateAndHeal(state: DashboardState): DashboardState {
 
   // Clean stale context files
   cleanContextFiles();
+
+  // Restart poller if it's not running
+  if (!pollerRunning()) {
+    log.info("validate", "poller not running, restarting");
+    startPoller(resolveGardenRunner());
+  }
 
   if (changed) {
     log.info("validate", "state healed", {

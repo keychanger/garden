@@ -78,10 +78,10 @@ describe("buildWorktreeRules", () => {
     expect(result).toContain("pull request against main");
   });
 
-  it("instructs to exit after PR", async () => {
+  it("instructs to wait for feedback after PR", async () => {
     const { buildWorktreeRules } = await importRules();
     const result = buildWorktreeRules("test-branch");
-    expect(result).toContain("After opening the PR, exit");
+    expect(result).toContain("After opening the PR, wait for review feedback");
   });
 });
 
@@ -118,9 +118,9 @@ describe("buildReviewRules", () => {
     expect(result).toContain("gh pr review 42 --request-changes");
   });
 
-  it("instructs to exit after review", async () => {
+  it("instructs to wait after review", async () => {
     const { buildReviewRules } = await importRules();
     const result = buildReviewRules(42, "swift-oak");
-    expect(result).toContain("After completing your review action, exit");
+    expect(result).toContain("After completing your review, wait for further instructions");
   });
 });

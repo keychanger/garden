@@ -96,34 +96,43 @@ Hidden windows follow the convention: `_<project>-worker-<N>` and `_<project>-sh
 5. `⌥x` kills the focused worker, removes its worktree (and branch if no PR exists)
 6. Switching projects parks everything in hidden windows; switching back restores
 
-### Automated PR Review Cycle
-When a worktree worker exits, a post-exit hook runs:
-1. Check if the worker opened a PR on its branch
-2. If yes: spawn a review worker in the same worktree
-3. The review worker reads the diff, runs tests, and either approves+merges or requests changes
-4. If merged: worktree is cleaned up, registry entries removed
-5. If changes requested: the original worker is resumed (via `claude --resume`) with its post-exit hook, creating a loop
-6. The cycle repeats until the PR is merged
+### PR Poller and Review Cycle
+A background poller (`_garden-pr-poller`) runs every 30 seconds in a hidden tmux window. It drives the entire PR lifecycle without relying on workers to exit or run specific commands.
 
-Review workers are registered with `role: "reviewer"` and `parentWorker` linking back to the original.
+**State machine per worker:**
+```
+working -> open -> in-review -> approved -> (merge + cleanup)
+                      |                        |
+                      v                        v (conflict)
+               changes-requested -> updating -> ready -> in-review
+                                                   approved -> resolving -> approved (retry)
+```
 
-### Merge Queue
-When a review worker approves a PR, it enters a per-project merge queue (`~/.garden/sessions/merge-queue.json`). The queue processes one PR at a time:
-1. Rebase the branch onto latest main
-2. Force-push the rebased branch
-3. Merge via `gh pr merge --squash --delete-branch`
-4. Clean up worktree and registry entries
-5. Process the next entry in the queue
+1. **working**: Worker is active, no PR yet. Poller checks for PRs via `gh pr list`.
+2. **open**: PR detected. Poller spawns a review worker.
+3. **in-review**: Reviewer is active. Poller watches for `APPROVED` or `CHANGES_REQUESTED`.
+4. **changes-requested**: Poller converts PR to draft, sends review feedback to worker via `tmux send-keys`.
+5. **updating**: Worker is pushing fixes. Poller debounces commits (30s of no new pushes).
+6. **ready**: Debounce complete. Poller marks PR ready and notifies the same reviewer to re-review.
+7. **approved**: Poller attempts rebase onto main, force-push, and merge.
+8. On successful merge: both worker and reviewer are killed, worktrees cleaned up.
+9. On rebase conflict (**resolving**): worker is notified to resolve, then merge is retried (no re-review needed).
 
-If rebase conflicts, the original worker is resumed to resolve the conflict. After resolution, the review cycle re-runs and re-queues.
+Review workers are registered with `role: "reviewer"` and `parentWorker` linking back to the original. The same reviewer persists across review rounds.
+
+If a PR is closed or merged externally, the poller detects this and cleans up from any state.
+
+### Merge Handling
+When the poller detects an approved PR, it processes merges sequentially per project:
+1. Fetch latest main
+2. Rebase the branch onto main
+3. Force-push the rebased branch
+4. Merge via `gh pr merge --squash --delete-branch`
+5. Kill worker and reviewer windows, clean up worktrees and registry
+
+If rebase conflicts, the worker is notified to resolve. After the worker pushes a fix (debounced), the merge is retried directly without re-review since the PR was already approved.
 
 Projects don't block each other — each project's queue drains independently.
-
-The status pane shows queue state alongside workers:
-```
-  ⏳ PR #7 (swift-oak) merging
-  ⏳ PR #12 (bold-fern) queued
-```
 
 ### Worker Isolation Model
 - Every worker operates in its own git worktree — no shared working directory

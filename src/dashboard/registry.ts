@@ -13,6 +13,11 @@ export interface WorkerEntry {
   prNumber?: number;
   role?: "worker" | "reviewer";
   parentWorker?: string;
+  prState?: string;
+  reviewerName?: string;
+  lastSeenSha?: string;
+  lastShaChangeAt?: string;
+  lastReviewId?: string;
 }
 
 export interface WorkerRegistry {

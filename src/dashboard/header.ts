@@ -76,7 +76,15 @@ export function printHeader(): void {
     }
   }
 
-  const header = formatHeader(projectName, isOnWorker, workerLabel, paneStatus, currentWorkerIdx, totalWorkers);
+  let prState = "";
+  if (workerLabel && state.activeProject) {
+    const entry = findWorkerByName(state.activeProject, workerLabel);
+    if (entry?.prState && entry.prState !== "working") {
+      prState = entry.prState;
+    }
+  }
+
+  const header = formatHeader(projectName, isOnWorker, workerLabel, paneStatus, currentWorkerIdx, totalWorkers, prState);
   process.stdout.write(header);
   setHeaderVar(header);
 }
@@ -111,7 +119,16 @@ export function updateHeaderVar(): void {
   const workerLabel = workerNameMatch ? workerNameMatch[1] : null;
 
   const paneStatus = state.activePaneType === "shell" ? "shell" : "";
-  const header = formatHeader(projectName, isOnWorker, workerLabel, paneStatus, currentWorkerIdx, totalWorkers);
+
+  let prState = "";
+  if (workerLabel && state.activeProject) {
+    const entry = findWorkerByName(state.activeProject, workerLabel);
+    if (entry?.prState && entry.prState !== "working") {
+      prState = entry.prState;
+    }
+  }
+
+  const header = formatHeader(projectName, isOnWorker, workerLabel, paneStatus, currentWorkerIdx, totalWorkers, prState);
   setHeaderVar(header);
 }
 
@@ -122,12 +139,14 @@ function formatHeader(
   paneStatus: string,
   currentWorkerIdx: number,
   totalWorkers: number,
+  prState?: string,
 ): string {
   const parts: string[] = [projectName];
 
   if (isOnWorker && totalWorkers > 0) {
     const label = workerLabel ?? "worker";
-    const status = paneStatus ? ` (${paneStatus})` : "";
+    const statusParts = [paneStatus, prState].filter(Boolean);
+    const status = statusParts.length > 0 ? ` (${statusParts.join(", ")})` : "";
     parts.push(`${label}${status} [${currentWorkerIdx}/${totalWorkers}]`);
   } else if (paneStatus) {
     parts.push(paneStatus);
@@ -149,7 +168,7 @@ function setHeaderVar(header: string): void {
 }
 
 export function buildStatusCommand(gardenRunner: string): string {
-  return `trap true USR1; sleep 1 & wait $!; prev=""; while true; do ${gardenRunner} dashboard _header >/dev/null 2>&1; ${gardenRunner} dashboard _check-prs >/dev/null 2>&1; cur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1); if [ "$cur" != "$prev" ]; then printf '\\033[H\\033[2J%s\\n' "$cur"; prev="$cur"; fi; sleep 2 & wait $!; done`;
+  return `trap true USR1; sleep 1 & wait $!; prev=""; while true; do ${gardenRunner} dashboard _header >/dev/null 2>&1; cur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1); if [ "$cur" != "$prev" ]; then printf '\\033[H\\033[2J%s\\n' "$cur"; prev="$cur"; fi; sleep 2 & wait $!; done`;
 }
 
 export function refreshStatusPane(): void {

@@ -166,6 +166,79 @@ export function mergePR(repoPath: string, prNumber: number): void {
   gh(repoPath, "pr", "merge", String(prNumber), "--squash", "--delete-branch");
 }
 
+export interface PRInfo {
+  state: string;
+  isDraft: boolean;
+  headSha: string;
+  reviewDecision: string | null;
+}
+
+export function getPRInfo(
+  repoPath: string,
+  prNumber: number,
+): PRInfo | null {
+  try {
+    const result = gh(
+      repoPath,
+      "pr",
+      "view",
+      String(prNumber),
+      "--json",
+      "state,isDraft,headOid,reviewDecision",
+    );
+    const data = JSON.parse(result);
+    return {
+      state: data.state,
+      isDraft: data.isDraft,
+      headSha: data.headOid,
+      reviewDecision: data.reviewDecision ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function convertToDraft(repoPath: string, prNumber: number): void {
+  gh(repoPath, "pr", "ready", String(prNumber), "--undo");
+}
+
+export function markReady(repoPath: string, prNumber: number): void {
+  gh(repoPath, "pr", "ready", String(prNumber));
+}
+
+export interface ReviewInfo {
+  id: string;
+  body: string;
+  state: string;
+}
+
+export function getLatestReview(
+  repoPath: string,
+  prNumber: number,
+): ReviewInfo | null {
+  try {
+    const result = gh(
+      repoPath,
+      "pr",
+      "view",
+      String(prNumber),
+      "--json",
+      "reviews",
+    );
+    const data = JSON.parse(result);
+    if (!Array.isArray(data.reviews) || data.reviews.length === 0) return null;
+    for (let i = data.reviews.length - 1; i >= 0; i--) {
+      const r = data.reviews[i];
+      if (r.body) {
+        return { id: r.id, body: r.body, state: r.state };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export function pruneWorktrees(repoPath: string): void {
   try {
     git(repoPath, "worktree", "prune");
