@@ -35,6 +35,14 @@ export function ensureDashboard(): void {
     const state = readDashState();
     const healed = validateAndHeal(state);
     writeDashState(healed);
+
+    // Resize status pane to correct height — attaching from a different
+    // terminal size can squish panes since tmux redistributes proportionally.
+    const config = loadConfig();
+    const projectCount = Object.keys(config.projects).length;
+    const statusHeight = Math.max(4, projectCount * 2 + 2);
+    try { tmux("resize-pane", "-t", healed.statusPaneId, "-y", String(statusHeight)); } catch { /* pane may be gone */ }
+
     return;
   }
 
