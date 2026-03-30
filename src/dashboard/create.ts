@@ -76,7 +76,9 @@ export function ensureDashboard(): void {
   try { tmux("set-option", "-t", statusId, "-p", "history-limit", "0"); } catch { /* ignore */ }
 
   setPaneTitle(statusId, "status");
+  setPaneLabel(statusId, "status");
   setPaneTitle(gardenShellId, "garden");
+  setPaneLabel(gardenShellId, "garden");
   if (firstProject) {
     setPaneLabel(rightPaneId, `shell-${firstProject}`);
     setPaneTitle(rightPaneId, firstProject);
