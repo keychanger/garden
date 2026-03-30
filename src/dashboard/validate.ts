@@ -3,11 +3,12 @@ import fs from "node:fs";
 import { SESSIONS_DIR, loadConfig } from "../config.js";
 import { type DashboardState } from "./state.js";
 import { readRegistry, writeRegistry } from "./registry.js";
-import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, killWindowSafe } from "./tmux.js";
+import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, killWindowSafe, tmuxSplit, setPaneTitle, setPaneLabel, tmux } from "./tmux.js";
 import { log } from "./log.js";
 import { worktreeExists, removeWorktree, pruneWorktrees, isPRMerged } from "./git.js";
 import { startPoller, pollerRunning } from "./poller.js";
 import { resolveGardenRunner } from "./create.js";
+import { buildStatusCommand } from "./header.js";
 
 /**
  * Validate dashboard state against tmux reality and heal inconsistencies.
@@ -21,6 +22,31 @@ export function validateAndHeal(state: DashboardState): DashboardState {
     log.warn("validate", "statusPaneId is stale", { paneId: healed.statusPaneId });
     healed.statusPaneId = null;
     changed = true;
+  }
+
+  // Recreate status pane if missing — split above the garden shell pane
+  if (!healed.statusPaneId && healed.gardenShellPaneId && paneExists(healed.gardenShellPaneId)) {
+    try {
+      const gardenRunner = resolveGardenRunner();
+      const config = loadConfig();
+      const projectCount = Object.keys(config.projects).length;
+      const statusHeight = Math.max(4, projectCount * 2 + 2);
+      const statusCmd = buildStatusCommand(gardenRunner);
+
+      const statusId = tmuxSplit("-v", "-b", "-t", healed.gardenShellPaneId, "-l", String(statusHeight),
+        "sh", "-c", statusCmd);
+
+      try { tmux("resize-pane", "-t", statusId, "-y", String(statusHeight)); } catch { /* ignore */ }
+      try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
+      setPaneTitle(statusId, "status");
+      setPaneLabel(statusId, "status");
+
+      healed.statusPaneId = statusId;
+      changed = true;
+      log.info("validate", "recreated status pane", { paneId: statusId });
+    } catch (err) {
+      log.warn("validate", "failed to recreate status pane", { error: String(err) });
+    }
   }
 
   if (healed.gardenShellPaneId && !paneExists(healed.gardenShellPaneId)) {
