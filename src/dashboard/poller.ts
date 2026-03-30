@@ -57,11 +57,20 @@ function pollWorker(
   // Check for externally closed/merged PRs in any PR-aware state
   if (state !== "working" && entry.prNumber) {
     const info = getPRInfo(projectPath, entry.prNumber);
-    if (!info || info.state === "MERGED" || info.state === "CLOSED") {
+    if (!info) {
+      // gh CLI failed (network, rate limit, etc.) — skip this cycle rather
+      // than assuming the PR is gone and destroying the worker.
+      log.warn("poller", "getPRInfo failed, skipping cycle", {
+        worker: entry.name,
+        prNumber: entry.prNumber,
+      });
+      return;
+    }
+    if (info.state === "MERGED" || info.state === "CLOSED") {
       log.info("poller", "PR closed/merged externally", {
         worker: entry.name,
         prNumber: entry.prNumber,
-        state: info?.state ?? "unknown",
+        state: info.state,
       });
       cleanupWorker(projectName, projectPath, entry);
       return;
