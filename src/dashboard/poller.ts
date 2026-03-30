@@ -58,8 +58,9 @@ function pollWorker(
 ): void {
   const state = entry.prState ?? "working";
 
-  // Check for externally closed/merged PRs in any PR-aware state
-  if (state !== "working" && entry.prNumber) {
+  // Check for externally closed/merged PRs in active PR states.
+  // Skip "merged" — handleMerged needs to run to detect new PRs on the branch.
+  if (state !== "working" && state !== "merged" && entry.prNumber) {
     const info = getPRInfo(projectPath, entry.prNumber);
     if (!info) {
       log.warn("poller", "getPRInfo failed, skipping cycle", {
