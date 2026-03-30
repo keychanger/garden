@@ -19,6 +19,7 @@ import { readRegistry } from "./registry.js";
 import { log, truncateLog } from "./log.js";
 import { validateAndHeal } from "./validate.js";
 import { startPoller } from "./poller.js";
+import { installPollTriggerHook, worktreeExists as wtExists } from "./git.js";
 
 const DASHBOARD_COLS = 200;
 const DASHBOARD_ROWS = 50;
@@ -123,6 +124,9 @@ export function ensureDashboard(): void {
 
     for (const entry of entries) {
       if (!entry.sessionId) continue;
+      if (entry.worktreePath && wtExists(entry.worktreePath)) {
+        installPollTriggerHook(entry.worktreePath);
+      }
       const workerCwd = entry.worktreePath ?? projectConfig.path;
       const resumeCmd = entry.worktreePath && entry.branchName
         ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, gardenRunner)

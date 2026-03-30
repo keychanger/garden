@@ -1,9 +1,11 @@
 // PR poller: watches GitHub PR state and drives the check/merge lifecycle.
-// Runs as a hidden tmux window, invoked every 30s via `garden dashboard _poll`.
+// Runs as a hidden tmux window. Wakes on signal via FIFO or 30s timeout.
 import { execSync } from "node:child_process";
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tryGetProject } from "../config.js";
+import { tryGetProject, SESSIONS_DIR } from "../config.js";
 import {
   tmux, getFirstPaneId, getPanePid, hasClaudeChild,
   windowExists, killWindowSafe,
@@ -21,6 +23,7 @@ import { log } from "./log.js";
 
 const DEBOUNCE_MS = 30_000;
 const POLLER_WINDOW = "_garden-pr-poller";
+const SIGNAL_FIFO = path.join(SESSIONS_DIR, "poll-signal");
 
 function prComment(projectPath: string, prNumber: number, message: string): void {
   commentOnPR(projectPath, prNumber, `[garden] ${message}`);
@@ -86,7 +89,7 @@ function pollWorker(
     case "failing":
       return handleFailing(projectName, projectPath, entry);
     case "merged":
-      return; // merged PRs stay until manually cleaned up via ⌥x
+      return; // merged PRs stay until manually cleaned up via opt-x
     default:
       // Handle workers stuck in old states (in-review, approved, etc.)
       log.warn("poller", "unknown state, resetting to open", {
@@ -278,21 +281,54 @@ function notifyWorker(
   log.info("poller", "notified worker", { worker: entry.name });
 }
 
+export function triggerPoll(): void {
+  try {
+    const fd = fs.openSync(SIGNAL_FIFO, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
+    fs.writeSync(fd, "\n");
+    fs.closeSync(fd);
+    log.info("poller", "triggered immediate poll");
+  } catch {
+    // FIFO not ready or poller not running — ignore
+  }
+}
+
 export function startPoller(gardenRunner: string): void {
   if (windowExists(POLLER_WINDOW)) return;
 
-  const cmd = `while true; do ${gardenRunner} dashboard _poll 2>/dev/null; sleep 30; done`;
+  ensureSignalFifo();
+  const fifo = SIGNAL_FIFO.replace(/'/g, "'\\''");
+  const cmd = [
+    `while true; do`,
+    `  ${gardenRunner} dashboard _poll 2>/dev/null;`,
+    `  read -t 30 <>'${fifo}' 2>/dev/null || true;`,
+    `done`,
+  ].join(" ");
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", POLLER_WINDOW,
-    "sh", "-c", cmd);
+    "bash", "-c", cmd);
 
   log.info("poller", "started poller");
 }
 
 export function stopPoller(): void {
   killWindowSafe(POLLER_WINDOW);
+  cleanupSignalFifo();
   log.info("poller", "stopped poller");
 }
 
 export function pollerRunning(): boolean {
   return windowExists(POLLER_WINDOW);
+}
+
+function ensureSignalFifo(): void {
+  try {
+    const stat = fs.statSync(SIGNAL_FIFO);
+    if (stat.isFIFO()) return;
+    fs.unlinkSync(SIGNAL_FIFO);
+  } catch { /* doesn't exist */ }
+  fs.mkdirSync(path.dirname(SIGNAL_FIFO), { recursive: true });
+  execFileSync("mkfifo", [SIGNAL_FIFO]);
+}
+
+function cleanupSignalFifo(): void {
+  try { fs.unlinkSync(SIGNAL_FIFO); } catch { /* ignore */ }
 }
