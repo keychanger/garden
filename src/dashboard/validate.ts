@@ -84,6 +84,7 @@ export function validateAndHeal(state: DashboardState): DashboardState {
   for (const [projectName, entries] of Object.entries(registry.workers)) {
     const before = entries.length;
     registry.workers[projectName] = entries.filter(entry => {
+      if (entry.prState === "merged") return true;
       const windowName = `_${projectName}-worker-${entry.name}`;
       const exists = windowExists(windowName) || windowName === healed.activeWindowName;
       if (!exists) {

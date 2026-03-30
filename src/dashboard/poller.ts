@@ -11,7 +11,7 @@ import {
   windowExists, killWindowSafe,
 } from "./tmux.js";
 import {
-  readRegistry, getWorkers, updateWorkerFields,
+  readRegistry, getWorkers, updateWorkerFields, removeWorker,
   type WorkerEntry,
 } from "./registry.js";
 import {
@@ -73,7 +73,10 @@ function pollWorker(
         prNumber: entry.prNumber,
         state: info.state,
       });
-      updateWorkerFields(projectName, entry.name, { prState: "merged" });
+      updateWorkerFields(projectName, entry.name, {
+        prState: "merged",
+        mergedAt: new Date().toISOString(),
+      });
       refreshDashboard();
       return;
     }
@@ -89,7 +92,7 @@ function pollWorker(
     case "failing":
       return handleFailing(projectName, projectPath, entry);
     case "merged":
-      return; // merged PRs stay until manually cleaned up via opt-x
+      return handleMerged(projectName, entry);
     default:
       // Handle workers stuck in old states (in-review, approved, etc.)
       log.warn("poller", "unknown state, resetting to open", {
@@ -231,7 +234,10 @@ function attemptMerge(
 
   log.info("poller", "PR merged", { worker: entry.name, prNumber: entry.prNumber });
   prComment(projectPath, entry.prNumber, "Merged successfully.");
-  updateWorkerFields(projectName, entry.name, { prState: "merged" });
+  updateWorkerFields(projectName, entry.name, {
+    prState: "merged",
+    mergedAt: new Date().toISOString(),
+  });
   refreshDashboard();
 }
 
@@ -259,6 +265,25 @@ function handleFailing(
   if (Date.now() - changeAt >= DEBOUNCE_MS) {
     log.info("poller", "debounce complete, retrying", { worker: entry.name });
     updateWorkerFields(projectName, entry.name, { prState: "open" });
+  }
+}
+
+const MERGED_TTL_MS = 5 * 60_000;
+
+function handleMerged(projectName: string, entry: WorkerEntry): void {
+  if (!entry.mergedAt) {
+    removeWorker(projectName, entry.name);
+    refreshDashboard();
+    return;
+  }
+  const mergedAt = new Date(entry.mergedAt).getTime();
+  if (Date.now() - mergedAt >= MERGED_TTL_MS) {
+    log.info("poller", "cleaning up stale merged entry", {
+      worker: entry.name,
+      mergedAt: entry.mergedAt,
+    });
+    removeWorker(projectName, entry.name);
+    refreshDashboard();
   }
 }
 
