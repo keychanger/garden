@@ -15,6 +15,19 @@ export function worktreePath(project: string, workerName: string): string {
   return path.join(WORKTREE_BASE, project, workerName);
 }
 
+export function fastForwardMain(repoPath: string): void {
+  try {
+    git(repoPath, "fetch", "origin", "main");
+    git(repoPath, "merge", "--ff-only", "origin/main");
+    log.info("git", "fast-forwarded main", { repoPath });
+  } catch (err) {
+    log.warn("git", "failed to fast-forward main", {
+      repoPath,
+      error: String(err),
+    });
+  }
+}
+
 export function createWorktree(
   repoPath: string,
   wtPath: string,

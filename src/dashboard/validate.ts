@@ -1,7 +1,7 @@
 // State validation and self-healing: reconciles dashboard state with tmux reality.
 import fs from "node:fs";
 import { SESSIONS_DIR, loadConfig } from "../config.js";
-import { type DashboardState } from "./state.js";
+import { type DashboardState, readDashState, writeDashState } from "./state.js";
 import { readRegistry, writeRegistry } from "./registry.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, killWindowSafe, tmuxSplit, setPaneTitle, setPaneLabel, tmux } from "./tmux.js";
 import { log } from "./log.js";
@@ -11,20 +11,26 @@ import { resolveGardenRunner } from "./create.js";
 import { buildStatusCommand } from "./header.js";
 
 /**
- * Validate dashboard state against tmux reality and heal inconsistencies.
- * Returns the healed state (may be identical if everything is consistent).
+ * Recreate the status pane if it's missing. Reads and writes state atomically.
+ * Called from the poll loop (every 30s) to catch mid-session disappearances,
+ * and also from validateAndHeal on reattach.
  */
-export function validateAndHeal(state: DashboardState): DashboardState {
-  const healed = { ...state };
-  let changed = false;
+export function healStatusPane(): void {
+  const state = readDashState();
+  const healed = healStatusPaneInState(state);
+  if (healed !== state) {
+    writeDashState(healed);
+  }
+}
+
+function healStatusPaneInState(state: DashboardState): DashboardState {
+  let healed = state;
 
   if (healed.statusPaneId && !paneExists(healed.statusPaneId)) {
     log.warn("validate", "statusPaneId is stale", { paneId: healed.statusPaneId });
-    healed.statusPaneId = null;
-    changed = true;
+    healed = { ...healed, statusPaneId: null };
   }
 
-  // Recreate status pane if missing — split above the garden shell pane
   if (!healed.statusPaneId && healed.gardenShellPaneId && paneExists(healed.gardenShellPaneId)) {
     try {
       const gardenRunner = resolveGardenRunner();
@@ -41,13 +47,23 @@ export function validateAndHeal(state: DashboardState): DashboardState {
       setPaneTitle(statusId, "status");
       setPaneLabel(statusId, "status");
 
-      healed.statusPaneId = statusId;
-      changed = true;
+      healed = { ...healed, statusPaneId: statusId };
       log.info("validate", "recreated status pane", { paneId: statusId });
     } catch (err) {
       log.warn("validate", "failed to recreate status pane", { error: String(err) });
     }
   }
+
+  return healed;
+}
+
+/**
+ * Validate dashboard state against tmux reality and heal inconsistencies.
+ * Returns the healed state (may be identical if everything is consistent).
+ */
+export function validateAndHeal(state: DashboardState): DashboardState {
+  let healed = healStatusPaneInState(state);
+  let changed = healed !== state;
 
   if (healed.gardenShellPaneId && !paneExists(healed.gardenShellPaneId)) {
     log.warn("validate", "gardenShellPaneId is stale", { paneId: healed.gardenShellPaneId });
