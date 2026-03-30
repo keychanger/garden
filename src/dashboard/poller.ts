@@ -15,6 +15,7 @@ import {
   getBranchPR, getPRInfo, convertToDraft, markReady,
   getLatestReview, rebaseBranch, abortRebase,
   forcePushBranch, mergePR, removeWorktree, pruneWorktrees,
+  commentOnPR,
   type PRInfo,
 } from "./git.js";
 import { spawnReviewWorker } from "./review.js";
@@ -24,6 +25,10 @@ import { log } from "./log.js";
 
 const DEBOUNCE_MS = 30_000;
 const POLLER_WINDOW = "_garden-pr-poller";
+
+function prComment(projectPath: string, prNumber: number, message: string): void {
+  commentOnPR(projectPath, prNumber, `[garden] ${message}`);
+}
 
 export function poll(): void {
   const registry = readRegistry();
@@ -147,6 +152,8 @@ function handleOpen(
     prNumber: entry.prNumber,
   });
 
+  prComment(projectPath, entry.prNumber, `Review started by \`${reviewerName}\`.`);
+
   updateWorkerFields(projectName, entry.name, {
     prState: "in-review",
     reviewerName,
@@ -212,6 +219,7 @@ function handleChangesRequested(
   if (review && review.id !== entry.lastReviewId) {
     const message = `The reviewer has requested changes on PR #${entry.prNumber}. Here is their feedback:\n\n${review.body}\n\nPlease address these changes. When you are done, commit and push all your changes in a single push.`;
     sendMessage(projectName, entry, message);
+    prComment(projectPath, entry.prNumber, `Sending feedback to worker \`${entry.name}\`. PR converted to draft.`);
     updateWorkerFields(projectName, entry.name, { lastReviewId: review.id });
   }
 
@@ -270,6 +278,8 @@ function handleReady(
     log.warn("poller", "failed to mark ready", { error: String(err) });
   }
 
+  prComment(projectPath, entry.prNumber, "Worker pushed updates. Re-requesting review.");
+
   // Notify the reviewer to re-review
   if (entry.reviewerName) {
     const reviewer = findWorkerByName(projectName, entry.reviewerName);
@@ -322,6 +332,7 @@ function handleApproved(
   if (!rebased) {
     log.info("poller", "rebase conflict", { worker: entry.name, prNumber: entry.prNumber });
     abortRebase(wtPath);
+    prComment(projectPath, entry.prNumber, `Merge conflict with main. Worker \`${entry.name}\` is resolving.`);
 
     // Notify worker to resolve conflicts
     const message = `Your PR #${entry.prNumber} has been approved but has merge conflicts with main. Please resolve the conflicts:\n\n1. Run: git rebase main\n2. Resolve any conflicts\n3. Run: git rebase --continue\n4. Push all changes when done.`;
@@ -352,6 +363,7 @@ function handleApproved(
   }
 
   log.info("poller", "PR merged", { worker: entry.name, prNumber: entry.prNumber });
+  prComment(projectPath, entry.prNumber, "Merged successfully.");
   cleanupWorker(projectName, projectPath, entry);
 }
 

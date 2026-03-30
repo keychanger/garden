@@ -239,6 +239,18 @@ export function getLatestReview(
   }
 }
 
+export function commentOnPR(
+  repoPath: string,
+  prNumber: number,
+  body: string,
+): void {
+  try {
+    gh(repoPath, "pr", "comment", String(prNumber), "--body", body);
+  } catch {
+    // best effort — don't block the poller if commenting fails
+  }
+}
+
 export function pruneWorktrees(repoPath: string): void {
   try {
     git(repoPath, "worktree", "prune");
