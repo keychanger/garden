@@ -19,7 +19,7 @@ import { readRegistry } from "./registry.js";
 import { log, truncateLog } from "./log.js";
 import { validateAndHeal } from "./validate.js";
 import { startPoller } from "./poller.js";
-import { installPollTriggerHook, worktreeExists as wtExists } from "./git.js";
+import { installPollTriggerHook, installClaudeHook, worktreeExists as wtExists } from "./git.js";
 
 const DASHBOARD_COLS = 200;
 const DASHBOARD_ROWS = 50;
@@ -135,6 +135,7 @@ export function ensureDashboard(): void {
       if (!entry.sessionId) continue;
       if (entry.worktreePath && wtExists(entry.worktreePath)) {
         installPollTriggerHook(entry.worktreePath);
+        installClaudeHook(entry.worktreePath);
       }
       const workerCwd = entry.worktreePath ?? projectConfig.path;
       const resumeCmd = entry.worktreePath && entry.branchName

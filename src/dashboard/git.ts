@@ -173,6 +173,27 @@ export function pruneWorktrees(repoPath: string): void {
   }
 }
 
+export function installClaudeHook(wtPath: string): void {
+  const claudeDir = path.join(wtPath, ".claude");
+  const settingsPath = path.join(claudeDir, "settings.json");
+  const signalFifo = path.join(SESSIONS_DIR, "poll-signal");
+
+  const settings = {
+    hooks: {
+      PostToolUse: [
+        {
+          matcher: "Bash",
+          command: `echo "$TOOL_INPUT" | grep -q 'gh pr create' && echo > '${signalFifo}' 2>/dev/null; exit 0`,
+        },
+      ],
+    },
+  };
+
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+  log.info("git", "installed Claude hook for PR detection", { wtPath });
+}
+
 export function installPollTriggerHook(wtPath: string): void {
   const hooksDir = path.join(wtPath, ".garden-hooks");
   const hookPath = path.join(hooksDir, "pre-push");
