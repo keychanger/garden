@@ -91,14 +91,16 @@ export function printHeader(): void {
   }
 
   let prState = "";
+  let mergeCount = 0;
   if (workerLabel && state.activeProject) {
     const entry = findWorkerByName(state.activeProject, workerLabel);
     if (entry?.prState && entry.prState !== "working") {
       prState = entry.prState;
     }
+    mergeCount = entry?.mergeCount ?? 0;
   }
 
-  const header = formatHeader(projectName, isOnWorker, workerLabel, paneStatus, currentWorkerIdx, totalWorkers, prState);
+  const header = formatHeader(projectName, isOnWorker, workerLabel, paneStatus, currentWorkerIdx, totalWorkers, prState, mergeCount);
   process.stdout.write(header);
   setHeaderVar(header);
 }
@@ -135,14 +137,16 @@ export function updateHeaderVar(): void {
   const paneStatus = state.activePaneType === "shell" ? "shell" : "";
 
   let prState = "";
+  let mergeCount = 0;
   if (workerLabel && state.activeProject) {
     const entry = findWorkerByName(state.activeProject, workerLabel);
     if (entry?.prState && entry.prState !== "working") {
       prState = entry.prState;
     }
+    mergeCount = entry?.mergeCount ?? 0;
   }
 
-  const header = formatHeader(projectName, isOnWorker, workerLabel, paneStatus, currentWorkerIdx, totalWorkers, prState);
+  const header = formatHeader(projectName, isOnWorker, workerLabel, paneStatus, currentWorkerIdx, totalWorkers, prState, mergeCount);
   setHeaderVar(header);
 }
 
@@ -154,12 +158,16 @@ function formatHeader(
   currentWorkerIdx: number,
   totalWorkers: number,
   prState?: string,
+  mergeCount?: number,
 ): string {
   const parts: string[] = [projectName];
 
   if (isOnWorker && totalWorkers > 0) {
     const label = workerLabel ?? "worker";
     const statusParts = [paneStatus, prState].filter(Boolean);
+    if (mergeCount && mergeCount > 0) {
+      statusParts.push(`${mergeCount} merged`);
+    }
     const status = statusParts.length > 0 ? ` (${statusParts.join(", ")})` : "";
     parts.push(`${label}${status} [${currentWorkerIdx}/${totalWorkers}]`);
   } else if (paneStatus) {

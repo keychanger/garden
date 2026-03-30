@@ -267,8 +267,65 @@ function handleFailing(
   }
 }
 
-function handleMerged(_projectName: string, _entry: WorkerEntry): void {
-  // No-op. Cleanup happens only on manual kill (opt-x) or garden reset.
+function handleMerged(
+  projectName: string,
+  entry: WorkerEntry,
+): void {
+  const project = tryGetProject(projectName);
+  if (!project) return;
+  const projectPath = project.path;
+  const branchName = entry.branchName ?? entry.name;
+
+  // Check if worker opened a new PR on the same branch
+  const newPrNumber = getBranchPR(projectPath, branchName);
+  if (newPrNumber !== null && newPrNumber !== entry.prNumber) {
+    const prevCount = entry.mergeCount ?? 0;
+    log.info("poller", "new PR found after merge, resuming", {
+      worker: entry.name,
+      newPrNumber,
+      mergeCount: prevCount + 1,
+    });
+    updateWorkerFields(projectName, entry.name, {
+      prNumber: newPrNumber,
+      prState: "open",
+      mergeCount: prevCount + 1,
+      mergedAt: undefined,
+    });
+    refreshDashboard();
+    return;
+  }
+
+  // Check for new commits on branch since merge
+  if (entry.mergedAt && entry.worktreePath) {
+    try {
+      const newCommits = execFileSync("git", [
+        "rev-list", "--count", "--after", entry.mergedAt, "HEAD",
+      ], {
+        cwd: entry.worktreePath,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 10_000,
+      }).trim();
+
+      if (parseInt(newCommits, 10) > 0) {
+        const prevCount = entry.mergeCount ?? 0;
+        log.info("poller", "new commits after merge, resuming", {
+          worker: entry.name,
+          newCommits,
+          mergeCount: prevCount + 1,
+        });
+        updateWorkerFields(projectName, entry.name, {
+          prState: "working",
+          prNumber: undefined,
+          mergeCount: prevCount + 1,
+          mergedAt: undefined,
+        });
+        refreshDashboard();
+      }
+    } catch {
+      // worktree may be gone, ignore
+    }
+  }
 }
 
 function notifyWorker(
