@@ -66,7 +66,7 @@ export function printHeader(): void {
     } else {
       const pid = getPanePid(state.activePaneId);
       if (pid && hasClaudeChild(pid)) {
-        let title = getPaneVar(state.activePaneId!, "garden_task");
+        let title = getPaneVar(state.activePaneId, "garden_task");
         if (!title && workerLabel && state.activeProject) {
           const entry = findWorkerByName(state.activeProject, workerLabel);
           if (entry?.task) {
@@ -74,10 +74,10 @@ export function printHeader(): void {
           }
         }
         if (!title) {
-          title = getPaneTitle(state.activePaneId!) ?? null;
+          title = getPaneTitle(state.activePaneId) ?? null;
         }
         if (title) {
-          setPaneVar(state.activePaneId!, "garden_task", title);
+          setPaneVar(state.activePaneId, "garden_task", title);
           if (workerLabel && state.activeProject) {
             updateWorkerTask(state.activeProject, workerLabel, title);
           }

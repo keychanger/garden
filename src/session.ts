@@ -1,5 +1,5 @@
 // Manages tmux sessions and per-session state files for garden projects.
-import { execSync, execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR } from "./config.js";
@@ -68,7 +68,7 @@ export function killTmuxSession(name: string): void {
 }
 
 export function attachTmuxSession(name: string): void {
-  execSync(`tmux attach -t ${tmuxSessionName(name)}`, {
+  execFileSync("tmux", ["attach", "-t", tmuxSessionName(name)], {
     stdio: "inherit",
   });
 }
@@ -110,13 +110,13 @@ export function attachDashboardSession(): void {
   if (process.env.TMUX) {
     // Already inside tmux — try switch-client, fall back to attach if no active client
     try {
-      execSync(`tmux switch-client -t ${DASHBOARD_SESSION}`, { stdio: "inherit" });
+      execFileSync("tmux", ["switch-client", "-t", DASHBOARD_SESSION], { stdio: "inherit" });
       return;
     } catch {
       // TMUX env var is stale (session died) — fall through to attach
     }
   }
-  execSync(`tmux attach -t ${DASHBOARD_SESSION}`, { stdio: "inherit" });
+  execFileSync("tmux", ["attach", "-t", DASHBOARD_SESSION], { stdio: "inherit" });
 }
 
 export function killDashboardSession(): void {
