@@ -11,7 +11,7 @@ import {
 
 interface WorkerInfo {
   name: string;
-  status: "working" | "waiting" | "exited";
+  status: "working" | "waiting" | "exited" | "merged";
   activity: string | null;
   active: boolean;
   prNumber?: number;
@@ -74,7 +74,7 @@ export async function status(_args: string[]): Promise<void> {
       console.log("    (no workers)");
     } else {
       for (const worker of project.workers) {
-        const icon = worker.active ? "●" : "○";
+        const icon = worker.status === "merged" ? "✓" : worker.active ? "●" : "○";
         const prTag = worker.prNumber ? ` [PR #${worker.prNumber}]` : "";
         const suffix = worker.activity ? ` — ${worker.activity}` : worker.status === "waiting" ? " (no task)" : "";
         console.log(`    ${icon} ${worker.name}${prTag}  ${worker.status}${suffix}`);
@@ -98,7 +98,8 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
     const paneInfo = detectPaneProcessStatus(dashState.activePaneId);
     if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
     const regEntry = registryByName.get(label);
-    workers.push({ name: label, ...paneInfo, active: true, prNumber: regEntry?.prNumber });
+    const workerStatus = regEntry?.prState === "merged" ? "merged" as const : paneInfo.status;
+    workers.push({ name: label, status: workerStatus, activity: paneInfo.activity, active: true, prNumber: regEntry?.prNumber });
   }
 
   const hiddenWindows = listHiddenWorkerWindows(projectName);
@@ -110,7 +111,22 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
       const paneInfo = detectPaneProcessStatus(paneId);
       if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
       const regEntry = registryByName.get(label);
-      workers.push({ name: label, ...paneInfo, active: false, prNumber: regEntry?.prNumber });
+      const workerStatus = regEntry?.prState === "merged" ? "merged" as const : paneInfo.status;
+      workers.push({ name: label, status: workerStatus, activity: paneInfo.activity, active: false, prNumber: regEntry?.prNumber });
+    }
+  }
+
+  // Include registry-only workers (e.g., merged PRs whose windows are gone)
+  const seenNames = new Set(workers.map(w => w.name));
+  for (const entry of registryEntries) {
+    if (!seenNames.has(entry.name) && entry.prState === "merged") {
+      workers.push({
+        name: entry.name,
+        status: "merged",
+        activity: null,
+        active: false,
+        prNumber: entry.prNumber,
+      });
     }
   }
 

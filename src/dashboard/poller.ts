@@ -10,12 +10,11 @@ import {
 } from "./tmux.js";
 import {
   readRegistry, getWorkers, updateWorkerFields,
-  removeWorker, type WorkerEntry,
+  type WorkerEntry,
 } from "./registry.js";
 import {
   getBranchPR, getPRInfo, rebaseBranch, abortRebase,
-  forcePushBranch, mergePR, removeWorktree, pruneWorktrees,
-  commentOnPR,
+  forcePushBranch, mergePR, commentOnPR,
 } from "./git.js";
 import { refreshDashboard } from "./header.js";
 import { log } from "./log.js";
@@ -71,7 +70,8 @@ function pollWorker(
         prNumber: entry.prNumber,
         state: info.state,
       });
-      cleanupWorker(projectName, projectPath, entry);
+      updateWorkerFields(projectName, entry.name, { prState: "merged" });
+      refreshDashboard();
       return;
     }
   }
@@ -85,6 +85,8 @@ function pollWorker(
       return; // merge in progress from a previous poll cycle
     case "failing":
       return handleFailing(projectName, projectPath, entry);
+    case "merged":
+      return; // merged PRs stay until manually cleaned up via ⌥x
     default:
       // Handle workers stuck in old states (in-review, approved, etc.)
       log.warn("poller", "unknown state, resetting to open", {
@@ -226,7 +228,8 @@ function attemptMerge(
 
   log.info("poller", "PR merged", { worker: entry.name, prNumber: entry.prNumber });
   prComment(projectPath, entry.prNumber, "Merged successfully.");
-  cleanupWorker(projectName, projectPath, entry);
+  updateWorkerFields(projectName, entry.name, { prState: "merged" });
+  refreshDashboard();
 }
 
 function handleFailing(
@@ -273,22 +276,6 @@ function notifyWorker(
   tmux("send-keys", "-t", paneId, "-l", message);
   tmux("send-keys", "-t", paneId, "Enter");
   log.info("poller", "notified worker", { worker: entry.name });
-}
-
-function cleanupWorker(
-  projectName: string,
-  projectPath: string,
-  entry: WorkerEntry,
-): void {
-  killWindowSafe(`_${projectName}-worker-${entry.name}`);
-
-  if (entry.worktreePath) {
-    removeWorktree(projectPath, entry.worktreePath);
-  }
-  pruneWorktrees(projectPath);
-
-  removeWorker(projectName, entry.name);
-  refreshDashboard();
 }
 
 export function startPoller(gardenRunner: string): void {
