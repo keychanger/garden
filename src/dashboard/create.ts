@@ -21,8 +21,8 @@ import { validateAndHeal } from "./validate.js";
 import { startPoller } from "./poller.js";
 import { installPollTriggerHook, installClaudeHook, worktreeExists as wtExists } from "./git.js";
 
-const DASHBOARD_COLS = 200;
-const DASHBOARD_ROWS = 50;
+const DASHBOARD_COLS = 250;
+const DASHBOARD_ROWS = 60;
 
 export function resizeTerminal(): void {
   try {
