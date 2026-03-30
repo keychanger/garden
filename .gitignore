@@ -1,3 +1,5 @@
 node_modules/
 dist/
 .garden/tasks.json
+.garden-hooks/
+.claude/
