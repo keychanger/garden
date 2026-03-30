@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
+import { SESSIONS_DIR } from "../config.js";
 import { log } from "./log.js";
 
 const WORKTREE_BASE = path.join(
@@ -101,7 +102,7 @@ export function isPRMerged(repoPath: string, prNumber: number): boolean {
 
 export function rebaseBranch(worktreePath: string): boolean {
   try {
-    git(worktreePath, "rebase", "main");
+    git(worktreePath, "rebase", "origin/main");
     return true;
   } catch {
     return false;
@@ -170,6 +171,26 @@ export function pruneWorktrees(repoPath: string): void {
   } catch {
     // best effort
   }
+}
+
+export function installPollTriggerHook(wtPath: string): void {
+  const hooksDir = path.join(wtPath, ".garden-hooks");
+  const hookPath = path.join(hooksDir, "pre-push");
+  const signalFifo = path.join(SESSIONS_DIR, "poll-signal");
+  const hookScript = [
+    "#!/bin/sh",
+    `FIFO="${signalFifo}"`,
+    `if [ -p "$FIFO" ]; then`,
+    `  (sleep 3 && echo > "$FIFO" 2>/dev/null) &`,
+    `fi`,
+    `exit 0`,
+    "",
+  ].join("\n");
+
+  fs.mkdirSync(hooksDir, { recursive: true });
+  fs.writeFileSync(hookPath, hookScript, { mode: 0o755 });
+  git(wtPath, "config", "--local", "core.hooksPath", hooksDir);
+  log.info("git", "installed poll trigger hook", { wtPath });
 }
 
 function git(cwd: string, ...args: string[]): string {

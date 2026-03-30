@@ -16,7 +16,7 @@ import {
 } from "./registry.js";
 import { log } from "./log.js";
 import { buildWorktreeWorkerCommand, createShellWindow, resolveGardenRunner } from "./create.js";
-import { worktreePath, createWorktree, removeWorktree, deleteBranch, getBranchPR } from "./git.js";
+import { worktreePath, createWorktree, removeWorktree, deleteBranch, getBranchPR, installPollTriggerHook } from "./git.js";
 
 export function newWorker(): void {
   log.info("workers", "newWorker");
@@ -35,6 +35,7 @@ export function newWorker(): void {
 
   try {
     createWorktree(project.path, wtPath, branchName);
+    installPollTriggerHook(wtPath);
   } catch (err) {
     log.error("workers", "failed to create worktree", { error: String(err) });
     tmuxDisplay(`Failed to create worktree: ${err}`);

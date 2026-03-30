@@ -13,7 +13,7 @@ import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
 import { newWorker, killPane } from "./workers.js";
 import { switchProject, focusWorker, focusShell, focusGarden, cyclePane } from "./navigate.js";
-import { poll } from "./poller.js";
+import { poll, triggerPoll, stopPoller } from "./poller.js";
 
 export async function dashboard(args: string[]): Promise<void> {
   checkTmux();
@@ -26,6 +26,7 @@ export async function dashboard(args: string[]): Promise<void> {
       return;
     }
     log.info("dashboard", "closing dashboard");
+    stopPoller();
     killDashboardSession();
     try { fs.unlinkSync(STATE_FILE); } catch { /* ignore */ }
     try { fs.unlinkSync(REGISTRY_FILE); } catch { /* ignore */ }
@@ -37,6 +38,7 @@ export async function dashboard(args: string[]): Promise<void> {
   if (sub === "restart") {
     if (dashboardExists()) {
       log.info("dashboard", "restarting dashboard");
+      stopPoller();
       killDashboardSession();
       try { fs.unlinkSync(STATE_FILE); } catch { /* ignore */ }
       try { fs.unlinkSync(REGISTRY_FILE); } catch { /* ignore */ }
@@ -58,6 +60,7 @@ export async function dashboard(args: string[]): Promise<void> {
   if (sub === "_cycle-pane") return cyclePane(args[1] === "prev" ? -1 : 1);
   if (sub === "_kill-pane") return killPane();
   if (sub === "_poll") return poll();
+  if (sub === "_trigger-poll") return triggerPoll();
   if (sub === "_header") return printHeader();
 
   if (sub === "help") {
