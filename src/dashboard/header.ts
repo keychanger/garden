@@ -1,9 +1,9 @@
 // Dashboard header and status bar: renders project info and hotkey hints
 // in the tmux status line.
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, paneExists, getPanePid, getPaneVar, hasClaudeChild, listHiddenWorkerWindows, setPaneVar } from "./tmux.js";
+import { tmux, paneExists, getPanePid, getPaneVar, getPaneTitle, hasClaudeChild, listHiddenWorkerWindows, setPaneVar } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
-import { findWorkerByName } from "./registry.js";
+import { findWorkerByName, updateWorkerTask } from "./registry.js";
 
 export function setupStatusBar(gardenRunner: string): void {
   const target = DASHBOARD_SESSION;
@@ -71,7 +71,15 @@ export function printHeader(): void {
           const entry = findWorkerByName(state.activeProject, workerLabel);
           if (entry?.task) {
             title = entry.task;
-            setPaneVar(state.activePaneId!, "garden_task", title);
+          }
+        }
+        if (!title) {
+          title = getPaneTitle(state.activePaneId!) ?? null;
+        }
+        if (title) {
+          setPaneVar(state.activePaneId!, "garden_task", title);
+          if (workerLabel && state.activeProject) {
+            updateWorkerTask(state.activeProject, workerLabel, title);
           }
         }
         paneStatus = title ? "working" : "waiting";
