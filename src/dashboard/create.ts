@@ -328,7 +328,8 @@ export function resolveGardenRunner(): string {
     const tsxBin = path.join(gardenRoot, "node_modules", ".bin", "tsx");
     return fs.existsSync(tsxBin) ? `${tsxBin} ${gardenBin}` : `npx tsx ${gardenBin}`;
   }
-  return `node ${gardenBin}`;
+  // Use absolute path for node so hooks work in minimal shell environments
+  return `${process.execPath} ${gardenBin}`;
 }
 
 export function cleanupContextFiles(): void {
