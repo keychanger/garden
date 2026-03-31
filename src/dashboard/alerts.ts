@@ -11,7 +11,6 @@ export interface Alert {
   source: string;
   project: string;
   worker?: string;
-  prNumber?: number;
   message: string;
 }
 

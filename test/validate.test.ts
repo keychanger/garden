@@ -43,7 +43,6 @@ vi.mock("../src/dashboard/git.js", () => ({
   worktreeExists: vi.fn(() => true),
   removeWorktree: vi.fn(),
   pruneWorktrees: vi.fn(),
-  isPRMerged: vi.fn(() => false),
 }));
 
 import { validateAndHeal } from "../src/dashboard/validate.js";

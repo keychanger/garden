@@ -94,31 +94,22 @@ Hidden windows follow the convention: `_<project>-worker-<N>` and `_<project>-sh
 2. Claude launches in the worktree with project rules and worktree workflow instructions
 3. The worker is interactive — you work with it directly
 4. `⌥]`/`⌥[` cycles between workers and shell
-5. `⌥x` kills the focused worker, removes its worktree (and branch if no PR exists)
+5. `⌥x` kills the focused worker, removes its worktree and branch
 6. Switching projects parks everything in hidden windows; switching back restores
 
-### PR Poller and Auto-Merge
-A background poller (`_garden-pr-poller`) runs every 30 seconds in a hidden tmux window. It drives the PR lifecycle: detecting PRs, running optional local checks, and merging automatically.
+### Poller and Auto-Merge
+A background poller (`_garden-poller`) runs every 30 seconds in a hidden tmux window. It watches worker branches for new commits and drives the review/merge lifecycle using local git operations (no GitHub PRs).
 
 **State machine per worker:**
 ```
-working -> open -> merging -> reviewing -> (cleanup)
-              |        |          |
-              v        v          v (changes requested)
-           failing <---+----------+
-              |
-              v (new commits + 30s debounce)
-            open (retry)
+working -> reviewing -> merged
+                     \-> failing -> (new commits) -> working
 ```
 
-1. **working**: Worker is active, no PR yet. Poller checks for PRs via `gh pr list`.
-2. **open**: PR detected. Transitions to merging (which runs checks after rebase). If another worker is already merging or reviewing, waits until the next cycle.
-3. **merging**: Poller checks if Claude is actively running in the worktree — if so, skips this cycle to avoid corrupting the live session. Otherwise: fetches main, rebases, runs optional checks on the rebased code, and force-pushes the rebased branch. On conflict or check failure, the worker is notified and state moves to failing. On force-push failure, state resets to open for retry.
-4. **reviewing**: A Claude session reviews the PR diff against project rules via `claude -p`. Checks adherence to rules, test coverage, and doc coverage. Always posts a formatted review comment on the PR with the verdict and reasoning. Also attempts a formal GitHub review (`gh pr review --approve/--request-changes`), but this may fail for self-PRs. If approved, proceeds to merge. If changes requested, notifies the worker and transitions to failing. If the review process fails (Claude unavailable, timeout, unparseable output), transitions to failing and surfaces an alert. The review acts as a gate -- unreviewed code is never auto-merged.
-5. **failing**: Checks failed, merge conflict, review requested changes, or review process failure. Poller watches for new commits via SHA tracking. After 30s of no new pushes, state transitions back to open for retry. Each failure increments a `failCount` on the worker entry; after 3 consecutive failures, an alert is surfaced. The count resets on successful merge.
-6. **merged**: PR merged. The pre-push hook runs `garden dashboard _post-push` after every push, which detects merged PRs and auto-creates follow-up PRs synchronously. The poller also checks for externally-opened PRs on the branch as a fallback.
-
-If a PR is closed or merged externally, the poller detects this and cleans up from any state.
+1. **working**: Worker is active. Poller compares branch HEAD SHA against last-seen SHA. When new commits are detected, Claude is not actively working, and no other worker is reviewing, transitions to reviewing.
+2. **reviewing**: Poller fetches main, rebases the branch, runs optional checks on the rebased code, force-pushes the rebased branch, then runs a Claude review (`claude -p`) against the diff and project rules. If approved, merges to main via local `git merge --ff-only` and pushes. If changes requested, notifies the worker and transitions to failing. If the review process fails (Claude unavailable, timeout, unparseable output), transitions to failing and surfaces an alert. The review acts as a gate -- unreviewed code is never auto-merged.
+3. **failing**: Checks failed, merge conflict, review requested changes, or review process failure. Poller watches for new commits via SHA tracking. After 30s debounce with no new pushes, state transitions back to working for retry. Each failure increments a `failCount` on the worker entry; after 3 consecutive failures, an alert is surfaced. The count resets on successful merge.
+4. **merged**: Code merged to main. If the worker pushes new commits after merge, the poller detects them and transitions back to working for a new review cycle.
 
 ### Checks Configuration
 Projects can optionally define a `checks` command in `~/.garden/config.yml`:
@@ -151,23 +142,18 @@ Merges are serialized per project (one at a time). The merge sequence:
 3. Rebase the branch onto main
 4. Run checks (if configured) on the rebased code
 5. Force-push the rebased branch
-6. Review the PR diff via `claude -p` against project rules (next poll cycle)
-7. Submit review via `gh pr review` (approve or request changes)
-8. Merge via `gh pr merge --merge` (only if review approves)
-9. Notify sibling workers with overlapping files (see below)
-10. Fast-forward local main
-11. Run postMerge command (if configured) on the main checkout
-12. Mark the worker as merged in the registry
+6. Review the diff via `claude -p` against project rules
+7. If approved: merge to main via `git merge --ff-only` and push
+8. Notify sibling workers with overlapping files (see below)
+9. Run postMerge command (if configured) on the main checkout
+10. Mark the worker as merged in the registry
 
 The worker and its worktree are not automatically cleaned up on merge. Cleanup happens only when the user kills the worker with `opt-x` or runs `garden reset`. This allows inspecting merged work before disposal.
 
 Projects don't block each other — each project's queue drains independently.
 
-### Post-Push Follow-Up PRs
-When a worker pushes to a branch whose PR has already been merged, the pre-push hook spawns `garden dashboard _post-push` in the background. This command detects the merged PR, checks for unmerged commits via `origin/main..HEAD`, and creates a follow-up PR synchronously. This avoids the race conditions of polling-based detection — the PR is created within seconds of the push, not on the next poll cycle.
-
 ### Sibling Merge Notification
-When a PR merges, the poller compares its changed files against every other active worker's branch in the same project. If files overlap, the sibling is notified with the merged PR's title, URL, and overlapping file list so it can review and avoid reverting the merged work.
+When code merges, the poller compares the changed files against every other active worker's branch in the same project. If files overlap, the sibling is notified with the merged worker's commit summary and overlapping file list so it can review and avoid reverting the merged work.
 
 - **Claude alive**: notification delivered via `tmux send-keys`
 - **Claude exited**: the worker is relaunched with a new Claude session; the notification is stored as a pending message in the registry and delivered on the next poll cycle once Claude is detected as running
@@ -177,9 +163,9 @@ The dashboard surfaces important events as alerts — persistent messages that r
 
 **Events that generate alerts:**
 - Review process failure (Claude unavailable, timeout, unparseable output)
-- Merge failure (GitHub API error)
+- Merge failure
 - Rebase conflict
-- Repeated failures (3+ consecutive failures on the same PR)
+- Repeated failures (3+ consecutive failures on the same worker)
 
 **Visibility:**
 - Header bar shows `[N alerts]` when alerts exist
@@ -191,8 +177,7 @@ The dashboard surfaces important events as alerts — persistent messages that r
 - Every worker operates in its own git worktree — no shared working directory
 - The project shell (`⌥s`) stays on the main checkout for manual work
 - Branch name equals the worker name (e.g., `swift-oak`)
-- PR title is the human-readable description, not the branch name
-- Worktrees persist until the PR is merged, enabling the review cycle and manual inspection
+- Worktrees persist until the worker is killed, enabling the review cycle and manual inspection
 
 ## Worker Status Detection
 

@@ -28,8 +28,8 @@ npm run dev -- help    # run via tsx during development
   - `header.ts` — tmux status bar via `@garden_header` variable, instant refresh
   - `tmux.ts` — low-level tmux helpers (shared by dashboard and status command)
   - `validate.ts` — state/tmux consistency validation and self-healing
-  - `git.ts` — git/gh CLI wrappers for worktree and PR operations
-  - `poller.ts` — PR poller: state machine driving review/merge lifecycle every 30s
+  - `git.ts` — git CLI wrappers for worktree and merge operations
+  - `poller.ts` — poller: state machine driving review/merge lifecycle every 30s
   - `alerts.ts` — persistent operator alerts (review failures, merge errors, repeated failures)
   - `log.ts` — structured JSON logger to `~/.garden/sessions/dashboard.log`
   - `names.ts` — worker name generation (adjective-noun pairs)
@@ -85,18 +85,18 @@ The dashboard uses a permanent tmux layout with content swapped in and out of pa
 Every worker runs in its own git worktree, isolated from the main checkout and other workers:
 
 1. `opt-n` creates a worktree at `~/.garden/worktrees/<project>/<worker-name>/` on a branch named after the worker.
-2. The worker's system prompt includes instructions to commit incrementally and open a PR when done.
-3. A **PR poller** (`src/dashboard/poller.ts`) runs every 30s in a hidden tmux window, driving the check/review/merge lifecycle:
-   - Detects PRs on worker branches via GitHub CLI.
-   - Skips merge if Claude is actively running in the worktree (live-Claude guard).
+2. The worker's system prompt includes instructions to commit incrementally and push when done.
+3. A **poller** (`src/dashboard/poller.ts`) runs every 30s in a hidden tmux window, driving the review/merge lifecycle using local git (no GitHub PRs):
+   - Detects new commits on worker branches via SHA comparison.
+   - Skips review if Claude is actively running in the worktree (live-Claude guard).
    - Rebases onto main, then runs optional `checks` command (configured per project in `~/.garden/config.yml`) on the rebased code.
-   - Force-pushes and transitions to review. A Claude session (`claude -p`) reviews the diff against project rules, checking adherence, test coverage, and doc coverage.
-   - If review approves: merges. If review requests changes: notifies the worker via `tmux send-keys`. If review process fails: transitions to failing and surfaces an alert (unreviewed code is never auto-merged).
-   - After merge, fast-forwards local main and runs optional `postMerge` command (e.g., `npm run build` to rebuild the CLI).
+   - Force-pushes and runs a Claude review (`claude -p`) of the diff against project rules, checking adherence, test coverage, and doc coverage.
+   - If review approves: merges to main via local `git merge --ff-only` and pushes. If review requests changes: notifies the worker via `tmux send-keys`. If review process fails: transitions to failing and surfaces an alert (unreviewed code is never auto-merged).
+   - After merge, runs optional `postMerge` command (e.g., `npm run build` to rebuild the CLI).
    - Notifies sibling workers with overlapping files (relaunches dead sessions if needed).
    - Debounces commits (30s quiet period) before retrying.
-4. Workers are killed on successful merge or manual `opt-x`.
-5. Worktrees are cleaned up after the PR is merged.
+4. Workers are killed on manual `opt-x` or `garden reset`.
+5. Worktrees are cleaned up when the worker is killed.
 
 The project shell (`opt-s`) stays on the main checkout for manual work.
 
@@ -106,7 +106,7 @@ The project shell (`opt-s`) stays on the main checkout for manual work.
 - tmux sessions are named `garden-dashboard`.
 - `GARDEN_PROJECT` env var scopes commands inside sessions.
 - Project name is auto-detected from cwd when inside a registered project.
-- Dashboard workers are interactive Claude sessions in isolated git worktrees, launched with project rules via `--append-system-prompt-file`. Workers operate autonomously — they commit, push, and open PRs without asking for confirmation, since each worktree is fully isolated.
+- Dashboard workers are interactive Claude sessions in isolated git worktrees, launched with project rules via `--append-system-prompt-file`. Workers operate autonomously — they commit and push without asking for confirmation, since each worktree is fully isolated. The poller handles review and merge automatically.
 
 ## Rules system
 

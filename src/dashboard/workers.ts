@@ -15,9 +15,8 @@ import {
   addWorker, removeWorker, findWorkerByName, getAllWorkerNames,
 } from "./registry.js";
 import { log } from "./log.js";
-import { addAlert } from "./alerts.js";
 import { buildWorktreeWorkerCommand, createShellWindow, resolveGardenRunner } from "./create.js";
-import { worktreePath, createWorktree, removeWorktree, deleteBranch, getBranchPR, installPollTriggerHook, installClaudeHook, fastForwardMain } from "./git.js";
+import { worktreePath, createWorktree, removeWorktree, deleteBranch, installPollTriggerHook, fastForwardMain } from "./git.js";
 
 export function newWorker(): void {
   log.info("workers", "newWorker");
@@ -38,7 +37,6 @@ export function newWorker(): void {
     fastForwardMain(project.path);
     createWorktree(project.path, wtPath, branchName);
     installPollTriggerHook(wtPath, resolveGardenRunner());
-    installClaudeHook(wtPath);
   } catch (err) {
     log.error("workers", "failed to create worktree", { error: String(err) });
     tmuxDisplay(`Failed to create worktree: ${err}`);
@@ -128,25 +126,12 @@ export function killPane(): void {
       const workerName = nameMatch[1];
       const entry = findWorkerByName(state.activeProject, workerName);
       if (entry?.worktreePath) {
-        const hasPR = getBranchPR(project.path, entry.branchName ?? workerName) !== null;
-        if (hasPR) {
-          addAlert({
-            level: "warn",
-            source: "workers",
-            project: state.activeProject,
-            worker: workerName,
-            prNumber: entry.prNumber,
-            message: `Worker killed with open PR #${entry.prNumber} — PR left open on GitHub`,
-          });
-        }
         removeWorktree(project.path, entry.worktreePath);
-        if (!hasPR && entry.branchName) {
+        if (entry.branchName) {
           deleteBranch(project.path, entry.branchName);
         }
-        removeWorker(state.activeProject, workerName);
-      } else {
-        removeWorker(state.activeProject, workerName);
       }
+      removeWorker(state.activeProject, workerName);
     }
   }
 

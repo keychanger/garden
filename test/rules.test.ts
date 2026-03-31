@@ -72,15 +72,15 @@ describe("buildWorktreeRules", () => {
     expect(result).toContain("Commit your work incrementally");
   });
 
-  it("instructs to open PR against main", async () => {
+  it("instructs to push branch for review", async () => {
     const { buildWorktreeRules } = await importRules();
     const result = buildWorktreeRules("test-branch");
-    expect(result).toContain("pull request against main");
+    expect(result).toContain("push your branch");
   });
 
   it("instructs about poller auto-merge", async () => {
     const { buildWorktreeRules } = await importRules();
     const result = buildWorktreeRules("test-branch");
-    expect(result).toContain("poller will run checks");
+    expect(result).toContain("poller will automatically rebase, review, and merge");
   });
 });

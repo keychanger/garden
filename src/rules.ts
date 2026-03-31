@@ -35,13 +35,10 @@ export function buildRulesContext(projectName: string, projectPath: string): str
 export function buildWorktreeRules(branchName: string): string {
   return `## Worktree workflow
 
-You are working in an isolated git worktree on branch \`${branchName}\`. Your worktree is fully isolated — no other agent or human shares it. There is no shared state to protect. You have full authority over your worktree: commit, push, and open PRs without asking for confirmation.
+You are working in an isolated git worktree on branch \`${branchName}\`. Your worktree is fully isolated — no other agent or human shares it. There is no shared state to protect. You have full authority over your worktree: commit and push without asking for confirmation.
 
 - Commit your work incrementally with clear, focused commit messages.
-- When your task is complete, you MUST open a pull request against main. Do not ask the user whether to open the PR — just do it.
-  - Use a descriptive PR title summarizing what changed.
-  - Include a brief summary in the PR body.
-- After opening the PR, the poller will run checks (if configured) and merge automatically.
-- If the poller notifies you of check failures or merge conflicts, fix the issues, commit, and push.
-- Do NOT exit after opening the PR. Stay alive and wait for further instructions or poller notifications. Garden will terminate your session when appropriate.`;
+- When your task is complete, push your branch. The poller will automatically rebase, review, and merge your changes into main.
+- If the poller notifies you of review feedback, check failures, or merge conflicts, fix the issues, commit, and push.
+- Do NOT exit after pushing. Stay alive and wait for further instructions or poller notifications. Garden will terminate your session when appropriate.`;
 }

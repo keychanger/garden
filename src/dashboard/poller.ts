@@ -1,4 +1,4 @@
-// PR poller: watches GitHub PR state and drives the check/merge lifecycle.
+// Poller: watches worker branches and drives the review/merge lifecycle.
 // Runs as a hidden tmux window. Re-polls immediately on state change (exit 75),
 // sleeps until signaled via FIFO or 30s timeout when idle (exit 0).
 import { execSync, execFileSync, spawnSync } from "node:child_process";
@@ -15,10 +15,10 @@ import {
   type WorkerEntry,
 } from "./registry.js";
 import {
-  getBranchPR, getPRInfo, rebaseBranch, abortRebase,
-  forcePushBranch, mergePR, commentOnPR, fastForwardMain,
-  getChangedFiles, getPRDetails, getPRDiff, submitPRReview,
-  createPR, getCommitSummary, getNewCommitSummary,
+  getBranchHeadSha, rebaseBranch, abortRebase,
+  forcePushBranch, mergeToMain, fastForwardMain,
+  getChangedFiles, getDiffAgainstMain,
+  getCommitSummary, getNewCommitSummary, deleteRemoteBranch,
 } from "./git.js";
 import { buildWorktreeWorkerCommand } from "./create.js";
 import { refreshDashboard } from "./header.js";
@@ -29,12 +29,8 @@ import { addAlert } from "./alerts.js";
 import crypto from "node:crypto";
 
 const DEBOUNCE_MS = 30_000;
-const POLLER_WINDOW = "_garden-pr-poller";
+const POLLER_WINDOW = "_garden-poller";
 export const SIGNAL_FIFO = path.join(SESSIONS_DIR, "poll-signal");
-
-function prComment(projectPath: string, prNumber: number, message: string): void {
-  commentOnPR(projectPath, prNumber, `[garden] ${message}`);
-}
 
 export function poll(): boolean {
   healStatusPane();
@@ -91,39 +87,9 @@ function pollWorker(
 
   const state = entry.prState ?? "working";
 
-  // Check for externally closed/merged PRs in active PR states.
-  // Skip "merged" — handleMerged needs to run to detect new PRs on the branch.
-  if (state !== "working" && state !== "merged" && entry.prNumber) {
-    const info = getPRInfo(projectPath, entry.prNumber);
-    if (!info) {
-      log.warn("poller", "getPRInfo failed, skipping cycle", {
-        worker: entry.name,
-        prNumber: entry.prNumber,
-      });
-      return false;
-    }
-    if (info.state === "MERGED" || info.state === "CLOSED") {
-      log.info("poller", "PR closed/merged externally", {
-        worker: entry.name,
-        prNumber: entry.prNumber,
-        state: info.state,
-      });
-      updateWorkerFields(projectName, entry.name, {
-        prState: "merged",
-        mergedAt: new Date().toISOString(),
-      });
-      refreshDashboard();
-      return true;
-    }
-  }
-
   switch (state) {
     case "working":
       return handleWorking(projectName, projectPath, entry);
-    case "open":
-      return handleOpen(projectName, projectPath, entry);
-    case "merging":
-      return false; // merge in progress from a previous poll cycle
     case "reviewing":
       return handleReviewing(projectName, projectPath, entry);
     case "failing":
@@ -131,11 +97,11 @@ function pollWorker(
     case "merged":
       return handleMerged(projectName, entry);
     default:
-      log.warn("poller", "unknown state, resetting to open", {
+      log.warn("poller", "unknown state, resetting to working", {
         worker: entry.name,
         state,
       });
-      updateWorkerFields(projectName, entry.name, { prState: "open" });
+      updateWorkerFields(projectName, entry.name, { prState: "working" });
       return true;
   }
 }
@@ -145,65 +111,57 @@ function handleWorking(
   projectPath: string,
   entry: WorkerEntry,
 ): boolean {
-  const branchName = entry.branchName ?? entry.name;
-  const prNumber = getBranchPR(projectPath, branchName);
-  if (prNumber === null) return false;
+  const wtPath = entry.worktreePath ?? projectPath;
+  const headSha = getBranchHeadSha(wtPath);
+  if (!headSha) return false;
 
-  log.info("poller", "PR detected", { worker: entry.name, prNumber });
-  updateWorkerFields(projectName, entry.name, {
-    prNumber,
-    prState: "open",
-  });
-  refreshDashboard();
-  return true;
+  // No new commits since last check
+  if (headSha === entry.lastSeenSha) return false;
+
+  // Don't start review while Claude is actively working
+  const workerWindow = `_${projectName}-worker-${entry.name}`;
+  if (windowExists(workerWindow)) {
+    const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindow}`);
+    if (paneId) {
+      const pid = getPanePid(paneId);
+      if (pid && isClaudeWorking(pid)) return false;
+    }
+  }
+
+  // Check if there are actually commits ahead of main
+  const commitSummary = getCommitSummary(wtPath);
+  if (!commitSummary) return false;
+
+  // Serialize: only one worker per project in reviewing state
+  const projectWorkers = getWorkers(projectName);
+  if (projectWorkers.some(w => w.name !== entry.name && w.prState === "reviewing")) {
+    return false;
+  }
+
+  return attemptReview(projectName, projectPath, entry);
 }
 
-function handleOpen(
+function attemptReview(
   projectName: string,
   projectPath: string,
   entry: WorkerEntry,
 ): boolean {
-  if (!entry.prNumber) return false;
-  return attemptMerge(projectName, projectPath, entry);
-}
-
-function attemptMerge(
-  projectName: string,
-  projectPath: string,
-  entry: WorkerEntry,
-): boolean {
-  if (!entry.prNumber) return false;
-
-  // Don't rebase/merge while Claude is actively running in the worktree
+  // Don't rebase/review while Claude is actively running in the worktree
   const workerWindow = `_${projectName}-worker-${entry.name}`;
   if (windowExists(workerWindow)) {
     const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindow}`);
     if (paneId) {
       const pid = getPanePid(paneId);
       if (pid && isClaudeWorking(pid)) {
-        log.info("poller", "Claude working in worktree, skipping merge", {
+        log.info("poller", "Claude working in worktree, skipping review", {
           worker: entry.name,
-          prNumber: entry.prNumber,
         });
         return false;
       }
     }
   }
 
-  // Serialize merges: only one PR per project can merge at a time
-  const projectWorkers = getWorkers(projectName);
-  const alreadyMerging = projectWorkers.some(
-    w => w.name !== entry.name && (w.prState === "merging" || w.prState === "reviewing"),
-  );
-  if (alreadyMerging) {
-    log.info("poller", "another PR is merging, waiting", {
-      worker: entry.name,
-      prNumber: entry.prNumber,
-    });
-    return false;
-  }
-
-  updateWorkerFields(projectName, entry.name, { prState: "merging" });
+  updateWorkerFields(projectName, entry.name, { prState: "reviewing" });
   refreshDashboard();
 
   const wtPath = entry.worktreePath ?? projectPath;
@@ -220,33 +178,27 @@ function attemptMerge(
 
   const rebased = rebaseBranch(wtPath);
   if (!rebased) {
-    log.info("poller", "rebase conflict", { worker: entry.name, prNumber: entry.prNumber });
+    log.info("poller", "rebase conflict", { worker: entry.name });
     abortRebase(wtPath);
 
-    const message = `Merge conflict with main on PR #${entry.prNumber}. Please resolve:\n\n1. git rebase main\n2. Resolve conflicts\n3. git rebase --continue\n4. Push when done.`;
-    const delivered = notifyWorker(projectName, entry, message);
-    prComment(projectPath, entry.prNumber,
-      delivered
-        ? `Merge conflict with main. Worker \`${entry.name}\` notified.`
-        : `Merge conflict with main. Worker \`${entry.name}\` was not reachable; notification stored for next delivery.`,
-    );
+    const message = `Merge conflict with main. Please resolve:\n\n1. git rebase main\n2. Resolve conflicts\n3. git rebase --continue\n4. Push when done.`;
+    notifyWorker(projectName, entry, message);
 
+    const headSha = getBranchHeadSha(wtPath);
     const newFailCount = (entry.failCount ?? 0) + 1;
     addAlert({
       level: "warn",
       source: "poller",
       project: projectName,
       worker: entry.name,
-      prNumber: entry.prNumber,
-      message: `Rebase conflict on PR #${entry.prNumber}`,
+      message: `Rebase conflict for worker ${entry.name}`,
     });
 
-    const info = getPRInfo(projectPath, entry.prNumber);
     updateWorkerFields(projectName, entry.name, {
       prState: "failing",
       failCount: newFailCount,
-      failingSha: info?.headSha,
-      lastSeenSha: info?.headSha,
+      failingSha: headSha ?? undefined,
+      lastSeenSha: headSha ?? undefined,
       lastShaChangeAt: new Date().toISOString(),
     });
     refreshDashboard();
@@ -267,22 +219,15 @@ function attemptMerge(
       log.info("poller", "checks failed after rebase", { worker: entry.name });
       const stderr = (err as { stderr?: Buffer })?.stderr?.toString() ?? "";
       const truncated = stderr.slice(-500);
-      const message = `Checks failed for PR #${entry.prNumber} after rebase:\n\n${truncated}\n\nFix the issues and push again.`;
-      const delivered = notifyWorker(projectName, entry, message);
-      const status = delivered
-        ? `Worker \`${entry.name}\` notified.`
-        : `Worker \`${entry.name}\` was not reachable; notification stored for next delivery.`;
-      const commentBody = truncated
-        ? `Checks failed after rebase. ${status}\n\n\`\`\`\n${truncated}\n\`\`\``
-        : `Checks failed after rebase. ${status}`;
-      prComment(projectPath, entry.prNumber, commentBody);
+      const message = `Checks failed after rebase:\n\n${truncated}\n\nFix the issues and push again.`;
+      notifyWorker(projectName, entry, message);
 
-      const info = getPRInfo(projectPath, entry.prNumber);
+      const headSha = getBranchHeadSha(wtPath);
       updateWorkerFields(projectName, entry.name, {
         prState: "failing",
         failCount: (entry.failCount ?? 0) + 1,
-        failingSha: info?.headSha,
-        lastSeenSha: info?.headSha,
+        failingSha: headSha ?? undefined,
+        lastSeenSha: headSha ?? undefined,
         lastShaChangeAt: new Date().toISOString(),
       });
       refreshDashboard();
@@ -295,20 +240,17 @@ function attemptMerge(
   } catch (err) {
     log.error("poller", "force-push failed", {
       worker: entry.name,
-      prNumber: entry.prNumber,
       error: String(err),
     });
-    updateWorkerFields(projectName, entry.name, { prState: "open" });
+    updateWorkerFields(projectName, entry.name, { prState: "working" });
     refreshDashboard();
     return true;
   }
 
-  log.info("poller", "force-pushed, transitioning to review", {
+  log.info("poller", "force-pushed, ready for review", {
     worker: entry.name,
-    prNumber: entry.prNumber,
   });
-  updateWorkerFields(projectName, entry.name, { prState: "reviewing" });
-  refreshDashboard();
+  // Stay in reviewing state — handleReviewing will run Claude review next cycle
   return true;
 }
 
@@ -317,19 +259,17 @@ function handleReviewing(
   projectPath: string,
   entry: WorkerEntry,
 ): boolean {
-  if (!entry.prNumber) return false;
-
-  // Live-Claude guard: if the worker started pushing new code, go back to open
+  // Live-Claude guard: if the worker started pushing new code, go back to working
   const workerWindow = `_${projectName}-worker-${entry.name}`;
   if (windowExists(workerWindow)) {
     const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindow}`);
     if (paneId) {
       const pid = getPanePid(paneId);
       if (pid && isClaudeWorking(pid)) {
-        log.info("poller", "Claude working during review, resetting to open", {
+        log.info("poller", "Claude working during review, resetting to working", {
           worker: entry.name,
         });
-        updateWorkerFields(projectName, entry.name, { prState: "open" });
+        updateWorkerFields(projectName, entry.name, { prState: "working" });
         refreshDashboard();
         return true;
       }
@@ -347,56 +287,39 @@ function handleReviewing(
       source: "review",
       project: projectName,
       worker: entry.name,
-      prNumber: entry.prNumber,
-      message: `Review failed for PR #${entry.prNumber}: Claude unavailable or unparseable output`,
+      message: `Review failed for worker ${entry.name}: Claude unavailable or unparseable output`,
     });
-    if (entry.prNumber) {
-      prComment(projectPath, entry.prNumber,
-        "Review process failed (Claude unavailable or timeout). Will retry after debounce.");
-    }
-    const info = getPRInfo(projectPath, entry.prNumber!);
+    const wtPath = entry.worktreePath ?? projectPath;
+    const headSha = getBranchHeadSha(wtPath);
     updateWorkerFields(projectName, entry.name, {
       prState: "failing",
       failCount: (entry.failCount ?? 0) + 1,
       failingSha: undefined,
-      lastSeenSha: info?.headSha,
+      lastSeenSha: headSha ?? undefined,
       lastShaChangeAt: new Date().toISOString(),
     });
     refreshDashboard();
     return true;
   }
 
-  // Attempt formal GitHub review (may fail for self-PRs)
-  submitPRReview(projectPath, entry.prNumber, review.approved, review.body);
-
-  // Always post a formatted review comment so the review is visible
-  const verdict = review.approved ? "Approved" : "Changes requested";
-  const reviewComment = `**Review: ${verdict}**\n\n${review.body}`;
-  prComment(projectPath, entry.prNumber, reviewComment);
-
-  log.info("poller", "posted review", {
+  log.info("poller", "review complete", {
     worker: entry.name,
-    prNumber: entry.prNumber,
     approved: review.approved,
   });
 
   if (review.approved) {
     finalizeMerge(projectName, projectPath, entry);
   } else {
-    const message = `PR review requested changes for #${entry.prNumber}:\n\n${review.body}\n\nFix the issues and push again.`;
-    const delivered = notifyWorker(projectName, entry, message);
-    if (!delivered) {
-      log.info("poller", "worker not reachable, notification stored", {
-        worker: entry.name,
-      });
-    }
+    const message = `Review requested changes:\n\n${review.body}\n\nFix the issues and push again.`;
+    notifyWorker(projectName, entry, message);
 
-    const info = getPRInfo(projectPath, entry.prNumber);
+    const wtPath = entry.worktreePath ?? projectPath;
+    const headSha = getBranchHeadSha(wtPath);
     updateWorkerFields(projectName, entry.name, {
       prState: "failing",
       failCount: (entry.failCount ?? 0) + 1,
-      failingSha: info?.headSha,
-      lastSeenSha: info?.headSha,
+      failingSha: headSha ?? undefined,
+      lastSeenSha: headSha ?? undefined,
       lastShaChangeAt: new Date().toISOString(),
     });
     refreshDashboard();
@@ -414,19 +337,19 @@ function runClaudeReview(
   projectPath: string,
   entry: WorkerEntry,
 ): ReviewResult | null {
-  if (!entry.prNumber) return null;
+  const wtPath = entry.worktreePath ?? projectPath;
 
   let diff: string;
   try {
-    diff = getPRDiff(projectPath, entry.prNumber);
+    diff = getDiffAgainstMain(wtPath);
   } catch {
-    log.warn("poller", "failed to get PR diff for review", { worker: entry.name });
+    log.warn("poller", "failed to get diff for review", { worker: entry.name });
     return null;
   }
 
-  const details = getPRDetails(projectPath, entry.prNumber);
+  const commitSummary = getCommitSummary(wtPath);
+  const branchName = entry.branchName ?? entry.name;
   const rules = buildRulesContext(projectName, projectPath);
-  const wtPath = entry.worktreePath ?? projectPath;
 
   const changedFiles = getChangedFiles(wtPath);
 
@@ -456,14 +379,14 @@ function runClaudeReview(
   }
 
   const prompt = [
-    "Review this pull request diff against the project rules below.",
+    "Review this branch diff against the project rules below.",
     "",
     "Check for:",
     "- Adherence to project rules (commit style, code patterns, scope discipline)",
     "- Code quality issues, security concerns, or unnecessary complexity",
     "- Documentation accuracy: read DESIGN.md and CLAUDE.md below. After applying this",
     "  diff, are they still accurate and complete? Flag any claims that are now wrong,",
-    "  missing sections for new behavior, or stale descriptions. Not every PR needs a",
+    "  missing sections for new behavior, or stale descriptions. Not every change needs a",
     "  doc change — only flag docs that are actually inaccurate after this diff.",
     "- Test quality: read the test files below. Check three things:",
     "  1. Accuracy — do existing tests still assert correct behavior after this diff?",
@@ -471,10 +394,12 @@ function runClaudeReview(
     "  2. Coverage — are the new/changed code paths exercised by tests? Flag significant",
     "     new logic (branching, error handling, state transitions) that has no test.",
     "  3. Completeness — do the tests cover edge cases and failure modes, not just the",
-    "     happy path? Flag obvious gaps. Not every PR needs a test change — only flag",
+    "     happy path? Flag obvious gaps. Not every change needs a test change — only flag",
     "     tests that are actually wrong or insufficient for the behavior this diff changes.",
     "",
-    `## PR #${entry.prNumber}: ${details?.title ?? "Unknown"}`,
+    `## Branch: ${branchName}`,
+    "",
+    commitSummary ? `### Commits\n\n\`\`\`\n${commitSummary}\n\`\`\`` : "",
     "",
     "## Project Rules",
     "",
@@ -558,14 +483,13 @@ function finalizeMerge(
   projectPath: string,
   entry: WorkerEntry,
 ): void {
-  if (!entry.prNumber) return;
+  const branchName = entry.branchName ?? entry.name;
 
   try {
-    mergePR(projectPath, entry.prNumber);
+    mergeToMain(projectPath, branchName);
   } catch (err) {
     log.error("poller", "merge failed", {
       worker: entry.name,
-      prNumber: entry.prNumber,
       error: String(err),
     });
     addAlert({
@@ -573,20 +497,17 @@ function finalizeMerge(
       source: "poller",
       project: projectName,
       worker: entry.name,
-      prNumber: entry.prNumber,
-      message: `Merge failed for PR #${entry.prNumber}: ${String(err).slice(0, 200)}`,
+      message: `Merge failed for worker ${entry.name}: ${String(err).slice(0, 200)}`,
     });
-    updateWorkerFields(projectName, entry.name, { prState: "open" });
+    updateWorkerFields(projectName, entry.name, { prState: "working" });
     refreshDashboard();
     return;
   }
 
-  log.info("poller", "PR merged", { worker: entry.name, prNumber: entry.prNumber });
-  prComment(projectPath, entry.prNumber, "Merged successfully.");
+  log.info("poller", "merged to main", { worker: entry.name });
 
   notifySiblingWorkers(projectName, projectPath, entry);
 
-  fastForwardMain(projectPath);
   runPostMerge(projectName, projectPath);
   updateWorkerFields(projectName, entry.name, {
     prState: "merged",
@@ -644,22 +565,22 @@ function handleFailing(
   projectPath: string,
   entry: WorkerEntry,
 ): boolean {
-  if (!entry.prNumber) return false;
+  const wtPath = entry.worktreePath ?? projectPath;
+  const headSha = getBranchHeadSha(wtPath);
+  if (!headSha) return false;
 
-  const info = getPRInfo(projectPath, entry.prNumber);
-  if (!info) return false;
-
-  if (info.headSha !== entry.lastSeenSha) {
-    // New commits pushed — post a summary comment so the reviewer has context
-    const wtPath = entry.worktreePath ?? projectPath;
+  if (headSha !== entry.lastSeenSha) {
+    // New commits pushed — track the change
     const commitLog = getNewCommitSummary(wtPath, entry.failingSha ?? entry.lastSeenSha);
     if (commitLog) {
-      prComment(projectPath, entry.prNumber,
-        `Worker \`${entry.name}\` pushed new commits:\n\n\`\`\`\n${commitLog}\n\`\`\``);
+      log.info("poller", "new commits detected in failing worker", {
+        worker: entry.name,
+        commits: commitLog,
+      });
     }
 
     updateWorkerFields(projectName, entry.name, {
-      lastSeenSha: info.headSha,
+      lastSeenSha: headSha,
       lastShaChangeAt: new Date().toISOString(),
     });
     return false;
@@ -669,7 +590,7 @@ function handleFailing(
   // This prevents re-reviewing unchanged code after changes-requested,
   // check failures, or rebase conflicts. Transient failures (review
   // process errors) clear failingSha so debounce-only retry still works.
-  if (entry.failingSha && info.headSha === entry.failingSha) {
+  if (entry.failingSha && headSha === entry.failingSha) {
     return false;
   }
 
@@ -684,13 +605,12 @@ function handleFailing(
         source: "poller",
         project: projectName,
         worker: entry.name,
-        prNumber: entry.prNumber,
-        message: `PR #${entry.prNumber} has failed ${entry.failCount} times -- may need manual attention`,
+        message: `Worker ${entry.name} has failed ${entry.failCount} times -- may need manual attention`,
       });
     }
 
     updateWorkerFields(projectName, entry.name, {
-      prState: "open",
+      prState: "working",
       failingSha: undefined,
     });
     return true;
@@ -702,30 +622,26 @@ function handleMerged(
   projectName: string,
   entry: WorkerEntry,
 ): boolean {
-  const project = tryGetProject(projectName);
-  if (!project) return false;
-  const branchName = entry.branchName ?? entry.name;
+  const wtPath = entry.worktreePath;
+  if (!wtPath) return false;
 
-  // Check if a new PR was opened on the same branch (by postPush or manually)
-  const newPrNumber = getBranchPR(project.path, branchName);
-  if (newPrNumber !== null && newPrNumber !== entry.prNumber) {
-    const prevCount = entry.mergeCount ?? 0;
-    log.info("poller", "new PR found after merge, resuming", {
-      worker: entry.name,
-      newPrNumber,
-      mergeCount: prevCount + 1,
-    });
-    updateWorkerFields(projectName, entry.name, {
-      prNumber: newPrNumber,
-      prState: "open",
-      mergeCount: prevCount + 1,
-      mergedAt: undefined,
-    });
-    refreshDashboard();
-    return true;
-  }
+  // Check if the worker has new commits ahead of main
+  const commitSummary = getCommitSummary(wtPath);
+  if (!commitSummary) return false;
 
-  return false;
+  const prevCount = entry.mergeCount ?? 0;
+  log.info("poller", "new commits after merge, resuming", {
+    worker: entry.name,
+    mergeCount: prevCount + 1,
+  });
+  updateWorkerFields(projectName, entry.name, {
+    prState: "working",
+    mergeCount: prevCount + 1,
+    mergedAt: undefined,
+    lastSeenSha: undefined,
+  });
+  refreshDashboard();
+  return true;
 }
 
 function notifyWorker(
@@ -771,15 +687,15 @@ function notifySiblingWorkers(
   projectPath: string,
   mergedEntry: WorkerEntry,
 ): void {
-  if (!mergedEntry.worktreePath || !mergedEntry.prNumber) return;
+  if (!mergedEntry.worktreePath) return;
 
   const mergedFiles = getChangedFiles(mergedEntry.worktreePath);
   if (mergedFiles.length === 0) return;
 
-  const details = getPRDetails(projectPath, mergedEntry.prNumber);
+  const commitSummary = getCommitSummary(mergedEntry.worktreePath);
   const siblings = getWorkers(projectName).filter(
     w => w.name !== mergedEntry.name &&
-      (w.prState === "working" || w.prState === "open" || w.prState === "failing"),
+      (w.prState === "working" || w.prState === "failing"),
   );
 
   const mergedSet = new Set(mergedFiles);
@@ -790,15 +706,13 @@ function notifySiblingWorkers(
     const overlap = siblingFiles.filter(f => mergedSet.has(f));
     if (overlap.length === 0) continue;
 
-    const title = details?.title ?? `PR #${mergedEntry.prNumber}`;
-    const url = details?.url ?? "";
+    const title = commitSummary?.split("\n")[0] ?? `worker ${mergedEntry.name}`;
     const fileList = overlap.join(", ");
     const message = [
-      `[garden] PR #${mergedEntry.prNumber} "${title}" just merged into main.`,
-      url ? `URL: ${url}` : "",
+      `[garden] Worker \`${mergedEntry.name}\` just merged into main: ${title}`,
       `It changed files that overlap with your branch: ${fileList}`,
       "Rebase onto main, review how these changes interact with your work, and make sure you are not reverting their fix. Push when ready.",
-    ].filter(Boolean).join("\n");
+    ].join("\n");
 
     const windowName = `_${projectName}-worker-${sibling.name}`;
     if (!windowExists(windowName)) continue;
@@ -854,107 +768,6 @@ function relaunchWorker(
 }
 
 export function postPush(): void {
-  const cwd = process.cwd();
-  const registry = readRegistry();
-
-  // Find the worker entry whose worktreePath matches cwd
-  let matchedProject: string | null = null;
-  let matchedEntry: WorkerEntry | null = null;
-
-  for (const [projectName, entries] of Object.entries(registry.workers)) {
-    for (const entry of entries) {
-      if (entry.worktreePath && path.resolve(entry.worktreePath) === path.resolve(cwd)) {
-        matchedProject = projectName;
-        matchedEntry = entry;
-        break;
-      }
-    }
-    if (matchedEntry) break;
-  }
-
-  if (!matchedProject || !matchedEntry) {
-    log.debug("post-push", "no matching worker for cwd", { cwd });
-    triggerPoll();
-    return;
-  }
-
-  // If no merged PR, just signal the poller
-  if (matchedEntry.prState !== "merged" || !matchedEntry.prNumber) {
-    triggerPoll();
-    return;
-  }
-
-  const project = tryGetProject(matchedProject);
-  if (!project) {
-    triggerPoll();
-    return;
-  }
-
-  // Check for unmerged commits
-  try {
-    execFileSync("git", ["fetch", "origin", "main"], {
-      cwd,
-      stdio: "ignore",
-      timeout: 30_000,
-    });
-  } catch { /* best effort */ }
-
-  let newCommits: number;
-  try {
-    const count = execFileSync("git", ["rev-list", "--count", "origin/main..HEAD"], {
-      cwd,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 10_000,
-    }).trim();
-    newCommits = parseInt(count, 10);
-  } catch {
-    triggerPoll();
-    return;
-  }
-
-  if (newCommits === 0) {
-    triggerPoll();
-    return;
-  }
-
-  const branchName = matchedEntry.branchName ?? matchedEntry.name;
-  const prevCount = matchedEntry.mergeCount ?? 0;
-
-  log.info("post-push", "unmerged commits after merge, creating follow-up PR", {
-    worker: matchedEntry.name,
-    newCommits,
-    mergeCount: prevCount + 1,
-  });
-
-  const commitLog = getCommitSummary(cwd);
-  const title = `${branchName} (continued)`;
-  const body = `Follow-up PR for worker \`${matchedEntry.name}\`.\n\n` +
-    `Previous PR #${matchedEntry.prNumber} was merged. New commits:\n\`\`\`\n${commitLog || "(commits)"}\n\`\`\``;
-
-  const newPrNumber = createPR(project.path, branchName, title, body);
-  if (newPrNumber) {
-    log.info("post-push", "created follow-up PR", {
-      worker: matchedEntry.name,
-      prNumber: newPrNumber,
-    });
-    updateWorkerFields(matchedProject, matchedEntry.name, {
-      prNumber: newPrNumber,
-      prState: "open",
-      mergeCount: prevCount + 1,
-      mergedAt: undefined,
-    });
-    refreshDashboard();
-  } else {
-    // Fall back to working so the poller picks it up
-    updateWorkerFields(matchedProject, matchedEntry.name, {
-      prState: "working",
-      prNumber: undefined,
-      mergeCount: prevCount + 1,
-      mergedAt: undefined,
-    });
-  }
-
   triggerPoll();
 }
 
