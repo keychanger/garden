@@ -10,6 +10,7 @@ import { rebuild } from "./rebuild.js";
 import { reset } from "./reset.js";
 import { health } from "./health.js";
 import { test } from "./test.js";
+import { alerts } from "./alerts.js";
 
 type Command = (args: string[]) => Promise<void>;
 
@@ -25,4 +26,5 @@ export const commands: Record<string, Command> = {
   reset,
   health,
   test,
+  alerts,
 };

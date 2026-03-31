@@ -8,6 +8,7 @@ import {
 } from "../session.js";
 import { STATE_FILE } from "./state.js";
 import { REGISTRY_FILE } from "./registry.js";
+import { ALERTS_FILE } from "./alerts.js";
 import { printHeader } from "./header.js";
 import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
@@ -30,6 +31,7 @@ export async function dashboard(args: string[]): Promise<void> {
     killDashboardSession();
     try { fs.unlinkSync(STATE_FILE); } catch { /* ignore */ }
     try { fs.unlinkSync(REGISTRY_FILE); } catch { /* ignore */ }
+    try { fs.unlinkSync(ALERTS_FILE); } catch { /* ignore */ }
     cleanupContextFiles();
     console.log("Dashboard closed.");
     return;

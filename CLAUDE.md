@@ -30,6 +30,7 @@ npm run dev -- help    # run via tsx during development
   - `validate.ts` — state/tmux consistency validation and self-healing
   - `git.ts` — git/gh CLI wrappers for worktree and PR operations
   - `poller.ts` — PR poller: state machine driving review/merge lifecycle every 30s
+  - `alerts.ts` — persistent operator alerts (review failures, merge errors, repeated failures)
   - `log.ts` — structured JSON logger to `~/.garden/sessions/dashboard.log`
   - `names.ts` — worker name generation (adjective-noun pairs)
 - `src/dashboard-claude.ts` — internal command: launches claude with rules context
@@ -92,7 +93,7 @@ Every worker runs in its own git worktree, isolated from the main checkout and o
    - Skips merge if Claude is actively running in the worktree (live-Claude guard).
    - Rebases onto main, then runs optional `checks` command (configured per project in `~/.garden/config.yml`) on the rebased code.
    - Force-pushes and transitions to review. A Claude session (`claude -p`) reviews the diff against project rules, checking adherence, test coverage, and doc coverage.
-   - If review approves: squash-merges. If review requests changes: notifies the worker via `tmux send-keys`. If review process fails: merges as fallback.
+   - If review approves: squash-merges. If review requests changes: notifies the worker via `tmux send-keys`. If review process fails: transitions to failing and surfaces an alert (unreviewed code is never auto-merged).
    - After merge, fast-forwards local main and runs optional `postMerge` command (e.g., `npm run build` to rebuild the CLI).
    - Notifies sibling workers with overlapping files (relaunches dead sessions if needed).
    - Debounces commits (30s quiet period) before retrying.

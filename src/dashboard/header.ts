@@ -4,6 +4,7 @@ import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, paneExists, getPanePid, getPaneVar, getPaneTitle, hasClaudeChild, listHiddenWorkerWindows, setPaneVar } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
 import { findWorkerByName, updateWorkerTask } from "./registry.js";
+import { alertCount } from "./alerts.js";
 
 export function setupStatusBar(gardenRunner: string): void {
   const target = DASHBOARD_SESSION;
@@ -100,7 +101,8 @@ export function printHeader(): void {
     mergeCount = entry?.mergeCount ?? 0;
   }
 
-  const header = formatHeader(projectName, isOnWorker, workerLabel, paneStatus, currentWorkerIdx, totalWorkers, prState, mergeCount);
+  const alerts = alertCount();
+  const header = formatHeader(projectName, isOnWorker, workerLabel, paneStatus, currentWorkerIdx, totalWorkers, prState, mergeCount, alerts);
   process.stdout.write(header);
   setHeaderVar(header);
 }
@@ -146,7 +148,8 @@ export function updateHeaderVar(): void {
     mergeCount = entry?.mergeCount ?? 0;
   }
 
-  const header = formatHeader(projectName, isOnWorker, workerLabel, paneStatus, currentWorkerIdx, totalWorkers, prState, mergeCount);
+  const alerts = alertCount();
+  const header = formatHeader(projectName, isOnWorker, workerLabel, paneStatus, currentWorkerIdx, totalWorkers, prState, mergeCount, alerts);
   setHeaderVar(header);
 }
 
@@ -159,6 +162,7 @@ function formatHeader(
   totalWorkers: number,
   prState?: string,
   mergeCount?: number,
+  alerts?: number,
 ): string {
   const parts: string[] = [projectName];
 
@@ -178,8 +182,11 @@ function formatHeader(
   }
 
   const info = parts.join(" · ");
+  const alertTag = alerts && alerts > 0
+    ? `  [${alerts} alert${alerts === 1 ? "" : "s"}]`
+    : "";
   const hints = "⌥n new | ⌥w worker | ⌥s shell | ⌥] next";
-  return `${info}  ${hints}`;
+  return `${info}${alertTag}  ${hints}`;
 }
 
 function setHeaderVar(header: string): void {

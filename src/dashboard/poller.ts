@@ -24,6 +24,7 @@ import { refreshDashboard } from "./header.js";
 import { healStatusPane } from "./validate.js";
 import { log } from "./log.js";
 import { buildRulesContext } from "../rules.js";
+import { addAlert } from "./alerts.js";
 import crypto from "node:crypto";
 
 const DEBOUNCE_MS = 30_000;
@@ -223,9 +224,20 @@ function attemptMerge(
         : `Merge conflict with main. Worker \`${entry.name}\` was not reachable; notification stored for next delivery.`,
     );
 
+    const newFailCount = (entry.failCount ?? 0) + 1;
+    addAlert({
+      level: "warn",
+      source: "poller",
+      project: projectName,
+      worker: entry.name,
+      prNumber: entry.prNumber,
+      message: `Rebase conflict on PR #${entry.prNumber}`,
+    });
+
     const info = getPRInfo(projectPath, entry.prNumber);
     updateWorkerFields(projectName, entry.name, {
       prState: "failing",
+      failCount: newFailCount,
       lastSeenSha: info?.headSha,
       lastShaChangeAt: new Date().toISOString(),
     });
@@ -260,6 +272,7 @@ function attemptMerge(
       const info = getPRInfo(projectPath, entry.prNumber);
       updateWorkerFields(projectName, entry.name, {
         prState: "failing",
+        failCount: (entry.failCount ?? 0) + 1,
         lastSeenSha: info?.headSha,
         lastShaChangeAt: new Date().toISOString(),
       });
@@ -316,10 +329,29 @@ function handleReviewing(
   const review = runClaudeReview(projectName, projectPath, entry);
 
   if (review === null) {
-    log.warn("poller", "review process failed, proceeding with merge", {
+    log.warn("poller", "review process failed, transitioning to failing", {
       worker: entry.name,
     });
-    finalizeMerge(projectName, projectPath, entry);
+    addAlert({
+      level: "error",
+      source: "review",
+      project: projectName,
+      worker: entry.name,
+      prNumber: entry.prNumber,
+      message: `Review failed for PR #${entry.prNumber}: Claude unavailable or unparseable output`,
+    });
+    if (entry.prNumber) {
+      prComment(projectPath, entry.prNumber,
+        "Review process failed (Claude unavailable or timeout). Will retry after debounce.");
+    }
+    const info = getPRInfo(projectPath, entry.prNumber!);
+    updateWorkerFields(projectName, entry.name, {
+      prState: "failing",
+      failCount: (entry.failCount ?? 0) + 1,
+      lastSeenSha: info?.headSha,
+      lastShaChangeAt: new Date().toISOString(),
+    });
+    refreshDashboard();
     return;
   }
 
@@ -351,6 +383,7 @@ function handleReviewing(
     const info = getPRInfo(projectPath, entry.prNumber);
     updateWorkerFields(projectName, entry.name, {
       prState: "failing",
+      failCount: (entry.failCount ?? 0) + 1,
       lastSeenSha: info?.headSha,
       lastShaChangeAt: new Date().toISOString(),
     });
@@ -492,12 +525,12 @@ function runClaudeReview(
       return { approved: false, body };
     }
 
-    // Could not parse verdict — treat as approval with the full output as body
-    log.warn("poller", "could not parse review verdict, treating as approval", {
+    // Could not parse verdict — treat as failure so it surfaces for retry
+    log.warn("poller", "could not parse review verdict", {
       worker: entry.name,
       firstLine,
     });
-    return { approved: true, body: output };
+    return null;
   } catch (err) {
     log.warn("poller", "claude review threw", {
       worker: entry.name,
@@ -522,6 +555,14 @@ function finalizeMerge(
       prNumber: entry.prNumber,
       error: String(err),
     });
+    addAlert({
+      level: "error",
+      source: "poller",
+      project: projectName,
+      worker: entry.name,
+      prNumber: entry.prNumber,
+      message: `Merge failed for PR #${entry.prNumber}: ${String(err).slice(0, 200)}`,
+    });
     updateWorkerFields(projectName, entry.name, { prState: "open" });
     refreshDashboard();
     return;
@@ -537,6 +578,7 @@ function finalizeMerge(
   updateWorkerFields(projectName, entry.name, {
     prState: "merged",
     mergedAt: new Date().toISOString(),
+    failCount: 0,
   });
   refreshDashboard();
 }
@@ -583,6 +625,18 @@ function handleFailing(
   const changeAt = entry.lastShaChangeAt ? new Date(entry.lastShaChangeAt).getTime() : 0;
   if (Date.now() - changeAt >= DEBOUNCE_MS) {
     log.info("poller", "debounce complete, retrying", { worker: entry.name });
+
+    if ((entry.failCount ?? 0) >= 3) {
+      addAlert({
+        level: "error",
+        source: "poller",
+        project: projectName,
+        worker: entry.name,
+        prNumber: entry.prNumber,
+        message: `PR #${entry.prNumber} has failed ${entry.failCount} times -- may need manual attention`,
+      });
+    }
+
     updateWorkerFields(projectName, entry.name, { prState: "open" });
   }
 }

@@ -70,6 +70,14 @@ vi.mock("../src/dashboard/validate.js", () => ({
   healStatusPane: vi.fn(),
 }));
 
+vi.mock("../src/dashboard/alerts.js", () => ({
+  addAlert: vi.fn(),
+  readAlerts: vi.fn(() => ({ alerts: [] })),
+  alertCount: vi.fn(() => 0),
+  clearAlerts: vi.fn(),
+  ALERTS_FILE: "/tmp/fake-sessions/dashboard.alerts.json",
+}));
+
 vi.mock("../src/dashboard/git.js", () => ({
   getBranchPR: vi.fn(() => null),
   getPRInfo: vi.fn(() => ({ state: "OPEN", headSha: "abc123" })),
@@ -106,11 +114,12 @@ import {
   getBranchPR, getPRInfo, rebaseBranch, abortRebase,
   forcePushBranch, mergePR, commentOnPR,
   getChangedFiles, getPRDetails, submitPRReview,
-  createPR,
+  createPR, getCommitSummary, getPRDiff,
 } from "../src/dashboard/git.js";
 import { buildWorktreeWorkerCommand } from "../src/dashboard/create.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
-import { tmux, hasClaudeChild, getPanePid, windowExists } from "../src/dashboard/tmux.js";
+import { tmux, hasClaudeChild, getPanePid, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
+import { addAlert } from "../src/dashboard/alerts.js";
 import { spawnSync } from "node:child_process";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
@@ -131,8 +140,21 @@ function makeWorker(overrides: Partial<WorkerEntry> = {}): WorkerEntry {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   registryMock._clear();
+  // Re-establish factory defaults after reset
+  vi.mocked(windowExists).mockReturnValue(true);
+  vi.mocked(getFirstPaneId).mockReturnValue("%5");
+  vi.mocked(getPanePid).mockReturnValue("12345");
+  vi.mocked(getChangedFiles).mockReturnValue([]);
+  vi.mocked(getPRDetails).mockReturnValue(null);
+  vi.mocked(getPRDiff).mockReturnValue("diff --git a/file.ts b/file.ts");
+  vi.mocked(submitPRReview).mockReturnValue(true);
+  vi.mocked(createPR).mockReturnValue(99);
+  vi.mocked(getCommitSummary).mockReturnValue("abc123 fix something");
+  vi.mocked(spawnSync).mockReturnValue({
+    status: 0, stdout: "APPROVE\nLooks good.", stderr: "",
+  } as ReturnType<typeof spawnSync>);
   vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject", checks: undefined } as ReturnType<typeof tryGetProject>);
   vi.mocked(rebaseBranch).mockReturnValue(true);
   vi.mocked(getPRInfo).mockReturnValue({ state: "OPEN", headSha: "abc123" });
@@ -189,6 +211,7 @@ describe("poll — open state, merge conflict", () => {
     );
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "failing",
+      failCount: 1,
       lastSeenSha: "abc123",
       lastShaChangeAt: expect.any(String),
     });
@@ -244,6 +267,7 @@ describe("poll — open state, successful merge", () => {
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "merged",
       mergedAt: expect.any(String),
+      failCount: 0,
     });
   });
 });
@@ -274,6 +298,7 @@ describe("poll — open state with checks", () => {
     expect(mergePR).not.toHaveBeenCalled();
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "failing",
+      failCount: 1,
       lastSeenSha: "abc123",
       lastShaChangeAt: expect.any(String),
     });
@@ -324,6 +349,7 @@ describe("poll — reviewing state", () => {
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "merged",
       mergedAt: expect.any(String),
+      failCount: 0,
     });
   });
 
@@ -350,12 +376,13 @@ describe("poll — reviewing state", () => {
     expect(mergePR).not.toHaveBeenCalled();
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "failing",
+      failCount: 1,
       lastSeenSha: "abc123",
       lastShaChangeAt: expect.any(String),
     });
   });
 
-  it("falls back to merge when review process fails", () => {
+  it("transitions to failing and adds alert when review process fails", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "reviewing", prNumber: 42 }),
     ]);
@@ -366,7 +393,41 @@ describe("poll — reviewing state", () => {
     poll();
 
     expect(submitPRReview).not.toHaveBeenCalled();
-    expect(mergePR).toHaveBeenCalledWith("/repo/myproject", 42);
+    expect(mergePR).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
+      prState: "failing",
+      failCount: 1,
+      lastSeenSha: "abc123",
+      lastShaChangeAt: expect.any(String),
+    });
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        source: "review",
+        project: "myproject",
+        worker: "bold-ash",
+        prNumber: 42,
+      }),
+    );
+  });
+
+  it("transitions to failing when review verdict is unparseable", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", prNumber: 42 }),
+    ]);
+    vi.mocked(spawnSync).mockReturnValue({
+      status: 0, stdout: "MAYBE\nNot sure about this one.", stderr: "",
+    } as never);
+
+    poll();
+
+    expect(mergePR).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "failing" }),
+    );
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ level: "error", source: "review" }),
+    );
   });
 
   it("resets to open when Claude becomes active during review", () => {
@@ -799,5 +860,121 @@ describe("poll — pending notification delivery", () => {
       c => c[2] && "pendingNotification" in (c[2] as Record<string, unknown>),
     );
     expect(clearCalls).toHaveLength(0);
+  });
+});
+
+describe("poll — alerts", () => {
+  it("adds alert on merge failure", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", prNumber: 42 }),
+    ]);
+    vi.mocked(spawnSync).mockReturnValue({
+      status: 0, stdout: "APPROVE\nLooks good.", stderr: "",
+    } as never);
+    vi.mocked(mergePR).mockImplementation(() => { throw new Error("merge conflict"); });
+
+    poll();
+
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        source: "poller",
+        project: "myproject",
+        message: expect.stringContaining("Merge failed"),
+      }),
+    );
+  });
+
+  it("adds alert on rebase conflict", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "open", prNumber: 42 }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue(false);
+    vi.mocked(hasClaudeChild).mockReturnValue(false);
+
+    poll();
+
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "poller",
+        message: expect.stringContaining("Rebase conflict"),
+      }),
+    );
+  });
+
+  it("adds alert after 3 repeated failures", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "failing",
+        prNumber: 42,
+        failCount: 3,
+        lastSeenSha: "abc123",
+        lastShaChangeAt: new Date(Date.now() - 60_000).toISOString(),
+      }),
+    ]);
+    vi.mocked(getPRInfo).mockReturnValue({ state: "OPEN", headSha: "abc123" });
+
+    poll();
+
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        message: expect.stringContaining("failed 3 times"),
+      }),
+    );
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
+      prState: "open",
+    });
+  });
+
+  it("does not add repeated-failure alert below threshold", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "failing",
+        prNumber: 42,
+        failCount: 2,
+        lastSeenSha: "abc123",
+        lastShaChangeAt: new Date(Date.now() - 60_000).toISOString(),
+      }),
+    ]);
+    vi.mocked(getPRInfo).mockReturnValue({ state: "OPEN", headSha: "abc123" });
+
+    poll();
+
+    expect(addAlert).not.toHaveBeenCalled();
+  });
+
+  it("resets failCount on successful merge", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", prNumber: 42, failCount: 2 }),
+    ]);
+    vi.mocked(spawnSync).mockReturnValue({
+      status: 0, stdout: "APPROVE\nLooks good.", stderr: "",
+    } as never);
+
+    poll();
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merged", failCount: 0 }),
+    );
+  });
+
+  it("increments failCount on review changes-requested", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", prNumber: 42, failCount: 1 }),
+    ]);
+    vi.mocked(spawnSync).mockReturnValue({
+      status: 0, stdout: "REQUEST_CHANGES\nNeeds tests.", stderr: "",
+    } as never);
+    vi.mocked(hasClaudeChild)
+      .mockReturnValueOnce(false)  // live-Claude guard
+      .mockReturnValueOnce(true);  // notifyWorker
+
+    poll();
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "failing", failCount: 2 }),
+    );
   });
 });
