@@ -316,6 +316,10 @@ describe("poll — reviewing state", () => {
     poll();
 
     expect(submitPRReview).toHaveBeenCalledWith("/repo/myproject", 42, true, "Looks good.");
+    expect(commentOnPR).toHaveBeenCalledWith(
+      "/repo/myproject", 42,
+      "[garden] **Review: Approved**\n\nLooks good.",
+    );
     expect(mergePR).toHaveBeenCalledWith("/repo/myproject", 42);
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "merged",
@@ -338,6 +342,10 @@ describe("poll — reviewing state", () => {
 
     expect(submitPRReview).toHaveBeenCalledWith(
       "/repo/myproject", 42, false, "Missing tests for new function.",
+    );
+    expect(commentOnPR).toHaveBeenCalledWith(
+      "/repo/myproject", 42,
+      "[garden] **Review: Changes requested**\n\nMissing tests for new function.",
     );
     expect(mergePR).not.toHaveBeenCalled();
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {

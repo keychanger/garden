@@ -222,13 +222,11 @@ export function submitPRReview(
     gh(repoPath, "pr", "review", String(prNumber), flag, "--body", body);
     return true;
   } catch (err) {
-    log.warn("git", "PR review submission failed, falling back to comment", {
+    log.warn("git", "formal PR review submission failed", {
       prNumber,
       approve,
       error: String(err),
     });
-    const prefix = approve ? "[Review: APPROVE]" : "[Review: REQUEST_CHANGES]";
-    commentOnPR(repoPath, prNumber, `${prefix}\n\n${body}`);
     return false;
   }
 }
