@@ -64,9 +64,7 @@ Some commands are not user-facing — they're dispatched by the dashboard via tm
 
 - `_dashboard-claude` — launches claude with project rules context (used by dashboard workers)
 
-The dashboard also has internal subcommands (e.g., `dashboard _switch 1`, `dashboard _new-worker`) called by hotkeys. These are dispatched inside `src/dashboard/index.ts`:
-
-- `_post-exit <workerName> <projectName>` — runs after a worktree worker exits
+The dashboard also has internal subcommands (e.g., `dashboard _switch 1`, `dashboard _new-worker`) called by hotkeys. These are dispatched inside `src/dashboard/index.ts`.
 
 ## Dashboard internals
 

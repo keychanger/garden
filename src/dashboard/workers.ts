@@ -15,6 +15,7 @@ import {
   addWorker, removeWorker, findWorkerByName, getAllWorkerNames,
 } from "./registry.js";
 import { log } from "./log.js";
+import { addAlert } from "./alerts.js";
 import { buildWorktreeWorkerCommand, createShellWindow } from "./create.js";
 import { worktreePath, createWorktree, removeWorktree, deleteBranch, getBranchPR, installPollTriggerHook, installClaudeHook, fastForwardMain } from "./git.js";
 
@@ -128,6 +129,16 @@ export function killPane(): void {
       const entry = findWorkerByName(state.activeProject, workerName);
       if (entry?.worktreePath) {
         const hasPR = getBranchPR(project.path, entry.branchName ?? workerName) !== null;
+        if (hasPR) {
+          addAlert({
+            level: "warn",
+            source: "workers",
+            project: state.activeProject,
+            worker: workerName,
+            prNumber: entry.prNumber,
+            message: `Worker killed with open PR #${entry.prNumber} — PR left open on GitHub`,
+          });
+        }
         removeWorktree(project.path, entry.worktreePath);
         if (!hasPR && entry.branchName) {
           deleteBranch(project.path, entry.branchName);

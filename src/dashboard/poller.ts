@@ -1,12 +1,13 @@
 // PR poller: watches GitHub PR state and drives the check/merge lifecycle.
-// Runs as a hidden tmux window. Wakes on signal via FIFO or 30s timeout.
+// Runs as a hidden tmux window. Re-polls immediately on state change (exit 75),
+// sleeps until signaled via FIFO or 30s timeout when idle (exit 0).
 import { execSync, execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tryGetProject, SESSIONS_DIR } from "../config.js";
 import {
-  tmux, getFirstPaneId, getPanePid, hasClaudeChild,
+  tmux, getFirstPaneId, getPanePid, hasClaudeChild, isClaudeWorking,
   windowExists, killWindowSafe,
 } from "./tmux.js";
 import {
@@ -29,15 +30,16 @@ import crypto from "node:crypto";
 
 const DEBOUNCE_MS = 30_000;
 const POLLER_WINDOW = "_garden-pr-poller";
-const SIGNAL_FIFO = path.join(SESSIONS_DIR, "poll-signal");
+export const SIGNAL_FIFO = path.join(SESSIONS_DIR, "poll-signal");
 
 function prComment(projectPath: string, prNumber: number, message: string): void {
   commentOnPR(projectPath, prNumber, `[garden] ${message}`);
 }
 
-export function poll(): void {
+export function poll(): boolean {
   healStatusPane();
   const registry = readRegistry();
+  let changed = false;
 
   for (const [projectName, entries] of Object.entries(registry.workers)) {
     const project = tryGetProject(projectName);
@@ -45,7 +47,9 @@ export function poll(): void {
 
     for (const entry of entries) {
       try {
-        pollWorker(projectName, project.path, entry);
+        if (pollWorker(projectName, project.path, entry)) {
+          changed = true;
+        }
       } catch (err) {
         log.error("poller", "error polling worker", {
           worker: entry.name,
@@ -55,13 +59,15 @@ export function poll(): void {
       }
     }
   }
+
+  return changed;
 }
 
 function pollWorker(
   projectName: string,
   projectPath: string,
   entry: WorkerEntry,
-): void {
+): boolean {
   // Deliver pending notification if Claude is alive
   if (entry.pendingNotification) {
     const windowName = `_${projectName}-worker-${entry.name}`;
@@ -94,7 +100,7 @@ function pollWorker(
         worker: entry.name,
         prNumber: entry.prNumber,
       });
-      return;
+      return false;
     }
     if (info.state === "MERGED" || info.state === "CLOSED") {
       log.info("poller", "PR closed/merged externally", {
@@ -107,7 +113,7 @@ function pollWorker(
         mergedAt: new Date().toISOString(),
       });
       refreshDashboard();
-      return;
+      return true;
     }
   }
 
@@ -117,7 +123,7 @@ function pollWorker(
     case "open":
       return handleOpen(projectName, projectPath, entry);
     case "merging":
-      return; // merge in progress from a previous poll cycle
+      return false; // merge in progress from a previous poll cycle
     case "reviewing":
       return handleReviewing(projectName, projectPath, entry);
     case "failing":
@@ -130,7 +136,7 @@ function pollWorker(
         state,
       });
       updateWorkerFields(projectName, entry.name, { prState: "open" });
-      return;
+      return true;
   }
 }
 
@@ -138,10 +144,10 @@ function handleWorking(
   projectName: string,
   projectPath: string,
   entry: WorkerEntry,
-): void {
+): boolean {
   const branchName = entry.branchName ?? entry.name;
   const prNumber = getBranchPR(projectPath, branchName);
-  if (prNumber === null) return;
+  if (prNumber === null) return false;
 
   log.info("poller", "PR detected", { worker: entry.name, prNumber });
   updateWorkerFields(projectName, entry.name, {
@@ -149,23 +155,24 @@ function handleWorking(
     prState: "open",
   });
   refreshDashboard();
+  return true;
 }
 
 function handleOpen(
   projectName: string,
   projectPath: string,
   entry: WorkerEntry,
-): void {
-  if (!entry.prNumber) return;
-  attemptMerge(projectName, projectPath, entry);
+): boolean {
+  if (!entry.prNumber) return false;
+  return attemptMerge(projectName, projectPath, entry);
 }
 
 function attemptMerge(
   projectName: string,
   projectPath: string,
   entry: WorkerEntry,
-): void {
-  if (!entry.prNumber) return;
+): boolean {
+  if (!entry.prNumber) return false;
 
   // Don't rebase/merge while Claude is actively running in the worktree
   const workerWindow = `_${projectName}-worker-${entry.name}`;
@@ -173,12 +180,12 @@ function attemptMerge(
     const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindow}`);
     if (paneId) {
       const pid = getPanePid(paneId);
-      if (pid && hasClaudeChild(pid)) {
-        log.info("poller", "Claude active in worktree, skipping merge", {
+      if (pid && isClaudeWorking(pid)) {
+        log.info("poller", "Claude working in worktree, skipping merge", {
           worker: entry.name,
           prNumber: entry.prNumber,
         });
-        return;
+        return false;
       }
     }
   }
@@ -193,7 +200,7 @@ function attemptMerge(
       worker: entry.name,
       prNumber: entry.prNumber,
     });
-    return;
+    return false;
   }
 
   updateWorkerFields(projectName, entry.name, { prState: "merging" });
@@ -242,7 +249,7 @@ function attemptMerge(
       lastShaChangeAt: new Date().toISOString(),
     });
     refreshDashboard();
-    return;
+    return true;
   }
 
   // Run checks after rebase so they validate the combined state
@@ -277,7 +284,7 @@ function attemptMerge(
         lastShaChangeAt: new Date().toISOString(),
       });
       refreshDashboard();
-      return;
+      return true;
     }
   }
 
@@ -291,7 +298,7 @@ function attemptMerge(
     });
     updateWorkerFields(projectName, entry.name, { prState: "open" });
     refreshDashboard();
-    return;
+    return true;
   }
 
   log.info("poller", "force-pushed, transitioning to review", {
@@ -300,14 +307,15 @@ function attemptMerge(
   });
   updateWorkerFields(projectName, entry.name, { prState: "reviewing" });
   refreshDashboard();
+  return true;
 }
 
 function handleReviewing(
   projectName: string,
   projectPath: string,
   entry: WorkerEntry,
-): void {
-  if (!entry.prNumber) return;
+): boolean {
+  if (!entry.prNumber) return false;
 
   // Live-Claude guard: if the worker started pushing new code, go back to open
   const workerWindow = `_${projectName}-worker-${entry.name}`;
@@ -315,13 +323,13 @@ function handleReviewing(
     const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindow}`);
     if (paneId) {
       const pid = getPanePid(paneId);
-      if (pid && hasClaudeChild(pid)) {
-        log.info("poller", "Claude active during review, resetting to open", {
+      if (pid && isClaudeWorking(pid)) {
+        log.info("poller", "Claude working during review, resetting to open", {
           worker: entry.name,
         });
         updateWorkerFields(projectName, entry.name, { prState: "open" });
         refreshDashboard();
-        return;
+        return true;
       }
     }
   }
@@ -352,7 +360,7 @@ function handleReviewing(
       lastShaChangeAt: new Date().toISOString(),
     });
     refreshDashboard();
-    return;
+    return true;
   }
 
   // Attempt formal GitHub review (may fail for self-PRs)
@@ -389,6 +397,7 @@ function handleReviewing(
     });
     refreshDashboard();
   }
+  return true;
 }
 
 interface ReviewResult {
@@ -606,11 +615,11 @@ function handleFailing(
   projectName: string,
   projectPath: string,
   entry: WorkerEntry,
-): void {
-  if (!entry.prNumber) return;
+): boolean {
+  if (!entry.prNumber) return false;
 
   const info = getPRInfo(projectPath, entry.prNumber);
-  if (!info) return;
+  if (!info) return false;
 
   if (info.headSha !== entry.lastSeenSha) {
     // New commits, reset debounce
@@ -618,7 +627,7 @@ function handleFailing(
       lastSeenSha: info.headSha,
       lastShaChangeAt: new Date().toISOString(),
     });
-    return;
+    return false;
   }
 
   // Check debounce timeout
@@ -638,15 +647,17 @@ function handleFailing(
     }
 
     updateWorkerFields(projectName, entry.name, { prState: "open" });
+    return true;
   }
+  return false;
 }
 
 function handleMerged(
   projectName: string,
   entry: WorkerEntry,
-): void {
+): boolean {
   const project = tryGetProject(projectName);
-  if (!project) return;
+  if (!project) return false;
   const projectPath = project.path;
   const branchName = entry.branchName ?? entry.name;
 
@@ -666,7 +677,7 @@ function handleMerged(
       mergedAt: undefined,
     });
     refreshDashboard();
-    return;
+    return true;
   }
 
   // Check for commits on the branch that aren't on main.
@@ -712,7 +723,7 @@ function handleMerged(
             mergedAt: undefined,
           });
           refreshDashboard();
-          return;
+          return true;
         }
 
         // Force-push the rebased branch and open a new PR
@@ -730,7 +741,7 @@ function handleMerged(
             mergedAt: undefined,
           });
           refreshDashboard();
-          return;
+          return true;
         }
 
         const commitLog = getCommitSummary(entry.worktreePath);
@@ -760,11 +771,13 @@ function handleMerged(
           });
         }
         refreshDashboard();
+        return true;
       }
     } catch {
       // worktree may be gone, ignore
     }
   }
+  return false;
 }
 
 function notifyWorker(
@@ -911,7 +924,7 @@ export function startPoller(gardenRunner: string): void {
   const cmd = [
     `while true; do`,
     `  ${gardenRunner} dashboard _poll 2>/dev/null;`,
-    `  read -t 30 <>'${fifo}' 2>/dev/null || true;`,
+    `  if [ $? -eq 0 ]; then read -t 30 <>'${fifo}' 2>/dev/null || true; fi;`,
     `done`,
   ].join(" ");
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", POLLER_WINDOW,
