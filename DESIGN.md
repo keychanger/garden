@@ -113,8 +113,8 @@ working -> open -> merging -> reviewing -> (cleanup)
 1. **working**: Worker is active, no PR yet. Poller checks for PRs via `gh pr list`.
 2. **open**: PR detected. Transitions to merging (which runs checks after rebase). If another worker is already merging or reviewing, waits until the next cycle.
 3. **merging**: Poller checks if Claude is actively running in the worktree — if so, skips this cycle to avoid corrupting the live session. Otherwise: fetches main, rebases, runs optional checks on the rebased code, and force-pushes the rebased branch. On conflict or check failure, the worker is notified and state moves to failing. On force-push failure, state resets to open for retry.
-4. **reviewing**: A Claude session reviews the PR diff against project rules via `claude -p`. Checks adherence to rules, test coverage, and doc coverage. Always posts a formatted review comment on the PR with the verdict and reasoning. Also attempts a formal GitHub review (`gh pr review --approve/--request-changes`), but this may fail for self-PRs. If approved, proceeds to merge. If changes requested, notifies the worker and transitions to failing. If the review process fails (Claude unavailable, timeout), proceeds with merge as a fallback.
-5. **failing**: Checks failed, merge conflict, or review requested changes. Poller watches for new commits via SHA tracking. After 30s of no new pushes, state transitions back to open for retry.
+4. **reviewing**: A Claude session reviews the PR diff against project rules via `claude -p`. Checks adherence to rules, test coverage, and doc coverage. Always posts a formatted review comment on the PR with the verdict and reasoning. Also attempts a formal GitHub review (`gh pr review --approve/--request-changes`), but this may fail for self-PRs. If approved, proceeds to merge. If changes requested, notifies the worker and transitions to failing. If the review process fails (Claude unavailable, timeout, unparseable output), transitions to failing and surfaces an alert. The review acts as a gate -- unreviewed code is never auto-merged.
+5. **failing**: Checks failed, merge conflict, review requested changes, or review process failure. Poller watches for new commits via SHA tracking. After 30s of no new pushes, state transitions back to open for retry. Each failure increments a `failCount` on the worker entry; after 3 consecutive failures, an alert is surfaced. The count resets on successful merge.
 6. **merged**: PR merged. Poller watches for new PRs or unmerged commits on the branch (detected via `origin/main..HEAD` ancestry check, not timestamps — timestamps miss commits orphaned by the force-push during merge). If the worker has commits not on main, the poller rebases onto main, force-pushes, and auto-creates a follow-up PR via `gh pr create`, transitioning directly to open. If rebase or PR creation fails, falls back to working.
 
 If a PR is closed or merged externally, the poller detects this and cleans up from any state.
@@ -152,7 +152,7 @@ Merges are serialized per project (one at a time). The merge sequence:
 5. Force-push the rebased branch
 6. Review the PR diff via `claude -p` against project rules (next poll cycle)
 7. Submit review via `gh pr review` (approve or request changes)
-8. Merge via `gh pr merge --squash` (only if review approves or review process fails)
+8. Merge via `gh pr merge --squash` (only if review approves)
 9. Notify sibling workers with overlapping files (see below)
 10. Fast-forward local main
 11. Run postMerge command (if configured) on the main checkout
@@ -167,6 +167,21 @@ When a PR merges, the poller compares its changed files against every other acti
 
 - **Claude alive**: notification delivered via `tmux send-keys`
 - **Claude exited**: the worker is relaunched with a new Claude session; the notification is stored as a pending message in the registry and delivered on the next poll cycle once Claude is detected as running
+
+### Alerts
+The dashboard surfaces important events as alerts — persistent messages that require operator attention. Alerts are stored atomically in `~/.garden/sessions/dashboard.alerts.json` (same write-tmp-then-rename pattern as other state files), capped at 100 entries.
+
+**Events that generate alerts:**
+- Review process failure (Claude unavailable, timeout, unparseable output)
+- Merge failure (GitHub API error)
+- Rebase conflict
+- Repeated failures (3+ consecutive failures on the same PR)
+
+**Visibility:**
+- Header bar shows `[N alerts]` when alerts exist
+- `garden alerts` lists all alerts with timestamps
+- `garden alerts clear` dismisses all
+- Alert file is cleaned up on `garden dashboard exit`
 
 ### Worker Isolation Model
 - Every worker operates in its own git worktree — no shared working directory
@@ -201,6 +216,8 @@ garden dashboard                   # Open the dashboard (creates if needed)
 garden dashboard exit              # Close the dashboard
 garden keys                        # Show dashboard keybindings
 garden status                      # Show all projects and their workers
+garden alerts                      # View dashboard alerts
+garden alerts clear                # Dismiss all alerts
 garden rebuild                     # Rebuild garden and relaunch dashboard
 ```
 
@@ -221,6 +238,7 @@ All read commands detect whether stdout is a TTY:
   sessions/
     dashboard.state.json  # Dashboard pane state
     dashboard.registry.json  # Worker registry (persists across restarts)
+    dashboard.alerts.json # Operator alerts (review failures, merge errors)
     dashboard-<project>.context  # System prompt for project's Claude sessions
     dashboard-<project>-<branch>.context  # Worktree worker context
     dashboard.log           # Structured JSON log
