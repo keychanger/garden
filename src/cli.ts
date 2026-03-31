@@ -68,6 +68,8 @@ Dashboard:
   dashboard exit, exit           Close the dashboard
   keys                           Show dashboard keybindings
   status                         Show project and worker status
+  alerts                         View dashboard alerts
+  alerts clear                   Dismiss all alerts
   health                         Check dashboard state consistency
   reset                          Clear the worker registry
   rebuild                        Rebuild garden and relaunch dashboard
