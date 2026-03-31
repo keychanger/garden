@@ -705,9 +705,8 @@ function handleMerged(
   }
 
   // Check for commits on the branch that aren't on main.
-  // Using origin/main..HEAD instead of --after timestamp because the
-  // merge pipeline force-pushes during rebase, which can orphan commits
-  // that predate mergedAt but were never included in the squash merge.
+  // With regular merges, branch commits become ancestors of main,
+  // so this should return 0 unless the worker pushed new commits after merge.
   if (entry.mergedAt && entry.worktreePath) {
     try {
       execFileSync("git", ["fetch", "origin", "main"], {
