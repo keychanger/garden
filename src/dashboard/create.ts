@@ -183,57 +183,65 @@ export function ensureDashboard(): void {
 
 export function createLogsWindow(): void {
   const windowName = "_garden-logs";
-  const alertsFile = path.join(SESSIONS_DIR, "dashboard.alerts.json");
-  const logFile = path.join(SESSIONS_DIR, "dashboard.log");
-
-  // Shell loop: show alerts then tail the log, refresh every 10s
-  const cmd = [
-    `while true; do`,
-    `  clear`,
-    `  echo "=== Alerts ==="`,
-    `  echo ""`,
-    `  if [ -f '${alertsFile}' ]; then`,
-    `    node -e "`,
-    `      const d = JSON.parse(require('fs').readFileSync('${alertsFile}','utf-8'));`,
-    `      if (!d.alerts || !d.alerts.length) { console.log('  (none)'); }`,
-    `      else { d.alerts.slice(-20).forEach(a => {`,
-    `        const t = a.ts.replace('T',' ').replace(/\\\\..*/,'');`,
-    `        console.log('  [' + a.level.toUpperCase() + '] ' + t + ' ' + a.project + (a.worker ? '/' + a.worker : '') + ': ' + a.message);`,
-    `      }); }`,
-    `    "`,
-    `  else`,
-    `    echo "  (none)"`,
-    `  fi`,
-    `  echo ""`,
-    `  echo "=== Recent Log ==="`,
-    `  echo ""`,
-    `  if [ -f '${logFile}' ]; then`,
-    `    tail -30 '${logFile}' | node -e "`,
-    `      const lines = require('fs').readFileSync('/dev/stdin','utf-8').trim().split('\\\\n');`,
-    `      lines.forEach(l => {`,
-    `        try {`,
-    `          const e = JSON.parse(l);`,
-    `          const t = e.ts.replace('T',' ').replace(/\\\\..*/,'');`,
-    `          const d = e.data ? ' ' + JSON.stringify(e.data) : '';`,
-    `          console.log('  ' + t + ' [' + e.level + '] ' + e.src + ': ' + e.msg + d);`,
-    `        } catch { console.log('  ' + l); }`,
-    `      });`,
-    `    "`,
-    `  else`,
-    `    echo "  (no log file)"`,
-    `  fi`,
-    `  sleep 10`,
-    `done`,
-  ].join(" ");
+  const scriptFile = writeLogsScript();
 
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName,
-    "sh", "-c", cmd);
+    "sh", "-c", `sh ${shellEscape(scriptFile)}`);
 
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (paneId) {
     setPaneLabel(paneId, "logs");
     setPaneTitle(paneId, "logs");
   }
+}
+
+function writeLogsScript(): string {
+  const alertsFile = path.join(SESSIONS_DIR, "dashboard.alerts.json");
+  const logFile = path.join(SESSIONS_DIR, "dashboard.log");
+  const scriptFile = path.join(SESSIONS_DIR, "logs-view.sh");
+
+  const script = `#!/bin/sh
+while true; do
+  clear
+  echo "=== Alerts ==="
+  echo ""
+  if [ -f '${alertsFile}' ]; then
+    node -e '
+      var d = JSON.parse(require("fs").readFileSync("${alertsFile}","utf-8"));
+      if (!d.alerts || !d.alerts.length) { console.log("  (none)"); }
+      else { d.alerts.slice(-20).forEach(function(a) {
+        var t = a.ts.replace("T"," ").replace(/\\..*/, "");
+        console.log("  [" + a.level.toUpperCase() + "] " + t + " " + a.project + (a.worker ? "/" + a.worker : "") + ": " + a.message);
+      }); }
+    '
+  else
+    echo "  (none)"
+  fi
+  echo ""
+  echo "=== Recent Log ==="
+  echo ""
+  if [ -f '${logFile}' ]; then
+    tail -30 '${logFile}' | node -e '
+      var lines = require("fs").readFileSync("/dev/stdin","utf-8").trim().split("\\n");
+      lines.forEach(function(l) {
+        try {
+          var e = JSON.parse(l);
+          var t = e.ts.replace("T"," ").replace(/\\..*/, "");
+          var d = e.data ? " " + JSON.stringify(e.data) : "";
+          console.log("  " + t + " [" + e.level + "] " + e.src + ": " + e.msg + d);
+        } catch(x) { console.log("  " + l); }
+      });
+    '
+  else
+    echo "  (no log file)"
+  fi
+  sleep 10
+done
+`;
+
+  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+  fs.writeFileSync(scriptFile, script, { mode: 0o755 });
+  return scriptFile;
 }
 
 export function createShellWindow(projectName: string, projectPath: string): void {
