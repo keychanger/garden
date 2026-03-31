@@ -271,6 +271,22 @@ export function getCommitSummary(wtPath: string): string {
   }
 }
 
+export function getNewCommitSummary(wtPath: string, sinceSha: string | undefined): string {
+  if (!sinceSha) return "";
+  try {
+    return execFileSync("git", [
+      "log", "--oneline", `${sinceSha}..HEAD`,
+    ], {
+      cwd: wtPath,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10_000,
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
 export function pruneWorktrees(repoPath: string): void {
   try {
     git(repoPath, "worktree", "prune");
