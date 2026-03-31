@@ -257,10 +257,10 @@ export function createPR(
   }
 }
 
-export function getCommitSummary(wtPath: string, since: string): string {
+export function getCommitSummary(wtPath: string): string {
   try {
     return execFileSync("git", [
-      "log", "--oneline", `--after=${since}`, "HEAD",
+      "log", "--oneline", "origin/main..HEAD",
     ], {
       cwd: wtPath,
       encoding: "utf-8",
