@@ -216,12 +216,20 @@ export function submitPRReview(
   prNumber: number,
   approve: boolean,
   body: string,
-): void {
+): boolean {
   const flag = approve ? "--approve" : "--request-changes";
   try {
     gh(repoPath, "pr", "review", String(prNumber), flag, "--body", body);
-  } catch {
-    // best effort — don't block the poller if review submission fails
+    return true;
+  } catch (err) {
+    log.warn("git", "PR review submission failed, falling back to comment", {
+      prNumber,
+      approve,
+      error: String(err),
+    });
+    const prefix = approve ? "[Review: APPROVE]" : "[Review: REQUEST_CHANGES]";
+    commentOnPR(repoPath, prNumber, `${prefix}\n\n${body}`);
+    return false;
   }
 }
 

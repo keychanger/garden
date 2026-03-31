@@ -82,7 +82,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   getChangedFiles: vi.fn(() => []),
   getPRDetails: vi.fn(() => null),
   getPRDiff: vi.fn(() => "diff --git a/file.ts b/file.ts"),
-  submitPRReview: vi.fn(),
+  submitPRReview: vi.fn(() => true),
   createPR: vi.fn(() => 99),
   getCommitSummary: vi.fn(() => "abc123 fix something"),
 }));

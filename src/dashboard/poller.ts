@@ -323,8 +323,8 @@ function handleReviewing(
     return;
   }
 
-  submitPRReview(projectPath, entry.prNumber, review.approved, review.body);
-  log.info("poller", "submitted PR review", {
+  const reviewSubmitted = submitPRReview(projectPath, entry.prNumber, review.approved, review.body);
+  log.info("poller", reviewSubmitted ? "submitted PR review" : "posted review as comment (formal review failed)", {
     worker: entry.name,
     prNumber: entry.prNumber,
     approved: review.approved,
