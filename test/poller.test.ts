@@ -4,6 +4,7 @@ import { execSync, execFileSync } from "node:child_process";
 vi.mock("node:child_process", () => ({
   execSync: vi.fn(() => ""),
   execFileSync: vi.fn(() => ""),
+  spawnSync: vi.fn(() => ({ status: 0, stdout: "APPROVE\nLooks good.", stderr: "" })),
 }));
 
 vi.mock("node:fs", () => ({
@@ -80,6 +81,12 @@ vi.mock("../src/dashboard/git.js", () => ({
   fastForwardMain: vi.fn(),
   getChangedFiles: vi.fn(() => []),
   getPRDetails: vi.fn(() => null),
+  getPRDiff: vi.fn(() => "diff --git a/file.ts b/file.ts"),
+  submitPRReview: vi.fn(),
+}));
+
+vi.mock("../src/rules.js", () => ({
+  buildRulesContext: vi.fn(() => "test rules"),
 }));
 
 vi.mock("../src/dashboard/create.js", () => ({
@@ -96,11 +103,12 @@ import { updateWorkerFields, getWorkers } from "../src/dashboard/registry.js";
 import {
   getBranchPR, getPRInfo, rebaseBranch, abortRebase,
   forcePushBranch, mergePR, commentOnPR,
-  getChangedFiles, getPRDetails,
+  getChangedFiles, getPRDetails, submitPRReview,
 } from "../src/dashboard/git.js";
 import { buildWorktreeWorkerCommand } from "../src/dashboard/create.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
 import { tmux, hasClaudeChild, getPanePid, windowExists } from "../src/dashboard/tmux.js";
+import { spawnSync } from "node:child_process";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 const registryMock = await import("../src/dashboard/registry.js") as {
@@ -202,7 +210,7 @@ describe("poll — open state, merge conflict", () => {
 });
 
 describe("poll — open state, successful merge", () => {
-  it("rebases, force-pushes, and merges", () => {
+  it("rebases, force-pushes, and transitions to reviewing", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "open", prNumber: 42 }),
     ]);
@@ -212,7 +220,24 @@ describe("poll — open state, successful merge", () => {
 
     expect(rebaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
     expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
+      prState: "reviewing",
+    });
+    // mergePR happens on the next cycle after review
+    expect(mergePR).not.toHaveBeenCalled();
+  });
+
+  it("merges after review approves on second poll cycle", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "open", prNumber: 42 }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue(true);
+
+    poll(); // open -> reviewing
+    poll(); // reviewing -> merged
+
     expect(mergePR).toHaveBeenCalledWith("/repo/myproject", 42);
+    expect(submitPRReview).toHaveBeenCalled();
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "merged",
       mergedAt: expect.any(String),
@@ -251,7 +276,7 @@ describe("poll — open state with checks", () => {
     });
   });
 
-  it("runs checks after rebase and merges when both pass", () => {
+  it("runs checks after rebase and transitions to reviewing when both pass", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "open", prNumber: 42 }),
     ]);
@@ -270,7 +295,82 @@ describe("poll — open state with checks", () => {
       expect.objectContaining({ cwd: "/tmp/wt/myproject/bold-ash" }),
     );
     expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
+      prState: "reviewing",
+    });
+  });
+});
+
+describe("poll — reviewing state", () => {
+  it("merges when review approves", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", prNumber: 42 }),
+    ]);
+    vi.mocked(spawnSync).mockReturnValue({
+      status: 0, stdout: "APPROVE\nLooks good.", stderr: "",
+    } as never);
+
+    poll();
+
+    expect(submitPRReview).toHaveBeenCalledWith("/repo/myproject", 42, true, "Looks good.");
     expect(mergePR).toHaveBeenCalledWith("/repo/myproject", 42);
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
+      prState: "merged",
+      mergedAt: expect.any(String),
+    });
+  });
+
+  it("transitions to failing when review requests changes", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", prNumber: 42 }),
+    ]);
+    vi.mocked(spawnSync).mockReturnValue({
+      status: 0, stdout: "REQUEST_CHANGES\nMissing tests for new function.", stderr: "",
+    } as never);
+    vi.mocked(hasClaudeChild)
+      .mockReturnValueOnce(false)  // live-Claude guard in handleReviewing
+      .mockReturnValueOnce(true);  // notifyWorker
+
+    poll();
+
+    expect(submitPRReview).toHaveBeenCalledWith(
+      "/repo/myproject", 42, false, "Missing tests for new function.",
+    );
+    expect(mergePR).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
+      prState: "failing",
+      lastSeenSha: "abc123",
+      lastShaChangeAt: expect.any(String),
+    });
+  });
+
+  it("falls back to merge when review process fails", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", prNumber: 42 }),
+    ]);
+    vi.mocked(spawnSync).mockReturnValue({
+      status: 1, stdout: "", stderr: "claude not found",
+    } as never);
+
+    poll();
+
+    expect(submitPRReview).not.toHaveBeenCalled();
+    expect(mergePR).toHaveBeenCalledWith("/repo/myproject", 42);
+  });
+
+  it("resets to open when Claude becomes active during review", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", prNumber: 42 }),
+    ]);
+    vi.mocked(hasClaudeChild).mockReturnValue(true);
+
+    poll();
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
+      prState: "open",
+    });
+    expect(spawnSync).not.toHaveBeenCalled();
+    expect(mergePR).not.toHaveBeenCalled();
   });
 });
 
@@ -384,7 +484,8 @@ describe("poll — live-Claude guard", () => {
     ]);
     vi.mocked(hasClaudeChild).mockReturnValue(false);
 
-    poll();
+    poll(); // open -> reviewing
+    poll(); // reviewing -> merged
 
     expect(rebaseBranch).toHaveBeenCalled();
     expect(forcePushBranch).toHaveBeenCalled();
@@ -457,23 +558,28 @@ describe("poll — sibling merge notification", () => {
     vi.mocked(hasClaudeChild).mockReturnValue(false);
     vi.mocked(rebaseBranch).mockReturnValue(true);
 
-    // bold-ash merges, then we check sibling notification
-    // getChangedFiles returns overlapping files
-    vi.mocked(getChangedFiles)
-      .mockReturnValueOnce(["src/foo.ts", "src/bar.ts"]) // merged worker
-      .mockReturnValueOnce(["src/foo.ts", "src/baz.ts"]); // sibling
-
     vi.mocked(getPRDetails).mockReturnValue({
       title: "fix: normalize output",
       url: "https://github.com/org/repo/pull/42",
     });
 
+    poll(); // open -> reviewing
+
+    // Set up getChangedFiles for the review+merge+notification cycle:
+    // 1st call: runClaudeReview test file lookup
+    // 2nd call: notifySiblingWorkers — merged worker's files
+    // 3rd call: notifySiblingWorkers — sibling's files
+    vi.mocked(getChangedFiles)
+      .mockReturnValueOnce([])                            // review: test file lookup
+      .mockReturnValueOnce(["src/foo.ts", "src/bar.ts"])  // merged worker
+      .mockReturnValueOnce(["src/foo.ts", "src/baz.ts"]); // sibling
+
     // Claude alive in sibling for notification delivery
     vi.mocked(hasClaudeChild)
-      .mockReturnValueOnce(false) // bold-ash: live-Claude guard (let merge proceed)
-      .mockReturnValueOnce(true); // calm-bay: sibling notification (Claude alive)
+      .mockReturnValueOnce(false)  // bold-ash: live-Claude guard in handleReviewing
+      .mockReturnValueOnce(true);  // calm-bay: sibling notification (Claude alive)
 
-    poll();
+    poll(); // reviewing -> merged (with sibling notification)
 
     // Verify sibling was notified via send-keys
     expect(tmux).toHaveBeenCalledWith(
@@ -509,11 +615,14 @@ describe("poll — sibling merge notification", () => {
     vi.mocked(hasClaudeChild).mockReturnValue(false);
     vi.mocked(rebaseBranch).mockReturnValue(true);
 
+    poll(); // open -> reviewing
+
     vi.mocked(getChangedFiles)
+      .mockReturnValueOnce([])             // review: test file lookup
       .mockReturnValueOnce(["src/foo.ts"]) // merged worker
       .mockReturnValueOnce(["src/bar.ts"]); // sibling — no overlap
 
-    poll();
+    poll(); // reviewing -> merged
 
     // mergePR should be called (merge happens) but no sibling notification
     expect(mergePR).toHaveBeenCalled();
@@ -545,10 +654,6 @@ describe("poll — sibling merge notification", () => {
       }),
     ]);
 
-    vi.mocked(getChangedFiles)
-      .mockReturnValueOnce(["src/foo.ts"])
-      .mockReturnValueOnce(["src/foo.ts"]);
-
     vi.mocked(getPRDetails).mockReturnValue({
       title: "fix: something",
       url: "https://github.com/org/repo/pull/42",
@@ -558,7 +663,14 @@ describe("poll — sibling merge notification", () => {
     vi.mocked(hasClaudeChild).mockReturnValue(false);
     vi.mocked(rebaseBranch).mockReturnValue(true);
 
-    poll();
+    poll(); // open -> reviewing
+
+    vi.mocked(getChangedFiles)
+      .mockReturnValueOnce([])              // review: test file lookup
+      .mockReturnValueOnce(["src/foo.ts"])   // merged worker
+      .mockReturnValueOnce(["src/foo.ts"]);  // sibling — overlap
+
+    poll(); // reviewing -> merged (with sibling relaunch)
 
     // Should have relaunched with new session and set pending notification
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "calm-bay",
@@ -595,11 +707,18 @@ describe("poll — sibling merge notification", () => {
     vi.mocked(rebaseBranch).mockReturnValue(true);
     vi.mocked(getChangedFiles).mockReturnValue(["src/foo.ts"]);
 
-    poll();
+    poll(); // open -> reviewing
+    poll(); // reviewing -> merged
 
-    // getChangedFiles should only be called once (for the merged worker)
+    // getChangedFiles should only be called once (for the merged worker's sibling check)
     // not for calm-bay since it's in "merged" state
-    expect(getChangedFiles).toHaveBeenCalledTimes(1);
+    const changedFilesCalls = vi.mocked(getChangedFiles).mock.calls;
+    // One call from runClaudeReview (for test file lookup), one from notifySiblingWorkers
+    const siblingCalls = changedFilesCalls.filter(c => c[0] === "/tmp/wt/myproject/bold-ash");
+    expect(siblingCalls.length).toBeGreaterThanOrEqual(1);
+    // calm-bay should NOT have getChangedFiles called (it's merged)
+    const calmBayCalls = changedFilesCalls.filter(c => c[0] === "/tmp/wt/myproject/calm-bay");
+    expect(calmBayCalls).toHaveLength(0);
   });
 });
 

@@ -244,7 +244,10 @@ function attemptMerge(
       const truncated = stderr.slice(-500);
       const message = `Checks failed for PR #${entry.prNumber} after rebase:\n\n${truncated}\n\nFix the issues and push again.`;
       notifyWorker(projectName, entry, message);
-      prComment(projectPath, entry.prNumber, "Checks failed after rebase. Worker notified.");
+      const commentBody = truncated
+        ? `Checks failed after rebase. Worker \`${entry.name}\` notified.\n\n\`\`\`\n${truncated}\n\`\`\``
+        : `Checks failed after rebase. Worker \`${entry.name}\` notified.`;
+      prComment(projectPath, entry.prNumber, commentBody);
 
       const info = getPRInfo(projectPath, entry.prNumber);
       updateWorkerFields(projectName, entry.name, {
