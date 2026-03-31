@@ -101,20 +101,21 @@ A background poller (`_garden-pr-poller`) runs every 30 seconds in a hidden tmux
 
 **State machine per worker:**
 ```
-working -> open -> merging -> (cleanup)
-              |        |
-              v        v (conflict)
-           failing <---+
+working -> open -> merging -> reviewing -> (cleanup)
+              |        |          |
+              v        v          v (changes requested)
+           failing <---+----------+
               |
               v (new commits + 30s debounce)
             open (retry)
 ```
 
 1. **working**: Worker is active, no PR yet. Poller checks for PRs via `gh pr list`.
-2. **open**: PR detected. Transitions to merging (which runs checks after rebase). If another worker is already merging, waits until the next cycle.
-3. **merging**: Poller checks if Claude is actively running in the worktree — if so, skips this cycle to avoid corrupting the live session. Otherwise: fetches main, rebases, runs optional checks on the rebased code, force-pushes, and squash-merges. On conflict or check failure, the worker is notified and state moves to failing. On merge error, state resets to open for retry.
-4. **failing**: Checks failed or merge conflict. Poller watches for new commits via SHA tracking. After 30s of no new pushes, state transitions back to open for retry.
-5. **merged**: PR merged. Poller watches for new PRs or commits on the branch. If the worker continues with new commits, the poller rebases onto latest main before transitioning back to working.
+2. **open**: PR detected. Transitions to merging (which runs checks after rebase). If another worker is already merging or reviewing, waits until the next cycle.
+3. **merging**: Poller checks if Claude is actively running in the worktree — if so, skips this cycle to avoid corrupting the live session. Otherwise: fetches main, rebases, runs optional checks on the rebased code, and force-pushes the rebased branch. On conflict or check failure, the worker is notified and state moves to failing. On force-push failure, state resets to open for retry.
+4. **reviewing**: A Claude session reviews the PR diff against project rules via `claude -p`. Checks adherence to rules, test coverage, and doc coverage. If approved, submits an approving review via `gh pr review --approve` and proceeds to merge. If changes requested, submits via `gh pr review --request-changes`, notifies the worker, and transitions to failing. If the review process fails (Claude unavailable, timeout), proceeds with merge as a fallback.
+5. **failing**: Checks failed, merge conflict, or review requested changes. Poller watches for new commits via SHA tracking. After 30s of no new pushes, state transitions back to open for retry.
+6. **merged**: PR merged. Poller watches for new PRs or commits on the branch. If the worker continues with new commits, the poller rebases onto latest main before transitioning back to working.
 
 If a PR is closed or merged externally, the poller detects this and cleans up from any state.
 
@@ -137,10 +138,12 @@ Merges are serialized per project (one at a time). The merge sequence:
 3. Rebase the branch onto main
 4. Run checks (if configured) on the rebased code
 5. Force-push the rebased branch
-6. Merge via `gh pr merge --squash`
-7. Notify sibling workers with overlapping files (see below)
-8. Fast-forward local main
-9. Mark the worker as merged in the registry
+6. Review the PR diff via `claude -p` against project rules (next poll cycle)
+7. Submit review via `gh pr review` (approve or request changes)
+8. Merge via `gh pr merge --squash` (only if review approves or review process fails)
+9. Notify sibling workers with overlapping files (see below)
+10. Fast-forward local main
+11. Mark the worker as merged in the registry
 
 The worker and its worktree are not automatically cleaned up on merge. Cleanup happens only when the user kills the worker with `opt-x` or runs `garden reset`. This allows inspecting merged work before disposal.
 

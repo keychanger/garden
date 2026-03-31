@@ -207,6 +207,24 @@ export function getPRDetails(
   }
 }
 
+export function getPRDiff(repoPath: string, prNumber: number): string {
+  return gh(repoPath, "pr", "diff", String(prNumber));
+}
+
+export function submitPRReview(
+  repoPath: string,
+  prNumber: number,
+  approve: boolean,
+  body: string,
+): void {
+  const flag = approve ? "--approve" : "--request-changes";
+  try {
+    gh(repoPath, "pr", "review", String(prNumber), flag, "--body", body);
+  } catch {
+    // best effort — don't block the poller if review submission fails
+  }
+}
+
 export function pruneWorktrees(repoPath: string): void {
   try {
     git(repoPath, "worktree", "prune");
