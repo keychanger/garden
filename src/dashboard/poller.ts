@@ -356,9 +356,18 @@ function handleReviewing(
 
     finalizeMerge(projectName, projectPath, entry);
   } else {
-    // "failed" — reviewer couldn't fix the issues, fall back to worker
-    const message = `Review found issues that could not be auto-fixed:\n\n${review.body}\n\nFix the issues and push again.`;
-    notifyWorker(projectName, entry, message);
+    // "failed" — reviewer couldn't fix the issues
+    log.error("poller", "reviewer could not fix issues", {
+      worker: entry.name,
+      body: review.body,
+    });
+    addAlert({
+      level: "error",
+      source: "review",
+      project: projectName,
+      worker: entry.name,
+      message: `Reviewer could not fix issues for worker ${entry.name}: ${review.body.slice(0, 300)}`,
+    });
 
     const wtPath = entry.worktreePath ?? projectPath;
     const headSha = getBranchHeadSha(wtPath);

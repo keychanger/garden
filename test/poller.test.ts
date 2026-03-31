@@ -421,9 +421,17 @@ describe("poll — reviewing state", () => {
       lastSeenSha: "abc123",
       lastShaChangeAt: expect.any(String),
     });
-    // Worker should be notified
-    expect(tmux).toHaveBeenCalledWith(
-      "send-keys", "-t", "%5", "-l",
+    // Should add an alert, not notify the worker
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        source: "review",
+        worker: "bold-ash",
+      }),
+    );
+    // Worker should NOT be notified
+    expect(tmux).not.toHaveBeenCalledWith(
+      "send-keys", expect.anything(), expect.anything(), expect.anything(),
       expect.stringContaining("could not be auto-fixed"),
     );
   });
