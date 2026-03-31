@@ -64,6 +64,32 @@ describe("createWorktree", () => {
       expect.objectContaining({ cwd: "/repo" }),
     );
   });
+
+  it("installs npm dependencies when package.json exists", () => {
+    mockFs.existsSync.mockReturnValue(true);
+    createWorktree("/repo", "/tmp/wt/proj/worker", "swift-oak");
+    expect(mockExec).toHaveBeenCalledWith(
+      "npm",
+      ["install"],
+      expect.objectContaining({ cwd: "/tmp/wt/proj/worker", timeout: 120_000 }),
+    );
+  });
+
+  it("skips npm install when no package.json", () => {
+    mockFs.existsSync.mockReturnValue(false);
+    createWorktree("/repo", "/tmp/wt/proj/worker", "swift-oak");
+    const npmCalls = mockExec.mock.calls.filter(c => c[0] === "npm");
+    expect(npmCalls).toHaveLength(0);
+  });
+
+  it("does not throw when npm install fails", () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockExec.mockImplementation((cmd: string) => {
+      if (cmd === "npm") throw new Error("npm install failed");
+      return "";
+    });
+    expect(() => createWorktree("/repo", "/tmp/wt/proj/worker", "swift-oak")).not.toThrow();
+  });
 });
 
 describe("removeWorktree", () => {
