@@ -592,9 +592,19 @@ function finalizeMerge(
   refreshDashboard();
 }
 
+function getHeadCommit(projectPath: string): string {
+  try {
+    return execSync("git rev-parse --short HEAD", { cwd: projectPath, encoding: "utf-8" }).trim();
+  } catch {
+    return "unknown";
+  }
+}
+
 function runPostMerge(projectName: string, projectPath: string): void {
   const project = tryGetProject(projectName);
   if (!project?.postMerge) return;
+
+  const commit = getHeadCommit(projectPath);
 
   try {
     execSync(project.postMerge, {
@@ -602,11 +612,25 @@ function runPostMerge(projectName: string, projectPath: string): void {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 120_000,
     });
-    log.info("poller", "postMerge completed", { project: projectName });
+    if (projectName === "garden") {
+      log.info("poller", "garden rebuilt", { commit });
+    } else {
+      log.info("poller", "postMerge completed", { project: projectName, commit });
+    }
   } catch (err) {
-    log.warn("poller", "postMerge failed", {
+    const message = projectName === "garden"
+      ? `Garden rebuild failed at commit ${commit}: ${String(err).slice(0, 200)}`
+      : `postMerge failed at commit ${commit}: ${String(err).slice(0, 200)}`;
+    log.error("poller", "postMerge failed", {
       project: projectName,
+      commit,
       error: String(err),
+    });
+    addAlert({
+      level: "error",
+      source: "poller",
+      project: projectName,
+      message,
     });
   }
 }
