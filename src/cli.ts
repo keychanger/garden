@@ -25,10 +25,8 @@ const aliases: Record<string, string> = {
   unregister: "remove",
 };
 
-// Top-level shortcuts
-// garden exit → garden dashboard exit
-// garden restart → garden dashboard restart
-if (commandName === "exit" || commandName === "restart") {
+// Top-level shortcut: garden exit → garden dashboard exit
+if (commandName === "exit") {
   commandArgs.unshift(commandName);
   commandName = "dashboard";
 }
@@ -68,7 +66,6 @@ Development:
 Dashboard:
   dashboard                      Open the dashboard (creates if needed)
   dashboard exit, exit           Close the dashboard
-  dashboard restart, restart     Restart the dashboard
   keys                           Show dashboard keybindings
   status                         Show project and worker status
   health                         Check dashboard state consistency
