@@ -115,7 +115,7 @@ working -> open -> merging -> reviewing -> (cleanup)
 3. **merging**: Poller checks if Claude is actively running in the worktree — if so, skips this cycle to avoid corrupting the live session. Otherwise: fetches main, rebases, runs optional checks on the rebased code, and force-pushes the rebased branch. On conflict or check failure, the worker is notified and state moves to failing. On force-push failure, state resets to open for retry.
 4. **reviewing**: A Claude session reviews the PR diff against project rules via `claude -p`. Checks adherence to rules, test coverage, and doc coverage. If approved, submits an approving review via `gh pr review --approve` and proceeds to merge. If changes requested, submits via `gh pr review --request-changes`, notifies the worker, and transitions to failing. If the review process fails (Claude unavailable, timeout), proceeds with merge as a fallback.
 5. **failing**: Checks failed, merge conflict, or review requested changes. Poller watches for new commits via SHA tracking. After 30s of no new pushes, state transitions back to open for retry.
-6. **merged**: PR merged. Poller watches for new PRs or commits on the branch. If the worker continues with new commits, the poller rebases onto latest main before transitioning back to working.
+6. **merged**: PR merged. Poller watches for new PRs or commits on the branch. If the worker pushes new commits, the poller rebases onto main, force-pushes, and auto-creates a follow-up PR via `gh pr create`, transitioning directly to open. If rebase or PR creation fails, falls back to working.
 
 If a PR is closed or merged externally, the poller detects this and cleans up from any state.
 

@@ -225,6 +225,47 @@ export function submitPRReview(
   }
 }
 
+export function createPR(
+  repoPath: string,
+  branchName: string,
+  title: string,
+  body: string,
+): number | null {
+  try {
+    const result = gh(
+      repoPath,
+      "pr", "create",
+      "--head", branchName,
+      "--title", title,
+      "--body", body,
+      "--json", "number",
+    );
+    const data = JSON.parse(result);
+    return data.number ?? null;
+  } catch (err) {
+    log.warn("git", "failed to create PR", {
+      branchName,
+      error: String(err),
+    });
+    return null;
+  }
+}
+
+export function getCommitSummary(wtPath: string, since: string): string {
+  try {
+    return execFileSync("git", [
+      "log", "--oneline", `--after=${since}`, "HEAD",
+    ], {
+      cwd: wtPath,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10_000,
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
 export function pruneWorktrees(repoPath: string): void {
   try {
     git(repoPath, "worktree", "prune");

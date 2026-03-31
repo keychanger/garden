@@ -83,6 +83,8 @@ vi.mock("../src/dashboard/git.js", () => ({
   getPRDetails: vi.fn(() => null),
   getPRDiff: vi.fn(() => "diff --git a/file.ts b/file.ts"),
   submitPRReview: vi.fn(),
+  createPR: vi.fn(() => 99),
+  getCommitSummary: vi.fn(() => "abc123 fix something"),
 }));
 
 vi.mock("../src/rules.js", () => ({
@@ -104,6 +106,7 @@ import {
   getBranchPR, getPRInfo, rebaseBranch, abortRebase,
   forcePushBranch, mergePR, commentOnPR,
   getChangedFiles, getPRDetails, submitPRReview,
+  createPR,
 } from "../src/dashboard/git.js";
 import { buildWorktreeWorkerCommand } from "../src/dashboard/create.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
@@ -494,7 +497,7 @@ describe("poll — live-Claude guard", () => {
 });
 
 describe("poll — merged state with new commits", () => {
-  it("rebases onto main when resuming after merge", () => {
+  it("rebases, force-pushes, and auto-creates follow-up PR", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merged",
@@ -502,19 +505,26 @@ describe("poll — merged state with new commits", () => {
         mergedAt: new Date(Date.now() - 60_000).toISOString(),
       }),
     ]);
-    // Simulate new commits after merge
     vi.mocked(execFileSync).mockReturnValue("1" as never);
     vi.mocked(rebaseBranch).mockReturnValue(true);
+    vi.mocked(createPR).mockReturnValue(99);
 
     poll();
 
     expect(rebaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(createPR).toHaveBeenCalledWith(
+      "/repo/myproject",
+      "bold-ash",
+      expect.stringContaining("continued"),
+      expect.stringContaining("follow-up"),
+    );
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
-      expect.objectContaining({ prState: "working" }),
+      expect.objectContaining({ prState: "open", prNumber: 99 }),
     );
   });
 
-  it("still transitions to working if rebase fails", () => {
+  it("falls back to working if rebase fails", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merged",
@@ -528,6 +538,28 @@ describe("poll — merged state with new commits", () => {
     poll();
 
     expect(abortRebase).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(createPR).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "working" }),
+    );
+  });
+
+  it("falls back to working if PR creation fails", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merged",
+        prNumber: 42,
+        mergedAt: new Date(Date.now() - 60_000).toISOString(),
+      }),
+    ]);
+    vi.mocked(execFileSync).mockReturnValue("1" as never);
+    vi.mocked(rebaseBranch).mockReturnValue(true);
+    vi.mocked(createPR).mockReturnValue(null);
+
+    poll();
+
+    expect(forcePushBranch).toHaveBeenCalled();
+    expect(createPR).toHaveBeenCalled();
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "working" }),
     );

@@ -17,6 +17,7 @@ import {
   getBranchPR, getPRInfo, rebaseBranch, abortRebase,
   forcePushBranch, mergePR, commentOnPR, fastForwardMain,
   getChangedFiles, getPRDetails, getPRDiff, submitPRReview,
+  createPR, getCommitSummary,
 } from "./git.js";
 import { buildWorktreeWorkerCommand } from "./create.js";
 import { refreshDashboard } from "./header.js";
@@ -601,13 +602,13 @@ function handleMerged(
 
       if (parseInt(newCommits, 10) > 0) {
         const prevCount = entry.mergeCount ?? 0;
-        log.info("poller", "new commits after merge, resuming", {
+        log.info("poller", "new commits after merge", {
           worker: entry.name,
           newCommits,
           mergeCount: prevCount + 1,
         });
 
-        // Rebase onto latest main so continued work starts from the tip
+        // Rebase onto latest main so the new commits sit on top
         try {
           execFileSync("git", ["fetch", "origin", "main"], {
             cwd: entry.worktreePath,
@@ -620,14 +621,60 @@ function handleMerged(
             worker: entry.name,
           });
           abortRebase(entry.worktreePath);
+          updateWorkerFields(projectName, entry.name, {
+            prState: "working",
+            prNumber: undefined,
+            mergeCount: prevCount + 1,
+            mergedAt: undefined,
+          });
+          refreshDashboard();
+          return;
         }
 
-        updateWorkerFields(projectName, entry.name, {
-          prState: "working",
-          prNumber: undefined,
-          mergeCount: prevCount + 1,
-          mergedAt: undefined,
-        });
+        // Force-push the rebased branch and open a new PR
+        try {
+          forcePushBranch(entry.worktreePath);
+        } catch (err) {
+          log.warn("poller", "force-push failed after merge resume", {
+            worker: entry.name,
+            error: String(err),
+          });
+          updateWorkerFields(projectName, entry.name, {
+            prState: "working",
+            prNumber: undefined,
+            mergeCount: prevCount + 1,
+            mergedAt: undefined,
+          });
+          refreshDashboard();
+          return;
+        }
+
+        const commitLog = getCommitSummary(entry.worktreePath, entry.mergedAt);
+        const title = `${branchName} (continued)`;
+        const body = `Automated follow-up PR for worker \`${entry.name}\`.\n\n` +
+          `Previous PR was merged. New commits:\n\`\`\`\n${commitLog || "(commits)"}\n\`\`\``;
+
+        const newPrNumber = createPR(projectPath, branchName, title, body);
+        if (newPrNumber) {
+          log.info("poller", "auto-created follow-up PR", {
+            worker: entry.name,
+            prNumber: newPrNumber,
+          });
+          updateWorkerFields(projectName, entry.name, {
+            prNumber: newPrNumber,
+            prState: "open",
+            mergeCount: prevCount + 1,
+            mergedAt: undefined,
+          });
+        } else {
+          // Fall back to working state if PR creation fails
+          updateWorkerFields(projectName, entry.name, {
+            prState: "working",
+            prNumber: undefined,
+            mergeCount: prevCount + 1,
+            mergedAt: undefined,
+          });
+        }
         refreshDashboard();
       }
     } catch {
