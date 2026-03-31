@@ -323,8 +323,15 @@ function handleReviewing(
     return;
   }
 
-  const reviewSubmitted = submitPRReview(projectPath, entry.prNumber, review.approved, review.body);
-  log.info("poller", reviewSubmitted ? "submitted PR review" : "posted review as comment (formal review failed)", {
+  // Attempt formal GitHub review (may fail for self-PRs)
+  submitPRReview(projectPath, entry.prNumber, review.approved, review.body);
+
+  // Always post a formatted review comment so the review is visible
+  const verdict = review.approved ? "Approved" : "Changes requested";
+  const reviewComment = `**Review: ${verdict}**\n\n${review.body}`;
+  prComment(projectPath, entry.prNumber, reviewComment);
+
+  log.info("poller", "posted review", {
     worker: entry.name,
     prNumber: entry.prNumber,
     approved: review.approved,
@@ -335,11 +342,11 @@ function handleReviewing(
   } else {
     const message = `PR review requested changes for #${entry.prNumber}:\n\n${review.body}\n\nFix the issues and push again.`;
     const delivered = notifyWorker(projectName, entry, message);
-    prComment(projectPath, entry.prNumber,
-      delivered
-        ? `Review requested changes. Worker \`${entry.name}\` notified.`
-        : `Review requested changes. Worker \`${entry.name}\` was not reachable; notification stored for next delivery.`,
-    );
+    if (!delivered) {
+      log.info("poller", "worker not reachable, notification stored", {
+        worker: entry.name,
+      });
+    }
 
     const info = getPRInfo(projectPath, entry.prNumber);
     updateWorkerFields(projectName, entry.name, {
