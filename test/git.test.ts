@@ -218,11 +218,11 @@ describe("forcePushBranch", () => {
 });
 
 describe("mergePR", () => {
-  it("calls gh pr merge with squash", () => {
+  it("calls gh pr merge", () => {
     mergePR("/repo", 42);
     expect(mockExec).toHaveBeenCalledWith(
       "gh",
-      ["pr", "merge", "42", "--squash"],
+      ["pr", "merge", "42", "--merge"],
       expect.objectContaining({ cwd: "/repo" }),
     );
   });

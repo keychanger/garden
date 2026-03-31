@@ -153,7 +153,7 @@ Merges are serialized per project (one at a time). The merge sequence:
 5. Force-push the rebased branch
 6. Review the PR diff via `claude -p` against project rules (next poll cycle)
 7. Submit review via `gh pr review` (approve or request changes)
-8. Merge via `gh pr merge --squash` (only if review approves)
+8. Merge via `gh pr merge --merge` (only if review approves)
 9. Notify sibling workers with overlapping files (see below)
 10. Fast-forward local main
 11. Run postMerge command (if configured) on the main checkout
