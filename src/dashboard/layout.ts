@@ -75,3 +75,72 @@ export function swapToHidden(parkWindowName: string, restoreWindowName: string, 
   parkToHidden(parkWindowName, state);
   restoreFromHidden(restoreWindowName, state);
 }
+
+/**
+ * Park the garden pane's content into a hidden window.
+ * After this, the garden slot contains a temporary empty shell.
+ */
+export function gardenParkToHidden(windowName: string, state: DashboardState): string | null {
+  if (!state.gardenShellPaneId || !paneExists(state.gardenShellPaneId)) {
+    log.warn("layout", "gardenParkToHidden: garden pane missing or dead", {
+      gardenShellPaneId: state.gardenShellPaneId,
+      windowName,
+    });
+    return null;
+  }
+
+  if (windowExists(windowName)) {
+    killWindowSafe(windowName);
+  }
+
+  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName);
+  const tempPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
+  if (!tempPaneId) {
+    log.error("layout", "gardenParkToHidden: failed to get pane ID for new window", { windowName });
+    return null;
+  }
+
+  tmux("swap-pane", "-s", state.gardenShellPaneId, "-t", tempPaneId);
+  log.debug("layout", "gardenParkToHidden", {
+    windowName,
+    from: state.gardenShellPaneId,
+    to: tempPaneId,
+  });
+  state.gardenShellPaneId = tempPaneId;
+  state.gardenPaneType = null;
+  state.gardenWindowName = null;
+  return tempPaneId;
+}
+
+/**
+ * Restore content from a hidden window into the garden slot.
+ * The hidden window is killed afterward.
+ */
+export function gardenRestoreFromHidden(windowName: string, state: DashboardState): void {
+  const targetPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
+  if (!targetPaneId || !state.gardenShellPaneId) {
+    log.warn("layout", "gardenRestoreFromHidden: missing pane", {
+      windowName,
+      targetPaneId,
+      gardenShellPaneId: state.gardenShellPaneId,
+    });
+    return;
+  }
+
+  tmux("swap-pane", "-s", state.gardenShellPaneId, "-t", targetPaneId);
+  killWindowSafe(windowName);
+  log.debug("layout", "gardenRestoreFromHidden", {
+    windowName,
+    from: state.gardenShellPaneId,
+    to: targetPaneId,
+  });
+  state.gardenShellPaneId = targetPaneId;
+}
+
+/**
+ * Park current garden content and restore from another hidden window in one step.
+ */
+export function gardenSwapToHidden(parkWindowName: string, restoreWindowName: string, state: DashboardState): void {
+  gardenParkToHidden(parkWindowName, state);
+  gardenRestoreFromHidden(restoreWindowName, state);
+}

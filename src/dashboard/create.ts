@@ -105,6 +105,8 @@ export function ensureDashboard(): void {
     activeProject: string | null;
     statusPaneId: string;
     gardenShellPaneId: string;
+    gardenPaneType: "shell" | "logs" | null;
+    gardenWindowName: string | null;
     activePaneId: string;
     activePaneType: "worker" | "shell" | null;
     activeWindowName: string | null;
@@ -112,6 +114,8 @@ export function ensureDashboard(): void {
     activeProject: firstProject,
     statusPaneId: statusId,
     gardenShellPaneId: gardenShellId,
+    gardenPaneType: "shell",
+    gardenWindowName: null,
     activePaneId: rightPaneId,
     activePaneType: firstProject ? "shell" : null,
     activeWindowName: firstProject ? `_${firstProject}-shell` : null,
@@ -174,6 +178,61 @@ export function ensureDashboard(): void {
     tmux("select-pane", "-t", state.activePaneId);
   } else {
     tmux("select-pane", "-t", gardenShellId);
+  }
+}
+
+export function createLogsWindow(): void {
+  const windowName = "_garden-logs";
+  const alertsFile = path.join(SESSIONS_DIR, "dashboard.alerts.json");
+  const logFile = path.join(SESSIONS_DIR, "dashboard.log");
+
+  // Shell loop: show alerts then tail the log, refresh every 10s
+  const cmd = [
+    `while true; do`,
+    `  clear`,
+    `  echo "=== Alerts ==="`,
+    `  echo ""`,
+    `  if [ -f '${alertsFile}' ]; then`,
+    `    node -e "`,
+    `      const d = JSON.parse(require('fs').readFileSync('${alertsFile}','utf-8'));`,
+    `      if (!d.alerts || !d.alerts.length) { console.log('  (none)'); }`,
+    `      else { d.alerts.slice(-20).forEach(a => {`,
+    `        const t = a.ts.replace('T',' ').replace(/\\\\..*/,'');`,
+    `        console.log('  [' + a.level.toUpperCase() + '] ' + t + ' ' + a.project + (a.worker ? '/' + a.worker : '') + ': ' + a.message);`,
+    `      }); }`,
+    `    "`,
+    `  else`,
+    `    echo "  (none)"`,
+    `  fi`,
+    `  echo ""`,
+    `  echo "=== Recent Log ==="`,
+    `  echo ""`,
+    `  if [ -f '${logFile}' ]; then`,
+    `    tail -30 '${logFile}' | node -e "`,
+    `      const lines = require('fs').readFileSync('/dev/stdin','utf-8').trim().split('\\\\n');`,
+    `      lines.forEach(l => {`,
+    `        try {`,
+    `          const e = JSON.parse(l);`,
+    `          const t = e.ts.replace('T',' ').replace(/\\\\..*/,'');`,
+    `          const d = e.data ? ' ' + JSON.stringify(e.data) : '';`,
+    `          console.log('  ' + t + ' [' + e.level + '] ' + e.src + ': ' + e.msg + d);`,
+    `        } catch { console.log('  ' + l); }`,
+    `      });`,
+    `    "`,
+    `  else`,
+    `    echo "  (no log file)"`,
+    `  fi`,
+    `  sleep 10`,
+    `done`,
+  ].join(" ");
+
+  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName,
+    "sh", "-c", cmd);
+
+  const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
+  if (paneId) {
+    setPaneLabel(paneId, "logs");
+    setPaneTitle(paneId, "logs");
   }
 }
 

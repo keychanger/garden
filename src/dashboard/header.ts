@@ -185,7 +185,7 @@ function formatHeader(
   const alertTag = alerts && alerts > 0
     ? `  [${alerts} alert${alerts === 1 ? "" : "s"}]`
     : "";
-  const hints = "⌥n new | ⌥w worker | ⌥s shell | ⌥] next";
+  const hints = "⌥n new | ⌥w worker | ⌥s shell | ⌥l logs | ⌥] next";
   return `${info}${alertTag}  ${hints}`;
 }
 

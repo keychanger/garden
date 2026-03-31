@@ -3,14 +3,16 @@ import { loadConfig, getProject } from "../config.js";
 import { readDashState, writeDashState } from "./state.js";
 import { parkToHidden, swapToHidden } from "./layout.js";
 import { restoreFromHidden } from "./layout.js";
+import { gardenSwapToHidden, gardenRestoreFromHidden } from "./layout.js";
 import { refreshDashboard } from "./header.js";
 import {
   tmux, tmuxDisplay,
   paneExists, windowExists,
   listHiddenWorkerWindows,
+  setPaneLabel,
 } from "./tmux.js";
 import { log } from "./log.js";
-import { createShellWindow } from "./create.js";
+import { createShellWindow, createLogsWindow } from "./create.js";
 
 export function switchProject(indexArg: string): void {
   log.info("navigate", "switchProject", { index: indexArg });
@@ -117,8 +119,60 @@ export function focusShell(): void {
 
 export function focusGarden(): void {
   const state = readDashState();
+
+  if (state.gardenPaneType === "logs") {
+    const shellWindowName = "_garden-shell";
+    if (!windowExists(shellWindowName)) {
+      tmuxDisplay("Garden shell window missing.");
+      return;
+    }
+    gardenSwapToHidden("_garden-logs", shellWindowName, state);
+    state.gardenPaneType = "shell";
+    state.gardenWindowName = null;
+    writeDashState(state);
+    refreshDashboard();
+  }
+
   if (state.gardenShellPaneId && paneExists(state.gardenShellPaneId)) {
     tmux("select-pane", "-t", state.gardenShellPaneId);
+  }
+}
+
+export function focusLogs(): void {
+  const state = readDashState();
+
+  if (state.gardenPaneType === "logs") {
+    if (state.gardenShellPaneId && paneExists(state.gardenShellPaneId)) {
+      tmux("select-pane", "-t", state.gardenShellPaneId);
+    }
+    return;
+  }
+
+  const logsWindowName = "_garden-logs";
+  if (!windowExists(logsWindowName)) {
+    createLogsWindow();
+  }
+
+  // Park the garden shell to hidden, restore logs
+  const parkName = state.gardenWindowName ?? "_garden-shell";
+  gardenSwapToHidden(parkName, logsWindowName, state);
+  state.gardenPaneType = "logs";
+  state.gardenWindowName = "_garden-logs";
+  setPaneLabel(state.gardenShellPaneId!, "logs");
+  writeDashState(state);
+  refreshDashboard();
+
+  if (state.gardenShellPaneId && paneExists(state.gardenShellPaneId)) {
+    tmux("select-pane", "-t", state.gardenShellPaneId);
+  }
+}
+
+export function cycleGardenPane(): void {
+  const state = readDashState();
+  if (state.gardenPaneType === "logs") {
+    focusGarden();
+  } else {
+    focusLogs();
   }
 }
 

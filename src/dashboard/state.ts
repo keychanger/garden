@@ -6,9 +6,11 @@ import { log } from "./log.js";
 
 export interface DashboardState {
   activeProject: string | null;
-  // Left side (fixed)
+  // Left side — garden pane is swappable between shell and logs
   statusPaneId: string | null;
-  gardenShellPaneId: string | null;
+  gardenShellPaneId: string | null; // current pane ID in the garden slot (despite the name)
+  gardenPaneType: "shell" | "logs" | null;
+  gardenWindowName: string | null; // logical name for parking, e.g. "_garden-shell" or "_garden-logs"
   // Right side — activePaneId is the pane currently in the right slot
   activePaneId: string | null;
   activePaneType: "worker" | "shell" | null;
@@ -21,6 +23,8 @@ const DEFAULT_STATE: DashboardState = {
   activeProject: null,
   statusPaneId: null,
   gardenShellPaneId: null,
+  gardenPaneType: null,
+  gardenWindowName: null,
   activePaneId: null,
   activePaneType: null,
   activeWindowName: null,
@@ -29,7 +33,11 @@ const DEFAULT_STATE: DashboardState = {
 export function readDashState(): DashboardState {
   try {
     if (fs.existsSync(STATE_FILE)) {
-      return JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
+      const raw = JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
+      // Backfill new fields for state files from older versions
+      if (raw.gardenPaneType === undefined) raw.gardenPaneType = "shell";
+      if (raw.gardenWindowName === undefined) raw.gardenWindowName = null;
+      return raw;
     }
   } catch (err) {
     log.warn("state", "failed to read state file, using defaults", {

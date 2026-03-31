@@ -13,7 +13,7 @@ import { printHeader } from "./header.js";
 import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
 import { newWorker, killPane } from "./workers.js";
-import { switchProject, focusWorker, focusShell, focusGarden, cyclePane } from "./navigate.js";
+import { switchProject, focusWorker, focusShell, focusGarden, focusLogs, cyclePane } from "./navigate.js";
 import { poll, triggerPoll, stopPoller } from "./poller.js";
 
 export async function dashboard(args: string[]): Promise<void> {
@@ -43,6 +43,7 @@ export async function dashboard(args: string[]): Promise<void> {
   if (sub === "_focus-worker") return focusWorker();
   if (sub === "_focus-shell") return focusShell();
   if (sub === "_focus-garden") return focusGarden();
+  if (sub === "_focus-logs") return focusLogs();
   if (sub === "_cycle-pane") return cyclePane(args[1] === "prev" ? -1 : 1);
   if (sub === "_kill-pane") return killPane();
   if (sub === "_poll") {
@@ -88,6 +89,7 @@ Hotkeys (⌥ = Option/Alt, no prefix needed):
   ⌥] / ⌥[     Cycle between workers
   ⌥x           Kill current worker (shell is protected)
   ⌥g           Focus garden shell
+  ⌥l           Focus logs/alerts
 
 Setup:
   iTerm2: Profiles → Keys → Left Option key → "Esc+"
