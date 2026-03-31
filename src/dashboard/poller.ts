@@ -358,6 +358,21 @@ function runClaudeReview(
 
   const details = getPRDetails(projectPath, entry.prNumber);
   const rules = buildRulesContext(projectName, projectPath);
+  const wtPath = entry.worktreePath ?? projectPath;
+
+  // Include full content of changed doc files so the reviewer can assess quality
+  const changedFiles = getChangedFiles(wtPath);
+  const docSections: string[] = [];
+  for (const file of changedFiles) {
+    if (!file.endsWith(".md")) continue;
+    const fullPath = path.join(wtPath, file);
+    try {
+      const content = fs.readFileSync(fullPath, "utf-8");
+      docSections.push(`### ${file}\n\n${content}`);
+    } catch {
+      // file may have been deleted
+    }
+  }
 
   const prompt = [
     "Review this pull request diff against the project rules below.",
@@ -365,7 +380,9 @@ function runClaudeReview(
     "Check for:",
     "- Adherence to project rules (commit style, code patterns, scope discipline)",
     "- Test coverage for changed behavior",
-    "- Documentation updates for changed commands, flags, file layout, or architecture",
+    "- Documentation quality: if docs were changed, verify they are accurate, complete,",
+    "  and consistent with the code changes. If code changes affect commands, architecture,",
+    "  file layout, or conventions but no docs were updated, flag that.",
     "- Code quality issues, security concerns, or unnecessary complexity",
     "",
     `## PR #${entry.prNumber}: ${details?.title ?? "Unknown"}`,
@@ -379,6 +396,15 @@ function runClaudeReview(
     "```diff",
     diff,
     "```",
+    ...(docSections.length > 0 ? [
+      "",
+      "## Full Documentation Files (changed in this PR)",
+      "",
+      "Use these to assess whether documentation is accurate and complete,",
+      "not just whether it was updated.",
+      "",
+      ...docSections,
+    ] : []),
     "",
     "## Output Format",
     "",
