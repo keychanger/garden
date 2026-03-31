@@ -200,46 +200,44 @@ function writeLogsScript(): string {
   const logFile = path.join(SESSIONS_DIR, "dashboard.log");
   const scriptFile = path.join(SESSIONS_DIR, "logs-view.sh");
 
+  // Same pattern as the status pane: capture output to a variable,
+  // only redraw when content changes. Avoids flashing on every refresh.
   const script = `#!/bin/sh
-# Move cursor to top-left and clear screen without flashing
-refresh() {
-  printf '\\033[H\\033[2J'
-}
-
-refresh
+prev=""
+printf '\\033[H\\033[2J\\033[3J'
 while true; do
-  refresh
-  echo "=== Alerts ==="
-  echo ""
-  if [ -f '${alertsFile}' ]; then
-    node -e '
-      var d = JSON.parse(require("fs").readFileSync("${alertsFile}","utf-8"));
-      if (!d.alerts || !d.alerts.length) { console.log("  (none)"); }
+  cur=$(node -e '
+    var fs = require("fs");
+    var out = [];
+    out.push("=== Alerts ===");
+    out.push("");
+    try {
+      var d = JSON.parse(fs.readFileSync("${alertsFile}","utf-8"));
+      if (!d.alerts || !d.alerts.length) { out.push("  (none)"); }
       else { d.alerts.slice(-20).forEach(function(a) {
         var t = new Date(a.ts).toLocaleString();
-        console.log("  [" + a.level.toUpperCase() + "] " + t + " " + a.project + (a.worker ? "/" + a.worker : "") + ": " + a.message);
+        out.push("  [" + a.level.toUpperCase() + "] " + t + " " + a.project + (a.worker ? "/" + a.worker : "") + ": " + a.message);
       }); }
-    '
-  else
-    echo "  (none)"
-  fi
-  echo ""
-  echo "=== Recent Log ==="
-  echo ""
-  if [ -f '${logFile}' ]; then
-    tail -30 '${logFile}' | node -e '
-      var lines = require("fs").readFileSync("/dev/stdin","utf-8").trim().split("\\n");
+    } catch(x) { out.push("  (none)"); }
+    out.push("");
+    out.push("=== Recent Log ===");
+    out.push("");
+    try {
+      var lines = fs.readFileSync("${logFile}","utf-8").trim().split("\\n").slice(-30);
       lines.forEach(function(l) {
         try {
           var e = JSON.parse(l);
           var t = new Date(e.ts).toLocaleString();
           var d = e.data ? " " + JSON.stringify(e.data) : "";
-          console.log("  " + t + " [" + e.level + "] " + e.src + ": " + e.msg + d);
-        } catch(x) { console.log("  " + l); }
+          out.push("  " + t + " [" + e.level + "] " + e.src + ": " + e.msg + d);
+        } catch(x) { out.push("  " + l); }
       });
-    '
-  else
-    echo "  (no log file)"
+    } catch(x) { out.push("  (no log file)"); }
+    console.log(out.join("\\n"));
+  ' 2>/dev/null)
+  if [ "$cur" != "$prev" ]; then
+    printf '\\033[H\\033[2J\\033[3J%s\\n' "$cur"
+    prev="$cur"
   fi
   sleep 10
 done
