@@ -131,6 +131,18 @@ projects:
 
 The poller runs this command in the worker's worktree **after rebasing onto main**, so checks validate the combined state of the branch plus latest main. No checks configured means merge immediately after successful rebase.
 
+Projects can also define a `postMerge` command that runs on the main checkout after fast-forwarding:
+
+```yaml
+projects:
+  garden:
+    path: /Users/joshua/code/keychange/garden
+    checks: npx tsc --noEmit && npx vitest run
+    postMerge: npm run build
+```
+
+This is essential for projects like garden itself, where the poller runs the compiled CLI. Without a post-merge rebuild, the poller continues executing stale code even after merging fixes.
+
 ### Merge Handling
 Merges are serialized per project (one at a time). The merge sequence:
 1. Check if Claude is running in the worktree — if so, skip this cycle
@@ -143,7 +155,8 @@ Merges are serialized per project (one at a time). The merge sequence:
 8. Merge via `gh pr merge --squash` (only if review approves or review process fails)
 9. Notify sibling workers with overlapping files (see below)
 10. Fast-forward local main
-11. Mark the worker as merged in the registry
+11. Run postMerge command (if configured) on the main checkout
+12. Mark the worker as merged in the registry
 
 The worker and its worktree are not automatically cleaned up on merge. Cleanup happens only when the user kills the worker with `opt-x` or runs `garden reset`. This allows inspecting merged work before disposal.
 

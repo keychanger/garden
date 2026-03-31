@@ -238,16 +238,15 @@ export function createPR(
   body: string,
 ): number | null {
   try {
-    const result = gh(
+    const url = gh(
       repoPath,
       "pr", "create",
       "--head", branchName,
       "--title", title,
       "--body", body,
-      "--json", "number",
-    );
-    const data = JSON.parse(result);
-    return data.number ?? null;
+    ).trim();
+    const match = url.match(/\/pull\/(\d+)$/);
+    return match ? parseInt(match[1], 10) : null;
   } catch (err) {
     log.warn("git", "failed to create PR", {
       branchName,

@@ -13,6 +13,7 @@ export const SESSIONS_DIR = path.join(GARDEN_DIR, "sessions");
 export interface ProjectConfig {
   path: string;
   checks?: string;
+  postMerge?: string;
 }
 
 export interface GardenConfig {
