@@ -304,13 +304,60 @@ function handleReviewing(
 
   log.info("poller", "review complete", {
     worker: entry.name,
-    approved: review.approved,
+    verdict: review.verdict,
   });
 
-  if (review.approved) {
+  if (review.verdict === "clean" || review.verdict === "fixed") {
+    const wtPath = entry.worktreePath ?? projectPath;
+
+    // If reviewer made fixes, force-push and re-run checks
+    if (review.verdict === "fixed") {
+      try {
+        forcePushBranch(wtPath);
+      } catch (err) {
+        log.error("poller", "force-push after review fixes failed", {
+          worker: entry.name,
+          error: String(err),
+        });
+        updateWorkerFields(projectName, entry.name, { prState: "working" });
+        refreshDashboard();
+        return true;
+      }
+
+      const project = tryGetProject(projectName);
+      if (project?.checks) {
+        try {
+          execSync(project.checks, {
+            cwd: wtPath,
+            stdio: ["ignore", "pipe", "pipe"],
+            timeout: 300_000,
+          });
+          log.info("poller", "checks passed after review fixes", { worker: entry.name });
+        } catch (err: unknown) {
+          log.info("poller", "checks failed after review fixes", { worker: entry.name });
+          const stderr = (err as { stderr?: Buffer })?.stderr?.toString() ?? "";
+          const truncated = stderr.slice(-500);
+          const message = `Review fixes broke checks:\n\n${truncated}\n\nFix the issues and push again.`;
+          notifyWorker(projectName, entry, message);
+
+          const headSha = getBranchHeadSha(wtPath);
+          updateWorkerFields(projectName, entry.name, {
+            prState: "failing",
+            failCount: (entry.failCount ?? 0) + 1,
+            failingSha: headSha ?? undefined,
+            lastSeenSha: headSha ?? undefined,
+            lastShaChangeAt: new Date().toISOString(),
+          });
+          refreshDashboard();
+          return true;
+        }
+      }
+    }
+
     finalizeMerge(projectName, projectPath, entry);
   } else {
-    const message = `Review requested changes:\n\n${review.body}\n\nFix the issues and push again.`;
+    // "failed" — reviewer couldn't fix the issues, fall back to worker
+    const message = `Review found issues that could not be auto-fixed:\n\n${review.body}\n\nFix the issues and push again.`;
     notifyWorker(projectName, entry, message);
 
     const wtPath = entry.worktreePath ?? projectPath;
@@ -328,7 +375,7 @@ function handleReviewing(
 }
 
 interface ReviewResult {
-  approved: boolean;
+  verdict: "clean" | "fixed" | "failed";
   body: string;
 }
 
@@ -397,6 +444,11 @@ function runClaudeReview(
     "     happy path? Flag obvious gaps. Not every change needs a test change — only flag",
     "     tests that are actually wrong or insufficient for the behavior this diff changes.",
     "",
+    "If you find issues, fix them directly in the worktree. Edit files, update tests,",
+    "update docs as needed. Make focused, minimal fixes — do not refactor or improve code",
+    "beyond what the review requires. Commit your fixes with a clear message prefixed with",
+    '"review: " (e.g., "review: add missing tests for error handling").',
+    "",
     `## Branch: ${branchName}`,
     "",
     commitSummary ? `### Commits\n\n\`\`\`\n${commitSummary}\n\`\`\`` : "",
@@ -427,18 +479,17 @@ function runClaudeReview(
     "",
     "## Output Format",
     "",
-    "Your FIRST line must be exactly one of:",
-    "APPROVE",
-    "REQUEST_CHANGES",
-    "",
-    "Then provide your review comments explaining your decision.",
+    "Your LAST line of output must be exactly one of:",
+    "CLEAN — no issues found, code is ready to merge as-is",
+    "FIXED — issues were found and fixed in the worktree",
+    "FAILED — issues were found but could not be fixed (explain above)",
   ].join("\n");
 
   try {
-    const proc = spawnSync("claude", ["-p", "--verbose"], {
+    const proc = spawnSync("claude", ["-p", "--dangerously-skip-permissions"], {
       input: prompt,
       encoding: "utf-8",
-      timeout: 300_000,
+      timeout: 600_000,
       stdio: ["pipe", "pipe", "pipe"],
       cwd: entry.worktreePath ?? projectPath,
     });
@@ -453,20 +504,24 @@ function runClaudeReview(
     }
 
     const output = proc.stdout.trim();
-    const firstLine = output.split("\n")[0].trim().toUpperCase();
-    const body = output.split("\n").slice(1).join("\n").trim() || "No additional comments.";
+    const lines = output.split("\n");
+    const lastLine = lines[lines.length - 1].trim().toUpperCase();
+    const body = lines.slice(0, -1).join("\n").trim() || "No additional comments.";
 
-    if (firstLine === "APPROVE") {
-      return { approved: true, body };
+    if (lastLine === "CLEAN") {
+      return { verdict: "clean", body };
     }
-    if (firstLine === "REQUEST_CHANGES") {
-      return { approved: false, body };
+    if (lastLine === "FIXED") {
+      return { verdict: "fixed", body };
+    }
+    if (lastLine === "FAILED") {
+      return { verdict: "failed", body };
     }
 
     // Could not parse verdict — treat as failure so it surfaces for retry
     log.warn("poller", "could not parse review verdict", {
       worker: entry.name,
-      firstLine,
+      lastLine,
     });
     return null;
   } catch (err) {

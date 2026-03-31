@@ -4,7 +4,7 @@ import { execSync, execFileSync } from "node:child_process";
 vi.mock("node:child_process", () => ({
   execSync: vi.fn(() => ""),
   execFileSync: vi.fn(() => ""),
-  spawnSync: vi.fn(() => ({ status: 0, stdout: "APPROVE\nLooks good.", stderr: "" })),
+  spawnSync: vi.fn(() => ({ status: 0, stdout: "Looks good.\nCLEAN", stderr: "" })),
 }));
 
 vi.mock("node:fs", () => ({
@@ -148,7 +148,7 @@ beforeEach(() => {
   vi.mocked(getCommitSummary).mockReturnValue("abc123 fix something");
   vi.mocked(getNewCommitSummary).mockReturnValue("def456 address review feedback");
   vi.mocked(spawnSync).mockReturnValue({
-    status: 0, stdout: "APPROVE\nLooks good.", stderr: "",
+    status: 0, stdout: "Looks good.\nCLEAN", stderr: "",
   } as ReturnType<typeof spawnSync>);
   vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject", checks: undefined } as ReturnType<typeof tryGetProject>);
   vi.mocked(rebaseBranch).mockReturnValue(true);
@@ -331,12 +331,12 @@ describe("poll — working state with checks", () => {
 });
 
 describe("poll — reviewing state", () => {
-  it("merges when review approves", () => {
+  it("merges when review returns CLEAN", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "reviewing" }),
     ]);
     vi.mocked(spawnSync).mockReturnValue({
-      status: 0, stdout: "APPROVE\nLooks good.", stderr: "",
+      status: 0, stdout: "Looks good.\nCLEAN", stderr: "",
     } as never);
 
     poll();
@@ -349,14 +349,66 @@ describe("poll — reviewing state", () => {
     });
   });
 
-  it("transitions to failing when review requests changes", () => {
+  it("merges after fixing when review returns FIXED", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "reviewing" }),
     ]);
     vi.mocked(spawnSync).mockReturnValue({
-      status: 0, stdout: "REQUEST_CHANGES\nMissing tests for new function.", stderr: "",
+      status: 0, stdout: "Added missing tests.\nFIXED", stderr: "",
     } as never);
-    // Guard uses isClaudeWorking (default false); notification needs Claude alive
+
+    poll();
+
+    // Should force-push the fixes before merging
+    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(mergeToMain).toHaveBeenCalledWith("/repo/myproject", "bold-ash");
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
+      prState: "merged",
+      mergedAt: expect.any(String),
+      failCount: 0,
+    });
+  });
+
+  it("re-runs checks after reviewer fixes and transitions to failing if checks fail", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing" }),
+    ]);
+    vi.mocked(spawnSync).mockReturnValue({
+      status: 0, stdout: "Fixed docs.\nFIXED", stderr: "",
+    } as never);
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject",
+      checks: "npm test",
+    } as ReturnType<typeof tryGetProject>);
+    vi.mocked(execSync).mockImplementation(() => {
+      throw Object.assign(new Error("tests failed"), { stderr: Buffer.from("FAIL") });
+    });
+    vi.mocked(hasClaudeChild).mockReturnValue(true);
+
+    poll();
+
+    expect(forcePushBranch).toHaveBeenCalled();
+    expect(execSync).toHaveBeenCalledWith(
+      "npm test",
+      expect.objectContaining({ cwd: "/tmp/wt/myproject/bold-ash" }),
+    );
+    expect(mergeToMain).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
+      prState: "failing",
+      failCount: 1,
+      failingSha: "abc123",
+      lastSeenSha: "abc123",
+      lastShaChangeAt: expect.any(String),
+    });
+  });
+
+  it("transitions to failing when reviewer returns FAILED", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing" }),
+    ]);
+    vi.mocked(spawnSync).mockReturnValue({
+      status: 0, stdout: "Fundamental architecture issue.\nFAILED", stderr: "",
+    } as never);
     vi.mocked(hasClaudeChild).mockReturnValue(true);
 
     poll();
@@ -369,6 +421,11 @@ describe("poll — reviewing state", () => {
       lastSeenSha: "abc123",
       lastShaChangeAt: expect.any(String),
     });
+    // Worker should be notified
+    expect(tmux).toHaveBeenCalledWith(
+      "send-keys", "-t", "%5", "-l",
+      expect.stringContaining("could not be auto-fixed"),
+    );
   });
 
   it("transitions to failing and adds alert when review process fails", () => {
@@ -403,7 +460,7 @@ describe("poll — reviewing state", () => {
       makeWorker({ prState: "reviewing" }),
     ]);
     vi.mocked(spawnSync).mockReturnValue({
-      status: 0, stdout: "MAYBE\nNot sure about this one.", stderr: "",
+      status: 0, stdout: "Not sure about this one.\nMAYBE", stderr: "",
     } as never);
 
     poll();
@@ -801,7 +858,7 @@ describe("poll — alerts", () => {
       makeWorker({ prState: "reviewing" }),
     ]);
     vi.mocked(spawnSync).mockReturnValue({
-      status: 0, stdout: "APPROVE\nLooks good.", stderr: "",
+      status: 0, stdout: "Looks good.\nCLEAN", stderr: "",
     } as never);
     vi.mocked(mergeToMain).mockImplementation(() => { throw new Error("merge conflict"); });
 
@@ -880,7 +937,7 @@ describe("poll — alerts", () => {
       makeWorker({ prState: "reviewing", failCount: 2 }),
     ]);
     vi.mocked(spawnSync).mockReturnValue({
-      status: 0, stdout: "APPROVE\nLooks good.", stderr: "",
+      status: 0, stdout: "Looks good.\nCLEAN", stderr: "",
     } as never);
 
     poll();
@@ -890,12 +947,12 @@ describe("poll — alerts", () => {
     );
   });
 
-  it("increments failCount on review changes-requested", () => {
+  it("increments failCount when reviewer cannot fix issues", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "reviewing", failCount: 1 }),
     ]);
     vi.mocked(spawnSync).mockReturnValue({
-      status: 0, stdout: "REQUEST_CHANGES\nNeeds tests.", stderr: "",
+      status: 0, stdout: "Fundamental issue.\nFAILED", stderr: "",
     } as never);
     // Guard uses isClaudeWorking (default false); notification needs Claude alive
     vi.mocked(hasClaudeChild).mockReturnValue(true);

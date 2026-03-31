@@ -107,8 +107,8 @@ working -> reviewing -> merged
 ```
 
 1. **working**: Worker is active. Poller compares branch HEAD SHA against last-seen SHA. When new commits are detected, Claude is not actively working, and no other worker is reviewing, transitions to reviewing.
-2. **reviewing**: Poller fetches main, rebases the branch, runs optional checks on the rebased code, force-pushes the rebased branch, then runs a Claude review (`claude -p`) against the diff and project rules. If approved, merges to main via local `git merge --ff-only` and pushes. If changes requested, notifies the worker and transitions to failing. If the review process fails (Claude unavailable, timeout, unparseable output), transitions to failing and surfaces an alert. The review acts as a gate -- unreviewed code is never auto-merged.
-3. **failing**: Checks failed, merge conflict, review requested changes, or review process failure. Poller watches for new commits via SHA tracking. After 30s debounce with no new pushes, state transitions back to working for retry. Each failure increments a `failCount` on the worker entry; after 3 consecutive failures, an alert is surfaced. The count resets on successful merge.
+2. **reviewing**: Poller fetches main, rebases the branch, runs optional checks on the rebased code, force-pushes the rebased branch, then runs a Claude review (`claude -p --dangerously-skip-permissions`) against the diff and project rules. The reviewer has full tool access in the worktree. If the code is clean, merges to main. If the reviewer finds issues, it fixes them directly (editing files, updating tests/docs), commits the fixes, re-runs checks, and merges. If the reviewer cannot fix the issues, it notifies the original worker and transitions to failing. If the review process fails (Claude unavailable, timeout, unparseable output), transitions to failing and surfaces an alert. Unreviewed code is never auto-merged.
+3. **failing**: Checks failed, merge conflict, unfixable review issues, or review process failure. Poller watches for new commits via SHA tracking. After 30s debounce with no new pushes, state transitions back to working for retry. Each failure increments a `failCount` on the worker entry; after 3 consecutive failures, an alert is surfaced. The count resets on successful merge.
 4. **merged**: Code merged to main. If the worker pushes new commits after merge, the poller detects them and transitions back to working for a new review cycle.
 
 ### Checks Configuration
@@ -142,11 +142,12 @@ Merges are serialized per project (one at a time). The merge sequence:
 3. Rebase the branch onto main
 4. Run checks (if configured) on the rebased code
 5. Force-push the rebased branch
-6. Review the diff via `claude -p` against project rules
-7. If approved: merge to main via `git merge --ff-only` and push
-8. Notify sibling workers with overlapping files (see below)
-9. Run postMerge command (if configured) on the main checkout
-10. Mark the worker as merged in the registry
+6. Review the diff via `claude -p --dangerously-skip-permissions` against project rules
+7. If clean: merge to main via `git merge --ff-only` and push
+8. If issues found: reviewer fixes them directly, re-runs checks, then merges
+9. Notify sibling workers with overlapping files (see below)
+10. Run postMerge command (if configured) on the main checkout
+11. Mark the worker as merged in the registry
 
 The worker and its worktree are not automatically cleaned up on merge. Cleanup happens only when the user kills the worker with `opt-x` or runs `garden reset`. This allows inspecting merged work before disposal.
 

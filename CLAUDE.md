@@ -90,8 +90,8 @@ Every worker runs in its own git worktree, isolated from the main checkout and o
    - Detects new commits on worker branches via SHA comparison.
    - Skips review if Claude is actively running in the worktree (live-Claude guard).
    - Rebases onto main, then runs optional `checks` command (configured per project in `~/.garden/config.yml`) on the rebased code.
-   - Force-pushes and runs a Claude review (`claude -p`) of the diff against project rules, checking adherence, test coverage, and doc coverage.
-   - If review approves: merges to main via local `git merge --ff-only` and pushes. If review requests changes: notifies the worker via `tmux send-keys`. If review process fails: transitions to failing and surfaces an alert (unreviewed code is never auto-merged).
+   - Force-pushes and runs a Claude review (`claude -p --dangerously-skip-permissions`) of the diff against project rules, checking adherence, test coverage, and doc coverage. The reviewer has full tool access in the worktree.
+   - If code is clean: merges to main via local `git merge --ff-only` and pushes. If issues found: reviewer fixes them directly, re-runs checks, and merges. If reviewer cannot fix: notifies the worker via `tmux send-keys`. If review process fails: transitions to failing and surfaces an alert (unreviewed code is never auto-merged).
    - After merge, runs optional `postMerge` command (e.g., `npm run build` to rebuild the CLI).
    - Notifies sibling workers with overlapping files (relaunches dead sessions if needed).
    - Debounces commits (30s quiet period) before retrying.
