@@ -533,11 +533,31 @@ function finalizeMerge(
   notifySiblingWorkers(projectName, projectPath, entry);
 
   fastForwardMain(projectPath);
+  runPostMerge(projectName, projectPath);
   updateWorkerFields(projectName, entry.name, {
     prState: "merged",
     mergedAt: new Date().toISOString(),
   });
   refreshDashboard();
+}
+
+function runPostMerge(projectName: string, projectPath: string): void {
+  const project = tryGetProject(projectName);
+  if (!project?.postMerge) return;
+
+  try {
+    execSync(project.postMerge, {
+      cwd: projectPath,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 120_000,
+    });
+    log.info("poller", "postMerge completed", { project: projectName });
+  } catch (err) {
+    log.warn("poller", "postMerge failed", {
+      project: projectName,
+      error: String(err),
+    });
+  }
 }
 
 function handleFailing(
