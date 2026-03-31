@@ -18,7 +18,7 @@ import {
   getBranchPR, getPRInfo, rebaseBranch, abortRebase,
   forcePushBranch, mergePR, commentOnPR, fastForwardMain,
   getChangedFiles, getPRDetails, getPRDiff, submitPRReview,
-  createPR, getCommitSummary,
+  createPR, getCommitSummary, getNewCommitSummary,
 } from "./git.js";
 import { buildWorktreeWorkerCommand } from "./create.js";
 import { refreshDashboard } from "./header.js";
@@ -245,6 +245,7 @@ function attemptMerge(
     updateWorkerFields(projectName, entry.name, {
       prState: "failing",
       failCount: newFailCount,
+      failingSha: info?.headSha,
       lastSeenSha: info?.headSha,
       lastShaChangeAt: new Date().toISOString(),
     });
@@ -280,6 +281,7 @@ function attemptMerge(
       updateWorkerFields(projectName, entry.name, {
         prState: "failing",
         failCount: (entry.failCount ?? 0) + 1,
+        failingSha: info?.headSha,
         lastSeenSha: info?.headSha,
         lastShaChangeAt: new Date().toISOString(),
       });
@@ -356,6 +358,7 @@ function handleReviewing(
     updateWorkerFields(projectName, entry.name, {
       prState: "failing",
       failCount: (entry.failCount ?? 0) + 1,
+      failingSha: undefined,
       lastSeenSha: info?.headSha,
       lastShaChangeAt: new Date().toISOString(),
     });
@@ -392,6 +395,7 @@ function handleReviewing(
     updateWorkerFields(projectName, entry.name, {
       prState: "failing",
       failCount: (entry.failCount ?? 0) + 1,
+      failingSha: info?.headSha,
       lastSeenSha: info?.headSha,
       lastShaChangeAt: new Date().toISOString(),
     });
@@ -646,11 +650,26 @@ function handleFailing(
   if (!info) return false;
 
   if (info.headSha !== entry.lastSeenSha) {
-    // New commits, reset debounce
+    // New commits pushed — post a summary comment so the reviewer has context
+    const wtPath = entry.worktreePath ?? projectPath;
+    const commitLog = getNewCommitSummary(wtPath, entry.failingSha ?? entry.lastSeenSha);
+    if (commitLog) {
+      prComment(projectPath, entry.prNumber,
+        `Worker \`${entry.name}\` pushed new commits:\n\n\`\`\`\n${commitLog}\n\`\`\``);
+    }
+
     updateWorkerFields(projectName, entry.name, {
       lastSeenSha: info.headSha,
       lastShaChangeAt: new Date().toISOString(),
     });
+    return false;
+  }
+
+  // If failingSha is set, new commits are required before retrying.
+  // This prevents re-reviewing unchanged code after changes-requested,
+  // check failures, or rebase conflicts. Transient failures (review
+  // process errors) clear failingSha so debounce-only retry still works.
+  if (entry.failingSha && info.headSha === entry.failingSha) {
     return false;
   }
 
@@ -670,7 +689,10 @@ function handleFailing(
       });
     }
 
-    updateWorkerFields(projectName, entry.name, { prState: "open" });
+    updateWorkerFields(projectName, entry.name, {
+      prState: "open",
+      failingSha: undefined,
+    });
     return true;
   }
   return false;

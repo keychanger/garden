@@ -94,6 +94,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   submitPRReview: vi.fn(() => true),
   createPR: vi.fn(() => 99),
   getCommitSummary: vi.fn(() => "abc123 fix something"),
+  getNewCommitSummary: vi.fn(() => "def456 address review feedback"),
 }));
 
 vi.mock("../src/rules.js", () => ({
@@ -115,7 +116,7 @@ import {
   getBranchPR, getPRInfo, rebaseBranch, abortRebase,
   forcePushBranch, mergePR, commentOnPR,
   getChangedFiles, getPRDetails, submitPRReview,
-  createPR, getCommitSummary, getPRDiff,
+  createPR, getCommitSummary, getNewCommitSummary, getPRDiff,
 } from "../src/dashboard/git.js";
 import { buildWorktreeWorkerCommand } from "../src/dashboard/create.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
@@ -153,6 +154,7 @@ beforeEach(() => {
   vi.mocked(submitPRReview).mockReturnValue(true);
   vi.mocked(createPR).mockReturnValue(99);
   vi.mocked(getCommitSummary).mockReturnValue("abc123 fix something");
+  vi.mocked(getNewCommitSummary).mockReturnValue("def456 address review feedback");
   vi.mocked(spawnSync).mockReturnValue({
     status: 0, stdout: "APPROVE\nLooks good.", stderr: "",
   } as ReturnType<typeof spawnSync>);
@@ -211,6 +213,7 @@ describe("poll — open state, merge conflict", () => {
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "failing",
       failCount: 1,
+      failingSha: "abc123",
       lastSeenSha: "abc123",
       lastShaChangeAt: expect.any(String),
     });
@@ -298,6 +301,7 @@ describe("poll — open state with checks", () => {
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "failing",
       failCount: 1,
+      failingSha: "abc123",
       lastSeenSha: "abc123",
       lastShaChangeAt: expect.any(String),
     });
@@ -375,6 +379,7 @@ describe("poll — reviewing state", () => {
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "failing",
       failCount: 1,
+      failingSha: "abc123",
       lastSeenSha: "abc123",
       lastShaChangeAt: expect.any(String),
     });
@@ -445,11 +450,12 @@ describe("poll — reviewing state", () => {
 });
 
 describe("poll — failing state", () => {
-  it("resets debounce when SHA changes", () => {
+  it("resets debounce and posts commit summary when SHA changes", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "failing",
         prNumber: 42,
+        failingSha: "old-sha",
         lastSeenSha: "old-sha",
         lastShaChangeAt: new Date(Date.now() - 60_000).toISOString(),
       }),
@@ -458,13 +464,37 @@ describe("poll — failing state", () => {
 
     poll();
 
+    expect(getNewCommitSummary).toHaveBeenCalledWith(
+      "/tmp/wt/myproject/bold-ash", "old-sha",
+    );
+    expect(commentOnPR).toHaveBeenCalledWith(
+      "/repo/myproject", 42,
+      expect.stringContaining("pushed new commits"),
+    );
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       lastSeenSha: "new-sha",
       lastShaChangeAt: expect.any(String),
     });
   });
 
-  it("transitions back to open after debounce with same SHA", () => {
+  it("stays in failing after debounce when failingSha matches (requires new commits)", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "failing",
+        prNumber: 42,
+        failingSha: "abc123",
+        lastSeenSha: "abc123",
+        lastShaChangeAt: new Date(Date.now() - 60_000).toISOString(),
+      }),
+    ]);
+    vi.mocked(getPRInfo).mockReturnValue({ state: "OPEN", headSha: "abc123" });
+
+    poll();
+
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
+
+  it("transitions back to open after debounce for transient failures (no failingSha)", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "failing",
@@ -479,6 +509,7 @@ describe("poll — failing state", () => {
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "open",
+      failingSha: undefined,
     });
   });
 
@@ -497,6 +528,26 @@ describe("poll — failing state", () => {
 
     // Should not have updated prState since SHA is same and debounce hasn't elapsed
     expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
+
+  it("retries after new commits and debounce when failingSha is set", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "failing",
+        prNumber: 42,
+        failingSha: "old-sha",
+        lastSeenSha: "new-sha",
+        lastShaChangeAt: new Date(Date.now() - 60_000).toISOString(),
+      }),
+    ]);
+    vi.mocked(getPRInfo).mockReturnValue({ state: "OPEN", headSha: "new-sha" });
+
+    poll();
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
+      prState: "open",
+      failingSha: undefined,
+    });
   });
 });
 
@@ -914,6 +965,7 @@ describe("poll — alerts", () => {
     );
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "open",
+      failingSha: undefined,
     });
   });
 
