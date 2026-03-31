@@ -55,23 +55,10 @@ in `<project>/.garden/rules.md` can extend or override these.
 
 - Always work on a feature branch. Never commit directly to main.
 - Branch names: `<type>/<short-description>` (e.g., feat/task-remove, fix/worker-signal).
-- Open a pull request when work is complete. Do not merge your own PR.
-- PRs must have a clear title and description summarizing what changed and why.
+- Push your branch when work is complete. The poller handles review and merge.
 - Use conventional commit messages: feat:, fix:, refactor:, docs:, test:, chore:.
 - Make small, focused commits. One logical change per commit.
 - Commit messages describe why, not what. The diff shows what.
-
-## PR reviews
-
-When reviewing a PR:
-
-- Check out the PR branch and read the full diff.
-- Verify all tests pass.
-- Check compliance with these rules: scope discipline, code quality, no secrets,
-  no unnecessary dependencies, docs aligned with code.
-- Use `gh pr review` to approve or request changes.
-- If requesting changes, be specific. Say what to fix and where, not just what is wrong.
-- Do not merge — the author or a human merges.
 
 ## Error handling
 
