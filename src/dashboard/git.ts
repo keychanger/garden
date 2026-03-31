@@ -36,6 +36,7 @@ export function createWorktree(
   fs.mkdirSync(path.dirname(wtPath), { recursive: true });
   git(repoPath, "worktree", "add", wtPath, "-b", branchName);
   log.info("git", "created worktree", { wtPath, branchName });
+  installDeps(wtPath);
 }
 
 export function removeWorktree(repoPath: string, wtPath: string): void {
@@ -191,6 +192,23 @@ export function installPollTriggerHook(wtPath: string, _gardenRunner?: string): 
   fs.writeFileSync(hookPath, hookScript, { mode: 0o755 });
   git(wtPath, "config", "--local", "core.hooksPath", hooksDir);
   log.info("git", "installed poll trigger hook", { wtPath });
+}
+
+function installDeps(wtPath: string): void {
+  if (!fs.existsSync(path.join(wtPath, "package.json"))) return;
+  try {
+    execFileSync("npm", ["install"], {
+      cwd: wtPath,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 120_000,
+    });
+    log.info("git", "installed dependencies", { wtPath });
+  } catch (err) {
+    log.warn("git", "failed to install dependencies", {
+      wtPath,
+      error: String(err),
+    });
+  }
 }
 
 function git(cwd: string, ...args: string[]): string {
