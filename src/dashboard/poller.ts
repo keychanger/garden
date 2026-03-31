@@ -360,17 +360,30 @@ function runClaudeReview(
   const rules = buildRulesContext(projectName, projectPath);
   const wtPath = entry.worktreePath ?? projectPath;
 
-  // Include full content of changed doc files so the reviewer can assess quality
   const changedFiles = getChangedFiles(wtPath);
+
+  // Always include canonical docs so the reviewer can verify accuracy
   const docSections: string[] = [];
-  for (const file of changedFiles) {
-    if (!file.endsWith(".md")) continue;
-    const fullPath = path.join(wtPath, file);
+  for (const docFile of ["DESIGN.md", "CLAUDE.md"]) {
+    const fullPath = path.join(wtPath, docFile);
     try {
       const content = fs.readFileSync(fullPath, "utf-8");
-      docSections.push(`### ${file}\n\n${content}`);
+      docSections.push(`### ${docFile}\n\n${content}`);
     } catch {
-      // file may have been deleted
+      // file may not exist in this project
+    }
+  }
+
+  // Include test files that correspond to changed source files
+  const testSections: string[] = [];
+  for (const file of changedFiles) {
+    const basename = path.basename(file, path.extname(file));
+    const testFile = path.join(wtPath, "test", `${basename}.test.ts`);
+    try {
+      const content = fs.readFileSync(testFile, "utf-8");
+      testSections.push(`### test/${basename}.test.ts\n\n${content}`);
+    } catch {
+      // no corresponding test file
     }
   }
 
@@ -379,11 +392,19 @@ function runClaudeReview(
     "",
     "Check for:",
     "- Adherence to project rules (commit style, code patterns, scope discipline)",
-    "- Test coverage for changed behavior",
-    "- Documentation quality: if docs were changed, verify they are accurate, complete,",
-    "  and consistent with the code changes. If code changes affect commands, architecture,",
-    "  file layout, or conventions but no docs were updated, flag that.",
     "- Code quality issues, security concerns, or unnecessary complexity",
+    "- Documentation accuracy: read DESIGN.md and CLAUDE.md below. After applying this",
+    "  diff, are they still accurate and complete? Flag any claims that are now wrong,",
+    "  missing sections for new behavior, or stale descriptions. Not every PR needs a",
+    "  doc change — only flag docs that are actually inaccurate after this diff.",
+    "- Test quality: read the test files below. Check three things:",
+    "  1. Accuracy — do existing tests still assert correct behavior after this diff?",
+    "     Flag tests that now assert stale or wrong behavior.",
+    "  2. Coverage — are the new/changed code paths exercised by tests? Flag significant",
+    "     new logic (branching, error handling, state transitions) that has no test.",
+    "  3. Completeness — do the tests cover edge cases and failure modes, not just the",
+    "     happy path? Flag obvious gaps. Not every PR needs a test change — only flag",
+    "     tests that are actually wrong or insufficient for the behavior this diff changes.",
     "",
     `## PR #${entry.prNumber}: ${details?.title ?? "Unknown"}`,
     "",
@@ -396,14 +417,19 @@ function runClaudeReview(
     "```diff",
     diff,
     "```",
-    ...(docSections.length > 0 ? [
+    "",
+    "## Documentation (current state in the worktree)",
+    "",
+    "Verify these are still accurate after the diff above.",
+    "",
+    ...docSections,
+    ...(testSections.length > 0 ? [
       "",
-      "## Full Documentation Files (changed in this PR)",
+      "## Test Files (corresponding to changed source files)",
       "",
-      "Use these to assess whether documentation is accurate and complete,",
-      "not just whether it was updated.",
+      "Verify these still correctly cover the changed behavior.",
       "",
-      ...docSections,
+      ...testSections,
     ] : []),
     "",
     "## Output Format",
