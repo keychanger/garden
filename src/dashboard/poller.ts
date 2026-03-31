@@ -595,11 +595,22 @@ function handleMerged(
     return;
   }
 
-  // Check for new commits on branch since merge
+  // Check for commits on the branch that aren't on main.
+  // Using origin/main..HEAD instead of --after timestamp because the
+  // merge pipeline force-pushes during rebase, which can orphan commits
+  // that predate mergedAt but were never included in the squash merge.
   if (entry.mergedAt && entry.worktreePath) {
     try {
+      execFileSync("git", ["fetch", "origin", "main"], {
+        cwd: entry.worktreePath,
+        stdio: "ignore",
+        timeout: 30_000,
+      });
+    } catch { /* best effort */ }
+
+    try {
       const newCommits = execFileSync("git", [
-        "rev-list", "--count", "--after", entry.mergedAt, "HEAD",
+        "rev-list", "--count", "origin/main..HEAD",
       ], {
         cwd: entry.worktreePath,
         encoding: "utf-8",
@@ -609,19 +620,11 @@ function handleMerged(
 
       if (parseInt(newCommits, 10) > 0) {
         const prevCount = entry.mergeCount ?? 0;
-        log.info("poller", "new commits after merge", {
+        log.info("poller", "unmerged commits on branch", {
           worker: entry.name,
           newCommits,
           mergeCount: prevCount + 1,
         });
-
-        // Rebase onto latest main so the new commits sit on top
-        try {
-          execFileSync("git", ["fetch", "origin", "main"], {
-            cwd: entry.worktreePath,
-            stdio: "ignore",
-          });
-        } catch { /* best effort */ }
 
         if (!rebaseBranch(entry.worktreePath)) {
           log.warn("poller", "rebase failed on resume after merge", {
@@ -656,7 +659,7 @@ function handleMerged(
           return;
         }
 
-        const commitLog = getCommitSummary(entry.worktreePath, entry.mergedAt);
+        const commitLog = getCommitSummary(entry.worktreePath);
         const title = `${branchName} (continued)`;
         const body = `Automated follow-up PR for worker \`${entry.name}\`.\n\n` +
           `Previous PR was merged. New commits:\n\`\`\`\n${commitLog || "(commits)"}\n\`\`\``;
