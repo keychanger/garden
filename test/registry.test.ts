@@ -110,34 +110,34 @@ describe("updateWorkerFields", () => {
     updateWorkerFields("proj", "bold-ash", {
       worktreePath: "/tmp/wt",
       branchName: "bold-ash",
-      prNumber: 42,
+      prState: "reviewing",
     });
     const worker = getWorkers("proj")[0];
     expect(worker.worktreePath).toBe("/tmp/wt");
     expect(worker.branchName).toBe("bold-ash");
-    expect(worker.prNumber).toBe(42);
+    expect(worker.prState).toBe("reviewing");
   });
 
   it("preserves existing fields not in update", async () => {
     const { addWorker, updateWorkerFields, getWorkers } = await importRegistry();
     addWorker("proj", { name: "bold-ash", sessionId: "a", task: "original" });
-    updateWorkerFields("proj", "bold-ash", { prNumber: 10 });
+    updateWorkerFields("proj", "bold-ash", { prState: "merged" });
     const worker = getWorkers("proj")[0];
     expect(worker.task).toBe("original");
     expect(worker.sessionId).toBe("a");
-    expect(worker.prNumber).toBe(10);
+    expect(worker.prState).toBe("merged");
   });
 
   it("is a no-op for unknown worker", async () => {
     const { addWorker, updateWorkerFields, getWorkers } = await importRegistry();
     addWorker("proj", { name: "bold-ash", sessionId: "a", task: "" });
-    updateWorkerFields("proj", "nonexistent", { prNumber: 5 });
-    expect(getWorkers("proj")[0].prNumber).toBeUndefined();
+    updateWorkerFields("proj", "nonexistent", { prState: "merged" });
+    expect(getWorkers("proj")[0].prState).toBeUndefined();
   });
 
   it("is a no-op for unknown project", async () => {
     const { updateWorkerFields } = await importRegistry();
-    expect(() => updateWorkerFields("unknown", "any", { prNumber: 5 })).not.toThrow();
+    expect(() => updateWorkerFields("unknown", "any", { prState: "merged" })).not.toThrow();
   });
 
   it("can set role and parentWorker", async () => {

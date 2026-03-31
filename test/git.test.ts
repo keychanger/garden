@@ -24,14 +24,14 @@ import {
   removeWorktree,
   worktreeExists,
   deleteBranch,
-  getBranchPR,
-  isPRMerged,
+  getBranchHeadSha,
+  getDiffAgainstMain,
+  mergeToMain,
+  deleteRemoteBranch,
   rebaseBranch,
   abortRebase,
   forcePushBranch,
-  mergePR,
   getChangedFiles,
-  getPRDetails,
   pruneWorktrees,
 } from "../src/dashboard/git.js";
 
@@ -115,51 +115,77 @@ describe("deleteBranch", () => {
   });
 });
 
-describe("getBranchPR", () => {
-  it("returns PR number when found", () => {
-    mockExec.mockReturnValue(JSON.stringify([{ number: 42 }]));
-    expect(getBranchPR("/repo", "swift-oak")).toBe(42);
-  });
-
-  it("returns null when no PRs", () => {
-    mockExec.mockReturnValue("[]");
-    expect(getBranchPR("/repo", "swift-oak")).toBeNull();
+describe("getBranchHeadSha", () => {
+  it("returns HEAD sha", () => {
+    mockExec.mockReturnValue("abc123def");
+    expect(getBranchHeadSha("/tmp/wt")).toBe("abc123def");
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["rev-parse", "HEAD"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
   });
 
   it("returns null on error", () => {
     mockExec.mockImplementation(() => {
-      throw new Error("gh failed");
+      throw new Error("not a git repo");
     });
-    expect(getBranchPR("/repo", "swift-oak")).toBeNull();
-  });
-
-  it("calls gh with correct args", () => {
-    mockExec.mockReturnValue("[]");
-    getBranchPR("/repo", "swift-oak");
-    expect(mockExec).toHaveBeenCalledWith(
-      "gh",
-      ["pr", "list", "--head", "swift-oak", "--json", "number", "--limit", "1"],
-      expect.objectContaining({ cwd: "/repo" }),
-    );
+    expect(getBranchHeadSha("/tmp/wt")).toBeNull();
   });
 });
 
-describe("isPRMerged", () => {
-  it("returns true when state is MERGED", () => {
-    mockExec.mockReturnValue(JSON.stringify({ state: "MERGED" }));
-    expect(isPRMerged("/repo", 42)).toBe(true);
+describe("getDiffAgainstMain", () => {
+  it("returns diff output", () => {
+    mockExec.mockReturnValue("diff --git a/file.ts b/file.ts\n+new line");
+    expect(getDiffAgainstMain("/tmp/wt")).toBe("diff --git a/file.ts b/file.ts\n+new line");
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["diff", "origin/main...HEAD"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
   });
 
-  it("returns false when state is OPEN", () => {
-    mockExec.mockReturnValue(JSON.stringify({ state: "OPEN" }));
-    expect(isPRMerged("/repo", 42)).toBe(false);
-  });
-
-  it("returns false on error", () => {
+  it("throws on error", () => {
     mockExec.mockImplementation(() => {
-      throw new Error("not found");
+      throw new Error("not a git repo");
     });
-    expect(isPRMerged("/repo", 42)).toBe(false);
+    expect(() => getDiffAgainstMain("/tmp/wt")).toThrow();
+  });
+});
+
+describe("mergeToMain", () => {
+  it("fetches, checks out main, merges, and pushes", () => {
+    mergeToMain("/repo", "swift-oak");
+    const calls = mockExec.mock.calls;
+    expect(calls[0]).toEqual(["git", ["fetch", "origin"], expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[1]).toEqual(["git", ["checkout", "main"], expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[2]).toEqual(["git", ["merge", "--ff-only", "origin/swift-oak"], expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[3]).toEqual(["git", ["push", "origin", "main"], expect.objectContaining({ cwd: "/repo" })]);
+  });
+
+  it("throws on failure", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("merge failed");
+    });
+    expect(() => mergeToMain("/repo", "swift-oak")).toThrow();
+  });
+});
+
+describe("deleteRemoteBranch", () => {
+  it("calls git push origin --delete", () => {
+    deleteRemoteBranch("/repo", "swift-oak");
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["push", "origin", "--delete", "swift-oak"],
+      expect.objectContaining({ cwd: "/repo" }),
+    );
+  });
+
+  it("does not throw on failure", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("branch not found");
+    });
+    expect(() => deleteRemoteBranch("/repo", "swift-oak")).not.toThrow();
   });
 });
 
@@ -217,24 +243,6 @@ describe("forcePushBranch", () => {
   });
 });
 
-describe("mergePR", () => {
-  it("calls gh pr merge", () => {
-    mergePR("/repo", 42);
-    expect(mockExec).toHaveBeenCalledWith(
-      "gh",
-      ["pr", "merge", "42", "--merge"],
-      expect.objectContaining({ cwd: "/repo" }),
-    );
-  });
-
-  it("throws on failure", () => {
-    mockExec.mockImplementation(() => {
-      throw new Error("merge failed");
-    });
-    expect(() => mergePR("/repo", 42)).toThrow();
-  });
-});
-
 describe("getChangedFiles", () => {
   it("returns list of changed files", () => {
     mockExec.mockReturnValue("src/foo.ts\nsrc/bar.ts\n");
@@ -256,31 +264,6 @@ describe("getChangedFiles", () => {
       throw new Error("not a git repo");
     });
     expect(getChangedFiles("/tmp/wt")).toEqual([]);
-  });
-});
-
-describe("getPRDetails", () => {
-  it("returns title and url", () => {
-    mockExec.mockReturnValue(JSON.stringify({
-      title: "fix: normalize output",
-      url: "https://github.com/org/repo/pull/42",
-    }));
-    expect(getPRDetails("/repo", 42)).toEqual({
-      title: "fix: normalize output",
-      url: "https://github.com/org/repo/pull/42",
-    });
-    expect(mockExec).toHaveBeenCalledWith(
-      "gh",
-      ["pr", "view", "42", "--json", "title,url"],
-      expect.objectContaining({ cwd: "/repo" }),
-    );
-  });
-
-  it("returns null on error", () => {
-    mockExec.mockImplementation(() => {
-      throw new Error("not found");
-    });
-    expect(getPRDetails("/repo", 42)).toBeNull();
   });
 });
 

@@ -59,7 +59,6 @@ describe("addAlert", () => {
       source: "review",
       project: "myproject",
       worker: "bold-ash",
-      prNumber: 42,
       message: "Review failed",
     });
 

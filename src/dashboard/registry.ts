@@ -10,7 +10,6 @@ export interface WorkerEntry {
   task: string;       // last known task summary from pane title
   worktreePath?: string;
   branchName?: string;
-  prNumber?: number;
   prState?: string;
   mergeCount?: number;
   lastSeenSha?: string;

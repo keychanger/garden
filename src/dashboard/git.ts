@@ -1,4 +1,4 @@
-// Git and GitHub CLI operations for worktree-based workers.
+// Git operations for worktree-based workers.
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
@@ -70,47 +70,16 @@ export function deleteBranch(repoPath: string, branchName: string): void {
   }
 }
 
-export function getBranchPR(
-  repoPath: string,
-  branchName: string,
-): number | null {
+export function getBranchHeadSha(wtPath: string): string | null {
   try {
-    const result = gh(
-      repoPath,
-      "pr",
-      "list",
-      "--head",
-      branchName,
-      "--json",
-      "number",
-      "--limit",
-      "1",
-    );
-    const prs = JSON.parse(result);
-    if (Array.isArray(prs) && prs.length > 0) {
-      return prs[0].number;
-    }
-    return null;
+    return git(wtPath, "rev-parse", "HEAD");
   } catch {
     return null;
   }
 }
 
-export function isPRMerged(repoPath: string, prNumber: number): boolean {
-  try {
-    const result = gh(
-      repoPath,
-      "pr",
-      "view",
-      String(prNumber),
-      "--json",
-      "state",
-    );
-    const data = JSON.parse(result);
-    return data.state === "MERGED";
-  } catch {
-    return false;
-  }
+export function getDiffAgainstMain(wtPath: string): string {
+  return git(wtPath, "diff", "origin/main...HEAD");
 }
 
 export function rebaseBranch(worktreePath: string): boolean {
@@ -134,47 +103,23 @@ export function forcePushBranch(worktreePath: string): void {
   git(worktreePath, "push", "--force-with-lease");
 }
 
-export function mergePR(repoPath: string, prNumber: number): void {
-  gh(repoPath, "pr", "merge", String(prNumber), "--merge");
+export function mergeToMain(repoPath: string, branchName: string): void {
+  git(repoPath, "fetch", "origin");
+  git(repoPath, "checkout", "main");
+  git(repoPath, "merge", "--ff-only", `origin/${branchName}`);
+  git(repoPath, "push", "origin", "main");
+  log.info("git", "merged to main", { branchName });
 }
 
-export interface PRInfo {
-  state: string;
-  headSha: string;
-}
-
-export function getPRInfo(
-  repoPath: string,
-  prNumber: number,
-): PRInfo | null {
+export function deleteRemoteBranch(repoPath: string, branchName: string): void {
   try {
-    const result = gh(
-      repoPath,
-      "pr",
-      "view",
-      String(prNumber),
-      "--json",
-      "state,headRefOid",
-    );
-    const data = JSON.parse(result);
-    return {
-      state: data.state,
-      headSha: data.headRefOid,
-    };
-  } catch {
-    return null;
-  }
-}
-
-export function commentOnPR(
-  repoPath: string,
-  prNumber: number,
-  body: string,
-): void {
-  try {
-    gh(repoPath, "pr", "comment", String(prNumber), "--body", body);
-  } catch {
-    // best effort — don't block the poller if commenting fails
+    git(repoPath, "push", "origin", "--delete", branchName);
+    log.info("git", "deleted remote branch", { branchName });
+  } catch (err) {
+    log.warn("git", "failed to delete remote branch", {
+      branchName,
+      error: String(err),
+    });
   }
 }
 
@@ -184,75 +129,6 @@ export function getChangedFiles(wtPath: string): string[] {
     return result.split("\n").filter(Boolean);
   } catch {
     return [];
-  }
-}
-
-export function getPRDetails(
-  repoPath: string,
-  prNumber: number,
-): { title: string; url: string } | null {
-  try {
-    const result = gh(
-      repoPath,
-      "pr",
-      "view",
-      String(prNumber),
-      "--json",
-      "title,url",
-    );
-    const data = JSON.parse(result);
-    return { title: data.title, url: data.url };
-  } catch {
-    return null;
-  }
-}
-
-export function getPRDiff(repoPath: string, prNumber: number): string {
-  return gh(repoPath, "pr", "diff", String(prNumber));
-}
-
-export function submitPRReview(
-  repoPath: string,
-  prNumber: number,
-  approve: boolean,
-  body: string,
-): boolean {
-  const flag = approve ? "--approve" : "--request-changes";
-  try {
-    gh(repoPath, "pr", "review", String(prNumber), flag, "--body", body);
-    return true;
-  } catch (err) {
-    log.warn("git", "formal PR review submission failed", {
-      prNumber,
-      approve,
-      error: String(err),
-    });
-    return false;
-  }
-}
-
-export function createPR(
-  repoPath: string,
-  branchName: string,
-  title: string,
-  body: string,
-): number | null {
-  try {
-    const url = gh(
-      repoPath,
-      "pr", "create",
-      "--head", branchName,
-      "--title", title,
-      "--body", body,
-    ).trim();
-    const match = url.match(/\/pull\/(\d+)$/);
-    return match ? parseInt(match[1], 10) : null;
-  } catch (err) {
-    log.warn("git", "failed to create PR", {
-      branchName,
-      error: String(err),
-    });
-    return null;
   }
 }
 
@@ -295,42 +171,11 @@ export function pruneWorktrees(repoPath: string): void {
   }
 }
 
-export function installClaudeHook(wtPath: string): void {
-  const claudeDir = path.join(wtPath, ".claude");
-  const settingsPath = path.join(claudeDir, "settings.json");
-  const signalFifo = path.join(SESSIONS_DIR, "poll-signal");
-
-  const settings = {
-    hooks: {
-      PostToolUse: [
-        {
-          matcher: "Bash",
-          hooks: [
-            {
-              type: "command",
-              command: `grep -q 'gh pr create' && (echo > '${signalFifo}') >/dev/null 2>&1 & exit 0`,
-            },
-          ],
-        },
-      ],
-    },
-  };
-
-  fs.mkdirSync(claudeDir, { recursive: true });
-  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-  log.info("git", "installed Claude hook for PR detection", { wtPath });
-}
-
-export function installPollTriggerHook(wtPath: string, gardenRunner?: string): void {
+export function installPollTriggerHook(wtPath: string, _gardenRunner?: string): void {
   const hooksDir = path.join(wtPath, ".garden-hooks");
   const hookPath = path.join(hooksDir, "pre-push");
   const signalFifo = path.join(SESSIONS_DIR, "poll-signal");
 
-  // The pre-push hook runs before the push completes, so we spawn
-  // _post-push in the background with a short delay to let the push finish.
-  // _post-push handles follow-up PR creation for merged branches and
-  // also signals the poller.
-  const runner = gardenRunner ?? "garden";
   const hookScript = [
     "#!/bin/sh",
     `# Signal the poller immediately`,
@@ -338,8 +183,6 @@ export function installPollTriggerHook(wtPath: string, gardenRunner?: string): v
     `if [ -p "$FIFO" ]; then`,
     `  (echo > "$FIFO") </dev/null >/dev/null 2>&1 &`,
     `fi`,
-    `# After push completes, check for merged PRs and create follow-ups`,
-    `(sleep 2 && cd "${wtPath}" && ${runner} dashboard _post-push) </dev/null >/dev/null 2>&1 &`,
     `exit 0`,
     "",
   ].join("\n");
@@ -352,15 +195,6 @@ export function installPollTriggerHook(wtPath: string, gardenRunner?: string): v
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, {
-    cwd,
-    encoding: "utf-8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 60_000,
-  }).trim();
-}
-
-function gh(cwd: string, ...args: string[]): string {
-  return execFileSync("gh", args, {
     cwd,
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],

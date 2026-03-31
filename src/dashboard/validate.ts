@@ -5,7 +5,7 @@ import { type DashboardState, readDashState, writeDashState } from "./state.js";
 import { readRegistry, writeRegistry } from "./registry.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, killWindowSafe, tmuxSplit, setPaneTitle, setPaneLabel, tmux } from "./tmux.js";
 import { log } from "./log.js";
-import { worktreeExists, removeWorktree, pruneWorktrees, isPRMerged } from "./git.js";
+import { worktreeExists, removeWorktree, pruneWorktrees } from "./git.js";
 import { startPoller, pollerRunning } from "./poller.js";
 import { resolveGardenRunner } from "./create.js";
 import { buildStatusCommand } from "./header.js";
@@ -155,12 +155,6 @@ export function validateAndHeal(state: DashboardState): DashboardState {
           worker: entry.name,
           worktreePath: entry.worktreePath,
         });
-        if (entry.prNumber && isPRMerged(entry.worktreePath, entry.prNumber)) {
-          log.info("validate", "PR already merged, cleaning registry entry", {
-            worker: entry.name,
-            prNumber: entry.prNumber,
-          });
-        }
         entry.worktreePath = undefined;
         registryChanged = true;
       }

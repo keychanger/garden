@@ -14,13 +14,6 @@ interface WorkerInfo {
   status: "working" | "waiting" | "exited" | "merged";
   activity: string | null;
   active: boolean;
-  prNumber?: number;
-}
-
-interface QueueEntryInfo {
-  prNumber: number;
-  workerName: string;
-  status: "merging" | "queued";
 }
 
 interface ProjectStatusInfo {
@@ -28,7 +21,6 @@ interface ProjectStatusInfo {
   index: number;
   isActive: boolean;
   workers: WorkerInfo[];
-  queue: QueueEntryInfo[];
 }
 
 export async function status(_args: string[]): Promise<void> {
@@ -44,20 +36,11 @@ export async function status(_args: string[]): Promise<void> {
   const hasDashboard = dashboardExists();
 
   const statuses: ProjectStatusInfo[] = names.map((name, i) => {
-    const registryEntries = getWorkers(name);
-    const queue: QueueEntryInfo[] = registryEntries
-      .filter(e => e.prState === "merging")
-      .map(e => ({
-        prNumber: e.prNumber ?? 0,
-        workerName: e.name,
-        status: "merging" as const,
-      }));
     return {
       name,
       index: i + 1,
       isActive: dashState.activeProject === name,
       workers: hasDashboard ? getProjectWorkers(name, dashState) : [],
-      queue,
     };
   });
 
@@ -70,17 +53,13 @@ export async function status(_args: string[]): Promise<void> {
     const marker = project.isActive ? " ◄" : "";
     console.log(`  ${project.index}. ${project.name}${marker}`);
 
-    if (project.workers.length === 0 && project.queue.length === 0) {
+    if (project.workers.length === 0) {
       console.log("    (no workers)");
     } else {
       for (const worker of project.workers) {
         const icon = worker.status === "merged" ? "✓" : worker.active ? "●" : "○";
-        const prTag = worker.prNumber ? ` [PR #${worker.prNumber}]` : "";
         const suffix = worker.activity ? ` — ${worker.activity}` : worker.status === "waiting" ? " (no task)" : "";
-        console.log(`    ${icon} ${worker.name}${prTag}  ${worker.status}${suffix}`);
-      }
-      for (const entry of project.queue) {
-        console.log(`    ⏳ PR #${entry.prNumber} (${entry.workerName}) ${entry.status}`);
+        console.log(`    ${icon} ${worker.name}  ${worker.status}${suffix}`);
       }
     }
   }
@@ -99,7 +78,7 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
     if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
     const regEntry = registryByName.get(label);
     const workerStatus = regEntry?.prState === "merged" ? "merged" as const : paneInfo.status;
-    workers.push({ name: label, status: workerStatus, activity: paneInfo.activity, active: true, prNumber: regEntry?.prNumber });
+    workers.push({ name: label, status: workerStatus, activity: paneInfo.activity, active: true });
   }
 
   const hiddenWindows = listHiddenWorkerWindows(projectName);
@@ -112,11 +91,11 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
       if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
       const regEntry = registryByName.get(label);
       const workerStatus = regEntry?.prState === "merged" ? "merged" as const : paneInfo.status;
-      workers.push({ name: label, status: workerStatus, activity: paneInfo.activity, active: false, prNumber: regEntry?.prNumber });
+      workers.push({ name: label, status: workerStatus, activity: paneInfo.activity, active: false });
     }
   }
 
-  // Include registry-only workers (e.g., merged PRs whose windows are gone)
+  // Include registry-only workers (e.g., merged workers whose windows are gone)
   const seenNames = new Set(workers.map(w => w.name));
   for (const entry of registryEntries) {
     if (!seenNames.has(entry.name) && entry.prState === "merged") {
@@ -125,7 +104,6 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
         status: "merged",
         activity: null,
         active: false,
-        prNumber: entry.prNumber,
       });
     }
   }
