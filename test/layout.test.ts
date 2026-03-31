@@ -12,6 +12,15 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   paneExists: vi.fn(() => true),
 }));
 
+vi.mock("../src/dashboard/log.js", () => ({
+  log: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
 import { parkToHidden, restoreFromHidden, swapToHidden } from "../src/dashboard/layout.js";
 import { tmux, getFirstPaneId, windowExists, killWindowSafe, paneExists } from "../src/dashboard/tmux.js";
 import type { DashboardState } from "../src/dashboard/state.js";
