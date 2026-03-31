@@ -68,11 +68,11 @@ The dashboard also has internal subcommands (e.g., `dashboard _switch 1`, `dashb
 
 ## Dashboard internals
 
-The dashboard uses a permanent tmux layout with content swapped in and out of the right pane slot. This is the key architectural pattern:
+The dashboard uses a permanent tmux layout with content swapped in and out of pane slots. This is the key architectural pattern:
 
-- **The right pane is never removed.** Content is moved via `tmux swap-pane` between the visible slot and hidden tmux windows. This preserves the layout tree.
-- **Hidden windows** use underscore-prefixed names: `_<project>-worker-N`, `_<project>-shell`. The underscore marks them as garden-managed.
-- **Parking/restoring** (`src/dashboard/layout.ts`): To swap content, we create a temp hidden window, swap the current pane into it, then swap the target pane from its hidden window into the right slot, and kill the temp window.
+- **Pane slots are never removed.** Content is moved via `tmux swap-pane` between visible slots and hidden tmux windows. This preserves the layout tree. Both the right pane and the garden pane (lower-left) are swappable.
+- **Hidden windows** use underscore-prefixed names: `_<project>-worker-N`, `_<project>-shell`, `_garden-shell`, `_garden-logs`. The underscore marks them as garden-managed.
+- **Parking/restoring** (`src/dashboard/layout.ts`): To swap content, we create a temp hidden window, swap the current pane into it, then swap the target pane from its hidden window into the slot, and kill the temp window. Separate functions handle the right pane (`parkToHidden`/`restoreFromHidden`) and garden pane (`gardenParkToHidden`/`gardenRestoreFromHidden`).
 - **State** (`src/dashboard/state.ts`): Tracks which project is active, which pane is visible, and pane IDs. Written atomically (write-tmp-then-rename) to `dashboard.state.json` after every operation.
 - **Status detection** (`src/dashboard/tmux.ts`): Uses `pgrep` to detect whether claude is running and whether it has child processes (working vs waiting).
 - **Header bar** (`src/dashboard/header.ts`): Uses a tmux session variable (`@garden_header`) instead of subprocess spawning. Updated instantly after every mutation via `refresh-client -S`. Background process detection runs on a 5-second poll.
