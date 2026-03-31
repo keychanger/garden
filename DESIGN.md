@@ -124,7 +124,7 @@ projects:
     path: /Users/joshua/code/keychange/garden
     baseBranch: main
     checks: npx tsc --noEmit && npx vitest run
-    postMerge: npm run build
+    postMerge: npm install && npm run build
 ```
 
 **baseBranch**: The branch that workers branch from and merge into. Resolution order: explicit config > auto-detected from `git symbolic-ref refs/remotes/origin/HEAD` > `"main"` as last resort. Most repos work without setting this.
