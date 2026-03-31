@@ -40,6 +40,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   getFirstPaneId: vi.fn(() => "%5"),
   getPanePid: vi.fn(() => "12345"),
   hasClaudeChild: vi.fn(() => true),
+  isClaudeWorking: vi.fn(() => false),
   windowExists: vi.fn(() => true),
   killWindowSafe: vi.fn(),
 }));
@@ -118,7 +119,7 @@ import {
 } from "../src/dashboard/git.js";
 import { buildWorktreeWorkerCommand } from "../src/dashboard/create.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
-import { tmux, hasClaudeChild, getPanePid, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
+import { tmux, hasClaudeChild, isClaudeWorking, getPanePid, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { spawnSync } from "node:child_process";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
@@ -194,11 +195,9 @@ describe("poll — open state, merge conflict", () => {
       makeWorker({ prState: "open", prNumber: 42 }),
     ]);
     vi.mocked(rebaseBranch).mockReturnValue(false);
-    // First call: live-Claude guard (false = let merge proceed)
-    // Second call: notifyWorker (true = Claude alive, deliver message)
-    vi.mocked(hasClaudeChild)
-      .mockReturnValueOnce(false)
-      .mockReturnValueOnce(true);
+    // Guard uses isClaudeWorking (default false = let merge proceed)
+    // notifyWorker uses hasClaudeChild (true = Claude alive, deliver message)
+    vi.mocked(hasClaudeChild).mockReturnValue(true);
 
     poll();
 
@@ -360,9 +359,8 @@ describe("poll — reviewing state", () => {
     vi.mocked(spawnSync).mockReturnValue({
       status: 0, stdout: "REQUEST_CHANGES\nMissing tests for new function.", stderr: "",
     } as never);
-    vi.mocked(hasClaudeChild)
-      .mockReturnValueOnce(false)  // live-Claude guard in handleReviewing
-      .mockReturnValueOnce(true);  // notifyWorker
+    // Guard uses isClaudeWorking (default false); notification needs Claude alive
+    vi.mocked(hasClaudeChild).mockReturnValue(true);
 
     poll();
 
@@ -434,7 +432,7 @@ describe("poll — reviewing state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "reviewing", prNumber: 42 }),
     ]);
-    vi.mocked(hasClaudeChild).mockReturnValue(true);
+    vi.mocked(isClaudeWorking).mockReturnValue(true);
 
     poll();
 
@@ -537,11 +535,11 @@ describe("poll — merge serialization", () => {
 });
 
 describe("poll — live-Claude guard", () => {
-  it("skips merge when Claude is actively running in worktree", () => {
+  it("skips merge when Claude is actively working in worktree", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "open", prNumber: 42 }),
     ]);
-    vi.mocked(hasClaudeChild).mockReturnValue(true);
+    vi.mocked(isClaudeWorking).mockReturnValue(true);
 
     poll();
 
@@ -550,11 +548,11 @@ describe("poll — live-Claude guard", () => {
     expect(mergePR).not.toHaveBeenCalled();
   });
 
-  it("proceeds with merge when Claude has exited", () => {
+  it("proceeds with merge when Claude is not working", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "open", prNumber: 42 }),
     ]);
-    vi.mocked(hasClaudeChild).mockReturnValue(false);
+    // isClaudeWorking defaults to false — merge should proceed
 
     poll(); // open -> reviewing
     poll(); // reviewing -> merged
@@ -675,10 +673,8 @@ describe("poll — sibling merge notification", () => {
       .mockReturnValueOnce(["src/foo.ts", "src/bar.ts"])  // merged worker
       .mockReturnValueOnce(["src/foo.ts", "src/baz.ts"]); // sibling
 
-    // Claude alive in sibling for notification delivery
-    vi.mocked(hasClaudeChild)
-      .mockReturnValueOnce(false)  // bold-ash: live-Claude guard in handleReviewing
-      .mockReturnValueOnce(true);  // calm-bay: sibling notification (Claude alive)
+    // Guard uses isClaudeWorking (default false); sibling needs Claude alive for delivery
+    vi.mocked(hasClaudeChild).mockReturnValue(true);
 
     poll(); // reviewing -> merged (with sibling notification)
 
@@ -967,9 +963,8 @@ describe("poll — alerts", () => {
     vi.mocked(spawnSync).mockReturnValue({
       status: 0, stdout: "REQUEST_CHANGES\nNeeds tests.", stderr: "",
     } as never);
-    vi.mocked(hasClaudeChild)
-      .mockReturnValueOnce(false)  // live-Claude guard
-      .mockReturnValueOnce(true);  // notifyWorker
+    // Guard uses isClaudeWorking (default false); notification needs Claude alive
+    vi.mocked(hasClaudeChild).mockReturnValue(true);
 
     poll();
 

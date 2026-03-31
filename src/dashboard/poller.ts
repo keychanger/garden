@@ -7,7 +7,7 @@ import path from "node:path";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tryGetProject, SESSIONS_DIR } from "../config.js";
 import {
-  tmux, getFirstPaneId, getPanePid, hasClaudeChild,
+  tmux, getFirstPaneId, getPanePid, hasClaudeChild, isClaudeWorking,
   windowExists, killWindowSafe,
 } from "./tmux.js";
 import {
@@ -180,8 +180,8 @@ function attemptMerge(
     const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindow}`);
     if (paneId) {
       const pid = getPanePid(paneId);
-      if (pid && hasClaudeChild(pid)) {
-        log.info("poller", "Claude active in worktree, skipping merge", {
+      if (pid && isClaudeWorking(pid)) {
+        log.info("poller", "Claude working in worktree, skipping merge", {
           worker: entry.name,
           prNumber: entry.prNumber,
         });
@@ -323,8 +323,8 @@ function handleReviewing(
     const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindow}`);
     if (paneId) {
       const pid = getPanePid(paneId);
-      if (pid && hasClaudeChild(pid)) {
-        log.info("poller", "Claude active during review, resetting to open", {
+      if (pid && isClaudeWorking(pid)) {
+        log.info("poller", "Claude working during review, resetting to open", {
           worker: entry.name,
         });
         updateWorkerFields(projectName, entry.name, { prState: "open" });
