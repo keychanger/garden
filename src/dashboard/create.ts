@@ -18,7 +18,7 @@ import {
 import { readRegistry } from "./registry.js";
 import { log, truncateLog } from "./log.js";
 import { validateAndHeal } from "./validate.js";
-import { startPoller } from "./poller.js";
+import { startPoller, SIGNAL_FIFO } from "./poller.js";
 import { installPollTriggerHook, installClaudeHook, worktreeExists as wtExists } from "./git.js";
 
 const DASHBOARD_COLS = 250;
@@ -208,7 +208,7 @@ export function buildWorktreeWorkerCommand(
 ): string {
   const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName);
   const claudeCmd = `claude --dangerously-skip-permissions --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
-  return `${claudeCmd}; exec $SHELL`;
+  return `${claudeCmd}; ${pollSignalSnippet()} exec $SHELL`;
 }
 
 export function buildWorktreeResumeCommand(
@@ -220,7 +220,12 @@ export function buildWorktreeResumeCommand(
 ): string {
   const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName);
   const claudeCmd = `claude --dangerously-skip-permissions --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
-  return `${claudeCmd}; exec $SHELL`;
+  return `${claudeCmd}; ${pollSignalSnippet()} exec $SHELL`;
+}
+
+function pollSignalSnippet(): string {
+  const fifo = SIGNAL_FIFO.replace(/'/g, "'\\''");
+  return `[ -p '${fifo}' ] && (echo > '${fifo}') 2>/dev/null;`;
 }
 
 function writeContextFile(projectName: string, projectPath: string): string {
