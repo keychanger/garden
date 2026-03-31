@@ -140,7 +140,7 @@ export function ensureDashboard(): void {
     for (const entry of entries) {
       if (!entry.sessionId) continue;
       if (entry.worktreePath && wtExists(entry.worktreePath)) {
-        installPollTriggerHook(entry.worktreePath);
+        installPollTriggerHook(entry.worktreePath, gardenRunner);
         installClaudeHook(entry.worktreePath);
       }
       const workerCwd = entry.worktreePath ?? projectConfig.path;
@@ -201,8 +201,14 @@ function writeLogsScript(): string {
   const scriptFile = path.join(SESSIONS_DIR, "logs-view.sh");
 
   const script = `#!/bin/sh
+# Move cursor to top-left and clear screen without flashing
+refresh() {
+  printf '\\033[H\\033[2J'
+}
+
+refresh
 while true; do
-  clear
+  refresh
   echo "=== Alerts ==="
   echo ""
   if [ -f '${alertsFile}' ]; then
@@ -210,7 +216,7 @@ while true; do
       var d = JSON.parse(require("fs").readFileSync("${alertsFile}","utf-8"));
       if (!d.alerts || !d.alerts.length) { console.log("  (none)"); }
       else { d.alerts.slice(-20).forEach(function(a) {
-        var t = a.ts.replace("T"," ").replace(/\\..*/, "");
+        var t = new Date(a.ts).toLocaleString();
         console.log("  [" + a.level.toUpperCase() + "] " + t + " " + a.project + (a.worker ? "/" + a.worker : "") + ": " + a.message);
       }); }
     '
@@ -226,7 +232,7 @@ while true; do
       lines.forEach(function(l) {
         try {
           var e = JSON.parse(l);
-          var t = e.ts.replace("T"," ").replace(/\\..*/, "");
+          var t = new Date(e.ts).toLocaleString();
           var d = e.data ? " " + JSON.stringify(e.data) : "";
           console.log("  " + t + " [" + e.level + "] " + e.src + ": " + e.msg + d);
         } catch(x) { console.log("  " + l); }

@@ -116,7 +116,7 @@ working -> open -> merging -> reviewing -> (cleanup)
 3. **merging**: Poller checks if Claude is actively running in the worktree — if so, skips this cycle to avoid corrupting the live session. Otherwise: fetches main, rebases, runs optional checks on the rebased code, and force-pushes the rebased branch. On conflict or check failure, the worker is notified and state moves to failing. On force-push failure, state resets to open for retry.
 4. **reviewing**: A Claude session reviews the PR diff against project rules via `claude -p`. Checks adherence to rules, test coverage, and doc coverage. Always posts a formatted review comment on the PR with the verdict and reasoning. Also attempts a formal GitHub review (`gh pr review --approve/--request-changes`), but this may fail for self-PRs. If approved, proceeds to merge. If changes requested, notifies the worker and transitions to failing. If the review process fails (Claude unavailable, timeout, unparseable output), transitions to failing and surfaces an alert. The review acts as a gate -- unreviewed code is never auto-merged.
 5. **failing**: Checks failed, merge conflict, review requested changes, or review process failure. Poller watches for new commits via SHA tracking. After 30s of no new pushes, state transitions back to open for retry. Each failure increments a `failCount` on the worker entry; after 3 consecutive failures, an alert is surfaced. The count resets on successful merge.
-6. **merged**: PR merged. Poller watches for new PRs or unmerged commits on the branch (detected via `origin/main..HEAD` ancestry check, not timestamps — timestamps miss commits orphaned by the force-push during merge). If the worker has commits not on main, the poller rebases onto main, force-pushes, and auto-creates a follow-up PR via `gh pr create`, transitioning directly to open. If rebase or PR creation fails, falls back to working.
+6. **merged**: PR merged. The pre-push hook runs `garden dashboard _post-push` after every push, which detects merged PRs and auto-creates follow-up PRs synchronously. The poller also checks for externally-opened PRs on the branch as a fallback.
 
 If a PR is closed or merged externally, the poller detects this and cleans up from any state.
 
@@ -162,6 +162,9 @@ Merges are serialized per project (one at a time). The merge sequence:
 The worker and its worktree are not automatically cleaned up on merge. Cleanup happens only when the user kills the worker with `opt-x` or runs `garden reset`. This allows inspecting merged work before disposal.
 
 Projects don't block each other — each project's queue drains independently.
+
+### Post-Push Follow-Up PRs
+When a worker pushes to a branch whose PR has already been merged, the pre-push hook spawns `garden dashboard _post-push` in the background. This command detects the merged PR, checks for unmerged commits via `origin/main..HEAD`, and creates a follow-up PR synchronously. This avoids the race conditions of polling-based detection — the PR is created within seconds of the push, not on the next poll cycle.
 
 ### Sibling Merge Notification
 When a PR merges, the poller compares its changed files against every other active worker's branch in the same project. If files overlap, the sibling is notified with the merged PR's title, URL, and overlapping file list so it can review and avoid reverting the merged work.
