@@ -16,10 +16,13 @@ import {
 import {
   getBranchPR, getPRInfo, rebaseBranch, abortRebase,
   forcePushBranch, mergePR, commentOnPR, fastForwardMain,
+  getChangedFiles, getPRDetails,
 } from "./git.js";
+import { buildWorktreeWorkerCommand } from "./create.js";
 import { refreshDashboard } from "./header.js";
 import { healStatusPane } from "./validate.js";
 import { log } from "./log.js";
+import crypto from "node:crypto";
 
 const DEBOUNCE_MS = 30_000;
 const POLLER_WINDOW = "_garden-pr-poller";
@@ -56,6 +59,27 @@ function pollWorker(
   projectPath: string,
   entry: WorkerEntry,
 ): void {
+  // Deliver pending notification if Claude is alive
+  if (entry.pendingNotification) {
+    const windowName = `_${projectName}-worker-${entry.name}`;
+    if (windowExists(windowName)) {
+      const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
+      if (paneId) {
+        const pid = getPanePid(paneId);
+        if (pid && hasClaudeChild(pid)) {
+          tmux("send-keys", "-t", paneId, "-l", entry.pendingNotification);
+          tmux("send-keys", "-t", paneId, "Enter");
+          updateWorkerFields(projectName, entry.name, {
+            pendingNotification: undefined,
+          });
+          log.info("poller", "delivered pending notification", {
+            worker: entry.name,
+          });
+        }
+      }
+    }
+  }
+
   const state = entry.prState ?? "working";
 
   // Check for externally closed/merged PRs in active PR states.
@@ -129,39 +153,6 @@ function handleOpen(
   entry: WorkerEntry,
 ): void {
   if (!entry.prNumber) return;
-
-  const project = tryGetProject(projectName);
-  if (!project) return;
-
-  // Run checks if configured
-  if (project.checks) {
-    const wtPath = entry.worktreePath ?? projectPath;
-    try {
-      execSync(project.checks, {
-        cwd: wtPath,
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 300_000,
-      });
-      log.info("poller", "checks passed", { worker: entry.name });
-    } catch (err: unknown) {
-      log.info("poller", "checks failed", { worker: entry.name });
-      const stderr = (err as { stderr?: Buffer })?.stderr?.toString() ?? "";
-      const truncated = stderr.slice(-500);
-      const message = `Checks failed for PR #${entry.prNumber}:\n\n${truncated}\n\nFix the issues and push again.`;
-      notifyWorker(projectName, entry, message);
-      prComment(projectPath, entry.prNumber, "Checks failed. Worker notified.");
-
-      const info = getPRInfo(projectPath, entry.prNumber);
-      updateWorkerFields(projectName, entry.name, {
-        prState: "failing",
-        lastSeenSha: info?.headSha,
-        lastShaChangeAt: new Date().toISOString(),
-      });
-      refreshDashboard();
-      return;
-    }
-  }
-
   attemptMerge(projectName, projectPath, entry);
 }
 
@@ -171,6 +162,22 @@ function attemptMerge(
   entry: WorkerEntry,
 ): void {
   if (!entry.prNumber) return;
+
+  // Don't rebase/merge while Claude is actively running in the worktree
+  const workerWindow = `_${projectName}-worker-${entry.name}`;
+  if (windowExists(workerWindow)) {
+    const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindow}`);
+    if (paneId) {
+      const pid = getPanePid(paneId);
+      if (pid && hasClaudeChild(pid)) {
+        log.info("poller", "Claude active in worktree, skipping merge", {
+          worker: entry.name,
+          prNumber: entry.prNumber,
+        });
+        return;
+      }
+    }
+  }
 
   // Serialize merges: only one PR per project can merge at a time
   const projectWorkers = getWorkers(projectName);
@@ -219,6 +226,35 @@ function attemptMerge(
     return;
   }
 
+  // Run checks after rebase so they validate the combined state
+  const project = tryGetProject(projectName);
+  if (project?.checks) {
+    try {
+      execSync(project.checks, {
+        cwd: wtPath,
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 300_000,
+      });
+      log.info("poller", "checks passed after rebase", { worker: entry.name });
+    } catch (err: unknown) {
+      log.info("poller", "checks failed after rebase", { worker: entry.name });
+      const stderr = (err as { stderr?: Buffer })?.stderr?.toString() ?? "";
+      const truncated = stderr.slice(-500);
+      const message = `Checks failed for PR #${entry.prNumber} after rebase:\n\n${truncated}\n\nFix the issues and push again.`;
+      notifyWorker(projectName, entry, message);
+      prComment(projectPath, entry.prNumber, "Checks failed after rebase. Worker notified.");
+
+      const info = getPRInfo(projectPath, entry.prNumber);
+      updateWorkerFields(projectName, entry.name, {
+        prState: "failing",
+        lastSeenSha: info?.headSha,
+        lastShaChangeAt: new Date().toISOString(),
+      });
+      refreshDashboard();
+      return;
+    }
+  }
+
   try {
     forcePushBranch(wtPath);
     mergePR(projectPath, entry.prNumber);
@@ -236,6 +272,10 @@ function attemptMerge(
 
   log.info("poller", "PR merged", { worker: entry.name, prNumber: entry.prNumber });
   prComment(projectPath, entry.prNumber, "Merged successfully.");
+
+  // Notify siblings before fast-forwarding main (so getChangedFiles still works)
+  notifySiblingWorkers(projectName, projectPath, entry);
+
   fastForwardMain(projectPath);
   updateWorkerFields(projectName, entry.name, {
     prState: "merged",
@@ -318,6 +358,22 @@ function handleMerged(
           newCommits,
           mergeCount: prevCount + 1,
         });
+
+        // Rebase onto latest main so continued work starts from the tip
+        try {
+          execFileSync("git", ["fetch", "origin", "main"], {
+            cwd: entry.worktreePath,
+            stdio: "ignore",
+          });
+        } catch { /* best effort */ }
+
+        if (!rebaseBranch(entry.worktreePath)) {
+          log.warn("poller", "rebase failed on resume after merge", {
+            worker: entry.name,
+          });
+          abortRebase(entry.worktreePath);
+        }
+
         updateWorkerFields(projectName, entry.name, {
           prState: "working",
           prNumber: undefined,
@@ -349,6 +405,93 @@ function notifyWorker(
   tmux("send-keys", "-t", paneId, "-l", message);
   tmux("send-keys", "-t", paneId, "Enter");
   log.info("poller", "notified worker", { worker: entry.name });
+}
+
+function notifySiblingWorkers(
+  projectName: string,
+  projectPath: string,
+  mergedEntry: WorkerEntry,
+): void {
+  if (!mergedEntry.worktreePath || !mergedEntry.prNumber) return;
+
+  const mergedFiles = getChangedFiles(mergedEntry.worktreePath);
+  if (mergedFiles.length === 0) return;
+
+  const details = getPRDetails(projectPath, mergedEntry.prNumber);
+  const siblings = getWorkers(projectName).filter(
+    w => w.name !== mergedEntry.name &&
+      (w.prState === "working" || w.prState === "open" || w.prState === "failing"),
+  );
+
+  const mergedSet = new Set(mergedFiles);
+
+  for (const sibling of siblings) {
+    if (!sibling.worktreePath) continue;
+    const siblingFiles = getChangedFiles(sibling.worktreePath);
+    const overlap = siblingFiles.filter(f => mergedSet.has(f));
+    if (overlap.length === 0) continue;
+
+    const title = details?.title ?? `PR #${mergedEntry.prNumber}`;
+    const url = details?.url ?? "";
+    const fileList = overlap.join(", ");
+    const message = [
+      `[garden] PR #${mergedEntry.prNumber} "${title}" just merged into main.`,
+      url ? `URL: ${url}` : "",
+      `It changed files that overlap with your branch: ${fileList}`,
+      "Rebase onto main, review how these changes interact with your work, and make sure you are not reverting their fix. Push when ready.",
+    ].filter(Boolean).join("\n");
+
+    const windowName = `_${projectName}-worker-${sibling.name}`;
+    if (!windowExists(windowName)) continue;
+
+    const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
+    if (!paneId) continue;
+
+    const pid = getPanePid(paneId);
+    if (pid && hasClaudeChild(pid)) {
+      tmux("send-keys", "-t", paneId, "-l", message);
+      tmux("send-keys", "-t", paneId, "Enter");
+      log.info("poller", "notified sibling of merge overlap", {
+        worker: sibling.name,
+        mergedWorker: mergedEntry.name,
+        overlapFiles: overlap,
+      });
+    } else {
+      relaunchWorker(projectName, projectPath, sibling, message);
+    }
+  }
+}
+
+function relaunchWorker(
+  projectName: string,
+  projectPath: string,
+  entry: WorkerEntry,
+  notification: string,
+): void {
+  const windowName = `_${projectName}-worker-${entry.name}`;
+  const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
+  if (!paneId) return;
+
+  const newSessionId = crypto.randomUUID();
+  const branchName = entry.branchName ?? entry.name;
+  const wtPath = entry.worktreePath ?? "";
+  if (!wtPath) return;
+
+  const launchCmd = buildWorktreeWorkerCommand(
+    projectName, projectPath, entry.name, branchName, newSessionId,
+  );
+
+  updateWorkerFields(projectName, entry.name, {
+    sessionId: newSessionId,
+    pendingNotification: notification,
+  });
+
+  tmux("send-keys", "-t", paneId, "-l", launchCmd);
+  tmux("send-keys", "-t", paneId, "Enter");
+  log.info("poller", "relaunched worker for sibling notification", {
+    worker: entry.name,
+    newSessionId,
+  });
 }
 
 export function triggerPoll(): void {

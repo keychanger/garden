@@ -16,6 +16,7 @@ export interface WorkerEntry {
   lastSeenSha?: string;
   lastShaChangeAt?: string;
   mergedAt?: string;
+  pendingNotification?: string;
   role?: string;
   parentWorker?: string;
 }
