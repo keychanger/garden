@@ -215,8 +215,12 @@ function attemptMerge(
     abortRebase(wtPath);
 
     const message = `Merge conflict with main on PR #${entry.prNumber}. Please resolve:\n\n1. git rebase main\n2. Resolve conflicts\n3. git rebase --continue\n4. Push when done.`;
-    notifyWorker(projectName, entry, message);
-    prComment(projectPath, entry.prNumber, `Merge conflict with main. Worker \`${entry.name}\` notified.`);
+    const delivered = notifyWorker(projectName, entry, message);
+    prComment(projectPath, entry.prNumber,
+      delivered
+        ? `Merge conflict with main. Worker \`${entry.name}\` notified.`
+        : `Merge conflict with main. Worker \`${entry.name}\` was not reachable; notification stored for next delivery.`,
+    );
 
     const info = getPRInfo(projectPath, entry.prNumber);
     updateWorkerFields(projectName, entry.name, {
@@ -243,10 +247,13 @@ function attemptMerge(
       const stderr = (err as { stderr?: Buffer })?.stderr?.toString() ?? "";
       const truncated = stderr.slice(-500);
       const message = `Checks failed for PR #${entry.prNumber} after rebase:\n\n${truncated}\n\nFix the issues and push again.`;
-      notifyWorker(projectName, entry, message);
+      const delivered = notifyWorker(projectName, entry, message);
+      const status = delivered
+        ? `Worker \`${entry.name}\` notified.`
+        : `Worker \`${entry.name}\` was not reachable; notification stored for next delivery.`;
       const commentBody = truncated
-        ? `Checks failed after rebase. Worker \`${entry.name}\` notified.\n\n\`\`\`\n${truncated}\n\`\`\``
-        : `Checks failed after rebase. Worker \`${entry.name}\` notified.`;
+        ? `Checks failed after rebase. ${status}\n\n\`\`\`\n${truncated}\n\`\`\``
+        : `Checks failed after rebase. ${status}`;
       prComment(projectPath, entry.prNumber, commentBody);
 
       const info = getPRInfo(projectPath, entry.prNumber);
@@ -326,8 +333,12 @@ function handleReviewing(
     finalizeMerge(projectName, projectPath, entry);
   } else {
     const message = `PR review requested changes for #${entry.prNumber}:\n\n${review.body}\n\nFix the issues and push again.`;
-    notifyWorker(projectName, entry, message);
-    prComment(projectPath, entry.prNumber, "Review requested changes. Worker notified.");
+    const delivered = notifyWorker(projectName, entry, message);
+    prComment(projectPath, entry.prNumber,
+      delivered
+        ? `Review requested changes. Worker \`${entry.name}\` notified.`
+        : `Review requested changes. Worker \`${entry.name}\` was not reachable; notification stored for next delivery.`,
+    );
 
     const info = getPRInfo(projectPath, entry.prNumber);
     updateWorkerFields(projectName, entry.name, {
@@ -629,19 +640,38 @@ function notifyWorker(
   projectName: string,
   entry: WorkerEntry,
   message: string,
-): void {
+): boolean {
   const windowName = `_${projectName}-worker-${entry.name}`;
-  if (!windowExists(windowName)) return;
+  if (!windowExists(windowName)) {
+    log.warn("poller", "worker window not found, storing pending notification", {
+      worker: entry.name,
+    });
+    updateWorkerFields(projectName, entry.name, { pendingNotification: message });
+    return false;
+  }
 
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
-  if (!paneId) return;
+  if (!paneId) {
+    log.warn("poller", "worker pane not found, storing pending notification", {
+      worker: entry.name,
+    });
+    updateWorkerFields(projectName, entry.name, { pendingNotification: message });
+    return false;
+  }
 
   const pid = getPanePid(paneId);
-  if (!pid || !hasClaudeChild(pid)) return;
+  if (!pid || !hasClaudeChild(pid)) {
+    log.warn("poller", "Claude not alive in worker, storing pending notification", {
+      worker: entry.name,
+    });
+    updateWorkerFields(projectName, entry.name, { pendingNotification: message });
+    return false;
+  }
 
   tmux("send-keys", "-t", paneId, "-l", message);
   tmux("send-keys", "-t", paneId, "Enter");
   log.info("poller", "notified worker", { worker: entry.name });
+  return true;
 }
 
 function notifySiblingWorkers(
