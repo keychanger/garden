@@ -87,11 +87,12 @@ Every worker runs in its own git worktree, isolated from the main checkout and o
 
 1. `opt-n` creates a worktree at `~/.garden/worktrees/<project>/<worker-name>/` on a branch named after the worker.
 2. The worker's system prompt includes instructions to commit incrementally and open a PR when done.
-3. A **PR poller** (`src/dashboard/poller.ts`) runs every 30s in a hidden tmux window, driving the check/merge lifecycle:
+3. A **PR poller** (`src/dashboard/poller.ts`) runs every 30s in a hidden tmux window, driving the check/review/merge lifecycle:
    - Detects PRs on worker branches via GitHub CLI.
    - Skips merge if Claude is actively running in the worktree (live-Claude guard).
    - Rebases onto main, then runs optional `checks` command (configured per project in `~/.garden/config.yml`) on the rebased code.
-   - Force-pushes and squash-merges; notifies workers of check failures or conflicts via `tmux send-keys`.
+   - Force-pushes and transitions to review. A Claude session (`claude -p`) reviews the diff against project rules, checking adherence, test coverage, and doc coverage.
+   - If review approves: squash-merges. If review requests changes: notifies the worker via `tmux send-keys`. If review process fails: merges as fallback.
    - After merge, notifies sibling workers with overlapping files (relaunches dead sessions if needed).
    - Debounces commits (30s quiet period) before retrying.
 4. Workers are killed on successful merge or manual `opt-x`.

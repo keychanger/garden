@@ -1,6 +1,6 @@
 // PR poller: watches GitHub PR state and drives the check/merge lifecycle.
 // Runs as a hidden tmux window. Wakes on signal via FIFO or 30s timeout.
-import { execSync, execFileSync } from "node:child_process";
+import { execSync, execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DASHBOARD_SESSION } from "../session.js";
@@ -16,12 +16,13 @@ import {
 import {
   getBranchPR, getPRInfo, rebaseBranch, abortRebase,
   forcePushBranch, mergePR, commentOnPR, fastForwardMain,
-  getChangedFiles, getPRDetails,
+  getChangedFiles, getPRDetails, getPRDiff, submitPRReview,
 } from "./git.js";
 import { buildWorktreeWorkerCommand } from "./create.js";
 import { refreshDashboard } from "./header.js";
 import { healStatusPane } from "./validate.js";
 import { log } from "./log.js";
+import { buildRulesContext } from "../rules.js";
 import crypto from "node:crypto";
 
 const DEBOUNCE_MS = 30_000;
@@ -115,12 +116,13 @@ function pollWorker(
       return handleOpen(projectName, projectPath, entry);
     case "merging":
       return; // merge in progress from a previous poll cycle
+    case "reviewing":
+      return handleReviewing(projectName, projectPath, entry);
     case "failing":
       return handleFailing(projectName, projectPath, entry);
     case "merged":
       return handleMerged(projectName, entry);
     default:
-      // Handle workers stuck in old states (in-review, approved, etc.)
       log.warn("poller", "unknown state, resetting to open", {
         worker: entry.name,
         state,
@@ -182,7 +184,7 @@ function attemptMerge(
   // Serialize merges: only one PR per project can merge at a time
   const projectWorkers = getWorkers(projectName);
   const alreadyMerging = projectWorkers.some(
-    w => w.name !== entry.name && w.prState === "merging",
+    w => w.name !== entry.name && (w.prState === "merging" || w.prState === "reviewing"),
   );
   if (alreadyMerging) {
     log.info("poller", "another PR is merging, waiting", {
@@ -242,7 +244,10 @@ function attemptMerge(
       const truncated = stderr.slice(-500);
       const message = `Checks failed for PR #${entry.prNumber} after rebase:\n\n${truncated}\n\nFix the issues and push again.`;
       notifyWorker(projectName, entry, message);
-      prComment(projectPath, entry.prNumber, "Checks failed after rebase. Worker notified.");
+      const commentBody = truncated
+        ? `Checks failed after rebase. Worker \`${entry.name}\` notified.\n\n\`\`\`\n${truncated}\n\`\`\``
+        : `Checks failed after rebase. Worker \`${entry.name}\` notified.`;
+      prComment(projectPath, entry.prNumber, commentBody);
 
       const info = getPRInfo(projectPath, entry.prNumber);
       updateWorkerFields(projectName, entry.name, {
@@ -257,6 +262,240 @@ function attemptMerge(
 
   try {
     forcePushBranch(wtPath);
+  } catch (err) {
+    log.error("poller", "force-push failed", {
+      worker: entry.name,
+      prNumber: entry.prNumber,
+      error: String(err),
+    });
+    updateWorkerFields(projectName, entry.name, { prState: "open" });
+    refreshDashboard();
+    return;
+  }
+
+  log.info("poller", "force-pushed, transitioning to review", {
+    worker: entry.name,
+    prNumber: entry.prNumber,
+  });
+  updateWorkerFields(projectName, entry.name, { prState: "reviewing" });
+  refreshDashboard();
+}
+
+function handleReviewing(
+  projectName: string,
+  projectPath: string,
+  entry: WorkerEntry,
+): void {
+  if (!entry.prNumber) return;
+
+  // Live-Claude guard: if the worker started pushing new code, go back to open
+  const workerWindow = `_${projectName}-worker-${entry.name}`;
+  if (windowExists(workerWindow)) {
+    const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindow}`);
+    if (paneId) {
+      const pid = getPanePid(paneId);
+      if (pid && hasClaudeChild(pid)) {
+        log.info("poller", "Claude active during review, resetting to open", {
+          worker: entry.name,
+        });
+        updateWorkerFields(projectName, entry.name, { prState: "open" });
+        refreshDashboard();
+        return;
+      }
+    }
+  }
+
+  const review = runClaudeReview(projectName, projectPath, entry);
+
+  if (review === null) {
+    log.warn("poller", "review process failed, proceeding with merge", {
+      worker: entry.name,
+    });
+    finalizeMerge(projectName, projectPath, entry);
+    return;
+  }
+
+  submitPRReview(projectPath, entry.prNumber, review.approved, review.body);
+  log.info("poller", "submitted PR review", {
+    worker: entry.name,
+    prNumber: entry.prNumber,
+    approved: review.approved,
+  });
+
+  if (review.approved) {
+    finalizeMerge(projectName, projectPath, entry);
+  } else {
+    const message = `PR review requested changes for #${entry.prNumber}:\n\n${review.body}\n\nFix the issues and push again.`;
+    notifyWorker(projectName, entry, message);
+    prComment(projectPath, entry.prNumber, "Review requested changes. Worker notified.");
+
+    const info = getPRInfo(projectPath, entry.prNumber);
+    updateWorkerFields(projectName, entry.name, {
+      prState: "failing",
+      lastSeenSha: info?.headSha,
+      lastShaChangeAt: new Date().toISOString(),
+    });
+    refreshDashboard();
+  }
+}
+
+interface ReviewResult {
+  approved: boolean;
+  body: string;
+}
+
+function runClaudeReview(
+  projectName: string,
+  projectPath: string,
+  entry: WorkerEntry,
+): ReviewResult | null {
+  if (!entry.prNumber) return null;
+
+  let diff: string;
+  try {
+    diff = getPRDiff(projectPath, entry.prNumber);
+  } catch {
+    log.warn("poller", "failed to get PR diff for review", { worker: entry.name });
+    return null;
+  }
+
+  const details = getPRDetails(projectPath, entry.prNumber);
+  const rules = buildRulesContext(projectName, projectPath);
+  const wtPath = entry.worktreePath ?? projectPath;
+
+  const changedFiles = getChangedFiles(wtPath);
+
+  // Always include canonical docs so the reviewer can verify accuracy
+  const docSections: string[] = [];
+  for (const docFile of ["DESIGN.md", "CLAUDE.md"]) {
+    const fullPath = path.join(wtPath, docFile);
+    try {
+      const content = fs.readFileSync(fullPath, "utf-8");
+      docSections.push(`### ${docFile}\n\n${content}`);
+    } catch {
+      // file may not exist in this project
+    }
+  }
+
+  // Include test files that correspond to changed source files
+  const testSections: string[] = [];
+  for (const file of changedFiles) {
+    const basename = path.basename(file, path.extname(file));
+    const testFile = path.join(wtPath, "test", `${basename}.test.ts`);
+    try {
+      const content = fs.readFileSync(testFile, "utf-8");
+      testSections.push(`### test/${basename}.test.ts\n\n${content}`);
+    } catch {
+      // no corresponding test file
+    }
+  }
+
+  const prompt = [
+    "Review this pull request diff against the project rules below.",
+    "",
+    "Check for:",
+    "- Adherence to project rules (commit style, code patterns, scope discipline)",
+    "- Code quality issues, security concerns, or unnecessary complexity",
+    "- Documentation accuracy: read DESIGN.md and CLAUDE.md below. After applying this",
+    "  diff, are they still accurate and complete? Flag any claims that are now wrong,",
+    "  missing sections for new behavior, or stale descriptions. Not every PR needs a",
+    "  doc change — only flag docs that are actually inaccurate after this diff.",
+    "- Test quality: read the test files below. Check three things:",
+    "  1. Accuracy — do existing tests still assert correct behavior after this diff?",
+    "     Flag tests that now assert stale or wrong behavior.",
+    "  2. Coverage — are the new/changed code paths exercised by tests? Flag significant",
+    "     new logic (branching, error handling, state transitions) that has no test.",
+    "  3. Completeness — do the tests cover edge cases and failure modes, not just the",
+    "     happy path? Flag obvious gaps. Not every PR needs a test change — only flag",
+    "     tests that are actually wrong or insufficient for the behavior this diff changes.",
+    "",
+    `## PR #${entry.prNumber}: ${details?.title ?? "Unknown"}`,
+    "",
+    "## Project Rules",
+    "",
+    rules,
+    "",
+    "## Diff",
+    "",
+    "```diff",
+    diff,
+    "```",
+    "",
+    "## Documentation (current state in the worktree)",
+    "",
+    "Verify these are still accurate after the diff above.",
+    "",
+    ...docSections,
+    ...(testSections.length > 0 ? [
+      "",
+      "## Test Files (corresponding to changed source files)",
+      "",
+      "Verify these still correctly cover the changed behavior.",
+      "",
+      ...testSections,
+    ] : []),
+    "",
+    "## Output Format",
+    "",
+    "Your FIRST line must be exactly one of:",
+    "APPROVE",
+    "REQUEST_CHANGES",
+    "",
+    "Then provide your review comments explaining your decision.",
+  ].join("\n");
+
+  try {
+    const proc = spawnSync("claude", ["-p", "--verbose"], {
+      input: prompt,
+      encoding: "utf-8",
+      timeout: 300_000,
+      stdio: ["pipe", "pipe", "pipe"],
+      cwd: entry.worktreePath ?? projectPath,
+    });
+
+    if (proc.status !== 0 || !proc.stdout) {
+      log.warn("poller", "claude review process failed", {
+        worker: entry.name,
+        exitCode: proc.status,
+        stderr: proc.stderr?.slice(-200),
+      });
+      return null;
+    }
+
+    const output = proc.stdout.trim();
+    const firstLine = output.split("\n")[0].trim().toUpperCase();
+    const body = output.split("\n").slice(1).join("\n").trim() || "No additional comments.";
+
+    if (firstLine === "APPROVE") {
+      return { approved: true, body };
+    }
+    if (firstLine === "REQUEST_CHANGES") {
+      return { approved: false, body };
+    }
+
+    // Could not parse verdict — treat as approval with the full output as body
+    log.warn("poller", "could not parse review verdict, treating as approval", {
+      worker: entry.name,
+      firstLine,
+    });
+    return { approved: true, body: output };
+  } catch (err) {
+    log.warn("poller", "claude review threw", {
+      worker: entry.name,
+      error: String(err),
+    });
+    return null;
+  }
+}
+
+function finalizeMerge(
+  projectName: string,
+  projectPath: string,
+  entry: WorkerEntry,
+): void {
+  if (!entry.prNumber) return;
+
+  try {
     mergePR(projectPath, entry.prNumber);
   } catch (err) {
     log.error("poller", "merge failed", {
@@ -264,7 +503,6 @@ function attemptMerge(
       prNumber: entry.prNumber,
       error: String(err),
     });
-    // Reset to open so it retries next cycle
     updateWorkerFields(projectName, entry.name, { prState: "open" });
     refreshDashboard();
     return;
@@ -273,7 +511,6 @@ function attemptMerge(
   log.info("poller", "PR merged", { worker: entry.name, prNumber: entry.prNumber });
   prComment(projectPath, entry.prNumber, "Merged successfully.");
 
-  // Notify siblings before fast-forwarding main (so getChangedFiles still works)
   notifySiblingWorkers(projectName, projectPath, entry);
 
   fastForwardMain(projectPath);
