@@ -30,6 +30,8 @@ import {
   abortRebase,
   forcePushBranch,
   mergePR,
+  getChangedFiles,
+  getPRDetails,
   pruneWorktrees,
 } from "../src/dashboard/git.js";
 
@@ -230,6 +232,55 @@ describe("mergePR", () => {
       throw new Error("merge failed");
     });
     expect(() => mergePR("/repo", 42)).toThrow();
+  });
+});
+
+describe("getChangedFiles", () => {
+  it("returns list of changed files", () => {
+    mockExec.mockReturnValue("src/foo.ts\nsrc/bar.ts\n");
+    expect(getChangedFiles("/tmp/wt")).toEqual(["src/foo.ts", "src/bar.ts"]);
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["diff", "--name-only", "origin/main...HEAD"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
+  it("returns empty array when no changes", () => {
+    mockExec.mockReturnValue("");
+    expect(getChangedFiles("/tmp/wt")).toEqual([]);
+  });
+
+  it("returns empty array on error", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("not a git repo");
+    });
+    expect(getChangedFiles("/tmp/wt")).toEqual([]);
+  });
+});
+
+describe("getPRDetails", () => {
+  it("returns title and url", () => {
+    mockExec.mockReturnValue(JSON.stringify({
+      title: "fix: normalize output",
+      url: "https://github.com/org/repo/pull/42",
+    }));
+    expect(getPRDetails("/repo", 42)).toEqual({
+      title: "fix: normalize output",
+      url: "https://github.com/org/repo/pull/42",
+    });
+    expect(mockExec).toHaveBeenCalledWith(
+      "gh",
+      ["pr", "view", "42", "--json", "title,url"],
+      expect.objectContaining({ cwd: "/repo" }),
+    );
+  });
+
+  it("returns null on error", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("not found");
+    });
+    expect(getPRDetails("/repo", 42)).toBeNull();
   });
 });
 

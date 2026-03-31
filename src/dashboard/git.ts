@@ -178,6 +178,35 @@ export function commentOnPR(
   }
 }
 
+export function getChangedFiles(wtPath: string): string[] {
+  try {
+    const result = git(wtPath, "diff", "--name-only", "origin/main...HEAD");
+    return result.split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+export function getPRDetails(
+  repoPath: string,
+  prNumber: number,
+): { title: string; url: string } | null {
+  try {
+    const result = gh(
+      repoPath,
+      "pr",
+      "view",
+      String(prNumber),
+      "--json",
+      "title,url",
+    );
+    const data = JSON.parse(result);
+    return { title: data.title, url: data.url };
+  } catch {
+    return null;
+  }
+}
+
 export function pruneWorktrees(repoPath: string): void {
   try {
     git(repoPath, "worktree", "prune");

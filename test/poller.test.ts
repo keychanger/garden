@@ -78,6 +78,16 @@ vi.mock("../src/dashboard/git.js", () => ({
   mergePR: vi.fn(),
   commentOnPR: vi.fn(),
   fastForwardMain: vi.fn(),
+  getChangedFiles: vi.fn(() => []),
+  getPRDetails: vi.fn(() => null),
+}));
+
+vi.mock("../src/dashboard/create.js", () => ({
+  buildWorktreeWorkerCommand: vi.fn(() => "claude --dangerously-skip-permissions --session-id fake-id"),
+}));
+
+vi.mock("node:crypto", () => ({
+  default: { randomUUID: vi.fn(() => "new-uuid-123") },
 }));
 
 import { poll } from "../src/dashboard/poller.js";
@@ -86,9 +96,11 @@ import { updateWorkerFields, getWorkers } from "../src/dashboard/registry.js";
 import {
   getBranchPR, getPRInfo, rebaseBranch, abortRebase,
   forcePushBranch, mergePR, commentOnPR,
+  getChangedFiles, getPRDetails,
 } from "../src/dashboard/git.js";
+import { buildWorktreeWorkerCommand } from "../src/dashboard/create.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
-import { tmux } from "../src/dashboard/tmux.js";
+import { tmux, hasClaudeChild, getPanePid, windowExists } from "../src/dashboard/tmux.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 const registryMock = await import("../src/dashboard/registry.js") as {
@@ -114,6 +126,8 @@ beforeEach(() => {
   vi.mocked(rebaseBranch).mockReturnValue(true);
   vi.mocked(getPRInfo).mockReturnValue({ state: "OPEN", headSha: "abc123" });
   vi.mocked(getBranchPR).mockReturnValue(null);
+  // Default: Claude not running, so merge attempts proceed
+  vi.mocked(hasClaudeChild).mockReturnValue(false);
 });
 
 describe("poll — working state", () => {
@@ -147,6 +161,11 @@ describe("poll — open state, merge conflict", () => {
       makeWorker({ prState: "open", prNumber: 42 }),
     ]);
     vi.mocked(rebaseBranch).mockReturnValue(false);
+    // First call: live-Claude guard (false = let merge proceed)
+    // Second call: notifyWorker (true = Claude alive, deliver message)
+    vi.mocked(hasClaudeChild)
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
 
     poll();
 
@@ -202,7 +221,7 @@ describe("poll — open state, successful merge", () => {
 });
 
 describe("poll — open state with checks", () => {
-  it("transitions to failing when checks fail", () => {
+  it("transitions to failing when checks fail after rebase", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "open", prNumber: 42 }),
     ]);
@@ -210,22 +229,48 @@ describe("poll — open state with checks", () => {
       path: "/repo/myproject",
       checks: "npm test",
     } as ReturnType<typeof tryGetProject>);
+    vi.mocked(rebaseBranch).mockReturnValue(true);
     vi.mocked(execSync).mockImplementation(() => {
       throw Object.assign(new Error("tests failed"), { stderr: Buffer.from("FAIL src/foo.test.ts") });
     });
 
     poll();
 
+    // Rebase happens before checks now
+    expect(rebaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
     expect(execSync).toHaveBeenCalledWith(
       "npm test",
       expect.objectContaining({ cwd: "/tmp/wt/myproject/bold-ash" }),
     );
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(mergePR).not.toHaveBeenCalled();
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "failing",
       lastSeenSha: "abc123",
       lastShaChangeAt: expect.any(String),
     });
-    expect(rebaseBranch).not.toHaveBeenCalled();
+  });
+
+  it("runs checks after rebase and merges when both pass", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "open", prNumber: 42 }),
+    ]);
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject",
+      checks: "npm test",
+    } as ReturnType<typeof tryGetProject>);
+    vi.mocked(rebaseBranch).mockReturnValue(true);
+    vi.mocked(execSync).mockReturnValue("" as never);
+
+    poll();
+
+    expect(rebaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(execSync).toHaveBeenCalledWith(
+      "npm test",
+      expect.objectContaining({ cwd: "/tmp/wt/myproject/bold-ash" }),
+    );
+    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(mergePR).toHaveBeenCalledWith("/repo/myproject", 42);
   });
 });
 
@@ -316,5 +361,284 @@ describe("poll — merge serialization", () => {
     // bold-ash should not have attempted merge
     expect(mergePR).not.toHaveBeenCalled();
     expect(forcePushBranch).not.toHaveBeenCalled();
+  });
+});
+
+describe("poll — live-Claude guard", () => {
+  it("skips merge when Claude is actively running in worktree", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "open", prNumber: 42 }),
+    ]);
+    vi.mocked(hasClaudeChild).mockReturnValue(true);
+
+    poll();
+
+    expect(rebaseBranch).not.toHaveBeenCalled();
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(mergePR).not.toHaveBeenCalled();
+  });
+
+  it("proceeds with merge when Claude has exited", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "open", prNumber: 42 }),
+    ]);
+    vi.mocked(hasClaudeChild).mockReturnValue(false);
+
+    poll();
+
+    expect(rebaseBranch).toHaveBeenCalled();
+    expect(forcePushBranch).toHaveBeenCalled();
+    expect(mergePR).toHaveBeenCalled();
+  });
+});
+
+describe("poll — merged state with new commits", () => {
+  it("rebases onto main when resuming after merge", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merged",
+        prNumber: 42,
+        mergedAt: new Date(Date.now() - 60_000).toISOString(),
+      }),
+    ]);
+    // Simulate new commits after merge
+    vi.mocked(execFileSync).mockReturnValue("1" as never);
+    vi.mocked(rebaseBranch).mockReturnValue(true);
+
+    poll();
+
+    expect(rebaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "working" }),
+    );
+  });
+
+  it("still transitions to working if rebase fails", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merged",
+        prNumber: 42,
+        mergedAt: new Date(Date.now() - 60_000).toISOString(),
+      }),
+    ]);
+    vi.mocked(execFileSync).mockReturnValue("1" as never);
+    vi.mocked(rebaseBranch).mockReturnValue(false);
+
+    poll();
+
+    expect(abortRebase).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "working" }),
+    );
+  });
+});
+
+describe("poll — sibling merge notification", () => {
+  it("notifies sibling worker when files overlap after merge", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        name: "bold-ash",
+        prState: "open",
+        prNumber: 42,
+        sessionId: "s1",
+        task: "t1",
+        worktreePath: "/tmp/wt/myproject/bold-ash",
+        branchName: "bold-ash",
+      }),
+      makeWorker({
+        name: "calm-bay",
+        prState: "working",
+        sessionId: "s2",
+        task: "t2",
+        worktreePath: "/tmp/wt/myproject/calm-bay",
+        branchName: "calm-bay",
+      }),
+    ]);
+    vi.mocked(hasClaudeChild).mockReturnValue(false);
+    vi.mocked(rebaseBranch).mockReturnValue(true);
+
+    // bold-ash merges, then we check sibling notification
+    // getChangedFiles returns overlapping files
+    vi.mocked(getChangedFiles)
+      .mockReturnValueOnce(["src/foo.ts", "src/bar.ts"]) // merged worker
+      .mockReturnValueOnce(["src/foo.ts", "src/baz.ts"]); // sibling
+
+    vi.mocked(getPRDetails).mockReturnValue({
+      title: "fix: normalize output",
+      url: "https://github.com/org/repo/pull/42",
+    });
+
+    // Claude alive in sibling for notification delivery
+    vi.mocked(hasClaudeChild)
+      .mockReturnValueOnce(false) // bold-ash: live-Claude guard (let merge proceed)
+      .mockReturnValueOnce(true); // calm-bay: sibling notification (Claude alive)
+
+    poll();
+
+    // Verify sibling was notified via send-keys
+    expect(tmux).toHaveBeenCalledWith(
+      "send-keys", "-t", "%5", "-l",
+      expect.stringContaining("src/foo.ts"),
+    );
+    expect(tmux).toHaveBeenCalledWith(
+      "send-keys", "-t", "%5", "-l",
+      expect.stringContaining("fix: normalize output"),
+    );
+  });
+
+  it("does not notify sibling when no file overlap", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        name: "bold-ash",
+        prState: "open",
+        prNumber: 42,
+        sessionId: "s1",
+        task: "t1",
+        worktreePath: "/tmp/wt/myproject/bold-ash",
+        branchName: "bold-ash",
+      }),
+      makeWorker({
+        name: "calm-bay",
+        prState: "working",
+        sessionId: "s2",
+        task: "t2",
+        worktreePath: "/tmp/wt/myproject/calm-bay",
+        branchName: "calm-bay",
+      }),
+    ]);
+    vi.mocked(hasClaudeChild).mockReturnValue(false);
+    vi.mocked(rebaseBranch).mockReturnValue(true);
+
+    vi.mocked(getChangedFiles)
+      .mockReturnValueOnce(["src/foo.ts"]) // merged worker
+      .mockReturnValueOnce(["src/bar.ts"]); // sibling — no overlap
+
+    poll();
+
+    // mergePR should be called (merge happens) but no sibling notification
+    expect(mergePR).toHaveBeenCalled();
+    // Only send-keys calls should be for the merge flow, not sibling notification
+    const sendKeyCalls = vi.mocked(tmux).mock.calls.filter(
+      c => c[0] === "send-keys" && typeof c[3] === "string" && c[3].includes("overlap"),
+    );
+    expect(sendKeyCalls).toHaveLength(0);
+  });
+
+  it("relaunches dead sibling on overlap", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        name: "bold-ash",
+        prState: "open",
+        prNumber: 42,
+        sessionId: "s1",
+        task: "t1",
+        worktreePath: "/tmp/wt/myproject/bold-ash",
+        branchName: "bold-ash",
+      }),
+      makeWorker({
+        name: "calm-bay",
+        prState: "working",
+        sessionId: "s2",
+        task: "t2",
+        worktreePath: "/tmp/wt/myproject/calm-bay",
+        branchName: "calm-bay",
+      }),
+    ]);
+
+    vi.mocked(getChangedFiles)
+      .mockReturnValueOnce(["src/foo.ts"])
+      .mockReturnValueOnce(["src/foo.ts"]);
+
+    vi.mocked(getPRDetails).mockReturnValue({
+      title: "fix: something",
+      url: "https://github.com/org/repo/pull/42",
+    });
+
+    // Claude not running in either worker
+    vi.mocked(hasClaudeChild).mockReturnValue(false);
+    vi.mocked(rebaseBranch).mockReturnValue(true);
+
+    poll();
+
+    // Should have relaunched with new session and set pending notification
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "calm-bay",
+      expect.objectContaining({
+        sessionId: "new-uuid-123",
+        pendingNotification: expect.stringContaining("src/foo.ts"),
+      }),
+    );
+    expect(buildWorktreeWorkerCommand).toHaveBeenCalled();
+  });
+
+  it("skips notification for workers in merged state", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        name: "bold-ash",
+        prState: "open",
+        prNumber: 42,
+        sessionId: "s1",
+        task: "t1",
+        worktreePath: "/tmp/wt/myproject/bold-ash",
+        branchName: "bold-ash",
+      }),
+      makeWorker({
+        name: "calm-bay",
+        prState: "merged",
+        sessionId: "s2",
+        task: "t2",
+        worktreePath: "/tmp/wt/myproject/calm-bay",
+        branchName: "calm-bay",
+      }),
+    ]);
+
+    vi.mocked(hasClaudeChild).mockReturnValue(false);
+    vi.mocked(rebaseBranch).mockReturnValue(true);
+    vi.mocked(getChangedFiles).mockReturnValue(["src/foo.ts"]);
+
+    poll();
+
+    // getChangedFiles should only be called once (for the merged worker)
+    // not for calm-bay since it's in "merged" state
+    expect(getChangedFiles).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("poll — pending notification delivery", () => {
+  it("delivers pending notification when Claude is alive", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "working",
+        pendingNotification: "You have overlapping changes with PR #42",
+      }),
+    ]);
+    vi.mocked(hasClaudeChild).mockReturnValue(true);
+
+    poll();
+
+    expect(tmux).toHaveBeenCalledWith(
+      "send-keys", "-t", "%5", "-l",
+      "You have overlapping changes with PR #42",
+    );
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
+      pendingNotification: undefined,
+    });
+  });
+
+  it("does not deliver pending notification when Claude is not alive", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "working",
+        pendingNotification: "You have overlapping changes with PR #42",
+      }),
+    ]);
+    vi.mocked(hasClaudeChild).mockReturnValue(false);
+
+    poll();
+
+    // Should not have cleared the notification
+    const clearCalls = vi.mocked(updateWorkerFields).mock.calls.filter(
+      c => c[2] && "pendingNotification" in (c[2] as Record<string, unknown>),
+    );
+    expect(clearCalls).toHaveLength(0);
   });
 });
