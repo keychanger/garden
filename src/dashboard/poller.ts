@@ -682,11 +682,10 @@ function handleMerged(
 ): boolean {
   const project = tryGetProject(projectName);
   if (!project) return false;
-  const projectPath = project.path;
   const branchName = entry.branchName ?? entry.name;
 
-  // Check if worker opened a new PR on the same branch
-  const newPrNumber = getBranchPR(projectPath, branchName);
+  // Check if a new PR was opened on the same branch (by postPush or manually)
+  const newPrNumber = getBranchPR(project.path, branchName);
   if (newPrNumber !== null && newPrNumber !== entry.prNumber) {
     const prevCount = entry.mergeCount ?? 0;
     log.info("poller", "new PR found after merge, resuming", {
@@ -704,102 +703,6 @@ function handleMerged(
     return true;
   }
 
-  // Check for commits on the branch that aren't on main.
-  // With regular merges, branch commits become ancestors of main,
-  // so this should return 0 unless the worker pushed new commits after merge.
-  if (entry.mergedAt && entry.worktreePath) {
-    try {
-      execFileSync("git", ["fetch", "origin", "main"], {
-        cwd: entry.worktreePath,
-        stdio: "ignore",
-        timeout: 30_000,
-      });
-    } catch { /* best effort */ }
-
-    try {
-      const newCommits = execFileSync("git", [
-        "rev-list", "--count", "origin/main..HEAD",
-      ], {
-        cwd: entry.worktreePath,
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 10_000,
-      }).trim();
-
-      if (parseInt(newCommits, 10) > 0) {
-        const prevCount = entry.mergeCount ?? 0;
-        log.info("poller", "unmerged commits on branch", {
-          worker: entry.name,
-          newCommits,
-          mergeCount: prevCount + 1,
-        });
-
-        if (!rebaseBranch(entry.worktreePath)) {
-          log.warn("poller", "rebase failed on resume after merge", {
-            worker: entry.name,
-          });
-          abortRebase(entry.worktreePath);
-          updateWorkerFields(projectName, entry.name, {
-            prState: "working",
-            prNumber: undefined,
-            mergeCount: prevCount + 1,
-            mergedAt: undefined,
-          });
-          refreshDashboard();
-          return true;
-        }
-
-        // Force-push the rebased branch and open a new PR
-        try {
-          forcePushBranch(entry.worktreePath);
-        } catch (err) {
-          log.warn("poller", "force-push failed after merge resume", {
-            worker: entry.name,
-            error: String(err),
-          });
-          updateWorkerFields(projectName, entry.name, {
-            prState: "working",
-            prNumber: undefined,
-            mergeCount: prevCount + 1,
-            mergedAt: undefined,
-          });
-          refreshDashboard();
-          return true;
-        }
-
-        const commitLog = getCommitSummary(entry.worktreePath);
-        const title = `${branchName} (continued)`;
-        const body = `Automated follow-up PR for worker \`${entry.name}\`.\n\n` +
-          `Previous PR was merged. New commits:\n\`\`\`\n${commitLog || "(commits)"}\n\`\`\``;
-
-        const newPrNumber = createPR(projectPath, branchName, title, body);
-        if (newPrNumber) {
-          log.info("poller", "auto-created follow-up PR", {
-            worker: entry.name,
-            prNumber: newPrNumber,
-          });
-          updateWorkerFields(projectName, entry.name, {
-            prNumber: newPrNumber,
-            prState: "open",
-            mergeCount: prevCount + 1,
-            mergedAt: undefined,
-          });
-        } else {
-          // Fall back to working state if PR creation fails
-          updateWorkerFields(projectName, entry.name, {
-            prState: "working",
-            prNumber: undefined,
-            mergeCount: prevCount + 1,
-            mergedAt: undefined,
-          });
-        }
-        refreshDashboard();
-        return true;
-      }
-    } catch {
-      // worktree may be gone, ignore
-    }
-  }
   return false;
 }
 
@@ -926,6 +829,111 @@ function relaunchWorker(
     worker: entry.name,
     newSessionId,
   });
+}
+
+export function postPush(): void {
+  const cwd = process.cwd();
+  const registry = readRegistry();
+
+  // Find the worker entry whose worktreePath matches cwd
+  let matchedProject: string | null = null;
+  let matchedEntry: WorkerEntry | null = null;
+
+  for (const [projectName, entries] of Object.entries(registry.workers)) {
+    for (const entry of entries) {
+      if (entry.worktreePath && path.resolve(entry.worktreePath) === path.resolve(cwd)) {
+        matchedProject = projectName;
+        matchedEntry = entry;
+        break;
+      }
+    }
+    if (matchedEntry) break;
+  }
+
+  if (!matchedProject || !matchedEntry) {
+    log.debug("post-push", "no matching worker for cwd", { cwd });
+    triggerPoll();
+    return;
+  }
+
+  // If no merged PR, just signal the poller
+  if (matchedEntry.prState !== "merged" || !matchedEntry.prNumber) {
+    triggerPoll();
+    return;
+  }
+
+  const project = tryGetProject(matchedProject);
+  if (!project) {
+    triggerPoll();
+    return;
+  }
+
+  // Check for unmerged commits
+  try {
+    execFileSync("git", ["fetch", "origin", "main"], {
+      cwd,
+      stdio: "ignore",
+      timeout: 30_000,
+    });
+  } catch { /* best effort */ }
+
+  let newCommits: number;
+  try {
+    const count = execFileSync("git", ["rev-list", "--count", "origin/main..HEAD"], {
+      cwd,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10_000,
+    }).trim();
+    newCommits = parseInt(count, 10);
+  } catch {
+    triggerPoll();
+    return;
+  }
+
+  if (newCommits === 0) {
+    triggerPoll();
+    return;
+  }
+
+  const branchName = matchedEntry.branchName ?? matchedEntry.name;
+  const prevCount = matchedEntry.mergeCount ?? 0;
+
+  log.info("post-push", "unmerged commits after merge, creating follow-up PR", {
+    worker: matchedEntry.name,
+    newCommits,
+    mergeCount: prevCount + 1,
+  });
+
+  const commitLog = getCommitSummary(cwd);
+  const title = `${branchName} (continued)`;
+  const body = `Follow-up PR for worker \`${matchedEntry.name}\`.\n\n` +
+    `Previous PR #${matchedEntry.prNumber} was merged. New commits:\n\`\`\`\n${commitLog || "(commits)"}\n\`\`\``;
+
+  const newPrNumber = createPR(project.path, branchName, title, body);
+  if (newPrNumber) {
+    log.info("post-push", "created follow-up PR", {
+      worker: matchedEntry.name,
+      prNumber: newPrNumber,
+    });
+    updateWorkerFields(matchedProject, matchedEntry.name, {
+      prNumber: newPrNumber,
+      prState: "open",
+      mergeCount: prevCount + 1,
+      mergedAt: undefined,
+    });
+    refreshDashboard();
+  } else {
+    // Fall back to working so the poller picks it up
+    updateWorkerFields(matchedProject, matchedEntry.name, {
+      prState: "working",
+      prNumber: undefined,
+      mergeCount: prevCount + 1,
+      mergedAt: undefined,
+    });
+  }
+
+  triggerPoll();
 }
 
 export function triggerPoll(): void {

@@ -16,7 +16,7 @@ import {
 } from "./registry.js";
 import { log } from "./log.js";
 import { addAlert } from "./alerts.js";
-import { buildWorktreeWorkerCommand, createShellWindow } from "./create.js";
+import { buildWorktreeWorkerCommand, createShellWindow, resolveGardenRunner } from "./create.js";
 import { worktreePath, createWorktree, removeWorktree, deleteBranch, getBranchPR, installPollTriggerHook, installClaudeHook, fastForwardMain } from "./git.js";
 
 export function newWorker(): void {
@@ -37,7 +37,7 @@ export function newWorker(): void {
   try {
     fastForwardMain(project.path);
     createWorktree(project.path, wtPath, branchName);
-    installPollTriggerHook(wtPath);
+    installPollTriggerHook(wtPath, resolveGardenRunner());
     installClaudeHook(wtPath);
   } catch (err) {
     log.error("workers", "failed to create worktree", { error: String(err) });

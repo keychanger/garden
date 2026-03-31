@@ -14,7 +14,7 @@ import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
 import { newWorker, killPane } from "./workers.js";
 import { switchProject, focusWorker, focusShell, focusGarden, focusLogs, cyclePane } from "./navigate.js";
-import { poll, triggerPoll, stopPoller } from "./poller.js";
+import { poll, triggerPoll, postPush, stopPoller } from "./poller.js";
 
 export async function dashboard(args: string[]): Promise<void> {
   checkTmux();
@@ -52,6 +52,7 @@ export async function dashboard(args: string[]): Promise<void> {
     return;
   }
   if (sub === "_trigger-poll") return triggerPoll();
+  if (sub === "_post-push") return postPush();
   if (sub === "_header") return printHeader();
 
   if (sub === "help") {

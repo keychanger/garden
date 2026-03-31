@@ -305,16 +305,25 @@ export function installClaudeHook(wtPath: string): void {
   log.info("git", "installed Claude hook for PR detection", { wtPath });
 }
 
-export function installPollTriggerHook(wtPath: string): void {
+export function installPollTriggerHook(wtPath: string, gardenRunner?: string): void {
   const hooksDir = path.join(wtPath, ".garden-hooks");
   const hookPath = path.join(hooksDir, "pre-push");
   const signalFifo = path.join(SESSIONS_DIR, "poll-signal");
+
+  // The pre-push hook runs before the push completes, so we spawn
+  // _post-push in the background with a short delay to let the push finish.
+  // _post-push handles follow-up PR creation for merged branches and
+  // also signals the poller.
+  const runner = gardenRunner ?? "garden";
   const hookScript = [
     "#!/bin/sh",
+    `# Signal the poller immediately`,
     `FIFO="${signalFifo}"`,
     `if [ -p "$FIFO" ]; then`,
     `  (echo > "$FIFO") </dev/null >/dev/null 2>&1 &`,
     `fi`,
+    `# After push completes, check for merged PRs and create follow-ups`,
+    `(sleep 2 && cd "${wtPath}" && ${runner} dashboard _post-push) </dev/null >/dev/null 2>&1 &`,
     `exit 0`,
     "",
   ].join("\n");

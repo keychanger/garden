@@ -108,7 +108,7 @@ vi.mock("node:crypto", () => ({
   default: { randomUUID: vi.fn(() => "new-uuid-123") },
 }));
 
-import { poll } from "../src/dashboard/poller.js";
+import { poll, postPush } from "../src/dashboard/poller.js";
 import { tryGetProject } from "../src/config.js";
 import { updateWorkerFields, getWorkers } from "../src/dashboard/registry.js";
 import {
@@ -563,8 +563,8 @@ describe("poll — live-Claude guard", () => {
   });
 });
 
-describe("poll — merged state with new commits", () => {
-  it("rebases, force-pushes, and auto-creates follow-up PR", () => {
+describe("postPush — follow-up PR creation", () => {
+  it("creates follow-up PR when branch has merged PR and unmerged commits", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merged",
@@ -572,43 +572,24 @@ describe("poll — merged state with new commits", () => {
         mergedAt: new Date(Date.now() - 60_000).toISOString(),
       }),
     ]);
+    // Mock cwd to match worktree path
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue("/tmp/wt/myproject/bold-ash");
+    // rev-list returns 1 unmerged commit
     vi.mocked(execFileSync).mockReturnValue("1" as never);
-    vi.mocked(rebaseBranch).mockReturnValue(true);
     vi.mocked(createPR).mockReturnValue(99);
 
-    poll();
+    postPush();
 
-    expect(rebaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
-    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
     expect(createPR).toHaveBeenCalledWith(
       "/repo/myproject",
       "bold-ash",
       expect.stringContaining("continued"),
-      expect.stringContaining("follow-up"),
+      expect.stringContaining("Follow-up"),
     );
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "open", prNumber: 99 }),
     );
-  });
-
-  it("falls back to working if rebase fails", () => {
-    registryMock._setEntries("myproject", [
-      makeWorker({
-        prState: "merged",
-        prNumber: 42,
-        mergedAt: new Date(Date.now() - 60_000).toISOString(),
-      }),
-    ]);
-    vi.mocked(execFileSync).mockReturnValue("1" as never);
-    vi.mocked(rebaseBranch).mockReturnValue(false);
-
-    poll();
-
-    expect(abortRebase).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
-    expect(createPR).not.toHaveBeenCalled();
-    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
-      expect.objectContaining({ prState: "working" }),
-    );
+    cwdSpy.mockRestore();
   });
 
   it("falls back to working if PR creation fails", () => {
@@ -619,17 +600,29 @@ describe("poll — merged state with new commits", () => {
         mergedAt: new Date(Date.now() - 60_000).toISOString(),
       }),
     ]);
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue("/tmp/wt/myproject/bold-ash");
     vi.mocked(execFileSync).mockReturnValue("1" as never);
-    vi.mocked(rebaseBranch).mockReturnValue(true);
     vi.mocked(createPR).mockReturnValue(null);
 
-    poll();
+    postPush();
 
-    expect(forcePushBranch).toHaveBeenCalled();
     expect(createPR).toHaveBeenCalled();
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "working" }),
     );
+    cwdSpy.mockRestore();
+  });
+
+  it("only signals poller when no merged PR exists", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "open", prNumber: 42 }),
+    ]);
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue("/tmp/wt/myproject/bold-ash");
+
+    postPush();
+
+    expect(createPR).not.toHaveBeenCalled();
+    cwdSpy.mockRestore();
   });
 });
 
