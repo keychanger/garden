@@ -89,8 +89,10 @@ Every worker runs in its own git worktree, isolated from the main checkout and o
 2. The worker's system prompt includes instructions to commit incrementally and open a PR when done.
 3. A **PR poller** (`src/dashboard/poller.ts`) runs every 30s in a hidden tmux window, driving the check/merge lifecycle:
    - Detects PRs on worker branches via GitHub CLI.
-   - Runs optional `checks` command (configured per project in `~/.garden/config.yml`).
-   - Attempts rebase+merge; notifies workers of check failures or conflicts via `tmux send-keys`.
+   - Skips merge if Claude is actively running in the worktree (live-Claude guard).
+   - Rebases onto main, then runs optional `checks` command (configured per project in `~/.garden/config.yml`) on the rebased code.
+   - Force-pushes and squash-merges; notifies workers of check failures or conflicts via `tmux send-keys`.
+   - After merge, notifies sibling workers with overlapping files (relaunches dead sessions if needed).
    - Debounces commits (30s quiet period) before retrying.
 4. Workers are killed on successful merge or manual `opt-x`.
 5. Worktrees are cleaned up after the PR is merged.

@@ -111,9 +111,10 @@ working -> open -> merging -> (cleanup)
 ```
 
 1. **working**: Worker is active, no PR yet. Poller checks for PRs via `gh pr list`.
-2. **open**: PR detected. If a `checks` command is configured for the project, the poller runs it in the worktree. Pass (or no checks configured) transitions to merging. Fail transitions to failing, and the worker is notified via `tmux send-keys`.
-3. **merging**: Poller fetches main, rebases, force-pushes, and squash-merges. On conflict, the worker is notified and state moves to failing. On merge error, state resets to open for retry.
+2. **open**: PR detected. Transitions to merging (which runs checks after rebase). If another worker is already merging, waits until the next cycle.
+3. **merging**: Poller checks if Claude is actively running in the worktree — if so, skips this cycle to avoid corrupting the live session. Otherwise: fetches main, rebases, runs optional checks on the rebased code, force-pushes, and squash-merges. On conflict or check failure, the worker is notified and state moves to failing. On merge error, state resets to open for retry.
 4. **failing**: Checks failed or merge conflict. Poller watches for new commits via SHA tracking. After 30s of no new pushes, state transitions back to open for retry.
+5. **merged**: PR merged. Poller watches for new PRs or commits on the branch. If the worker continues with new commits, the poller rebases onto latest main before transitioning back to working.
 
 If a PR is closed or merged externally, the poller detects this and cleans up from any state.
 
@@ -127,19 +128,29 @@ projects:
     checks: npm run build && npm test
 ```
 
-The poller runs this command in the worker's worktree before attempting to merge. No checks configured means merge immediately on PR detection.
+The poller runs this command in the worker's worktree **after rebasing onto main**, so checks validate the combined state of the branch plus latest main. No checks configured means merge immediately after successful rebase.
 
 ### Merge Handling
 Merges are serialized per project (one at a time). The merge sequence:
-1. Fetch latest main
-2. Rebase the branch onto main
-3. Force-push the rebased branch
-4. Merge via `gh pr merge --squash`
-5. Mark the worker as merged in the registry
+1. Check if Claude is running in the worktree — if so, skip this cycle
+2. Fetch latest main
+3. Rebase the branch onto main
+4. Run checks (if configured) on the rebased code
+5. Force-push the rebased branch
+6. Merge via `gh pr merge --squash`
+7. Notify sibling workers with overlapping files (see below)
+8. Fast-forward local main
+9. Mark the worker as merged in the registry
 
 The worker and its worktree are not automatically cleaned up on merge. Cleanup happens only when the user kills the worker with `opt-x` or runs `garden reset`. This allows inspecting merged work before disposal.
 
 Projects don't block each other — each project's queue drains independently.
+
+### Sibling Merge Notification
+When a PR merges, the poller compares its changed files against every other active worker's branch in the same project. If files overlap, the sibling is notified with the merged PR's title, URL, and overlapping file list so it can review and avoid reverting the merged work.
+
+- **Claude alive**: notification delivered via `tmux send-keys`
+- **Claude exited**: the worker is relaunched with a new Claude session; the notification is stored as a pending message in the registry and delivered on the next poll cycle once Claude is detected as running
 
 ### Worker Isolation Model
 - Every worker operates in its own git worktree — no shared working directory
