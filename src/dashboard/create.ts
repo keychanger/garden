@@ -251,6 +251,89 @@ export function buildWorktreeWorkerCommand(
   return `${claudeCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }
 
+/**
+ * Write a shell script that sets up the worktree and launches claude.
+ * The slow work (git fetch, worktree add, npm install) runs inside the
+ * tmux pane so the window appears instantly with progress output.
+ */
+export function buildWorktreeBootstrapScript(
+  projectName: string,
+  projectPath: string,
+  workerName: string,
+  branchName: string,
+  sessionId: string,
+  wtPath: string,
+  baseBranch?: string,
+): string {
+  // Write the context file eagerly (fast, just file I/O)
+  const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName, baseBranch);
+
+  const fifo = signalFifoPath(projectName).replace(/'/g, "'\\''");
+  const pollSignal = `[ -p '${fifo}' ] && (echo > '${fifo}') 2>/dev/null;`;
+
+  const escapedProjectPath = shellEscape(projectPath);
+  const escapedWtPath = shellEscape(wtPath);
+  const escapedContextFile = shellEscape(contextFile);
+  const escapedHooksDir = shellEscape(path.join(wtPath, ".garden-hooks"));
+  const escapedHookPath = shellEscape(path.join(wtPath, ".garden-hooks", "pre-push"));
+  const signalFifoPath_ = path.join(SESSIONS_DIR, `${projectName}-poll-signal`);
+
+  // Build the hook script content with the actual fifo path baked in
+  const hookContent = [
+    "#!/bin/sh",
+    `FIFO='${signalFifoPath_.replace(/'/g, "'\\''")}'`,
+    'if [ -p "$FIFO" ]; then',
+    '  (echo > "$FIFO") </dev/null >/dev/null 2>&1 &',
+    'fi',
+    'exit 0',
+  ].join("\\n");
+
+  const base = baseBranch ?? "main";
+  const escapedBase = base.replace(/'/g, "'\\''");
+
+  const script = `#!/bin/sh
+set -e
+
+printf 'Setting up worktree %s...\\n' '${branchName}'
+
+# Fast-forward ${base} before branching
+printf '  Fetching origin...\\n'
+git -C ${escapedProjectPath} fetch origin '${escapedBase}' 2>/dev/null || true
+git -C ${escapedProjectPath} merge --ff-only 'origin/${escapedBase}' 2>/dev/null || true
+
+# Create worktree
+printf '  Creating worktree...\\n'
+mkdir -p "$(dirname ${escapedWtPath})"
+git -C ${escapedProjectPath} worktree add ${escapedWtPath} -b '${branchName}'
+
+# Install dependencies if needed
+if [ -f ${escapedWtPath}/package.json ]; then
+  printf '  Installing dependencies...\\n'
+  (cd ${escapedWtPath} && npm install --prefer-offline) 2>/dev/null || true
+fi
+
+# Install poll trigger hook
+mkdir -p ${escapedHooksDir}
+printf '${hookContent}\\n' > ${escapedHookPath}
+chmod 755 ${escapedHookPath}
+git -C ${escapedWtPath} config --local core.hooksPath ${escapedHooksDir}
+
+# Switch to the worktree directory
+cd ${escapedWtPath}
+printf '  Ready.\\n\\n'
+
+# Launch claude
+claude --dangerously-skip-permissions --session-id ${sessionId} --append-system-prompt-file ${escapedContextFile}
+${pollSignal}
+exec $SHELL
+`;
+
+  const scriptFile = path.join(SESSIONS_DIR, `bootstrap-${projectName}-${branchName}.sh`);
+  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+  fs.writeFileSync(scriptFile, script, { mode: 0o755 });
+  return scriptFile;
+}
+
 export function buildWorktreeResumeCommand(
   projectName: string,
   projectPath: string,

@@ -6,7 +6,7 @@ import { readDashState, writeDashState } from "./state.js";
 import { parkToHidden, restoreFromHidden } from "./layout.js";
 import { refreshDashboard } from "./header.js";
 import {
-  tmux, tmuxDisplay, setPaneLabel,
+  tmux, tmuxDisplay, tmuxNewWindow, setPaneLabel, shellEscape,
   getFirstPaneId, paneExists, windowExists,
   listHiddenWorkerWindows, killWindowSafe,
 } from "./tmux.js";
@@ -15,8 +15,8 @@ import {
   addWorker, removeWorker, findWorkerByName, getAllWorkerNames,
 } from "./registry.js";
 import { log } from "./log.js";
-import { buildWorktreeWorkerCommand, createShellWindow, resolveGardenRunner } from "./create.js";
-import { worktreePath, createWorktree, removeWorktree, deleteBranch, installPollTriggerHook, fastForwardBase, getBranchHeadSha, resolveBaseBranch } from "./git.js";
+import { buildWorktreeBootstrapScript, createShellWindow, resolveGardenRunner } from "./create.js";
+import { worktreePath, removeWorktree, deleteBranch, resolveBaseBranch } from "./git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
 import { getWorkers } from "./registry.js";
 
@@ -34,30 +34,25 @@ export function newWorker(): void {
   const sessionId = crypto.randomUUID();
   const branchName = workerName;
   const wtPath = worktreePath(state.activeProject, workerName);
+  const gardenRunner = resolveGardenRunner();
 
   const baseBranch = resolveBaseBranch(project.path, project);
-  try {
-    fastForwardBase(project.path, baseBranch);
-    createWorktree(project.path, wtPath, branchName);
-    installPollTriggerHook(wtPath, resolveGardenRunner(), state.activeProject);
-  } catch (err) {
-    log.error("workers", "failed to create worktree", { worker: workerName, data: { error: String(err) } });
-    tmuxDisplay(`Failed to create worktree: ${err}`);
-    return;
-  }
 
-  const workerCmd = buildWorktreeWorkerCommand(
-    project.name, project.path, workerName, branchName, sessionId, baseBranch,
+  // Write the bootstrap script that handles slow setup (git fetch, worktree
+  // creation, npm install) inside the tmux pane so the window appears instantly
+  // with progress output instead of blocking the hotkey handler.
+  const scriptFile = buildWorktreeBootstrapScript(
+    project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
   );
 
+  // Show the new pane immediately — bootstrap runs inside it
   const parkName = state.activeWindowName ?? `_${state.activeProject}-active`;
   parkToHidden(parkName, state);
 
   const workerWindowName = `_${state.activeProject}-worker-${workerName}`;
 
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", wtPath,
-    "sh", "-c", workerCmd);
-  const workerPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindowName}`);
+  const workerPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
+    "sh", "-c", `sh ${shellEscape(scriptFile)}`);
   if (workerPaneId) setPaneLabel(workerPaneId, workerName);
   restoreFromHidden(workerWindowName, state);
 
@@ -67,15 +62,14 @@ export function newWorker(): void {
     task: "",
     worktreePath: wtPath,
     branchName,
-    lastSeenSha: getBranchHeadSha(wtPath) ?? undefined,
   });
 
-  ensureProjectPoller(state.activeProject, resolveGardenRunner());
+  ensureProjectPoller(state.activeProject, gardenRunner);
 
   state.activePaneType = "worker";
   state.activeWindowName = workerWindowName;
   writeDashState(state);
-  refreshDashboard();
+  refreshDashboard({ state });
 }
 
 export function killPane(): void {
