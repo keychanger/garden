@@ -233,6 +233,7 @@ All read commands detect whether stdout is a TTY:
     dashboard-<project>-<branch>.context  # Worktree worker context
     dashboard.log           # Structured JSON log
     <project>-poll-signal   # FIFO for waking project pollers
+    bootstrap-<project>-<branch>.sh       # Transient worktree bootstrap script
     <project>-<worker>-review-prompt.txt  # Transient review prompt
     <project>-<worker>-review-result.txt  # Transient review output
   worktrees/
