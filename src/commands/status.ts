@@ -34,7 +34,7 @@ const STATUS_ICONS: Record<WorkerStatus, string> = {
   waiting:        "\u25C6",     // filled diamond
   pushed:         "\u2191",     // up arrow
   reviewing:      "\u25CE",     // bullseye
-  "merge-pending": "\u25CE",    // bullseye
+  "merge-pending": "\u25F7",    // circle with right half - queued
   failing:        "\u2716",     // heavy multiplication x
   merged:         "\u{1F333}",  // deciduous tree
   exited:         "\u25CB",     // open circle
