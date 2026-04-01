@@ -132,7 +132,7 @@ export function getChangedFiles(wtPath: string): string[] {
 export function getCommitSummary(wtPath: string): string {
   try {
     return execFileSync("git", [
-      "log", "--oneline", "origin/main..HEAD",
+      "log", "--oneline", "main..HEAD",
     ], {
       cwd: wtPath,
       encoding: "utf-8",

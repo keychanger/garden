@@ -16,7 +16,7 @@ import {
 } from "./registry.js";
 import { log } from "./log.js";
 import { buildWorktreeWorkerCommand, createShellWindow, resolveGardenRunner } from "./create.js";
-import { worktreePath, createWorktree, removeWorktree, deleteBranch, installPollTriggerHook, fastForwardMain } from "./git.js";
+import { worktreePath, createWorktree, removeWorktree, deleteBranch, installPollTriggerHook, fastForwardMain, getBranchHeadSha } from "./git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
 import { getWorkers } from "./registry.js";
 
@@ -66,6 +66,7 @@ export function newWorker(): void {
     task: "",
     worktreePath: wtPath,
     branchName,
+    lastSeenSha: getBranchHeadSha(wtPath) ?? undefined,
   });
 
   ensureProjectPoller(state.activeProject, resolveGardenRunner());
