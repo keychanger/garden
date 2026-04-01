@@ -153,6 +153,21 @@ export function updateHeaderVar(): void {
   setHeaderVar(header);
 }
 
+const HEADER_STATUS_ICONS: Record<string, string> = {
+  working:   "\u{1F331}",  // seedling
+  waiting:   "\u{1F33F}",  // herb
+  exited:    "\u{1F940}",  // wilted flower
+  reviewing: "\u{1F338}",  // cherry blossom
+  failing:   "\u{1F342}",  // fallen leaf
+  merged:    "\u{1F333}",  // deciduous tree
+  shell:     "\u{1F41A}",  // shell (literal!)
+};
+
+function headerIcon(paneStatus: string, prState?: string): string {
+  const effectiveState = prState || paneStatus;
+  return HEADER_STATUS_ICONS[effectiveState] ?? "";
+}
+
 function formatHeader(
   projectName: string,
   isOnWorker: boolean,
@@ -168,24 +183,26 @@ function formatHeader(
 
   if (isOnWorker && totalWorkers > 0) {
     const label = workerLabel ?? "worker";
+    const icon = headerIcon(paneStatus, prState);
     const statusParts = [paneStatus, prState].filter(Boolean);
     if (mergeCount && mergeCount > 0) {
       statusParts.push(`${mergeCount} merged`);
     }
     const status = statusParts.length > 0 ? ` (${statusParts.join(", ")})` : "";
-    parts.push(`${label}${status} [${currentWorkerIdx}/${totalWorkers}]`);
+    parts.push(`${icon} ${label}${status} [${currentWorkerIdx}/${totalWorkers}]`);
   } else if (paneStatus) {
-    parts.push(paneStatus);
+    const icon = headerIcon(paneStatus);
+    parts.push(`${icon} ${paneStatus}`);
     if (totalWorkers > 0) {
       parts.push(`${totalWorkers} worker${totalWorkers === 1 ? "" : "s"} parked`);
     }
   }
 
-  const info = parts.join(" · ");
+  const info = parts.join(" \u00B7 ");
   const alertTag = alerts && alerts > 0
     ? `  [${alerts} alert${alerts === 1 ? "" : "s"}]`
     : "";
-  const hints = "⌥n new | ⌥w worker | ⌥s shell | ⌥l logs | ⌥] next";
+  const hints = "\u2325n new | \u2325w worker | \u2325s shell | \u2325l logs | \u2325] next";
   return `${info}${alertTag}  ${hints}`;
 }
 

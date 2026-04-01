@@ -9,11 +9,15 @@ import {
   getClaudeChildPid, hasChildProcesses, listHiddenWorkerWindows,
 } from "../dashboard/tmux.js";
 
+type WorkerStatus = "working" | "waiting" | "exited" | "reviewing" | "failing" | "merged";
+
 interface WorkerInfo {
   name: string;
-  status: "working" | "waiting" | "exited" | "merged";
+  status: WorkerStatus;
   activity: string | null;
   active: boolean;
+  mergeCount: number;
+  failCount: number;
 }
 
 interface ProjectStatusInfo {
@@ -21,6 +25,26 @@ interface ProjectStatusInfo {
   index: number;
   isActive: boolean;
   workers: WorkerInfo[];
+}
+
+const WORKING_FRAMES = ["\u{1F331}", "\u{1FAB4}", "\u{1F33F}"];  // seedling, potted plant, herb
+const STATUS_ICONS: Record<WorkerStatus, string> = {
+  working:   WORKING_FRAMES[0],
+  waiting:   "\u{1F33F}",  // herb
+  exited:    "\u{1F940}",  // wilted flower
+  reviewing: "\u{1F338}",  // cherry blossom
+  failing:   "\u{1F342}",  // fallen leaf
+  merged:    "\u{1F333}",  // deciduous tree
+};
+
+function workingIcon(): string {
+  const frame = Math.floor(Date.now() / 5000) % WORKING_FRAMES.length;
+  return WORKING_FRAMES[frame];
+}
+
+function iconFor(status: WorkerStatus): string {
+  if (status === "working") return workingIcon();
+  return STATUS_ICONS[status];
 }
 
 export async function status(_args: string[]): Promise<void> {
@@ -49,20 +73,42 @@ export async function status(_args: string[]): Promise<void> {
     return;
   }
 
+  // Compute column widths across all workers
+  const allWorkers = statuses.flatMap(p => p.workers);
+  const nameWidth = Math.max(10, ...allWorkers.map(w => w.name.length));
+  const statusWidth = Math.max(7, ...allWorkers.map(w => formatStatus(w).length));
+
   for (const project of statuses) {
-    const marker = project.isActive ? " ◄" : "";
+    const marker = project.isActive ? " \u25C4" : "";
     console.log(`  ${project.index}. ${project.name}${marker}`);
 
     if (project.workers.length === 0) {
       console.log("    (no workers)");
     } else {
       for (const worker of project.workers) {
-        const icon = worker.status === "merged" ? "✓" : worker.active ? "●" : "○";
-        const suffix = worker.activity ? ` — ${worker.activity}` : worker.status === "waiting" ? " (no task)" : "";
-        console.log(`    ${icon} ${worker.name}  ${worker.status}${suffix}`);
+        const icon = iconFor(worker.status);
+        const name = worker.name.padEnd(nameWidth);
+        const status = formatStatus(worker).padEnd(statusWidth);
+        const activity = worker.activity ? `  ${worker.activity}` : "";
+        console.log(`    ${icon} ${name}  ${status}${activity}`);
       }
     }
   }
+}
+
+function formatStatus(worker: WorkerInfo): string {
+  const base = worker.status;
+  if (base === "merged" && worker.mergeCount > 1) return `merged (x${worker.mergeCount})`;
+  if (base === "failing" && worker.failCount > 1) return `failing (${worker.failCount}x)`;
+  return base;
+}
+
+function resolveWorkerStatus(paneStatus: PaneInfo["status"], regEntry: { prState?: string } | undefined): WorkerStatus {
+  const pr = regEntry?.prState;
+  if (pr === "merged") return "merged";
+  if (pr === "reviewing") return "reviewing";
+  if (pr === "failing") return "failing";
+  return paneStatus;
 }
 
 function getProjectWorkers(projectName: string, dashState: { activeProject: string | null; activePaneId: string | null; activePaneType: string | null; activeWindowName?: string | null }): WorkerInfo[] {
@@ -77,8 +123,8 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
     const paneInfo = detectPaneProcessStatus(dashState.activePaneId);
     if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
     const regEntry = registryByName.get(label);
-    const workerStatus = regEntry?.prState === "merged" ? "merged" as const : paneInfo.status;
-    workers.push({ name: label, status: workerStatus, activity: paneInfo.activity, active: true });
+    const workerStatus = resolveWorkerStatus(paneInfo.status, regEntry);
+    workers.push({ name: label, status: workerStatus, activity: paneInfo.activity, active: true, mergeCount: regEntry?.mergeCount ?? 0, failCount: regEntry?.failCount ?? 0 });
   }
 
   const hiddenWindows = listHiddenWorkerWindows(projectName);
@@ -90,8 +136,8 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
       const paneInfo = detectPaneProcessStatus(paneId);
       if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
       const regEntry = registryByName.get(label);
-      const workerStatus = regEntry?.prState === "merged" ? "merged" as const : paneInfo.status;
-      workers.push({ name: label, status: workerStatus, activity: paneInfo.activity, active: false });
+      const workerStatus = resolveWorkerStatus(paneInfo.status, regEntry);
+      workers.push({ name: label, status: workerStatus, activity: paneInfo.activity, active: false, mergeCount: regEntry?.mergeCount ?? 0, failCount: regEntry?.failCount ?? 0 });
     }
   }
 
@@ -104,6 +150,8 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
         status: "merged",
         activity: null,
         active: false,
+        mergeCount: entry.mergeCount ?? 0,
+        failCount: entry.failCount ?? 0,
       });
     }
   }

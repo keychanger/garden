@@ -241,7 +241,7 @@ describe("registry task fallback", () => {
       console.log = origLog;
     }
 
-    expect(lines.some(l => l.includes("(no task)"))).toBe(true);
+    expect(lines.some(l => l.includes("waiting"))).toBe(true);
   });
 });
 
