@@ -102,17 +102,18 @@ Each project gets its own background poller (`_<project>-poller`) running in a h
 
 **State machine per worker:**
 ```
-working -> reviewing -> merge-pending -> merged
-               |              |
-               v              v
-           failing        reviewing (re-review on rebase conflict)
+working -> pushed -> reviewing -> merge-pending -> merged
+                        |              |
+                        v              v
+                    failing        reviewing (re-review on rebase conflict)
 ```
 
-1. **working**: Worker is active. Poller compares branch HEAD SHA against last-seen SHA. When new commits are detected and Claude is not actively working, transitions to reviewing. Multiple workers per project can be reviewing simultaneously.
-2. **reviewing**: Poller launches a Claude reviewer (`claude -p --dangerously-skip-permissions`) asynchronously in a hidden tmux window (`_<project>-review-<worker>`). The reviewer rebases onto main, resolves conflicts, runs optional checks, fixes check failures, and reviews code against project rules. The poller polls for review completion by checking if the review window still exists. On completion: if clean or fixed, force-pushes and transitions to merge-pending. If the reviewer cannot fix the issues, transitions to failing. If the review process fails (Claude unavailable, timeout, unparseable output), transitions to failing. Unreviewed code is never auto-merged.
-3. **merge-pending**: Review passed, waiting to merge. A serial merge queue processes one merge at a time per project (ordered by timestamp). The merge sequence: rebase onto current main, force-push, then ff-merge. If the rebase has conflicts (because main advanced while waiting), the poller launches a scoped re-review — a new reviewer session focused on rebase conflict resolution, provided with the previous review's output and the worker's task description for context. If the rebase is clean, the merge proceeds.
-4. **failing**: Unfixable review issues or review process failure. Poller watches for new commits via SHA tracking. After 30s debounce with no new pushes, state transitions back to working for retry. Each failure increments a `failCount` on the worker entry; after 3 consecutive failures, an alert is surfaced. The count resets on successful merge.
-5. **merged**: Code merged to main. If the worker pushes new commits after merge, the poller detects them and transitions back to working for a new review cycle.
+1. **working**: Worker is active. Poller compares branch HEAD SHA against last-seen SHA. When new commits are detected, transitions to pushed immediately (even if Claude is still working). Multiple workers per project can transition independently.
+2. **pushed**: Commits detected, awaiting review launch. If Claude is actively working and pushes new commits, reverts to working. Once Claude is idle, launches the review.
+3. **reviewing**: Poller launches a Claude reviewer (`claude -p --dangerously-skip-permissions`) asynchronously in a hidden tmux window (`_<project>-review-<worker>`). The reviewer rebases onto main, resolves conflicts, runs optional checks, fixes check failures, and reviews code against project rules. The poller polls for review completion by checking if the review window still exists. On completion: if clean or fixed, force-pushes and transitions to merge-pending. If the reviewer cannot fix the issues, transitions to failing. If the review process fails (Claude unavailable, timeout, unparseable output), transitions to failing. Unreviewed code is never auto-merged.
+4. **merge-pending**: Review passed, waiting to merge. A serial merge queue processes one merge at a time per project (ordered by timestamp). The merge sequence: rebase onto current main, force-push, then ff-merge. If the rebase has conflicts (because main advanced while waiting), the poller launches a scoped re-review — a new reviewer session focused on rebase conflict resolution, provided with the previous review's output and the worker's task description for context. If the rebase is clean, the merge proceeds.
+5. **failing**: Unfixable review issues or review process failure. Poller watches for new commits via SHA tracking. After 30s debounce with no new pushes, state transitions back to working for retry. Each failure increments a `failCount` on the worker entry; after 3 consecutive failures, an alert is surfaced. The count resets on successful merge.
+6. **merged**: Code merged to main. If the worker pushes new commits after merge, the poller detects them and transitions back to working for a new review cycle.
 
 ### Checks Configuration
 Projects can optionally define a `checks` command in `~/.garden/config.yml`:
@@ -181,14 +182,17 @@ The dashboard surfaces important events as alerts — persistent messages that r
 
 The status pane shows each worker's lifecycle state using plant-themed icons:
 
+- 🪴 **starting** — Claude launched but not yet tasked (no activity detected)
 - 🌱 **working** — process alive, has child processes (actively running tools)
 - 🌿 **waiting** — process alive, no child processes (showing prompt, wants input)
-- 🥀 **exited** — process has terminated
+- 📦 **pushed** — commits detected, awaiting review launch
 - 🌸 **reviewing** — poller is reviewing the worker's commits
+- 🌸 **merge-pending** — review passed, in the merge queue
 - 🍂 **failing** — checks or review failed (with failure count if repeated)
 - 🌳 **merged** — code merged to main (with merge count if multiple merges)
+- 🥀 **exited** — process has terminated
 
-Process status is detected via tmux's `pane_pid` and child process checks. Lifecycle states (reviewing, failing, merged) come from the worker registry. Workers are displayed in aligned columns: focus indicator (filled/empty circle), lifecycle icon, name, status, and activity.
+Process status is detected via tmux's `pane_pid` and child process checks. Lifecycle states (pushed, reviewing, merge-pending, failing, merged) come from the worker registry. Workers are displayed in aligned columns: focus indicator (filled/empty circle), lifecycle icon, name, status, and activity.
 
 ## Commands
 
