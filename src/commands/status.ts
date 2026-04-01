@@ -83,7 +83,8 @@ export async function status(_args: string[]): Promise<void> {
 
   for (const project of statuses) {
     const marker = project.isActive ? " \u25C4" : "";
-    console.log(`  ${project.index}. ${project.name}${marker}`);
+    const name = project.isActive ? `\x1b[1;32m${project.name}\x1b[0m` : project.name;
+    console.log(`  ${project.index}. ${name}${marker}`);
 
     if (project.workers.length === 0) {
       console.log("    (no workers)");
