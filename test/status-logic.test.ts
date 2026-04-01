@@ -43,7 +43,7 @@ vi.mock("../src/output.js", () => ({
   isTTY: true,
 }));
 
-import { status } from "../src/commands/status.js";
+import { status, renderQuickStatus } from "../src/commands/status.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { getWorkers } from "../src/dashboard/registry.js";
 import { dashboardExists } from "../src/session.js";
@@ -412,5 +412,137 @@ describe("no dashboard", () => {
     }
 
     expect(lines.some(l => l.includes("(no workers)"))).toBe(true);
+  });
+});
+
+describe("renderQuickStatus", () => {
+  it("returns no-projects message when config is empty", () => {
+    vi.mocked(loadConfig).mockReturnValue({ projects: {} });
+    const state = {
+      activeProject: null,
+      statusPaneId: null,
+      gardenShellPaneId: null,
+      activePaneId: null,
+      activePaneType: null,
+      activeWindowName: null,
+    };
+    expect(renderQuickStatus(state)).toBe("No projects added.");
+  });
+
+  it("shows active worker from state with registry status", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "fixing auth", prState: "reviewing" },
+    ]);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+
+    const state = {
+      activeProject: "garden",
+      statusPaneId: "%0",
+      gardenShellPaneId: "%1",
+      activePaneId: "%2",
+      activePaneType: "worker" as const,
+      activeWindowName: "_garden-worker-bold-ash",
+    };
+
+    const result = renderQuickStatus(state);
+    expect(result).toContain("bold-ash");
+    expect(result).toContain("reviewing");
+    expect(result).toContain("fixing auth");
+    expect(result).toMatch(/●/); // active indicator
+  });
+
+  it("shows hidden workers as inactive", () => {
+    vi.mocked(getWorkers).mockReturnValue([]);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_garden-worker-calm-bay"]);
+
+    const state = {
+      activeProject: "garden",
+      statusPaneId: "%0",
+      gardenShellPaneId: "%1",
+      activePaneId: "%2",
+      activePaneType: "shell" as const,
+      activeWindowName: "_garden-shell",
+    };
+
+    const result = renderQuickStatus(state);
+    expect(result).toContain("calm-bay");
+    expect(result).toMatch(/○/); // inactive indicator
+  });
+
+  it("resolves status to working when task exists but no prState", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "fixing auth" },
+    ]);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+
+    const state = {
+      activeProject: "garden",
+      statusPaneId: "%0",
+      gardenShellPaneId: "%1",
+      activePaneId: "%2",
+      activePaneType: "worker" as const,
+      activeWindowName: "_garden-worker-bold-ash",
+    };
+
+    const result = renderQuickStatus(state);
+    expect(result).toContain("working");
+  });
+
+  it("resolves status to ready when no task and no prState", () => {
+    vi.mocked(getWorkers).mockReturnValue([]);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+
+    const state = {
+      activeProject: "garden",
+      statusPaneId: "%0",
+      gardenShellPaneId: "%1",
+      activePaneId: "%2",
+      activePaneType: "worker" as const,
+      activeWindowName: "_garden-worker-bold-ash",
+    };
+
+    const result = renderQuickStatus(state);
+    expect(result).toContain("ready");
+  });
+
+  it("uses provided windowNames instead of querying tmux", () => {
+    vi.mocked(getWorkers).mockReturnValue([]);
+    vi.mocked(listHiddenWorkerWindows).mockImplementation((_proj, names) => {
+      // Should receive our passed-in names
+      if (names) return names.filter(n => n.includes("-worker-"));
+      return [];
+    });
+
+    const state = {
+      activeProject: "garden",
+      statusPaneId: "%0",
+      gardenShellPaneId: "%1",
+      activePaneId: "%2",
+      activePaneType: "shell" as const,
+      activeWindowName: "_garden-shell",
+    };
+
+    const result = renderQuickStatus(state, ["_garden-worker-swift-oak", "_garden-shell"]);
+    expect(result).toContain("swift-oak");
+  });
+
+  it("includes merged registry-only workers", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "old-elm", sessionId: "xyz", task: "", prState: "merged", mergeCount: 2 },
+    ]);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+
+    const state = {
+      activeProject: "garden",
+      statusPaneId: "%0",
+      gardenShellPaneId: "%1",
+      activePaneId: "%2",
+      activePaneType: "shell" as const,
+      activeWindowName: "_garden-shell",
+    };
+
+    const result = renderQuickStatus(state);
+    expect(result).toContain("old-elm");
+    expect(result).toContain("merged (x2)");
   });
 });

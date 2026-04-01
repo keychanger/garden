@@ -237,6 +237,7 @@ All read commands detect whether stdout is a TTY:
     bootstrap-<project>-<branch>.sh       # Transient worktree bootstrap script
     <project>-<worker>-review-prompt.txt  # Transient review prompt
     <project>-<worker>-review-result.txt  # Transient review output
+    status.rendered           # Pre-rendered status snapshot for instant display
   worktrees/
     <project>/
       <worker-name>/      # Git worktree for each worker
