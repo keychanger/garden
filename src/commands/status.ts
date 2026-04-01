@@ -2,7 +2,7 @@
 import { loadConfig } from "../config.js";
 import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
-import { readDashState } from "../dashboard/state.js";
+import { readDashState, type DashboardState } from "../dashboard/state.js";
 import { getWorkers } from "../dashboard/registry.js";
 import {
   getPanePid, getPaneLabel, getPaneVar, getPaneTitle, getFirstPaneId,
@@ -191,4 +191,96 @@ function detectPaneProcessStatus(paneId: string): PaneInfo {
     return { status: activity ? "waiting" : "ready", activity };
   }
   return { status: "working", activity };
+}
+
+/**
+ * Render status from state + registry without any pgrep/tmux process detection.
+ * Used for instant visual feedback on mutations; the full status poll refines it.
+ */
+export function renderQuickStatus(state: DashboardState, windowNames?: string[]): string {
+  const config = loadConfig();
+  const names = Object.keys(config.projects);
+  if (names.length === 0) return "No projects added.";
+
+  const lines: string[] = [];
+  const allWorkers: WorkerInfo[] = [];
+
+  const projectWorkers: WorkerInfo[][] = names.map((name) => {
+    const workers = getQuickWorkers(name, state, windowNames);
+    allWorkers.push(...workers);
+    return workers;
+  });
+
+  const nameWidth = Math.max(10, ...allWorkers.map(w => w.name.length));
+  const statusWidth = Math.max(7, ...allWorkers.map(w => formatStatus(w).length));
+
+  for (let pi = 0; pi < names.length; pi++) {
+    if (pi > 0) lines.push("");
+    const name = names[pi];
+    const isActive = state.activeProject === name;
+    const marker = isActive ? " \u25C4" : "";
+    const displayName = isActive ? `\x1b[1;32m${name}\x1b[0m` : name;
+    lines.push(`  ${pi + 1}. ${displayName}${marker}`);
+
+    const workers = projectWorkers[pi];
+    if (workers.length === 0) {
+      lines.push("    (no workers)");
+    } else {
+      for (const worker of workers) {
+        const focus = worker.active ? "\u25CF" : "\u25CB";
+        const icon = iconFor(worker.status);
+        const wName = worker.name.padEnd(nameWidth);
+        const wStatus = formatStatus(worker).padEnd(statusWidth);
+        const activity = worker.activity ? `  ${worker.activity}` : "";
+        lines.push(`    ${focus} ${icon} ${wName}  ${wStatus}${activity}`);
+      }
+    }
+  }
+
+  return lines.join("\n");
+}
+
+function getQuickWorkers(projectName: string, state: DashboardState, windowNames?: string[]): WorkerInfo[] {
+  const workers: WorkerInfo[] = [];
+  const registryEntries = getWorkers(projectName);
+  const registryByName = new Map(registryEntries.map(e => [e.name, e]));
+
+  if (state.activeProject === projectName && state.activePaneType === "worker") {
+    const nameMatch = (state.activeWindowName ?? "").match(/-worker-(.+)$/);
+    const label = nameMatch ? nameMatch[1] : "worker-1";
+    const entry = registryByName.get(label);
+    const status = resolveQuickWorkerStatus(entry);
+    workers.push({ name: label, status, activity: entry?.task ?? null, active: true, mergeCount: entry?.mergeCount ?? 0, failCount: entry?.failCount ?? 0 });
+  }
+
+  const hiddenWindows = listHiddenWorkerWindows(projectName, windowNames);
+  for (const win of hiddenWindows) {
+    if (win === state.activeWindowName) continue;
+    const nameMatch = win.match(/-worker-(.+)$/);
+    const label = nameMatch ? nameMatch[1] : win;
+    const entry = registryByName.get(label);
+    const status = resolveQuickWorkerStatus(entry);
+    workers.push({ name: label, status, activity: entry?.task ?? null, active: false, mergeCount: entry?.mergeCount ?? 0, failCount: entry?.failCount ?? 0 });
+  }
+
+  const seenNames = new Set(workers.map(w => w.name));
+  for (const entry of registryEntries) {
+    if (!seenNames.has(entry.name) && entry.prState === "merged") {
+      workers.push({ name: entry.name, status: "merged", activity: null, active: false, mergeCount: entry.mergeCount ?? 0, failCount: entry.failCount ?? 0 });
+    }
+  }
+
+  workers.sort((a, b) => a.name.localeCompare(b.name));
+  return workers;
+}
+
+function resolveQuickWorkerStatus(entry?: { prState?: string; task?: string }): WorkerStatus {
+  const pr = entry?.prState;
+  if (pr === "merged") return "merged";
+  if (pr === "merge-pending") return "merge-pending";
+  if (pr === "reviewing") return "reviewing";
+  if (pr === "pushed") return "pushed";
+  if (pr === "failing") return "failing";
+  if (entry?.task) return "working";
+  return "ready";
 }

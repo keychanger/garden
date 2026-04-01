@@ -1,10 +1,16 @@
 // Dashboard header and status bar: renders project info and hotkey hints
 // in the tmux status line.
+import fs from "node:fs";
+import path from "node:path";
+import { SESSIONS_DIR } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, paneExists, getPanePid, getPaneVar, getPaneTitle, hasClaudeChild, listHiddenWorkerWindows, setPaneVar } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
 import { findWorkerByName, updateWorkerTask } from "./registry.js";
 import { alertCount } from "./alerts.js";
+import { renderQuickStatus } from "../commands/status.js";
+
+const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
 
 interface RefreshOptions {
   state?: DashboardState;
@@ -234,14 +240,25 @@ export function buildStatusCommand(gardenRunner: string): string {
   // SIGUSR1 after every mutation (new worker, project switch, kill, etc.)
   // which interrupts the `sleep & wait` immediately. A 5s background poll
   // catches process status changes (working/waiting/exited) that have no
-  // event source. The trap on USR1 interrupts the sleep's wait, causing
-  // an immediate refresh.
+  // event source.
+  //
+  // On signal, the trap immediately displays a pre-rendered status snapshot
+  // (written by refreshDashboard) for instant visual feedback. The header
+  // var is already updated by the mutation, so _header is skipped on
+  // signal-triggered iterations. The full status poll then refines the
+  // display with live process detection.
+  const sf = STATUS_RENDERED_FILE;
   return [
     `printf '\\033[H\\033[2J\\033[3J'`,
-    `trap true USR1`,
+    `sf='${sf}'`,
+    `sig=0`,
+    `trap 'printf "\\033[H\\033[2J\\033[3J"; cat "$sf" 2>/dev/null; echo; sig=1' USR1`,
     `prev=""`,
     `while true; do`,
-    `  ${gardenRunner} dashboard _header >/dev/null 2>&1;`,
+    `  if [ $sig -eq 0 ]; then`,
+    `    ${gardenRunner} dashboard _header >/dev/null 2>&1;`,
+    `  fi;`,
+    `  sig=0;`,
     `  cur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1);`,
     `  if [ "$cur" != "$prev" ]; then`,
     `    printf '\\033[H\\033[2J\\033[3J%s\\n' "$cur";`,
@@ -262,10 +279,22 @@ export function refreshStatusPane(opts?: RefreshOptions): void {
 }
 
 /**
- * Full dashboard refresh: updates header var instantly, then signals
- * the status pane for a content refresh. Call after every mutation.
+ * Full dashboard refresh: updates header var instantly, writes a
+ * pre-rendered status snapshot for the status pane to display on
+ * signal, then signals the status pane. Call after every mutation.
  */
 export function refreshDashboard(opts?: RefreshOptions): void {
   updateHeaderVar(opts);
+  writeQuickStatus(opts);
   refreshStatusPane(opts);
+}
+
+function writeQuickStatus(opts?: RefreshOptions): void {
+  try {
+    const state = opts?.state ?? readDashState();
+    const rendered = renderQuickStatus(state, opts?.windowNames);
+    const tmpFile = STATUS_RENDERED_FILE + ".tmp";
+    fs.writeFileSync(tmpFile, rendered);
+    fs.renameSync(tmpFile, STATUS_RENDERED_FILE);
+  } catch { /* best effort */ }
 }
