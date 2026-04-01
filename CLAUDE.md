@@ -29,7 +29,7 @@ npm run dev -- help    # run via tsx during development
   - `tmux.ts` — low-level tmux helpers (shared by dashboard and status command)
   - `validate.ts` — state/tmux consistency validation and self-healing
   - `git.ts` — git CLI wrappers for worktree and merge operations
-  - `poller.ts` — poller: state machine driving review/merge lifecycle every 30s
+  - `poller.ts` — poller: event-driven state machine driving review/merge lifecycle
   - `alerts.ts` — persistent operator alerts (review failures, merge errors, repeated failures)
   - `log.ts` — structured JSON logger to `~/.garden/sessions/dashboard.log`
   - `names.ts` — worker name generation (adjective-noun pairs)
