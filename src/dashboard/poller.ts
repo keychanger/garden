@@ -83,8 +83,7 @@ function pollProject(projectName: string): boolean {
     } catch (err) {
       log.error("poller", "error polling worker", {
         worker: entry.name,
-        project: projectName,
-        error: String(err),
+        data: { error: String(err) },
       });
     }
   }
@@ -115,7 +114,7 @@ function pollWorker(
     default:
       log.warn("poller", "unknown state, resetting to working", {
         worker: entry.name,
-        state,
+        data: { state },
       });
       updateWorkerFields(projectName, entry.name, { prState: "working" });
       return true;
@@ -229,8 +228,7 @@ function handleReviewing(
 
   log.info("poller", "review complete", {
     worker: entry.name,
-    verdict: review.verdict,
-    ...(review.verdict === "fixed" && { summary: review.body }),
+    data: { verdict: review.verdict },
   });
 
   if (review.verdict === "clean" || review.verdict === "fixed") {
@@ -243,7 +241,7 @@ function handleReviewing(
     } catch (err) {
       log.error("poller", "force-push after review failed", {
         worker: entry.name,
-        error: String(err),
+        data: { error: String(err) },
       });
       updateWorkerFields(projectName, entry.name, {
         prState: "working",
@@ -265,7 +263,6 @@ function handleReviewing(
     // "failed" — reviewer couldn't fix the issues
     log.error("poller", "reviewer could not fix issues", {
       worker: entry.name,
-      body: review.body,
     });
     addAlert({
       level: "error",
@@ -333,7 +330,7 @@ function handleMergePending(
   } catch (err) {
     log.error("poller", "force-push failed in merge queue", {
       worker: entry.name,
-      error: String(err),
+      data: { error: String(err) },
     });
     updateWorkerFields(projectName, entry.name, {
       prState: "working",
@@ -361,9 +358,9 @@ function handleFailing(
     // New commits pushed — track the change
     const commitLog = getNewCommitSummary(wtPath, entry.failingSha ?? entry.lastSeenSha);
     if (commitLog) {
-      log.info("poller", "new commits detected in failing worker", {
+      log.info("poller", "new commits in failing worker", {
         worker: entry.name,
-        commits: commitLog,
+        data: { commits: commitLog },
       });
     }
 
@@ -418,7 +415,6 @@ function handleMerged(
   const prevCount = entry.mergeCount ?? 0;
   log.info("poller", "new commits after merge, resuming", {
     worker: entry.name,
-    mergeCount: prevCount + 1,
   });
   updateWorkerFields(projectName, entry.name, {
     prState: "working",
@@ -498,7 +494,6 @@ function launchReview(
 
   log.info("poller", isReReview ? "launched re-review" : "launched review", {
     worker: entry.name,
-    reviewWindow: revWindow,
   });
   return true;
 }
@@ -530,7 +525,7 @@ function readReviewResult(
   } catch (err) {
     log.warn("poller", "failed to read review result", {
       worker: entry.name,
-      error: String(err),
+      data: { error: String(err) },
     });
     return null;
   }
@@ -547,7 +542,7 @@ function parseReviewResult(output: string, workerName: string): ReviewResult | n
 
   log.warn("poller", "could not parse review verdict", {
     worker: workerName,
-    lastLine,
+    data: { lastLine },
   });
   return null;
 }
@@ -789,7 +784,7 @@ function finalizeMerge(
   } catch (err) {
     log.error("poller", "merge failed", {
       worker: entry.name,
-      error: String(err),
+      data: { error: String(err) },
     });
     addAlert({
       level: "error",
@@ -843,18 +838,16 @@ function runPostMerge(projectName: string, projectPath: string): void {
       timeout: 120_000,
     });
     if (projectName === "garden") {
-      log.info("poller", "garden rebuilt", { commit });
+      log.info("poller", "garden rebuilt", { data: { commit } });
     } else {
-      log.info("poller", "postMerge completed", { project: projectName, commit });
+      log.info("poller", "postMerge completed", { data: { commit } });
     }
   } catch (err) {
     const message = projectName === "garden"
       ? `Garden rebuild failed at commit ${commit}: ${String(err).slice(0, 200)}`
       : `postMerge failed at commit ${commit}: ${String(err).slice(0, 200)}`;
     log.error("poller", "postMerge failed", {
-      project: projectName,
-      commit,
-      error: String(err),
+      data: { commit, error: String(err) },
     });
     addAlert({
       level: "error",
@@ -910,13 +903,12 @@ function notifySiblingWorkers(
       tmux("send-keys", "-t", paneId, "Enter");
       log.info("poller", "notified sibling of merge overlap", {
         worker: sibling.name,
-        mergedWorker: mergedEntry.name,
-        overlapFiles: overlap,
+        data: { mergedWorker: mergedEntry.name, overlapFiles: overlap },
       });
     } else {
-      log.info("poller", "skipping dead sibling for merge overlap notification", {
+      log.info("poller", "skipping dead sibling", {
         worker: sibling.name,
-        mergedWorker: mergedEntry.name,
+        data: { mergedWorker: mergedEntry.name },
       });
     }
   }
@@ -987,7 +979,7 @@ export function triggerProjectPoll(projectName: string): void {
     const fd = fs.openSync(fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
     fs.writeSync(fd, "\n");
     fs.closeSync(fd);
-    log.info("poller", "triggered project poll", { project: projectName });
+    log.info("poller", "triggered poll", { data: { project: projectName } });
   } catch {
     // FIFO not ready or poller not running
   }
@@ -1017,7 +1009,7 @@ export function startProjectPoller(projectName: string, gardenRunner: string): v
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", window,
     "bash", "-c", cmd);
 
-  log.info("poller", "started project poller", { project: projectName });
+  log.info("poller", "started", { data: { project: projectName } });
 }
 
 export function stopProjectPoller(projectName: string): void {
@@ -1025,7 +1017,7 @@ export function stopProjectPoller(projectName: string): void {
   killWindowSafe(window);
   const fifo = signalFifoPath(projectName);
   try { fs.unlinkSync(fifo); } catch { /* ignore */ }
-  log.info("poller", "stopped project poller", { project: projectName });
+  log.info("poller", "stopped", { data: { project: projectName } });
 }
 
 export function stopAllPollers(): void {

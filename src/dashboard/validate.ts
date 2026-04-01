@@ -27,7 +27,7 @@ function healStatusPaneInState(state: DashboardState): DashboardState {
   let healed = state;
 
   if (healed.statusPaneId && !paneExists(healed.statusPaneId)) {
-    log.warn("validate", "statusPaneId is stale", { paneId: healed.statusPaneId });
+    log.warn("validate", "statusPaneId is stale");
     healed = { ...healed, statusPaneId: null };
   }
 
@@ -48,9 +48,9 @@ function healStatusPaneInState(state: DashboardState): DashboardState {
       setPaneLabel(statusId, "status");
 
       healed = { ...healed, statusPaneId: statusId };
-      log.info("validate", "recreated status pane", { paneId: statusId });
+      log.info("validate", "recreated status pane");
     } catch (err) {
-      log.warn("validate", "failed to recreate status pane", { error: String(err) });
+      log.warn("validate", "failed to recreate status pane", { data: { error: String(err) } });
     }
   }
 
@@ -66,16 +66,13 @@ export function validateAndHeal(state: DashboardState): DashboardState {
   let changed = healed !== state;
 
   if (healed.gardenShellPaneId && !paneExists(healed.gardenShellPaneId)) {
-    log.warn("validate", "gardenShellPaneId is stale", { paneId: healed.gardenShellPaneId });
+    log.warn("validate", "gardenShellPaneId is stale");
     healed.gardenShellPaneId = null;
     changed = true;
   }
 
   if (healed.activePaneId && !paneExists(healed.activePaneId)) {
-    log.warn("validate", "activePaneId is stale, attempting recovery", {
-      paneId: healed.activePaneId,
-      windowName: healed.activeWindowName,
-    });
+    log.warn("validate", "activePaneId is stale, attempting recovery");
     changed = true;
 
     // Try to recover from the named window
@@ -84,10 +81,7 @@ export function validateAndHeal(state: DashboardState): DashboardState {
       const paneId = getFirstPaneId(healed.activeWindowName);
       if (paneId) {
         healed.activePaneId = paneId;
-        log.info("validate", "recovered activePaneId from window", {
-          windowName: healed.activeWindowName,
-          paneId,
-        });
+        log.info("validate", "recovered activePaneId from window");
         recovered = true;
       }
     }
@@ -101,10 +95,7 @@ export function validateAndHeal(state: DashboardState): DashboardState {
           healed.activePaneId = paneId;
           healed.activePaneType = "worker";
           healed.activeWindowName = win;
-          log.info("validate", "recovered activePaneId from worker window", {
-            windowName: win,
-            paneId,
-          });
+          log.info("validate", "recovered activePaneId from worker window");
           recovered = true;
           break;
         }
@@ -131,7 +122,6 @@ export function validateAndHeal(state: DashboardState): DashboardState {
       const exists = windowExists(windowName) || windowName === healed.activeWindowName;
       if (!exists) {
         log.info("validate", "removing registry entry for missing window", {
-          project: projectName,
           worker: entry.name,
         });
       }
@@ -151,9 +141,7 @@ export function validateAndHeal(state: DashboardState): DashboardState {
       if (!entry.worktreePath) continue;
       if (!worktreeExists(entry.worktreePath)) {
         log.warn("validate", "worktree missing for worker", {
-          project: projectName,
           worker: entry.name,
-          worktreePath: entry.worktreePath,
         });
         entry.worktreePath = undefined;
         registryChanged = true;
@@ -180,7 +168,7 @@ export function validateAndHeal(state: DashboardState): DashboardState {
   const gardenRunner = resolveGardenRunner();
   for (const projectName of Object.keys(registry.workers)) {
     if (registry.workers[projectName].length > 0 && !projectPollerRunning(projectName)) {
-      log.info("validate", "project poller not running, restarting", { project: projectName });
+      log.info("validate", "project poller not running, restarting", { data: { project: projectName } });
       startProjectPoller(projectName, gardenRunner);
     }
   }
@@ -195,11 +183,7 @@ export function validateAndHeal(state: DashboardState): DashboardState {
   cleanOrphanedReviewWindows(registry);
 
   if (changed) {
-    log.info("validate", "state healed", {
-      activePaneId: healed.activePaneId,
-      activePaneType: healed.activePaneType,
-      activeWindowName: healed.activeWindowName,
-    });
+    log.info("validate", "state healed");
   }
 
   return healed;
@@ -216,14 +200,14 @@ function cleanContextFiles(): void {
         const projectName = file.replace("dashboard-", "").replace(".context", "");
         if (!projectNames.has(projectName)) {
           fs.unlinkSync(`${SESSIONS_DIR}/${file}`);
-          log.info("validate", "removed stale context file", { file });
+          log.info("validate", "removed stale context file", { data: { file } });
         }
         continue;
       }
       // Clean stale review result/prompt files
       if (file.endsWith("-review-result.txt") || file.endsWith("-review-prompt.txt")) {
         fs.unlinkSync(`${SESSIONS_DIR}/${file}`);
-        log.info("validate", "removed stale review file", { file });
+        log.info("validate", "removed stale review file", { data: { file } });
       }
     }
   } catch { /* sessions dir might not exist */ }
@@ -236,9 +220,7 @@ function cleanOrphanedReviewWindows(registry: WorkerRegistry): void {
       if (entry.reviewWindowName && !windowExists(entry.reviewWindowName)) {
         updateWorkerFields(projectName, entry.name, { reviewWindowName: undefined });
         log.info("validate", "cleared stale reviewWindowName", {
-          project: projectName,
           worker: entry.name,
-          window: entry.reviewWindowName,
         });
       }
     }

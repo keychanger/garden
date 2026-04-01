@@ -324,8 +324,7 @@ describe("poll — reviewing state (async)", () => {
 
     expect(log.info).toHaveBeenCalledWith("poller", "review complete", {
       worker: "bold-ash",
-      verdict: "fixed",
-      summary: "Added missing tests.",
+      data: { verdict: "fixed" },
     });
   });
 
@@ -348,7 +347,7 @@ describe("poll — reviewing state (async)", () => {
 
     expect(log.info).toHaveBeenCalledWith("poller", "review complete", {
       worker: "bold-ash",
-      verdict: "clean",
+      data: { verdict: "clean" },
     });
   });
 

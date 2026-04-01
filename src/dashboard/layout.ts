@@ -12,10 +12,7 @@ import { log } from "./log.js";
  */
 export function parkToHidden(windowName: string, state: DashboardState): string | null {
   if (!state.activePaneId || !paneExists(state.activePaneId)) {
-    log.warn("layout", "parkToHidden: active pane missing or dead", {
-      activePaneId: state.activePaneId,
-      windowName,
-    });
+    log.warn("layout", "parkToHidden: active pane missing or dead");
     return null;
   }
 
@@ -26,17 +23,13 @@ export function parkToHidden(windowName: string, state: DashboardState): string 
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName);
   const tempPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (!tempPaneId) {
-    log.error("layout", "parkToHidden: failed to get pane ID for new window", { windowName });
+    log.error("layout", "parkToHidden: failed to get pane ID for new window");
     return null;
   }
 
   // Swap: active content goes to hidden window, temp comes to right slot
   tmux("swap-pane", "-s", state.activePaneId, "-t", tempPaneId);
-  log.debug("layout", "parkToHidden", {
-    windowName,
-    from: state.activePaneId,
-    to: tempPaneId,
-  });
+  log.debug("layout", "parkToHidden");
   state.activePaneId = tempPaneId;
   state.activePaneType = null;
   state.activeWindowName = null;
@@ -50,21 +43,13 @@ export function parkToHidden(windowName: string, state: DashboardState): string 
 export function restoreFromHidden(windowName: string, state: DashboardState): void {
   const targetPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (!targetPaneId || !state.activePaneId) {
-    log.warn("layout", "restoreFromHidden: missing pane", {
-      windowName,
-      targetPaneId,
-      activePaneId: state.activePaneId,
-    });
+    log.warn("layout", "restoreFromHidden: missing pane");
     return;
   }
 
   tmux("swap-pane", "-s", state.activePaneId, "-t", targetPaneId);
   killWindowSafe(windowName);
-  log.debug("layout", "restoreFromHidden", {
-    windowName,
-    from: state.activePaneId,
-    to: targetPaneId,
-  });
+  log.debug("layout", "restoreFromHidden");
   state.activePaneId = targetPaneId;
 }
 
@@ -82,10 +67,7 @@ export function swapToHidden(parkWindowName: string, restoreWindowName: string, 
  */
 export function gardenParkToHidden(windowName: string, state: DashboardState): string | null {
   if (!state.gardenShellPaneId || !paneExists(state.gardenShellPaneId)) {
-    log.warn("layout", "gardenParkToHidden: garden pane missing or dead", {
-      gardenShellPaneId: state.gardenShellPaneId,
-      windowName,
-    });
+    log.warn("layout", "gardenParkToHidden: garden pane missing or dead");
     return null;
   }
 
@@ -96,16 +78,12 @@ export function gardenParkToHidden(windowName: string, state: DashboardState): s
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName);
   const tempPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (!tempPaneId) {
-    log.error("layout", "gardenParkToHidden: failed to get pane ID for new window", { windowName });
+    log.error("layout", "gardenParkToHidden: failed to get pane ID for new window");
     return null;
   }
 
   tmux("swap-pane", "-s", state.gardenShellPaneId, "-t", tempPaneId);
-  log.debug("layout", "gardenParkToHidden", {
-    windowName,
-    from: state.gardenShellPaneId,
-    to: tempPaneId,
-  });
+  log.debug("layout", "gardenParkToHidden");
   state.gardenShellPaneId = tempPaneId;
   state.gardenPaneType = null;
   state.gardenWindowName = null;
@@ -119,21 +97,13 @@ export function gardenParkToHidden(windowName: string, state: DashboardState): s
 export function gardenRestoreFromHidden(windowName: string, state: DashboardState): void {
   const targetPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (!targetPaneId || !state.gardenShellPaneId) {
-    log.warn("layout", "gardenRestoreFromHidden: missing pane", {
-      windowName,
-      targetPaneId,
-      gardenShellPaneId: state.gardenShellPaneId,
-    });
+    log.warn("layout", "gardenRestoreFromHidden: missing pane");
     return;
   }
 
   tmux("swap-pane", "-s", state.gardenShellPaneId, "-t", targetPaneId);
   killWindowSafe(windowName);
-  log.debug("layout", "gardenRestoreFromHidden", {
-    windowName,
-    from: state.gardenShellPaneId,
-    to: targetPaneId,
-  });
+  log.debug("layout", "gardenRestoreFromHidden");
   state.gardenShellPaneId = targetPaneId;
 }
 

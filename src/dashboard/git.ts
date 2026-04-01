@@ -19,11 +19,10 @@ export function fastForwardMain(repoPath: string): void {
   try {
     git(repoPath, "fetch", "origin", "main");
     git(repoPath, "merge", "--ff-only", "origin/main");
-    log.info("git", "fast-forwarded main", { repoPath });
+    log.info("git", "fast-forwarded main");
   } catch (err) {
     log.warn("git", "failed to fast-forward main", {
-      repoPath,
-      error: String(err),
+      data: { error: String(err) },
     });
   }
 }
@@ -35,18 +34,17 @@ export function createWorktree(
 ): void {
   fs.mkdirSync(path.dirname(wtPath), { recursive: true });
   git(repoPath, "worktree", "add", wtPath, "-b", branchName);
-  log.info("git", "created worktree", { wtPath, branchName });
+  log.info("git", "created worktree", { data: { branchName } });
   installDeps(wtPath);
 }
 
 export function removeWorktree(repoPath: string, wtPath: string): void {
   try {
     git(repoPath, "worktree", "remove", wtPath, "--force");
-    log.info("git", "removed worktree", { wtPath });
+    log.info("git", "removed worktree");
   } catch (err) {
     log.warn("git", "failed to remove worktree", {
-      wtPath,
-      error: String(err),
+      data: { error: String(err) },
     });
   }
 }
@@ -62,11 +60,10 @@ export function worktreeExists(wtPath: string): boolean {
 export function deleteBranch(repoPath: string, branchName: string): void {
   try {
     git(repoPath, "branch", "-D", branchName);
-    log.info("git", "deleted branch", { branchName });
+    log.info("git", "deleted branch", { data: { branchName } });
   } catch (err) {
     log.warn("git", "failed to delete branch", {
-      branchName,
-      error: String(err),
+      data: { branchName, error: String(err) },
     });
   }
 }
@@ -109,17 +106,16 @@ export function mergeToMain(repoPath: string, branchName: string): void {
   git(repoPath, "checkout", "main");
   git(repoPath, "merge", "--ff-only", `origin/${branchName}`);
   git(repoPath, "push", "origin", "main");
-  log.info("git", "merged to main", { branchName });
+  log.info("git", "merged to main", { data: { branchName } });
 }
 
 export function deleteRemoteBranch(repoPath: string, branchName: string): void {
   try {
     git(repoPath, "push", "origin", "--delete", branchName);
-    log.info("git", "deleted remote branch", { branchName });
+    log.info("git", "deleted remote branch", { data: { branchName } });
   } catch (err) {
     log.warn("git", "failed to delete remote branch", {
-      branchName,
-      error: String(err),
+      data: { branchName, error: String(err) },
     });
   }
 }
@@ -193,7 +189,7 @@ export function installPollTriggerHook(wtPath: string, _gardenRunner?: string, p
   fs.mkdirSync(hooksDir, { recursive: true });
   fs.writeFileSync(hookPath, hookScript, { mode: 0o755 });
   git(wtPath, "config", "--local", "core.hooksPath", hooksDir);
-  log.info("git", "installed poll trigger hook", { wtPath });
+  log.info("git", "installed poll trigger hook");
 }
 
 function installDeps(wtPath: string): void {
@@ -204,11 +200,10 @@ function installDeps(wtPath: string): void {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 120_000,
     });
-    log.info("git", "installed dependencies", { wtPath });
+    log.info("git", "installed dependencies");
   } catch (err) {
     log.warn("git", "failed to install dependencies", {
-      wtPath,
-      error: String(err),
+      data: { error: String(err) },
     });
   }
 }

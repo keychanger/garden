@@ -24,7 +24,7 @@ describe("log", () => {
 
   it("includes data when provided", async () => {
     const { log } = await importLog();
-    log.info("test", "with data", { key: "value" });
+    log.info("test", "with data", { data: { key: "value" } });
     const logFile = path.join(env.sessionsDir, "dashboard.log");
     const entry = JSON.parse(fs.readFileSync(logFile, "utf-8").trim());
     expect(entry.data).toEqual({ key: "value" });

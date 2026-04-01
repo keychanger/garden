@@ -19,7 +19,12 @@ function shouldLog(level: LogLevel): boolean {
   return LEVEL_ORDER[level] >= LEVEL_ORDER[getMinLevel()];
 }
 
-function write(level: LogLevel, src: string, msg: string, data?: Record<string, unknown>): void {
+interface LogOpts {
+  worker?: string;
+  data?: Record<string, unknown>;
+}
+
+function write(level: LogLevel, src: string, msg: string, opts?: LogOpts): void {
   if (!shouldLog(level)) return;
   try {
     fs.mkdirSync(SESSIONS_DIR, { recursive: true });
@@ -27,9 +32,10 @@ function write(level: LogLevel, src: string, msg: string, data?: Record<string, 
       ts: new Date().toISOString(),
       level,
       src,
-      msg,
     };
-    if (data) entry.data = data;
+    if (opts?.worker) entry.worker = opts.worker;
+    entry.msg = msg;
+    if (opts?.data) entry.data = opts.data;
     fs.appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n");
   } catch { /* logging must never crash the app */ }
 }
@@ -44,8 +50,8 @@ export function truncateLog(): void {
 }
 
 export const log = {
-  debug: (src: string, msg: string, data?: Record<string, unknown>) => write("debug", src, msg, data),
-  info: (src: string, msg: string, data?: Record<string, unknown>) => write("info", src, msg, data),
-  warn: (src: string, msg: string, data?: Record<string, unknown>) => write("warn", src, msg, data),
-  error: (src: string, msg: string, data?: Record<string, unknown>) => write("error", src, msg, data),
+  debug: (src: string, msg: string, opts?: LogOpts) => write("debug", src, msg, opts),
+  info: (src: string, msg: string, opts?: LogOpts) => write("info", src, msg, opts),
+  warn: (src: string, msg: string, opts?: LogOpts) => write("warn", src, msg, opts),
+  error: (src: string, msg: string, opts?: LogOpts) => write("error", src, msg, opts),
 };

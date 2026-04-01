@@ -15,7 +15,7 @@ import { log } from "./log.js";
 import { createShellWindow, createLogsWindow } from "./create.js";
 
 export function switchProject(indexArg: string): void {
-  log.info("navigate", "switchProject", { index: indexArg });
+  log.info("navigate", "switchProject", { data: { index: indexArg } });
   const index = parseInt(indexArg, 10) - 1;
   const config = loadConfig();
   const projectNames = Object.keys(config.projects);

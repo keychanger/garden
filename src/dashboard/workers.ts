@@ -40,7 +40,7 @@ export function newWorker(): void {
     createWorktree(project.path, wtPath, branchName);
     installPollTriggerHook(wtPath, resolveGardenRunner(), state.activeProject);
   } catch (err) {
-    log.error("workers", "failed to create worktree", { error: String(err) });
+    log.error("workers", "failed to create worktree", { worker: workerName, data: { error: String(err) } });
     tmuxDisplay(`Failed to create worktree: ${err}`);
     return;
   }

@@ -41,8 +41,7 @@ export function readDashState(): DashboardState {
     }
   } catch (err) {
     log.warn("state", "failed to read state file, using defaults", {
-      file: STATE_FILE,
-      error: String(err),
+      data: { error: String(err) },
     });
   }
   return { ...DEFAULT_STATE };

@@ -37,8 +37,7 @@ export function readRegistry(): WorkerRegistry {
     }
   } catch (err) {
     log.warn("registry", "failed to read registry, using empty", {
-      file: REGISTRY_FILE,
-      error: String(err),
+      data: { error: String(err) },
     });
   }
   return { workers: {} };
