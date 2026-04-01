@@ -167,20 +167,25 @@ export function updateHeaderVar(opts?: RefreshOptions): void {
   setHeaderVar(header);
 }
 
+const SPINNER_FRAMES = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u2834", "\u2826", "\u2827", "\u2807", "\u280F"];
 const HEADER_STATUS_ICONS: Record<string, string> = {
-  ready:            "\u{1FAB4}",  // potted plant
-  working:          "\u{1F331}",  // seedling
-  waiting:          "\u{1F33F}",  // herb
-  pushed:           "\u{1F4E6}",  // package
-  reviewing:        "\u{1F338}",  // cherry blossom
-  "merge-pending":  "\u{1F338}",  // cherry blossom
-  failing:          "\u{1F342}",  // fallen leaf
+  ready:            "\u{1F331}",  // seedling
+  working:          SPINNER_FRAMES[0],
+  waiting:          "\u25C6",     // filled diamond
+  pushed:           "\u2191",     // up arrow
+  reviewing:        "\u25CE",     // bullseye
+  "merge-pending":  "\u25CE",    // bullseye
+  failing:          "\u2716",     // heavy multiplication x
   merged:           "\u{1F333}",  // deciduous tree
-  exited:           "\u{1F940}",  // wilted flower
+  exited:           "\u25CB",     // open circle
 };
 
 function headerIcon(paneStatus: string, prState?: string): string {
   const effectiveState = prState || paneStatus;
+  if (effectiveState === "working") {
+    const frame = Math.floor(Date.now() / 2000) % SPINNER_FRAMES.length;
+    return SPINNER_FRAMES[frame];
+  }
   return HEADER_STATUS_ICONS[effectiveState] ?? "";
 }
 

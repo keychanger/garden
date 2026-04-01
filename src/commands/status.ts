@@ -27,26 +27,24 @@ interface ProjectStatusInfo {
   workers: WorkerInfo[];
 }
 
-const WORKING_FRAMES = ["\u{1F331}", "\u{1FAB4}", "\u{1F33F}"];  // seedling, potted plant, herb
+const SPINNER_FRAMES = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u2834", "\u2826", "\u2827", "\u2807", "\u280F"];
 const STATUS_ICONS: Record<WorkerStatus, string> = {
-  ready:          "\u{1FAB4}",  // potted plant (new, not yet tasked)
-  working:        WORKING_FRAMES[0],
-  waiting:        "\u{1F33F}",  // herb (needs input)
-  pushed:         "\u{1F4E6}",  // package (shipped, awaiting review)
-  reviewing:      "\u{1F338}",  // cherry blossom
-  "merge-pending": "\u{1F338}", // cherry blossom (in merge queue)
-  failing:        "\u{1F342}",  // fallen leaf
+  ready:          "\u{1F331}",  // seedling
+  working:        SPINNER_FRAMES[0],
+  waiting:        "\u25C6",     // filled diamond
+  pushed:         "\u2191",     // up arrow
+  reviewing:      "\u25CE",     // bullseye
+  "merge-pending": "\u25CE",    // bullseye
+  failing:        "\u2716",     // heavy multiplication x
   merged:         "\u{1F333}",  // deciduous tree
-  exited:         "\u{1F940}",  // wilted flower
+  exited:         "\u25CB",     // open circle
 };
 
-function workingIcon(): string {
-  const frame = Math.floor(Date.now() / 5000) % WORKING_FRAMES.length;
-  return WORKING_FRAMES[frame];
-}
-
 function iconFor(status: WorkerStatus): string {
-  if (status === "working") return workingIcon();
+  if (status === "working") {
+    const frame = Math.floor(Date.now() / 2000) % SPINNER_FRAMES.length;
+    return SPINNER_FRAMES[frame];
+  }
   return STATUS_ICONS[status];
 }
 
