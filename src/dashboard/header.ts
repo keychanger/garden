@@ -66,27 +66,30 @@ export function printHeader(): void {
       paneStatus = "shell";
     } else {
       const pid = getPanePid(state.activePaneId);
-      if (pid && hasClaudeChild(pid)) {
-        let title = getPaneVar(state.activePaneId, "garden_task");
-        if (!title && workerLabel && state.activeProject) {
-          const entry = findWorkerByName(state.activeProject, workerLabel);
-          if (entry?.task) {
-            title = entry.task;
-          }
+      const claudeRunning = pid && hasClaudeChild(pid);
+
+      let title = getPaneVar(state.activePaneId, "garden_task");
+      if (!title && workerLabel && state.activeProject) {
+        const entry = findWorkerByName(state.activeProject, workerLabel);
+        if (entry?.task) {
+          title = entry.task;
         }
-        if (!title) {
-          title = getPaneTitle(state.activePaneId) ?? null;
+      }
+      if (!title && claudeRunning) {
+        title = getPaneTitle(state.activePaneId) ?? null;
+      }
+      if (title) {
+        setPaneVar(state.activePaneId, "garden_task", title);
+        if (workerLabel && state.activeProject) {
+          updateWorkerTask(state.activeProject, workerLabel, title);
         }
-        if (title) {
-          setPaneVar(state.activePaneId, "garden_task", title);
-          if (workerLabel && state.activeProject) {
-            updateWorkerTask(state.activeProject, workerLabel, title);
-          }
-        }
-        paneStatus = title ? "working" : "waiting";
+      }
+
+      if (claudeRunning) {
+        paneStatus = title ? "working" : "starting";
       } else {
-        paneStatus = "exited";
-        setPaneVar(state.activePaneId, "garden_task", "");
+        paneStatus = title ? "exited" : "starting";
+        if (!title) setPaneVar(state.activePaneId, "garden_task", "");
       }
     }
   }
@@ -154,13 +157,15 @@ export function updateHeaderVar(): void {
 }
 
 const HEADER_STATUS_ICONS: Record<string, string> = {
-  working:   "\u{1F331}",  // seedling
-  waiting:   "\u{1F33F}",  // herb
-  exited:    "\u{1F940}",  // wilted flower
-  reviewing: "\u{1F338}",  // cherry blossom
-  failing:   "\u{1F342}",  // fallen leaf
-  merged:    "\u{1F333}",  // deciduous tree
-  shell:     "\u{1F41A}",  // shell (literal!)
+  starting:         "\u{1FAB4}",  // potted plant
+  working:          "\u{1F331}",  // seedling
+  waiting:          "\u{1F33F}",  // herb
+  pushed:           "\u{1F4E6}",  // package
+  reviewing:        "\u{1F338}",  // cherry blossom
+  "merge-pending":  "\u{1F338}",  // cherry blossom
+  failing:          "\u{1F342}",  // fallen leaf
+  merged:           "\u{1F333}",  // deciduous tree
+  exited:           "\u{1F940}",  // wilted flower
 };
 
 function headerIcon(paneStatus: string, prState?: string): string {
@@ -183,17 +188,22 @@ function formatHeader(
 
   if (isOnWorker && totalWorkers > 0) {
     const label = workerLabel ?? "worker";
-    const displayState = prState === "merge-pending" ? "merge pending" : prState;
+    const effectiveState = prState || paneStatus;
+    const displayState = effectiveState === "merge-pending" ? "merge pending" : effectiveState;
     const icon = headerIcon(paneStatus, prState);
-    const statusParts = [paneStatus, displayState].filter(Boolean);
+    const statusParts = [displayState].filter(Boolean);
     if (mergeCount && mergeCount > 0) {
       statusParts.push(`${mergeCount} merged`);
     }
     const status = statusParts.length > 0 ? ` (${statusParts.join(", ")})` : "";
     parts.push(`${icon} ${label}${status} [${currentWorkerIdx}/${totalWorkers}]`);
-  } else if (paneStatus) {
+  } else if (paneStatus && paneStatus !== "shell") {
     const icon = headerIcon(paneStatus);
     parts.push(`${icon} ${paneStatus}`);
+    if (totalWorkers > 0) {
+      parts.push(`${totalWorkers} worker${totalWorkers === 1 ? "" : "s"} parked`);
+    }
+  } else if (paneStatus === "shell") {
     if (totalWorkers > 0) {
       parts.push(`${totalWorkers} worker${totalWorkers === 1 ? "" : "s"} parked`);
     }

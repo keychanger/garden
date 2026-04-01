@@ -9,7 +9,7 @@ import {
   getClaudeChildPid, hasChildProcesses, listHiddenWorkerWindows,
 } from "../dashboard/tmux.js";
 
-type WorkerStatus = "working" | "waiting" | "exited" | "reviewing" | "failing" | "merged";
+type WorkerStatus = "starting" | "working" | "waiting" | "pushed" | "reviewing" | "merge-pending" | "failing" | "merged" | "exited";
 
 interface WorkerInfo {
   name: string;
@@ -29,12 +29,15 @@ interface ProjectStatusInfo {
 
 const WORKING_FRAMES = ["\u{1F331}", "\u{1FAB4}", "\u{1F33F}"];  // seedling, potted plant, herb
 const STATUS_ICONS: Record<WorkerStatus, string> = {
-  working:   WORKING_FRAMES[0],
-  waiting:   "\u{1F33F}",  // herb
-  exited:    "\u{1F940}",  // wilted flower
-  reviewing: "\u{1F338}",  // cherry blossom
-  failing:   "\u{1F342}",  // fallen leaf
-  merged:    "\u{1F333}",  // deciduous tree
+  starting:       "\u{1FAB4}",  // potted plant (new, not yet tasked)
+  working:        WORKING_FRAMES[0],
+  waiting:        "\u{1F33F}",  // herb (needs input)
+  pushed:         "\u{1F4E6}",  // package (shipped, awaiting review)
+  reviewing:      "\u{1F338}",  // cherry blossom
+  "merge-pending": "\u{1F338}", // cherry blossom (in merge queue)
+  failing:        "\u{1F342}",  // fallen leaf
+  merged:         "\u{1F333}",  // deciduous tree
+  exited:         "\u{1F940}",  // wilted flower
 };
 
 function workingIcon(): string {
@@ -101,14 +104,19 @@ function formatStatus(worker: WorkerInfo): string {
   const base = worker.status;
   if (base === "merged" && worker.mergeCount > 1) return `merged (x${worker.mergeCount})`;
   if (base === "failing" && worker.failCount > 1) return `failing (x${worker.failCount})`;
+  if (base === "merge-pending") return "merge pending";
   return base;
 }
 
-function resolveWorkerStatus(paneStatus: PaneInfo["status"], regEntry: { prState?: string } | undefined): WorkerStatus {
+function resolveWorkerStatus(paneStatus: PaneInfo["status"], regEntry: { prState?: string; task?: string } | undefined, activity: string | null): WorkerStatus {
   const pr = regEntry?.prState;
   if (pr === "merged") return "merged";
+  if (pr === "merge-pending") return "merge-pending";
   if (pr === "reviewing") return "reviewing";
+  if (pr === "pushed") return "pushed";
   if (pr === "failing") return "failing";
+  // Upgrade starting to waiting if we know this worker has a task
+  if (paneStatus === "starting" && activity) return "waiting";
   return paneStatus;
 }
 
@@ -124,7 +132,7 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
     const paneInfo = detectPaneProcessStatus(dashState.activePaneId);
     if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
     const regEntry = registryByName.get(label);
-    const workerStatus = resolveWorkerStatus(paneInfo.status, regEntry);
+    const workerStatus = resolveWorkerStatus(paneInfo.status, regEntry, paneInfo.activity);
     workers.push({ name: label, status: workerStatus, activity: paneInfo.activity, active: true, mergeCount: regEntry?.mergeCount ?? 0, failCount: regEntry?.failCount ?? 0 });
   }
 
@@ -137,7 +145,7 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
       const paneInfo = detectPaneProcessStatus(paneId);
       if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
       const regEntry = registryByName.get(label);
-      const workerStatus = resolveWorkerStatus(paneInfo.status, regEntry);
+      const workerStatus = resolveWorkerStatus(paneInfo.status, regEntry, paneInfo.activity);
       workers.push({ name: label, status: workerStatus, activity: paneInfo.activity, active: false, mergeCount: regEntry?.mergeCount ?? 0, failCount: regEntry?.failCount ?? 0 });
     }
   }
@@ -163,7 +171,7 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
 }
 
 interface PaneInfo {
-  status: "working" | "waiting" | "exited";
+  status: "starting" | "working" | "waiting" | "exited";
   activity: string | null;
 }
 
@@ -172,9 +180,12 @@ function detectPaneProcessStatus(paneId: string): PaneInfo {
   if (!pid) return { status: "exited", activity: null };
 
   const claudePid = getClaudeChildPid(pid);
-  if (!claudePid) return { status: "waiting", activity: null };
+  if (!claudePid) return { status: "starting", activity: null };
 
   const activity = getPaneVar(paneId, "garden_task") ?? getPaneTitle(paneId) ?? null;
-  const status = hasChildProcesses(claudePid) ? "working" : "waiting";
-  return { status, activity };
+  if (!hasChildProcesses(claudePid)) {
+    // Claude is idle — starting if no task yet, waiting if it has one
+    return { status: activity ? "waiting" : "starting", activity };
+  }
+  return { status: "working", activity };
 }

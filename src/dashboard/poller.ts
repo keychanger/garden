@@ -102,6 +102,8 @@ function pollWorker(
   switch (state) {
     case "working":
       return handleWorking(projectName, projectPath, entry);
+    case "pushed":
+      return handlePushed(projectName, projectPath, entry);
     case "reviewing":
       return handleReviewing(projectName, projectPath, entry);
     case "merge-pending":
@@ -134,12 +136,36 @@ function handleWorking(
   // No new commits since last check
   if (headSha === entry.lastSeenSha) return false;
 
-  // Don't start review while Claude is actively working
-  if (isWorkerClaudeWorking(projectName, entry.name)) return false;
-
   // Check if there are actually commits ahead of main
   const commitSummary = getCommitSummary(wtPath);
   if (!commitSummary) return false;
+
+  // Transition to pushed — review will launch from handlePushed
+  updateWorkerFields(projectName, entry.name, {
+    prState: "pushed",
+    lastSeenSha: headSha,
+    lastShaChangeAt: new Date().toISOString(),
+  });
+  refreshDashboard();
+  return true;
+}
+
+function handlePushed(
+  projectName: string,
+  projectPath: string,
+  entry: WorkerEntry,
+): boolean {
+  // If Claude started new work, go back to working
+  if (isWorkerClaudeWorking(projectName, entry.name)) {
+    const wtPath = entry.worktreePath ?? projectPath;
+    const headSha = getBranchHeadSha(wtPath);
+    if (headSha && headSha !== entry.lastSeenSha) {
+      updateWorkerFields(projectName, entry.name, { prState: "working" });
+      refreshDashboard();
+      return true;
+    }
+    return false;
+  }
 
   return launchReview(projectName, projectPath, entry, false);
 }
@@ -853,7 +879,7 @@ function notifySiblingWorkers(
   const commitSummary = getCommitSummary(mergedEntry.worktreePath);
   const siblings = getWorkers(projectName).filter(
     w => w.name !== mergedEntry.name &&
-      (w.prState === "working" || w.prState === "failing"),
+      (w.prState === "working" || w.prState === "pushed" || w.prState === "failing"),
   );
 
   const mergedSet = new Set(mergedFiles);

@@ -154,7 +154,7 @@ describe("worker status detection", () => {
     expect(lines.some(l => l.includes("exited"))).toBe(true);
   });
 
-  it("shows waiting when claude is running but no children", async () => {
+  it("shows starting when claude is running but no children and no task", async () => {
     vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
     vi.mocked(getPanePid).mockReturnValue("123");
     vi.mocked(getClaudeChildPid).mockReturnValue("456");
@@ -162,6 +162,29 @@ describe("worker status detection", () => {
     vi.mocked(getPaneTitle).mockReturnValue(null);
     vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
     vi.mocked(getWorkers).mockReturnValue([]);
+
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (msg: string) => lines.push(msg);
+    try {
+      await status([]);
+    } finally {
+      console.log = origLog;
+    }
+
+    expect(lines.some(l => l.includes("starting"))).toBe(true);
+  });
+
+  it("shows waiting when claude is running but no children and has task", async () => {
+    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
+    vi.mocked(getPanePid).mockReturnValue("123");
+    vi.mocked(getClaudeChildPid).mockReturnValue("456");
+    vi.mocked(hasChildProcesses).mockReturnValue(false);
+    vi.mocked(getPaneTitle).mockReturnValue(null);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "fixing auth" },
+    ]);
 
     const lines: string[] = [];
     const origLog = console.log;
@@ -221,7 +244,7 @@ describe("registry task fallback", () => {
     expect(lines.some(l => l.includes("fixing auth"))).toBe(true);
   });
 
-  it("shows no task when registry task is empty string", async () => {
+  it("shows starting when registry task is empty string", async () => {
     vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
     vi.mocked(getPanePid).mockReturnValue("123");
     vi.mocked(getClaudeChildPid).mockReturnValue("456");
@@ -241,7 +264,7 @@ describe("registry task fallback", () => {
       console.log = origLog;
     }
 
-    expect(lines.some(l => l.includes("waiting"))).toBe(true);
+    expect(lines.some(l => l.includes("starting"))).toBe(true);
   });
 });
 

@@ -151,13 +151,26 @@ beforeEach(() => {
 });
 
 describe("poll — working state", () => {
-  it("detects new commits and launches review", () => {
+  it("detects new commits and transitions to pushed", () => {
     registryMock._setEntries("myproject", [makeWorker({ prState: "working" })]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
 
     poll();
 
     expect(getBranchHeadSha).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "pushed", lastSeenSha: "new-sha" }),
+    );
+  });
+
+  it("launches review from pushed state", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "pushed", lastSeenSha: "new-sha" }),
+    ]);
+    vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
+
+    poll();
+
     // Should write prompt file and launch review window
     expect(fs.writeFileSync).toHaveBeenCalled();
     expect(tmux).toHaveBeenCalledWith(
@@ -183,13 +196,17 @@ describe("poll — working state", () => {
     expect(updateWorkerFields).not.toHaveBeenCalled();
   });
 
-  it("does nothing when Claude is actively working", () => {
+  it("transitions to pushed even when Claude is actively working", () => {
     registryMock._setEntries("myproject", [makeWorker({ prState: "working" })]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
     vi.mocked(isClaudeWorking).mockReturnValue(true);
 
     poll();
 
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "pushed" }),
+    );
+    // But review should not launch yet
     expect(forcePushBranch).not.toHaveBeenCalled();
   });
 
@@ -203,7 +220,7 @@ describe("poll — working state", () => {
     expect(forcePushBranch).not.toHaveBeenCalled();
   });
 
-  it("allows multiple workers to review simultaneously", () => {
+  it("allows multiple workers to transition independently", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ name: "calm-bay", prState: "reviewing", sessionId: "s1", task: "t1",
         reviewWindowName: "_myproject-review-calm-bay" }),
@@ -213,9 +230,9 @@ describe("poll — working state", () => {
 
     poll();
 
-    // bold-ash should still launch review even though calm-bay is reviewing
+    // bold-ash should transition to pushed even though calm-bay is reviewing
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
-      expect.objectContaining({ prState: "reviewing" }),
+      expect.objectContaining({ prState: "pushed" }),
     );
   });
 });
@@ -602,7 +619,9 @@ describe("poll — merge-pending state", () => {
 
 describe("poll — reviewer prompt", () => {
   it("includes rebase instructions", () => {
-    registryMock._setEntries("myproject", [makeWorker({ prState: "working" })]);
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "pushed", lastSeenSha: "new-sha" }),
+    ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
 
     poll();
@@ -616,7 +635,9 @@ describe("poll — reviewer prompt", () => {
   });
 
   it("includes checks command when configured", () => {
-    registryMock._setEntries("myproject", [makeWorker({ prState: "working" })]);
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "pushed", lastSeenSha: "new-sha" }),
+    ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
     vi.mocked(tryGetProject).mockReturnValue({
       path: "/repo/myproject",
@@ -635,7 +656,9 @@ describe("poll — reviewer prompt", () => {
   });
 
   it("omits checks step when not configured", () => {
-    registryMock._setEntries("myproject", [makeWorker({ prState: "working" })]);
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "pushed", lastSeenSha: "new-sha" }),
+    ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
     vi.mocked(tryGetProject).mockReturnValue({
       path: "/repo/myproject",
@@ -653,7 +676,7 @@ describe("poll — reviewer prompt", () => {
 
   it("includes worker task in prompt", () => {
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", task: "refactor the dashboard" }),
+      makeWorker({ prState: "pushed", lastSeenSha: "new-sha", task: "refactor the dashboard" }),
     ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
 
@@ -760,8 +783,10 @@ describe("poll — failing state", () => {
 });
 
 describe("poll — live-Claude guard", () => {
-  it("skips review when Claude is actively working in worktree", () => {
-    registryMock._setEntries("myproject", [makeWorker({ prState: "working" })]);
+  it("skips review launch when Claude is actively working in pushed state", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "pushed", lastSeenSha: "new-sha" }),
+    ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
     vi.mocked(isClaudeWorking).mockReturnValue(true);
 
@@ -771,11 +796,27 @@ describe("poll — live-Claude guard", () => {
     expect(mergeToMain).not.toHaveBeenCalled();
   });
 
-  it("proceeds with review when Claude is not working", () => {
-    registryMock._setEntries("myproject", [makeWorker({ prState: "working" })]);
+  it("reverts to working from pushed when Claude pushes new commits", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "pushed", lastSeenSha: "old-sha" }),
+    ]);
+    vi.mocked(getBranchHeadSha).mockReturnValue("newer-sha");
+    vi.mocked(isClaudeWorking).mockReturnValue(true);
+
+    poll();
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "working" }),
+    );
+  });
+
+  it("proceeds with review from pushed when Claude is not working", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "pushed", lastSeenSha: "new-sha" }),
+    ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
 
-    poll(); // working -> reviewing (launches review window)
+    poll();
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "reviewing" }),
@@ -784,11 +825,23 @@ describe("poll — live-Claude guard", () => {
 });
 
 describe("poll — full cycle", () => {
-  it("working -> reviewing -> merge-pending -> merged", () => {
+  it("working -> pushed -> reviewing -> merge-pending -> merged", () => {
     registryMock._setEntries("myproject", [makeWorker({ prState: "working" })]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
 
-    poll(); // working -> reviewing (launches review window)
+    poll(); // working -> pushed
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "pushed" }),
+    );
+
+    // Now poll from pushed state to launch review
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "pushed", lastSeenSha: "new-sha" }),
+    ]);
+    vi.mocked(updateWorkerFields).mockClear();
+
+    poll(); // pushed -> reviewing
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "reviewing" }),
