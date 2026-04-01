@@ -86,7 +86,8 @@ The dashboard also has internal subcommands (e.g., `dashboard _switch 1`, `dashb
 The dashboard uses a permanent tmux layout with content swapped in and out of pane slots. This is the key architectural pattern:
 
 - **Pane slots are never removed.** Content is moved via `tmux swap-pane` between visible slots and hidden tmux windows. This preserves the layout tree. Both the right pane and the garden pane (lower-left) are swappable.
-- **Hidden windows** use underscore-prefixed names: `_<project>-worker-N`, `_<project>-shell`, `_<project>-poller`, `_<project>-review-<worker>`, `_garden-shell`, `_garden-logs`. The underscore marks them as garden-managed.
+- **Garden pane** (lower-left) cycles between three views: the garden console (bold green `garden>` prompt with auto-dispatch via zsh `command_not_found_handler`), a regular shell, and a logs view. `⌥[`/`⌥]` cycle when focused on the garden pane; `⌥g` jumps to console, `⌥l` jumps to logs.
+- **Hidden windows** use underscore-prefixed names: `_<project>-worker-N`, `_<project>-shell`, `_<project>-poller`, `_<project>-review-<worker>`, `_garden-console`, `_garden-shell`, `_garden-logs`. The underscore marks them as garden-managed.
 - **Parking/restoring** (`src/dashboard/layout.ts`): To swap content, we create a temp hidden window, swap the current pane into it, then swap the target pane from its hidden window into the slot, and kill the temp window. Separate functions handle the right pane (`parkToHidden`/`restoreFromHidden`) and garden pane (`gardenParkToHidden`/`gardenRestoreFromHidden`).
 - **State** (`src/dashboard/state.ts`): Tracks which project is active, which pane is visible, and pane IDs. Written atomically (write-tmp-then-rename) to `dashboard.state.json` after every operation.
 - **Status detection** (`src/dashboard/tmux.ts`): Uses `pgrep` to detect whether claude is running and whether it has child processes (working vs waiting).

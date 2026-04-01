@@ -10,7 +10,7 @@ Garden is a personal tool — opinionated toward a single developer managing man
 A named reference to a directory on disk where Claude Code can operate. Projects are added with `garden add [path]` (name is derived from the directory basename).
 
 ### Dashboard
-A tmux session (`garden-dashboard`) that serves as the primary interface. The dashboard is a left/right split: project status and garden pane on the left, an active pane (worker or shell) on the right with a header bar. The garden pane (lower-left) is swappable between the garden shell (`⌥g`) and a logs view (`⌥l`), using the same swap-pane mechanism as the right pane. You never interact with tmux directly — garden sets up the layout, keybindings, and pane management.
+A tmux session (`garden-dashboard`) that serves as the primary interface. The dashboard is a left/right split: project status and garden pane on the left, an active pane (worker or shell) on the right with a header bar. The garden pane (lower-left) cycles between three views using `⌥[`/`⌥]` (when focused): the garden console (`⌥g`) with auto-dispatch for garden commands, a regular shell, and a logs view (`⌥l`). The same swap-pane mechanism as the right pane is used. You never interact with tmux directly — garden sets up the layout, keybindings, and pane management.
 
 ### Workers
 Interactive Claude Code sessions running inside the dashboard. Each project can have multiple workers (e.g., one for a feature, one for a review). Workers persist when you switch between projects — they're parked in hidden tmux windows and swapped back in when you return.
@@ -70,9 +70,9 @@ Requires terminal setup: iTerm2 → Profiles → Keys → Left Option key → "E
 | `⌥n` | New worker (Claude session) |
 | `⌥w` | Jump to first worker |
 | `⌥s` | Jump to project shell |
-| `⌥]` / `⌥[` | Cycle between all panes (workers + shell) |
+| `⌥]` / `⌥[` | Context-aware: cycle workers (right pane) or views (garden pane) |
 | `⌥x` | Kill current worker (shell is protected) |
-| `⌥g` | Focus garden shell (lower-left) |
+| `⌥g` | Focus garden console (lower-left) |
 | `⌥l` | Focus logs view (lower-left) |
 
 ## Pane Management
