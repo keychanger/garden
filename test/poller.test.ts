@@ -82,8 +82,6 @@ vi.mock("../src/dashboard/alerts.js", () => ({
 vi.mock("../src/dashboard/git.js", () => ({
   getBranchHeadSha: vi.fn(() => "abc123"),
   getDiffAgainstMain: vi.fn(() => "diff --git a/file.ts b/file.ts"),
-  rebaseBranch: vi.fn(() => true),
-  abortRebase: vi.fn(),
   forcePushBranch: vi.fn(),
   mergeToMain: vi.fn(),
   deleteRemoteBranch: vi.fn(),
@@ -97,23 +95,14 @@ vi.mock("../src/rules.js", () => ({
   buildRulesContext: vi.fn(() => "test rules"),
 }));
 
-vi.mock("../src/dashboard/create.js", () => ({
-  buildWorktreeWorkerCommand: vi.fn(() => "claude --dangerously-skip-permissions --session-id fake-id"),
-}));
-
-vi.mock("node:crypto", () => ({
-  default: { randomUUID: vi.fn(() => "new-uuid-123") },
-}));
-
 import { poll, postPush } from "../src/dashboard/poller.js";
 import { tryGetProject } from "../src/config.js";
 import { updateWorkerFields, getWorkers } from "../src/dashboard/registry.js";
 import {
-  getBranchHeadSha, rebaseBranch, abortRebase,
+  getBranchHeadSha,
   forcePushBranch, mergeToMain,
   getChangedFiles, getCommitSummary, getNewCommitSummary, getDiffAgainstMain,
 } from "../src/dashboard/git.js";
-import { buildWorktreeWorkerCommand } from "../src/dashboard/create.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
 import { tmux, hasClaudeChild, isClaudeWorking, getPanePid, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
@@ -151,7 +140,6 @@ beforeEach(() => {
     status: 0, stdout: "Looks good.\nCLEAN", stderr: "",
   } as ReturnType<typeof spawnSync>);
   vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject", checks: undefined } as ReturnType<typeof tryGetProject>);
-  vi.mocked(rebaseBranch).mockReturnValue(true);
   vi.mocked(getBranchHeadSha).mockReturnValue("abc123");
   // Default: Claude not running, so review attempts proceed
   vi.mocked(hasClaudeChild).mockReturnValue(false);
@@ -189,7 +177,7 @@ describe("poll — working state", () => {
 
     poll();
 
-    expect(rebaseBranch).not.toHaveBeenCalled();
+    expect(forcePushBranch).not.toHaveBeenCalled();
   });
 
   it("does nothing when no commits ahead of main", () => {
@@ -199,131 +187,17 @@ describe("poll — working state", () => {
 
     poll();
 
-    expect(rebaseBranch).not.toHaveBeenCalled();
-  });
-});
-
-describe("poll — working state, merge conflict", () => {
-  it("aborts rebase and notifies worker on conflict", () => {
-    registryMock._setEntries("myproject", [makeWorker({ prState: "working" })]);
-    vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
-    vi.mocked(rebaseBranch).mockReturnValue(false);
-    // notifyWorker uses hasClaudeChild (true = Claude alive, deliver message)
-    vi.mocked(hasClaudeChild).mockReturnValue(true);
-
-    poll();
-
-    expect(rebaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
-    expect(abortRebase).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
-    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
-      prState: "failing",
-      failCount: 1,
-      failingSha: "new-sha",
-      lastSeenSha: "new-sha",
-      lastShaChangeAt: expect.any(String),
-    });
-    // Notifies worker via tmux send-keys
-    expect(tmux).toHaveBeenCalledWith(
-      "send-keys", "-t", "%5", "-l",
-      expect.stringContaining("Merge conflict"),
-    );
-  });
-
-  it("does not force-push or merge on conflict", () => {
-    registryMock._setEntries("myproject", [makeWorker({ prState: "working" })]);
-    vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
-    vi.mocked(rebaseBranch).mockReturnValue(false);
-
-    poll();
-
     expect(forcePushBranch).not.toHaveBeenCalled();
-    expect(mergeToMain).not.toHaveBeenCalled();
-  });
-});
-
-describe("poll — working state, successful review and merge", () => {
-  it("rebases, force-pushes, and transitions to reviewing", () => {
-    registryMock._setEntries("myproject", [makeWorker({ prState: "working" })]);
-    vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
-    vi.mocked(rebaseBranch).mockReturnValue(true);
-
-    poll();
-
-    expect(rebaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
-    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
-    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
-      prState: "reviewing",
-    });
-    // mergeToMain happens on the next cycle after review
-    expect(mergeToMain).not.toHaveBeenCalled();
   });
 
-  it("merges after review approves on second poll cycle", () => {
+  it("does not rebase or force-push during attemptReview", () => {
     registryMock._setEntries("myproject", [makeWorker({ prState: "working" })]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
-    vi.mocked(rebaseBranch).mockReturnValue(true);
 
     poll(); // working -> reviewing
-    poll(); // reviewing -> merged
 
-    expect(mergeToMain).toHaveBeenCalledWith("/repo/myproject", "bold-ash");
-    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
-      prState: "merged",
-      mergedAt: expect.any(String),
-      failCount: 0,
-    });
-  });
-});
-
-describe("poll — working state with checks", () => {
-  it("transitions to failing when checks fail after rebase", () => {
-    registryMock._setEntries("myproject", [makeWorker({ prState: "working" })]);
-    vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
-    vi.mocked(tryGetProject).mockReturnValue({
-      path: "/repo/myproject",
-      checks: "npm test",
-    } as ReturnType<typeof tryGetProject>);
-    vi.mocked(rebaseBranch).mockReturnValue(true);
-    vi.mocked(execSync).mockImplementation(() => {
-      throw Object.assign(new Error("tests failed"), { stderr: Buffer.from("FAIL src/foo.test.ts") });
-    });
-
-    poll();
-
-    expect(rebaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
-    expect(execSync).toHaveBeenCalledWith(
-      "npm test",
-      expect.objectContaining({ cwd: "/tmp/wt/myproject/bold-ash" }),
-    );
+    // attemptReview just sets state, no rebase or force-push
     expect(forcePushBranch).not.toHaveBeenCalled();
-    expect(mergeToMain).not.toHaveBeenCalled();
-    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
-      prState: "failing",
-      failCount: 1,
-      failingSha: "new-sha",
-      lastSeenSha: "new-sha",
-      lastShaChangeAt: expect.any(String),
-    });
-  });
-
-  it("runs checks after rebase and transitions to reviewing when both pass", () => {
-    registryMock._setEntries("myproject", [makeWorker({ prState: "working" })]);
-    vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
-    vi.mocked(tryGetProject).mockReturnValue({
-      path: "/repo/myproject",
-      checks: "npm test",
-    } as ReturnType<typeof tryGetProject>);
-    vi.mocked(rebaseBranch).mockReturnValue(true);
-    vi.mocked(execSync).mockReturnValue("" as never);
-
-    poll();
-
-    expect(rebaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
-    expect(execSync).toHaveBeenCalledWith(
-      "npm test",
-      expect.objectContaining({ cwd: "/tmp/wt/myproject/bold-ash" }),
-    );
-    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "reviewing",
     });
@@ -341,6 +215,7 @@ describe("poll — reviewing state", () => {
 
     poll();
 
+    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
     expect(mergeToMain).toHaveBeenCalledWith("/repo/myproject", "bold-ash");
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "merged",
@@ -359,46 +234,12 @@ describe("poll — reviewing state", () => {
 
     poll();
 
-    // Should force-push the fixes before merging
     expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
     expect(mergeToMain).toHaveBeenCalledWith("/repo/myproject", "bold-ash");
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "merged",
       mergedAt: expect.any(String),
       failCount: 0,
-    });
-  });
-
-  it("re-runs checks after reviewer fixes and transitions to failing if checks fail", () => {
-    registryMock._setEntries("myproject", [
-      makeWorker({ prState: "reviewing" }),
-    ]);
-    vi.mocked(spawnSync).mockReturnValue({
-      status: 0, stdout: "Fixed docs.\nFIXED", stderr: "",
-    } as never);
-    vi.mocked(tryGetProject).mockReturnValue({
-      path: "/repo/myproject",
-      checks: "npm test",
-    } as ReturnType<typeof tryGetProject>);
-    vi.mocked(execSync).mockImplementation(() => {
-      throw Object.assign(new Error("tests failed"), { stderr: Buffer.from("FAIL") });
-    });
-    vi.mocked(hasClaudeChild).mockReturnValue(true);
-
-    poll();
-
-    expect(forcePushBranch).toHaveBeenCalled();
-    expect(execSync).toHaveBeenCalledWith(
-      "npm test",
-      expect.objectContaining({ cwd: "/tmp/wt/myproject/bold-ash" }),
-    );
-    expect(mergeToMain).not.toHaveBeenCalled();
-    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
-      prState: "failing",
-      failCount: 1,
-      failingSha: "abc123",
-      lastSeenSha: "abc123",
-      lastShaChangeAt: expect.any(String),
     });
   });
 
@@ -409,7 +250,6 @@ describe("poll — reviewing state", () => {
     vi.mocked(spawnSync).mockReturnValue({
       status: 0, stdout: "Fundamental architecture issue.\nFAILED", stderr: "",
     } as never);
-    vi.mocked(hasClaudeChild).mockReturnValue(true);
 
     poll();
 
@@ -421,18 +261,12 @@ describe("poll — reviewing state", () => {
       lastSeenSha: "abc123",
       lastShaChangeAt: expect.any(String),
     });
-    // Should add an alert, not notify the worker
     expect(addAlert).toHaveBeenCalledWith(
       expect.objectContaining({
         level: "error",
         source: "review",
         worker: "bold-ash",
       }),
-    );
-    // Worker should NOT be notified
-    expect(tmux).not.toHaveBeenCalledWith(
-      "send-keys", expect.anything(), expect.anything(), expect.anything(),
-      expect.stringContaining("could not be auto-fixed"),
     );
   });
 
@@ -495,6 +329,74 @@ describe("poll — reviewing state", () => {
     });
     expect(spawnSync).not.toHaveBeenCalled();
     expect(mergeToMain).not.toHaveBeenCalled();
+  });
+
+  it("full cycle: working -> reviewing -> merged", () => {
+    registryMock._setEntries("myproject", [makeWorker({ prState: "working" })]);
+    vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
+
+    poll(); // working -> reviewing
+
+    expect(forcePushBranch).not.toHaveBeenCalled();
+
+    poll(); // reviewing -> merged
+
+    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(mergeToMain).toHaveBeenCalledWith("/repo/myproject", "bold-ash");
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
+      prState: "merged",
+      mergedAt: expect.any(String),
+      failCount: 0,
+    });
+  });
+});
+
+describe("poll — reviewer prompt", () => {
+  it("includes rebase instructions", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing" }),
+    ]);
+
+    poll();
+
+    expect(spawnSync).toHaveBeenCalledWith(
+      "claude",
+      ["-p", "--dangerously-skip-permissions"],
+      expect.objectContaining({
+        input: expect.stringContaining("git rebase main"),
+      }),
+    );
+  });
+
+  it("includes checks command when configured", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing" }),
+    ]);
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject",
+      checks: "npm test",
+    } as ReturnType<typeof tryGetProject>);
+
+    poll();
+
+    const input = vi.mocked(spawnSync).mock.calls[0][2]?.input as string;
+    expect(input).toContain("npm test");
+    expect(input).toContain("Run checks");
+  });
+
+  it("omits checks step when not configured", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing" }),
+    ]);
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject",
+      checks: undefined,
+    } as ReturnType<typeof tryGetProject>);
+
+    poll();
+
+    const input = vi.mocked(spawnSync).mock.calls[0][2]?.input as string;
+    expect(input).not.toContain("Run checks");
   });
 });
 
@@ -605,7 +507,6 @@ describe("poll — merge serialization", () => {
 
     // bold-ash should not have attempted review (serialization guard)
     // calm-bay should not have reviewed (Claude active guard)
-    expect(rebaseBranch).not.toHaveBeenCalled();
     expect(forcePushBranch).not.toHaveBeenCalled();
   });
 });
@@ -618,7 +519,6 @@ describe("poll — live-Claude guard", () => {
 
     poll();
 
-    expect(rebaseBranch).not.toHaveBeenCalled();
     expect(forcePushBranch).not.toHaveBeenCalled();
     expect(mergeToMain).not.toHaveBeenCalled();
   });
@@ -631,7 +531,6 @@ describe("poll — live-Claude guard", () => {
     poll(); // working -> reviewing
     poll(); // reviewing -> merged
 
-    expect(rebaseBranch).toHaveBeenCalled();
     expect(forcePushBranch).toHaveBeenCalled();
     expect(mergeToMain).toHaveBeenCalled();
   });
@@ -667,7 +566,6 @@ describe("poll — sibling merge notification", () => {
     ]);
     vi.mocked(hasClaudeChild).mockReturnValue(false);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
-    vi.mocked(rebaseBranch).mockReturnValue(true);
 
     poll(); // working -> reviewing
 
@@ -713,7 +611,6 @@ describe("poll — sibling merge notification", () => {
     ]);
     vi.mocked(hasClaudeChild).mockReturnValue(false);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
-    vi.mocked(rebaseBranch).mockReturnValue(true);
 
     poll(); // working -> reviewing
 
@@ -733,7 +630,7 @@ describe("poll — sibling merge notification", () => {
     expect(sendKeyCalls).toHaveLength(0);
   });
 
-  it("relaunches dead sibling on overlap", () => {
+  it("skips dead sibling instead of relaunching", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         name: "bold-ash",
@@ -756,7 +653,6 @@ describe("poll — sibling merge notification", () => {
     // Claude not running in either worker
     vi.mocked(hasClaudeChild).mockReturnValue(false);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
-    vi.mocked(rebaseBranch).mockReturnValue(true);
 
     poll(); // working -> reviewing
 
@@ -765,16 +661,16 @@ describe("poll — sibling merge notification", () => {
       .mockReturnValueOnce(["src/foo.ts"])   // merged worker
       .mockReturnValueOnce(["src/foo.ts"]);  // sibling — overlap
 
-    poll(); // reviewing -> merged (with sibling relaunch)
+    poll(); // reviewing -> merged (sibling is dead, should be skipped)
 
-    // Should have relaunched with new session and set pending notification
-    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "calm-bay",
-      expect.objectContaining({
-        sessionId: "new-uuid-123",
-        pendingNotification: expect.stringContaining("src/foo.ts"),
-      }),
+    // Should NOT have relaunched or set pending notification
+    const updateCalls = vi.mocked(updateWorkerFields).mock.calls.filter(
+      c => c[1] === "calm-bay",
     );
-    expect(buildWorktreeWorkerCommand).toHaveBeenCalled();
+    const relaunchCalls = updateCalls.filter(
+      c => "sessionId" in (c[2] as Record<string, unknown>),
+    );
+    expect(relaunchCalls).toHaveLength(0);
   });
 
   it("skips notification for workers in merged state", () => {
@@ -799,7 +695,6 @@ describe("poll — sibling merge notification", () => {
 
     vi.mocked(hasClaudeChild).mockReturnValue(false);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
-    vi.mocked(rebaseBranch).mockReturnValue(true);
     // Return files only for bold-ash; calm-bay has no new commits
     vi.mocked(getChangedFiles).mockReturnValue(["src/foo.ts"]);
     vi.mocked(getCommitSummary).mockImplementation((wtPath: string) => {
@@ -817,46 +712,6 @@ describe("poll — sibling merge notification", () => {
     const changedFilesCalls = vi.mocked(getChangedFiles).mock.calls;
     const calmBayCalls = changedFilesCalls.filter(c => c[0] === "/tmp/wt/myproject/calm-bay");
     expect(calmBayCalls).toHaveLength(0);
-  });
-});
-
-describe("poll — pending notification delivery", () => {
-  it("delivers pending notification when Claude is alive", () => {
-    registryMock._setEntries("myproject", [
-      makeWorker({
-        prState: "working",
-        pendingNotification: "You have overlapping changes",
-      }),
-    ]);
-    vi.mocked(hasClaudeChild).mockReturnValue(true);
-
-    poll();
-
-    expect(tmux).toHaveBeenCalledWith(
-      "send-keys", "-t", "%5", "-l",
-      "You have overlapping changes",
-    );
-    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
-      pendingNotification: undefined,
-    });
-  });
-
-  it("does not deliver pending notification when Claude is not alive", () => {
-    registryMock._setEntries("myproject", [
-      makeWorker({
-        prState: "working",
-        pendingNotification: "You have overlapping changes",
-      }),
-    ]);
-    vi.mocked(hasClaudeChild).mockReturnValue(false);
-
-    poll();
-
-    // Should not have cleared the notification
-    const clearCalls = vi.mocked(updateWorkerFields).mock.calls.filter(
-      c => c[2] && "pendingNotification" in (c[2] as Record<string, unknown>),
-    );
-    expect(clearCalls).toHaveLength(0);
   });
 });
 
@@ -878,23 +733,6 @@ describe("poll — alerts", () => {
         source: "poller",
         project: "myproject",
         message: expect.stringContaining("Merge failed"),
-      }),
-    );
-  });
-
-  it("adds alert on rebase conflict", () => {
-    registryMock._setEntries("myproject", [makeWorker({ prState: "working" })]);
-    vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
-    vi.mocked(rebaseBranch).mockReturnValue(false);
-    vi.mocked(hasClaudeChild).mockReturnValue(false);
-
-    poll();
-
-    expect(addAlert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        level: "warn",
-        source: "poller",
-        message: expect.stringContaining("Rebase conflict"),
       }),
     );
   });
@@ -962,8 +800,6 @@ describe("poll — alerts", () => {
     vi.mocked(spawnSync).mockReturnValue({
       status: 0, stdout: "Fundamental issue.\nFAILED", stderr: "",
     } as never);
-    // Guard uses isClaudeWorking (default false); notification needs Claude alive
-    vi.mocked(hasClaudeChild).mockReturnValue(true);
 
     poll();
 
