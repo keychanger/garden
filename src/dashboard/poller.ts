@@ -578,6 +578,7 @@ function handleFailing(
     updateWorkerFields(projectName, entry.name, {
       prState: "working",
       failingSha: undefined,
+      lastSeenSha: undefined,
     });
     return true;
   }
