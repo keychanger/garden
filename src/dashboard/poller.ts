@@ -475,7 +475,8 @@ function launchReview(
   const revWindow = reviewWindowName(projectName, entry.name);
   const escapedPrompt = promptFile.replace(/'/g, "'\\''");
   const escapedResult = resultFile.replace(/'/g, "'\\''");
-  const cmd = `claude -p --dangerously-skip-permissions < '${escapedPrompt}' > '${escapedResult}' 2>&1`;
+  const escapedFifo = signalFifoPath(projectName).replace(/'/g, "'\\''");
+  const cmd = `claude -p --dangerously-skip-permissions < '${escapedPrompt}' > '${escapedResult}' 2>&1; [ -p '${escapedFifo}' ] && (echo > '${escapedFifo}') 2>/dev/null`;
 
   // Kill any leftover review window
   if (windowExists(revWindow)) {
@@ -1003,7 +1004,7 @@ export function startProjectPoller(projectName: string, gardenRunner: string): v
   const cmd = [
     `while true; do`,
     `  ${gardenRunner} dashboard _poll '${escapedProject}' 2>/dev/null;`,
-    `  if [ $? -eq 0 ]; then read -t 30 <>'${escapedFifo}' 2>/dev/null || true; fi;`,
+    `  if [ $? -eq 0 ]; then read -t 10 <>'${escapedFifo}' 2>/dev/null || true; fi;`,
     `done`,
   ].join(" ");
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", window,
