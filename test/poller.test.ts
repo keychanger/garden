@@ -106,6 +106,7 @@ import {
 import { refreshDashboard } from "../src/dashboard/header.js";
 import { tmux, hasClaudeChild, isClaudeWorking, getPanePid, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
+import { log } from "../src/dashboard/log.js";
 import { spawnSync } from "node:child_process";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
@@ -240,6 +241,39 @@ describe("poll — reviewing state", () => {
       prState: "merged",
       mergedAt: expect.any(String),
       failCount: 0,
+    });
+  });
+
+  it("logs summary for fixed verdicts", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing" }),
+    ]);
+    vi.mocked(spawnSync).mockReturnValue({
+      status: 0, stdout: "Added missing tests.\nFIXED", stderr: "",
+    } as never);
+
+    poll();
+
+    expect(log.info).toHaveBeenCalledWith("poller", "review complete", {
+      worker: "bold-ash",
+      verdict: "fixed",
+      summary: "Added missing tests.",
+    });
+  });
+
+  it("does not log summary for clean verdicts", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing" }),
+    ]);
+    vi.mocked(spawnSync).mockReturnValue({
+      status: 0, stdout: "Looks good.\nCLEAN", stderr: "",
+    } as never);
+
+    poll();
+
+    expect(log.info).toHaveBeenCalledWith("poller", "review complete", {
+      worker: "bold-ash",
+      verdict: "clean",
     });
   });
 
