@@ -83,16 +83,17 @@ vi.mock("../src/dashboard/alerts.js", () => ({
 
 vi.mock("../src/dashboard/git.js", () => ({
   getBranchHeadSha: vi.fn(() => "abc123"),
-  getDiffAgainstMain: vi.fn(() => "diff --git a/file.ts b/file.ts"),
+  getDiffAgainstBase: vi.fn(() => "diff --git a/file.ts b/file.ts"),
   forcePushBranch: vi.fn(),
-  mergeToMain: vi.fn(),
+  mergeToBase: vi.fn(),
   rebaseBranch: vi.fn(() => true),
   abortRebase: vi.fn(),
   deleteRemoteBranch: vi.fn(),
-  fastForwardMain: vi.fn(),
+  fastForwardBase: vi.fn(),
   getChangedFiles: vi.fn(() => []),
   getCommitSummary: vi.fn(() => "abc123 fix something"),
   getNewCommitSummary: vi.fn(() => "def456 address review feedback"),
+  resolveBaseBranch: vi.fn(() => "main"),
 }));
 
 vi.mock("../src/rules.js", () => ({
@@ -105,8 +106,8 @@ import { tryGetProject } from "../src/config.js";
 import { updateWorkerFields, getWorkers } from "../src/dashboard/registry.js";
 import {
   getBranchHeadSha,
-  forcePushBranch, mergeToMain, rebaseBranch, abortRebase,
-  getChangedFiles, getCommitSummary, getNewCommitSummary, getDiffAgainstMain,
+  forcePushBranch, mergeToBase, rebaseBranch, abortRebase,
+  getChangedFiles, getCommitSummary, getNewCommitSummary, getDiffAgainstBase,
 } from "../src/dashboard/git.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
 import { tmux, hasClaudeChild, isClaudeWorking, getPanePid, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
@@ -138,7 +139,7 @@ beforeEach(() => {
   vi.mocked(getFirstPaneId).mockReturnValue("%5");
   vi.mocked(getPanePid).mockReturnValue("12345");
   vi.mocked(getChangedFiles).mockReturnValue([]);
-  vi.mocked(getDiffAgainstMain).mockReturnValue("diff --git a/file.ts b/file.ts");
+  vi.mocked(getDiffAgainstBase).mockReturnValue("diff --git a/file.ts b/file.ts");
   vi.mocked(getCommitSummary).mockReturnValue("abc123 fix something");
   vi.mocked(getNewCommitSummary).mockReturnValue("def456 address review feedback");
   vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject", checks: undefined } as ReturnType<typeof tryGetProject>);
@@ -249,7 +250,7 @@ describe("poll — reviewing state (async)", () => {
 
     // Should not process result yet
     expect(forcePushBranch).not.toHaveBeenCalled();
-    expect(mergeToMain).not.toHaveBeenCalled();
+    expect(mergeToBase).not.toHaveBeenCalled();
   });
 
   it("transitions to merge-pending when review returns CLEAN", () => {
@@ -369,7 +370,7 @@ describe("poll — reviewing state (async)", () => {
 
     poll();
 
-    expect(mergeToMain).not.toHaveBeenCalled();
+    expect(mergeToBase).not.toHaveBeenCalled();
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "working", reviewWindowName: undefined }),
     );
@@ -392,7 +393,7 @@ describe("poll — reviewing state (async)", () => {
 
     poll();
 
-    expect(mergeToMain).not.toHaveBeenCalled();
+    expect(mergeToBase).not.toHaveBeenCalled();
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({
         prState: "failing",
@@ -451,7 +452,7 @@ describe("poll — reviewing state (async)", () => {
 
     poll();
 
-    expect(mergeToMain).not.toHaveBeenCalled();
+    expect(mergeToBase).not.toHaveBeenCalled();
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "failing", reviewWindowName: undefined }),
     );
@@ -468,7 +469,7 @@ describe("poll — reviewing state (async)", () => {
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "working", reviewWindowName: undefined }),
     );
-    expect(mergeToMain).not.toHaveBeenCalled();
+    expect(mergeToBase).not.toHaveBeenCalled();
   });
 });
 
@@ -484,9 +485,9 @@ describe("poll — merge-pending state", () => {
 
     poll();
 
-    expect(rebaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(rebaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "main");
     expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
-    expect(mergeToMain).toHaveBeenCalledWith("/repo/myproject", "bold-ash");
+    expect(mergeToBase).toHaveBeenCalledWith("/repo/myproject", "bold-ash", "main");
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({
         prState: "merged",
@@ -511,7 +512,7 @@ describe("poll — merge-pending state", () => {
     poll();
 
     expect(abortRebase).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
-    expect(mergeToMain).not.toHaveBeenCalled();
+    expect(mergeToBase).not.toHaveBeenCalled();
     // Should launch a re-review
     expect(tmux).toHaveBeenCalledWith(
       "new-window", "-d", "-t", expect.any(String), "-n", "_myproject-review-bold-ash",
@@ -573,8 +574,8 @@ describe("poll — merge-pending state", () => {
     poll();
 
     // calm-bay merges first (earlier timestamp), then bold-ash can proceed
-    const mergeCalls = vi.mocked(mergeToMain).mock.calls;
-    expect(mergeCalls[0]).toEqual(["/repo/myproject", "calm-bay"]);
+    const mergeCalls = vi.mocked(mergeToBase).mock.calls;
+    expect(mergeCalls[0]).toEqual(["/repo/myproject", "calm-bay", "main"]);
   });
 
   it("resets to working when force-push fails", () => {
@@ -588,7 +589,7 @@ describe("poll — merge-pending state", () => {
 
     poll();
 
-    expect(mergeToMain).not.toHaveBeenCalled();
+    expect(mergeToBase).not.toHaveBeenCalled();
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "working", mergePendingAt: undefined }),
     );
@@ -601,7 +602,7 @@ describe("poll — merge-pending state", () => {
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
       }),
     ]);
-    vi.mocked(mergeToMain).mockImplementation(() => { throw new Error("merge conflict"); });
+    vi.mocked(mergeToBase).mockImplementation(() => { throw new Error("merge conflict"); });
 
     poll();
 
@@ -792,7 +793,7 @@ describe("poll — live-Claude guard", () => {
     poll();
 
     expect(forcePushBranch).not.toHaveBeenCalled();
-    expect(mergeToMain).not.toHaveBeenCalled();
+    expect(mergeToBase).not.toHaveBeenCalled();
   });
 
   it("reverts to working from pushed when Claude pushes new commits", () => {
@@ -866,7 +867,7 @@ describe("poll — full cycle", () => {
 
     poll(); // merge-pending -> merged
 
-    expect(mergeToMain).toHaveBeenCalledWith("/repo/myproject", "bold-ash");
+    expect(mergeToBase).toHaveBeenCalledWith("/repo/myproject", "bold-ash", "main");
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "merged" }),
     );
@@ -977,7 +978,7 @@ describe("poll — sibling merge notification", () => {
 
     poll();
 
-    expect(mergeToMain).toHaveBeenCalled();
+    expect(mergeToBase).toHaveBeenCalled();
     const sendKeyCalls = vi.mocked(tmux).mock.calls.filter(
       c => c[0] === "send-keys" && typeof c[3] === "string" && c[3].includes("overlap"),
     );

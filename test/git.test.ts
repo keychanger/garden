@@ -25,8 +25,8 @@ import {
   worktreeExists,
   deleteBranch,
   getBranchHeadSha,
-  getDiffAgainstMain,
-  mergeToMain,
+  getDiffAgainstBase,
+  mergeToBase,
   deleteRemoteBranch,
   rebaseBranch,
   abortRebase,
@@ -34,6 +34,7 @@ import {
   getChangedFiles,
   getCommitSummary,
   pruneWorktrees,
+  resolveBaseBranch,
 } from "../src/dashboard/git.js";
 
 const mockExec = vi.mocked(execFileSync);
@@ -161,13 +162,23 @@ describe("getBranchHeadSha", () => {
   });
 });
 
-describe("getDiffAgainstMain", () => {
+describe("getDiffAgainstBase", () => {
   it("returns diff output", () => {
     mockExec.mockReturnValue("diff --git a/file.ts b/file.ts\n+new line");
-    expect(getDiffAgainstMain("/tmp/wt")).toBe("diff --git a/file.ts b/file.ts\n+new line");
+    expect(getDiffAgainstBase("/tmp/wt", "main")).toBe("diff --git a/file.ts b/file.ts\n+new line");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
       ["diff", "origin/main...HEAD"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
+  it("uses the specified base branch", () => {
+    mockExec.mockReturnValue("some diff");
+    getDiffAgainstBase("/tmp/wt", "develop");
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["diff", "origin/develop...HEAD"],
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -176,13 +187,13 @@ describe("getDiffAgainstMain", () => {
     mockExec.mockImplementation(() => {
       throw new Error("not a git repo");
     });
-    expect(() => getDiffAgainstMain("/tmp/wt")).toThrow();
+    expect(() => getDiffAgainstBase("/tmp/wt", "main")).toThrow();
   });
 });
 
-describe("mergeToMain", () => {
-  it("fetches, checks out main, merges, and pushes", () => {
-    mergeToMain("/repo", "swift-oak");
+describe("mergeToBase", () => {
+  it("fetches, checks out base branch, merges, and pushes", () => {
+    mergeToBase("/repo", "swift-oak", "main");
     const calls = mockExec.mock.calls;
     expect(calls[0]).toEqual(["git", ["fetch", "origin"], expect.objectContaining({ cwd: "/repo" })]);
     expect(calls[1]).toEqual(["git", ["checkout", "main"], expect.objectContaining({ cwd: "/repo" })]);
@@ -190,11 +201,18 @@ describe("mergeToMain", () => {
     expect(calls[3]).toEqual(["git", ["push", "origin", "main"], expect.objectContaining({ cwd: "/repo" })]);
   });
 
+  it("uses the specified base branch", () => {
+    mergeToBase("/repo", "swift-oak", "develop");
+    const calls = mockExec.mock.calls;
+    expect(calls[1]).toEqual(["git", ["checkout", "develop"], expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[3]).toEqual(["git", ["push", "origin", "develop"], expect.objectContaining({ cwd: "/repo" })]);
+  });
+
   it("throws on failure", () => {
     mockExec.mockImplementation(() => {
       throw new Error("merge failed");
     });
-    expect(() => mergeToMain("/repo", "swift-oak")).toThrow();
+    expect(() => mergeToBase("/repo", "swift-oak", "main")).toThrow();
   });
 });
 
@@ -218,10 +236,19 @@ describe("deleteRemoteBranch", () => {
 
 describe("rebaseBranch", () => {
   it("returns true on successful rebase", () => {
-    expect(rebaseBranch("/tmp/wt")).toBe(true);
+    expect(rebaseBranch("/tmp/wt", "main")).toBe(true);
     expect(mockExec).toHaveBeenCalledWith(
       "git",
       ["rebase", "origin/main"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
+  it("uses the specified base branch", () => {
+    rebaseBranch("/tmp/wt", "develop");
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["rebase", "origin/develop"],
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -230,7 +257,7 @@ describe("rebaseBranch", () => {
     mockExec.mockImplementation(() => {
       throw new Error("conflict");
     });
-    expect(rebaseBranch("/tmp/wt")).toBe(false);
+    expect(rebaseBranch("/tmp/wt", "main")).toBe(false);
   });
 });
 
@@ -273,7 +300,7 @@ describe("forcePushBranch", () => {
 describe("getChangedFiles", () => {
   it("returns list of changed files", () => {
     mockExec.mockReturnValue("src/foo.ts\nsrc/bar.ts\n");
-    expect(getChangedFiles("/tmp/wt")).toEqual(["src/foo.ts", "src/bar.ts"]);
+    expect(getChangedFiles("/tmp/wt", "main")).toEqual(["src/foo.ts", "src/bar.ts"]);
     expect(mockExec).toHaveBeenCalledWith(
       "git",
       ["diff", "--name-only", "origin/main...HEAD"],
@@ -281,23 +308,33 @@ describe("getChangedFiles", () => {
     );
   });
 
+  it("uses the specified base branch", () => {
+    mockExec.mockReturnValue("src/foo.ts\n");
+    getChangedFiles("/tmp/wt", "develop");
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["diff", "--name-only", "origin/develop...HEAD"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
   it("returns empty array when no changes", () => {
     mockExec.mockReturnValue("");
-    expect(getChangedFiles("/tmp/wt")).toEqual([]);
+    expect(getChangedFiles("/tmp/wt", "main")).toEqual([]);
   });
 
   it("returns empty array on error", () => {
     mockExec.mockImplementation(() => {
       throw new Error("not a git repo");
     });
-    expect(getChangedFiles("/tmp/wt")).toEqual([]);
+    expect(getChangedFiles("/tmp/wt", "main")).toEqual([]);
   });
 });
 
 describe("getCommitSummary", () => {
-  it("returns oneline log of commits ahead of main", () => {
+  it("returns oneline log of commits ahead of base branch", () => {
     mockExec.mockReturnValue("abc123 fix something\ndef456 add feature\n");
-    expect(getCommitSummary("/tmp/wt")).toBe("abc123 fix something\ndef456 add feature");
+    expect(getCommitSummary("/tmp/wt", "main")).toBe("abc123 fix something\ndef456 add feature");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
       ["log", "--oneline", "main..HEAD"],
@@ -305,16 +342,26 @@ describe("getCommitSummary", () => {
     );
   });
 
+  it("uses the specified base branch", () => {
+    mockExec.mockReturnValue("abc123 fix something\n");
+    getCommitSummary("/tmp/wt", "develop");
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["log", "--oneline", "develop..HEAD"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
   it("returns empty string when no commits ahead", () => {
     mockExec.mockReturnValue("");
-    expect(getCommitSummary("/tmp/wt")).toBe("");
+    expect(getCommitSummary("/tmp/wt", "main")).toBe("");
   });
 
   it("returns empty string on error", () => {
     mockExec.mockImplementation(() => {
       throw new Error("not a git repo");
     });
-    expect(getCommitSummary("/tmp/wt")).toBe("");
+    expect(getCommitSummary("/tmp/wt", "main")).toBe("");
   });
 });
 
@@ -333,5 +380,31 @@ describe("pruneWorktrees", () => {
       throw new Error("failed");
     });
     expect(() => pruneWorktrees("/repo")).not.toThrow();
+  });
+});
+
+describe("resolveBaseBranch", () => {
+  it("returns explicit baseBranch from project config", () => {
+    expect(resolveBaseBranch("/repo", { baseBranch: "develop" })).toBe("develop");
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
+  it("detects from origin/HEAD when no config", () => {
+    mockExec.mockReturnValue("refs/remotes/origin/master");
+    expect(resolveBaseBranch("/repo")).toBe("master");
+  });
+
+  it("falls back to main when origin/HEAD is not set", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("not a symbolic ref");
+    });
+    expect(resolveBaseBranch("/repo")).toBe("main");
+  });
+
+  it("falls back to main when config has no baseBranch", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("not a symbolic ref");
+    });
+    expect(resolveBaseBranch("/repo", {})).toBe("main");
   });
 });

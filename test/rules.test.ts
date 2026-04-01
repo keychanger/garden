@@ -83,4 +83,17 @@ describe("buildWorktreeRules", () => {
     const result = buildWorktreeRules("test-branch");
     expect(result).toContain("poller will automatically rebase, review, and merge");
   });
+
+  it("defaults to main as base branch", async () => {
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("test-branch");
+    expect(result).toContain("merge your changes into main");
+  });
+
+  it("uses custom base branch when specified", async () => {
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("test-branch", "develop");
+    expect(result).toContain("merge your changes into develop");
+    expect(result).not.toContain("into main");
+  });
 });
