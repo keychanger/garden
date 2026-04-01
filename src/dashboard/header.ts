@@ -6,6 +6,11 @@ import { readDashState, type DashboardState } from "./state.js";
 import { findWorkerByName, updateWorkerTask } from "./registry.js";
 import { alertCount } from "./alerts.js";
 
+interface RefreshOptions {
+  state?: DashboardState;
+  windowNames?: string[];
+}
+
 export function setupStatusBar(gardenRunner: string): void {
   const target = DASHBOARD_SESSION;
   const mainWindow = `${DASHBOARD_SESSION}:main`;
@@ -115,8 +120,8 @@ export function printHeader(): void {
  * (no process detection, no pgrep). Called synchronously after mutations
  * for instant visual feedback. The background loop fills in live status.
  */
-export function updateHeaderVar(): void {
-  const state = readDashState();
+export function updateHeaderVar(opts?: RefreshOptions): void {
+  const state = opts?.state ?? readDashState();
 
   if (!state.activeProject) {
     setHeaderVar("no project selected  [⌥1-⌥9 select]");
@@ -125,7 +130,7 @@ export function updateHeaderVar(): void {
 
   const projectName = state.activeProject;
 
-  const hiddenWorkers = listHiddenWorkerWindows(projectName);
+  const hiddenWorkers = listHiddenWorkerWindows(projectName, opts?.windowNames);
   let totalWorkers = hiddenWorkers.length;
   let currentWorkerIdx = 0;
   const isOnWorker = state.activePaneType === "worker";
@@ -247,8 +252,8 @@ export function buildStatusCommand(gardenRunner: string): string {
   ].join("\n");
 }
 
-export function refreshStatusPane(): void {
-  const state = readDashState();
+export function refreshStatusPane(opts?: RefreshOptions): void {
+  const state = opts?.state ?? readDashState();
   if (!state.statusPaneId) return;
   try {
     const pid = getPanePid(state.statusPaneId);
@@ -260,7 +265,7 @@ export function refreshStatusPane(): void {
  * Full dashboard refresh: updates header var instantly, then signals
  * the status pane for a content refresh. Call after every mutation.
  */
-export function refreshDashboard(): void {
-  updateHeaderVar();
-  refreshStatusPane();
+export function refreshDashboard(opts?: RefreshOptions): void {
+  updateHeaderVar(opts);
+  refreshStatusPane(opts);
 }

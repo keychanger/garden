@@ -8,6 +8,7 @@ import { refreshDashboard } from "./header.js";
 import {
   tmux, tmuxDisplay,
   paneExists, windowExists,
+  listAllWindowNames,
   listHiddenWorkerWindows,
   setPaneLabel,
 } from "./tmux.js";
@@ -34,20 +35,24 @@ export function switchProject(indexArg: string): void {
     return;
   }
 
+  // Single list-windows call replaces multiple windowExists checks
+  const windowNames = listAllWindowNames();
+  const has = (name: string) => windowNames.includes(name);
+
   const parkName = state.activeWindowName ?? `_${state.activeProject ?? "none"}-active`;
   parkToHidden(parkName, state);
 
-  if (windowExists(`_${projectName}-active`)) {
+  if (has(`_${projectName}-active`)) {
     restoreFromHidden(`_${projectName}-active`, state);
     state.activePaneType = "worker";
     state.activeWindowName = `_${projectName}-active`;
   } else {
-    const workerWindows = listHiddenWorkerWindows(projectName);
+    const workerWindows = listHiddenWorkerWindows(projectName, windowNames);
     if (workerWindows.length > 0) {
       restoreFromHidden(workerWindows[0], state);
       state.activePaneType = "worker";
       state.activeWindowName = workerWindows[0];
-    } else if (windowExists(`_${projectName}-shell`)) {
+    } else if (has(`_${projectName}-shell`)) {
       restoreFromHidden(`_${projectName}-shell`, state);
       state.activePaneType = "shell";
       state.activeWindowName = `_${projectName}-shell`;
@@ -61,7 +66,7 @@ export function switchProject(indexArg: string): void {
 
   state.activeProject = projectName;
   writeDashState(state);
-  refreshDashboard();
+  refreshDashboard({ state });
   tmuxDisplay(`Switched to ${projectName}`);
 }
 
@@ -91,7 +96,7 @@ export function focusWorker(): void {
   state.activePaneType = "worker";
   state.activeWindowName = workerWindows[0];
   writeDashState(state);
-  refreshDashboard();
+  refreshDashboard({ state });
 }
 
 export function focusShell(): void {
@@ -121,7 +126,7 @@ export function focusShell(): void {
   state.activePaneType = "shell";
   state.activeWindowName = shellWindowName;
   writeDashState(state);
-  refreshDashboard();
+  refreshDashboard({ state });
 }
 
 export function focusGarden(): void {
@@ -137,7 +142,7 @@ export function focusGarden(): void {
     state.gardenPaneType = "shell";
     state.gardenWindowName = null;
     writeDashState(state);
-    refreshDashboard();
+    refreshDashboard({ state });
   }
 
   if (state.gardenShellPaneId && paneExists(state.gardenShellPaneId)) {
@@ -167,7 +172,7 @@ export function focusLogs(): void {
   state.gardenWindowName = "_garden-logs";
   setPaneLabel(state.gardenShellPaneId!, "logs");
   writeDashState(state);
-  refreshDashboard();
+  refreshDashboard({ state });
 
   if (state.gardenShellPaneId && paneExists(state.gardenShellPaneId)) {
     tmux("select-pane", "-t", state.gardenShellPaneId);
@@ -220,5 +225,5 @@ export function cyclePane(direction: 1 | -1): void {
   state.activePaneType = "worker";
   state.activeWindowName = targetWindow;
   writeDashState(state);
-  refreshDashboard();
+  refreshDashboard({ state });
 }

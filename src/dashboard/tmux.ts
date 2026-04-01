@@ -20,6 +20,13 @@ export function tmuxSplit(...args: string[]): string {
   }).trim();
 }
 
+export function tmuxNewWindow(...args: string[]): string {
+  return execFileSync("tmux", ["new-window", "-P", "-F", "#{pane_id}", ...args], {
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+}
+
 export function tmuxDisplay(msg: string): void {
   try {
     tmux("display-message", "-t", DASHBOARD_SESSION, msg);
@@ -145,16 +152,20 @@ export function hasChildProcesses(pid: string): boolean {
   }
 }
 
-export function listHiddenWorkerWindows(project: string): string[] {
+export function listAllWindowNames(): string[] {
   try {
-    const windows = tmuxOutput(
+    return tmuxOutput(
       "list-windows", "-t", DASHBOARD_SESSION, "-F", "#{window_name}"
     ).split("\n").filter(Boolean);
-    const prefix = `_${project}-worker-`;
-    return windows.filter(w => w.startsWith(prefix));
   } catch {
     return [];
   }
+}
+
+export function listHiddenWorkerWindows(project: string, windowNames?: string[]): string[] {
+  const names = windowNames ?? listAllWindowNames();
+  const prefix = `_${project}-worker-`;
+  return names.filter(w => w.startsWith(prefix));
 }
 
 export function shellEscape(s: string): string {

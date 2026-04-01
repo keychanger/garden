@@ -1,7 +1,7 @@
 // Pane parking and restoring: swaps content between the visible right slot
 // and hidden tmux windows so the layout tree is never modified.
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, getFirstPaneId, windowExists, killWindowSafe, paneExists } from "./tmux.js";
+import { tmux, tmuxNewWindow, getFirstPaneId, killWindowSafe, paneExists } from "./tmux.js";
 import type { DashboardState } from "./state.js";
 import { log } from "./log.js";
 
@@ -16,12 +16,9 @@ export function parkToHidden(windowName: string, state: DashboardState): string 
     return null;
   }
 
-  if (windowExists(windowName)) {
-    killWindowSafe(windowName);
-  }
+  killWindowSafe(windowName);
 
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName);
-  const tempPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
+  const tempPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", windowName);
   if (!tempPaneId) {
     log.error("layout", "parkToHidden: failed to get pane ID for new window");
     return null;
@@ -71,12 +68,9 @@ export function gardenParkToHidden(windowName: string, state: DashboardState): s
     return null;
   }
 
-  if (windowExists(windowName)) {
-    killWindowSafe(windowName);
-  }
+  killWindowSafe(windowName);
 
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName);
-  const tempPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
+  const tempPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", windowName);
   if (!tempPaneId) {
     log.error("layout", "gardenParkToHidden: failed to get pane ID for new window");
     return null;

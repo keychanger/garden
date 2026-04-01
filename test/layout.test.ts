@@ -6,6 +6,7 @@ vi.mock("../src/session.js", () => ({
 
 vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
+  tmuxNewWindow: vi.fn(),
   getFirstPaneId: vi.fn(),
   windowExists: vi.fn(() => false),
   killWindowSafe: vi.fn(),
@@ -22,7 +23,7 @@ vi.mock("../src/dashboard/log.js", () => ({
 }));
 
 import { parkToHidden, restoreFromHidden, swapToHidden } from "../src/dashboard/layout.js";
-import { tmux, getFirstPaneId, windowExists, killWindowSafe, paneExists } from "../src/dashboard/tmux.js";
+import { tmux, tmuxNewWindow, getFirstPaneId, windowExists, killWindowSafe, paneExists } from "../src/dashboard/tmux.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 
 function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
@@ -45,21 +46,20 @@ beforeEach(() => {
 
 describe("parkToHidden", () => {
   it("creates hidden window and swaps pane into it", () => {
-    vi.mocked(getFirstPaneId).mockReturnValue("%10");
+    vi.mocked(tmuxNewWindow).mockReturnValue("%10");
     const state = makeState();
     parkToHidden("_garden-worker-bold-ash", state);
 
-    expect(vi.mocked(tmux)).toHaveBeenCalledWith(
-      "new-window", "-d", "-t", "garden-dashboard", "-n", "_garden-worker-bold-ash"
+    expect(vi.mocked(tmuxNewWindow)).toHaveBeenCalledWith(
+      "-d", "-t", "garden-dashboard", "-n", "_garden-worker-bold-ash"
     );
     expect(vi.mocked(tmux)).toHaveBeenCalledWith(
       "swap-pane", "-s", "%2", "-t", "%10"
     );
   });
 
-  it("kills existing window with same name before creating", () => {
-    vi.mocked(windowExists).mockReturnValue(true);
-    vi.mocked(getFirstPaneId).mockReturnValue("%10");
+  it("always kills existing window before creating", () => {
+    vi.mocked(tmuxNewWindow).mockReturnValue("%10");
     const state = makeState();
     parkToHidden("_garden-worker-bold-ash", state);
 
@@ -80,7 +80,7 @@ describe("parkToHidden", () => {
   });
 
   it("clears activePaneType and activeWindowName on state", () => {
-    vi.mocked(getFirstPaneId).mockReturnValue("%10");
+    vi.mocked(tmuxNewWindow).mockReturnValue("%10");
     const state = makeState();
     parkToHidden("_garden-worker-bold-ash", state);
     expect(state.activePaneType).toBeNull();
@@ -122,19 +122,14 @@ describe("restoreFromHidden", () => {
 
 describe("swapToHidden", () => {
   it("parks then restores in sequence", () => {
-    let callOrder = 0;
-    vi.mocked(getFirstPaneId).mockImplementation(() => {
-      callOrder++;
-      return callOrder === 1 ? "%10" : "%20";
-    });
+    vi.mocked(tmuxNewWindow).mockReturnValue("%10");
+    vi.mocked(getFirstPaneId).mockReturnValue("%20");
 
     const state = makeState();
     swapToHidden("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
 
-    const tmuxCalls = vi.mocked(tmux).mock.calls;
-    const newWindowIdx = tmuxCalls.findIndex(c => c[0] === "new-window");
-    const swapCalls = tmuxCalls.filter(c => c[0] === "swap-pane");
+    expect(vi.mocked(tmuxNewWindow)).toHaveBeenCalled();
+    const swapCalls = vi.mocked(tmux).mock.calls.filter(c => c[0] === "swap-pane");
     expect(swapCalls.length).toBe(2);
-    expect(newWindowIdx).toBeLessThan(tmuxCalls.indexOf(swapCalls[1]));
   });
 });
