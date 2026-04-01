@@ -31,8 +31,8 @@ Rules are plain markdown. Edit them directly.
 │  (auto-sized)       │  garden · 1/2 worker (idle) │
 │                     ├─────────────────────────────┤
 │  garden ◄           │                             │
-│  ● 🌱 worker-1 working│  Active Pane               │
-│  ○ 🌿 worker-2 waiting│  (worker or shell)         │
+│  ● ⠋ worker-1 working │  Active Pane               │
+│  ○ ◆ worker-2 waiting │  (worker or shell)         │
 │  api                │                             │
 │    (no workers)     │                             │
 ├─────────────────────┤                             │
@@ -181,7 +181,7 @@ The status pane shows each worker's lifecycle state using status icons:
 - ◆ **waiting** — process alive, no child processes (showing prompt, wants input)
 - ↑ **pushed** — commits detected, awaiting review launch
 - ◎ **reviewing** — poller is reviewing the worker's commits
-- ◎ **merge-pending** — review passed, in the merge queue
+- ◷ **merge-pending** — review passed, in the merge queue
 - ✖ **failing** — checks or review failed (with failure count if repeated)
 - 🌳 **merged** — code merged to main (with merge count if multiple merges)
 - ○ **exited** — process has terminated
