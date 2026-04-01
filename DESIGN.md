@@ -32,7 +32,7 @@ Rules are plain markdown. Edit them directly.
 │                     ├─────────────────────────────┤
 │  garden ◄           │                             │
 │  ● ⠋ worker-1 working │  Active Pane               │
-│  ○ ◆ worker-2 waiting │  (worker or shell)         │
+│  ○ ◆ worker-2 idle    │  (worker or shell)         │
 │  api                │                             │
 │    (no workers)     │                             │
 ├─────────────────────┤                             │
@@ -178,7 +178,7 @@ The status pane shows each worker's lifecycle state using status icons:
 
 - 🌱 **ready** — Claude launched but not yet tasked (no activity detected)
 - ⠋ **working** — process alive, has child processes (braille spinner animation)
-- ◆ **waiting** — process alive, no child processes (showing prompt, wants input)
+- ◆ **idle** — process alive, no child processes (probably needs input)
 - ↑ **pushed** — commits detected, awaiting review launch
 - ◎ **reviewing** — poller is reviewing the worker's commits
 - ◷ **merge-pending** — review passed, in the merge queue
