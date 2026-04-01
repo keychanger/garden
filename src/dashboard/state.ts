@@ -9,7 +9,7 @@ export interface DashboardState {
   // Left side — garden pane is swappable between shell and logs
   statusPaneId: string | null;
   gardenShellPaneId: string | null; // current pane ID in the garden slot (despite the name)
-  gardenPaneType: "shell" | "logs" | null;
+  gardenPaneType: "console" | "shell" | "logs" | null;
   gardenWindowName: string | null; // logical name for parking, e.g. "_garden-shell" or "_garden-logs"
   // Right side — activePaneId is the pane currently in the right slot
   activePaneId: string | null;
@@ -35,7 +35,8 @@ export function readDashState(): DashboardState {
     if (fs.existsSync(STATE_FILE)) {
       const raw = JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
       // Backfill new fields for state files from older versions
-      if (raw.gardenPaneType === undefined) raw.gardenPaneType = "shell";
+      if (raw.gardenPaneType === undefined) raw.gardenPaneType = "console";
+      if (raw.gardenPaneType === "shell" && raw.gardenWindowName === null) raw.gardenPaneType = "console";
       if (raw.gardenWindowName === undefined) raw.gardenWindowName = null;
       return raw;
     }

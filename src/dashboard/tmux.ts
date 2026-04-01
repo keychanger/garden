@@ -27,6 +27,14 @@ export function tmuxNewWindow(...args: string[]): string {
   }).trim();
 }
 
+export function getActivePaneId(): string | null {
+  try {
+    return tmuxOutput("display-message", "-t", DASHBOARD_SESSION, "-p", "#{pane_id}");
+  } catch {
+    return null;
+  }
+}
+
 export function tmuxDisplay(msg: string): void {
   try {
     tmux("display-message", "-t", DASHBOARD_SESSION, msg);

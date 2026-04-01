@@ -40,7 +40,7 @@ describe("writeDashState / readDashState", () => {
       activeProject: "myproject",
       statusPaneId: "%1",
       gardenShellPaneId: "%2",
-      gardenPaneType: "shell" as const,
+      gardenPaneType: "console" as const,
       gardenWindowName: null,
       activePaneId: "%3",
       activePaneType: "worker" as const,

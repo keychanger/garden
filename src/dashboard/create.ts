@@ -88,8 +88,8 @@ export function ensureDashboard(): void {
 
   setPaneTitle(statusId, "status");
   setPaneLabel(statusId, "status");
-  setPaneTitle(gardenShellId, "garden");
-  setPaneLabel(gardenShellId, "garden");
+  setPaneTitle(gardenShellId, "console");
+  setPaneLabel(gardenShellId, "console");
   if (firstProject) {
     setPaneLabel(rightPaneId, `shell-${firstProject}`);
     setPaneTitle(rightPaneId, firstProject);
@@ -108,7 +108,7 @@ export function ensureDashboard(): void {
     activeProject: string | null;
     statusPaneId: string;
     gardenShellPaneId: string;
-    gardenPaneType: "shell" | "logs" | null;
+    gardenPaneType: "console" | "shell" | "logs" | null;
     gardenWindowName: string | null;
     activePaneId: string;
     activePaneType: "worker" | "shell" | null;
@@ -117,8 +117,8 @@ export function ensureDashboard(): void {
     activeProject: firstProject,
     statusPaneId: statusId,
     gardenShellPaneId: gardenShellId,
-    gardenPaneType: "shell",
-    gardenWindowName: null,
+    gardenPaneType: "console",
+    gardenWindowName: "_garden-console",
     activePaneId: rightPaneId,
     activePaneType: firstProject ? "shell" : null,
     activeWindowName: firstProject ? `_${firstProject}-shell` : null,
@@ -217,6 +217,28 @@ exec garden logs --follow
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
   fs.writeFileSync(scriptFile, script, { mode: 0o755 });
   return scriptFile;
+}
+
+export function createGardenConsoleWindow(gardenRunner: string): void {
+  const consoleInit = writeConsoleInitScript(gardenRunner);
+  const windowName = "_garden-console";
+  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName);
+  const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
+  if (paneId) {
+    setPaneLabel(paneId, "console");
+    setPaneTitle(paneId, "console");
+    tmux("send-keys", "-t", paneId, `source ${shellEscape(consoleInit)} && clear`, "Enter");
+  }
+}
+
+export function createGardenShellWindow(): void {
+  const windowName = "_garden-shell";
+  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName);
+  const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
+  if (paneId) {
+    setPaneLabel(paneId, "shell");
+    setPaneTitle(paneId, "shell");
+  }
 }
 
 export function createShellWindow(projectName: string, projectPath: string): void {
@@ -380,7 +402,7 @@ function writeWorktreeContextFile(
 
 function writeConsoleInitScript(gardenRunner: string): string {
   const script = `# Garden console init — custom prompt with auto-dispatch
-PS1=$'\\033[1;32mgarden\\033[0m '
+PS1=$'\\033[1;32mgarden>\\033[0m '
 
 command_not_found_handler() {
   ${gardenRunner} "$@"

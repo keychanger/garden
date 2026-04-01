@@ -11,9 +11,10 @@ import {
   listAllWindowNames,
   listHiddenWorkerWindows,
   setPaneLabel,
+  getActivePaneId,
 } from "./tmux.js";
 import { log } from "./log.js";
-import { createShellWindow, createLogsWindow } from "./create.js";
+import { createShellWindow, createLogsWindow, createGardenShellWindow, createGardenConsoleWindow, resolveGardenRunner } from "./create.js";
 
 export function switchProject(indexArg: string): void {
   log.info("navigate", "switchProject", { data: { index: indexArg } });
@@ -129,48 +130,41 @@ export function focusShell(): void {
   refreshDashboard({ state });
 }
 
-export function focusGarden(): void {
-  const state = readDashState();
+const GARDEN_VIEWS = ["console", "shell", "logs"] as const;
+type GardenView = typeof GARDEN_VIEWS[number];
 
-  if (state.gardenPaneType === "logs") {
-    const shellWindowName = "_garden-shell";
-    if (!windowExists(shellWindowName)) {
-      tmuxDisplay("Garden shell window missing.");
-      return;
-    }
-    gardenSwapToHidden("_garden-logs", shellWindowName, state);
-    state.gardenPaneType = "shell";
-    state.gardenWindowName = null;
-    writeDashState(state);
-    refreshDashboard({ state });
-  }
-
-  if (state.gardenShellPaneId && paneExists(state.gardenShellPaneId)) {
-    tmux("select-pane", "-t", state.gardenShellPaneId);
-  }
+function gardenWindowForView(view: GardenView): string {
+  return `_garden-${view}`;
 }
 
-export function focusLogs(): void {
+function gardenLabelForView(view: GardenView): string {
+  return view;
+}
+
+function ensureGardenView(view: GardenView): void {
+  const windowName = gardenWindowForView(view);
+  if (windowExists(windowName)) return;
+  if (view === "console") createGardenConsoleWindow(resolveGardenRunner());
+  else if (view === "shell") createGardenShellWindow();
+  else if (view === "logs") createLogsWindow();
+}
+
+function switchGardenTo(view: GardenView): void {
   const state = readDashState();
 
-  if (state.gardenPaneType === "logs") {
+  if (state.gardenPaneType === view) {
     if (state.gardenShellPaneId && paneExists(state.gardenShellPaneId)) {
       tmux("select-pane", "-t", state.gardenShellPaneId);
     }
     return;
   }
 
-  const logsWindowName = "_garden-logs";
-  if (!windowExists(logsWindowName)) {
-    createLogsWindow();
-  }
-
-  // Park the garden shell to hidden, restore logs
-  const parkName = state.gardenWindowName ?? "_garden-shell";
-  gardenSwapToHidden(parkName, logsWindowName, state);
-  state.gardenPaneType = "logs";
-  state.gardenWindowName = "_garden-logs";
-  setPaneLabel(state.gardenShellPaneId!, "logs");
+  const parkName = state.gardenWindowName ?? "_garden-console";
+  ensureGardenView(view);
+  gardenSwapToHidden(parkName, gardenWindowForView(view), state);
+  state.gardenPaneType = view;
+  state.gardenWindowName = gardenWindowForView(view);
+  setPaneLabel(state.gardenShellPaneId!, gardenLabelForView(view));
   writeDashState(state);
   refreshDashboard({ state });
 
@@ -179,17 +173,31 @@ export function focusLogs(): void {
   }
 }
 
-export function cycleGardenPane(): void {
+export function focusGarden(): void {
+  switchGardenTo("console");
+}
+
+export function focusLogs(): void {
+  switchGardenTo("logs");
+}
+
+export function cycleGardenPane(direction: 1 | -1): void {
   const state = readDashState();
-  if (state.gardenPaneType === "logs") {
-    focusGarden();
-  } else {
-    focusLogs();
-  }
+  const current = state.gardenPaneType ?? "console";
+  const currentIdx = GARDEN_VIEWS.indexOf(current as GardenView);
+  const nextIdx = (currentIdx + direction + GARDEN_VIEWS.length) % GARDEN_VIEWS.length;
+  switchGardenTo(GARDEN_VIEWS[nextIdx]);
 }
 
 export function cyclePane(direction: 1 | -1): void {
   const state = readDashState();
+
+  // Context-aware: if focused on the garden pane, cycle garden views
+  const focusedPane = getActivePaneId();
+  if (focusedPane && focusedPane === state.gardenShellPaneId) {
+    return cycleGardenPane(direction);
+  }
+
   if (!state.activeProject) {
     tmuxDisplay("No project selected.");
     return;

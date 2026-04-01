@@ -85,7 +85,7 @@ Usage:
   garden dashboard                 Open the dashboard (creates if needed)
   garden dashboard exit            Close the dashboard
 Layout:
-  Left: project status (upper, auto-sized) + garden shell (lower).
+  Left: project status (upper) + garden pane (lower: console, shell, or logs).
   Right: active pane (worker or shell). Info in status bar.
 
 Hotkeys (⌥ = Option/Alt, no prefix needed):
@@ -93,10 +93,10 @@ Hotkeys (⌥ = Option/Alt, no prefix needed):
   ⌥n           New worker (Claude session)
   ⌥w           Jump to first worker
   ⌥s           Jump to project shell
-  ⌥] / ⌥[     Cycle between workers
+  ⌥] / ⌥[     Cycle workers (right pane) or views (garden pane)
   ⌥x           Kill current worker (shell is protected)
-  ⌥g           Focus garden shell
-  ⌥l           Focus logs/alerts
+  ⌥g           Focus garden console
+  ⌥l           Focus logs
 
 Setup:
   iTerm2: Profiles → Keys → Left Option key → "Esc+"

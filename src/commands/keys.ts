@@ -4,10 +4,11 @@ export async function keys(): Promise<void> {
 Garden Dashboard Keybindings (⌥ = Option/Alt)
 
   Navigation
-    ⌥g           Focus garden shell
+    ⌥g           Focus garden console
+    ⌥l           Focus logs
     ⌥w           Jump to first worker
     ⌥s           Jump to project shell
-    ⌥] / ⌥[     Cycle between all panes
+    ⌥] / ⌥[     Cycle workers (right pane) or views (garden pane)
 
   Projects
     ⌥1 – ⌥9     Switch to project by number
