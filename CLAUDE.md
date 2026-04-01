@@ -89,11 +89,10 @@ Every worker runs in its own git worktree, isolated from the main checkout and o
 3. A **poller** (`src/dashboard/poller.ts`) runs every 30s in a hidden tmux window, driving the review/merge lifecycle using local git (no GitHub PRs):
    - Detects new commits on worker branches via SHA comparison.
    - Skips review if Claude is actively running in the worktree (live-Claude guard).
-   - Rebases onto main, then runs optional `checks` command (configured per project in `~/.garden/config.yml`) on the rebased code.
-   - Force-pushes and runs a Claude review (`claude -p --dangerously-skip-permissions`) of the diff against project rules, checking adherence, test coverage, and doc coverage. The reviewer has full tool access in the worktree.
-   - If code is clean: merges to main via local `git merge --ff-only` and pushes. If issues found: reviewer fixes them directly, re-runs checks, and merges. If reviewer cannot fix: transitions to failing and surfaces an alert. If review process fails: transitions to failing and surfaces an alert (unreviewed code is never auto-merged).
+   - Runs a Claude reviewer (`claude -p --dangerously-skip-permissions`) with full tool access in the worktree. The reviewer handles everything: rebasing onto main, resolving conflicts, running optional `checks` command (configured per project in `~/.garden/config.yml`), fixing check failures, and reviewing code against project rules for adherence, test coverage, and doc coverage.
+   - If code is clean or reviewer fixed all issues: force-pushes and merges to main via local `git merge --ff-only`. If reviewer cannot fix: transitions to failing and surfaces an alert. If review process fails: transitions to failing and surfaces an alert (unreviewed code is never auto-merged).
    - After merge, runs optional `postMerge` command (e.g., `npm run build` to rebuild the CLI).
-   - Notifies sibling workers with overlapping files (relaunches dead sessions if needed).
+   - Notifies live sibling workers with overlapping files so they can rebase.
    - Debounces commits (30s quiet period) before retrying.
 4. Workers are killed on manual `opt-x` or `garden reset`.
 5. Worktrees are cleaned up when the worker is killed.

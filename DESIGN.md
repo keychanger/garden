@@ -107,8 +107,8 @@ working -> reviewing -> merged
 ```
 
 1. **working**: Worker is active. Poller compares branch HEAD SHA against last-seen SHA. When new commits are detected, Claude is not actively working, and no other worker is reviewing, transitions to reviewing.
-2. **reviewing**: Poller fetches main, rebases the branch, runs optional checks on the rebased code, force-pushes the rebased branch, then runs a Claude review (`claude -p --dangerously-skip-permissions`) against the diff and project rules. The reviewer has full tool access in the worktree. If the code is clean, merges to main. If the reviewer finds issues, it fixes them directly (editing files, updating tests/docs), commits the fixes, re-runs checks, and merges. If the reviewer cannot fix the issues, transitions to failing and surfaces an alert. If the review process fails (Claude unavailable, timeout, unparseable output), transitions to failing and surfaces an alert. Unreviewed code is never auto-merged.
-3. **failing**: Checks failed, merge conflict, unfixable review issues, or review process failure. Poller watches for new commits via SHA tracking. After 30s debounce with no new pushes, state transitions back to working for retry. Each failure increments a `failCount` on the worker entry; after 3 consecutive failures, an alert is surfaced. The count resets on successful merge.
+2. **reviewing**: Poller fetches main, then runs a Claude reviewer (`claude -p --dangerously-skip-permissions`) with full tool access in the worktree. The reviewer handles everything in one pass: rebasing onto main, resolving conflicts, running optional checks, fixing check failures, and reviewing code against project rules. If the code is clean or the reviewer fixed all issues: force-pushes and merges to main. If the reviewer cannot fix the issues, transitions to failing and surfaces an alert. If the review process fails (Claude unavailable, timeout, unparseable output), transitions to failing and surfaces an alert. Unreviewed code is never auto-merged.
+3. **failing**: Unfixable review issues or review process failure. Poller watches for new commits via SHA tracking. After 30s debounce with no new pushes, state transitions back to working for retry. Each failure increments a `failCount` on the worker entry; after 3 consecutive failures, an alert is surfaced. The count resets on successful merge.
 4. **merged**: Code merged to main. If the worker pushes new commits after merge, the poller detects them and transitions back to working for a new review cycle.
 
 ### Checks Configuration
@@ -121,7 +121,7 @@ projects:
     checks: npm run build && npm test
 ```
 
-The poller runs this command in the worker's worktree **after rebasing onto main**, so checks validate the combined state of the branch plus latest main. No checks configured means merge immediately after successful rebase.
+The reviewer runs this command in the worker's worktree after rebasing onto main, so checks validate the combined state of the branch plus latest main. If checks fail, the reviewer fixes the issues and re-runs. No checks configured means the reviewer only does the code review.
 
 Projects can also define a `postMerge` command that runs on the main checkout after fast-forwarding:
 
@@ -139,33 +139,26 @@ This is essential for projects like garden itself, where the poller runs the com
 Merges are serialized per project (one at a time). The merge sequence:
 1. Check if Claude is running in the worktree — if so, skip this cycle
 2. Fetch latest main
-3. Rebase the branch onto main
-4. Run checks (if configured) on the rebased code
-5. Force-push the rebased branch
-6. Review the diff via `claude -p --dangerously-skip-permissions` against project rules
-7. If clean: merge to main via `git merge --ff-only` and push
-8. If issues found: reviewer fixes them directly, re-runs checks, then merges
-9. Notify sibling workers with overlapping files (see below)
-10. Run postMerge command (if configured) on the main checkout
-11. Mark the worker as merged in the registry
+3. Run the Claude reviewer (`claude -p --dangerously-skip-permissions`) which handles: rebase onto main, conflict resolution, checks, check failure fixes, and code review
+4. If clean or fixed: force-push the branch, merge to main via `git merge --ff-only` and push
+5. Notify live sibling workers with overlapping files (see below)
+6. Run postMerge command (if configured) on the main checkout
+7. Mark the worker as merged in the registry
 
 The worker and its worktree are not automatically cleaned up on merge. Cleanup happens only when the user kills the worker with `opt-x` or runs `garden reset`. This allows inspecting merged work before disposal.
 
 Projects don't block each other — each project's queue drains independently.
 
 ### Sibling Merge Notification
-When code merges, the poller compares the changed files against every other active worker's branch in the same project. If files overlap, the sibling is notified with the merged worker's commit summary and overlapping file list so it can review and avoid reverting the merged work.
-
-- **Claude alive**: notification delivered via `tmux send-keys`
-- **Claude exited**: the worker is relaunched with a new Claude session; the notification is stored as a pending message in the registry and delivered on the next poll cycle once Claude is detected as running
+When code merges, the poller compares the changed files against every other active worker's branch in the same project. If files overlap and the sibling has a live Claude session, it is notified via `tmux send-keys` with the merged worker's commit summary and overlapping file list so it can review and avoid reverting the merged work. Dead workers are skipped — they will hit rebase conflicts naturally on their next review cycle.
 
 ### Alerts
 The dashboard surfaces important events as alerts — persistent messages that require operator attention. Alerts are stored atomically in `~/.garden/sessions/dashboard.alerts.json` (same write-tmp-then-rename pattern as other state files), capped at 100 entries.
 
 **Events that generate alerts:**
 - Review process failure (Claude unavailable, timeout, unparseable output)
+- Reviewer could not fix issues (FAILED verdict)
 - Merge failure
-- Rebase conflict
 - Repeated failures (3+ consecutive failures on the same worker)
 
 **Visibility:**
