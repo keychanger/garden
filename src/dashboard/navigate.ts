@@ -41,15 +41,22 @@ export function switchProject(indexArg: string): void {
     restoreFromHidden(`_${projectName}-active`, state);
     state.activePaneType = "worker";
     state.activeWindowName = `_${projectName}-active`;
-  } else if (windowExists(`_${projectName}-shell`)) {
-    restoreFromHidden(`_${projectName}-shell`, state);
-    state.activePaneType = "shell";
-    state.activeWindowName = `_${projectName}-shell`;
   } else {
-    createShellWindow(projectName, project.path);
-    restoreFromHidden(`_${projectName}-shell`, state);
-    state.activePaneType = "shell";
-    state.activeWindowName = `_${projectName}-shell`;
+    const workerWindows = listHiddenWorkerWindows(projectName);
+    if (workerWindows.length > 0) {
+      restoreFromHidden(workerWindows[0], state);
+      state.activePaneType = "worker";
+      state.activeWindowName = workerWindows[0];
+    } else if (windowExists(`_${projectName}-shell`)) {
+      restoreFromHidden(`_${projectName}-shell`, state);
+      state.activePaneType = "shell";
+      state.activeWindowName = `_${projectName}-shell`;
+    } else {
+      createShellWindow(projectName, project.path);
+      restoreFromHidden(`_${projectName}-shell`, state);
+      state.activePaneType = "shell";
+      state.activeWindowName = `_${projectName}-shell`;
+    }
   }
 
   state.activeProject = projectName;
