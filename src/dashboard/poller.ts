@@ -23,6 +23,7 @@ import {
   resolveBaseBranch,
 } from "./git.js";
 import { refreshDashboard } from "./header.js";
+import { readDashState } from "./state.js";
 import { healStatusPane } from "./validate.js";
 import { log } from "./log.js";
 import { buildRulesContext } from "../rules.js";
@@ -937,8 +938,18 @@ function notifySiblingWorkers(
 
 function isWorkerClaudeWorking(projectName: string, workerName: string): boolean {
   const workerWindow = `_${projectName}-worker-${workerName}`;
-  if (!windowExists(workerWindow)) return false;
-  const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindow}`);
+  let paneId: string | null = null;
+
+  if (windowExists(workerWindow)) {
+    paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindow}`);
+  } else {
+    // Worker may be visible in the right pane (hidden window killed after swap)
+    const state = readDashState();
+    if (state.activeWindowName === workerWindow && state.activePaneId) {
+      paneId = state.activePaneId;
+    }
+  }
+
   if (!paneId) return false;
   const pid = getPanePid(paneId);
   return !!pid && isClaudeWorking(pid);
