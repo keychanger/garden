@@ -873,6 +873,41 @@ describe("poll — full cycle", () => {
   });
 });
 
+describe("poll — merged state", () => {
+  it("transitions to working when Claude is still active but has no new commits", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merged",
+        mergedAt: new Date().toISOString(),
+        mergeCount: 0,
+      }),
+    ]);
+    vi.mocked(getCommitSummary).mockReturnValue("");
+    vi.mocked(isClaudeWorking).mockReturnValue(true);
+
+    poll();
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "working", mergeCount: 1 }),
+    );
+  });
+
+  it("stays merged when Claude is idle and there are no new commits", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merged",
+        mergedAt: new Date().toISOString(),
+      }),
+    ]);
+    vi.mocked(getCommitSummary).mockReturnValue("");
+    vi.mocked(isClaudeWorking).mockReturnValue(false);
+
+    poll();
+
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
+});
+
 describe("postPush", () => {
   it("is a simple trigger", () => {
     expect(() => postPush()).not.toThrow();

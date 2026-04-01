@@ -410,10 +410,14 @@ function handleMerged(
 
   // Check if the worker has new commits ahead of main
   const commitSummary = getCommitSummary(wtPath);
-  if (!commitSummary) return false;
+  // Also check if Claude is still actively working -- it may not have
+  // committed yet, but the status should reflect that it's not done
+  const claudeActive = isWorkerClaudeWorking(projectName, entry.name);
+  if (!commitSummary && !claudeActive) return false;
 
   const prevCount = entry.mergeCount ?? 0;
-  log.info("poller", "new commits after merge, resuming", {
+  const reason = commitSummary ? "new commits after merge" : "Claude still working after merge";
+  log.info("poller", reason + ", resuming", {
     worker: entry.name,
   });
   updateWorkerFields(projectName, entry.name, {
