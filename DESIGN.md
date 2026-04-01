@@ -45,7 +45,7 @@ Rules are plain markdown. Edit them directly.
 
 ### Panes
 
-- **Project Status** (upper-left) — Live-updating display of all projects and their workers. Shows which project is active (`◄`), each worker's lifecycle state via plant-themed icons, a focus indicator (filled/empty circle) showing which worker is active, and aligned columns for name/status/activity. Auto-sizes to the number of projects.
+- **Project Status** (upper-left) — Live-updating display of all projects and their workers. Shows which project is active (`◄`), each worker's lifecycle state via status icons (braille spinner for working, Unicode symbols for other states), a focus indicator (filled/empty circle) showing which worker is active, and aligned columns for name/status/activity. Auto-sizes to the number of projects.
 - **Garden Pane** (lower-left) — Cycles between three views: the garden console (bold green `garden>` prompt with auto-dispatch for garden commands), a regular shell, and a logs view. `⌥[`/`⌥]` cycle when focused; `⌥g` jumps to console, `⌥l` jumps to logs.
 - **Header** (top-right, 1-2 lines) — Shows current project, active pane type, worker count, and hotkey hints. Auto-refreshes.
 - **Active Pane** (right) — The currently visible pane for the active project. Either a worker (Claude session) or the project shell. Only one is visible at a time; others are parked in hidden tmux windows.
@@ -174,17 +174,17 @@ The dashboard surfaces important events as alerts — persistent messages that r
 
 ## Worker Status Detection
 
-The status pane shows each worker's lifecycle state using plant-themed icons:
+The status pane shows each worker's lifecycle state using status icons:
 
-- 🪴 **ready** — Claude launched but not yet tasked (no activity detected)
-- 🌱 **working** — process alive, has child processes (actively running tools)
-- 🌿 **waiting** — process alive, no child processes (showing prompt, wants input)
-- 📦 **pushed** — commits detected, awaiting review launch
-- 🌸 **reviewing** — poller is reviewing the worker's commits
-- 🌸 **merge-pending** — review passed, in the merge queue
-- 🍂 **failing** — checks or review failed (with failure count if repeated)
+- 🌱 **ready** — Claude launched but not yet tasked (no activity detected)
+- ⠋ **working** — process alive, has child processes (braille spinner animation)
+- ◆ **waiting** — process alive, no child processes (showing prompt, wants input)
+- ↑ **pushed** — commits detected, awaiting review launch
+- ◎ **reviewing** — poller is reviewing the worker's commits
+- ◎ **merge-pending** — review passed, in the merge queue
+- ✖ **failing** — checks or review failed (with failure count if repeated)
 - 🌳 **merged** — code merged to main (with merge count if multiple merges)
-- 🥀 **exited** — process has terminated
+- ○ **exited** — process has terminated
 
 Process status is detected via tmux's `pane_pid` and child process checks. Lifecycle states (pushed, reviewing, merge-pending, failing, merged) come from the worker registry. Workers are displayed in aligned columns: focus indicator (filled/empty circle), lifecycle icon, name, status, and activity.
 
