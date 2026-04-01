@@ -70,6 +70,11 @@ Dashboard:
   status                         Show project and worker status
   alerts                         View dashboard alerts
   alerts clear                   Dismiss all alerts
+  logs [options]                 View dashboard logs (pretty-printed)
+  logs -f                        Follow logs in real time
+  logs -l warn                   Filter by minimum level
+  logs -s poller                 Filter by source module
+  logs -w <name>                 Filter by worker name
   health                         Check dashboard state consistency
   reset                          Clear the worker registry
   rebuild                        Rebuild garden and relaunch dashboard
