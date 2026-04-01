@@ -32,6 +32,7 @@ import {
   abortRebase,
   forcePushBranch,
   getChangedFiles,
+  getCommitSummary,
   pruneWorktrees,
 } from "../src/dashboard/git.js";
 
@@ -290,6 +291,30 @@ describe("getChangedFiles", () => {
       throw new Error("not a git repo");
     });
     expect(getChangedFiles("/tmp/wt")).toEqual([]);
+  });
+});
+
+describe("getCommitSummary", () => {
+  it("returns oneline log of commits ahead of main", () => {
+    mockExec.mockReturnValue("abc123 fix something\ndef456 add feature\n");
+    expect(getCommitSummary("/tmp/wt")).toBe("abc123 fix something\ndef456 add feature");
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["log", "--oneline", "main..HEAD"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
+  it("returns empty string when no commits ahead", () => {
+    mockExec.mockReturnValue("");
+    expect(getCommitSummary("/tmp/wt")).toBe("");
+  });
+
+  it("returns empty string on error", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("not a git repo");
+    });
+    expect(getCommitSummary("/tmp/wt")).toBe("");
   });
 });
 
