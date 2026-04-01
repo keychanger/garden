@@ -21,7 +21,6 @@ import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poll
 import { getWorkers } from "./registry.js";
 
 export function newWorker(): void {
-  log.info("workers", "newWorker");
   const state = readDashState();
   if (!state.activeProject) {
     tmuxDisplay("No project selected. Use ⌥1-⌥9 first.");
@@ -64,6 +63,11 @@ export function newWorker(): void {
     branchName,
   });
 
+  log.info("workers", "created", {
+    worker: workerName,
+    data: { project: state.activeProject, branch: branchName },
+  });
+
   ensureProjectPoller(state.activeProject, gardenRunner);
 
   state.activePaneType = "worker";
@@ -73,7 +77,6 @@ export function newWorker(): void {
 }
 
 export function killPane(): void {
-  log.info("workers", "killPane");
   const state = readDashState();
 
   if (state.activePaneType === "shell") {
@@ -135,6 +138,10 @@ export function killPane(): void {
         }
       }
       removeWorker(state.activeProject, workerName);
+      log.info("workers", "killed", {
+        worker: workerName,
+        data: { project: state.activeProject, branch: entry?.branchName },
+      });
 
       // Stop project poller if no workers remain
       const remaining = getWorkers(state.activeProject);

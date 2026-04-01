@@ -11,6 +11,7 @@ export interface LogEntry {
   level: string;
   src: string;
   msg: string;
+  worker?: string;
   data?: Record<string, unknown>;
 }
 
@@ -71,9 +72,10 @@ function formatEntry(entry: LogEntry, useRelativeTime: boolean): string {
   const symbol = LEVEL_SYMBOLS[entry.level] ?? " ";
   const level = entry.level.toUpperCase().padEnd(5);
   const src = entry.src.padEnd(8);
+  const workerStr = entry.worker ? `${color.magenta}${entry.worker.padEnd(20)}${color.reset} ` : "";
   const dataStr = entry.data ? `  ${color.dim}${formatData(entry.data)}${color.reset}` : "";
 
-  return `${color.dim}${ts}${color.reset} ${levelColor}${symbol} ${level}${color.reset} ${color.cyan}${src}${color.reset} ${entry.msg}${dataStr}`;
+  return `${color.dim}${ts}${color.reset} ${levelColor}${symbol} ${level}${color.reset} ${color.cyan}${src}${color.reset} ${workerStr}${entry.msg}${dataStr}`;
 }
 
 function parseLine(line: string): LogEntry | null {
@@ -131,7 +133,7 @@ export function matchesFilters(entry: LogEntry, filters: Filters): boolean {
   }
   if (filters.src && entry.src.toLowerCase() !== filters.src) return false;
   if (filters.worker) {
-    const workerVal = entry.data?.worker ?? entry.data?.branchName ?? entry.data?.windowName;
+    const workerVal = entry.worker ?? entry.data?.worker ?? entry.data?.branchName ?? entry.data?.windowName;
     if (typeof workerVal !== "string" || !workerVal.toLowerCase().includes(filters.worker)) {
       return false;
     }

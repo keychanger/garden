@@ -86,6 +86,14 @@ export function updateWorkerFields(
   if (!entries) return;
   const entry = entries.find(e => e.name === workerName);
   if (!entry) return;
+
+  // Log state transitions when prState changes
+  if (fields.prState && fields.prState !== entry.prState) {
+    log.info("poller", `${entry.prState ?? "new"} -> ${fields.prState}`, {
+      worker: workerName,
+    });
+  }
+
   Object.assign(entry, fields);
   writeRegistry(registry);
 }
