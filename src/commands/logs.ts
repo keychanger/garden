@@ -6,7 +6,7 @@ import { isTTY } from "../output.js";
 
 const LOG_FILE = path.join(SESSIONS_DIR, "dashboard.log");
 
-interface LogEntry {
+export interface LogEntry {
   ts: string;
   level: string;
   src: string;
@@ -42,7 +42,7 @@ const LEVEL_SYMBOLS: Record<string, string> = {
   error: "x",
 };
 
-function relativeTime(isoTs: string): string {
+export function relativeTime(isoTs: string): string {
   const delta = Date.now() - new Date(isoTs).getTime();
   if (delta < 0) return "just now";
   const secs = Math.floor(delta / 1000);
@@ -94,7 +94,7 @@ function readLogLines(): string[] {
   }
 }
 
-interface Filters {
+export interface Filters {
   level?: string;
   src?: string;
   worker?: string;
@@ -102,7 +102,7 @@ interface Filters {
   follow: boolean;
 }
 
-function parseArgs(args: string[]): Filters {
+export function parseArgs(args: string[]): Filters {
   const filters: Filters = { count: 40, follow: false };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -123,7 +123,7 @@ function parseArgs(args: string[]): Filters {
 
 const LEVEL_ORDER: Record<string, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 
-function matchesFilters(entry: LogEntry, filters: Filters): boolean {
+export function matchesFilters(entry: LogEntry, filters: Filters): boolean {
   if (filters.level) {
     const minLevel = LEVEL_ORDER[filters.level] ?? 0;
     const entryLevel = LEVEL_ORDER[entry.level] ?? 0;
@@ -148,7 +148,7 @@ interface DedupedEntry {
   count: number;
 }
 
-function dedup(entries: LogEntry[]): DedupedEntry[] {
+export function dedup(entries: LogEntry[]): DedupedEntry[] {
   const result: DedupedEntry[] = [];
   for (const entry of entries) {
     const key = dedupKey(entry);
@@ -246,19 +246,17 @@ async function follow(filters: Filters): Promise<void> {
         repeatCount = 1;
       }
     }
-    if (newLines.length > 0) process.stdout.write("\n");
   }, 1000);
 
   // Keep alive until interrupted
   await new Promise<void>((resolve) => {
-    process.on("SIGINT", () => {
+    const cleanup = () => {
       clearInterval(poll);
+      if (prevKey) process.stdout.write("\n");
       resolve();
-    });
-    process.on("SIGTERM", () => {
-      clearInterval(poll);
-      resolve();
-    });
+    };
+    process.on("SIGINT", cleanup);
+    process.on("SIGTERM", cleanup);
   });
 }
 
