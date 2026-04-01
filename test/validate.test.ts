@@ -15,6 +15,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
 vi.mock("../src/dashboard/registry.js", () => ({
   readRegistry: vi.fn(() => ({ workers: {} })),
   writeRegistry: vi.fn(),
+  updateWorkerFields: vi.fn(),
 }));
 
 vi.mock("../src/config.js", () => ({
@@ -27,8 +28,10 @@ vi.mock("../src/dashboard/log.js", () => ({
 }));
 
 vi.mock("../src/dashboard/poller.js", () => ({
-  startPoller: vi.fn(),
-  pollerRunning: vi.fn(() => true),
+  startProjectPoller: vi.fn(),
+  projectPollerRunning: vi.fn(() => true),
+  pollerWindowName: vi.fn((p: string) => `_${p}-poller`),
+  reviewWindowName: vi.fn((p: string, w: string) => `_${p}-review-${w}`),
 }));
 
 vi.mock("../src/dashboard/create.js", () => ({

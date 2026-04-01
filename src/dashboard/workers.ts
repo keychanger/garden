@@ -17,6 +17,8 @@ import {
 import { log } from "./log.js";
 import { buildWorktreeWorkerCommand, createShellWindow, resolveGardenRunner } from "./create.js";
 import { worktreePath, createWorktree, removeWorktree, deleteBranch, installPollTriggerHook, fastForwardMain } from "./git.js";
+import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
+import { getWorkers } from "./registry.js";
 
 export function newWorker(): void {
   log.info("workers", "newWorker");
@@ -36,7 +38,7 @@ export function newWorker(): void {
   try {
     fastForwardMain(project.path);
     createWorktree(project.path, wtPath, branchName);
-    installPollTriggerHook(wtPath, resolveGardenRunner());
+    installPollTriggerHook(wtPath, resolveGardenRunner(), state.activeProject);
   } catch (err) {
     log.error("workers", "failed to create worktree", { error: String(err) });
     tmuxDisplay(`Failed to create worktree: ${err}`);
@@ -65,6 +67,8 @@ export function newWorker(): void {
     worktreePath: wtPath,
     branchName,
   });
+
+  ensureProjectPoller(state.activeProject, resolveGardenRunner());
 
   state.activePaneType = "worker";
   state.activeWindowName = workerWindowName;
@@ -125,13 +129,22 @@ export function killPane(): void {
     if (nameMatch) {
       const workerName = nameMatch[1];
       const entry = findWorkerByName(state.activeProject, workerName);
-      if (entry?.worktreePath) {
-        removeWorktree(project.path, entry.worktreePath);
+      if (entry) {
+        killReviewWindow(state.activeProject, workerName);
+        if (entry.worktreePath) {
+          removeWorktree(project.path, entry.worktreePath);
+        }
         if (entry.branchName) {
           deleteBranch(project.path, entry.branchName);
         }
       }
       removeWorker(state.activeProject, workerName);
+
+      // Stop project poller if no workers remain
+      const remaining = getWorkers(state.activeProject);
+      if (remaining.length === 0) {
+        stopProjectPoller(state.activeProject);
+      }
     }
   }
 

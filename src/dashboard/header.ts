@@ -183,8 +183,9 @@ function formatHeader(
 
   if (isOnWorker && totalWorkers > 0) {
     const label = workerLabel ?? "worker";
+    const displayState = prState === "merge-pending" ? "merge pending" : prState;
     const icon = headerIcon(paneStatus, prState);
-    const statusParts = [paneStatus, prState].filter(Boolean);
+    const statusParts = [paneStatus, displayState].filter(Boolean);
     if (mergeCount && mergeCount > 0) {
       statusParts.push(`${mergeCount} merged`);
     }

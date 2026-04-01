@@ -172,10 +172,12 @@ export function pruneWorktrees(repoPath: string): void {
   }
 }
 
-export function installPollTriggerHook(wtPath: string, _gardenRunner?: string): void {
+export function installPollTriggerHook(wtPath: string, _gardenRunner?: string, projectName?: string): void {
   const hooksDir = path.join(wtPath, ".garden-hooks");
   const hookPath = path.join(hooksDir, "pre-push");
-  const signalFifo = path.join(SESSIONS_DIR, "poll-signal");
+  const signalFifo = projectName
+    ? path.join(SESSIONS_DIR, `${projectName}-poll-signal`)
+    : path.join(SESSIONS_DIR, "poll-signal");
 
   const hookScript = [
     "#!/bin/sh",

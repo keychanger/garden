@@ -1,11 +1,11 @@
 // Poller: watches worker branches and drives the review/merge lifecycle.
-// Runs as a hidden tmux window. Re-polls immediately on state change (exit 75),
-// sleeps until signaled via FIFO or 30s timeout when idle (exit 0).
-import { execSync, execFileSync, spawnSync } from "node:child_process";
+// Each project gets its own poller running in a hidden tmux window.
+// Reviews run asynchronously in separate tmux windows. Merges are serialized.
+import { execSync, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tryGetProject, SESSIONS_DIR } from "../config.js";
+import { tryGetProject, loadConfig, SESSIONS_DIR } from "../config.js";
 import {
   tmux, getFirstPaneId, getPanePid, hasClaudeChild, isClaudeWorking,
   windowExists, killWindowSafe,
@@ -16,9 +16,10 @@ import {
 } from "./registry.js";
 import {
   getBranchHeadSha,
-  forcePushBranch, mergeToMain, fastForwardMain,
+  rebaseBranch, abortRebase,
+  forcePushBranch, mergeToMain,
   getChangedFiles, getDiffAgainstMain,
-  getCommitSummary, getNewCommitSummary, deleteRemoteBranch,
+  getCommitSummary, getNewCommitSummary,
 } from "./git.js";
 import { refreshDashboard } from "./header.js";
 import { healStatusPane } from "./validate.js";
@@ -27,30 +28,64 @@ import { buildRulesContext } from "../rules.js";
 import { addAlert } from "./alerts.js";
 
 const DEBOUNCE_MS = 30_000;
-const POLLER_WINDOW = "_garden-poller";
-export const SIGNAL_FIFO = path.join(SESSIONS_DIR, "poll-signal");
+const LEGACY_POLLER_WINDOW = "_garden-poller";
 
-export function poll(): boolean {
+// Per-project naming helpers
+export function pollerWindowName(project: string): string {
+  return `_${project}-poller`;
+}
+
+export function signalFifoPath(project: string): string {
+  return path.join(SESSIONS_DIR, `${project}-poll-signal`);
+}
+
+function reviewWindowName(project: string, worker: string): string {
+  return `_${project}-review-${worker}`;
+}
+
+function reviewResultPath(project: string, worker: string): string {
+  return path.join(SESSIONS_DIR, `${project}-${worker}-review-result.txt`);
+}
+
+function reviewPromptPath(project: string, worker: string): string {
+  return path.join(SESSIONS_DIR, `${project}-${worker}-review-prompt.txt`);
+}
+
+// Main poll entry point — called by `garden dashboard _poll [project]`
+export function poll(projectName?: string): boolean {
   healStatusPane();
+
+  if (projectName) {
+    return pollProject(projectName);
+  }
+
+  // Legacy: poll all projects (used during migration from global poller)
   const registry = readRegistry();
   let changed = false;
+  for (const pn of Object.keys(registry.workers)) {
+    if (pollProject(pn)) changed = true;
+  }
+  return changed;
+}
 
-  for (const [projectName, entries] of Object.entries(registry.workers)) {
-    const project = tryGetProject(projectName);
-    if (!project) continue;
+function pollProject(projectName: string): boolean {
+  const project = tryGetProject(projectName);
+  if (!project) return false;
 
-    for (const entry of entries) {
-      try {
-        if (pollWorker(projectName, project.path, entry)) {
-          changed = true;
-        }
-      } catch (err) {
-        log.error("poller", "error polling worker", {
-          worker: entry.name,
-          project: projectName,
-          error: String(err),
-        });
+  const workers = getWorkers(projectName);
+  let changed = false;
+
+  for (const entry of workers) {
+    try {
+      if (pollWorker(projectName, project.path, entry)) {
+        changed = true;
       }
+    } catch (err) {
+      log.error("poller", "error polling worker", {
+        worker: entry.name,
+        project: projectName,
+        error: String(err),
+      });
     }
   }
 
@@ -69,6 +104,8 @@ function pollWorker(
       return handleWorking(projectName, projectPath, entry);
     case "reviewing":
       return handleReviewing(projectName, projectPath, entry);
+    case "merge-pending":
+      return handleMergePending(projectName, projectPath, entry);
     case "failing":
       return handleFailing(projectName, projectPath, entry);
     case "merged":
@@ -83,6 +120,8 @@ function pollWorker(
   }
 }
 
+// --- State handlers ---
+
 function handleWorking(
   projectName: string,
   projectPath: string,
@@ -96,65 +135,13 @@ function handleWorking(
   if (headSha === entry.lastSeenSha) return false;
 
   // Don't start review while Claude is actively working
-  const workerWindow = `_${projectName}-worker-${entry.name}`;
-  if (windowExists(workerWindow)) {
-    const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindow}`);
-    if (paneId) {
-      const pid = getPanePid(paneId);
-      if (pid && isClaudeWorking(pid)) return false;
-    }
-  }
+  if (isWorkerClaudeWorking(projectName, entry.name)) return false;
 
   // Check if there are actually commits ahead of main
   const commitSummary = getCommitSummary(wtPath);
   if (!commitSummary) return false;
 
-  // Serialize: only one worker per project in reviewing state
-  const projectWorkers = getWorkers(projectName);
-  if (projectWorkers.some(w => w.name !== entry.name && w.prState === "reviewing")) {
-    return false;
-  }
-
-  return attemptReview(projectName, projectPath, entry);
-}
-
-function attemptReview(
-  projectName: string,
-  projectPath: string,
-  entry: WorkerEntry,
-): boolean {
-  // Don't rebase/review while Claude is actively running in the worktree
-  const workerWindow = `_${projectName}-worker-${entry.name}`;
-  if (windowExists(workerWindow)) {
-    const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindow}`);
-    if (paneId) {
-      const pid = getPanePid(paneId);
-      if (pid && isClaudeWorking(pid)) {
-        log.info("poller", "Claude working in worktree, skipping review", {
-          worker: entry.name,
-        });
-        return false;
-      }
-    }
-  }
-
-  updateWorkerFields(projectName, entry.name, { prState: "reviewing" });
-  refreshDashboard();
-
-  const wtPath = entry.worktreePath ?? projectPath;
-
-  // Fetch latest main so the reviewer can rebase onto it
-  try {
-    execFileSync("git", ["fetch", "origin", "main"], {
-      cwd: wtPath,
-      stdio: "ignore",
-    });
-  } catch {
-    // best effort
-  }
-
-  log.info("poller", "ready for review", { worker: entry.name });
-  return true;
+  return launchReview(projectName, projectPath, entry, false);
 }
 
 function handleReviewing(
@@ -162,24 +149,32 @@ function handleReviewing(
   projectPath: string,
   entry: WorkerEntry,
 ): boolean {
-  // Live-Claude guard: if the worker started pushing new code, go back to working
-  const workerWindow = `_${projectName}-worker-${entry.name}`;
-  if (windowExists(workerWindow)) {
-    const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindow}`);
-    if (paneId) {
-      const pid = getPanePid(paneId);
-      if (pid && isClaudeWorking(pid)) {
-        log.info("poller", "Claude working during review, resetting to working", {
-          worker: entry.name,
-        });
-        updateWorkerFields(projectName, entry.name, { prState: "working" });
-        refreshDashboard();
-        return true;
-      }
-    }
+  // Live-Claude guard: if the worker started pushing new code, abort review
+  if (isWorkerClaudeWorking(projectName, entry.name)) {
+    log.info("poller", "Claude working during review, resetting to working", {
+      worker: entry.name,
+    });
+    killReviewWindow(projectName, entry.name);
+    updateWorkerFields(projectName, entry.name, {
+      prState: "working",
+      reviewWindowName: undefined,
+    });
+    refreshDashboard();
+    return true;
   }
 
-  const review = runClaudeReview(projectName, projectPath, entry);
+  // Check if review is still running
+  const revWindow = entry.reviewWindowName;
+  if (revWindow && windowExists(revWindow)) {
+    return false; // still in-flight
+  }
+
+  // Review window is gone — read result
+  const resultFile = reviewResultPath(projectName, entry.name);
+  const review = readReviewResult(projectName, entry);
+
+  // Clean up files
+  cleanReviewFiles(projectName, entry.name);
 
   if (review === null) {
     log.warn("poller", "review process failed, transitioning to failing", {
@@ -200,6 +195,7 @@ function handleReviewing(
       failingSha: undefined,
       lastSeenSha: headSha ?? undefined,
       lastShaChangeAt: new Date().toISOString(),
+      reviewWindowName: undefined,
     });
     refreshDashboard();
     return true;
@@ -214,7 +210,7 @@ function handleReviewing(
   if (review.verdict === "clean" || review.verdict === "fixed") {
     const wtPath = entry.worktreePath ?? projectPath;
 
-    // Always force-push: reviewer rebases, so local state diverges from remote
+    // Force-push: reviewer rebases, so local state diverges from remote
     const branchName = entry.branchName ?? entry.name;
     try {
       forcePushBranch(wtPath, branchName);
@@ -223,12 +219,22 @@ function handleReviewing(
         worker: entry.name,
         error: String(err),
       });
-      updateWorkerFields(projectName, entry.name, { prState: "working" });
+      updateWorkerFields(projectName, entry.name, {
+        prState: "working",
+        reviewWindowName: undefined,
+      });
       refreshDashboard();
       return true;
     }
 
-    finalizeMerge(projectName, projectPath, entry);
+    // Transition to merge-pending instead of merging directly
+    updateWorkerFields(projectName, entry.name, {
+      prState: "merge-pending",
+      mergePendingAt: new Date().toISOString(),
+      lastReviewBody: review.body,
+      reviewWindowName: undefined,
+    });
+    refreshDashboard();
   } else {
     // "failed" — reviewer couldn't fix the issues
     log.error("poller", "reviewer could not fix issues", {
@@ -251,279 +257,69 @@ function handleReviewing(
       failingSha: headSha ?? undefined,
       lastSeenSha: headSha ?? undefined,
       lastShaChangeAt: new Date().toISOString(),
+      reviewWindowName: undefined,
     });
     refreshDashboard();
   }
   return true;
 }
 
-interface ReviewResult {
-  verdict: "clean" | "fixed" | "failed";
-  body: string;
-}
-
-function runClaudeReview(
+function handleMergePending(
   projectName: string,
   projectPath: string,
   entry: WorkerEntry,
-): ReviewResult | null {
+): boolean {
+  // Serial merge gate: only the earliest merge-pending worker proceeds
+  const projectWorkers = getWorkers(projectName);
+  const olderPending = projectWorkers.some(w =>
+    w.name !== entry.name &&
+    w.prState === "merge-pending" &&
+    (w.mergePendingAt ?? "") < (entry.mergePendingAt ?? ""),
+  );
+  if (olderPending) return false;
+
   const wtPath = entry.worktreePath ?? projectPath;
 
-  let diff: string;
+  // Fetch latest main
   try {
-    diff = getDiffAgainstMain(wtPath);
-  } catch {
-    log.warn("poller", "failed to get diff for review", { worker: entry.name });
-    return null;
-  }
-
-  const commitSummary = getCommitSummary(wtPath);
-  const branchName = entry.branchName ?? entry.name;
-  const rules = buildRulesContext(projectName, projectPath);
-  const project = tryGetProject(projectName);
-  const checksCommand = project?.checks;
-
-  const changedFiles = getChangedFiles(wtPath);
-
-  // Always include canonical docs so the reviewer can verify accuracy
-  const docSections: string[] = [];
-  for (const docFile of ["DESIGN.md", "CLAUDE.md"]) {
-    const fullPath = path.join(wtPath, docFile);
-    try {
-      const content = fs.readFileSync(fullPath, "utf-8");
-      docSections.push(`### ${docFile}\n\n${content}`);
-    } catch {
-      // file may not exist in this project
-    }
-  }
-
-  // Include test files that correspond to changed source files
-  const testSections: string[] = [];
-  for (const file of changedFiles) {
-    const basename = path.basename(file, path.extname(file));
-    const testFile = path.join(wtPath, "test", `${basename}.test.ts`);
-    try {
-      const content = fs.readFileSync(testFile, "utf-8");
-      testSections.push(`### test/${basename}.test.ts\n\n${content}`);
-    } catch {
-      // no corresponding test file
-    }
-  }
-
-  // Build step numbering dynamically based on whether checks are configured
-  let stepNum = 1;
-  const rebaseStep = stepNum++;
-  const checksStep = checksCommand ? stepNum++ : null;
-  const reviewStep = stepNum;
-
-  const prompt = [
-    "You are reviewing a branch before merge. Complete these steps in order:",
-    "",
-    `## Step ${rebaseStep}: Rebase onto main`,
-    "",
-    "Run \`git rebase main\` in the worktree. If there are conflicts:",
-    "- Resolve them sensibly (preserve the intent of both sides)",
-    "- \`git add\` resolved files and \`git rebase --continue\`",
-    "- If a conflict is truly unresolvable, abort the rebase and report FAILED",
-    "",
-    ...(checksCommand ? [
-      `## Step ${checksStep}: Run checks`,
-      "",
-      `Run: \`${checksCommand}\``,
-      "",
-      "If checks fail, fix the issues and re-run until they pass.",
-      "If you cannot fix them, report FAILED.",
-      "",
-    ] : []),
-    `## Step ${reviewStep}: Code review`,
-    "",
-    "Review the branch diff against the project rules below.",
-    "",
-    "Check for:",
-    "- Adherence to project rules (commit style, code patterns, scope discipline)",
-    "- Code quality issues, security concerns, or unnecessary complexity",
-    "- Documentation accuracy: read DESIGN.md and CLAUDE.md below. After applying this",
-    "  diff, are they still accurate and complete? Flag any claims that are now wrong,",
-    "  missing sections for new behavior, or stale descriptions. Not every change needs a",
-    "  doc change — only flag docs that are actually inaccurate after this diff.",
-    "- Test quality: read the test files below. Check three things:",
-    "  1. Accuracy — do existing tests still assert correct behavior after this diff?",
-    "     Flag tests that now assert stale or wrong behavior.",
-    "  2. Coverage — are the new/changed code paths exercised by tests? Flag significant",
-    "     new logic (branching, error handling, state transitions) that has no test.",
-    "  3. Completeness — do the tests cover edge cases and failure modes, not just the",
-    "     happy path? Flag obvious gaps. Not every change needs a test change — only flag",
-    "     tests that are actually wrong or insufficient for the behavior this diff changes.",
-    "",
-    "If you find issues, fix them directly in the worktree. Edit files, update tests,",
-    "update docs as needed. Make focused, minimal fixes — do not refactor or improve code",
-    "beyond what the review requires. Commit your fixes with a clear message prefixed with",
-    '"review: " (e.g., "review: add missing tests for error handling").',
-    "",
-    `## Branch: ${branchName}`,
-    "",
-    commitSummary ? `### Commits\n\n\`\`\`\n${commitSummary}\n\`\`\`` : "",
-    "",
-    "## Project Rules",
-    "",
-    rules,
-    "",
-    "## Diff",
-    "",
-    "```diff",
-    diff,
-    "```",
-    "",
-    "## Documentation (current state in the worktree)",
-    "",
-    "Verify these are still accurate after the diff above.",
-    "",
-    ...docSections,
-    ...(testSections.length > 0 ? [
-      "",
-      "## Test Files (corresponding to changed source files)",
-      "",
-      "Verify these still correctly cover the changed behavior.",
-      "",
-      ...testSections,
-    ] : []),
-    "",
-    "## Output Format",
-    "",
-    "Your LAST line of output must be exactly one of:",
-    "CLEAN — no issues found, code is ready to merge as-is",
-    "FIXED — issues were found and fixed in the worktree",
-    "FAILED — issues were found but could not be fixed (explain above)",
-  ].join("\n");
-
-  try {
-    const proc = spawnSync("claude", ["-p", "--dangerously-skip-permissions"], {
-      input: prompt,
-      encoding: "utf-8",
-      timeout: 600_000,
-      stdio: ["pipe", "pipe", "pipe"],
-      cwd: entry.worktreePath ?? projectPath,
+    execFileSync("git", ["fetch", "origin", "main"], {
+      cwd: wtPath,
+      stdio: "ignore",
     });
+  } catch { /* best effort */ }
 
-    if (proc.status !== 0 || !proc.stdout) {
-      log.warn("poller", "claude review process failed", {
-        worker: entry.name,
-        exitCode: proc.status,
-        stderr: proc.stderr?.slice(-200),
-      });
-      return null;
-    }
-
-    const output = proc.stdout.trim();
-    const lines = output.split("\n");
-    const lastLine = lines[lines.length - 1].trim().toUpperCase();
-    const body = lines.slice(0, -1).join("\n").trim() || "No additional comments.";
-
-    if (lastLine === "CLEAN") {
-      return { verdict: "clean", body };
-    }
-    if (lastLine === "FIXED") {
-      return { verdict: "fixed", body };
-    }
-    if (lastLine === "FAILED") {
-      return { verdict: "failed", body };
-    }
-
-    // Could not parse verdict — treat as failure so it surfaces for retry
-    log.warn("poller", "could not parse review verdict", {
+  // Rebase onto current main
+  if (!rebaseBranch(wtPath)) {
+    abortRebase(wtPath);
+    log.warn("poller", "rebase conflicts in merge queue, launching re-review", {
       worker: entry.name,
-      lastLine,
     });
-    return null;
+
+    // Go back to reviewing with a scoped re-review
+    launchReview(projectName, projectPath, entry, true);
+    return true;
+  }
+
+  // Force-push rebased branch
+  const branchName = entry.branchName ?? entry.name;
+  try {
+    forcePushBranch(wtPath, branchName);
   } catch (err) {
-    log.warn("poller", "claude review threw", {
+    log.error("poller", "force-push failed in merge queue", {
       worker: entry.name,
       error: String(err),
     });
-    return null;
-  }
-}
-
-function finalizeMerge(
-  projectName: string,
-  projectPath: string,
-  entry: WorkerEntry,
-): void {
-  const branchName = entry.branchName ?? entry.name;
-
-  try {
-    mergeToMain(projectPath, branchName);
-  } catch (err) {
-    log.error("poller", "merge failed", {
-      worker: entry.name,
-      error: String(err),
+    updateWorkerFields(projectName, entry.name, {
+      prState: "working",
+      mergePendingAt: undefined,
     });
-    addAlert({
-      level: "error",
-      source: "poller",
-      project: projectName,
-      worker: entry.name,
-      message: `Merge failed for worker ${entry.name}: ${String(err).slice(0, 200)}`,
-    });
-    updateWorkerFields(projectName, entry.name, { prState: "working" });
     refreshDashboard();
-    return;
+    return true;
   }
 
-  log.info("poller", "merged to main", { worker: entry.name });
-
-  notifySiblingWorkers(projectName, entry);
-
-  runPostMerge(projectName, projectPath);
-  updateWorkerFields(projectName, entry.name, {
-    prState: "merged",
-    mergedAt: new Date().toISOString(),
-    failCount: 0,
-  });
-  refreshDashboard();
-}
-
-function getHeadCommit(projectPath: string): string {
-  try {
-    return execSync("git rev-parse --short HEAD", { cwd: projectPath, encoding: "utf-8" }).trim();
-  } catch {
-    return "unknown";
-  }
-}
-
-function runPostMerge(projectName: string, projectPath: string): void {
-  const project = tryGetProject(projectName);
-  if (!project?.postMerge) return;
-
-  const commit = getHeadCommit(projectPath);
-
-  try {
-    execSync(project.postMerge, {
-      cwd: projectPath,
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 120_000,
-    });
-    if (projectName === "garden") {
-      log.info("poller", "garden rebuilt", { commit });
-    } else {
-      log.info("poller", "postMerge completed", { project: projectName, commit });
-    }
-  } catch (err) {
-    const message = projectName === "garden"
-      ? `Garden rebuild failed at commit ${commit}: ${String(err).slice(0, 200)}`
-      : `postMerge failed at commit ${commit}: ${String(err).slice(0, 200)}`;
-    log.error("poller", "postMerge failed", {
-      project: projectName,
-      commit,
-      error: String(err),
-    });
-    addAlert({
-      level: "error",
-      source: "poller",
-      project: projectName,
-      message,
-    });
-  }
+  // Merge to main
+  finalizeMerge(projectName, projectPath, entry);
+  return true;
 }
 
 function handleFailing(
@@ -553,9 +349,6 @@ function handleFailing(
   }
 
   // If failingSha is set, new commits are required before retrying.
-  // This prevents re-reviewing unchanged code after changes-requested,
-  // check failures, or rebase conflicts. Transient failures (review
-  // process errors) clear failingSha so debounce-only retry still works.
   if (entry.failingSha && headSha === entry.failingSha) {
     return false;
   }
@@ -610,6 +403,444 @@ function handleMerged(
   refreshDashboard();
   return true;
 }
+
+// --- Review launching and result parsing ---
+
+function launchReview(
+  projectName: string,
+  projectPath: string,
+  entry: WorkerEntry,
+  isReReview: boolean,
+): boolean {
+  // Don't launch while Claude is actively working in the worktree
+  if (isWorkerClaudeWorking(projectName, entry.name)) {
+    log.info("poller", "Claude working in worktree, skipping review", {
+      worker: entry.name,
+    });
+    return false;
+  }
+
+  const wtPath = entry.worktreePath ?? projectPath;
+
+  // Fetch latest main so the reviewer can rebase onto it
+  try {
+    execFileSync("git", ["fetch", "origin", "main"], {
+      cwd: wtPath,
+      stdio: "ignore",
+    });
+  } catch { /* best effort */ }
+
+  // Build the review prompt
+  const prompt = isReReview
+    ? buildReReviewPrompt(projectName, projectPath, entry)
+    : buildReviewPrompt(projectName, projectPath, entry);
+
+  if (prompt === null) {
+    log.warn("poller", "failed to build review prompt", { worker: entry.name });
+    return false;
+  }
+
+  // Write prompt to file
+  const promptFile = reviewPromptPath(projectName, entry.name);
+  const resultFile = reviewResultPath(projectName, entry.name);
+  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+  fs.writeFileSync(promptFile, prompt);
+
+  // Clean any stale result file
+  try { fs.unlinkSync(resultFile); } catch { /* ignore */ }
+
+  // Launch review in a hidden tmux window
+  const revWindow = reviewWindowName(projectName, entry.name);
+  const escapedPrompt = promptFile.replace(/'/g, "'\\''");
+  const escapedResult = resultFile.replace(/'/g, "'\\''");
+  const cmd = `claude -p --dangerously-skip-permissions < '${escapedPrompt}' > '${escapedResult}' 2>&1`;
+
+  // Kill any leftover review window
+  if (windowExists(revWindow)) {
+    killWindowSafe(revWindow);
+  }
+
+  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", revWindow,
+    "-c", wtPath, "bash", "-c", cmd);
+
+  const newState = isReReview ? "reviewing" : "reviewing";
+  updateWorkerFields(projectName, entry.name, {
+    prState: newState,
+    reviewWindowName: revWindow,
+    mergePendingAt: isReReview ? undefined : entry.mergePendingAt,
+  });
+  refreshDashboard();
+
+  log.info("poller", isReReview ? "launched re-review" : "launched review", {
+    worker: entry.name,
+    reviewWindow: revWindow,
+  });
+  return true;
+}
+
+interface ReviewResult {
+  verdict: "clean" | "fixed" | "failed";
+  body: string;
+}
+
+function readReviewResult(
+  projectName: string,
+  entry: WorkerEntry,
+): ReviewResult | null {
+  const resultFile = reviewResultPath(projectName, entry.name);
+
+  try {
+    if (!fs.existsSync(resultFile)) {
+      log.warn("poller", "review result file missing", { worker: entry.name });
+      return null;
+    }
+
+    const output = fs.readFileSync(resultFile, "utf-8").trim();
+    if (!output) {
+      log.warn("poller", "review result file empty", { worker: entry.name });
+      return null;
+    }
+
+    return parseReviewResult(output, entry.name);
+  } catch (err) {
+    log.warn("poller", "failed to read review result", {
+      worker: entry.name,
+      error: String(err),
+    });
+    return null;
+  }
+}
+
+function parseReviewResult(output: string, workerName: string): ReviewResult | null {
+  const lines = output.split("\n");
+  const lastLine = lines[lines.length - 1].trim().toUpperCase();
+  const body = lines.slice(0, -1).join("\n").trim() || "No additional comments.";
+
+  if (lastLine === "CLEAN") return { verdict: "clean", body };
+  if (lastLine === "FIXED") return { verdict: "fixed", body };
+  if (lastLine === "FAILED") return { verdict: "failed", body };
+
+  log.warn("poller", "could not parse review verdict", {
+    worker: workerName,
+    lastLine,
+  });
+  return null;
+}
+
+function buildReviewPrompt(
+  projectName: string,
+  projectPath: string,
+  entry: WorkerEntry,
+): string | null {
+  const wtPath = entry.worktreePath ?? projectPath;
+
+  let diff: string;
+  try {
+    diff = getDiffAgainstMain(wtPath);
+  } catch {
+    log.warn("poller", "failed to get diff for review", { worker: entry.name });
+    return null;
+  }
+
+  const commitSummary = getCommitSummary(wtPath);
+  const branchName = entry.branchName ?? entry.name;
+  const rules = buildRulesContext(projectName, projectPath);
+  const project = tryGetProject(projectName);
+  const checksCommand = project?.checks;
+  const changedFiles = getChangedFiles(wtPath);
+
+  const docSections = readDocSections(wtPath);
+  const testSections = readTestSections(wtPath, changedFiles);
+
+  let stepNum = 1;
+  const rebaseStep = stepNum++;
+  const checksStep = checksCommand ? stepNum++ : null;
+  const reviewStep = stepNum;
+
+  const prompt = [
+    "You are reviewing a branch before merge. Complete these steps in order:",
+    "",
+    `## Step ${rebaseStep}: Rebase onto main`,
+    "",
+    "Run \`git rebase main\` in the worktree. If there are conflicts:",
+    "- Resolve them sensibly (preserve the intent of both sides)",
+    "- \`git add\` resolved files and \`git rebase --continue\`",
+    "- If a conflict is truly unresolvable, abort the rebase and report FAILED",
+    "",
+    ...(checksCommand ? [
+      `## Step ${checksStep}: Run checks`,
+      "",
+      `Run: \`${checksCommand}\``,
+      "",
+      "If checks fail, fix the issues and re-run until they pass.",
+      "If you cannot fix them, report FAILED.",
+      "",
+    ] : []),
+    `## Step ${reviewStep}: Code review`,
+    "",
+    "Review the branch diff against the project rules below.",
+    "",
+    "Check for:",
+    "- Adherence to project rules (commit style, code patterns, scope discipline)",
+    "- Code quality issues, security concerns, or unnecessary complexity",
+    "- Documentation accuracy: read DESIGN.md and CLAUDE.md below. After applying this",
+    "  diff, are they still accurate and complete? Flag any claims that are now wrong,",
+    "  missing sections for new behavior, or stale descriptions. Not every change needs a",
+    "  doc change — only flag docs that are actually inaccurate after this diff.",
+    "- Test quality: read the test files below. Check three things:",
+    "  1. Accuracy — do existing tests still assert correct behavior after this diff?",
+    "     Flag tests that now assert stale or wrong behavior.",
+    "  2. Coverage — are the new/changed code paths exercised by tests? Flag significant",
+    "     new logic (branching, error handling, state transitions) that has no test.",
+    "  3. Completeness — do the tests cover edge cases and failure modes, not just the",
+    "     happy path? Flag obvious gaps. Not every change needs a test change — only flag",
+    "     tests that are actually wrong or insufficient for the behavior this diff changes.",
+    "",
+    "If you find issues, fix them directly in the worktree. Edit files, update tests,",
+    "update docs as needed. Make focused, minimal fixes — do not refactor or improve code",
+    "beyond what the review requires. Commit your fixes with a clear message prefixed with",
+    '"review: " (e.g., "review: add missing tests for error handling").',
+    "",
+    `## Branch: ${branchName}`,
+    "",
+    ...(entry.task ? [`### Worker task\n\n${entry.task}`, ""] : []),
+    commitSummary ? `### Commits\n\n\`\`\`\n${commitSummary}\n\`\`\`` : "",
+    "",
+    "## Project Rules",
+    "",
+    rules,
+    "",
+    "## Diff",
+    "",
+    "```diff",
+    diff,
+    "```",
+    "",
+    "## Documentation (current state in the worktree)",
+    "",
+    "Verify these are still accurate after the diff above.",
+    "",
+    ...docSections,
+    ...(testSections.length > 0 ? [
+      "",
+      "## Test Files (corresponding to changed source files)",
+      "",
+      "Verify these still correctly cover the changed behavior.",
+      "",
+      ...testSections,
+    ] : []),
+    "",
+    "## Output Format",
+    "",
+    "Your LAST line of output must be exactly one of:",
+    "CLEAN — no issues found, code is ready to merge as-is",
+    "FIXED — issues were found and fixed in the worktree",
+    "FAILED — issues were found but could not be fixed (explain above)",
+  ].join("\n");
+
+  return prompt;
+}
+
+function buildReReviewPrompt(
+  projectName: string,
+  projectPath: string,
+  entry: WorkerEntry,
+): string | null {
+  const wtPath = entry.worktreePath ?? projectPath;
+
+  let diff: string;
+  try {
+    diff = getDiffAgainstMain(wtPath);
+  } catch {
+    log.warn("poller", "failed to get diff for re-review", { worker: entry.name });
+    return null;
+  }
+
+  const commitSummary = getCommitSummary(wtPath);
+  const branchName = entry.branchName ?? entry.name;
+  const rules = buildRulesContext(projectName, projectPath);
+  const project = tryGetProject(projectName);
+  const checksCommand = project?.checks;
+  const changedFiles = getChangedFiles(wtPath);
+
+  const docSections = readDocSections(wtPath);
+  const testSections = readTestSections(wtPath, changedFiles);
+
+  let stepNum = 1;
+  const rebaseStep = stepNum++;
+  const checksStep = checksCommand ? stepNum++ : null;
+  const reviewStep = stepNum;
+
+  const prompt = [
+    "You are re-reviewing a branch that was previously reviewed and approved.",
+    "It is being re-reviewed because main advanced and a rebase is needed before merge.",
+    "",
+    "## Context",
+    "",
+    ...(entry.task ? [`**Worker task:** ${entry.task}`, ""] : []),
+    ...(entry.lastReviewBody ? [
+      "**Previous review (approved):**",
+      "",
+      entry.lastReviewBody,
+      "",
+    ] : []),
+    "Focus on rebasing onto main, resolving any conflicts while preserving the",
+    "intent of both sides, and verifying the merged result still works.",
+    "",
+    `## Step ${rebaseStep}: Rebase onto main`,
+    "",
+    "Run \`git rebase main\` in the worktree. If there are conflicts:",
+    "- Resolve them sensibly (preserve the intent of both sides)",
+    "- Read the commit messages carefully — they describe the intent of each change",
+    "- \`git add\` resolved files and \`git rebase --continue\`",
+    "- If a conflict is truly unresolvable, abort the rebase and report FAILED",
+    "",
+    ...(checksCommand ? [
+      `## Step ${checksStep}: Run checks`,
+      "",
+      `Run: \`${checksCommand}\``,
+      "",
+      "If checks fail, fix the issues and re-run until they pass.",
+      "If you cannot fix them, report FAILED.",
+      "",
+    ] : []),
+    `## Step ${reviewStep}: Verify correctness after rebase`,
+    "",
+    "This branch was already reviewed. Focus on:",
+    "- Whether conflict resolution preserved the intent of both sides",
+    "- Whether the rebased code still works correctly with the new main",
+    "- Whether tests still pass after rebase",
+    "",
+    "If you find issues, fix them directly in the worktree. Commit fixes with a",
+    'message prefixed with "review: ".',
+    "",
+    `## Branch: ${branchName}`,
+    "",
+    ...(entry.task ? [`### Worker task\n\n${entry.task}`, ""] : []),
+    commitSummary ? `### Commits\n\n\`\`\`\n${commitSummary}\n\`\`\`` : "",
+    "",
+    "## Project Rules",
+    "",
+    rules,
+    "",
+    "## Diff",
+    "",
+    "```diff",
+    diff,
+    "```",
+    "",
+    "## Documentation (current state in the worktree)",
+    "",
+    ...docSections,
+    ...(testSections.length > 0 ? [
+      "",
+      "## Test Files (corresponding to changed source files)",
+      "",
+      ...testSections,
+    ] : []),
+    "",
+    "## Output Format",
+    "",
+    "Your LAST line of output must be exactly one of:",
+    "CLEAN — no issues found, code is ready to merge as-is",
+    "FIXED — issues were found and fixed in the worktree",
+    "FAILED — issues were found but could not be fixed (explain above)",
+  ].join("\n");
+
+  return prompt;
+}
+
+// --- Merge ---
+
+function finalizeMerge(
+  projectName: string,
+  projectPath: string,
+  entry: WorkerEntry,
+): void {
+  const branchName = entry.branchName ?? entry.name;
+
+  try {
+    mergeToMain(projectPath, branchName);
+  } catch (err) {
+    log.error("poller", "merge failed", {
+      worker: entry.name,
+      error: String(err),
+    });
+    addAlert({
+      level: "error",
+      source: "poller",
+      project: projectName,
+      worker: entry.name,
+      message: `Merge failed for worker ${entry.name}: ${String(err).slice(0, 200)}`,
+    });
+    updateWorkerFields(projectName, entry.name, {
+      prState: "working",
+      mergePendingAt: undefined,
+    });
+    refreshDashboard();
+    return;
+  }
+
+  log.info("poller", "merged to main", { worker: entry.name });
+
+  notifySiblingWorkers(projectName, entry);
+
+  runPostMerge(projectName, projectPath);
+  updateWorkerFields(projectName, entry.name, {
+    prState: "merged",
+    mergedAt: new Date().toISOString(),
+    failCount: 0,
+    mergePendingAt: undefined,
+    reviewWindowName: undefined,
+    lastReviewBody: undefined,
+  });
+  refreshDashboard();
+}
+
+function getHeadCommit(projectPath: string): string {
+  try {
+    return execSync("git rev-parse --short HEAD", { cwd: projectPath, encoding: "utf-8" }).trim();
+  } catch {
+    return "unknown";
+  }
+}
+
+function runPostMerge(projectName: string, projectPath: string): void {
+  const project = tryGetProject(projectName);
+  if (!project?.postMerge) return;
+
+  const commit = getHeadCommit(projectPath);
+
+  try {
+    execSync(project.postMerge, {
+      cwd: projectPath,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 120_000,
+    });
+    if (projectName === "garden") {
+      log.info("poller", "garden rebuilt", { commit });
+    } else {
+      log.info("poller", "postMerge completed", { project: projectName, commit });
+    }
+  } catch (err) {
+    const message = projectName === "garden"
+      ? `Garden rebuild failed at commit ${commit}: ${String(err).slice(0, 200)}`
+      : `postMerge failed at commit ${commit}: ${String(err).slice(0, 200)}`;
+    log.error("poller", "postMerge failed", {
+      project: projectName,
+      commit,
+      error: String(err),
+    });
+    addAlert({
+      level: "error",
+      source: "poller",
+      project: projectName,
+      message,
+    });
+  }
+}
+
+// --- Sibling notification ---
 
 function notifySiblingWorkers(
   projectName: string,
@@ -666,58 +897,141 @@ function notifySiblingWorkers(
   }
 }
 
-export function postPush(): void {
-  triggerPoll();
+// --- Helpers ---
+
+function isWorkerClaudeWorking(projectName: string, workerName: string): boolean {
+  const workerWindow = `_${projectName}-worker-${workerName}`;
+  if (!windowExists(workerWindow)) return false;
+  const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindow}`);
+  if (!paneId) return false;
+  const pid = getPanePid(paneId);
+  return !!pid && isClaudeWorking(pid);
 }
 
-export function triggerPoll(): void {
-  try {
-    const fd = fs.openSync(SIGNAL_FIFO, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
-    fs.writeSync(fd, "\n");
-    fs.closeSync(fd);
-    log.info("poller", "triggered immediate poll");
-  } catch {
-    // FIFO not ready or poller not running — ignore
+function killReviewWindow(projectName: string, workerName: string): void {
+  const revWindow = reviewWindowName(projectName, workerName);
+  if (windowExists(revWindow)) {
+    killWindowSafe(revWindow);
+  }
+  cleanReviewFiles(projectName, workerName);
+}
+
+function cleanReviewFiles(projectName: string, workerName: string): void {
+  try { fs.unlinkSync(reviewResultPath(projectName, workerName)); } catch { /* ignore */ }
+  try { fs.unlinkSync(reviewPromptPath(projectName, workerName)); } catch { /* ignore */ }
+}
+
+function readDocSections(wtPath: string): string[] {
+  const sections: string[] = [];
+  for (const docFile of ["DESIGN.md", "CLAUDE.md"]) {
+    const fullPath = path.join(wtPath, docFile);
+    try {
+      const content = fs.readFileSync(fullPath, "utf-8");
+      sections.push(`### ${docFile}\n\n${content}`);
+    } catch { /* file may not exist */ }
+  }
+  return sections;
+}
+
+function readTestSections(wtPath: string, changedFiles: string[]): string[] {
+  const sections: string[] = [];
+  for (const file of changedFiles) {
+    const basename = path.basename(file, path.extname(file));
+    const testFile = path.join(wtPath, "test", `${basename}.test.ts`);
+    try {
+      const content = fs.readFileSync(testFile, "utf-8");
+      sections.push(`### test/${basename}.test.ts\n\n${content}`);
+    } catch { /* no corresponding test file */ }
+  }
+  return sections;
+}
+
+// --- Per-project poller lifecycle ---
+
+export function postPush(projectName?: string): void {
+  if (projectName) {
+    triggerProjectPoll(projectName);
+  } else {
+    triggerAllPollers();
   }
 }
 
-export function startPoller(gardenRunner: string): void {
-  if (windowExists(POLLER_WINDOW)) return;
+export function triggerProjectPoll(projectName: string): void {
+  const fifo = signalFifoPath(projectName);
+  try {
+    const fd = fs.openSync(fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
+    fs.writeSync(fd, "\n");
+    fs.closeSync(fd);
+    log.info("poller", "triggered project poll", { project: projectName });
+  } catch {
+    // FIFO not ready or poller not running
+  }
+}
 
-  ensureSignalFifo();
-  const fifo = SIGNAL_FIFO.replace(/'/g, "'\\''");
+function triggerAllPollers(): void {
+  const config = loadConfig();
+  for (const projectName of Object.keys(config.projects)) {
+    triggerProjectPoll(projectName);
+  }
+}
+
+export function startProjectPoller(projectName: string, gardenRunner: string): void {
+  const window = pollerWindowName(projectName);
+  if (windowExists(window)) return;
+
+  const fifo = signalFifoPath(projectName);
+  ensureSignalFifo(fifo);
+  const escapedFifo = fifo.replace(/'/g, "'\\''");
+  const escapedProject = projectName.replace(/'/g, "'\\''");
   const cmd = [
     `while true; do`,
-    `  ${gardenRunner} dashboard _poll 2>/dev/null;`,
-    `  if [ $? -eq 0 ]; then read -t 30 <>'${fifo}' 2>/dev/null || true; fi;`,
+    `  ${gardenRunner} dashboard _poll '${escapedProject}' 2>/dev/null;`,
+    `  if [ $? -eq 0 ]; then read -t 30 <>'${escapedFifo}' 2>/dev/null || true; fi;`,
     `done`,
   ].join(" ");
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", POLLER_WINDOW,
+  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", window,
     "bash", "-c", cmd);
 
-  log.info("poller", "started poller");
+  log.info("poller", "started project poller", { project: projectName });
 }
 
-export function stopPoller(): void {
-  killWindowSafe(POLLER_WINDOW);
-  cleanupSignalFifo();
-  log.info("poller", "stopped poller");
+export function stopProjectPoller(projectName: string): void {
+  const window = pollerWindowName(projectName);
+  killWindowSafe(window);
+  const fifo = signalFifoPath(projectName);
+  try { fs.unlinkSync(fifo); } catch { /* ignore */ }
+  log.info("poller", "stopped project poller", { project: projectName });
 }
 
-export function pollerRunning(): boolean {
-  return windowExists(POLLER_WINDOW);
+export function stopAllPollers(): void {
+  const config = loadConfig();
+  for (const projectName of Object.keys(config.projects)) {
+    stopProjectPoller(projectName);
+  }
+  // Kill legacy global poller if it exists
+  killWindowSafe(LEGACY_POLLER_WINDOW);
+  const legacyFifo = path.join(SESSIONS_DIR, "poll-signal");
+  try { fs.unlinkSync(legacyFifo); } catch { /* ignore */ }
 }
 
-function ensureSignalFifo(): void {
+export function ensureProjectPoller(projectName: string, gardenRunner: string): void {
+  if (projectPollerRunning(projectName)) return;
+  startProjectPoller(projectName, gardenRunner);
+}
+
+export function projectPollerRunning(projectName: string): boolean {
+  return windowExists(pollerWindowName(projectName));
+}
+
+// Exported for review window cleanup in workers.ts and validate.ts
+export { killReviewWindow, reviewWindowName };
+
+function ensureSignalFifo(fifoPath: string): void {
   try {
-    const stat = fs.statSync(SIGNAL_FIFO);
+    const stat = fs.statSync(fifoPath);
     if (stat.isFIFO()) return;
-    fs.unlinkSync(SIGNAL_FIFO);
+    fs.unlinkSync(fifoPath);
   } catch { /* doesn't exist */ }
-  fs.mkdirSync(path.dirname(SIGNAL_FIFO), { recursive: true });
-  execFileSync("mkfifo", [SIGNAL_FIFO]);
-}
-
-function cleanupSignalFifo(): void {
-  try { fs.unlinkSync(SIGNAL_FIFO); } catch { /* ignore */ }
+  fs.mkdirSync(path.dirname(fifoPath), { recursive: true });
+  execFileSync("mkfifo", [fifoPath]);
 }

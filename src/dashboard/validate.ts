@@ -2,11 +2,11 @@
 import fs from "node:fs";
 import { SESSIONS_DIR, loadConfig } from "../config.js";
 import { type DashboardState, readDashState, writeDashState } from "./state.js";
-import { readRegistry, writeRegistry } from "./registry.js";
+import { readRegistry, writeRegistry, updateWorkerFields, type WorkerRegistry } from "./registry.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, killWindowSafe, tmuxSplit, setPaneTitle, setPaneLabel, tmux } from "./tmux.js";
 import { log } from "./log.js";
 import { worktreeExists, removeWorktree, pruneWorktrees } from "./git.js";
-import { startPoller, pollerRunning } from "./poller.js";
+import { startProjectPoller, projectPollerRunning, pollerWindowName, reviewWindowName as getReviewWindowName } from "./poller.js";
 import { resolveGardenRunner } from "./create.js";
 import { buildStatusCommand } from "./header.js";
 
@@ -176,11 +176,23 @@ export function validateAndHeal(state: DashboardState): DashboardState {
   // Clean stale context files
   cleanContextFiles();
 
-  // Restart poller if it's not running
-  if (!pollerRunning()) {
-    log.info("validate", "poller not running, restarting");
-    startPoller(resolveGardenRunner());
+  // Restart per-project pollers if not running
+  const gardenRunner = resolveGardenRunner();
+  for (const projectName of Object.keys(registry.workers)) {
+    if (registry.workers[projectName].length > 0 && !projectPollerRunning(projectName)) {
+      log.info("validate", "project poller not running, restarting", { project: projectName });
+      startProjectPoller(projectName, gardenRunner);
+    }
   }
+
+  // Kill legacy global poller if it exists
+  if (windowExists("_garden-poller")) {
+    killWindowSafe("_garden-poller");
+    log.info("validate", "killed legacy global poller");
+  }
+
+  // Clean orphaned review windows
+  cleanOrphanedReviewWindows(registry);
 
   if (changed) {
     log.info("validate", "state healed", {
@@ -199,12 +211,36 @@ function cleanContextFiles(): void {
     const projectNames = new Set(Object.keys(config.projects));
     const files = fs.readdirSync(SESSIONS_DIR);
     for (const file of files) {
-      if (!file.startsWith("dashboard-") || !file.endsWith(".context")) continue;
-      const projectName = file.replace("dashboard-", "").replace(".context", "");
-      if (!projectNames.has(projectName)) {
+      // Clean stale context files
+      if (file.startsWith("dashboard-") && file.endsWith(".context")) {
+        const projectName = file.replace("dashboard-", "").replace(".context", "");
+        if (!projectNames.has(projectName)) {
+          fs.unlinkSync(`${SESSIONS_DIR}/${file}`);
+          log.info("validate", "removed stale context file", { file });
+        }
+        continue;
+      }
+      // Clean stale review result/prompt files
+      if (file.endsWith("-review-result.txt") || file.endsWith("-review-prompt.txt")) {
         fs.unlinkSync(`${SESSIONS_DIR}/${file}`);
-        log.info("validate", "removed stale context file", { file });
+        log.info("validate", "removed stale review file", { file });
       }
     }
   } catch { /* sessions dir might not exist */ }
+}
+
+function cleanOrphanedReviewWindows(registry: WorkerRegistry): void {
+  // Clear reviewWindowName from entries whose windows no longer exist
+  for (const [projectName, entries] of Object.entries(registry.workers)) {
+    for (const entry of entries) {
+      if (entry.reviewWindowName && !windowExists(entry.reviewWindowName)) {
+        updateWorkerFields(projectName, entry.name, { reviewWindowName: undefined });
+        log.info("validate", "cleared stale reviewWindowName", {
+          project: projectName,
+          worker: entry.name,
+          window: entry.reviewWindowName,
+        });
+      }
+    }
+  }
 }

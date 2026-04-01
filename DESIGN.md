@@ -98,18 +98,21 @@ Hidden windows follow the convention: `_<project>-worker-<N>` and `_<project>-sh
 6. Switching projects parks everything in hidden windows; switching back restores
 
 ### Poller and Auto-Merge
-A background poller (`_garden-poller`) runs every 30 seconds in a hidden tmux window. It watches worker branches for new commits and drives the review/merge lifecycle using local git operations (no GitHub PRs).
+Each project gets its own background poller (`_<project>-poller`) running in a hidden tmux window. Pollers are independent — one project's reviews never block another. Each poller watches its project's worker branches for new commits and drives the review/merge lifecycle using local git operations (no GitHub PRs). Pollers start when a project's first worker is created and stop when the last worker is killed.
 
 **State machine per worker:**
 ```
-working -> reviewing -> merged
-                     \-> failing -> (new commits) -> working
+working -> reviewing -> merge-pending -> merged
+               |              |
+               v              v
+           failing        reviewing (re-review on rebase conflict)
 ```
 
-1. **working**: Worker is active. Poller compares branch HEAD SHA against last-seen SHA. When new commits are detected, Claude is not actively working, and no other worker is reviewing, transitions to reviewing.
-2. **reviewing**: Poller fetches main, then runs a Claude reviewer (`claude -p --dangerously-skip-permissions`) with full tool access in the worktree. The reviewer handles everything in one pass: rebasing onto main, resolving conflicts, running optional checks, fixing check failures, and reviewing code against project rules. If the code is clean or the reviewer fixed all issues: force-pushes and merges to main. If the reviewer cannot fix the issues, transitions to failing and surfaces an alert. If the review process fails (Claude unavailable, timeout, unparseable output), transitions to failing and surfaces an alert. Unreviewed code is never auto-merged.
-3. **failing**: Unfixable review issues or review process failure. Poller watches for new commits via SHA tracking. After 30s debounce with no new pushes, state transitions back to working for retry. Each failure increments a `failCount` on the worker entry; after 3 consecutive failures, an alert is surfaced. The count resets on successful merge.
-4. **merged**: Code merged to main. If the worker pushes new commits after merge, the poller detects them and transitions back to working for a new review cycle.
+1. **working**: Worker is active. Poller compares branch HEAD SHA against last-seen SHA. When new commits are detected and Claude is not actively working, transitions to reviewing. Multiple workers per project can be reviewing simultaneously.
+2. **reviewing**: Poller launches a Claude reviewer (`claude -p --dangerously-skip-permissions`) asynchronously in a hidden tmux window (`_<project>-review-<worker>`). The reviewer rebases onto main, resolves conflicts, runs optional checks, fixes check failures, and reviews code against project rules. The poller polls for review completion by checking if the review window still exists. On completion: if clean or fixed, force-pushes and transitions to merge-pending. If the reviewer cannot fix the issues, transitions to failing. If the review process fails (Claude unavailable, timeout, unparseable output), transitions to failing. Unreviewed code is never auto-merged.
+3. **merge-pending**: Review passed, waiting to merge. A serial merge queue processes one merge at a time per project (ordered by timestamp). The merge sequence: rebase onto current main, force-push, then ff-merge. If the rebase has conflicts (because main advanced while waiting), the poller launches a scoped re-review — a new reviewer session focused on rebase conflict resolution, provided with the previous review's output and the worker's task description for context. If the rebase is clean, the merge proceeds.
+4. **failing**: Unfixable review issues or review process failure. Poller watches for new commits via SHA tracking. After 30s debounce with no new pushes, state transitions back to working for retry. Each failure increments a `failCount` on the worker entry; after 3 consecutive failures, an alert is surfaced. The count resets on successful merge.
+5. **merged**: Code merged to main. If the worker pushes new commits after merge, the poller detects them and transitions back to working for a new review cycle.
 
 ### Checks Configuration
 Projects can optionally define a `checks` command in `~/.garden/config.yml`:
@@ -136,18 +139,19 @@ projects:
 This is essential for projects like garden itself, where the poller runs the compiled CLI. Without a post-merge rebuild, the poller continues executing stale code even after merging fixes.
 
 ### Merge Handling
-Merges are serialized per project (one at a time). The merge sequence:
-1. Check if Claude is running in the worktree — if so, skip this cycle
-2. Fetch latest main
-3. Run the Claude reviewer (`claude -p --dangerously-skip-permissions`) which handles: rebase onto main, conflict resolution, checks, check failure fixes, and code review
-4. If clean or fixed: force-push the branch, merge to main via `git merge --ff-only` and push
+After a review passes, workers enter the `merge-pending` state. The merge queue processes one worker at a time per project (ordered by `mergePendingAt` timestamp):
+
+1. Fetch latest main
+2. Rebase onto current main
+3. If rebase conflicts: abort rebase, launch a scoped re-review with context from the previous review and the worker's task description. The re-reviewer handles the rebase and verifies correctness.
+4. If rebase is clean: force-push the rebased branch, merge to main via `git merge --ff-only` and push
 5. Notify live sibling workers with overlapping files (see below)
 6. Run postMerge command (if configured) on the main checkout
 7. Mark the worker as merged in the registry
 
 The worker and its worktree are not automatically cleaned up on merge. Cleanup happens only when the user kills the worker with `opt-x` or runs `garden reset`. This allows inspecting merged work before disposal.
 
-Projects don't block each other — each project's queue drains independently.
+Projects don't block each other — each project has its own poller and merge queue.
 
 ### Sibling Merge Notification
 When code merges, the poller compares the changed files against every other active worker's branch in the same project. If files overlap and the sibling has a live Claude session, it is notified via `tmux send-keys` with the merged worker's commit summary and overlapping file list so it can review and avoid reverting the merged work. Dead workers are skipped — they will hit rebase conflicts naturally on their next review cycle.

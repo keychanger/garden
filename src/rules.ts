@@ -37,7 +37,7 @@ export function buildWorktreeRules(branchName: string): string {
 
 You are working in an isolated git worktree on branch \`${branchName}\`. Your worktree is fully isolated — no other agent or human shares it. There is no shared state to protect. You have full authority over your worktree: commit and push without asking for confirmation.
 
-- Commit your work incrementally with clear, focused commit messages.
+- Commit your work incrementally. Your commit messages are the primary way reviewers understand your intent — write them for an audience that has never seen your task description. The first commit should explain what problem you are solving and your approach. Subsequent commits should explain why each change was made, not just what changed.
 - When your task is complete, push your branch. The poller will automatically rebase, review, and merge your changes into main.
 - If the poller notifies you of review feedback, check failures, or merge conflicts, fix the issues, commit, and push.
 - Do NOT exit after pushing. Stay alive and wait for further instructions or poller notifications. Garden will terminate your session when appropriate.`;

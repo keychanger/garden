@@ -18,7 +18,7 @@ import {
 import { readRegistry } from "./registry.js";
 import { log, truncateLog } from "./log.js";
 import { validateAndHeal } from "./validate.js";
-import { startPoller, SIGNAL_FIFO } from "./poller.js";
+import { startProjectPoller, signalFifoPath } from "./poller.js";
 import { installPollTriggerHook, worktreeExists as wtExists } from "./git.js";
 
 const DASHBOARD_COLS = 250;
@@ -140,7 +140,7 @@ export function ensureDashboard(): void {
     for (const entry of entries) {
       if (!entry.sessionId) continue;
       if (entry.worktreePath && wtExists(entry.worktreePath)) {
-        installPollTriggerHook(entry.worktreePath, gardenRunner);
+        installPollTriggerHook(entry.worktreePath, gardenRunner, projectName);
       }
       const workerCwd = entry.worktreePath ?? projectConfig.path;
       const resumeCmd = entry.worktreePath && entry.branchName
@@ -171,7 +171,13 @@ export function ensureDashboard(): void {
 
   writeDashState(state);
   setupKeybindings(gardenRunner);
-  startPoller(gardenRunner);
+
+  // Start per-project pollers for projects that have workers
+  for (const [pn, entries] of Object.entries(registry.workers)) {
+    if (entries.length > 0) {
+      startProjectPoller(pn, gardenRunner);
+    }
+  }
 
   if (firstResumedWindow && state.activePaneId) {
     tmux("select-pane", "-t", state.activePaneId);
@@ -240,7 +246,7 @@ export function buildWorktreeWorkerCommand(
 ): string {
   const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName);
   const claudeCmd = `claude --dangerously-skip-permissions --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
-  return `${claudeCmd}; ${pollSignalSnippet()} exec $SHELL`;
+  return `${claudeCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }
 
 export function buildWorktreeResumeCommand(
@@ -252,11 +258,11 @@ export function buildWorktreeResumeCommand(
 ): string {
   const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName);
   const claudeCmd = `claude --dangerously-skip-permissions --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
-  return `${claudeCmd}; ${pollSignalSnippet()} exec $SHELL`;
+  return `${claudeCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }
 
-function pollSignalSnippet(): string {
-  const fifo = SIGNAL_FIFO.replace(/'/g, "'\\''");
+function pollSignalSnippet(projectName: string): string {
+  const fifo = signalFifoPath(projectName).replace(/'/g, "'\\''");
   return `[ -p '${fifo}' ] && (echo > '${fifo}') 2>/dev/null;`;
 }
 

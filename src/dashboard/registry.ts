@@ -17,6 +17,9 @@ export interface WorkerEntry {
   mergedAt?: string;
   failCount?: number;
   failingSha?: string;
+  reviewWindowName?: string;
+  mergePendingAt?: string;
+  lastReviewBody?: string;
   role?: string;
   parentWorker?: string;
 }

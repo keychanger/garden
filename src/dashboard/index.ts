@@ -14,7 +14,8 @@ import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
 import { newWorker, killPane } from "./workers.js";
 import { switchProject, focusWorker, focusShell, focusGarden, focusLogs, cyclePane } from "./navigate.js";
-import { poll, triggerPoll, postPush, stopPoller } from "./poller.js";
+import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
+import { loadConfig } from "../config.js";
 
 export async function dashboard(args: string[]): Promise<void> {
   checkTmux();
@@ -27,7 +28,7 @@ export async function dashboard(args: string[]): Promise<void> {
       return;
     }
     log.info("dashboard", "closing dashboard");
-    stopPoller();
+    stopAllPollers();
     killDashboardSession();
     try { fs.unlinkSync(STATE_FILE); } catch { /* ignore */ }
     try { fs.unlinkSync(REGISTRY_FILE); } catch { /* ignore */ }
@@ -47,12 +48,17 @@ export async function dashboard(args: string[]): Promise<void> {
   if (sub === "_cycle-pane") return cyclePane(args[1] === "prev" ? -1 : 1);
   if (sub === "_kill-pane") return killPane();
   if (sub === "_poll") {
-    const changed = poll();
+    const changed = poll(args[1]);
     if (changed) process.exit(75);
     return;
   }
-  if (sub === "_trigger-poll") return triggerPoll();
-  if (sub === "_post-push") return postPush();
+  if (sub === "_trigger-poll") {
+    if (args[1]) return triggerProjectPoll(args[1]);
+    const config = loadConfig();
+    for (const pn of Object.keys(config.projects)) triggerProjectPoll(pn);
+    return;
+  }
+  if (sub === "_post-push") return postPush(args[1]);
   if (sub === "_header") return printHeader();
 
   if (sub === "help") {

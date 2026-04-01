@@ -71,7 +71,7 @@ The dashboard also has internal subcommands (e.g., `dashboard _switch 1`, `dashb
 The dashboard uses a permanent tmux layout with content swapped in and out of pane slots. This is the key architectural pattern:
 
 - **Pane slots are never removed.** Content is moved via `tmux swap-pane` between visible slots and hidden tmux windows. This preserves the layout tree. Both the right pane and the garden pane (lower-left) are swappable.
-- **Hidden windows** use underscore-prefixed names: `_<project>-worker-N`, `_<project>-shell`, `_garden-shell`, `_garden-logs`. The underscore marks them as garden-managed.
+- **Hidden windows** use underscore-prefixed names: `_<project>-worker-N`, `_<project>-shell`, `_<project>-poller`, `_<project>-review-<worker>`, `_garden-shell`, `_garden-logs`. The underscore marks them as garden-managed.
 - **Parking/restoring** (`src/dashboard/layout.ts`): To swap content, we create a temp hidden window, swap the current pane into it, then swap the target pane from its hidden window into the slot, and kill the temp window. Separate functions handle the right pane (`parkToHidden`/`restoreFromHidden`) and garden pane (`gardenParkToHidden`/`gardenRestoreFromHidden`).
 - **State** (`src/dashboard/state.ts`): Tracks which project is active, which pane is visible, and pane IDs. Written atomically (write-tmp-then-rename) to `dashboard.state.json` after every operation.
 - **Status detection** (`src/dashboard/tmux.ts`): Uses `pgrep` to detect whether claude is running and whether it has child processes (working vs waiting).
@@ -86,11 +86,11 @@ Every worker runs in its own git worktree, isolated from the main checkout and o
 
 1. `opt-n` creates a worktree at `~/.garden/worktrees/<project>/<worker-name>/` on a branch named after the worker.
 2. The worker's system prompt includes instructions to commit incrementally and push when done.
-3. A **poller** (`src/dashboard/poller.ts`) runs every 30s in a hidden tmux window, driving the review/merge lifecycle using local git (no GitHub PRs):
+3. Each project gets its own **poller** (`src/dashboard/poller.ts`) running in a hidden tmux window (`_<project>-poller`), driving the review/merge lifecycle using local git (no GitHub PRs). Projects never block each other.
    - Detects new commits on worker branches via SHA comparison.
    - Skips review if Claude is actively running in the worktree (live-Claude guard).
-   - Runs a Claude reviewer (`claude -p --dangerously-skip-permissions`) with full tool access in the worktree. The reviewer handles everything: rebasing onto main, resolving conflicts, running optional `checks` command (configured per project in `~/.garden/config.yml`), fixing check failures, and reviewing code against project rules for adherence, test coverage, and doc coverage.
-   - If code is clean or reviewer fixed all issues: force-pushes and merges to main via local `git merge --ff-only`. If reviewer cannot fix: transitions to failing and surfaces an alert. If review process fails: transitions to failing and surfaces an alert (unreviewed code is never auto-merged).
+   - Launches a Claude reviewer asynchronously in a hidden tmux window (`_<project>-review-<worker>`). Multiple reviews can run in parallel within a project. The reviewer rebases onto main, resolves conflicts, runs optional `checks` command (configured per project in `~/.garden/config.yml`), fixes check failures, and reviews code against project rules.
+   - If code is clean or reviewer fixed all issues: force-pushes and transitions to `merge-pending`. A serial merge queue processes one merge at a time per project. If the rebase onto current main has conflicts (because main advanced), a scoped re-review is launched with context from the previous review. If the rebase is clean: merges to main via `git merge --ff-only`.
    - After merge, runs optional `postMerge` command (e.g., `npm run build` to rebuild the CLI).
    - Notifies live sibling workers with overlapping files so they can rebase.
    - Debounces commits (30s quiet period) before retrying.
