@@ -181,18 +181,27 @@ function handleReviewing(
   baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
-  // Live-Claude guard: if the worker started pushing new code, abort review
+  // Live-Claude guard: if the worker pushed new commits, abort the review
+  // so it doesn't review stale code. We check for actual SHA changes rather
+  // than just isClaudeWorking, because transient child processes (e.g. from
+  // navigation swaps) can produce false positives that kill valid reviews.
   if (isWorkerClaudeWorking(projectName, entry.name)) {
-    log.info("poller", "Claude working during review, resetting to working", {
-      worker: entry.name,
-    });
-    killReviewWindow(projectName, entry.name);
-    updateWorkerFields(projectName, entry.name, {
-      prState: "working",
-      reviewWindowName: undefined,
-    });
-    refreshDashboard();
-    return true;
+    const wtPath = entry.worktreePath ?? projectPath;
+    const headSha = getBranchHeadSha(wtPath);
+    if (headSha && headSha !== entry.lastSeenSha) {
+      log.info("poller", "new commits during review, resetting to working", {
+        worker: entry.name,
+      });
+      killReviewWindow(projectName, entry.name);
+      updateWorkerFields(projectName, entry.name, {
+        prState: "working",
+        lastSeenSha: headSha,
+        lastShaChangeAt: new Date().toISOString(),
+        reviewWindowName: undefined,
+      });
+      refreshDashboard();
+      return true;
+    }
   }
 
   // Check if review is still running

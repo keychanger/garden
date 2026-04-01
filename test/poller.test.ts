@@ -469,11 +469,12 @@ describe("poll — reviewing state (async)", () => {
     );
   });
 
-  it("resets to working when Claude becomes active during review", () => {
+  it("resets to working when Claude pushes new commits during review", () => {
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash" }),
+      makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash", lastSeenSha: "old-sha" }),
     ]);
     vi.mocked(isClaudeWorking).mockReturnValue(true);
+    vi.mocked(getBranchHeadSha).mockReturnValue("newer-sha");
 
     poll();
 
@@ -481,6 +482,20 @@ describe("poll — reviewing state (async)", () => {
       expect.objectContaining({ prState: "working", reviewWindowName: undefined }),
     );
     expect(mergeToBase).not.toHaveBeenCalled();
+  });
+
+  it("continues review when Claude is active but has no new commits", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash", lastSeenSha: "abc123" }),
+    ]);
+    vi.mocked(isClaudeWorking).mockReturnValue(true);
+    vi.mocked(getBranchHeadSha).mockReturnValue("abc123");
+
+    poll();
+
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "working" }),
+    );
   });
 });
 
