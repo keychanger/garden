@@ -69,6 +69,16 @@ vi.mock("../src/dashboard/registry.js", () => {
   };
 });
 
+vi.mock("../src/dashboard/state.js", () => ({
+  readDashState: vi.fn(() => ({
+    activeProject: null,
+    activePaneId: null,
+    activePaneType: null,
+    activeWindowName: null,
+  })),
+  STATE_FILE: "/tmp/fake-sessions/dashboard.state.json",
+}));
+
 vi.mock("../src/dashboard/validate.js", () => ({
   healStatusPane: vi.fn(),
 }));
@@ -112,6 +122,7 @@ import {
 import { refreshDashboard } from "../src/dashboard/header.js";
 import { tmux, hasClaudeChild, isClaudeWorking, getPanePid, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
+import { readDashState } from "../src/dashboard/state.js";
 import { log } from "../src/dashboard/log.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
@@ -819,6 +830,35 @@ describe("poll — live-Claude guard", () => {
     poll();
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "reviewing" }),
+    );
+  });
+
+  it("detects Claude activity via dashboard state when worker is visible in right pane", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "pushed", lastSeenSha: "new-sha" }),
+    ]);
+    vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
+    // Worker window doesn't exist (it's visible in the right pane)
+    vi.mocked(windowExists).mockReturnValue(false);
+    // Dashboard state shows this worker is active
+    vi.mocked(readDashState).mockReturnValue({
+      activeProject: "myproject",
+      activePaneId: "%10",
+      activePaneType: "worker",
+      activeWindowName: "_myproject-worker-bold-ash",
+      statusPaneId: null,
+      gardenShellPaneId: null,
+      gardenPaneType: null,
+      gardenWindowName: null,
+    });
+    vi.mocked(getPanePid).mockReturnValue("12345");
+    vi.mocked(isClaudeWorking).mockReturnValue(true);
+
+    poll();
+
+    // Should detect Claude is working and skip review
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "reviewing" }),
     );
   });
