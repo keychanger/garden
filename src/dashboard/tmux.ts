@@ -94,6 +94,12 @@ export function windowExists(windowName: string): boolean {
   }
 }
 
+export function renameWindow(oldName: string, newName: string): void {
+  try {
+    tmux("rename-window", "-t", `${DASHBOARD_SESSION}:${oldName}`, newName);
+  } catch { /* ignore */ }
+}
+
 export function killWindowSafe(windowName: string): void {
   try {
     tmux("kill-window", "-t", `${DASHBOARD_SESSION}:${windowName}`);

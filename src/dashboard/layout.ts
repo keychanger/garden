@@ -1,7 +1,7 @@
 // Pane parking and restoring: swaps content between the visible right slot
 // and hidden tmux windows so the layout tree is never modified.
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, tmuxNewWindow, getFirstPaneId, killWindowSafe, paneExists } from "./tmux.js";
+import { tmux, tmuxNewWindow, getFirstPaneId, killWindowSafe, renameWindow, paneExists } from "./tmux.js";
 import type { DashboardState } from "./state.js";
 import { log } from "./log.js";
 
@@ -56,6 +56,34 @@ export function restoreFromHidden(windowName: string, state: DashboardState): vo
 export function swapToHidden(parkWindowName: string, restoreWindowName: string, state: DashboardState): void {
   parkToHidden(parkWindowName, state);
   restoreFromHidden(restoreWindowName, state);
+}
+
+/**
+ * Fast swap: directly exchange visible pane with a hidden window's pane,
+ * then rename the hidden window. Avoids creating/destroying temp windows.
+ * Use when both source (visible) and target (hidden) are known to exist.
+ * Returns true on success, false on failure (caller should fall back to swapToHidden).
+ */
+export function swapDirect(parkWindowName: string, restoreWindowName: string, state: DashboardState): boolean {
+  if (!state.activePaneId || !paneExists(state.activePaneId)) {
+    log.warn("layout", "swapDirect: active pane missing or dead");
+    return false;
+  }
+
+  const targetPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${restoreWindowName}`);
+  if (!targetPaneId) {
+    log.warn("layout", "swapDirect: target window missing");
+    return false;
+  }
+
+  // Direct swap: visible content goes to hidden window, hidden content comes to visible slot
+  tmux("swap-pane", "-s", state.activePaneId, "-t", targetPaneId);
+  // Rename the hidden window (now holding old visible content) to the park name
+  renameWindow(restoreWindowName, parkWindowName);
+
+  log.debug("layout", "swapDirect", { data: { from: parkWindowName, to: restoreWindowName } });
+  state.activePaneId = targetPaneId;
+  return true;
 }
 
 /**

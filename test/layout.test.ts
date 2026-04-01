@@ -10,6 +10,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   getFirstPaneId: vi.fn(),
   windowExists: vi.fn(() => false),
   killWindowSafe: vi.fn(),
+  renameWindow: vi.fn(),
   paneExists: vi.fn(() => true),
 }));
 
@@ -22,8 +23,8 @@ vi.mock("../src/dashboard/log.js", () => ({
   },
 }));
 
-import { parkToHidden, restoreFromHidden, swapToHidden } from "../src/dashboard/layout.js";
-import { tmux, tmuxNewWindow, getFirstPaneId, windowExists, killWindowSafe, paneExists } from "../src/dashboard/tmux.js";
+import { parkToHidden, restoreFromHidden, swapToHidden, swapDirect } from "../src/dashboard/layout.js";
+import { tmux, tmuxNewWindow, getFirstPaneId, windowExists, killWindowSafe, renameWindow, paneExists } from "../src/dashboard/tmux.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 
 function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
@@ -131,5 +132,46 @@ describe("swapToHidden", () => {
     expect(vi.mocked(tmuxNewWindow)).toHaveBeenCalled();
     const swapCalls = vi.mocked(tmux).mock.calls.filter(c => c[0] === "swap-pane");
     expect(swapCalls.length).toBe(2);
+  });
+});
+
+describe("swapDirect", () => {
+  it("swaps panes and renames window in one step", () => {
+    vi.mocked(getFirstPaneId).mockReturnValue("%20");
+    const state = makeState();
+    const result = swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
+
+    expect(result).toBe(true);
+    expect(vi.mocked(tmux)).toHaveBeenCalledWith(
+      "swap-pane", "-s", "%2", "-t", "%20"
+    );
+    expect(vi.mocked(renameWindow)).toHaveBeenCalledWith(
+      "_garden-worker-calm-bay", "_garden-worker-bold-ash"
+    );
+    expect(state.activePaneId).toBe("%20");
+  });
+
+  it("does not create or kill any windows", () => {
+    vi.mocked(getFirstPaneId).mockReturnValue("%20");
+    const state = makeState();
+    swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
+
+    expect(vi.mocked(tmuxNewWindow)).not.toHaveBeenCalled();
+    expect(vi.mocked(killWindowSafe)).not.toHaveBeenCalled();
+  });
+
+  it("returns false when active pane is missing", () => {
+    const state = makeState({ activePaneId: null });
+    const result = swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
+    expect(result).toBe(false);
+    expect(vi.mocked(tmux)).not.toHaveBeenCalled();
+  });
+
+  it("returns false when target window is missing", () => {
+    vi.mocked(getFirstPaneId).mockReturnValue(null);
+    const state = makeState();
+    const result = swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
+    expect(result).toBe(false);
+    expect(vi.mocked(tmux)).not.toHaveBeenCalled();
   });
 });

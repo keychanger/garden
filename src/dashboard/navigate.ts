@@ -1,7 +1,9 @@
 // Pane navigation: project switching, worker/shell focus, cycling.
-import { loadConfig, getProject } from "../config.js";
+import fs from "node:fs";
+import path from "node:path";
+import { loadConfig, getProject, SESSIONS_DIR } from "../config.js";
 import { readDashState, writeDashState } from "./state.js";
-import { parkToHidden, swapToHidden } from "./layout.js";
+import { parkToHidden, swapToHidden, swapDirect } from "./layout.js";
 import { restoreFromHidden } from "./layout.js";
 import { gardenSwapToHidden, gardenRestoreFromHidden } from "./layout.js";
 import { refreshDashboard } from "./header.js";
@@ -15,6 +17,38 @@ import {
 } from "./tmux.js";
 import { log } from "./log.js";
 import { createShellWindow, createLogsWindow, createGardenShellWindow, createGardenConsoleWindow, resolveGardenRunner } from "./create.js";
+
+const CYCLE_LOCK = path.join(SESSIONS_DIR, "cycle.lock");
+
+function withCycleLock<T>(fn: () => T): T {
+  let fd: number | null = null;
+  const maxWait = 500;
+  const start = Date.now();
+
+  // Spin until we acquire the lock or timeout
+  while (true) {
+    try {
+      fd = fs.openSync(CYCLE_LOCK, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
+      break;
+    } catch {
+      if (Date.now() - start > maxWait) {
+        // Stale lock — force acquire
+        try { fs.unlinkSync(CYCLE_LOCK); } catch { /* ignore */ }
+        continue;
+      }
+      // Brief spin (1ms)
+      const deadline = Date.now() + 1;
+      while (Date.now() < deadline) { /* busy wait */ }
+    }
+  }
+
+  try {
+    return fn();
+  } finally {
+    try { fs.closeSync(fd!); } catch { /* ignore */ }
+    try { fs.unlinkSync(CYCLE_LOCK); } catch { /* ignore */ }
+  }
+}
 
 export function switchProject(indexArg: string): void {
   log.info("navigate", "switchProject", { data: { index: indexArg } });
@@ -190,48 +224,62 @@ export function cycleGardenPane(direction: 1 | -1): void {
 }
 
 export function cyclePane(direction: 1 | -1): void {
-  const state = readDashState();
-
-  // Context-aware: if focused on the garden pane, cycle garden views
+  // Context-aware: if focused on the garden pane, cycle garden views (no lock needed)
   const focusedPane = getActivePaneId();
+  const state = readDashState();
   if (focusedPane && focusedPane === state.gardenShellPaneId) {
     return cycleGardenPane(direction);
   }
 
-  if (!state.activeProject) {
-    tmuxDisplay("No project selected.");
-    return;
-  }
+  // Serialize concurrent cycles to prevent race conditions
+  withCycleLock(() => {
+    // Re-read state inside lock to see updates from any prior queued cycle
+    const lockedState = readDashState();
 
-  const hiddenWorkers = listHiddenWorkerWindows(state.activeProject);
-  const currentName = state.activeWindowName;
-  const isCurrentWorker = currentName && currentName.includes("-worker-");
+    if (!lockedState.activeProject) {
+      tmuxDisplay("No project selected.");
+      return;
+    }
 
-  const allWorkers = isCurrentWorker
-    ? [...new Set([currentName, ...hiddenWorkers])].sort()
-    : [...hiddenWorkers];
+    // Single window list for the entire operation
+    const windowNames = listAllWindowNames();
+    const hiddenWorkers = listHiddenWorkerWindows(lockedState.activeProject, windowNames);
+    const currentName = lockedState.activeWindowName;
+    const isCurrentWorker = currentName && currentName.includes("-worker-");
 
-  if (allWorkers.length === 0) {
-    tmuxDisplay("No workers to cycle to. Press ⌥n to create one.");
-    return;
-  }
+    const allWorkers = isCurrentWorker
+      ? [...new Set([currentName, ...hiddenWorkers])].sort()
+      : [...hiddenWorkers];
 
-  const currentIdx = currentName ? allWorkers.indexOf(currentName) : -1;
-  let nextIdx: number;
-  if (currentIdx === -1) {
-    nextIdx = direction === 1 ? 0 : allWorkers.length - 1;
-  } else {
-    nextIdx = (currentIdx + direction + allWorkers.length) % allWorkers.length;
-  }
+    if (allWorkers.length === 0) {
+      tmuxDisplay("No workers to cycle to. Press ⌥n to create one.");
+      return;
+    }
 
-  const targetWindow = allWorkers[nextIdx];
-  if (targetWindow === currentName) return;
+    const currentIdx = currentName ? allWorkers.indexOf(currentName) : -1;
+    let nextIdx: number;
+    if (currentIdx === -1) {
+      nextIdx = direction === 1 ? 0 : allWorkers.length - 1;
+    } else {
+      nextIdx = (currentIdx + direction + allWorkers.length) % allWorkers.length;
+    }
 
-  const parkName = currentName ?? `_${state.activeProject}-active`;
-  swapToHidden(parkName, targetWindow, state);
+    const targetWindow = allWorkers[nextIdx];
+    if (targetWindow === currentName) return;
 
-  state.activePaneType = "worker";
-  state.activeWindowName = targetWindow;
-  writeDashState(state);
-  refreshDashboard({ state });
+    const parkName = currentName ?? `_${lockedState.activeProject}-active`;
+
+    // Fast path: direct swap (swap-pane + rename, no temp window)
+    if (!swapDirect(parkName, targetWindow, lockedState)) {
+      swapToHidden(parkName, targetWindow, lockedState);
+    }
+
+    lockedState.activePaneType = "worker";
+    lockedState.activeWindowName = targetWindow;
+    writeDashState(lockedState);
+
+    // Update window list in memory: target was renamed to park name
+    const updatedNames = windowNames.map(n => n === targetWindow ? parkName : n);
+    refreshDashboard({ state: lockedState, windowNames: updatedNames });
+  });
 }
