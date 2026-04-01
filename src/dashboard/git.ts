@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
-import { SESSIONS_DIR } from "../config.js";
+import { SESSIONS_DIR, type ProjectConfig } from "../config.js";
 import { log } from "./log.js";
 
 const WORKTREE_BASE = path.join(
@@ -11,18 +11,30 @@ const WORKTREE_BASE = path.join(
   "worktrees",
 );
 
+export function resolveBaseBranch(repoPath: string, projectConfig?: Pick<ProjectConfig, "baseBranch">): string {
+  if (projectConfig?.baseBranch) return projectConfig.baseBranch;
+  try {
+    const ref = git(repoPath, "symbolic-ref", "refs/remotes/origin/HEAD");
+    const match = ref.match(/^refs\/remotes\/origin\/(.+)$/);
+    if (match) return match[1];
+  } catch {
+    // origin/HEAD not set — common for --single-branch clones
+  }
+  return "main";
+}
+
 export function worktreePath(project: string, workerName: string): string {
   return path.join(WORKTREE_BASE, project, workerName);
 }
 
-export function fastForwardMain(repoPath: string): void {
+export function fastForwardBase(repoPath: string, baseBranch: string): void {
   try {
-    git(repoPath, "fetch", "origin", "main");
-    git(repoPath, "merge", "--ff-only", "origin/main");
-    log.info("git", "fast-forwarded main");
+    git(repoPath, "fetch", "origin", baseBranch);
+    git(repoPath, "merge", "--ff-only", `origin/${baseBranch}`);
+    log.info("git", "fast-forwarded base branch", { data: { baseBranch } });
   } catch (err) {
-    log.warn("git", "failed to fast-forward main", {
-      data: { error: String(err) },
+    log.warn("git", "failed to fast-forward base branch", {
+      data: { baseBranch, error: String(err) },
     });
   }
 }
@@ -76,13 +88,13 @@ export function getBranchHeadSha(wtPath: string): string | null {
   }
 }
 
-export function getDiffAgainstMain(wtPath: string): string {
-  return git(wtPath, "diff", "origin/main...HEAD");
+export function getDiffAgainstBase(wtPath: string, baseBranch: string): string {
+  return git(wtPath, "diff", `origin/${baseBranch}...HEAD`);
 }
 
-export function rebaseBranch(worktreePath: string): boolean {
+export function rebaseBranch(worktreePath: string, baseBranch: string): boolean {
   try {
-    git(worktreePath, "rebase", "origin/main");
+    git(worktreePath, "rebase", `origin/${baseBranch}`);
     return true;
   } catch {
     return false;
@@ -101,12 +113,12 @@ export function forcePushBranch(worktreePath: string, branch: string): void {
   git(worktreePath, "push", "--force-with-lease", "origin", branch);
 }
 
-export function mergeToMain(repoPath: string, branchName: string): void {
+export function mergeToBase(repoPath: string, branchName: string, baseBranch: string): void {
   git(repoPath, "fetch", "origin");
-  git(repoPath, "checkout", "main");
+  git(repoPath, "checkout", baseBranch);
   git(repoPath, "merge", "--ff-only", `origin/${branchName}`);
-  git(repoPath, "push", "origin", "main");
-  log.info("git", "merged to main", { data: { branchName } });
+  git(repoPath, "push", "origin", baseBranch);
+  log.info("git", "merged to base branch", { data: { branchName, baseBranch } });
 }
 
 export function deleteRemoteBranch(repoPath: string, branchName: string): void {
@@ -120,19 +132,19 @@ export function deleteRemoteBranch(repoPath: string, branchName: string): void {
   }
 }
 
-export function getChangedFiles(wtPath: string): string[] {
+export function getChangedFiles(wtPath: string, baseBranch: string): string[] {
   try {
-    const result = git(wtPath, "diff", "--name-only", "origin/main...HEAD");
+    const result = git(wtPath, "diff", "--name-only", `origin/${baseBranch}...HEAD`);
     return result.split("\n").filter(Boolean);
   } catch {
     return [];
   }
 }
 
-export function getCommitSummary(wtPath: string): string {
+export function getCommitSummary(wtPath: string, baseBranch: string): string {
   try {
     return execFileSync("git", [
-      "log", "--oneline", "main..HEAD",
+      "log", "--oneline", `${baseBranch}..HEAD`,
     ], {
       cwd: wtPath,
       encoding: "utf-8",

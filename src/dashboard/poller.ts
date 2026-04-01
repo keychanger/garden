@@ -17,9 +17,10 @@ import {
 import {
   getBranchHeadSha,
   rebaseBranch, abortRebase,
-  forcePushBranch, mergeToMain,
-  getChangedFiles, getDiffAgainstMain,
+  forcePushBranch, mergeToBase,
+  getChangedFiles, getDiffAgainstBase,
   getCommitSummary, getNewCommitSummary,
+  resolveBaseBranch,
 } from "./git.js";
 import { refreshDashboard } from "./header.js";
 import { healStatusPane } from "./validate.js";
@@ -72,12 +73,13 @@ function pollProject(projectName: string): boolean {
   const project = tryGetProject(projectName);
   if (!project) return false;
 
+  const baseBranch = resolveBaseBranch(project.path, project);
   const workers = getWorkers(projectName);
   let changed = false;
 
   for (const entry of workers) {
     try {
-      if (pollWorker(projectName, project.path, entry)) {
+      if (pollWorker(projectName, project.path, baseBranch, entry)) {
         changed = true;
       }
     } catch (err) {
@@ -94,23 +96,24 @@ function pollProject(projectName: string): boolean {
 function pollWorker(
   projectName: string,
   projectPath: string,
+  baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
   const state = entry.prState ?? "working";
 
   switch (state) {
     case "working":
-      return handleWorking(projectName, projectPath, entry);
+      return handleWorking(projectName, projectPath, baseBranch, entry);
     case "pushed":
-      return handlePushed(projectName, projectPath, entry);
+      return handlePushed(projectName, projectPath, baseBranch, entry);
     case "reviewing":
-      return handleReviewing(projectName, projectPath, entry);
+      return handleReviewing(projectName, projectPath, baseBranch, entry);
     case "merge-pending":
-      return handleMergePending(projectName, projectPath, entry);
+      return handleMergePending(projectName, projectPath, baseBranch, entry);
     case "failing":
-      return handleFailing(projectName, projectPath, entry);
+      return handleFailing(projectName, projectPath, baseBranch, entry);
     case "merged":
-      return handleMerged(projectName, entry);
+      return handleMerged(projectName, baseBranch, entry);
     default:
       log.warn("poller", "unknown state, resetting to working", {
         worker: entry.name,
@@ -126,6 +129,7 @@ function pollWorker(
 function handleWorking(
   projectName: string,
   projectPath: string,
+  baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
   const wtPath = entry.worktreePath ?? projectPath;
@@ -135,8 +139,8 @@ function handleWorking(
   // No new commits since last check
   if (headSha === entry.lastSeenSha) return false;
 
-  // Check if there are actually commits ahead of main
-  const commitSummary = getCommitSummary(wtPath);
+  // Check if there are actually commits ahead of base branch
+  const commitSummary = getCommitSummary(wtPath, baseBranch);
   if (!commitSummary) return false;
 
   // Transition to pushed — review will launch from handlePushed
@@ -152,6 +156,7 @@ function handleWorking(
 function handlePushed(
   projectName: string,
   projectPath: string,
+  baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
   // If Claude started new work, go back to working
@@ -166,12 +171,13 @@ function handlePushed(
     return false;
   }
 
-  return launchReview(projectName, projectPath, entry, false);
+  return launchReview(projectName, projectPath, baseBranch, entry, false);
 }
 
 function handleReviewing(
   projectName: string,
   projectPath: string,
+  baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
   // Live-Claude guard: if the worker started pushing new code, abort review
@@ -290,6 +296,7 @@ function handleReviewing(
 function handleMergePending(
   projectName: string,
   projectPath: string,
+  baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
   // Serial merge gate: only the earliest merge-pending worker proceeds
@@ -303,23 +310,23 @@ function handleMergePending(
 
   const wtPath = entry.worktreePath ?? projectPath;
 
-  // Fetch latest main
+  // Fetch latest base branch
   try {
-    execFileSync("git", ["fetch", "origin", "main"], {
+    execFileSync("git", ["fetch", "origin", baseBranch], {
       cwd: wtPath,
       stdio: "ignore",
     });
   } catch { /* best effort */ }
 
-  // Rebase onto current main
-  if (!rebaseBranch(wtPath)) {
+  // Rebase onto current base branch
+  if (!rebaseBranch(wtPath, baseBranch)) {
     abortRebase(wtPath);
     log.warn("poller", "rebase conflicts in merge queue, launching re-review", {
       worker: entry.name,
     });
 
     // Go back to reviewing with a scoped re-review
-    launchReview(projectName, projectPath, entry, true);
+    launchReview(projectName, projectPath, baseBranch, entry, true);
     return true;
   }
 
@@ -340,14 +347,15 @@ function handleMergePending(
     return true;
   }
 
-  // Merge to main
-  finalizeMerge(projectName, projectPath, entry);
+  // Merge to base branch
+  finalizeMerge(projectName, projectPath, baseBranch, entry);
   return true;
 }
 
 function handleFailing(
   projectName: string,
   projectPath: string,
+  baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
   const wtPath = entry.worktreePath ?? projectPath;
@@ -403,13 +411,14 @@ function handleFailing(
 
 function handleMerged(
   projectName: string,
+  baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
   const wtPath = entry.worktreePath;
   if (!wtPath) return false;
 
-  // Check if the worker has new commits ahead of main
-  const commitSummary = getCommitSummary(wtPath);
+  // Check if the worker has new commits ahead of base branch
+  const commitSummary = getCommitSummary(wtPath, baseBranch);
   // Also check if Claude is still actively working -- it may not have
   // committed yet, but the status should reflect that it's not done
   const claudeActive = isWorkerClaudeWorking(projectName, entry.name);
@@ -435,6 +444,7 @@ function handleMerged(
 function launchReview(
   projectName: string,
   projectPath: string,
+  baseBranch: string,
   entry: WorkerEntry,
   isReReview: boolean,
 ): boolean {
@@ -448,9 +458,9 @@ function launchReview(
 
   const wtPath = entry.worktreePath ?? projectPath;
 
-  // Fetch latest main so the reviewer can rebase onto it
+  // Fetch latest base branch so the reviewer can rebase onto it
   try {
-    execFileSync("git", ["fetch", "origin", "main"], {
+    execFileSync("git", ["fetch", "origin", baseBranch], {
       cwd: wtPath,
       stdio: "ignore",
     });
@@ -458,8 +468,8 @@ function launchReview(
 
   // Build the review prompt
   const prompt = isReReview
-    ? buildReReviewPrompt(projectName, projectPath, entry)
-    : buildReviewPrompt(projectName, projectPath, entry);
+    ? buildReReviewPrompt(projectName, projectPath, baseBranch, entry)
+    : buildReviewPrompt(projectName, projectPath, baseBranch, entry);
 
   if (prompt === null) {
     log.warn("poller", "failed to build review prompt", { worker: entry.name });
@@ -555,24 +565,25 @@ function parseReviewResult(output: string, workerName: string): ReviewResult | n
 function buildReviewPrompt(
   projectName: string,
   projectPath: string,
+  baseBranch: string,
   entry: WorkerEntry,
 ): string | null {
   const wtPath = entry.worktreePath ?? projectPath;
 
   let diff: string;
   try {
-    diff = getDiffAgainstMain(wtPath);
+    diff = getDiffAgainstBase(wtPath, baseBranch);
   } catch {
     log.warn("poller", "failed to get diff for review", { worker: entry.name });
     return null;
   }
 
-  const commitSummary = getCommitSummary(wtPath);
+  const commitSummary = getCommitSummary(wtPath, baseBranch);
   const branchName = entry.branchName ?? entry.name;
   const rules = buildRulesContext(projectName, projectPath);
   const project = tryGetProject(projectName);
   const checksCommand = project?.checks;
-  const changedFiles = getChangedFiles(wtPath);
+  const changedFiles = getChangedFiles(wtPath, baseBranch);
 
   const docSections = readDocSections(wtPath);
   const testSections = readTestSections(wtPath, changedFiles);
@@ -585,9 +596,9 @@ function buildReviewPrompt(
   const prompt = [
     "You are reviewing a branch before merge. Complete these steps in order:",
     "",
-    `## Step ${rebaseStep}: Rebase onto main`,
+    `## Step ${rebaseStep}: Rebase onto ${baseBranch}`,
     "",
-    "Run \`git rebase main\` in the worktree. If there are conflicts:",
+    `Run \`git rebase ${baseBranch}\` in the worktree. If there are conflicts:`,
     "- Resolve them sensibly (preserve the intent of both sides)",
     "- \`git add\` resolved files and \`git rebase --continue\`",
     "- If a conflict is truly unresolvable, abort the rebase and report FAILED",
@@ -669,24 +680,25 @@ function buildReviewPrompt(
 function buildReReviewPrompt(
   projectName: string,
   projectPath: string,
+  baseBranch: string,
   entry: WorkerEntry,
 ): string | null {
   const wtPath = entry.worktreePath ?? projectPath;
 
   let diff: string;
   try {
-    diff = getDiffAgainstMain(wtPath);
+    diff = getDiffAgainstBase(wtPath, baseBranch);
   } catch {
     log.warn("poller", "failed to get diff for re-review", { worker: entry.name });
     return null;
   }
 
-  const commitSummary = getCommitSummary(wtPath);
+  const commitSummary = getCommitSummary(wtPath, baseBranch);
   const branchName = entry.branchName ?? entry.name;
   const rules = buildRulesContext(projectName, projectPath);
   const project = tryGetProject(projectName);
   const checksCommand = project?.checks;
-  const changedFiles = getChangedFiles(wtPath);
+  const changedFiles = getChangedFiles(wtPath, baseBranch);
 
   const docSections = readDocSections(wtPath);
   const testSections = readTestSections(wtPath, changedFiles);
@@ -698,7 +710,7 @@ function buildReReviewPrompt(
 
   const prompt = [
     "You are re-reviewing a branch that was previously reviewed and approved.",
-    "It is being re-reviewed because main advanced and a rebase is needed before merge.",
+    `It is being re-reviewed because ${baseBranch} advanced and a rebase is needed before merge.`,
     "",
     "## Context",
     "",
@@ -709,12 +721,12 @@ function buildReReviewPrompt(
       entry.lastReviewBody,
       "",
     ] : []),
-    "Focus on rebasing onto main, resolving any conflicts while preserving the",
+    `Focus on rebasing onto ${baseBranch}, resolving any conflicts while preserving the`,
     "intent of both sides, and verifying the merged result still works.",
     "",
-    `## Step ${rebaseStep}: Rebase onto main`,
+    `## Step ${rebaseStep}: Rebase onto ${baseBranch}`,
     "",
-    "Run \`git rebase main\` in the worktree. If there are conflicts:",
+    `Run \`git rebase ${baseBranch}\` in the worktree. If there are conflicts:`,
     "- Resolve them sensibly (preserve the intent of both sides)",
     "- Read the commit messages carefully — they describe the intent of each change",
     "- \`git add\` resolved files and \`git rebase --continue\`",
@@ -733,7 +745,7 @@ function buildReReviewPrompt(
     "",
     "This branch was already reviewed. Focus on:",
     "- Whether conflict resolution preserved the intent of both sides",
-    "- Whether the rebased code still works correctly with the new main",
+    `- Whether the rebased code still works correctly with the new ${baseBranch}`,
     "- Whether tests still pass after rebase",
     "",
     "If you find issues, fix them directly in the worktree. Commit fixes with a",
@@ -780,12 +792,13 @@ function buildReReviewPrompt(
 function finalizeMerge(
   projectName: string,
   projectPath: string,
+  baseBranch: string,
   entry: WorkerEntry,
 ): void {
   const branchName = entry.branchName ?? entry.name;
 
   try {
-    mergeToMain(projectPath, branchName);
+    mergeToBase(projectPath, branchName, baseBranch);
   } catch (err) {
     log.error("poller", "merge failed", {
       worker: entry.name,
@@ -806,9 +819,9 @@ function finalizeMerge(
     return;
   }
 
-  log.info("poller", "merged to main", { worker: entry.name });
+  log.info("poller", "merged to base branch", { worker: entry.name, data: { baseBranch } });
 
-  notifySiblingWorkers(projectName, entry);
+  notifySiblingWorkers(projectName, baseBranch, entry);
 
   runPostMerge(projectName, projectPath);
   updateWorkerFields(projectName, entry.name, {
@@ -867,14 +880,15 @@ function runPostMerge(projectName: string, projectPath: string): void {
 
 function notifySiblingWorkers(
   projectName: string,
+  baseBranch: string,
   mergedEntry: WorkerEntry,
 ): void {
   if (!mergedEntry.worktreePath) return;
 
-  const mergedFiles = getChangedFiles(mergedEntry.worktreePath);
+  const mergedFiles = getChangedFiles(mergedEntry.worktreePath, baseBranch);
   if (mergedFiles.length === 0) return;
 
-  const commitSummary = getCommitSummary(mergedEntry.worktreePath);
+  const commitSummary = getCommitSummary(mergedEntry.worktreePath, baseBranch);
   const siblings = getWorkers(projectName).filter(
     w => w.name !== mergedEntry.name &&
       (w.prState === "working" || w.prState === "pushed" || w.prState === "failing"),
@@ -884,16 +898,16 @@ function notifySiblingWorkers(
 
   for (const sibling of siblings) {
     if (!sibling.worktreePath) continue;
-    const siblingFiles = getChangedFiles(sibling.worktreePath);
+    const siblingFiles = getChangedFiles(sibling.worktreePath, baseBranch);
     const overlap = siblingFiles.filter(f => mergedSet.has(f));
     if (overlap.length === 0) continue;
 
     const title = commitSummary?.split("\n")[0] ?? `worker ${mergedEntry.name}`;
     const fileList = overlap.join(", ");
     const message = [
-      `[garden] Worker \`${mergedEntry.name}\` just merged into main: ${title}`,
+      `[garden] Worker \`${mergedEntry.name}\` just merged into ${baseBranch}: ${title}`,
       `It changed files that overlap with your branch: ${fileList}`,
-      "Rebase onto main, review how these changes interact with your work, and make sure you are not reverting their fix. Push when ready.",
+      `Rebase onto ${baseBranch}, review how these changes interact with your work, and make sure you are not reverting their fix. Push when ready.`,
     ].join("\n");
 
     const windowName = `_${projectName}-worker-${sibling.name}`;

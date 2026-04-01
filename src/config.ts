@@ -12,8 +12,17 @@ export const SESSIONS_DIR = path.join(GARDEN_DIR, "sessions");
 
 export interface ProjectConfig {
   path: string;
+  baseBranch?: string;
   checks?: string;
   postMerge?: string;
+}
+
+const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
+  "path", "baseBranch", "checks", "postMerge",
+]);
+
+export function isValidConfigKey(key: string): boolean {
+  return VALID_CONFIG_KEYS.has(key);
 }
 
 export interface GardenConfig {

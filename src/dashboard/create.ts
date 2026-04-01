@@ -5,7 +5,7 @@ import {
   dashboardExists,
   DASHBOARD_SESSION,
 } from "../session.js";
-import { loadConfig, tryGetProject, SESSIONS_DIR } from "../config.js";
+import { loadConfig, tryGetProject, SESSIONS_DIR, type ProjectConfig } from "../config.js";
 import { buildRulesContext, buildWorktreeRules } from "../rules.js";
 import { readDashState, writeDashState, STATE_FILE } from "./state.js";
 import { restoreFromHidden } from "./layout.js";
@@ -19,7 +19,7 @@ import { readRegistry } from "./registry.js";
 import { log, truncateLog } from "./log.js";
 import { validateAndHeal } from "./validate.js";
 import { startProjectPoller, signalFifoPath } from "./poller.js";
-import { installPollTriggerHook, worktreeExists as wtExists } from "./git.js";
+import { installPollTriggerHook, worktreeExists as wtExists, resolveBaseBranch } from "./git.js";
 
 const DASHBOARD_COLS = 250;
 const DASHBOARD_ROWS = 60;
@@ -137,6 +137,7 @@ export function ensureDashboard(): void {
     const projectConfig = tryGetProject(projectName);
     if (!projectConfig) continue;
 
+    const baseBranch = resolveBaseBranch(projectConfig.path, projectConfig);
     for (const entry of entries) {
       if (!entry.sessionId) continue;
       if (entry.worktreePath && wtExists(entry.worktreePath)) {
@@ -144,7 +145,7 @@ export function ensureDashboard(): void {
       }
       const workerCwd = entry.worktreePath ?? projectConfig.path;
       const resumeCmd = entry.worktreePath && entry.branchName
-        ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId)
+        ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch)
         : buildResumeCommand(projectName, projectConfig.path, entry.sessionId);
       const workerWindowName = `_${projectName}-worker-${entry.name}`;
 
@@ -243,8 +244,9 @@ export function buildWorktreeWorkerCommand(
   workerName: string,
   branchName: string,
   sessionId: string,
+  baseBranch?: string,
 ): string {
-  const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName);
+  const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName, baseBranch);
   const claudeCmd = `claude --dangerously-skip-permissions --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   return `${claudeCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }
@@ -255,8 +257,9 @@ export function buildWorktreeResumeCommand(
   workerName: string,
   branchName: string,
   sessionId: string,
+  baseBranch?: string,
 ): string {
-  const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName);
+  const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName, baseBranch);
   const claudeCmd = `claude --dangerously-skip-permissions --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   return `${claudeCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }
@@ -278,9 +281,10 @@ function writeWorktreeContextFile(
   projectName: string,
   projectPath: string,
   branchName: string,
+  baseBranch?: string,
 ): string {
   const base = buildRulesContext(projectName, projectPath);
-  const worktreeRules = buildWorktreeRules(branchName);
+  const worktreeRules = buildWorktreeRules(branchName, baseBranch);
   const context = `${base}\n\n${worktreeRules}`;
   const contextFile = path.join(SESSIONS_DIR, `dashboard-${projectName}-${branchName}.context`);
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });

@@ -59,6 +59,7 @@ Projects:
   add [path]                     Add a project (defaults to current directory)
   remove <name>                  Remove a project
   list, ls                       List all projects
+  config <project> [key] [value] View or set project config
 
 Development:
   test [project] [-- args]       Run project tests (npm test)

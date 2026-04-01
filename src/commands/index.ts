@@ -12,6 +12,7 @@ import { health } from "./health.js";
 import { test } from "./test.js";
 import { alerts } from "./alerts.js";
 import { logs } from "./logs.js";
+import { config } from "./config.js";
 
 type Command = (args: string[]) => Promise<void>;
 
@@ -20,6 +21,7 @@ export const commands: Record<string, Command> = {
   add,
   remove,
   list,
+  config,
   status,
   dashboard,
   keys,

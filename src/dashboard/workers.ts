@@ -16,7 +16,7 @@ import {
 } from "./registry.js";
 import { log } from "./log.js";
 import { buildWorktreeWorkerCommand, createShellWindow, resolveGardenRunner } from "./create.js";
-import { worktreePath, createWorktree, removeWorktree, deleteBranch, installPollTriggerHook, fastForwardMain, getBranchHeadSha } from "./git.js";
+import { worktreePath, createWorktree, removeWorktree, deleteBranch, installPollTriggerHook, fastForwardBase, getBranchHeadSha, resolveBaseBranch } from "./git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
 import { getWorkers } from "./registry.js";
 
@@ -35,8 +35,9 @@ export function newWorker(): void {
   const branchName = workerName;
   const wtPath = worktreePath(state.activeProject, workerName);
 
+  const baseBranch = resolveBaseBranch(project.path, project);
   try {
-    fastForwardMain(project.path);
+    fastForwardBase(project.path, baseBranch);
     createWorktree(project.path, wtPath, branchName);
     installPollTriggerHook(wtPath, resolveGardenRunner(), state.activeProject);
   } catch (err) {
@@ -46,7 +47,7 @@ export function newWorker(): void {
   }
 
   const workerCmd = buildWorktreeWorkerCommand(
-    project.name, project.path, workerName, branchName, sessionId,
+    project.name, project.path, workerName, branchName, sessionId, baseBranch,
   );
 
   const parkName = state.activeWindowName ?? `_${state.activeProject}-active`;
