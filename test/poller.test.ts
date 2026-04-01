@@ -243,6 +243,23 @@ describe("poll — reviewing state", () => {
     });
   });
 
+  it("resets to working when force-push fails after review", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing" }),
+    ]);
+    vi.mocked(spawnSync).mockReturnValue({
+      status: 0, stdout: "Looks good.\nCLEAN", stderr: "",
+    } as never);
+    vi.mocked(forcePushBranch).mockImplementation(() => { throw new Error("push failed"); });
+
+    poll();
+
+    expect(mergeToMain).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
+      prState: "working",
+    });
+  });
+
   it("transitions to failing when reviewer returns FAILED", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "reviewing" }),
