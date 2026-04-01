@@ -100,8 +100,8 @@ export function abortRebase(worktreePath: string): void {
   }
 }
 
-export function forcePushBranch(worktreePath: string): void {
-  git(worktreePath, "push", "--force-with-lease");
+export function forcePushBranch(worktreePath: string, branch: string): void {
+  git(worktreePath, "push", "--force-with-lease", "origin", branch);
 }
 
 export function mergeToMain(repoPath: string, branchName: string): void {

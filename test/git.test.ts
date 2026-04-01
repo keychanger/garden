@@ -252,11 +252,11 @@ describe("abortRebase", () => {
 });
 
 describe("forcePushBranch", () => {
-  it("calls git push --force-with-lease", () => {
-    forcePushBranch("/tmp/wt");
+  it("calls git push --force-with-lease with explicit remote and branch", () => {
+    forcePushBranch("/tmp/wt", "my-branch");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["push", "--force-with-lease"],
+      ["push", "--force-with-lease", "origin", "my-branch"],
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -265,7 +265,7 @@ describe("forcePushBranch", () => {
     mockExec.mockImplementation(() => {
       throw new Error("rejected");
     });
-    expect(() => forcePushBranch("/tmp/wt")).toThrow();
+    expect(() => forcePushBranch("/tmp/wt", "my-branch")).toThrow();
   });
 });
 

@@ -214,8 +214,9 @@ function handleReviewing(
     const wtPath = entry.worktreePath ?? projectPath;
 
     // Always force-push: reviewer rebases, so local state diverges from remote
+    const branchName = entry.branchName ?? entry.name;
     try {
-      forcePushBranch(wtPath);
+      forcePushBranch(wtPath, branchName);
     } catch (err) {
       log.error("poller", "force-push after review failed", {
         worker: entry.name,
