@@ -97,7 +97,10 @@ export function ensureDashboard(): void {
 
   // Clear scrollback created by resize events during split setup
   try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
-  tmux("send-keys", "-t", gardenShellId, "clear", "Enter");
+
+  // Initialize the garden console with custom prompt and command dispatch
+  const consoleInit = writeConsoleInitScript(gardenRunner);
+  tmux("send-keys", "-t", gardenShellId, `source ${shellEscape(consoleInit)} && clear`, "Enter");
 
   setupStatusBar(gardenRunner);
 
@@ -373,6 +376,20 @@ function writeWorktreeContextFile(
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
   fs.writeFileSync(contextFile, context);
   return contextFile;
+}
+
+function writeConsoleInitScript(gardenRunner: string): string {
+  const script = `# Garden console init — custom prompt with auto-dispatch
+PS1=$'\\033[1;32mgarden\\033[0m '
+
+command_not_found_handler() {
+  ${gardenRunner} "$@"
+}
+`;
+  const scriptFile = path.join(SESSIONS_DIR, "console-init.zsh");
+  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+  fs.writeFileSync(scriptFile, script, { mode: 0o644 });
+  return scriptFile;
 }
 
 export function resolveGardenRunner(): string {
