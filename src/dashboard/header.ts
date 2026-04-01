@@ -258,12 +258,17 @@ export function buildStatusCommand(gardenRunner: string): string {
   // signal-triggered iterations. The full status poll then refines the
   // display with live process detection.
   const sf = STATUS_RENDERED_FILE;
+  // Build the braille character class for sed replacement (all spinner frames)
+  const brailleClass = `[${SPINNER_FRAMES.join("")}]`;
+  // Shell array literal of spinner frames
+  const framesArr = SPINNER_FRAMES.map(f => `'${f}'`).join(" ");
   return [
     `printf '\\033[H\\033[2J\\033[3J'`,
     `sf='${sf}'`,
     `sig=0`,
     `trap 'printf "\\033[H\\033[2J\\033[3J"; cat "$sf" 2>/dev/null; echo; sig=1' USR1`,
     `prev=""`,
+    `spin_frames=(${framesArr})`,
     `while true; do`,
     `  if [ $sig -eq 0 ]; then`,
     `    ${gardenRunner} dashboard _header >/dev/null 2>&1;`,
@@ -274,7 +279,23 @@ export function buildStatusCommand(gardenRunner: string): string {
     `    printf '\\033[H\\033[2J\\033[3J%s\\n' "$cur";`,
     `    prev="$cur";`,
     `  fi;`,
-    `  sleep 5 & wait $! 2>/dev/null;`,
+    // When a worker is "working", animate the spinner at ~120ms.
+    // After ~5s of animation (42 frames), break for a full status refresh.
+    `  if printf '%s' "$cur" | grep -q 'working'; then`,
+    `    sc=0;`,
+    `    while [ $sc -lt 42 ]; do`,
+    `      sleep 0.12 & wait $! 2>/dev/null;`,
+    `      if [ $sig -eq 1 ]; then break; fi;`,
+    `      sc=$((sc + 1));`,
+    `      si=$((sc % ${SPINNER_FRAMES.length}));`,
+    // eval to index the shell array by variable
+    `      eval "sf_char=\\$\\{spin_frames[\\$si]\\}";`,
+    `      animated=$(printf '%s' "$cur" | sed "s/${brailleClass}/$sf_char/g");`,
+    `      printf '\\033[H\\033[2J\\033[3J%s\\n' "$animated";`,
+    `    done;`,
+    `  else`,
+    `    sleep 5 & wait $! 2>/dev/null;`,
+    `  fi;`,
     `done`,
   ].join("\n");
 }
