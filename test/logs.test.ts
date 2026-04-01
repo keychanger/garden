@@ -103,6 +103,18 @@ describe("matchesFilters", () => {
     expect(matchesFilters(entry, { src: "review", count: 40, follow: false })).toBe(false);
   });
 
+  it("matches worker in top-level worker field", () => {
+    const e: LogEntry = { ...entry, worker: "swift-oak", data: undefined };
+    expect(matchesFilters(e, { worker: "swift", count: 40, follow: false })).toBe(true);
+    expect(matchesFilters(e, { worker: "bold", count: 40, follow: false })).toBe(false);
+  });
+
+  it("prefers top-level worker over data.worker", () => {
+    const e: LogEntry = { ...entry, worker: "swift-oak", data: { worker: "bold-ash" } };
+    expect(matchesFilters(e, { worker: "swift", count: 40, follow: false })).toBe(true);
+    expect(matchesFilters(e, { worker: "bold", count: 40, follow: false })).toBe(false);
+  });
+
   it("filters by worker name in data.worker", () => {
     expect(matchesFilters(entry, { worker: "bold", count: 40, follow: false })).toBe(true);
     expect(matchesFilters(entry, { worker: "swift", count: 40, follow: false })).toBe(false);
