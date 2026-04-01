@@ -9,7 +9,7 @@ import {
   getClaudeChildPid, hasChildProcesses, listHiddenWorkerWindows,
 } from "../dashboard/tmux.js";
 
-type WorkerStatus = "starting" | "working" | "waiting" | "pushed" | "reviewing" | "merge-pending" | "failing" | "merged" | "exited";
+type WorkerStatus = "ready" | "working" | "waiting" | "pushed" | "reviewing" | "merge-pending" | "failing" | "merged" | "exited";
 
 interface WorkerInfo {
   name: string;
@@ -29,7 +29,7 @@ interface ProjectStatusInfo {
 
 const WORKING_FRAMES = ["\u{1F331}", "\u{1FAB4}", "\u{1F33F}"];  // seedling, potted plant, herb
 const STATUS_ICONS: Record<WorkerStatus, string> = {
-  starting:       "\u{1FAB4}",  // potted plant (new, not yet tasked)
+  ready:          "\u{1FAB4}",  // potted plant (new, not yet tasked)
   working:        WORKING_FRAMES[0],
   waiting:        "\u{1F33F}",  // herb (needs input)
   pushed:         "\u{1F4E6}",  // package (shipped, awaiting review)
@@ -115,8 +115,8 @@ function resolveWorkerStatus(paneStatus: PaneInfo["status"], regEntry: { prState
   if (pr === "reviewing") return "reviewing";
   if (pr === "pushed") return "pushed";
   if (pr === "failing") return "failing";
-  // Upgrade starting to waiting if we know this worker has a task
-  if (paneStatus === "starting" && activity) return "waiting";
+  // Upgrade ready to waiting if we know this worker has a task
+  if (paneStatus === "ready" && activity) return "waiting";
   return paneStatus;
 }
 
@@ -171,7 +171,7 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
 }
 
 interface PaneInfo {
-  status: "starting" | "working" | "waiting" | "exited";
+  status: "ready" | "working" | "waiting" | "exited";
   activity: string | null;
 }
 
@@ -180,12 +180,12 @@ function detectPaneProcessStatus(paneId: string): PaneInfo {
   if (!pid) return { status: "exited", activity: null };
 
   const claudePid = getClaudeChildPid(pid);
-  if (!claudePid) return { status: "starting", activity: null };
+  if (!claudePid) return { status: "ready", activity: null };
 
   const activity = getPaneVar(paneId, "garden_task") ?? getPaneTitle(paneId) ?? null;
   if (!hasChildProcesses(claudePid)) {
-    // Claude is idle — starting if no task yet, waiting if it has one
-    return { status: activity ? "waiting" : "starting", activity };
+    // Claude is idle — ready if no task yet, waiting if it has one
+    return { status: activity ? "waiting" : "ready", activity };
   }
   return { status: "working", activity };
 }

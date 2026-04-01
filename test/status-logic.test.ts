@@ -154,7 +154,7 @@ describe("worker status detection", () => {
     expect(lines.some(l => l.includes("exited"))).toBe(true);
   });
 
-  it("shows starting when claude is running but no children and no task", async () => {
+  it("shows ready when claude is running but no children and no task", async () => {
     vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
     vi.mocked(getPanePid).mockReturnValue("123");
     vi.mocked(getClaudeChildPid).mockReturnValue("456");
@@ -172,7 +172,7 @@ describe("worker status detection", () => {
       console.log = origLog;
     }
 
-    expect(lines.some(l => l.includes("starting"))).toBe(true);
+    expect(lines.some(l => l.includes("ready"))).toBe(true);
   });
 
   it("shows waiting when claude is running but no children and has task", async () => {
@@ -244,7 +244,7 @@ describe("registry task fallback", () => {
     expect(lines.some(l => l.includes("fixing auth"))).toBe(true);
   });
 
-  it("shows starting when registry task is empty string", async () => {
+  it("shows ready when registry task is empty string", async () => {
     vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
     vi.mocked(getPanePid).mockReturnValue("123");
     vi.mocked(getClaudeChildPid).mockReturnValue("456");
@@ -264,7 +264,7 @@ describe("registry task fallback", () => {
       console.log = origLog;
     }
 
-    expect(lines.some(l => l.includes("starting"))).toBe(true);
+    expect(lines.some(l => l.includes("ready"))).toBe(true);
   });
 });
 

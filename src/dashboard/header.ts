@@ -86,9 +86,9 @@ export function printHeader(): void {
       }
 
       if (claudeRunning) {
-        paneStatus = title ? "working" : "starting";
+        paneStatus = title ? "working" : "ready";
       } else {
-        paneStatus = title ? "exited" : "starting";
+        paneStatus = title ? "exited" : "ready";
         if (!title) setPaneVar(state.activePaneId, "garden_task", "");
       }
     }
@@ -157,7 +157,7 @@ export function updateHeaderVar(): void {
 }
 
 const HEADER_STATUS_ICONS: Record<string, string> = {
-  starting:         "\u{1FAB4}",  // potted plant
+  ready:            "\u{1FAB4}",  // potted plant
   working:          "\u{1F331}",  // seedling
   waiting:          "\u{1F33F}",  // herb
   pushed:           "\u{1F4E6}",  // package
