@@ -176,6 +176,7 @@ The dashboard surfaces important events as alerts — persistent messages that r
 
 The status pane shows each worker's lifecycle state using status icons:
 
+- ⏳ **loading** — worker pane started, bootstrap script running, Claude not yet launched
 - 🌱 **ready** — Claude launched but not yet tasked (no activity detected)
 - ⠋ **working** — process alive, has child processes (braille spinner animation)
 - ◆ **idle** — process alive, no child processes (probably needs input)

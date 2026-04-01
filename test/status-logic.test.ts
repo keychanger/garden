@@ -154,6 +154,26 @@ describe("worker status detection", () => {
     expect(lines.some(l => l.includes("exited"))).toBe(true);
   });
 
+  it("shows loading when shell has children but no claude yet", async () => {
+    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
+    vi.mocked(getPanePid).mockReturnValue("123");
+    vi.mocked(getClaudeChildPid).mockReturnValue(null);
+    vi.mocked(hasChildProcesses).mockReturnValue(true);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+    vi.mocked(getWorkers).mockReturnValue([]);
+
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (msg: string) => lines.push(msg);
+    try {
+      await status([]);
+    } finally {
+      console.log = origLog;
+    }
+
+    expect(lines.some(l => l.includes("loading"))).toBe(true);
+  });
+
   it("shows ready when claude is running but no children and no task", async () => {
     vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
     vi.mocked(getPanePid).mockReturnValue("123");
