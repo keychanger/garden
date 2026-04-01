@@ -31,8 +31,8 @@ Rules are plain markdown. Edit them directly.
 │  (auto-sized)       │  garden · 1/2 worker (idle) │
 │                     ├─────────────────────────────┤
 │  garden ◄           │                             │
-│    🌱 worker-1 working│  Active Pane               │
-│    🌿 worker-2 waiting│  (worker or shell)         │
+│  ● 🌱 worker-1 working│  Active Pane               │
+│  ○ 🌿 worker-2 waiting│  (worker or shell)         │
 │  api                │                             │
 │    (no workers)     │                             │
 ├─────────────────────┤                             │
@@ -45,7 +45,7 @@ Rules are plain markdown. Edit them directly.
 
 ### Panes
 
-- **Project Status** (upper-left) — Live-updating display of all projects and their workers. Shows which project is active (`◄`), each worker's lifecycle state via plant-themed icons, and aligned columns for name/status/activity. Auto-sizes to the number of projects.
+- **Project Status** (upper-left) — Live-updating display of all projects and their workers. Shows which project is active (`◄`), each worker's lifecycle state via plant-themed icons, a focus indicator (filled/empty circle) showing which worker is active, and aligned columns for name/status/activity. Auto-sizes to the number of projects.
 - **Garden Shell** (lower-left) — A shell cd'd to the garden project. Run garden commands: register projects, check status.
 - **Header** (top-right, 1-2 lines) — Shows current project, active pane type, worker count, and hotkey hints. Auto-refreshes.
 - **Active Pane** (right) — The currently visible pane for the active project. Either a worker (Claude session) or the project shell. Only one is visible at a time; others are parked in hidden tmux windows.
@@ -184,7 +184,7 @@ The status pane shows each worker's lifecycle state using plant-themed icons:
 - 🍂 **failing** — checks or review failed (with failure count if repeated)
 - 🌳 **merged** — code merged to main (with merge count if multiple merges)
 
-Process status is detected via tmux's `pane_pid` and child process checks. Lifecycle states (reviewing, failing, merged) come from the worker registry. Workers are displayed in aligned columns: icon, name, status, and activity.
+Process status is detected via tmux's `pane_pid` and child process checks. Lifecycle states (reviewing, failing, merged) come from the worker registry. Workers are displayed in aligned columns: focus indicator (filled/empty circle), lifecycle icon, name, status, and activity.
 
 ## Commands
 

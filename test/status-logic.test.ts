@@ -341,6 +341,40 @@ describe("registry lifecycle states", () => {
   });
 });
 
+describe("focus indicator", () => {
+  it("shows filled circle for active worker and empty for inactive", async () => {
+    vi.mocked(getPaneLabel).mockImplementation((id: string) => {
+      if (id === "%2") return "bold-ash";
+      if (id === "%10") return "calm-bay";
+      return null;
+    });
+    vi.mocked(getPanePid).mockReturnValue("123");
+    vi.mocked(getClaudeChildPid).mockReturnValue("456");
+    vi.mocked(hasChildProcesses).mockReturnValue(false);
+    vi.mocked(getPaneTitle).mockReturnValue(null);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_garden-worker-calm-bay"]);
+    vi.mocked(getFirstPaneId).mockImplementation((target: string) => {
+      if (target.includes("calm-bay")) return "%10";
+      return null;
+    });
+    vi.mocked(getWorkers).mockReturnValue([]);
+
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (msg: string) => lines.push(msg);
+    try {
+      await status([]);
+    } finally {
+      console.log = origLog;
+    }
+
+    const activeLine = lines.find(l => l.includes("bold-ash"))!;
+    const inactiveLine = lines.find(l => l.includes("calm-bay"))!;
+    expect(activeLine).toMatch(/●/);
+    expect(inactiveLine).toMatch(/○/);
+  });
+});
+
 describe("no dashboard", () => {
   it("shows no workers when dashboard does not exist", async () => {
     vi.mocked(dashboardExists).mockReturnValue(false);
