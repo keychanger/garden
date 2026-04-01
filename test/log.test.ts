@@ -30,6 +30,23 @@ describe("log", () => {
     expect(entry.data).toEqual({ key: "value" });
   });
 
+  it("includes worker as top-level field when provided", async () => {
+    const { log } = await importLog();
+    log.info("test", "worker log", { worker: "bold-ash", data: { key: "val" } });
+    const logFile = path.join(env.sessionsDir, "dashboard.log");
+    const entry = JSON.parse(fs.readFileSync(logFile, "utf-8").trim());
+    expect(entry.worker).toBe("bold-ash");
+    expect(entry.data).toEqual({ key: "val" });
+  });
+
+  it("omits worker field when not provided", async () => {
+    const { log } = await importLog();
+    log.info("test", "no worker", { data: { x: 1 } });
+    const logFile = path.join(env.sessionsDir, "dashboard.log");
+    const entry = JSON.parse(fs.readFileSync(logFile, "utf-8").trim());
+    expect(entry.worker).toBeUndefined();
+  });
+
   it("respects log level filtering", async () => {
     process.env.GARDEN_LOG_LEVEL = "warn";
     try {
