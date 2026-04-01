@@ -86,11 +86,12 @@ export async function status(_args: string[]): Promise<void> {
       console.log("    (no workers)");
     } else {
       for (const worker of project.workers) {
+        const focus = worker.active ? "\u25CF" : "\u25CB";
         const icon = iconFor(worker.status);
         const name = worker.name.padEnd(nameWidth);
         const status = formatStatus(worker).padEnd(statusWidth);
         const activity = worker.activity ? `  ${worker.activity}` : "";
-        console.log(`    ${icon} ${name}  ${status}${activity}`);
+        console.log(`    ${focus} ${icon} ${name}  ${status}${activity}`);
       }
     }
   }
