@@ -31,8 +31,8 @@ Rules are plain markdown. Edit them directly.
 │  (auto-sized)       │  garden · 1/2 worker (idle) │
 │                     ├─────────────────────────────┤
 │  garden ◄           │                             │
-│    ● worker-1 working│  Active Pane               │
-│    ○ worker-2 waiting│  (worker or shell)         │
+│    🌱 worker-1 working│  Active Pane               │
+│    🌿 worker-2 waiting│  (worker or shell)         │
 │  api                │                             │
 │    (no workers)     │                             │
 ├─────────────────────┤                             │
@@ -45,7 +45,7 @@ Rules are plain markdown. Edit them directly.
 
 ### Panes
 
-- **Project Status** (upper-left) — Live-updating display of all projects and their workers. Shows which project is active (`◄`), which worker is focused (`●` vs `○`), and each worker's status. Auto-sizes to the number of projects.
+- **Project Status** (upper-left) — Live-updating display of all projects and their workers. Shows which project is active (`◄`), each worker's lifecycle state via plant-themed icons, and aligned columns for name/status/activity. Auto-sizes to the number of projects.
 - **Garden Shell** (lower-left) — A shell cd'd to the garden project. Run garden commands: register projects, check status.
 - **Header** (top-right, 1-2 lines) — Shows current project, active pane type, worker count, and hotkey hints. Auto-refreshes.
 - **Active Pane** (right) — The currently visible pane for the active project. Either a worker (Claude session) or the project shell. Only one is visible at a time; others are parked in hidden tmux windows.
@@ -175,13 +175,16 @@ The dashboard surfaces important events as alerts — persistent messages that r
 
 ## Worker Status Detection
 
-The status pane shows each worker's state:
+The status pane shows each worker's lifecycle state using plant-themed icons:
 
-- **working** — process alive, recent output activity (within last few seconds)
-- **waiting** — process alive, no recent activity (showing prompt, wants input)
-- **exited** — process has terminated
+- 🌱 **working** — process alive, has child processes (actively running tools)
+- 🌿 **waiting** — process alive, no child processes (showing prompt, wants input)
+- 🥀 **exited** — process has terminated
+- 🌸 **reviewing** — poller is reviewing the worker's commits
+- 🍂 **failing** — checks or review failed (with failure count if repeated)
+- 🌳 **merged** — code merged to main (with merge count if multiple merges)
 
-Detection uses tmux's `pane_pid` to check process liveness and `pane_activity` timestamp to distinguish working from waiting.
+Process status is detected via tmux's `pane_pid` and child process checks. Lifecycle states (reviewing, failing, merged) come from the worker registry. Workers are displayed in aligned columns: icon, name, status, and activity.
 
 ## Commands
 

@@ -99,7 +99,7 @@ export async function status(_args: string[]): Promise<void> {
 function formatStatus(worker: WorkerInfo): string {
   const base = worker.status;
   if (base === "merged" && worker.mergeCount > 1) return `merged (x${worker.mergeCount})`;
-  if (base === "failing" && worker.failCount > 1) return `failing (${worker.failCount}x)`;
+  if (base === "failing" && worker.failCount > 1) return `failing (x${worker.failCount})`;
   return base;
 }
 

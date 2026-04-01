@@ -245,6 +245,102 @@ describe("registry task fallback", () => {
   });
 });
 
+describe("registry lifecycle states", () => {
+  it("shows reviewing status from registry", async () => {
+    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
+    vi.mocked(getPanePid).mockReturnValue("123");
+    vi.mocked(getClaudeChildPid).mockReturnValue("456");
+    vi.mocked(hasChildProcesses).mockReturnValue(false);
+    vi.mocked(getPaneTitle).mockReturnValue(null);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", prState: "reviewing" },
+    ]);
+
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (msg: string) => lines.push(msg);
+    try {
+      await status([]);
+    } finally {
+      console.log = origLog;
+    }
+
+    expect(lines.some(l => l.includes("reviewing"))).toBe(true);
+  });
+
+  it("shows failing status with count from registry", async () => {
+    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
+    vi.mocked(getPanePid).mockReturnValue("123");
+    vi.mocked(getClaudeChildPid).mockReturnValue("456");
+    vi.mocked(hasChildProcesses).mockReturnValue(false);
+    vi.mocked(getPaneTitle).mockReturnValue(null);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", prState: "failing", failCount: 3 },
+    ]);
+
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (msg: string) => lines.push(msg);
+    try {
+      await status([]);
+    } finally {
+      console.log = origLog;
+    }
+
+    expect(lines.some(l => l.includes("failing (x3)"))).toBe(true);
+  });
+
+  it("shows merged status with count from registry", async () => {
+    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
+    vi.mocked(getPanePid).mockReturnValue("123");
+    vi.mocked(getClaudeChildPid).mockReturnValue("456");
+    vi.mocked(hasChildProcesses).mockReturnValue(false);
+    vi.mocked(getPaneTitle).mockReturnValue(null);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", prState: "merged", mergeCount: 5 },
+    ]);
+
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (msg: string) => lines.push(msg);
+    try {
+      await status([]);
+    } finally {
+      console.log = origLog;
+    }
+
+    expect(lines.some(l => l.includes("merged (x5)"))).toBe(true);
+  });
+
+  it("shows plain status when count is 1", async () => {
+    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
+    vi.mocked(getPanePid).mockReturnValue("123");
+    vi.mocked(getClaudeChildPid).mockReturnValue("456");
+    vi.mocked(hasChildProcesses).mockReturnValue(false);
+    vi.mocked(getPaneTitle).mockReturnValue(null);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", prState: "merged", mergeCount: 1 },
+    ]);
+
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (msg: string) => lines.push(msg);
+    try {
+      await status([]);
+    } finally {
+      console.log = origLog;
+    }
+
+    const workerLine = lines.find(l => l.includes("bold-ash"))!;
+    expect(workerLine).toContain("merged");
+    expect(workerLine).not.toContain("(x");
+  });
+});
+
 describe("no dashboard", () => {
   it("shows no workers when dashboard does not exist", async () => {
     vi.mocked(dashboardExists).mockReturnValue(false);
