@@ -46,7 +46,7 @@ Rules are plain markdown. Edit them directly.
 ### Panes
 
 - **Project Status** (upper-left) — Live-updating display of all projects and their workers. Shows which project is active (`◄`), each worker's lifecycle state via plant-themed icons, a focus indicator (filled/empty circle) showing which worker is active, and aligned columns for name/status/activity. Auto-sizes to the number of projects.
-- **Garden Shell** (lower-left) — A shell cd'd to the garden project. Run garden commands: register projects, check status.
+- **Garden Shell** (lower-left) — A shell cd'd to the garden project with a custom `garden` prompt. Unrecognized commands are auto-dispatched to the garden CLI, so you can type `status` instead of `garden status`.
 - **Header** (top-right, 1-2 lines) — Shows current project, active pane type, worker count, and hotkey hints. Auto-refreshes.
 - **Active Pane** (right) — The currently visible pane for the active project. Either a worker (Claude session) or the project shell. Only one is visible at a time; others are parked in hidden tmux windows.
 
@@ -233,6 +233,7 @@ All read commands detect whether stdout is a TTY:
     dashboard-<project>-<branch>.context  # Worktree worker context
     dashboard.log           # Structured JSON log
     <project>-poll-signal   # FIFO for waking project pollers
+    console-init.zsh              # Garden console init (custom prompt + auto-dispatch)
     bootstrap-<project>-<branch>.sh       # Transient worktree bootstrap script
     <project>-<worker>-review-prompt.txt  # Transient review prompt
     <project>-<worker>-review-result.txt  # Transient review output
