@@ -87,7 +87,7 @@ Each project's workers and shell live in hidden tmux windows when not active. Wh
 This preserves both the layout tree (the right pane slot is never destroyed) and all worker state across switches.
 
 ### Hidden Window Naming
-Hidden windows follow the convention: `_<project>-worker-<N>` and `_<project>-shell`. When switching projects, the visible pane is parked as `_<project>-active`. The underscore prefix marks them as managed by garden — not user-facing.
+Hidden windows follow the convention: `_<project>-worker-<N>`, `_<project>-shell`, `_<project>-poller`, and `_<project>-review-<worker>`. When switching projects, the visible pane is parked as `_<project>-active`. The underscore prefix marks them as managed by garden — not user-facing.
 
 ### Worker Lifecycle
 1. `⌥n` creates a git worktree at `~/.garden/worktrees/<project>/<worker-name>/` and a branch named after the worker
@@ -233,6 +233,9 @@ All read commands detect whether stdout is a TTY:
     dashboard-<project>.context  # System prompt for project's Claude sessions
     dashboard-<project>-<branch>.context  # Worktree worker context
     dashboard.log           # Structured JSON log
+    <project>-poll-signal   # FIFO for waking project pollers
+    <project>-<worker>-review-prompt.txt  # Transient review prompt
+    <project>-<worker>-review-result.txt  # Transient review output
   worktrees/
     <project>/
       <worker-name>/      # Git worktree for each worker
