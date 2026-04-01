@@ -9,7 +9,7 @@ import {
   getClaudeChildPid, hasChildProcesses, listHiddenWorkerWindows,
 } from "../dashboard/tmux.js";
 
-type WorkerStatus = "ready" | "working" | "waiting" | "pushed" | "reviewing" | "merge-pending" | "failing" | "merged" | "exited";
+type WorkerStatus = "ready" | "working" | "idle" | "pushed" | "reviewing" | "merge-pending" | "failing" | "merged" | "exited";
 
 interface WorkerInfo {
   name: string;
@@ -31,7 +31,7 @@ const SPINNER_FRAMES = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u283
 const STATUS_ICONS: Record<WorkerStatus, string> = {
   ready:          "\u{1F331}",  // seedling
   working:        SPINNER_FRAMES[0],
-  waiting:        "\u25C6",     // filled diamond
+  idle:           "\u25C6",     // filled diamond
   pushed:         "\u2191",     // up arrow
   reviewing:      "\u25CE",     // bullseye
   "merge-pending": "\u25F7",    // circle with right half - queued
@@ -116,8 +116,8 @@ function resolveWorkerStatus(paneStatus: PaneInfo["status"], regEntry: { prState
   if (pr === "reviewing") return "reviewing";
   if (pr === "pushed") return "pushed";
   if (pr === "failing") return "failing";
-  // Upgrade ready to waiting if we know this worker has a task
-  if (paneStatus === "ready" && activity) return "waiting";
+  // Upgrade ready to idle if we know this worker has a task
+  if (paneStatus === "ready" && activity) return "idle";
   return paneStatus;
 }
 
@@ -172,7 +172,7 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
 }
 
 interface PaneInfo {
-  status: "ready" | "working" | "waiting" | "exited";
+  status: "ready" | "working" | "idle" | "exited";
   activity: string | null;
 }
 
@@ -185,8 +185,8 @@ function detectPaneProcessStatus(paneId: string): PaneInfo {
 
   const activity = getPaneVar(paneId, "garden_task") ?? getPaneTitle(paneId) ?? null;
   if (!hasChildProcesses(claudePid)) {
-    // Claude is idle — ready if no task yet, waiting if it has one
-    return { status: activity ? "waiting" : "ready", activity };
+    // No child processes: ready if no task yet, idle if it has one
+    return { status: activity ? "idle" : "ready", activity };
   }
   return { status: "working", activity };
 }

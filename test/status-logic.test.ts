@@ -175,7 +175,7 @@ describe("worker status detection", () => {
     expect(lines.some(l => l.includes("ready"))).toBe(true);
   });
 
-  it("shows waiting when claude is running but no children and has task", async () => {
+  it("shows idle when claude is running but no children and has task", async () => {
     vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
     vi.mocked(getPanePid).mockReturnValue("123");
     vi.mocked(getClaudeChildPid).mockReturnValue("456");
@@ -195,7 +195,7 @@ describe("worker status detection", () => {
       console.log = origLog;
     }
 
-    expect(lines.some(l => l.includes("waiting"))).toBe(true);
+    expect(lines.some(l => l.includes("idle"))).toBe(true);
   });
 
   it("shows working when claude has child processes", async () => {

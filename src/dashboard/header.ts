@@ -171,7 +171,7 @@ const SPINNER_FRAMES = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u283
 const HEADER_STATUS_ICONS: Record<string, string> = {
   ready:            "\u{1F331}",  // seedling
   working:          SPINNER_FRAMES[0],
-  waiting:          "\u25C6",     // filled diamond
+  idle:             "\u25C6",     // filled diamond
   pushed:           "\u2191",     // up arrow
   reviewing:        "\u25CE",     // bullseye
   "merge-pending":  "\u25F7",    // circle with right half - queued
@@ -244,7 +244,7 @@ export function buildStatusCommand(gardenRunner: string): string {
   // The status pane is primarily signal-driven: refreshStatusPane() sends
   // SIGUSR1 after every mutation (new worker, project switch, kill, etc.)
   // which interrupts the `sleep & wait` immediately. A 5s background poll
-  // catches process status changes (working/waiting/exited) that have no
+  // catches process status changes (working/idle/exited) that have no
   // event source.
   //
   // On signal, the trap immediately displays a pre-rendered status snapshot
