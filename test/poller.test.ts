@@ -216,7 +216,7 @@ describe("poll — reviewing state", () => {
 
     poll();
 
-    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
     expect(mergeToMain).toHaveBeenCalledWith("/repo/myproject", "bold-ash");
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "merged",
@@ -235,7 +235,7 @@ describe("poll — reviewing state", () => {
 
     poll();
 
-    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
     expect(mergeToMain).toHaveBeenCalledWith("/repo/myproject", "bold-ash");
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "merged",
@@ -392,7 +392,7 @@ describe("poll — reviewing state", () => {
 
     poll(); // reviewing -> merged
 
-    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
     expect(mergeToMain).toHaveBeenCalledWith("/repo/myproject", "bold-ash");
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "merged",
