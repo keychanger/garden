@@ -46,7 +46,7 @@ Rules are plain markdown. Edit them directly.
 ### Panes
 
 - **Project Status** (upper-left) — Live-updating display of all projects and their workers. Shows which project is active (`◄`), each worker's lifecycle state via plant-themed icons, a focus indicator (filled/empty circle) showing which worker is active, and aligned columns for name/status/activity. Auto-sizes to the number of projects.
-- **Garden Shell** (lower-left) — A shell cd'd to the garden project with a custom `garden` prompt. Unrecognized commands are auto-dispatched to the garden CLI, so you can type `status` instead of `garden status`.
+- **Garden Pane** (lower-left) — Cycles between three views: the garden console (bold green `garden>` prompt with auto-dispatch for garden commands), a regular shell, and a logs view. `⌥[`/`⌥]` cycle when focused; `⌥g` jumps to console, `⌥l` jumps to logs.
 - **Header** (top-right, 1-2 lines) — Shows current project, active pane type, worker count, and hotkey hints. Auto-refreshes.
 - **Active Pane** (right) — The currently visible pane for the active project. Either a worker (Claude session) or the project shell. Only one is visible at a time; others are parked in hidden tmux windows.
 
@@ -87,7 +87,7 @@ Each project's workers and shell live in hidden tmux windows when not active. Wh
 This preserves both the layout tree (the right pane slot is never destroyed) and all worker state across switches.
 
 ### Hidden Window Naming
-Hidden windows follow the convention: `_<project>-worker-<N>`, `_<project>-shell`, `_<project>-poller`, and `_<project>-review-<worker>`. When switching projects, the visible pane is parked as `_<project>-active`. The underscore prefix marks them as managed by garden — not user-facing.
+Hidden windows follow the convention: `_<project>-worker-<N>`, `_<project>-shell`, `_<project>-poller`, `_<project>-review-<worker>`, `_garden-console`, `_garden-shell`, and `_garden-logs`. When switching projects, the visible pane is parked as `_<project>-active`. The underscore prefix marks them as managed by garden — not user-facing.
 
 ### Worker Lifecycle
 1. `⌥n` creates a git worktree at `~/.garden/worktrees/<project>/<worker-name>/` and a branch named after the worker

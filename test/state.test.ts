@@ -51,6 +51,40 @@ describe("writeDashState / readDashState", () => {
     expect(loaded).toEqual(original);
   });
 
+  it("migrates old shell-with-null-window to console", async () => {
+    const { readDashState, STATE_FILE } = await importState();
+    const oldState = {
+      activeProject: "myproject",
+      statusPaneId: "%1",
+      gardenShellPaneId: "%2",
+      gardenPaneType: "shell",
+      gardenWindowName: null,
+      activePaneId: "%3",
+      activePaneType: "worker",
+      activeWindowName: "_myproject-worker-bold-ash",
+    };
+    fs.writeFileSync(STATE_FILE, JSON.stringify(oldState));
+    const loaded = readDashState();
+    expect(loaded.gardenPaneType).toBe("console");
+  });
+
+  it("preserves shell type when window name is set", async () => {
+    const { readDashState, STATE_FILE } = await importState();
+    const state = {
+      activeProject: "myproject",
+      statusPaneId: "%1",
+      gardenShellPaneId: "%2",
+      gardenPaneType: "shell",
+      gardenWindowName: "_garden-shell",
+      activePaneId: "%3",
+      activePaneType: "worker",
+      activeWindowName: "_myproject-worker-bold-ash",
+    };
+    fs.writeFileSync(STATE_FILE, JSON.stringify(state));
+    const loaded = readDashState();
+    expect(loaded.gardenPaneType).toBe("shell");
+  });
+
   it("creates directory if missing", async () => {
     const { writeDashState, STATE_FILE } = await importState();
     const dir = path.dirname(STATE_FILE);
