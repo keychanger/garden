@@ -208,6 +208,7 @@ function handleReviewing(
   log.info("poller", "review complete", {
     worker: entry.name,
     verdict: review.verdict,
+    ...(review.verdict === "fixed" && { summary: review.body }),
   });
 
   if (review.verdict === "clean" || review.verdict === "fixed") {
