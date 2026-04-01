@@ -463,9 +463,8 @@ function launchReview(
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", revWindow,
     "-c", wtPath, "bash", "-c", cmd);
 
-  const newState = isReReview ? "reviewing" : "reviewing";
   updateWorkerFields(projectName, entry.name, {
-    prState: newState,
+    prState: "reviewing",
     reviewWindowName: revWindow,
     mergePendingAt: isReReview ? undefined : entry.mergePendingAt,
   });
