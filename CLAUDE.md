@@ -34,6 +34,7 @@ npm run dev -- help    # run via tsx during development
   - `log.ts` — structured JSON logger to `~/.garden/sessions/dashboard.log`
   - `names.ts` — worker name generation (adjective-noun pairs)
 - `src/dashboard-claude.ts` — internal command: launches claude with rules context
+- `src/commands/config.ts` — `garden config` command: view/set project config
 - `src/config.ts` — reads/writes `~/.garden/config.yml`, project resolution
 - `src/session.ts` — tmux session management (create, kill, attach, list)
 - `src/rules.ts` — assembles global + project rules for Claude sessions
@@ -46,9 +47,23 @@ Projects are added by directory path. The project name is always the directory b
 ```bash
 garden add [path]      # defaults to cwd
 garden remove <name>   # name = directory basename
+garden config <project> [key] [value]  # view or set project config
 ```
 
 `register`/`unregister` are kept as aliases for backward compatibility.
+
+### Project configuration
+
+Per-project settings can be viewed and set via `garden config`:
+
+```bash
+garden config garden                    # show all config for project
+garden config garden baseBranch         # get a single key
+garden config garden baseBranch develop # set a key
+garden config garden baseBranch unset   # clear a key
+```
+
+Available keys: `baseBranch`, `checks`, `postMerge`. The `baseBranch` key controls which branch workers branch from and merge into. Resolution order: explicit config > auto-detected from `git symbolic-ref refs/remotes/origin/HEAD` > `"main"` as last resort.
 
 ## Adding a new command
 

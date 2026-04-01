@@ -110,44 +110,38 @@ working -> pushed -> reviewing -> merge-pending -> merged
 
 1. **working**: Worker is active. Poller compares branch HEAD SHA against last-seen SHA. When new commits are detected, transitions to pushed immediately (even if Claude is still working). Multiple workers per project can transition independently.
 2. **pushed**: Commits detected, awaiting review launch. If Claude is actively working and pushes new commits, reverts to working. Once Claude is idle, launches the review.
-3. **reviewing**: Poller launches a Claude reviewer (`claude -p --dangerously-skip-permissions`) asynchronously in a hidden tmux window (`_<project>-review-<worker>`). The reviewer rebases onto main, resolves conflicts, runs optional checks, fixes check failures, and reviews code against project rules. The poller polls for review completion by checking if the review window still exists. On completion: if clean or fixed, force-pushes and transitions to merge-pending. If the reviewer cannot fix the issues, transitions to failing. If the review process fails (Claude unavailable, timeout, unparseable output), transitions to failing. Unreviewed code is never auto-merged.
-4. **merge-pending**: Review passed, waiting to merge. A serial merge queue processes one merge at a time per project (ordered by timestamp). The merge sequence: rebase onto current main, force-push, then ff-merge. If the rebase has conflicts (because main advanced while waiting), the poller launches a scoped re-review — a new reviewer session focused on rebase conflict resolution, provided with the previous review's output and the worker's task description for context. If the rebase is clean, the merge proceeds.
+3. **reviewing**: Poller launches a Claude reviewer (`claude -p --dangerously-skip-permissions`) asynchronously in a hidden tmux window (`_<project>-review-<worker>`). The reviewer rebases onto the base branch, resolves conflicts, runs optional checks, fixes check failures, and reviews code against project rules. The poller polls for review completion by checking if the review window still exists. On completion: if clean or fixed, force-pushes and transitions to merge-pending. If the reviewer cannot fix the issues, transitions to failing. If the review process fails (Claude unavailable, timeout, unparseable output), transitions to failing. Unreviewed code is never auto-merged.
+4. **merge-pending**: Review passed, waiting to merge. A serial merge queue processes one merge at a time per project (ordered by timestamp). The merge sequence: rebase onto current base branch, force-push, then ff-merge. If the rebase has conflicts (because the base branch advanced while waiting), the poller launches a scoped re-review — a new reviewer session focused on rebase conflict resolution, provided with the previous review's output and the worker's task description for context. If the rebase is clean, the merge proceeds.
 5. **failing**: Unfixable review issues or review process failure. Poller watches for new commits via SHA tracking. After 30s debounce with no new pushes, state transitions back to working for retry. Each failure increments a `failCount` on the worker entry; after 3 consecutive failures, an alert is surfaced. The count resets on successful merge.
-6. **merged**: Code merged to main. If the worker pushes new commits after merge, or Claude is still actively working (even before committing), the poller transitions back to working for a new review cycle.
+6. **merged**: Code merged to the base branch. If the worker pushes new commits after merge, or Claude is still actively working (even before committing), the poller transitions back to working for a new review cycle.
 
-### Checks Configuration
-Projects can optionally define a `checks` command in `~/.garden/config.yml`:
-
-```yaml
-projects:
-  garden:
-    path: /Users/joshua/code/keychange/garden
-    checks: npm run build && npm test
-```
-
-The reviewer runs this command in the worker's worktree after rebasing onto main, so checks validate the combined state of the branch plus latest main. If checks fail, the reviewer fixes the issues and re-runs. No checks configured means the reviewer only does the code review.
-
-Projects can also define a `postMerge` command that runs on the main checkout after fast-forwarding:
+### Project Configuration
+Projects can define settings in `~/.garden/config.yml`, either by editing the file directly or via `garden config <project> <key> <value>`:
 
 ```yaml
 projects:
   garden:
     path: /Users/joshua/code/keychange/garden
+    baseBranch: main
     checks: npx tsc --noEmit && npx vitest run
     postMerge: npm run build
 ```
 
-This is essential for projects like garden itself, where the poller runs the compiled CLI. Without a post-merge rebuild, the poller continues executing stale code even after merging fixes.
+**baseBranch**: The branch that workers branch from and merge into. Resolution order: explicit config > auto-detected from `git symbolic-ref refs/remotes/origin/HEAD` > `"main"` as last resort. Most repos work without setting this.
+
+**checks**: Command the reviewer runs in the worker's worktree after rebasing onto the base branch, so checks validate the combined state of the branch plus latest base. If checks fail, the reviewer fixes the issues and re-runs. No checks configured means the reviewer only does the code review.
+
+**postMerge**: Command that runs on the main checkout after merging. This is essential for projects like garden itself, where the poller runs the compiled CLI. Without a post-merge rebuild, the poller continues executing stale code even after merging fixes.
 
 ### Merge Handling
 After a review passes, workers enter the `merge-pending` state. The merge queue processes one worker at a time per project (ordered by `mergePendingAt` timestamp):
 
-1. Fetch latest main
-2. Rebase onto current main
+1. Fetch latest base branch
+2. Rebase onto current base branch
 3. If rebase conflicts: abort rebase, launch a scoped re-review with context from the previous review and the worker's task description. The re-reviewer handles the rebase and verifies correctness.
-4. If rebase is clean: force-push the rebased branch, merge to main via `git merge --ff-only` and push
+4. If rebase is clean: force-push the rebased branch, merge to base branch via `git merge --ff-only` and push
 5. Notify live sibling workers with overlapping files (see below)
-6. Run postMerge command (if configured) on the main checkout
+6. Run postMerge command (if configured) on the base branch checkout
 7. Mark the worker as merged in the registry
 
 The worker and its worktree are not automatically cleaned up on merge. Cleanup happens only when the user kills the worker with `opt-x` or runs `garden reset`. This allows inspecting merged work before disposal.
@@ -202,6 +196,7 @@ garden init                        # Initialize ~/.garden, check for tmux
 garden add [path]                  # Add a project (defaults to cwd, name = basename)
 garden remove <name>               # Remove a project
 garden list                        # List all projects
+garden config <project> [key] [val]  # View or set project config
 ```
 
 ### Dashboard
