@@ -279,6 +279,10 @@ function resolveQuickWorkerStatus(entry?: { prState?: string; task?: string }): 
   if (pr === "reviewing") return "reviewing";
   if (pr === "pushed") return "pushed";
   if (pr === "failing") return "failing";
-  if (entry?.task) return "working";
+  // prState "working" is the poller's default — it just means no lifecycle
+  // state, not that Claude is actively executing tools. Without pgrep we
+  // can't tell working from idle, so show idle (has task) or ready (no task)
+  // to avoid a false "working" flash on every navigation.
+  if (entry?.task) return "idle";
   return "ready";
 }

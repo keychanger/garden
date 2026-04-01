@@ -469,7 +469,7 @@ describe("renderQuickStatus", () => {
     expect(result).toMatch(/○/); // inactive indicator
   });
 
-  it("resolves status to working when task exists but no prState", () => {
+  it("resolves status to idle when task exists but no lifecycle prState", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "fixing auth" },
     ]);
@@ -485,7 +485,7 @@ describe("renderQuickStatus", () => {
     };
 
     const result = renderQuickStatus(state);
-    expect(result).toContain("working");
+    expect(result).toContain("idle");
   });
 
   it("resolves status to ready when no task and no prState", () => {
