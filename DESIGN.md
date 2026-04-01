@@ -182,7 +182,7 @@ The dashboard surfaces important events as alerts — persistent messages that r
 
 The status pane shows each worker's lifecycle state using plant-themed icons:
 
-- 🪴 **starting** — Claude launched but not yet tasked (no activity detected)
+- 🪴 **ready** — Claude launched but not yet tasked (no activity detected)
 - 🌱 **working** — process alive, has child processes (actively running tools)
 - 🌿 **waiting** — process alive, no child processes (showing prompt, wants input)
 - 📦 **pushed** — commits detected, awaiting review launch
