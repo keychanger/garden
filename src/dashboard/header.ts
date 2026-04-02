@@ -1,13 +1,13 @@
-// Dashboard header and status bar: renders project info and hotkey hints
-// in the tmux status line.
+// Dashboard header and status bar: renders project tabs (left) and
+// priority-based fleet status (right) in the tmux status line.
 import fs from "node:fs";
 import path from "node:path";
-import { SESSIONS_DIR } from "../config.js";
+import { SESSIONS_DIR, loadConfig, getFocusedProjectNames } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, paneExists, getPanePid, getPaneVar, getPaneTitle, hasClaudeChild, hasChildProcesses, listHiddenWorkerWindows, setPaneVar } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
-import { findWorkerByName, updateWorkerTask } from "./registry.js";
-import { alertCount } from "./alerts.js";
+import { readRegistry, findWorkerByName, updateWorkerTask, type WorkerEntry } from "./registry.js";
+import { readAlerts, type Alert } from "./alerts.js";
 import { renderQuickStatus } from "../commands/status.js";
 
 const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
@@ -18,19 +18,19 @@ interface RefreshOptions {
   windowNames?: string[];
 }
 
-export function setupStatusBar(gardenRunner: string): void {
+export function setupStatusBar(_gardenRunner: string): void {
   const target = DASHBOARD_SESSION;
   const mainWindow = `${DASHBOARD_SESSION}:main`;
   const opts: Array<[string[], string]> = [
     // Session options
     [["-t", target, "mouse", "on"], "mouse"],
+    [["-t", target, "status-left-length", "80"], "status-left-length"],
+    [["-t", target, "status-left", "#{@garden_left}"], "status-left"],
     [["-t", target, "status-right-length", "120"], "status-right-length"],
-    [["-t", target, "status-right", "#{@garden_header}"], "status-right"],
+    [["-t", target, "status-right", "#{@garden_right}"], "status-right"],
     [["-t", target, "status-interval", "2"], "status-interval"],
-    [["-t", target, "status-left", ""], "status-left"],
-    [["-t", target, "status-left-length", "0"], "status-left-length"],
     // Window options — target main window directly to override user globals
-    [["-t", mainWindow, "window-status-current-format", "garden"], "window-status-current-format"],
+    [["-t", mainWindow, "window-status-current-format", ""], "window-status-current-format"],
     [["-t", mainWindow, "window-status-format", ""], "window-status-format"],
     [["-t", mainWindow, "pane-border-status", "top"], "pane-border-status"],
     [["-t", mainWindow, "pane-border-format",
@@ -41,216 +41,310 @@ export function setupStatusBar(gardenRunner: string): void {
   }
 }
 
-/**
- * Full header update: queries process status, updates pane vars and registry,
- * then sets the @garden_header tmux variable. Called by the status pane's
- * background loop every few seconds for live process detection.
- */
-export function printHeader(): void {
-  const state = readDashState();
-
-  if (!state.activeProject) {
-    const header = "no project selected  [⌥1-⌥9 select]";
-    process.stdout.write(header);
-    setHeaderVar(header);
-    return;
-  }
-
-  const projectName = state.activeProject;
-
-  const hiddenWorkers = listHiddenWorkerWindows(projectName);
-  let totalWorkers = hiddenWorkers.length;
-  let currentWorkerIdx = 0;
-  const isOnWorker = state.activePaneType === "worker";
-  if (isOnWorker) {
-    totalWorkers++;
-    const currentName = state.activeWindowName ?? "";
-    const allWorkers = [...new Set([currentName, ...hiddenWorkers])].sort();
-    currentWorkerIdx = allWorkers.indexOf(currentName) + 1;
-  }
-
-  const workerNameMatch = (state.activeWindowName ?? "").match(/-worker-(.+)$/);
-  const workerLabel = workerNameMatch ? workerNameMatch[1] : null;
-
-  let paneStatus = "";
-  if (state.activePaneId && paneExists(state.activePaneId)) {
-    if (state.activePaneType === "shell") {
-      paneStatus = "shell";
-    } else {
-      const pid = getPanePid(state.activePaneId);
-      const claudeRunning = pid && hasClaudeChild(pid);
-
-      let title = getPaneVar(state.activePaneId, "garden_task");
-      if (!title && workerLabel && state.activeProject) {
-        const entry = findWorkerByName(state.activeProject, workerLabel);
-        if (entry?.task) {
-          title = entry.task;
-        }
-      }
-      if (claudeRunning) {
-        const liveTitle = getPaneTitle(state.activePaneId) ?? null;
-        if (liveTitle) {
-          title = liveTitle;
-        }
-      }
-      if (title) {
-        setPaneVar(state.activePaneId, "garden_task", title);
-        if (workerLabel && state.activeProject) {
-          updateWorkerTask(state.activeProject, workerLabel, title);
-        }
-      }
-
-      if (claudeRunning) {
-        paneStatus = title ? "working" : "ready";
-      } else if (title) {
-        paneStatus = "exited";
-      } else if (pid && hasChildProcesses(pid)) {
-        paneStatus = "loading";
-      } else {
-        paneStatus = "ready";
-        setPaneVar(state.activePaneId, "garden_task", "");
-      }
-
-    }
-  }
-
-  let prState = "";
-  let mergeCount = 0;
-  if (workerLabel && state.activeProject) {
-    const entry = findWorkerByName(state.activeProject, workerLabel);
-    if (entry?.prState && entry.prState !== "working") {
-      prState = entry.prState;
-    }
-    mergeCount = entry?.mergeCount ?? 0;
-  }
-
-  const alerts = alertCount();
-  const header = formatHeader(projectName, isOnWorker, workerLabel, paneStatus, currentWorkerIdx, totalWorkers, prState, mergeCount, alerts);
-  process.stdout.write(header);
-  setHeaderVar(header);
-}
-
-/**
- * Quick header update: builds header from state and tmux window list only
- * (no process detection, no pgrep). Called synchronously after mutations
- * for instant visual feedback. The background loop fills in live status.
- */
-export function updateHeaderVar(opts?: RefreshOptions): void {
-  const state = opts?.state ?? readDashState();
-
-  if (!state.activeProject) {
-    setHeaderVar("no project selected  [⌥1-⌥9 select]");
-    return;
-  }
-
-  const projectName = state.activeProject;
-
-  const hiddenWorkers = listHiddenWorkerWindows(projectName, opts?.windowNames);
-  let totalWorkers = hiddenWorkers.length;
-  let currentWorkerIdx = 0;
-  const isOnWorker = state.activePaneType === "worker";
-  if (isOnWorker) {
-    totalWorkers++;
-    const currentName = state.activeWindowName ?? "";
-    const allWorkers = [...new Set([currentName, ...hiddenWorkers])].sort();
-    currentWorkerIdx = allWorkers.indexOf(currentName) + 1;
-  }
-
-  const workerNameMatch = (state.activeWindowName ?? "").match(/-worker-(.+)$/);
-  const workerLabel = workerNameMatch ? workerNameMatch[1] : null;
-
-  let paneStatus = state.activePaneType === "shell" ? "shell" : "";
-  let prState = "";
-  let mergeCount = 0;
-  if (workerLabel && state.activeProject) {
-    const entry = findWorkerByName(state.activeProject, workerLabel);
-    if (entry?.prState && entry.prState !== "working") {
-      prState = entry.prState;
-    }
-    if (!paneStatus && entry?.claudeStatus) {
-      paneStatus = entry.claudeStatus;
-    }
-    mergeCount = entry?.mergeCount ?? 0;
-  }
-
-  const alerts = alertCount();
-  const header = formatHeader(projectName, isOnWorker, workerLabel, paneStatus, currentWorkerIdx, totalWorkers, prState, mergeCount, alerts);
-  setHeaderVar(header);
-}
+// ---------------------------------------------------------------------------
+// Spinner frames and status icons
+// ---------------------------------------------------------------------------
 
 const SPINNER_FRAMES = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u2834", "\u2826", "\u2827", "\u2807", "\u280F"];
-const HEADER_STATUS_ICONS: Record<string, string> = {
+const STATUS_ICONS: Record<string, string> = {
   loading:          "\u29D7",     // hourglass
   ready:            "\u25C7",     // open diamond
   working:          SPINNER_FRAMES[0],
   idle:             "\u25C6",     // filled diamond
   pushed:           "\u2191",     // up arrow
   reviewing:        "\u25CE",     // bullseye
-  "merge-pending":  "\u25F7",    // circle with right half - queued
+  "merge-pending":  "\u25D7",     // circle with right half - queued
   failing:          "\u2716",     // heavy multiplication x
   merged:           "\u2713",     // check mark
   exited:           "\u25CB",     // open circle
 };
 
-function headerIcon(paneStatus: string): string {
-  if (paneStatus === "working") {
-    const frame = Math.floor(Date.now() / 2000) % SPINNER_FRAMES.length;
-    return SPINNER_FRAMES[frame];
-  }
-  return HEADER_STATUS_ICONS[paneStatus] ?? "";
+export { SPINNER_FRAMES };
+
+function spinnerIcon(): string {
+  const frame = Math.floor(Date.now() / 2000) % SPINNER_FRAMES.length;
+  return SPINNER_FRAMES[frame];
 }
 
-function formatHeader(
-  projectName: string,
-  isOnWorker: boolean,
-  workerLabel: string | null,
-  paneStatus: string,
-  currentWorkerIdx: number,
-  totalWorkers: number,
-  prState?: string,
-  mergeCount?: number,
-  alerts?: number,
-): string {
-  const parts: string[] = [projectName];
+// ---------------------------------------------------------------------------
+// Per-project aggregate status: pick the "most interesting" worker state
+// ---------------------------------------------------------------------------
 
-  if (isOnWorker && totalWorkers > 0) {
-    const label = workerLabel ?? "worker";
-    const displayState = prState
-      ? (prState === "merge-pending" ? "merge pending" : prState)
-      : (paneStatus || "");
-    const icon = headerIcon(paneStatus);
-    const statusParts = [displayState].filter(Boolean);
-    if (mergeCount && mergeCount > 0) {
-      statusParts.push(`${mergeCount} merged`);
+const STATE_PRIORITY: Record<string, number> = {
+  failing: 1,
+  reviewing: 2,
+  "merge-pending": 3,
+  working: 4,
+  pushed: 5,
+  loading: 6,
+  idle: 7,
+  merged: 8,
+  ready: 9,
+  exited: 10,
+};
+
+function projectAggregateState(workers: WorkerEntry[]): string | null {
+  if (workers.length === 0) return null;
+  let best: string | null = null;
+  let bestPri = Infinity;
+  for (const w of workers) {
+    // Use prState if it's a lifecycle state, otherwise fall back to claudeStatus
+    const state = (w.prState && w.prState !== "working") ? w.prState : (w.claudeStatus ?? "ready");
+    const pri = STATE_PRIORITY[state] ?? 99;
+    if (pri < bestPri) {
+      bestPri = pri;
+      best = state;
     }
-    const status = statusParts.length > 0 ? ` (${statusParts.join(", ")})` : "";
-    parts.push(`${icon} ${label}${status} [${currentWorkerIdx}/${totalWorkers}]`);
-  } else if (paneStatus && paneStatus !== "shell") {
-    const icon = headerIcon(paneStatus);
-    parts.push(`${icon} ${paneStatus}`);
-    if (totalWorkers > 0) {
-      parts.push(`${totalWorkers} worker${totalWorkers === 1 ? "" : "s"} parked`);
+  }
+  return best;
+}
+
+function stateIcon(state: string): string {
+  if (state === "working") return spinnerIcon();
+  return STATUS_ICONS[state] ?? "";
+}
+
+// ---------------------------------------------------------------------------
+// Left side: project tabs
+// ---------------------------------------------------------------------------
+
+function formatLeft(projectNames: string[], activeProject: string | null, registry: Record<string, WorkerEntry[]>): string {
+  if (projectNames.length === 0) return " no projects";
+  const tabs: string[] = [];
+  for (let i = 0; i < projectNames.length; i++) {
+    const name = projectNames[i];
+    const workers = registry[name] ?? [];
+    const aggState = projectAggregateState(workers);
+
+    let indicator = "";
+    if (aggState) {
+      const icon = stateIcon(aggState);
+      if (aggState === "failing") {
+        indicator = `#[fg=red]${icon}#[default]`;
+      } else if (aggState === "merged") {
+        indicator = `#[fg=green]${icon}#[default]`;
+      } else {
+        indicator = icon;
+      }
     }
-  } else if (paneStatus === "shell") {
-    if (totalWorkers > 0) {
-      parts.push(`${totalWorkers} worker${totalWorkers === 1 ? "" : "s"} parked`);
+
+    const num = i + 1;
+    const suffix = indicator ? indicator : "";
+    if (name === activeProject) {
+      tabs.push(`#[fg=green,bold]${num} ${name}${suffix}#[default]`);
+    } else {
+      tabs.push(`#[fg=default]${num} ${name}${suffix}#[default]`);
+    }
+  }
+  return ` ${tabs.join("  ")} `;
+}
+
+// ---------------------------------------------------------------------------
+// Right side: priority-based fleet context
+// ---------------------------------------------------------------------------
+
+interface FleetCounts {
+  failing: number;
+  reviewing: number;
+  mergePending: number;
+  working: number;
+  pushed: number;
+  merged: number;
+  idle: number;
+}
+
+function countFleet(registry: Record<string, WorkerEntry[]>): FleetCounts {
+  const counts: FleetCounts = { failing: 0, reviewing: 0, mergePending: 0, working: 0, pushed: 0, merged: 0, idle: 0 };
+  for (const workers of Object.values(registry)) {
+    for (const w of workers) {
+      const pr = w.prState;
+      if (pr === "failing") counts.failing++;
+      else if (pr === "reviewing") counts.reviewing++;
+      else if (pr === "merge-pending") counts.mergePending++;
+      else if (pr === "pushed") counts.pushed++;
+      else if (pr === "merged") counts.merged++;
+      else {
+        // No lifecycle state — use process status
+        const cs = w.claudeStatus;
+        if (cs === "working") counts.working++;
+        else if (cs === "idle") counts.idle++;
+      }
+    }
+  }
+  return counts;
+}
+
+function formatFailingAlerts(alerts: Alert[], registry: Record<string, WorkerEntry[]>): string {
+  // Show failing workers
+  const failingWorkers: string[] = [];
+  for (const [project, workers] of Object.entries(registry)) {
+    for (const w of workers) {
+      if (w.prState === "failing") {
+        failingWorkers.push(`${project}/${w.name}`);
+      }
     }
   }
 
-  const info = parts.join(" \u00B7 ");
-  const alertTag = alerts && alerts > 0
-    ? `  [${alerts} alert${alerts === 1 ? "" : "s"}]`
-    : "";
-  const hints = "\u2325n new | \u2325w worker | \u2325s shell | \u2325r root | \u2325] next";
-  return `${info}${alertTag}  ${hints}`;
+  const parts: string[] = [];
+  if (failingWorkers.length > 0) {
+    const icon = STATUS_ICONS.failing;
+    if (failingWorkers.length <= 2) {
+      parts.push(`#[fg=red]${icon} ${failingWorkers.join(", ")}#[default]`);
+    } else {
+      parts.push(`#[fg=red]${icon} ${failingWorkers.length} failing#[default]`);
+    }
+  }
+
+  // Show most recent alert if it adds information beyond "failing"
+  if (alerts.length > 0 && failingWorkers.length === 0) {
+    const latest = alerts[alerts.length - 1];
+    const prefix = latest.level === "error" ? "#[fg=red]" : "#[fg=yellow]";
+    const msg = latest.message.length > 50 ? latest.message.slice(0, 47) + "..." : latest.message;
+    parts.push(`${prefix}${msg}#[default]`);
+  } else if (alerts.length > 0 && failingWorkers.length > 0) {
+    parts.push(`#[fg=yellow]${alerts.length} alert${alerts.length === 1 ? "" : "s"}#[default]`);
+  }
+
+  return parts.join("  ");
 }
 
-function setHeaderVar(header: string): void {
+function formatFleetSummary(counts: FleetCounts): string {
+  const parts: string[] = [];
+
+  if (counts.failing > 0) {
+    parts.push(`#[fg=red]${STATUS_ICONS.failing} ${counts.failing} failing#[default]`);
+  }
+  if (counts.reviewing > 0) {
+    parts.push(`${STATUS_ICONS.reviewing} ${counts.reviewing} reviewing`);
+  }
+  if (counts.mergePending > 0) {
+    parts.push(`${STATUS_ICONS["merge-pending"]} ${counts.mergePending} merging`);
+  }
+  if (counts.working > 0) {
+    parts.push(`${spinnerIcon()} ${counts.working} working`);
+  }
+  if (counts.pushed > 0) {
+    parts.push(`${STATUS_ICONS.pushed} ${counts.pushed} pushed`);
+  }
+  if (counts.merged > 0) {
+    parts.push(`#[fg=green]${STATUS_ICONS.merged} ${counts.merged} merged#[default]`);
+  }
+
+  if (parts.length === 0) {
+    if (counts.idle > 0) return `${counts.idle} worker${counts.idle === 1 ? "" : "s"} idle`;
+    return "no workers";
+  }
+  return parts.join("  ");
+}
+
+function formatRight(registry: Record<string, WorkerEntry[]>, alerts: Alert[]): string {
+  // Priority 1: failures and alerts
+  if (alerts.length > 0 || Object.values(registry).some(ws => ws.some(w => w.prState === "failing"))) {
+    const failAlertStr = formatFailingAlerts(alerts, registry);
+    if (failAlertStr) return `${failAlertStr} `;
+  }
+
+  // Priority 2: fleet summary
+  const counts = countFleet(registry);
+  return `${formatFleetSummary(counts)} `;
+}
+
+// ---------------------------------------------------------------------------
+// Full header update (called by status pane loop with process detection)
+// ---------------------------------------------------------------------------
+
+export function printHeader(): void {
+  const state = readDashState();
+  const config = loadConfig();
+  const projectNames = getFocusedProjectNames(config);
+  const reg = readRegistry();
+  const alerts = readAlerts().alerts;
+
+  // If active pane is a worker, do process detection to update registry
+  if (state.activeProject && state.activePaneId && paneExists(state.activePaneId) && state.activePaneType === "worker") {
+    const workerNameMatch = (state.activeWindowName ?? "").match(/-worker-(.+)$/);
+    const workerLabel = workerNameMatch ? workerNameMatch[1] : null;
+
+    const pid = getPanePid(state.activePaneId);
+    const claudeRunning = pid && hasClaudeChild(pid);
+
+    let title = getPaneVar(state.activePaneId, "garden_task");
+    if (!title && workerLabel && state.activeProject) {
+      const entry = findWorkerByName(state.activeProject, workerLabel);
+      if (entry?.task) title = entry.task;
+    }
+    if (claudeRunning) {
+      const liveTitle = getPaneTitle(state.activePaneId) ?? null;
+      if (liveTitle) title = liveTitle;
+    }
+    if (title) {
+      setPaneVar(state.activePaneId, "garden_task", title);
+      if (workerLabel && state.activeProject) {
+        updateWorkerTask(state.activeProject, workerLabel, title);
+      }
+    }
+
+    let paneStatus = "";
+    if (claudeRunning) {
+      paneStatus = title ? "working" : "ready";
+    } else if (title) {
+      paneStatus = "exited";
+    } else if (pid && hasChildProcesses(pid)) {
+      paneStatus = "loading";
+    } else {
+      paneStatus = "ready";
+      setPaneVar(state.activePaneId, "garden_task", "");
+    }
+
+    // Update the cached status in registry so it's reflected in the bar
+    if (workerLabel && state.activeProject) {
+      const entry = findWorkerByName(state.activeProject, workerLabel);
+      if (entry) {
+        entry.claudeStatus = paneStatus;
+      }
+    }
+  }
+
+  const left = formatLeft(projectNames, state.activeProject, reg.workers);
+  const right = formatRight(reg.workers, alerts);
+
+  // Write to stdout for the status pane loop
+  process.stdout.write(left);
+  setBarVars(left, right);
+}
+
+// ---------------------------------------------------------------------------
+// Quick header update (no pgrep, cached registry data only)
+// ---------------------------------------------------------------------------
+
+export function updateHeaderVar(opts?: RefreshOptions): void {
+  const state = opts?.state ?? readDashState();
+  const config = loadConfig();
+  const projectNames = getFocusedProjectNames(config);
+  const reg = readRegistry();
+  const alerts = readAlerts().alerts;
+
+  const left = formatLeft(projectNames, state.activeProject, reg.workers);
+  const right = formatRight(reg.workers, alerts);
+  setBarVars(left, right);
+}
+
+// ---------------------------------------------------------------------------
+// tmux variable helpers
+// ---------------------------------------------------------------------------
+
+function setBarVars(left: string, right: string): void {
   try {
-    tmux("set-option", "-t", DASHBOARD_SESSION, "@garden_header", header);
+    tmux("set-option", "-t", DASHBOARD_SESSION, "@garden_left", left);
+    tmux("set-option", "-t", DASHBOARD_SESSION, "@garden_right", right);
     tmux("refresh-client", "-S");
   } catch { /* no client attached or session gone */ }
 }
+
+
+// ---------------------------------------------------------------------------
+// Claude hook handler
+// ---------------------------------------------------------------------------
 
 export function handleClaudeHook(event: string): void {
   try {
@@ -259,18 +353,11 @@ export function handleClaudeHook(event: string): void {
   refreshDashboard();
 }
 
+// ---------------------------------------------------------------------------
+// Status pane command builder
+// ---------------------------------------------------------------------------
+
 export function buildStatusCommand(gardenRunner: string): string {
-  // Fully event-driven: the status pane blocks on SIGUSR1 signals instead
-  // of polling. Claude Code hooks (UserPromptSubmit, Stop) and dashboard
-  // mutations (project switch, worker create/kill, poller transitions) all
-  // call refreshDashboard() which sends SIGUSR1 to wake this loop.
-  //
-  // On signal, the trap displays a pre-rendered snapshot for instant
-  // feedback. The main loop then runs _header (pgrep-based process
-  // detection) and status (formatted display) to refine the output.
-  //
-  // An event marker file distinguishes signal types: "prompt" starts
-  // spinner animation, "stop" or no marker just refreshes.
   const sf = STATUS_RENDERED_FILE;
   const ef = CLAUDE_EVENT_FILE;
   const brailleClass = `[${SPINNER_FRAMES.join("")}]`;
@@ -314,13 +401,16 @@ export function buildStatusCommand(gardenRunner: string): string {
     `      printf '\\033[H\\033[2J\\033[3J%s\\n' "$animated";`,
     `    done;`,
     `  else`,
-    // Block until signaled — no polling. Safety-net timeout prevents
-    // permanent stall if a signal is missed.
+    // Block until signaled — no polling.
     `    sleep 120 & wait $! 2>/dev/null;`,
     `  fi;`,
     `done`,
   ].join("\n");
 }
+
+// ---------------------------------------------------------------------------
+// Refresh helpers
+// ---------------------------------------------------------------------------
 
 export function refreshStatusPane(opts?: RefreshOptions): void {
   const state = opts?.state ?? readDashState();
@@ -331,11 +421,6 @@ export function refreshStatusPane(opts?: RefreshOptions): void {
   } catch { /* pane gone or process exited */ }
 }
 
-/**
- * Full dashboard refresh: updates header var instantly, writes a
- * pre-rendered status snapshot for the status pane to display on
- * signal, then signals the status pane. Call after every mutation.
- */
 export function refreshDashboard(opts?: RefreshOptions): void {
   updateHeaderVar(opts);
   writeQuickStatus(opts);
