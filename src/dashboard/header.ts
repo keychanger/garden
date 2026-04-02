@@ -274,7 +274,7 @@ export function buildStatusCommand(gardenRunner: string): string {
   const sf = STATUS_RENDERED_FILE;
   const ef = CLAUDE_EVENT_FILE;
   const brailleClass = `[${SPINNER_FRAMES.join("")}]`;
-  const caseBranches = SPINNER_FRAMES.map((f, i) => `${i}) printf '%s' '${f}';;`).join(" ");
+  const caseBranches = SPINNER_FRAMES.map((f, i) => `${i}) sf_char='${f}';;`).join(" ");
   return [
     `printf '\\033[H\\033[2J\\033[3J'`,
     `sf='${sf}'`,
@@ -282,7 +282,6 @@ export function buildStatusCommand(gardenRunner: string): string {
     `sig=0`,
     `trap 'printf "\\033[H\\033[2J\\033[3J"; cat "$sf" 2>/dev/null; echo; sig=1' USR1`,
     `prev=""`,
-    `spin_frame() { case $1 in ${caseBranches} esac; }`,
     `while true; do`,
     `  if [ $sig -eq 0 ]; then`,
     `    ${gardenRunner} dashboard _header >/dev/null 2>&1;`,
@@ -306,11 +305,11 @@ export function buildStatusCommand(gardenRunner: string): string {
     `  if printf '%s' "$cur" | grep -q '${brailleClass}'; then`,
     `    sc=0;`,
     `    while [ $sc -lt 500 ]; do`,
-    `      sleep 0.12 & wait $! 2>/dev/null;`,
+    `      sleep 0.08 & wait $! 2>/dev/null;`,
     `      if [ $sig -eq 1 ]; then break; fi;`,
     `      sc=$((sc + 1));`,
     `      si=$((sc % ${SPINNER_FRAMES.length}));`,
-    `      sf_char=$(spin_frame $si);`,
+    `      case $si in ${caseBranches} esac;`,
     `      animated=$(printf '%s' "$cur" | sed "s/${brailleClass}/$sf_char/g");`,
     `      printf '\\033[H\\033[2J\\033[3J%s\\n' "$animated";`,
     `    done;`,
