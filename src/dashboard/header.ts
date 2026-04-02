@@ -162,14 +162,16 @@ export function updateHeaderVar(opts?: RefreshOptions): void {
   const workerNameMatch = (state.activeWindowName ?? "").match(/-worker-(.+)$/);
   const workerLabel = workerNameMatch ? workerNameMatch[1] : null;
 
-  const paneStatus = state.activePaneType === "shell" ? "shell" : "";
-
+  let paneStatus = state.activePaneType === "shell" ? "shell" : "";
   let prState = "";
   let mergeCount = 0;
   if (workerLabel && state.activeProject) {
     const entry = findWorkerByName(state.activeProject, workerLabel);
     if (entry?.prState && entry.prState !== "working") {
       prState = entry.prState;
+    }
+    if (!paneStatus && entry?.claudeStatus) {
+      paneStatus = entry.claudeStatus;
     }
     mergeCount = entry?.mergeCount ?? 0;
   }
@@ -193,13 +195,12 @@ const HEADER_STATUS_ICONS: Record<string, string> = {
   exited:           "\u25CB",     // open circle
 };
 
-function headerIcon(paneStatus: string, prState?: string): string {
-  const effectiveState = prState || paneStatus;
-  if (effectiveState === "working") {
+function headerIcon(paneStatus: string): string {
+  if (paneStatus === "working") {
     const frame = Math.floor(Date.now() / 2000) % SPINNER_FRAMES.length;
     return SPINNER_FRAMES[frame];
   }
-  return HEADER_STATUS_ICONS[effectiveState] ?? "";
+  return HEADER_STATUS_ICONS[paneStatus] ?? "";
 }
 
 function formatHeader(
@@ -217,9 +218,10 @@ function formatHeader(
 
   if (isOnWorker && totalWorkers > 0) {
     const label = workerLabel ?? "worker";
-    const effectiveState = prState || paneStatus;
-    const displayState = effectiveState === "merge-pending" ? "merge pending" : effectiveState;
-    const icon = headerIcon(paneStatus, prState);
+    const displayState = prState
+      ? (prState === "merge-pending" ? "merge pending" : prState)
+      : (paneStatus || "");
+    const icon = headerIcon(paneStatus);
     const statusParts = [displayState].filter(Boolean);
     if (mergeCount && mergeCount > 0) {
       statusParts.push(`${mergeCount} merged`);
