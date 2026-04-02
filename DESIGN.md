@@ -182,7 +182,7 @@ Each worker has two independent status axes:
 **Process status** — what Claude is doing right now (drives the icon):
 - ⏳ **loading** — worker pane started, bootstrap script running, Claude not yet launched
 - ◇ **ready** — Claude launched but not yet tasked (no activity detected)
-- ⠋ **working** — process alive, has child processes (braille spinner animation)
+- ⠋ **working** — process alive, has child processes or hook reports active (braille spinner animation)
 - ◆ **idle** — process alive, no child processes (probably needs input)
 - ○ **exited** — process has terminated
 
@@ -195,7 +195,7 @@ Each worker has two independent status axes:
 
 The icon always reflects process status, so a worker that is "reviewing" but idle shows the idle diamond, not the reviewing bullseye. The status text shows the lifecycle state when present, otherwise the process state. This prevents icons from flashing when switching projects, since the icon is driven by cached process detection rather than lifecycle transitions.
 
-Process status is detected via tmux's `pane_pid` and child process checks, triggered on-demand by events rather than polling. Claude Code hooks (`UserPromptSubmit`, `Stop`) installed in each worker's `.claude/settings.local.json` signal the status pane via SIGUSR1 when a worker starts or finishes processing. Lifecycle states (pushed, reviewing, merge-pending, failing, merged) come from the worker registry. Workers are displayed in aligned columns: focus indicator (filled/empty circle), process icon, name, status, and activity.
+Process status is detected via tmux's `pane_pid` and child process checks, triggered on-demand by events rather than polling. Claude Code hooks (`UserPromptSubmit`, `Stop`) installed in each worker's `.claude/settings.local.json` signal the status pane via SIGUSR1 when a worker starts or finishes processing. The hooks also cache `claudeStatus` in the worker registry so that status detection can distinguish "Claude is thinking" (no tool children yet, but hook reported working) from "Claude is idle" — this prevents the working icon from briefly flashing to idle on project switches or during thinking pauses. Lifecycle states (pushed, reviewing, merge-pending, failing, merged) come from the worker registry. Workers are displayed in aligned columns: focus indicator (filled/empty circle), process icon, name, status, and activity.
 
 ## Commands
 

@@ -227,6 +227,29 @@ describe("worker status detection", () => {
     expect(lines.some(l => l.includes("idle"))).toBe(true);
   });
 
+  it("shows working when claude has no children but hook set claudeStatus to working", async () => {
+    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
+    vi.mocked(getPanePid).mockReturnValue("123");
+    vi.mocked(getClaudeChildPid).mockReturnValue("456");
+    vi.mocked(hasChildProcesses).mockReturnValue(false);
+    vi.mocked(getPaneTitle).mockReturnValue(null);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "working" },
+    ]);
+
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (msg: string) => lines.push(msg);
+    try {
+      await status([]);
+    } finally {
+      console.log = origLog;
+    }
+
+    expect(lines.some(l => l.includes("working"))).toBe(true);
+  });
+
   it("shows working when claude has child processes", async () => {
     vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
     vi.mocked(getPanePid).mockReturnValue("123");
