@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR, loadConfig, getFocusedProjectNames } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, paneExists, getPanePid, getPaneVar, getPaneTitle, hasClaudeChild, hasChildProcesses, setPaneVar } from "./tmux.js";
+import { tmux, tmuxOutput, paneExists, getPanePid, getPaneVar, getPaneTitle, hasClaudeChild, hasChildProcesses, setPaneVar } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
 import { readRegistry, findWorkerByName, updateWorkerTask, type WorkerEntry } from "./registry.js";
 import { readAlerts, type Alert } from "./alerts.js";
@@ -66,7 +66,7 @@ export function setupStatusBar(_gardenRunner: string): void {
     [["-t", target, "status-right-length", "120"], "status-right-length"],
     [["-t", target, "status-right", "#{@garden_right}"], "status-right"],
     [["-t", target, "status-interval", "2"], "status-interval"],
-    // Window options — target main window directly to override user globals
+    // Window options — suppress window names for all windows in this session
     [["-t", mainWindow, "window-status-current-format", ""], "window-status-current-format"],
     [["-t", mainWindow, "window-status-format", ""], "window-status-format"],
     [["-t", mainWindow, "pane-border-status", "top"], "pane-border-status"],
@@ -168,7 +168,7 @@ function formatLeft(projectNames: string[], activeProject: string | null, regist
     const num = i + 1;
     const suffix = indicator ? indicator : "";
     if (name === activeProject) {
-      tabs.push(`#[fg=green,bold]${num} ${name}${suffix}#[default]`);
+      tabs.push(`#[bold]${num} ${name}${suffix}#[default]`);
     } else {
       tabs.push(`#[fg=default]${num} ${name}${suffix}#[default]`);
     }
@@ -379,8 +379,24 @@ function setBarVars(left: string, right: string): void {
     tmux("set-option", "-t", t, "status-right", "#{@garden_right}");
     tmux("set-option", "-t", t, "@garden_left", left);
     tmux("set-option", "-t", t, "@garden_right", right);
+    // Suppress window names in the status bar center area. Hidden worker
+    // windows would otherwise leak their names into the window list.
+    suppressWindowNames();
     tmux("refresh-client", "-S");
   } catch { /* no client attached or session gone */ }
+}
+
+function suppressWindowNames(): void {
+  try {
+    const windows = tmuxOutput("list-windows", "-t", DASHBOARD_SESSION, "-F", "#{window_name}");
+    for (const win of windows.split("\n").filter(Boolean)) {
+      const target = `${DASHBOARD_SESSION}:${win}`;
+      try {
+        tmux("set-option", "-t", target, "window-status-format", "");
+        tmux("set-option", "-t", target, "window-status-current-format", "");
+      } catch { /* window may have been killed */ }
+    }
+  } catch { /* session gone */ }
 }
 
 
