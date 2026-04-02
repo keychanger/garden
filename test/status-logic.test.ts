@@ -26,6 +26,10 @@ vi.mock("../src/dashboard/registry.js", () => ({
   getWorkers: vi.fn(() => []),
 }));
 
+vi.mock("../src/dashboard/header.js", () => ({
+  isClaudeActiveByHook: vi.fn(() => false),
+}));
+
 vi.mock("../src/session.js", () => ({
   dashboardExists: vi.fn(() => true),
   DASHBOARD_SESSION: "garden-dashboard",
@@ -61,6 +65,7 @@ import {
   getPanePid, getPaneTitle, getPaneLabel, getFirstPaneId,
   getClaudeChildPid, hasChildProcesses, listHiddenWorkerWindows,
 } from "../src/dashboard/tmux.js";
+import { isClaudeActiveByHook } from "../src/dashboard/header.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -225,6 +230,29 @@ describe("worker status detection", () => {
     }
 
     expect(lines.some(l => l.includes("idle"))).toBe(true);
+  });
+
+  it("shows working when hook reports active despite no child processes", async () => {
+    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
+    vi.mocked(getPanePid).mockReturnValue("123");
+    vi.mocked(getClaudeChildPid).mockReturnValue("456");
+    vi.mocked(hasChildProcesses).mockReturnValue(false);
+    vi.mocked(getPaneTitle).mockReturnValue("running subagent");
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+    vi.mocked(getWorkers).mockReturnValue([]);
+    vi.mocked(isClaudeActiveByHook).mockReturnValue(true);
+
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (msg: string) => lines.push(msg);
+    try {
+      await status([]);
+    } finally {
+      console.log = origLog;
+    }
+
+    expect(lines.some(l => l.includes("working"))).toBe(true);
+    vi.mocked(isClaudeActiveByHook).mockReturnValue(false);
   });
 
   it("shows working when claude has child processes", async () => {

@@ -212,17 +212,21 @@ function cleanStaleActiveMarkers(registry: WorkerRegistry): void {
   try {
     const files = fs.readdirSync(SESSIONS_DIR);
     const prefix = "claude-active-";
+
+    // Build set of valid marker filenames from registry to avoid ambiguous
+    // hyphen-splitting (project names and worker names both contain hyphens).
+    const validMarkers = new Set<string>();
+    for (const [project, entries] of Object.entries(registry.workers)) {
+      for (const entry of entries) {
+        validMarkers.add(`${prefix}${project}-${entry.name}`);
+      }
+    }
+
     for (const file of files) {
       if (!file.startsWith(prefix)) continue;
-      const rest = file.slice(prefix.length);
-      const dashIdx = rest.indexOf("-");
-      if (dashIdx < 0) continue;
-      const project = rest.slice(0, dashIdx);
-      const worker = rest.slice(dashIdx + 1);
-      const entries = registry.workers[project];
-      if (!entries || !entries.some(e => e.name === worker)) {
-        removeClaudeActiveMarker(project, worker);
-        log.info("validate", "removed stale active marker", { worker });
+      if (!validMarkers.has(file)) {
+        try { fs.unlinkSync(`${SESSIONS_DIR}/${file}`); } catch { /* ignore */ }
+        log.info("validate", "removed stale active marker", { data: { file } });
       }
     }
   } catch { /* sessions dir might not exist */ }
