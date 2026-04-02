@@ -190,7 +190,7 @@ The status pane shows each worker's lifecycle state using status icons:
 - ✓ **merged** — code merged to main (with merge count if multiple merges)
 - ○ **exited** — process has terminated
 
-Process status is detected via tmux's `pane_pid` and child process checks. Lifecycle states (pushed, reviewing, merge-pending, failing, merged) come from the worker registry. Workers are displayed in aligned columns: focus indicator (filled/empty circle), lifecycle icon, name, status, and activity.
+Process status is detected via tmux's `pane_pid` and child process checks, triggered on-demand by events rather than polling. Claude Code hooks (`UserPromptSubmit`, `Stop`) installed in each worker's `.claude/settings.local.json` signal the status pane via SIGUSR1 when a worker starts or finishes processing. Lifecycle states (pushed, reviewing, merge-pending, failing, merged) come from the worker registry. Workers are displayed in aligned columns: focus indicator (filled/empty circle), lifecycle icon, name, status, and activity.
 
 ## Commands
 
