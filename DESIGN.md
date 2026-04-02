@@ -177,20 +177,25 @@ The dashboard surfaces important events as alerts — persistent messages that r
 
 ## Worker Status Detection
 
-The status pane shows each worker's lifecycle state using status icons:
+Each worker has two independent status axes:
 
+**Process status** — what Claude is doing right now (drives the icon):
 - ⏳ **loading** — worker pane started, bootstrap script running, Claude not yet launched
 - ◇ **ready** — Claude launched but not yet tasked (no activity detected)
 - ⠋ **working** — process alive, has child processes (braille spinner animation)
 - ◆ **idle** — process alive, no child processes (probably needs input)
+- ○ **exited** — process has terminated
+
+**Lifecycle status** — where the worker is in the review pipeline (drives the status text):
 - ↑ **pushed** — commits detected, awaiting review launch
 - ◎ **reviewing** — poller is reviewing the worker's commits
 - ◷ **merge-pending** — review passed, in the merge queue
 - ✖ **failing** — checks or review failed (with failure count if repeated)
 - ✓ **merged** — code merged to main (with merge count if multiple merges)
-- ○ **exited** — process has terminated
 
-Process status is detected via tmux's `pane_pid` and child process checks, triggered on-demand by events rather than polling. Claude Code hooks (`UserPromptSubmit`, `Stop`) installed in each worker's `.claude/settings.local.json` signal the status pane via SIGUSR1 when a worker starts or finishes processing. Lifecycle states (pushed, reviewing, merge-pending, failing, merged) come from the worker registry. Workers are displayed in aligned columns: focus indicator (filled/empty circle), lifecycle icon, name, status, and activity.
+The icon always reflects process status, so a worker that is "reviewing" but idle shows the idle diamond, not the reviewing bullseye. The status text shows the lifecycle state when present, otherwise the process state. This prevents icons from flashing when switching projects, since the icon is driven by cached process detection rather than lifecycle transitions.
+
+Process status is detected via tmux's `pane_pid` and child process checks, triggered on-demand by events rather than polling. Claude Code hooks (`UserPromptSubmit`, `Stop`) installed in each worker's `.claude/settings.local.json` signal the status pane via SIGUSR1 when a worker starts or finishes processing. Lifecycle states (pushed, reviewing, merge-pending, failing, merged) come from the worker registry. Workers are displayed in aligned columns: focus indicator (filled/empty circle), process icon, name, status, and activity.
 
 ## Commands
 
