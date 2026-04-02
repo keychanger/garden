@@ -22,8 +22,10 @@ import {
   getCommitSummary, getNewCommitSummary,
   resolveBaseBranch,
 } from "./git.js";
-import { refreshDashboard } from "./header.js";
+import { refreshDashboard, setupStatusBar } from "./header.js";
 import { readDashState } from "./state.js";
+import { setupKeybindings } from "./hotkeys.js";
+import { resolveGardenRunner } from "./create.js";
 import { healStatusPane } from "./validate.js";
 import { log } from "./log.js";
 import { buildRulesContext } from "../rules.js";
@@ -858,6 +860,15 @@ function runPostMerge(projectName: string, projectPath: string): void {
     } else {
       log.info("poller", "postMerge completed", { data: { commit } });
     }
+    // Refresh tmux keybindings and status bar config after rebuild.
+    // The CLI binary may have changed (new hotkeys, updated status format),
+    // but tmux bindings are only set at dashboard creation. Re-running them
+    // is idempotent and picks up any changes from the rebuilt code.
+    try {
+      const gr = resolveGardenRunner();
+      setupKeybindings(gr);
+      setupStatusBar(gr);
+    } catch { /* dashboard may not be running */ }
   } catch (err) {
     const message = projectName === "garden"
       ? `Garden rebuild failed at commit ${commit}: ${String(err).slice(0, 200)}`
