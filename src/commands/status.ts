@@ -1,5 +1,5 @@
 // Shows project status: registered projects, active workers, and their states.
-import { loadConfig } from "../config.js";
+import { loadConfig, getFocusedProjectNames } from "../config.js";
 import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
@@ -51,7 +51,7 @@ function iconFor(status: WorkerStatus): string {
 
 export async function status(_args: string[]): Promise<void> {
   const config = loadConfig();
-  const names = Object.keys(config.projects);
+  const names = getFocusedProjectNames(config);
 
   if (names.length === 0) {
     console.log("No projects added.");
@@ -204,7 +204,7 @@ function detectPaneProcessStatus(paneId: string): PaneInfo {
  */
 export function renderQuickStatus(state: DashboardState, windowNames?: string[]): string {
   const config = loadConfig();
-  const names = Object.keys(config.projects);
+  const names = getFocusedProjectNames(config);
   if (names.length === 0) return "No projects added.";
 
   const lines: string[] = [];

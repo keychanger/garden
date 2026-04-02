@@ -2,7 +2,7 @@
 import { loadConfig, saveConfig, resolveProject, isValidConfigKey, type ProjectConfig } from "../config.js";
 import { output } from "../output.js";
 
-const SETTABLE_KEYS = ["baseBranch", "checks", "postMerge"] as const;
+const SETTABLE_KEYS = ["baseBranch", "checks", "postMerge", "focused"] as const;
 type SettableKey = typeof SETTABLE_KEYS[number];
 
 export async function config(args: string[]): Promise<void> {
@@ -38,7 +38,11 @@ export async function config(args: string[]): Promise<void> {
 function showProjectConfig(project: ProjectConfig & { name: string }): void {
   const data: Record<string, string> = { path: project.path };
   for (const key of SETTABLE_KEYS) {
-    if (project[key]) data[key] = project[key]!;
+    if (key === "focused") {
+      if (project.focused === false) data.focused = "false";
+    } else if (project[key]) {
+      data[key] = project[key]!;
+    }
   }
 
   output(data, (d) => {
@@ -48,6 +52,11 @@ function showProjectConfig(project: ProjectConfig & { name: string }): void {
 }
 
 function showConfigKey(project: ProjectConfig & { name: string }, key: SettableKey): void {
+  if (key === "focused") {
+    const val = project.focused !== false ? "true" : "false";
+    output({ [key]: val }, () => val);
+    return;
+  }
   const value = project[key];
   if (value) {
     output({ [key]: value }, () => value);
@@ -61,7 +70,15 @@ function setConfigKey(projectName: string, key: SettableKey, value: string): voi
   const project = cfg.projects[projectName];
   if (!project) throw new Error(`Unknown project: ${projectName}`);
 
-  if (value === "" || value === "unset" || value === "null") {
+  if (key === "focused") {
+    if (value === "false") {
+      project.focused = false;
+      console.log(`Set ${key} = false for ${projectName}`);
+    } else {
+      delete project.focused;
+      console.log(`Cleared ${key} for ${projectName} (default: focused)`);
+    }
+  } else if (value === "" || value === "unset" || value === "null") {
     delete project[key];
     console.log(`Cleared ${key} for ${projectName}`);
   } else {

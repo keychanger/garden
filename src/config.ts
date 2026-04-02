@@ -15,10 +15,11 @@ export interface ProjectConfig {
   baseBranch?: string;
   checks?: string;
   postMerge?: string;
+  focused?: boolean;
 }
 
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
-  "path", "baseBranch", "checks", "postMerge",
+  "path", "baseBranch", "checks", "postMerge", "focused",
 ]);
 
 export function isValidConfigKey(key: string): boolean {
@@ -112,6 +113,27 @@ export function resolveProject(nameArg?: string): ProjectConfig & { name: string
  * Detect project name by matching a directory against registered project paths.
  * Defaults to cwd when no directory is provided.
  */
+export function getFocusedProjectNames(config?: GardenConfig): string[] {
+  const cfg = config ?? loadConfig();
+  return Object.keys(cfg.projects).filter(
+    name => cfg.projects[name].focused !== false
+  );
+}
+
+export function reorderProject(config: GardenConfig, name: string, position: number): void {
+  const keys = Object.keys(config.projects);
+  if (!keys.includes(name)) throw new Error(`Unknown project: ${name}`);
+  const index = position - 1;
+  if (index < 0 || index >= keys.length) {
+    throw new Error(`Position must be 1-${keys.length}`);
+  }
+  const filtered = keys.filter(k => k !== name);
+  filtered.splice(index, 0, name);
+  const reordered: Record<string, ProjectConfig> = {};
+  for (const k of filtered) reordered[k] = config.projects[k];
+  config.projects = reordered;
+}
+
 export function detectProjectFromPath(dir?: string): string | undefined {
   try {
     const config = loadConfig();

@@ -60,6 +60,9 @@ Projects:
   remove <name>                  Remove a project
   list, ls                       List all projects
   config <project> [key] [value] View or set project config
+  focus <name>                   Show project in dashboard
+  unfocus <name>                 Hide project from dashboard
+  sort <name> <position>         Move project to position (1-based)
 
 Development:
   test [project] [-- args]       Run project tests (npm test)

@@ -5,7 +5,7 @@ import {
   dashboardExists,
   DASHBOARD_SESSION,
 } from "../session.js";
-import { loadConfig, tryGetProject, SESSIONS_DIR, type ProjectConfig } from "../config.js";
+import { loadConfig, tryGetProject, getFocusedProjectNames, SESSIONS_DIR, type ProjectConfig } from "../config.js";
 import { buildRulesContext, buildWorktreeRules } from "../rules.js";
 import { readDashState, writeDashState, STATE_FILE } from "./state.js";
 import { restoreFromHidden } from "./layout.js";
@@ -39,7 +39,7 @@ export function ensureDashboard(): void {
     // Resize status pane to correct height — attaching from a different
     // terminal size can squish panes since tmux redistributes proportionally.
     const config = loadConfig();
-    const projectCount = Object.keys(config.projects).length;
+    const projectCount = getFocusedProjectNames(config).length;
     const statusHeight = Math.max(4, projectCount * 2 + 2);
     if (healed.statusPaneId) {
       try { tmux("resize-pane", "-t", healed.statusPaneId, "-y", String(statusHeight)); } catch { /* pane may be gone */ }
@@ -57,11 +57,11 @@ export function ensureDashboard(): void {
   const statusCmd = buildStatusCommand(gardenRunner);
 
   const config = loadConfig();
-  const projectCount = Object.keys(config.projects).length;
+  const focusedNames = getFocusedProjectNames(config);
+  const projectCount = focusedNames.length;
   const statusHeight = Math.max(4, projectCount * 2 + 2);
 
-  const projectNames = Object.keys(config.projects);
-  const firstProject = projectNames.length > 0 ? projectNames[0] : null;
+  const firstProject = focusedNames.length > 0 ? focusedNames[0] : null;
   const firstPath = firstProject ? config.projects[firstProject].path : cwd;
 
   const cols = String(process.stdout.columns || 200);

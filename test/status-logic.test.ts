@@ -31,12 +31,21 @@ vi.mock("../src/session.js", () => ({
   DASHBOARD_SESSION: "garden-dashboard",
 }));
 
-vi.mock("../src/config.js", () => ({
-  loadConfig: vi.fn(() => ({
+vi.mock("../src/config.js", () => {
+  const loadConfig = vi.fn(() => ({
     projects: { garden: { path: "/tmp/garden" } },
-  })),
-  SESSIONS_DIR: "/tmp/fake-sessions",
-}));
+  }));
+  return {
+    loadConfig,
+    getFocusedProjectNames: vi.fn((config) => {
+      const cfg = config ?? loadConfig();
+      return Object.keys(cfg.projects).filter(
+        (name: string) => cfg.projects[name].focused !== false
+      );
+    }),
+    SESSIONS_DIR: "/tmp/fake-sessions",
+  };
+});
 
 vi.mock("../src/output.js", () => ({
   output: vi.fn(),

@@ -1,7 +1,7 @@
 // Pane navigation: project switching, worker/shell focus, cycling.
 import fs from "node:fs";
 import path from "node:path";
-import { loadConfig, getProject, SESSIONS_DIR } from "../config.js";
+import { loadConfig, getProject, getFocusedProjectNames, SESSIONS_DIR } from "../config.js";
 import { readDashState, writeDashState } from "./state.js";
 import { parkToHidden, swapToHidden, swapDirect } from "./layout.js";
 import { restoreFromHidden } from "./layout.js";
@@ -53,7 +53,7 @@ export function switchProject(indexArg: string): void {
   log.info("navigate", "switchProject", { data: { index: indexArg } });
   const index = parseInt(indexArg, 10) - 1;
   const config = loadConfig();
-  const projectNames = Object.keys(config.projects);
+  const projectNames = getFocusedProjectNames(config);
 
   if (index < 0 || index >= projectNames.length) {
     tmuxDisplay(`No project at index ${index + 1}`);
