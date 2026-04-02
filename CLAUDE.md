@@ -25,7 +25,7 @@ npm run dev -- help    # run via tsx during development
   - `registry.ts` — worker registry, atomic read/write to `dashboard.registry.json`
   - `layout.ts` — pane parking/restoring via tmux swap-pane
   - `hotkeys.ts` — Alt/Option keybinding setup
-  - `header.ts` — tmux status bar via `@garden_header` variable, instant refresh
+  - `header.ts` — tmux status bar: project tabs (left) via `@garden_left`, fleet status (right) via `@garden_right`
   - `tmux.ts` — low-level tmux helpers (shared by dashboard and status command)
   - `validate.ts` — state/tmux consistency validation and self-healing
   - `git.ts` — git CLI wrappers for worktree and merge operations
@@ -96,7 +96,7 @@ The dashboard uses a permanent tmux layout with content swapped in and out of pa
 - **Parking/restoring** (`src/dashboard/layout.ts`): To swap content, we create a temp hidden window, swap the current pane into it, then swap the target pane from its hidden window into the slot, and kill the temp window. Separate functions handle the right pane (`parkToHidden`/`restoreFromHidden`) and garden pane (`gardenParkToHidden`/`gardenRestoreFromHidden`).
 - **State** (`src/dashboard/state.ts`): Tracks which project is active, which pane is visible, and pane IDs. Written atomically (write-tmp-then-rename) to `dashboard.state.json` after every operation.
 - **Status detection** (`src/dashboard/tmux.ts`): Uses `pgrep` to detect whether claude is running and whether it has child processes (working vs idle). Called on-demand after events, not on a timer.
-- **Header bar** (`src/dashboard/header.ts`): Uses a tmux session variable (`@garden_header`) instead of subprocess spawning. Updated instantly after every mutation via `refresh-client -S`. Claude Code hooks (`UserPromptSubmit`, `Stop`) signal the status pane when workers start/stop processing.
+- **Bottom bar** (`src/dashboard/header.ts`): Two-sided tmux status line. Left (`@garden_left`): numbered project tabs with per-project aggregate status icons, active project in green. Right (`@garden_right`): priority-based fleet context — failures/alerts when present, otherwise aggregate worker counts across all projects. Updated instantly after every mutation via `refresh-client -S`. Claude Code hooks (`UserPromptSubmit`, `Stop`) signal the status pane when workers start/stop processing.
 - **State validation** (`src/dashboard/validate.ts`): On every attach, validates pane IDs against tmux reality and heals stale state. Cleans orphaned registry entries and context files.
 - **Logging** (`src/dashboard/log.ts`): Structured JSON log to `~/.garden/sessions/dashboard.log`. Logs state mutations, swap operations, and validation results.
 - **Health check**: `garden health` diagnoses state/tmux divergence. `garden health --fix` runs the self-healing validator.
