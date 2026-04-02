@@ -153,6 +153,37 @@ describe("updateWorkerFields", () => {
   });
 });
 
+describe("batchUpdateWorkerFields", () => {
+  it("updates multiple workers in a single write", async () => {
+    const { addWorker, batchUpdateWorkerFields, getWorkers } = await importRegistry();
+    addWorker("proj", { name: "bold-ash", sessionId: "a", task: "" });
+    addWorker("proj", { name: "calm-bay", sessionId: "b", task: "" });
+    batchUpdateWorkerFields([
+      { project: "proj", workerName: "bold-ash", fields: { claudeStatus: "working" } },
+      { project: "proj", workerName: "calm-bay", fields: { claudeStatus: "idle" } },
+    ]);
+    const workers = getWorkers("proj");
+    expect(workers.find(w => w.name === "bold-ash")!.claudeStatus).toBe("working");
+    expect(workers.find(w => w.name === "calm-bay")!.claudeStatus).toBe("idle");
+  });
+
+  it("skips unknown workers and projects without error", async () => {
+    const { addWorker, batchUpdateWorkerFields, getWorkers } = await importRegistry();
+    addWorker("proj", { name: "bold-ash", sessionId: "a", task: "" });
+    batchUpdateWorkerFields([
+      { project: "proj", workerName: "bold-ash", fields: { claudeStatus: "working" } },
+      { project: "proj", workerName: "nonexistent", fields: { claudeStatus: "idle" } },
+      { project: "unknown", workerName: "any", fields: { claudeStatus: "idle" } },
+    ]);
+    expect(getWorkers("proj")[0].claudeStatus).toBe("working");
+  });
+
+  it("is a no-op for empty updates array", async () => {
+    const { batchUpdateWorkerFields } = await importRegistry();
+    expect(() => batchUpdateWorkerFields([])).not.toThrow();
+  });
+});
+
 describe("findWorkerByName", () => {
   it("finds a worker by name", async () => {
     const { addWorker, findWorkerByName } = await importRegistry();
