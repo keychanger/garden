@@ -134,6 +134,8 @@ projects:
 
 **postMerge**: Command that runs on the main checkout after merging. This is essential for projects like garden itself, where the poller runs the compiled CLI. Without a post-merge rebuild, the poller continues executing stale code even after merging fixes.
 
+**focused**: Controls whether the project appears in the dashboard status display and gets a hotkey assignment. Default is focused (field absent = focused). Set to `false` to hide a project from the dashboard without losing its config. Workers and pollers for unfocused projects continue running. Managed via `garden focus`/`garden unfocus` or `garden config <project> focused false`.
+
 ### Merge Handling
 After a review passes, workers enter the `merge-pending` state. The merge queue processes one worker at a time per project (ordered by `mergePendingAt` timestamp):
 
@@ -199,6 +201,9 @@ garden add [path]                  # Add a project (defaults to cwd, name = base
 garden remove <name>               # Remove a project
 garden list                        # List all projects
 garden config <project> [key] [val]  # View or set project config
+garden focus <name>                # Show project in dashboard
+garden unfocus <name>              # Hide project from dashboard
+garden sort <name> <position>      # Move project to position (1-based)
 ```
 
 ### Dashboard
