@@ -949,6 +949,23 @@ describe("poll — merged state", () => {
     );
   });
 
+  it("transitions to working when new commits appear after merge", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merged",
+        mergedAt: new Date().toISOString(),
+        mergeCount: 1,
+      }),
+    ]);
+    vi.mocked(getCommitSummary).mockReturnValue("def456 add new feature");
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "working", mergeCount: 2 }),
+    );
+  });
+
   it("stays merged when Claude is idle and there are no new commits", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
