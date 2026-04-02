@@ -7,6 +7,7 @@ import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, paneExists, getPanePid, getPaneVar, getPaneTitle, hasClaudeChild, hasChildProcesses, listHiddenWorkerWindows, setPaneVar } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
 import { findWorkerByName, updateWorkerTask } from "./registry.js";
+import { triggerProjectPoll } from "./poller.js";
 import { alertCount } from "./alerts.js";
 import { renderQuickStatus } from "../commands/status.js";
 
@@ -117,6 +118,12 @@ export function printHeader(): void {
       prState = entry.prState;
     }
     mergeCount = entry?.mergeCount ?? 0;
+
+    // Wake the poller immediately when Claude is active on a merged worker
+    // so the state transition doesn't wait for the next poll cycle.
+    if (entry?.prState === "merged" && paneStatus === "working") {
+      triggerProjectPoll(state.activeProject);
+    }
   }
 
   const alerts = alertCount();
