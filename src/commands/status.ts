@@ -136,9 +136,9 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
 
   if (dashState.activeProject === projectName && dashState.activePaneId && dashState.activePaneType === "worker") {
     const label = getPaneLabel(dashState.activePaneId) ?? "worker-1";
-    const regEntry = registryByName.get(label);
-    const paneInfo = detectPaneProcessStatus(dashState.activePaneId, regEntry);
+    const paneInfo = detectPaneProcessStatus(dashState.activePaneId);
     if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
+    const regEntry = registryByName.get(label);
     const resolved = resolveWorkerStatus(paneInfo.status, regEntry, paneInfo.activity);
     statusUpdates.push([label, resolved.processStatus]);
     workers.push({ name: label, ...resolved, activity: paneInfo.activity, active: true, mergeCount: regEntry?.mergeCount ?? 0, failCount: regEntry?.failCount ?? 0 });
@@ -150,9 +150,9 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
     const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${win}`);
     if (paneId) {
       const label = getPaneLabel(paneId) ?? win.replace(`_${projectName}-`, "");
-      const regEntry = registryByName.get(label);
-      const paneInfo = detectPaneProcessStatus(paneId, regEntry);
+      const paneInfo = detectPaneProcessStatus(paneId);
       if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
+      const regEntry = registryByName.get(label);
       const resolved = resolveWorkerStatus(paneInfo.status, regEntry, paneInfo.activity);
       statusUpdates.push([label, resolved.processStatus]);
       workers.push({ name: label, ...resolved, activity: paneInfo.activity, active: false, mergeCount: regEntry?.mergeCount ?? 0, failCount: regEntry?.failCount ?? 0 });
@@ -195,7 +195,7 @@ interface PaneInfo {
   activity: string | null;
 }
 
-function detectPaneProcessStatus(paneId: string, regEntry?: { claudeStatus?: string }): PaneInfo {
+function detectPaneProcessStatus(paneId: string): PaneInfo {
   const pid = getPanePid(paneId);
   if (!pid) return { status: "exited", activity: null };
 
@@ -208,12 +208,6 @@ function detectPaneProcessStatus(paneId: string, regEntry?: { claudeStatus?: str
 
   const activity = getPaneVar(paneId, "garden_task") ?? getPaneTitle(paneId) ?? null;
   if (!hasChildProcesses(claudePid)) {
-    // No tool children. The hook-set claudeStatus is authoritative here:
-    // Claude thinking (no tool calls yet) looks like "idle" to pgrep, but
-    // the UserPromptSubmit hook has already marked it as "working".
-    if (regEntry?.claudeStatus === "working") {
-      return { status: "working", activity };
-    }
     return { status: activity ? "idle" : "ready", activity };
   }
   return { status: "working", activity };

@@ -6,7 +6,7 @@ import { SESSIONS_DIR } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, paneExists, getPanePid, getPaneVar, getPaneTitle, hasClaudeChild, hasChildProcesses, listHiddenWorkerWindows, setPaneVar } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
-import { findWorkerByName, updateWorkerTask, updateWorkerFields } from "./registry.js";
+import { findWorkerByName, updateWorkerTask } from "./registry.js";
 import { alertCount } from "./alerts.js";
 import { renderQuickStatus } from "../commands/status.js";
 
@@ -111,9 +111,6 @@ export function printHeader(): void {
         setPaneVar(state.activePaneId, "garden_task", "");
       }
 
-      if (workerLabel && state.activeProject) {
-        try { updateWorkerFields(state.activeProject, workerLabel, { claudeStatus: paneStatus }); } catch { /* best effort */ }
-      }
     }
   }
 
@@ -259,18 +256,6 @@ export function handleClaudeHook(event: string): void {
   try {
     fs.writeFileSync(CLAUDE_EVENT_FILE, event);
   } catch { /* best effort */ }
-
-  // Update the active worker's cached process status so that status
-  // detection knows Claude is working even before tool children appear.
-  const state = readDashState();
-  if (state.activeProject && state.activePaneType === "worker") {
-    const nameMatch = (state.activeWindowName ?? "").match(/-worker-(.+)$/);
-    if (nameMatch) {
-      const claudeStatus = event === "prompt" ? "working" : "idle";
-      try { updateWorkerFields(state.activeProject, nameMatch[1], { claudeStatus }); } catch { /* best effort */ }
-    }
-  }
-
   refreshDashboard();
 }
 
@@ -311,9 +296,14 @@ export function buildStatusCommand(gardenRunner: string): string {
     // Read and consume event marker to decide whether to animate
     `  ev=""`,
     `  [ -f "$ef" ] && ev=$(cat "$ef" 2>/dev/null) && rm -f "$ef"`,
-    // Animate spinner when any worker is actively working (has a braille
-    // spinner character in the output) or on a "prompt" event signal.
-    `  if [ "$ev" = "prompt" ] || printf '%s' "$cur" | grep -q '${brailleClass}'; then`,
+    // When "prompt" hook fires but pgrep didn't detect tool children (no
+    // braille spinner in output), inject a spinner on the active worker line
+    // (marked with ●) so the animation sed has something to replace.
+    `  if [ "$ev" = "prompt" ] && ! printf '%s' "$cur" | grep -q '${brailleClass}'; then`,
+    `    cur=$(printf '%s' "$cur" | perl -CSD -pe 's/(\\x{25CF} )\\S/$1\\x{280B}/')`,
+    `  fi`,
+    // Animate spinner when any worker has a braille spinner character.
+    `  if printf '%s' "$cur" | grep -q '${brailleClass}'; then`,
     `    sc=0;`,
     `    while [ $sc -lt 500 ]; do`,
     `      sleep 0.12 & wait $! 2>/dev/null;`,
