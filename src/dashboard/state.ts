@@ -9,8 +9,8 @@ export interface DashboardState {
   // Left side — garden pane is swappable between shell and logs
   statusPaneId: string | null;
   gardenShellPaneId: string | null; // current pane ID in the garden slot (despite the name)
-  gardenPaneType: "console" | "shell" | "logs" | null;
-  gardenWindowName: string | null; // logical name for parking, e.g. "_garden-shell" or "_garden-logs"
+  gardenPaneType: "garden" | "root" | "logs" | null;
+  gardenWindowName: string | null; // logical name for parking, e.g. "_garden-root" or "_garden-logs"
   // Right side — activePaneId is the pane currently in the right slot
   activePaneId: string | null;
   activePaneType: "worker" | "shell" | null;
@@ -35,8 +35,13 @@ export function readDashState(): DashboardState {
     if (fs.existsSync(STATE_FILE)) {
       const raw = JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
       // Backfill new fields for state files from older versions
-      if (raw.gardenPaneType === undefined) raw.gardenPaneType = "console";
-      if (raw.gardenPaneType === "shell" && raw.gardenWindowName === null) raw.gardenPaneType = "console";
+      // Migrate old view names
+      if (raw.gardenPaneType === "console") raw.gardenPaneType = "garden";
+      if (raw.gardenPaneType === "shell") raw.gardenPaneType = "root";
+      if (raw.gardenPaneType === undefined) raw.gardenPaneType = "garden";
+      if (raw.gardenPaneType === "root" && raw.gardenWindowName === null) raw.gardenPaneType = "garden";
+      if (raw.gardenWindowName === "_garden-console") raw.gardenWindowName = "_garden-garden";
+      if (raw.gardenWindowName === "_garden-shell") raw.gardenWindowName = "_garden-root";
       if (raw.gardenWindowName === undefined) raw.gardenWindowName = null;
       return raw;
     }

@@ -21,6 +21,7 @@ export function setupKeybindings(gardenRunner: string): void {
   bindMeta("[", `${gr} dashboard _cycle-pane prev`);
   bindMeta("s", `${gr} dashboard _focus-shell`);
   bindMeta("g", `${gr} dashboard _focus-garden`);
+  bindMeta("r", `${gr} dashboard _focus-root`);
   bindMeta("l", `${gr} dashboard _focus-logs`);
   bindMeta("k", "tmux clear-history; tmux send-keys -R C-l");
 

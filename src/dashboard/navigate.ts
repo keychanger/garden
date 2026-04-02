@@ -16,7 +16,7 @@ import {
   getActivePaneId,
 } from "./tmux.js";
 import { log } from "./log.js";
-import { createShellWindow, createLogsWindow, createGardenShellWindow, createGardenConsoleWindow, resolveGardenRunner } from "./create.js";
+import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenConsoleWindow, resolveGardenRunner } from "./create.js";
 
 const CYCLE_LOCK = path.join(SESSIONS_DIR, "cycle.lock");
 
@@ -164,7 +164,7 @@ export function focusShell(): void {
   refreshDashboard({ state });
 }
 
-const GARDEN_VIEWS = ["console", "shell", "logs"] as const;
+const GARDEN_VIEWS = ["garden", "root", "logs"] as const;
 type GardenView = typeof GARDEN_VIEWS[number];
 
 function gardenWindowForView(view: GardenView): string {
@@ -178,8 +178,8 @@ function gardenLabelForView(view: GardenView): string {
 function ensureGardenView(view: GardenView): void {
   const windowName = gardenWindowForView(view);
   if (windowExists(windowName)) return;
-  if (view === "console") createGardenConsoleWindow(resolveGardenRunner());
-  else if (view === "shell") createGardenShellWindow();
+  if (view === "garden") createGardenConsoleWindow(resolveGardenRunner());
+  else if (view === "root") createGardenRootWindow();
   else if (view === "logs") createLogsWindow();
 }
 
@@ -193,7 +193,7 @@ function switchGardenTo(view: GardenView): void {
     return;
   }
 
-  const parkName = state.gardenWindowName ?? "_garden-console";
+  const parkName = state.gardenWindowName ?? "_garden-garden";
   ensureGardenView(view);
   gardenSwapToHidden(parkName, gardenWindowForView(view), state);
   state.gardenPaneType = view;
@@ -208,7 +208,11 @@ function switchGardenTo(view: GardenView): void {
 }
 
 export function focusGarden(): void {
-  switchGardenTo("console");
+  switchGardenTo("garden");
+}
+
+export function focusRoot(): void {
+  switchGardenTo("root");
 }
 
 export function focusLogs(): void {
@@ -217,7 +221,7 @@ export function focusLogs(): void {
 
 export function cycleGardenPane(direction: 1 | -1): void {
   const state = readDashState();
-  const current = state.gardenPaneType ?? "console";
+  const current = state.gardenPaneType ?? "garden";
   const currentIdx = GARDEN_VIEWS.indexOf(current as GardenView);
   const nextIdx = (currentIdx + direction + GARDEN_VIEWS.length) % GARDEN_VIEWS.length;
   switchGardenTo(GARDEN_VIEWS[nextIdx]);

@@ -40,7 +40,7 @@ describe("writeDashState / readDashState", () => {
       activeProject: "myproject",
       statusPaneId: "%1",
       gardenShellPaneId: "%2",
-      gardenPaneType: "console" as const,
+      gardenPaneType: "garden" as const,
       gardenWindowName: null,
       activePaneId: "%3",
       activePaneType: "worker" as const,
@@ -51,24 +51,25 @@ describe("writeDashState / readDashState", () => {
     expect(loaded).toEqual(original);
   });
 
-  it("migrates old shell-with-null-window to console", async () => {
+  it("migrates old console to garden", async () => {
     const { readDashState, STATE_FILE } = await importState();
     const oldState = {
       activeProject: "myproject",
       statusPaneId: "%1",
       gardenShellPaneId: "%2",
-      gardenPaneType: "shell",
-      gardenWindowName: null,
+      gardenPaneType: "console",
+      gardenWindowName: "_garden-console",
       activePaneId: "%3",
       activePaneType: "worker",
       activeWindowName: "_myproject-worker-bold-ash",
     };
     fs.writeFileSync(STATE_FILE, JSON.stringify(oldState));
     const loaded = readDashState();
-    expect(loaded.gardenPaneType).toBe("console");
+    expect(loaded.gardenPaneType).toBe("garden");
+    expect(loaded.gardenWindowName).toBe("_garden-garden");
   });
 
-  it("preserves shell type when window name is set", async () => {
+  it("migrates old shell to root", async () => {
     const { readDashState, STATE_FILE } = await importState();
     const state = {
       activeProject: "myproject",
@@ -82,7 +83,25 @@ describe("writeDashState / readDashState", () => {
     };
     fs.writeFileSync(STATE_FILE, JSON.stringify(state));
     const loaded = readDashState();
-    expect(loaded.gardenPaneType).toBe("shell");
+    expect(loaded.gardenPaneType).toBe("root");
+    expect(loaded.gardenWindowName).toBe("_garden-root");
+  });
+
+  it("migrates old root-with-null-window to garden", async () => {
+    const { readDashState, STATE_FILE } = await importState();
+    const oldState = {
+      activeProject: "myproject",
+      statusPaneId: "%1",
+      gardenShellPaneId: "%2",
+      gardenPaneType: "shell",
+      gardenWindowName: null,
+      activePaneId: "%3",
+      activePaneType: "worker",
+      activeWindowName: "_myproject-worker-bold-ash",
+    };
+    fs.writeFileSync(STATE_FILE, JSON.stringify(oldState));
+    const loaded = readDashState();
+    expect(loaded.gardenPaneType).toBe("garden");
   });
 
   it("creates directory if missing", async () => {

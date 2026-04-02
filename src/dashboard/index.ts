@@ -13,7 +13,7 @@ import { printHeader } from "./header.js";
 import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
 import { newWorker, killPane } from "./workers.js";
-import { switchProject, focusWorker, focusShell, focusGarden, focusLogs, cyclePane } from "./navigate.js";
+import { switchProject, focusWorker, focusShell, focusGarden, focusRoot, focusLogs, cyclePane } from "./navigate.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
 import { loadConfig } from "../config.js";
 
@@ -44,6 +44,7 @@ export async function dashboard(args: string[]): Promise<void> {
   if (sub === "_focus-worker") return focusWorker();
   if (sub === "_focus-shell") return focusShell();
   if (sub === "_focus-garden") return focusGarden();
+  if (sub === "_focus-root") return focusRoot();
   if (sub === "_focus-logs") return focusLogs();
   if (sub === "_cycle-pane") return cyclePane(args[1] === "prev" ? -1 : 1);
   if (sub === "_kill-pane") return killPane();
@@ -85,7 +86,7 @@ Usage:
   garden dashboard                 Open the dashboard (creates if needed)
   garden dashboard exit            Close the dashboard
 Layout:
-  Left: project status (upper) + garden pane (lower: console, shell, or logs).
+  Left: project status (upper) + garden pane (lower: garden, root, or logs).
   Right: active pane (worker or shell). Info in status bar.
 
 Hotkeys (⌥ = Option/Alt, no prefix needed):
@@ -95,7 +96,8 @@ Hotkeys (⌥ = Option/Alt, no prefix needed):
   ⌥s           Jump to project shell
   ⌥] / ⌥[     Cycle workers (right pane) or views (garden pane)
   ⌥x           Kill current worker (shell is protected)
-  ⌥g           Focus garden console
+  ⌥g           Focus garden (console with garden> prompt)
+  ⌥r           Focus root shell
   ⌥l           Focus logs
 
 Setup:

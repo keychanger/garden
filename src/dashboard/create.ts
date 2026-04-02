@@ -88,8 +88,8 @@ export function ensureDashboard(): void {
 
   setPaneTitle(statusId, "status");
   setPaneLabel(statusId, "status");
-  setPaneTitle(gardenShellId, "console");
-  setPaneLabel(gardenShellId, "console");
+  setPaneTitle(gardenShellId, "garden");
+  setPaneLabel(gardenShellId, "garden");
   if (firstProject) {
     setPaneLabel(rightPaneId, `shell-${firstProject}`);
     setPaneTitle(rightPaneId, firstProject);
@@ -108,7 +108,7 @@ export function ensureDashboard(): void {
     activeProject: string | null;
     statusPaneId: string;
     gardenShellPaneId: string;
-    gardenPaneType: "console" | "shell" | "logs" | null;
+    gardenPaneType: "garden" | "root" | "logs" | null;
     gardenWindowName: string | null;
     activePaneId: string;
     activePaneType: "worker" | "shell" | null;
@@ -117,8 +117,8 @@ export function ensureDashboard(): void {
     activeProject: firstProject,
     statusPaneId: statusId,
     gardenShellPaneId: gardenShellId,
-    gardenPaneType: "console",
-    gardenWindowName: "_garden-console",
+    gardenPaneType: "garden",
+    gardenWindowName: "_garden-garden",
     activePaneId: rightPaneId,
     activePaneType: firstProject ? "shell" : null,
     activeWindowName: firstProject ? `_${firstProject}-shell` : null,
@@ -221,23 +221,23 @@ exec garden logs --follow
 
 export function createGardenConsoleWindow(gardenRunner: string): void {
   const consoleInit = writeConsoleInitScript(gardenRunner);
-  const windowName = "_garden-console";
+  const windowName = "_garden-garden";
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName);
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (paneId) {
-    setPaneLabel(paneId, "console");
-    setPaneTitle(paneId, "console");
+    setPaneLabel(paneId, "garden");
+    setPaneTitle(paneId, "garden");
     tmux("send-keys", "-t", paneId, `source ${shellEscape(consoleInit)} && clear`, "Enter");
   }
 }
 
-export function createGardenShellWindow(): void {
-  const windowName = "_garden-shell";
+export function createGardenRootWindow(): void {
+  const windowName = "_garden-root";
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName);
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (paneId) {
-    setPaneLabel(paneId, "shell");
-    setPaneTitle(paneId, "shell");
+    setPaneLabel(paneId, "root");
+    setPaneTitle(paneId, "root");
   }
 }
 

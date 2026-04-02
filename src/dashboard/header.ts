@@ -234,7 +234,7 @@ function formatHeader(
   const alertTag = alerts && alerts > 0
     ? `  [${alerts} alert${alerts === 1 ? "" : "s"}]`
     : "";
-  const hints = "\u2325n new | \u2325w worker | \u2325s shell | \u2325l logs | \u2325] next";
+  const hints = "\u2325n new | \u2325w worker | \u2325s shell | \u2325r root | \u2325] next";
   return `${info}${alertTag}  ${hints}`;
 }
 
