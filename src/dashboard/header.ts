@@ -259,6 +259,18 @@ export function handleClaudeHook(event: string): void {
   try {
     fs.writeFileSync(CLAUDE_EVENT_FILE, event);
   } catch { /* best effort */ }
+
+  // Update the active worker's cached process status so that status
+  // detection knows Claude is working even before tool children appear.
+  const state = readDashState();
+  if (state.activeProject && state.activePaneType === "worker") {
+    const nameMatch = (state.activeWindowName ?? "").match(/-worker-(.+)$/);
+    if (nameMatch) {
+      const claudeStatus = event === "prompt" ? "working" : "idle";
+      try { updateWorkerFields(state.activeProject, nameMatch[1], { claudeStatus }); } catch { /* best effort */ }
+    }
+  }
+
   refreshDashboard();
 }
 
