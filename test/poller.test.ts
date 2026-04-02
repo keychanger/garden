@@ -167,7 +167,7 @@ describe("poll — working state", () => {
     registryMock._setEntries("myproject", [makeWorker({ prState: "working" })]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
 
-    poll();
+    poll("myproject");
 
     expect(getBranchHeadSha).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
@@ -181,7 +181,7 @@ describe("poll — working state", () => {
     ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
 
-    poll();
+    poll("myproject");
 
     // Should write prompt file and launch review window
     expect(fs.writeFileSync).toHaveBeenCalled();
@@ -203,7 +203,7 @@ describe("poll — working state", () => {
     ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("abc123");
 
-    poll();
+    poll("myproject");
 
     expect(updateWorkerFields).not.toHaveBeenCalled();
   });
@@ -213,7 +213,7 @@ describe("poll — working state", () => {
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
     vi.mocked(isClaudeWorking).mockReturnValue(true);
 
-    poll();
+    poll("myproject");
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "pushed" }),
@@ -227,7 +227,7 @@ describe("poll — working state", () => {
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
     vi.mocked(getCommitSummary).mockReturnValue("");
 
-    poll();
+    poll("myproject");
 
     expect(forcePushBranch).not.toHaveBeenCalled();
   });
@@ -240,7 +240,7 @@ describe("poll — working state", () => {
     ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
 
-    poll();
+    poll("myproject");
 
     // bold-ash should transition to pushed even though calm-bay is reviewing
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
@@ -257,7 +257,7 @@ describe("poll — reviewing state (async)", () => {
     // Review window still exists
     vi.mocked(windowExists).mockImplementation((name: string) => true);
 
-    const changed = poll();
+    const changed = poll("myproject");
 
     // Should not process result yet
     expect(forcePushBranch).not.toHaveBeenCalled();
@@ -281,7 +281,7 @@ describe("poll — reviewing state (async)", () => {
       return "{}";
     });
 
-    poll();
+    poll("myproject");
 
     expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
@@ -309,7 +309,7 @@ describe("poll — reviewing state (async)", () => {
       return "{}";
     });
 
-    poll();
+    poll("myproject");
 
     expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
@@ -332,7 +332,7 @@ describe("poll — reviewing state (async)", () => {
       return "{}";
     });
 
-    poll();
+    poll("myproject");
 
     expect(log.info).toHaveBeenCalledWith("poller", "review complete", {
       worker: "bold-ash",
@@ -355,7 +355,7 @@ describe("poll — reviewing state (async)", () => {
       return "{}";
     });
 
-    poll();
+    poll("myproject");
 
     expect(log.info).toHaveBeenCalledWith("poller", "review complete", {
       worker: "bold-ash",
@@ -379,7 +379,7 @@ describe("poll — reviewing state (async)", () => {
     });
     vi.mocked(forcePushBranch).mockImplementation(() => { throw new Error("push failed"); });
 
-    poll();
+    poll("myproject");
 
     expect(mergeToBase).not.toHaveBeenCalled();
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
@@ -402,7 +402,7 @@ describe("poll — reviewing state (async)", () => {
       return "{}";
     });
 
-    poll();
+    poll("myproject");
 
     expect(mergeToBase).not.toHaveBeenCalled();
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
@@ -432,7 +432,7 @@ describe("poll — reviewing state (async)", () => {
     );
     vi.mocked(fs.existsSync).mockReturnValue(false);
 
-    poll();
+    poll("myproject");
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({
@@ -461,7 +461,7 @@ describe("poll — reviewing state (async)", () => {
       return "{}";
     });
 
-    poll();
+    poll("myproject");
 
     expect(mergeToBase).not.toHaveBeenCalled();
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
@@ -476,7 +476,7 @@ describe("poll — reviewing state (async)", () => {
     vi.mocked(isClaudeWorking).mockReturnValue(true);
     vi.mocked(getBranchHeadSha).mockReturnValue("newer-sha");
 
-    poll();
+    poll("myproject");
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "working", reviewWindowName: undefined }),
@@ -491,7 +491,7 @@ describe("poll — reviewing state (async)", () => {
     vi.mocked(isClaudeWorking).mockReturnValue(true);
     vi.mocked(getBranchHeadSha).mockReturnValue("abc123");
 
-    poll();
+    poll("myproject");
 
     expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "working" }),
@@ -509,7 +509,7 @@ describe("poll — merge-pending state", () => {
     ]);
     vi.mocked(rebaseBranch).mockReturnValue(true);
 
-    poll();
+    poll("myproject");
 
     expect(rebaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "main");
     expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
@@ -536,7 +536,7 @@ describe("poll — merge-pending state", () => {
     ]);
     vi.mocked(rebaseBranch).mockReturnValue(false);
 
-    poll();
+    poll("myproject");
 
     expect(abortRebase).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
     expect(mergeToBase).not.toHaveBeenCalled();
@@ -564,7 +564,7 @@ describe("poll — merge-pending state", () => {
     ]);
     vi.mocked(rebaseBranch).mockReturnValue(false);
 
-    poll();
+    poll("myproject");
 
     // Check prompt file content
     const writeFileCalls = vi.mocked(fs.writeFileSync).mock.calls;
@@ -598,7 +598,7 @@ describe("poll — merge-pending state", () => {
       }),
     ]);
 
-    poll();
+    poll("myproject");
 
     // calm-bay merges first (earlier timestamp), then bold-ash can proceed
     const mergeCalls = vi.mocked(mergeToBase).mock.calls;
@@ -614,7 +614,7 @@ describe("poll — merge-pending state", () => {
     ]);
     vi.mocked(forcePushBranch).mockImplementation(() => { throw new Error("push failed"); });
 
-    poll();
+    poll("myproject");
 
     expect(mergeToBase).not.toHaveBeenCalled();
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
@@ -631,7 +631,7 @@ describe("poll — merge-pending state", () => {
     ]);
     vi.mocked(mergeToBase).mockImplementation(() => { throw new Error("merge conflict"); });
 
-    poll();
+    poll("myproject");
 
     expect(addAlert).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -651,7 +651,7 @@ describe("poll — reviewer prompt", () => {
     ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
 
-    poll();
+    poll("myproject");
 
     const writeFileCalls = vi.mocked(fs.writeFileSync).mock.calls;
     const promptCall = writeFileCalls.find(c =>
@@ -671,7 +671,7 @@ describe("poll — reviewer prompt", () => {
       checks: "npm test",
     } as ReturnType<typeof tryGetProject>);
 
-    poll();
+    poll("myproject");
 
     const writeFileCalls = vi.mocked(fs.writeFileSync).mock.calls;
     const promptCall = writeFileCalls.find(c =>
@@ -692,7 +692,7 @@ describe("poll — reviewer prompt", () => {
       checks: undefined,
     } as ReturnType<typeof tryGetProject>);
 
-    poll();
+    poll("myproject");
 
     const writeFileCalls = vi.mocked(fs.writeFileSync).mock.calls;
     const promptCall = writeFileCalls.find(c =>
@@ -707,7 +707,7 @@ describe("poll — reviewer prompt", () => {
     ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
 
-    poll();
+    poll("myproject");
 
     const writeFileCalls = vi.mocked(fs.writeFileSync).mock.calls;
     const promptCall = writeFileCalls.find(c =>
@@ -729,7 +729,7 @@ describe("poll — failing state", () => {
     ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
 
-    poll();
+    poll("myproject");
 
     expect(getNewCommitSummary).toHaveBeenCalledWith(
       "/tmp/wt/myproject/bold-ash", "old-sha",
@@ -751,7 +751,7 @@ describe("poll — failing state", () => {
     ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("abc123");
 
-    poll();
+    poll("myproject");
 
     expect(updateWorkerFields).not.toHaveBeenCalled();
   });
@@ -766,7 +766,7 @@ describe("poll — failing state", () => {
     ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("abc123");
 
-    poll();
+    poll("myproject");
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "working",
@@ -784,7 +784,7 @@ describe("poll — failing state", () => {
     ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("abc123");
 
-    poll();
+    poll("myproject");
 
     expect(updateWorkerFields).not.toHaveBeenCalled();
   });
@@ -800,7 +800,7 @@ describe("poll — failing state", () => {
     ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
 
-    poll();
+    poll("myproject");
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
       prState: "working",
@@ -817,7 +817,7 @@ describe("poll — live-Claude guard", () => {
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
     vi.mocked(isClaudeWorking).mockReturnValue(true);
 
-    poll();
+    poll("myproject");
 
     expect(forcePushBranch).not.toHaveBeenCalled();
     expect(mergeToBase).not.toHaveBeenCalled();
@@ -830,7 +830,7 @@ describe("poll — live-Claude guard", () => {
     vi.mocked(getBranchHeadSha).mockReturnValue("newer-sha");
     vi.mocked(isClaudeWorking).mockReturnValue(true);
 
-    poll();
+    poll("myproject");
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "working" }),
@@ -843,7 +843,7 @@ describe("poll — live-Claude guard", () => {
     ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
 
-    poll();
+    poll("myproject");
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "reviewing" }),
@@ -871,7 +871,7 @@ describe("poll — live-Claude guard", () => {
     vi.mocked(getPanePid).mockReturnValue("12345");
     vi.mocked(isClaudeWorking).mockReturnValue(true);
 
-    poll();
+    poll("myproject");
 
     // Should detect Claude is working and skip review
     expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
@@ -885,7 +885,7 @@ describe("poll — full cycle", () => {
     registryMock._setEntries("myproject", [makeWorker({ prState: "working" })]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
 
-    poll(); // working -> pushed
+    poll("myproject"); // working -> pushed
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "pushed" }),
@@ -897,7 +897,7 @@ describe("poll — full cycle", () => {
     ]);
     vi.mocked(updateWorkerFields).mockClear();
 
-    poll(); // pushed -> reviewing
+    poll("myproject"); // pushed -> reviewing
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "reviewing" }),
@@ -915,13 +915,13 @@ describe("poll — full cycle", () => {
       return "{}";
     });
 
-    poll(); // reviewing -> merge-pending
+    poll("myproject"); // reviewing -> merge-pending
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "merge-pending" }),
     );
 
-    poll(); // merge-pending -> merged
+    poll("myproject"); // merge-pending -> merged
 
     expect(mergeToBase).toHaveBeenCalledWith("/repo/myproject", "bold-ash", "main");
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
@@ -942,7 +942,7 @@ describe("poll — merged state", () => {
     vi.mocked(getCommitSummary).mockReturnValue("");
     vi.mocked(isClaudeWorking).mockReturnValue(true);
 
-    poll();
+    poll("myproject");
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "working", mergeCount: 1 }),
@@ -959,7 +959,7 @@ describe("poll — merged state", () => {
     vi.mocked(getCommitSummary).mockReturnValue("");
     vi.mocked(isClaudeWorking).mockReturnValue(false);
 
-    poll();
+    poll("myproject");
 
     expect(updateWorkerFields).not.toHaveBeenCalled();
   });
@@ -999,7 +999,7 @@ describe("poll — sibling merge notification", () => {
 
     vi.mocked(hasClaudeChild).mockReturnValue(true);
 
-    poll(); // merge-pending -> merged (with sibling notification)
+    poll("myproject"); // merge-pending -> merged (with sibling notification)
 
     expect(tmux).toHaveBeenCalledWith(
       "send-keys", "-t", "%5", "-l",
@@ -1032,7 +1032,7 @@ describe("poll — sibling merge notification", () => {
       .mockReturnValueOnce(["src/foo.ts"]) // merged worker
       .mockReturnValueOnce(["src/bar.ts"]); // sibling — no overlap
 
-    poll();
+    poll("myproject");
 
     expect(mergeToBase).toHaveBeenCalled();
     const sendKeyCalls = vi.mocked(tmux).mock.calls.filter(
@@ -1067,7 +1067,7 @@ describe("poll — sibling merge notification", () => {
       .mockReturnValueOnce(["src/foo.ts"])   // merged worker
       .mockReturnValueOnce(["src/foo.ts"]);  // sibling — overlap
 
-    poll();
+    poll("myproject");
 
     // Should NOT have relaunched
     const updateCalls = vi.mocked(updateWorkerFields).mock.calls.filter(
@@ -1106,7 +1106,7 @@ describe("poll — sibling merge notification", () => {
       return "abc123 fix something";
     });
 
-    poll();
+    poll("myproject");
 
     const changedFilesCalls = vi.mocked(getChangedFiles).mock.calls;
     const calmBayCalls = changedFilesCalls.filter(c => c[0] === "/tmp/wt/myproject/calm-bay");
@@ -1126,7 +1126,7 @@ describe("poll — alerts", () => {
     ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("abc123");
 
-    poll();
+    poll("myproject");
 
     expect(addAlert).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1151,7 +1151,7 @@ describe("poll — alerts", () => {
     ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("abc123");
 
-    poll();
+    poll("myproject");
 
     expect(addAlert).not.toHaveBeenCalled();
   });
@@ -1165,7 +1165,7 @@ describe("poll — alerts", () => {
       }),
     ]);
 
-    poll();
+    poll("myproject");
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "merged", failCount: 0 }),
@@ -1191,7 +1191,7 @@ describe("poll — alerts", () => {
       return "{}";
     });
 
-    poll();
+    poll("myproject");
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "failing", failCount: 2 }),

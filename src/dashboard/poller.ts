@@ -30,7 +30,6 @@ import { buildRulesContext } from "../rules.js";
 import { addAlert } from "./alerts.js";
 
 const DEBOUNCE_MS = 30_000;
-const LEGACY_POLLER_WINDOW = "_garden-poller";
 
 // Per-project naming helpers
 export function pollerWindowName(project: string): string {
@@ -53,21 +52,10 @@ function reviewPromptPath(project: string, worker: string): string {
   return path.join(SESSIONS_DIR, `${project}-${worker}-review-prompt.txt`);
 }
 
-// Main poll entry point — called by `garden dashboard _poll [project]`
-export function poll(projectName?: string): boolean {
+// Main poll entry point — called by `garden dashboard _poll <project>`
+export function poll(projectName: string): boolean {
   healStatusPane();
-
-  if (projectName) {
-    return pollProject(projectName);
-  }
-
-  // Legacy: poll all projects (used during migration from global poller)
-  const registry = readRegistry();
-  let changed = false;
-  for (const pn of Object.keys(registry.workers)) {
-    if (pollProject(pn)) changed = true;
-  }
-  return changed;
+  return pollProject(projectName);
 }
 
 function pollProject(projectName: string): boolean {
@@ -1065,10 +1053,6 @@ export function stopAllPollers(): void {
   for (const projectName of Object.keys(config.projects)) {
     stopProjectPoller(projectName);
   }
-  // Kill legacy global poller if it exists
-  killWindowSafe(LEGACY_POLLER_WINDOW);
-  const legacyFifo = path.join(SESSIONS_DIR, "poll-signal");
-  try { fs.unlinkSync(legacyFifo); } catch { /* ignore */ }
 }
 
 export function ensureProjectPoller(projectName: string, gardenRunner: string): void {

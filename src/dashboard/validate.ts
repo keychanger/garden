@@ -173,12 +173,6 @@ export function validateAndHeal(state: DashboardState): DashboardState {
     }
   }
 
-  // Kill legacy global poller if it exists
-  if (windowExists("_garden-poller")) {
-    killWindowSafe("_garden-poller");
-    log.info("validate", "killed legacy global poller");
-  }
-
   // Clean orphaned review windows
   cleanOrphanedReviewWindows(registry);
 
