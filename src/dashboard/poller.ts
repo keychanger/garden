@@ -183,9 +183,10 @@ function handleReviewing(
         worker: entry.name,
       });
       killReviewWindow(projectName, entry.name);
+      // Do NOT update lastSeenSha here — handleWorking needs to see the
+      // new SHA so it transitions back to "pushed" for a fresh review.
       updateWorkerFields(projectName, entry.name, {
         prState: "working",
-        lastSeenSha: headSha,
         lastShaChangeAt: new Date().toISOString(),
         reviewWindowName: undefined,
       });
