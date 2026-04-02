@@ -860,15 +860,15 @@ function runPostMerge(projectName: string, projectPath: string): void {
     } else {
       log.info("poller", "postMerge completed", { data: { commit } });
     }
-    // Refresh tmux keybindings and status bar config after rebuild.
-    // The CLI binary may have changed (new hotkeys, updated status format),
-    // but tmux bindings are only set at dashboard creation. Re-running them
-    // is idempotent and picks up any changes from the rebuilt code.
-    try {
-      const gr = resolveGardenRunner();
-      setupKeybindings(gr);
-      setupStatusBar(gr);
-    } catch { /* dashboard may not be running */ }
+    // After rebuilding garden itself, refresh tmux keybindings and status bar
+    // so the running dashboard picks up any changes from the new CLI binary.
+    if (projectName === "garden") {
+      try {
+        const gr = resolveGardenRunner();
+        setupKeybindings(gr);
+        setupStatusBar(gr);
+      } catch { /* dashboard may not be running */ }
+    }
   } catch (err) {
     const message = projectName === "garden"
       ? `Garden rebuild failed at commit ${commit}: ${String(err).slice(0, 200)}`
