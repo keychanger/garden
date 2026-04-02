@@ -1,5 +1,6 @@
 // Reorder projects in the config to control hotkey assignment.
 import { loadConfig, saveConfig, reorderProject } from "../config.js";
+import { refreshDashboard } from "../dashboard/header.js";
 
 export async function reorder(args: string[]): Promise<void> {
   const name = args[0];
@@ -17,6 +18,7 @@ export async function reorder(args: string[]): Promise<void> {
   const config = loadConfig();
   reorderProject(config, name, position);
   saveConfig(config);
+  refreshDashboard();
 
   const names = Object.keys(config.projects);
   console.log("Project order:");

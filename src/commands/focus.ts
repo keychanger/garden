@@ -1,5 +1,6 @@
 // Focus or unfocus projects to control dashboard visibility.
 import { loadConfig, saveConfig, getProject } from "../config.js";
+import { refreshDashboard } from "../dashboard/header.js";
 
 export async function focus(args: string[]): Promise<void> {
   const name = args[0];
@@ -14,6 +15,7 @@ export async function focus(args: string[]): Promise<void> {
   const config = loadConfig();
   delete config.projects[name].focused;
   saveConfig(config);
+  refreshDashboard();
   console.log(`Focused '${name}'`);
 }
 
@@ -30,5 +32,6 @@ export async function unfocus(args: string[]): Promise<void> {
   const config = loadConfig();
   config.projects[name].focused = false;
   saveConfig(config);
+  refreshDashboard();
   console.log(`Unfocused '${name}'`);
 }
