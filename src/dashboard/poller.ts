@@ -415,15 +415,14 @@ function handleMerged(
   const wtPath = entry.worktreePath;
   if (!wtPath) return false;
 
-  // Check if the worker has new commits ahead of base branch
+  // Only transition out of merged when new commits appear.
+  // Merged state is the signal to the operator that the worker is eligible
+  // for destruction, so it must persist until explicit new work is committed.
   const commitSummary = getCommitSummary(wtPath, baseBranch);
-  // Also check if Claude is still actively working -- it may not have
-  // committed yet, but the status should reflect that it's not done
-  const claudeActive = isWorkerClaudeWorking(projectName, entry.name);
-  if (!commitSummary && !claudeActive) return false;
+  if (!commitSummary) return false;
 
   const prevCount = entry.mergeCount ?? 0;
-  const reason = commitSummary ? "new commits after merge" : "Claude still working after merge";
+  const reason = "new commits after merge";
   log.info("poller", reason + ", resuming", {
     worker: entry.name,
   });
