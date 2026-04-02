@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR, loadConfig, getFocusedProjectNames } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, paneExists, getPanePid, getPaneVar, getPaneTitle, hasClaudeChild, hasChildProcesses, listHiddenWorkerWindows, setPaneVar } from "./tmux.js";
+import { tmux, paneExists, getPanePid, getPaneVar, getPaneTitle, hasClaudeChild, hasChildProcesses, setPaneVar } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
 import { readRegistry, findWorkerByName, updateWorkerTask, type WorkerEntry } from "./registry.js";
 import { readAlerts, type Alert } from "./alerts.js";
@@ -53,7 +53,7 @@ const STATUS_ICONS: Record<string, string> = {
   idle:             "\u25C6",     // filled diamond
   pushed:           "\u2191",     // up arrow
   reviewing:        "\u25CE",     // bullseye
-  "merge-pending":  "\u25D7",     // circle with right half - queued
+  "merge-pending":  "\u25F7",     // circle with right half - queued
   failing:          "\u2716",     // heavy multiplication x
   merged:           "\u2713",     // check mark
   exited:           "\u25CB",     // open circle
