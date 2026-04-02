@@ -1,12 +1,12 @@
 // Reorder projects in the config to control hotkey assignment.
 import { loadConfig, saveConfig, reorderProject } from "../config.js";
 
-export async function sort(args: string[]): Promise<void> {
+export async function reorder(args: string[]): Promise<void> {
   const name = args[0];
   const posArg = args[1];
 
   if (!name || !posArg) {
-    throw new Error("Usage: garden sort <project> <position>");
+    throw new Error("Usage: garden reorder <project> <position>");
   }
 
   const position = parseInt(posArg, 10);

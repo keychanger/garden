@@ -36,7 +36,7 @@ npm run dev -- help    # run via tsx during development
 - `src/dashboard-claude.ts` — internal command: launches claude with rules context
 - `src/commands/config.ts` — `garden config` command: view/set project config
 - `src/commands/focus.ts` — `garden focus` / `garden unfocus`: control dashboard visibility
-- `src/commands/sort.ts` — `garden sort`: reorder projects for hotkey assignment
+- `src/commands/reorder.ts` — `garden reorder`: reorder projects for hotkey assignment
 - `src/config.ts` — reads/writes `~/.garden/config.yml`, project resolution
 - `src/session.ts` — tmux session management (create, kill, attach, list)
 - `src/rules.ts` — assembles global + project rules for Claude sessions
@@ -52,7 +52,7 @@ garden remove <name>   # name = directory basename
 garden config <project> [key] [value]  # view or set project config
 garden focus <name>    # show project in dashboard
 garden unfocus <name>  # hide project from dashboard
-garden sort <name> <N> # move project to position N
+garden reorder <name> <N> # move project to position N
 ```
 
 `register`/`unregister` are kept as aliases for backward compatibility.

@@ -14,7 +14,7 @@ import { alerts } from "./alerts.js";
 import { logs } from "./logs.js";
 import { config } from "./config.js";
 import { focus, unfocus } from "./focus.js";
-import { sort } from "./sort.js";
+import { reorder } from "./reorder.js";
 
 type Command = (args: string[]) => Promise<void>;
 
@@ -26,7 +26,7 @@ export const commands: Record<string, Command> = {
   config,
   focus,
   unfocus,
-  sort,
+  reorder,
   status,
   dashboard,
   keys,

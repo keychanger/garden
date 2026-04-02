@@ -203,7 +203,7 @@ garden list                        # List all projects
 garden config <project> [key] [val]  # View or set project config
 garden focus <name>                # Show project in dashboard
 garden unfocus <name>              # Hide project from dashboard
-garden sort <name> <position>      # Move project to position (1-based)
+garden reorder <name> <position>   # Move project to position (1-based)
 ```
 
 ### Dashboard
