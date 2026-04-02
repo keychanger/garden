@@ -13,7 +13,6 @@ import {
   listAllWindowNames,
   listHiddenWorkerWindows,
   setPaneLabel,
-  getActivePaneId,
 } from "./tmux.js";
 import { log } from "./log.js";
 import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenConsoleWindow, resolveGardenRunner } from "./create.js";
@@ -219,22 +218,7 @@ export function focusLogs(): void {
   switchGardenTo("logs");
 }
 
-export function cycleGardenPane(direction: 1 | -1): void {
-  const state = readDashState();
-  const current = state.gardenPaneType ?? "garden";
-  const currentIdx = GARDEN_VIEWS.indexOf(current as GardenView);
-  const nextIdx = (currentIdx + direction + GARDEN_VIEWS.length) % GARDEN_VIEWS.length;
-  switchGardenTo(GARDEN_VIEWS[nextIdx]);
-}
-
 export function cyclePane(direction: 1 | -1): void {
-  // Context-aware: if focused on the garden pane, cycle garden views (no lock needed)
-  const focusedPane = getActivePaneId();
-  const state = readDashState();
-  if (focusedPane && focusedPane === state.gardenShellPaneId) {
-    return cycleGardenPane(direction);
-  }
-
   // Serialize concurrent cycles to prevent race conditions
   withCycleLock(() => {
     // Re-read state inside lock to see updates from any prior queued cycle
