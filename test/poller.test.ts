@@ -931,7 +931,7 @@ describe("poll — full cycle", () => {
 });
 
 describe("poll — merged state", () => {
-  it("transitions to working when Claude is active after merge", () => {
+  it("stays merged when Claude is active but no new commits", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merged",
@@ -944,12 +944,7 @@ describe("poll — merged state", () => {
 
     poll("myproject");
 
-    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
-      prState: "working",
-      mergeCount: 1,
-      mergedAt: undefined,
-      lastSeenSha: undefined,
-    });
+    expect(updateWorkerFields).not.toHaveBeenCalled();
   });
 
   it("transitions to working when new commits appear after merge", () => {

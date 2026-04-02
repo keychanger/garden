@@ -417,21 +417,20 @@ function handleMerged(
   const wtPath = entry.worktreePath;
   if (!wtPath) return false;
 
-  // Transition out of merged when Claude is actively working (user re-engaged)
-  // or when new commits appear.
-  const claudeActive = isWorkerClaudeWorking(projectName, entry.name);
+  // Only transition out of merged when new commits appear, indicating a new
+  // work cycle. Claude being active alone (e.g. answering questions) should
+  // not clear the merged indicator — "merged" is sticky until new work starts.
   const commitSummary = getCommitSummary(wtPath, baseBranch);
 
-  if (!claudeActive && !commitSummary) return false;
+  if (!commitSummary) return false;
 
   const prevCount = entry.mergeCount ?? 0;
-  const reason = claudeActive ? "claude active after merge" : "new commits after merge";
-  log.info("poller", reason + ", resuming", {
+  log.info("poller", "new commits after merge, resuming", {
     worker: entry.name,
   });
   updateWorkerFields(projectName, entry.name, {
     prState: "working",
-    mergeCount: prevCount + (commitSummary ? 1 : 0),
+    mergeCount: prevCount + 1,
     mergedAt: undefined,
     lastSeenSha: undefined,
   });
