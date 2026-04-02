@@ -80,8 +80,9 @@ export async function status(_args: string[]): Promise<void> {
   const nameWidth = Math.max(10, ...allWorkers.map(w => w.name.length));
   const statusWidth = Math.max(7, ...allWorkers.map(w => formatStatus(w).length));
 
+  console.log("");
   for (let pi = 0; pi < statuses.length; pi++) {
-    if (pi > 0) console.log();
+    if (pi > 0) console.log("");
     const project = statuses[pi];
     const marker = project.isActive ? " \u25C4" : "";
     const name = project.isActive ? `\x1b[1;32m${project.name}\x1b[0m` : project.name;
@@ -100,6 +101,7 @@ export async function status(_args: string[]): Promise<void> {
       }
     }
   }
+  console.log("");
 }
 
 function formatStatus(worker: WorkerInfo): string {
@@ -217,6 +219,7 @@ export function renderQuickStatus(state: DashboardState, windowNames?: string[])
   const nameWidth = Math.max(10, ...allWorkers.map(w => w.name.length));
   const statusWidth = Math.max(7, ...allWorkers.map(w => formatStatus(w).length));
 
+  lines.push("");
   for (let pi = 0; pi < names.length; pi++) {
     if (pi > 0) lines.push("");
     const name = names[pi];
@@ -239,6 +242,7 @@ export function renderQuickStatus(state: DashboardState, windowNames?: string[])
       }
     }
   }
+  lines.push("");
 
   return lines.join("\n");
 }
