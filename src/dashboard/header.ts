@@ -38,9 +38,20 @@ function workerFromCwd(): { project: string; worker: string } | null {
   return { project: parts[0], worker: parts[1] };
 }
 
+// Marker older than this is considered stale (Claude likely crashed without
+// firing the Stop hook). 5 minutes is generous — even long tool runs rarely
+// go silent for that long without any subprocess activity.
+const MARKER_STALE_MS = 5 * 60 * 1000;
+
 export function isClaudeActiveByHook(project: string, worker: string): boolean {
   try {
-    return fs.existsSync(claudeActiveMarkerPath(project, worker));
+    const p = claudeActiveMarkerPath(project, worker);
+    const stat = fs.statSync(p);
+    if (Date.now() - stat.mtimeMs > MARKER_STALE_MS) {
+      fs.unlinkSync(p);
+      return false;
+    }
+    return true;
   } catch {
     return false;
   }
