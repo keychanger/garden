@@ -30,14 +30,14 @@ interface ProjectStatusInfo {
 const SPINNER_FRAMES = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u2834", "\u2826", "\u2827", "\u2807", "\u280F"];
 const STATUS_ICONS: Record<WorkerStatus, string> = {
   loading:        "\u29D7",     // hourglass
-  ready:          "\u{1F331}",  // seedling
+  ready:          "\u25C7",     // open diamond
   working:        SPINNER_FRAMES[0],
   idle:           "\u25C6",     // filled diamond
   pushed:         "\u2191",     // up arrow
   reviewing:      "\u25CE",     // bullseye
   "merge-pending": "\u25F7",    // circle with right half - queued
   failing:        "\u2716",     // heavy multiplication x
-  merged:         "\u{1F333}",  // deciduous tree
+  merged:         "\u2713",     // check mark
   exited:         "\u25CB",     // open circle
 };
 
