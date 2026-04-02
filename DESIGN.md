@@ -177,14 +177,14 @@ The dashboard surfaces important events as alerts — persistent messages that r
 The status pane shows each worker's lifecycle state using status icons:
 
 - ⏳ **loading** — worker pane started, bootstrap script running, Claude not yet launched
-- 🌱 **ready** — Claude launched but not yet tasked (no activity detected)
+- ◇ **ready** — Claude launched but not yet tasked (no activity detected)
 - ⠋ **working** — process alive, has child processes (braille spinner animation)
 - ◆ **idle** — process alive, no child processes (probably needs input)
 - ↑ **pushed** — commits detected, awaiting review launch
 - ◎ **reviewing** — poller is reviewing the worker's commits
 - ◷ **merge-pending** — review passed, in the merge queue
 - ✖ **failing** — checks or review failed (with failure count if repeated)
-- 🌳 **merged** — code merged to main (with merge count if multiple merges)
+- ✓ **merged** — code merged to main (with merge count if multiple merges)
 - ○ **exited** — process has terminated
 
 Process status is detected via tmux's `pane_pid` and child process checks. Lifecycle states (pushed, reviewing, merge-pending, failing, merged) come from the worker registry. Workers are displayed in aligned columns: focus indicator (filled/empty circle), lifecycle icon, name, status, and activity.
