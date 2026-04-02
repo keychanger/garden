@@ -24,6 +24,29 @@ import { installPollTriggerHook, worktreeExists as wtExists, resolveBaseBranch }
 const DASHBOARD_COLS = 250;
 const DASHBOARD_ROWS = 60;
 
+function buildClaudeHooksJson(gardenRunner: string): string {
+  const hookCmd = `${gardenRunner} dashboard _claude-hook`;
+  return JSON.stringify({
+    hooks: {
+      UserPromptSubmit: [{
+        matcher: "",
+        hooks: [{ type: "command", command: `${hookCmd} prompt`, timeout: 5 }],
+      }],
+      Stop: [{
+        matcher: "",
+        hooks: [{ type: "command", command: `${hookCmd} stop`, async: true, timeout: 5 }],
+      }],
+    },
+  }, null, 2);
+}
+
+export function installClaudeHooks(targetDir: string): void {
+  const json = buildClaudeHooksJson(resolveGardenRunner());
+  const claudeDir = path.join(targetDir, ".claude");
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, "settings.local.json"), json);
+}
+
 export function resizeTerminal(): void {
   try {
     process.stdout.write(`\x1b[8;${DASHBOARD_ROWS};${DASHBOARD_COLS}t`);
@@ -145,6 +168,7 @@ export function ensureDashboard(): void {
       if (!entry.sessionId) continue;
       if (entry.worktreePath && wtExists(entry.worktreePath)) {
         installPollTriggerHook(entry.worktreePath, gardenRunner, projectName);
+        installClaudeHooks(entry.worktreePath);
       }
       const workerCwd = entry.worktreePath ?? projectConfig.path;
       const resumeCmd = entry.worktreePath && entry.branchName
@@ -252,15 +276,21 @@ export function createShellWindow(projectName: string, projectPath: string): voi
 }
 
 export function buildWorkerCommand(projectName: string, projectPath: string, sessionId: string): string {
+  installClaudeHooks(projectPath);
+  const gardenRunner = shellEscape(resolveGardenRunner());
   const contextFile = writeContextFile(projectName, projectPath);
   const claudeCmd = `claude --dangerously-skip-permissions --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
-  return `${claudeCmd}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
+  const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
+  return `${claudeCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
 }
 
 export function buildResumeCommand(projectName: string, projectPath: string, sessionId: string): string {
+  installClaudeHooks(projectPath);
+  const gardenRunner = shellEscape(resolveGardenRunner());
   const contextFile = writeContextFile(projectName, projectPath);
   const claudeCmd = `claude --dangerously-skip-permissions --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
-  return `${claudeCmd}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
+  const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
+  return `${claudeCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
 }
 
 export function buildWorktreeWorkerCommand(
@@ -313,6 +343,11 @@ export function buildWorktreeBootstrapScript(
     'exit 0',
   ].join("\\n");
 
+  const gardenRunner = resolveGardenRunner();
+  const escapedGardenRunner = shellEscape(gardenRunner);
+  const claudeHooksJson = buildClaudeHooksJson(gardenRunner);
+  const escapedHooksJson = claudeHooksJson.replace(/'/g, "'\\''");
+
   const base = baseBranch ?? "main";
   const escapedBase = base.replace(/'/g, "'\\''");
 
@@ -343,12 +378,17 @@ printf '${hookContent}\\n' > ${escapedHookPath}
 chmod 755 ${escapedHookPath}
 git -C ${escapedWtPath} config --local core.hooksPath ${escapedHooksDir}
 
+# Install Claude Code hooks for event-driven status updates
+mkdir -p ${escapedWtPath}/.claude
+printf '%s' '${escapedHooksJson}' > ${escapedWtPath}/.claude/settings.local.json
+
 # Switch to the worktree directory
 cd ${escapedWtPath}
 printf '  Ready.\\n\\n'
 
 # Launch claude
 claude --dangerously-skip-permissions --session-id ${sessionId} --append-system-prompt-file ${escapedContextFile}
+${escapedGardenRunner} dashboard _claude-hook stop 2>/dev/null || true
 ${pollSignal}
 exec $SHELL
 `;
@@ -368,8 +408,10 @@ export function buildWorktreeResumeCommand(
   baseBranch?: string,
 ): string {
   const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName, baseBranch);
+  const gardenRunner = shellEscape(resolveGardenRunner());
   const claudeCmd = `claude --dangerously-skip-permissions --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
-  return `${claudeCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
+  const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
+  return `${claudeCmd}; ${exitHook}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }
 
 function pollSignalSnippet(projectName: string): string {

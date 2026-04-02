@@ -12,6 +12,7 @@ import { alertCount } from "./alerts.js";
 import { renderQuickStatus } from "../commands/status.js";
 
 const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
+const CLAUDE_EVENT_FILE = path.join(SESSIONS_DIR, "claude-event");
 
 interface RefreshOptions {
   state?: DashboardState;
@@ -255,26 +256,33 @@ function setHeaderVar(header: string): void {
   } catch { /* no client attached or session gone */ }
 }
 
+export function handleClaudeHook(event: string): void {
+  try {
+    fs.writeFileSync(CLAUDE_EVENT_FILE, event);
+  } catch { /* best effort */ }
+  refreshDashboard();
+}
+
 export function buildStatusCommand(gardenRunner: string): string {
-  // The status pane is primarily signal-driven: refreshStatusPane() sends
-  // SIGUSR1 after every mutation (new worker, project switch, kill, etc.)
-  // which interrupts the `sleep & wait` immediately. A 5s background poll
-  // catches process status changes (working/idle/exited) that have no
-  // event source.
+  // Fully event-driven: the status pane blocks on SIGUSR1 signals instead
+  // of polling. Claude Code hooks (UserPromptSubmit, Stop) and dashboard
+  // mutations (project switch, worker create/kill, poller transitions) all
+  // call refreshDashboard() which sends SIGUSR1 to wake this loop.
   //
-  // On signal, the trap immediately displays a pre-rendered status snapshot
-  // (written by refreshDashboard) for instant visual feedback. The header
-  // var is already updated by the mutation, so _header is skipped on
-  // signal-triggered iterations. The full status poll then refines the
-  // display with live process detection.
+  // On signal, the trap displays a pre-rendered snapshot for instant
+  // feedback. The main loop then runs _header (pgrep-based process
+  // detection) and status (formatted display) to refine the output.
+  //
+  // An event marker file distinguishes signal types: "prompt" starts
+  // spinner animation, "stop" or no marker just refreshes.
   const sf = STATUS_RENDERED_FILE;
-  // Build the braille character class for sed replacement (all spinner frames)
+  const ef = CLAUDE_EVENT_FILE;
   const brailleClass = `[${SPINNER_FRAMES.join("")}]`;
-  // POSIX-compatible function to get spinner frame by index
   const caseBranches = SPINNER_FRAMES.map((f, i) => `${i}) printf '%s' '${f}';;`).join(" ");
   return [
     `printf '\\033[H\\033[2J\\033[3J'`,
     `sf='${sf}'`,
+    `ef='${ef}'`,
     `sig=0`,
     `trap 'printf "\\033[H\\033[2J\\033[3J"; cat "$sf" 2>/dev/null; echo; sig=1' USR1`,
     `prev=""`,
@@ -289,11 +297,13 @@ export function buildStatusCommand(gardenRunner: string): string {
     `    printf '\\033[H\\033[2J\\033[3J%s\\n' "$cur";`,
     `    prev="$cur";`,
     `  fi;`,
-    // When a worker is "working", animate the spinner at ~120ms.
-    // After ~5s of animation (42 frames), break for a full status refresh.
-    `  if printf '%s' "$cur" | grep -q 'working'; then`,
+    // Read and consume event marker to decide whether to animate
+    `  ev=""`,
+    `  [ -f "$ef" ] && ev=$(cat "$ef" 2>/dev/null) && rm -f "$ef"`,
+    // Animate spinner when working (triggered by "prompt" event or status)
+    `  if [ "$ev" = "prompt" ] || printf '%s' "$cur" | grep -q 'working'; then`,
     `    sc=0;`,
-    `    while [ $sc -lt 42 ]; do`,
+    `    while [ $sc -lt 500 ]; do`,
     `      sleep 0.12 & wait $! 2>/dev/null;`,
     `      if [ $sig -eq 1 ]; then break; fi;`,
     `      sc=$((sc + 1));`,
@@ -303,7 +313,9 @@ export function buildStatusCommand(gardenRunner: string): string {
     `      printf '\\033[H\\033[2J\\033[3J%s\\n' "$animated";`,
     `    done;`,
     `  else`,
-    `    sleep 5 & wait $! 2>/dev/null;`,
+    // Block until signaled — no polling. Safety-net timeout prevents
+    // permanent stall if a signal is missed.
+    `    sleep 120 & wait $! 2>/dev/null;`,
     `  fi;`,
     `done`,
   ].join("\n");
