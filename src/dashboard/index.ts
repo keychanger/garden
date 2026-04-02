@@ -94,7 +94,7 @@ Hotkeys (⌥ = Option/Alt, no prefix needed):
   ⌥n           New worker (Claude session)
   ⌥w           Jump to first worker
   ⌥s           Jump to project shell
-  ⌥] / ⌥[     Cycle workers (right pane) or views (garden pane)
+  ⌥] / ⌥[     Cycle workers and shell
   ⌥x           Kill current worker (shell is protected)
   ⌥g           Focus garden (console with garden> prompt)
   ⌥r           Focus root shell

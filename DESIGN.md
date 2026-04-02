@@ -10,7 +10,7 @@ Garden is a personal tool — opinionated toward a single developer managing man
 A named reference to a directory on disk where Claude Code can operate. Projects are added with `garden add [path]` (name is derived from the directory basename).
 
 ### Dashboard
-A tmux session (`garden-dashboard`) that serves as the primary interface. The dashboard is a left/right split: project status and garden pane on the left, an active pane (worker or shell) on the right with a header bar. The garden pane (lower-left) cycles between three views using `⌥[`/`⌥]` (when focused): the garden view (`⌥g`) with a bold green `garden>` prompt and auto-dispatch for garden commands, the root shell (`⌥r`) for general-purpose terminal use, and a logs view (`⌥l`). The same swap-pane mechanism as the right pane is used. You never interact with tmux directly — garden sets up the layout, keybindings, and pane management.
+A tmux session (`garden-dashboard`) that serves as the primary interface. The dashboard is a left/right split: project status and garden pane on the left, an active pane (worker or shell) on the right with a header bar. The garden pane (lower-left) cycles between three views: the garden view (`⌥g`) with a bold green `garden>` prompt and auto-dispatch for garden commands, the root shell (`⌥r`) for general-purpose terminal use, and a logs view (`⌥l`). The same swap-pane mechanism as the right pane is used. You never interact with tmux directly — garden sets up the layout, keybindings, and pane management.
 
 ### Workers
 Interactive Claude Code sessions running inside the dashboard. Each project can have multiple workers (e.g., one for a feature, one for a review). Workers persist when you switch between projects — they're parked in hidden tmux windows and swapped back in when you return.
@@ -46,7 +46,7 @@ Rules are plain markdown. Edit them directly.
 ### Panes
 
 - **Project Status** (upper-left) — Live-updating display of all projects and their workers. Shows which project is active (`◄`), each worker's lifecycle state via status icons (braille spinner for working, Unicode symbols for other states), a focus indicator (filled/empty circle) showing which worker is active, and aligned columns for name/status/activity. Auto-sizes to the number of projects.
-- **Garden Pane** (lower-left) — Cycles between three views: garden (bold green `garden>` prompt with auto-dispatch for garden commands), root (general-purpose shell), and logs. `⌥[`/`⌥]` cycle when focused; `⌥g` jumps to garden, `⌥r` jumps to root, `⌥l` jumps to logs.
+- **Garden Pane** (lower-left) — Cycles between three views: garden (bold green `garden>` prompt with auto-dispatch for garden commands), root (general-purpose shell), and logs. `⌥g` jumps to garden, `⌥r` jumps to root, `⌥l` jumps to logs.
 - **Header** (top-right, 1-2 lines) — Shows current project, active pane type, worker count, and hotkey hints. Auto-refreshes.
 - **Active Pane** (right) — The currently visible pane for the active project. Either a worker (Claude session) or the project shell. Only one is visible at a time; others are parked in hidden tmux windows.
 
@@ -70,7 +70,7 @@ Requires terminal setup: iTerm2 → Profiles → Keys → Left Option key → "E
 | `⌥n` | New worker (Claude session) |
 | `⌥w` | Jump to first worker |
 | `⌥s` | Jump to project shell |
-| `⌥]` / `⌥[` | Context-aware: cycle workers (right pane) or views (garden pane) |
+| `⌥]` / `⌥[` | Cycle workers and shell |
 | `⌥x` | Kill current worker (shell is protected) |
 | `⌥g` | Focus garden view (lower-left) |
 | `⌥r` | Focus root shell (lower-left) |
