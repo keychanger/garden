@@ -17,7 +17,7 @@ import {
 import {
   getBranchHeadSha,
   rebaseBranch, abortRebase,
-  forcePushBranch, mergeToBase,
+  forcePushBranch, mergeToBase, deleteRemoteBranch,
   getChangedFiles, getDiffAgainstBase,
   getCommitSummary, getNewCommitSummary,
   resolveBaseBranch,
@@ -830,6 +830,7 @@ function finalizeMerge(
   }
 
   log.info("poller", "merged to base branch", { worker: entry.name, data: { baseBranch } });
+  deleteRemoteBranch(projectPath, branchName);
 
   notifySiblingWorkers(projectName, baseBranch, entry);
 

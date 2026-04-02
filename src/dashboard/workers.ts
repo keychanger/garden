@@ -16,7 +16,7 @@ import {
 } from "./registry.js";
 import { log } from "./log.js";
 import { buildWorktreeBootstrapScript, createShellWindow, resolveGardenRunner } from "./create.js";
-import { worktreePath, removeWorktree, deleteBranch, resolveBaseBranch } from "./git.js";
+import { worktreePath, removeWorktree, deleteBranch, deleteRemoteBranch, resolveBaseBranch } from "./git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
 import { getWorkers } from "./registry.js";
 
@@ -135,6 +135,7 @@ export function killPane(): void {
         }
         if (entry.branchName) {
           deleteBranch(project.path, entry.branchName);
+          deleteRemoteBranch(project.path, entry.branchName);
         }
       }
       removeWorker(state.activeProject, workerName);

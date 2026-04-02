@@ -115,7 +115,7 @@ import { poll, postPush } from "../src/dashboard/poller.js";
 import { tryGetProject } from "../src/config.js";
 import { updateWorkerFields, getWorkers } from "../src/dashboard/registry.js";
 import {
-  getBranchHeadSha,
+  getBranchHeadSha, deleteRemoteBranch,
   forcePushBranch, mergeToBase, rebaseBranch, abortRebase,
   getChangedFiles, getCommitSummary, getNewCommitSummary, getDiffAgainstBase,
 } from "../src/dashboard/git.js";
@@ -514,6 +514,7 @@ describe("poll — merge-pending state", () => {
     expect(rebaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "main");
     expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
     expect(mergeToBase).toHaveBeenCalledWith("/repo/myproject", "bold-ash", "main");
+    expect(deleteRemoteBranch).toHaveBeenCalledWith("/repo/myproject", "bold-ash");
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({
         prState: "merged",
