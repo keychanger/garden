@@ -479,9 +479,15 @@ describe("poll — reviewing state (async)", () => {
 
     poll("myproject");
 
-    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
-      expect.objectContaining({ prState: "working", reviewWindowName: undefined }),
+    const call = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "working",
     );
+    expect(call).toBeDefined();
+    const fields = call![2] as Record<string, unknown>;
+    expect(fields.reviewWindowName).toBeUndefined();
+    // lastSeenSha must NOT be updated — handleWorking needs to see the new
+    // SHA so it transitions back to "pushed" for a fresh review.
+    expect(fields).not.toHaveProperty("lastSeenSha");
     expect(mergeToBase).not.toHaveBeenCalled();
   });
 
