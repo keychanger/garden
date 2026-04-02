@@ -87,8 +87,11 @@ export function printHeader(): void {
           title = entry.task;
         }
       }
-      if (!title && claudeRunning) {
-        title = getPaneTitle(state.activePaneId) ?? null;
+      if (claudeRunning) {
+        const liveTitle = getPaneTitle(state.activePaneId) ?? null;
+        if (liveTitle) {
+          title = liveTitle;
+        }
       }
       if (title) {
         setPaneVar(state.activePaneId, "garden_task", title);
