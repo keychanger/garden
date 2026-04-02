@@ -260,15 +260,15 @@ export function buildStatusCommand(gardenRunner: string): string {
   const sf = STATUS_RENDERED_FILE;
   // Build the braille character class for sed replacement (all spinner frames)
   const brailleClass = `[${SPINNER_FRAMES.join("")}]`;
-  // Shell array literal of spinner frames
-  const framesArr = SPINNER_FRAMES.map(f => `'${f}'`).join(" ");
+  // POSIX-compatible function to get spinner frame by index
+  const caseBranches = SPINNER_FRAMES.map((f, i) => `${i}) printf '%s' '${f}';;`).join(" ");
   return [
     `printf '\\033[H\\033[2J\\033[3J'`,
     `sf='${sf}'`,
     `sig=0`,
     `trap 'printf "\\033[H\\033[2J\\033[3J"; cat "$sf" 2>/dev/null; echo; sig=1' USR1`,
     `prev=""`,
-    `spin_frames=(${framesArr})`,
+    `spin_frame() { case $1 in ${caseBranches} esac; }`,
     `while true; do`,
     `  if [ $sig -eq 0 ]; then`,
     `    ${gardenRunner} dashboard _header >/dev/null 2>&1;`,
@@ -288,8 +288,7 @@ export function buildStatusCommand(gardenRunner: string): string {
     `      if [ $sig -eq 1 ]; then break; fi;`,
     `      sc=$((sc + 1));`,
     `      si=$((sc % ${SPINNER_FRAMES.length}));`,
-    // eval to index the shell array by variable
-    `      eval "sf_char=\\$\\{spin_frames[\\$si]\\}";`,
+    `      sf_char=$(spin_frame $si);`,
     `      animated=$(printf '%s' "$cur" | sed "s/${brailleClass}/$sf_char/g");`,
     `      printf '\\033[H\\033[2J\\033[3J%s\\n' "$animated";`,
     `    done;`,
