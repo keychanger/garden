@@ -299,8 +299,9 @@ export function buildStatusCommand(gardenRunner: string): string {
     // Read and consume event marker to decide whether to animate
     `  ev=""`,
     `  [ -f "$ef" ] && ev=$(cat "$ef" 2>/dev/null) && rm -f "$ef"`,
-    // Animate spinner when working (triggered by "prompt" event or status)
-    `  if [ "$ev" = "prompt" ] || printf '%s' "$cur" | grep -q 'working'; then`,
+    // Animate spinner when any worker is actively working (has a braille
+    // spinner character in the output) or on a "prompt" event signal.
+    `  if [ "$ev" = "prompt" ] || printf '%s' "$cur" | grep -q '${brailleClass}'; then`,
     `    sc=0;`,
     `    while [ $sc -lt 500 ]; do`,
     `      sleep 0.12 & wait $! 2>/dev/null;`,
