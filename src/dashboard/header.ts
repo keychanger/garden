@@ -13,6 +13,43 @@ import { renderQuickStatus } from "../commands/status.js";
 const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
 const CLAUDE_EVENT_FILE = path.join(SESSIONS_DIR, "claude-event");
 
+// ---------------------------------------------------------------------------
+// Per-worker hook-based active state tracking
+// ---------------------------------------------------------------------------
+// When Claude runs subagents, they execute in-process (same Node.js event
+// loop). pgrep-based child process detection sees no children during API
+// calls, so status falls back to "idle". The UserPromptSubmit/Stop hooks
+// bracket the entire processing window, including subagent work. We write a
+// marker file on "prompt" and remove it on "stop" so status detection can
+// distinguish "idle at prompt" from "working with no child processes".
+// ---------------------------------------------------------------------------
+
+function claudeActiveMarkerPath(project: string, worker: string): string {
+  return path.join(SESSIONS_DIR, `claude-active-${project}-${worker}`);
+}
+
+function workerFromCwd(): { project: string; worker: string } | null {
+  const cwd = process.cwd();
+  const home = process.env.HOME ?? "";
+  const prefix = path.join(home, ".garden", "worktrees") + path.sep;
+  if (!cwd.startsWith(prefix)) return null;
+  const parts = cwd.slice(prefix.length).split(path.sep);
+  if (parts.length < 2) return null;
+  return { project: parts[0], worker: parts[1] };
+}
+
+export function isClaudeActiveByHook(project: string, worker: string): boolean {
+  try {
+    return fs.existsSync(claudeActiveMarkerPath(project, worker));
+  } catch {
+    return false;
+  }
+}
+
+export function removeClaudeActiveMarker(project: string, worker: string): void {
+  try { fs.unlinkSync(claudeActiveMarkerPath(project, worker)); } catch { /* ignore */ }
+}
+
 interface RefreshOptions {
   state?: DashboardState;
   windowNames?: string[];
@@ -352,6 +389,18 @@ function setBarVars(left: string, right: string): void {
 // ---------------------------------------------------------------------------
 
 export function handleClaudeHook(event: string): void {
+  // Track per-worker active state via marker files so status detection can
+  // distinguish "idle at prompt" from "working with in-process subagents".
+  const workerInfo = workerFromCwd();
+  if (workerInfo) {
+    const markerPath = claudeActiveMarkerPath(workerInfo.project, workerInfo.worker);
+    if (event === "prompt") {
+      try { fs.writeFileSync(markerPath, "1"); } catch { /* best effort */ }
+    } else {
+      try { fs.unlinkSync(markerPath); } catch { /* best effort */ }
+    }
+  }
+
   try {
     fs.writeFileSync(CLAUDE_EVENT_FILE, event);
   } catch { /* best effort */ }

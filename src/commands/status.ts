@@ -8,6 +8,7 @@ import {
   getPanePid, getPaneLabel, getPaneVar, getPaneTitle, getFirstPaneId,
   getClaudeChildPid, hasChildProcesses, listHiddenWorkerWindows,
 } from "../dashboard/tmux.js";
+import { isClaudeActiveByHook } from "../dashboard/header.js";
 
 type ProcessStatus = "loading" | "ready" | "working" | "idle" | "exited";
 type LifecycleStatus = "pushed" | "reviewing" | "merge-pending" | "failing" | "merged";
@@ -136,7 +137,7 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
 
   if (dashState.activeProject === projectName && dashState.activePaneId && dashState.activePaneType === "worker") {
     const label = getPaneLabel(dashState.activePaneId) ?? "worker-1";
-    const paneInfo = detectPaneProcessStatus(dashState.activePaneId);
+    const paneInfo = detectPaneProcessStatus(dashState.activePaneId, projectName, label);
     if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
     const regEntry = registryByName.get(label);
     const resolved = resolveWorkerStatus(paneInfo.status, regEntry, paneInfo.activity);
@@ -150,7 +151,7 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
     const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${win}`);
     if (paneId) {
       const label = getPaneLabel(paneId) ?? win.replace(`_${projectName}-`, "");
-      const paneInfo = detectPaneProcessStatus(paneId);
+      const paneInfo = detectPaneProcessStatus(paneId, projectName, label);
       if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
       const regEntry = registryByName.get(label);
       const resolved = resolveWorkerStatus(paneInfo.status, regEntry, paneInfo.activity);
@@ -195,7 +196,7 @@ interface PaneInfo {
   activity: string | null;
 }
 
-function detectPaneProcessStatus(paneId: string): PaneInfo {
+function detectPaneProcessStatus(paneId: string, project?: string, worker?: string): PaneInfo {
   const pid = getPanePid(paneId);
   if (!pid) return { status: "exited", activity: null };
 
@@ -208,6 +209,11 @@ function detectPaneProcessStatus(paneId: string): PaneInfo {
 
   const activity = getPaneVar(paneId, "garden_task") ?? getPaneTitle(paneId) ?? null;
   if (!hasChildProcesses(claudePid)) {
+    // No child processes, but Claude may still be working (e.g., subagents
+    // making API calls in-process). Check hook-based active state marker.
+    if (project && worker && isClaudeActiveByHook(project, worker)) {
+      return { status: "working", activity };
+    }
     return { status: activity ? "idle" : "ready", activity };
   }
   return { status: "working", activity };

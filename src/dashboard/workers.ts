@@ -4,7 +4,7 @@ import { DASHBOARD_SESSION } from "../session.js";
 import { getProject } from "../config.js";
 import { readDashState, writeDashState } from "./state.js";
 import { parkToHidden, restoreFromHidden } from "./layout.js";
-import { refreshDashboard } from "./header.js";
+import { refreshDashboard, removeClaudeActiveMarker } from "./header.js";
 import {
   tmux, tmuxDisplay, tmuxNewWindow, setPaneLabel, shellEscape,
   getFirstPaneId, paneExists, windowExists,
@@ -139,6 +139,7 @@ export function killPane(): void {
         }
       }
       removeWorker(state.activeProject, workerName);
+      removeClaudeActiveMarker(state.activeProject, workerName);
       log.info("workers", "killed", {
         worker: workerName,
         data: { project: state.activeProject, branch: entry?.branchName },

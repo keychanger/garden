@@ -22,7 +22,7 @@ import {
   getCommitSummary, getNewCommitSummary,
   resolveBaseBranch,
 } from "./git.js";
-import { refreshDashboard, setupStatusBar } from "./header.js";
+import { refreshDashboard, setupStatusBar, isClaudeActiveByHook } from "./header.js";
 import { readDashState } from "./state.js";
 import { setupKeybindings } from "./hotkeys.js";
 import { resolveGardenRunner } from "./create.js";
@@ -960,7 +960,9 @@ function isWorkerClaudeWorking(projectName: string, workerName: string): boolean
 
   if (!paneId) return false;
   const pid = getPanePid(paneId);
-  return !!pid && isClaudeWorking(pid);
+  if (pid && isClaudeWorking(pid)) return true;
+  // Fallback: check hook-based state for in-process subagent work
+  return isClaudeActiveByHook(projectName, workerName);
 }
 
 function killReviewWindow(projectName: string, workerName: string): void {

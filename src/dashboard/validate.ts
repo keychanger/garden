@@ -8,7 +8,7 @@ import { log } from "./log.js";
 import { worktreeExists, removeWorktree, pruneWorktrees } from "./git.js";
 import { startProjectPoller, projectPollerRunning, pollerWindowName, reviewWindowName as getReviewWindowName } from "./poller.js";
 import { resolveGardenRunner } from "./create.js";
-import { buildStatusCommand } from "./header.js";
+import { buildStatusCommand, removeClaudeActiveMarker } from "./header.js";
 
 /**
  * Recreate the status pane if it's missing. Reads and writes state atomically.
@@ -161,8 +161,9 @@ export function validateAndHeal(state: DashboardState): DashboardState {
     }
   } catch { /* best effort */ }
 
-  // Clean stale context files
+  // Clean stale context files and hook-state markers
   cleanContextFiles();
+  cleanStaleActiveMarkers(registry);
 
   // Restart per-project pollers if not running
   const gardenRunner = resolveGardenRunner();
@@ -202,6 +203,26 @@ function cleanContextFiles(): void {
       if (file.endsWith("-review-result.txt") || file.endsWith("-review-prompt.txt")) {
         fs.unlinkSync(`${SESSIONS_DIR}/${file}`);
         log.info("validate", "removed stale review file", { data: { file } });
+      }
+    }
+  } catch { /* sessions dir might not exist */ }
+}
+
+function cleanStaleActiveMarkers(registry: WorkerRegistry): void {
+  try {
+    const files = fs.readdirSync(SESSIONS_DIR);
+    const prefix = "claude-active-";
+    for (const file of files) {
+      if (!file.startsWith(prefix)) continue;
+      const rest = file.slice(prefix.length);
+      const dashIdx = rest.indexOf("-");
+      if (dashIdx < 0) continue;
+      const project = rest.slice(0, dashIdx);
+      const worker = rest.slice(dashIdx + 1);
+      const entries = registry.workers[project];
+      if (!entries || !entries.some(e => e.name === worker)) {
+        removeClaudeActiveMarker(project, worker);
+        log.info("validate", "removed stale active marker", { worker });
       }
     }
   } catch { /* sessions dir might not exist */ }
