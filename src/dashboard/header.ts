@@ -335,8 +335,13 @@ export function updateHeaderVar(opts?: RefreshOptions): void {
 
 function setBarVars(left: string, right: string): void {
   try {
-    tmux("set-option", "-t", DASHBOARD_SESSION, "@garden_left", left);
-    tmux("set-option", "-t", DASHBOARD_SESSION, "@garden_right", right);
+    const t = DASHBOARD_SESSION;
+    // Ensure format strings point to the correct variables. Idempotent and
+    // cheap — self-heals after CLI rebuilds without requiring dashboard restart.
+    tmux("set-option", "-t", t, "status-left", "#{@garden_left}");
+    tmux("set-option", "-t", t, "status-right", "#{@garden_right}");
+    tmux("set-option", "-t", t, "@garden_left", left);
+    tmux("set-option", "-t", t, "@garden_right", right);
     tmux("refresh-client", "-S");
   } catch { /* no client attached or session gone */ }
 }
