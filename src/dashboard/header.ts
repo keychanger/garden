@@ -6,7 +6,7 @@ import { SESSIONS_DIR } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, paneExists, getPanePid, getPaneVar, getPaneTitle, hasClaudeChild, hasChildProcesses, listHiddenWorkerWindows, setPaneVar } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
-import { findWorkerByName, updateWorkerTask } from "./registry.js";
+import { findWorkerByName, updateWorkerTask, updateWorkerFields } from "./registry.js";
 import { triggerProjectPoll } from "./poller.js";
 import { alertCount } from "./alerts.js";
 import { renderQuickStatus } from "../commands/status.js";
@@ -110,6 +110,10 @@ export function printHeader(): void {
       } else {
         paneStatus = "ready";
         setPaneVar(state.activePaneId, "garden_task", "");
+      }
+
+      if (workerLabel && state.activeProject) {
+        try { updateWorkerFields(state.activeProject, workerLabel, { claudeStatus: paneStatus }); } catch { /* best effort */ }
       }
     }
   }

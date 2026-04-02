@@ -17,6 +17,7 @@ export interface WorkerEntry {
   mergedAt?: string;
   failCount?: number;
   failingSha?: string;
+  claudeStatus?: string;  // cached process status from last pgrep detection
   reviewWindowName?: string;
   mergePendingAt?: string;
   lastReviewBody?: string;
@@ -95,6 +96,26 @@ export function updateWorkerFields(
   }
 
   Object.assign(entry, fields);
+  writeRegistry(registry);
+}
+
+export function batchUpdateWorkerFields(
+  updates: Array<{ project: string; workerName: string; fields: Partial<Omit<WorkerEntry, "name">> }>,
+): void {
+  if (updates.length === 0) return;
+  const registry = readRegistry();
+  for (const { project, workerName, fields } of updates) {
+    const entries = registry.workers[project];
+    if (!entries) continue;
+    const entry = entries.find(e => e.name === workerName);
+    if (!entry) continue;
+    if (fields.prState && fields.prState !== entry.prState) {
+      log.info("poller", `${entry.prState ?? "new"} -> ${fields.prState}`, {
+        worker: workerName,
+      });
+    }
+    Object.assign(entry, fields);
+  }
   writeRegistry(registry);
 }
 

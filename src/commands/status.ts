@@ -3,7 +3,7 @@ import { loadConfig, getFocusedProjectNames } from "../config.js";
 import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
-import { getWorkers } from "../dashboard/registry.js";
+import { getWorkers, batchUpdateWorkerFields } from "../dashboard/registry.js";
 import {
   getPanePid, getPaneLabel, getPaneVar, getPaneTitle, getFirstPaneId,
   getClaudeChildPid, hasChildProcesses, listHiddenWorkerWindows,
@@ -131,12 +131,15 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
   const registryTaskByName = new Map(registryEntries.map(e => [e.name, e.task]));
   const registryByName = new Map(registryEntries.map(e => [e.name, e]));
 
+  const statusUpdates: Array<[string, string]> = [];
+
   if (dashState.activeProject === projectName && dashState.activePaneId && dashState.activePaneType === "worker") {
     const label = getPaneLabel(dashState.activePaneId) ?? "worker-1";
     const paneInfo = detectPaneProcessStatus(dashState.activePaneId);
     if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
     const regEntry = registryByName.get(label);
     const workerStatus = resolveWorkerStatus(paneInfo.status, regEntry, paneInfo.activity);
+    statusUpdates.push([label, paneInfo.status]);
     workers.push({ name: label, status: workerStatus, activity: paneInfo.activity, active: true, mergeCount: regEntry?.mergeCount ?? 0, failCount: regEntry?.failCount ?? 0 });
   }
 
@@ -150,8 +153,19 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
       if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
       const regEntry = registryByName.get(label);
       const workerStatus = resolveWorkerStatus(paneInfo.status, regEntry, paneInfo.activity);
+      statusUpdates.push([label, paneInfo.status]);
       workers.push({ name: label, status: workerStatus, activity: paneInfo.activity, active: false, mergeCount: regEntry?.mergeCount ?? 0, failCount: regEntry?.failCount ?? 0 });
     }
+  }
+
+  if (statusUpdates.length > 0) {
+    try {
+      batchUpdateWorkerFields(
+        statusUpdates.map(([label, status]) => ({
+          project: projectName, workerName: label, fields: { claudeStatus: status },
+        })),
+      );
+    } catch { /* best effort */ }
   }
 
   // Include registry-only workers (e.g., merged workers whose windows are gone)
@@ -281,17 +295,20 @@ function getQuickWorkers(projectName: string, state: DashboardState, windowNames
   return workers;
 }
 
-function resolveQuickWorkerStatus(entry?: { prState?: string; task?: string }): WorkerStatus {
+function resolveQuickWorkerStatus(entry?: { prState?: string; task?: string; claudeStatus?: string }): WorkerStatus {
   const pr = entry?.prState;
   if (pr === "merged") return "merged";
   if (pr === "merge-pending") return "merge-pending";
   if (pr === "reviewing") return "reviewing";
   if (pr === "pushed") return "pushed";
   if (pr === "failing") return "failing";
-  // prState "working" is the poller's default — it just means no lifecycle
-  // state, not that Claude is actively executing tools. Without pgrep we
-  // can't tell working from idle, so show idle (has task) or ready (no task)
-  // to avoid a false "working" flash on every navigation.
+  // Use the cached process status from the last pgrep-based detection
+  // to avoid flashing idle/ready when the real status is working.
+  const cached = entry?.claudeStatus;
+  if (cached === "working" || cached === "idle" || cached === "loading" || cached === "exited") {
+    return cached;
+  }
   if (entry?.task) return "idle";
   return "ready";
 }
+
