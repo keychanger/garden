@@ -448,7 +448,7 @@ export function buildStatusCommand(gardenRunner: string): string {
     `sf='${sf}'`,
     `ef='${ef}'`,
     `sig=0`,
-    `trap 'printf "\\033[H\\033[2J\\033[3J"; cat "$sf" 2>/dev/null; echo; sig=1' USR1`,
+    `trap '_t=$(cat "$sf" 2>/dev/null); printf "\\033[H\\033[2J%s\\n" "$_t"; prev="$_t"; sig=1' USR1`,
     `prev=""`,
     `while true; do`,
     `  if [ $sig -eq 0 ]; then`,
