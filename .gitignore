@@ -3,3 +3,4 @@ dist/
 .garden/tasks.json
 .garden-hooks/
 .claude/
+config.yml
