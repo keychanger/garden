@@ -276,6 +276,13 @@ describe("rebaseBranch", () => {
     expect(rebaseBranch("/tmp/wt", "main")).toBe("conflict");
   });
 
+  it("returns 'conflict' when rebase could not apply a commit", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("error: could not apply abc1234... some commit message");
+    });
+    expect(rebaseBranch("/tmp/wt", "main")).toBe("conflict");
+  });
+
   it("returns 'error' for non-conflict failures", () => {
     mockExec.mockImplementation(() => {
       throw new Error("fatal: Unable to create '.git/index.lock': File exists.");
