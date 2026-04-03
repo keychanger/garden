@@ -46,12 +46,14 @@ const STATUS_ICONS: Record<WorkerStatus, string> = {
 };
 
 function iconFor(worker: WorkerInfo): string {
-  const ps = worker.processStatus;
-  if (ps === "working") {
+  // Use the display status for the icon so lifecycle states (merged,
+  // reviewing, etc.) show their own icon rather than a spinner when
+  // the Claude process happens to still be detected as active.
+  if (worker.status === "working") {
     const frame = Math.floor(Date.now() / 2000) % SPINNER_FRAMES.length;
     return SPINNER_FRAMES[frame];
   }
-  return STATUS_ICONS[ps] ?? STATUS_ICONS[worker.status];
+  return STATUS_ICONS[worker.status];
 }
 
 export async function status(_args: string[]): Promise<void> {

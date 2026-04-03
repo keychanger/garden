@@ -22,7 +22,7 @@ import {
   getCommitSummary, getNewCommitSummary,
   resolveBaseBranch,
 } from "./git.js";
-import { refreshDashboard, setupStatusBar, isClaudeActiveByHook } from "./header.js";
+import { refreshDashboard, setupStatusBar, isClaudeActiveByHook, removeClaudeActiveMarker } from "./header.js";
 import { readDashState } from "./state.js";
 import { setupKeybindings } from "./hotkeys.js";
 import { resolveGardenRunner } from "./create.js";
@@ -821,6 +821,7 @@ function finalizeMerge(
 
   log.info("poller", "merged to base branch", { worker: entry.name, data: { baseBranch } });
   deleteRemoteBranch(projectPath, branchName);
+  removeClaudeActiveMarker(projectName, entry.name);
 
   notifySiblingWorkers(projectName, baseBranch, entry);
 

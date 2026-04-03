@@ -395,7 +395,7 @@ describe("registry lifecycle states", () => {
     expect(lines.some(l => l.includes("merged (x5)"))).toBe(true);
   });
 
-  it("icon reflects process status, not lifecycle status", async () => {
+  it("icon reflects lifecycle status, not raw process status", async () => {
     vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
     vi.mocked(getPanePid).mockReturnValue("123");
     vi.mocked(getClaudeChildPid).mockReturnValue("456");
@@ -418,9 +418,9 @@ describe("registry lifecycle states", () => {
     const workerLine = lines.find(l => l.includes("bold-ash"))!;
     // Status text shows lifecycle state
     expect(workerLine).toContain("reviewing");
-    // Icon should be idle diamond (process has no children but has task), not reviewing bullseye
-    expect(workerLine).toContain("\u25C6"); // filled diamond = idle
-    expect(workerLine).not.toContain("\u25CE"); // bullseye = reviewing
+    // Icon should match lifecycle state, not raw process detection
+    expect(workerLine).toContain("\u25CE"); // bullseye = reviewing
+    expect(workerLine).not.toContain("\u25C6"); // filled diamond = idle
   });
 
   it("shows plain status when count is 1", async () => {
