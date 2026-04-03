@@ -7,7 +7,7 @@ import path from "node:path";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tryGetProject, loadConfig, SESSIONS_DIR } from "../config.js";
 import {
-  tmux, getFirstPaneId, getPanePid, hasClaudeChild, isClaudeWorking,
+  tmux, getFirstPaneId, getPanePid, hasClaudeChild,
   windowExists, killWindowSafe,
 } from "./tmux.js";
 import {
@@ -22,7 +22,8 @@ import {
   getCommitSummary, getNewCommitSummary,
   resolveBaseBranch,
 } from "./git.js";
-import { refreshDashboard, setupStatusBar, isClaudeActiveByHook, removeClaudeActiveMarker } from "./header.js";
+import { refreshDashboard, setupStatusBar, removeClaudeActiveMarker } from "./header.js";
+import { isWorkerWorking } from "./detect.js";
 import { readDashState } from "./state.js";
 import { setupKeybindings } from "./hotkeys.js";
 import { resolveGardenRunner } from "./create.js";
@@ -947,24 +948,22 @@ function notifySiblingWorkers(
 // --- Helpers ---
 
 function isWorkerClaudeWorking(projectName: string, workerName: string): boolean {
-  const workerWindow = `_${projectName}-worker-${workerName}`;
-  let paneId: string | null = null;
-
-  if (windowExists(workerWindow)) {
-    paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindow}`);
-  } else {
-    // Worker may be visible in the right pane (hidden window killed after swap)
-    const state = readDashState();
-    if (state.activeWindowName === workerWindow && state.activePaneId) {
-      paneId = state.activePaneId;
-    }
-  }
-
+  const paneId = resolveWorkerPaneId(projectName, workerName);
   if (!paneId) return false;
-  const pid = getPanePid(paneId);
-  if (pid && isClaudeWorking(pid)) return true;
-  // Fallback: check hook-based state for in-process subagent work
-  return isClaudeActiveByHook(projectName, workerName);
+  return isWorkerWorking(paneId, projectName, workerName);
+}
+
+function resolveWorkerPaneId(projectName: string, workerName: string): string | null {
+  const workerWindow = `_${projectName}-worker-${workerName}`;
+  if (windowExists(workerWindow)) {
+    return getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindow}`);
+  }
+  // Worker may be visible in the right pane (hidden window killed after swap)
+  const state = readDashState();
+  if (state.activeWindowName === workerWindow && state.activePaneId) {
+    return state.activePaneId;
+  }
+  return null;
 }
 
 function killReviewWindow(projectName: string, workerName: string): void {

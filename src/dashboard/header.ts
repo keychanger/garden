@@ -4,15 +4,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR, loadConfig } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, tmuxOutput, paneExists, getPanePid, getPaneVar, getPaneTitle, hasClaudeChild, hasChildProcesses, setPaneVar } from "./tmux.js";
+import { tmux, tmuxOutput, paneExists, getPanePid, setPaneVar } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
-import { findWorkerByName, updateWorkerTask } from "./registry.js";
+import { findWorkerByName, updateWorkerTask, updateWorkerFields } from "./registry.js";
+import { detectPaneProcessStatus } from "./detect.js";
 import { resolveBaseBranch } from "./git.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { GARDEN_VERSION } from "../version.js";
 
 const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
-const CLAUDE_EVENT_FILE = path.join(SESSIONS_DIR, "claude-event");
 
 // ---------------------------------------------------------------------------
 // Per-worker hook-based active state tracking
@@ -129,42 +129,32 @@ export function printHeader(): void {
     const workerNameMatch = (state.activeWindowName ?? "").match(/-worker-(.+)$/);
     const workerLabel = workerNameMatch ? workerNameMatch[1] : null;
 
-    const pid = getPanePid(state.activePaneId);
-    const claudeRunning = pid && hasClaudeChild(pid);
+    // Use consolidated detection (includes marker file check for subagents)
+    const paneInfo = detectPaneProcessStatus(
+      state.activePaneId,
+      state.activeProject ?? undefined,
+      workerLabel ?? undefined,
+    );
 
-    let title = getPaneVar(state.activePaneId, "garden_task");
+    // Sync task title: prefer live pane title when working, fall back to registry
+    let title = paneInfo.activity;
     if (!title && workerLabel && state.activeProject) {
       const entry = findWorkerByName(state.activeProject, workerLabel);
       if (entry?.task) title = entry.task;
-    }
-    if (claudeRunning) {
-      const liveTitle = getPaneTitle(state.activePaneId) ?? null;
-      if (liveTitle) title = liveTitle;
     }
     if (title) {
       setPaneVar(state.activePaneId, "garden_task", title);
       if (workerLabel && state.activeProject) {
         updateWorkerTask(state.activeProject, workerLabel, title);
       }
-    }
-
-    let paneStatus = "";
-    if (claudeRunning) {
-      paneStatus = title ? "working" : "ready";
-    } else if (title) {
-      paneStatus = "exited";
-    } else if (pid && hasChildProcesses(pid)) {
-      paneStatus = "loading";
-    } else {
-      paneStatus = "ready";
+    } else if (paneInfo.status === "ready") {
       setPaneVar(state.activePaneId, "garden_task", "");
     }
 
     if (workerLabel && state.activeProject) {
-      const entry = findWorkerByName(state.activeProject, workerLabel);
-      if (entry) {
-        entry.claudeStatus = paneStatus;
-      }
+      updateWorkerFields(state.activeProject, workerLabel, {
+        claudeStatus: paneInfo.status,
+      });
     }
   }
 
@@ -237,9 +227,15 @@ export function handleClaudeHook(event: string): void {
     }
   }
 
-  try {
-    fs.writeFileSync(CLAUDE_EVENT_FILE, event);
-  } catch { /* best effort */ }
+  // Update registry claudeStatus immediately so quick renders are correct
+  if (workerInfo && event === "prompt") {
+    try {
+      updateWorkerFields(workerInfo.project, workerInfo.worker, {
+        claudeStatus: "working",
+      });
+    } catch { /* best effort */ }
+  }
+
   refreshDashboard();
 }
 
@@ -249,13 +245,11 @@ export function handleClaudeHook(event: string): void {
 
 export function buildStatusCommand(gardenRunner: string): string {
   const sf = STATUS_RENDERED_FILE;
-  const ef = CLAUDE_EVENT_FILE;
   const brailleClass = `[${SPINNER_FRAMES.join("")}]`;
   const caseBranches = SPINNER_FRAMES.map((f, i) => `${i}) sf_char='${f}';;`).join(" ");
   return [
     `printf '\\033[H\\033[2J\\033[3J'`,
     `sf='${sf}'`,
-    `ef='${ef}'`,
     `sig=0`,
     `trap '_t=$(cat "$sf" 2>/dev/null); printf "\\033[H%s\\n\\033[J" "$_t"; prev="$_t"; sig=1' USR1`,
     `prev=""`,
@@ -269,15 +263,6 @@ export function buildStatusCommand(gardenRunner: string): string {
     `    printf '\\033[H%s\\n\\033[J' "$cur";`,
     `    prev="$cur";`,
     `  fi;`,
-    // Read and consume event marker to decide whether to animate
-    `  ev=""`,
-    `  [ -f "$ef" ] && ev=$(cat "$ef" 2>/dev/null) && rm -f "$ef"`,
-    // When "prompt" hook fires but pgrep didn't detect tool children (no
-    // braille spinner in output), inject a spinner on the active worker line
-    // (marked with ●) so the animation sed has something to replace.
-    `  if [ "$ev" = "prompt" ] && ! printf '%s' "$cur" | grep -q '${brailleClass}'; then`,
-    `    cur=$(printf '%s' "$cur" | perl -CSD -pe 's/(\\x{25CF} )\\S/$1\\x{280B}/')`,
-    `  fi`,
     // Animate spinner when any worker has a braille spinner character.
     `  if printf '%s' "$cur" | grep -q '${brailleClass}'; then`,
     `    sc=0;`,

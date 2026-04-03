@@ -5,12 +5,9 @@ import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
 import { getWorkers, batchUpdateWorkerFields } from "../dashboard/registry.js";
 import {
-  getPanePid, getPaneLabel, getPaneVar, getPaneTitle, getFirstPaneId,
-  getClaudeChildPid, hasChildProcesses, listHiddenWorkerWindows,
+  getPaneLabel, getFirstPaneId, listHiddenWorkerWindows,
 } from "../dashboard/tmux.js";
-import { isClaudeActiveByHook } from "../dashboard/header.js";
-
-type ProcessStatus = "loading" | "ready" | "working" | "idle" | "exited";
+import { detectPaneProcessStatus, type ProcessStatus, type PaneProcessInfo } from "../dashboard/detect.js";
 type LifecycleStatus = "pushed" | "reviewing" | "merge-pending" | "failing" | "merged";
 type WorkerStatus = ProcessStatus | LifecycleStatus;
 
@@ -119,7 +116,7 @@ function formatStatus(worker: WorkerInfo): string {
   return base;
 }
 
-function resolveWorkerStatus(paneStatus: PaneInfo["status"], regEntry: { prState?: string; task?: string } | undefined, activity: string | null): { status: WorkerStatus; processStatus: ProcessStatus } {
+function resolveWorkerStatus(paneStatus: PaneProcessInfo["status"], regEntry: { prState?: string; task?: string } | undefined, activity: string | null): { status: WorkerStatus; processStatus: ProcessStatus } {
   const processStatus: ProcessStatus = (paneStatus === "ready" && activity) ? "idle" : paneStatus;
   const pr = regEntry?.prState;
   if (pr === "merged" || pr === "merge-pending" || pr === "reviewing" || pr === "pushed" || pr === "failing") {
@@ -193,33 +190,6 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
   return workers;
 }
 
-interface PaneInfo {
-  status: "loading" | "ready" | "working" | "idle" | "exited";
-  activity: string | null;
-}
-
-function detectPaneProcessStatus(paneId: string, project?: string, worker?: string): PaneInfo {
-  const pid = getPanePid(paneId);
-  if (!pid) return { status: "exited", activity: null };
-
-  const claudePid = getClaudeChildPid(pid);
-  if (!claudePid) {
-    // No Claude yet — if shell has children, bootstrap is still running
-    if (hasChildProcesses(pid)) return { status: "loading", activity: null };
-    return { status: "ready", activity: null };
-  }
-
-  const activity = getPaneVar(paneId, "garden_task") ?? getPaneTitle(paneId) ?? null;
-  if (!hasChildProcesses(claudePid)) {
-    // No child processes, but Claude may still be working (e.g., subagents
-    // making API calls in-process). Check hook-based active state marker.
-    if (project && worker && isClaudeActiveByHook(project, worker)) {
-      return { status: "working", activity };
-    }
-    return { status: activity ? "idle" : "ready", activity };
-  }
-  return { status: "working", activity };
-}
 
 /**
  * Render status from state + registry without any pgrep/tmux process detection.

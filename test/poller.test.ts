@@ -43,7 +43,11 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
   getFirstPaneId: vi.fn(() => "%5"),
   getPanePid: vi.fn(() => "12345"),
+  getClaudeChildPid: vi.fn(() => "12346"),
   hasClaudeChild: vi.fn(() => true),
+  hasChildProcesses: vi.fn(() => false),
+  getPaneVar: vi.fn(() => null),
+  getPaneTitle: vi.fn(() => null),
   isClaudeWorking: vi.fn(() => false),
   windowExists: vi.fn(() => true),
   killWindowSafe: vi.fn(),
@@ -122,7 +126,7 @@ import {
   getChangedFiles, getCommitSummary, getNewCommitSummary, getDiffAgainstBase,
 } from "../src/dashboard/git.js";
 import { refreshDashboard, removeClaudeActiveMarker } from "../src/dashboard/header.js";
-import { tmux, hasClaudeChild, isClaudeWorking, getPanePid, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
+import { tmux, hasClaudeChild, hasChildProcesses, getPanePid, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { log } from "../src/dashboard/log.js";
@@ -213,7 +217,7 @@ describe("poll — working state", () => {
   it("transitions to pushed even when Claude is actively working", () => {
     registryMock._setEntries("myproject", [makeWorker({ prState: "working" })]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
-    vi.mocked(isClaudeWorking).mockReturnValue(true);
+    vi.mocked(hasChildProcesses).mockReturnValue(true);
 
     poll("myproject");
 
@@ -475,7 +479,7 @@ describe("poll — reviewing state (async)", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash", lastSeenSha: "old-sha" }),
     ]);
-    vi.mocked(isClaudeWorking).mockReturnValue(true);
+    vi.mocked(hasChildProcesses).mockReturnValue(true);
     vi.mocked(getBranchHeadSha).mockReturnValue("newer-sha");
 
     poll("myproject");
@@ -496,7 +500,7 @@ describe("poll — reviewing state (async)", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash", lastSeenSha: "abc123" }),
     ]);
-    vi.mocked(isClaudeWorking).mockReturnValue(true);
+    vi.mocked(hasChildProcesses).mockReturnValue(true);
     vi.mocked(getBranchHeadSha).mockReturnValue("abc123");
 
     poll("myproject");
@@ -824,7 +828,7 @@ describe("poll — live-Claude guard", () => {
       makeWorker({ prState: "pushed", lastSeenSha: "new-sha" }),
     ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
-    vi.mocked(isClaudeWorking).mockReturnValue(true);
+    vi.mocked(hasChildProcesses).mockReturnValue(true);
 
     poll("myproject");
 
@@ -837,7 +841,7 @@ describe("poll — live-Claude guard", () => {
       makeWorker({ prState: "pushed", lastSeenSha: "old-sha" }),
     ]);
     vi.mocked(getBranchHeadSha).mockReturnValue("newer-sha");
-    vi.mocked(isClaudeWorking).mockReturnValue(true);
+    vi.mocked(hasChildProcesses).mockReturnValue(true);
 
     poll("myproject");
 
@@ -878,7 +882,7 @@ describe("poll — live-Claude guard", () => {
       gardenWindowName: null,
     });
     vi.mocked(getPanePid).mockReturnValue("12345");
-    vi.mocked(isClaudeWorking).mockReturnValue(true);
+    vi.mocked(hasChildProcesses).mockReturnValue(true);
 
     poll("myproject");
 
@@ -949,7 +953,7 @@ describe("poll — merged state", () => {
       }),
     ]);
     vi.mocked(getCommitSummary).mockReturnValue("");
-    vi.mocked(isClaudeWorking).mockReturnValue(true);
+    vi.mocked(hasChildProcesses).mockReturnValue(true);
 
     poll("myproject");
 
@@ -981,7 +985,7 @@ describe("poll — merged state", () => {
       }),
     ]);
     vi.mocked(getCommitSummary).mockReturnValue("");
-    vi.mocked(isClaudeWorking).mockReturnValue(false);
+    vi.mocked(hasChildProcesses).mockReturnValue(false);
 
     poll("myproject");
 
