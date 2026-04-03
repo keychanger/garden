@@ -1,14 +1,15 @@
-// Dashboard header and status bar: renders project tabs (left) and
-// priority-based fleet status (right) in the tmux status line.
+// Dashboard header and status bar: renders active project context (left)
+// and garden build version (right) in the tmux status line.
 import fs from "node:fs";
 import path from "node:path";
-import { SESSIONS_DIR, loadConfig, getFocusedProjectNames } from "../config.js";
+import { SESSIONS_DIR, loadConfig } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, tmuxOutput, paneExists, getPanePid, getPaneVar, getPaneTitle, hasClaudeChild, hasChildProcesses, setPaneVar } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
-import { readRegistry, findWorkerByName, updateWorkerTask, type WorkerEntry } from "./registry.js";
-import { readAlerts, type Alert } from "./alerts.js";
+import { readRegistry, findWorkerByName, updateWorkerTask } from "./registry.js";
+import { resolveBaseBranch } from "./git.js";
 import { renderQuickStatus } from "../commands/status.js";
+import { GARDEN_VERSION } from "../version.js";
 
 const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
 const CLAUDE_EVENT_FILE = path.join(SESSIONS_DIR, "claude-event");
@@ -90,211 +91,29 @@ export function setupStatusBar(_gardenRunner: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Spinner frames and status icons
+// Spinner frames (used by status pane animation in buildStatusCommand)
 // ---------------------------------------------------------------------------
 
 const SPINNER_FRAMES = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u2834", "\u2826", "\u2827", "\u2807", "\u280F"];
-const STATUS_ICONS: Record<string, string> = {
-  loading:          "\u29D7",     // hourglass
-  ready:            "\u25C7",     // open diamond
-  working:          SPINNER_FRAMES[0],
-  idle:             "\u25C6",     // filled diamond
-  pushed:           "\u2191",     // up arrow
-  reviewing:        "\u25CE",     // bullseye
-  "merge-pending":  "\u25F7",     // circle with right half - queued
-  failing:          "\u2716",     // heavy multiplication x
-  merged:           "\u2713",     // check mark
-  exited:           "\u25CB",     // open circle
-};
 
-export { SPINNER_FRAMES };
+// ---------------------------------------------------------------------------
+// Left side: active project and its base branch
+// ---------------------------------------------------------------------------
 
-function spinnerIcon(): string {
-  const frame = Math.floor(Date.now() / 2000) % SPINNER_FRAMES.length;
-  return SPINNER_FRAMES[frame];
+function formatLeft(activeProject: string | null, config: ReturnType<typeof loadConfig>): string {
+  if (!activeProject) return " no projects";
+  const projectConfig = config.projects[activeProject];
+  const repoPath = projectConfig?.path ?? "";
+  const baseBranch = repoPath ? resolveBaseBranch(repoPath, projectConfig) : "main";
+  return ` #[bold]${activeProject}#[default]  ${baseBranch} `;
 }
 
 // ---------------------------------------------------------------------------
-// Per-project aggregate status: pick the "most interesting" worker state
+// Right side: garden build version
 // ---------------------------------------------------------------------------
 
-const STATE_PRIORITY: Record<string, number> = {
-  failing: 1,
-  reviewing: 2,
-  "merge-pending": 3,
-  working: 4,
-  pushed: 5,
-  loading: 6,
-  idle: 7,
-  merged: 8,
-  ready: 9,
-  exited: 10,
-};
-
-function projectAggregateState(workers: WorkerEntry[]): string | null {
-  if (workers.length === 0) return null;
-  let best: string | null = null;
-  let bestPri = Infinity;
-  for (const w of workers) {
-    // Use prState if it's a lifecycle state, otherwise fall back to claudeStatus
-    const state = (w.prState && w.prState !== "working") ? w.prState : (w.claudeStatus ?? "ready");
-    const pri = STATE_PRIORITY[state] ?? 99;
-    if (pri < bestPri) {
-      bestPri = pri;
-      best = state;
-    }
-  }
-  return best;
-}
-
-function stateIcon(state: string): string {
-  if (state === "working") return spinnerIcon();
-  return STATUS_ICONS[state] ?? "";
-}
-
-// ---------------------------------------------------------------------------
-// Left side: project tabs
-// ---------------------------------------------------------------------------
-
-function formatLeft(projectNames: string[], activeProject: string | null, registry: Record<string, WorkerEntry[]>): string {
-  if (projectNames.length === 0) return " no projects";
-  const tabs: string[] = [];
-  for (let i = 0; i < projectNames.length; i++) {
-    const name = projectNames[i];
-    const workers = registry[name] ?? [];
-    const aggState = projectAggregateState(workers);
-
-    let indicator = "";
-    if (aggState) {
-      const icon = stateIcon(aggState);
-      if (aggState === "failing") {
-        indicator = `#[fg=red]${icon}#[default]`;
-      } else if (aggState === "merged") {
-        indicator = `#[fg=green]${icon}#[default]`;
-      } else {
-        indicator = icon;
-      }
-    }
-
-    const num = i + 1;
-    const suffix = indicator ? indicator : "";
-    if (name === activeProject) {
-      tabs.push(`#[bold]${num} ${name}${suffix}#[default]`);
-    } else {
-      tabs.push(`#[fg=default]${num} ${name}${suffix}#[default]`);
-    }
-  }
-  return ` ${tabs.join("  ")} `;
-}
-
-// ---------------------------------------------------------------------------
-// Right side: priority-based fleet context
-// ---------------------------------------------------------------------------
-
-interface FleetCounts {
-  failing: number;
-  reviewing: number;
-  mergePending: number;
-  working: number;
-  pushed: number;
-  merged: number;
-  idle: number;
-}
-
-function countFleet(registry: Record<string, WorkerEntry[]>): FleetCounts {
-  const counts: FleetCounts = { failing: 0, reviewing: 0, mergePending: 0, working: 0, pushed: 0, merged: 0, idle: 0 };
-  for (const workers of Object.values(registry)) {
-    for (const w of workers) {
-      const pr = w.prState;
-      if (pr === "failing") counts.failing++;
-      else if (pr === "reviewing") counts.reviewing++;
-      else if (pr === "merge-pending") counts.mergePending++;
-      else if (pr === "pushed") counts.pushed++;
-      else if (pr === "merged") counts.merged++;
-      else {
-        // No lifecycle state — use process status
-        const cs = w.claudeStatus;
-        if (cs === "working") counts.working++;
-        else if (cs === "idle") counts.idle++;
-      }
-    }
-  }
-  return counts;
-}
-
-function formatFailingAlerts(alerts: Alert[], registry: Record<string, WorkerEntry[]>): string {
-  // Show failing workers
-  const failingWorkers: string[] = [];
-  for (const [project, workers] of Object.entries(registry)) {
-    for (const w of workers) {
-      if (w.prState === "failing") {
-        failingWorkers.push(`${project}/${w.name}`);
-      }
-    }
-  }
-
-  const parts: string[] = [];
-  if (failingWorkers.length > 0) {
-    const icon = STATUS_ICONS.failing;
-    if (failingWorkers.length <= 2) {
-      parts.push(`#[fg=red]${icon} ${failingWorkers.join(", ")}#[default]`);
-    } else {
-      parts.push(`#[fg=red]${icon} ${failingWorkers.length} failing#[default]`);
-    }
-  }
-
-  // Show most recent alert if it adds information beyond "failing"
-  if (alerts.length > 0 && failingWorkers.length === 0) {
-    const latest = alerts[alerts.length - 1];
-    const prefix = latest.level === "error" ? "#[fg=red]" : "#[fg=yellow]";
-    const msg = latest.message.length > 50 ? latest.message.slice(0, 47) + "..." : latest.message;
-    parts.push(`${prefix}${msg}#[default]`);
-  } else if (alerts.length > 0 && failingWorkers.length > 0) {
-    parts.push(`#[fg=yellow]${alerts.length} alert${alerts.length === 1 ? "" : "s"}#[default]`);
-  }
-
-  return parts.join("  ");
-}
-
-function formatFleetSummary(counts: FleetCounts): string {
-  const parts: string[] = [];
-
-  if (counts.failing > 0) {
-    parts.push(`#[fg=red]${STATUS_ICONS.failing} ${counts.failing} failing#[default]`);
-  }
-  if (counts.reviewing > 0) {
-    parts.push(`${STATUS_ICONS.reviewing} ${counts.reviewing} reviewing`);
-  }
-  if (counts.mergePending > 0) {
-    parts.push(`${STATUS_ICONS["merge-pending"]} ${counts.mergePending} merging`);
-  }
-  if (counts.working > 0) {
-    parts.push(`${spinnerIcon()} ${counts.working} working`);
-  }
-  if (counts.pushed > 0) {
-    parts.push(`${STATUS_ICONS.pushed} ${counts.pushed} pushed`);
-  }
-  if (counts.merged > 0) {
-    parts.push(`#[fg=green]${STATUS_ICONS.merged} ${counts.merged} merged#[default]`);
-  }
-
-  if (parts.length === 0) {
-    if (counts.idle > 0) return `${counts.idle} worker${counts.idle === 1 ? "" : "s"} idle`;
-    return "no workers";
-  }
-  return parts.join("  ");
-}
-
-function formatRight(registry: Record<string, WorkerEntry[]>, alerts: Alert[]): string {
-  // Priority 1: failures and alerts
-  if (alerts.length > 0 || Object.values(registry).some(ws => ws.some(w => w.prState === "failing"))) {
-    const failAlertStr = formatFailingAlerts(alerts, registry);
-    if (failAlertStr) return `${failAlertStr} `;
-  }
-
-  // Priority 2: fleet summary
-  const counts = countFleet(registry);
-  return `${formatFleetSummary(counts)} `;
+function formatRight(): string {
+  return `garden ${GARDEN_VERSION} `;
 }
 
 // ---------------------------------------------------------------------------
@@ -304,9 +123,7 @@ function formatRight(registry: Record<string, WorkerEntry[]>, alerts: Alert[]): 
 export function printHeader(): void {
   const state = readDashState();
   const config = loadConfig();
-  const projectNames = getFocusedProjectNames(config);
   const reg = readRegistry();
-  const alerts = readAlerts().alerts;
 
   // If active pane is a worker, do process detection to update registry
   if (state.activeProject && state.activePaneId && paneExists(state.activePaneId) && state.activePaneType === "worker") {
@@ -344,7 +161,6 @@ export function printHeader(): void {
       setPaneVar(state.activePaneId, "garden_task", "");
     }
 
-    // Update the cached status in registry so it's reflected in the bar
     if (workerLabel && state.activeProject) {
       const entry = findWorkerByName(state.activeProject, workerLabel);
       if (entry) {
@@ -353,11 +169,8 @@ export function printHeader(): void {
     }
   }
 
-  const left = formatLeft(projectNames, state.activeProject, reg.workers);
-  const right = formatRight(reg.workers, alerts);
-
-  // Write to stdout for the status pane loop
-  process.stdout.write(left);
+  const left = formatLeft(state.activeProject, config);
+  const right = formatRight();
   setBarVars(left, right);
 }
 
@@ -368,12 +181,9 @@ export function printHeader(): void {
 export function updateHeaderVar(opts?: RefreshOptions): void {
   const state = opts?.state ?? readDashState();
   const config = loadConfig();
-  const projectNames = getFocusedProjectNames(config);
-  const reg = readRegistry();
-  const alerts = readAlerts().alerts;
 
-  const left = formatLeft(projectNames, state.activeProject, reg.workers);
-  const right = formatRight(reg.workers, alerts);
+  const left = formatLeft(state.activeProject, config);
+  const right = formatRight();
   setBarVars(left, right);
 }
 
