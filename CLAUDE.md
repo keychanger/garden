@@ -111,7 +111,7 @@ Every worker runs in its own git worktree, isolated from the main checkout and o
 2. The worker's system prompt includes instructions to commit incrementally and push when done.
 3. Each project gets its own **poller** (`src/dashboard/poller.ts`) running in a hidden tmux window (`_<project>-poller`), driving the review/merge lifecycle using local git (no GitHub PRs). Projects never block each other.
    - Detects new commits on worker branches via SHA comparison, transitioning to `pushed` immediately.
-   - Defers review launch while Claude is actively working in the worktree (live-Claude guard). If Claude pushes new commits while in `pushed` state, reverts to `working`.
+   - Defers review launch while Claude is actively working in the worktree (live-Claude guard). While in `pushed` state, reverts to `working` if Claude is active so the status label stays accurate.
    - Launches a Claude reviewer asynchronously in a hidden tmux window (`_<project>-review-<worker>`). Multiple reviews can run in parallel within a project. The reviewer rebases onto the base branch, resolves conflicts, runs optional `checks` command (configured per project in `~/.garden/config.yml`), fixes check failures, and reviews code against project rules.
    - If code is clean or reviewer fixed all issues: force-pushes and transitions to `merge-pending`. A serial merge queue processes one merge at a time per project. If the rebase onto current base branch has conflicts (because the base branch advanced), a scoped re-review is launched with context from the previous review. If the rebase is clean: merges to the base branch via `git merge --ff-only`.
    - After merge, runs optional `postMerge` command (e.g., `npm run build` to rebuild the CLI).

@@ -870,7 +870,7 @@ describe("poll — failing state", () => {
 });
 
 describe("poll — live-Claude guard", () => {
-  it("skips review launch when Claude is actively working in pushed state", () => {
+  it("reverts to working from pushed when Claude is active (no new commits)", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "pushed", lastSeenSha: "new-sha" }),
     ]);
@@ -879,6 +879,9 @@ describe("poll — live-Claude guard", () => {
 
     poll("myproject");
 
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "working" }),
+    );
     expect(forcePushBranch).not.toHaveBeenCalled();
     expect(mergeToBase).not.toHaveBeenCalled();
   });
