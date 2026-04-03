@@ -174,7 +174,7 @@ function handleReviewing(
 ): boolean {
   // Live-Claude guard: if the worker pushed new commits, abort the review
   // so it doesn't review stale code. We check for actual SHA changes rather
-  // than just isClaudeWorking, because transient child processes (e.g. from
+  // than just isWorkerWorking, because transient child processes (e.g. from
   // navigation swaps) can produce false positives that kill valid reviews.
   if (isWorkerClaudeWorking(projectName, entry.name)) {
     const wtPath = entry.worktreePath ?? projectPath;

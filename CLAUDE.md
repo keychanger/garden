@@ -26,6 +26,7 @@ npm run dev -- help    # run via tsx during development
   - `layout.ts` — pane parking/restoring via tmux swap-pane
   - `hotkeys.ts` — Alt/Option keybinding setup
   - `header.ts` — tmux status bar: active project context (left) via `@garden_left`, build version (right) via `@garden_right`
+  - `detect.ts` — consolidated worker process status detection (pgrep + hook markers)
   - `tmux.ts` — low-level tmux helpers (shared by dashboard and status command)
   - `validate.ts` — state/tmux consistency validation and self-healing
   - `git.ts` — git CLI wrappers for worktree and merge operations
@@ -96,7 +97,7 @@ The dashboard uses a permanent tmux layout with content swapped in and out of pa
 - **Hidden windows** use underscore-prefixed names: `_<project>-worker-N`, `_<project>-shell`, `_<project>-poller`, `_<project>-review-<worker>`, `_garden-garden`, `_garden-root`, `_garden-logs`. The underscore marks them as garden-managed.
 - **Parking/restoring** (`src/dashboard/layout.ts`): To swap content, we create a temp hidden window, swap the current pane into it, then swap the target pane from its hidden window into the slot, and kill the temp window. Separate functions handle the right pane (`parkToHidden`/`restoreFromHidden`) and garden pane (`gardenParkToHidden`/`gardenRestoreFromHidden`).
 - **State** (`src/dashboard/state.ts`): Tracks which project is active, which pane is visible, and pane IDs. Written atomically (write-tmp-then-rename) to `dashboard.state.json` after every operation.
-- **Status detection** (`src/dashboard/tmux.ts`): Uses `pgrep` to detect whether claude is running and whether it has child processes (working vs idle). Falls back to hook-based marker files for in-process subagent work. Called on-demand after events, not on a timer.
+- **Status detection** (`src/dashboard/detect.ts`): Single source of truth for worker process status. Uses `pgrep` to detect whether claude is running and whether it has child processes (working vs idle). Falls back to hook-based marker files for in-process subagent work. Called on-demand after events, not on a timer.
 - **Bottom bar** (`src/dashboard/header.ts`): Two-sided tmux status line. Left (`@garden_left`): active project name (bold) and its base branch. Right (`@garden_right`): garden build version (git short SHA, or "dev" when running via tsx). Updated instantly after every mutation via `refresh-client -S`. Claude Code hooks (`UserPromptSubmit`, `Stop`) signal the status pane when workers start/stop processing.
 - **State validation** (`src/dashboard/validate.ts`): On every attach, validates pane IDs against tmux reality and heals stale state. Cleans orphaned registry entries and context files.
 - **Logging** (`src/dashboard/log.ts`): Structured JSON log to `~/.garden/sessions/dashboard.log`. Logs state mutations, swap operations, and validation results.

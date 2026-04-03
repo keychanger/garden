@@ -149,11 +149,6 @@ export function hasClaudeChild(pid: string): boolean {
   return getClaudeChildPid(pid) !== null;
 }
 
-export function isClaudeWorking(shellPid: string): boolean {
-  const claudePid = getClaudeChildPid(shellPid);
-  if (!claudePid) return false;
-  return hasChildProcesses(claudePid);
-}
 
 export function hasChildProcesses(pid: string): boolean {
   try {

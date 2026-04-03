@@ -48,7 +48,6 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   hasChildProcesses: vi.fn(() => false),
   getPaneVar: vi.fn(() => null),
   getPaneTitle: vi.fn(() => null),
-  isClaudeWorking: vi.fn(() => false),
   windowExists: vi.fn(() => true),
   killWindowSafe: vi.fn(),
 }));
