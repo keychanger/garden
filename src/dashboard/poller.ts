@@ -152,16 +152,13 @@ function handlePushed(
   baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
-  // If Claude started new work, go back to working
+  // If Claude is still working, revert to "working" so the status is accurate.
+  // handleWorking gates on SHA changes, so we won't bounce back to "pushed"
+  // until there's actually a new commit.
   if (isWorkerClaudeWorking(projectName, entry.name)) {
-    const wtPath = entry.worktreePath ?? projectPath;
-    const headSha = getBranchHeadSha(wtPath);
-    if (headSha && headSha !== entry.lastSeenSha) {
-      updateWorkerFields(projectName, entry.name, { prState: "working" });
-      refreshDashboard();
-      return true;
-    }
-    return false;
+    updateWorkerFields(projectName, entry.name, { prState: "working" });
+    refreshDashboard();
+    return true;
   }
 
   return launchReview(projectName, projectPath, baseBranch, entry, false);
