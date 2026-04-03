@@ -267,7 +267,9 @@ export function renderQuickStatus(state: DashboardState, windowNames?: string[])
   }
   lines.push("");
 
-  return lines.join("\n");
+  // Append clear-to-end-of-line to each line so the status pane can
+  // overwrite in place without full screen clears (avoids flashing).
+  return lines.map(l => l + "\x1b[K").join("\n");
 }
 
 function getQuickWorkers(projectName: string, state: DashboardState, windowNames?: string[]): WorkerInfo[] {
