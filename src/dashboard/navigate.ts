@@ -101,7 +101,6 @@ export function switchProject(indexArg: string): void {
   state.activeProject = projectName;
   writeDashState(state);
   refreshDashboard({ state });
-  tmuxDisplay(`Switched to ${projectName}`);
 }
 
 export function focusWorker(): void {
