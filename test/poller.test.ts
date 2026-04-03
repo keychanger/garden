@@ -546,7 +546,7 @@ describe("poll — merge-pending state", () => {
         task: "fix the bug",
       }),
     ]);
-    vi.mocked(rebaseBranch).mockReturnValue(false);
+    vi.mocked(rebaseBranch).mockReturnValue("conflict");
 
     poll("myproject");
 
@@ -580,6 +580,31 @@ describe("poll — merge-pending state", () => {
     expect(mergeToBase).not.toHaveBeenCalled();
   });
 
+  it("retries silently on non-conflict rebase error", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue("error");
+
+    poll("myproject");
+
+    expect(abortRebase).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(mergeToBase).not.toHaveBeenCalled();
+    // Should NOT launch a re-review — the problem isn't in the code
+    expect(tmux).not.toHaveBeenCalledWith(
+      "new-window", expect.anything(), expect.anything(), expect.anything(),
+      "-n", "_myproject-review-bold-ash",
+      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
+    );
+    // State should remain merge-pending
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "reviewing" }),
+    );
+  });
+
   it("includes previous review body in re-review prompt", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
@@ -589,7 +614,7 @@ describe("poll — merge-pending state", () => {
         task: "add retry logic",
       }),
     ]);
-    vi.mocked(rebaseBranch).mockReturnValue(false);
+    vi.mocked(rebaseBranch).mockReturnValue("conflict");
 
     poll("myproject");
 

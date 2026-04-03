@@ -92,12 +92,22 @@ export function getDiffAgainstBase(wtPath: string, baseBranch: string): string {
   return git(wtPath, "diff", `origin/${baseBranch}...HEAD`);
 }
 
-export function rebaseBranch(worktreePath: string, baseBranch: string): boolean {
+export type RebaseResult = "ok" | "conflict" | "error";
+
+export function rebaseBranch(worktreePath: string, baseBranch: string): RebaseResult {
   try {
     git(worktreePath, "rebase", `origin/${baseBranch}`);
-    return true;
-  } catch {
-    return false;
+    return "ok";
+  } catch (err) {
+    const msg = String(err);
+    // Actual merge conflicts mention CONFLICT or "could not apply"
+    if (msg.includes("CONFLICT") || msg.includes("could not apply")) {
+      return "conflict";
+    }
+    log.error("git", "rebase failed (not a conflict)", {
+      data: { baseBranch, error: msg },
+    });
+    return "error";
   }
 }
 

@@ -21,6 +21,7 @@ import {
   getChangedFiles, getDiffAgainstBase,
   getCommitSummary, getNewCommitSummary,
   resolveBaseBranch,
+  type RebaseResult,
 } from "./git.js";
 import { refreshDashboard, setupStatusBar, removeClaudeActiveMarker } from "./header.js";
 import { isWorkerWorking } from "./detect.js";
@@ -327,15 +328,20 @@ function handleMergePending(
   } catch { /* best effort */ }
 
   // Rebase onto current base branch
-  if (!rebaseBranch(wtPath, baseBranch)) {
+  const rebaseResult = rebaseBranch(wtPath, baseBranch);
+  if (rebaseResult === "conflict") {
     abortRebase(wtPath);
     log.warn("poller", "rebase conflicts in merge queue, launching re-review", {
       worker: entry.name,
     });
-
-    // Go back to reviewing with a scoped re-review
     launchReview(projectName, projectPath, baseBranch, entry, true);
     return true;
+  }
+  if (rebaseResult === "error") {
+    // Non-conflict failure (lock file, dirty state, etc). Don't launch
+    // a re-review — the problem isn't in the code. Just wait and retry.
+    abortRebase(wtPath);
+    return false;
   }
 
   // Force-push rebased branch

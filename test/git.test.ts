@@ -251,8 +251,8 @@ describe("deleteRemoteBranch", () => {
 });
 
 describe("rebaseBranch", () => {
-  it("returns true on successful rebase", () => {
-    expect(rebaseBranch("/tmp/wt", "main")).toBe(true);
+  it("returns 'ok' on successful rebase", () => {
+    expect(rebaseBranch("/tmp/wt", "main")).toBe("ok");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
       ["rebase", "origin/main"],
@@ -269,11 +269,18 @@ describe("rebaseBranch", () => {
     );
   });
 
-  it("returns false on conflict", () => {
+  it("returns 'conflict' when rebase has merge conflicts", () => {
     mockExec.mockImplementation(() => {
-      throw new Error("conflict");
+      throw new Error("CONFLICT (content): Merge conflict in file.ts");
     });
-    expect(rebaseBranch("/tmp/wt", "main")).toBe(false);
+    expect(rebaseBranch("/tmp/wt", "main")).toBe("conflict");
+  });
+
+  it("returns 'error' for non-conflict failures", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("fatal: Unable to create '.git/index.lock': File exists.");
+    });
+    expect(rebaseBranch("/tmp/wt", "main")).toBe("error");
   });
 });
 
