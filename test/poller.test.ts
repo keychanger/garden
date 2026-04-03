@@ -121,7 +121,7 @@ import {
   forcePushBranch, mergeToBase, rebaseBranch, abortRebase,
   getChangedFiles, getCommitSummary, getNewCommitSummary, getDiffAgainstBase,
 } from "../src/dashboard/git.js";
-import { refreshDashboard } from "../src/dashboard/header.js";
+import { refreshDashboard, removeClaudeActiveMarker } from "../src/dashboard/header.js";
 import { tmux, hasClaudeChild, isClaudeWorking, getPanePid, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { readDashState } from "../src/dashboard/state.js";
@@ -523,6 +523,7 @@ describe("poll — merge-pending state", () => {
     expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
     expect(mergeToBase).toHaveBeenCalledWith("/repo/myproject", "bold-ash", "main");
     expect(deleteRemoteBranch).toHaveBeenCalledWith("/repo/myproject", "bold-ash");
+    expect(removeClaudeActiveMarker).toHaveBeenCalledWith("myproject", "bold-ash");
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({
         prState: "merged",

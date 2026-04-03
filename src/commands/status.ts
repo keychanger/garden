@@ -17,7 +17,7 @@ type WorkerStatus = ProcessStatus | LifecycleStatus;
 interface WorkerInfo {
   name: string;
   status: WorkerStatus;         // display label: lifecycle state when present, else process state
-  processStatus: ProcessStatus; // what Claude is doing right now (drives the icon)
+  processStatus: ProcessStatus; // what Claude is doing right now (cached to registry)
   activity: string | null;
   active: boolean;
   mergeCount: number;
