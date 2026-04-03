@@ -119,6 +119,11 @@ function formatStatus(worker: WorkerInfo): string {
 function resolveWorkerStatus(paneStatus: PaneProcessInfo["status"], regEntry: { prState?: string; task?: string } | undefined, activity: string | null): { status: WorkerStatus; processStatus: ProcessStatus } {
   const processStatus: ProcessStatus = (paneStatus === "ready" && activity) ? "idle" : paneStatus;
   const pr = regEntry?.prState;
+  // When pushed but Claude is actively working, show "working" — the commits
+  // are there but review is deferred until Claude finishes.
+  if (pr === "pushed" && processStatus === "working") {
+    return { status: "working", processStatus };
+  }
   if (pr === "merged" || pr === "merge-pending" || pr === "reviewing" || pr === "pushed" || pr === "failing") {
     return { status: pr, processStatus };
   }
@@ -282,6 +287,11 @@ function resolveQuickWorkerStatus(entry?: { prState?: string; task?: string; cla
   const processStatus: ProcessStatus = cached ?? (entry?.task ? "idle" : "ready");
 
   const pr = entry?.prState;
+  // When pushed but Claude is actively working, show "working" — the commits
+  // are there but review is deferred until Claude finishes.
+  if (pr === "pushed" && processStatus === "working") {
+    return { status: "working", processStatus };
+  }
   if (pr === "merged" || pr === "merge-pending" || pr === "reviewing" || pr === "pushed" || pr === "failing") {
     return { status: pr, processStatus };
   }

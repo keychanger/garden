@@ -152,13 +152,25 @@ function handlePushed(
   baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
-  // If Claude is still working, revert to "working" so the status is accurate.
-  // handleWorking gates on SHA changes, so we won't bounce back to "pushed"
-  // until there's actually a new commit.
+  // Don't launch a review while Claude is actively working — it would review
+  // stale code. Keep prState as "pushed" (the display layer shows "working"
+  // when the process is active in a pushed state). Mutating prState to
+  // "working" here creates a stuck state: when Claude stops without making
+  // new commits, handleWorking gates on SHA and can never transition back.
   if (isWorkerClaudeWorking(projectName, entry.name)) {
-    updateWorkerFields(projectName, entry.name, { prState: "working" });
-    refreshDashboard();
-    return true;
+    // Track new commits so handleReviewing won't treat pre-review commits
+    // as "new work" and spuriously abort the review once it launches.
+    const wtPath = entry.worktreePath ?? projectPath;
+    const headSha = getBranchHeadSha(wtPath);
+    if (headSha && headSha !== entry.lastSeenSha) {
+      updateWorkerFields(projectName, entry.name, {
+        lastSeenSha: headSha,
+        lastShaChangeAt: new Date().toISOString(),
+      });
+      refreshDashboard();
+      return true;
+    }
+    return false;
   }
 
   return launchReview(projectName, projectPath, baseBranch, entry, false);

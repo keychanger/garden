@@ -870,7 +870,7 @@ describe("poll — failing state", () => {
 });
 
 describe("poll — live-Claude guard", () => {
-  it("reverts to working from pushed when Claude is active (no new commits)", () => {
+  it("stays in pushed when Claude is active (defers review, no state mutation)", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "pushed", lastSeenSha: "new-sha" }),
     ]);
@@ -879,14 +879,18 @@ describe("poll — live-Claude guard", () => {
 
     poll("myproject");
 
-    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+    // Should NOT mutate prState — stays "pushed", display layer handles cosmetics
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "working" }),
+    );
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "reviewing" }),
     );
     expect(forcePushBranch).not.toHaveBeenCalled();
     expect(mergeToBase).not.toHaveBeenCalled();
   });
 
-  it("reverts to working from pushed when Claude pushes new commits", () => {
+  it("stays in pushed when Claude pushes new commits (tracks SHA, defers review)", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "pushed", lastSeenSha: "old-sha" }),
     ]);
@@ -895,8 +899,15 @@ describe("poll — live-Claude guard", () => {
 
     poll("myproject");
 
+    // Should update lastSeenSha without changing prState
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ lastSeenSha: "newer-sha" }),
+    );
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "working" }),
+    );
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "reviewing" }),
     );
   });
 
@@ -936,9 +947,12 @@ describe("poll — live-Claude guard", () => {
 
     poll("myproject");
 
-    // Should detect Claude is working and skip review
+    // Should detect Claude is working and skip review (staying in pushed)
     expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "reviewing" }),
+    );
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "working" }),
     );
   });
 });
