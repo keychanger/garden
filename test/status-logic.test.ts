@@ -590,6 +590,45 @@ describe("renderQuickStatus", () => {
     expect(result).toContain("ready");
   });
 
+  it("shows idle when claudeStatus is idle after stop hook", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "idle" },
+    ]);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+
+    const state = {
+      activeProject: "garden",
+      statusPaneId: "%0",
+      gardenShellPaneId: "%1",
+      activePaneId: "%2",
+      activePaneType: "worker" as const,
+      activeWindowName: "_garden-worker-bold-ash",
+    };
+
+    const result = renderQuickStatus(state);
+    expect(result).toContain("idle");
+    expect(result).not.toContain("working");
+  });
+
+  it("shows working when claudeStatus is working from prompt hook", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "working" },
+    ]);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+
+    const state = {
+      activeProject: "garden",
+      statusPaneId: "%0",
+      gardenShellPaneId: "%1",
+      activePaneId: "%2",
+      activePaneType: "worker" as const,
+      activeWindowName: "_garden-worker-bold-ash",
+    };
+
+    const result = renderQuickStatus(state);
+    expect(result).toContain("working");
+  });
+
   it("uses provided windowNames instead of querying tmux", () => {
     vi.mocked(getWorkers).mockReturnValue([]);
     vi.mocked(listHiddenWorkerWindows).mockImplementation((_proj, names) => {

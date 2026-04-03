@@ -239,6 +239,12 @@ export function handleClaudeHook(event: string): void {
         claudeStatus: "working",
       });
     } catch { /* best effort */ }
+  } else if (workerInfo) {
+    try {
+      updateWorkerFields(workerInfo.project, workerInfo.worker, {
+        claudeStatus: "idle",
+      });
+    } catch { /* best effort */ }
   }
 
   refreshDashboard();
@@ -280,9 +286,26 @@ export function buildStatusCommand(gardenRunner: string): string {
     `      animated=$(printf '%s' "$cur" | sed "s/${brailleClass}/$sf_char/g");`,
     `      printf '\\033[H%s\\n\\033[J' "$animated";`,
     `    done;`,
+    // Transient-state polling: "loading" means bootstrap is running and will
+    // finish soon. Poll every 3s so loading->ready appears within seconds.
+    `  elif printf '%s' "$cur" | grep -q '\u29D7'; then`,
+    `    tc=0;`,
+    `    while [ $tc -lt 10 ]; do`,
+    `      sleep 3 & wait $! 2>/dev/null;`,
+    `      if [ $sig -eq 1 ]; then break; fi;`,
+    `      tc=$((tc + 1));`,
+    `      ${gardenRunner} dashboard _header >/dev/null 2>&1;`,
+    `      ncur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1 | awk '{printf "%s\\033[K\\n", $0}');`,
+    `      if [ "$ncur" != "$cur" ]; then`,
+    `        printf '\\033[H%s\\n\\033[J' "$ncur";`,
+    `        prev="$ncur";`,
+    `        cur="$ncur";`,
+    `        break;`,
+    `      fi;`,
+    `    done;`,
     `  else`,
-    // Block until signaled — no polling.
-    `    sleep 120 & wait $! 2>/dev/null;`,
+    // Safety-net: recheck after 30s in case a signal was missed.
+    `    sleep 30 & wait $! 2>/dev/null;`,
     `  fi;`,
     `done`,
   ].join("\n");
