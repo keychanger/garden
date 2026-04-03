@@ -101,7 +101,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   getDiffAgainstBase: vi.fn(() => "diff --git a/file.ts b/file.ts"),
   forcePushBranch: vi.fn(),
   mergeToBase: vi.fn(),
-  rebaseBranch: vi.fn(() => true),
+  rebaseBranch: vi.fn(() => "ok"),
   abortRebase: vi.fn(),
   deleteRemoteBranch: vi.fn(),
   fastForwardBase: vi.fn(),
@@ -160,7 +160,7 @@ beforeEach(() => {
   vi.mocked(getNewCommitSummary).mockReturnValue("def456 address review feedback");
   vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject", checks: undefined } as ReturnType<typeof tryGetProject>);
   vi.mocked(getBranchHeadSha).mockReturnValue("abc123");
-  vi.mocked(rebaseBranch).mockReturnValue(true);
+  vi.mocked(rebaseBranch).mockReturnValue("ok");
   // Default: Claude not running, so review attempts proceed
   vi.mocked(hasClaudeChild).mockReturnValue(false);
   // Default: fs.existsSync returns false
@@ -518,7 +518,7 @@ describe("poll — merge-pending state", () => {
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
       }),
     ]);
-    vi.mocked(rebaseBranch).mockReturnValue(true);
+    vi.mocked(rebaseBranch).mockReturnValue("ok");
 
     poll("myproject");
 
