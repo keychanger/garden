@@ -565,19 +565,27 @@ describe("poll — merge-pending state", () => {
     );
   });
 
-  it("skips rebase when Claude is actively working", () => {
+  it("skips re-review when rebase conflicts and Claude is working", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
       }),
     ]);
+    vi.mocked(rebaseBranch).mockReturnValue("conflict");
     vi.mocked(hasChildProcesses).mockReturnValue(true);
 
     poll("myproject");
 
-    expect(rebaseBranch).not.toHaveBeenCalled();
+    // Rebase is attempted, but re-review is deferred until Claude is idle
+    expect(rebaseBranch).toHaveBeenCalled();
+    expect(abortRebase).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
     expect(mergeToBase).not.toHaveBeenCalled();
+    expect(tmux).not.toHaveBeenCalledWith(
+      "new-window", expect.anything(), expect.anything(), expect.anything(),
+      "-n", "_myproject-review-bold-ash",
+      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
+    );
   });
 
   it("retries silently on non-conflict rebase error", () => {

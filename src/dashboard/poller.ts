@@ -311,12 +311,6 @@ function handleMergePending(
   );
   if (olderPending) return false;
 
-  // Don't attempt rebase while Claude is actively working — a conflict
-  // would require a re-review, which can't launch until Claude is idle.
-  // Without this guard, the poller spins in a tight loop: rebase fails,
-  // launchReview bails on the working check, state stays merge-pending.
-  if (isWorkerClaudeWorking(projectName, entry.name)) return false;
-
   const wtPath = entry.worktreePath ?? projectPath;
 
   // Fetch latest base branch
@@ -331,6 +325,10 @@ function handleMergePending(
   const rebaseResult = rebaseBranch(wtPath, baseBranch);
   if (rebaseResult === "conflict") {
     abortRebase(wtPath);
+    // A re-review needs Claude to be idle (it runs in the worktree).
+    // If Claude is working, just wait — don't spin launching reviews
+    // that will immediately bail on the working check.
+    if (isWorkerClaudeWorking(projectName, entry.name)) return false;
     log.warn("poller", "rebase conflicts in merge queue, launching re-review", {
       worker: entry.name,
     });
