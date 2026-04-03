@@ -268,11 +268,19 @@ export function buildStatusCommand(gardenRunner: string): string {
     `  if [ $sig -eq 0 ]; then`,
     `    ${gardenRunner} dashboard _header >/dev/null 2>&1;`,
     `  fi;`,
-    `  sig=0;`,
-    `  cur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1 | awk '{printf "%s\\033[K\\n", $0}');`,
-    `  if [ "$cur" != "$prev" ]; then`,
-    `    printf '\\033[H%s\\n\\033[J' "$cur";`,
-    `    prev="$cur";`,
+    `  if [ $sig -eq 1 ]; then`,
+    // Signal trap already displayed the pre-rendered content and set prev.
+    // Reuse it as cur to skip the expensive garden-status subprocess (~1s)
+    // and go straight into the animation loop.
+    `    cur="$prev";`,
+    `    sig=0;`,
+    `  else`,
+    `    sig=0;`,
+    `    cur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1 | awk '{printf "%s\\033[K\\n", $0}');`,
+    `    if [ "$cur" != "$prev" ]; then`,
+    `      printf '\\033[H%s\\n\\033[J' "$cur";`,
+    `      prev="$cur";`,
+    `    fi;`,
     `  fi;`,
     // Animate spinner when any worker has a braille spinner character.
     `  if printf '%s' "$cur" | grep -q '${brailleClass}'; then`,
