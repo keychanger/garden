@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR, loadConfig } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, tmuxOutput, paneExists, getPanePid, setPaneVar } from "./tmux.js";
+import { tmux, tmuxOutput, paneExists, getPanePid, getPaneTitle, setPaneVar } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
 import { findWorkerByName, updateWorkerTask, updateWorkerFields } from "./registry.js";
 import { detectPaneProcessStatus } from "./detect.js";
@@ -136,8 +136,13 @@ export function printHeader(): void {
       workerLabel ?? undefined,
     );
 
-    // Sync task title: prefer live pane title when working, fall back to registry
+    // Sync task title: when Claude is working, prefer the live pane title
+    // (Claude updates it as it works) over the cached garden_task pane var.
     let title = paneInfo.activity;
+    if (paneInfo.status === "working") {
+      const liveTitle = getPaneTitle(state.activePaneId);
+      if (liveTitle) title = liveTitle;
+    }
     if (!title && workerLabel && state.activeProject) {
       const entry = findWorkerByName(state.activeProject, workerLabel);
       if (entry?.task) title = entry.task;
