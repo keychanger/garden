@@ -1,0 +1,9 @@
+projects:
+  garden:
+    path: /Users/joshua/code/keychange/garden
+    checks: npx tsc --noEmit && npx vitest run
+    postMerge: npm install && npm run build
+  wolf:
+    path: /Users/joshua/code/leadingtone/wolf
+  lex:
+    path: /Users/joshua/code/imp/lex
