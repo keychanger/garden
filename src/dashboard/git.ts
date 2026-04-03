@@ -123,6 +123,8 @@ export function mergeToBase(repoPath: string, branchName: string, baseBranch: st
 
 export function deleteRemoteBranch(repoPath: string, branchName: string): void {
   try {
+    const refs = git(repoPath, "ls-remote", "--heads", "origin", branchName);
+    if (!refs.trim()) return;
     git(repoPath, "push", "origin", "--delete", branchName);
     log.info("git", "deleted remote branch", { data: { branchName } });
   } catch (err) {

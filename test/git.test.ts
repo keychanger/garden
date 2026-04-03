@@ -217,11 +217,27 @@ describe("mergeToBase", () => {
 });
 
 describe("deleteRemoteBranch", () => {
-  it("calls git push origin --delete", () => {
+  it("calls git push origin --delete when remote ref exists", () => {
+    mockExec.mockReturnValueOnce("abc123\trefs/heads/swift-oak\n");
     deleteRemoteBranch("/repo", "swift-oak");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
+      ["ls-remote", "--heads", "origin", "swift-oak"],
+      expect.objectContaining({ cwd: "/repo" }),
+    );
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
       ["push", "origin", "--delete", "swift-oak"],
+      expect.objectContaining({ cwd: "/repo" }),
+    );
+  });
+
+  it("skips delete when remote ref does not exist", () => {
+    deleteRemoteBranch("/repo", "swift-oak");
+    expect(mockExec).toHaveBeenCalledTimes(1);
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["ls-remote", "--heads", "origin", "swift-oak"],
       expect.objectContaining({ cwd: "/repo" }),
     );
   });
