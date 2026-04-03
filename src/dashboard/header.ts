@@ -6,7 +6,7 @@ import { SESSIONS_DIR, loadConfig } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, tmuxOutput, paneExists, getPanePid, getPaneVar, getPaneTitle, hasClaudeChild, hasChildProcesses, setPaneVar } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
-import { readRegistry, findWorkerByName, updateWorkerTask } from "./registry.js";
+import { findWorkerByName, updateWorkerTask } from "./registry.js";
 import { resolveBaseBranch } from "./git.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { GARDEN_VERSION } from "../version.js";
@@ -123,7 +123,6 @@ function formatRight(): string {
 export function printHeader(): void {
   const state = readDashState();
   const config = loadConfig();
-  const reg = readRegistry();
 
   // If active pane is a worker, do process detection to update registry
   if (state.activeProject && state.activePaneId && paneExists(state.activePaneId) && state.activePaneType === "worker") {
