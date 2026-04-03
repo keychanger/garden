@@ -565,6 +565,21 @@ describe("poll — merge-pending state", () => {
     );
   });
 
+  it("skips rebase when Claude is actively working", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(hasChildProcesses).mockReturnValue(true);
+
+    poll("myproject");
+
+    expect(rebaseBranch).not.toHaveBeenCalled();
+    expect(mergeToBase).not.toHaveBeenCalled();
+  });
+
   it("includes previous review body in re-review prompt", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
