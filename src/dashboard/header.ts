@@ -40,9 +40,12 @@ function workerFromCwd(): { project: string; worker: string } | null {
 }
 
 // Marker older than this is considered stale (Claude likely crashed without
-// firing the Stop hook). 5 minutes is generous — even long tool runs rarely
-// go silent for that long without any subprocess activity.
-const MARKER_STALE_MS = 5 * 60 * 1000;
+// firing the Stop hook). Detection touches the marker whenever it sees active
+// child processes, so the mtime reflects "last tool activity" rather than
+// "when the user sent a message." 2 minutes without any tool subprocess is
+// long enough to cover API-call gaps between tools, short enough to clear
+// stuck markers promptly.
+const MARKER_STALE_MS = 2 * 60 * 1000;
 
 export function isClaudeActiveByHook(project: string, worker: string): boolean {
   try {
@@ -60,6 +63,14 @@ export function isClaudeActiveByHook(project: string, worker: string): boolean {
 
 export function removeClaudeActiveMarker(project: string, worker: string): void {
   try { fs.unlinkSync(claudeActiveMarkerPath(project, worker)); } catch { /* ignore */ }
+}
+
+export function touchClaudeActiveMarker(project: string, worker: string): void {
+  try {
+    const p = claudeActiveMarkerPath(project, worker);
+    const now = new Date();
+    fs.utimesSync(p, now, now);
+  } catch { /* marker doesn't exist — fine */ }
 }
 
 interface RefreshOptions {

@@ -37,6 +37,7 @@ vi.mock("../src/dashboard/header.js", () => ({
   refreshDashboard: vi.fn(),
   isClaudeActiveByHook: vi.fn(() => false),
   removeClaudeActiveMarker: vi.fn(),
+  touchClaudeActiveMarker: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/tmux.js", () => ({

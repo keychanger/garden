@@ -28,6 +28,7 @@ vi.mock("../src/dashboard/registry.js", () => ({
 
 vi.mock("../src/dashboard/header.js", () => ({
   isClaudeActiveByHook: vi.fn(() => false),
+  touchClaudeActiveMarker: vi.fn(),
 }));
 
 vi.mock("../src/session.js", () => ({

@@ -5,7 +5,7 @@ import {
   getPanePid, getClaudeChildPid, hasChildProcesses,
   getPaneVar, getPaneTitle,
 } from "./tmux.js";
-import { isClaudeActiveByHook } from "./header.js";
+import { isClaudeActiveByHook, touchClaudeActiveMarker } from "./header.js";
 
 export type ProcessStatus = "loading" | "ready" | "working" | "idle" | "exited";
 
@@ -37,6 +37,10 @@ export function detectPaneProcessStatus(
     }
     return { status: activity ? "idle" : "ready", activity };
   }
+  // Touch the marker to keep its mtime fresh while tools are running.
+  // This way the staleness timeout measures "time since last tool activity"
+  // rather than "time since UserPromptSubmit," catching stuck markers faster.
+  if (project && worker) touchClaudeActiveMarker(project, worker);
   return { status: "working", activity };
 }
 
