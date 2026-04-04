@@ -716,7 +716,7 @@ describe("renderQuickStatus", () => {
     expect(result).toContain("merged (x2)");
   });
 
-  it("truncates long activity text to fit terminal width", () => {
+  it("shows full activity text without truncation (tmux clips)", () => {
     const longTask = "a]".repeat(100);
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: longTask, claudeStatus: "working" },
@@ -732,74 +732,8 @@ describe("renderQuickStatus", () => {
       activeWindowName: "_garden-worker-bold-ash",
     };
 
-    // Force a known terminal width
-    const origColumns = process.stdout.columns;
-    Object.defineProperty(process.stdout, "columns", { value: 80, writable: true, configurable: true });
-    try {
-      const result = renderQuickStatus(state);
-      // Should contain ellipsis, not the full text
-      expect(result).toContain("\u2026");
-      expect(result).not.toContain(longTask);
-      // Each line should fit within 80 columns (excluding ANSI codes)
-      const lines = result.split("\n");
-      for (const line of lines) {
-        const stripped = line.replace(/\x1b\[[^m]*m/g, "").replace(/\x1b\[K$/, "");
-        expect(stripped.length).toBeLessThanOrEqual(80);
-      }
-    } finally {
-      Object.defineProperty(process.stdout, "columns", { value: origColumns, writable: true, configurable: true });
-    }
-  });
-
-  it("shows activity without truncation when it fits", () => {
-    vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "short task", claudeStatus: "idle" },
-    ]);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-
-    const state = {
-      activeProject: "garden",
-      statusPaneId: "%0",
-      gardenShellPaneId: "%1",
-      activePaneId: "%2",
-      activePaneType: "worker" as const,
-      activeWindowName: "_garden-worker-bold-ash",
-    };
-
-    const origColumns = process.stdout.columns;
-    Object.defineProperty(process.stdout, "columns", { value: 120, writable: true, configurable: true });
-    try {
-      const result = renderQuickStatus(state);
-      expect(result).toContain("short task");
-      expect(result).not.toContain("\u2026");
-    } finally {
-      Object.defineProperty(process.stdout, "columns", { value: origColumns, writable: true, configurable: true });
-    }
-  });
-
-  it("hides activity when terminal is too narrow", () => {
-    vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "some task", claudeStatus: "idle" },
-    ]);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-
-    const state = {
-      activeProject: "garden",
-      statusPaneId: "%0",
-      gardenShellPaneId: "%1",
-      activePaneId: "%2",
-      activePaneType: "worker" as const,
-      activeWindowName: "_garden-worker-bold-ash",
-    };
-
-    // Very narrow terminal — prefix alone is ~30 chars, so 35 leaves <10 for activity
-    const origColumns = process.stdout.columns;
-    Object.defineProperty(process.stdout, "columns", { value: 35, writable: true, configurable: true });
-    try {
-      const result = renderQuickStatus(state);
-      expect(result).not.toContain("some task");
-    } finally {
-      Object.defineProperty(process.stdout, "columns", { value: origColumns, writable: true, configurable: true });
-    }
+    // renderQuickStatus does not truncate — tmux pane handles clipping
+    const result = renderQuickStatus(state);
+    expect(result).toContain(longTask);
   });
 });

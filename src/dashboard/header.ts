@@ -231,15 +231,6 @@ function suppressWindowNames(): void {
 // ---------------------------------------------------------------------------
 
 export function handleClaudeHook(event: string): void {
-  // Read hook data from stdin (Claude Code pipes JSON with prompt text, etc.)
-  let hookData: { prompt?: string; agent_id?: string } = {};
-  try {
-    if (!process.stdin.isTTY) {
-      const raw = fs.readFileSync(0, "utf8");
-      if (raw) hookData = JSON.parse(raw);
-    }
-  } catch { /* best effort */ }
-
   // Track per-worker active state via marker files so status detection can
   // distinguish "idle at prompt" from "working with in-process subagents".
   const workerInfo = workerFromCwd();
@@ -249,16 +240,6 @@ export function handleClaudeHook(event: string): void {
       try { fs.writeFileSync(markerPath, "1"); } catch { /* best effort */ }
     } else {
       try { fs.unlinkSync(markerPath); } catch { /* best effort */ }
-    }
-  }
-
-  // Save task from top-level user prompts (skip subagent prompts)
-  if (workerInfo && event === "prompt" && hookData.prompt && !hookData.agent_id) {
-    const task = hookData.prompt.split("\n")[0].slice(0, 80).trim();
-    if (task) {
-      try {
-        updateWorkerTask(workerInfo.project, workerInfo.worker, task);
-      } catch { /* best effort */ }
     }
   }
 
