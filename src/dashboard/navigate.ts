@@ -13,7 +13,9 @@ import {
   listAllWindowNames,
   listHiddenWorkerWindows,
   setPaneLabel,
+  setPaneVar,
 } from "./tmux.js";
+import { findWorkerByName } from "./registry.js";
 import { log } from "./log.js";
 import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenConsoleWindow, resolveGardenRunner } from "./create.js";
 
@@ -46,6 +48,22 @@ function withCycleLock<T>(fn: () => T): T {
   } finally {
     try { fs.closeSync(fd!); } catch { /* ignore */ }
     try { fs.unlinkSync(CYCLE_LOCK); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Re-apply pane variables after a worker pane is swapped into the visible
+ * slot. swap-pane does not carry pane-level user options (@garden_name,
+ * @garden_task), so restore them from the window name and registry.
+ */
+function restoreWorkerPaneVars(paneId: string, project: string, windowName: string): void {
+  const nameMatch = windowName.match(/-worker-(.+)$/);
+  if (!nameMatch) return;
+  const workerLabel = nameMatch[1];
+  setPaneLabel(paneId, workerLabel);
+  const entry = findWorkerByName(project, workerLabel);
+  if (entry?.task) {
+    setPaneVar(paneId, "garden_task", entry.task);
   }
 }
 
@@ -98,6 +116,10 @@ export function switchProject(indexArg: string): void {
     }
   }
 
+  if (state.activePaneType === "worker" && state.activePaneId && state.activeWindowName) {
+    restoreWorkerPaneVars(state.activePaneId, projectName, state.activeWindowName);
+  }
+
   state.activeProject = projectName;
   writeDashState(state);
   refreshDashboard({ state });
@@ -125,6 +147,10 @@ export function focusWorker(): void {
 
   const parkName = state.activeWindowName ?? `_${state.activeProject}-active`;
   swapToHidden(parkName, workerWindows[0], state);
+
+  if (state.activePaneId) {
+    restoreWorkerPaneVars(state.activePaneId, state.activeProject, workerWindows[0]);
+  }
 
   state.activePaneType = "worker";
   state.activeWindowName = workerWindows[0];
@@ -259,6 +285,10 @@ export function cyclePane(direction: 1 | -1): void {
     // Fast path: direct swap (swap-pane + rename, no temp window)
     if (!swapDirect(parkName, targetWindow, lockedState)) {
       swapToHidden(parkName, targetWindow, lockedState);
+    }
+
+    if (lockedState.activePaneId && lockedState.activeProject) {
+      restoreWorkerPaneVars(lockedState.activePaneId, lockedState.activeProject, targetWindow);
     }
 
     lockedState.activePaneType = "worker";

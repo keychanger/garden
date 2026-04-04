@@ -6,7 +6,7 @@ import { readDashState, writeDashState } from "./state.js";
 import { parkToHidden, restoreFromHidden } from "./layout.js";
 import { refreshDashboard, removeClaudeActiveMarker } from "./header.js";
 import {
-  tmux, tmuxDisplay, tmuxNewWindow, setPaneLabel, shellEscape,
+  tmux, tmuxDisplay, tmuxNewWindow, setPaneLabel, setPaneVar, shellEscape,
   getFirstPaneId, paneExists, windowExists,
   listHiddenWorkerWindows, killWindowSafe,
 } from "./tmux.js";
@@ -54,6 +54,8 @@ export function newWorker(): void {
     "sh", "-c", `sh ${shellEscape(scriptFile)}`);
   if (workerPaneId) setPaneLabel(workerPaneId, workerName);
   restoreFromHidden(workerWindowName, state);
+  // Re-apply label after swap (swap-pane may not preserve pane options)
+  if (state.activePaneId) setPaneLabel(state.activePaneId, workerName);
 
   addWorker(state.activeProject, {
     name: workerName,
@@ -107,6 +109,14 @@ export function killPane(): void {
       state.activePaneId = targetPaneId;
       state.activePaneType = "worker";
       state.activeWindowName = targetWindow;
+      // Re-apply pane variables lost during swap-pane
+      const nextNameMatch = targetWindow.match(/-worker-(.+)$/);
+      if (nextNameMatch) {
+        const nextLabel = nextNameMatch[1];
+        setPaneLabel(targetPaneId, nextLabel);
+        const nextEntry = findWorkerByName(state.activeProject, nextLabel);
+        if (nextEntry?.task) setPaneVar(targetPaneId, "garden_task", nextEntry.task);
+      }
     }
   } else {
     const shellWindowName = `_${state.activeProject}-shell`;
