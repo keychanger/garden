@@ -161,6 +161,32 @@ export function hasChildProcesses(pid: string): boolean {
   }
 }
 
+// Returns true if the process has child processes that are not MCP servers.
+// MCP servers are persistent background processes that don't indicate active
+// tool use. Without this filter, idle Claude sessions with MCP servers
+// configured are incorrectly detected as "working".
+export function hasNonMcpChildren(pid: string): boolean {
+  try {
+    const pgrepOut = execFileSync("pgrep", ["-P", pid], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const childPids = pgrepOut.split("\n").filter(Boolean);
+    if (childPids.length === 0) return false;
+    // Check command lines in a single ps call
+    const psOut = execFileSync("ps", ["-p", childPids.join(","), "-o", "args="], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    for (const line of psOut.split("\n")) {
+      if (line && !line.toLowerCase().includes("mcp")) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export function listAllWindowNames(): string[] {
   try {
     return tmuxOutput(

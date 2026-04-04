@@ -8,6 +8,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   getFirstPaneId: vi.fn(),
   getClaudeChildPid: vi.fn(),
   hasChildProcesses: vi.fn(),
+  hasNonMcpChildren: vi.fn(),
   listHiddenWorkerWindows: vi.fn(() => []),
 }));
 
@@ -64,7 +65,7 @@ import { dashboardExists } from "../src/session.js";
 import { loadConfig } from "../src/config.js";
 import {
   getPanePid, getPaneTitle, getPaneLabel, getFirstPaneId,
-  getClaudeChildPid, hasChildProcesses, listHiddenWorkerWindows,
+  getClaudeChildPid, hasChildProcesses, hasNonMcpChildren, listHiddenWorkerWindows,
 } from "../src/dashboard/tmux.js";
 import { isClaudeActiveByHook } from "../src/dashboard/header.js";
 
@@ -256,11 +257,11 @@ describe("worker status detection", () => {
     vi.mocked(isClaudeActiveByHook).mockReturnValue(false);
   });
 
-  it("shows working when claude has child processes", async () => {
+  it("shows working when claude has non-MCP child processes", async () => {
     vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
     vi.mocked(getPanePid).mockReturnValue("123");
     vi.mocked(getClaudeChildPid).mockReturnValue("456");
-    vi.mocked(hasChildProcesses).mockReturnValue(true);
+    vi.mocked(hasNonMcpChildren).mockReturnValue(true);
     vi.mocked(getPaneTitle).mockReturnValue("fixing the build");
     vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
     vi.mocked(getWorkers).mockReturnValue([]);
@@ -275,6 +276,30 @@ describe("worker status detection", () => {
     }
 
     expect(lines.some(l => l.includes("working"))).toBe(true);
+  });
+
+  it("shows idle when claude only has MCP server children", async () => {
+    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
+    vi.mocked(getPanePid).mockReturnValue("123");
+    vi.mocked(getClaudeChildPid).mockReturnValue("456");
+    vi.mocked(hasNonMcpChildren).mockReturnValue(false);
+    vi.mocked(getPaneTitle).mockReturnValue(null);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "previous task" },
+    ]);
+
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (msg: string) => lines.push(msg);
+    try {
+      await status([]);
+    } finally {
+      console.log = origLog;
+    }
+
+    expect(lines.some(l => l.includes("idle"))).toBe(true);
+    expect(lines.some(l => l.includes("working"))).toBe(false);
   });
 });
 

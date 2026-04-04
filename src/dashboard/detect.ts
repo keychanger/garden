@@ -2,7 +2,7 @@
 // Single source of truth for "what is this worker's process status?"
 // Combines pgrep-based child process detection with hook-based marker files.
 import {
-  getPanePid, getClaudeChildPid, hasChildProcesses,
+  getPanePid, getClaudeChildPid, hasChildProcesses, hasNonMcpChildren,
   getPaneVar, getPaneTitle,
 } from "./tmux.js";
 import { isClaudeActiveByHook, touchClaudeActiveMarker } from "./header.js";
@@ -29,9 +29,11 @@ export function detectPaneProcessStatus(
   }
 
   const activity = getPaneVar(paneId, "garden_task") ?? getPaneTitle(paneId) ?? null;
-  if (!hasChildProcesses(claudePid)) {
-    // No child processes, but Claude may still be working (e.g., subagents
-    // making API calls in-process). Check hook-based active state marker.
+  // Check for active tool children, excluding persistent MCP servers.
+  // MCP servers are long-running child processes that don't indicate work.
+  if (!hasNonMcpChildren(claudePid)) {
+    // No active tool processes. Claude may still be working in-process
+    // (subagents making API calls). Check hook-based active state marker.
     if (project && worker && isClaudeActiveByHook(project, worker)) {
       return { status: "working", activity };
     }
