@@ -630,6 +630,26 @@ describe("renderQuickStatus", () => {
     expect(result).toContain("working");
   });
 
+  it("shows working instead of pushed when Claude is actively working", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "fixing auth", prState: "pushed", claudeStatus: "working" },
+    ]);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+
+    const state = {
+      activeProject: "garden",
+      statusPaneId: "%0",
+      gardenShellPaneId: "%1",
+      activePaneId: "%2",
+      activePaneType: "worker" as const,
+      activeWindowName: "_garden-worker-bold-ash",
+    };
+
+    const result = renderQuickStatus(state);
+    expect(result).toContain("working");
+    expect(result).not.toContain("pushed");
+  });
+
   it("uses provided windowNames instead of querying tmux", () => {
     vi.mocked(getWorkers).mockReturnValue([]);
     vi.mocked(listHiddenWorkerWindows).mockImplementation((_proj, names) => {
