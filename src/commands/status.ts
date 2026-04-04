@@ -83,6 +83,8 @@ export async function status(_args: string[]): Promise<void> {
   const allWorkers = statuses.flatMap(p => p.workers);
   const nameWidth = Math.max(10, ...allWorkers.map(w => w.name.length));
   const statusWidth = Math.max(7, ...allWorkers.map(w => formatStatus(w).length));
+  // Prefix: "    ○ ◆ " + name + "  " + status = 8 + nameWidth + 2 + statusWidth
+  const prefixWidth = 8 + nameWidth + 2 + statusWidth;
 
   console.log("");
   for (let pi = 0; pi < statuses.length; pi++) {
@@ -100,12 +102,21 @@ export async function status(_args: string[]): Promise<void> {
         const icon = iconFor(worker);
         const name = worker.name.padEnd(nameWidth);
         const status = formatStatus(worker).padEnd(statusWidth);
-        const activity = worker.activity ? `  ${worker.activity}` : "";
+        const activity = worker.activity ? `  ${truncateActivity(worker.activity, prefixWidth)}` : "";
         console.log(`    ${focus} ${icon} ${name}  ${status}${activity}`);
       }
     }
   }
   console.log("");
+}
+
+function truncateActivity(text: string, prefixWidth: number): string {
+  // +2 for the "  " gap before activity text
+  const cols = process.stdout.columns || 80;
+  const maxLen = cols - prefixWidth - 2;
+  if (maxLen < 10) return "";
+  if (text.length <= maxLen) return text;
+  return text.slice(0, maxLen - 1) + "\u2026";
 }
 
 function formatStatus(worker: WorkerInfo): string {
@@ -216,6 +227,7 @@ export function renderQuickStatus(state: DashboardState, windowNames?: string[])
 
   const nameWidth = Math.max(10, ...allWorkers.map(w => w.name.length));
   const statusWidth = Math.max(7, ...allWorkers.map(w => formatStatus(w).length));
+  const prefixWidth = 8 + nameWidth + 2 + statusWidth;
 
   lines.push("");
   for (let pi = 0; pi < names.length; pi++) {
@@ -235,7 +247,7 @@ export function renderQuickStatus(state: DashboardState, windowNames?: string[])
         const icon = iconFor(worker);
         const wName = worker.name.padEnd(nameWidth);
         const wStatus = formatStatus(worker).padEnd(statusWidth);
-        const activity = worker.activity ? `  ${worker.activity}` : "";
+        const activity = worker.activity ? `  ${truncateActivity(worker.activity, prefixWidth)}` : "";
         lines.push(`    ${focus} ${icon} ${wName}  ${wStatus}${activity}`);
       }
     }
