@@ -105,6 +105,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   mergeToBase: vi.fn(),
   rebaseBranch: vi.fn(() => "ok"),
   abortRebase: vi.fn(),
+  cleanWorktree: vi.fn(),
   deleteRemoteBranch: vi.fn(),
   fastForwardBase: vi.fn(),
   getChangedFiles: vi.fn(() => []),
@@ -612,6 +613,15 @@ describe("poll — merge-pending state", () => {
     // State should remain merge-pending
     expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "reviewing" }),
+    );
+    // Should alert the operator
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        source: "poller",
+        project: "myproject",
+        worker: "bold-ash",
+      }),
     );
   });
 

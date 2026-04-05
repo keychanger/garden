@@ -16,7 +16,7 @@ import {
 } from "./registry.js";
 import {
   getBranchHeadSha,
-  rebaseBranch, abortRebase,
+  rebaseBranch, abortRebase, cleanWorktree,
   forcePushBranch, mergeToBase, deleteRemoteBranch,
   getChangedFiles, getDiffAgainstBase,
   getCommitSummary, getNewCommitSummary,
@@ -330,6 +330,10 @@ function handleMergePending(
     });
   } catch { /* best effort */ }
 
+  // Clean tooling artifacts (Claude settings, hook dirs) left by the reviewer.
+  // By this point all meaningful changes are committed — anything left is noise.
+  cleanWorktree(wtPath);
+
   // Rebase onto current base branch
   const rebaseResult = rebaseBranch(wtPath, baseBranch);
   if (rebaseResult === "conflict") {
@@ -345,9 +349,14 @@ function handleMergePending(
     return true;
   }
   if (rebaseResult === "error") {
-    // Non-conflict failure (lock file, dirty state, etc). Don't launch
-    // a re-review — the problem isn't in the code. Just wait and retry.
     abortRebase(wtPath);
+    addAlert({
+      level: "error",
+      source: "poller",
+      project: projectName,
+      worker: entry.name,
+      message: `Rebase failed (not a conflict) — manual intervention needed`,
+    });
     return false;
   }
 

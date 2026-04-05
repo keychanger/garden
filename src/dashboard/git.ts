@@ -92,6 +92,17 @@ export function getDiffAgainstBase(wtPath: string, baseBranch: string): string {
   return git(wtPath, "diff", `origin/${baseBranch}...HEAD`);
 }
 
+export function cleanWorktree(worktreePath: string): void {
+  try {
+    git(worktreePath, "checkout", "--", ".");
+    log.info("git", "cleaned unstaged changes before rebase", {
+      data: { worktreePath },
+    });
+  } catch {
+    // nothing to clean
+  }
+}
+
 export type RebaseResult = "ok" | "conflict" | "error";
 
 export function rebaseBranch(worktreePath: string, baseBranch: string): RebaseResult {
