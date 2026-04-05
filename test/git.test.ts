@@ -30,6 +30,7 @@ import {
   deleteRemoteBranch,
   rebaseBranch,
   abortRebase,
+  cleanWorktree,
   forcePushBranch,
   getChangedFiles,
   getCommitSummary,
@@ -247,6 +248,24 @@ describe("deleteRemoteBranch", () => {
       throw new Error("branch not found");
     });
     expect(() => deleteRemoteBranch("/repo", "swift-oak")).not.toThrow();
+  });
+});
+
+describe("cleanWorktree", () => {
+  it("runs git checkout -- . to discard unstaged changes", () => {
+    cleanWorktree("/tmp/wt");
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["checkout", "--", "."],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
+  it("does not throw when there is nothing to clean", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("nothing to clean");
+    });
+    expect(() => cleanWorktree("/tmp/wt")).not.toThrow();
   });
 });
 

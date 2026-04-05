@@ -591,7 +591,7 @@ describe("poll — merge-pending state", () => {
     );
   });
 
-  it("retries silently on non-conflict rebase error", () => {
+  it("alerts operator on non-conflict rebase error", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
