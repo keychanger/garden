@@ -47,6 +47,10 @@ function workerFromCwd(): { project: string; worker: string } | null {
 // stuck markers promptly.
 const MARKER_STALE_MS = 2 * 60 * 1000;
 
+// Hook-set claudeStatus values take priority over pgrep for this window.
+// Must match HOOK_PRIORITY_MS in src/commands/status.ts.
+const HOOK_PRIORITY_MS = 5000;
+
 export function isClaudeActiveByHook(project: string, worker: string): boolean {
   try {
     const p = claudeActiveMarkerPath(project, worker);
@@ -171,7 +175,7 @@ export function printHeader(): void {
       // Defer to recent hook data — hooks are authoritative for claudeStatus
       // and pgrep detection can race with them (reading stale process state).
       const hookEntry = findWorkerByName(state.activeProject, workerLabel);
-      const hookFresh = hookEntry?.claudeHookAt && (Date.now() - hookEntry.claudeHookAt < 5000);
+      const hookFresh = hookEntry?.claudeHookAt && (Date.now() - hookEntry.claudeHookAt < HOOK_PRIORITY_MS);
       if (!hookFresh) {
         updateWorkerFields(state.activeProject, workerLabel, {
           claudeStatus: paneInfo.status,
