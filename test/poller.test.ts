@@ -67,6 +67,12 @@ vi.mock("../src/dashboard/registry.js", () => {
         if (entry) Object.assign(entry, fields);
       },
     ),
+    findWorkerByName: vi.fn(
+      (project: string, name: string) => {
+        const list = entries[project];
+        return list?.find(e => e.name === name);
+      },
+    ),
     _setEntries: (project: string, list: import("../src/dashboard/registry.js").WorkerEntry[]) => {
       entries[project] = list;
     },
@@ -238,6 +244,32 @@ describe("poll — working state", () => {
     poll("myproject");
 
     expect(forcePushBranch).not.toHaveBeenCalled();
+  });
+
+  it("self-heals: restores merged state when prState lost but mergeCount > 0", () => {
+    // Simulates a race condition where prState was clobbered by a concurrent writer
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: undefined, mergeCount: 1 }),
+    ]);
+    vi.mocked(getCommitSummary).mockReturnValue("");
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merged" }),
+    );
+  });
+
+  it("does not self-heal when mergeCount is 0 (never merged)", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: undefined, mergeCount: 0 }),
+    ]);
+    vi.mocked(getBranchHeadSha).mockReturnValue("abc123");
+    vi.mocked(getCommitSummary).mockReturnValue("");
+
+    poll("myproject");
+
+    expect(updateWorkerFields).not.toHaveBeenCalled();
   });
 
   it("allows multiple workers to transition independently", () => {
@@ -1014,7 +1046,7 @@ describe("poll — full cycle", () => {
 
     expect(mergeToBase).toHaveBeenCalledWith("/repo/myproject", "bold-ash", "main");
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
-      expect.objectContaining({ prState: "merged" }),
+      expect.objectContaining({ prState: "merged", mergeCount: 1 }),
     );
   });
 });
@@ -1049,8 +1081,13 @@ describe("poll — merged state", () => {
     poll("myproject");
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
-      expect.objectContaining({ prState: "working", mergeCount: 2 }),
+      expect.objectContaining({ prState: "working" }),
     );
+    // mergeCount is NOT incremented here — it's set by finalizeMerge on each merge
+    const workingCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "working",
+    );
+    expect(workingCall![2]).not.toHaveProperty("mergeCount");
   });
 
   it("stays merged when Claude is idle and there are no new commits", () => {

@@ -11,7 +11,7 @@ import {
   windowExists, killWindowSafe,
 } from "./tmux.js";
 import {
-  readRegistry, getWorkers, updateWorkerFields,
+  readRegistry, getWorkers, updateWorkerFields, findWorkerByName,
   type WorkerEntry,
 } from "./registry.js";
 import {
@@ -125,6 +125,21 @@ function handleWorking(
   baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
+  // Self-heal: if prState was lost (concurrent registry write race) but this
+  // worker has previously merged and has no new work, restore merged state.
+  // mergeCount is set atomically with prState by finalizeMerge, so if the
+  // race clobbered both, mergeCount > 0 won't be true and we skip this.
+  if (!entry.prState && entry.mergeCount && entry.mergeCount > 0) {
+    const wtPath = entry.worktreePath ?? projectPath;
+    const commitSummary = getCommitSummary(wtPath, baseBranch);
+    if (!commitSummary) {
+      log.warn("poller", "restoring lost merged state", { worker: entry.name });
+      updateWorkerFields(projectName, entry.name, { prState: "merged" });
+      refreshDashboard();
+      return true;
+    }
+  }
+
   const wtPath = entry.worktreePath ?? projectPath;
   const headSha = getBranchHeadSha(wtPath);
   if (!headSha) return false;
@@ -454,13 +469,11 @@ function handleMerged(
 
   if (!commitSummary) return false;
 
-  const prevCount = entry.mergeCount ?? 0;
   log.info("poller", "new commits after merge, resuming", {
     worker: entry.name,
   });
   updateWorkerFields(projectName, entry.name, {
     prState: "working",
-    mergeCount: prevCount + 1,
     mergedAt: undefined,
     lastSeenSha: undefined,
   });
@@ -855,14 +868,31 @@ function finalizeMerge(
   notifySiblingWorkers(projectName, baseBranch, entry);
 
   runPostMerge(projectName, projectPath);
-  updateWorkerFields(projectName, entry.name, {
-    prState: "merged",
+
+  const mergedFields = {
+    prState: "merged" as const,
+    mergeCount: (entry.mergeCount ?? 0) + 1,
     mergedAt: new Date().toISOString(),
     failCount: 0,
     mergePendingAt: undefined,
     reviewWindowName: undefined,
     lastReviewBody: undefined,
-  });
+  };
+  updateWorkerFields(projectName, entry.name, mergedFields);
+
+  // Verify: concurrent status/header writers can race with this write
+  // (they read-modify-write the whole registry to cache claudeStatus).
+  // If our prState was clobbered, re-write it. The double-check makes
+  // the race window astronomically small.
+  const written = findWorkerByName(projectName, entry.name);
+  if (written && written.prState !== "merged") {
+    log.warn("poller", "merged state clobbered by concurrent write, retrying", {
+      worker: entry.name,
+      data: { found: written.prState ?? "undefined" },
+    });
+    updateWorkerFields(projectName, entry.name, mergedFields);
+  }
+
   refreshDashboard();
 }
 
