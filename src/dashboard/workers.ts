@@ -1,5 +1,6 @@
 // Worker lifecycle: creation and destruction of Claude worker sessions.
 import crypto from "node:crypto";
+import { spawn } from "node:child_process";
 import { DASHBOARD_SESSION } from "../session.js";
 import { getProject } from "../config.js";
 import { readDashState, writeDashState } from "./state.js";
@@ -16,7 +17,7 @@ import {
 } from "./registry.js";
 import { log } from "./log.js";
 import { buildWorktreeBootstrapScript, createShellWindow, resolveGardenRunner } from "./create.js";
-import { worktreePath, removeWorktree, deleteBranch, deleteRemoteBranch, resolveBaseBranch } from "./git.js";
+import { worktreePath, resolveBaseBranch } from "./git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
 import { getWorkers } from "./registry.js";
 
@@ -134,6 +135,12 @@ export function killPane(): void {
     }
   }
 
+  // Update state and refresh UI immediately so the dashboard feels responsive.
+  // Heavy git cleanup (worktree removal, branch deletion) runs in the background.
+  let cleanupRepoPath: string | undefined;
+  let cleanupWtPath: string | undefined;
+  let cleanupBranch: string | undefined;
+
   if (killedWindowName && state.activeProject) {
     if (state.lastActiveWorker[state.activeProject] === killedWindowName) {
       delete state.lastActiveWorker[state.activeProject];
@@ -142,16 +149,8 @@ export function killPane(): void {
     if (nameMatch) {
       const workerName = nameMatch[1];
       const entry = findWorkerByName(state.activeProject, workerName);
-      if (entry) {
-        killReviewWindow(state.activeProject, workerName);
-        if (entry.worktreePath) {
-          removeWorktree(project.path, entry.worktreePath);
-        }
-        if (entry.branchName) {
-          deleteBranch(project.path, entry.branchName);
-          deleteRemoteBranch(project.path, entry.branchName);
-        }
-      }
+
+      killReviewWindow(state.activeProject, workerName);
       removeWorker(state.activeProject, workerName);
       removeClaudeActiveMarker(state.activeProject, workerName);
       log.info("workers", "killed", {
@@ -159,14 +158,45 @@ export function killPane(): void {
         data: { project: state.activeProject, branch: entry?.branchName },
       });
 
-      // Stop project poller if no workers remain
       const remaining = getWorkers(state.activeProject);
       if (remaining.length === 0) {
         stopProjectPoller(state.activeProject);
+      }
+
+      if (entry) {
+        cleanupRepoPath = project.path;
+        cleanupWtPath = entry.worktreePath;
+        cleanupBranch = entry.branchName;
       }
     }
   }
 
   writeDashState(state);
   refreshDashboard();
+
+  if (cleanupRepoPath) {
+    backgroundGitCleanup(cleanupRepoPath, cleanupWtPath, cleanupBranch);
+  }
+}
+
+function backgroundGitCleanup(
+  repoPath: string,
+  wtPath: string | undefined,
+  branchName: string | undefined,
+): void {
+  const parts: string[] = [];
+  if (wtPath) {
+    parts.push(`git -C ${shellEscape(repoPath)} worktree remove ${shellEscape(wtPath)} --force`);
+  }
+  if (branchName) {
+    parts.push(`git -C ${shellEscape(repoPath)} branch -D ${shellEscape(branchName)}`);
+    parts.push(
+      `git -C ${shellEscape(repoPath)} ls-remote --heads origin ${shellEscape(branchName)}`
+      + ` | grep -q . && git -C ${shellEscape(repoPath)} push origin --delete ${shellEscape(branchName)}`,
+    );
+  }
+  if (parts.length === 0) return;
+  const script = parts.map(p => `(${p}) 2>/dev/null || true`).join("; ");
+  const child = spawn("sh", ["-c", script], { detached: true, stdio: "ignore" });
+  child.unref();
 }
