@@ -87,6 +87,11 @@ export function switchProject(indexArg: string): void {
     return;
   }
 
+  // Record last active worker for the project we're leaving
+  if (state.activeProject && state.activePaneType === "worker" && state.activeWindowName) {
+    state.lastActiveWorker[state.activeProject] = state.activeWindowName;
+  }
+
   // Single list-windows call replaces multiple windowExists checks
   const windowNames = listAllWindowNames();
   const has = (name: string) => windowNames.includes(name);
@@ -100,10 +105,15 @@ export function switchProject(indexArg: string): void {
     state.activeWindowName = `_${projectName}-active`;
   } else {
     const workerWindows = listHiddenWorkerWindows(projectName, windowNames);
-    if (workerWindows.length > 0) {
-      restoreFromHidden(workerWindows[0], state);
+    // Prefer the last-touched worker, fall back to first available
+    const preferred = state.lastActiveWorker[projectName];
+    const targetWorker = preferred && workerWindows.includes(preferred)
+      ? preferred
+      : workerWindows[0];
+    if (targetWorker) {
+      restoreFromHidden(targetWorker, state);
       state.activePaneType = "worker";
-      state.activeWindowName = workerWindows[0];
+      state.activeWindowName = targetWorker;
     } else if (has(`_${projectName}-shell`)) {
       restoreFromHidden(`_${projectName}-shell`, state);
       state.activePaneType = "shell";
@@ -145,15 +155,20 @@ export function focusWorker(): void {
     return;
   }
 
+  const preferred = state.lastActiveWorker[state.activeProject];
+  const targetWorker = preferred && workerWindows.includes(preferred)
+    ? preferred
+    : workerWindows[0];
+
   const parkName = state.activeWindowName ?? `_${state.activeProject}-active`;
-  swapToHidden(parkName, workerWindows[0], state);
+  swapToHidden(parkName, targetWorker, state);
 
   if (state.activePaneId) {
-    restoreWorkerPaneVars(state.activePaneId, state.activeProject, workerWindows[0]);
+    restoreWorkerPaneVars(state.activePaneId, state.activeProject, targetWorker);
   }
 
   state.activePaneType = "worker";
-  state.activeWindowName = workerWindows[0];
+  state.activeWindowName = targetWorker;
   writeDashState(state);
   refreshDashboard({ state });
 }
@@ -293,6 +308,9 @@ export function cyclePane(direction: 1 | -1): void {
 
     lockedState.activePaneType = "worker";
     lockedState.activeWindowName = targetWindow;
+    if (lockedState.activeProject) {
+      lockedState.lastActiveWorker[lockedState.activeProject] = targetWindow;
+    }
     writeDashState(lockedState);
 
     // Update window list in memory: target was renamed to park name

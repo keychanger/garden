@@ -22,6 +22,7 @@ describe("readDashState", () => {
       activePaneId: null,
       activePaneType: null,
       activeWindowName: null,
+      lastActiveWorker: {},
     });
   });
 
@@ -45,6 +46,7 @@ describe("writeDashState / readDashState", () => {
       activePaneId: "%3",
       activePaneType: "worker" as const,
       activeWindowName: "_myproject-worker-bold-ash",
+      lastActiveWorker: {},
     };
     writeDashState(original);
     const loaded = readDashState();
@@ -87,6 +89,23 @@ describe("writeDashState / readDashState", () => {
     expect(loaded.gardenWindowName).toBe("_garden-root");
   });
 
+  it("backfills lastActiveWorker for old state files", async () => {
+    const { readDashState, STATE_FILE } = await importState();
+    const oldState = {
+      activeProject: "myproject",
+      statusPaneId: "%1",
+      gardenShellPaneId: "%2",
+      gardenPaneType: "garden",
+      gardenWindowName: "_garden-garden",
+      activePaneId: "%3",
+      activePaneType: "worker",
+      activeWindowName: "_myproject-worker-bold-ash",
+    };
+    fs.writeFileSync(STATE_FILE, JSON.stringify(oldState));
+    const loaded = readDashState();
+    expect(loaded.lastActiveWorker).toEqual({});
+  });
+
   it("migrates old root-with-null-window to garden", async () => {
     const { readDashState, STATE_FILE } = await importState();
     const oldState = {
@@ -117,6 +136,7 @@ describe("writeDashState / readDashState", () => {
       activePaneId: null,
       activePaneType: null,
       activeWindowName: null,
+      lastActiveWorker: {},
     });
     expect(fs.existsSync(STATE_FILE)).toBe(true);
   });

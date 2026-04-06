@@ -15,6 +15,8 @@ export interface DashboardState {
   activePaneId: string | null;
   activePaneType: "worker" | "shell" | null;
   activeWindowName: string | null; // logical name for parking, e.g. "_proj-shell" or "_proj-worker-2"
+  // Per-project last-active worker window name (not persisted across sessions)
+  lastActiveWorker: Record<string, string>;
 }
 
 export const STATE_FILE = path.join(SESSIONS_DIR, "dashboard.state.json");
@@ -28,6 +30,7 @@ const DEFAULT_STATE: DashboardState = {
   activePaneId: null,
   activePaneType: null,
   activeWindowName: null,
+  lastActiveWorker: {},
 };
 
 export function readDashState(): DashboardState {
@@ -43,6 +46,7 @@ export function readDashState(): DashboardState {
       if (raw.gardenWindowName === "_garden-console") raw.gardenWindowName = "_garden-garden";
       if (raw.gardenWindowName === "_garden-shell") raw.gardenWindowName = "_garden-root";
       if (raw.gardenWindowName === undefined) raw.gardenWindowName = null;
+      if (!raw.lastActiveWorker) raw.lastActiveWorker = {};
       return raw;
     }
   } catch (err) {

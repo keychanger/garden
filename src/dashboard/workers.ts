@@ -74,6 +74,7 @@ export function newWorker(): void {
 
   state.activePaneType = "worker";
   state.activeWindowName = workerWindowName;
+  state.lastActiveWorker[state.activeProject] = workerWindowName;
   writeDashState(state);
   refreshDashboard({ state });
 }
@@ -134,6 +135,9 @@ export function killPane(): void {
   }
 
   if (killedWindowName && state.activeProject) {
+    if (state.lastActiveWorker[state.activeProject] === killedWindowName) {
+      delete state.lastActiveWorker[state.activeProject];
+    }
     const nameMatch = killedWindowName.match(/-worker-(.+)$/);
     if (nameMatch) {
       const workerName = nameMatch[1];

@@ -7,7 +7,7 @@ import {
 } from "../session.js";
 import { loadConfig, tryGetProject, getFocusedProjectNames, SESSIONS_DIR, type ProjectConfig } from "../config.js";
 import { buildRulesContext, buildWorktreeRules } from "../rules.js";
-import { readDashState, writeDashState, STATE_FILE } from "./state.js";
+import { type DashboardState, readDashState, writeDashState, STATE_FILE } from "./state.js";
 import { restoreFromHidden } from "./layout.js";
 import { setupKeybindings } from "./hotkeys.js";
 import { setupStatusBar, buildStatusCommand, updateHeaderVar } from "./header.js";
@@ -127,16 +127,7 @@ export function ensureDashboard(): void {
 
   setupStatusBar(gardenRunner);
 
-  const state: {
-    activeProject: string | null;
-    statusPaneId: string;
-    gardenShellPaneId: string;
-    gardenPaneType: "garden" | "root" | "logs" | null;
-    gardenWindowName: string | null;
-    activePaneId: string;
-    activePaneType: "worker" | "shell" | null;
-    activeWindowName: string | null;
-  } = {
+  const state: DashboardState = {
     activeProject: firstProject,
     statusPaneId: statusId,
     gardenShellPaneId: gardenShellId,
@@ -145,6 +136,7 @@ export function ensureDashboard(): void {
     activePaneId: rightPaneId,
     activePaneType: firstProject ? "shell" : null,
     activeWindowName: firstProject ? `_${firstProject}-shell` : null,
+    lastActiveWorker: {},
   };
 
   writeDashState(state);
