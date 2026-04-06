@@ -195,7 +195,7 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
     // a hook — hooks are authoritative and pgrep can race with them.
     const filtered = statusUpdates.filter(([label]) => {
       const entry = registryByName.get(label);
-      return !entry?.claudeHookAt || (Date.now() - entry.claudeHookAt >= 5000);
+      return !entry?.claudeHookAt || (Date.now() - entry.claudeHookAt >= HOOK_PRIORITY_MS);
     });
     if (filtered.length > 0) {
       try {
