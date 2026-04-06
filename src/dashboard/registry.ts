@@ -18,6 +18,7 @@ export interface WorkerEntry {
   failCount?: number;
   failingSha?: string;
   claudeStatus?: string;  // cached process status from last pgrep detection
+  claudeHookAt?: number;  // epoch ms when a hook last set claudeStatus (hooks take priority over pgrep)
   reviewWindowName?: string;
   mergePendingAt?: string;
   lastReviewBody?: string;

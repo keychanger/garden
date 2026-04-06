@@ -303,6 +303,60 @@ describe("worker status detection", () => {
   });
 });
 
+describe("hook priority over pgrep", () => {
+  it("uses hook claudeStatus when fresh, not pgrep detection", async () => {
+    // pgrep sees child processes (working), but Stop hook just set idle
+    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
+    vi.mocked(getPanePid).mockReturnValue("123");
+    vi.mocked(getClaudeChildPid).mockReturnValue("456");
+    vi.mocked(hasNonMcpChildren).mockReturnValue(true); // pgrep says working
+    vi.mocked(getPaneTitle).mockReturnValue("some task");
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "some task",
+        claudeStatus: "idle", claudeHookAt: Date.now() }, // hook says idle
+    ]);
+
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (msg: string) => lines.push(msg);
+    try {
+      await status([]);
+    } finally {
+      console.log = origLog;
+    }
+
+    // Should show idle (from hook), not working (from pgrep)
+    expect(lines.some(l => l.includes("idle"))).toBe(true);
+    expect(lines.some(l => l.includes("working"))).toBe(false);
+  });
+
+  it("uses pgrep when hook data is stale", async () => {
+    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
+    vi.mocked(getPanePid).mockReturnValue("123");
+    vi.mocked(getClaudeChildPid).mockReturnValue("456");
+    vi.mocked(hasNonMcpChildren).mockReturnValue(true); // pgrep says working
+    vi.mocked(getPaneTitle).mockReturnValue("some task");
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "some task",
+        claudeStatus: "idle", claudeHookAt: Date.now() - 10000 }, // 10s ago, stale
+    ]);
+
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (msg: string) => lines.push(msg);
+    try {
+      await status([]);
+    } finally {
+      console.log = origLog;
+    }
+
+    // Hook is stale, so pgrep wins — shows working
+    expect(lines.some(l => l.includes("working"))).toBe(true);
+  });
+});
+
 describe("registry task fallback", () => {
   it("falls back to registry task when pane title is null", async () => {
     vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
@@ -332,6 +386,7 @@ describe("registry task fallback", () => {
     vi.mocked(getPanePid).mockReturnValue("123");
     vi.mocked(getClaudeChildPid).mockReturnValue("456");
     vi.mocked(hasChildProcesses).mockReturnValue(false);
+    vi.mocked(hasNonMcpChildren).mockReturnValue(false);
     vi.mocked(getPaneTitle).mockReturnValue(null);
     vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
     vi.mocked(getWorkers).mockReturnValue([
@@ -403,6 +458,7 @@ describe("registry lifecycle states", () => {
     vi.mocked(getPanePid).mockReturnValue("123");
     vi.mocked(getClaudeChildPid).mockReturnValue("456");
     vi.mocked(hasChildProcesses).mockReturnValue(false);
+    vi.mocked(hasNonMcpChildren).mockReturnValue(false);
     vi.mocked(getPaneTitle).mockReturnValue(null);
     vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
     vi.mocked(getWorkers).mockReturnValue([

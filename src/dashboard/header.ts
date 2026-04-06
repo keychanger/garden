@@ -168,9 +168,15 @@ export function printHeader(): void {
     }
 
     if (workerLabel && state.activeProject) {
-      updateWorkerFields(state.activeProject, workerLabel, {
-        claudeStatus: paneInfo.status,
-      });
+      // Defer to recent hook data — hooks are authoritative for claudeStatus
+      // and pgrep detection can race with them (reading stale process state).
+      const hookEntry = findWorkerByName(state.activeProject, workerLabel);
+      const hookFresh = hookEntry?.claudeHookAt && (Date.now() - hookEntry.claudeHookAt < 5000);
+      if (!hookFresh) {
+        updateWorkerFields(state.activeProject, workerLabel, {
+          claudeStatus: paneInfo.status,
+        });
+      }
     }
   }
 
@@ -243,17 +249,20 @@ export function handleClaudeHook(event: string): void {
     }
   }
 
-  // Update registry claudeStatus immediately so quick renders are correct
+  // Update registry claudeStatus immediately so quick renders are correct.
+  // Set claudeHookAt so pgrep-based writers defer to this authoritative value.
   if (workerInfo && event === "prompt") {
     try {
       updateWorkerFields(workerInfo.project, workerInfo.worker, {
         claudeStatus: "working",
+        claudeHookAt: Date.now(),
       });
     } catch { /* best effort */ }
   } else if (workerInfo) {
     try {
       updateWorkerFields(workerInfo.project, workerInfo.worker, {
         claudeStatus: "idle",
+        claudeHookAt: Date.now(),
       });
     } catch { /* best effort */ }
   }

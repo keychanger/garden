@@ -124,6 +124,20 @@ function formatStatus(worker: WorkerInfo): string {
   return base;
 }
 
+// When a hook recently set claudeStatus, prefer it over pgrep — the hook
+// fires at the exact moment Claude starts/stops, while pgrep can see stale
+// process trees (e.g., processes still winding down after Stop).
+const HOOK_PRIORITY_MS = 5000;
+
+function hookOverride(
+  regEntry: { claudeStatus?: string; claudeHookAt?: number } | undefined,
+  pgrepStatus: ProcessStatus,
+): ProcessStatus {
+  if (!regEntry?.claudeHookAt) return pgrepStatus;
+  if (Date.now() - regEntry.claudeHookAt >= HOOK_PRIORITY_MS) return pgrepStatus;
+  return (regEntry.claudeStatus as ProcessStatus) ?? pgrepStatus;
+}
+
 function resolveWorkerStatus(paneStatus: PaneProcessInfo["status"], regEntry: { prState?: string; task?: string } | undefined, activity: string | null): { status: WorkerStatus; processStatus: ProcessStatus } {
   const processStatus: ProcessStatus = (paneStatus === "ready" && activity) ? "idle" : paneStatus;
   const pr = regEntry?.prState;
@@ -153,7 +167,9 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
     const paneInfo = detectPaneProcessStatus(dashState.activePaneId, projectName, label);
     if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
     const regEntry = registryByName.get(label);
-    const resolved = resolveWorkerStatus(paneInfo.status, regEntry, paneInfo.activity);
+    // Hooks are authoritative for process status — override pgrep when fresh
+    const effectiveStatus = hookOverride(regEntry, paneInfo.status);
+    const resolved = resolveWorkerStatus(effectiveStatus, regEntry, paneInfo.activity);
     statusUpdates.push([label, resolved.processStatus]);
     workers.push({ name: label, ...resolved, activity: paneInfo.activity, active: true, mergeCount: regEntry?.mergeCount ?? 0, failCount: regEntry?.failCount ?? 0 });
   }
@@ -167,20 +183,29 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
       const paneInfo = detectPaneProcessStatus(paneId, projectName, label);
       if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
       const regEntry = registryByName.get(label);
-      const resolved = resolveWorkerStatus(paneInfo.status, regEntry, paneInfo.activity);
+      const effectiveStatus = hookOverride(regEntry, paneInfo.status);
+      const resolved = resolveWorkerStatus(effectiveStatus, regEntry, paneInfo.activity);
       statusUpdates.push([label, resolved.processStatus]);
       workers.push({ name: label, ...resolved, activity: paneInfo.activity, active: false, mergeCount: regEntry?.mergeCount ?? 0, failCount: regEntry?.failCount ?? 0 });
     }
   }
 
   if (statusUpdates.length > 0) {
-    try {
-      batchUpdateWorkerFields(
-        statusUpdates.map(([label, status]) => ({
-          project: projectName, workerName: label, fields: { claudeStatus: status },
-        })),
-      );
-    } catch { /* best effort */ }
+    // Filter out updates for workers whose claudeStatus was recently set by
+    // a hook — hooks are authoritative and pgrep can race with them.
+    const filtered = statusUpdates.filter(([label]) => {
+      const entry = registryByName.get(label);
+      return !entry?.claudeHookAt || (Date.now() - entry.claudeHookAt >= 5000);
+    });
+    if (filtered.length > 0) {
+      try {
+        batchUpdateWorkerFields(
+          filtered.map(([label, status]) => ({
+            project: projectName, workerName: label, fields: { claudeStatus: status },
+          })),
+        );
+      } catch { /* best effort */ }
+    }
   }
 
   // Include registry-only workers (e.g., merged workers whose windows are gone)
