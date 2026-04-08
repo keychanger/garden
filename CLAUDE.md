@@ -34,6 +34,7 @@ npm run dev -- help    # run via tsx during development
   - `alerts.ts` — persistent operator alerts (review failures, merge errors, repeated failures)
   - `log.ts` — structured JSON logger to `~/.garden/sessions/dashboard.log`
   - `names.ts` — worker name generation (adjective-noun pairs)
+  - `STATUS.md` — spec for worker status tracking and display system
 - `src/dashboard-claude.ts` — internal command: launches claude with rules context
 - `src/commands/config.ts` — `garden config` command: view/set project config
 - `src/commands/focus.ts` — `garden focus` / `garden unfocus`: control dashboard visibility

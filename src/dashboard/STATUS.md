@@ -10,6 +10,7 @@ These are the states the user sees in the status pane. Nothing else is shown.
 
 | State         | Icon | Meaning                                          |
 |---------------|------|--------------------------------------------------|
+| loading       | `H`  | Worker pane started, bootstrap running, Claude not yet launched. |
 | ready         | `*`  | Fresh worker. Claude loaded, waiting for first input. |
 | working       | `@`  | Claude is actively processing. Coding, planning, answering — doesn't matter. |
 | idle          | `#`  | Claude is at the prompt. Ball is in the user's court — waiting for input, permission, or has an answer to read. Not in the review cycle. |
@@ -20,7 +21,7 @@ These are the states the user sees in the status pane. Nothing else is shown.
 | exited        | `o`  | Worker process died.                             |
 
 (Icons shown here are placeholders. Actual icons are Unicode symbols defined
-in `status.ts`.)
+in `src/commands/status.ts`.)
 
 ## State transitions
 
@@ -202,7 +203,7 @@ corrects any staleness.
 One function resolves display status from process status + lifecycle state:
 
 ```
-resolveDisplayStatus(processStatus, lifecycleState) -> DisplayStatus:
+resolveWorkerStatus(processStatus, lifecycleState) -> DisplayStatus:
 
   if lifecycleState is merged       -> merged
   if lifecycleState is merge-pending -> merge-pending
