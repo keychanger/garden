@@ -199,10 +199,14 @@ recurring re-check, or "fallback poll."
    input, then clears immediately. There is no "merged history" — each
    cycle is independent.
 
-5. **`pushed` is never displayed.** It is an internal poller term that
-   resolves to either `working` (Claude still going) or `reviewing`
-   (Claude stopped). The window between "Claude stopped" and "reviewer
-   launched" is sub-second and not user-visible.
+5. **There is no `pushed` state.** Earlier versions of this system carried
+   an internal `pushed` lifecycle state between "commits exist" and
+   "reviewer launched". The current model collapses that gap: the worker's
+   Stop hook sets `pendingReviewAt` (and pokes the poller FIFO) the moment
+   it observes commits ahead of base, and the poller's next wake transitions
+   the worker directly to `reviewing`. The window is sub-second and not
+   user-visible. `pushed` does not appear in the registry, the renderer,
+   or the type system.
 
 6. **Every transition is event-triggered.** No transition is discovered
    by a recurring tick or fallback poll. The poller wakes only when

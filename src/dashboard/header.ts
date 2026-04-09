@@ -5,7 +5,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { SESSIONS_DIR, loadConfig, tryGetProject } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, tmuxOutput, getPanePid } from "./tmux.js";
+import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
 import { findWorkerByName, updateWorkerFields } from "./registry.js";
 import { resolveBaseBranch } from "./git.js";
@@ -139,6 +139,22 @@ function suppressWindowNames(): void {
 // Claude hook handler
 // ---------------------------------------------------------------------------
 
+// Locate a worker's pane regardless of whether it's currently visible in the
+// right slot or parked in a hidden window. Used by the hook handler to read
+// the live tmux pane title (which Claude sets via terminal escape sequences
+// and which doubles as a "what is this worker doing" summary).
+function findWorkerPaneId(project: string, worker: string): string | null {
+  const windowName = `_${project}-worker-${worker}`;
+  const state = readDashState();
+  if (state.activeWindowName === windowName && state.activePaneId) {
+    return state.activePaneId;
+  }
+  if (windowExists(windowName)) {
+    return getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
+  }
+  return null;
+}
+
 export function handleClaudeHook(event: string): void {
   // The reviewer also runs `claude -p` from inside the worktree, so its hooks
   // fire from the same cwd. We disambiguate via env var: launchReview() sets
@@ -156,7 +172,7 @@ export function handleClaudeHook(event: string): void {
   //   prompt       → claudeStatus = "working" (and clear stale `merged` prState)
   //   stop         → claudeStatus = "idle"    (and poke poller if commits exist)
   const fields: Partial<Pick<import("./registry.js").WorkerEntry,
-    "claudeStatus" | "lastHookAt" | "prState">> = {
+    "claudeStatus" | "lastHookAt" | "prState" | "task">> = {
     lastHookAt: Date.now(),
   };
 
@@ -179,6 +195,18 @@ export function handleClaudeHook(event: string): void {
       data: { project: workerInfo.project, event },
     });
     return;
+  }
+
+  // Capture the live pane title as the worker's task summary, when available.
+  // Claude sets the title via terminal escape sequences as it works; reading
+  // it here gives the registry an updated "what is this worker doing" string.
+  // Title may be missing right at session start (no activity yet) or during
+  // the brief window before Claude has set it after UserPromptSubmit — in
+  // both cases we leave the previous task field intact.
+  const paneId = findWorkerPaneId(workerInfo.project, workerInfo.worker);
+  if (paneId) {
+    const title = getPaneTitle(paneId);
+    if (title) fields.task = title;
   }
 
   try {

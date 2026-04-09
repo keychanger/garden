@@ -114,6 +114,22 @@ export function getPaneLabel(paneId: string): string | null {
   }
 }
 
+// Read the tmux pane title. Claude Code sets this via terminal escape
+// sequences (OSC 0/2) as it works, so it doubles as a "what is this worker
+// currently doing" summary. We strip the leading non-alphanumeric noise
+// (Claude prefixes with characters like "✱ ") and reject the default
+// "Claude Code" placeholder so empty workers don't show garbage.
+export function getPaneTitle(paneId: string): string | null {
+  try {
+    const raw = tmuxOutput("display-message", "-t", paneId, "-p", "#{pane_title}");
+    if (!raw) return null;
+    const cleaned = raw.replace(/^[^a-zA-Z0-9]+/, "").trim();
+    return (cleaned && cleaned !== "Claude Code") ? cleaned : null;
+  } catch {
+    return null;
+  }
+}
+
 export function listAllWindowNames(): string[] {
   try {
     return tmuxOutput(

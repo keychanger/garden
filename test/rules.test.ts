@@ -96,4 +96,15 @@ describe("buildWorktreeRules", () => {
     expect(result).toContain("merge your changes into develop");
     expect(result).not.toContain("into main");
   });
+
+  it("explicitly forbids creating a side branch", async () => {
+    // This directive prevents the worker side-branch trap that loops the
+    // poller forever. See `feedback_worker_branch_trap` in agent memory and
+    // forcePushBranch's HEAD: refspec for the corresponding code-level guard.
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("swift-oak");
+    expect(result).toContain("Do NOT");
+    expect(result).toContain("git checkout -b");
+    expect(result).toContain("`swift-oak`");
+  });
 });
