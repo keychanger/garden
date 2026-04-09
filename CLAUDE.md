@@ -34,7 +34,7 @@ npm run dev -- help    # run via tsx during development
   - `alerts.ts` — persistent operator alerts (review failures, merge errors, repeated failures)
   - `log.ts` — structured JSON logger to `~/.garden/sessions/dashboard.log`
   - `names.ts` — worker name generation (adjective-noun pairs)
-  - `STATUS.md` — spec for worker status tracking and display system
+  - `STATUS.md` — **spec** for the worker status tracking and display system. Source of truth: the code follows this document, not the other way around. See "Specification files" below.
 - `src/dashboard-claude.ts` — internal command: launches claude with rules context
 - `src/commands/config.ts` — `garden config` command: view/set project config
 - `src/commands/focus.ts` — `garden focus` / `garden unfocus`: control dashboard visibility
@@ -122,6 +122,21 @@ Every worker runs in its own git worktree, isolated from the main checkout and o
 5. Worktrees are cleaned up when the worker is killed.
 
 The project shell (`opt-s`) stays on the main checkout for manual work.
+
+## Specification files
+
+A specification file is a markdown document that is the source of truth for a system: the code is expected to follow it, not the other way around. Specs are identified by the marker phrase **"the code is wrong"** in their opening paragraph (the spec convention is "if the code disagrees with this document, the code is wrong"). The reviewer detects this marker via `findSpecFiles()` in `src/dashboard/poller.ts` and prepends a strong warning to the review prompt instructing it to never edit a spec file to match the current implementation.
+
+When working with a spec file:
+
+- The spec drives the code. If the code does X but the spec says Y, the code is wrong — fix the code, not the spec.
+- A spec may describe behavior the current code does not yet implement. That is intentional — it is the design target. Do not "fix" the spec by removing the description, and do not silently update prose to match the legacy code.
+- Treat spec changes the way you would treat user instructions: review for clarity, internal consistency, and grammar. Never rewrite design intent.
+- If you genuinely believe a spec change is wrong, raise it explicitly rather than editing the spec.
+
+Current specs in this project:
+
+- `src/dashboard/STATUS.md` — worker status tracking and display system
 
 ## Conventions
 
