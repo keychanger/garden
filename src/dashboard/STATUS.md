@@ -1,142 +1,134 @@
 # Worker Status System
 
-Spec for the worker status tracking and display system. This document is the
-source of truth for how status works. If the code disagrees with this document,
-the code is wrong.
+Spec for the worker status tracking and display system. This document is
+the source of truth for how status works. **If the code disagrees with
+this document, the code is wrong.**
 
 ## Display states
 
-These are the states the user sees in the status pane. Nothing else is shown.
+These are the only states the user sees in the status pane.
 
 | State         | Icon | Meaning                                          |
 |---------------|------|--------------------------------------------------|
 | loading       | `H`  | Worker pane started, bootstrap running, Claude not yet launched. |
 | ready         | `*`  | Fresh worker. Claude loaded, waiting for first input. |
-| working       | `@`  | Claude is actively processing. Coding, planning, answering — doesn't matter. |
+| working       | `@`  | Claude is generating a response to a submitted prompt. See "What 'working' means" below. |
 | idle          | `#`  | Claude is at the prompt. Ball is in the user's court — waiting for input, permission, or has an answer to read. Not in the review cycle. |
 | reviewing     | `%`  | Automated reviewer is checking the worker's code. |
 | merge-pending | `&`  | Review passed. Queued for merge.                 |
 | merged        | `+`  | Code landed on the base branch.                  |
 | failing       | `x`  | Review failed. Waiting for worker to fix.        |
-| exited        | `o`  | Worker process died.                             |
+| exited        | `o`  | Worker process is gone.                          |
 
-(Icons shown here are placeholders. Actual icons are Unicode symbols defined
-in `src/commands/status.ts`.)
+(Icons shown here are placeholders. Actual Unicode symbols are defined in
+`src/commands/status.ts`.)
+
+### What "working" means
+
+`working` means exactly one thing: **Claude has received a submitted
+prompt and has not yet finished its response.**
+
+It starts the instant the `UserPromptSubmit` hook fires and ends the
+instant the `Stop` hook fires. Nothing else flips it.
+
+Things that *are* working:
+- Generating tokens
+- Running tools (Read, Bash, Edit, etc.)
+- Calling subagents
+- Thinking between tool calls
+
+Things that are *not* working:
+- The user typing a message at the prompt (no prompt has been submitted yet)
+- The user reading Claude's last response
+- Claude sitting at the prompt with nothing to do
+- The session being open in a pane the user isn't looking at
+
+If a worker shows `working` while you're still typing into it, that is a
+bug — the previous `Stop` hook didn't fire or didn't reach the registry.
 
 ## State transitions
 
-```
-  [ready] ---------> [working] --------> [idle]
-                       ^  |                 |
-                       |  |                 | (new input)
-                       |  |                 |
-       (new input)     |  | (new commits    |
-       .---------------'  |  + Claude stops)|
-       |                  |                 |
-       |                  v                 |
-       |              [reviewing] ------.   |
-       |                  |             |   |
-       |                  | (passed)    |   |
-       |                  v             |   |
-       |           [merge-pending] -----'   |
-       |                  |          (rebase conflict)
-       |                  | (merged)
-       |                  v
-       '------------- [merged] <------------'
-                                  (no new commits;
-                                   stays merged)
+```mermaid
+stateDiagram-v2
+    [*] --> loading
+    loading --> ready : bootstrap done, Claude up
+    ready --> working : first input
 
-       Error path:
-       [reviewing] ---> [failing] ---> [working] (new commits after debounce)
+    working --> idle : Stop + no new commits
+    working --> reviewing : Stop + new commits
+
+    idle --> working : new input
+
+    reviewing --> merge_pending : reviewer passes
+    reviewing --> failing : reviewer fails
+    reviewing --> working : new commits during review
+
+    merge_pending --> merged : ff-only merge succeeds
+    merge_pending --> reviewing : rebase conflict (re-review)
+    merge_pending --> working : merge fails (non-conflict)
+
+    merged --> working : new input (merged cleared)
+
+    failing --> working : new commits after debounce
+
+    state "merge-pending" as merge_pending
+
+    note right of working
+        Any state transitions
+        to "exited" if the
+        pane process dies.
+    end note
 ```
 
 The two exits from `working` are the core branching point:
-- **No new commits** -> `idle` (ball in user's court, not in review cycle)
-- **New commits** -> `reviewing` (enters review cycle, skips idle entirely)
+- **No new commits** → `idle` (ball in user's court)
+- **New commits** → `reviewing` (skips idle, enters review cycle)
 
 ### Transition rules
 
-**ready -> working**: Claude receives input (UserPromptSubmit hook fires).
-One-time transition. A worker never returns to `ready`.
+| From          | To            | Trigger                                              |
+|---------------|---------------|------------------------------------------------------|
+| loading       | ready         | Bootstrap finishes, Claude is up                     |
+| ready         | working       | First `UserPromptSubmit`                             |
+| working       | idle          | `Stop` fires; no new commits ahead of base branch    |
+| working       | reviewing     | `Stop` fires; new commits ahead of base branch       |
+| idle          | working       | `UserPromptSubmit`                                   |
+| reviewing     | merge-pending | Reviewer verdict CLEAN or FIXED                      |
+| reviewing     | failing       | Reviewer verdict FAILED                              |
+| reviewing     | working       | New commits appear during review (review aborted)    |
+| merge-pending | merged        | Fast-forward merge succeeds                          |
+| merge-pending | reviewing     | Rebase conflict (scoped re-review launched)          |
+| merge-pending | working       | Merge fails (non-conflict)                           |
+| merged        | working       | `UserPromptSubmit` (merged cleared instantly)        |
+| failing       | working       | New commits after 30s debounce                       |
+| any           | exited        | Pane process is gone                                 |
 
-**working -> idle**: Claude finishes processing (Stop hook fires) and there
-are no new commits ahead of the base branch (or no *new* commits since the
-last merge). Claude is at the prompt — it answered a question, made a plan,
-is waiting for permission, or otherwise finished without producing code.
-The user probably has something to look at.
-
-**working -> reviewing**: Claude finishes processing (Stop hook fires) and
-there are new commits ahead of the base branch. The poller launches a
-reviewer. This is the key gate: review only starts when Claude is done.
-The worker skips `idle` entirely — it goes straight into the review cycle.
-
-**idle -> working**: Claude receives new input (UserPromptSubmit hook fires).
-
-**reviewing -> merge-pending**: Reviewer verdict is CLEAN or FIXED.
-
-**reviewing -> failing**: Reviewer verdict is FAILED.
-
-**reviewing -> working**: New commits appear on the worker branch while the
-reviewer is running. Review is aborted because it's now stale. Returns to
-`working` so the poller waits for Claude to finish before re-reviewing.
-
-**merge-pending -> merged**: Fast-forward merge succeeds.
-
-**merge-pending -> reviewing**: Rebase onto current base branch has
-conflicts. A scoped re-review is launched to resolve them.
-
-**merge-pending -> working**: Merge fails for non-conflict reasons. Alert
-surfaced.
-
-**failing -> working**: Worker pushes new commits after the debounce period
-(30s). Back to the normal cycle.
-
-**merged -> working**: Claude receives new input. Back to the cycle.
-
-**From working, the two exits are always the same:**
-- No new commits -> `idle` (ball in user's court)
-- New commits -> `reviewing` (enters review cycle)
-
-This is true regardless of whether the worker was previously merged, idle,
-or fresh. The review cycle and idle are mutually exclusive outcomes of
-working.
-
-**Any state -> exited**: Worker pane process dies.
-
-### What "pushed" is NOT
-
-There is no `pushed` display state. Internally, the poller tracks that
-commits exist ahead of the base branch. But from the user's perspective:
-
-- If Claude is still working: show `working`.
-- If Claude stopped and commits exist: show `reviewing` (the reviewer
-  launches immediately when Claude stops).
-- The brief window between "Claude stopped" and "reviewer launched" is
-  sub-second and not user-visible.
-
-If for some reason the reviewer can't launch immediately (e.g., poller
-hasn't ticked yet), the worker stays in `working` until the next poll
-cycle launches the reviewer. This gap is sub-second in practice.
+A worker never returns to `ready` once it has received its first input.
 
 ## Key invariants
 
-1. **`idle` and the review cycle are mutually exclusive.** If a worker is in
-   the review cycle (reviewing, merge-pending, merged, failing), it never
-   shows `idle`. If it shows `idle`, it's not in the review cycle.
+1. **`idle` and the review cycle are mutually exclusive.** A worker in
+   `reviewing`, `merge-pending`, or `failing` never shows `idle`. If it
+   shows `idle`, it is not in the review cycle.
 
 2. **`working` is the only entry point to the review cycle.** The poller
-   only transitions to `reviewing` when Claude stops working and new commits
-   exist. You cannot go from `idle` directly to `reviewing`.
+   only transitions to `reviewing` when Claude stops working *and* new
+   commits exist. You cannot go from `idle` directly to `reviewing`.
 
 3. **`ready` is one-time.** Once a worker receives its first input, it
    never returns to `ready`.
 
-4. **Lifecycle states are sticky.** A worker stays `merged` even if Claude
-   is actively answering a question, until new commits appear. The lifecycle
-   state tells the user where the *code* is, not what Claude is doing.
+4. **Active pipeline states are sticky; `merged` is not.** While a worker
+   is in `reviewing`, `merge-pending`, or `failing`, those states take
+   priority over what Claude is doing — they represent in-progress
+   pipeline work. `merged` persists only until the worker receives new
+   input, then clears immediately. There is no "merged history" — each
+   cycle is independent.
 
-5. **`pushed` is never displayed.** It is an internal poller state. The
-   user sees `working` (Claude still going) or the reviewer launches.
+5. **`pushed` is never displayed.** It is an internal poller term that
+   resolves to either `working` (Claude still going) or `reviewing`
+   (Claude stopped). The window between "Claude stopped" and "reviewer
+   launched" is sub-second and not user-visible.
 
 ## Detection machinery
 
@@ -146,175 +138,132 @@ tracking.
 
 ### Signal sources (ordered by authority)
 
-1. **Hooks** (highest authority): Claude Code fires `UserPromptSubmit` when
-   processing starts and `Stop` when it finishes. These are the
+1. **Hooks** (highest authority): Claude Code fires `UserPromptSubmit`
+   when processing starts and `Stop` when it finishes. These are the
    authoritative signals for working/idle transitions.
-
-2. **Marker files**: The hooks write/delete a file at
-   `~/.garden/sessions/claude-active-<project>-<worker>`. This persists the
-   working/idle signal so that process detection can read it without
-   re-querying hooks. The marker's mtime is touched whenever tool
-   subprocesses are detected, so staleness measures "time since last
-   activity" not "time since prompt."
-
-3. **Child process detection** (pgrep): Detects whether Claude has active
-   tool subprocesses. Used to confirm working state and to touch the marker
-   mtime. Cannot detect in-process work (subagents, API calls), which is
-   why the marker exists.
-
-4. **Registry cache** (lowest authority): The `claudeStatus` field in the
-   registry caches the last-known process status. Used by the quick render
-   path for instant display. May be stale.
+2. **Marker files** (`~/.garden/sessions/claude-active-<project>-<worker>`):
+   the hooks write/delete the marker. Process detection reads it without
+   re-querying hooks. mtime is touched when tool subprocesses are
+   detected, so staleness measures "time since last tool activity," not
+   "time since prompt."
+3. **pgrep child detection**: detects whether Claude has active tool
+   subprocesses. Confirms working state and touches the marker mtime.
+   Cannot detect in-process work (subagents, API calls) — that is why
+   the marker exists.
+4. **Registry cache** (`claudeStatus`, lowest authority): last-known
+   process status. Used by the quick render path for instant display. May
+   be stale; the next full render corrects it.
 
 ### Detection function
 
-`detectPaneProcessStatus(paneId, project, worker)` returns a
-`ProcessStatus`:
+`detectPaneProcessStatus(paneId, project, worker)` returns a `ProcessStatus`:
 
-```
-  pane PID exists?
-    no  -> exited
-    yes -> Claude child PID exists?
-      no  -> has other children?
-        yes -> loading
-        no  -> ready
-      yes -> has non-MCP child processes?
-        yes -> working (touch marker)
-        no  -> marker file fresh?
-          yes -> working
-          no  -> has activity text?
-            yes -> idle
-            no  -> ready
+```mermaid
+flowchart TD
+    A{pane PID exists?} -->|no| exited
+    A -->|yes| B{Claude child PID exists?}
+    B -->|no| C{has other children?}
+    C -->|yes| loading
+    C -->|no| ready1[ready]
+    B -->|yes| D{has non-MCP child processes?}
+    D -->|yes| working1["working<br/>(touch marker)"]
+    D -->|no| E{marker file fresh?}
+    E -->|yes| working2[working]
+    E -->|no| F{has activity text?}
+    F -->|yes| idle
+    F -->|no| ready2[ready]
 ```
 
 ### Two render paths
 
-**Full render** (`garden status` / `printHeader`): Calls
-`detectPaneProcessStatus` for live process detection. Writes result to
-registry `claudeStatus`. Accurate but costs a pgrep call per worker.
-
-**Quick render** (`renderQuickStatus`): Reads `claudeStatus` from the
-registry. No process detection. Used for instant visual feedback after
-mutations (new worker, kill worker, project switch). The next full render
-corrects any staleness.
+- **Full render** (`garden status` / `printHeader`): live `pgrep`
+  detection. Writes the result to registry `claudeStatus`. Accurate but
+  costs a pgrep call per worker.
+- **Quick render** (`renderQuickStatus`): reads `claudeStatus` from the
+  registry. No detection. Used for instant visual feedback after
+  mutations (new/kill worker, project switch). The next full render
+  corrects any staleness.
 
 ### Display resolution
 
-One function resolves display status from process status + lifecycle state:
+`resolveWorkerStatus(processStatus, lifecycleState)` combines the two:
 
-```
-resolveWorkerStatus(processStatus, lifecycleState) -> DisplayStatus:
-
-  if lifecycleState is merged       -> merged
-  if lifecycleState is merge-pending -> merge-pending
-  if lifecycleState is reviewing    -> reviewing
-  if lifecycleState is failing      -> failing
-
-  // No lifecycle state, or lifecycle is "working"/"pushed" (internal):
-  // fall through to process status
-  return processStatus
+```mermaid
+flowchart TD
+    Start["resolveWorkerStatus(processStatus, lifecycleState)"] --> A{lifecycleState?}
+    A -->|reviewing| reviewing
+    A -->|merge-pending| merge_pending["merge-pending"]
+    A -->|failing| failing
+    A -->|merged| merged
+    A -->|"none / working / pushed"| B["return processStatus"]
 ```
 
-The lifecycle states (reviewing, merge-pending, merged, failing) always
-take priority because they represent pipeline stages that don't depend on
-what Claude is doing right now. A merged worker is merged even if Claude is
-actively answering a question — until new commits appear.
+Active pipeline states (`reviewing`, `merge-pending`, `failing`) take
+priority because they represent in-progress stages that don't depend on
+what Claude is doing right now. `merged` also takes priority while set,
+but it clears the moment the worker receives new input — at which point
+the display falls through to `processStatus` (working, then idle or
+reviewing).
 
-**`idle` only appears when there is no active lifecycle state.** A worker
-in the review cycle (reviewing, merge-pending, merged, failing) never
-shows idle, even if Claude is at the prompt. The lifecycle state is more
-informative.
+### Marker file lifecycle
 
-When lifecycle is `pushed` (internal-only, never displayed):
-- Process is `working` -> show `working` (Claude still going)
-- Process is not `working` -> show `working` until the reviewer launches
-  (sub-second gap, next poll cycle picks it up)
+The marker bridges the gap between hooks (which fire at the right time)
+and process detection (which runs on demand).
 
-### Hook -> display pipeline
+- **Created**: `UserPromptSubmit` hook, written by `handleClaudeHook("prompt")`.
+- **Touched**: by `detectPaneProcessStatus` whenever it finds active
+  non-MCP child processes. mtime then measures "time since last tool
+  activity."
+- **Deleted**: `Stop` hook, removed by `handleClaudeHook("stop")`.
+- **Stale expiry**: marker older than `MARKER_STALE_MS` (2 minutes) is
+  treated as gone. Catches Claude crashes that skip the `Stop` hook. The
+  threshold balances long subagent runs (must not expire mid-work) and
+  prompt cleanup of stuck markers.
 
-The full signal flow from input to pixels:
+### Hook → display pipeline
 
+```mermaid
+sequenceDiagram
+    participant User
+    participant Claude
+    participant Hook
+    participant Registry
+    participant StatusPane
+    participant Poller
+
+    User->>Claude: sends message
+    Claude->>Hook: UserPromptSubmit fires
+    Hook->>Hook: write marker file
+    Hook->>Registry: claudeStatus = "working"
+    Hook->>StatusPane: SIGUSR1
+    StatusPane->>Registry: read (quick path)
+    StatusPane->>User: shows "working"
+
+    Note over Claude: processing...
+
+    Claude->>Hook: Stop fires
+    Hook->>Hook: delete marker file
+    Hook->>Registry: claudeStatus = "idle"
+    Hook->>StatusPane: SIGUSR1
+    StatusPane->>Registry: read (quick path)
+    StatusPane->>User: shows "idle"
+
+    Note over Poller: new commits + Claude idle
+    Poller->>Registry: prState = "reviewing"
+    Poller->>StatusPane: SIGUSR1
+    StatusPane->>User: shows "reviewing"
 ```
-  User sends message to Claude
-    |
-    v
-  UserPromptSubmit hook fires
-    |
-    +---> write marker file
-    +---> set registry claudeStatus = "working"
-    +---> signal status pane (SIGUSR1)
-    |
-    v
-  Status pane re-renders (quick path: reads registry)
-    |
-    v
-  User sees: working (spinner)
-
-  ... Claude processes ...
-
-  Stop hook fires
-    |
-    +---> delete marker file
-    +---> set registry claudeStatus = "idle"
-    +---> signal status pane (SIGUSR1)
-    |
-    v
-  Status pane re-renders (quick path: reads registry)
-    |
-    v
-  User sees: idle
-
-  ... Poller detects new commits, Claude is idle ...
-
-  Poller launches reviewer
-    |
-    +---> set registry prState = "reviewing"
-    +---> signal status pane
-    |
-    v
-  User sees: reviewing
-```
-
-## Marker file lifecycle
-
-The marker file bridges the gap between hooks (which fire at the right
-time) and process detection (which runs on demand).
-
-**Created**: On `UserPromptSubmit` hook. Written synchronously by
-`handleClaudeHook("prompt")`.
-
-**Touched**: By `detectPaneProcessStatus` whenever it finds active non-MCP
-child processes. This keeps the mtime fresh so that the staleness check
-measures "time since last tool activity" rather than "time since the user
-sent a message."
-
-**Deleted**: On `Stop` hook. Deleted synchronously by
-`handleClaudeHook("stop")`.
-
-**Stale expiry**: If the marker is older than `MARKER_STALE_MS` (2
-minutes), `isClaudeActiveByHook` deletes it and returns false. This
-handles the case where Claude crashes without firing the Stop hook.
-
-The 2-minute threshold is a tradeoff: long enough to survive gaps between
-tool calls (Claude thinking about what to do next), short enough to clear
-stuck markers from crashes.
 
 ## Known edge cases
 
-**Subagent work with no tool calls**: Claude can spend minutes on
+**Subagent work with no tool calls.** Claude can spend minutes on
 in-process subagent work (API calls, planning) with no child processes.
-The marker file keeps the status as "working" during this time. If the gap
-exceeds 2 minutes without any tool subprocess, status will briefly flicker
-to "idle" before the next tool call creates a child process and detection
-switches back to "working." This is acceptable — a 2-minute gap with zero
-activity is unusual.
+The marker file keeps the status as `working` during this time. If a
+2-minute gap accumulates without any tool subprocess, status briefly
+flickers to `idle` before the next tool call recreates a subprocess and
+flips it back. Acceptable — a 2-minute gap with zero activity is unusual.
 
-**Reviewer launched while Claude was between keystrokes**: The poller
-checks `isWorkerWorking()` before launching a review. If Claude happens to
-be idle between rapid-fire messages, the poller might launch a review
-prematurely. The review will be aborted if new commits appear during the
-review.
-
-**Multiple merges in one session**: The `mergeCount` in the registry
-tracks how many times a worker has gone through the full cycle. Display
-shows "merged (x3)" etc. Each cycle is independent.
+**Reviewer launched between keystrokes.** The poller checks
+`isWorkerWorking()` before launching a review. If Claude happens to be
+idle between rapid-fire messages, the poller might launch a review
+prematurely. The review will be aborted if new commits appear during it.
