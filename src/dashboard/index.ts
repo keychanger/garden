@@ -47,7 +47,7 @@ export async function dashboard(args: string[]): Promise<void> {
   if (sub === "_focus-root") return focusRoot();
   if (sub === "_focus-logs") return focusLogs();
   if (sub === "_cycle-pane") return cyclePane(args[1] === "prev" ? -1 : 1);
-  if (sub === "_kill-pane") return killPane();
+  if (sub === "_kill-pane") return killPane({ force: args.includes("--force") });
   if (sub === "_poll") {
     const changed = poll(args[1]);
     if (changed) process.exit(75);

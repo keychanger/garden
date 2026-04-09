@@ -17,7 +17,7 @@ import {
 } from "./registry.js";
 import { log } from "./log.js";
 import { buildWorktreeBootstrapScript, createShellWindow, resolveGardenRunner } from "./create.js";
-import { worktreePath, resolveBaseBranch } from "./git.js";
+import { worktreePath, resolveBaseBranch, isWorktreeDirty } from "./git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
 import { getWorkers } from "./registry.js";
 
@@ -80,7 +80,7 @@ export function newWorker(): void {
   refreshDashboard({ state });
 }
 
-export function killPane(): void {
+export function killPane(opts: { force?: boolean } = {}): void {
   const state = readDashState();
 
   if (state.activePaneType === "shell") {
@@ -101,6 +101,28 @@ export function killPane(): void {
   const killedWindowName = state.activeWindowName;
   const workerWindows = listHiddenWorkerWindows(state.activeProject);
   const project = getProject(state.activeProject);
+
+  // Guard against silently destroying uncommitted work. The poller is blind
+  // to anything that hasn't been committed, so a worker that did substantive
+  // work but never ran `git commit` looks identical to an empty worker.
+  // Without this check, ⌥x on a dirty worker tears down the worktree and
+  // the work is gone with no recovery path.
+  if (!opts.force && killedWindowName && state.activeProject) {
+    const nameMatch = killedWindowName.match(/-worker-(.+)$/);
+    if (nameMatch) {
+      const workerName = nameMatch[1];
+      const entry = findWorkerByName(state.activeProject, workerName);
+      if (entry?.worktreePath && isWorktreeDirty(entry.worktreePath)) {
+        const gardenRunner = resolveGardenRunner();
+        const prompt = `Worker '${workerName}' has uncommitted changes. Kill anyway?`;
+        const confirmCmd = `run-shell "${gardenRunner} dashboard _kill-pane --force"`;
+        try {
+          tmux("confirm-before", "-p", `${prompt} (y/n) `, confirmCmd);
+        } catch { /* tmux command failed; bail safely without killing */ }
+        return;
+      }
+    }
+  }
 
   if (workerWindows.length > 0) {
     const targetWindow = workerWindows[0];

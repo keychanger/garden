@@ -97,7 +97,7 @@ Hidden windows follow the convention: `_<project>-worker-<N>`, `_<project>-shell
 2. Claude launches in the worktree with project rules and worktree workflow instructions
 3. The worker is interactive — you work with it directly
 4. `⌥]`/`⌥[` cycles between workers and shell
-5. `⌥x` kills the focused worker, removes its worktree and branch
+5. `⌥x` kills the focused worker, removes its worktree and branch. If the worktree has uncommitted changes, `⌥x` shows a tmux confirmation prompt before destroying the worker — guarding against silently losing work that the poller never saw because it was never committed
 6. Switching projects parks everything in hidden windows; switching back restores
 
 ### Poller and Auto-Merge
