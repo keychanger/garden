@@ -1,7 +1,7 @@
 // Pane parking and restoring: swaps content between the visible right slot
 // and hidden tmux windows so the layout tree is never modified.
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, tmuxNewWindow, getFirstPaneId, killWindowSafe, renameWindow, paneExists } from "./tmux.js";
+import { tmux, tmuxNewWindow, getFirstPaneId, killWindowSafe, renameWindow, paneExists, getPaneSize, resizeWindow } from "./tmux.js";
 import type { DashboardState } from "./state.js";
 import { log } from "./log.js";
 
@@ -16,12 +16,20 @@ export function parkToHidden(windowName: string, state: DashboardState): string 
     return null;
   }
 
+  const visibleSize = getPaneSize(state.activePaneId);
+
   killWindowSafe(windowName);
 
   const tempPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", windowName);
   if (!tempPaneId) {
     log.error("layout", "parkToHidden: failed to get pane ID for new window");
     return null;
+  }
+
+  // Pre-size the hidden window to match the visible slot so swap-pane
+  // does not trigger a SIGWINCH reflow on the content being parked.
+  if (visibleSize) {
+    resizeWindow(windowName, visibleSize.width, visibleSize.height);
   }
 
   // Swap: active content goes to hidden window, temp comes to right slot
@@ -42,6 +50,13 @@ export function restoreFromHidden(windowName: string, state: DashboardState): vo
   if (!targetPaneId || !state.activePaneId) {
     log.warn("layout", "restoreFromHidden: missing pane");
     return;
+  }
+
+  // Pre-size the hidden window to match the visible slot so swap-pane
+  // does not trigger a SIGWINCH reflow on the content being restored.
+  const visibleSize = getPaneSize(state.activePaneId);
+  if (visibleSize) {
+    resizeWindow(windowName, visibleSize.width, visibleSize.height);
   }
 
   tmux("swap-pane", "-s", state.activePaneId, "-t", targetPaneId);
@@ -76,6 +91,13 @@ export function swapDirect(parkWindowName: string, restoreWindowName: string, st
     return false;
   }
 
+  // Pre-size the hidden window to match the visible slot so swap-pane
+  // does not trigger a SIGWINCH reflow on either pane.
+  const visibleSize = getPaneSize(state.activePaneId);
+  if (visibleSize) {
+    resizeWindow(restoreWindowName, visibleSize.width, visibleSize.height);
+  }
+
   // Direct swap: visible content goes to hidden window, hidden content comes to visible slot
   tmux("swap-pane", "-s", state.activePaneId, "-t", targetPaneId);
   // Rename the hidden window (now holding old visible content) to the park name
@@ -96,12 +118,18 @@ export function gardenParkToHidden(windowName: string, state: DashboardState): s
     return null;
   }
 
+  const visibleSize = getPaneSize(state.gardenShellPaneId);
+
   killWindowSafe(windowName);
 
   const tempPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", windowName);
   if (!tempPaneId) {
     log.error("layout", "gardenParkToHidden: failed to get pane ID for new window");
     return null;
+  }
+
+  if (visibleSize) {
+    resizeWindow(windowName, visibleSize.width, visibleSize.height);
   }
 
   tmux("swap-pane", "-s", state.gardenShellPaneId, "-t", tempPaneId);
@@ -121,6 +149,11 @@ export function gardenRestoreFromHidden(windowName: string, state: DashboardStat
   if (!targetPaneId || !state.gardenShellPaneId) {
     log.warn("layout", "gardenRestoreFromHidden: missing pane");
     return;
+  }
+
+  const visibleSize = getPaneSize(state.gardenShellPaneId);
+  if (visibleSize) {
+    resizeWindow(windowName, visibleSize.width, visibleSize.height);
   }
 
   tmux("swap-pane", "-s", state.gardenShellPaneId, "-t", targetPaneId);

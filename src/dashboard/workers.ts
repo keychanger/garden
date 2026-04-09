@@ -10,6 +10,7 @@ import {
   tmux, tmuxDisplay, tmuxNewWindow, setPaneLabel, setPaneVar, shellEscape,
   getFirstPaneId, paneExists, windowExists,
   listHiddenWorkerWindows, killWindowSafe,
+  getPaneSize, resizeWindow,
 } from "./tmux.js";
 import { generateWorkerName } from "./names.js";
 import {
@@ -129,6 +130,8 @@ export function killPane(opts: { force?: boolean } = {}): void {
     const targetWindow = workerWindows[0];
     const targetPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${targetWindow}`);
     if (targetPaneId) {
+      const visibleSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
+      if (visibleSize) resizeWindow(targetWindow, visibleSize.width, visibleSize.height);
       tmux("swap-pane", "-s", state.activePaneId, "-t", targetPaneId);
       killWindowSafe(targetWindow);
       state.activePaneId = targetPaneId;
@@ -150,6 +153,8 @@ export function killPane(opts: { force?: boolean } = {}): void {
     }
     const shellPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${shellWindowName}`);
     if (shellPaneId) {
+      const visibleSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
+      if (visibleSize) resizeWindow(shellWindowName, visibleSize.width, visibleSize.height);
       tmux("swap-pane", "-s", state.activePaneId, "-t", shellPaneId);
       killWindowSafe(shellWindowName);
       state.activePaneId = shellPaneId;

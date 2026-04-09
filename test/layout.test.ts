@@ -12,6 +12,8 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   killWindowSafe: vi.fn(),
   renameWindow: vi.fn(),
   paneExists: vi.fn(() => true),
+  getPaneSize: vi.fn(() => ({ width: 129, height: 58 })),
+  resizeWindow: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/log.js", () => ({

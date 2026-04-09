@@ -91,6 +91,23 @@ export function renameWindow(oldName: string, newName: string): void {
   } catch { /* ignore */ }
 }
 
+export function getPaneSize(paneId: string): { width: number; height: number } | null {
+  try {
+    const out = tmuxOutput("display-message", "-t", paneId, "-p", "#{pane_width} #{pane_height}");
+    const parts = out.split(" ");
+    if (parts.length !== 2) return null;
+    return { width: parseInt(parts[0], 10), height: parseInt(parts[1], 10) };
+  } catch {
+    return null;
+  }
+}
+
+export function resizeWindow(windowName: string, width: number, height: number): void {
+  try {
+    tmux("resize-window", "-t", `${DASHBOARD_SESSION}:${windowName}`, "-x", String(width), "-y", String(height));
+  } catch { /* ignore — window may not exist */ }
+}
+
 export function killWindowSafe(windowName: string): void {
   try {
     tmux("kill-window", "-t", `${DASHBOARD_SESSION}:${windowName}`);
