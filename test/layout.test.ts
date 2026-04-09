@@ -26,7 +26,7 @@ vi.mock("../src/dashboard/log.js", () => ({
 }));
 
 import { parkToHidden, restoreFromHidden, swapToHidden, swapDirect } from "../src/dashboard/layout.js";
-import { tmux, tmuxNewWindow, getFirstPaneId, windowExists, killWindowSafe, renameWindow, paneExists } from "../src/dashboard/tmux.js";
+import { tmux, tmuxNewWindow, getFirstPaneId, windowExists, killWindowSafe, renameWindow, paneExists, getPaneSize, resizeWindow } from "../src/dashboard/tmux.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 
 function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
@@ -56,6 +56,19 @@ describe("parkToHidden", () => {
     expect(vi.mocked(tmuxNewWindow)).toHaveBeenCalledWith(
       "-d", "-t", "garden-dashboard", "-n", "_garden-worker-bold-ash"
     );
+    expect(vi.mocked(resizeWindow)).toHaveBeenCalledWith("_garden-worker-bold-ash", 129, 58);
+    expect(vi.mocked(tmux)).toHaveBeenCalledWith(
+      "swap-pane", "-s", "%2", "-t", "%10"
+    );
+  });
+
+  it("skips resize when getPaneSize returns null", () => {
+    vi.mocked(getPaneSize).mockReturnValueOnce(null);
+    vi.mocked(tmuxNewWindow).mockReturnValue("%10");
+    const state = makeState();
+    parkToHidden("_garden-worker-bold-ash", state);
+
+    expect(vi.mocked(resizeWindow)).not.toHaveBeenCalled();
     expect(vi.mocked(tmux)).toHaveBeenCalledWith(
       "swap-pane", "-s", "%2", "-t", "%10"
     );
@@ -98,6 +111,7 @@ describe("restoreFromHidden", () => {
     const state = makeState();
     restoreFromHidden("_garden-worker-calm-bay", state);
 
+    expect(vi.mocked(resizeWindow)).toHaveBeenCalledWith("_garden-worker-calm-bay", 129, 58);
     expect(vi.mocked(tmux)).toHaveBeenCalledWith(
       "swap-pane", "-s", "%2", "-t", "%20"
     );
@@ -144,6 +158,7 @@ describe("swapDirect", () => {
     const result = swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
 
     expect(result).toBe(true);
+    expect(vi.mocked(resizeWindow)).toHaveBeenCalledWith("_garden-worker-calm-bay", 129, 58);
     expect(vi.mocked(tmux)).toHaveBeenCalledWith(
       "swap-pane", "-s", "%2", "-t", "%20"
     );
