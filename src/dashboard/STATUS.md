@@ -290,6 +290,46 @@ sequenceDiagram
     StatusPane->>User: shows "idle"
 ```
 
+### Legacy mechanisms removed
+
+The current implementation contains the following mechanisms, all of
+which this spec rejects. They are listed here by name so that gut-and-
+replace work can target them precisely. Until they are deleted, they
+exist in the code but not in this spec — and the spec governs.
+
+- **`pgrep` child process detection** in `src/dashboard/detect.ts`
+  (`detectPaneProcessStatus`, `getClaudeChildPid`, `hasChildProcesses`,
+  `hasNonMcpChildren`). Today's primary signal for working/idle/loading.
+  Replaced by hooks-only writes to the registry.
+- **Marker files** at `~/.garden/sessions/claude-active-<project>-<worker>`
+  and the `MARKER_STALE_MS` (2-minute) expiry window in
+  `src/dashboard/header.ts`. Created to bridge the gap between hooks
+  and pgrep observations during in-process subagent work. With pgrep
+  gone, no bridge is needed.
+- **`HOOK_PRIORITY_MS` window** (5 seconds) in `src/dashboard/header.ts`
+  and `src/commands/status.ts`. Created to defend hook-set values
+  against pgrep-based writers that would otherwise race them. With
+  pgrep gone, no defense is needed.
+- **Activity-text parsing** from pane title and the `garden_task` pane
+  variable in `src/dashboard/detect.ts`. Used as a tiebreaker when
+  process-detection signals are inconclusive. Hooks make this redundant.
+- **10-second fallback poll** in the poller's FIFO read loop
+  (`startProjectPoller` in `src/dashboard/poller.ts`, `read -t 10`).
+  Created as a safety net for missed events. The spec rejects safety-
+  net polling — missed events must be diagnosed at their source, not
+  papered over by re-checking on a timer.
+- **`mergeCount` tracking** in the registry and any "merged (xN)"
+  display rendering. Per invariant 4, there is no merged history; each
+  cycle is independent.
+- **The "two render paths" split** (full render vs quick render) in
+  `src/dashboard/header.ts` and `src/commands/status.ts`. With process
+  detection removed, both paths collapse into the same registry-read.
+  There is one render path.
+
+Each of these is a load-bearing piece of the legacy detection machinery
+that has produced the regressions this spec is designed to eliminate.
+The gut-and-replace work that follows this spec must remove all of them.
+
 ## Known edge cases
 
 The legacy implementation had several edge cases driven by its
