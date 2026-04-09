@@ -629,6 +629,8 @@ function buildReviewPrompt(
 
   const docSections = readDocSections(wtPath);
   const testSections = readTestSections(wtPath, changedFiles);
+  const specFiles = findSpecFiles(wtPath, changedFiles);
+  const specWarning = buildSpecWarning(specFiles);
 
   let stepNum = 1;
   const rebaseStep = stepNum++;
@@ -638,6 +640,7 @@ function buildReviewPrompt(
   const prompt = [
     "You are reviewing a branch before merge. Complete these steps in order:",
     "",
+    ...specWarning,
     `## Step ${rebaseStep}: Rebase onto ${baseBranch}`,
     "",
     `Run \`git rebase ${baseBranch}\` in the worktree. If there are conflicts:`,
@@ -664,7 +667,10 @@ function buildReviewPrompt(
     "- Documentation accuracy: read DESIGN.md and CLAUDE.md below. After applying this",
     "  diff, are they still accurate and complete? Flag any claims that are now wrong,",
     "  missing sections for new behavior, or stale descriptions. Not every change needs a",
-    "  doc change — only flag docs that are actually inaccurate after this diff.",
+    "  doc change — only flag docs that are actually inaccurate after this diff. This",
+    "  bullet applies *only* to descriptive documents (DESIGN.md, CLAUDE.md) — not to",
+    "  specification files (those marked as a source of truth, see the warning above if",
+    "  any are in this diff). Specs drive the code; do not edit them to match code.",
     "- Test quality: read the test files below. Check three things:",
     "  1. Accuracy — do existing tests still assert correct behavior after this diff?",
     "     Flag tests that now assert stale or wrong behavior.",
@@ -744,6 +750,8 @@ function buildReReviewPrompt(
 
   const docSections = readDocSections(wtPath);
   const testSections = readTestSections(wtPath, changedFiles);
+  const specFiles = findSpecFiles(wtPath, changedFiles);
+  const specWarning = buildSpecWarning(specFiles);
 
   let stepNum = 1;
   const rebaseStep = stepNum++;
@@ -754,6 +762,7 @@ function buildReReviewPrompt(
     "You are re-reviewing a branch that was previously reviewed and approved.",
     `It is being re-reviewed because ${baseBranch} advanced and a rebase is needed before merge.`,
     "",
+    ...specWarning,
     "## Context",
     "",
     ...(entry.task ? [`**Worker task:** ${entry.task}`, ""] : []),
@@ -1047,6 +1056,62 @@ function readDocSections(wtPath: string): string[] {
     } catch { /* file may not exist */ }
   }
   return sections;
+}
+
+// A specification file is a markdown file that opens with the source-of-truth
+// marker phrase. The reviewer must treat these differently from descriptive
+// docs (DESIGN.md, CLAUDE.md): the spec drives the code, not the other way
+// around. Past regressions have all involved the reviewer "fixing" a spec
+// file to match the current implementation, inverting the spec relationship.
+const SPEC_MARKER = "the code is wrong";
+
+function findSpecFiles(wtPath: string, changedFiles: string[]): string[] {
+  const specs: string[] = [];
+  for (const file of changedFiles) {
+    if (!file.endsWith(".md")) continue;
+    try {
+      const content = fs.readFileSync(path.join(wtPath, file), "utf-8");
+      if (content.slice(0, 2000).includes(SPEC_MARKER)) {
+        specs.push(file);
+      }
+    } catch { /* file may have been renamed or deleted in the diff */ }
+  }
+  return specs;
+}
+
+function buildSpecWarning(specFiles: string[]): string[] {
+  if (specFiles.length === 0) return [];
+  return [
+    "## ⚠️ Specification files in this diff",
+    "",
+    "This diff modifies one or more **specification** files — documents that",
+    "are the *source of truth* for their respective systems:",
+    "",
+    ...specFiles.map(f => `- \`${f}\``),
+    "",
+    "When reviewing changes to a specification:",
+    "",
+    "- **Do not revert spec changes to match the current implementation.**",
+    "  The spec drives the code, not the other way around. The spec opens",
+    "  with the statement that if the code disagrees, the code is wrong —",
+    "  that is the contract, and your job is to honor it.",
+    "- **Do flag implementation code in this diff that contradicts the spec.**",
+    "  Code-vs-spec mismatches must be fixed by changing the code, never the",
+    "  spec.",
+    "- **If the spec contradicts code OUTSIDE this diff,** that is a known",
+    "  gap the user is intentionally documenting. Do not \"fix\" the spec to",
+    "  match the legacy code. The user is using the spec to guide future work.",
+    "- **Treat spec changes the way you would treat user instructions.**",
+    "  Verify clarity, internal consistency, and grammar. Never rewrite design",
+    "  intent. Never \"correct\" the spec by editing prose to describe what",
+    "  the code currently does.",
+    "",
+    "If you genuinely believe a spec change is wrong (e.g., logically",
+    "self-contradictory, or impossible to implement), flag it in your review",
+    "output rather than silently editing it. Editing a spec to match code is",
+    "the exact mistake this section exists to prevent.",
+    "",
+  ];
 }
 
 function readTestSections(wtPath: string, changedFiles: string[]): string[] {

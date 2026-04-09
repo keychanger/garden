@@ -819,6 +819,93 @@ describe("poll — reviewer prompt", () => {
     );
     expect(String(promptCall![1])).toContain("refactor the dashboard");
   });
+
+  it("injects the spec warning when the diff modifies a spec file", () => {
+    // A spec file is detected by the marker phrase "the code is wrong" in
+    // the first 2KB of the file. STATUS.md is the canonical example.
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "pushed", lastSeenSha: "new-sha" }),
+    ]);
+    vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
+    vi.mocked(getChangedFiles).mockReturnValue(["src/dashboard/STATUS.md"]);
+    vi.mocked(fs.readFileSync).mockImplementation(((p: string) => {
+      if (String(p).endsWith("STATUS.md")) {
+        return "# Spec\n\nIf the code disagrees with this document, the code is wrong.";
+      }
+      return "{}";
+    }) as typeof fs.readFileSync);
+
+    poll("myproject");
+
+    const writeFileCalls = vi.mocked(fs.writeFileSync).mock.calls;
+    const promptCall = writeFileCalls.find(c =>
+      String(c[0]).includes("review-prompt"),
+    );
+    const content = String(promptCall![1]);
+    expect(content).toContain("Specification files in this diff");
+    expect(content).toContain("src/dashboard/STATUS.md");
+    expect(content).toContain("Do not revert spec changes to match the current implementation");
+  });
+
+  it("omits the spec warning when no spec files are in the diff", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "pushed", lastSeenSha: "new-sha" }),
+    ]);
+    vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
+    vi.mocked(getChangedFiles).mockReturnValue(["src/foo.ts", "test/foo.test.ts"]);
+
+    poll("myproject");
+
+    const writeFileCalls = vi.mocked(fs.writeFileSync).mock.calls;
+    const promptCall = writeFileCalls.find(c =>
+      String(c[0]).includes("review-prompt"),
+    );
+    expect(String(promptCall![1])).not.toContain("Specification files in this diff");
+  });
+
+  it("does not treat a markdown file without the marker as a spec", () => {
+    // README.md, CHANGELOG.md, and other plain markdown files must not
+    // accidentally trigger the spec warning.
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "pushed", lastSeenSha: "new-sha" }),
+    ]);
+    vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
+    vi.mocked(getChangedFiles).mockReturnValue(["README.md"]);
+    vi.mocked(fs.readFileSync).mockImplementation(((p: string) => {
+      if (String(p).endsWith("README.md")) {
+        return "# Project Readme\n\nThis is a normal readme without spec markers.";
+      }
+      return "{}";
+    }) as typeof fs.readFileSync);
+
+    poll("myproject");
+
+    const writeFileCalls = vi.mocked(fs.writeFileSync).mock.calls;
+    const promptCall = writeFileCalls.find(c =>
+      String(c[0]).includes("review-prompt"),
+    );
+    expect(String(promptCall![1])).not.toContain("Specification files in this diff");
+  });
+
+  it("scopes the doc-accuracy bullet to descriptive docs only", () => {
+    // The bullet should explicitly note it does not apply to spec files,
+    // so the reviewer cannot use "documentation accuracy" as license to
+    // edit a spec into matching the code.
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "pushed", lastSeenSha: "new-sha" }),
+    ]);
+    vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
+
+    poll("myproject");
+
+    const writeFileCalls = vi.mocked(fs.writeFileSync).mock.calls;
+    const promptCall = writeFileCalls.find(c =>
+      String(c[0]).includes("review-prompt"),
+    );
+    const content = String(promptCall![1]);
+    expect(content).toContain("only* to descriptive documents");
+    expect(content).toContain("Specs drive the code; do not edit them to match code");
+  });
 });
 
 describe("poll — failing state", () => {
