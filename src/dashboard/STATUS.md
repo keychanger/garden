@@ -88,7 +88,7 @@ The two exits from `working` are the core branching point:
 
 | From          | To            | Trigger                                              |
 |---------------|---------------|------------------------------------------------------|
-| loading       | ready         | Bootstrap finishes, Claude is up                     |
+| loading       | ready         | Claude child PID detected by process detection       |
 | ready         | working       | First `UserPromptSubmit`                             |
 | working       | idle          | `Stop` fires; no new commits ahead of base branch    |
 | working       | reviewing     | `Stop` fires; new commits ahead of base branch       |
@@ -108,30 +108,33 @@ A worker never returns to `ready` once it has received its first input.
 ## How transitions are detected
 
 Every transition above is delivered by an identifiable event from a
-specific source. There is no central tick that polls for state. The
-poller is a *dispatcher* — it wakes when an event arrives, runs one unit
-of work, and goes back to sleep.
+specific source. The poller is primarily event-driven — it wakes when an
+event arrives via FIFO, runs one unit of work, and goes back to sleep.
+A 10-second fallback poll ensures no transition is permanently missed.
 
 ### Event sources
 
-Four sources cover the entire state machine.
+Three event sources plus a fallback poll cover the entire state machine.
 
-**1. Claude Code hooks** — `SessionStart`, `UserPromptSubmit`, `Stop`.
+**1. Claude Code hooks** — `UserPromptSubmit`, `Stop`.
 
-These bracket the lifecycle of every Claude conversation and fire from
-*every* Claude process: workers, reviewers, helpers. They drive:
+These bracket each prompt/response cycle and fire from *every* Claude
+process: workers, reviewers, helpers. The hooks call
+`garden dashboard _claude-hook prompt|stop`, which updates the marker
+file, registry `claudeStatus`, and signals the status pane (SIGUSR1).
+They drive:
 
-- `loading → ready` (worker's `SessionStart`)
 - `ready → working`, `idle → working` (worker's `UserPromptSubmit`)
 - `working → idle`, `working → reviewing` (worker's `Stop`)
 - `reviewing → merge-pending`, `reviewing → failing` (reviewer's `Stop`)
 
-The worker's `Stop` hook also branches: if it sees new commits ahead of
-the base branch, it pokes the project's poller FIFO so review starts
-without waiting for a tick.
+The hooks do *not* poke the poller FIFO — they update display state
+only. The poller learns about new commits via push events (below).
 
 **2. Worker push events** — a worker's `git push` completion pokes its
-project's poller FIFO. The push is the event; the poke is the delivery.
+project's poller FIFO via a pre-push hook installed in each worktree.
+When the Claude process exits entirely, the bootstrap script also pokes
+the FIFO. The push or exit is the event; the FIFO poke is the delivery.
 
 Drives:
 
@@ -149,29 +152,33 @@ Drives:
 - `merge-pending → reviewing` (rebase conflict)
 - `merge-pending → working` (merge fails for a non-conflict reason)
 
-**4. tmux `pane-died` hook** — tmux fires this automatically when a
-pane process exits. The dashboard listens and marks the worker.
+**4. Process detection** — `detectPaneProcessStatus` checks whether the
+pane PID still exists. This runs during each poller cycle (see below).
 
 Drives:
 
 - `any → exited`
 
-### The only timer
+### Timers
 
-The `failing → working` 30-second debounce is the *only* timer in the
-system. It is a deliberate hold-off (preventing review storms on a
-worker that's actively failing in a tight loop), not a discovery
-mechanism. Even then, the timer starts on a push event — not on a tick.
+Two timers exist:
+
+- **`failing → working` debounce** (30 seconds): a deliberate hold-off
+  preventing review storms. Starts on a push event, not on a tick.
+- **Poller FIFO fallback** (10 seconds): the poller loop waits on its
+  FIFO for events; if no event arrives within 10 seconds, it re-polls
+  as a safety net. Events (pushes, Claude exit) cause immediate wake-up.
+  The fallback catches missed events and detects `exited` workers whose
+  pane process died without signaling.
 
 ### Why this matters
 
-A bug in this system is always a bug in event plumbing — never "the
-poller didn't tick fast enough." There is no tick. If a transition
-isn't reached, exactly one event was missed, and there is exactly one
-place to look for it. This is what makes the state machine resistant to
-the kind of timing-based regressions that have hit it in the past, and
-why this spec rejects any code change that introduces a `setInterval` or
-recurring re-check on state.
+The primary mechanism is event-driven: most transitions happen within
+milliseconds of their triggering event. The 10-second fallback ensures
+eventual consistency but is not the intended path. A transition that
+relies on the fallback to be discovered (rather than an event) indicates
+a gap in event plumbing — either a missing FIFO poke or a hook that
+failed to fire.
 
 ## Key invariants
 
@@ -198,13 +205,12 @@ recurring re-check on state.
    (Claude stopped). The window between "Claude stopped" and "reviewer
    launched" is sub-second and not user-visible.
 
-6. **Every transition is event-triggered.** No transition is discovered
-   by a recurring tick. The poller wakes when poked by an event (a hook
-   firing, a worker pushing, a reviewer exiting, a merge queue item
-   completing) and does one unit of work. The 30-second `failing →
-   working` debounce is the only timer in the system, and it is a
-   deliberate hold-off, not a discovery mechanism. See "How transitions
-   are detected" above.
+6. **Transitions are primarily event-driven.** The poller wakes when
+   poked by an event (a worker pushing, a Claude process exiting, a
+   reviewer finishing) and does one unit of work. A 10-second fallback
+   poll on the FIFO ensures eventual consistency if an event is missed,
+   but the intended path for every transition is event delivery. See
+   "How transitions are detected" above.
 
 ## Detection machinery
 
