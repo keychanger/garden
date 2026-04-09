@@ -2,7 +2,8 @@
 // and garden build version (right) in the tmux status line.
 import fs from "node:fs";
 import path from "node:path";
-import { SESSIONS_DIR, loadConfig } from "../config.js";
+import { execFileSync } from "node:child_process";
+import { SESSIONS_DIR, loadConfig, tryGetProject } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, tmuxOutput, paneExists, getPanePid, getPaneTitle, setPaneVar } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
@@ -11,6 +12,8 @@ import { detectPaneProcessStatus } from "./detect.js";
 import { resolveBaseBranch } from "./git.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { GARDEN_VERSION } from "../version.js";
+import { triggerProjectPoll } from "./poller.js";
+import { log } from "./log.js";
 
 const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
 
@@ -175,7 +178,7 @@ export function printHeader(): void {
       // Defer to recent hook data — hooks are authoritative for claudeStatus
       // and pgrep detection can race with them (reading stale process state).
       const hookEntry = findWorkerByName(state.activeProject, workerLabel);
-      const hookFresh = hookEntry?.claudeHookAt && (Date.now() - hookEntry.claudeHookAt < HOOK_PRIORITY_MS);
+      const hookFresh = hookEntry?.lastHookAt && (Date.now() - hookEntry.lastHookAt < HOOK_PRIORITY_MS);
       if (!hookFresh) {
         updateWorkerFields(state.activeProject, workerLabel, {
           claudeStatus: paneInfo.status,
@@ -241,36 +244,142 @@ function suppressWindowNames(): void {
 // ---------------------------------------------------------------------------
 
 export function handleClaudeHook(event: string): void {
-  // Track per-worker active state via marker files so status detection can
-  // distinguish "idle at prompt" from "working with in-process subagents".
+  // The reviewer also runs `claude -p` from inside the worktree, so its hooks
+  // fire from the same cwd. We disambiguate via env var: launchReview() sets
+  // GARDEN_REVIEWER=1, and reviewer hook fires never reach the registry path.
+  if (process.env.GARDEN_REVIEWER === "1") return;
+
   const workerInfo = workerFromCwd();
-  if (workerInfo) {
+  if (!workerInfo) {
+    refreshDashboard();
+    return;
+  }
+
+  // Marker file management is legacy (slated for removal in the gut-and-replace
+  // pass). Restrict it to the prompt/stop branches that wrote/deleted it before
+  // — sessionstart must NOT touch the marker.
+  if (event === "prompt") {
     const markerPath = claudeActiveMarkerPath(workerInfo.project, workerInfo.worker);
-    if (event === "prompt") {
-      try { fs.writeFileSync(markerPath, "1"); } catch { /* best effort */ }
-    } else {
-      try { fs.unlinkSync(markerPath); } catch { /* best effort */ }
+    try { fs.writeFileSync(markerPath, "1"); } catch { /* best effort */ }
+  } else if (event === "stop") {
+    const markerPath = claudeActiveMarkerPath(workerInfo.project, workerInfo.worker);
+    try { fs.unlinkSync(markerPath); } catch { /* best effort */ }
+  }
+
+  // Three-way branch on the Claude Code event:
+  //   sessionstart → claudeStatus = "ready"   (fresh worker, Claude loaded)
+  //   prompt       → claudeStatus = "working" (and clear stale `merged` prState)
+  //   stop         → claudeStatus = "idle"    (and poke poller if commits exist)
+  const fields: Partial<Pick<import("./registry.js").WorkerEntry,
+    "claudeStatus" | "lastHookAt" | "prState">> = {
+    lastHookAt: Date.now(),
+  };
+
+  if (event === "sessionstart") {
+    fields.claudeStatus = "ready";
+  } else if (event === "prompt") {
+    fields.claudeStatus = "working";
+    // Clear merged prState on the next prompt — invariant 4 ("merged" is sticky
+    // until new input). The hook handler is the only place this clear happens.
+    const existing = findWorkerByName(workerInfo.project, workerInfo.worker);
+    if (existing?.prState === "merged") {
+      fields.prState = undefined;
     }
+  } else if (event === "stop") {
+    fields.claudeStatus = "idle";
+  } else {
+    // Unknown event — log and bail. The spec only handles sessionstart/prompt/stop.
+    log.warn("hook", "unknown claude hook event", {
+      worker: workerInfo.worker,
+      data: { project: workerInfo.project, event },
+    });
+    return;
   }
 
-  // Update registry claudeStatus immediately so quick renders are correct.
-  // Set claudeHookAt so pgrep-based writers defer to this authoritative value.
-  if (workerInfo && event === "prompt") {
-    try {
-      updateWorkerFields(workerInfo.project, workerInfo.worker, {
-        claudeStatus: "working",
-        claudeHookAt: Date.now(),
-      });
-    } catch { /* best effort */ }
-  } else if (workerInfo) {
-    try {
-      updateWorkerFields(workerInfo.project, workerInfo.worker, {
-        claudeStatus: "idle",
-        claudeHookAt: Date.now(),
-      });
-    } catch { /* best effort */ }
+  try {
+    updateWorkerFields(workerInfo.project, workerInfo.worker, fields);
+  } catch (err) {
+    log.warn("hook", "failed to update worker for hook event", {
+      worker: workerInfo.worker,
+      data: { project: workerInfo.project, event, error: String(err) },
+    });
   }
 
+  // Structured diagnostic trail for "missed event" debugging.
+  log.info("hook", "claude hook", {
+    worker: workerInfo.worker,
+    data: {
+      project: workerInfo.project,
+      event,
+      claudeStatus: fields.claudeStatus,
+      prStateCleared: fields.prState === undefined && event === "prompt",
+    },
+  });
+
+  // On stop, if the worktree has commits ahead of base, poke the project's
+  // poller FIFO so review starts immediately. This is the worker→reviewing
+  // path: the poller wakes, sees claudeStatus="idle" with commits, and
+  // launches the reviewer.
+  if (event === "stop") {
+    pokePollerIfCommitsAhead(workerInfo.project, workerInfo.worker);
+  }
+
+  refreshDashboard();
+}
+
+function pokePollerIfCommitsAhead(projectName: string, workerName: string): void {
+  try {
+    const project = tryGetProject(projectName);
+    if (!project) return;
+    const baseBranch = resolveBaseBranch(project.path, project);
+    const cwd = process.cwd();
+    // git rev-list --count <base>..HEAD — counts commits ahead of base.
+    // Returns "0" if no commits ahead, a positive number otherwise.
+    const out = execFileSync("git", ["rev-list", "--count", `${baseBranch}..HEAD`], {
+      cwd,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const ahead = parseInt(out, 10);
+    if (Number.isFinite(ahead) && ahead > 0) {
+      triggerProjectPoll(projectName);
+      log.info("hook", "stop hook poked poller (commits ahead of base)", {
+        worker: workerName,
+        data: { project: projectName, baseBranch, commitsAhead: ahead },
+      });
+    }
+  } catch (err) {
+    // Common: not a git dir, base branch missing, etc. The poller will
+    // recover on the next event source — do not fall back to a poll.
+    log.info("hook", "skipped poller poke (git check failed)", {
+      worker: workerName,
+      data: { project: projectName, error: String(err).slice(0, 200) },
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// tmux pane-died handler
+// ---------------------------------------------------------------------------
+
+// tmux fires pane-died with the window name. We parse out project + worker,
+// look up the registry entry, and write claudeStatus="exited". No-op when
+// the window name does not match a worker pattern (reviewer windows, garden
+// panes) or when the registry entry is missing (bootstrap-failure race).
+export function handlePaneDied(windowName: string | undefined): void {
+  if (!windowName) return;
+  const match = windowName.match(/^_([^-]+)-worker-(.+)$/);
+  if (!match) return;
+  const [, project, worker] = match;
+  const entry = findWorkerByName(project, worker);
+  if (!entry) return;
+  try {
+    updateWorkerFields(project, worker, { claudeStatus: "exited" });
+  } catch { /* best effort */ }
+  log.info("hook", "pane-died → exited", {
+    worker,
+    data: { project, windowName },
+  });
   refreshDashboard();
 }
 

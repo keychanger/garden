@@ -9,7 +9,7 @@ import {
 import { STATE_FILE } from "./state.js";
 import { REGISTRY_FILE } from "./registry.js";
 import { ALERTS_FILE } from "./alerts.js";
-import { printHeader, handleClaudeHook } from "./header.js";
+import { printHeader, handleClaudeHook, handlePaneDied } from "./header.js";
 import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
 import { newWorker, killPane } from "./workers.js";
@@ -62,6 +62,7 @@ export async function dashboard(args: string[]): Promise<void> {
   if (sub === "_post-push") return postPush(args[1]);
   if (sub === "_header") return printHeader();
   if (sub === "_claude-hook") return handleClaudeHook(args[1]);
+  if (sub === "_pane-died") return handlePaneDied(args[1]);
 
   if (sub === "help") {
     printDashboardHelp();

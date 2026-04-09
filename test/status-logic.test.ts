@@ -314,7 +314,7 @@ describe("hook priority over pgrep", () => {
     vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "some task",
-        claudeStatus: "idle", claudeHookAt: Date.now() }, // hook says idle
+        claudeStatus: "idle", lastHookAt: Date.now() }, // hook says idle
     ]);
 
     const lines: string[] = [];
@@ -340,7 +340,7 @@ describe("hook priority over pgrep", () => {
     vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "some task",
-        claudeStatus: "idle", claudeHookAt: Date.now() - 10000 }, // 10s ago, stale
+        claudeStatus: "idle", lastHookAt: Date.now() - 10000 }, // 10s ago, stale
     ]);
 
     const lines: string[] = [];

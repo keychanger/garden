@@ -15,7 +15,7 @@ import {
   tmux, tmuxOutput, tmuxSplit, setPaneTitle, setPaneLabel, setPaneVar,
   getFirstPaneId, shellEscape,
 } from "./tmux.js";
-import { readRegistry } from "./registry.js";
+import { readRegistry, updateWorkerFields } from "./registry.js";
 import { log, truncateLog } from "./log.js";
 import { validateAndHeal } from "./validate.js";
 import { startProjectPoller, signalFifoPath } from "./poller.js";
@@ -28,6 +28,10 @@ function buildClaudeHooksJson(gardenRunner: string): string {
   const hookCmd = `${gardenRunner} dashboard _claude-hook`;
   return JSON.stringify({
     hooks: {
+      SessionStart: [{
+        matcher: "",
+        hooks: [{ type: "command", command: `${hookCmd} sessionstart`, timeout: 5 }],
+      }],
       UserPromptSubmit: [{
         matcher: "",
         hooks: [{ type: "command", command: `${hookCmd} prompt`, timeout: 5 }],
@@ -127,6 +131,15 @@ export function ensureDashboard(): void {
 
   setupStatusBar(gardenRunner);
 
+  // tmux pane-died hook: when a worker pane process exits, write
+  // claudeStatus="exited" to the registry. This is the only mechanism in
+  // the new status model that observes process liveness — and tmux delivers
+  // it as an event, not a poll.
+  try {
+    tmux("set-hook", "-t", DASHBOARD_SESSION, "pane-died",
+      `run-shell "${gardenRunner} dashboard _pane-died '#{window_name}' 2>/dev/null"`);
+  } catch { /* hooks may not be supported on very old tmux */ }
+
   const state: DashboardState = {
     activeProject: firstProject,
     statusPaneId: statusId,
@@ -162,6 +175,12 @@ export function ensureDashboard(): void {
         installPollTriggerHook(entry.worktreePath, gardenRunner, projectName);
         installClaudeHooks(entry.worktreePath);
       }
+      // Claude Code does not fire SessionStart on --resume, so the SessionStart
+      // hook will not write claudeStatus for resumed workers. Write "idle"
+      // directly: a resumed worker is at the prompt by definition, and the
+      // first user prompt will flip it to "working" via UserPromptSubmit.
+      // prState is preserved as-is from the previous session.
+      updateWorkerFields(projectName, entry.name, { claudeStatus: "idle" });
       const workerCwd = entry.worktreePath ?? projectConfig.path;
       const resumeCmd = entry.worktreePath && entry.branchName
         ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch)

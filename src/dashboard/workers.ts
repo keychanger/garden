@@ -64,6 +64,7 @@ export function newWorker(): void {
     task: "",
     worktreePath: wtPath,
     branchName,
+    claudeStatus: "loading",
   });
 
   log.info("workers", "created", {

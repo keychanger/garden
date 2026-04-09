@@ -130,11 +130,11 @@ function formatStatus(worker: WorkerInfo): string {
 const HOOK_PRIORITY_MS = 5000;
 
 function hookOverride(
-  regEntry: { claudeStatus?: string; claudeHookAt?: number } | undefined,
+  regEntry: { claudeStatus?: string; lastHookAt?: number } | undefined,
   pgrepStatus: ProcessStatus,
 ): ProcessStatus {
-  if (!regEntry?.claudeHookAt) return pgrepStatus;
-  if (Date.now() - regEntry.claudeHookAt >= HOOK_PRIORITY_MS) return pgrepStatus;
+  if (!regEntry?.lastHookAt) return pgrepStatus;
+  if (Date.now() - regEntry.lastHookAt >= HOOK_PRIORITY_MS) return pgrepStatus;
   return (regEntry.claudeStatus as ProcessStatus) ?? pgrepStatus;
 }
 
@@ -195,7 +195,7 @@ function getProjectWorkers(projectName: string, dashState: { activeProject: stri
     // a hook — hooks are authoritative and pgrep can race with them.
     const filtered = statusUpdates.filter(([label]) => {
       const entry = registryByName.get(label);
-      return !entry?.claudeHookAt || (Date.now() - entry.claudeHookAt >= HOOK_PRIORITY_MS);
+      return !entry?.lastHookAt || (Date.now() - entry.lastHookAt >= HOOK_PRIORITY_MS);
     });
     if (filtered.length > 0) {
       try {
