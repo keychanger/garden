@@ -37,6 +37,8 @@ export function buildWorktreeRules(branchName: string, baseBranch = "main"): str
 
 You are working in an isolated git worktree on branch \`${branchName}\`. Your worktree is fully isolated — no other agent or human shares it. There is no shared state to protect. You have full authority over your worktree: commit and push without asking for confirmation.
 
+**Branch rule (load-bearing):** You are already on branch \`${branchName}\`. Commit directly to it. **Do NOT** create a new feature branch with \`git checkout -b\` or \`git switch -c\`. The poller maps you to exactly one branch by name; if you commit on a side branch, the poller will force-push the stale named ref instead of your work and the merge will silently fail in a loop. This applies even if \`${branchName}\` has already been merged before — more commits on the same branch are reviewed and merged again as a fresh cycle. If a global rule says "always create a feature branch", that rule does not apply to you: you are the worker, and \`${branchName}\` IS your feature branch.
+
 - Commit your work incrementally. Your commit messages are the primary way reviewers understand your intent — write them for an audience that has never seen your task description. The first commit should explain what problem you are solving and your approach. Subsequent commits should explain why each change was made, not just what changed.
 - When your task is complete, push your branch. The poller will automatically rebase, review, and merge your changes into ${baseBranch}.
 - If the poller notifies you of review feedback, check failures, or merge conflicts, fix the issues, commit, and push.

@@ -364,11 +364,15 @@ describe("abortRebase", () => {
 });
 
 describe("forcePushBranch", () => {
-  it("calls git push --force-with-lease with explicit remote and branch", () => {
+  it("pushes the worktree HEAD to the named branch on origin", () => {
+    // The HEAD: refspec is load-bearing: it pushes whatever the worktree is
+    // currently on, regardless of which local branch ref happens to share
+    // the worker name. Without it, a worker that committed on a side branch
+    // would push a stale named ref and the poller's merge would loop.
     forcePushBranch("/tmp/wt", "my-branch");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["push", "--force-with-lease", "origin", "my-branch"],
+      ["push", "--force-with-lease", "origin", "HEAD:my-branch"],
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });

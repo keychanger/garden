@@ -145,7 +145,15 @@ export function abortRebase(worktreePath: string): void {
 }
 
 export function forcePushBranch(worktreePath: string, branch: string): void {
-  git(worktreePath, "push", "--force-with-lease", "origin", branch);
+  // Push the worktree's actual HEAD to the named branch on origin, regardless
+  // of which local branch is currently checked out. Without HEAD: in the
+  // refspec, git pushes refs/heads/<branch> from the local repo, which can
+  // be stale (or unmoved) if the worker has done its work on a different
+  // local branch in the same worktree. The previous behavior caused the
+  // poller to force-push a stale ref and loop forever in handleMerged when
+  // a worker created a side branch — see worktree workflow rules in
+  // src/rules.ts for the directive that prevents the same trap.
+  git(worktreePath, "push", "--force-with-lease", "origin", `HEAD:${branch}`);
 }
 
 export function mergeToBase(repoPath: string, branchName: string, baseBranch: string): void {
