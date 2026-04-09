@@ -1082,7 +1082,7 @@ function findSpecFiles(wtPath: string, changedFiles: string[]): string[] {
 function buildSpecWarning(specFiles: string[]): string[] {
   if (specFiles.length === 0) return [];
   return [
-    "## ⚠️ Specification files in this diff",
+    "## WARNING: Specification files in this diff",
     "",
     "This diff modifies one or more **specification** files — documents that",
     "are the *source of truth* for their respective systems:",
