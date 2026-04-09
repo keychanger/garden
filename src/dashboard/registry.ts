@@ -1,8 +1,21 @@
 // Worker registry: persistent record of living workers across dashboard restarts.
+//
+// Concurrency model: the registry file is read/modified/written as a unit.
+// Multiple processes (poller, hooks, dashboard commands) can write at the
+// same instant. To prevent lost updates, every read-modify-write cycle holds
+// an exclusive file lock for the duration. The lock is a sibling .lock file
+// created with O_CREAT|O_EXCL. Stale locks (holder PID dead) are reclaimed.
+// See STATUS.md "Detection machinery" — the registry is the single source of
+// truth, so it must be race-free.
 import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR } from "../config.js";
 import { log } from "./log.js";
+
+// claudeStatus is written by Claude Code hooks and the tmux pane-died handler.
+// prState is written by the poller. There are no other writers. See STATUS.md.
+export type ClaudeStatus = "loading" | "ready" | "working" | "idle" | "exited";
+export type PrState = "working" | "reviewing" | "merge-pending" | "merged" | "failing";
 
 export interface WorkerEntry {
   name: string;       // adjective-noun name, e.g. "swift-oak"
@@ -10,14 +23,13 @@ export interface WorkerEntry {
   task: string;       // last known task summary from pane title
   worktreePath?: string;
   branchName?: string;
-  prState?: string;
-  mergeCount?: number;
+  prState?: PrState;
   lastSeenSha?: string;
   lastShaChangeAt?: string;
   mergedAt?: string;
   failCount?: number;
   failingSha?: string;
-  claudeStatus?: string;  // cached process status from last pgrep detection
+  claudeStatus?: ClaudeStatus;
   lastHookAt?: number;    // epoch ms when a Claude hook last fired for this worker
   reviewWindowName?: string;
   mergePendingAt?: string;
@@ -31,6 +43,58 @@ export interface WorkerRegistry {
 }
 
 export const REGISTRY_FILE = path.join(SESSIONS_DIR, "dashboard.registry.json");
+const LOCK_FILE = REGISTRY_FILE + ".lock";
+
+// Acquire an exclusive lock by creating a file with O_CREAT|O_EXCL. If the
+// lockfile already exists and the holder PID is dead, reclaim it. Retries
+// briefly under contention. Throws if it can't acquire within the deadline —
+// callers treat that as best-effort and proceed without the lock (a missed
+// hook write is preferable to hanging the dashboard).
+function withRegistryLock<T>(fn: () => T): T {
+  const deadline = Date.now() + 500; // 500ms total
+  const myPid = process.pid;
+  let acquired = false;
+
+  while (!acquired && Date.now() < deadline) {
+    try {
+      fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+      const fd = fs.openSync(LOCK_FILE, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o644);
+      fs.writeSync(fd, String(myPid));
+      fs.closeSync(fd);
+      acquired = true;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+        // Check if holder is alive; if not, reclaim
+        let holderPid = -1;
+        try { holderPid = parseInt(fs.readFileSync(LOCK_FILE, "utf-8"), 10); } catch { /* ignore */ }
+        let holderAlive = false;
+        if (Number.isFinite(holderPid) && holderPid > 0) {
+          try { process.kill(holderPid, 0); holderAlive = true; } catch { /* dead */ }
+        }
+        if (!holderAlive) {
+          try { fs.unlinkSync(LOCK_FILE); } catch { /* ignore */ }
+          continue; // retry immediately
+        }
+        // Spin briefly
+        const wait = new Int32Array(new SharedArrayBuffer(4));
+        Atomics.wait(wait, 0, 0, 5);
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  if (!acquired) {
+    log.warn("registry", "could not acquire registry lock, proceeding without it");
+    return fn();
+  }
+
+  try {
+    return fn();
+  } finally {
+    try { fs.unlinkSync(LOCK_FILE); } catch { /* ignore */ }
+  }
+}
 
 export function readRegistry(): WorkerRegistry {
   try {
@@ -53,29 +117,35 @@ export function writeRegistry(registry: WorkerRegistry): void {
 }
 
 export function addWorker(project: string, entry: WorkerEntry): void {
-  const registry = readRegistry();
-  if (!registry.workers[project]) registry.workers[project] = [];
-  registry.workers[project].push(entry);
-  writeRegistry(registry);
+  withRegistryLock(() => {
+    const registry = readRegistry();
+    if (!registry.workers[project]) registry.workers[project] = [];
+    registry.workers[project].push(entry);
+    writeRegistry(registry);
+  });
 }
 
 export function removeWorker(project: string, workerName: string): void {
-  const registry = readRegistry();
-  const entries = registry.workers[project];
-  if (!entries) return;
-  registry.workers[project] = entries.filter(e => e.name !== workerName);
-  if (registry.workers[project].length === 0) delete registry.workers[project];
-  writeRegistry(registry);
+  withRegistryLock(() => {
+    const registry = readRegistry();
+    const entries = registry.workers[project];
+    if (!entries) return;
+    registry.workers[project] = entries.filter(e => e.name !== workerName);
+    if (registry.workers[project].length === 0) delete registry.workers[project];
+    writeRegistry(registry);
+  });
 }
 
 export function updateWorkerTask(project: string, workerName: string, task: string): void {
-  const registry = readRegistry();
-  const entries = registry.workers[project];
-  if (!entries) return;
-  const entry = entries.find(e => e.name === workerName);
-  if (!entry) return;
-  entry.task = task;
-  writeRegistry(registry);
+  withRegistryLock(() => {
+    const registry = readRegistry();
+    const entries = registry.workers[project];
+    if (!entries) return;
+    const entry = entries.find(e => e.name === workerName);
+    if (!entry) return;
+    entry.task = task;
+    writeRegistry(registry);
+  });
 }
 
 export function updateWorkerFields(
@@ -83,41 +153,45 @@ export function updateWorkerFields(
   workerName: string,
   fields: Partial<Omit<WorkerEntry, "name">>,
 ): void {
-  const registry = readRegistry();
-  const entries = registry.workers[project];
-  if (!entries) return;
-  const entry = entries.find(e => e.name === workerName);
-  if (!entry) return;
+  withRegistryLock(() => {
+    const registry = readRegistry();
+    const entries = registry.workers[project];
+    if (!entries) return;
+    const entry = entries.find(e => e.name === workerName);
+    if (!entry) return;
 
-  // Log state transitions when prState changes
-  if (fields.prState && fields.prState !== entry.prState) {
-    log.info("poller", `${entry.prState ?? "new"} -> ${fields.prState}`, {
-      worker: workerName,
-    });
-  }
+    // Log state transitions when prState changes
+    if (fields.prState && fields.prState !== entry.prState) {
+      log.info("poller", `${entry.prState ?? "new"} -> ${fields.prState}`, {
+        worker: workerName,
+      });
+    }
 
-  Object.assign(entry, fields);
-  writeRegistry(registry);
+    Object.assign(entry, fields);
+    writeRegistry(registry);
+  });
 }
 
 export function batchUpdateWorkerFields(
   updates: Array<{ project: string; workerName: string; fields: Partial<Omit<WorkerEntry, "name">> }>,
 ): void {
   if (updates.length === 0) return;
-  const registry = readRegistry();
-  for (const { project, workerName, fields } of updates) {
-    const entries = registry.workers[project];
-    if (!entries) continue;
-    const entry = entries.find(e => e.name === workerName);
-    if (!entry) continue;
-    if (fields.prState && fields.prState !== entry.prState) {
-      log.info("poller", `${entry.prState ?? "new"} -> ${fields.prState}`, {
-        worker: workerName,
-      });
+  withRegistryLock(() => {
+    const registry = readRegistry();
+    for (const { project, workerName, fields } of updates) {
+      const entries = registry.workers[project];
+      if (!entries) continue;
+      const entry = entries.find(e => e.name === workerName);
+      if (!entry) continue;
+      if (fields.prState && fields.prState !== entry.prState) {
+        log.info("poller", `${entry.prState ?? "new"} -> ${fields.prState}`, {
+          worker: workerName,
+        });
+      }
+      Object.assign(entry, fields);
     }
-    Object.assign(entry, fields);
-  }
-  writeRegistry(registry);
+    writeRegistry(registry);
+  });
 }
 
 export function findWorkerByName(

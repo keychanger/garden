@@ -8,7 +8,7 @@ import { log } from "./log.js";
 import { worktreeExists, removeWorktree, pruneWorktrees } from "./git.js";
 import { startProjectPoller, projectPollerRunning, pollerWindowName, reviewWindowName as getReviewWindowName } from "./poller.js";
 import { resolveGardenRunner } from "./create.js";
-import { buildStatusCommand, removeClaudeActiveMarker } from "./header.js";
+import { buildStatusCommand } from "./header.js";
 
 /**
  * Recreate the status pane if it's missing. Reads and writes state atomically.
@@ -161,9 +161,8 @@ export function validateAndHeal(state: DashboardState): DashboardState {
     }
   } catch { /* best effort */ }
 
-  // Clean stale context files and hook-state markers
+  // Clean stale context files
   cleanContextFiles();
-  cleanStaleActiveMarkers(registry);
 
   // Restart per-project pollers if not running
   const gardenRunner = resolveGardenRunner();
@@ -203,30 +202,6 @@ function cleanContextFiles(): void {
       if (file.endsWith("-review-result.txt") || file.endsWith("-review-prompt.txt")) {
         fs.unlinkSync(`${SESSIONS_DIR}/${file}`);
         log.info("validate", "removed stale review file", { data: { file } });
-      }
-    }
-  } catch { /* sessions dir might not exist */ }
-}
-
-function cleanStaleActiveMarkers(registry: WorkerRegistry): void {
-  try {
-    const files = fs.readdirSync(SESSIONS_DIR);
-    const prefix = "claude-active-";
-
-    // Build set of valid marker filenames from registry to avoid ambiguous
-    // hyphen-splitting (project names and worker names both contain hyphens).
-    const validMarkers = new Set<string>();
-    for (const [project, entries] of Object.entries(registry.workers)) {
-      for (const entry of entries) {
-        validMarkers.add(`${prefix}${project}-${entry.name}`);
-      }
-    }
-
-    for (const file of files) {
-      if (!file.startsWith(prefix)) continue;
-      if (!validMarkers.has(file)) {
-        try { fs.unlinkSync(`${SESSIONS_DIR}/${file}`); } catch { /* ignore */ }
-        log.info("validate", "removed stale active marker", { data: { file } });
       }
     }
   } catch { /* sessions dir might not exist */ }

@@ -181,23 +181,22 @@ The dashboard surfaces important events as alerts — persistent messages that r
 
 Each worker has two independent status axes:
 
-**Process status** — what Claude is doing right now:
+**Process status** — what Claude is doing, written by Claude Code hooks:
 - ⏳ **loading** — worker pane started, bootstrap script running, Claude not yet launched
-- ◇ **ready** — Claude launched but not yet tasked (no activity detected)
-- ⠋ **working** — process alive, has child processes or hook reports active (braille spinner animation)
-- ◆ **idle** — process alive, no child processes (probably needs input)
+- ◇ **ready** — Claude launched but not yet tasked
+- ⠋ **working** — Claude is processing a submitted prompt (braille spinner animation)
+- ◆ **idle** — Claude is at the prompt, waiting for input
 - ○ **exited** — process has terminated
 
-**Lifecycle status** — where the worker is in the review pipeline:
-- ↑ **pushed** — commits detected, awaiting review launch
-- ◎ **reviewing** — poller is reviewing the worker's commits
+**Lifecycle status** — where the worker's code is in the review pipeline, written by the poller:
+- ◎ **reviewing** — automated reviewer is checking the worker's commits
 - ◷ **merge-pending** — review passed, in the merge queue
-- ✖ **failing** — checks or review failed (with failure count if repeated)
-- ✓ **merged** — code merged to main (with merge count if multiple merges)
+- ✖ **failing** — review failed (with failure count if repeated)
+- ✓ **merged** — code merged to base branch
 
-The display status combines both axes: lifecycle state takes priority when present, otherwise the process state is shown. Both the icon and the status text reflect this combined display status. A worker that is "reviewing" shows the reviewing bullseye, regardless of its raw process state. Only workers in the "working" display state get the animated braille spinner.
+The display combines both axes: lifecycle state takes priority when present, otherwise the process state is shown. A worker that is "reviewing" shows the reviewing bullseye regardless of what Claude is doing. Only workers in the "working" display state get the animated braille spinner.
 
-Process status is detected by a single consolidated function in `src/dashboard/detect.ts`, using tmux's `pane_pid` and child process checks, triggered on-demand by events rather than polling. Claude Code hooks (`UserPromptSubmit`, `Stop`) installed in each worker's `.claude/settings.local.json` signal the status pane via SIGUSR1 when a worker starts or finishes processing. The hooks also write per-worker marker files (`claude-active-<project>-<worker>` in the sessions directory) so that status detection can distinguish "idle at prompt" from "working with in-process subagents" — when Claude runs subagents, they execute in the same Node.js process, so pgrep-based child detection sees no children during API calls. The hooks also immediately update the worker's `claudeStatus` and `claudeHookAt` timestamp in the registry — `UserPromptSubmit` sets status to "working" and `Stop` sets it to "idle". Hook-set values take priority over pgrep-based detection for a short window (5 seconds), preventing stale process trees from overwriting authoritative hook data. Lifecycle states (pushed, reviewing, merge-pending, failing, merged) come from the worker registry. Workers are displayed in aligned columns: focus indicator (filled/empty circle), process icon, name, status, and activity.
+The full specification for status tracking and display lives in `src/dashboard/STATUS.md`. The registry is the single source of truth: Claude Code hooks (`SessionStart`, `UserPromptSubmit`, `Stop`) write `claudeStatus`; the poller writes `prState`; the tmux `pane-died` hook writes `claudeStatus="exited"`. There is no pgrep, no marker file, no fallback poll. Every transition is event-triggered.
 
 ## Commands
 

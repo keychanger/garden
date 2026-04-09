@@ -5,10 +5,9 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { SESSIONS_DIR, loadConfig, tryGetProject } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, tmuxOutput, paneExists, getPanePid, getPaneTitle, setPaneVar } from "./tmux.js";
+import { tmux, tmuxOutput, getPanePid } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
-import { findWorkerByName, updateWorkerTask, updateWorkerFields } from "./registry.js";
-import { detectPaneProcessStatus } from "./detect.js";
+import { findWorkerByName, updateWorkerFields } from "./registry.js";
 import { resolveBaseBranch } from "./git.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { GARDEN_VERSION } from "../version.js";
@@ -18,19 +17,8 @@ import { log } from "./log.js";
 const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
 
 // ---------------------------------------------------------------------------
-// Per-worker hook-based active state tracking
+// Worker identity from cwd
 // ---------------------------------------------------------------------------
-// When Claude runs subagents, they execute in-process (same Node.js event
-// loop). pgrep-based child process detection sees no children during API
-// calls, so status falls back to "idle". The UserPromptSubmit/Stop hooks
-// bracket the entire processing window, including subagent work. We write a
-// marker file on "prompt" and remove it on "stop" so status detection can
-// distinguish "idle at prompt" from "working with no child processes".
-// ---------------------------------------------------------------------------
-
-function claudeActiveMarkerPath(project: string, worker: string): string {
-  return path.join(SESSIONS_DIR, `claude-active-${project}-${worker}`);
-}
 
 function workerFromCwd(): { project: string; worker: string } | null {
   const cwd = process.cwd();
@@ -40,44 +28,6 @@ function workerFromCwd(): { project: string; worker: string } | null {
   const parts = cwd.slice(prefix.length).split(path.sep);
   if (parts.length < 2) return null;
   return { project: parts[0], worker: parts[1] };
-}
-
-// Marker older than this is considered stale (Claude likely crashed without
-// firing the Stop hook). Detection touches the marker whenever it sees active
-// child processes, so the mtime reflects "last tool activity" rather than
-// "when the user sent a message." 2 minutes without any tool subprocess is
-// long enough to cover API-call gaps between tools, short enough to clear
-// stuck markers promptly.
-const MARKER_STALE_MS = 2 * 60 * 1000;
-
-// Hook-set claudeStatus values take priority over pgrep for this window.
-// Must match HOOK_PRIORITY_MS in src/commands/status.ts.
-const HOOK_PRIORITY_MS = 5000;
-
-export function isClaudeActiveByHook(project: string, worker: string): boolean {
-  try {
-    const p = claudeActiveMarkerPath(project, worker);
-    const stat = fs.statSync(p);
-    if (Date.now() - stat.mtimeMs > MARKER_STALE_MS) {
-      fs.unlinkSync(p);
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function removeClaudeActiveMarker(project: string, worker: string): void {
-  try { fs.unlinkSync(claudeActiveMarkerPath(project, worker)); } catch { /* ignore */ }
-}
-
-export function touchClaudeActiveMarker(project: string, worker: string): void {
-  try {
-    const p = claudeActiveMarkerPath(project, worker);
-    const now = new Date();
-    fs.utimesSync(p, now, now);
-  } catch { /* marker doesn't exist — fine */ }
 }
 
 interface RefreshOptions {
@@ -135,66 +85,12 @@ function formatRight(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Full header update (called by status pane loop with process detection)
+// Header update — left/right bar vars, no process detection.
 // ---------------------------------------------------------------------------
 
 export function printHeader(): void {
-  const state = readDashState();
-  const config = loadConfig();
-
-  // If active pane is a worker, do process detection to update registry
-  if (state.activeProject && state.activePaneId && paneExists(state.activePaneId) && state.activePaneType === "worker") {
-    const workerNameMatch = (state.activeWindowName ?? "").match(/-worker-(.+)$/);
-    const workerLabel = workerNameMatch ? workerNameMatch[1] : null;
-
-    // Use consolidated detection (includes marker file check for subagents)
-    const paneInfo = detectPaneProcessStatus(
-      state.activePaneId,
-      state.activeProject ?? undefined,
-      workerLabel ?? undefined,
-    );
-
-    // Sync task title: when Claude is working, prefer the live pane title
-    // (Claude updates it as it works) over the cached garden_task pane var.
-    let title = paneInfo.activity;
-    if (paneInfo.status === "working") {
-      const liveTitle = getPaneTitle(state.activePaneId);
-      if (liveTitle) title = liveTitle;
-    }
-    if (!title && workerLabel && state.activeProject) {
-      const entry = findWorkerByName(state.activeProject, workerLabel);
-      if (entry?.task) title = entry.task;
-    }
-    if (title) {
-      setPaneVar(state.activePaneId, "garden_task", title);
-      if (workerLabel && state.activeProject) {
-        updateWorkerTask(state.activeProject, workerLabel, title);
-      }
-    } else if (paneInfo.status === "ready") {
-      setPaneVar(state.activePaneId, "garden_task", "");
-    }
-
-    if (workerLabel && state.activeProject) {
-      // Defer to recent hook data — hooks are authoritative for claudeStatus
-      // and pgrep detection can race with them (reading stale process state).
-      const hookEntry = findWorkerByName(state.activeProject, workerLabel);
-      const hookFresh = hookEntry?.lastHookAt && (Date.now() - hookEntry.lastHookAt < HOOK_PRIORITY_MS);
-      if (!hookFresh) {
-        updateWorkerFields(state.activeProject, workerLabel, {
-          claudeStatus: paneInfo.status,
-        });
-      }
-    }
-  }
-
-  const left = formatLeft(state.activeProject, config);
-  const right = formatRight();
-  setBarVars(left, right);
+  updateHeaderVar();
 }
-
-// ---------------------------------------------------------------------------
-// Quick header update (no pgrep, cached registry data only)
-// ---------------------------------------------------------------------------
 
 export function updateHeaderVar(opts?: RefreshOptions): void {
   const state = opts?.state ?? readDashState();
@@ -253,17 +149,6 @@ export function handleClaudeHook(event: string): void {
   if (!workerInfo) {
     refreshDashboard();
     return;
-  }
-
-  // Marker file management is legacy (slated for removal in the gut-and-replace
-  // pass). Restrict it to the prompt/stop branches that wrote/deleted it before
-  // — sessionstart must NOT touch the marker.
-  if (event === "prompt") {
-    const markerPath = claudeActiveMarkerPath(workerInfo.project, workerInfo.worker);
-    try { fs.writeFileSync(markerPath, "1"); } catch { /* best effort */ }
-  } else if (event === "stop") {
-    const markerPath = claudeActiveMarkerPath(workerInfo.project, workerInfo.worker);
-    try { fs.unlinkSync(markerPath); } catch { /* best effort */ }
   }
 
   // Three-way branch on the Claude Code event:
@@ -391,6 +276,12 @@ export function buildStatusCommand(gardenRunner: string): string {
   const sf = STATUS_RENDERED_FILE;
   const brailleClass = `[${SPINNER_FRAMES.join("")}]`;
   const caseBranches = SPINNER_FRAMES.map((f, i) => `${i}) sf_char='${f}';;`).join(" ");
+  // Event-driven status pane loop:
+  //   - SIGUSR1 from refreshStatusPane() interrupts the wait and re-renders.
+  //   - The render reads the pre-baked file written by writeQuickStatus().
+  //   - When a spinner is on screen, animate it locally; otherwise block.
+  //   - There is no recurring re-check, no safety-net sleep, no fallback poll.
+  //     Per STATUS.md invariant 6, every transition is event-triggered.
   return [
     `printf '\\033[H\\033[2J\\033[3J'`,
     `sf='${sf}'`,
@@ -399,17 +290,13 @@ export function buildStatusCommand(gardenRunner: string): string {
     `prev=""`,
     `fc=0`,
     `while true; do`,
-    `  if [ $sig -eq 0 ]; then`,
-    `    ${gardenRunner} dashboard _header >/dev/null 2>&1;`,
-    `  fi;`,
     `  if [ $sig -eq 1 ]; then`,
     // Signal trap already displayed the pre-rendered content and set prev.
-    // Reuse it as cur to skip the expensive garden-status subprocess (~1s)
-    // and go straight into the animation loop.
+    // Reuse it as cur to skip the status subprocess and go straight into
+    // the animation loop.
     `    cur="$prev";`,
     `    sig=0;`,
     `  else`,
-    `    sig=0;`,
     `    cur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1 | awk '{printf "%s\\033[K\\n", $0}');`,
     `    if [ "$cur" != "$prev" ]; then`,
     `      printf '\\033[H%s\\n\\033[J' "$cur";`,
@@ -429,26 +316,11 @@ export function buildStatusCommand(gardenRunner: string): string {
     `      animated=$(printf '%s' "$cur" | sed "s/${brailleClass}/$sf_char/g");`,
     `      printf '\\033[H%s\\n\\033[J' "$animated";`,
     `    done;`,
-    // Transient-state polling: "loading" means bootstrap is running and will
-    // finish soon. Poll every 3s so loading->ready appears within seconds.
-    `  elif printf '%s' "$cur" | grep -q '\u29D7'; then`,
-    `    tc=0;`,
-    `    while [ $tc -lt 10 ]; do`,
-    `      sleep 3 & wait $! 2>/dev/null;`,
-    `      if [ $sig -eq 1 ]; then break; fi;`,
-    `      tc=$((tc + 1));`,
-    `      ${gardenRunner} dashboard _header >/dev/null 2>&1;`,
-    `      ncur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1 | awk '{printf "%s\\033[K\\n", $0}');`,
-    `      if [ "$ncur" != "$cur" ]; then`,
-    `        printf '\\033[H%s\\n\\033[J' "$ncur";`,
-    `        prev="$ncur";`,
-    `        cur="$ncur";`,
-    `        break;`,
-    `      fi;`,
-    `    done;`,
     `  else`,
-    // Safety-net: recheck after 30s in case a signal was missed.
-    `    sleep 30 & wait $! 2>/dev/null;`,
+    // Block until a SIGUSR1 from refreshStatusPane() wakes us. The trap
+    // interrupts the wait, the next loop iteration re-renders. No timer.
+    // 86400 = 24h, large enough to be effectively infinite for an idle pane.
+    `    sleep 86400 & wait $! 2>/dev/null;`,
     `  fi;`,
     `done`,
   ].join("\n");

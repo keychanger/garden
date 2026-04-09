@@ -26,7 +26,6 @@ npm run dev -- help    # run via tsx during development
   - `layout.ts` — pane parking/restoring via tmux swap-pane
   - `hotkeys.ts` — Alt/Option keybinding setup
   - `header.ts` — tmux status bar: active project context (left) via `@garden_left`, build version (right) via `@garden_right`
-  - `detect.ts` — consolidated worker process status detection (pgrep + hook markers)
   - `tmux.ts` — low-level tmux helpers (shared by dashboard and status command)
   - `validate.ts` — state/tmux consistency validation and self-healing
   - `git.ts` — git CLI wrappers for worktree and merge operations
@@ -98,7 +97,7 @@ The dashboard uses a permanent tmux layout with content swapped in and out of pa
 - **Hidden windows** use underscore-prefixed names: `_<project>-worker-N`, `_<project>-shell`, `_<project>-poller`, `_<project>-review-<worker>`, `_garden-garden`, `_garden-root`, `_garden-logs`. The underscore marks them as garden-managed.
 - **Parking/restoring** (`src/dashboard/layout.ts`): To swap content, we create a temp hidden window, swap the current pane into it, then swap the target pane from its hidden window into the slot, and kill the temp window. Separate functions handle the right pane (`parkToHidden`/`restoreFromHidden`) and garden pane (`gardenParkToHidden`/`gardenRestoreFromHidden`).
 - **State** (`src/dashboard/state.ts`): Tracks which project is active, which pane is visible, and pane IDs. Written atomically (write-tmp-then-rename) to `dashboard.state.json` after every operation.
-- **Status detection** (`src/dashboard/detect.ts`): Single source of truth for worker process status. Uses `pgrep` to detect whether claude is running and whether it has child processes (working vs idle). Falls back to hook-based marker files for in-process subagent work. Called on-demand after events, not on a timer.
+- **Status writers** (`src/dashboard/header.ts` `handleClaudeHook`/`handlePaneDied`, `src/dashboard/poller.ts`): The registry is the single source of truth (see `src/dashboard/STATUS.md`). Claude Code hooks (SessionStart, UserPromptSubmit, Stop) write `claudeStatus`; the poller writes `prState`; the tmux `pane-died` hook writes `claudeStatus="exited"`. The renderer never calls `pgrep`, never reads marker files. Every transition is event-triggered — there is no fallback poll.
 - **Bottom bar** (`src/dashboard/header.ts`): Two-sided tmux status line. Left (`@garden_left`): active project name (bold) and its base branch. Right (`@garden_right`): garden build version (git short SHA, or "dev" when running via tsx). Updated instantly after every mutation via `refresh-client -S`. Claude Code hooks (`UserPromptSubmit`, `Stop`) signal the status pane when workers start/stop processing.
 - **State validation** (`src/dashboard/validate.ts`): On every attach, validates pane IDs against tmux reality and heals stale state. Cleans orphaned registry entries and context files.
 - **Logging** (`src/dashboard/log.ts`): Structured JSON log to `~/.garden/sessions/dashboard.log`. Logs state mutations, swap operations, and validation results.
@@ -111,9 +110,8 @@ Every worker runs in its own git worktree, isolated from the main checkout and o
 1. `opt-n` creates a worktree at `~/.garden/worktrees/<project>/<worker-name>/` on a branch named after the worker.
 2. The worker's system prompt includes instructions to commit incrementally and push when done.
 3. Each project gets its own **poller** (`src/dashboard/poller.ts`) running in a hidden tmux window (`_<project>-poller`), driving the review/merge lifecycle using local git (no GitHub PRs). Projects never block each other.
-   - Detects new commits on worker branches via SHA comparison, transitioning to `pushed` immediately.
-   - Defers review launch while Claude is actively working in the worktree (live-Claude guard). The display layer shows "working" instead of "pushed" while Claude is active; the lifecycle state stays "pushed" to avoid stuck states.
-   - Launches a Claude reviewer asynchronously in a hidden tmux window (`_<project>-review-<worker>`). Multiple reviews can run in parallel within a project. The reviewer rebases onto the base branch, resolves conflicts, runs optional `checks` command (configured per project in `~/.garden/config.yml`), fixes check failures, and reviews code against project rules.
+   - Wakes only on FIFO pokes from event sources: Claude Code Stop hooks (when commits exist ahead of base), pre-push hooks installed in worktrees, merge-queue completion. There is no fallback poll. See `src/dashboard/STATUS.md` for the full state machine.
+   - When the worker's Stop hook fires and `claudeStatus="idle"` with commits ahead of base, transitions `working → reviewing` and launches a Claude reviewer asynchronously in a hidden tmux window (`_<project>-review-<worker>`). Multiple reviews can run in parallel within a project. The reviewer rebases onto the base branch, resolves conflicts, runs optional `checks` command (configured per project in `~/.garden/config.yml`), fixes check failures, and reviews code against project rules.
    - If code is clean or reviewer fixed all issues: force-pushes and transitions to `merge-pending`. A serial merge queue processes one merge at a time per project. If the rebase onto current base branch has conflicts (because the base branch advanced), a scoped re-review is launched with context from the previous review. If the rebase is clean: merges to the base branch via `git merge --ff-only`.
    - After merge, runs optional `postMerge` command (e.g., `npm run build` to rebuild the CLI).
    - Notifies live sibling workers with overlapping files so they can rebase.

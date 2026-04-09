@@ -7,7 +7,7 @@ import path from "node:path";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tryGetProject, loadConfig, SESSIONS_DIR } from "../config.js";
 import {
-  tmux, getFirstPaneId, getPanePid, hasClaudeChild,
+  tmux, getFirstPaneId,
   windowExists, killWindowSafe,
 } from "./tmux.js";
 import {
@@ -23,8 +23,7 @@ import {
   resolveBaseBranch,
   type RebaseResult,
 } from "./git.js";
-import { refreshDashboard, setupStatusBar, removeClaudeActiveMarker } from "./header.js";
-import { isWorkerWorking } from "./detect.js";
+import { refreshDashboard, setupStatusBar } from "./header.js";
 import { readDashState } from "./state.js";
 import { setupKeybindings } from "./hotkeys.js";
 import { resolveGardenRunner } from "./create.js";
@@ -92,13 +91,14 @@ function pollWorker(
   baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
+  // pollWorker is called when the FIFO is poked. It dispatches on prState
+  // and runs one unit of work. Per STATUS.md invariant 6, every transition
+  // is event-triggered — pollWorker never schedules a re-check.
   const state = entry.prState ?? "working";
 
   switch (state) {
     case "working":
       return handleWorking(projectName, projectPath, baseBranch, entry);
-    case "pushed":
-      return handlePushed(projectName, projectPath, baseBranch, entry);
     case "reviewing":
       return handleReviewing(projectName, projectPath, baseBranch, entry);
     case "merge-pending":
@@ -107,86 +107,32 @@ function pollWorker(
       return handleFailing(projectName, projectPath, baseBranch, entry);
     case "merged":
       return handleMerged(projectName, baseBranch, entry);
-    default:
-      log.warn("poller", "unknown state, resetting to working", {
-        worker: entry.name,
-        data: { state },
-      });
-      updateWorkerFields(projectName, entry.name, { prState: "working" });
-      return true;
   }
 }
 
 // --- State handlers ---
 
+// `working` worker: the Stop-hook FIFO poke gets us here. If Claude is now
+// idle (the Stop hook just wrote claudeStatus="idle") and the worktree has
+// commits ahead of base, launch the reviewer. Otherwise wait — there is no
+// SHA poll here, no recurring re-check. The next event will wake us.
 function handleWorking(
   projectName: string,
   projectPath: string,
   baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
-  // Self-heal: if prState was lost (concurrent registry write race) but this
-  // worker has previously merged and has no new work, restore merged state.
-  // mergeCount is set atomically with prState by finalizeMerge, so if the
-  // race clobbered both, mergeCount > 0 won't be true and we skip this.
-  if (!entry.prState && entry.mergeCount && entry.mergeCount > 0) {
-    const wtPath = entry.worktreePath ?? projectPath;
-    const commitSummary = getCommitSummary(wtPath, baseBranch);
-    if (!commitSummary) {
-      log.warn("poller", "restoring lost merged state", { worker: entry.name });
-      updateWorkerFields(projectName, entry.name, { prState: "merged" });
-      refreshDashboard();
-      return true;
-    }
-  }
+  // Don't launch a review over live code: only proceed when the hook says
+  // Claude is idle (or the worker has exited). working/loading/ready mean
+  // either the Stop hook hasn't fired or the worker is actively producing.
+  if (entry.claudeStatus !== "idle") return false;
+
+  // Already reviewing? (defensive — handleReviewing should be the dispatch)
+  if (entry.reviewWindowName && windowExists(entry.reviewWindowName)) return false;
 
   const wtPath = entry.worktreePath ?? projectPath;
-  const headSha = getBranchHeadSha(wtPath);
-  if (!headSha) return false;
-
-  // No new commits since last check
-  if (headSha === entry.lastSeenSha) return false;
-
-  // Check if there are actually commits ahead of base branch
   const commitSummary = getCommitSummary(wtPath, baseBranch);
   if (!commitSummary) return false;
-
-  // Transition to pushed — review will launch from handlePushed
-  updateWorkerFields(projectName, entry.name, {
-    prState: "pushed",
-    lastSeenSha: headSha,
-    lastShaChangeAt: new Date().toISOString(),
-  });
-  refreshDashboard();
-  return true;
-}
-
-function handlePushed(
-  projectName: string,
-  projectPath: string,
-  baseBranch: string,
-  entry: WorkerEntry,
-): boolean {
-  // Don't launch a review while Claude is actively working — it would review
-  // stale code. Keep prState as "pushed" (the display layer shows "working"
-  // when the process is active in a pushed state). Mutating prState to
-  // "working" here creates a stuck state: when Claude stops without making
-  // new commits, handleWorking gates on SHA and can never transition back.
-  if (isWorkerClaudeWorking(projectName, entry.name)) {
-    // Track new commits so handleReviewing won't treat pre-review commits
-    // as "new work" and spuriously abort the review once it launches.
-    const wtPath = entry.worktreePath ?? projectPath;
-    const headSha = getBranchHeadSha(wtPath);
-    if (headSha && headSha !== entry.lastSeenSha) {
-      updateWorkerFields(projectName, entry.name, {
-        lastSeenSha: headSha,
-        lastShaChangeAt: new Date().toISOString(),
-      });
-      refreshDashboard();
-      return true;
-    }
-    return false;
-  }
 
   return launchReview(projectName, projectPath, baseBranch, entry, false);
 }
@@ -197,28 +143,25 @@ function handleReviewing(
   baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
-  // Live-Claude guard: if the worker pushed new commits, abort the review
-  // so it doesn't review stale code. We check for actual SHA changes rather
-  // than just isWorkerWorking, because transient child processes (e.g. from
-  // navigation swaps) can produce false positives that kill valid reviews.
-  if (isWorkerClaudeWorking(projectName, entry.name)) {
-    const wtPath = entry.worktreePath ?? projectPath;
-    const headSha = getBranchHeadSha(wtPath);
-    if (headSha && headSha !== entry.lastSeenSha) {
-      log.info("poller", "new commits during review, resetting to working", {
-        worker: entry.name,
-      });
-      killReviewWindow(projectName, entry.name);
-      // Do NOT update lastSeenSha here — handleWorking needs to see the
-      // new SHA so it transitions back to "pushed" for a fresh review.
-      updateWorkerFields(projectName, entry.name, {
-        prState: "working",
-        lastShaChangeAt: new Date().toISOString(),
-        reviewWindowName: undefined,
-      });
-      refreshDashboard();
-      return true;
-    }
+  // Mid-review push detection: a worker push fires the pre-push hook, which
+  // pokes the FIFO. We compare the current head SHA to the SHA captured when
+  // the review launched. If they differ, the worker pushed new commits during
+  // review — abort and reset to working. The next Stop hook will re-trigger
+  // a fresh review on the new code.
+  const wtPath = entry.worktreePath ?? projectPath;
+  const headSha = getBranchHeadSha(wtPath);
+  if (headSha && entry.lastSeenSha && headSha !== entry.lastSeenSha) {
+    log.info("poller", "new commits during review, resetting to working", {
+      worker: entry.name,
+    });
+    killReviewWindow(projectName, entry.name);
+    updateWorkerFields(projectName, entry.name, {
+      prState: "working",
+      lastShaChangeAt: new Date().toISOString(),
+      reviewWindowName: undefined,
+    });
+    refreshDashboard();
+    return true;
   }
 
   // Check if review is still running
@@ -353,9 +296,8 @@ function handleMergePending(
   const rebaseResult = rebaseBranch(wtPath, baseBranch);
   if (rebaseResult === "conflict") {
     abortRebase(wtPath);
-    // A re-review needs Claude to be idle (it runs in the worktree).
-    // If Claude is working, just wait — don't spin launching reviews
-    // that will immediately bail on the working check.
+    // A re-review runs Claude in the worktree, so it must be safe to launch.
+    // If the worker is working, defer — the next event will re-poll.
     if (isWorkerClaudeWorking(projectName, entry.name)) return false;
     log.warn("poller", "rebase conflicts in merge queue, launching re-review", {
       worker: entry.name,
@@ -490,14 +432,8 @@ function launchReview(
   entry: WorkerEntry,
   isReReview: boolean,
 ): boolean {
-  // Don't launch while Claude is actively working in the worktree
-  if (isWorkerClaudeWorking(projectName, entry.name)) {
-    log.info("poller", "Claude working in worktree, skipping review", {
-      worker: entry.name,
-    });
-    return false;
-  }
-
+  // The caller (handleWorking / handleMergePending) is responsible for the
+  // "claude must be idle" check. We don't repeat it here.
   const wtPath = entry.worktreePath ?? projectPath;
 
   // Fetch latest base branch so the reviewer can rebase onto it
@@ -548,9 +484,14 @@ function launchReview(
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", revWindow,
     "-c", wtPath, "bash", "-c", cmd);
 
+  // Capture the head SHA at launch time. handleReviewing compares the live
+  // SHA against this baseline to detect mid-review pushes.
+  const launchSha = getBranchHeadSha(wtPath) ?? entry.lastSeenSha;
   updateWorkerFields(projectName, entry.name, {
     prState: "reviewing",
     reviewWindowName: revWindow,
+    lastSeenSha: launchSha,
+    lastShaChangeAt: new Date().toISOString(),
     mergePendingAt: isReReview ? undefined : entry.mergePendingAt,
   });
   refreshDashboard();
@@ -878,35 +819,22 @@ function finalizeMerge(
 
   log.info("poller", "merged to base branch", { worker: entry.name, data: { baseBranch } });
   deleteRemoteBranch(projectPath, branchName);
-  removeClaudeActiveMarker(projectName, entry.name);
 
   notifySiblingWorkers(projectName, baseBranch, entry);
 
   runPostMerge(projectName, projectPath);
 
-  const mergedFields = {
-    prState: "merged" as const,
-    mergeCount: (entry.mergeCount ?? 0) + 1,
+  // Per STATUS.md invariant 4: there is no merged history. mergeCount is gone.
+  // The race that the old double-check guarded against is gone too: the file
+  // lock around updateWorkerFields prevents concurrent clobbering.
+  updateWorkerFields(projectName, entry.name, {
+    prState: "merged",
     mergedAt: new Date().toISOString(),
     failCount: 0,
     mergePendingAt: undefined,
     reviewWindowName: undefined,
     lastReviewBody: undefined,
-  };
-  updateWorkerFields(projectName, entry.name, mergedFields);
-
-  // Verify: concurrent status/header writers can race with this write
-  // (they read-modify-write the whole registry to cache claudeStatus).
-  // If our prState was clobbered, re-write it. The double-check makes
-  // the race window astronomically small.
-  const written = findWorkerByName(projectName, entry.name);
-  if (written && written.prState !== "merged") {
-    log.warn("poller", "merged state clobbered by concurrent write, retrying", {
-      worker: entry.name,
-      data: { found: written.prState ?? "undefined" },
-    });
-    updateWorkerFields(projectName, entry.name, mergedFields);
-  }
+  });
 
   refreshDashboard();
 }
@@ -974,9 +902,12 @@ function notifySiblingWorkers(
   if (mergedFiles.length === 0) return;
 
   const commitSummary = getCommitSummary(mergedEntry.worktreePath, baseBranch);
+  // pushed is no longer a state in the new model — workers go straight from
+  // working to reviewing via the Stop hook poke. The siblings to notify are
+  // those whose code is still in flight.
   const siblings = getWorkers(projectName).filter(
     w => w.name !== mergedEntry.name &&
-      (w.prState === "working" || w.prState === "pushed" || w.prState === "failing"),
+      (!w.prState || w.prState === "working" || w.prState === "failing"),
   );
 
   const mergedSet = new Set(mergedFiles);
@@ -1001,42 +932,33 @@ function notifySiblingWorkers(
     const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
     if (!paneId) continue;
 
-    const pid = getPanePid(paneId);
-    if (pid && hasClaudeChild(pid)) {
-      tmux("send-keys", "-t", paneId, "-l", message);
-      tmux("send-keys", "-t", paneId, "Enter");
-      log.info("poller", "notified sibling of merge overlap", {
-        worker: sibling.name,
-        data: { mergedWorker: mergedEntry.name, overlapFiles: overlap },
-      });
-    } else {
+    // Liveness from the registry (claudeStatus is hook-driven). A sibling
+    // marked exited is dead — skip.
+    if (sibling.claudeStatus === "exited") {
       log.info("poller", "skipping dead sibling", {
         worker: sibling.name,
         data: { mergedWorker: mergedEntry.name },
       });
+      continue;
     }
+
+    tmux("send-keys", "-t", paneId, "-l", message);
+    tmux("send-keys", "-t", paneId, "Enter");
+    log.info("poller", "notified sibling of merge overlap", {
+      worker: sibling.name,
+      data: { mergedWorker: mergedEntry.name, overlapFiles: overlap },
+    });
   }
 }
 
 // --- Helpers ---
 
+// Worker liveness is now read from the registry (set by Claude Code hooks),
+// not by inspecting tmux pane child processes. The registry is the single
+// source of truth per STATUS.md.
 function isWorkerClaudeWorking(projectName: string, workerName: string): boolean {
-  const paneId = resolveWorkerPaneId(projectName, workerName);
-  if (!paneId) return false;
-  return isWorkerWorking(paneId, projectName, workerName);
-}
-
-function resolveWorkerPaneId(projectName: string, workerName: string): string | null {
-  const workerWindow = `_${projectName}-worker-${workerName}`;
-  if (windowExists(workerWindow)) {
-    return getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindow}`);
-  }
-  // Worker may be visible in the right pane (hidden window killed after swap)
-  const state = readDashState();
-  if (state.activeWindowName === workerWindow && state.activePaneId) {
-    return state.activePaneId;
-  }
-  return null;
+  const entry = findWorkerByName(projectName, workerName);
+  return entry?.claudeStatus === "working";
 }
 
 function killReviewWindow(projectName: string, workerName: string): void {
@@ -1170,10 +1092,16 @@ export function startProjectPoller(projectName: string, gardenRunner: string): v
   ensureSignalFifo(fifo);
   const escapedFifo = fifo.replace(/'/g, "'\\''");
   const escapedProject = projectName.replace(/'/g, "'\\''");
+  // Event-driven poller loop: poll once, then block on the FIFO until an
+  // event arrives. Per STATUS.md invariant 6, there is no fallback poll.
+  // Every transition is delivered by an event from one of four sources:
+  // Claude Code hooks, worker push hook, merge queue completion, or tmux
+  // pane-died. The poller is a pure dispatcher that does one unit of work
+  // per wake.
   const cmd = [
     `while true; do`,
     `  ${gardenRunner} dashboard _poll '${escapedProject}' 2>/dev/null;`,
-    `  if [ $? -eq 0 ]; then read -t 10 <>'${escapedFifo}' 2>/dev/null || true; fi;`,
+    `  read <>'${escapedFifo}' 2>/dev/null || true;`,
     `done`,
   ].join(" ");
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", window,

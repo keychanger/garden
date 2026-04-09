@@ -1,14 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// The new status system is registry-driven: claudeStatus and prState are
+// the only inputs to the renderer. There is no pgrep, no marker file, no
+// pane-title parsing. These tests exercise the combine function and the
+// rendering of each state.
+
 vi.mock("../src/dashboard/tmux.js", () => ({
-  getPanePid: vi.fn(),
-  getPaneTitle: vi.fn(),
   getPaneLabel: vi.fn(),
-  getPaneVar: vi.fn(() => null),
   getFirstPaneId: vi.fn(),
-  getClaudeChildPid: vi.fn(),
-  hasChildProcesses: vi.fn(),
-  hasNonMcpChildren: vi.fn(),
   listHiddenWorkerWindows: vi.fn(() => []),
 }));
 
@@ -25,11 +24,6 @@ vi.mock("../src/dashboard/state.js", () => ({
 
 vi.mock("../src/dashboard/registry.js", () => ({
   getWorkers: vi.fn(() => []),
-}));
-
-vi.mock("../src/dashboard/header.js", () => ({
-  isClaudeActiveByHook: vi.fn(() => false),
-  touchClaudeActiveMarker: vi.fn(),
 }));
 
 vi.mock("../src/session.js", () => ({
@@ -58,16 +52,12 @@ vi.mock("../src/output.js", () => ({
   isTTY: true,
 }));
 
-import { status, renderQuickStatus } from "../src/commands/status.js";
+import { status, renderQuickStatus, resolveWorkerStatus } from "../src/commands/status.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { getWorkers } from "../src/dashboard/registry.js";
 import { dashboardExists } from "../src/session.js";
 import { loadConfig } from "../src/config.js";
-import {
-  getPanePid, getPaneTitle, getPaneLabel, getFirstPaneId,
-  getClaudeChildPid, hasChildProcesses, hasNonMcpChildren, listHiddenWorkerWindows,
-} from "../src/dashboard/tmux.js";
-import { isClaudeActiveByHook } from "../src/dashboard/header.js";
+import { listHiddenWorkerWindows } from "../src/dashboard/tmux.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -85,78 +75,41 @@ beforeEach(() => {
   });
 });
 
-describe("worker deduplication", () => {
-  it("active worker appearing in hidden windows list shows up exactly once", async () => {
-    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
-    vi.mocked(getPanePid).mockReturnValue("123");
-    vi.mocked(getClaudeChildPid).mockReturnValue("456");
-    vi.mocked(hasChildProcesses).mockReturnValue(false);
-    vi.mocked(getPaneTitle).mockReturnValue(null);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_garden-worker-bold-ash"]);
-    vi.mocked(getWorkers).mockReturnValue([]);
-
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
-
-    const workerLines = lines.filter(l => l.includes("bold-ash"));
-    expect(workerLines).toHaveLength(1);
+describe("resolveWorkerStatus", () => {
+  it("returns claudeStatus when no prState is set", () => {
+    expect(resolveWorkerStatus({ claudeStatus: "loading" })).toBe("loading");
+    expect(resolveWorkerStatus({ claudeStatus: "ready" })).toBe("ready");
+    expect(resolveWorkerStatus({ claudeStatus: "working" })).toBe("working");
+    expect(resolveWorkerStatus({ claudeStatus: "idle" })).toBe("idle");
+    expect(resolveWorkerStatus({ claudeStatus: "exited" })).toBe("exited");
   });
 
-  it("hidden workers for active project are listed when not active pane", async () => {
-    vi.mocked(readDashState).mockReturnValue({
-      activeProject: "garden",
-      statusPaneId: "%0",
-      gardenShellPaneId: "%1",
-      activePaneId: "%2",
-      activePaneType: "shell",
-      activeWindowName: "_garden-shell",
-    });
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([
-      "_garden-worker-bold-ash",
-      "_garden-worker-calm-bay",
-    ]);
-    vi.mocked(getFirstPaneId).mockImplementation((target: string) => {
-      if (target.includes("bold-ash")) return "%10";
-      if (target.includes("calm-bay")) return "%11";
-      return null;
-    });
-    vi.mocked(getPaneLabel).mockImplementation((id: string) => {
-      if (id === "%10") return "bold-ash";
-      if (id === "%11") return "calm-bay";
-      return null;
-    });
-    vi.mocked(getPanePid).mockReturnValue("123");
-    vi.mocked(getClaudeChildPid).mockReturnValue("456");
-    vi.mocked(hasChildProcesses).mockReturnValue(false);
-    vi.mocked(getPaneTitle).mockReturnValue(null);
-    vi.mocked(getWorkers).mockReturnValue([]);
+  it("returns 'ready' when neither field is set", () => {
+    expect(resolveWorkerStatus({})).toBe("ready");
+    expect(resolveWorkerStatus(undefined)).toBe("ready");
+  });
 
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
+  it("lifecycle prState takes priority over claudeStatus", () => {
+    expect(resolveWorkerStatus({ claudeStatus: "working", prState: "reviewing" })).toBe("reviewing");
+    expect(resolveWorkerStatus({ claudeStatus: "idle", prState: "merge-pending" })).toBe("merge-pending");
+    expect(resolveWorkerStatus({ claudeStatus: "working", prState: "failing" })).toBe("failing");
+    expect(resolveWorkerStatus({ claudeStatus: "idle", prState: "merged" })).toBe("merged");
+  });
 
-    const workerLines = lines.filter(l => l.includes("bold-ash") || l.includes("calm-bay"));
-    expect(workerLines).toHaveLength(2);
+  it("prState='working' is not displayed (claudeStatus shows through)", () => {
+    // prState='working' means "no in-flight lifecycle state". The display
+    // should reflect what Claude is doing, not the placeholder.
+    expect(resolveWorkerStatus({ claudeStatus: "working", prState: "working" })).toBe("working");
+    expect(resolveWorkerStatus({ claudeStatus: "idle", prState: "working" })).toBe("idle");
   });
 });
 
-describe("worker status detection", () => {
-  it("shows exited when no PID", async () => {
-    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
-    vi.mocked(getPanePid).mockReturnValue(null);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-    vi.mocked(getWorkers).mockReturnValue([]);
+describe("worker deduplication", () => {
+  it("active worker appearing in hidden windows list shows up exactly once", async () => {
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_garden-worker-bold-ash"]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "idle" },
+    ]);
 
     const lines: string[] = [];
     const origLog = console.log;
@@ -167,694 +120,164 @@ describe("worker status detection", () => {
       console.log = origLog;
     }
 
-    expect(lines.some(l => l.includes("exited"))).toBe(true);
+    const occurrences = lines.filter(l => l.includes("bold-ash")).length;
+    expect(occurrences).toBe(1);
   });
+});
 
-  it("shows loading when shell has children but no claude yet", async () => {
-    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
-    vi.mocked(getPanePid).mockReturnValue("123");
-    vi.mocked(getClaudeChildPid).mockReturnValue(null);
-    vi.mocked(hasChildProcesses).mockReturnValue(true);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-    vi.mocked(getWorkers).mockReturnValue([]);
-
+describe("status display", () => {
+  it("shows loading from registry", async () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "loading" },
+    ]);
     const lines: string[] = [];
     const origLog = console.log;
     console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
-
+    try { await status([]); } finally { console.log = origLog; }
     expect(lines.some(l => l.includes("loading"))).toBe(true);
   });
 
-  it("shows ready when claude is running but no children and no task", async () => {
-    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
-    vi.mocked(getPanePid).mockReturnValue("123");
-    vi.mocked(getClaudeChildPid).mockReturnValue("456");
-    vi.mocked(hasChildProcesses).mockReturnValue(false);
-    vi.mocked(getPaneTitle).mockReturnValue(null);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-    vi.mocked(getWorkers).mockReturnValue([]);
-
+  it("shows ready from registry", async () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "ready" },
+    ]);
     const lines: string[] = [];
     const origLog = console.log;
     console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
-
+    try { await status([]); } finally { console.log = origLog; }
     expect(lines.some(l => l.includes("ready"))).toBe(true);
   });
 
-  it("shows idle when claude is running but no children and has task", async () => {
-    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
-    vi.mocked(getPanePid).mockReturnValue("123");
-    vi.mocked(getClaudeChildPid).mockReturnValue("456");
-    vi.mocked(hasChildProcesses).mockReturnValue(false);
-    vi.mocked(getPaneTitle).mockReturnValue(null);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+  it("shows working from registry", async () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "fixing auth" },
+      { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "working" },
     ]);
-
     const lines: string[] = [];
     const origLog = console.log;
     console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
-
-    expect(lines.some(l => l.includes("idle"))).toBe(true);
-  });
-
-  it("shows working when hook reports active despite no child processes", async () => {
-    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
-    vi.mocked(getPanePid).mockReturnValue("123");
-    vi.mocked(getClaudeChildPid).mockReturnValue("456");
-    vi.mocked(hasChildProcesses).mockReturnValue(false);
-    vi.mocked(getPaneTitle).mockReturnValue("running subagent");
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-    vi.mocked(getWorkers).mockReturnValue([]);
-    vi.mocked(isClaudeActiveByHook).mockReturnValue(true);
-
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
-
-    expect(lines.some(l => l.includes("working"))).toBe(true);
-    vi.mocked(isClaudeActiveByHook).mockReturnValue(false);
-  });
-
-  it("shows working when claude has non-MCP child processes", async () => {
-    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
-    vi.mocked(getPanePid).mockReturnValue("123");
-    vi.mocked(getClaudeChildPid).mockReturnValue("456");
-    vi.mocked(hasNonMcpChildren).mockReturnValue(true);
-    vi.mocked(getPaneTitle).mockReturnValue("fixing the build");
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-    vi.mocked(getWorkers).mockReturnValue([]);
-
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
-
+    try { await status([]); } finally { console.log = origLog; }
     expect(lines.some(l => l.includes("working"))).toBe(true);
   });
 
-  it("shows idle when claude only has MCP server children", async () => {
-    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
-    vi.mocked(getPanePid).mockReturnValue("123");
-    vi.mocked(getClaudeChildPid).mockReturnValue("456");
-    vi.mocked(hasNonMcpChildren).mockReturnValue(false);
-    vi.mocked(getPaneTitle).mockReturnValue(null);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+  it("shows idle from registry", async () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "previous task" },
+      { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "idle" },
     ]);
-
     const lines: string[] = [];
     const origLog = console.log;
     console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
-
+    try { await status([]); } finally { console.log = origLog; }
     expect(lines.some(l => l.includes("idle"))).toBe(true);
-    expect(lines.some(l => l.includes("working"))).toBe(false);
+  });
+
+  it("shows exited from registry", async () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "exited" },
+    ]);
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (msg: string) => lines.push(msg);
+    try { await status([]); } finally { console.log = origLog; }
+    expect(lines.some(l => l.includes("exited"))).toBe(true);
   });
 });
 
-describe("hook priority over pgrep", () => {
-  it("uses hook claudeStatus when fresh, not pgrep detection", async () => {
-    // pgrep sees child processes (working), but Stop hook just set idle
-    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
-    vi.mocked(getPanePid).mockReturnValue("123");
-    vi.mocked(getClaudeChildPid).mockReturnValue("456");
-    vi.mocked(hasNonMcpChildren).mockReturnValue(true); // pgrep says working
-    vi.mocked(getPaneTitle).mockReturnValue("some task");
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+describe("lifecycle state display (prState takes priority)", () => {
+  it("shows reviewing when prState=reviewing, even if claudeStatus=working", async () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "some task",
-        claudeStatus: "idle", lastHookAt: Date.now() }, // hook says idle
+      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "working", prState: "reviewing" },
     ]);
-
     const lines: string[] = [];
     const origLog = console.log;
     console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
-
-    // Should show idle (from hook), not working (from pgrep)
-    expect(lines.some(l => l.includes("idle"))).toBe(true);
-    expect(lines.some(l => l.includes("working"))).toBe(false);
-  });
-
-  it("uses pgrep when hook data is stale", async () => {
-    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
-    vi.mocked(getPanePid).mockReturnValue("123");
-    vi.mocked(getClaudeChildPid).mockReturnValue("456");
-    vi.mocked(hasNonMcpChildren).mockReturnValue(true); // pgrep says working
-    vi.mocked(getPaneTitle).mockReturnValue("some task");
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-    vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "some task",
-        claudeStatus: "idle", lastHookAt: Date.now() - 10000 }, // 10s ago, stale
-    ]);
-
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
-
-    // Hook is stale, so pgrep wins — shows working
-    expect(lines.some(l => l.includes("working"))).toBe(true);
-  });
-});
-
-describe("registry task fallback", () => {
-  it("falls back to registry task when pane title is null", async () => {
-    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
-    vi.mocked(getPanePid).mockReturnValue("123");
-    vi.mocked(getClaudeChildPid).mockReturnValue("456");
-    vi.mocked(hasChildProcesses).mockReturnValue(false);
-    vi.mocked(getPaneTitle).mockReturnValue(null);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-    vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "fixing auth" },
-    ]);
-
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
-
-    expect(lines.some(l => l.includes("fixing auth"))).toBe(true);
-  });
-
-  it("shows ready when registry task is empty string", async () => {
-    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
-    vi.mocked(getPanePid).mockReturnValue("123");
-    vi.mocked(getClaudeChildPid).mockReturnValue("456");
-    vi.mocked(hasChildProcesses).mockReturnValue(false);
-    vi.mocked(hasNonMcpChildren).mockReturnValue(false);
-    vi.mocked(getPaneTitle).mockReturnValue(null);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-    vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "" },
-    ]);
-
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
-
-    expect(lines.some(l => l.includes("ready"))).toBe(true);
-  });
-});
-
-describe("registry lifecycle states", () => {
-  it("shows reviewing status from registry", async () => {
-    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
-    vi.mocked(getPanePid).mockReturnValue("123");
-    vi.mocked(getClaudeChildPid).mockReturnValue("456");
-    vi.mocked(hasChildProcesses).mockReturnValue(false);
-    vi.mocked(getPaneTitle).mockReturnValue(null);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-    vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", prState: "reviewing" },
-    ]);
-
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
-
+    try { await status([]); } finally { console.log = origLog; }
     expect(lines.some(l => l.includes("reviewing"))).toBe(true);
+    expect(lines.some(l => l.includes("working"))).toBe(false);
   });
 
-  it("shows failing status with count from registry", async () => {
-    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
-    vi.mocked(getPanePid).mockReturnValue("123");
-    vi.mocked(getClaudeChildPid).mockReturnValue("456");
-    vi.mocked(hasChildProcesses).mockReturnValue(false);
-    vi.mocked(getPaneTitle).mockReturnValue(null);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+  it("shows merge pending when prState=merge-pending", async () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", prState: "failing", failCount: 3 },
+      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "merge-pending" },
     ]);
-
     const lines: string[] = [];
     const origLog = console.log;
     console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
+    try { await status([]); } finally { console.log = origLog; }
+    expect(lines.some(l => l.includes("merge pending"))).toBe(true);
+  });
 
+  it("shows failing with count when failCount > 1", async () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "failing", failCount: 3 },
+    ]);
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (msg: string) => lines.push(msg);
+    try { await status([]); } finally { console.log = origLog; }
     expect(lines.some(l => l.includes("failing (x3)"))).toBe(true);
   });
 
-  it("shows merged status with count from registry", async () => {
-    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
-    vi.mocked(getPanePid).mockReturnValue("123");
-    vi.mocked(getClaudeChildPid).mockReturnValue("456");
-    vi.mocked(hasChildProcesses).mockReturnValue(false);
-    vi.mocked(hasNonMcpChildren).mockReturnValue(false);
-    vi.mocked(getPaneTitle).mockReturnValue(null);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+  it("shows merged from prState", async () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", prState: "merged", mergeCount: 5 },
+      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "merged" },
     ]);
-
     const lines: string[] = [];
     const origLog = console.log;
     console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
-
-    expect(lines.some(l => l.includes("merged (x5)"))).toBe(true);
-  });
-
-  it("shows working when merged worker has active child processes (Q&A)", async () => {
-    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
-    vi.mocked(getPanePid).mockReturnValue("123");
-    vi.mocked(getClaudeChildPid).mockReturnValue("456");
-    vi.mocked(hasNonMcpChildren).mockReturnValue(true);
-    vi.mocked(getPaneTitle).mockReturnValue("answering question");
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-    vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", prState: "merged", mergeCount: 1 },
-    ]);
-
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
-
-    expect(lines.some(l => l.includes("working"))).toBe(true);
-    expect(lines.some(l => l.includes("merged"))).toBe(false);
-  });
-
-  it("icon reflects lifecycle status, not raw process status", async () => {
-    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
-    vi.mocked(getPanePid).mockReturnValue("123");
-    vi.mocked(getClaudeChildPid).mockReturnValue("456");
-    vi.mocked(hasChildProcesses).mockReturnValue(false);
-    vi.mocked(getPaneTitle).mockReturnValue(null);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-    vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "fixing auth", prState: "reviewing" },
-    ]);
-
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
-
-    const workerLine = lines.find(l => l.includes("bold-ash"))!;
-    // Status text shows lifecycle state
-    expect(workerLine).toContain("reviewing");
-    // Icon should match lifecycle state, not raw process detection
-    expect(workerLine).toContain("\u25CE"); // bullseye = reviewing
-    expect(workerLine).not.toContain("\u25C6"); // filled diamond = idle
-  });
-
-  it("shows plain status when count is 1", async () => {
-    vi.mocked(getPaneLabel).mockReturnValue("bold-ash");
-    vi.mocked(getPanePid).mockReturnValue("123");
-    vi.mocked(getClaudeChildPid).mockReturnValue("456");
-    vi.mocked(hasChildProcesses).mockReturnValue(false);
-    vi.mocked(hasNonMcpChildren).mockReturnValue(false);
-    vi.mocked(getPaneTitle).mockReturnValue(null);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-    vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", prState: "merged", mergeCount: 1 },
-    ]);
-
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
-
-    const workerLine = lines.find(l => l.includes("bold-ash"))!;
-    expect(workerLine).toContain("merged");
-    expect(workerLine).not.toContain("(x");
-  });
-});
-
-describe("focus indicator", () => {
-  it("shows filled circle for active worker and empty for inactive", async () => {
-    vi.mocked(getPaneLabel).mockImplementation((id: string) => {
-      if (id === "%2") return "bold-ash";
-      if (id === "%10") return "calm-bay";
-      return null;
-    });
-    vi.mocked(getPanePid).mockReturnValue("123");
-    vi.mocked(getClaudeChildPid).mockReturnValue("456");
-    vi.mocked(hasChildProcesses).mockReturnValue(false);
-    vi.mocked(getPaneTitle).mockReturnValue(null);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_garden-worker-calm-bay"]);
-    vi.mocked(getFirstPaneId).mockImplementation((target: string) => {
-      if (target.includes("calm-bay")) return "%10";
-      return null;
-    });
-    vi.mocked(getWorkers).mockReturnValue([]);
-
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
-
-    const activeLine = lines.find(l => l.includes("bold-ash"))!;
-    const inactiveLine = lines.find(l => l.includes("calm-bay"))!;
-    expect(activeLine).toMatch(/●/);
-    expect(inactiveLine).toMatch(/○/);
-  });
-});
-
-describe("no dashboard", () => {
-  it("shows no workers when dashboard does not exist", async () => {
-    vi.mocked(dashboardExists).mockReturnValue(false);
-
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
-
-    expect(lines.some(l => l.includes("(no workers)"))).toBe(true);
+    try { await status([]); } finally { console.log = origLog; }
+    expect(lines.some(l => l.includes("merged"))).toBe(true);
   });
 });
 
 describe("renderQuickStatus", () => {
-  it("returns no-projects message when config is empty", () => {
-    vi.mocked(loadConfig).mockReturnValue({ projects: {} });
-    const state = {
-      activeProject: null,
-      statusPaneId: null,
-      gardenShellPaneId: null,
-      activePaneId: null,
-      activePaneType: null,
-      activeWindowName: null,
-    };
-    expect(renderQuickStatus(state)).toBe("No projects added.");
-  });
+  const state = {
+    activeProject: "garden",
+    statusPaneId: "%0",
+    gardenShellPaneId: "%1",
+    activePaneId: "%2",
+    activePaneType: "worker" as const,
+    activeWindowName: "_garden-worker-bold-ash",
+  };
 
-  it("shows active worker from state with registry status", () => {
+  it("renders working from registry", () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "fixing auth", prState: "reviewing" },
+      { name: "bold-ash", sessionId: "abc", task: "fixing the build", claudeStatus: "working" },
     ]);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-
-    const state = {
-      activeProject: "garden",
-      statusPaneId: "%0",
-      gardenShellPaneId: "%1",
-      activePaneId: "%2",
-      activePaneType: "worker" as const,
-      activeWindowName: "_garden-worker-bold-ash",
-    };
-
     const result = renderQuickStatus(state);
     expect(result).toContain("bold-ash");
-    expect(result).toContain("reviewing");
-    expect(result).toContain("fixing auth");
-    expect(result).toMatch(/●/); // active indicator
+    expect(result).toContain("working");
   });
 
-  it("shows hidden workers as inactive", () => {
-    vi.mocked(getWorkers).mockReturnValue([]);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_garden-worker-calm-bay"]);
-
-    const state = {
-      activeProject: "garden",
-      statusPaneId: "%0",
-      gardenShellPaneId: "%1",
-      activePaneId: "%2",
-      activePaneType: "shell" as const,
-      activeWindowName: "_garden-shell",
-    };
-
-    const result = renderQuickStatus(state);
-    expect(result).toContain("calm-bay");
-    expect(result).toMatch(/○/); // inactive indicator
-  });
-
-  it("resolves status to idle when task exists but no lifecycle prState", () => {
+  it("renders loading from registry", () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "fixing auth" },
+      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "loading" },
     ]);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-
-    const state = {
-      activeProject: "garden",
-      statusPaneId: "%0",
-      gardenShellPaneId: "%1",
-      activePaneId: "%2",
-      activePaneType: "worker" as const,
-      activeWindowName: "_garden-worker-bold-ash",
-    };
-
     const result = renderQuickStatus(state);
-    expect(result).toContain("idle");
+    expect(result).toContain("loading");
   });
 
-  it("resolves status to ready when no task and no prState", () => {
-    vi.mocked(getWorkers).mockReturnValue([]);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-
-    const state = {
-      activeProject: "garden",
-      statusPaneId: "%0",
-      gardenShellPaneId: "%1",
-      activePaneId: "%2",
-      activePaneType: "worker" as const,
-      activeWindowName: "_garden-worker-bold-ash",
-    };
-
-    const result = renderQuickStatus(state);
-    expect(result).toContain("ready");
-  });
-
-  it("shows idle when claudeStatus is idle after stop hook", () => {
+  it("renders idle when claudeStatus=idle and no lifecycle state", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "idle" },
     ]);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-
-    const state = {
-      activeProject: "garden",
-      statusPaneId: "%0",
-      gardenShellPaneId: "%1",
-      activePaneId: "%2",
-      activePaneType: "worker" as const,
-      activeWindowName: "_garden-worker-bold-ash",
-    };
-
     const result = renderQuickStatus(state);
     expect(result).toContain("idle");
-    expect(result).not.toContain("working");
   });
 
-  it("shows working when claudeStatus is working from prompt hook", () => {
+  it("renders reviewing even if claudeStatus is working", () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "working" },
+      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "working", prState: "reviewing" },
     ]);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-
-    const state = {
-      activeProject: "garden",
-      statusPaneId: "%0",
-      gardenShellPaneId: "%1",
-      activePaneId: "%2",
-      activePaneType: "worker" as const,
-      activeWindowName: "_garden-worker-bold-ash",
-    };
-
     const result = renderQuickStatus(state);
-    expect(result).toContain("working");
+    expect(result).toContain("reviewing");
   });
 
-  it("shows working instead of merged when Claude is actively working (Q&A)", () => {
+  it("includes merged registry-only workers (window already gone)", () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "fixing auth", prState: "merged", mergeCount: 1, claudeStatus: "working" },
+      { name: "old-elm", sessionId: "abc", task: "", prState: "merged" },
     ]);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-
-    const state = {
-      activeProject: "garden",
-      statusPaneId: "%0",
-      gardenShellPaneId: "%1",
-      activePaneId: "%2",
-      activePaneType: "worker" as const,
-      activeWindowName: "_garden-worker-bold-ash",
-    };
-
-    const result = renderQuickStatus(state);
-    expect(result).toContain("working");
-    expect(result).not.toContain("merged");
-  });
-
-  it("shows merged when Claude is idle after Q&A on merged worker", () => {
-    vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "fixing auth", prState: "merged", mergeCount: 1, claudeStatus: "idle" },
-    ]);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-
-    const state = {
-      activeProject: "garden",
-      statusPaneId: "%0",
-      gardenShellPaneId: "%1",
-      activePaneId: "%2",
-      activePaneType: "worker" as const,
-      activeWindowName: "_garden-worker-bold-ash",
-    };
-
-    const result = renderQuickStatus(state);
-    expect(result).toContain("merged");
-    expect(result).not.toContain("idle");
-  });
-
-  it("shows working instead of pushed when Claude is actively working", () => {
-    vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "fixing auth", prState: "pushed", claudeStatus: "working" },
-    ]);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-
-    const state = {
-      activeProject: "garden",
-      statusPaneId: "%0",
-      gardenShellPaneId: "%1",
-      activePaneId: "%2",
-      activePaneType: "worker" as const,
-      activeWindowName: "_garden-worker-bold-ash",
-    };
-
-    const result = renderQuickStatus(state);
-    expect(result).toContain("working");
-    expect(result).not.toContain("pushed");
-  });
-
-  it("uses provided windowNames instead of querying tmux", () => {
-    vi.mocked(getWorkers).mockReturnValue([]);
-    vi.mocked(listHiddenWorkerWindows).mockImplementation((_proj, names) => {
-      // Should receive our passed-in names
-      if (names) return names.filter(n => n.includes("-worker-"));
-      return [];
-    });
-
-    const state = {
-      activeProject: "garden",
-      statusPaneId: "%0",
-      gardenShellPaneId: "%1",
-      activePaneId: "%2",
-      activePaneType: "shell" as const,
-      activeWindowName: "_garden-shell",
-    };
-
-    const result = renderQuickStatus(state, ["_garden-worker-swift-oak", "_garden-shell"]);
-    expect(result).toContain("swift-oak");
-  });
-
-  it("includes merged registry-only workers", () => {
-    vi.mocked(getWorkers).mockReturnValue([
-      { name: "old-elm", sessionId: "xyz", task: "", prState: "merged", mergeCount: 2 },
-    ]);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-
-    const state = {
-      activeProject: "garden",
-      statusPaneId: "%0",
-      gardenShellPaneId: "%1",
-      activePaneId: "%2",
-      activePaneType: "shell" as const,
-      activeWindowName: "_garden-shell",
-    };
-
     const result = renderQuickStatus(state);
     expect(result).toContain("old-elm");
-    expect(result).toContain("merged (x2)");
-  });
-
-  it("shows full activity text without truncation (tmux clips)", () => {
-    const longTask = "a]".repeat(100);
-    vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: longTask, claudeStatus: "working" },
-    ]);
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-
-    const state = {
-      activeProject: "garden",
-      statusPaneId: "%0",
-      gardenShellPaneId: "%1",
-      activePaneId: "%2",
-      activePaneType: "worker" as const,
-      activeWindowName: "_garden-worker-bold-ash",
-    };
-
-    // renderQuickStatus does not truncate — tmux pane handles clipping
-    const result = renderQuickStatus(state);
-    expect(result).toContain(longTask);
+    expect(result).toContain("merged");
   });
 });

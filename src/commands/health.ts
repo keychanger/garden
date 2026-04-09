@@ -4,7 +4,7 @@ import { readDashState, writeDashState } from "../dashboard/state.js";
 import { readRegistry } from "../dashboard/registry.js";
 import { validateAndHeal } from "../dashboard/validate.js";
 import {
-  paneExists, windowExists, getPanePid, hasClaudeChild,
+  paneExists, windowExists,
   listHiddenWorkerWindows,
 } from "../dashboard/tmux.js";
 import { loadConfig } from "../config.js";
@@ -66,16 +66,10 @@ export async function health(args: string[]): Promise<void> {
         continue;
       }
 
-      let workerStatus = "window exists";
-      if (isActive && state.activePaneId) {
-        const pid = getPanePid(state.activePaneId);
-        if (pid && hasClaudeChild(pid)) {
-          workerStatus = "claude running";
-        } else if (pid) {
-          workerStatus = "claude exited";
-        }
-      }
-
+      // Liveness comes from the registry's claudeStatus, written by Claude
+      // Code hooks and the tmux pane-died handler. The registry is the
+      // single source of truth per STATUS.md.
+      const workerStatus = entry.claudeStatus ?? "unknown";
       const task = entry.task ? ` (${entry.task})` : "";
       console.log(`  ${projectName}/${entry.name}: ${workerStatus}${task}`);
     }

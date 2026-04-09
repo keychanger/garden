@@ -40,7 +40,6 @@ vi.mock("../src/dashboard/create.js", () => ({
 
 vi.mock("../src/dashboard/header.js", () => ({
   buildStatusCommand: vi.fn(() => "echo status"),
-  removeClaudeActiveMarker: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/git.js", () => ({

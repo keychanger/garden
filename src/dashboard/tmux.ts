@@ -59,15 +59,6 @@ export function setPaneVar(paneId: string, name: string, value: string): void {
   } catch { /* ignore */ }
 }
 
-export function getPaneVar(paneId: string, name: string): string | null {
-  try {
-    const val = tmuxOutput("display-message", "-t", paneId, "-p", `#{@${name}}`);
-    return val || null;
-  } catch {
-    return null;
-  }
-}
-
 export function getFirstPaneId(target: string): string | null {
   try {
     return tmuxOutput("list-panes", "-t", target, "-F", "#{pane_id}").split("\n")[0] || null;
@@ -114,76 +105,12 @@ export function getPanePid(paneId: string): string | null {
   }
 }
 
-export function getPaneTitle(paneId: string): string | null {
-  try {
-    const raw = tmuxOutput("display-message", "-t", paneId, "-p", "#{pane_title}");
-    if (!raw) return null;
-    const cleaned = raw.replace(/^[^a-zA-Z0-9]+/, "").trim();
-    return (cleaned && cleaned !== "Claude Code") ? cleaned : null;
-  } catch {
-    return null;
-  }
-}
-
 export function getPaneLabel(paneId: string): string | null {
   try {
     const label = tmuxOutput("display-message", "-t", paneId, "-p", "#{@garden_name}");
     return label || null;
   } catch {
     return null;
-  }
-}
-
-export function getClaudeChildPid(pid: string): string | null {
-  try {
-    return execFileSync("pgrep", ["-P", pid, "claude"], {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim().split("\n")[0] || null;
-  } catch {
-    return null;
-  }
-}
-
-export function hasClaudeChild(pid: string): boolean {
-  return getClaudeChildPid(pid) !== null;
-}
-
-
-export function hasChildProcesses(pid: string): boolean {
-  try {
-    execFileSync("pgrep", ["-P", pid], {
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Returns true if the process has child processes that are not MCP servers.
-// MCP servers are persistent background processes that don't indicate active
-// tool use. Without this filter, idle Claude sessions with MCP servers
-// configured are incorrectly detected as "working".
-export function hasNonMcpChildren(pid: string): boolean {
-  try {
-    const pgrepOut = execFileSync("pgrep", ["-P", pid], {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    const childPids = pgrepOut.split("\n").filter(Boolean);
-    if (childPids.length === 0) return false;
-    // Check command lines in a single ps call
-    const psOut = execFileSync("ps", ["-p", childPids.join(","), "-o", "args="], {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    for (const line of psOut.split("\n")) {
-      if (line && !line.toLowerCase().includes("mcp")) return true;
-    }
-    return false;
-  } catch {
-    return false;
   }
 }
 

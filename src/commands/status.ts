@@ -1,23 +1,30 @@
 // Shows project status: registered projects, active workers, and their states.
+//
+// Per STATUS.md, the registry is the single source of truth and there is one
+// render path. This file reads claudeStatus and prState from the registry,
+// combines them via resolveWorkerStatus(), and renders. It does not call
+// pgrep, does not read marker files, and does not parse pane-title text.
 import { loadConfig, getFocusedProjectNames } from "../config.js";
-import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
+import { dashboardExists } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
-import { getWorkers, batchUpdateWorkerFields } from "../dashboard/registry.js";
-import {
-  getPaneLabel, getFirstPaneId, listHiddenWorkerWindows,
-} from "../dashboard/tmux.js";
-import { detectPaneProcessStatus, type ProcessStatus, type PaneProcessInfo } from "../dashboard/detect.js";
-type LifecycleStatus = "pushed" | "reviewing" | "merge-pending" | "failing" | "merged";
+import { getWorkers } from "../dashboard/registry.js";
+import { listHiddenWorkerWindows } from "../dashboard/tmux.js";
+
+// Display states from STATUS.md. These are the only values the renderer ever
+// emits. `loading`/`ready`/`working`/`idle`/`exited` come from claudeStatus
+// (written by hooks). `reviewing`/`merge-pending`/`failing`/`merged` come
+// from prState (written by the poller). The combine function gives prState
+// priority because it describes where the worker's *code* is.
+export type ProcessStatus = "loading" | "ready" | "working" | "idle" | "exited";
+type LifecycleStatus = "reviewing" | "merge-pending" | "failing" | "merged";
 type WorkerStatus = ProcessStatus | LifecycleStatus;
 
 interface WorkerInfo {
   name: string;
-  status: WorkerStatus;         // display label: lifecycle state when present, else process state
-  processStatus: ProcessStatus; // what Claude is doing right now (cached to registry)
+  status: WorkerStatus;
   activity: string | null;
   active: boolean;
-  mergeCount: number;
   failCount: number;
 }
 
@@ -34,7 +41,6 @@ const STATUS_ICONS: Record<WorkerStatus, string> = {
   ready:          "\u25C7",     // open diamond
   working:        SPINNER_FRAMES[0],
   idle:           "\u25C6",     // filled diamond
-  pushed:         "\u2191",     // up arrow
   reviewing:      "\u25CE",     // bullseye
   "merge-pending": "\u25F7",    // circle with right half - queued
   failing:        "\u2716",     // heavy multiplication x
@@ -43,9 +49,6 @@ const STATUS_ICONS: Record<WorkerStatus, string> = {
 };
 
 function iconFor(worker: WorkerInfo): string {
-  // Use the display status for the icon so lifecycle states (merged,
-  // reviewing, etc.) show their own icon rather than a spinner when
-  // the Claude process happens to still be detected as active.
   if (worker.status === "working") {
     const frame = Math.floor(Date.now() / 2000) % SPINNER_FRAMES.length;
     return SPINNER_FRAMES[frame];
@@ -70,7 +73,7 @@ export async function status(_args: string[]): Promise<void> {
       name,
       index: i + 1,
       isActive: dashState.activeProject === name,
-      workers: hasDashboard ? getProjectWorkers(name, dashState) : [],
+      workers: hasDashboard ? collectWorkers(name, dashState) : [],
     };
   });
 
@@ -79,11 +82,9 @@ export async function status(_args: string[]): Promise<void> {
     return;
   }
 
-  // Compute column widths across all workers
   const allWorkers = statuses.flatMap(p => p.workers);
   const nameWidth = Math.max(10, ...allWorkers.map(w => w.name.length));
   const statusWidth = Math.max(7, ...allWorkers.map(w => formatStatus(w).length));
-  // "    ○ ◆ " (8) + name + "  " (2) + status + "  " (2) = prefix before activity
   const cols = process.stdout.columns || 120;
   const activityMax = Math.max(20, cols - (8 + nameWidth + 2 + statusWidth + 2));
 
@@ -101,10 +102,10 @@ export async function status(_args: string[]): Promise<void> {
       for (const worker of project.workers) {
         const focus = worker.active ? "\u25CF" : "\u25CB";
         const icon = iconFor(worker);
-        const name = worker.name.padEnd(nameWidth);
-        const status = formatStatus(worker).padEnd(statusWidth);
+        const wname = worker.name.padEnd(nameWidth);
+        const wstatus = formatStatus(worker).padEnd(statusWidth);
         const activity = worker.activity ? `  ${truncateActivity(worker.activity, activityMax)}` : "";
-        console.log(`    ${focus} ${icon} ${name}  ${status}${activity}`);
+        console.log(`    ${focus} ${icon} ${wname}  ${wstatus}${activity}`);
       }
     }
   }
@@ -118,121 +119,88 @@ function truncateActivity(text: string, maxLen: number): string {
 
 function formatStatus(worker: WorkerInfo): string {
   const base = worker.status;
-  if (base === "merged" && worker.mergeCount > 1) return `merged (x${worker.mergeCount})`;
   if (base === "failing" && worker.failCount > 1) return `failing (x${worker.failCount})`;
   if (base === "merge-pending") return "merge pending";
   return base;
 }
 
-// When a hook recently set claudeStatus, prefer it over pgrep — the hook
-// fires at the exact moment Claude starts/stops, while pgrep can see stale
-// process trees (e.g., processes still winding down after Stop).
-const HOOK_PRIORITY_MS = 5000;
-
-function hookOverride(
-  regEntry: { claudeStatus?: string; lastHookAt?: number } | undefined,
-  pgrepStatus: ProcessStatus,
-): ProcessStatus {
-  if (!regEntry?.lastHookAt) return pgrepStatus;
-  if (Date.now() - regEntry.lastHookAt >= HOOK_PRIORITY_MS) return pgrepStatus;
-  return (regEntry.claudeStatus as ProcessStatus) ?? pgrepStatus;
+// Combine claudeStatus and prState into a single display state.
+// Lifecycle states (reviewing, merge-pending, failing, merged) take priority
+// because they describe where the worker's *code* is, not what Claude is
+// doing right now. The hook handler is the only place that clears `merged`
+// from prState (on UserPromptSubmit) — this function never mutates state.
+export function resolveWorkerStatus(
+  entry: { claudeStatus?: string; prState?: string } | undefined,
+): WorkerStatus {
+  const pr = entry?.prState;
+  if (pr === "reviewing" || pr === "merge-pending" || pr === "failing" || pr === "merged") {
+    return pr;
+  }
+  const cs = entry?.claudeStatus as ProcessStatus | undefined;
+  // No claudeStatus yet (e.g., entry just created without "loading"): show
+  // "ready" as the safest neutral state.
+  return cs ?? "ready";
 }
 
-function resolveWorkerStatus(paneStatus: PaneProcessInfo["status"], regEntry: { prState?: string; task?: string } | undefined, activity: string | null): { status: WorkerStatus; processStatus: ProcessStatus } {
-  const processStatus: ProcessStatus = (paneStatus === "ready" && activity) ? "idle" : paneStatus;
-  const pr = regEntry?.prState;
-  // When pushed or merged but Claude is actively working, show "working" —
-  // for pushed: commits are there but review is deferred until Claude finishes.
-  // for merged: worker is answering a follow-up question.
-  if ((pr === "pushed" || pr === "merged") && processStatus === "working") {
-    return { status: "working", processStatus };
-  }
-  if (pr === "merged" || pr === "merge-pending" || pr === "reviewing" || pr === "pushed" || pr === "failing") {
-    return { status: pr, processStatus };
-  }
-  return { status: processStatus, processStatus };
-}
-
-function getProjectWorkers(projectName: string, dashState: { activeProject: string | null; activePaneId: string | null; activePaneType: string | null; activeWindowName?: string | null }): WorkerInfo[] {
+function collectWorkers(
+  projectName: string,
+  state: DashboardState,
+  windowNames?: string[],
+): WorkerInfo[] {
   const workers: WorkerInfo[] = [];
-  const activeWindowName = dashState.activeWindowName ?? null;
   const registryEntries = getWorkers(projectName);
-  const registryTaskByName = new Map(registryEntries.map(e => [e.name, e.task]));
   const registryByName = new Map(registryEntries.map(e => [e.name, e]));
 
-  const statusUpdates: Array<[string, string]> = [];
-
-  if (dashState.activeProject === projectName && dashState.activePaneId && dashState.activePaneType === "worker") {
-    const label = getPaneLabel(dashState.activePaneId) ?? "worker-1";
-    const paneInfo = detectPaneProcessStatus(dashState.activePaneId, projectName, label);
-    if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
-    const regEntry = registryByName.get(label);
-    // Hooks are authoritative for process status — override pgrep when fresh
-    const effectiveStatus = hookOverride(regEntry, paneInfo.status);
-    const resolved = resolveWorkerStatus(effectiveStatus, regEntry, paneInfo.activity);
-    statusUpdates.push([label, resolved.processStatus]);
-    workers.push({ name: label, ...resolved, activity: paneInfo.activity, active: true, mergeCount: regEntry?.mergeCount ?? 0, failCount: regEntry?.failCount ?? 0 });
-  }
-
-  const hiddenWindows = listHiddenWorkerWindows(projectName);
-  for (const win of hiddenWindows) {
-    if (win === activeWindowName) continue;
-    const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${win}`);
-    if (paneId) {
-      const label = getPaneLabel(paneId) ?? win.replace(`_${projectName}-`, "");
-      const paneInfo = detectPaneProcessStatus(paneId, projectName, label);
-      if (!paneInfo.activity) paneInfo.activity = registryTaskByName.get(label) || null;
-      const regEntry = registryByName.get(label);
-      const effectiveStatus = hookOverride(regEntry, paneInfo.status);
-      const resolved = resolveWorkerStatus(effectiveStatus, regEntry, paneInfo.activity);
-      statusUpdates.push([label, resolved.processStatus]);
-      workers.push({ name: label, ...resolved, activity: paneInfo.activity, active: false, mergeCount: regEntry?.mergeCount ?? 0, failCount: regEntry?.failCount ?? 0 });
-    }
-  }
-
-  if (statusUpdates.length > 0) {
-    // Filter out updates for workers whose claudeStatus was recently set by
-    // a hook — hooks are authoritative and pgrep can race with them.
-    const filtered = statusUpdates.filter(([label]) => {
-      const entry = registryByName.get(label);
-      return !entry?.lastHookAt || (Date.now() - entry.lastHookAt >= HOOK_PRIORITY_MS);
+  if (state.activeProject === projectName && state.activePaneType === "worker") {
+    const nameMatch = (state.activeWindowName ?? "").match(/-worker-(.+)$/);
+    const label = nameMatch ? nameMatch[1] : "worker-1";
+    const entry = registryByName.get(label);
+    workers.push({
+      name: label,
+      status: resolveWorkerStatus(entry),
+      activity: entry?.task || null,
+      active: true,
+      failCount: entry?.failCount ?? 0,
     });
-    if (filtered.length > 0) {
-      try {
-        batchUpdateWorkerFields(
-          filtered.map(([label, status]) => ({
-            project: projectName, workerName: label, fields: { claudeStatus: status },
-          })),
-        );
-      } catch { /* best effort */ }
-    }
   }
 
-  // Include registry-only workers (e.g., merged workers whose windows are gone)
+  const hiddenWindows = listHiddenWorkerWindows(projectName, windowNames);
+  for (const win of hiddenWindows) {
+    if (win === state.activeWindowName) continue;
+    const nameMatch = win.match(/-worker-(.+)$/);
+    const label = nameMatch ? nameMatch[1] : win;
+    const entry = registryByName.get(label);
+    workers.push({
+      name: label,
+      status: resolveWorkerStatus(entry),
+      activity: entry?.task || null,
+      active: false,
+      failCount: entry?.failCount ?? 0,
+    });
+  }
+
+  // Include registry-only workers (e.g. merged workers whose windows are gone)
   const seenNames = new Set(workers.map(w => w.name));
   for (const entry of registryEntries) {
     if (!seenNames.has(entry.name) && entry.prState === "merged") {
       workers.push({
         name: entry.name,
         status: "merged",
-        processStatus: "exited",
         activity: null,
         active: false,
-        mergeCount: entry.mergeCount ?? 0,
         failCount: entry.failCount ?? 0,
       });
     }
   }
 
   workers.sort((a, b) => a.name.localeCompare(b.name));
-
   return workers;
 }
 
-
 /**
- * Render status from state + registry without any pgrep/tmux process detection.
- * Used for instant visual feedback on mutations; the full status poll refines it.
+ * Render status from state + registry. Used by writeQuickStatus() to bake
+ * the status pane content to a file before SIGUSR1, and reused by `garden
+ * status` directly. There is one render path.
  */
 export function renderQuickStatus(state: DashboardState, windowNames?: string[]): string {
   const config = loadConfig();
@@ -243,7 +211,7 @@ export function renderQuickStatus(state: DashboardState, windowNames?: string[])
   const allWorkers: WorkerInfo[] = [];
 
   const projectWorkers: WorkerInfo[][] = names.map((name) => {
-    const workers = getQuickWorkers(name, state, windowNames);
+    const workers = collectWorkers(name, state, windowNames);
     allWorkers.push(...workers);
     return workers;
   });
@@ -267,10 +235,10 @@ export function renderQuickStatus(state: DashboardState, windowNames?: string[])
       for (const worker of workers) {
         const focus = worker.active ? "\u25CF" : "\u25CB";
         const icon = iconFor(worker);
-        const wName = worker.name.padEnd(nameWidth);
-        const wStatus = formatStatus(worker).padEnd(statusWidth);
+        const wname = worker.name.padEnd(nameWidth);
+        const wstatus = formatStatus(worker).padEnd(statusWidth);
         const activity = worker.activity ? `  ${worker.activity}` : "";
-        lines.push(`    ${focus} ${icon} ${wName}  ${wStatus}${activity}`);
+        lines.push(`    ${focus} ${icon} ${wname}  ${wstatus}${activity}`);
       }
     }
   }
@@ -280,56 +248,3 @@ export function renderQuickStatus(state: DashboardState, windowNames?: string[])
   // overwrite in place without full screen clears (avoids flashing).
   return lines.map(l => l + "\x1b[K").join("\n");
 }
-
-function getQuickWorkers(projectName: string, state: DashboardState, windowNames?: string[]): WorkerInfo[] {
-  const workers: WorkerInfo[] = [];
-  const registryEntries = getWorkers(projectName);
-  const registryByName = new Map(registryEntries.map(e => [e.name, e]));
-
-  if (state.activeProject === projectName && state.activePaneType === "worker") {
-    const nameMatch = (state.activeWindowName ?? "").match(/-worker-(.+)$/);
-    const label = nameMatch ? nameMatch[1] : "worker-1";
-    const entry = registryByName.get(label);
-    const resolved = resolveQuickWorkerStatus(entry);
-    workers.push({ name: label, ...resolved, activity: entry?.task ?? null, active: true, mergeCount: entry?.mergeCount ?? 0, failCount: entry?.failCount ?? 0 });
-  }
-
-  const hiddenWindows = listHiddenWorkerWindows(projectName, windowNames);
-  for (const win of hiddenWindows) {
-    if (win === state.activeWindowName) continue;
-    const nameMatch = win.match(/-worker-(.+)$/);
-    const label = nameMatch ? nameMatch[1] : win;
-    const entry = registryByName.get(label);
-    const resolved = resolveQuickWorkerStatus(entry);
-    workers.push({ name: label, ...resolved, activity: entry?.task ?? null, active: false, mergeCount: entry?.mergeCount ?? 0, failCount: entry?.failCount ?? 0 });
-  }
-
-  const seenNames = new Set(workers.map(w => w.name));
-  for (const entry of registryEntries) {
-    if (!seenNames.has(entry.name) && entry.prState === "merged") {
-      workers.push({ name: entry.name, status: "merged", processStatus: "exited", activity: null, active: false, mergeCount: entry.mergeCount ?? 0, failCount: entry.failCount ?? 0 });
-    }
-  }
-
-  workers.sort((a, b) => a.name.localeCompare(b.name));
-  return workers;
-}
-
-function resolveQuickWorkerStatus(entry?: { prState?: string; task?: string; claudeStatus?: string }): { status: WorkerStatus; processStatus: ProcessStatus } {
-  // Process status: use cached pgrep result, fall back to task heuristic
-  const cached = entry?.claudeStatus as ProcessStatus | undefined;
-  const processStatus: ProcessStatus = cached ?? (entry?.task ? "idle" : "ready");
-
-  const pr = entry?.prState;
-  // When pushed or merged but Claude is actively working, show "working" —
-  // for pushed: commits are there but review is deferred until Claude finishes.
-  // for merged: worker is answering a follow-up question.
-  if ((pr === "pushed" || pr === "merged") && processStatus === "working") {
-    return { status: "working", processStatus };
-  }
-  if (pr === "merged" || pr === "merge-pending" || pr === "reviewing" || pr === "pushed" || pr === "failing") {
-    return { status: pr, processStatus };
-  }
-  return { status: processStatus, processStatus };
-}
-
