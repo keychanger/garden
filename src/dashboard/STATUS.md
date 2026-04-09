@@ -67,7 +67,7 @@ stateDiagram-v2
     merge_pending --> reviewing : rebase conflict (re-review)
     merge_pending --> working : merge fails (non-conflict)
 
-    merged --> working : new input (merged cleared)
+    merged --> working : new commits on branch
 
     failing --> working : new commits after debounce
 
@@ -99,7 +99,7 @@ The two exits from `working` are the core branching point:
 | merge-pending | merged        | Fast-forward merge succeeds                          |
 | merge-pending | reviewing     | Rebase conflict (scoped re-review launched)          |
 | merge-pending | working       | Merge fails (non-conflict)                           |
-| merged        | working       | `UserPromptSubmit` (merged cleared instantly)        |
+| merged        | working       | New commits on the branch (poller detects via SHA)   |
 | failing       | working       | New commits after 30s debounce                       |
 | any           | exited        | Pane process is gone                                 |
 
@@ -118,12 +118,12 @@ A worker never returns to `ready` once it has received its first input.
 3. **`ready` is one-time.** Once a worker receives its first input, it
    never returns to `ready`.
 
-4. **Active pipeline states are sticky; `merged` is not.** While a worker
-   is in `reviewing`, `merge-pending`, or `failing`, those states take
-   priority over what Claude is doing — they represent in-progress
-   pipeline work. `merged` persists only until the worker receives new
-   input, then clears immediately. There is no "merged history" — each
-   cycle is independent.
+4. **Lifecycle states are sticky.** A worker stays `merged` even if
+   Claude is actively answering a question, until new commits appear on
+   the branch. The lifecycle state tells the user where the *code* is,
+   not what Claude is doing. Each merge cycle is independent —
+   `mergeCount` in the registry tracks how many times a worker has gone
+   through the full cycle, and the display shows "merged (x3)" etc.
 
 5. **`pushed` is never displayed.** It is an internal poller term that
    resolves to either `working` (Claude still going) or `reviewing`
@@ -198,12 +198,12 @@ flowchart TD
     A -->|"none / working / pushed"| B["return processStatus"]
 ```
 
-Active pipeline states (`reviewing`, `merge-pending`, `failing`) take
-priority because they represent in-progress stages that don't depend on
-what Claude is doing right now. `merged` also takes priority while set,
-but it clears the moment the worker receives new input — at which point
-the display falls through to `processStatus` (working, then idle or
-reviewing).
+Lifecycle states (`reviewing`, `merge-pending`, `failing`, `merged`)
+take priority because they represent pipeline stages that don't depend
+on what Claude is doing right now. A merged worker shows `merged` even
+if Claude is actively answering a question — until new commits appear
+on the branch, at which point `prState` transitions to `working` and
+the display falls through to `processStatus`.
 
 ### Marker file lifecycle
 
