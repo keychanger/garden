@@ -2,7 +2,9 @@
 
 Spec for the worker status tracking and display system. This document is
 the source of truth for how status works. **If the code disagrees with
-this document, the code is wrong.**
+this document, the code is wrong.** The current implementation contains
+historical fallbacks and heuristics that this spec rejects — they are
+the source of past regressions and will be removed.
 
 ## Display states
 
@@ -51,32 +53,32 @@ bug — the previous `Stop` hook didn't fire or didn't reach the registry.
 ```mermaid
 stateDiagram-v2
     [*] --> loading
-    loading --> ready : bootstrap done, Claude up
-    ready --> working : first input
+    loading --> ready : SessionStart hook
+    ready --> working : UserPromptSubmit
 
-    working --> idle : Stop + no new commits
-    working --> reviewing : Stop + new commits
+    working --> idle : Stop / no new commits
+    working --> reviewing : Stop / new commits
 
-    idle --> working : new input
+    idle --> working : UserPromptSubmit
 
-    reviewing --> merge_pending : reviewer passes
-    reviewing --> failing : reviewer fails
-    reviewing --> working : new commits during review
+    reviewing --> merge_pending : reviewer Stop (passes)
+    reviewing --> failing : reviewer Stop (fails)
+    reviewing --> working : worker push (stale review)
 
-    merge_pending --> merged : ff-only merge succeeds
-    merge_pending --> reviewing : rebase conflict (re-review)
-    merge_pending --> working : merge fails (non-conflict)
+    merge_pending --> merged : queue: ff merge
+    merge_pending --> reviewing : queue: rebase conflict
+    merge_pending --> working : queue: merge fails
 
-    merged --> working : new commits on branch
+    merged --> working : UserPromptSubmit (merged cleared)
 
-    failing --> working : new commits after debounce
+    failing --> working : worker push + 30s debounce
 
     state "merge-pending" as merge_pending
 
     note right of working
         Any state transitions
-        to "exited" if the
-        pane process dies.
+        to "exited" via the
+        tmux pane-died hook.
     end note
 ```
 
@@ -86,60 +88,60 @@ The two exits from `working` are the core branching point:
 
 ### Transition rules
 
-| From          | To            | Trigger                                              |
+| From          | To            | Trigger event                                        |
 |---------------|---------------|------------------------------------------------------|
-| loading       | ready         | Claude child PID detected by process detection       |
-| ready         | working       | First `UserPromptSubmit`                             |
-| working       | idle          | `Stop` fires; no new commits ahead of base branch    |
-| working       | reviewing     | `Stop` fires; new commits ahead of base branch       |
-| idle          | working       | `UserPromptSubmit`                                   |
-| reviewing     | merge-pending | Reviewer verdict CLEAN or FIXED                      |
-| reviewing     | failing       | Reviewer verdict FAILED                              |
-| reviewing     | working       | New commits appear during review (review aborted)    |
-| merge-pending | merged        | Fast-forward merge succeeds                          |
-| merge-pending | reviewing     | Rebase conflict (scoped re-review launched)          |
-| merge-pending | working       | Merge fails (non-conflict)                           |
-| merged        | working       | New commits on the branch (poller detects via SHA)   |
-| failing       | working       | New commits after 30s debounce                       |
-| any           | exited        | Pane process is gone                                 |
+| loading       | ready         | Worker `SessionStart` hook                           |
+| ready         | working       | Worker `UserPromptSubmit` (first)                    |
+| working       | idle          | Worker `Stop`; no new commits ahead of base          |
+| working       | reviewing     | Worker `Stop`; new commits ahead of base             |
+| idle          | working       | Worker `UserPromptSubmit`                            |
+| reviewing     | merge-pending | Reviewer `Stop` with verdict CLEAN or FIXED          |
+| reviewing     | failing       | Reviewer `Stop` with verdict FAILED                  |
+| reviewing     | working       | Worker push event (commits during review, aborted)   |
+| merge-pending | merged        | Merge queue: ff merge succeeds                       |
+| merge-pending | reviewing     | Merge queue: rebase conflict (re-review launched)    |
+| merge-pending | working       | Merge queue: merge fails (non-conflict)              |
+| merged        | working       | Worker `UserPromptSubmit` (merged cleared)           |
+| failing       | working       | Worker push event + 30s debounce                     |
+| any           | exited        | tmux `pane-died` hook                                |
 
 A worker never returns to `ready` once it has received its first input.
 
 ## How transitions are detected
 
 Every transition above is delivered by an identifiable event from a
-specific source. The poller is primarily event-driven — it wakes when an
-event arrives via FIFO, runs one unit of work, and goes back to sleep.
-A 10-second fallback poll ensures no transition is permanently missed.
+specific source. **There is no recurring tick. There is no fallback
+poll. There is no "let's check just in case."** The poller is a pure
+dispatcher: it wakes when an event arrives, runs one unit of work, and
+goes back to sleep.
 
 ### Event sources
 
-Three event sources plus a fallback poll cover the entire state machine.
+Four sources cover the entire state machine.
 
-**1. Claude Code hooks** — `UserPromptSubmit`, `Stop`.
+**1. Claude Code hooks** — `SessionStart`, `UserPromptSubmit`, `Stop`.
 
-These bracket each prompt/response cycle and fire from *every* Claude
-process: workers, reviewers, helpers. The hooks call
-`garden dashboard _claude-hook prompt|stop`, which updates the marker
-file, registry `claudeStatus`, and signals the status pane (SIGUSR1).
-They drive:
+These bracket the lifecycle of every Claude conversation and fire from
+*every* Claude process: workers, reviewers, helpers. The hooks call
+`garden dashboard _claude-hook <event>`, which updates the registry and
+signals the status pane. They drive:
 
-- `ready → working`, `idle → working` (worker's `UserPromptSubmit`)
+- `loading → ready` (worker's `SessionStart`)
+- `ready → working`, `idle → working`, `merged → working` (worker's `UserPromptSubmit`)
 - `working → idle`, `working → reviewing` (worker's `Stop`)
 - `reviewing → merge-pending`, `reviewing → failing` (reviewer's `Stop`)
 
-The hooks do *not* poke the poller FIFO — they update display state
-only. The poller learns about new commits via push events (below).
+The worker's `Stop` hook also pokes the project's poller FIFO if it sees
+new commits ahead of the base branch — so review starts immediately,
+without waiting for any tick.
 
 **2. Worker push events** — a worker's `git push` completion pokes its
 project's poller FIFO via a pre-push hook installed in each worktree.
-When the Claude process exits entirely, the bootstrap script also pokes
-the FIFO. The push or exit is the event; the FIFO poke is the delivery.
+The push is the event; the poke is the delivery.
 
 Drives:
 
 - `reviewing → working` (commits arrive during review, review aborted)
-- `merged → working` (worker pushes new commits after merge)
 - `failing → working` (after the 30s debounce starts on the push)
 
 **3. Merge queue completion** — an internal in-process event. When one
@@ -152,33 +154,30 @@ Drives:
 - `merge-pending → reviewing` (rebase conflict)
 - `merge-pending → working` (merge fails for a non-conflict reason)
 
-**4. Process detection** — `detectPaneProcessStatus` checks whether the
-pane PID still exists. This runs during each poller cycle (see below).
+**4. tmux `pane-died` hook** — tmux fires this automatically when a
+pane process exits. The dashboard listens and writes
+`claudeStatus = "exited"` to the registry.
 
 Drives:
 
 - `any → exited`
 
-### Timers
+### The only timer
 
-Two timers exist:
-
-- **`failing → working` debounce** (30 seconds): a deliberate hold-off
-  preventing review storms. Starts on a push event, not on a tick.
-- **Poller FIFO fallback** (10 seconds): the poller loop waits on its
-  FIFO for events; if no event arrives within 10 seconds, it re-polls
-  as a safety net. Events (pushes, Claude exit) cause immediate wake-up.
-  The fallback catches missed events and detects `exited` workers whose
-  pane process died without signaling.
+The 30-second `failing → working` debounce is the *only* timer in the
+system. It is a deliberate hold-off — preventing review storms on a
+worker that's actively failing in a tight loop — not a discovery
+mechanism. The timer starts on a push event, not on a tick.
 
 ### Why this matters
 
-The primary mechanism is event-driven: most transitions happen within
-milliseconds of their triggering event. The 10-second fallback ensures
-eventual consistency but is not the intended path. A transition that
-relies on the fallback to be discovered (rather than an event) indicates
-a gap in event plumbing — either a missing FIFO poke or a hook that
-failed to fire.
+A bug in this system is always a bug in event plumbing — never "the
+poller didn't tick fast enough." There is no tick. If a transition
+isn't reached, exactly one event was missed, and there is exactly one
+place to look for it. This is what makes the state machine resistant to
+the kind of timing-based regressions that have hit it in the past, and
+why this spec rejects any code change that introduces a `setInterval`,
+recurring re-check, or "fallback poll."
 
 ## Key invariants
 
@@ -193,114 +192,78 @@ failed to fire.
 3. **`ready` is one-time.** Once a worker receives its first input, it
    never returns to `ready`.
 
-4. **Lifecycle states are sticky.** A worker stays `merged` even if
-   Claude is actively answering a question, until new commits appear on
-   the branch. The lifecycle state tells the user where the *code* is,
-   not what Claude is doing. Each merge cycle is independent —
-   `mergeCount` in the registry tracks how many times a worker has gone
-   through the full cycle, and the display shows "merged (x3)" etc.
+4. **Active pipeline states are sticky; `merged` is not.** While a worker
+   is in `reviewing`, `merge-pending`, or `failing`, those states take
+   priority over what Claude is doing — they represent in-progress
+   pipeline work. `merged` persists only until the worker receives new
+   input, then clears immediately. There is no "merged history" — each
+   cycle is independent.
 
 5. **`pushed` is never displayed.** It is an internal poller term that
    resolves to either `working` (Claude still going) or `reviewing`
    (Claude stopped). The window between "Claude stopped" and "reviewer
    launched" is sub-second and not user-visible.
 
-6. **Transitions are primarily event-driven.** The poller wakes when
-   poked by an event (a worker pushing, a Claude process exiting, a
-   reviewer finishing) and does one unit of work. A 10-second fallback
-   poll on the FIFO ensures eventual consistency if an event is missed,
-   but the intended path for every transition is event delivery. See
-   "How transitions are detected" above.
+6. **Every transition is event-triggered.** No transition is discovered
+   by a recurring tick or fallback poll. The poller wakes only when
+   poked by an event (a hook firing, a worker pushing, a reviewer
+   exiting, a merge queue item completing) and does one unit of work.
+   The 30-second `failing → working` debounce is the only timer in the
+   system, and it is a deliberate hold-off, not a discovery mechanism.
 
 ## Detection machinery
 
-Status detection answers one question: **is Claude currently processing?**
-Everything else is derived from that answer plus the poller's lifecycle
-tracking.
+The status of every worker is two fields in the registry: `claudeStatus`
+and `prState`. There are exactly four writers and one reader. There is
+no `pgrep`, no marker file, no activity-text parsing, no fallback poll.
 
-### Signal sources (ordered by authority)
+### Writers
 
-1. **Hooks** (highest authority): Claude Code fires `UserPromptSubmit`
-   when processing starts and `Stop` when it finishes. These are the
-   authoritative signals for working/idle transitions.
-2. **Marker files** (`~/.garden/sessions/claude-active-<project>-<worker>`):
-   the hooks write/delete the marker. Process detection reads it without
-   re-querying hooks. mtime is touched when tool subprocesses are
-   detected, so staleness measures "time since last tool activity," not
-   "time since prompt."
-3. **pgrep child detection**: detects whether Claude has active tool
-   subprocesses. Confirms working state and touches the marker mtime.
-   Cannot detect in-process work (subagents, API calls) — that is why
-   the marker exists.
-4. **Registry cache** (`claudeStatus`, lowest authority): last-known
-   process status. Used by the quick render path for instant display. May
-   be stale; the next full render corrects it.
+**Worker creation** writes `claudeStatus = "loading"` when `newWorker()`
+spawns the worker pane.
 
-### Detection function
+**Claude Code hooks** write `claudeStatus`. The hooks fire from every
+Claude process and call `garden dashboard _claude-hook <event>`:
 
-`detectPaneProcessStatus(paneId, project, worker)` returns a `ProcessStatus`:
+- `SessionStart` → `claudeStatus = "ready"`
+- `UserPromptSubmit` → `claudeStatus = "working"`. Also clears `prState`
+  if it equals `merged` (this is the only place `merged` is cleared).
+- `Stop` → `claudeStatus = "idle"`. If commits ahead of base exist, also
+  pokes the project's poller FIFO so review begins immediately.
 
-```mermaid
-flowchart TD
-    A{pane PID exists?} -->|no| exited
-    A -->|yes| B{Claude child PID exists?}
-    B -->|no| C{has other children?}
-    C -->|yes| loading
-    C -->|no| ready1[ready]
-    B -->|yes| D{has non-MCP child processes?}
-    D -->|yes| working1["working<br/>(touch marker)"]
-    D -->|no| E{marker file fresh?}
-    E -->|yes| working2[working]
-    E -->|no| F{has activity text?}
-    F -->|yes| idle
-    F -->|no| ready2[ready]
-```
+**The poller** writes `prState` in response to the events documented in
+"How transitions are detected." The poller is the only writer of
+in-progress lifecycle states (`reviewing`, `merge-pending`, `failing`,
+`merged`).
 
-### Two render paths
+**The tmux `pane-died` handler** writes `claudeStatus = "exited"` when
+a worker pane process exits.
 
-- **Full render** (`garden status` / `printHeader`): live `pgrep`
-  detection. Writes the result to registry `claudeStatus`. Accurate but
-  costs a pgrep call per worker.
-- **Quick render** (`renderQuickStatus`): reads `claudeStatus` from the
-  registry. No detection. Used for instant visual feedback after
-  mutations (new/kill worker, project switch). The next full render
-  corrects any staleness.
+### Reader
 
-### Display resolution
+The status renderer reads `claudeStatus` and `prState` from the registry
+and combines them with `resolveWorkerStatus()`. There is exactly one
+render path. The renderer never executes `pgrep`, never reads a marker
+file, never parses activity text. If the registry says a worker is
+working, it is working — full stop.
 
-`resolveWorkerStatus(processStatus, lifecycleState)` combines the two:
+### resolveWorkerStatus
 
 ```mermaid
 flowchart TD
-    Start["resolveWorkerStatus(processStatus, lifecycleState)"] --> A{lifecycleState?}
+    Start["resolveWorkerStatus(claudeStatus, prState)"] --> A{prState set?}
     A -->|reviewing| reviewing
     A -->|merge-pending| merge_pending["merge-pending"]
     A -->|failing| failing
     A -->|merged| merged
-    A -->|"none / working / pushed"| B["return processStatus"]
+    A -->|none| B["return claudeStatus"]
 ```
 
 Lifecycle states (`reviewing`, `merge-pending`, `failing`, `merged`)
-take priority because they represent pipeline stages that don't depend
-on what Claude is doing right now. A merged worker shows `merged` even
-if Claude is actively answering a question — until new commits appear
-on the branch, at which point `prState` transitions to `working` and
-the display falls through to `processStatus`.
-
-### Marker file lifecycle
-
-The marker bridges the gap between hooks (which fire at the right time)
-and process detection (which runs on demand).
-
-- **Created**: `UserPromptSubmit` hook, written by `handleClaudeHook("prompt")`.
-- **Touched**: by `detectPaneProcessStatus` whenever it finds active
-  non-MCP child processes. mtime then measures "time since last tool
-  activity."
-- **Deleted**: `Stop` hook, removed by `handleClaudeHook("stop")`.
-- **Stale expiry**: marker older than `MARKER_STALE_MS` (2 minutes) is
-  treated as gone. Catches Claude crashes that skip the `Stop` hook. The
-  threshold balances long subagent runs (must not expire mid-work) and
-  prompt cleanup of stuck markers.
+take priority because they describe where the worker's *code* is, not
+what Claude is doing right now. `merged` is the only one that clears on
+`UserPromptSubmit` — that clear is performed by the hook handler, not
+by this combine function.
 
 ### Hook → display pipeline
 
@@ -311,41 +274,39 @@ sequenceDiagram
     participant Hook
     participant Registry
     participant StatusPane
-    participant Poller
 
     User->>Claude: sends message
     Claude->>Hook: UserPromptSubmit fires
-    Hook->>Hook: write marker file
-    Hook->>Registry: claudeStatus = "working"
+    Hook->>Registry: claudeStatus = "working"; clear prState if "merged"
     Hook->>StatusPane: SIGUSR1
-    StatusPane->>Registry: read (quick path)
+    StatusPane->>Registry: read claudeStatus + prState
     StatusPane->>User: shows "working"
 
     Note over Claude: processing...
 
     Claude->>Hook: Stop fires
-    Hook->>Hook: delete marker file
     Hook->>Registry: claudeStatus = "idle"
     Hook->>StatusPane: SIGUSR1
-    StatusPane->>Registry: read (quick path)
     StatusPane->>User: shows "idle"
-
-    Note over Poller: new commits + Claude idle
-    Poller->>Registry: prState = "reviewing"
-    Poller->>StatusPane: SIGUSR1
-    StatusPane->>User: shows "reviewing"
 ```
 
 ## Known edge cases
 
-**Subagent work with no tool calls.** Claude can spend minutes on
-in-process subagent work (API calls, planning) with no child processes.
-The marker file keeps the status as `working` during this time. If a
-2-minute gap accumulates without any tool subprocess, status briefly
-flickers to `idle` before the next tool call recreates a subprocess and
-flips it back. Acceptable — a 2-minute gap with zero activity is unusual.
+The legacy implementation had several edge cases driven by its
+heuristic detection (subagent flicker, race between pgrep and hooks,
+marker staleness). All of those go away in the event-driven model
+because there is no detection — only event delivery.
 
-**Reviewer launched between keystrokes.** The poller checks
-`isWorkerWorking()` before launching a review. If Claude happens to be
-idle between rapid-fire messages, the poller might launch a review
-prematurely. The review will be aborted if new commits appear during it.
+The remaining failure modes are honest:
+
+**Hook fails to fire.** If Claude crashes or Claude Code's hook plumbing
+is broken, `claudeStatus` is not updated and the worker shows its last
+known state. The `garden health` command detects workers whose hooks
+haven't fired in an unusually long time and surfaces them to the user.
+We do not auto-correct via fallback polling — that mechanism is the
+exact source of the regressions this spec is meant to prevent.
+
+**tmux `pane-died` hook missed.** If tmux fails to fire `pane-died`, an
+exited worker continues to show its previous status until the next
+explicit interaction. The `garden health` command detects panes whose
+PIDs no longer exist and corrects the registry.
