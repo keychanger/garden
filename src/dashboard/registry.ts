@@ -31,6 +31,12 @@ export interface WorkerEntry {
   failingSha?: string;
   claudeStatus?: ClaudeStatus;
   lastHookAt?: number;    // epoch ms when a Claude hook last fired for this worker
+  // Set by the worker's Stop hook when it sees commits ahead of base. The
+  // poller's handleWorking gates launchReview on this — without it, an idle
+  // worker with stale commits would be reviewed on every FIFO poke. Cleared
+  // when launchReview runs. Per STATUS.md invariant 2: "working is the only
+  // entry point to the review cycle" — pendingReviewAt makes that explicit.
+  pendingReviewAt?: number;
   reviewWindowName?: string;
   mergePendingAt?: string;
   lastReviewBody?: string;

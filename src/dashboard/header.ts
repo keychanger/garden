@@ -201,18 +201,20 @@ export function handleClaudeHook(event: string): void {
     },
   });
 
-  // On stop, if the worktree has commits ahead of base, poke the project's
-  // poller FIFO so review starts immediately. This is the worker→reviewing
-  // path: the poller wakes, sees claudeStatus="idle" with commits, and
-  // launches the reviewer.
+  // On stop, if the worktree has commits ahead of base, mark the worker as
+  // pending review and poke the poller FIFO. The mark distinguishes "Stop
+  // hook just fired with new commits" (review eligible) from "worker has
+  // been idle for a month with stale commits" (must not review). Without
+  // this, any FIFO poke would launch a review on every idle worker that
+  // happens to have commits — a direct violation of STATUS.md invariant 2.
   if (event === "stop") {
-    pokePollerIfCommitsAhead(workerInfo.project, workerInfo.worker);
+    markPendingReviewIfCommitsAhead(workerInfo.project, workerInfo.worker);
   }
 
   refreshDashboard();
 }
 
-function pokePollerIfCommitsAhead(projectName: string, workerName: string): void {
+function markPendingReviewIfCommitsAhead(projectName: string, workerName: string): void {
   try {
     const project = tryGetProject(projectName);
     if (!project) return;
@@ -227,8 +229,9 @@ function pokePollerIfCommitsAhead(projectName: string, workerName: string): void
     }).trim();
     const ahead = parseInt(out, 10);
     if (Number.isFinite(ahead) && ahead > 0) {
+      updateWorkerFields(projectName, workerName, { pendingReviewAt: Date.now() });
       triggerProjectPoll(projectName);
-      log.info("hook", "stop hook poked poller (commits ahead of base)", {
+      log.info("hook", "stop hook marked pending review (commits ahead of base)", {
         worker: workerName,
         data: { project: projectName, baseBranch, commitsAhead: ahead },
       });

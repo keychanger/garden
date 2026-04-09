@@ -161,18 +161,19 @@ beforeEach(() => {
   vi.mocked(fs.existsSync).mockReturnValue(false);
 });
 
-// In the new model the trigger to launch a review is the worker Stop hook
-// writing claudeStatus="idle" and poking the FIFO. The poller's handleWorking
-// then sees claudeStatus="idle" + commits ahead of base and launches.
+// In the new model, review is launched when pendingReviewAt is set on the
+// worker. Per STATUS.md invariant 2, working→reviewing requires the Stop
+// hook to fire with new commits — and the Stop hook is the only place that
+// sets pendingReviewAt. Idle workers without pendingReviewAt are NOT
+// candidates for review even if they have stale commits ahead of base.
 describe("poll — working state", () => {
-  it("launches review when claudeStatus=idle and commits exist", () => {
+  it("launches review when pendingReviewAt is set and commits exist", () => {
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", claudeStatus: "idle" }),
+      makeWorker({ prState: "working", claudeStatus: "idle", pendingReviewAt: Date.now() }),
     ]);
 
     poll("myproject");
 
-    // Prompt file written, review window launched, prState set to reviewing
     expect(fs.writeFileSync).toHaveBeenCalled();
     expect(tmux).toHaveBeenCalledWith(
       "new-window", "-d", "-t", expect.any(String), "-n", "_myproject-review-bold-ash",
@@ -186,36 +187,67 @@ describe("poll — working state", () => {
     );
   });
 
-  it("does nothing when claudeStatus is working (Claude still active)", () => {
+  it("does NOT review an idle worker without pendingReviewAt (the regression)", () => {
+    // This is the spec invariant 2 case: a worker may be idle with stale
+    // commits ahead of base for any reason — Q&A session, abandoned branch,
+    // resume-after-restart. Without pendingReviewAt set by the Stop hook,
+    // we MUST NOT launch a review on it.
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", claudeStatus: "working" }),
+      makeWorker({ prState: "working", claudeStatus: "idle" }),
     ]);
+    // Commits ahead of base, but no pendingReviewAt
+    vi.mocked(getCommitSummary).mockReturnValue("abc123 some old commit");
 
     poll("myproject");
 
     expect(forcePushBranch).not.toHaveBeenCalled();
     expect(updateWorkerFields).not.toHaveBeenCalled();
+    expect(tmux).not.toHaveBeenCalledWith(
+      "new-window", expect.anything(), expect.anything(), expect.anything(),
+      "-n", expect.stringContaining("review"),
+      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
+    );
   });
 
-  it("does nothing when claudeStatus is loading", () => {
+  it("does nothing when claudeStatus is working (Claude still active)", () => {
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", claudeStatus: "loading" }),
+      makeWorker({ prState: "working", claudeStatus: "working", pendingReviewAt: Date.now() }),
     ]);
 
     poll("myproject");
 
-    expect(updateWorkerFields).not.toHaveBeenCalled();
+    expect(forcePushBranch).not.toHaveBeenCalled();
   });
 
-  it("does nothing when no commits ahead of base", () => {
+  it("clears pendingReviewAt when commits no longer exist", () => {
+    // Stop hook said commits existed; by the time the poller wakes, they're
+    // gone (force-pushed away, base advanced past them, etc.). Clear the
+    // flag so we don't keep retrying.
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", claudeStatus: "idle" }),
+      makeWorker({ prState: "working", claudeStatus: "idle", pendingReviewAt: Date.now() }),
     ]);
     vi.mocked(getCommitSummary).mockReturnValue("");
 
     poll("myproject");
 
-    expect(updateWorkerFields).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ pendingReviewAt: undefined }),
+    );
+    expect(forcePushBranch).not.toHaveBeenCalled();
+  });
+
+  it("launchReview clears pendingReviewAt", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", claudeStatus: "idle", pendingReviewAt: Date.now() }),
+    ]);
+
+    poll("myproject");
+
+    const launchCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "reviewing",
+    );
+    expect(launchCall).toBeDefined();
+    expect((launchCall![2] as Record<string, unknown>).pendingReviewAt).toBeUndefined();
   });
 
   it("allows multiple workers to transition independently", () => {
@@ -225,16 +257,15 @@ describe("poll — working state", () => {
         worktreePath: "/tmp/wt/myproject/calm-bay", branchName: "calm-bay",
         lastSeenSha: "abc123" }),
       makeWorker({ name: "bold-ash", prState: "working", claudeStatus: "idle",
+        pendingReviewAt: Date.now(),
         sessionId: "s2", task: "t2" }),
     ]);
-    // calm-bay's review window exists; bold-ash should be the one transitioning
     vi.mocked(windowExists).mockImplementation((name: string) =>
       !name.includes("bold-ash"),
     );
 
     poll("myproject");
 
-    // bold-ash transitions to reviewing (independent of calm-bay)
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "reviewing" }),
     );
@@ -601,7 +632,7 @@ describe("poll — merge-pending state", () => {
 describe("poll — reviewer prompt", () => {
   function setupForReview() {
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", claudeStatus: "idle" }),
+      makeWorker({ prState: "working", claudeStatus: "idle", pendingReviewAt: Date.now() }),
     ]);
   }
 
@@ -654,7 +685,8 @@ describe("poll — reviewer prompt", () => {
 
   it("includes worker task in prompt", () => {
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", claudeStatus: "idle", task: "refactor the dashboard" }),
+      makeWorker({ prState: "working", claudeStatus: "idle",
+        pendingReviewAt: Date.now(), task: "refactor the dashboard" }),
     ]);
 
     poll("myproject");

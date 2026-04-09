@@ -112,28 +112,36 @@ function pollWorker(
 
 // --- State handlers ---
 
-// `working` worker: the Stop-hook FIFO poke gets us here. If Claude is now
-// idle (the Stop hook just wrote claudeStatus="idle") and the worktree has
-// commits ahead of base, launch the reviewer. Otherwise wait — there is no
-// SHA poll here, no recurring re-check. The next event will wake us.
+// `working` worker: the Stop-hook FIFO poke gets us here. The Stop hook
+// sets pendingReviewAt only when it observed commits ahead of base, so this
+// handler only launches a review for workers whose Stop hook *just* fired
+// with new commits. Idle workers with stale commits do not get reviewed —
+// per STATUS.md invariant 2, you cannot enter the review cycle from idle.
 function handleWorking(
   projectName: string,
   projectPath: string,
   baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
-  // Don't launch a review over live code: only proceed when the hook says
-  // Claude is idle. working/loading/ready mean the Stop hook hasn't fired
-  // or the worker is actively producing. "exited" is also skipped — if the
-  // worker died without the Stop hook, `garden health` surfaces it.
-  if (entry.claudeStatus !== "idle") return false;
+  if (!entry.pendingReviewAt) return false;
 
   // Already reviewing? (defensive — handleReviewing should be the dispatch)
   if (entry.reviewWindowName && windowExists(entry.reviewWindowName)) return false;
 
+  // Don't launch a review while Claude is mid-response. The Stop hook is
+  // what sets pendingReviewAt, so claudeStatus should already be "idle" by
+  // the time we get here — this guard catches the race where a fresh
+  // UserPromptSubmit landed between the Stop and the poller wake.
+  if (entry.claudeStatus === "working") return false;
+
   const wtPath = entry.worktreePath ?? projectPath;
   const commitSummary = getCommitSummary(wtPath, baseBranch);
-  if (!commitSummary) return false;
+  if (!commitSummary) {
+    // Stop hook said commits existed; they no longer do (force-pushed away,
+    // base advanced past us, etc.). Clear the flag — nothing to review.
+    updateWorkerFields(projectName, entry.name, { pendingReviewAt: undefined });
+    return false;
+  }
 
   return launchReview(projectName, projectPath, baseBranch, entry, false);
 }
@@ -493,6 +501,7 @@ function launchReview(
     reviewWindowName: revWindow,
     lastSeenSha: launchSha,
     lastShaChangeAt: new Date().toISOString(),
+    pendingReviewAt: undefined,
     mergePendingAt: isReReview ? undefined : entry.mergePendingAt,
   });
   refreshDashboard();

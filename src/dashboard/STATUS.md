@@ -229,7 +229,14 @@ Claude process and call `garden dashboard _claude-hook <event>`:
 - `UserPromptSubmit` → `claudeStatus = "working"`. Also clears `prState`
   if it equals `merged` (this is the only place `merged` is cleared).
 - `Stop` → `claudeStatus = "idle"`. If commits ahead of base exist, also
-  pokes the project's poller FIFO so review begins immediately.
+  sets `pendingReviewAt = Date.now()` and pokes the project's poller FIFO
+  so review begins immediately. `pendingReviewAt` is the per-worker mark
+  that the Stop hook just observed new commits — without it, the poller
+  cannot tell "Stop hook just fired" from "worker has been idle with
+  stale commits for a month" and would spuriously review old branches.
+  This is what makes invariant 2 enforceable: only Stop sets the flag,
+  only the poller's working→reviewing transition reads it, and
+  `launchReview` clears it.
 
 **The poller** writes `prState` in response to the events documented in
 "How transitions are detected." The poller is the only writer of
