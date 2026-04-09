@@ -123,8 +123,9 @@ function handleWorking(
   entry: WorkerEntry,
 ): boolean {
   // Don't launch a review over live code: only proceed when the hook says
-  // Claude is idle (or the worker has exited). working/loading/ready mean
-  // either the Stop hook hasn't fired or the worker is actively producing.
+  // Claude is idle. working/loading/ready mean the Stop hook hasn't fired
+  // or the worker is actively producing. "exited" is also skipped — if the
+  // worker died without the Stop hook, `garden health` surfaces it.
   if (entry.claudeStatus !== "idle") return false;
 
   // Already reviewing? (defensive — handleReviewing should be the dispatch)

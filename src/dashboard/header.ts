@@ -253,7 +253,7 @@ function pokePollerIfCommitsAhead(projectName: string, workerName: string): void
 // panes) or when the registry entry is missing (bootstrap-failure race).
 export function handlePaneDied(windowName: string | undefined): void {
   if (!windowName) return;
-  const match = windowName.match(/^_([^-]+)-worker-(.+)$/);
+  const match = windowName.match(/^_(.+)-worker-(.+)$/);
   if (!match) return;
   const [, project, worker] = match;
   const entry = findWorkerByName(project, worker);
