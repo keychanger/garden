@@ -105,15 +105,14 @@ Each project gets its own background poller (`_<project>-poller`) running in a h
 
 **State machine per worker:**
 ```
-working -> pushed -> reviewing -> merge-pending -> merged
-                        |              |
-                        v              v
-                    failing        reviewing (re-review on rebase conflict)
+working -> reviewing -> merge-pending -> merged
+               |              |
+               v              v
+           failing        reviewing (re-review on rebase conflict)
 ```
 
-1. **working**: Worker is active. Poller compares branch HEAD SHA against last-seen SHA. When new commits are detected, transitions to pushed immediately (even if Claude is still working). Multiple workers per project can transition independently.
-2. **pushed**: Commits detected, awaiting review launch. If Claude is actively working, review launch is deferred (the display layer shows "working" while Claude is active in a pushed state). Once Claude is idle, launches the review.
-3. **reviewing**: Poller launches a Claude reviewer (`claude -p --dangerously-skip-permissions`) asynchronously in a hidden tmux window (`_<project>-review-<worker>`). The reviewer rebases onto the base branch, resolves conflicts, runs optional checks, fixes check failures, and reviews code against project rules. The poller polls for review completion by checking if the review window still exists. On completion: if clean or fixed, force-pushes and transitions to merge-pending. If the reviewer cannot fix the issues, transitions to failing. If the review process fails (Claude unavailable, timeout, unparseable output), transitions to failing. Unreviewed code is never auto-merged.
+1. **working**: Worker is active. When the worker's Claude Code Stop hook fires with `claudeStatus="idle"` and the worktree has commits ahead of base, the poller transitions to reviewing. Multiple workers per project can transition independently.
+2. **reviewing**: Poller launches a Claude reviewer (`claude -p --dangerously-skip-permissions`) asynchronously in a hidden tmux window (`_<project>-review-<worker>`). The reviewer rebases onto the base branch, resolves conflicts, runs optional checks, fixes check failures, and reviews code against project rules. The poller polls for review completion by checking if the review window still exists. On completion: if clean or fixed, force-pushes and transitions to merge-pending. If the reviewer cannot fix the issues, transitions to failing. If the review process fails (Claude unavailable, timeout, unparseable output), transitions to failing. Unreviewed code is never auto-merged.
 4. **merge-pending**: Review passed, waiting to merge. A serial merge queue processes one merge at a time per project (ordered by timestamp). The merge sequence: rebase onto current base branch, force-push, then ff-merge. If the rebase has conflicts (because the base branch advanced while waiting), the poller launches a scoped re-review — a new reviewer session focused on rebase conflict resolution, provided with the previous review's output and the worker's task description for context. If the rebase is clean, the merge proceeds.
 5. **failing**: Unfixable review issues or review process failure. Poller watches for new commits via SHA tracking. After 30s debounce with no new pushes, state transitions back to working for retry. Each failure increments a `failCount` on the worker entry; after 3 consecutive failures, an alert is surfaced. The count resets on successful merge.
 6. **merged**: Code merged to the base branch. This is a sticky state — it persists even if Claude is actively responding to questions, since conversational activity alone doesn't indicate a new work cycle. Only transitions back to working when new commits appear on the branch, starting a new review cycle.
@@ -250,7 +249,6 @@ All read commands detect whether stdout is a TTY:
     bootstrap-<project>-<branch>.sh       # Transient worktree bootstrap script
     <project>-<worker>-review-prompt.txt  # Transient review prompt
     <project>-<worker>-review-result.txt  # Transient review output
-    claude-active-<project>-<worker>  # Hook-based active state marker (transient)
     status.rendered           # Pre-rendered status snapshot for instant display
   worktrees/
     <project>/
