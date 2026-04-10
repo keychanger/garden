@@ -5,7 +5,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { SESSIONS_DIR, loadConfig, tryGetProject } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists } from "./tmux.js";
+import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
 import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields } from "./registry.js";
 import { resolveBaseBranch } from "./git.js";
@@ -297,6 +297,58 @@ export function handlePaneDied(windowName: string | undefined): void {
     data: { project, windowName },
   });
   refreshDashboard();
+}
+
+// ---------------------------------------------------------------------------
+// tmux pane-title-changed handler
+// ---------------------------------------------------------------------------
+
+// tmux fires pane-title-changed whenever a pane's title is set via escape
+// sequences. Claude Code updates the title continuously as it works, so this
+// gives us live task summaries without polling. We receive the window name
+// (to identify the worker) and pane ID (to read the current title).
+export function handleTitleChanged(windowName: string | undefined, paneId: string | undefined): void {
+  if (!windowName || !paneId) return;
+
+  // Identify the worker — either from the hidden window name or, if the
+  // worker is swapped into the visible right slot, from the active state.
+  let project: string | undefined;
+  let worker: string | undefined;
+
+  const match = windowName.match(/^_(.+)-worker-(.+)$/);
+  if (match) {
+    [, project, worker] = match;
+  } else {
+    const state = readDashState();
+    if (state.activePaneId === paneId && state.activeWindowName) {
+      const activeMatch = state.activeWindowName.match(/^_(.+)-worker-(.+)$/);
+      if (activeMatch) {
+        [, project, worker] = activeMatch;
+      }
+    }
+  }
+
+  if (!project || !worker) return;
+
+  const title = getPaneTitle(paneId);
+  if (!title) return;
+
+  // Skip if unchanged
+  const entry = findWorkerByName(project, worker);
+  if (!entry || entry.task === title) return;
+
+  try {
+    updateWorkerFields(project, worker, { task: title });
+  } catch { return; }
+
+  // Update pane border if this worker is in the visible right slot
+  const state = readDashState();
+  if (state.activePaneId === paneId) {
+    setPaneVar(paneId, "garden_task", title);
+  }
+
+  writeQuickStatus();
+  refreshStatusPane();
 }
 
 // ---------------------------------------------------------------------------

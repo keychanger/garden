@@ -148,6 +148,14 @@ export function ensureDashboard(): void {
       `run-shell "${gardenRunner} dashboard _pane-died '#{window_name}' 2>/dev/null"`);
   } catch { /* hooks may not be supported on very old tmux */ }
 
+  // tmux pane-title-changed hook: Claude Code sets the pane title via escape
+  // sequences as it works. This hook captures those changes live so task
+  // summaries in the status pane and pane border stay current without polling.
+  try {
+    tmux("set-hook", "-t", DASHBOARD_SESSION, "pane-title-changed",
+      `run-shell -b "${gardenRunner} dashboard _title-changed '#{window_name}' '#{pane_id}' 2>/dev/null"`);
+  } catch { /* hooks may not be supported on very old tmux */ }
+
   const state: DashboardState = {
     activeProject: firstProject,
     statusPaneId: statusId,
