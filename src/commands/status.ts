@@ -3,13 +3,15 @@
 // Per STATUS.md, the registry is the single source of truth and there is one
 // render path. This file reads claudeStatus and prState from the registry,
 // combines them via resolveWorkerStatus(), and renders. It does not call
-// pgrep, does not read marker files, and does not parse pane-title text.
+// pgrep and does not read marker files. Before rendering, it refreshes
+// worker task summaries from live tmux pane titles so the registry stays
+// current between hook events.
 import { loadConfig, getFocusedProjectNames } from "../config.js";
-import { dashboardExists } from "../session.js";
+import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
-import { getWorkers } from "../dashboard/registry.js";
-import { listHiddenWorkerWindows } from "../dashboard/tmux.js";
+import { getWorkers, readRegistry, batchUpdateWorkerFields } from "../dashboard/registry.js";
+import { listHiddenWorkerWindows, windowExists, getFirstPaneId, getPaneTitle } from "../dashboard/tmux.js";
 
 // Display states from STATUS.md. These are the only values the renderer ever
 // emits. `loading`/`ready`/`working`/`idle`/`exited` come from claudeStatus
@@ -56,6 +58,36 @@ function iconFor(worker: WorkerInfo): string {
   return STATUS_ICONS[worker.status];
 }
 
+// Refresh all workers' task fields from their live tmux pane titles. Called
+// before rendering so the registry has current data even if no hook has fired
+// recently (e.g. workers in the middle of a long work session). This keeps
+// the registry as the source of truth — we update it, then render from it.
+function refreshWorkerTasks(state: DashboardState): void {
+  try {
+    const registry = readRegistry();
+    const updates: Array<{ project: string; workerName: string; fields: { task: string } }> = [];
+
+    for (const [project, entries] of Object.entries(registry.workers)) {
+      for (const entry of entries) {
+        const windowName = `_${project}-worker-${entry.name}`;
+        let paneId: string | null = null;
+        if (state.activeWindowName === windowName && state.activePaneId) {
+          paneId = state.activePaneId;
+        } else if (windowExists(windowName)) {
+          paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
+        }
+        if (!paneId) continue;
+        const title = getPaneTitle(paneId);
+        if (title && title !== entry.task) {
+          updates.push({ project, workerName: entry.name, fields: { task: title } });
+        }
+      }
+    }
+
+    if (updates.length > 0) batchUpdateWorkerFields(updates);
+  } catch { /* best effort */ }
+}
+
 export async function status(_args: string[]): Promise<void> {
   const config = loadConfig();
   const names = getFocusedProjectNames(config);
@@ -67,6 +99,8 @@ export async function status(_args: string[]): Promise<void> {
 
   const dashState = readDashState();
   const hasDashboard = dashboardExists();
+
+  if (hasDashboard) refreshWorkerTasks(dashState);
 
   const statuses: ProjectStatusInfo[] = names.map((name, i) => {
     return {
