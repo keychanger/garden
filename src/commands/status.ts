@@ -118,7 +118,7 @@ export async function status(_args: string[]): Promise<void> {
 
   const allWorkers = statuses.flatMap(p => p.workers);
   const nameWidth = Math.max(10, ...allWorkers.map(w => w.name.length));
-  const statusWidth = 12; // fixed: widest is "failing (xN)"
+  const statusWidth = STATUS_WIDTH;
   const cols = process.stdout.columns || 120;
   const activityMax = Math.max(20, cols - (8 + nameWidth + 2 + statusWidth + 2));
 
@@ -151,9 +151,14 @@ function truncateActivity(text: string, maxLen: number): string {
   return text.slice(0, maxLen - 1) + "\u2026";
 }
 
+const STATUS_WIDTH = 10; // fits "failing xN"; "reviewing" (9) gets 1 char pad
+
 function formatStatus(worker: WorkerInfo): string {
   const base = worker.status;
-  if (base === "failing" && worker.failCount > 1) return `failing (x${worker.failCount})`;
+  if (base === "failing" && worker.failCount > 1) {
+    const s = `failing x${worker.failCount}`;
+    return s.length > STATUS_WIDTH ? "failing" : s;
+  }
   if (base === "merge-pending") return "merging";
   return base;
 }
@@ -251,7 +256,7 @@ export function renderQuickStatus(state: DashboardState, windowNames?: string[])
   });
 
   const nameWidth = Math.max(10, ...allWorkers.map(w => w.name.length));
-  const statusWidth = 12; // fixed: widest is "failing (xN)"
+  const statusWidth = STATUS_WIDTH;
 
   lines.push("");
   for (let pi = 0; pi < names.length; pi++) {

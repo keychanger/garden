@@ -214,7 +214,7 @@ describe("lifecycle state display (prState takes priority)", () => {
     const origLog = console.log;
     console.log = (msg: string) => lines.push(msg);
     try { await status([]); } finally { console.log = origLog; }
-    expect(lines.some(l => l.includes("failing (x3)"))).toBe(true);
+    expect(lines.some(l => l.includes("failing x3"))).toBe(true);
   });
 
   it("shows merged from prState", async () => {
