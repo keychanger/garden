@@ -1,7 +1,7 @@
 // Poller: watches worker branches and drives the review/merge lifecycle.
 // Each project gets its own poller running in a hidden tmux window.
 // Reviews run asynchronously in separate tmux windows. Merges are serialized.
-import { execSync, execFileSync } from "node:child_process";
+import { execSync, execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DASHBOARD_SESSION } from "../session.js";
@@ -374,6 +374,10 @@ function handleFailing(
       lastSeenSha: headSha,
       lastShaChangeAt: new Date().toISOString(),
     });
+    // Schedule a one-shot wake-up so the debounce check fires after DEBOUNCE_MS.
+    // Without this, the event-driven poller sleeps on the FIFO indefinitely —
+    // nothing else pokes it, so the failing → working transition never fires.
+    scheduleDelayedPoke(projectName, DEBOUNCE_MS);
     return false;
   }
 
@@ -1090,6 +1094,16 @@ export function triggerProjectPoll(projectName: string): void {
   } catch {
     // FIFO not ready or poller not running
   }
+}
+
+function scheduleDelayedPoke(projectName: string, delayMs: number): void {
+  const fifo = signalFifoPath(projectName);
+  const delaySec = Math.ceil(delayMs / 1000);
+  const escapedFifo = fifo.replace(/'/g, "'\\''");
+  spawn("bash", ["-c", `sleep ${delaySec} && echo > '${escapedFifo}' 2>/dev/null`], {
+    detached: true,
+    stdio: "ignore",
+  }).unref();
 }
 
 function triggerAllPollers(): void {

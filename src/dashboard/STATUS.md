@@ -167,7 +167,12 @@ Drives:
 The 30-second `failing → working` debounce is the *only* timer in the
 system. It is a deliberate hold-off — preventing review storms on a
 worker that's actively failing in a tight loop — not a discovery
-mechanism. The timer starts on a push event, not on a tick.
+mechanism. The timer starts on a push event, not on a tick. When the
+poller detects new commits in a failing worker, it schedules a one-shot
+delayed FIFO poke (via a detached `sleep N && echo > fifo` process) so
+the debounce check fires after 30 seconds. This is not a recurring
+poll — it is a single scheduled event tied to a specific state
+transition.
 
 ### Why this matters
 
