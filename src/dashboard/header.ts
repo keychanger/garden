@@ -167,10 +167,13 @@ export function handleClaudeHook(event: string): void {
     return;
   }
 
-  // Three-way branch on the Claude Code event:
+  // Branch on the Claude Code event:
   //   sessionstart → claudeStatus = "ready"   (fresh worker, Claude loaded)
   //   prompt       → claudeStatus = "working" (and clear stale `merged` prState)
   //   stop         → claudeStatus = "idle"    (and poke poller if commits exist)
+  //   notification → claudeStatus = "idle"    (Claude needs user attention mid-turn)
+  //   pretooluse   → claudeStatus = "idle"    (user-input tool about to execute)
+  //   posttooluse  → claudeStatus = "working" (user responded, Claude continues)
   const fields: Partial<Pick<import("./registry.js").WorkerEntry,
     "claudeStatus" | "lastHookAt" | "prState" | "task">> = {
     lastHookAt: Date.now(),
@@ -188,8 +191,29 @@ export function handleClaudeHook(event: string): void {
     }
   } else if (event === "stop") {
     fields.claudeStatus = "idle";
+  } else if (event === "notification" || event === "pretooluse") {
+    // Mid-turn idle: Claude needs user input (plan approval, question, etc.).
+    // Only transition if currently working — avoid overwriting "idle" from a
+    // Stop that already fired, or "ready" from a fresh worker.
+    const existing = findWorkerByName(workerInfo.project, workerInfo.worker);
+    if (existing?.claudeStatus === "working") {
+      fields.claudeStatus = "idle";
+    } else {
+      // Not working — log for diagnostics but don't change status.
+      log.info("hook", "mid-turn idle hook skipped (not working)", {
+        worker: workerInfo.worker,
+        data: { project: workerInfo.project, event, claudeStatus: existing?.claudeStatus },
+      });
+    }
+  } else if (event === "posttooluse") {
+    // User responded to a mid-turn prompt (plan approved, question answered).
+    // Flip back to working so the dashboard shows Claude is processing again.
+    const existing = findWorkerByName(workerInfo.project, workerInfo.worker);
+    if (existing?.claudeStatus === "idle") {
+      fields.claudeStatus = "working";
+    }
   } else {
-    // Unknown event — log and bail. The spec only handles sessionstart/prompt/stop.
+    // Unknown event — log and bail.
     log.warn("hook", "unknown claude hook event", {
       worker: workerInfo.worker,
       data: { project: workerInfo.project, event },

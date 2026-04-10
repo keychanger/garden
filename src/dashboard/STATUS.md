@@ -15,7 +15,7 @@ These are the only states the user sees in the status pane.
 | loading       | `H`  | Worker pane started, bootstrap running, Claude not yet launched. |
 | ready         | `*`  | Fresh worker. Claude loaded, waiting for first input. |
 | working       | `@`  | Claude is generating a response to a submitted prompt. See "What 'working' means" below. |
-| idle          | `#`  | Claude is at the prompt. Ball is in the user's court — waiting for input, permission, or has an answer to read. Not in the review cycle. |
+| idle          | `#`  | Ball is in the user's court — Claude is at the prompt, waiting for plan approval, answering a question, or has a response to read. Not in the review cycle. |
 | reviewing     | `%`  | Automated reviewer is checking the worker's code. |
 | merge-pending | `&`  | Review passed. Queued for merge.                 |
 | merged        | `+`  | Code landed on the base branch.                  |
@@ -44,9 +44,11 @@ Things that are *not* working:
 - The user reading Claude's last response
 - Claude sitting at the prompt with nothing to do
 - The session being open in a pane the user isn't looking at
+- Claude waiting for the user to approve a plan or answer a question (mid-turn idle)
 
-If a worker shows `working` while you're still typing into it, that is a
-bug — the previous `Stop` hook didn't fire or didn't reach the registry.
+If a worker shows `working` while Claude is waiting for user input, that
+is a bug — a mid-turn idle hook (Notification/PreToolUse) didn't fire or
+didn't reach the registry.
 
 ## State transitions
 
@@ -57,9 +59,11 @@ stateDiagram-v2
     ready --> working : UserPromptSubmit
 
     working --> idle : Stop / no new commits
+    working --> idle : Notification or PreToolUse (mid-turn)
     working --> reviewing : Stop / new commits
 
     idle --> working : UserPromptSubmit
+    idle --> working : PostToolUse (mid-turn resume)
 
     reviewing --> merge_pending : reviewer Stop (passes)
     reviewing --> failing : reviewer Stop (fails)
@@ -93,8 +97,10 @@ The two exits from `working` are the core branching point:
 | loading       | ready         | Worker `SessionStart` hook                           |
 | ready         | working       | Worker `UserPromptSubmit` (first)                    |
 | working       | idle          | Worker `Stop`; no new commits ahead of base          |
+| working       | idle          | Worker `Notification` or `PreToolUse` (mid-turn)     |
 | working       | reviewing     | Worker `Stop`; new commits ahead of base             |
 | idle          | working       | Worker `UserPromptSubmit`                            |
+| idle          | working       | Worker `PostToolUse` (mid-turn resume)               |
 | reviewing     | merge-pending | Reviewer `Stop` with verdict CLEAN or FIXED          |
 | reviewing     | failing       | Reviewer `Stop` with verdict FAILED                  |
 | reviewing     | working       | Worker push event (commits during review, aborted)   |
@@ -119,7 +125,8 @@ goes back to sleep.
 
 Four sources cover the entire state machine.
 
-**1. Claude Code hooks** — `SessionStart`, `UserPromptSubmit`, `Stop`.
+**1. Claude Code hooks** — `SessionStart`, `UserPromptSubmit`, `Stop`,
+`Notification`, `PreToolUse`, `PostToolUse`.
 
 These bracket the lifecycle of every Claude conversation and fire from
 *every* Claude process: workers, reviewers, helpers. The hooks call
@@ -129,6 +136,8 @@ signals the status pane. They drive:
 - `loading → ready` (worker's `SessionStart`)
 - `ready → working`, `idle → working`, `merged → working` (worker's `UserPromptSubmit`)
 - `working → idle`, `working → reviewing` (worker's `Stop`)
+- `working → idle` (worker's `Notification` or `PreToolUse` for user-input tools)
+- `idle → working` (worker's `PostToolUse` for user-input tools)
 - `reviewing → merge-pending`, `reviewing → failing` (reviewer's `Stop`)
 
 The worker's `Stop` hook also pokes the project's poller FIFO if it sees
@@ -246,6 +255,17 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   This is what makes invariant 2 enforceable: only Stop sets the flag,
   only the poller's working→reviewing transition reads it, and
   `launchReview` clears it.
+- `Notification` → `claudeStatus = "idle"` (only if currently `working`).
+  Fires when Claude needs user attention mid-turn. Workers run with
+  `--dangerously-skip-permissions`, so `permission_prompt` notifications
+  do not apply; the relevant cases are plan approval, questions, and
+  elicitation dialogs.
+- `PreToolUse` (matched to `AskUserQuestion`, `EnterPlanMode`) →
+  `claudeStatus = "idle"` (only if currently `working`). Fires when
+  Claude is about to execute a tool that requires user input.
+- `PostToolUse` (matched to `AskUserQuestion`, `EnterPlanMode`) →
+  `claudeStatus = "working"` (only if currently `idle`). Fires when
+  the user has responded and Claude resumes processing.
 
 **The poller** writes `prState` in response to the events documented in
 "How transitions are detected." The poller is the only writer of
@@ -299,6 +319,44 @@ sequenceDiagram
     StatusPane->>User: shows "working"
 
     Note over Claude: processing...
+
+    Claude->>Hook: Stop fires
+    Hook->>Registry: claudeStatus = "idle"
+    Hook->>StatusPane: SIGUSR1
+    StatusPane->>User: shows "idle"
+```
+
+#### Mid-turn idle (plan mode, questions)
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Claude
+    participant Hook
+    participant Registry
+    participant StatusPane
+
+    User->>Claude: sends message
+    Claude->>Hook: UserPromptSubmit fires
+    Hook->>Registry: claudeStatus = "working"
+    Hook->>StatusPane: SIGUSR1
+    StatusPane->>User: shows "working"
+
+    Note over Claude: processing...
+
+    Claude->>Hook: Notification or PreToolUse fires
+    Hook->>Registry: claudeStatus = "idle" (was "working")
+    Hook->>StatusPane: SIGUSR1
+    StatusPane->>User: shows "idle"
+
+    Note over User: approves plan / answers question
+
+    Claude->>Hook: PostToolUse fires
+    Hook->>Registry: claudeStatus = "working" (was "idle")
+    Hook->>StatusPane: SIGUSR1
+    StatusPane->>User: shows "working"
+
+    Note over Claude: continues processing...
 
     Claude->>Hook: Stop fires
     Hook->>Registry: claudeStatus = "idle"
