@@ -317,6 +317,12 @@ describe("poll — reviewing state (async)", () => {
         reviewWindowName: undefined,
       }),
     );
+    // Must poke the poller so it processes handleMergePending next tick
+    expect(spawn).toHaveBeenCalledWith(
+      "bash",
+      ["-c", expect.stringContaining("sleep 0")],
+      expect.objectContaining({ detached: true, stdio: "ignore" }),
+    );
   });
 
   it("transitions to merge-pending when review returns FIXED", () => {
@@ -340,6 +346,11 @@ describe("poll — reviewing state (async)", () => {
     expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "merge-pending" }),
+    );
+    expect(spawn).toHaveBeenCalledWith(
+      "bash",
+      ["-c", expect.stringContaining("sleep 0")],
+      expect.objectContaining({ detached: true, stdio: "ignore" }),
     );
   });
 
