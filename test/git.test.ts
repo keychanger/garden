@@ -26,6 +26,7 @@ import {
   isWorktreeDirty,
   deleteBranch,
   getBranchHeadSha,
+  getRemoteTrackingSha,
   getDiffAgainstBase,
   mergeToBase,
   deleteRemoteBranch,
@@ -195,6 +196,25 @@ describe("getBranchHeadSha", () => {
       throw new Error("not a git repo");
     });
     expect(getBranchHeadSha("/tmp/wt")).toBeNull();
+  });
+});
+
+describe("getRemoteTrackingSha", () => {
+  it("returns remote tracking ref sha", () => {
+    mockExec.mockReturnValue("def456abc");
+    expect(getRemoteTrackingSha("/tmp/wt", "swift-oak")).toBe("def456abc");
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["rev-parse", "origin/swift-oak"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
+  it("returns null on error", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("no such ref");
+    });
+    expect(getRemoteTrackingSha("/tmp/wt", "swift-oak")).toBeNull();
   });
 });
 
