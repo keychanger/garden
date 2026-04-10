@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { execSync, execFileSync } from "node:child_process";
+import { execSync, execFileSync, spawn } from "node:child_process";
 
 vi.mock("node:child_process", () => ({
   execSync: vi.fn(() => ""),
   execFileSync: vi.fn(() => ""),
   spawnSync: vi.fn(() => ({ status: 0, stdout: "Looks good.\nCLEAN", stderr: "" })),
+  spawn: vi.fn(() => ({ unref: vi.fn() })),
 }));
 
 vi.mock("node:fs", () => ({
@@ -790,6 +791,26 @@ describe("poll — failing state", () => {
       lastSeenSha: "new-sha",
       lastShaChangeAt: expect.any(String),
     });
+  });
+
+  it("schedules a delayed FIFO poke when SHA changes", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "failing",
+        failingSha: "old-sha",
+        lastSeenSha: "old-sha",
+        lastShaChangeAt: new Date(Date.now() - 60_000).toISOString(),
+      }),
+    ]);
+    vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
+
+    poll("myproject");
+
+    expect(spawn).toHaveBeenCalledWith(
+      "bash",
+      ["-c", expect.stringContaining("sleep 30")],
+      expect.objectContaining({ detached: true, stdio: "ignore" }),
+    );
   });
 
   it("stays in failing after debounce when failingSha matches (requires new commits)", () => {
