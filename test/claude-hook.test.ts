@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 
 // Registry mock with real read-modify-write behavior
 const entries: Record<string, import("../src/dashboard/registry.js").WorkerEntry[]> = {};
@@ -102,6 +102,7 @@ import { updateWorkerFields } from "../src/dashboard/registry.js";
 import { log } from "../src/dashboard/log.js";
 
 const originalCwd = process.cwd;
+const originalGardenReviewer = process.env.GARDEN_REVIEWER;
 
 function setCwd(project: string, worker: string) {
   const home = process.env.HOME ?? "";
@@ -131,7 +132,14 @@ function seedWorker(
 beforeEach(() => {
   vi.clearAllMocks();
   process.cwd = originalCwd;
+  delete process.env.GARDEN_REVIEWER;
   for (const key of Object.keys(entries)) delete entries[key];
+});
+
+afterAll(() => {
+  if (originalGardenReviewer !== undefined) {
+    process.env.GARDEN_REVIEWER = originalGardenReviewer;
+  }
 });
 
 describe("handleClaudeHook — mid-turn idle", () => {
