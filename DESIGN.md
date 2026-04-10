@@ -190,7 +190,7 @@ Each worker has two independent status axes:
 **Lifecycle status** — where the worker's code is in the review pipeline, written by the poller:
 - ◎ **reviewing** — automated reviewer is checking the worker's commits
 - ◷ **merge-pending** — review passed, in the merge queue
-- ✖ **failing** — review failed (with failure count if repeated)
+- ✖ **failing** — review failed, waiting for worker to fix
 - ✓ **merged** — code merged to base branch
 
 The display combines both axes: lifecycle state takes priority when present, otherwise the process state is shown. A worker that is "reviewing" shows the reviewing bullseye regardless of what Claude is doing. Only workers in the "working" display state get the animated braille spinner.
