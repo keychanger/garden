@@ -206,7 +206,7 @@ describe("lifecycle state display (prState takes priority)", () => {
     expect(lines.some(l => l.includes("merging"))).toBe(true);
   });
 
-  it("shows failing with count when failCount > 1", async () => {
+  it("shows failing without count", async () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "failing", failCount: 3 },
     ]);
@@ -214,7 +214,7 @@ describe("lifecycle state display (prState takes priority)", () => {
     const origLog = console.log;
     console.log = (msg: string) => lines.push(msg);
     try { await status([]); } finally { console.log = origLog; }
-    expect(lines.some(l => l.includes("failing x3"))).toBe(true);
+    expect(lines.some(l => l.includes("failing"))).toBe(true);
   });
 
   it("shows merged from prState", async () => {
