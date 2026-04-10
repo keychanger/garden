@@ -14,6 +14,7 @@ import { setupStatusBar, buildStatusCommand, updateHeaderVar } from "./header.js
 import {
   tmux, tmuxOutput, tmuxSplit, setPaneTitle, setPaneLabel, setPaneVar,
   getFirstPaneId, shellEscape,
+  getPaneSize, resizeWindow, listAllWindowNames,
 } from "./tmux.js";
 import { readRegistry, updateWorkerFields } from "./registry.js";
 import { log, truncateLog } from "./log.js";
@@ -71,6 +72,11 @@ export function ensureDashboard(): void {
     if (healed.statusPaneId) {
       try { tmux("resize-pane", "-t", healed.statusPaneId, "-y", String(statusHeight)); } catch { /* pane may be gone */ }
     }
+
+    // Pre-size all hidden windows to match their target visible slots so
+    // that swap-pane never triggers a SIGWINCH reflow. Without this, hidden
+    // windows sit at full session width and the first swap causes jitter.
+    presizeHiddenWindows(healed);
 
     return;
   }
@@ -165,6 +171,7 @@ export function ensureDashboard(): void {
   // Resume workers from previous session
   const registry = readRegistry();
   let firstResumedWindow: string | null = null;
+  const rightSize = getPaneSize(rightPaneId);
 
   for (const [projectName, entries] of Object.entries(registry.workers)) {
     const projectConfig = tryGetProject(projectName);
@@ -191,6 +198,9 @@ export function ensureDashboard(): void {
 
       tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", workerCwd,
         "sh", "-c", resumeCmd);
+      // Pre-size so the resumed worker renders at the right pane size from
+      // the start, avoiding SIGWINCH jitter on first swap.
+      if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
 
       const workerPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindowName}`);
       if (workerPaneId) {
@@ -481,6 +491,38 @@ export function resolveGardenRunner(): string {
   }
   // Use absolute path for node so hooks work in minimal shell environments
   return `${process.execPath} ${gardenBin}`;
+}
+
+/**
+ * Resize all hidden windows to match the visible pane they'll swap into.
+ * Worker/shell windows match the right pane; garden/root/logs match the
+ * garden pane. Called on attach so hidden windows are already sized
+ * correctly before the first swap — avoiding the SIGWINCH race where
+ * resize-window fires right before swap-pane and the TUI hasn't finished
+ * redrawing yet.
+ */
+export function presizeHiddenWindows(state: DashboardState): void {
+  const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
+  const gardenSize = state.gardenShellPaneId ? getPaneSize(state.gardenShellPaneId) : null;
+
+  if (!rightSize && !gardenSize) return;
+
+  const windows = listAllWindowNames();
+  for (const name of windows) {
+    if (name === "main") continue;
+
+    // Garden pane targets
+    if (name === "_garden-garden" || name === "_garden-root" || name === "_garden-logs") {
+      if (gardenSize) resizeWindow(name, gardenSize.width, gardenSize.height);
+      continue;
+    }
+
+    // Skip pollers and review windows — never swapped into a visible slot
+    if (name.endsWith("-poller") || name.includes("-review-")) continue;
+
+    // Worker and shell windows target the right pane
+    if (rightSize) resizeWindow(name, rightSize.width, rightSize.height);
+  }
 }
 
 export function cleanupContextFiles(): void {

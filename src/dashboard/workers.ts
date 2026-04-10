@@ -54,6 +54,10 @@ export function newWorker(): void {
 
   const workerPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
     "sh", "-c", `sh ${shellEscape(scriptFile)}`);
+  // Pre-size so the bootstrap script renders at the right pane size from
+  // the start, avoiding SIGWINCH jitter when restoreFromHidden swaps it in.
+  const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
+  if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
   if (workerPaneId) setPaneLabel(workerPaneId, workerName);
   restoreFromHidden(workerWindowName, state);
   // Re-apply label after swap (swap-pane may not preserve pane options)
