@@ -97,6 +97,7 @@ vi.mock("../src/dashboard/alerts.js", () => ({
 
 vi.mock("../src/dashboard/git.js", () => ({
   getBranchHeadSha: vi.fn(() => "abc123"),
+  getRemoteTrackingSha: vi.fn(() => "abc123"),
   getDiffAgainstBase: vi.fn(() => "diff --git a/file.ts b/file.ts"),
   forcePushBranch: vi.fn(),
   mergeToBase: vi.fn(),
@@ -120,7 +121,7 @@ import { poll, postPush } from "../src/dashboard/poller.js";
 import { tryGetProject } from "../src/config.js";
 import { updateWorkerFields, findWorkerByName } from "../src/dashboard/registry.js";
 import {
-  getBranchHeadSha, deleteRemoteBranch,
+  getBranchHeadSha, getRemoteTrackingSha, deleteRemoteBranch,
   forcePushBranch, mergeToBase, rebaseBranch, abortRebase,
   getChangedFiles, getCommitSummary, getNewCommitSummary, getDiffAgainstBase,
 } from "../src/dashboard/git.js";
@@ -157,6 +158,7 @@ beforeEach(() => {
   vi.mocked(getNewCommitSummary).mockReturnValue("def456 address review feedback");
   vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject", checks: undefined } as ReturnType<typeof tryGetProject>);
   vi.mocked(getBranchHeadSha).mockReturnValue("abc123");
+  vi.mocked(getRemoteTrackingSha).mockReturnValue("abc123");
   vi.mocked(rebaseBranch).mockReturnValue("ok");
   vi.mocked(fs.existsSync).mockReturnValue(false);
 });
@@ -426,7 +428,7 @@ describe("poll — reviewing state (async)", () => {
       makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",
         lastSeenSha: "old-sha" }),
     ]);
-    vi.mocked(getBranchHeadSha).mockReturnValue("newer-sha");
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("newer-sha");
 
     poll("myproject");
 

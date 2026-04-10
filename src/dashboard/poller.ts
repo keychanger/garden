@@ -15,7 +15,7 @@ import {
   type WorkerEntry,
 } from "./registry.js";
 import {
-  getBranchHeadSha,
+  getBranchHeadSha, getRemoteTrackingSha,
   rebaseBranch, abortRebase, cleanWorktree,
   forcePushBranch, mergeToBase, deleteRemoteBranch,
   getChangedFiles, getDiffAgainstBase,
@@ -153,13 +153,15 @@ function handleReviewing(
   entry: WorkerEntry,
 ): boolean {
   // Mid-review push detection: a worker push fires the pre-push hook, which
-  // pokes the FIFO. We compare the current head SHA to the SHA captured when
-  // the review launched. If they differ, the worker pushed new commits during
-  // review — abort and reset to working. The next Stop hook will re-trigger
-  // a fresh review on the new code.
+  // pokes the FIFO. We compare the remote tracking ref (origin/<branch>) to
+  // the SHA captured when the review launched. The local HEAD changes when the
+  // reviewer rebases, but origin/<branch> only changes when someone pushes —
+  // so this correctly detects worker pushes without false positives from the
+  // reviewer's rebase.
   const wtPath = entry.worktreePath ?? projectPath;
-  const headSha = getBranchHeadSha(wtPath);
-  if (headSha && entry.lastSeenSha && headSha !== entry.lastSeenSha) {
+  const branchName = entry.branchName ?? entry.name;
+  const remoteSha = getRemoteTrackingSha(wtPath, branchName);
+  if (remoteSha && entry.lastSeenSha && remoteSha !== entry.lastSeenSha) {
     log.info("poller", "new commits during review, resetting to working", {
       worker: entry.name,
     });
@@ -493,9 +495,12 @@ function launchReview(
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", revWindow,
     "-c", wtPath, "bash", "-c", cmd);
 
-  // Capture the head SHA at launch time. handleReviewing compares the live
-  // SHA against this baseline to detect mid-review pushes.
-  const launchSha = getBranchHeadSha(wtPath) ?? entry.lastSeenSha;
+  // Capture the remote tracking SHA at launch time. handleReviewing compares
+  // origin/<branch> against this baseline to detect mid-review pushes. We use
+  // the remote ref (not local HEAD) because the reviewer rebases locally,
+  // which changes HEAD but not origin/<branch>.
+  const branchName = entry.branchName ?? entry.name;
+  const launchSha = getRemoteTrackingSha(wtPath, branchName) ?? getBranchHeadSha(wtPath) ?? entry.lastSeenSha;
   updateWorkerFields(projectName, entry.name, {
     prState: "reviewing",
     reviewWindowName: revWindow,

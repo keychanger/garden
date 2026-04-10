@@ -102,6 +102,18 @@ export function getBranchHeadSha(wtPath: string): string | null {
   }
 }
 
+// Read the remote tracking ref for a branch. Unlike getBranchHeadSha (which
+// reads the local HEAD), this reflects the last-pushed state. It is NOT
+// affected by a local rebase, so the poller can use it to detect genuine
+// worker pushes without false positives from the reviewer rebasing.
+export function getRemoteTrackingSha(wtPath: string, branchName: string): string | null {
+  try {
+    return git(wtPath, "rev-parse", `origin/${branchName}`);
+  } catch {
+    return null;
+  }
+}
+
 export function getDiffAgainstBase(wtPath: string, baseBranch: string): string {
   return git(wtPath, "diff", `origin/${baseBranch}...HEAD`);
 }
