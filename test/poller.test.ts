@@ -440,6 +440,12 @@ describe("poll — reviewing state (async)", () => {
     const fields = call![2] as Record<string, unknown>;
     expect(fields.reviewWindowName).toBeUndefined();
     expect(mergeToBase).not.toHaveBeenCalled();
+    // Must schedule a re-poke so handleWorking picks up pendingReviewAt
+    expect(spawn).toHaveBeenCalledWith(
+      "bash",
+      ["-c", expect.stringContaining("sleep 0")],
+      expect.objectContaining({ detached: true, stdio: "ignore" }),
+    );
   });
 });
 

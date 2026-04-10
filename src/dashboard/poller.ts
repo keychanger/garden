@@ -172,6 +172,11 @@ function handleReviewing(
       reviewWindowName: undefined,
     });
     refreshDashboard();
+    // The FIFO poke that woke us dispatched to handleReviewing (this function),
+    // not handleWorking. If the stop hook already set pendingReviewAt, the
+    // worker is ready for a new review but no further poke is coming. Schedule
+    // an immediate re-poke so the next tick picks it up via handleWorking.
+    scheduleDelayedPoke(projectName, 0);
     return true;
   }
 
