@@ -118,7 +118,7 @@ export async function status(_args: string[]): Promise<void> {
 
   const allWorkers = statuses.flatMap(p => p.workers);
   const nameWidth = Math.max(10, ...allWorkers.map(w => w.name.length));
-  const statusWidth = 9; // fixed: widest is "reviewing"
+  const statusWidth = 12; // fixed: widest is "failing (xN)"
   const cols = process.stdout.columns || 120;
   const activityMax = Math.max(20, cols - (8 + nameWidth + 2 + statusWidth + 2));
 
@@ -251,7 +251,7 @@ export function renderQuickStatus(state: DashboardState, windowNames?: string[])
   });
 
   const nameWidth = Math.max(10, ...allWorkers.map(w => w.name.length));
-  const statusWidth = 9; // fixed: widest is "reviewing"
+  const statusWidth = 12; // fixed: widest is "failing (xN)"
 
   lines.push("");
   for (let pi = 0; pi < names.length; pi++) {
