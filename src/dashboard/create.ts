@@ -111,6 +111,7 @@ export function ensureDashboard(): void {
     "sh", "-c", statusCmd);
 
   try { tmux("resize-pane", "-t", statusId, "-y", String(statusHeight)); } catch { /* ignore */ }
+  try { tmux("set-option", "-p", "-t", statusId, "history-limit", "0"); } catch { /* ignore */ }
   try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
 
   setPaneTitle(statusId, "status");
