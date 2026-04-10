@@ -7,7 +7,7 @@ import { SESSIONS_DIR, loadConfig, tryGetProject } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
-import { findWorkerByName, updateWorkerFields } from "./registry.js";
+import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields } from "./registry.js";
 import { resolveBaseBranch } from "./git.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { GARDEN_VERSION } from "../version.js";
@@ -372,8 +372,36 @@ export function refreshStatusPane(opts?: RefreshOptions): void {
 
 export function refreshDashboard(opts?: RefreshOptions): void {
   updateHeaderVar(opts);
+  refreshWorkerTasks();
   writeQuickStatus(opts);
   refreshStatusPane(opts);
+}
+
+// Refresh all workers' task fields from their live tmux pane titles. This
+// catches tasks set by Claude during work — the hook handler only captures
+// the title at hook time, but Claude updates the pane title continuously as
+// it works. By refreshing on every dashboard update (which piggybacks on
+// existing hook events), we keep all workers' tasks current without polling.
+function refreshWorkerTasks(): void {
+  try {
+    const registry = readRegistry();
+    const updates: Array<{ project: string; workerName: string; fields: { task: string } }> = [];
+
+    for (const [project, entries] of Object.entries(registry.workers)) {
+      for (const entry of entries) {
+        const paneId = findWorkerPaneId(project, entry.name);
+        if (!paneId) continue;
+        const title = getPaneTitle(paneId);
+        if (title && title !== entry.task) {
+          updates.push({ project, workerName: entry.name, fields: { task: title } });
+        }
+      }
+    }
+
+    if (updates.length > 0) {
+      batchUpdateWorkerFields(updates);
+    }
+  } catch { /* best effort — don't block dashboard refresh */ }
 }
 
 function writeQuickStatus(opts?: RefreshOptions): void {
