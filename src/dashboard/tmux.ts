@@ -1,5 +1,6 @@
 // Low-level tmux helpers used throughout the dashboard.
 import { execFileSync } from "node:child_process";
+import os from "node:os";
 import { DASHBOARD_SESSION } from "../session.js";
 
 export function tmux(...args: string[]): void {
@@ -135,13 +136,16 @@ export function getPaneLabel(paneId: string): string | null {
 // sequences (OSC 0/2) as it works, so it doubles as a "what is this worker
 // currently doing" summary. We strip the leading non-alphanumeric noise
 // (Claude prefixes with characters like "✱ ") and reject the default
-// "Claude Code" placeholder so empty workers don't show garbage.
+// "Claude Code" placeholder and system hostname (tmux defaults new panes
+// to the hostname, which would overwrite the persisted task on resume).
 export function getPaneTitle(paneId: string): string | null {
   try {
     const raw = tmuxOutput("display-message", "-t", paneId, "-p", "#{pane_title}");
     if (!raw) return null;
     const cleaned = raw.replace(/^[^a-zA-Z0-9]+/, "").trim();
-    return (cleaned && cleaned !== "Claude Code") ? cleaned : null;
+    if (!cleaned || cleaned === "Claude Code") return null;
+    if (cleaned === os.hostname()) return null;
+    return cleaned;
   } catch {
     return null;
   }

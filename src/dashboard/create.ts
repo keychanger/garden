@@ -194,7 +194,10 @@ export function ensureDashboard(): void {
       const workerPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindowName}`);
       if (workerPaneId) {
         setPaneLabel(workerPaneId, entry.name);
-        if (entry.task) setPaneVar(workerPaneId, "garden_task", entry.task);
+        if (entry.task) {
+          setPaneVar(workerPaneId, "garden_task", entry.task);
+          setPaneTitle(workerPaneId, entry.task);
+        }
       }
 
       if (projectName === state.activeProject && !firstResumedWindow) {
