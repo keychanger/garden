@@ -251,6 +251,9 @@ function handleReviewing(
       reviewWindowName: undefined,
     });
     refreshDashboard();
+    // The poller is event-driven and will block on the FIFO after this tick.
+    // Poke it so the next tick processes handleMergePending.
+    scheduleDelayedPoke(projectName, 0);
   } else {
     // "failed" — reviewer couldn't fix the issues
     log.error("poller", "reviewer could not fix issues", {
