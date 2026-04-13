@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 
 // Registry mock with real read-modify-write behavior
 const entries: Record<string, import("../src/dashboard/registry.js").WorkerEntry[]> = {};
@@ -100,6 +100,8 @@ vi.mock("../src/commands/status.js", () => ({
 import { handleClaudeHook } from "../src/dashboard/header.js";
 import { updateWorkerFields } from "../src/dashboard/registry.js";
 import { log } from "../src/dashboard/log.js";
+import { tmux } from "../src/dashboard/tmux.js";
+import { readDashState } from "../src/dashboard/state.js";
 
 const originalCwd = process.cwd;
 const originalGardenReviewer = process.env.GARDEN_REVIEWER;
@@ -280,5 +282,47 @@ describe("handleClaudeHook — core events", () => {
       expect.anything(),
     );
     expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
+});
+
+describe("writeQuickStatus — status pane resize", () => {
+  const stateWithPane = {
+    activeProject: "garden",
+    statusPaneId: "%0",
+    gardenShellPaneId: null,
+    activePaneId: null,
+    activePaneType: null as null,
+    activeWindowName: null,
+  };
+  const stateWithoutPane = {
+    ...stateWithPane,
+    statusPaneId: null,
+  };
+
+  afterEach(() => {
+    vi.mocked(readDashState).mockReturnValue(stateWithoutPane);
+  });
+
+  it("resizes status pane to content line count when statusPaneId is set", () => {
+    vi.mocked(readDashState).mockReturnValue(stateWithPane);
+    seedWorker("garden", "bold-ash", { claudeStatus: "idle" });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("stop");
+
+    // renderQuickStatus is mocked to return ""; "".split("\n").length === 1,
+    // so Math.max(4, 1) === 4 → expect height "4"
+    expect(vi.mocked(tmux)).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "4");
+  });
+
+  it("skips resize when statusPaneId is null", () => {
+    seedWorker("garden", "bold-ash", { claudeStatus: "idle" });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("stop");
+
+    expect(vi.mocked(tmux)).not.toHaveBeenCalledWith(
+      "resize-pane", expect.any(String), expect.any(String), expect.any(String), expect.any(String),
+    );
   });
 });
