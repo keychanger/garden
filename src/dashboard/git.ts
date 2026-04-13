@@ -275,6 +275,14 @@ function installDeps(wtPath: string): void {
   }
 }
 
+export function currentBranch(repoPath: string): string | null {
+  try {
+    return git(repoPath, "rev-parse", "--abbrev-ref", "HEAD");
+  } catch {
+    return null;
+  }
+}
+
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, {
     cwd,

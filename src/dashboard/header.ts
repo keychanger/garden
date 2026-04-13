@@ -8,7 +8,7 @@ import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
 import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields } from "./registry.js";
-import { resolveBaseBranch } from "./git.js";
+import { currentBranch, resolveBaseBranch } from "./git.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { GARDEN_VERSION } from "../version.js";
 import { triggerProjectPoll } from "./poller.js";
@@ -72,8 +72,8 @@ function formatLeft(activeProject: string | null, config: ReturnType<typeof load
   if (!activeProject) return " no projects";
   const projectConfig = config.projects[activeProject];
   const repoPath = projectConfig?.path ?? "";
-  const baseBranch = repoPath ? resolveBaseBranch(repoPath, projectConfig) : "main";
-  return ` #[bold]${activeProject}#[default]  ${baseBranch} `;
+  const branch = repoPath ? (currentBranch(repoPath) ?? "main") : "main";
+  return ` #[bold]${activeProject}#[default]  ${branch} `;
 }
 
 // ---------------------------------------------------------------------------
