@@ -171,9 +171,9 @@ export function handleClaudeHook(event: string): void {
   //   sessionstart → claudeStatus = "ready"   (fresh worker, Claude loaded)
   //   prompt       → claudeStatus = "working" (and clear stale `merged` prState)
   //   stop         → claudeStatus = "idle"    (and poke poller if commits exist)
-  //   notification → claudeStatus = "idle"    (Claude needs user attention mid-turn)
   //   pretooluse   → claudeStatus = "idle"    (user-input tool about to execute)
   //   posttooluse  → claudeStatus = "working" (user responded, Claude continues)
+  //   notification → claudeStatus = "idle"    (legacy, no longer configured)
   const fields: Partial<Pick<import("./registry.js").WorkerEntry,
     "claudeStatus" | "lastHookAt" | "prState" | "task">> = {
     lastHookAt: Date.now(),

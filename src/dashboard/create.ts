@@ -42,22 +42,18 @@ function buildClaudeHooksJson(gardenRunner: string): string {
         matcher: "",
         hooks: [{ type: "command", command: `${hookCmd} stop`, async: true, timeout: 5 }],
       }],
-      Notification: [{
-        matcher: "",
-        hooks: [{ type: "command", command: `${hookCmd} notification`, timeout: 5 }],
-      }],
       PreToolUse: [{
         matcher: "AskUserQuestion",
         hooks: [{ type: "command", command: `${hookCmd} pretooluse`, timeout: 5 }],
       }, {
-        matcher: "EnterPlanMode",
+        matcher: "ExitPlanMode",
         hooks: [{ type: "command", command: `${hookCmd} pretooluse`, timeout: 5 }],
       }],
       PostToolUse: [{
         matcher: "AskUserQuestion",
         hooks: [{ type: "command", command: `${hookCmd} posttooluse`, timeout: 5 }],
       }, {
-        matcher: "EnterPlanMode",
+        matcher: "ExitPlanMode",
         hooks: [{ type: "command", command: `${hookCmd} posttooluse`, timeout: 5 }],
       }],
     },

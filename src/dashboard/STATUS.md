@@ -47,8 +47,8 @@ Things that are *not* working:
 - Claude waiting for the user to approve a plan or answer a question (mid-turn idle)
 
 If a worker shows `working` while Claude is waiting for user input, that
-is a bug — a mid-turn idle hook (Notification/PreToolUse) didn't fire or
-didn't reach the registry.
+is a bug — the PreToolUse hook for the blocking tool (`ExitPlanMode`,
+`AskUserQuestion`) didn't fire or didn't reach the registry.
 
 ## State transitions
 
@@ -59,7 +59,7 @@ stateDiagram-v2
     ready --> working : UserPromptSubmit
 
     working --> idle : Stop / no new commits
-    working --> idle : Notification or PreToolUse (mid-turn)
+    working --> idle : PreToolUse (mid-turn user-input)
     working --> reviewing : Stop / new commits
 
     idle --> working : UserPromptSubmit
@@ -97,7 +97,7 @@ The two exits from `working` are the core branching point:
 | loading       | ready         | Worker `SessionStart` hook                           |
 | ready         | working       | Worker `UserPromptSubmit` (first)                    |
 | working       | idle          | Worker `Stop`; no new commits ahead of base          |
-| working       | idle          | Worker `Notification` or `PreToolUse` (mid-turn)     |
+| working       | idle          | Worker `PreToolUse` (mid-turn user-input tool)       |
 | working       | reviewing     | Worker `Stop`; new commits ahead of base             |
 | idle          | working       | Worker `UserPromptSubmit`                            |
 | idle          | working       | Worker `PostToolUse` (mid-turn resume)               |
@@ -126,7 +126,7 @@ goes back to sleep.
 Four sources cover the entire state machine.
 
 **1. Claude Code hooks** — `SessionStart`, `UserPromptSubmit`, `Stop`,
-`Notification`, `PreToolUse`, `PostToolUse`.
+`PreToolUse`, `PostToolUse`.
 
 These bracket the lifecycle of every Claude conversation and fire from
 *every* Claude process: workers, reviewers, helpers. The hooks call
@@ -136,7 +136,7 @@ signals the status pane. They drive:
 - `loading → ready` (worker's `SessionStart`)
 - `ready → working`, `idle → working`, `merged → working` (worker's `UserPromptSubmit`)
 - `working → idle`, `working → reviewing` (worker's `Stop`)
-- `working → idle` (worker's `Notification` or `PreToolUse` for user-input tools)
+- `working → idle` (worker's `PreToolUse` for user-input tools)
 - `idle → working` (worker's `PostToolUse` for user-input tools)
 - `reviewing → merge-pending`, `reviewing → failing` (reviewer's `Stop`)
 
@@ -255,15 +255,18 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   This is what makes invariant 2 enforceable: only Stop sets the flag,
   only the poller's working→reviewing transition reads it, and
   `launchReview` clears it.
-- `Notification` → `claudeStatus = "idle"` (only if currently `working`).
-  Fires when Claude needs user attention mid-turn. Workers run with
-  `--dangerously-skip-permissions`, so `permission_prompt` notifications
-  do not apply; the relevant cases are plan approval, questions, and
-  elicitation dialogs.
-- `PreToolUse` (matched to `AskUserQuestion`, `EnterPlanMode`) →
+- `PreToolUse` (matched to `AskUserQuestion`, `ExitPlanMode`) →
   `claudeStatus = "idle"` (only if currently `working`). Fires when
   Claude is about to execute a tool that requires user input.
-- `PostToolUse` (matched to `AskUserQuestion`, `EnterPlanMode`) →
+  `ExitPlanMode` is the blocking tool — it presents the plan for user
+  approval. `EnterPlanMode` is non-blocking (Claude entering plan mode
+  to write the plan) and must NOT be hooked, as its PreToolUse/PostToolUse
+  fire during active generation and would cause spurious working↔idle
+  flicker. The `Notification` hook is not used — it matches too broadly
+  (all notification types, not just user-attention ones) and the
+  user-input cases are fully covered by PreToolUse/PostToolUse on the
+  specific tools.
+- `PostToolUse` (matched to `AskUserQuestion`, `ExitPlanMode`) →
   `claudeStatus = "working"` (only if currently `idle`). Fires when
   the user has responded and Claude resumes processing.
 
@@ -344,7 +347,7 @@ sequenceDiagram
 
     Note over Claude: processing...
 
-    Claude->>Hook: Notification or PreToolUse fires
+    Claude->>Hook: PreToolUse fires (ExitPlanMode / AskUserQuestion)
     Hook->>Registry: claudeStatus = "idle" (was "working")
     Hook->>StatusPane: SIGUSR1
     StatusPane->>User: shows "idle"
