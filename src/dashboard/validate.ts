@@ -77,7 +77,8 @@ function healStatusPaneInState(state: DashboardState): DashboardState {
       const gardenRunner = resolveGardenRunner();
       const config = loadConfig();
       const projectCount = Object.keys(config.projects).length;
-      const statusHeight = Math.max(4, projectCount * 2 + 2);
+      // +1 for pane-border-status top, which occupies one row of total pane height.
+      const statusHeight = Math.max(4, projectCount * 2 + 2) + 1;
       const statusCmd = buildStatusCommand(gardenRunner);
 
       const statusId = tmuxSplit("-v", "-b", "-t", healed.gardenShellPaneId, "-l", String(statusHeight),

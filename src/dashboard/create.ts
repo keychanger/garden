@@ -83,12 +83,17 @@ export function ensureDashboard(): void {
     const healed = validateAndHeal(state);
     writeDashState(healed);
 
-    // Resize status pane to exact content height — base the calculation on
-    // actual rendered lines so multiple workers per project are counted.
-    // Attaching from a different terminal size can also squish panes.
-    const statusHeight = Math.max(4, renderQuickStatus(healed).split("\n").length);
+    // Respawn the status pane with the current buildStatusCommand script so
+    // any code changes take effect immediately without a full dashboard reset.
+    // pane-border-status top adds one row to the total pane height, so size
+    // to content lines + 1 to keep the content area exactly right.
+    const gardenRunner = resolveGardenRunner();
+    const statusHeight = Math.max(4, renderQuickStatus(healed).split("\n").length) + 1;
     if (healed.statusPaneId) {
+      const statusCmd = buildStatusCommand(gardenRunner);
+      try { tmux("respawn-pane", "-k", "-t", healed.statusPaneId, "sh", "-c", statusCmd); } catch { /* ignore */ }
       try { tmux("resize-pane", "-t", healed.statusPaneId, "-y", String(statusHeight)); } catch { /* pane may be gone */ }
+      try { tmux("clear-history", "-t", healed.statusPaneId); } catch { /* ignore */ }
       // Disable mouse on the status pane so the user cannot accidentally
       // enter copy-mode by scrolling. Mouse is enabled globally for other panes.
       try { tmux("set-option", "-p", "-t", healed.statusPaneId, "mouse", "off"); } catch { /* ignore */ }
@@ -259,7 +264,8 @@ export function ensureDashboard(): void {
   // Resize status pane to exact content height now that all workers are
   // resumed and their windows exist — worker rows are now visible to
   // renderQuickStatus, giving an accurate line count.
-  const exactStatusHeight = Math.max(4, renderQuickStatus(state).split("\n").length);
+  // +1 accounts for the pane-border-status top row (set by setupStatusBar above).
+  const exactStatusHeight = Math.max(4, renderQuickStatus(state).split("\n").length) + 1;
   try { tmux("resize-pane", "-t", statusId, "-y", String(exactStatusHeight)); } catch { /* ignore */ }
   try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
 

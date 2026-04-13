@@ -493,7 +493,9 @@ function writeQuickStatus(opts?: RefreshOptions): void {
     // events that don't change the layout — which races with the SIGUSR1 that
     // follows and can leave the pane in a broken state.
     if (state.statusPaneId) {
-      const h = Math.max(4, rendered.split("\n").length);
+      // +1 for the pane-border-status top row, which is included in pane_height
+      // but not in the rendered line count.
+      const h = Math.max(4, rendered.split("\n").length) + 1;
       const cur = getPaneSize(state.statusPaneId);
       if (!cur || cur.height !== h) {
         try { tmux("resize-pane", "-t", state.statusPaneId, "-y", String(h)); } catch { /* ignore */ }

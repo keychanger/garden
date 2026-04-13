@@ -312,8 +312,8 @@ describe("writeQuickStatus — status pane resize", () => {
     handleClaudeHook("stop");
 
     // renderQuickStatus is mocked to return ""; "".split("\n").length === 1,
-    // so Math.max(4, 1) === 4 → expect height "4"
-    expect(vi.mocked(tmux)).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "4");
+    // Math.max(4, 1) + 1 === 5 (the +1 accounts for pane-border-status top)
+    expect(vi.mocked(tmux)).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "5");
   });
 
   it("skips resize when statusPaneId is null", () => {
