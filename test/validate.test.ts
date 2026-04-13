@@ -9,6 +9,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   tmuxSplit: vi.fn(() => "%50"),
   setPaneTitle: vi.fn(),
   setPaneLabel: vi.fn(),
+  getPaneSize: vi.fn(() => null),
   tmux: vi.fn(),
 }));
 
@@ -36,6 +37,11 @@ vi.mock("../src/dashboard/poller.js", () => ({
 
 vi.mock("../src/dashboard/create.js", () => ({
   resolveGardenRunner: vi.fn(() => "garden"),
+  createGardenConsoleWindow: vi.fn(),
+}));
+
+vi.mock("../src/dashboard/layout.js", () => ({
+  gardenRestoreFromHidden: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/header.js", () => ({
@@ -90,8 +96,17 @@ describe("validateAndHeal", () => {
     expect(vi.mocked(tmuxSplit)).toHaveBeenCalled();
   });
 
-  it("nulls stale gardenShellPaneId", () => {
+  it("recreates garden pane when gardenShellPaneId is stale", () => {
     vi.mocked(paneExists).mockImplementation((id: string) => id !== "%1");
+    const state = makeState();
+    const healed = validateAndHeal(state);
+    // stale pane is nulled then recreation is attempted; tmuxSplit returns "%50"
+    expect(healed.gardenShellPaneId).toBe("%50");
+    expect(vi.mocked(tmuxSplit)).toHaveBeenCalled();
+  });
+
+  it("leaves gardenShellPaneId null when statusPaneId is also missing", () => {
+    vi.mocked(paneExists).mockImplementation((id: string) => id !== "%0" && id !== "%1");
     const state = makeState();
     const healed = validateAndHeal(state);
     expect(healed.gardenShellPaneId).toBeNull();
