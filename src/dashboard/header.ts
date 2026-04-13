@@ -5,7 +5,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { SESSIONS_DIR, loadConfig, tryGetProject } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar } from "./tmux.js";
+import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
 import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields } from "./registry.js";
 import { resolveBaseBranch } from "./git.js";
@@ -487,14 +487,17 @@ function writeQuickStatus(opts?: RefreshOptions): void {
     const tmpFile = STATUS_RENDERED_FILE + ".tmp";
     fs.writeFileSync(tmpFile, rendered);
     fs.renameSync(tmpFile, STATUS_RENDERED_FILE);
-    // Keep the pane height in sync with content. Without this, adding or
-    // killing workers changes the line count but leaves the pane the wrong
-    // size. An oversized pane has dead space; an undersized pane causes the
-    // terminal to scroll on render, which shifts the cursor baseline and
-    // produces duplicate / ghosted project rows on subsequent redraws.
+    // Resize only when line count changes. Resizing on every hook event would
+    // send SIGWINCH to the status pane process each time, interrupting its
+    // sleep and causing the else-branch garden-status fallback to fire on
+    // events that don't change the layout — which races with the SIGUSR1 that
+    // follows and can leave the pane in a broken state.
     if (state.statusPaneId) {
       const h = Math.max(4, rendered.split("\n").length);
-      try { tmux("resize-pane", "-t", state.statusPaneId, "-y", String(h)); } catch { /* ignore */ }
+      const cur = getPaneSize(state.statusPaneId);
+      if (!cur || cur.height !== h) {
+        try { tmux("resize-pane", "-t", state.statusPaneId, "-y", String(h)); } catch { /* ignore */ }
+      }
     }
   } catch { /* best effort */ }
 }

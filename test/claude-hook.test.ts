@@ -42,6 +42,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   getFirstPaneId: vi.fn(() => null),
   getPaneTitle: vi.fn(() => ""),
   getPanePid: vi.fn(() => null),
+  getPaneSize: vi.fn(() => null),  // null triggers resize since current size unknown
   windowExists: vi.fn(() => false),
   setPaneVar: vi.fn(),
   listAllWindowNames: vi.fn(() => []),
