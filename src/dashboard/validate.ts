@@ -7,8 +7,9 @@ import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, kill
 import { log } from "./log.js";
 import { worktreeExists, removeWorktree, pruneWorktrees } from "./git.js";
 import { startProjectPoller, projectPollerRunning, pollerWindowName, reviewWindowName as getReviewWindowName } from "./poller.js";
-import { resolveGardenRunner } from "./create.js";
+import { resolveGardenRunner, createGardenConsoleWindow } from "./create.js";
 import { buildStatusCommand } from "./header.js";
+import { gardenRestoreFromHidden } from "./layout.js";
 
 /**
  * Recreate the status pane if it's missing. Reads and writes state atomically.
@@ -21,6 +22,46 @@ export function healStatusPane(): void {
   if (healed !== state) {
     writeDashState(healed);
   }
+}
+
+function healGardenPaneInState(state: DashboardState): DashboardState {
+  let healed = state;
+
+  if (healed.gardenShellPaneId && !paneExists(healed.gardenShellPaneId)) {
+    log.warn("validate", "gardenShellPaneId is stale");
+    healed = { ...healed, gardenShellPaneId: null };
+  }
+
+  if (!healed.gardenShellPaneId && healed.statusPaneId && paneExists(healed.statusPaneId)) {
+    try {
+      const newPaneId = tmuxSplit("-v", "-t", healed.statusPaneId);
+      if (newPaneId) {
+        setPaneTitle(newPaneId, "garden");
+        setPaneLabel(newPaneId, "garden");
+
+        // gardenRestoreFromHidden mutates state.gardenShellPaneId in-place,
+        // so work with a mutable interim object before the final spread.
+        const interim = { ...healed, gardenShellPaneId: newPaneId };
+
+        const gardenRunner = resolveGardenRunner();
+        if (!windowExists("_garden-garden")) {
+          createGardenConsoleWindow(gardenRunner);
+        }
+        gardenRestoreFromHidden("_garden-garden", interim);
+
+        healed = {
+          ...interim,
+          gardenPaneType: "garden" as const,
+          gardenWindowName: "_garden-garden",
+        };
+        log.info("validate", "recreated garden pane");
+      }
+    } catch (err) {
+      log.warn("validate", "failed to recreate garden pane", { data: { error: String(err) } });
+    }
+  }
+
+  return healed;
 }
 
 function healStatusPaneInState(state: DashboardState): DashboardState {
@@ -63,13 +104,8 @@ function healStatusPaneInState(state: DashboardState): DashboardState {
  */
 export function validateAndHeal(state: DashboardState): DashboardState {
   let healed = healStatusPaneInState(state);
+  healed = healGardenPaneInState(healed);
   let changed = healed !== state;
-
-  if (healed.gardenShellPaneId && !paneExists(healed.gardenShellPaneId)) {
-    log.warn("validate", "gardenShellPaneId is stale");
-    healed.gardenShellPaneId = null;
-    changed = true;
-  }
 
   if (healed.activePaneId && !paneExists(healed.activePaneId)) {
     log.warn("validate", "activePaneId is stale, attempting recovery");
