@@ -25,6 +25,23 @@ export function setupKeybindings(gardenRunner: string): void {
   bindMeta("l", `${gr} dashboard _focus-logs`);
   bindMeta("k", "tmux clear-history; tmux send-keys -R C-l");
 
+  // Mouse scroll: always enter copy-mode on wheel-up instead of passing
+  // events to alternate-screen apps (like Claude Code).
+  try {
+    execFileSync("tmux", [
+      "bind-key", "-n", "WheelUpPane",
+      "if-shell", "-F", "#{pane_in_mode}",
+      "send-keys -M",
+      "copy-mode -e; send-keys -M"
+    ], { stdio: "ignore" });
+  } catch { /* ignore */ }
+  try {
+    execFileSync("tmux", [
+      "bind-key", "-n", "WheelDownPane",
+      "send-keys", "-M"
+    ], { stdio: "ignore" });
+  } catch { /* ignore */ }
+
   // Lock window navigation to main so prefix+n/p can't escape to hidden windows
   try {
     const mainTarget = `${DASHBOARD_SESSION}:main`;
