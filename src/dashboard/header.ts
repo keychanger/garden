@@ -487,5 +487,14 @@ function writeQuickStatus(opts?: RefreshOptions): void {
     const tmpFile = STATUS_RENDERED_FILE + ".tmp";
     fs.writeFileSync(tmpFile, rendered);
     fs.renameSync(tmpFile, STATUS_RENDERED_FILE);
+    // Keep the pane height in sync with content. Without this, adding or
+    // killing workers changes the line count but leaves the pane the wrong
+    // size. An oversized pane has dead space; an undersized pane causes the
+    // terminal to scroll on render, which shifts the cursor baseline and
+    // produces duplicate / ghosted project rows on subsequent redraws.
+    if (state.statusPaneId) {
+      const h = Math.max(4, rendered.split("\n").length);
+      try { tmux("resize-pane", "-t", state.statusPaneId, "-y", String(h)); } catch { /* ignore */ }
+    }
   } catch { /* best effort */ }
 }
