@@ -2,6 +2,8 @@
 import path from "node:path";
 import fs from "node:fs";
 import { loadConfig, saveConfig } from "../config.js";
+import { dashboardExists } from "../session.js";
+import { refreshDashboard } from "../dashboard/header.js";
 
 export async function add(args: string[]): Promise<void> {
   const rawPath = args[0] ?? ".";
@@ -33,4 +35,8 @@ export async function add(args: string[]): Promise<void> {
   config.projects[name] = { path: resolved };
   saveConfig(config);
   console.log(`Added project '${name}' (${resolved})`);
+
+  if (dashboardExists()) {
+    refreshDashboard();
+  }
 }
