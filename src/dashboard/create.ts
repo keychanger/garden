@@ -11,6 +11,7 @@ import { type DashboardState, readDashState, writeDashState, STATE_FILE } from "
 import { restoreFromHidden } from "./layout.js";
 import { setupKeybindings } from "./hotkeys.js";
 import { setupStatusBar, buildStatusCommand, updateHeaderVar } from "./header.js";
+import { renderQuickStatus } from "../commands/status.js";
 import {
   tmux, tmuxOutput, tmuxSplit, setPaneTitle, setPaneLabel, setPaneVar,
   getFirstPaneId, shellEscape,
@@ -82,13 +83,15 @@ export function ensureDashboard(): void {
     const healed = validateAndHeal(state);
     writeDashState(healed);
 
-    // Resize status pane to correct height — attaching from a different
-    // terminal size can squish panes since tmux redistributes proportionally.
-    const config = loadConfig();
-    const projectCount = getFocusedProjectNames(config).length;
-    const statusHeight = Math.max(4, projectCount * 2 + 2);
+    // Resize status pane to exact content height — base the calculation on
+    // actual rendered lines so multiple workers per project are counted.
+    // Attaching from a different terminal size can also squish panes.
+    const statusHeight = Math.max(4, renderQuickStatus(healed).split("\n").length);
     if (healed.statusPaneId) {
       try { tmux("resize-pane", "-t", healed.statusPaneId, "-y", String(statusHeight)); } catch { /* pane may be gone */ }
+      // Disable mouse on the status pane so the user cannot accidentally
+      // enter copy-mode by scrolling. Mouse is enabled globally for other panes.
+      try { tmux("set-option", "-p", "-t", healed.statusPaneId, "mouse", "off"); } catch { /* ignore */ }
     }
 
     // Pre-size all hidden windows to match their target visible slots so
@@ -138,6 +141,8 @@ export function ensureDashboard(): void {
   try { tmux("set-option", "-p", "-t", statusId, "history-limit", "0"); } catch { /* ignore */ }
   try { tmux("set-option", "-t", DASHBOARD_SESSION, "-u", "history-limit"); } catch { /* ignore */ }
   try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
+  // Disable mouse on the status pane so scroll events cannot activate copy-mode.
+  try { tmux("set-option", "-p", "-t", statusId, "mouse", "off"); } catch { /* ignore */ }
 
   setPaneTitle(statusId, "status");
   setPaneLabel(statusId, "status");
@@ -250,6 +255,14 @@ export function ensureDashboard(): void {
   }
 
   writeDashState(state);
+
+  // Resize status pane to exact content height now that all workers are
+  // resumed and their windows exist — worker rows are now visible to
+  // renderQuickStatus, giving an accurate line count.
+  const exactStatusHeight = Math.max(4, renderQuickStatus(state).split("\n").length);
+  try { tmux("resize-pane", "-t", statusId, "-y", String(exactStatusHeight)); } catch { /* ignore */ }
+  try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
+
   setupKeybindings(gardenRunner);
 
   // Start per-project pollers for projects that have workers
