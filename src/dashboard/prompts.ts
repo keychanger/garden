@@ -19,12 +19,10 @@ export function buildReviewPrompt(
   projectPath: string,
   baseBranch: string,
   entry: WorkerEntry,
-  opts?: { reReview?: boolean },
 ): string | null {
   const data = gatherPromptData(projectName, projectPath, baseBranch, entry);
   if (!data) return null;
 
-  const isReReview = opts?.reReview ?? false;
   const { diff, commitSummary, branchName, rules, checksCommand, docSections, testSections, specWarning } = data;
 
   let stepNum = 1;
@@ -34,35 +32,13 @@ export function buildReviewPrompt(
 
   const sections: string[] = [];
 
-  // Intro
-  if (isReReview) {
-    sections.push(
-      "You are re-reviewing a branch that was previously reviewed and approved.",
-      `It is being re-reviewed because ${baseBranch} advanced and a rebase is needed before merge.`,
-    );
-  } else {
-    sections.push(
-      "You are reviewing a branch before merge. Complete these steps in order:",
-    );
-  }
-  sections.push("");
+  sections.push(
+    "You are reviewing a branch before merge. Complete these steps in order:",
+    "",
+  );
 
   // Spec warning (if any spec files changed)
   sections.push(...specWarning);
-
-  // Re-review context section
-  if (isReReview) {
-    sections.push("## Context", "");
-    if (entry.task) sections.push(`**Worker task:** ${entry.task}`, "");
-    if (entry.lastReviewBody) {
-      sections.push("**Previous review (approved):**", "", entry.lastReviewBody, "");
-    }
-    sections.push(
-      `Focus on rebasing onto ${baseBranch}, resolving any conflicts while preserving the`,
-      "intent of both sides, and verifying the merged result still works.",
-      "",
-    );
-  }
 
   // Step: Rebase
   sections.push(
@@ -70,11 +46,6 @@ export function buildReviewPrompt(
     "",
     `Run \`git rebase ${baseBranch}\` in the worktree. If there are conflicts:`,
     "- Resolve them sensibly (preserve the intent of both sides)",
-  );
-  if (isReReview) {
-    sections.push("- Read the commit messages carefully — they describe the intent of each change");
-  }
-  sections.push(
     "- `git add` resolved files and `git rebase --continue`",
     "- If a conflict is truly unresolvable, abort the rebase and report FAILED",
     "",
@@ -94,50 +65,36 @@ export function buildReviewPrompt(
   }
 
   // Step: Review
-  if (isReReview) {
-    sections.push(
-      `## Step ${reviewStep}: Verify correctness after rebase`,
-      "",
-      "This branch was already reviewed. Focus on:",
-      "- Whether conflict resolution preserved the intent of both sides",
-      `- Whether the rebased code still works correctly with the new ${baseBranch}`,
-      "- Whether tests still pass after rebase",
-      "",
-      "If you find issues, fix them directly in the worktree. Commit fixes with a",
-      'message prefixed with "review: ".',
-    );
-  } else {
-    sections.push(
-      `## Step ${reviewStep}: Code review`,
-      "",
-      "Review the branch diff against the project rules below.",
-      "",
-      "Check for:",
-      "- Adherence to project rules (commit style, code patterns, scope discipline)",
-      "- Code quality issues, security concerns, or unnecessary complexity",
-      "- Documentation accuracy: read DESIGN.md and CLAUDE.md below. After applying this",
-      "  diff, are they still accurate and complete? Flag any claims that are now wrong,",
-      "  missing sections for new behavior, or stale descriptions. Not every change needs a",
-      "  doc change — only flag docs that are actually inaccurate after this diff. This",
-      "  bullet applies *only* to descriptive documents (DESIGN.md, CLAUDE.md) — not to",
-      "  specification files (those marked as a source of truth, see the warning above if",
-      "  any are in this diff). Specs drive the code; do not edit them to match code.",
-      "- Test quality: read the test files below. Check three things:",
-      "  1. Accuracy — do existing tests still assert correct behavior after this diff?",
-      "     Flag tests that now assert stale or wrong behavior.",
-      "  2. Coverage — are the new/changed code paths exercised by tests? Flag significant",
-      "     new logic (branching, error handling, state transitions) that has no test.",
-      "  3. Completeness — do the tests cover edge cases and failure modes, not just the",
-      "     happy path? Flag obvious gaps. Not every change needs a test change — only flag",
-      "     tests that are actually wrong or insufficient for the behavior this diff changes.",
-      "",
-      "If you find issues, fix them directly in the worktree. Edit files, update tests,",
-      "update docs as needed. Make focused, minimal fixes — do not refactor or improve code",
-      "beyond what the review requires. Commit your fixes with a clear message prefixed with",
-      '"review: " (e.g., "review: add missing tests for error handling").',
-    );
-  }
-  sections.push("");
+  sections.push(
+    `## Step ${reviewStep}: Code review`,
+    "",
+    "Review the branch diff against the project rules below.",
+    "",
+    "Check for:",
+    "- Adherence to project rules (commit style, code patterns, scope discipline)",
+    "- Code quality issues, security concerns, or unnecessary complexity",
+    "- Documentation accuracy: read DESIGN.md and CLAUDE.md below. After applying this",
+    "  diff, are they still accurate and complete? Flag any claims that are now wrong,",
+    "  missing sections for new behavior, or stale descriptions. Not every change needs a",
+    "  doc change — only flag docs that are actually inaccurate after this diff. This",
+    "  bullet applies *only* to descriptive documents (DESIGN.md, CLAUDE.md) — not to",
+    "  specification files (those marked as a source of truth, see the warning above if",
+    "  any are in this diff). Specs drive the code; do not edit them to match code.",
+    "- Test quality: read the test files below. Check three things:",
+    "  1. Accuracy — do existing tests still assert correct behavior after this diff?",
+    "     Flag tests that now assert stale or wrong behavior.",
+    "  2. Coverage — are the new/changed code paths exercised by tests? Flag significant",
+    "     new logic (branching, error handling, state transitions) that has no test.",
+    "  3. Completeness — do the tests cover edge cases and failure modes, not just the",
+    "     happy path? Flag obvious gaps. Not every change needs a test change — only flag",
+    "     tests that are actually wrong or insufficient for the behavior this diff changes.",
+    "",
+    "If you find issues, fix them directly in the worktree. Edit files, update tests,",
+    "update docs as needed. Make focused, minimal fixes — do not refactor or improve code",
+    "beyond what the review requires. Commit your fixes with a clear message prefixed with",
+    '"review: " (e.g., "review: add missing tests for error handling").',
+    "",
+  );
 
   // Tail: branch info, commits, rules, diff, docs, tests, output format
   sections.push(`## Branch: ${branchName}`, "");
@@ -157,10 +114,9 @@ export function buildReviewPrompt(
     "",
     "## Documentation (current state in the worktree)",
     "",
+    "Verify these are still accurate after the diff above.",
+    "",
   );
-  if (!isReReview) {
-    sections.push("Verify these are still accurate after the diff above.", "");
-  }
   sections.push(...docSections);
 
   if (testSections.length > 0) {
@@ -168,10 +124,9 @@ export function buildReviewPrompt(
       "",
       "## Test Files (corresponding to changed source files)",
       "",
+      "Verify these still correctly cover the changed behavior.",
+      "",
     );
-    if (!isReReview) {
-      sections.push("Verify these still correctly cover the changed behavior.", "");
-    }
     sections.push(...testSections);
   }
 
@@ -183,6 +138,100 @@ export function buildReviewPrompt(
     "CLEAN — no issues found, code is ready to merge as-is",
     "FIXED — issues were found and fixed in the worktree",
     "FAILED — issues were found but could not be fixed (explain above)",
+  );
+
+  return sections.join("\n");
+}
+
+// Build the prompt for a resolver Claude session. The resolver has a single
+// narrow job: complete `git rebase origin/<base>` in the worktree and commit
+// any conflict resolutions. It does NOT code-review; the code was already
+// approved by the initial reviewer. It does NOT push — the poller pushes
+// after programmatic verification (see STATUS.md invariant 7).
+//
+// The verdict is DONE or FAILED, not CLEAN/FIXED/FAILED. This keeps the
+// resolver's output space distinct from the reviewer's so parsing cannot
+// be confused by a stale result file from a prior run.
+export function buildResolvePrompt(
+  projectName: string,
+  projectPath: string,
+  baseBranch: string,
+  entry: WorkerEntry,
+): string | null {
+  const wtPath = entry.worktreePath ?? projectPath;
+
+  let commitSummary: string;
+  try {
+    commitSummary = getCommitSummary(wtPath, baseBranch);
+  } catch {
+    log.warn("poller", "failed to get commit summary for resolve", { worker: entry.name });
+    commitSummary = "";
+  }
+
+  const branchName = entry.branchName ?? entry.name;
+  const attemptNum = (entry.resolveAttempts ?? 0) + 1;
+
+  const sections: string[] = [];
+
+  sections.push(
+    `You are resolving a rebase conflict on branch \`${branchName}\` in project ${projectName}.`,
+    "",
+    `The branch was reviewed and approved, but when the merge queue tried to rebase it onto`,
+    `\`origin/${baseBranch}\` the rebase conflicted. Your job is to complete that rebase.`,
+    "",
+    "**This is not a code review.** The code itself has already been approved. Do not refactor,",
+    "add tests, update docs, or make any change not required to resolve the conflict.",
+    "",
+    `This is resolve attempt ${attemptNum} of 2.`,
+    "",
+  );
+
+  if (entry.task) {
+    sections.push("## Worker task", "", entry.task, "");
+  }
+
+  if (entry.lastReviewBody) {
+    sections.push(
+      "## Previous review (approved)",
+      "",
+      entry.lastReviewBody,
+      "",
+    );
+  }
+
+  if (commitSummary) {
+    sections.push("## Commits on this branch", "", "```", commitSummary, "```", "");
+  }
+
+  sections.push(
+    "## Steps",
+    "",
+    "1. Run `git status`. If a rebase is already in progress (output mentions",
+    "   `rebase in progress` or `You are currently rebasing`), run `git rebase --abort`.",
+    "",
+    `2. Run \`git rebase origin/${baseBranch}\`.`,
+    "",
+    "3. If conflicts appear:",
+    "   - Read each conflict carefully and resolve it preserving the intent of both sides.",
+    "   - Read commit messages (`git log`) and diffs as needed to understand intent.",
+    "   - `git add` each resolved file.",
+    "   - `git rebase --continue` and repeat for further conflicts.",
+    "   - If a conflict is genuinely unresolvable (e.g. the two sides implement",
+    `     contradictory designs), run \`git rebase --abort\` and output \`FAILED\`.`,
+    "",
+    `4. When the rebase is complete, confirm with \`git status\` (should say clean) and`,
+    `   \`git log --oneline origin/${baseBranch}..HEAD\` (should list your branch's commits).`,
+    "",
+    "5. Do **not** push. The poller handles the push after verifying your work.",
+    "",
+    "## Output format",
+    "",
+    "Your LAST line of output must be exactly one of:",
+    "",
+    "- `DONE` — the rebase completed cleanly and HEAD is ready for merge.",
+    "- `FAILED` — the conflict is unresolvable or you could not complete the rebase.",
+    "",
+    "Write a brief summary of what you did above the verdict line.",
   );
 
   return sections.join("\n");

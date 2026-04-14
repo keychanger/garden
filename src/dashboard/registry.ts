@@ -15,7 +15,7 @@ import { log } from "./log.js";
 // claudeStatus is written by Claude Code hooks and the tmux pane-died handler.
 // prState is written by the poller. There are no other writers. See STATUS.md.
 export type ClaudeStatus = "loading" | "ready" | "working" | "idle" | "exited";
-export type PrState = "working" | "reviewing" | "merge-pending" | "merged" | "failing";
+export type PrState = "working" | "reviewing" | "merge-pending" | "resolving" | "merged" | "failing";
 
 export interface WorkerEntry {
   name: string;       // adjective-noun name, e.g. "swift-oak"
@@ -40,6 +40,15 @@ export interface WorkerEntry {
   reviewWindowName?: string;
   mergePendingAt?: string;
   lastReviewBody?: string;
+  // Resolver state (see STATUS.md invariants 7 and 8). preResolveSha is the
+  // HEAD SHA captured the moment before the resolver launches — the poller
+  // compares post-resolver HEAD against it to confirm the resolver actually
+  // committed something. resolveAttempts counts resolver launches for the
+  // current merge; budget is 2, resets on worker push or successful merge.
+  // lastResolveBody carries the resolver's last output body for alert text.
+  preResolveSha?: string;
+  resolveAttempts?: number;
+  lastResolveBody?: string;
   role?: string;
   parentWorker?: string;
 }

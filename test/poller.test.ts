@@ -111,6 +111,10 @@ vi.mock("../src/dashboard/git.js", () => ({
   getCommitSummary: vi.fn(() => "abc123 fix something"),
   getNewCommitSummary: vi.fn(() => "def456 address review feedback"),
   resolveBaseBranch: vi.fn(() => "main"),
+  ensureNoRebaseInProgress: vi.fn(),
+  hasRebaseInProgress: vi.fn(() => false),
+  isAncestor: vi.fn(() => true),
+  getUnmergedFiles: vi.fn(() => []),
 }));
 
 vi.mock("../src/rules.js", () => ({
@@ -126,6 +130,7 @@ import {
   forcePushBranch, mergeToBase, rebaseBranch, abortRebase,
   fastForwardBase,
   getChangedFiles, getCommitSummary, getNewCommitSummary, getDiffAgainstBase,
+  ensureNoRebaseInProgress, hasRebaseInProgress, isAncestor, getUnmergedFiles,
 } from "../src/dashboard/git.js";
 import { tmux, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
@@ -162,6 +167,9 @@ beforeEach(() => {
   vi.mocked(getBranchHeadSha).mockReturnValue("abc123");
   vi.mocked(getRemoteTrackingSha).mockReturnValue("abc123");
   vi.mocked(rebaseBranch).mockReturnValue("ok");
+  vi.mocked(hasRebaseInProgress).mockReturnValue(false);
+  vi.mocked(isAncestor).mockReturnValue(true);
+  vi.mocked(getUnmergedFiles).mockReturnValue([]);
   vi.mocked(fs.existsSync).mockReturnValue(false);
 });
 
@@ -482,12 +490,17 @@ describe("poll — reviewing state (async)", () => {
     );
   });
 
-  it("aborts review when worker pushes new commits during review", () => {
+  it("aborts review when worker pushes new commits after reviewer exits", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",
         lastSeenSha: "old-sha" }),
     ]);
     vi.mocked(getRemoteTrackingSha).mockReturnValue("newer-sha");
+    // Reviewer window has exited; SHA change is therefore a genuine worker push.
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(getCommitSummary).mockReturnValue("abc123 new work");
 
     poll("myproject");
 
@@ -497,13 +510,57 @@ describe("poll — reviewing state (async)", () => {
     expect(call).toBeDefined();
     const fields = call![2] as Record<string, unknown>;
     expect(fields.reviewWindowName).toBeUndefined();
+    // pendingReviewAt must be set so handleWorking launches a fresh review —
+    // without this repair, the worker would stall in `working` with no poke.
+    expect(fields.pendingReviewAt).toEqual(expect.any(Number));
+    expect(fields.resolveAttempts).toBe(0);
     expect(mergeToBase).not.toHaveBeenCalled();
-    // Must schedule a re-poke so handleWorking picks up pendingReviewAt
     expect(spawn).toHaveBeenCalledWith(
       "bash",
       ["-c", expect.stringContaining("sleep 0")],
       expect.objectContaining({ detached: true, stdio: "ignore" }),
     );
+  });
+
+  it("does NOT reset to working when SHA changes but reviewer window is still alive", () => {
+    // Race-fix regression: a mid-session reviewer push changes origin/<branch>
+    // before the reviewer exits. We must attribute that to the reviewer, not
+    // the worker — otherwise the reviewer's own progress wrongly kills review.
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "old-sha" }),
+    ]);
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("newer-sha");
+    vi.mocked(windowExists).mockReturnValue(true); // reviewer still running
+
+    poll("myproject");
+
+    const resetCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "working",
+    );
+    expect(resetCall).toBeUndefined();
+  });
+
+  it("omits pendingReviewAt on worker-push reset when no commits are ahead of base", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "old-sha" }),
+    ]);
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("newer-sha");
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(getCommitSummary).mockReturnValue(""); // no commits ahead of base
+
+    poll("myproject");
+
+    const call = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "working",
+    );
+    expect(call).toBeDefined();
+    const fields = call![2] as Record<string, unknown>;
+    // No commits means no work to review — don't set pendingReviewAt.
+    expect(fields.pendingReviewAt).toBeUndefined();
   });
 });
 
@@ -534,7 +591,7 @@ describe("poll — merge-pending state", () => {
     );
   });
 
-  it("launches re-review when rebase has conflicts and Claude is idle", () => {
+  it("launches resolver when rebase has conflicts and Claude is idle", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
@@ -545,6 +602,7 @@ describe("poll — merge-pending state", () => {
       }),
     ]);
     vi.mocked(rebaseBranch).mockReturnValue("conflict");
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre-resolve-sha");
 
     poll("myproject");
 
@@ -556,13 +614,54 @@ describe("poll — merge-pending state", () => {
     );
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({
-        prState: "reviewing",
+        prState: "resolving",
         reviewWindowName: "_myproject-review-bold-ash",
+        preResolveSha: "pre-resolve-sha",
+        resolveAttempts: 1,
       }),
     );
   });
 
-  it("skips re-review when rebase conflicts and Claude is working", () => {
+  it("escalates to failing when resolver budget is exhausted", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        claudeStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        resolveAttempts: 2, // budget already consumed
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue("conflict");
+    vi.mocked(getUnmergedFiles).mockReturnValue(["src/foo.ts", "src/bar.ts"]);
+
+    poll("myproject");
+
+    expect(abortRebase).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    // No new resolver window launched
+    expect(tmux).not.toHaveBeenCalledWith(
+      "new-window", expect.anything(), expect.anything(), expect.anything(),
+      "-n", "_myproject-review-bold-ash",
+      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
+    );
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "failing",
+        failCount: 1,
+        mergePendingAt: undefined,
+      }),
+    );
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        source: "poller",
+        project: "myproject",
+        worker: "bold-ash",
+        message: expect.stringContaining("src/foo.ts"),
+      }),
+    );
+  });
+
+  it("skips resolver launch when rebase conflicts and Claude is working", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
@@ -582,6 +681,19 @@ describe("poll — merge-pending state", () => {
       "-n", "_myproject-review-bold-ash",
       expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
     );
+  });
+
+  it("clears leftover rebase state before attempting rebase", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+
+    poll("myproject");
+
+    expect(ensureNoRebaseInProgress).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
   });
 
   it("alerts operator on non-conflict rebase error", () => {
@@ -607,7 +719,7 @@ describe("poll — merge-pending state", () => {
     );
   });
 
-  it("includes previous review body in re-review prompt", () => {
+  it("includes previous review body and worker task in resolver prompt", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
@@ -627,9 +739,10 @@ describe("poll — merge-pending state", () => {
     );
     expect(promptCall).toBeDefined();
     const promptContent = String(promptCall![1]);
-    expect(promptContent).toContain("previously reviewed and approved");
+    expect(promptContent).toContain("resolving a rebase conflict");
     expect(promptContent).toContain("Code is well structured.");
     expect(promptContent).toContain("add retry logic");
+    expect(promptContent).toContain("Do **not** push");
   });
 
   it("merges earliest merge-pending first", () => {
@@ -707,6 +820,201 @@ describe("poll — merge-pending state", () => {
       ["-c", expect.stringContaining("sleep")],
       expect.objectContaining({ detached: true, stdio: "ignore" }),
     );
+  });
+});
+
+describe("poll — resolving state", () => {
+  function setupResolver(
+    overrides: Partial<import("../src/dashboard/registry.js").WorkerEntry> = {},
+  ): void {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "resolving",
+        reviewWindowName: "_myproject-review-bold-ash",
+        preResolveSha: "pre-sha",
+        resolveAttempts: 1,
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        lastSeenSha: "origin-baseline",
+        ...overrides,
+      }),
+    ]);
+    // Default: resolver has exited (its window is gone).
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) return "Rebased cleanly.\nDONE";
+      return "{}";
+    });
+    // Align origin tracking ref with the baseline so the worker-push branch
+    // does not fire by accident; tests that want to simulate a worker push
+    // override this explicitly.
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("origin-baseline");
+  }
+
+  it("returns false while resolver window is still running", () => {
+    setupResolver();
+    vi.mocked(windowExists).mockReturnValue(true); // resolver still in-flight
+
+    poll("myproject");
+
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
+
+  it("transitions to merge-pending when DONE and verification passes", () => {
+    setupResolver();
+    vi.mocked(getBranchHeadSha).mockReturnValue("post-rebase-sha"); // differs from preResolveSha
+    vi.mocked(isAncestor).mockReturnValue(true);
+    vi.mocked(hasRebaseInProgress).mockReturnValue(false);
+
+    poll("myproject");
+
+    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "merge-pending",
+        reviewWindowName: undefined,
+      }),
+    );
+    // Queues the next merge-queue attempt
+    expect(spawn).toHaveBeenCalledWith(
+      "bash",
+      ["-c", expect.stringContaining("sleep 0")],
+      expect.objectContaining({ detached: true, stdio: "ignore" }),
+    );
+  });
+
+  it("retries when resolver says DONE but rebase is still in progress", () => {
+    setupResolver();
+    vi.mocked(getBranchHeadSha).mockReturnValue("post-rebase-sha");
+    vi.mocked(hasRebaseInProgress).mockReturnValue(true); // lying — rebase not finished
+
+    poll("myproject");
+
+    // Must abort leftover rebase and bounce back to merge-pending (budget has
+    // one attempt left, so no escalation yet).
+    expect(abortRebase).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "merge-pending",
+        reviewWindowName: undefined,
+      }),
+    );
+  });
+
+  it("retries when resolver says DONE but base is not an ancestor of HEAD", () => {
+    setupResolver();
+    vi.mocked(getBranchHeadSha).mockReturnValue("post-rebase-sha");
+    vi.mocked(isAncestor).mockReturnValue(false); // rebase never happened
+
+    poll("myproject");
+
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merge-pending" }),
+    );
+  });
+
+  it("retries when resolver says DONE but HEAD did not change from preResolveSha", () => {
+    setupResolver();
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre-sha"); // same as preResolveSha
+
+    poll("myproject");
+
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merge-pending" }),
+    );
+  });
+
+  it("retries when resolver verdict is FAILED", () => {
+    setupResolver();
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) return "Conflict is contradictory.\nFAILED";
+      return "{}";
+    });
+    vi.mocked(getBranchHeadSha).mockReturnValue("post-sha");
+
+    poll("myproject");
+
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merge-pending" }),
+    );
+  });
+
+  it("escalates to failing with conflict files in alert when budget is exhausted", () => {
+    setupResolver({ resolveAttempts: 2 }); // at budget
+    vi.mocked(isAncestor).mockReturnValue(false); // verification fails
+    vi.mocked(getUnmergedFiles).mockReturnValue(["src/auth.ts"]);
+    vi.mocked(getBranchHeadSha).mockReturnValue("post-sha");
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "failing",
+        failCount: 1,
+        mergePendingAt: undefined,
+      }),
+    );
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        source: "poller",
+        worker: "bold-ash",
+        message: expect.stringContaining("src/auth.ts"),
+      }),
+    );
+  });
+
+  it("stores resolver body when it parses even if verification fails", () => {
+    setupResolver();
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) return "Tried to rebase.\nFAILED";
+      return "{}";
+    });
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ lastResolveBody: "Tried to rebase." }),
+    );
+  });
+
+  it("worker push during resolving resets to working and clears budget", () => {
+    setupResolver({ lastSeenSha: "origin-baseline" });
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("worker-pushed-sha");
+    vi.mocked(getCommitSummary).mockReturnValue("abc123 new worker commit");
+
+    poll("myproject");
+
+    const resetCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "working",
+    );
+    expect(resetCall).toBeDefined();
+    const fields = resetCall![2] as Record<string, unknown>;
+    expect(fields.resolveAttempts).toBe(0);
+    expect(fields.preResolveSha).toBeUndefined();
+    expect(fields.pendingReviewAt).toEqual(expect.any(Number));
+    expect(forcePushBranch).not.toHaveBeenCalled();
+  });
+
+  it("does not process resolver output while the window is still alive", () => {
+    setupResolver();
+    vi.mocked(windowExists).mockReturnValue(true); // still alive
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("mid-rebase-push"); // reviewer pushed mid-session
+
+    poll("myproject");
+
+    // Neither reset-to-working nor verify-and-merge should fire.
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+    expect(forcePushBranch).not.toHaveBeenCalled();
   });
 });
 

@@ -18,6 +18,7 @@ These are the only states the user sees in the status pane.
 | idle          | `#`  | Ball is in the user's court — Claude is at the prompt, waiting for plan approval, answering a question, or has a response to read. Not in the review cycle. |
 | reviewing     | `%`  | Automated reviewer is checking the worker's code. |
 | merge-pending | `&`  | Review passed. Queued for merge.                 |
+| resolving     | `~`  | Automated resolver is fixing a merge-queue rebase conflict. |
 | merged        | `+`  | Code landed on the base branch.                  |
 | failing       | `x`  | Review failed. Waiting for worker to fix.        |
 | exited        | `o`  | Worker process is gone.                          |
@@ -70,8 +71,12 @@ stateDiagram-v2
     reviewing --> working : worker push (stale review)
 
     merge_pending --> merged : queue: ff merge
-    merge_pending --> reviewing : queue: rebase conflict
+    merge_pending --> resolving : queue: rebase conflict
     merge_pending --> working : queue: merge fails
+
+    resolving --> merge_pending : resolver Stop (verified)
+    resolving --> failing : resolver Stop (budget exhausted)
+    resolving --> working : worker push (stale resolution)
 
     merged --> working : UserPromptSubmit (merged cleared)
 
@@ -105,8 +110,11 @@ The two exits from `working` are the core branching point:
 | reviewing     | failing       | Reviewer `Stop` with verdict FAILED                  |
 | reviewing     | working       | Worker push event (commits during review, aborted)   |
 | merge-pending | merged        | Merge queue: ff merge succeeds                       |
-| merge-pending | reviewing     | Merge queue: rebase conflict (re-review launched)    |
+| merge-pending | resolving     | Merge queue: rebase conflict (resolver launched)     |
 | merge-pending | working       | Merge queue: merge fails (non-conflict)              |
+| resolving     | merge-pending | Resolver `Stop`, programmatic verification passed    |
+| resolving     | failing       | Resolver `Stop`, budget exhausted or verification failed |
+| resolving     | working       | Worker push event (commits during resolution, aborted) |
 | merged        | working       | Worker `UserPromptSubmit` (merged cleared)           |
 | failing       | working       | Worker push event + 30s debounce                     |
 | any           | exited        | tmux `pane-died` hook                                |
@@ -139,6 +147,7 @@ signals the status pane. They drive:
 - `working → idle` (worker's `PreToolUse` for user-input tools)
 - `idle → working` (worker's `PostToolUse` for user-input tools)
 - `reviewing → merge-pending`, `reviewing → failing` (reviewer's `Stop`)
+- `resolving → merge-pending`, `resolving → failing` (resolver's `Stop`)
 
 The worker's `Stop` hook also pokes the project's poller FIFO if it sees
 new commits ahead of the base branch — so review starts immediately,
@@ -151,6 +160,7 @@ The push is the event; the poke is the delivery.
 Drives:
 
 - `reviewing → working` (commits arrive during review, review aborted)
+- `resolving → working` (commits arrive during resolution, resolver aborted)
 - `failing → working` (after the 30s debounce starts on the push)
 
 **3. Merge queue completion** — an internal in-process event. When one
@@ -160,8 +170,10 @@ No external trigger.
 Drives:
 
 - `merge-pending → merged`
-- `merge-pending → reviewing` (rebase conflict)
+- `merge-pending → resolving` (rebase conflict)
 - `merge-pending → working` (merge fails for a non-conflict reason)
+- `resolving → merge-pending` (resolver succeeded and verification passed)
+- `resolving → failing` (resolver budget exhausted or verification failed)
 
 **4. tmux `pane-died` hook** — tmux fires this automatically when a
 pane process exits. The dashboard listens and writes
@@ -196,8 +208,8 @@ recurring re-check, or "fallback poll."
 ## Key invariants
 
 1. **`idle` and the review cycle are mutually exclusive.** A worker in
-   `reviewing`, `merge-pending`, or `failing` never shows `idle`. If it
-   shows `idle`, it is not in the review cycle.
+   `reviewing`, `merge-pending`, `resolving`, or `failing` never shows
+   `idle`. If it shows `idle`, it is not in the review cycle.
 
 2. **`working` is the only entry point to the review cycle.** The poller
    only transitions to `reviewing` when Claude stops working *and* new
@@ -207,11 +219,11 @@ recurring re-check, or "fallback poll."
    never returns to `ready`.
 
 4. **Active pipeline states are sticky; `merged` is not.** While a worker
-   is in `reviewing`, `merge-pending`, or `failing`, those states take
-   priority over what Claude is doing — they represent in-progress
-   pipeline work. `merged` persists only until the worker receives new
-   input, then clears immediately. There is no "merged history" — each
-   cycle is independent.
+   is in `reviewing`, `merge-pending`, `resolving`, or `failing`, those
+   states take priority over what Claude is doing — they represent
+   in-progress pipeline work. `merged` persists only until the worker
+   receives new input, then clears immediately. There is no "merged
+   history" — each cycle is independent.
 
 5. **There is no `pushed` state.** Earlier versions of this system carried
    an internal `pushed` lifecycle state between "commits exist" and
@@ -228,6 +240,26 @@ recurring re-check, or "fallback poll."
    exiting, a merge queue item completing) and does one unit of work.
    The 30-second `failing → working` debounce is the only timer in the
    system, and it is a deliberate hold-off, not a discovery mechanism.
+
+7. **Resolver verdicts are not trusted — they are verified.** When a
+   resolver returns a `DONE` verdict, the poller does not transition to
+   `merge-pending` on the strength of the text alone. It runs three
+   programmatic checks against the worktree: no rebase is in progress
+   (`.git/rebase-merge` and `.git/rebase-apply` are absent),
+   `origin/<base>` is an ancestor of local HEAD, and HEAD differs from
+   `preResolveSha`. All three must pass. If any fails, the attempt
+   counts as a failed resolution regardless of the verdict text. This
+   invariant exists because Claude can (and has) declared success
+   without completing the rebase — the spec makes verification the
+   contract, not trust.
+
+8. **Resolver retries have a fixed budget.** `resolveAttempts` on the
+   worker entry caps the number of resolver launches per merge attempt
+   at 2 (one initial + one retry). When the budget is exhausted, the
+   worker transitions to `failing` and a persistent operator alert is
+   raised. Budget resets to 0 on any worker-authored push (new commits
+   on the branch) or on successful merge. Workers cannot silently spin
+   on an unresolvable conflict.
 
 ## Detection machinery
 
@@ -293,16 +325,17 @@ flowchart TD
     Start["resolveWorkerStatus(claudeStatus, prState)"] --> A{prState set?}
     A -->|reviewing| reviewing
     A -->|merge-pending| merge_pending["merge-pending"]
+    A -->|resolving| resolving
     A -->|failing| failing
     A -->|merged| merged
     A -->|none| B["return claudeStatus"]
 ```
 
-Lifecycle states (`reviewing`, `merge-pending`, `failing`, `merged`)
-take priority because they describe where the worker's *code* is, not
-what Claude is doing right now. `merged` is the only one that clears on
-`UserPromptSubmit` — that clear is performed by the hook handler, not
-by this combine function.
+Lifecycle states (`reviewing`, `merge-pending`, `resolving`, `failing`,
+`merged`) take priority because they describe where the worker's *code*
+is, not what Claude is doing right now. `merged` is the only one that
+clears on `UserPromptSubmit` — that clear is performed by the hook
+handler, not by this combine function.
 
 ### Hook → display pipeline
 

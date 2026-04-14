@@ -149,6 +149,51 @@ export function abortRebase(worktreePath: string): void {
   }
 }
 
+// True when a rebase is in progress (either interactive/merge-style or am-style).
+// Used to detect leftover rebase state from a crashed or aborted resolver.
+export function hasRebaseInProgress(worktreePath: string): boolean {
+  return fs.existsSync(path.join(worktreePath, ".git", "rebase-merge")) ||
+    fs.existsSync(path.join(worktreePath, ".git", "rebase-apply"));
+}
+
+// True when `ancestor` is an ancestor of `descendant` in the worktree's repo.
+// Used by the resolver verification to confirm the branch is rebased onto base.
+export function isAncestor(worktreePath: string, ancestor: string, descendant: string): boolean {
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", ancestor, descendant], {
+      cwd: worktreePath,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Ensure no rebase is in progress. If one is found, abort it. Belt-and-suspenders
+// cleanup before the poller attempts a fresh rebase — recovers from a prior
+// resolver that crashed or was killed mid-rebase.
+export function ensureNoRebaseInProgress(worktreePath: string): void {
+  if (hasRebaseInProgress(worktreePath)) {
+    log.warn("git", "aborting leftover rebase before fresh attempt", {
+      data: { worktreePath },
+    });
+    abortRebase(worktreePath);
+  }
+}
+
+// Paths (relative to worktree root) currently in a merge-conflict state — i.e.
+// files with unresolved conflict markers during a rebase/merge. Used in
+// escalation alerts so the operator knows exactly where the resolver got stuck.
+export function getUnmergedFiles(worktreePath: string): string[] {
+  try {
+    const out = git(worktreePath, "diff", "--name-only", "--diff-filter=U");
+    return out.split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 export function forcePushBranch(worktreePath: string, branch: string): void {
   // Push the worktree's actual HEAD to the named branch on origin, regardless
   // of which local branch is currently checked out. Without HEAD: in the

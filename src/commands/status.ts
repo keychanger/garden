@@ -20,7 +20,7 @@ import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/w
 // from prState (written by the poller). The combine function gives prState
 // priority because it describes where the worker's *code* is.
 export type ProcessStatus = "loading" | "ready" | "working" | "idle" | "exited";
-type LifecycleStatus = "reviewing" | "merge-pending" | "failing" | "merged";
+type LifecycleStatus = "reviewing" | "merge-pending" | "resolving" | "failing" | "merged";
 type WorkerStatus = ProcessStatus | LifecycleStatus;
 
 interface WorkerInfo {
@@ -46,6 +46,7 @@ const STATUS_ICONS: Record<WorkerStatus, string> = {
   idle:           "\u25C6",     // filled diamond
   reviewing:      "\u25CE",     // bullseye
   "merge-pending": "\u25F7",    // circle with right half - queued
+  resolving:      "\u25D4",     // circle with upper-right quadrant - resolving
   failing:        "\u2716",     // heavy multiplication x
   merged:         "\u2713",     // check mark
   exited:         "\u25CB",     // open circle
@@ -152,7 +153,7 @@ function truncateActivity(text: string, maxLen: number): string {
   return text.slice(0, maxLen - 1) + "\u2026";
 }
 
-const STATUS_WIDTH = 9; // "reviewing" is the widest
+const STATUS_WIDTH = 9; // "resolving" / "reviewing" are the widest
 
 function formatStatus(worker: WorkerInfo): string {
   if (worker.status === "merge-pending") return "merging";
@@ -168,7 +169,7 @@ export function resolveWorkerStatus(
   entry: { claudeStatus?: string; prState?: string } | undefined,
 ): WorkerStatus {
   const pr = entry?.prState;
-  if (pr === "reviewing" || pr === "merge-pending" || pr === "failing" || pr === "merged") {
+  if (pr === "reviewing" || pr === "merge-pending" || pr === "resolving" || pr === "failing" || pr === "merged") {
     return pr;
   }
   const cs = entry?.claudeStatus as ProcessStatus | undefined;

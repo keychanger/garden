@@ -27,7 +27,7 @@ vi.mock("../src/rules.js", () => ({
 import fs from "node:fs";
 import { tryGetProject } from "../src/config.js";
 import { getDiffAgainstBase, getChangedFiles } from "../src/dashboard/git.js";
-import { buildReviewPrompt, findSpecFiles, buildSpecWarning, readDocSections, readTestSections } from "../src/dashboard/prompts.js";
+import { buildReviewPrompt, buildResolvePrompt, findSpecFiles, buildSpecWarning, readDocSections, readTestSections } from "../src/dashboard/prompts.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 function makeEntry(overrides?: Partial<WorkerEntry>): WorkerEntry {
@@ -101,38 +101,55 @@ describe("buildReviewPrompt — initial review", () => {
   });
 });
 
-describe("buildReviewPrompt — re-review", () => {
-  it("includes re-review intro", () => {
-    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry(), { reReview: true });
-    expect(result).toContain("previously reviewed and approved");
-    expect(result).toContain("re-reviewing");
+describe("buildResolvePrompt", () => {
+  it("frames the task as resolving, not reviewing", () => {
+    const result = buildResolvePrompt("myproject", "/repo/myproject", "main", makeEntry());
+    expect(result).toContain("resolving a rebase conflict");
+    expect(result).toContain("This is not a code review");
   });
 
-  it("includes context section with task and lastReviewBody", () => {
-    const entry = makeEntry({ task: "add retry logic", lastReviewBody: "Code is well structured." });
-    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", entry, { reReview: true });
+  it("includes base branch in rebase instruction", () => {
+    const result = buildResolvePrompt("myproject", "/repo/myproject", "develop", makeEntry());
+    expect(result).toContain("git rebase origin/develop");
+  });
+
+  it("instructs resolver not to push", () => {
+    const result = buildResolvePrompt("myproject", "/repo/myproject", "main", makeEntry());
+    expect(result).toContain("Do **not** push");
+  });
+
+  it("uses DONE/FAILED verdict, not CLEAN/FIXED", () => {
+    const result = buildResolvePrompt("myproject", "/repo/myproject", "main", makeEntry());
+    expect(result).toContain("`DONE`");
+    expect(result).toContain("`FAILED`");
+    expect(result).not.toContain("CLEAN");
+    expect(result).not.toContain("FIXED");
+  });
+
+  it("reports the current attempt number of the budget", () => {
+    const result = buildResolvePrompt(
+      "myproject", "/repo/myproject", "main",
+      makeEntry({ resolveAttempts: 1 }),
+    );
+    expect(result).toContain("attempt 2 of 2");
+  });
+
+  it("defaults to attempt 1 when resolveAttempts is unset", () => {
+    const result = buildResolvePrompt("myproject", "/repo/myproject", "main", makeEntry());
+    expect(result).toContain("attempt 1 of 2");
+  });
+
+  it("includes worker task and previous review body as context", () => {
+    const entry = makeEntry({ task: "add retry logic", lastReviewBody: "Looks good." });
+    const result = buildResolvePrompt("myproject", "/repo/myproject", "main", entry);
     expect(result).toContain("add retry logic");
-    expect(result).toContain("Code is well structured.");
-    expect(result).toContain("Previous review (approved)");
+    expect(result).toContain("Looks good.");
   });
 
-  it("uses focused review step instead of full code review", () => {
-    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry(), { reReview: true });
-    expect(result).toContain("Verify correctness after rebase");
-    expect(result).not.toContain("Code review");
-    expect(result).not.toContain("Documentation accuracy");
-    expect(result).not.toContain("Test quality");
-  });
-
-  it("omits doc and test verification text", () => {
-    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry(), { reReview: true });
-    expect(result).not.toContain("Verify these are still accurate after the diff above");
-    expect(result).not.toContain("Verify these still correctly cover the changed behavior");
-  });
-
-  it("includes commit message reading instruction in rebase step", () => {
-    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry(), { reReview: true });
-    expect(result).toContain("Read the commit messages carefully");
+  it("tells the resolver to abort any in-progress rebase first", () => {
+    const result = buildResolvePrompt("myproject", "/repo/myproject", "main", makeEntry());
+    expect(result).toContain("rebase in progress");
+    expect(result).toContain("git rebase --abort");
   });
 });
 
