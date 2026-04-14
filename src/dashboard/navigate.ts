@@ -18,6 +18,7 @@ import {
 import { findWorkerByName } from "./registry.js";
 import { log } from "./log.js";
 import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenConsoleWindow, resolveGardenRunner } from "./create.js";
+import { parkingWindowName, shellWindowName as shellWin, gardenWindowName, parseWorkerSuffix, isWorkerWindow, type GardenView } from "./window-names.js";
 
 const CYCLE_LOCK = path.join(SESSIONS_DIR, "cycle.lock");
 
@@ -57,9 +58,8 @@ function withCycleLock<T>(fn: () => T): T {
  * @garden_task), so restore them from the window name and registry.
  */
 function restoreWorkerPaneVars(paneId: string, project: string, windowName: string): void {
-  const nameMatch = windowName.match(/-worker-(.+)$/);
-  if (!nameMatch) return;
-  const workerLabel = nameMatch[1];
+  const workerLabel = parseWorkerSuffix(windowName);
+  if (!workerLabel) return;
   setPaneLabel(paneId, workerLabel);
   const entry = findWorkerByName(project, workerLabel);
   if (entry?.task) {
@@ -98,13 +98,15 @@ export function switchProject(indexArg: string): void {
     const windowNames = listAllWindowNames();
     const has = (name: string) => windowNames.includes(name);
 
-    const parkName = state.activeWindowName ?? `_${state.activeProject ?? "none"}-active`;
+    const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject ?? "none");
     parkToHidden(parkName, state);
 
-    if (has(`_${projectName}-active`)) {
-      restoreFromHidden(`_${projectName}-active`, state);
+    const parkTarget = parkingWindowName(projectName);
+    const shellTarget = shellWin(projectName);
+    if (has(parkTarget)) {
+      restoreFromHidden(parkTarget, state);
       state.activePaneType = "worker";
-      state.activeWindowName = `_${projectName}-active`;
+      state.activeWindowName = parkTarget;
     } else {
       const workerWindows = listHiddenWorkerWindows(projectName, windowNames);
       // Prefer the last-touched worker, fall back to first available
@@ -116,15 +118,15 @@ export function switchProject(indexArg: string): void {
         restoreFromHidden(targetWorker, state);
         state.activePaneType = "worker";
         state.activeWindowName = targetWorker;
-      } else if (has(`_${projectName}-shell`)) {
-        restoreFromHidden(`_${projectName}-shell`, state);
+      } else if (has(shellTarget)) {
+        restoreFromHidden(shellTarget, state);
         state.activePaneType = "shell";
-        state.activeWindowName = `_${projectName}-shell`;
+        state.activeWindowName = shellTarget;
       } else {
         createShellWindow(projectName, project.path);
-        restoreFromHidden(`_${projectName}-shell`, state);
+        restoreFromHidden(shellTarget, state);
         state.activePaneType = "shell";
-        state.activeWindowName = `_${projectName}-shell`;
+        state.activeWindowName = shellTarget;
       }
     }
 
@@ -166,7 +168,7 @@ export function focusWorker(): void {
 
     log.info("navigate", "focusWorker", { data: { target: targetWorker } });
 
-    const parkName = state.activeWindowName ?? `_${state.activeProject}-active`;
+    const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject);
     swapToHidden(parkName, targetWorker, state);
 
     if (state.activePaneId) {
@@ -198,36 +200,25 @@ export function focusShell(): void {
     log.info("navigate", "focusShell", { data: { project: state.activeProject } });
 
     const project = getProject(state.activeProject);
-    const shellWindowName = `_${state.activeProject}-shell`;
+    const shellTarget = shellWin(state.activeProject);
 
-    if (!windowExists(shellWindowName)) {
+    if (!windowExists(shellTarget)) {
       createShellWindow(state.activeProject, project.path);
     }
 
-    const parkName = state.activeWindowName ?? `_${state.activeProject}-active`;
-    swapToHidden(parkName, shellWindowName, state);
+    const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject);
+    swapToHidden(parkName, shellTarget, state);
 
     state.activePaneType = "shell";
-    state.activeWindowName = shellWindowName;
+    state.activeWindowName = shellTarget;
     writeDashState(state);
     refreshDashboard({ state });
   });
 }
 
-const GARDEN_VIEWS = ["garden", "root", "logs"] as const;
-type GardenView = typeof GARDEN_VIEWS[number];
-
-function gardenWindowForView(view: GardenView): string {
-  return `_garden-${view}`;
-}
-
-function gardenLabelForView(view: GardenView): string {
-  return view;
-}
-
 function ensureGardenView(view: GardenView): void {
-  const windowName = gardenWindowForView(view);
-  if (windowExists(windowName)) return;
+  const wn = gardenWindowName(view);
+  if (windowExists(wn)) return;
   if (view === "garden") createGardenConsoleWindow(resolveGardenRunner());
   else if (view === "root") createGardenRootWindow();
   else if (view === "logs") createLogsWindow();
@@ -246,12 +237,12 @@ function switchGardenTo(view: GardenView): void {
 
     log.info("navigate", "switchGardenTo", { data: { view, from: state.gardenPaneType } });
 
-    const parkName = state.gardenWindowName ?? "_garden-garden";
+    const parkName = state.gardenWindowName ?? gardenWindowName("garden");
     ensureGardenView(view);
-    gardenSwapToHidden(parkName, gardenWindowForView(view), state);
+    gardenSwapToHidden(parkName, gardenWindowName(view), state);
     state.gardenPaneType = view;
-    state.gardenWindowName = gardenWindowForView(view);
-    setPaneLabel(state.gardenShellPaneId!, gardenLabelForView(view));
+    state.gardenWindowName = gardenWindowName(view);
+    setPaneLabel(state.gardenShellPaneId!, view);
     writeDashState(state);
     refreshDashboard({ state });
 
@@ -288,7 +279,7 @@ export function cyclePane(direction: 1 | -1): void {
     const windowNames = listAllWindowNames();
     const hiddenWorkers = listHiddenWorkerWindows(lockedState.activeProject, windowNames);
     const currentName = lockedState.activeWindowName;
-    const isCurrentWorker = currentName && currentName.includes("-worker-");
+    const isCurrentWorker = currentName && isWorkerWindow(currentName);
 
     const allWorkers = isCurrentWorker
       ? [...new Set([currentName, ...hiddenWorkers])].sort()
@@ -312,7 +303,7 @@ export function cyclePane(direction: 1 | -1): void {
 
     log.info("navigate", "cyclePane", { data: { direction, from: currentName, to: targetWindow } });
 
-    const parkName = currentName ?? `_${lockedState.activeProject}-active`;
+    const parkName = currentName ?? parkingWindowName(lockedState.activeProject);
 
     // Fast path: direct swap (swap-pane + rename, no temp window)
     if (!swapDirect(parkName, targetWindow, lockedState)) {

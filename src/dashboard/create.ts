@@ -22,6 +22,7 @@ import { log, truncateLog } from "./log.js";
 import { validateAndHeal } from "./validate.js";
 import { startProjectPoller, signalFifoPath } from "./poller.js";
 import { installPollTriggerHook, worktreeExists as wtExists, resolveBaseBranch } from "./git.js";
+import { gardenWindowName, shellWindowName as shellWin, workerWindowName as workerWin, isGardenWindow } from "./window-names.js";
 
 const DASHBOARD_COLS = 250;
 const DASHBOARD_ROWS = 60;
@@ -180,10 +181,10 @@ export function ensureDashboard(): void {
     statusPaneId: statusId,
     gardenShellPaneId: gardenShellId,
     gardenPaneType: "garden",
-    gardenWindowName: "_garden-garden",
+    gardenWindowName: gardenWindowName("garden"),
     activePaneId: rightPaneId,
     activePaneType: firstProject ? "shell" : null,
-    activeWindowName: firstProject ? `_${firstProject}-shell` : null,
+    activeWindowName: firstProject ? shellWin(firstProject) : null,
     lastActiveWorker: {},
   };
 
@@ -221,7 +222,7 @@ export function ensureDashboard(): void {
       const resumeCmd = entry.worktreePath && entry.branchName
         ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch)
         : buildResumeCommand(projectName, projectConfig.path, entry.sessionId);
-      const workerWindowName = `_${projectName}-worker-${entry.name}`;
+      const workerWindowName = workerWin(projectName, entry.name);
 
       tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", workerCwd,
         "sh", "-c", resumeCmd);
@@ -277,7 +278,7 @@ export function ensureDashboard(): void {
 }
 
 export function createLogsWindow(): void {
-  const windowName = "_garden-logs";
+  const windowName = gardenWindowName("logs");
   const scriptFile = writeLogsScript();
 
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName,
@@ -307,7 +308,7 @@ exec garden logs --follow
 
 export function createGardenConsoleWindow(gardenRunner: string): void {
   const consoleInit = writeConsoleInitScript(gardenRunner);
-  const windowName = "_garden-garden";
+  const windowName = gardenWindowName("garden");
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName);
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (paneId) {
@@ -318,7 +319,7 @@ export function createGardenConsoleWindow(gardenRunner: string): void {
 }
 
 export function createGardenRootWindow(): void {
-  const windowName = "_garden-root";
+  const windowName = gardenWindowName("root");
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName);
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (paneId) {
@@ -328,7 +329,7 @@ export function createGardenRootWindow(): void {
 }
 
 export function createShellWindow(projectName: string, projectPath: string): void {
-  const windowName = `_${projectName}-shell`;
+  const windowName = shellWin(projectName);
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName, "-c", projectPath);
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (paneId) {
@@ -555,7 +556,7 @@ export function presizeHiddenWindows(state: DashboardState): void {
     if (name === "main") continue;
 
     // Garden pane targets
-    if (name === "_garden-garden" || name === "_garden-root" || name === "_garden-logs") {
+    if (isGardenWindow(name)) {
       if (gardenSize) resizeWindow(name, gardenSize.width, gardenSize.height);
       continue;
     }

@@ -6,8 +6,9 @@ import { readRegistry, writeRegistry, updateWorkerFields, type WorkerRegistry } 
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, killWindowSafe, tmuxSplit, setPaneTitle, setPaneLabel, tmux } from "./tmux.js";
 import { log } from "./log.js";
 import { worktreeExists, removeWorktree, pruneWorktrees } from "./git.js";
-import { startProjectPoller, projectPollerRunning, pollerWindowName, reviewWindowName as getReviewWindowName } from "./poller.js";
+import { startProjectPoller, projectPollerRunning } from "./poller.js";
 import { resolveGardenRunner, createGardenConsoleWindow } from "./create.js";
+import { gardenWindowName, workerWindowName } from "./window-names.js";
 import { buildStatusCommand } from "./header.js";
 import { gardenRestoreFromHidden } from "./layout.js";
 
@@ -44,15 +45,16 @@ function healGardenPaneInState(state: DashboardState): DashboardState {
         const interim = { ...healed, gardenShellPaneId: newPaneId };
 
         const gardenRunner = resolveGardenRunner();
-        if (!windowExists("_garden-garden")) {
+        const gardenWin = gardenWindowName("garden");
+        if (!windowExists(gardenWin)) {
           createGardenConsoleWindow(gardenRunner);
         }
-        gardenRestoreFromHidden("_garden-garden", interim);
+        gardenRestoreFromHidden(gardenWin, interim);
 
         healed = {
           ...interim,
           gardenPaneType: "garden" as const,
-          gardenWindowName: "_garden-garden",
+          gardenWindowName: gardenWin,
         };
         log.info("validate", "recreated garden pane");
       }
@@ -154,7 +156,7 @@ export function validateAndHeal(state: DashboardState): DashboardState {
   for (const [projectName, entries] of Object.entries(registry.workers)) {
     const before = entries.length;
     registry.workers[projectName] = entries.filter(entry => {
-      const windowName = `_${projectName}-worker-${entry.name}`;
+      const windowName = workerWindowName(projectName, entry.name);
       const exists = windowExists(windowName) || windowName === healed.activeWindowName;
       if (!exists) {
         log.info("validate", "removing registry entry for missing window", {

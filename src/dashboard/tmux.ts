@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import { DASHBOARD_SESSION } from "../session.js";
 import { log } from "./log.js";
+import { workerWindowPrefix } from "./window-names.js";
 
 export function tmux(...args: string[]): void {
   execFileSync("tmux", args, { stdio: "ignore" });
@@ -164,7 +165,7 @@ export function listAllWindowNames(): string[] {
 
 export function listHiddenWorkerWindows(project: string, windowNames?: string[]): string[] {
   const names = windowNames ?? listAllWindowNames();
-  const prefix = `_${project}-worker-`;
+  const prefix = workerWindowPrefix(project);
   return names.filter(w => w.startsWith(prefix));
 }
 

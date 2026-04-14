@@ -23,6 +23,7 @@ import { buildWorktreeBootstrapScript, createShellWindow, resolveGardenRunner } 
 import { worktreePath, resolveBaseBranch, isWorktreeDirty } from "./git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
 import { getWorkers } from "./registry.js";
+import { workerWindowName as workerWin, parkingWindowName, shellWindowName as shellWin, parseWorkerSuffix } from "./window-names.js";
 
 const KILL_CONFIRM_FILE = path.join(SESSIONS_DIR, "dashboard.kill-confirm.json");
 const KILL_CONFIRM_TIMEOUT_MS = 5000;
@@ -69,10 +70,10 @@ export function newWorker(): void {
     );
 
     // Show the new pane immediately — bootstrap runs inside it
-    const parkName = state.activeWindowName ?? `_${state.activeProject}-active`;
+    const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject);
     parkToHidden(parkName, state);
 
-    const workerWindowName = `_${state.activeProject}-worker-${workerName}`;
+    const workerWindowName = workerWin(state.activeProject, workerName);
 
     const workerPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
       "sh", "-c", `sh ${shellEscape(scriptFile)}`);
@@ -149,9 +150,8 @@ export function killPane(opts: { force?: boolean } = {}): void {
     // 5 seconds confirms the kill. This avoids tmux confirm-before which
     // silently fails when its run-shell callback can't launch a new process.
     if (!opts.force && killedWindowName && state.activeProject) {
-      const nameMatch = killedWindowName.match(/-worker-(.+)$/);
-      if (nameMatch) {
-        const workerName = nameMatch[1];
+      const workerName = parseWorkerSuffix(killedWindowName);
+      if (workerName) {
         const entry = findWorkerByName(state.activeProject, workerName);
         if (entry?.worktreePath && isWorktreeDirty(entry.worktreePath)) {
           const pending = readKillConfirm();
@@ -180,28 +180,27 @@ export function killPane(opts: { force?: boolean } = {}): void {
         state.activePaneType = "worker";
         state.activeWindowName = targetWindow;
         // Re-apply pane variables lost during swap-pane
-        const nextNameMatch = targetWindow.match(/-worker-(.+)$/);
-        if (nextNameMatch) {
-          const nextLabel = nextNameMatch[1];
+        const nextLabel = parseWorkerSuffix(targetWindow);
+        if (nextLabel) {
           setPaneLabel(targetPaneId, nextLabel);
           const nextEntry = findWorkerByName(state.activeProject, nextLabel);
           if (nextEntry?.task) setPaneVar(targetPaneId, "garden_task", nextEntry.task);
         }
       }
     } else {
-      const shellWindowName = `_${state.activeProject}-shell`;
-      if (!windowExists(shellWindowName)) {
+      const shellTarget = shellWin(state.activeProject);
+      if (!windowExists(shellTarget)) {
         createShellWindow(state.activeProject, project.path);
       }
-      const shellPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${shellWindowName}`);
+      const shellPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${shellTarget}`);
       if (shellPaneId) {
         const visibleSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
-        if (visibleSize) resizeWindow(shellWindowName, visibleSize.width, visibleSize.height);
+        if (visibleSize) resizeWindow(shellTarget, visibleSize.width, visibleSize.height);
         tmux("swap-pane", "-s", state.activePaneId, "-t", shellPaneId);
-        killWindowSafe(shellWindowName);
+        killWindowSafe(shellTarget);
         state.activePaneId = shellPaneId;
         state.activePaneType = "shell";
-        state.activeWindowName = shellWindowName;
+        state.activeWindowName = shellTarget;
       }
     }
 
@@ -209,15 +208,14 @@ export function killPane(opts: { force?: boolean } = {}): void {
       if (state.lastActiveWorker[state.activeProject] === killedWindowName) {
         delete state.lastActiveWorker[state.activeProject];
       }
-      const nameMatch = killedWindowName.match(/-worker-(.+)$/);
-      if (nameMatch) {
-        const workerName = nameMatch[1];
-        const entry = findWorkerByName(state.activeProject, workerName);
+      const killedWorkerName = parseWorkerSuffix(killedWindowName);
+      if (killedWorkerName) {
+        const entry = findWorkerByName(state.activeProject, killedWorkerName);
 
-        killReviewWindow(state.activeProject, workerName);
-        removeWorker(state.activeProject, workerName);
+        killReviewWindow(state.activeProject, killedWorkerName);
+        removeWorker(state.activeProject, killedWorkerName);
         log.info("workers", "killed", {
-          worker: workerName,
+          worker: killedWorkerName,
           data: { project: state.activeProject, branch: entry?.branchName },
         });
 

@@ -13,6 +13,7 @@ import { renderQuickStatus } from "../commands/status.js";
 import { GARDEN_VERSION } from "../version.js";
 import { triggerProjectPoll } from "./poller.js";
 import { log } from "./log.js";
+import { workerWindowName as workerWin, parseWorkerWindow } from "./window-names.js";
 
 const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
 
@@ -144,7 +145,7 @@ function suppressWindowNames(): void {
 // the live tmux pane title (which Claude sets via terminal escape sequences
 // and which doubles as a "what is this worker doing" summary).
 function findWorkerPaneId(project: string, worker: string): string | null {
-  const windowName = `_${project}-worker-${worker}`;
+  const windowName = workerWin(project, worker);
   const state = readDashState();
   if (state.activeWindowName === windowName && state.activePaneId) {
     return state.activePaneId;
@@ -308,9 +309,9 @@ function markPendingReviewIfCommitsAhead(projectName: string, workerName: string
 // panes) or when the registry entry is missing (bootstrap-failure race).
 export function handlePaneDied(windowName: string | undefined): void {
   if (!windowName) return;
-  const match = windowName.match(/^_(.+)-worker-(.+)$/);
-  if (!match) return;
-  const [, project, worker] = match;
+  const parsed = parseWorkerWindow(windowName);
+  if (!parsed) return;
+  const { project, worker } = parsed;
   const entry = findWorkerByName(project, worker);
   if (!entry) return;
   try {
@@ -339,15 +340,15 @@ export function handleTitleChanged(windowName: string | undefined, paneId: strin
   let project: string | undefined;
   let worker: string | undefined;
 
-  const match = windowName.match(/^_(.+)-worker-(.+)$/);
-  if (match) {
-    [, project, worker] = match;
+  const parsed = parseWorkerWindow(windowName);
+  if (parsed) {
+    ({ project, worker } = parsed);
   } else {
     const state = readDashState();
     if (state.activePaneId === paneId && state.activeWindowName) {
-      const activeMatch = state.activeWindowName.match(/^_(.+)-worker-(.+)$/);
-      if (activeMatch) {
-        [, project, worker] = activeMatch;
+      const activeParsed = parseWorkerWindow(state.activeWindowName);
+      if (activeParsed) {
+        ({ project, worker } = activeParsed);
       }
     }
   }

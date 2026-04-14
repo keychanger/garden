@@ -31,20 +31,12 @@ import { healStatusPane } from "./validate.js";
 import { log } from "./log.js";
 import { buildRulesContext } from "../rules.js";
 import { addAlert } from "./alerts.js";
+import { pollerWindowName, reviewWindowName, workerWindowName } from "./window-names.js";
 
 const DEBOUNCE_MS = 30_000;
 
-// Per-project naming helpers
-export function pollerWindowName(project: string): string {
-  return `_${project}-poller`;
-}
-
 export function signalFifoPath(project: string): string {
   return path.join(SESSIONS_DIR, `${project}-poll-signal`);
-}
-
-function reviewWindowName(project: string, worker: string): string {
-  return `_${project}-review-${worker}`;
 }
 
 function reviewResultPath(project: string, worker: string): string {
@@ -985,7 +977,7 @@ function notifySiblingWorkers(
       `Rebase onto ${baseBranch}, review how these changes interact with your work, and make sure you are not reverting their fix. Push when ready.`,
     ].join("\n");
 
-    const windowName = `_${projectName}-worker-${sibling.name}`;
+    const windowName = workerWindowName(projectName, sibling.name);
     if (!windowExists(windowName)) continue;
 
     const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
@@ -1203,8 +1195,8 @@ export function projectPollerRunning(projectName: string): boolean {
   return windowExists(pollerWindowName(projectName));
 }
 
-// Exported for review window cleanup in workers.ts and validate.ts
-export { killReviewWindow, reviewWindowName };
+// Exported for review window cleanup in workers.ts
+export { killReviewWindow };
 
 function ensureSignalFifo(fifoPath: string): void {
   try {

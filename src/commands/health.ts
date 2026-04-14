@@ -8,6 +8,7 @@ import {
   listHiddenWorkerWindows,
 } from "../dashboard/tmux.js";
 import { loadConfig } from "../config.js";
+import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/window-names.js";
 
 // A worker in `working` state with no hook fire in this long is considered
 // stuck. The Stop hook should fire whenever Claude finishes — if 15 minutes
@@ -66,7 +67,7 @@ export async function health(args: string[]): Promise<void> {
 
     for (const entry of entries) {
       totalWorkers++;
-      const windowName = `_${projectName}-worker-${entry.name}`;
+      const windowName = workerWin(projectName, entry.name);
       const isActive = windowName === state.activeWindowName;
       const hasWindow = windowExists(windowName) || isActive;
 
@@ -130,7 +131,7 @@ export async function health(args: string[]): Promise<void> {
     // Check for orphaned windows (in tmux but not in registry)
     const registeredNames = new Set(entries.map(e => e.name));
     for (const win of hiddenWindows) {
-      const workerName = win.replace(`_${projectName}-worker-`, "");
+      const workerName = parseWorkerSuffix(win) ?? win;
       if (!registeredNames.has(workerName) && win !== state.activeWindowName) {
         console.log(`  ${projectName}/${workerName}: ORPHANED window`);
         issues.push(`Orphaned window ${win} not in registry`);

@@ -12,6 +12,7 @@ import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
 import { getWorkers, readRegistry, batchUpdateWorkerFields } from "../dashboard/registry.js";
 import { listHiddenWorkerWindows, windowExists, getFirstPaneId, getPaneTitle } from "../dashboard/tmux.js";
+import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/window-names.js";
 
 // Display states from STATUS.md. These are the only values the renderer ever
 // emits. `loading`/`ready`/`working`/`idle`/`exited` come from claudeStatus
@@ -69,7 +70,7 @@ function refreshWorkerTasks(state: DashboardState): void {
 
     for (const [project, entries] of Object.entries(registry.workers)) {
       for (const entry of entries) {
-        const windowName = `_${project}-worker-${entry.name}`;
+        const windowName = workerWin(project, entry.name);
         let paneId: string | null = null;
         if (state.activeWindowName === windowName && state.activePaneId) {
           paneId = state.activePaneId;
@@ -186,8 +187,7 @@ function collectWorkers(
   const registryByName = new Map(registryEntries.map(e => [e.name, e]));
 
   if (state.activeProject === projectName && state.activePaneType === "worker") {
-    const nameMatch = (state.activeWindowName ?? "").match(/-worker-(.+)$/);
-    const label = nameMatch ? nameMatch[1] : "worker-1";
+    const label = parseWorkerSuffix(state.activeWindowName ?? "") ?? "worker-1";
     const entry = registryByName.get(label);
     workers.push({
       name: label,
@@ -201,8 +201,7 @@ function collectWorkers(
   const hiddenWindows = listHiddenWorkerWindows(projectName, windowNames);
   for (const win of hiddenWindows) {
     if (win === state.activeWindowName) continue;
-    const nameMatch = win.match(/-worker-(.+)$/);
-    const label = nameMatch ? nameMatch[1] : win;
+    const label = parseWorkerSuffix(win) ?? win;
     const entry = registryByName.get(label);
     workers.push({
       name: label,
