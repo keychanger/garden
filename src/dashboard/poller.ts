@@ -564,8 +564,17 @@ function readReviewResult(
 
 function parseReviewResult(output: string, workerName: string): ReviewResult | null {
   const lines = output.split("\n");
-  const lastLine = lines[lines.length - 1].trim().toUpperCase();
-  const body = lines.slice(0, -1).join("\n").trim() || "No additional comments.";
+  // Skip trailing blank lines to find the actual verdict line.
+  let lastLineIdx = lines.length - 1;
+  while (lastLineIdx >= 0 && !lines[lastLineIdx].trim()) lastLineIdx--;
+  if (lastLineIdx < 0) {
+    log.warn("poller", "review output is empty", { worker: workerName });
+    return null;
+  }
+
+  // Strip trailing punctuation/whitespace before matching, so "CLEAN." works.
+  const lastLine = lines[lastLineIdx].trim().toUpperCase().replace(/[.\s!]+$/, "");
+  const body = lines.slice(0, lastLineIdx).join("\n").trim() || "No additional comments.";
 
   if (lastLine === "CLEAN") return { verdict: "clean", body };
   if (lastLine === "FIXED") return { verdict: "fixed", body };

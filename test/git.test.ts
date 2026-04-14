@@ -154,12 +154,12 @@ describe("isWorktreeDirty", () => {
     expect(mockExec).not.toHaveBeenCalled();
   });
 
-  it("returns false when git fails (broken state should not block kill)", () => {
+  it("returns true when git fails (fail-safe: assume dirty to show kill confirmation)", () => {
     mockFs.existsSync.mockReturnValue(true);
     mockExec.mockImplementation(() => {
       throw new Error("not a git repo");
     });
-    expect(isWorktreeDirty("/tmp/wt")).toBe(false);
+    expect(isWorktreeDirty("/tmp/wt")).toBe(true);
   });
 });
 
