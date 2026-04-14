@@ -17,7 +17,7 @@ import {
 import {
   getBranchHeadSha, getRemoteTrackingSha,
   rebaseBranch, abortRebase, cleanWorktree,
-  forcePushBranch, mergeToBase, deleteRemoteBranch,
+  forcePushBranch, mergeToBase, fastForwardBase, deleteRemoteBranch,
   getChangedFiles, getDiffAgainstBase,
   getCommitSummary, getNewCommitSummary,
   resolveBaseBranch,
@@ -864,6 +864,12 @@ function finalizeMerge(
 
   log.info("poller", "merged to base branch", { worker: entry.name, data: { baseBranch } });
   deleteRemoteBranch(projectPath, branchName);
+
+  // Update the main checkout so postMerge (e.g. npm run build) runs
+  // against the newly merged code, not stale working-tree files.
+  // mergeToBase only pushes to the remote via refspec — it never touches
+  // the local checkout.
+  fastForwardBase(projectPath, baseBranch);
 
   notifySiblingWorkers(projectName, baseBranch, entry);
 
