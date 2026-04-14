@@ -469,7 +469,7 @@ describe("getCommitSummary", () => {
     expect(getCommitSummary("/tmp/wt", "main")).toBe("abc123 fix something\ndef456 add feature");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["log", "--oneline", "main..HEAD"],
+      ["log", "--oneline", "origin/main..HEAD"],
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -479,7 +479,7 @@ describe("getCommitSummary", () => {
     getCommitSummary("/tmp/wt", "develop");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["log", "--oneline", "develop..HEAD"],
+      ["log", "--oneline", "origin/develop..HEAD"],
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });

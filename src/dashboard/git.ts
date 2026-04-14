@@ -216,7 +216,7 @@ export function getChangedFiles(wtPath: string, baseBranch: string): string[] {
 export function getCommitSummary(wtPath: string, baseBranch: string): string {
   try {
     return execFileSync("git", [
-      "log", "--oneline", `${baseBranch}..HEAD`,
+      "log", "--oneline", `origin/${baseBranch}..HEAD`,
     ], {
       cwd: wtPath,
       encoding: "utf-8",

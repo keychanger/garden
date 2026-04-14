@@ -274,7 +274,7 @@ function markPendingReviewIfCommitsAhead(projectName: string, workerName: string
     const cwd = process.cwd();
     // git rev-list --count <base>..HEAD — counts commits ahead of base.
     // Returns "0" if no commits ahead, a positive number otherwise.
-    const out = execFileSync("git", ["rev-list", "--count", `${baseBranch}..HEAD`], {
+    const out = execFileSync("git", ["rev-list", "--count", `origin/${baseBranch}..HEAD`], {
       cwd,
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
