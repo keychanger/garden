@@ -32,6 +32,10 @@ import {
   deleteRemoteBranch,
   rebaseBranch,
   abortRebase,
+  hasRebaseInProgress,
+  isAncestor,
+  ensureNoRebaseInProgress,
+  getUnmergedFiles,
   cleanWorktree,
   forcePushBranch,
   getChangedFiles,
@@ -404,6 +408,89 @@ describe("abortRebase", () => {
       throw new Error("no rebase in progress");
     });
     expect(() => abortRebase("/tmp/wt")).not.toThrow();
+  });
+});
+
+describe("hasRebaseInProgress", () => {
+  it("returns true when rebase-merge directory exists", () => {
+    mockFs.existsSync.mockImplementation((p: unknown) =>
+      String(p).includes("rebase-merge"),
+    );
+    expect(hasRebaseInProgress("/tmp/wt")).toBe(true);
+  });
+
+  it("returns true when rebase-apply directory exists", () => {
+    mockFs.existsSync.mockImplementation((p: unknown) =>
+      String(p).includes("rebase-apply"),
+    );
+    expect(hasRebaseInProgress("/tmp/wt")).toBe(true);
+  });
+
+  it("returns false when neither directory exists", () => {
+    mockFs.existsSync.mockReturnValue(false);
+    expect(hasRebaseInProgress("/tmp/wt")).toBe(false);
+  });
+});
+
+describe("isAncestor", () => {
+  it("returns true when ancestor check succeeds", () => {
+    expect(isAncestor("/tmp/wt", "origin/main", "HEAD")).toBe(true);
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["merge-base", "--is-ancestor", "origin/main", "HEAD"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
+  it("returns false when ancestor check fails", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("not ancestor");
+    });
+    expect(isAncestor("/tmp/wt", "origin/main", "HEAD")).toBe(false);
+  });
+});
+
+describe("ensureNoRebaseInProgress", () => {
+  it("aborts rebase when one is in progress", () => {
+    mockFs.existsSync.mockImplementation((p: unknown) =>
+      String(p).includes("rebase-merge"),
+    );
+    ensureNoRebaseInProgress("/tmp/wt");
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["rebase", "--abort"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
+  it("does nothing when no rebase is in progress", () => {
+    mockFs.existsSync.mockReturnValue(false);
+    ensureNoRebaseInProgress("/tmp/wt");
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+});
+
+describe("getUnmergedFiles", () => {
+  it("returns list of unmerged file paths", () => {
+    mockExec.mockReturnValue("src/foo.ts\nsrc/bar.ts\n");
+    expect(getUnmergedFiles("/tmp/wt")).toEqual(["src/foo.ts", "src/bar.ts"]);
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["diff", "--name-only", "--diff-filter=U"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
+  it("returns empty array when no conflicts", () => {
+    mockExec.mockReturnValue("");
+    expect(getUnmergedFiles("/tmp/wt")).toEqual([]);
+  });
+
+  it("returns empty array on error", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("not a git repo");
+    });
+    expect(getUnmergedFiles("/tmp/wt")).toEqual([]);
   });
 });
 

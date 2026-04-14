@@ -194,6 +194,7 @@ Each worker has two independent status axes:
 **Lifecycle status** — where the worker's code is in the review pipeline, written by the poller:
 - ◎ **reviewing** — automated reviewer is checking the worker's commits
 - ◷ **merge-pending** — review passed, in the merge queue
+- ◔ **resolving** — automated resolver is fixing a merge-queue rebase conflict
 - ✖ **failing** — review failed, waiting for worker to fix
 - ✓ **merged** — code merged to base branch
 
