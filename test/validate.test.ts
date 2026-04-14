@@ -166,6 +166,47 @@ describe("validateAndHeal", () => {
     expect(written.workers.garden[0].name).toBe("bold-ash");
   });
 
+  it("removes merged registry entries when tmux window is gone", () => {
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: {
+        garden: [
+          { name: "bold-ash", sessionId: "a", task: "fix" },
+          { name: "merged-one", sessionId: "c", task: "done", prState: "merged" },
+        ],
+      },
+    });
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("merged-one")
+    );
+    const state = makeState();
+    validateAndHeal(state);
+    expect(vi.mocked(writeRegistry)).toHaveBeenCalled();
+    const written = vi.mocked(writeRegistry).mock.calls[0][0];
+    expect(written.workers.garden).toHaveLength(1);
+    expect(written.workers.garden[0].name).toBe("bold-ash");
+  });
+
+  it("clears stale lastActiveWorker references", () => {
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      name !== "_garden-worker-gone"
+    );
+    const state = makeState({
+      lastActiveWorker: { garden: "_garden-worker-gone" },
+    });
+    const healed = validateAndHeal(state);
+    expect(healed.lastActiveWorker).not.toHaveProperty("garden");
+  });
+
+  it("keeps lastActiveWorker when window is the active window", () => {
+    vi.mocked(windowExists).mockReturnValue(false);
+    const state = makeState({
+      activeWindowName: "_garden-worker-bold-ash",
+      lastActiveWorker: { garden: "_garden-worker-bold-ash" },
+    });
+    const healed = validateAndHeal(state);
+    expect(healed.lastActiveWorker.garden).toBe("_garden-worker-bold-ash");
+  });
+
   it("keeps registry entries for active window even if not a hidden window", () => {
     vi.mocked(readRegistry).mockReturnValue({
       workers: {
