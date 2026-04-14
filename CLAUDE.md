@@ -70,7 +70,7 @@ garden config garden baseBranch develop # set a key
 garden config garden baseBranch unset   # clear a key
 ```
 
-Available keys: `baseBranch`, `checks`, `postMerge`, `focused`. The `baseBranch` key controls which branch workers branch from and merge into. Resolution order: explicit config > auto-detected from `git symbolic-ref refs/remotes/origin/HEAD` > `"main"` as last resort. The `focused` key controls dashboard visibility (default: focused). Use `garden focus`/`garden unfocus` as shortcuts.
+Available keys: `baseBranch`, `checks`, `postMerge`, `focused`. The `baseBranch` key controls which branch workers branch from and merge into. Resolution order: explicit config > current branch of main checkout > `origin/HEAD` symref > `"main"` as last resort. The `focused` key controls dashboard visibility (default: focused). Use `garden focus`/`garden unfocus` as shortcuts.
 
 ## Adding a new command
 

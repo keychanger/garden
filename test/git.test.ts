@@ -521,19 +521,38 @@ describe("resolveBaseBranch", () => {
     expect(mockExec).not.toHaveBeenCalled();
   });
 
-  it("detects from origin/HEAD when no config", () => {
-    mockExec.mockReturnValue("refs/remotes/origin/master");
+  it("uses current branch of main checkout when no config", () => {
+    mockExec.mockReturnValue("develop");
+    expect(resolveBaseBranch("/repo")).toBe("develop");
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["rev-parse", "--abbrev-ref", "HEAD"],
+      expect.objectContaining({ cwd: "/repo" }),
+    );
+  });
+
+  it("detects from origin/HEAD when current branch is detached HEAD", () => {
+    mockExec
+      .mockReturnValueOnce("HEAD") // currentBranch returns "HEAD" for detached
+      .mockReturnValueOnce("refs/remotes/origin/master"); // symbolic-ref
     expect(resolveBaseBranch("/repo")).toBe("master");
   });
 
-  it("falls back to main when origin/HEAD is not set", () => {
+  it("detects from origin/HEAD when currentBranch fails", () => {
+    mockExec
+      .mockImplementationOnce(() => { throw new Error("not a git repo"); }) // currentBranch
+      .mockReturnValueOnce("refs/remotes/origin/master"); // symbolic-ref
+    expect(resolveBaseBranch("/repo")).toBe("master");
+  });
+
+  it("falls back to main when nothing works", () => {
     mockExec.mockImplementation(() => {
       throw new Error("not a symbolic ref");
     });
     expect(resolveBaseBranch("/repo")).toBe("main");
   });
 
-  it("falls back to main when config has no baseBranch", () => {
+  it("falls back to main when config has no baseBranch and nothing works", () => {
     mockExec.mockImplementation(() => {
       throw new Error("not a symbolic ref");
     });

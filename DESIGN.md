@@ -129,7 +129,7 @@ projects:
     postMerge: npm install && npm run build
 ```
 
-**baseBranch**: The branch that workers branch from and merge into. Resolution order: explicit config > auto-detected from `git symbolic-ref refs/remotes/origin/HEAD` > `"main"` as last resort. Most repos work without setting this.
+**baseBranch**: The branch that workers branch from and merge into. Resolution order: explicit config > current branch of main checkout > `origin/HEAD` symref > `"main"` as last resort. Most repos work without setting this.
 
 **checks**: Command the reviewer runs in the worker's worktree after rebasing onto the base branch, so checks validate the combined state of the branch plus latest base. If checks fail, the reviewer fixes the issues and re-runs. No checks configured means the reviewer only does the code review.
 

@@ -13,6 +13,10 @@ const WORKTREE_BASE = path.join(
 
 export function resolveBaseBranch(repoPath: string, projectConfig?: Pick<ProjectConfig, "baseBranch">): string {
   if (projectConfig?.baseBranch) return projectConfig.baseBranch;
+  // Use whatever branch is checked out in the main project directory —
+  // that's the branch workers should merge into.
+  const current = currentBranch(repoPath);
+  if (current && current !== "HEAD") return current;
   try {
     const ref = git(repoPath, "symbolic-ref", "refs/remotes/origin/HEAD");
     const match = ref.match(/^refs\/remotes\/origin\/(.+)$/);
