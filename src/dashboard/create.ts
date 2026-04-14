@@ -40,7 +40,7 @@ function buildClaudeHooksJson(gardenRunner: string): string {
       }],
       Stop: [{
         matcher: "",
-        hooks: [{ type: "command", command: `${hookCmd} stop`, async: true, timeout: 5 }],
+        hooks: [{ type: "command", command: `${hookCmd} stop`, timeout: 5 }],
       }],
       PreToolUse: [{
         matcher: "AskUserQuestion",
