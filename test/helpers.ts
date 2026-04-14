@@ -6,6 +6,14 @@ import { beforeEach, afterEach, vi } from "vitest";
 let tmpHome: string;
 let originalHome: string | undefined;
 
+export async function captureConsoleLog(fn: () => Promise<void> | void): Promise<string[]> {
+  const lines: string[] = [];
+  const orig = console.log;
+  console.log = (...args: unknown[]) => lines.push(args.map(String).join(" "));
+  try { await fn(); } finally { console.log = orig; }
+  return lines;
+}
+
 export function useTmpHome() {
   beforeEach(() => {
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "garden-test-"));
