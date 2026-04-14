@@ -30,6 +30,8 @@ npm run dev -- help    # run via tsx during development
   - `validate.ts` — state/tmux consistency validation and self-healing
   - `git.ts` — git CLI wrappers for worktree and merge operations
   - `poller.ts` — poller: event-driven state machine driving review/merge lifecycle
+  - `prompts.ts` — review prompt building for the reviewer Claude session
+  - `window-names.ts` — centralized tmux window naming conventions (construction, parsing, classification)
   - `alerts.ts` — persistent operator alerts (review failures, merge errors, repeated failures)
   - `log.ts` — structured JSON logger to `~/.garden/sessions/dashboard.log`
   - `names.ts` — worker name generation (adjective-noun pairs)
@@ -123,7 +125,7 @@ The project shell (`opt-s`) stays on the main checkout for manual work.
 
 ## Specification files
 
-A specification file is a markdown document that is the source of truth for a system: the code is expected to follow it, not the other way around. Specs are identified by the marker phrase **"the code is wrong"** in their opening paragraph (the spec convention is "if the code disagrees with this document, the code is wrong"). The reviewer detects this marker via `findSpecFiles()` in `src/dashboard/poller.ts` and prepends a strong warning to the review prompt instructing it to never edit a spec file to match the current implementation.
+A specification file is a markdown document that is the source of truth for a system: the code is expected to follow it, not the other way around. Specs are identified by the marker phrase **"the code is wrong"** in their opening paragraph (the spec convention is "if the code disagrees with this document, the code is wrong"). The reviewer detects this marker via `findSpecFiles()` in `src/dashboard/prompts.ts` and prepends a strong warning to the review prompt instructing it to never edit a spec file to match the current implementation.
 
 When working with a spec file:
 

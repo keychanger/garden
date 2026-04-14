@@ -31,8 +31,6 @@ vi.mock("../src/dashboard/log.js", () => ({
 vi.mock("../src/dashboard/poller.js", () => ({
   startProjectPoller: vi.fn(),
   projectPollerRunning: vi.fn(() => true),
-  pollerWindowName: vi.fn((p: string) => `_${p}-poller`),
-  reviewWindowName: vi.fn((p: string, w: string) => `_${p}-review-${w}`),
 }));
 
 vi.mock("../src/dashboard/create.js", () => ({
