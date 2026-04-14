@@ -106,7 +106,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   abortRebase: vi.fn(),
   cleanWorktree: vi.fn(),
   deleteRemoteBranch: vi.fn(),
-  fastForwardBase: vi.fn(),
+
   getChangedFiles: vi.fn(() => []),
   getCommitSummary: vi.fn(() => "abc123 fix something"),
   getNewCommitSummary: vi.fn(() => "def456 address review feedback"),

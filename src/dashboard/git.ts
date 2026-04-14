@@ -27,17 +27,6 @@ export function worktreePath(project: string, workerName: string): string {
   return path.join(WORKTREE_BASE, project, workerName);
 }
 
-export function fastForwardBase(repoPath: string, baseBranch: string): void {
-  try {
-    git(repoPath, "fetch", "origin", baseBranch);
-    git(repoPath, "merge", "--ff-only", `origin/${baseBranch}`);
-    log.info("git", "fast-forwarded base branch", { data: { baseBranch } });
-  } catch (err) {
-    log.warn("git", "failed to fast-forward base branch", {
-      data: { baseBranch, error: String(err) },
-    });
-  }
-}
 
 export function createWorktree(
   repoPath: string,

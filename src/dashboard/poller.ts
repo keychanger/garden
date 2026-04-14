@@ -867,7 +867,7 @@ function finalizeMerge(
 
   notifySiblingWorkers(projectName, baseBranch, entry);
 
-  runPostMerge(projectName, projectPath);
+  runPostMerge(projectName, projectPath, baseBranch);
 
   // Per STATUS.md invariant 4: there is no merged history. mergeCount is gone.
   // The race that the old double-check guarded against is gone too: the file
@@ -884,19 +884,19 @@ function finalizeMerge(
   refreshDashboard();
 }
 
-function getHeadCommit(projectPath: string): string {
+function getBaseBranchCommit(projectPath: string, baseBranch: string): string {
   try {
-    return execSync("git rev-parse --short HEAD", { cwd: projectPath, encoding: "utf-8" }).trim();
+    return execSync(`git rev-parse --short origin/${baseBranch}`, { cwd: projectPath, encoding: "utf-8" }).trim();
   } catch {
     return "unknown";
   }
 }
 
-function runPostMerge(projectName: string, projectPath: string): void {
+function runPostMerge(projectName: string, projectPath: string, baseBranch: string): void {
   const project = tryGetProject(projectName);
   if (!project?.postMerge) return;
 
-  const commit = getHeadCommit(projectPath);
+  const commit = getBaseBranchCommit(projectPath, baseBranch);
 
   try {
     execSync(project.postMerge, {
