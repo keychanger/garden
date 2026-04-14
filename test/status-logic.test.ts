@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { captureConsoleLog } from "./helpers.js";
 
 // The new status system is registry-driven: claudeStatus and prState are
 // the only inputs to the renderer. There is no pgrep, no marker file, no
@@ -111,15 +112,7 @@ describe("worker deduplication", () => {
       { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "idle" },
     ]);
 
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try {
-      await status([]);
-    } finally {
-      console.log = origLog;
-    }
-
+    const lines = await captureConsoleLog(() => status([]));
     const occurrences = lines.filter(l => l.includes("bold-ash")).length;
     expect(occurrences).toBe(1);
   });
@@ -130,10 +123,7 @@ describe("status display", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "loading" },
     ]);
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try { await status([]); } finally { console.log = origLog; }
+    const lines = await captureConsoleLog(() => status([]));
     expect(lines.some(l => l.includes("loading"))).toBe(true);
   });
 
@@ -141,10 +131,7 @@ describe("status display", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "ready" },
     ]);
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try { await status([]); } finally { console.log = origLog; }
+    const lines = await captureConsoleLog(() => status([]));
     expect(lines.some(l => l.includes("ready"))).toBe(true);
   });
 
@@ -152,10 +139,7 @@ describe("status display", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "working" },
     ]);
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try { await status([]); } finally { console.log = origLog; }
+    const lines = await captureConsoleLog(() => status([]));
     expect(lines.some(l => l.includes("working"))).toBe(true);
   });
 
@@ -163,10 +147,7 @@ describe("status display", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "idle" },
     ]);
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try { await status([]); } finally { console.log = origLog; }
+    const lines = await captureConsoleLog(() => status([]));
     expect(lines.some(l => l.includes("idle"))).toBe(true);
   });
 
@@ -174,10 +155,7 @@ describe("status display", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "exited" },
     ]);
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try { await status([]); } finally { console.log = origLog; }
+    const lines = await captureConsoleLog(() => status([]));
     expect(lines.some(l => l.includes("exited"))).toBe(true);
   });
 });
@@ -187,10 +165,7 @@ describe("lifecycle state display (prState takes priority)", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "working", prState: "reviewing" },
     ]);
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try { await status([]); } finally { console.log = origLog; }
+    const lines = await captureConsoleLog(() => status([]));
     expect(lines.some(l => l.includes("reviewing"))).toBe(true);
     expect(lines.some(l => l.includes("working"))).toBe(false);
   });
@@ -199,10 +174,7 @@ describe("lifecycle state display (prState takes priority)", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "merge-pending" },
     ]);
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try { await status([]); } finally { console.log = origLog; }
+    const lines = await captureConsoleLog(() => status([]));
     expect(lines.some(l => l.includes("merging"))).toBe(true);
   });
 
@@ -210,10 +182,7 @@ describe("lifecycle state display (prState takes priority)", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "failing", failCount: 3 },
     ]);
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try { await status([]); } finally { console.log = origLog; }
+    const lines = await captureConsoleLog(() => status([]));
     expect(lines.some(l => l.includes("failing"))).toBe(true);
   });
 
@@ -221,10 +190,7 @@ describe("lifecycle state display (prState takes priority)", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "merged" },
     ]);
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (msg: string) => lines.push(msg);
-    try { await status([]); } finally { console.log = origLog; }
+    const lines = await captureConsoleLog(() => status([]));
     expect(lines.some(l => l.includes("merged"))).toBe(true);
   });
 });
@@ -278,5 +244,53 @@ describe("renderQuickStatus", () => {
     ]);
     const result = renderQuickStatus(state);
     expect(result).not.toContain("old-elm");
+  });
+
+  it("returns 'No projects added.' for empty config", () => {
+    vi.mocked(loadConfig).mockReturnValue({ projects: {} });
+    const result = renderQuickStatus(state);
+    expect(result).toContain("No projects added.");
+  });
+
+  it("renders '(no workers)' for project with no workers", () => {
+    vi.mocked(getWorkers).mockReturnValue([]);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+    const noWorkerState = {
+      ...state,
+      activePaneType: "shell" as const,
+      activeWindowName: "_garden-shell",
+    };
+    const result = renderQuickStatus(noWorkerState);
+    expect(result).toContain("(no workers)");
+  });
+
+  it("marks active project with arrow marker", () => {
+    vi.mocked(getWorkers).mockReturnValue([]);
+    const result = renderQuickStatus(state);
+    expect(result).toContain("\u25C4"); // left-pointing triangle
+  });
+
+  it("appends clear-to-end-of-line escape to every line", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle" },
+    ]);
+    const result = renderQuickStatus(state);
+    const lines = result.split("\n");
+    for (const line of lines) {
+      expect(line).toMatch(/\x1b\[K$/);
+    }
+  });
+
+  it("renders multiple projects", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: { alpha: { path: "/alpha" }, beta: { path: "/beta" } },
+    });
+    vi.mocked(getWorkers).mockReturnValue([]);
+    const result = renderQuickStatus({
+      ...state,
+      activeProject: "alpha",
+    });
+    expect(result).toContain("alpha");
+    expect(result).toContain("beta");
   });
 });

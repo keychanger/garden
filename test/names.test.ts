@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { generateWorkerName } from "../src/dashboard/names.js";
 
 describe("generateWorkerName", () => {
@@ -28,18 +28,18 @@ describe("generateWorkerName", () => {
     expect(names.size).toBeGreaterThan(1);
   });
 
-  it("throws when all names are exhausted", () => {
-    // Use tiny lists to make exhaustion feasible
-    // The real implementation has millions of combinations,
-    // so we test the exhaustion logic by filling all combos from a small subset
-    const adj1 = "bold";
-    const adj2 = "calm";
-    const noun = "ash";
-    const allNames = [`${adj1}-${adj2}-${noun}`];
-
-    // Can't truly exhaust 5M+ names in a test, so just verify the function
-    // returns names not in the existing list
-    const name = generateWorkerName(allNames);
-    expect(allNames).not.toContain(name);
+  it("falls back to exhaustive search when random path collides", () => {
+    // Math.random()=0 always picks index 0: "arch-arch-arc"
+    // Put that name in the existing list to force the exhaustive fallback
+    const spy = vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      const name = generateWorkerName(["arch-arch-arc"]);
+      expect(name).not.toBe("arch-arch-arc");
+      // Exhaustive search starts at adj[0]-adj[0]-noun[0] ("arch-arch-arc"),
+      // finds it used, then moves to noun[1] ("arch-arch-ash")
+      expect(name).toBe("arch-arch-ash");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

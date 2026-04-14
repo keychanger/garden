@@ -96,16 +96,6 @@ vi.mock("../src/dashboard/poller.js", () => ({
   stopProjectPoller: vi.fn(),
 }));
 
-vi.mock("../src/dashboard/window-names.js", () => ({
-  workerWindowName: vi.fn((project: string, worker: string) => `_${project}-worker-${worker}`),
-  parkingWindowName: vi.fn((project: string) => `_${project}-active`),
-  shellWindowName: vi.fn((project: string) => `_${project}-shell`),
-  parseWorkerSuffix: vi.fn((name: string) => {
-    const match = name.match(/-worker-(.+)$/);
-    return match ? match[1] : null;
-  }),
-}));
-
 // --- Imports (after mocks) ---
 
 import { newWorker, killPane } from "../src/dashboard/workers.js";
@@ -339,10 +329,7 @@ describe("killPane", () => {
     vi.mocked(readDashState).mockReturnValue(state);
     vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_myproject-worker-next-one"]);
     vi.mocked(getFirstPaneId).mockReturnValue("%30");
-    vi.mocked(parseWorkerSuffix).mockImplementation((name: string) => {
-      const m = name.match(/-worker-(.+)$/);
-      return m ? m[1] : null;
-    });
+
     vi.mocked(findWorkerByName).mockImplementation((_proj: string, name: string) => {
       if (name === "swift-oak") {
         return {
@@ -385,10 +372,7 @@ describe("killPane", () => {
     vi.mocked(readDashState).mockReturnValue(state);
     vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_myproject-worker-next-one"]);
     vi.mocked(getFirstPaneId).mockReturnValue("%30");
-    vi.mocked(parseWorkerSuffix).mockImplementation((name: string) => {
-      const m = name.match(/-worker-(.+)$/);
-      return m ? m[1] : null;
-    });
+
     vi.mocked(findWorkerByName).mockImplementation((_proj: string, name: string) => {
       if (name === "next-one") return { name: "next-one", sessionId: "s2", task: "do stuff", branchName: "next-one" };
       if (name === "swift-oak") return { name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak", worktreePath: "/wt/swift-oak" };
@@ -406,10 +390,7 @@ describe("killPane", () => {
     vi.mocked(readDashState).mockReturnValue(state);
     vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
     vi.mocked(getFirstPaneId).mockReturnValue("%25");
-    vi.mocked(parseWorkerSuffix).mockImplementation((name: string) => {
-      const m = name.match(/-worker-(.+)$/);
-      return m ? m[1] : null;
-    });
+
     vi.mocked(findWorkerByName).mockImplementation((_proj: string, name: string) => {
       if (name === "swift-oak") return { name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak", worktreePath: "/wt/swift-oak" };
       return null;
@@ -431,10 +412,7 @@ describe("killPane", () => {
     vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
     vi.mocked(windowExists).mockReturnValue(false);
     vi.mocked(getFirstPaneId).mockReturnValue("%25");
-    vi.mocked(parseWorkerSuffix).mockImplementation((name: string) => {
-      const m = name.match(/-worker-(.+)$/);
-      return m ? m[1] : null;
-    });
+
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak",
       worktreePath: "/wt/swift-oak",
@@ -449,10 +427,7 @@ describe("killPane", () => {
     const state = makeState();
     vi.mocked(readDashState).mockReturnValue(state);
     vi.mocked(getFirstPaneId).mockReturnValue("%25");
-    vi.mocked(parseWorkerSuffix).mockImplementation((name: string) => {
-      const m = name.match(/-worker-(.+)$/);
-      return m ? m[1] : null;
-    });
+
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak",
       worktreePath: "/wt/swift-oak",
@@ -467,10 +442,7 @@ describe("killPane", () => {
     const state = makeState();
     vi.mocked(readDashState).mockReturnValue(state);
     vi.mocked(getFirstPaneId).mockReturnValue("%25");
-    vi.mocked(parseWorkerSuffix).mockImplementation((name: string) => {
-      const m = name.match(/-worker-(.+)$/);
-      return m ? m[1] : null;
-    });
+
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak",
       worktreePath: "/wt/swift-oak",
@@ -486,10 +458,7 @@ describe("killPane", () => {
     vi.mocked(readDashState).mockReturnValue(state);
     vi.mocked(getFirstPaneId).mockReturnValue("%25");
     vi.mocked(getWorkers).mockReturnValue([]);
-    vi.mocked(parseWorkerSuffix).mockImplementation((name: string) => {
-      const m = name.match(/-worker-(.+)$/);
-      return m ? m[1] : null;
-    });
+
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak",
       worktreePath: "/wt/swift-oak",
@@ -507,10 +476,7 @@ describe("killPane", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "other-worker", sessionId: "s2", task: "" },
     ]);
-    vi.mocked(parseWorkerSuffix).mockImplementation((name: string) => {
-      const m = name.match(/-worker-(.+)$/);
-      return m ? m[1] : null;
-    });
+
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak",
       worktreePath: "/wt/swift-oak",
@@ -527,10 +493,7 @@ describe("killPane", () => {
     });
     vi.mocked(readDashState).mockReturnValue(state);
     vi.mocked(getFirstPaneId).mockReturnValue("%25");
-    vi.mocked(parseWorkerSuffix).mockImplementation((name: string) => {
-      const m = name.match(/-worker-(.+)$/);
-      return m ? m[1] : null;
-    });
+
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak",
       worktreePath: "/wt/swift-oak",
@@ -546,10 +509,7 @@ describe("killPane", () => {
     const state = makeState();
     vi.mocked(readDashState).mockReturnValue(state);
     vi.mocked(getFirstPaneId).mockReturnValue("%25");
-    vi.mocked(parseWorkerSuffix).mockImplementation((name: string) => {
-      const m = name.match(/-worker-(.+)$/);
-      return m ? m[1] : null;
-    });
+
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak",
       worktreePath: "/wt/swift-oak",
@@ -567,10 +527,7 @@ describe("killPane", () => {
     const state = makeState();
     vi.mocked(readDashState).mockReturnValue(state);
     vi.mocked(getFirstPaneId).mockReturnValue("%25");
-    vi.mocked(parseWorkerSuffix).mockImplementation((name: string) => {
-      const m = name.match(/-worker-(.+)$/);
-      return m ? m[1] : null;
-    });
+
     vi.mocked(findWorkerByName).mockReturnValue(null);
 
     killPane();
@@ -587,10 +544,7 @@ describe("killPane", () => {
     const state = makeState();
     vi.mocked(readDashState).mockReturnValue(state);
     vi.mocked(getFirstPaneId).mockReturnValue("%25");
-    vi.mocked(parseWorkerSuffix).mockImplementation((name: string) => {
-      const m = name.match(/-worker-(.+)$/);
-      return m ? m[1] : null;
-    });
+
     vi.mocked(findWorkerByName).mockReturnValue(null);
 
     killPane();
@@ -608,10 +562,7 @@ describe("killPane dirty worktree double-tap", () => {
     const state = makeState();
     vi.mocked(readDashState).mockReturnValue(state);
     vi.mocked(isWorktreeDirty).mockReturnValue(true);
-    vi.mocked(parseWorkerSuffix).mockImplementation((name: string) => {
-      const m = name.match(/-worker-(.+)$/);
-      return m ? m[1] : null;
-    });
+
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak",
       worktreePath: "/wt/swift-oak",
@@ -700,10 +651,7 @@ describe("killPane dirty worktree double-tap", () => {
     vi.mocked(readDashState).mockReturnValue(state);
     vi.mocked(isWorktreeDirty).mockReturnValue(false);
     vi.mocked(getFirstPaneId).mockReturnValue("%25");
-    vi.mocked(parseWorkerSuffix).mockImplementation((name: string) => {
-      const m = name.match(/-worker-(.+)$/);
-      return m ? m[1] : null;
-    });
+
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak",
       worktreePath: "/wt/swift-oak",

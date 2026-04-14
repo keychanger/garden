@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { captureConsoleLog } from "./helpers.js";
 
 vi.mock("../src/session.js", () => ({
   dashboardExists: vi.fn(() => true),
@@ -45,12 +46,8 @@ import { health } from "../src/commands/health.js";
 import { readRegistry, updateWorkerFields } from "../src/dashboard/registry.js";
 import { getPanePid } from "../src/dashboard/tmux.js";
 
-let logged: string[] = [];
-
 beforeEach(() => {
   vi.clearAllMocks();
-  logged = [];
-  console.log = (msg: string) => logged.push(msg);
 });
 
 describe("garden health — stale hook detection", () => {
@@ -67,7 +64,7 @@ describe("garden health — stale hook detection", () => {
       },
     });
 
-    await health([]);
+    const logged = await captureConsoleLog(() => health([]));
 
     const issueLine = logged.find(l => l.includes("last hook"));
     expect(issueLine).toBeDefined();
@@ -88,7 +85,7 @@ describe("garden health — stale hook detection", () => {
       },
     });
 
-    await health([]);
+    const logged = await captureConsoleLog(() => health([]));
 
     const issueLine = logged.find(l => l.includes("last hook ever ago"));
     expect(issueLine).toBeDefined();
@@ -107,7 +104,7 @@ describe("garden health — stale hook detection", () => {
       },
     });
 
-    await health([]);
+    const logged = await captureConsoleLog(() => health([]));
 
     const issueLines = logged.filter(l => l.includes("last hook"));
     expect(issueLines).toHaveLength(0);
@@ -126,7 +123,7 @@ describe("garden health — stale hook detection", () => {
       },
     });
 
-    await health([]);
+    const logged = await captureConsoleLog(() => health([]));
 
     const issueLines = logged.filter(l => l.includes("last hook"));
     expect(issueLines).toHaveLength(0);
@@ -152,8 +149,9 @@ describe("garden health — dead pane PID detection", () => {
       return realKill(pid, sig as number);
     }) as typeof process.kill;
 
+    let logged: string[];
     try {
-      await health([]);
+      logged = await captureConsoleLog(() => health([]));
     } finally {
       process.kill = realKill;
     }
@@ -180,8 +178,9 @@ describe("garden health — dead pane PID detection", () => {
       return realKill(pid, sig as number);
     }) as typeof process.kill;
 
+    let logged: string[];
     try {
-      await health([]);
+      logged = await captureConsoleLog(() => health([]));
     } finally {
       process.kill = realKill;
     }
@@ -209,7 +208,7 @@ describe("garden health — dead pane PID detection", () => {
     }) as typeof process.kill;
 
     try {
-      await health(["--fix"]);
+      await captureConsoleLog(() => health(["--fix"]));
     } finally {
       process.kill = realKill;
     }
@@ -236,7 +235,7 @@ describe("garden health — dead pane PID detection", () => {
     }) as typeof process.kill;
 
     try {
-      await health([]);
+      await captureConsoleLog(() => health([]));
     } finally {
       process.kill = realKill;
     }
