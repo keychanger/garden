@@ -154,12 +154,12 @@ export function validateAndHeal(state: DashboardState): DashboardState {
   for (const [projectName, entries] of Object.entries(registry.workers)) {
     const before = entries.length;
     registry.workers[projectName] = entries.filter(entry => {
-      if (entry.prState === "merged") return true;
       const windowName = `_${projectName}-worker-${entry.name}`;
       const exists = windowExists(windowName) || windowName === healed.activeWindowName;
       if (!exists) {
         log.info("validate", "removing registry entry for missing window", {
           worker: entry.name,
+          data: { prState: entry.prState },
         });
       }
       return exists;
@@ -188,6 +188,15 @@ export function validateAndHeal(state: DashboardState): DashboardState {
 
   if (registryChanged) {
     writeRegistry(registry);
+  }
+
+  // Clean stale lastActiveWorker references pointing to dead windows
+  for (const [proj, winName] of Object.entries(healed.lastActiveWorker ?? {})) {
+    if (!windowExists(winName) && winName !== healed.activeWindowName) {
+      delete healed.lastActiveWorker[proj];
+      changed = true;
+      log.info("validate", "cleared stale lastActiveWorker", { data: { project: proj, window: winName } });
+    }
   }
 
   // Prune orphaned git worktrees

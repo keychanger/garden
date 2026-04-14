@@ -213,20 +213,6 @@ function collectWorkers(
     });
   }
 
-  // Include registry-only workers (e.g. merged workers whose windows are gone)
-  const seenNames = new Set(workers.map(w => w.name));
-  for (const entry of registryEntries) {
-    if (!seenNames.has(entry.name) && entry.prState === "merged") {
-      workers.push({
-        name: entry.name,
-        status: "merged",
-        activity: null,
-        active: false,
-        failCount: entry.failCount ?? 0,
-      });
-    }
-  }
-
   workers.sort((a, b) => a.name.localeCompare(b.name));
   return workers;
 }

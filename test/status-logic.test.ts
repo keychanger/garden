@@ -272,12 +272,11 @@ describe("renderQuickStatus", () => {
     expect(result).toContain("reviewing");
   });
 
-  it("includes merged registry-only workers (window already gone)", () => {
+  it("excludes merged workers whose tmux window is gone", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "old-elm", sessionId: "abc", task: "", prState: "merged" },
     ]);
     const result = renderQuickStatus(state);
-    expect(result).toContain("old-elm");
-    expect(result).toContain("merged");
+    expect(result).not.toContain("old-elm");
   });
 });
