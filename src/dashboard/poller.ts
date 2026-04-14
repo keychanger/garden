@@ -886,7 +886,7 @@ function finalizeMerge(
 
 function getBaseBranchCommit(projectPath: string, baseBranch: string): string {
   try {
-    return execSync(`git rev-parse --short origin/${baseBranch}`, { cwd: projectPath, encoding: "utf-8" }).trim();
+    return execFileSync("git", ["rev-parse", "--short", `origin/${baseBranch}`], { cwd: projectPath, encoding: "utf-8" }).trim();
   } catch {
     return "unknown";
   }
