@@ -229,21 +229,29 @@ export function mergeToBase(repoPath: string, branchName: string, baseBranch: st
   log.info("git", "merged to base branch", { data: { branchName, baseBranch } });
 }
 
-export function fastForwardBase(repoPath: string, baseBranch: string): void {
+export function fastForwardBase(
+  repoPath: string,
+  baseBranch: string,
+  ctx?: { project?: string; worker?: string },
+): void {
+  const worker = ctx?.worker;
+  const baseData = { baseBranch, ...(ctx?.project ? { project: ctx.project } : {}) };
   try {
     const current = currentBranch(repoPath);
     if (current !== baseBranch) {
       log.info("git", "skipping fast-forward: not on base branch", {
-        data: { baseBranch, currentBranch: current },
+        worker,
+        data: { ...baseData, currentBranch: current },
       });
       return;
     }
     git(repoPath, "fetch", "origin", baseBranch);
     git(repoPath, "merge", "--ff-only", `origin/${baseBranch}`);
-    log.info("git", "fast-forwarded local base branch", { data: { baseBranch } });
+    log.info("git", "fast-forwarded local base branch", { worker, data: baseData });
   } catch (err) {
-    log.warn("git", "failed to fast-forward local base branch", {
-      data: { baseBranch, error: String(err) },
+    log.info("git", "local base checkout not fast-forwarded (postMerge may run against stale code)", {
+      worker,
+      data: { ...baseData, error: String(err) },
     });
   }
 }

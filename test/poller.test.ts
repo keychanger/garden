@@ -580,7 +580,7 @@ describe("poll — merge-pending state", () => {
     expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
     expect(mergeToBase).toHaveBeenCalledWith("/repo/myproject", "bold-ash", "main");
     expect(deleteRemoteBranch).toHaveBeenCalledWith("/repo/myproject", "bold-ash");
-    expect(fastForwardBase).toHaveBeenCalledWith("/repo/myproject", "main");
+    expect(fastForwardBase).toHaveBeenCalledWith("/repo/myproject", "main", { project: "myproject", worker: "bold-ash" });
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({
         prState: "merged",

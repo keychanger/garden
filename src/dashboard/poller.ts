@@ -931,7 +931,7 @@ function finalizeMerge(
   // against the newly merged code, not stale working-tree files.
   // mergeToBase only pushes to the remote via refspec — it never touches
   // the local checkout.
-  fastForwardBase(projectPath, baseBranch);
+  fastForwardBase(projectPath, baseBranch, { project: projectName, worker: entry.name });
 
   notifySiblingWorkers(projectName, baseBranch, entry);
 
