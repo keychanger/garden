@@ -43,6 +43,7 @@ import {
   pruneWorktrees,
   resolveBaseBranch,
   currentBranch,
+  getRemoteHost,
 } from "../src/dashboard/git.js";
 
 const mockExec = vi.mocked(execFileSync);
@@ -663,5 +664,29 @@ describe("currentBranch", () => {
       throw new Error("not a git repo");
     });
     expect(currentBranch("/repo")).toBeNull();
+  });
+});
+
+describe("getRemoteHost", () => {
+  it("extracts host from ssh-style origin URL", () => {
+    mockExec.mockReturnValue("git@github.com:owner/repo.git\n");
+    expect(getRemoteHost("/repo")).toBe("github.com");
+  });
+
+  it("extracts host from https-style origin URL", () => {
+    mockExec.mockReturnValue("https://gitlab.example.com/owner/repo.git\n");
+    expect(getRemoteHost("/repo")).toBe("gitlab.example.com");
+  });
+
+  it("returns null when there is no origin", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("no origin");
+    });
+    expect(getRemoteHost("/repo")).toBeNull();
+  });
+
+  it("returns null for unparseable URLs", () => {
+    mockExec.mockReturnValue("not-a-url\n");
+    expect(getRemoteHost("/repo")).toBeNull();
   });
 });

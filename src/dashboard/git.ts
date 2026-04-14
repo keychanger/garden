@@ -366,6 +366,26 @@ export function currentBranch(repoPath: string): string | null {
   }
 }
 
+// Extract the host from the origin remote URL. Handles both ssh-style
+// (git@host:owner/repo.git) and https-style (https://host/owner/repo.git)
+// forms. Returns null if there is no origin or the URL can't be parsed.
+export function getRemoteHost(repoPath: string): string | null {
+  let url: string;
+  try {
+    url = git(repoPath, "config", "--get", "remote.origin.url");
+  } catch {
+    return null;
+  }
+  if (!url) return null;
+  const sshMatch = url.match(/^[^@]+@([^:]+):/);
+  if (sshMatch) return sshMatch[1];
+  try {
+    return new URL(url).hostname || null;
+  } catch {
+    return null;
+  }
+}
+
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, {
     cwd,

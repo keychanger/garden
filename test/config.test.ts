@@ -117,6 +117,27 @@ describe("getFocusedProjectNames", () => {
   });
 });
 
+describe("isValidConfigKey", () => {
+  it("accepts sandboxDomains as a valid key", async () => {
+    const { isValidConfigKey } = await importConfig();
+    expect(isValidConfigKey("sandboxDomains")).toBe(true);
+  });
+});
+
+describe("sandboxDomains round-trip", () => {
+  it("persists and reloads sandboxDomains as an array", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({
+      projects: {
+        test: { path: "/tmp/test", sandboxDomains: ["foo.com", "bar.com"] },
+      },
+    });
+    const reloaded = loadConfig();
+    expect(reloaded.projects.test.sandboxDomains).toEqual(["foo.com", "bar.com"]);
+  });
+});
+
 describe("reorderProject", () => {
   it("moves a project to a new position", async () => {
     const { reorderProject } = await importConfig();

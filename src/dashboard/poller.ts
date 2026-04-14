@@ -405,7 +405,7 @@ function launchResolver(
   const escapedPrompt = promptFile.replace(/'/g, "'\\''");
   const escapedResult = resultFile.replace(/'/g, "'\\''");
   const escapedFifo = signalFifoPath(projectName).replace(/'/g, "'\\''");
-  const cmd = `GARDEN_REVIEWER=1 claude -p --dangerously-skip-permissions < '${escapedPrompt}' > '${escapedResult}' 2>&1; [ -p '${escapedFifo}' ] && (echo > '${escapedFifo}') 2>/dev/null`;
+  const cmd = `GARDEN_REVIEWER=1 claude -p < '${escapedPrompt}' > '${escapedResult}' 2>&1; [ -p '${escapedFifo}' ] && (echo > '${escapedFifo}') 2>/dev/null`;
 
   if (windowExists(revWindow)) {
     killWindowSafe(revWindow);
@@ -758,7 +758,7 @@ function launchReview(
   // hook handler. Without this, the reviewer's Stop hook would be treated
   // as the worker's Stop hook and would (a) write claudeStatus="idle" for
   // the worker, and (b) poke the poller to start another review.
-  const cmd = `GARDEN_REVIEWER=1 claude -p --dangerously-skip-permissions < '${escapedPrompt}' > '${escapedResult}' 2>&1; [ -p '${escapedFifo}' ] && (echo > '${escapedFifo}') 2>/dev/null`;
+  const cmd = `GARDEN_REVIEWER=1 claude -p < '${escapedPrompt}' > '${escapedResult}' 2>&1; [ -p '${escapedFifo}' ] && (echo > '${escapedFifo}') 2>/dev/null`;
 
   // Kill any leftover review window
   if (windowExists(revWindow)) {

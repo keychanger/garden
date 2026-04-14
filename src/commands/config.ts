@@ -2,7 +2,7 @@
 import { loadConfig, saveConfig, resolveProject, isValidConfigKey, type ProjectConfig } from "../config.js";
 import { output } from "../output.js";
 
-const SETTABLE_KEYS = ["baseBranch", "checks", "postMerge", "focused"] as const;
+const SETTABLE_KEYS = ["baseBranch", "checks", "postMerge", "focused", "sandboxDomains"] as const;
 type SettableKey = typeof SETTABLE_KEYS[number];
 
 export async function config(args: string[]): Promise<void> {
@@ -40,6 +40,10 @@ function showProjectConfig(project: ProjectConfig & { name: string }): void {
   for (const key of SETTABLE_KEYS) {
     if (key === "focused") {
       if (project.focused === false) data.focused = "false";
+    } else if (key === "sandboxDomains") {
+      if (project.sandboxDomains && project.sandboxDomains.length > 0) {
+        data.sandboxDomains = project.sandboxDomains.join(", ");
+      }
     } else if (project[key]) {
       data[key] = project[key]!;
     }
@@ -55,6 +59,15 @@ function showConfigKey(project: ProjectConfig & { name: string }, key: SettableK
   if (key === "focused") {
     const val = project.focused !== false ? "true" : "false";
     output({ [key]: val }, () => val);
+    return;
+  }
+  if (key === "sandboxDomains") {
+    const list = project.sandboxDomains ?? [];
+    if (list.length > 0) {
+      output({ [key]: list }, () => list.join(", "));
+    } else {
+      output({ [key]: null }, () => `(not set)`);
+    }
     return;
   }
   const value = project[key];
@@ -77,6 +90,15 @@ function setConfigKey(projectName: string, key: SettableKey, value: string): voi
     } else {
       delete project.focused;
       console.log(`Cleared ${key} for ${projectName} (default: focused)`);
+    }
+  } else if (key === "sandboxDomains") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.sandboxDomains;
+      console.log(`Cleared ${key} for ${projectName}`);
+    } else {
+      const domains = value.split(",").map((d) => d.trim()).filter(Boolean);
+      project.sandboxDomains = domains;
+      console.log(`Set ${key} = ${domains.join(", ")} for ${projectName}`);
     }
   } else if (value === "" || value === "unset" || value === "null") {
     delete project[key];

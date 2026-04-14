@@ -102,6 +102,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   installPollTriggerHook: vi.fn(),
   worktreeExists: vi.fn(() => true),
   resolveBaseBranch: vi.fn(() => "main"),
+  getRemoteHost: vi.fn(() => "github.com"),
 }));
 
 vi.mock("../src/dashboard/window-names.js", async () => {
@@ -159,7 +160,7 @@ describe("resolveGardenRunner", () => {
 describe("installClaudeHooks", () => {
   it("writes hooks JSON to .claude/settings.local.json", () => {
     process.argv[1] = "/usr/local/bin/garden";
-    installClaudeHooks("/repo/myproject");
+    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
     expect(fs.mkdirSync).toHaveBeenCalledWith(
       expect.stringContaining(".claude"),
       { recursive: true },
@@ -172,7 +173,7 @@ describe("installClaudeHooks", () => {
 
   it("includes all required hook events", () => {
     process.argv[1] = "/usr/local/bin/garden";
-    installClaudeHooks("/repo/myproject");
+    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
     const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
     const parsed = JSON.parse(written);
     expect(parsed.hooks.SessionStart).toBeDefined();

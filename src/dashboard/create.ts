@@ -21,13 +21,14 @@ import { readRegistry, updateWorkerFields } from "./registry.js";
 import { log, truncateLog } from "./log.js";
 import { validateAndHeal } from "./validate.js";
 import { startProjectPoller, signalFifoPath } from "./poller.js";
-import { installPollTriggerHook, worktreeExists as wtExists, resolveBaseBranch } from "./git.js";
+import { installPollTriggerHook, worktreeExists as wtExists, resolveBaseBranch, getRemoteHost } from "./git.js";
+import { buildSandboxConfig, type SandboxConfig } from "./sandbox.js";
 import { gardenWindowName, shellWindowName as shellWin, workerWindowName as workerWin, isGardenWindow } from "./window-names.js";
 
 const DASHBOARD_COLS = 250;
 const DASHBOARD_ROWS = 60;
 
-function buildClaudeHooksJson(gardenRunner: string): string {
+function buildSettingsJson(gardenRunner: string, sandbox: SandboxConfig): string {
   const hookCmd = `${gardenRunner} dashboard _claude-hook`;
   return JSON.stringify({
     hooks: {
@@ -58,11 +59,24 @@ function buildClaudeHooksJson(gardenRunner: string): string {
         hooks: [{ type: "command", command: `${hookCmd} posttooluse`, timeout: 5 }],
       }],
     },
+    sandbox,
   }, null, 2);
 }
 
-export function installClaudeHooks(targetDir: string): void {
-  const json = buildClaudeHooksJson(resolveGardenRunner());
+// Build the sandbox config for a Claude session rooted at targetDir. The
+// worktree path becomes the writable root; the project's origin remote host
+// is auto-added to the network allowlist; per-project sandboxDomains extend it.
+function sandboxForTarget(targetDir: string, project: ProjectConfig): SandboxConfig {
+  return buildSandboxConfig({
+    worktreePath: targetDir,
+    project,
+    remoteHost: getRemoteHost(project.path),
+  });
+}
+
+export function installClaudeHooks(targetDir: string, project: ProjectConfig): void {
+  const sandbox = sandboxForTarget(targetDir, project);
+  const json = buildSettingsJson(resolveGardenRunner(), sandbox);
   const claudeDir = path.join(targetDir, ".claude");
   fs.mkdirSync(claudeDir, { recursive: true });
   fs.writeFileSync(path.join(claudeDir, "settings.local.json"), json);
@@ -210,7 +224,7 @@ export function ensureDashboard(): void {
       if (!entry.sessionId) continue;
       if (entry.worktreePath && wtExists(entry.worktreePath)) {
         installPollTriggerHook(entry.worktreePath, gardenRunner, projectName);
-        installClaudeHooks(entry.worktreePath);
+        installClaudeHooks(entry.worktreePath, projectConfig);
       }
       // Claude Code does not fire SessionStart on --resume, so the SessionStart
       // hook will not write claudeStatus for resumed workers. Write "idle"
@@ -339,19 +353,21 @@ export function createShellWindow(projectName: string, projectPath: string): voi
 }
 
 export function buildWorkerCommand(projectName: string, projectPath: string, sessionId: string): string {
-  installClaudeHooks(projectPath);
+  const project = resolveProjectForHooks(projectName, projectPath);
+  installClaudeHooks(projectPath, project);
   const gardenRunner = shellEscape(resolveGardenRunner());
   const contextFile = writeContextFile(projectName, projectPath);
-  const claudeCmd = `claude --dangerously-skip-permissions --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const claudeCmd = `claude --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${claudeCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
 }
 
 export function buildResumeCommand(projectName: string, projectPath: string, sessionId: string): string {
-  installClaudeHooks(projectPath);
+  const project = resolveProjectForHooks(projectName, projectPath);
+  installClaudeHooks(projectPath, project);
   const gardenRunner = shellEscape(resolveGardenRunner());
   const contextFile = writeContextFile(projectName, projectPath);
-  const claudeCmd = `claude --dangerously-skip-permissions --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const claudeCmd = `claude --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${claudeCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
 }
@@ -365,8 +381,17 @@ export function buildWorktreeWorkerCommand(
   baseBranch?: string,
 ): string {
   const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName, baseBranch);
-  const claudeCmd = `claude --dangerously-skip-permissions --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const claudeCmd = `claude --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   return `${claudeCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
+}
+
+// Resolve a ProjectConfig for installClaudeHooks. Callers of buildWorkerCommand
+// only carry a name and path (pre-worktree API shape), so look up the registered
+// project when possible and fall back to a minimal stub for unknown projects
+// (e.g., tests or ad-hoc invocations).
+function resolveProjectForHooks(projectName: string, projectPath: string): ProjectConfig {
+  const registered = tryGetProject(projectName);
+  return registered ?? { path: projectPath };
 }
 
 /**
@@ -408,8 +433,10 @@ export function buildWorktreeBootstrapScript(
 
   const gardenRunner = resolveGardenRunner();
   const escapedGardenRunner = shellEscape(gardenRunner);
-  const claudeHooksJson = buildClaudeHooksJson(gardenRunner);
-  const escapedHooksJson = claudeHooksJson.replace(/'/g, "'\\''");
+  const project = resolveProjectForHooks(projectName, projectPath);
+  const sandbox = sandboxForTarget(wtPath, project);
+  const settingsJson = buildSettingsJson(gardenRunner, sandbox);
+  const escapedHooksJson = settingsJson.replace(/'/g, "'\\''");
 
   const base = baseBranch ?? "main";
   const escapedBase = base.replace(/'/g, "'\\''");
@@ -457,7 +484,7 @@ cd ${escapedWtPath}
 printf '  Ready.\\n\\n'
 
 # Launch claude
-claude --dangerously-skip-permissions --session-id ${sessionId} --append-system-prompt-file ${escapedContextFile}
+claude --session-id ${sessionId} --append-system-prompt-file ${escapedContextFile}
 ${escapedGardenRunner} dashboard _claude-hook stop 2>/dev/null || true
 ${pollSignal}
 exec $SHELL
@@ -479,7 +506,7 @@ export function buildWorktreeResumeCommand(
 ): string {
   const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName, baseBranch);
   const gardenRunner = shellEscape(resolveGardenRunner());
-  const claudeCmd = `claude --dangerously-skip-permissions --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const claudeCmd = `claude --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${claudeCmd}; ${exitHook}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }

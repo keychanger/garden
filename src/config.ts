@@ -16,10 +16,11 @@ export interface ProjectConfig {
   checks?: string;
   postMerge?: string;
   focused?: boolean;
+  sandboxDomains?: string[];
 }
 
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
-  "path", "baseBranch", "checks", "postMerge", "focused",
+  "path", "baseBranch", "checks", "postMerge", "focused", "sandboxDomains",
 ]);
 
 export function isValidConfigKey(key: string): boolean {

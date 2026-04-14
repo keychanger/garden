@@ -35,6 +35,7 @@ npm run dev -- help    # run via tsx during development
   - `alerts.ts` — persistent operator alerts (review failures, merge errors, repeated failures)
   - `log.ts` — structured JSON logger to `~/.garden/sessions/dashboard.log`
   - `names.ts` — worker name generation (adjective-noun pairs)
+  - `sandbox.ts` — builds Claude sandbox config (filesystem allowWrite + network allowedDomains) for each worker and reviewer
   - `STATUS.md` — **spec** for the worker status tracking and display system. Source of truth: the code follows this document, not the other way around. See "Specification files" below.
 - `src/dashboard-claude.ts` — internal command: launches claude with rules context
 - `src/commands/config.ts` — `garden config` command: view/set project config
@@ -72,7 +73,7 @@ garden config garden baseBranch develop # set a key
 garden config garden baseBranch unset   # clear a key
 ```
 
-Available keys: `baseBranch`, `checks`, `postMerge`, `focused`. The `baseBranch` key controls which branch workers branch from and merge into. Resolution order: explicit config > current branch of main checkout > `origin/HEAD` symref > `"main"` as last resort. The `focused` key controls dashboard visibility (default: focused). Use `garden focus`/`garden unfocus` as shortcuts.
+Available keys: `baseBranch`, `checks`, `postMerge`, `focused`, `sandboxDomains`. The `baseBranch` key controls which branch workers branch from and merge into. Resolution order: explicit config > current branch of main checkout > `origin/HEAD` symref > `"main"` as last resort. The `focused` key controls dashboard visibility (default: focused). Use `garden focus`/`garden unfocus` as shortcuts. The `sandboxDomains` key is a comma-separated list of extra network domains added to each worker/reviewer's sandbox allowlist — use it for private registries, internal services, or other hosts beyond the garden-wide defaults (`garden config <project> sandboxDomains foo.com,bar.com`).
 
 ## Adding a new command
 
@@ -111,7 +112,7 @@ The dashboard uses a permanent tmux layout with content swapped in and out of pa
 Every worker runs in its own git worktree, isolated from the main checkout and other workers:
 
 1. `opt-n` creates a worktree at `~/.garden/worktrees/<project>/<worker-name>/` on a branch named after the worker.
-2. The worker's system prompt includes instructions to commit incrementally and push when done.
+2. The worker's system prompt includes instructions to commit incrementally and push when done. Each worktree's `.claude/settings.local.json` also configures Claude's OS-level sandbox (Seatbelt on macOS, bubblewrap on Linux) with auto-allow for sandboxed bash — workers no longer run with `--dangerously-skip-permissions`. The allowlist is built in `src/dashboard/sandbox.ts` from garden-wide defaults (Anthropic, github, npm, the project's git remote host) plus the project's `sandboxDomains` config key. Reviewers inherit the same config by running inside the worktree.
 3. Each project gets its own **poller** (`src/dashboard/poller.ts`) running in a hidden tmux window (`_<project>-poller`), driving the review/merge lifecycle using local git (no GitHub PRs). Projects never block each other.
    - Wakes only on FIFO pokes from event sources: Claude Code Stop hooks (when commits exist ahead of base), pre-push hooks installed in worktrees, merge-queue completion. There is no fallback poll. See `src/dashboard/STATUS.md` for the full state machine.
    - When the worker's Stop hook fires with commits ahead of base, the hook marks the worker for review (`pendingReviewAt`) and pokes the poller, which transitions `working → reviewing` and launches a Claude reviewer asynchronously in a hidden tmux window (`_<project>-review-<worker>`). Multiple reviews can run in parallel within a project. The reviewer rebases onto the base branch, resolves conflicts, runs optional `checks` command (configured per project in `~/.garden/config.yml`), fixes check failures, and reviews code against project rules.
