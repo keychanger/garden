@@ -444,6 +444,13 @@ git -C ${escapedWtPath} config --local core.hooksPath ${escapedHooksDir}
 mkdir -p ${escapedWtPath}/.claude
 printf '%s' '${escapedHooksJson}' > ${escapedWtPath}/.claude/settings.local.json
 
+# Ensure garden-managed dirs are excluded from git status.
+# Writing to the common info/exclude covers all worktrees and never gets committed.
+EXCLUDE_FILE="$(git -C ${escapedWtPath} rev-parse --git-common-dir)/info/exclude"
+for pattern in .claude/ .garden-hooks/; do
+  grep -qxF "$pattern" "$EXCLUDE_FILE" 2>/dev/null || printf '%s\\n' "$pattern" >> "$EXCLUDE_FILE"
+done
+
 # Switch to the worktree directory
 cd ${escapedWtPath}
 printf '  Ready.\\n\\n'
