@@ -170,9 +170,24 @@ export function forcePushBranch(worktreePath: string, branch: string): void {
 
 export function mergeToBase(repoPath: string, branchName: string, baseBranch: string): void {
   git(repoPath, "fetch", "origin");
-  git(repoPath, "checkout", baseBranch);
-  git(repoPath, "merge", "--ff-only", `origin/${branchName}`);
-  git(repoPath, "push", "origin", baseBranch);
+  // Resolve to concrete SHAs so we can verify fast-forward and push without
+  // needing a clean working tree or switching branches in the project checkout.
+  const branchSha = git(repoPath, "rev-parse", `origin/${branchName}`);
+  const baseSha = git(repoPath, "rev-parse", `origin/${baseBranch}`);
+  // Verify fast-forward: branch must be a descendant of current base
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", baseSha, branchSha], {
+      cwd: repoPath,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch {
+    throw new Error(
+      `Cannot fast-forward: origin/${branchName} (${branchSha}) is not a descendant of origin/${baseBranch} (${baseSha})`,
+    );
+  }
+  // Push directly to remote base branch — no local checkout or merge needed.
+  git(repoPath, "push", "origin", `${branchSha}:refs/heads/${baseBranch}`);
   log.info("git", "merged to base branch", { data: { branchName, baseBranch } });
 }
 

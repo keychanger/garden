@@ -850,11 +850,15 @@ function finalizeMerge(
       worker: entry.name,
       message: `Merge failed for worker ${entry.name}: ${String(err).slice(0, 200)}`,
     });
+    // Set pendingReviewAt so the worker gets re-reviewed instead of being
+    // stuck in "working" with no trigger to advance.
     updateWorkerFields(projectName, entry.name, {
       prState: "working",
+      pendingReviewAt: Date.now(),
       mergePendingAt: undefined,
     });
     refreshDashboard();
+    scheduleDelayedPoke(projectName, 5_000);
     return;
   }
 
