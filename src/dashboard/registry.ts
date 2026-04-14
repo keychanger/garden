@@ -91,8 +91,7 @@ function withRegistryLock<T>(fn: () => T): T {
   }
 
   if (!acquired) {
-    log.warn("registry", "could not acquire registry lock, proceeding without it");
-    return fn();
+    throw new Error("Could not acquire registry lock after 500ms");
   }
 
   try {

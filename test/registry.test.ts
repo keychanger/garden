@@ -221,6 +221,22 @@ describe("backward compatibility", () => {
   });
 });
 
+describe("withRegistryLock", () => {
+  it("throws when lock is held by a live process", async () => {
+    const { addWorker, REGISTRY_FILE } = await importRegistry();
+    // Hold the lock ourselves: write our own PID so the holder appears alive.
+    const lockFile = REGISTRY_FILE + ".lock";
+    fs.writeFileSync(lockFile, String(process.pid));
+    try {
+      expect(() => addWorker("proj", { name: "x", sessionId: "s", task: "" })).toThrow(
+        "Could not acquire registry lock after 500ms"
+      );
+    } finally {
+      try { fs.unlinkSync(lockFile); } catch { /* ignore */ }
+    }
+  }, 2000);
+});
+
 describe("getAllWorkerNames", () => {
   it("returns names across all projects", async () => {
     const { addWorker, getAllWorkerNames } = await importRegistry();
