@@ -48,6 +48,11 @@ in `<project>/.garden/rules.md` can extend or override these.
 - Add tests for new functionality. Update tests for changed functionality. If you change
   how a function behaves, its tests must reflect the new behavior. Leaving stale tests
   is a bug.
+- For bug fixes, write a failing test that reproduces the bug *before* writing the fix.
+  Run the test, confirm it fails for the reason you expect, then apply the fix and
+  confirm it passes. If the bug cannot reasonably be expressed as a test (e.g., a tmux
+  layout glitch, a visual regression), say so explicitly in the commit message rather
+  than skipping the step silently.
 - If a test framework exists, use it. If not, set one up only if the project has enough
   complexity to justify it.
 
