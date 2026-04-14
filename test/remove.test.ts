@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { captureConsoleLog } from "./helpers.js";
 
 let tmpHome: string;
 let originalHome: string | undefined;
@@ -61,14 +62,7 @@ describe("garden remove", () => {
     config.saveConfig({ projects: { myproj: { path: "/myproj" } } });
 
     const { remove } = await importRemove();
-    const logged: string[] = [];
-    const orig = console.log;
-    console.log = (...args: unknown[]) => logged.push(args.map(String).join(" "));
-    try {
-      await remove(["myproj"]);
-    } finally {
-      console.log = orig;
-    }
+    const logged = await captureConsoleLog(() => remove(["myproj"]));
 
     expect(logged.some(l => l.includes("Removed project 'myproj'"))).toBe(true);
   });

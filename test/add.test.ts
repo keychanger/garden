@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { captureConsoleLog } from "./helpers.js";
 
 let tmpHome: string;
 let originalHome: string | undefined;
@@ -81,14 +82,7 @@ describe("garden add", () => {
     config.saveConfig({ projects: { myproject: { path: projectDir } } });
 
     const { add } = await importAdd();
-    const logged: string[] = [];
-    const orig = console.log;
-    console.log = (...args: unknown[]) => logged.push(args.map(String).join(" "));
-    try {
-      await add([projectDir]);
-    } finally {
-      console.log = orig;
-    }
+    const logged = await captureConsoleLog(() => add([projectDir]));
 
     expect(logged.some(l => l.includes("already added"))).toBe(true);
   });
