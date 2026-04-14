@@ -243,6 +243,7 @@ All read commands detect whether stdout is a TTY:
     dashboard.alerts.json # Operator alerts (review failures, merge errors)
     dashboard-<project>.context  # System prompt for project's Claude sessions
     dashboard-<project>-<branch>.context  # Worktree worker context
+    dashboard.kill-confirm.json  # Transient double-tap kill confirmation
     dashboard.log           # Structured JSON log
     <project>-poll-signal   # FIFO for waking project pollers
     console-init.zsh              # Garden console init (custom prompt + auto-dispatch)
