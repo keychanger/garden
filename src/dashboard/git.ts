@@ -220,7 +220,8 @@ export function getChangedFiles(wtPath: string, baseBranch: string): string[] {
   try {
     const result = git(wtPath, "diff", "--name-only", `origin/${baseBranch}...HEAD`);
     return result.split("\n").filter(Boolean);
-  } catch {
+  } catch (err) {
+    log.warn("git", "getChangedFiles failed", { data: { baseBranch, error: String(err) } });
     return [];
   }
 }
@@ -235,7 +236,8 @@ export function getCommitSummary(wtPath: string, baseBranch: string): string {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 10_000,
     }).trim();
-  } catch {
+  } catch (err) {
+    log.warn("git", "getCommitSummary failed", { data: { baseBranch, error: String(err) } });
     return "";
   }
 }
@@ -251,7 +253,8 @@ export function getNewCommitSummary(wtPath: string, sinceSha: string | undefined
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 10_000,
     }).trim();
-  } catch {
+  } catch (err) {
+    log.warn("git", "getNewCommitSummary failed", { data: { sinceSha, error: String(err) } });
     return "";
   }
 }

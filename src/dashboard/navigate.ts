@@ -164,6 +164,8 @@ export function focusWorker(): void {
       ? preferred
       : workerWindows[0];
 
+    log.info("navigate", "focusWorker", { data: { target: targetWorker } });
+
     const parkName = state.activeWindowName ?? `_${state.activeProject}-active`;
     swapToHidden(parkName, targetWorker, state);
 
@@ -192,6 +194,8 @@ export function focusShell(): void {
       }
       return;
     }
+
+    log.info("navigate", "focusShell", { data: { project: state.activeProject } });
 
     const project = getProject(state.activeProject);
     const shellWindowName = `_${state.activeProject}-shell`;
@@ -239,6 +243,8 @@ function switchGardenTo(view: GardenView): void {
       }
       return;
     }
+
+    log.info("navigate", "switchGardenTo", { data: { view, from: state.gardenPaneType } });
 
     const parkName = state.gardenWindowName ?? "_garden-garden";
     ensureGardenView(view);
@@ -303,6 +309,8 @@ export function cyclePane(direction: 1 | -1): void {
 
     const targetWindow = allWorkers[nextIdx];
     if (targetWindow === currentName) return;
+
+    log.info("navigate", "cyclePane", { data: { direction, from: currentName, to: targetWindow } });
 
     const parkName = currentName ?? `_${lockedState.activeProject}-active`;
 

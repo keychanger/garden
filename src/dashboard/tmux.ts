@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import { DASHBOARD_SESSION } from "../session.js";
+import { log } from "./log.js";
 
 export function tmux(...args: string[]): void {
   execFileSync("tmux", args, { stdio: "ignore" });
@@ -39,25 +40,25 @@ export function getActivePaneId(): string | null {
 export function tmuxDisplay(msg: string): void {
   try {
     tmux("display-message", "-t", DASHBOARD_SESSION, msg);
-  } catch { /* ignore */ }
+  } catch { log.debug("tmux", "tmuxDisplay failed"); }
 }
 
 export function setPaneTitle(paneId: string, title: string): void {
   try {
     tmux("select-pane", "-t", paneId, "-T", title);
-  } catch { /* ignore */ }
+  } catch { log.debug("tmux", "setPaneTitle failed", { data: { paneId } }); }
 }
 
 export function setPaneLabel(paneId: string, label: string): void {
   try {
     tmux("set-option", "-p", "-t", paneId, "@garden_name", label);
-  } catch { /* ignore */ }
+  } catch { log.debug("tmux", "setPaneLabel failed", { data: { paneId } }); }
 }
 
 export function setPaneVar(paneId: string, name: string, value: string): void {
   try {
     tmux("set-option", "-p", "-t", paneId, `@${name}`, value);
-  } catch { /* ignore */ }
+  } catch { log.debug("tmux", "setPaneVar failed", { data: { paneId, name } }); }
 }
 
 export function getFirstPaneId(target: string): string | null {
@@ -89,7 +90,7 @@ export function windowExists(windowName: string): boolean {
 export function renameWindow(oldName: string, newName: string): void {
   try {
     tmux("rename-window", "-t", `${DASHBOARD_SESSION}:${oldName}`, newName);
-  } catch { /* ignore */ }
+  } catch { log.debug("tmux", "renameWindow failed", { data: { oldName, newName } }); }
 }
 
 export function getPaneSize(paneId: string): { width: number; height: number } | null {

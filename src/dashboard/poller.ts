@@ -69,6 +69,10 @@ function pollProject(projectName: string): boolean {
   const workers = getWorkers(projectName);
   let changed = false;
 
+  log.info("poller", "poll cycle", {
+    data: { project: projectName, workers: workers.map(w => w.name) },
+  });
+
   for (const entry of workers) {
     try {
       if (pollWorker(projectName, project.path, baseBranch, entry)) {
@@ -310,7 +314,9 @@ function handleMergePending(
       cwd: wtPath,
       stdio: "ignore",
     });
-  } catch { /* best effort */ }
+  } catch (err) {
+    log.debug("poller", "fetch before merge failed", { worker: entry.name, data: { error: String(err) } });
+  }
 
   // Clean tooling artifacts (Claude settings, hook dirs) left by the reviewer.
   // By this point all meaningful changes are committed — anything left is noise.
@@ -470,7 +476,9 @@ function launchReview(
       cwd: wtPath,
       stdio: "ignore",
     });
-  } catch { /* best effort */ }
+  } catch (err) {
+    log.debug("poller", "fetch before review failed", { worker: entry.name, data: { error: String(err) } });
+  }
 
   // Build the review prompt
   const prompt = isReReview
