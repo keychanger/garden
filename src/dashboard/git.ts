@@ -180,6 +180,25 @@ export function mergeToBase(repoPath: string, branchName: string, baseBranch: st
   log.info("git", "merged to base branch", { data: { branchName, baseBranch } });
 }
 
+export function fastForwardBase(repoPath: string, baseBranch: string): void {
+  try {
+    const current = currentBranch(repoPath);
+    if (current !== baseBranch) {
+      log.info("git", "skipping fast-forward: not on base branch", {
+        data: { baseBranch, currentBranch: current },
+      });
+      return;
+    }
+    git(repoPath, "fetch", "origin", baseBranch);
+    git(repoPath, "merge", "--ff-only", `origin/${baseBranch}`);
+    log.info("git", "fast-forwarded local base branch", { data: { baseBranch } });
+  } catch (err) {
+    log.warn("git", "failed to fast-forward local base branch", {
+      data: { baseBranch, error: String(err) },
+    });
+  }
+}
+
 export function deleteRemoteBranch(repoPath: string, branchName: string): void {
   try {
     const refs = git(repoPath, "ls-remote", "--heads", "origin", branchName);

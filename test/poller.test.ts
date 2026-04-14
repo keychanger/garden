@@ -106,7 +106,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   abortRebase: vi.fn(),
   cleanWorktree: vi.fn(),
   deleteRemoteBranch: vi.fn(),
-
+  fastForwardBase: vi.fn(),
   getChangedFiles: vi.fn(() => []),
   getCommitSummary: vi.fn(() => "abc123 fix something"),
   getNewCommitSummary: vi.fn(() => "def456 address review feedback"),
@@ -124,6 +124,7 @@ import { updateWorkerFields, findWorkerByName } from "../src/dashboard/registry.
 import {
   getBranchHeadSha, getRemoteTrackingSha, deleteRemoteBranch,
   forcePushBranch, mergeToBase, rebaseBranch, abortRebase,
+  fastForwardBase,
   getChangedFiles, getCommitSummary, getNewCommitSummary, getDiffAgainstBase,
 } from "../src/dashboard/git.js";
 import { tmux, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
@@ -522,6 +523,7 @@ describe("poll — merge-pending state", () => {
     expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
     expect(mergeToBase).toHaveBeenCalledWith("/repo/myproject", "bold-ash", "main");
     expect(deleteRemoteBranch).toHaveBeenCalledWith("/repo/myproject", "bold-ash");
+    expect(fastForwardBase).toHaveBeenCalledWith("/repo/myproject", "main");
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({
         prState: "merged",
