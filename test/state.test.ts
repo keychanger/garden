@@ -141,3 +141,29 @@ describe("writeDashState / readDashState", () => {
     expect(fs.existsSync(STATE_FILE)).toBe(true);
   });
 });
+
+describe("withStateLock", () => {
+  it("runs fn and cleans up lock file", async () => {
+    const { withStateLock, STATE_FILE } = await importState();
+    const lockFile = STATE_FILE + ".lock";
+    let sawLock = false;
+    withStateLock(() => {
+      sawLock = fs.existsSync(lockFile);
+    });
+    expect(sawLock).toBe(true);
+    expect(fs.existsSync(lockFile)).toBe(false);
+  });
+
+  it("throws when lock is held by a live process", async () => {
+    const { withStateLock, STATE_FILE } = await importState();
+    const lockFile = STATE_FILE + ".lock";
+    fs.writeFileSync(lockFile, String(process.pid));
+    try {
+      expect(() => withStateLock(() => {})).toThrow(
+        "Could not acquire state lock after 500ms"
+      );
+    } finally {
+      try { fs.unlinkSync(lockFile); } catch { /* ignore */ }
+    }
+  }, 2000);
+});

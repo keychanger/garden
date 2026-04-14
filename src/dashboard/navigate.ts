@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadConfig, getProject, getFocusedProjectNames, SESSIONS_DIR } from "../config.js";
-import { readDashState, writeDashState } from "./state.js";
+import { readDashState, writeDashState, withStateLock } from "./state.js";
 import { parkToHidden, swapToHidden, swapDirect } from "./layout.js";
 import { restoreFromHidden } from "./layout.js";
 import { gardenSwapToHidden, gardenRestoreFromHidden } from "./layout.js";
@@ -80,127 +80,134 @@ export function switchProject(indexArg: string): void {
 
   const projectName = projectNames[index];
   const project = config.projects[projectName];
-  const state = readDashState();
 
-  if (state.activeProject === projectName) {
-    tmuxDisplay(`Already on ${projectName}`);
-    return;
-  }
+  withStateLock(() => {
+    const state = readDashState();
 
-  // Record last active worker for the project we're leaving
-  if (state.activeProject && state.activePaneType === "worker" && state.activeWindowName) {
-    state.lastActiveWorker[state.activeProject] = state.activeWindowName;
-  }
-
-  // Single list-windows call replaces multiple windowExists checks
-  const windowNames = listAllWindowNames();
-  const has = (name: string) => windowNames.includes(name);
-
-  const parkName = state.activeWindowName ?? `_${state.activeProject ?? "none"}-active`;
-  parkToHidden(parkName, state);
-
-  if (has(`_${projectName}-active`)) {
-    restoreFromHidden(`_${projectName}-active`, state);
-    state.activePaneType = "worker";
-    state.activeWindowName = `_${projectName}-active`;
-  } else {
-    const workerWindows = listHiddenWorkerWindows(projectName, windowNames);
-    // Prefer the last-touched worker, fall back to first available
-    const preferred = state.lastActiveWorker[projectName];
-    const targetWorker = preferred && workerWindows.includes(preferred)
-      ? preferred
-      : workerWindows[0];
-    if (targetWorker) {
-      restoreFromHidden(targetWorker, state);
-      state.activePaneType = "worker";
-      state.activeWindowName = targetWorker;
-    } else if (has(`_${projectName}-shell`)) {
-      restoreFromHidden(`_${projectName}-shell`, state);
-      state.activePaneType = "shell";
-      state.activeWindowName = `_${projectName}-shell`;
-    } else {
-      createShellWindow(projectName, project.path);
-      restoreFromHidden(`_${projectName}-shell`, state);
-      state.activePaneType = "shell";
-      state.activeWindowName = `_${projectName}-shell`;
+    if (state.activeProject === projectName) {
+      tmuxDisplay(`Already on ${projectName}`);
+      return;
     }
-  }
 
-  if (state.activePaneType === "worker" && state.activePaneId && state.activeWindowName) {
-    restoreWorkerPaneVars(state.activePaneId, projectName, state.activeWindowName);
-  }
+    // Record last active worker for the project we're leaving
+    if (state.activeProject && state.activePaneType === "worker" && state.activeWindowName) {
+      state.lastActiveWorker[state.activeProject] = state.activeWindowName;
+    }
 
-  state.activeProject = projectName;
-  writeDashState(state);
-  refreshDashboard({ state });
+    // Single list-windows call replaces multiple windowExists checks
+    const windowNames = listAllWindowNames();
+    const has = (name: string) => windowNames.includes(name);
+
+    const parkName = state.activeWindowName ?? `_${state.activeProject ?? "none"}-active`;
+    parkToHidden(parkName, state);
+
+    if (has(`_${projectName}-active`)) {
+      restoreFromHidden(`_${projectName}-active`, state);
+      state.activePaneType = "worker";
+      state.activeWindowName = `_${projectName}-active`;
+    } else {
+      const workerWindows = listHiddenWorkerWindows(projectName, windowNames);
+      // Prefer the last-touched worker, fall back to first available
+      const preferred = state.lastActiveWorker[projectName];
+      const targetWorker = preferred && workerWindows.includes(preferred)
+        ? preferred
+        : workerWindows[0];
+      if (targetWorker) {
+        restoreFromHidden(targetWorker, state);
+        state.activePaneType = "worker";
+        state.activeWindowName = targetWorker;
+      } else if (has(`_${projectName}-shell`)) {
+        restoreFromHidden(`_${projectName}-shell`, state);
+        state.activePaneType = "shell";
+        state.activeWindowName = `_${projectName}-shell`;
+      } else {
+        createShellWindow(projectName, project.path);
+        restoreFromHidden(`_${projectName}-shell`, state);
+        state.activePaneType = "shell";
+        state.activeWindowName = `_${projectName}-shell`;
+      }
+    }
+
+    if (state.activePaneType === "worker" && state.activePaneId && state.activeWindowName) {
+      restoreWorkerPaneVars(state.activePaneId, projectName, state.activeWindowName);
+    }
+
+    state.activeProject = projectName;
+    writeDashState(state);
+    refreshDashboard({ state });
+  });
 }
 
 export function focusWorker(): void {
-  const state = readDashState();
-  if (!state.activeProject) {
-    tmuxDisplay("No project selected.");
-    return;
-  }
-
-  if (state.activePaneType === "worker") {
-    if (state.activePaneId && paneExists(state.activePaneId)) {
-      tmux("select-pane", "-t", state.activePaneId);
+  withStateLock(() => {
+    const state = readDashState();
+    if (!state.activeProject) {
+      tmuxDisplay("No project selected.");
+      return;
     }
-    return;
-  }
 
-  const workerWindows = listHiddenWorkerWindows(state.activeProject);
-  if (workerWindows.length === 0) {
-    tmuxDisplay("No workers. Press ⌥n to create one.");
-    return;
-  }
+    if (state.activePaneType === "worker") {
+      if (state.activePaneId && paneExists(state.activePaneId)) {
+        tmux("select-pane", "-t", state.activePaneId);
+      }
+      return;
+    }
 
-  const preferred = state.lastActiveWorker[state.activeProject];
-  const targetWorker = preferred && workerWindows.includes(preferred)
-    ? preferred
-    : workerWindows[0];
+    const workerWindows = listHiddenWorkerWindows(state.activeProject);
+    if (workerWindows.length === 0) {
+      tmuxDisplay("No workers. Press ⌥n to create one.");
+      return;
+    }
 
-  const parkName = state.activeWindowName ?? `_${state.activeProject}-active`;
-  swapToHidden(parkName, targetWorker, state);
+    const preferred = state.lastActiveWorker[state.activeProject];
+    const targetWorker = preferred && workerWindows.includes(preferred)
+      ? preferred
+      : workerWindows[0];
 
-  if (state.activePaneId) {
-    restoreWorkerPaneVars(state.activePaneId, state.activeProject, targetWorker);
-  }
+    const parkName = state.activeWindowName ?? `_${state.activeProject}-active`;
+    swapToHidden(parkName, targetWorker, state);
 
-  state.activePaneType = "worker";
-  state.activeWindowName = targetWorker;
-  writeDashState(state);
-  refreshDashboard({ state });
+    if (state.activePaneId) {
+      restoreWorkerPaneVars(state.activePaneId, state.activeProject, targetWorker);
+    }
+
+    state.activePaneType = "worker";
+    state.activeWindowName = targetWorker;
+    writeDashState(state);
+    refreshDashboard({ state });
+  });
 }
 
 export function focusShell(): void {
-  const state = readDashState();
-  if (!state.activeProject) {
-    tmuxDisplay("No project selected.");
-    return;
-  }
-
-  if (state.activePaneType === "shell") {
-    if (state.activePaneId && paneExists(state.activePaneId)) {
-      tmux("select-pane", "-t", state.activePaneId);
+  withStateLock(() => {
+    const state = readDashState();
+    if (!state.activeProject) {
+      tmuxDisplay("No project selected.");
+      return;
     }
-    return;
-  }
 
-  const project = getProject(state.activeProject);
-  const shellWindowName = `_${state.activeProject}-shell`;
+    if (state.activePaneType === "shell") {
+      if (state.activePaneId && paneExists(state.activePaneId)) {
+        tmux("select-pane", "-t", state.activePaneId);
+      }
+      return;
+    }
 
-  if (!windowExists(shellWindowName)) {
-    createShellWindow(state.activeProject, project.path);
-  }
+    const project = getProject(state.activeProject);
+    const shellWindowName = `_${state.activeProject}-shell`;
 
-  const parkName = state.activeWindowName ?? `_${state.activeProject}-active`;
-  swapToHidden(parkName, shellWindowName, state);
+    if (!windowExists(shellWindowName)) {
+      createShellWindow(state.activeProject, project.path);
+    }
 
-  state.activePaneType = "shell";
-  state.activeWindowName = shellWindowName;
-  writeDashState(state);
-  refreshDashboard({ state });
+    const parkName = state.activeWindowName ?? `_${state.activeProject}-active`;
+    swapToHidden(parkName, shellWindowName, state);
+
+    state.activePaneType = "shell";
+    state.activeWindowName = shellWindowName;
+    writeDashState(state);
+    refreshDashboard({ state });
+  });
 }
 
 const GARDEN_VIEWS = ["garden", "root", "logs"] as const;
@@ -223,27 +230,29 @@ function ensureGardenView(view: GardenView): void {
 }
 
 function switchGardenTo(view: GardenView): void {
-  const state = readDashState();
+  withStateLock(() => {
+    const state = readDashState();
 
-  if (state.gardenPaneType === view) {
+    if (state.gardenPaneType === view) {
+      if (state.gardenShellPaneId && paneExists(state.gardenShellPaneId)) {
+        tmux("select-pane", "-t", state.gardenShellPaneId);
+      }
+      return;
+    }
+
+    const parkName = state.gardenWindowName ?? "_garden-garden";
+    ensureGardenView(view);
+    gardenSwapToHidden(parkName, gardenWindowForView(view), state);
+    state.gardenPaneType = view;
+    state.gardenWindowName = gardenWindowForView(view);
+    setPaneLabel(state.gardenShellPaneId!, gardenLabelForView(view));
+    writeDashState(state);
+    refreshDashboard({ state });
+
     if (state.gardenShellPaneId && paneExists(state.gardenShellPaneId)) {
       tmux("select-pane", "-t", state.gardenShellPaneId);
     }
-    return;
-  }
-
-  const parkName = state.gardenWindowName ?? "_garden-garden";
-  ensureGardenView(view);
-  gardenSwapToHidden(parkName, gardenWindowForView(view), state);
-  state.gardenPaneType = view;
-  state.gardenWindowName = gardenWindowForView(view);
-  setPaneLabel(state.gardenShellPaneId!, gardenLabelForView(view));
-  writeDashState(state);
-  refreshDashboard({ state });
-
-  if (state.gardenShellPaneId && paneExists(state.gardenShellPaneId)) {
-    tmux("select-pane", "-t", state.gardenShellPaneId);
-  }
+  });
 }
 
 export function focusGarden(): void {
