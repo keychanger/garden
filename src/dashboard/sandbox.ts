@@ -1,14 +1,3 @@
-// Sandbox configuration for garden-spawned Claude sessions.
-//
-// Claude Code's sandbox enforces OS-level filesystem and network boundaries
-// (Seatbelt on macOS, bubblewrap on Linux). Workers and reviewers launch with
-// --dangerously-skip-permissions replaced by sandbox auto-allow mode: the
-// sandbox auto-approves commands that stay inside the allowlist, and anything
-// outside is blocked at the kernel level.
-//
-// This module builds the `sandbox` object merged into each worktree's
-// .claude/settings.local.json. The resulting shape follows Claude Code's
-// settings schema — see https://code.claude.com/docs/en/sandboxing.
 import type { ProjectConfig } from "../config.js";
 
 export interface SandboxConfig {

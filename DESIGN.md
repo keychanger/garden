@@ -140,6 +140,8 @@ projects:
 
 **focused**: Controls whether the project appears in the dashboard status display and gets a hotkey assignment. Default is focused (field absent = focused). Set to `false` to hide a project from the dashboard without losing its config. Workers and pollers for unfocused projects continue running. Managed via `garden focus`/`garden unfocus` or `garden config <project> focused false`.
 
+**sandboxDomains**: Comma-separated list of extra network domains added to each worker/reviewer's sandbox allowlist. Use for private registries, internal services, or other hosts beyond the garden-wide defaults (Anthropic, GitHub, npm, the project's git remote host). Set via `garden config <project> sandboxDomains foo.com,bar.com`.
+
 ### Merge Handling
 After a review passes, workers enter the `merge-pending` state. The merge queue processes one worker at a time per project (ordered by `mergePendingAt` timestamp):
 
