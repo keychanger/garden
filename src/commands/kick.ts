@@ -1,8 +1,3 @@
-// Re-arm a worker for review and poke its project poller. Used to recover
-// workers that are stranded in `working` with no active Claude session to
-// fire a Stop hook — e.g. after a reviewer-push race reset them, or after
-// a crashed poller dropped the pendingReviewAt flag. Mirrors what the Stop
-// hook would do if fresh commits had just landed.
 import { readRegistry, updateWorkerFields } from "../dashboard/registry.js";
 import { triggerProjectPoll } from "../dashboard/poller.js";
 import { getCommitSummary, resolveBaseBranch } from "../dashboard/git.js";
