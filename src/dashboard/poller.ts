@@ -107,6 +107,11 @@ function pollWorker(
       return handleFailing(projectName, projectPath, baseBranch, entry);
     case "merged":
       return handleMerged(projectName, baseBranch, entry);
+    default: {
+      const _exhaustive: never = state;
+      log.warn("poller", `unknown prState: ${_exhaustive}`, { worker: entry.name });
+      return false;
+    }
   }
 }
 

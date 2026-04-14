@@ -37,9 +37,9 @@ function withCycleLock<T>(fn: () => T): T {
         try { fs.unlinkSync(CYCLE_LOCK); } catch { /* ignore */ }
         continue;
       }
-      // Brief spin (1ms)
-      const deadline = Date.now() + 1;
-      while (Date.now() < deadline) { /* busy wait */ }
+      // Brief wait without burning CPU (same pattern as registry lock)
+      const wait = new Int32Array(new SharedArrayBuffer(4));
+      Atomics.wait(wait, 0, 0, 1);
     }
   }
 
