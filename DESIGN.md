@@ -143,7 +143,7 @@ After a review passes, workers enter the `merge-pending` state. The merge queue 
 1. Fetch latest base branch
 2. Rebase onto current base branch
 3. If rebase conflicts: abort rebase, launch a scoped re-review with context from the previous review and the worker's task description. The re-reviewer handles the rebase and verifies correctness.
-4. If rebase is clean: force-push the rebased branch, merge to base branch via `git merge --ff-only` and push
+4. If rebase is clean: force-push the rebased branch, fast-forward the remote base branch via direct refspec push (no local checkout needed)
 5. Notify live sibling workers with overlapping files (see below)
 6. Run postMerge command (if configured) on the base branch checkout
 7. Mark the worker as merged in the registry

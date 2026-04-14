@@ -673,7 +673,7 @@ describe("poll — merge-pending state", () => {
     );
   });
 
-  it("adds alert on merge failure", () => {
+  it("adds alert on merge failure and sets pendingReviewAt for re-review", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
@@ -691,6 +691,19 @@ describe("poll — merge-pending state", () => {
         project: "myproject",
         message: expect.stringContaining("Merge failed"),
       }),
+    );
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "working",
+        pendingReviewAt: expect.any(Number),
+        mergePendingAt: undefined,
+      }),
+    );
+    // Must schedule a delayed poke so the poller picks up the re-review
+    expect(spawn).toHaveBeenCalledWith(
+      "bash",
+      ["-c", expect.stringContaining("sleep")],
+      expect.objectContaining({ detached: true, stdio: "ignore" }),
     );
   });
 });
