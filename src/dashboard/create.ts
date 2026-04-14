@@ -90,9 +90,6 @@ export function ensureDashboard(): void {
       try { tmux("respawn-pane", "-k", "-t", healed.statusPaneId, "sh", "-c", statusCmd); } catch { /* ignore */ }
       try { tmux("resize-pane", "-t", healed.statusPaneId, "-y", String(statusHeight)); } catch { /* pane may be gone */ }
       try { tmux("clear-history", "-t", healed.statusPaneId); } catch { /* ignore */ }
-      // Disable mouse on the status pane so the user cannot accidentally
-      // enter copy-mode by scrolling. Mouse is enabled globally for other panes.
-      try { tmux("set-option", "-p", "-t", healed.statusPaneId, "mouse", "off"); } catch { /* ignore */ }
     }
 
     // Pre-size all hidden windows to match their target visible slots so
@@ -142,8 +139,6 @@ export function ensureDashboard(): void {
   try { tmux("set-option", "-p", "-t", statusId, "history-limit", "0"); } catch { /* ignore */ }
   try { tmux("set-option", "-t", DASHBOARD_SESSION, "-u", "history-limit"); } catch { /* ignore */ }
   try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
-  // Disable mouse on the status pane so scroll events cannot activate copy-mode.
-  try { tmux("set-option", "-p", "-t", statusId, "mouse", "off"); } catch { /* ignore */ }
 
   setPaneTitle(statusId, "status");
   setPaneLabel(statusId, "status");
