@@ -225,6 +225,7 @@ garden status                      # Show all projects and their workers
 garden alerts                      # View dashboard alerts
 garden alerts clear                # Dismiss all alerts
 garden logs [options]              # View dashboard logs (pretty-printed)
+garden kick <worker>               # Re-arm a stranded 'working' worker for review
 garden rebuild                     # Rebuild garden and relaunch dashboard
 ```
 

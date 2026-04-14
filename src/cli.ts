@@ -80,6 +80,7 @@ Dashboard:
   logs -s poller                 Filter by source module
   logs -w <name>                 Filter by worker name
   health                         Check dashboard state consistency
+  kick <worker>                  Re-arm a stranded 'working' worker for review
   reset                          Clear the worker registry
   rebuild                        Rebuild garden and relaunch dashboard
 

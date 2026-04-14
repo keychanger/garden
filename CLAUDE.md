@@ -104,6 +104,7 @@ The dashboard uses a permanent tmux layout with content swapped in and out of pa
 - **State validation** (`src/dashboard/validate.ts`): On every attach, validates pane IDs against tmux reality and heals stale state. Cleans orphaned registry entries and context files.
 - **Logging** (`src/dashboard/log.ts`): Structured JSON log to `~/.garden/sessions/dashboard.log`. Logs state mutations, swap operations, and validation results.
 - **Health check**: `garden health` diagnoses state/tmux divergence. `garden health --fix` runs the self-healing validator.
+- **Kick**: `garden kick <worker>` re-arms a worker stranded in `working` for review (sets `pendingReviewAt` and pokes the project poller). Use when a reviewer-push race or a crashed poller has left a worker with no event to wake it. Refuses workers not in `working` state or with no commits ahead of base.
 
 ## Worker isolation (worktrees)
 
