@@ -12,14 +12,13 @@ import {
 } from "./tmux.js";
 import {
   readRegistry, getWorkers, updateWorkerFields, findWorkerByName,
-  type WorkerEntry,
+  type WorkerEntry, type PrState,
 } from "./registry.js";
 import {
   getBranchHeadSha, getRemoteTrackingSha,
   rebaseBranch, abortRebase, cleanWorktree,
   forcePushBranch, mergeToBase, fastForwardBase, deleteRemoteBranch,
-  getChangedFiles, getDiffAgainstBase,
-  getCommitSummary, getNewCommitSummary,
+  getChangedFiles, getCommitSummary, getNewCommitSummary,
   resolveBaseBranch,
   type RebaseResult,
 } from "./git.js";
@@ -29,11 +28,36 @@ import { setupKeybindings } from "./hotkeys.js";
 import { resolveGardenRunner } from "./create.js";
 import { healStatusPane } from "./validate.js";
 import { log } from "./log.js";
-import { buildRulesContext } from "../rules.js";
 import { addAlert } from "./alerts.js";
 import { pollerWindowName, reviewWindowName, workerWindowName } from "./window-names.js";
+import { buildReviewPrompt } from "./prompts.js";
 
 const DEBOUNCE_MS = 30_000;
+
+// Valid state transitions per STATUS.md. transitionState warns (but does not
+// block) if a transition is not in this table, surfacing bugs in the log
+// without breaking production.
+const VALID_TRANSITIONS: Record<PrState, PrState[]> = {
+  working:         ["reviewing"],
+  reviewing:       ["merge-pending", "working", "failing"],
+  "merge-pending": ["merged", "reviewing", "working"],
+  failing:         ["working"],
+  merged:          ["working"],
+};
+
+function transitionState(
+  projectName: string,
+  workerName: string,
+  toState: PrState,
+  extraFields?: Partial<Omit<WorkerEntry, "name" | "prState">>,
+): void {
+  const entry = findWorkerByName(projectName, workerName);
+  const fromState: PrState = entry?.prState ?? "working";
+  if (!VALID_TRANSITIONS[fromState]?.includes(toState)) {
+    log.warn("poller", `invalid state transition: ${fromState} -> ${toState}`, { worker: workerName });
+  }
+  updateWorkerFields(projectName, workerName, { ...extraFields, prState: toState });
+}
 
 export function signalFifoPath(project: string): string {
   return path.join(SESSIONS_DIR, `${project}-poll-signal`);
@@ -167,8 +191,7 @@ function handleReviewing(
       worker: entry.name,
     });
     killReviewWindow(projectName, entry.name);
-    updateWorkerFields(projectName, entry.name, {
-      prState: "working",
+    transitionState(projectName, entry.name, "working", {
       lastShaChangeAt: new Date().toISOString(),
       reviewWindowName: undefined,
     });
@@ -207,8 +230,7 @@ function handleReviewing(
     });
     const wtPath = entry.worktreePath ?? projectPath;
     const headSha = getBranchHeadSha(wtPath);
-    updateWorkerFields(projectName, entry.name, {
-      prState: "failing",
+    transitionState(projectName, entry.name, "failing", {
       failCount: (entry.failCount ?? 0) + 1,
       failingSha: undefined,
       lastSeenSha: headSha ?? undefined,
@@ -236,8 +258,7 @@ function handleReviewing(
         worker: entry.name,
         data: { error: String(err) },
       });
-      updateWorkerFields(projectName, entry.name, {
-        prState: "working",
+      transitionState(projectName, entry.name, "working", {
         reviewWindowName: undefined,
       });
       refreshDashboard();
@@ -245,8 +266,7 @@ function handleReviewing(
     }
 
     // Transition to merge-pending instead of merging directly
-    updateWorkerFields(projectName, entry.name, {
-      prState: "merge-pending",
+    transitionState(projectName, entry.name, "merge-pending", {
       mergePendingAt: new Date().toISOString(),
       lastReviewBody: review.body,
       reviewWindowName: undefined,
@@ -270,8 +290,7 @@ function handleReviewing(
 
     const wtPath = entry.worktreePath ?? projectPath;
     const headSha = getBranchHeadSha(wtPath);
-    updateWorkerFields(projectName, entry.name, {
-      prState: "failing",
+    transitionState(projectName, entry.name, "failing", {
       failCount: (entry.failCount ?? 0) + 1,
       failingSha: headSha ?? undefined,
       lastSeenSha: headSha ?? undefined,
@@ -348,8 +367,7 @@ function handleMergePending(
       worker: entry.name,
       data: { error: String(err) },
     });
-    updateWorkerFields(projectName, entry.name, {
-      prState: "working",
+    transitionState(projectName, entry.name, "working", {
       mergePendingAt: undefined,
     });
     refreshDashboard();
@@ -412,8 +430,7 @@ function handleFailing(
       });
     }
 
-    updateWorkerFields(projectName, entry.name, {
-      prState: "working",
+    transitionState(projectName, entry.name, "working", {
       failingSha: undefined,
       lastSeenSha: undefined,
     });
@@ -440,8 +457,7 @@ function handleMerged(
   log.info("poller", "new commits after merge, resuming", {
     worker: entry.name,
   });
-  updateWorkerFields(projectName, entry.name, {
-    prState: "working",
+  transitionState(projectName, entry.name, "working", {
     mergedAt: undefined,
     lastSeenSha: undefined,
   });
@@ -473,9 +489,7 @@ function launchReview(
   }
 
   // Build the review prompt
-  const prompt = isReReview
-    ? buildReReviewPrompt(projectName, projectPath, baseBranch, entry)
-    : buildReviewPrompt(projectName, projectPath, baseBranch, entry);
+  const prompt = buildReviewPrompt(projectName, projectPath, baseBranch, entry, { reReview: isReReview });
 
   if (prompt === null) {
     log.warn("poller", "failed to build review prompt", { worker: entry.name });
@@ -518,8 +532,7 @@ function launchReview(
   // which changes HEAD but not origin/<branch>.
   const branchName = entry.branchName ?? entry.name;
   const launchSha = getRemoteTrackingSha(wtPath, branchName) ?? getBranchHeadSha(wtPath) ?? entry.lastSeenSha;
-  updateWorkerFields(projectName, entry.name, {
-    prState: "reviewing",
+  transitionState(projectName, entry.name, "reviewing", {
     reviewWindowName: revWindow,
     lastSeenSha: launchSha,
     lastShaChangeAt: new Date().toISOString(),
@@ -592,240 +605,6 @@ function parseReviewResult(output: string, workerName: string): ReviewResult | n
   return null;
 }
 
-function buildReviewPrompt(
-  projectName: string,
-  projectPath: string,
-  baseBranch: string,
-  entry: WorkerEntry,
-): string | null {
-  const wtPath = entry.worktreePath ?? projectPath;
-
-  let diff: string;
-  try {
-    diff = getDiffAgainstBase(wtPath, baseBranch);
-  } catch {
-    log.warn("poller", "failed to get diff for review", { worker: entry.name });
-    return null;
-  }
-
-  const commitSummary = getCommitSummary(wtPath, baseBranch);
-  const branchName = entry.branchName ?? entry.name;
-  const rules = buildRulesContext(projectName, projectPath);
-  const project = tryGetProject(projectName);
-  const checksCommand = project?.checks;
-  const changedFiles = getChangedFiles(wtPath, baseBranch);
-
-  const docSections = readDocSections(wtPath);
-  const testSections = readTestSections(wtPath, changedFiles);
-  const specFiles = findSpecFiles(wtPath, changedFiles);
-  const specWarning = buildSpecWarning(specFiles);
-
-  let stepNum = 1;
-  const rebaseStep = stepNum++;
-  const checksStep = checksCommand ? stepNum++ : null;
-  const reviewStep = stepNum;
-
-  const prompt = [
-    "You are reviewing a branch before merge. Complete these steps in order:",
-    "",
-    ...specWarning,
-    `## Step ${rebaseStep}: Rebase onto ${baseBranch}`,
-    "",
-    `Run \`git rebase ${baseBranch}\` in the worktree. If there are conflicts:`,
-    "- Resolve them sensibly (preserve the intent of both sides)",
-    "- \`git add\` resolved files and \`git rebase --continue\`",
-    "- If a conflict is truly unresolvable, abort the rebase and report FAILED",
-    "",
-    ...(checksCommand ? [
-      `## Step ${checksStep}: Run checks`,
-      "",
-      `Run: \`${checksCommand}\``,
-      "",
-      "If checks fail, fix the issues and re-run until they pass.",
-      "If you cannot fix them, report FAILED.",
-      "",
-    ] : []),
-    `## Step ${reviewStep}: Code review`,
-    "",
-    "Review the branch diff against the project rules below.",
-    "",
-    "Check for:",
-    "- Adherence to project rules (commit style, code patterns, scope discipline)",
-    "- Code quality issues, security concerns, or unnecessary complexity",
-    "- Documentation accuracy: read DESIGN.md and CLAUDE.md below. After applying this",
-    "  diff, are they still accurate and complete? Flag any claims that are now wrong,",
-    "  missing sections for new behavior, or stale descriptions. Not every change needs a",
-    "  doc change — only flag docs that are actually inaccurate after this diff. This",
-    "  bullet applies *only* to descriptive documents (DESIGN.md, CLAUDE.md) — not to",
-    "  specification files (those marked as a source of truth, see the warning above if",
-    "  any are in this diff). Specs drive the code; do not edit them to match code.",
-    "- Test quality: read the test files below. Check three things:",
-    "  1. Accuracy — do existing tests still assert correct behavior after this diff?",
-    "     Flag tests that now assert stale or wrong behavior.",
-    "  2. Coverage — are the new/changed code paths exercised by tests? Flag significant",
-    "     new logic (branching, error handling, state transitions) that has no test.",
-    "  3. Completeness — do the tests cover edge cases and failure modes, not just the",
-    "     happy path? Flag obvious gaps. Not every change needs a test change — only flag",
-    "     tests that are actually wrong or insufficient for the behavior this diff changes.",
-    "",
-    "If you find issues, fix them directly in the worktree. Edit files, update tests,",
-    "update docs as needed. Make focused, minimal fixes — do not refactor or improve code",
-    "beyond what the review requires. Commit your fixes with a clear message prefixed with",
-    '"review: " (e.g., "review: add missing tests for error handling").',
-    "",
-    `## Branch: ${branchName}`,
-    "",
-    ...(entry.task ? [`### Worker task\n\n${entry.task}`, ""] : []),
-    commitSummary ? `### Commits\n\n\`\`\`\n${commitSummary}\n\`\`\`` : "",
-    "",
-    "## Project Rules",
-    "",
-    rules,
-    "",
-    "## Diff",
-    "",
-    "```diff",
-    diff,
-    "```",
-    "",
-    "## Documentation (current state in the worktree)",
-    "",
-    "Verify these are still accurate after the diff above.",
-    "",
-    ...docSections,
-    ...(testSections.length > 0 ? [
-      "",
-      "## Test Files (corresponding to changed source files)",
-      "",
-      "Verify these still correctly cover the changed behavior.",
-      "",
-      ...testSections,
-    ] : []),
-    "",
-    "## Output Format",
-    "",
-    "Your LAST line of output must be exactly one of:",
-    "CLEAN — no issues found, code is ready to merge as-is",
-    "FIXED — issues were found and fixed in the worktree",
-    "FAILED — issues were found but could not be fixed (explain above)",
-  ].join("\n");
-
-  return prompt;
-}
-
-function buildReReviewPrompt(
-  projectName: string,
-  projectPath: string,
-  baseBranch: string,
-  entry: WorkerEntry,
-): string | null {
-  const wtPath = entry.worktreePath ?? projectPath;
-
-  let diff: string;
-  try {
-    diff = getDiffAgainstBase(wtPath, baseBranch);
-  } catch {
-    log.warn("poller", "failed to get diff for re-review", { worker: entry.name });
-    return null;
-  }
-
-  const commitSummary = getCommitSummary(wtPath, baseBranch);
-  const branchName = entry.branchName ?? entry.name;
-  const rules = buildRulesContext(projectName, projectPath);
-  const project = tryGetProject(projectName);
-  const checksCommand = project?.checks;
-  const changedFiles = getChangedFiles(wtPath, baseBranch);
-
-  const docSections = readDocSections(wtPath);
-  const testSections = readTestSections(wtPath, changedFiles);
-  const specFiles = findSpecFiles(wtPath, changedFiles);
-  const specWarning = buildSpecWarning(specFiles);
-
-  let stepNum = 1;
-  const rebaseStep = stepNum++;
-  const checksStep = checksCommand ? stepNum++ : null;
-  const reviewStep = stepNum;
-
-  const prompt = [
-    "You are re-reviewing a branch that was previously reviewed and approved.",
-    `It is being re-reviewed because ${baseBranch} advanced and a rebase is needed before merge.`,
-    "",
-    ...specWarning,
-    "## Context",
-    "",
-    ...(entry.task ? [`**Worker task:** ${entry.task}`, ""] : []),
-    ...(entry.lastReviewBody ? [
-      "**Previous review (approved):**",
-      "",
-      entry.lastReviewBody,
-      "",
-    ] : []),
-    `Focus on rebasing onto ${baseBranch}, resolving any conflicts while preserving the`,
-    "intent of both sides, and verifying the merged result still works.",
-    "",
-    `## Step ${rebaseStep}: Rebase onto ${baseBranch}`,
-    "",
-    `Run \`git rebase ${baseBranch}\` in the worktree. If there are conflicts:`,
-    "- Resolve them sensibly (preserve the intent of both sides)",
-    "- Read the commit messages carefully — they describe the intent of each change",
-    "- \`git add\` resolved files and \`git rebase --continue\`",
-    "- If a conflict is truly unresolvable, abort the rebase and report FAILED",
-    "",
-    ...(checksCommand ? [
-      `## Step ${checksStep}: Run checks`,
-      "",
-      `Run: \`${checksCommand}\``,
-      "",
-      "If checks fail, fix the issues and re-run until they pass.",
-      "If you cannot fix them, report FAILED.",
-      "",
-    ] : []),
-    `## Step ${reviewStep}: Verify correctness after rebase`,
-    "",
-    "This branch was already reviewed. Focus on:",
-    "- Whether conflict resolution preserved the intent of both sides",
-    `- Whether the rebased code still works correctly with the new ${baseBranch}`,
-    "- Whether tests still pass after rebase",
-    "",
-    "If you find issues, fix them directly in the worktree. Commit fixes with a",
-    'message prefixed with "review: ".',
-    "",
-    `## Branch: ${branchName}`,
-    "",
-    ...(entry.task ? [`### Worker task\n\n${entry.task}`, ""] : []),
-    commitSummary ? `### Commits\n\n\`\`\`\n${commitSummary}\n\`\`\`` : "",
-    "",
-    "## Project Rules",
-    "",
-    rules,
-    "",
-    "## Diff",
-    "",
-    "```diff",
-    diff,
-    "```",
-    "",
-    "## Documentation (current state in the worktree)",
-    "",
-    ...docSections,
-    ...(testSections.length > 0 ? [
-      "",
-      "## Test Files (corresponding to changed source files)",
-      "",
-      ...testSections,
-    ] : []),
-    "",
-    "## Output Format",
-    "",
-    "Your LAST line of output must be exactly one of:",
-    "CLEAN — no issues found, code is ready to merge as-is",
-    "FIXED — issues were found and fixed in the worktree",
-    "FAILED — issues were found but could not be fixed (explain above)",
-  ].join("\n");
-
-  return prompt;
-}
-
 // --- Merge ---
 
 function finalizeMerge(
@@ -852,8 +631,7 @@ function finalizeMerge(
     });
     // Set pendingReviewAt so the worker gets re-reviewed instead of being
     // stuck in "working" with no trigger to advance.
-    updateWorkerFields(projectName, entry.name, {
-      prState: "working",
+    transitionState(projectName, entry.name, "working", {
       pendingReviewAt: Date.now(),
       mergePendingAt: undefined,
     });
@@ -878,8 +656,7 @@ function finalizeMerge(
   // Per STATUS.md invariant 4: there is no merged history. mergeCount is gone.
   // The race that the old double-check guarded against is gone too: the file
   // lock around updateWorkerFields prevents concurrent clobbering.
-  updateWorkerFields(projectName, entry.name, {
-    prState: "merged",
+  transitionState(projectName, entry.name, "merged", {
     mergedAt: new Date().toISOString(),
     failCount: 0,
     mergePendingAt: undefined,
@@ -1023,87 +800,6 @@ function killReviewWindow(projectName: string, workerName: string): void {
 function cleanReviewFiles(projectName: string, workerName: string): void {
   try { fs.unlinkSync(reviewResultPath(projectName, workerName)); } catch { /* ignore */ }
   try { fs.unlinkSync(reviewPromptPath(projectName, workerName)); } catch { /* ignore */ }
-}
-
-function readDocSections(wtPath: string): string[] {
-  const sections: string[] = [];
-  for (const docFile of ["DESIGN.md", "CLAUDE.md"]) {
-    const fullPath = path.join(wtPath, docFile);
-    try {
-      const content = fs.readFileSync(fullPath, "utf-8");
-      sections.push(`### ${docFile}\n\n${content}`);
-    } catch { /* file may not exist */ }
-  }
-  return sections;
-}
-
-// A specification file is a markdown file that opens with the source-of-truth
-// marker phrase. The reviewer must treat these differently from descriptive
-// docs (DESIGN.md, CLAUDE.md): the spec drives the code, not the other way
-// around. Past regressions have all involved the reviewer "fixing" a spec
-// file to match the current implementation, inverting the spec relationship.
-const SPEC_MARKER = "the code is wrong";
-
-function findSpecFiles(wtPath: string, changedFiles: string[]): string[] {
-  const specs: string[] = [];
-  for (const file of changedFiles) {
-    if (!file.endsWith(".md")) continue;
-    try {
-      const content = fs.readFileSync(path.join(wtPath, file), "utf-8");
-      if (content.slice(0, 2000).includes(SPEC_MARKER)) {
-        specs.push(file);
-      }
-    } catch { /* file may have been renamed or deleted in the diff */ }
-  }
-  return specs;
-}
-
-function buildSpecWarning(specFiles: string[]): string[] {
-  if (specFiles.length === 0) return [];
-  return [
-    "## WARNING: Specification files in this diff",
-    "",
-    "This diff modifies one or more **specification** files — documents that",
-    "are the *source of truth* for their respective systems:",
-    "",
-    ...specFiles.map(f => `- \`${f}\``),
-    "",
-    "When reviewing changes to a specification:",
-    "",
-    "- **Do not revert spec changes to match the current implementation.**",
-    "  The spec drives the code, not the other way around. The spec opens",
-    "  with the statement that if the code disagrees, the code is wrong —",
-    "  that is the contract, and your job is to honor it.",
-    "- **Do flag implementation code in this diff that contradicts the spec.**",
-    "  Code-vs-spec mismatches must be fixed by changing the code, never the",
-    "  spec.",
-    "- **If the spec contradicts code OUTSIDE this diff,** that is a known",
-    "  gap the user is intentionally documenting. Do not \"fix\" the spec to",
-    "  match the legacy code. The user is using the spec to guide future work.",
-    "- **Treat spec changes the way you would treat user instructions.**",
-    "  Verify clarity, internal consistency, and grammar. Never rewrite design",
-    "  intent. Never \"correct\" the spec by editing prose to describe what",
-    "  the code currently does.",
-    "",
-    "If you genuinely believe a spec change is wrong (e.g., logically",
-    "self-contradictory, or impossible to implement), flag it in your review",
-    "output rather than silently editing it. Editing a spec to match code is",
-    "the exact mistake this section exists to prevent.",
-    "",
-  ];
-}
-
-function readTestSections(wtPath: string, changedFiles: string[]): string[] {
-  const sections: string[] = [];
-  for (const file of changedFiles) {
-    const basename = path.basename(file, path.extname(file));
-    const testFile = path.join(wtPath, "test", `${basename}.test.ts`);
-    try {
-      const content = fs.readFileSync(testFile, "utf-8");
-      sections.push(`### test/${basename}.test.ts\n\n${content}`);
-    } catch { /* no corresponding test file */ }
-  }
-  return sections;
 }
 
 // --- Per-project poller lifecycle ---
