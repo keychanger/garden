@@ -1,0 +1,514 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// ---------------------------------------------------------------------------
+// Mocks — must be declared before importing the module under test
+// ---------------------------------------------------------------------------
+
+const mockExecFileSync = vi.fn();
+
+vi.mock("node:child_process", () => ({
+  execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
+}));
+
+vi.mock("node:os", () => ({
+  default: { hostname: () => "my-macbook.local" },
+}));
+
+vi.mock("../src/session.js", () => ({
+  DASHBOARD_SESSION: "garden-dashboard",
+}));
+
+vi.mock("../src/dashboard/log.js", () => ({
+  log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock("../src/dashboard/window-names.js", () => ({
+  workerWindowPrefix: (project: string) => `_${project}-worker-`,
+}));
+
+// ---------------------------------------------------------------------------
+// Imports — after mocks
+// ---------------------------------------------------------------------------
+
+import {
+  tmux,
+  tmuxOutput,
+  tmuxSplit,
+  tmuxNewWindow,
+  getActivePaneId,
+  tmuxDisplay,
+  setPaneTitle,
+  setPaneLabel,
+  setPaneVar,
+  getFirstPaneId,
+  paneExists,
+  windowExists,
+  renameWindow,
+  getPaneSize,
+  resizeWindow,
+  killWindowSafe,
+  getPanePid,
+  getPaneLabel,
+  getPaneTitle,
+  listAllWindowNames,
+  listHiddenWorkerWindows,
+} from "../src/dashboard/tmux.js";
+
+import { log } from "../src/dashboard/log.js";
+
+// ---------------------------------------------------------------------------
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+// ===========================================================================
+// getPaneTitle
+// ===========================================================================
+
+describe("getPaneTitle", () => {
+  it("returns cleaned title, stripping leading non-alphanumeric noise", () => {
+    mockExecFileSync.mockReturnValue("✱ Refactoring auth module\n");
+    const result = getPaneTitle("%5");
+    expect(result).toBe("Refactoring auth module");
+  });
+
+  it("strips emoji prefix and whitespace", () => {
+    mockExecFileSync.mockReturnValue("⠋ Building tests\n");
+    const result = getPaneTitle("%5");
+    expect(result).toBe("Building tests");
+  });
+
+  it("returns null for 'Claude Code' placeholder", () => {
+    mockExecFileSync.mockReturnValue("Claude Code\n");
+    expect(getPaneTitle("%5")).toBeNull();
+  });
+
+  it("returns null when cleaned result equals hostname", () => {
+    mockExecFileSync.mockReturnValue("my-macbook.local\n");
+    expect(getPaneTitle("%5")).toBeNull();
+  });
+
+  it("returns null for empty string output", () => {
+    mockExecFileSync.mockReturnValue("\n");
+    expect(getPaneTitle("%5")).toBeNull();
+  });
+
+  it("returns null for string that is only non-alphanumeric noise", () => {
+    mockExecFileSync.mockReturnValue("✱ \n");
+    expect(getPaneTitle("%5")).toBeNull();
+  });
+
+  it("returns null when tmux command throws", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("pane gone"); });
+    expect(getPaneTitle("%5")).toBeNull();
+  });
+
+  it("returns a simple alphanumeric title as-is", () => {
+    mockExecFileSync.mockReturnValue("Writing unit tests\n");
+    expect(getPaneTitle("%5")).toBe("Writing unit tests");
+  });
+});
+
+// ===========================================================================
+// listHiddenWorkerWindows
+// ===========================================================================
+
+describe("listHiddenWorkerWindows", () => {
+  it("filters windows matching project worker prefix", () => {
+    const names = [
+      "_garden-worker-bold-ash",
+      "_garden-worker-calm-elm",
+      "_garden-shell",
+      "_other-worker-foo",
+      "main",
+    ];
+    const result = listHiddenWorkerWindows("garden", names);
+    expect(result).toEqual([
+      "_garden-worker-bold-ash",
+      "_garden-worker-calm-elm",
+    ]);
+  });
+
+  it("returns empty array when no workers match", () => {
+    const names = ["_other-worker-x", "main", "_garden-shell"];
+    expect(listHiddenWorkerWindows("garden", names)).toEqual([]);
+  });
+
+  it("returns empty array for empty window list", () => {
+    expect(listHiddenWorkerWindows("garden", [])).toEqual([]);
+  });
+
+  it("falls back to listAllWindowNames when windowNames not provided", () => {
+    // listAllWindowNames calls tmuxOutput internally
+    mockExecFileSync.mockReturnValue("_myproj-worker-w1\n_myproj-shell\nmain\n");
+    const result = listHiddenWorkerWindows("myproj");
+    expect(result).toEqual(["_myproj-worker-w1"]);
+  });
+});
+
+// ===========================================================================
+// getPaneSize
+// ===========================================================================
+
+describe("getPaneSize", () => {
+  it("parses width and height from tmux output", () => {
+    mockExecFileSync.mockReturnValue("120 40\n");
+    const size = getPaneSize("%3");
+    expect(size).toEqual({ width: 120, height: 40 });
+  });
+
+  it("returns null for bad format (too many parts)", () => {
+    mockExecFileSync.mockReturnValue("120 40 extra\n");
+    expect(getPaneSize("%3")).toBeNull();
+  });
+
+  it("returns null for bad format (single value)", () => {
+    mockExecFileSync.mockReturnValue("120\n");
+    expect(getPaneSize("%3")).toBeNull();
+  });
+
+  it("returns null when tmux command throws", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("no pane"); });
+    expect(getPaneSize("%3")).toBeNull();
+  });
+});
+
+// ===========================================================================
+// paneExists
+// ===========================================================================
+
+describe("paneExists", () => {
+  it("returns true when tmux returns matching pane id", () => {
+    mockExecFileSync.mockReturnValue("%5\n");
+    expect(paneExists("%5")).toBe(true);
+  });
+
+  it("returns false when tmux returns different pane id", () => {
+    mockExecFileSync.mockReturnValue("%99\n");
+    expect(paneExists("%5")).toBe(false);
+  });
+
+  it("returns false when tmux throws", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("bad pane"); });
+    expect(paneExists("%5")).toBe(false);
+  });
+});
+
+// ===========================================================================
+// windowExists
+// ===========================================================================
+
+describe("windowExists", () => {
+  it("returns true when tmux succeeds", () => {
+    mockExecFileSync.mockReturnValue("%1\n");
+    expect(windowExists("_garden-worker-bold-ash")).toBe(true);
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      ["list-panes", "-t", "garden-dashboard:_garden-worker-bold-ash", "-F", "#{pane_id}"],
+      expect.anything(),
+    );
+  });
+
+  it("returns false when tmux throws", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("no window"); });
+    expect(windowExists("_garden-worker-bold-ash")).toBe(false);
+  });
+});
+
+// ===========================================================================
+// tmux / tmuxOutput / tmuxSplit / tmuxNewWindow (basic delegation)
+// ===========================================================================
+
+describe("tmux", () => {
+  it("calls execFileSync with stdio ignore", () => {
+    mockExecFileSync.mockReturnValue(undefined);
+    tmux("set-option", "-t", "garden-dashboard", "mouse", "on");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      ["set-option", "-t", "garden-dashboard", "mouse", "on"],
+      { stdio: "ignore" },
+    );
+  });
+});
+
+describe("tmuxOutput", () => {
+  it("returns trimmed string from execFileSync", () => {
+    mockExecFileSync.mockReturnValue("  hello  \n");
+    expect(tmuxOutput("display-message", "-p", "test")).toBe("hello");
+  });
+});
+
+describe("tmuxSplit", () => {
+  it("prepends split-window args and returns pane id", () => {
+    mockExecFileSync.mockReturnValue("%10\n");
+    const result = tmuxSplit("-v", "-t", "garden-dashboard");
+    expect(result).toBe("%10");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      ["split-window", "-P", "-F", "#{pane_id}", "-v", "-t", "garden-dashboard"],
+      expect.anything(),
+    );
+  });
+});
+
+describe("tmuxNewWindow", () => {
+  it("prepends new-window args and returns pane id", () => {
+    mockExecFileSync.mockReturnValue("%20\n");
+    const result = tmuxNewWindow("-d", "-t", "garden-dashboard", "-n", "test");
+    expect(result).toBe("%20");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      ["new-window", "-P", "-F", "#{pane_id}", "-d", "-t", "garden-dashboard", "-n", "test"],
+      expect.anything(),
+    );
+  });
+});
+
+// ===========================================================================
+// getActivePaneId
+// ===========================================================================
+
+describe("getActivePaneId", () => {
+  it("returns pane id on success", () => {
+    mockExecFileSync.mockReturnValue("%3\n");
+    expect(getActivePaneId()).toBe("%3");
+  });
+
+  it("returns null on failure", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("no session"); });
+    expect(getActivePaneId()).toBeNull();
+  });
+});
+
+// ===========================================================================
+// tmuxDisplay — fire-and-forget with log on failure
+// ===========================================================================
+
+describe("tmuxDisplay", () => {
+  it("calls tmux display-message", () => {
+    mockExecFileSync.mockReturnValue(undefined);
+    tmuxDisplay("Hello world");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      ["display-message", "-t", "garden-dashboard", "Hello world"],
+      { stdio: "ignore" },
+    );
+  });
+
+  it("logs debug on failure", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("fail"); });
+    tmuxDisplay("msg");
+    expect(log.debug).toHaveBeenCalledWith("tmux", "tmuxDisplay failed");
+  });
+});
+
+// ===========================================================================
+// setPaneTitle — fire-and-forget with log on failure
+// ===========================================================================
+
+describe("setPaneTitle", () => {
+  it("calls select-pane with title", () => {
+    mockExecFileSync.mockReturnValue(undefined);
+    setPaneTitle("%5", "My Title");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      ["select-pane", "-t", "%5", "-T", "My Title"],
+      { stdio: "ignore" },
+    );
+  });
+
+  it("logs debug on failure", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("fail"); });
+    setPaneTitle("%5", "Title");
+    expect(log.debug).toHaveBeenCalledWith("tmux", "setPaneTitle failed", { data: { paneId: "%5" } });
+  });
+});
+
+// ===========================================================================
+// setPaneLabel — fire-and-forget with log on failure
+// ===========================================================================
+
+describe("setPaneLabel", () => {
+  it("sets @garden_name pane option", () => {
+    mockExecFileSync.mockReturnValue(undefined);
+    setPaneLabel("%5", "bold-ash");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      ["set-option", "-p", "-t", "%5", "@garden_name", "bold-ash"],
+      { stdio: "ignore" },
+    );
+  });
+
+  it("logs debug on failure", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("fail"); });
+    setPaneLabel("%5", "label");
+    expect(log.debug).toHaveBeenCalledWith("tmux", "setPaneLabel failed", { data: { paneId: "%5" } });
+  });
+});
+
+// ===========================================================================
+// setPaneVar — fire-and-forget with log on failure
+// ===========================================================================
+
+describe("setPaneVar", () => {
+  it("sets a custom @-prefixed pane option", () => {
+    mockExecFileSync.mockReturnValue(undefined);
+    setPaneVar("%5", "garden_task", "building");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      ["set-option", "-p", "-t", "%5", "@garden_task", "building"],
+      { stdio: "ignore" },
+    );
+  });
+
+  it("logs debug on failure", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("fail"); });
+    setPaneVar("%5", "garden_task", "x");
+    expect(log.debug).toHaveBeenCalledWith("tmux", "setPaneVar failed", { data: { paneId: "%5", name: "garden_task" } });
+  });
+});
+
+// ===========================================================================
+// getFirstPaneId
+// ===========================================================================
+
+describe("getFirstPaneId", () => {
+  it("returns first pane id from list-panes output", () => {
+    mockExecFileSync.mockReturnValue("%1\n%2\n%3\n");
+    expect(getFirstPaneId("garden-dashboard:main")).toBe("%1");
+  });
+
+  it("returns null when list-panes returns empty", () => {
+    mockExecFileSync.mockReturnValue("\n");
+    expect(getFirstPaneId("garden-dashboard:main")).toBeNull();
+  });
+
+  it("returns null on failure", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("no target"); });
+    expect(getFirstPaneId("garden-dashboard:main")).toBeNull();
+  });
+});
+
+// ===========================================================================
+// renameWindow — fire-and-forget with log on failure
+// ===========================================================================
+
+describe("renameWindow", () => {
+  it("calls tmux rename-window with session-qualified targets", () => {
+    mockExecFileSync.mockReturnValue(undefined);
+    renameWindow("old-name", "new-name");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      ["rename-window", "-t", "garden-dashboard:old-name", "new-name"],
+      { stdio: "ignore" },
+    );
+  });
+
+  it("logs debug on failure", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("fail"); });
+    renameWindow("old", "new");
+    expect(log.debug).toHaveBeenCalledWith("tmux", "renameWindow failed", { data: { oldName: "old", newName: "new" } });
+  });
+});
+
+// ===========================================================================
+// resizeWindow — silent on failure
+// ===========================================================================
+
+describe("resizeWindow", () => {
+  it("calls tmux resize-window with correct args", () => {
+    mockExecFileSync.mockReturnValue(undefined);
+    resizeWindow("_garden-worker-bold-ash", 120, 40);
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      ["resize-window", "-t", "garden-dashboard:_garden-worker-bold-ash", "-x", "120", "-y", "40"],
+      { stdio: "ignore" },
+    );
+  });
+
+  it("swallows error when window does not exist", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("no window"); });
+    expect(() => resizeWindow("missing", 100, 50)).not.toThrow();
+  });
+});
+
+// ===========================================================================
+// killWindowSafe — silent on failure
+// ===========================================================================
+
+describe("killWindowSafe", () => {
+  it("calls tmux kill-window with session-qualified target", () => {
+    mockExecFileSync.mockReturnValue(undefined);
+    killWindowSafe("_garden-worker-bold-ash");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      ["kill-window", "-t", "garden-dashboard:_garden-worker-bold-ash"],
+      { stdio: "ignore" },
+    );
+  });
+
+  it("swallows error silently", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("no window"); });
+    expect(() => killWindowSafe("missing")).not.toThrow();
+  });
+});
+
+// ===========================================================================
+// getPanePid
+// ===========================================================================
+
+describe("getPanePid", () => {
+  it("returns pid string on success", () => {
+    mockExecFileSync.mockReturnValue("12345\n");
+    expect(getPanePid("%5")).toBe("12345");
+  });
+
+  it("returns null on failure", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("fail"); });
+    expect(getPanePid("%5")).toBeNull();
+  });
+});
+
+// ===========================================================================
+// getPaneLabel
+// ===========================================================================
+
+describe("getPaneLabel", () => {
+  it("returns label string on success", () => {
+    mockExecFileSync.mockReturnValue("bold-ash\n");
+    expect(getPaneLabel("%5")).toBe("bold-ash");
+  });
+
+  it("returns null for empty label", () => {
+    mockExecFileSync.mockReturnValue("\n");
+    expect(getPaneLabel("%5")).toBeNull();
+  });
+
+  it("returns null on failure", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("fail"); });
+    expect(getPaneLabel("%5")).toBeNull();
+  });
+});
+
+// ===========================================================================
+// listAllWindowNames
+// ===========================================================================
+
+describe("listAllWindowNames", () => {
+  it("returns array of window names", () => {
+    mockExecFileSync.mockReturnValue("main\n_garden-worker-bold-ash\n_garden-shell\n");
+    const result = listAllWindowNames();
+    expect(result).toEqual(["main", "_garden-worker-bold-ash", "_garden-shell"]);
+  });
+
+  it("returns empty array on failure", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("no session"); });
+    expect(listAllWindowNames()).toEqual([]);
+  });
+
+  it("filters empty strings from output", () => {
+    mockExecFileSync.mockReturnValue("main\n\n_garden-shell\n\n");
+    expect(listAllWindowNames()).toEqual(["main", "_garden-shell"]);
+  });
+});
