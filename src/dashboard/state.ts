@@ -59,7 +59,7 @@ export function readDashState(): DashboardState {
 
 export function writeDashState(state: DashboardState): void {
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  const tmpFile = STATE_FILE + ".tmp";
+  const tmpFile = `${STATE_FILE}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(tmpFile, JSON.stringify(state, null, 2));
   fs.renameSync(tmpFile, STATE_FILE);
 }

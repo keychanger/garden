@@ -484,7 +484,7 @@ function writeQuickStatus(opts?: RefreshOptions): void {
   try {
     const state = opts?.state ?? readDashState();
     const rendered = renderQuickStatus(state, opts?.windowNames);
-    const tmpFile = STATUS_RENDERED_FILE + ".tmp";
+    const tmpFile = `${STATUS_RENDERED_FILE}.${process.pid}.${Date.now()}.tmp`;
     fs.writeFileSync(tmpFile, rendered);
     fs.renameSync(tmpFile, STATUS_RENDERED_FILE);
     // Resize only when line count changes. Resizing on every hook event would

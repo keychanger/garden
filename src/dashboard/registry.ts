@@ -117,7 +117,7 @@ export function readRegistry(): WorkerRegistry {
 
 export function writeRegistry(registry: WorkerRegistry): void {
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  const tmpFile = REGISTRY_FILE + ".tmp";
+  const tmpFile = `${REGISTRY_FILE}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(tmpFile, JSON.stringify(registry, null, 2));
   fs.renameSync(tmpFile, REGISTRY_FILE);
 }

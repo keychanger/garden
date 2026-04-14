@@ -43,7 +43,7 @@ export function loadConfig(): GardenConfig {
 
 export function saveConfig(config: GardenConfig): void {
   fs.mkdirSync(GARDEN_DIR, { recursive: true });
-  const tmpFile = CONFIG_PATH + ".tmp";
+  const tmpFile = `${CONFIG_PATH}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(tmpFile, yaml.dump(config, { lineWidth: -1 }));
   fs.renameSync(tmpFile, CONFIG_PATH);
 }

@@ -35,7 +35,7 @@ export function readAlerts(): AlertStore {
 
 function writeAlerts(store: AlertStore): void {
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  const tmpFile = ALERTS_FILE + ".tmp";
+  const tmpFile = `${ALERTS_FILE}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(tmpFile, JSON.stringify(store, null, 2));
   fs.renameSync(tmpFile, ALERTS_FILE);
 }
