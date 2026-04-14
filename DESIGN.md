@@ -49,7 +49,7 @@ Rules are plain markdown. Edit them directly.
 
 - **Project Status** (upper-left) — Live-updating display of all projects and their workers. Shows which project is active (`◄`), each worker's lifecycle state via status icons (braille spinner for working, Unicode symbols for other states), a focus indicator (filled/empty circle) showing which worker is active, and aligned columns for name/status/activity. Auto-sizes to the number of projects.
 - **Garden Pane** (lower-left) — Cycles between three views: garden (bold green `garden>` prompt with auto-dispatch for garden commands), root (general-purpose shell), and logs. `⌥g` jumps to garden, `⌥r` jumps to root, `⌥l` jumps to logs.
-- **Bottom bar** (tmux status line) — Two-sided display. Left side shows the active project name (bold) and its base branch. Right side shows the garden build version (git short SHA, or "dev" when running via tsx).
+- **Bottom bar** (tmux status line) — Two-sided display. Left side shows the active project name (bold) and its current git branch. Right side shows the garden build version (git short SHA, or "dev" when running via tsx).
 - **Active Pane** (right) — The currently visible pane for the active project. Either a worker (Claude session) or the project shell. Only one is visible at a time; others are parked in hidden tmux windows.
 
 ### Right-side pane model

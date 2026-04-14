@@ -38,6 +38,7 @@ import {
   getCommitSummary,
   pruneWorktrees,
   resolveBaseBranch,
+  currentBranch,
 } from "../src/dashboard/git.js";
 
 const mockExec = vi.mocked(execFileSync);
@@ -514,5 +515,24 @@ describe("resolveBaseBranch", () => {
       throw new Error("not a symbolic ref");
     });
     expect(resolveBaseBranch("/repo", {})).toBe("main");
+  });
+});
+
+describe("currentBranch", () => {
+  it("returns the current branch name", () => {
+    mockExec.mockReturnValue("my-feature");
+    expect(currentBranch("/repo")).toBe("my-feature");
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["rev-parse", "--abbrev-ref", "HEAD"],
+      expect.objectContaining({ cwd: "/repo" }),
+    );
+  });
+
+  it("returns null on error", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("not a git repo");
+    });
+    expect(currentBranch("/repo")).toBeNull();
   });
 });
