@@ -1209,13 +1209,7 @@ export function projectPollerRunning(projectName: string): boolean {
   return windowExists(pollerWindowName(projectName));
 }
 
-// Kill every long-lived poller window (usage-poller + per-project pollers with
-// live workers) and respawn them. Used by `_post-rebuild-refresh` after a
-// successful `npm run build`: the pollers are long-lived node processes that
-// cache the pre-rebuild bundle in memory, so without this they keep running
-// stale code until the next `garden rebuild` or tmux kill-server. FIFO pokes
-// that land during the gap (milliseconds) are dropped, but pokes are
-// idempotent — the next event re-pokes the fresh poller.
+// Pokes that land during the brief kill→spawn gap are dropped; the next event re-pokes.
 export function restartLongLivedPollers(gardenRunner: string): void {
   try {
     stopUsagePoller();
