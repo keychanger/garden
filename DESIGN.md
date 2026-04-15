@@ -175,8 +175,9 @@ When the reviewer emits a FIXED or FAILED verdict, its prompt now requires a fen
 A category becomes a *pending suggestion* once it has accumulated ≥3 findings across ≥2 distinct workers within the last 30 days. On the first crossing, a single alert is emitted via the normal `addAlert` path (source: `rules`, level: `warn`) — the nudge piggybacks on the existing alerts surface, so there's no new UI. Subsequent findings accumulate silently.
 
 **Commands:**
-- `garden rules` / `garden rules suggest` — list pending categories, counts, projects, example summaries
-- `garden rules accept <category> [--rule "..."] [--global | --project <name>] [--confirm]` — synthesize a markdown rule block and, after confirmation, append it to the inferred `rules.md` (project if one project is affected, global if multiple)
+- `garden rules` / `garden rules suggest` — interactive walk-through of pending suggestions with an `[a]ccept / [d]ismiss / [s]kip` prompt per category; accept optionally takes a one-line rule (Enter for evidence-only) and auto-resolves scope (project if one project is affected, global if multiple). Falls back to a plain list when stdin is not a TTY.
+- `garden rules list` — print pending suggestions without prompting
+- `garden rules accept <category> [--rule "..."] [--global | --project <name>] [--confirm]` — non-interactive accept for scripting: synthesize a markdown rule block and, after confirmation, append it to the inferred `rules.md`
 - `garden rules dismiss <category>` — mark so the suggestion won't re-surface
 - `garden rules findings [--project <name>]` — raw findings log
 
@@ -260,7 +261,8 @@ garden keys                        # Show dashboard keybindings
 garden status                      # Show all projects and their workers
 garden alerts                      # View dashboard alerts
 garden alerts clear                # Dismiss all alerts
-garden rules                       # View pending rule suggestions from reviewer findings
+garden rules                       # Interactive accept/dismiss for pending rule suggestions
+garden rules list                  # Print pending suggestions without prompting
 garden rules accept <category>     # Append a synthesized rule to rules.md (use --confirm)
 garden rules dismiss <category>    # Dismiss a rule suggestion
 garden rules findings              # Raw reviewer-findings log

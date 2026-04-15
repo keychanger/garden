@@ -3,6 +3,7 @@
 // logic and src/dashboard/prompts.ts for where findings are emitted.
 import fs from "node:fs";
 import path from "node:path";
+import readline from "node:readline";
 import { GARDEN_DIR, getProject, tryGetProject } from "../config.js";
 import {
   pendingSuggestions, getSuggestion, markSuggestion, listFindings,
@@ -18,15 +19,16 @@ export async function rules(args: string[]): Promise<void> {
   if (sub === "accept")  return handleAccept(rest);
   if (sub === "dismiss") return handleDismiss(rest);
   if (sub === "findings") return handleFindings(rest);
+  if (sub === "list") return handleList();
 
   throw new Error(
-    `Unknown subcommand: ${sub}. Usage: garden rules [suggest|accept|dismiss|findings]`,
+    `Unknown subcommand: ${sub}. Usage: garden rules [suggest|list|accept|dismiss|findings]`,
   );
 }
 
 // --- suggest ---
 
-function handleSuggest(): void {
+async function handleSuggest(): Promise<void> {
   const suggestions = pendingSuggestions();
   if (suggestions.length === 0) {
     if (isTTY) console.log("No pending rule suggestions.");
@@ -39,17 +41,77 @@ function handleSuggest(): void {
     return;
   }
 
+  if (process.stdin.isTTY) {
+    await runInteractive(suggestions);
+    return;
+  }
+
+  printSuggestionList(suggestions);
+  console.log(`Accept one: garden rules accept <category> --rule "..." [--confirm]`);
+  console.log(`Dismiss:    garden rules dismiss <category>`);
+}
+
+function handleList(): void {
+  const suggestions = pendingSuggestions();
+  if (suggestions.length === 0) {
+    if (isTTY) console.log("No pending rule suggestions.");
+    else console.log(JSON.stringify({ suggestions: [] }));
+    return;
+  }
+  if (!isTTY) {
+    for (const s of suggestions) console.log(JSON.stringify(s));
+    return;
+  }
+  printSuggestionList(suggestions);
+}
+
+function printSuggestionList(suggestions: SuggestionSummary[]): void {
   console.log(`${suggestions.length} pending rule suggestion${suggestions.length === 1 ? "" : "s"}:`);
   console.log("");
   for (const s of suggestions) {
-    const scope = s.projects.length > 1 ? `global (${s.projects.length} projects)` : `project: ${s.projects[0]}`;
     console.log(`  ${s.category}`);
-    console.log(`    count: ${s.count}  workers: ${s.distinctWorkers}  scope: ${scope}`);
+    console.log(`    count: ${s.count}  workers: ${s.distinctWorkers}  scope: ${describeScope(s)}`);
     for (const ex of s.examples) console.log(`    - ${ex}`);
     console.log("");
   }
-  console.log(`Accept one: garden rules accept <category> --rule "..." [--confirm]`);
-  console.log(`Dismiss:    garden rules dismiss <category>`);
+}
+
+function describeScope(s: SuggestionSummary): string {
+  return s.projects.length > 1 ? `global (${s.projects.length} projects)` : `project: ${s.projects[0]}`;
+}
+
+async function runInteractive(suggestions: SuggestionSummary[]): Promise<void> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const ask = (q: string) => new Promise<string>(resolve => rl.question(q, resolve));
+  try {
+    console.log(`${suggestions.length} pending rule suggestion${suggestions.length === 1 ? "" : "s"}.`);
+    for (let i = 0; i < suggestions.length; i++) {
+      const s = suggestions[i];
+      console.log("");
+      console.log(`[${i + 1}/${suggestions.length}] ${s.category}`);
+      console.log(`  count: ${s.count}  workers: ${s.distinctWorkers}  scope: ${describeScope(s)}`);
+      for (const ex of s.examples) console.log(`  - ${ex}`);
+      const target = resolveTarget(s, { category: s.category, global: false, confirm: false });
+      console.log(`  target: ${target.label}`);
+      console.log(`          (${target.filePath})`);
+
+      const choice = (await ask(`[a]ccept / [d]ismiss / [s]kip > `)).trim().toLowerCase();
+      if (choice === "a" || choice === "accept") {
+        const rule = (await ask(`  rule text (Enter for evidence-only): `)).trim();
+        const block = buildRuleBlock(s, rule || undefined);
+        appendToRules(target.filePath, block);
+        markSuggestion(s.category, "accepted", { appendedTo: target.filePath });
+        console.log(`  appended to ${target.filePath}`);
+      } else if (choice === "d" || choice === "dismiss") {
+        markSuggestion(s.category, "dismissed");
+        console.log(`  dismissed.`);
+      } else {
+        console.log(`  skipped.`);
+      }
+    }
+  } finally {
+    rl.close();
+  }
 }
 
 // --- accept ---

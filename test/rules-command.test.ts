@@ -10,6 +10,19 @@ vi.mock("node:fs", () => ({
   },
 }));
 
+const rlAnswers: string[] = [];
+vi.mock("node:readline", () => ({
+  default: {
+    createInterface: vi.fn(() => ({
+      question: (_q: string, cb: (answer: string) => void) => {
+        const next = rlAnswers.shift() ?? "";
+        cb(next);
+      },
+      close: vi.fn(),
+    })),
+  },
+}));
+
 vi.mock("../src/config.js", () => ({
   GARDEN_DIR: "/tmp/garden",
   getProject: vi.fn((name: string) => ({
@@ -71,6 +84,8 @@ function makeSummary(overrides?: Partial<SuggestionSummary>): SuggestionSummary 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  rlAnswers.length = 0;
+  Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
 });
 
 // --- parseAcceptFlags ---
@@ -190,6 +205,75 @@ describe("rules suggest", () => {
     cap.restore();
     const out = cap.lines.join("\n");
     expect(out).toContain("global (2 projects)");
+  });
+});
+
+// --- list (non-interactive) ---
+
+describe("rules list", () => {
+  it("prints suggestions without the accept/dismiss footer", async () => {
+    vi.mocked(pendingSuggestions).mockReturnValue([makeSummary()]);
+    const cap = captureLog();
+    await rules(["list"]);
+    cap.restore();
+    const out = cap.lines.join("\n");
+    expect(out).toContain("cat-a");
+    expect(out).not.toContain("Accept one:");
+  });
+});
+
+// --- interactive suggest ---
+
+describe("rules suggest (interactive TTY)", () => {
+  beforeEach(() => {
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+  });
+
+  it("accepts on 'a' with a rule, appends and marks accepted", async () => {
+    vi.mocked(pendingSuggestions).mockReturnValue([makeSummary()]);
+    rlAnswers.push("a", "Do not do X.");
+    const cap = captureLog();
+    await rules(["suggest"]);
+    cap.restore();
+    expect(fs.writeFileSync).toHaveBeenCalledTimes(1);
+    expect(markSuggestion).toHaveBeenCalledWith("cat-a", "accepted", expect.objectContaining({
+      appendedTo: "/repo/p1/.garden/rules.md",
+    }));
+  });
+
+  it("accepts with empty rule text (evidence-only)", async () => {
+    vi.mocked(pendingSuggestions).mockReturnValue([makeSummary()]);
+    rlAnswers.push("a", "");
+    await rules(["suggest"]);
+    expect(fs.writeFileSync).toHaveBeenCalledTimes(1);
+    expect(markSuggestion).toHaveBeenCalledWith("cat-a", "accepted", expect.anything());
+  });
+
+  it("dismisses on 'd' and does not write", async () => {
+    vi.mocked(pendingSuggestions).mockReturnValue([makeSummary()]);
+    rlAnswers.push("d");
+    await rules(["suggest"]);
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+    expect(markSuggestion).toHaveBeenCalledWith("cat-a", "dismissed");
+  });
+
+  it("skips on 's' without marking", async () => {
+    vi.mocked(pendingSuggestions).mockReturnValue([makeSummary()]);
+    rlAnswers.push("s");
+    await rules(["suggest"]);
+    expect(markSuggestion).not.toHaveBeenCalled();
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it("walks multiple suggestions in order", async () => {
+    vi.mocked(pendingSuggestions).mockReturnValue([
+      makeSummary({ category: "cat-a" }),
+      makeSummary({ category: "cat-b" }),
+    ]);
+    rlAnswers.push("d", "s");
+    await rules(["suggest"]);
+    expect(markSuggestion).toHaveBeenCalledTimes(1);
+    expect(markSuggestion).toHaveBeenCalledWith("cat-a", "dismissed");
   });
 });
 

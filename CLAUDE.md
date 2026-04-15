@@ -179,7 +179,7 @@ Rules are plain markdown. They control commit behavior, testing requirements, PR
 
 ### Rules evolution
 
-Reviewers emit a fenced `findings` JSON block before their verdict on FIXED/FAILED, tagging each intervention with a short kebab-case `category` and a one-sentence `summary`. The poller tallies these in `~/.garden/sessions/rules-findings.json`. When a category accumulates ≥3 findings across ≥2 distinct workers within 30 days, a one-time alert fires (source: `rules`) and the category becomes a *pending suggestion*. Use `garden rules` to review them and `garden rules accept <category> --rule "..." [--global|--project <name>] --confirm` to append a synthesized rule block to the inferred rules.md. Dismissed categories won't re-surface.
+Reviewers emit a fenced `findings` JSON block before their verdict on FIXED/FAILED, tagging each intervention with a short kebab-case `category` and a one-sentence `summary`. The poller tallies these in `~/.garden/sessions/rules-findings.json`. When a category accumulates ≥3 findings across ≥2 distinct workers within 30 days, a one-time alert fires (source: `rules`) and the category becomes a *pending suggestion*. `garden rules` walks each suggestion interactively with an `[a]ccept / [d]ismiss / [s]kip` prompt (accept asks for an optional one-line rule and auto-resolves scope). For scripting, `garden rules accept <category> --rule "..." [--global|--project <name>] --confirm` still works. Dismissed categories won't re-surface.
 
 ## Git workflow
 

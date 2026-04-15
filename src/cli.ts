@@ -76,7 +76,8 @@ Dashboard:
   status                         Show project and worker status
   alerts                         View dashboard alerts
   alerts clear                   Dismiss all alerts
-  rules                          View pending rule suggestions from reviewer findings
+  rules                          Interactive accept/dismiss for pending rule suggestions
+  rules list                     Print pending suggestions without prompting
   rules accept <category>        Append a suggested rule to rules.md (use --confirm)
   rules dismiss <category>       Dismiss a rule suggestion
   rules findings                 Raw reviewer-findings log
