@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -161,7 +161,39 @@ async function handleLogin(args: string[]): Promise<void> {
   const credFile = path.join(configDir, ".credentials.json");
   if (fs.existsSync(credFile)) {
     console.log(`Credentials written to ${credFile}`);
-  } else {
-    console.log(`Warning: ${credFile} not found after login. Check whether claude wrote to the macOS Keychain instead — that entry is shared, which would collide with the personal plan.`);
+    return;
+  }
+
+  // On macOS Claude Code stores credentials in the Keychain under a single
+  // shared service name, ignoring CLAUDE_CONFIG_DIR. That collision would
+  // alias every profile onto the most recent login. Capture the freshly
+  // written keychain entry into the profile's configDir so subsequent reads
+  // hit the file (loadProfileCredential is file-only by design) and so the
+  // user can re-login the default account to restore the keychain.
+  if (process.platform === "darwin" && captureKeychainTo(credFile)) {
+    console.log(`macOS keychain detected — captured token to ${credFile}.`);
+    console.log(`IMPORTANT: the keychain currently holds the '${name}' token, which displaced your personal account.`);
+    console.log(`Run 'claude /login' (no env) now to re-authenticate your default account and restore the keychain.`);
+    return;
+  }
+
+  console.log(`Warning: ${credFile} not found after login. Claude may not have written credentials.`);
+}
+
+function captureKeychainTo(credFile: string): boolean {
+  try {
+    const raw = execFileSync(
+      "security",
+      ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    ).trim();
+    if (!raw) return false;
+    fs.mkdirSync(path.dirname(credFile), { recursive: true });
+    const tmp = `${credFile}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmp, raw, { mode: 0o600 });
+    fs.renameSync(tmp, credFile);
+    return true;
+  } catch {
+    return false;
   }
 }
