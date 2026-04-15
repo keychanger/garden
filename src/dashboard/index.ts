@@ -74,11 +74,7 @@ export async function dashboard(args: string[]): Promise<void> {
     return;
   }
   if (sub === "_post-rebuild-refresh") {
-    // Called from the poller after a successful garden rebuild. This process
-    // is spawned via the just-rebuilt binary, so respawning the status pane
-    // from here gets the pane's bash loop running the new buildStatusCommand.
-    // refreshDashboard() then rewrites the pre-baked file with the new
-    // renderer and signals the pane.
+    // Spawned via the rebuilt binary so respawnStatusPane bakes in the new code
     const { respawnStatusPane } = await import("./create.js");
     const { readDashState } = await import("./state.js");
     const { refreshDashboard } = await import("./header.js");

@@ -569,12 +569,7 @@ command_not_found_handler() {
   return scriptFile;
 }
 
-// Respawn the status pane's bash loop with the current buildStatusCommand
-// script, so any changes to the loop itself (not just rendered content) take
-// effect. Called from ensureDashboard on attach and from _post-rebuild-refresh
-// after a garden rebuild so the running pane picks up new CLI code.
-// pane-border-status top adds one row to the total pane height, so we size
-// to content lines + 1 to keep the content area exactly right.
+// +1 because pane-border-status top adds one row to the total pane height
 export function respawnStatusPane(state: DashboardState): void {
   if (!state.statusPaneId) return;
   const gardenRunner = resolveGardenRunner();

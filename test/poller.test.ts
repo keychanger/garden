@@ -37,6 +37,15 @@ vi.mock("../src/dashboard/log.js", () => ({
 
 vi.mock("../src/dashboard/header.js", () => ({
   refreshDashboard: vi.fn(),
+  setupStatusBar: vi.fn(),
+}));
+
+vi.mock("../src/dashboard/hotkeys.js", () => ({
+  setupKeybindings: vi.fn(),
+}));
+
+vi.mock("../src/dashboard/create.js", () => ({
+  resolveGardenRunner: vi.fn(() => "node /usr/local/bin/garden"),
 }));
 
 vi.mock("../src/dashboard/tmux.js", () => ({
@@ -686,6 +695,34 @@ describe("poll — merge-pending state", () => {
         message: expect.stringContaining("did not fast-forward"),
       }),
     );
+  });
+
+  it("spawns detached _post-rebuild-refresh after garden self-rebuild", () => {
+    registryMock._setEntries("garden", [
+      makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        worktreePath: "/tmp/wt/garden/bold-ash",
+      }),
+    ]);
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/garden", checks: undefined, postMerge: "npm run build",
+    } as ReturnType<typeof tryGetProject>);
+    vi.mocked(rebaseBranch).mockReturnValue("ok");
+    vi.mocked(fastForwardBase).mockReturnValue(true);
+
+    poll("garden");
+
+    expect(execSync).toHaveBeenCalledWith(
+      "npm run build",
+      expect.objectContaining({ cwd: "/repo/garden" }),
+    );
+    const refreshCall = vi.mocked(spawn).mock.calls.find(
+      c => String(c[1]?.[1] ?? "").includes("_post-rebuild-refresh"),
+    );
+    expect(refreshCall).toBeDefined();
+    expect(refreshCall![0]).toBe("sh");
+    expect(refreshCall![2]).toEqual(expect.objectContaining({ detached: true, stdio: "ignore" }));
   });
 
   it("launches resolver when rebase has conflicts and Claude is idle", () => {
