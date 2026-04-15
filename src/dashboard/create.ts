@@ -96,18 +96,7 @@ export function ensureDashboard(): void {
     const healed = validateAndHeal(state);
     writeDashState(healed);
 
-    // Respawn the status pane with the current buildStatusCommand script so
-    // any code changes take effect immediately without a full dashboard reset.
-    // pane-border-status top adds one row to the total pane height, so size
-    // to content lines + 1 to keep the content area exactly right.
-    const gardenRunner = resolveGardenRunner();
-    const statusHeight = Math.max(4, renderQuickStatus(healed).split("\n").length) + 1;
-    if (healed.statusPaneId) {
-      const statusCmd = buildStatusCommand(gardenRunner);
-      try { tmux("respawn-pane", "-k", "-t", healed.statusPaneId, "sh", "-c", statusCmd); } catch { /* ignore */ }
-      try { tmux("resize-pane", "-t", healed.statusPaneId, "-y", String(statusHeight)); } catch { /* pane may be gone */ }
-      try { tmux("clear-history", "-t", healed.statusPaneId); } catch { /* ignore */ }
-    }
+    respawnStatusPane(healed);
 
     // Pre-size all hidden windows to match their target visible slots so
     // that swap-pane never triggers a SIGWINCH reflow. Without this, hidden
@@ -578,6 +567,22 @@ command_not_found_handler() {
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
   fs.writeFileSync(scriptFile, script, { mode: 0o644 });
   return scriptFile;
+}
+
+// Respawn the status pane's bash loop with the current buildStatusCommand
+// script, so any changes to the loop itself (not just rendered content) take
+// effect. Called from ensureDashboard on attach and from _post-rebuild-refresh
+// after a garden rebuild so the running pane picks up new CLI code.
+// pane-border-status top adds one row to the total pane height, so we size
+// to content lines + 1 to keep the content area exactly right.
+export function respawnStatusPane(state: DashboardState): void {
+  if (!state.statusPaneId) return;
+  const gardenRunner = resolveGardenRunner();
+  const statusHeight = Math.max(4, renderQuickStatus(state).split("\n").length) + 1;
+  const statusCmd = buildStatusCommand(gardenRunner);
+  try { tmux("respawn-pane", "-k", "-t", state.statusPaneId, "sh", "-c", statusCmd); } catch { /* ignore */ }
+  try { tmux("resize-pane", "-t", state.statusPaneId, "-y", String(statusHeight)); } catch { /* pane may be gone */ }
+  try { tmux("clear-history", "-t", state.statusPaneId); } catch { /* ignore */ }
 }
 
 export function resolveGardenRunner(): string {

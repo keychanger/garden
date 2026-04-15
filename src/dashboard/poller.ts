@@ -1005,11 +1005,20 @@ function runPostMerge(projectName: string, projectPath: string): void {
     }
     // After rebuilding garden itself, refresh tmux keybindings and status bar
     // so the running dashboard picks up any changes from the new CLI binary.
+    // Then spawn a detached subprocess via the freshly-built binary to respawn
+    // the status pane's bash loop — this process is still running pre-rebuild
+    // code in memory, so respawning the pane from here would bake in the old
+    // buildStatusCommand. The detached handoff gets the pane running the new
+    // version immediately, instead of waiting for the next natural restart.
     if (projectName === "garden") {
       try {
         const gr = resolveGardenRunner();
         setupKeybindings(gr);
         setupStatusBar(gr);
+        spawn("sh", ["-c", `${gr} dashboard _post-rebuild-refresh 2>/dev/null`], {
+          detached: true,
+          stdio: "ignore",
+        }).unref();
       } catch { /* dashboard may not be running */ }
     }
   } catch (err) {
