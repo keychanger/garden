@@ -214,6 +214,7 @@ The dashboard surfaces important events as alerts — persistent messages that r
 - Branch name equals the worker name (e.g., `swift-oak`)
 - Worktrees persist until the worker is killed, enabling the review cycle and manual inspection
 - Each worktree's `.claude/settings.local.json` configures Claude's OS-level sandbox (Seatbelt on macOS, bubblewrap on Linux). Auto-allow mode approves sandboxed bash without prompts while blocking out-of-allowlist filesystem writes and network calls at the kernel, and `permissions.defaultMode: "acceptEdits"` auto-approves file edits so workers proceed without stopping to ask. Workers and reviewers run without `--dangerously-skip-permissions` but remain autonomous inside the sandbox. Allowlist defaults (Anthropic, GitHub, npm, the project's git remote host, plus worktree + standard subprocess caches) are built in `src/dashboard/sandbox.ts` and extended per-project via the `sandboxDomains` config key
+- A **bash permission judge** (`src/dashboard/judge.ts`) runs as a PreToolUse hook on every `Bash` tool call. Plain commands (no shell metacharacters) fall through at zero cost to the built-in sandbox auto-allow. Commands with pipes, redirects, variable expansion, or other shell features are sent to Haiku via the Messages API for a security verdict. The judge is fail-closed: it can only emit `permissionDecision: "allow"` — any error, timeout, or uncertain verdict produces empty output, falling through to the normal permission flow (sandbox auto-allow or user prompt). Decisions are logged to `judge.log` and mirrored to `dashboard.log`
 
 ## Worker Status Detection
 
@@ -294,6 +295,7 @@ All read commands detect whether stdout is a TTY:
     dashboard-<project>-<branch>.context  # Worktree worker context
     dashboard.kill-confirm.json  # Transient double-tap kill confirmation
     dashboard.log           # Structured JSON log
+    judge.log               # Bash permission judge decisions (also mirrored to dashboard.log)
     <project>-poll-signal   # FIFO for waking project pollers
     console-init.zsh              # Garden console init (custom prompt + auto-dispatch)
     bootstrap-<project>-<branch>.sh       # Transient worktree bootstrap script

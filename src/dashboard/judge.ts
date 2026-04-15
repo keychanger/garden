@@ -1,13 +1,4 @@
-// Bash permission judge: a PreToolUse hook that asks Haiku whether a
-// sandboxed agent's bash command is safe to auto-approve. The OS sandbox
-// is the real security boundary; this layer only removes friction from
-// commands Claude Code's built-in static analyzer refuses to auto-allow.
-//
-// Safety invariant: the judge can only emit "allow". Any uncertainty,
-// parse failure, timeout, or network error produces empty output, which
-// falls through to Claude Code's normal permission flow (sandbox
-// auto-allow or user prompt). A compromised or prompt-injected judge
-// cannot block work and cannot override an explicit permissions.deny.
+// Fail-closed: judge can only emit "allow" — any error/timeout/uncertainty falls through to normal permission flow.
 import fs from "node:fs";
 import https from "node:https";
 import path from "node:path";
@@ -32,18 +23,12 @@ export interface Verdict {
   reason: string;
 }
 
-// Commands with no shell metacharacters are plain invocations
-// (`ls`, `npm test`, `git status`). The built-in sandbox auto-allow
-// handles these — no need to pay LLM latency. Anything with pipes,
-// redirects, command substitution, globs, or logical operators goes
-// to the judge.
+// Plain commands (no metacharacters) skip the LLM — the built-in sandbox auto-allow handles them.
 export function needsJudging(cmd: string): boolean {
   if (!cmd) return false;
   return /[$`|<>;&(){}*?\\]/.test(cmd);
 }
 
-// Parse the judge's JSON output. Returns uncertain on any malformed
-// shape so the fail-closed invariant holds.
 export function parseVerdict(text: string): Verdict {
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) return { decision: "uncertain", reason: "no JSON in response" };
@@ -170,8 +155,6 @@ interface LogRecord {
 }
 
 function writeLog(rec: LogRecord): void {
-  // Mirror to dashboard.log so judge decisions appear in the normal stream
-  // alongside hook/poller events, not only in the isolated judge.log.
   const level = rec.decision === "uncertain" ? "warn" : "info";
   log[level]("judge", `bash ${rec.decision}`, {
     data: {
@@ -188,10 +171,6 @@ function writeLog(rec: LogRecord): void {
   } catch { /* best-effort — never block the hook on log failure */ }
 }
 
-// Emits the PreToolUse hook output that tells Claude Code to auto-approve.
-// permissionDecision values: "allow" (skip prompt), "deny", "ask" (default).
-// We only ever emit "allow"; on uncertain, we stay silent and let the
-// normal flow run.
 function emitAllow(reason: string): void {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
