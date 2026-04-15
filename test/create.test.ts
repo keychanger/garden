@@ -183,6 +183,14 @@ describe("installClaudeHooks", () => {
     expect(parsed.hooks.PreToolUse).toBeDefined();
     expect(parsed.hooks.PostToolUse).toBeDefined();
   });
+
+  it("sets permissions.mode to acceptEdits for autonomous edits inside sandbox", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
+    const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+    const parsed = JSON.parse(written);
+    expect(parsed.permissions).toEqual({ mode: "acceptEdits" });
+  });
 });
 
 describe("buildWorkerCommand", () => {

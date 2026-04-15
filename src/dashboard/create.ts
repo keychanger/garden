@@ -60,6 +60,7 @@ function buildSettingsJson(gardenRunner: string, sandbox: SandboxConfig): string
       }],
     },
     sandbox,
+    permissions: { mode: "acceptEdits" },
   }, null, 2);
 }
 
