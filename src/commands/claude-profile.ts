@@ -164,12 +164,7 @@ async function handleLogin(args: string[]): Promise<void> {
     return;
   }
 
-  // On macOS Claude Code stores credentials in the Keychain under a single
-  // shared service name, ignoring CLAUDE_CONFIG_DIR. That collision would
-  // alias every profile onto the most recent login. Capture the freshly
-  // written keychain entry into the profile's configDir so subsequent reads
-  // hit the file (loadProfileCredential is file-only by design) and so the
-  // user can re-login the default account to restore the keychain.
+  // Keychain uses a single shared service name, ignoring CLAUDE_CONFIG_DIR — capture to file to avoid collisions.
   if (process.platform === "darwin" && captureKeychainTo(credFile)) {
     console.log(`macOS keychain detected — captured token to ${credFile}.`);
     console.log(`IMPORTANT: the keychain currently holds the '${name}' token, which displaced your personal account.`);
