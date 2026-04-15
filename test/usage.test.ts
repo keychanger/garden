@@ -4,38 +4,38 @@ import { normalizeUsage, formatDuration } from "../src/dashboard/usage.js";
 describe("normalizeUsage", () => {
   it("extracts all three meters from the observed api.anthropic.com shape", () => {
     const raw = {
-      five_hour:      { utilization: 62, resets_at: "2026-04-15T20:00:00Z" },
-      seven_day:      { utilization: 34, resets_at: "2026-04-19T04:00:00Z" },
-      seven_day_opus: { utilization: 78, resets_at: "2026-04-19T04:00:00Z" },
+      five_hour:        { utilization: 62, resets_at: "2026-04-15T20:00:00Z" },
+      seven_day:        { utilization: 34, resets_at: "2026-04-19T04:00:00Z" },
+      seven_day_sonnet: { utilization: 4,  resets_at: "2026-04-20T15:00:00Z" },
     };
     const out = normalizeUsage(raw);
     expect(out.fiveHour).toEqual({ pct: 62, resetsAt: "2026-04-15T20:00:00Z" });
     expect(out.weekly).toEqual({ pct: 34, resetsAt: "2026-04-19T04:00:00Z" });
-    expect(out.opus).toEqual({ pct: 78, resetsAt: "2026-04-19T04:00:00Z" });
+    expect(out.sonnet).toEqual({ pct: 4, resetsAt: "2026-04-20T15:00:00Z" });
   });
 
-  it("treats null buckets as absent (Max plans have null seven_day_opus)", () => {
+  it("treats null buckets as absent", () => {
     const raw = {
-      five_hour:      { utilization: 4, resets_at: "2026-04-15T23:00:00Z" },
-      seven_day:      { utilization: 32, resets_at: "2026-04-17T15:00:00Z" },
-      seven_day_opus: null,
+      five_hour:        { utilization: 4, resets_at: "2026-04-15T23:00:00Z" },
+      seven_day:        { utilization: 32, resets_at: "2026-04-17T15:00:00Z" },
+      seven_day_sonnet: null,
     };
     const out = normalizeUsage(raw);
     expect(out.fiveHour?.pct).toBe(4);
     expect(out.weekly?.pct).toBe(32);
-    expect(out.opus).toBeUndefined();
+    expect(out.sonnet).toBeUndefined();
   });
 
   it("omits buckets with missing or wrong-typed fields instead of throwing", () => {
     const raw = {
       five_hour: { utilization: 10, resets_at: "2026-04-15T20:00:00Z" },
       seven_day: { utilization: "34", resets_at: "2026-04-19T04:00:00Z" }, // bad type
-      seven_day_opus: null,
+      seven_day_sonnet: null,
     };
     const out = normalizeUsage(raw);
     expect(out.fiveHour?.pct).toBe(10);
     expect(out.weekly).toBeUndefined();
-    expect(out.opus).toBeUndefined();
+    expect(out.sonnet).toBeUndefined();
   });
 
   it("handles empty / non-object input gracefully", () => {

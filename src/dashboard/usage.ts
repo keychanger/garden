@@ -1,7 +1,7 @@
 // Claude usage meter: fetches the authenticated user's 5-hour, weekly, and
-// Opus-weekly quota from api.anthropic.com using the OAuth token that Claude
-// Code writes to the macOS Keychain. Persists a snapshot to SESSIONS_DIR and
-// renders a 3-bar header for the dashboard status pane.
+// Sonnet-weekly quota from api.anthropic.com using the OAuth token that
+// Claude Code writes to the macOS Keychain. Persists a snapshot to
+// SESSIONS_DIR and renders a 3-bar header for the dashboard status pane.
 //
 // The endpoint (/api/oauth/usage) is undocumented and strictly rate-limited
 // (observed Retry-After of ~50 minutes after 3 rapid probes). Callers must
@@ -24,7 +24,7 @@ export interface UsageMeter {
 export interface UsageData {
   fiveHour?: UsageMeter;
   weekly?: UsageMeter;
-  opus?: UsageMeter;
+  sonnet?: UsageMeter;
 }
 
 export interface UsageSnapshot {
@@ -129,15 +129,16 @@ export function fetchUsageRaw(token: string): Promise<FetchResult> {
 // -----------------------------------------------------------------------------
 
 // Shape of /api/oauth/usage (observed against a Claude Max account):
-//   { five_hour:      { utilization, resets_at } | null,
-//     seven_day:      { utilization, resets_at } | null,
-//     seven_day_opus: { utilization, resets_at } | null,
-//     seven_day_sonnet:{utilization, resets_at } | null,
+//   { five_hour:        { utilization, resets_at } | null,
+//     seven_day:        { utilization, resets_at } | null,
+//     seven_day_sonnet: { utilization, resets_at } | null,
+//     seven_day_opus:   { utilization, resets_at } | null,
 //     ... other buckets ...
-//     extra_usage:    { is_enabled, monthly_limit, used_credits, utilization } | null }
-// On Max plans Opus doesn't have its own weekly meter — seven_day_opus is
-// typically null and we show a dash for that row. Fields are parsed
-// defensively so any shape shift degrades to "—" rather than an exception.
+//     extra_usage:      { is_enabled, monthly_limit, used_credits, utilization } | null }
+// On Max plans seven_day_opus is typically null (Opus usage is rolled into
+// seven_day); seven_day_sonnet is the populated model-specific bucket, so
+// that's what the third bar shows. Fields are parsed defensively so any
+// shape shift or null bucket degrades to "—" rather than throwing.
 export function normalizeUsage(raw: unknown): UsageData {
   const out: UsageData = {};
   if (!raw || typeof raw !== "object") return out;
@@ -146,8 +147,8 @@ export function normalizeUsage(raw: unknown): UsageData {
   if (m) out.fiveHour = m;
   const w = pickMeter(r["seven_day"]);
   if (w) out.weekly = w;
-  const o = pickMeter(r["seven_day_opus"]);
-  if (o) out.opus = o;
+  const s = pickMeter(r["seven_day_sonnet"]);
+  if (s) out.sonnet = s;
   return out;
 }
 
@@ -209,7 +210,7 @@ export async function refreshUsage(): Promise<UsageSnapshot> {
           source: cred.source,
           fiveHour: data.fiveHour?.pct,
           weekly: data.weekly?.pct,
-          opus: data.opus?.pct,
+          sonnet: data.sonnet?.pct,
         },
       });
       return snap;
@@ -274,9 +275,9 @@ export function renderUsageHeader(nowMs: number = Date.now()): string {
   const d = snap.data ?? {};
 
   header.push("");
-  header.push(renderMeterLine("5h  ", d.fiveHour, nowMs, staleTag));
-  header.push(renderMeterLine("wk  ", d.weekly,   nowMs, staleTag));
-  header.push(renderMeterLine("opus", d.opus,     nowMs, staleTag));
+  header.push(renderMeterLine("5h    ", d.fiveHour, nowMs, staleTag));
+  header.push(renderMeterLine("wk    ", d.weekly,   nowMs, staleTag));
+  header.push(renderMeterLine("sonnet", d.sonnet,   nowMs, staleTag));
 
   return header.map(l => l + "\x1b[K").join("\n");
 }

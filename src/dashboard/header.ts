@@ -500,6 +500,11 @@ function writeQuickStatus(opts?: RefreshOptions): void {
       const cur = getPaneSize(state.statusPaneId);
       if (!cur || cur.height !== h) {
         try { tmux("resize-pane", "-t", state.statusPaneId, "-y", String(h)); } catch { /* ignore */ }
+        // Force tmux to push the new size to the pane process before the
+        // SIGUSR1 that follows in refreshDashboard(). Without this, the trap
+        // can print content into an unresized pane and the top lines (usage
+        // bars, in particular) scroll off before WINCH arrives.
+        try { tmux("refresh-client", "-S"); } catch { /* ignore */ }
       }
     }
   } catch { /* best effort */ }
