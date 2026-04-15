@@ -361,10 +361,7 @@ const LABEL_WIDTH = 6; // "sonnet" is the longest label
 const INDENT = "    ";  // 4-space indent mirrors worker rows in the status pane
 const STALE_AFTER_MS = 30 * 60 * 1000; // 30 min — long enough to survive the endpoint's long rate-limit windows
 
-// Render the content of the dedicated "usage" pane: a leading blank for
-// breathing room under the pane-border label, plus three meter rows (or a
-// single error/loading line). Lines include clear-to-EOL escapes so the
-// pane repaints in place without flashing.
+// Leading blank for breathing room under the pane-border label, then three meter rows.
 export function renderUsagePane(nowMs: number = Date.now()): string {
   const snap = readUsageSnapshot();
   const lines: string[] = [""];

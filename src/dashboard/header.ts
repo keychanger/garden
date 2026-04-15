@@ -531,10 +531,7 @@ function writeQuickStatus(opts?: RefreshOptions): void {
       const cur = getPaneSize(state.statusPaneId);
       if (!cur || cur.height !== h) {
         try { tmux("resize-pane", "-t", state.statusPaneId, "-y", String(h)); } catch { /* ignore */ }
-        // Shrinking a pane scrolls truncated rows into scrollback, which
-        // makes the pane mouse-scrollable and shows ghost copies of old
-        // renders. Flush scrollback after every resize so the pane stays
-        // fixed.
+        // Shrinking scrolls truncated rows into scrollback — flush to prevent ghost renders.
         try { tmux("clear-history", "-t", state.statusPaneId); } catch { /* ignore */ }
         // Flush resize to pane before SIGUSR1 — avoids top-line scroll-off race
         try { tmux("refresh-client", "-S"); } catch { /* ignore */ }

@@ -163,8 +163,7 @@ export function ensureDashboard(): void {
   try { tmux("resize-pane", "-t", usageId, "-y", String(USAGE_PANE_HEIGHT)); } catch { /* ignore */ }
   try { tmux("set-option", "-p", "-t", usageId, "history-limit", "0"); } catch { /* ignore */ }
   try { tmux("clear-history", "-t", usageId); } catch { /* ignore */ }
-  // Splitting the usage pane shrinks the status pane; flush any scrollback
-  // introduced by that shrink so the status pane stays non-scrollable.
+  // Splitting shrinks status pane — flush scrollback so it stays non-scrollable.
   try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
 
   setPaneTitle(usageId, "usage");

@@ -84,9 +84,7 @@ function healUsagePaneInState(state: DashboardState): DashboardState {
 
       try { tmux("resize-pane", "-t", usageId, "-y", String(USAGE_PANE_HEIGHT)); } catch { /* ignore */ }
       try { tmux("clear-history", "-t", usageId); } catch { /* ignore */ }
-      // Splitting off the usage pane shrinks the status pane by USAGE_PANE_HEIGHT
-      // rows — truncated content would otherwise land in the status pane's
-      // scrollback. Flush it so the status pane stays non-scrollable.
+      // Splitting shrinks status pane — flush scrollback so it stays non-scrollable.
       try { tmux("clear-history", "-t", healed.statusPaneId); } catch { /* ignore */ }
       setPaneTitle(usageId, "usage");
       setPaneLabel(usageId, "usage");
