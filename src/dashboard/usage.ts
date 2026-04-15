@@ -276,7 +276,7 @@ export function renderUsageHeader(nowMs: number = Date.now()): string {
 
   header.push("");
   header.push(renderMeterLine("5h    ", d.fiveHour, nowMs, staleTag));
-  header.push(renderMeterLine("wk    ", d.weekly,   nowMs, staleTag));
+  header.push(renderMeterLine("week  ", d.weekly,   nowMs, staleTag));
   header.push(renderMeterLine("sonnet", d.sonnet,   nowMs, staleTag));
 
   return header.map(l => l + "\x1b[K").join("\n");
