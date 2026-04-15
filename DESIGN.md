@@ -204,7 +204,7 @@ The dashboard surfaces important events as alerts — persistent messages that r
 - The project shell (`⌥s`) stays on the main checkout for manual work
 - Branch name equals the worker name (e.g., `swift-oak`)
 - Worktrees persist until the worker is killed, enabling the review cycle and manual inspection
-- Each worktree's `.claude/settings.local.json` configures Claude's OS-level sandbox (Seatbelt on macOS, bubblewrap on Linux). Auto-allow mode approves sandboxed bash without prompts while blocking out-of-allowlist filesystem writes and network calls at the kernel, and `permissions.mode: "acceptEdits"` auto-approves file edits so workers proceed without stopping to ask. Workers and reviewers run without `--dangerously-skip-permissions` but remain autonomous inside the sandbox. Allowlist defaults (Anthropic, GitHub, npm, the project's git remote host, plus worktree + standard subprocess caches) are built in `src/dashboard/sandbox.ts` and extended per-project via the `sandboxDomains` config key
+- Each worktree's `.claude/settings.local.json` configures Claude's OS-level sandbox (Seatbelt on macOS, bubblewrap on Linux). Auto-allow mode approves sandboxed bash without prompts while blocking out-of-allowlist filesystem writes and network calls at the kernel, and `permissions.defaultMode: "acceptEdits"` auto-approves file edits so workers proceed without stopping to ask. Workers and reviewers run without `--dangerously-skip-permissions` but remain autonomous inside the sandbox. Allowlist defaults (Anthropic, GitHub, npm, the project's git remote host, plus worktree + standard subprocess caches) are built in `src/dashboard/sandbox.ts` and extended per-project via the `sandboxDomains` config key
 
 ## Worker Status Detection
 
