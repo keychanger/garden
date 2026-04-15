@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   normalizeUsage,
-  pickProfileBar,
   formatDuration,
   shouldRefreshOnHookWith,
   HOOK_REFRESH_COOLDOWN_MS,
@@ -51,26 +50,6 @@ describe("normalizeUsage", () => {
     expect(normalizeUsage(null)).toEqual({});
     expect(normalizeUsage("nope")).toEqual({});
     expect(normalizeUsage({})).toEqual({});
-  });
-});
-
-describe("pickProfileBar", () => {
-  it("returns the most-utilized bucket", () => {
-    const data = {
-      fiveHour: { pct: 30, resetsAt: "2026-04-15T20:00:00Z" },
-      weekly: { pct: 80, resetsAt: "2026-04-19T04:00:00Z" },
-      sonnet: { pct: 10, resetsAt: "2026-04-20T15:00:00Z" },
-    };
-    expect(pickProfileBar(data)).toEqual({ pct: 80, resetsAt: "2026-04-19T04:00:00Z" });
-  });
-
-  it("returns undefined when all buckets are absent", () => {
-    expect(pickProfileBar({})).toBeUndefined();
-  });
-
-  it("returns the single available bucket", () => {
-    const data = { fiveHour: { pct: 42, resetsAt: "2026-04-15T20:00:00Z" } };
-    expect(pickProfileBar(data)?.pct).toBe(42);
   });
 });
 

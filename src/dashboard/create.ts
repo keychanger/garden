@@ -12,7 +12,6 @@ import { restoreFromHidden } from "./layout.js";
 import { setupKeybindings } from "./hotkeys.js";
 import { setupStatusBar, buildStatusCommand, buildUsageCommand, updateHeaderVar } from "./header.js";
 import { renderQuickStatus } from "../commands/status.js";
-import { renderUsagePane } from "./usage.js";
 import {
   tmux, tmuxOutput, tmuxSplit, setPaneTitle, setPaneLabel, setPaneVar,
   getFirstPaneId, shellEscape,
@@ -31,9 +30,8 @@ import { gardenWindowName, shellWindowName as shellWin, workerWindowName as work
 const DASHBOARD_COLS = 250;
 const DASHBOARD_ROWS = 60;
 
-export function computeUsagePaneHeight(): number {
-  return Math.max(4, renderUsagePane().split("\n").length + 1);
-}
+// Usage pane height: 3 meter lines + 1 leading blank + 1 pane-border-status top row.
+export const USAGE_PANE_HEIGHT = 5;
 
 function buildSettingsJson(gardenRunner: string, sandbox: SandboxConfig): string {
   const hookCmd = `${gardenRunner} dashboard _claude-hook`;
@@ -110,7 +108,7 @@ export function ensureDashboard(): void {
       const gardenRunner = resolveGardenRunner();
       const usageCmd = buildUsageCommand(gardenRunner);
       try { tmux("respawn-pane", "-k", "-t", healed.usagePaneId, "sh", "-c", usageCmd); } catch { /* ignore */ }
-      try { tmux("resize-pane", "-t", healed.usagePaneId, "-y", String(computeUsagePaneHeight())); } catch { /* pane may be gone */ }
+      try { tmux("resize-pane", "-t", healed.usagePaneId, "-y", String(USAGE_PANE_HEIGHT)); } catch { /* pane may be gone */ }
       try { tmux("clear-history", "-t", healed.usagePaneId); } catch { /* ignore */ }
     }
 
@@ -163,10 +161,9 @@ export function ensureDashboard(): void {
   try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
 
   const usageCmd = buildUsageCommand(gardenRunner);
-  const usageHeight = computeUsagePaneHeight();
-  const usageId = tmuxSplit("-v", "-b", "-t", statusId, "-l", String(usageHeight),
+  const usageId = tmuxSplit("-v", "-b", "-t", statusId, "-l", String(USAGE_PANE_HEIGHT),
     "sh", "-c", usageCmd);
-  try { tmux("resize-pane", "-t", usageId, "-y", String(usageHeight)); } catch { /* ignore */ }
+  try { tmux("resize-pane", "-t", usageId, "-y", String(USAGE_PANE_HEIGHT)); } catch { /* ignore */ }
   try { tmux("set-option", "-p", "-t", usageId, "history-limit", "0"); } catch { /* ignore */ }
   try { tmux("clear-history", "-t", usageId); } catch { /* ignore */ }
   // Splitting shrinks status pane — flush scrollback so it stays non-scrollable.

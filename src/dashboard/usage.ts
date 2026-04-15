@@ -11,7 +11,7 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
-import { SESSIONS_DIR, loadConfig, expandHome, type ResolvedClaudeProfile } from "../config.js";
+import { SESSIONS_DIR } from "../config.js";
 import { log } from "./log.js";
 
 export const USAGE_FILE = path.join(SESSIONS_DIR, "claude-usage.json");
@@ -32,15 +32,6 @@ export interface UsageSnapshot {
   data?: UsageData;        // present on success
   error?: string;          // present on failure; short human-readable
   retryAfterMs?: number;   // set when server returned Retry-After
-  profiles?: Record<string, ProfileSnapshot>;
-}
-
-export interface ProfileSnapshot {
-  fetchedAt: string;
-  label: string;
-  bar?: UsageMeter;        // most-utilized populated bucket for this profile
-  error?: string;
-  retryAfterMs?: number;
 }
 
 // -----------------------------------------------------------------------------
@@ -79,20 +70,6 @@ export function loadCredential(): Credential | null {
   }
 
   return null;
-}
-
-// Read a profile's OAuth token from <configDir>/.credentials.json. Skip the
-// macOS Keychain branch because that entry is keyed by service name only,
-// shared across all CLAUDE_CONFIG_DIRs, and would alias profiles together.
-export function loadProfileCredential(profile: ResolvedClaudeProfile): Credential | null {
-  const credFile = path.join(profile.configDir, ".credentials.json");
-  if (!fs.existsSync(credFile)) return null;
-  try {
-    const token = extractAccessToken(fs.readFileSync(credFile, "utf8"));
-    return token ? { token, source: "file" } : null;
-  } catch {
-    return null;
-  }
 }
 
 function extractAccessToken(raw: string): string | null {
@@ -184,18 +161,6 @@ function pickMeter(bucket: unknown): UsageMeter | undefined {
   return { pct, resetsAt: reset };
 }
 
-// Pick the single most-utilized populated bucket from a profile's response.
-// Profiles render as one bar (vs the personal account's three) because there's
-// only room for so many in the status pane and the "is the plan running out"
-// signal collapses cleanly to whichever bucket is closest to its limit.
-export function pickProfileBar(data: UsageData): UsageMeter | undefined {
-  const candidates = [data.fiveHour, data.weekly, data.sonnet].filter(
-    (m): m is UsageMeter => Boolean(m),
-  );
-  if (candidates.length === 0) return undefined;
-  return candidates.reduce((a, b) => (b.pct > a.pct ? b : a));
-}
-
 // -----------------------------------------------------------------------------
 // Snapshot persistence
 // -----------------------------------------------------------------------------
@@ -221,22 +186,14 @@ export function writeUsageSnapshot(snap: UsageSnapshot): void {
 // -----------------------------------------------------------------------------
 
 export async function refreshUsage(): Promise<UsageSnapshot> {
-  const previous = readUsageSnapshot();
-  const defaultPart = await refreshDefaultBucket();
-  const profiles = await refreshProfilesBuckets(previous?.profiles);
-  const snap: UsageSnapshot = { ...defaultPart };
-  if (Object.keys(profiles).length > 0) snap.profiles = profiles;
-  writeUsageSnapshot(snap);
-  return snap;
-}
-
-async function refreshDefaultBucket(): Promise<UsageSnapshot> {
   const cred = loadCredential();
   if (!cred) {
-    return {
+    const snap: UsageSnapshot = {
       fetchedAt: new Date().toISOString(),
       error: "no Claude Code credentials found",
     };
+    writeUsageSnapshot(snap);
+    return snap;
   }
 
   try {
@@ -246,6 +203,8 @@ async function refreshDefaultBucket(): Promise<UsageSnapshot> {
     if (res.status === 200) {
       const parsed = JSON.parse(res.body);
       const data = normalizeUsage(parsed);
+      const snap: UsageSnapshot = { fetchedAt, data };
+      writeUsageSnapshot(snap);
       log.info("usage", "fetched", {
         data: {
           source: cred.source,
@@ -254,101 +213,39 @@ async function refreshDefaultBucket(): Promise<UsageSnapshot> {
           sonnet: data.sonnet?.pct,
         },
       });
-      return { fetchedAt, data };
+      return snap;
     }
 
     if (res.status === 429) {
+      const snap: UsageSnapshot = {
+        fetchedAt,
+        error: "rate-limited",
+        retryAfterMs: res.retryAfterMs,
+      };
+      writeUsageSnapshot(snap);
       log.warn("usage", "rate-limited", { data: { retryAfterMs: res.retryAfterMs } });
-      return { fetchedAt, error: "rate-limited", retryAfterMs: res.retryAfterMs };
+      return snap;
     }
 
     if (res.status === 401 || res.status === 403) {
+      const snap: UsageSnapshot = { fetchedAt, error: "login expired" };
+      writeUsageSnapshot(snap);
       log.warn("usage", "auth failed", { data: { status: res.status } });
-      return { fetchedAt, error: "login expired" };
+      return snap;
     }
 
+    const snap: UsageSnapshot = { fetchedAt, error: `http ${res.status}` };
+    writeUsageSnapshot(snap);
     log.warn("usage", "unexpected status", { data: { status: res.status, body: res.body.slice(0, 200) } });
-    return { fetchedAt, error: `http ${res.status}` };
+    return snap;
   } catch (err) {
-    const error = (err instanceof Error ? err.message : String(err)).slice(0, 120);
-    log.warn("usage", "fetch error", { data: { error } });
-    return { fetchedAt: new Date().toISOString(), error };
-  }
-}
-
-// Per-profile cooldown so a profile in a Retry-After window doesn't refetch
-// on every default poll. Uses the profile's own previous snapshot, not the
-// default one.
-const PROFILE_REFRESH_FLOOR_MS = 60 * 1000;
-
-function profileShouldRefresh(prev: ProfileSnapshot | undefined, nowMs: number): boolean {
-  if (!prev) return true;
-  const age = nowMs - Date.parse(prev.fetchedAt);
-  if (!Number.isFinite(age)) return true;
-  if (prev.retryAfterMs && age < prev.retryAfterMs) return false;
-  return age >= PROFILE_REFRESH_FLOOR_MS;
-}
-
-async function refreshProfilesBuckets(
-  prev: Record<string, ProfileSnapshot> | undefined,
-): Promise<Record<string, ProfileSnapshot>> {
-  let profiles: Record<string, { configDir: string; label?: string }>;
-  try {
-    profiles = loadConfig().claudeProfiles ?? {};
-  } catch {
-    return {};
-  }
-  const out: Record<string, ProfileSnapshot> = {};
-  const nowMs = Date.now();
-
-  for (const [name, p] of Object.entries(profiles)) {
-    const resolved: ResolvedClaudeProfile = {
-      name,
-      configDir: expandHome(p.configDir),
-      label: p.label ?? name,
-    };
-    const previous = prev?.[name];
-    if (!profileShouldRefresh(previous, nowMs)) {
-      if (previous) out[name] = previous;
-      continue;
-    }
-    out[name] = await fetchProfileSnapshot(resolved);
-  }
-  return out;
-}
-
-async function fetchProfileSnapshot(profile: ResolvedClaudeProfile): Promise<ProfileSnapshot> {
-  const fetchedAt = new Date().toISOString();
-  const cred = loadProfileCredential(profile);
-  if (!cred) {
-    return { fetchedAt, label: profile.label, error: "not logged in" };
-  }
-  try {
-    const res = await fetchUsageRaw(cred.token);
-    if (res.status === 200) {
-      const data = normalizeUsage(JSON.parse(res.body));
-      const bar = pickProfileBar(data);
-      log.info("usage", "fetched profile", {
-        data: { profile: profile.name, pct: bar?.pct },
-      });
-      return { fetchedAt, label: profile.label, bar };
-    }
-    if (res.status === 429) {
-      log.warn("usage", "profile rate-limited", {
-        data: { profile: profile.name, retryAfterMs: res.retryAfterMs },
-      });
-      return { fetchedAt, label: profile.label, error: "rate-limited", retryAfterMs: res.retryAfterMs };
-    }
-    if (res.status === 401 || res.status === 403) {
-      return { fetchedAt, label: profile.label, error: "login expired" };
-    }
-    return { fetchedAt, label: profile.label, error: `http ${res.status}` };
-  } catch (err) {
-    return {
-      fetchedAt,
-      label: profile.label,
+    const snap: UsageSnapshot = {
+      fetchedAt: new Date().toISOString(),
       error: (err instanceof Error ? err.message : String(err)).slice(0, 120),
     };
+    writeUsageSnapshot(snap);
+    log.warn("usage", "fetch error", { data: { error: snap.error } });
+    return snap;
   }
 }
 
@@ -384,17 +281,7 @@ export function renderUsagePane(nowMs: number = Date.now()): string {
   lines.push(renderMeterLine("week",   d.weekly,   nowMs, staleTag));
   lines.push(renderMeterLine("sonnet", d.sonnet,   nowMs, staleTag));
 
-  for (const [, p] of Object.entries(snap.profiles ?? {})) {
-    lines.push(renderProfileLine(p, nowMs));
-  }
-
   return lines.map(l => l + "\x1b[K").join("\n");
-}
-
-function renderProfileLine(p: ProfileSnapshot, nowMs: number): string {
-  const label = p.label.padEnd(6).slice(0, 6);
-  if (p.error) return `  ${label}  ${dim(p.error)}`;
-  return renderMeterLine(label, p.bar, nowMs, "");
 }
 
 function renderMeterLine(label: string, meter: UsageMeter | undefined, nowMs: number, suffix: string): string {

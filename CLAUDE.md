@@ -94,7 +94,7 @@ garden claude-profile list                     # shows profiles and which projec
 garden claude-profile remove imp               # refuses while any project still references it
 ```
 
-A project's claudeProfile is injected as `CLAUDE_CONFIG_DIR` whenever its worker, reviewer, resolver, or `_dashboard-claude` session spawns. Hooks in `.claude/settings.local.json` shell out to garden and intentionally do not depend on the override. The dashboard usage meter renders one extra bar per registered profile (under `sonnet`), labeled with the profile's name and showing the profile's most-utilized populated bucket.
+A project's claudeProfile is injected as `CLAUDE_CONFIG_DIR` whenever its worker, reviewer, resolver, or `_dashboard-claude` session spawns. Hooks in `.claude/settings.local.json` shell out to garden and intentionally do not depend on the override. The dashboard usage meter is not split per-profile: Anthropic's `/api/oauth/usage` aggregates by user identity, so two workspace tokens tied to the same email return identical data — a per-profile bar would just mirror `week`. Whatever per-workspace quota the alternate plan has is visible only via the org owner's admin dashboard.
 
 ## Adding a new command
 

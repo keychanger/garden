@@ -7,7 +7,7 @@ import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, kill
 import { log } from "./log.js";
 import { worktreeExists, removeWorktree, pruneWorktrees } from "./git.js";
 import { startProjectPoller, projectPollerRunning } from "./poller.js";
-import { resolveGardenRunner, createGardenConsoleWindow, computeUsagePaneHeight } from "./create.js";
+import { resolveGardenRunner, createGardenConsoleWindow, USAGE_PANE_HEIGHT } from "./create.js";
 import { gardenWindowName, workerWindowName } from "./window-names.js";
 import { buildStatusCommand, buildUsageCommand } from "./header.js";
 import { gardenRestoreFromHidden } from "./layout.js";
@@ -79,11 +79,10 @@ function healUsagePaneInState(state: DashboardState): DashboardState {
     try {
       const gardenRunner = resolveGardenRunner();
       const usageCmd = buildUsageCommand(gardenRunner);
-      const usageHeight = computeUsagePaneHeight();
-      const usageId = tmuxSplit("-v", "-b", "-t", healed.statusPaneId, "-l", String(usageHeight),
+      const usageId = tmuxSplit("-v", "-b", "-t", healed.statusPaneId, "-l", String(USAGE_PANE_HEIGHT),
         "sh", "-c", usageCmd);
 
-      try { tmux("resize-pane", "-t", usageId, "-y", String(usageHeight)); } catch { /* ignore */ }
+      try { tmux("resize-pane", "-t", usageId, "-y", String(USAGE_PANE_HEIGHT)); } catch { /* ignore */ }
       try { tmux("clear-history", "-t", usageId); } catch { /* ignore */ }
       // Splitting shrinks status pane — flush scrollback so it stays non-scrollable.
       try { tmux("clear-history", "-t", healed.statusPaneId); } catch { /* ignore */ }
