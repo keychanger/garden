@@ -28,7 +28,7 @@ Rules are plain markdown. Edit them directly.
 ```
 ┌─────────────────────┬─────────────────────────────┐
 │  Usage Meters       │                             │
-│  (dynamic height)   │                             │
+│  (fixed height)     │                             │
 ├─────────────────────┤                             │
 │  Project Status     │                             │
 │  (auto-sized)       │                             │
@@ -50,7 +50,7 @@ Rules are plain markdown. Edit them directly.
 
 ### Panes
 
-- **Usage Meters** (top-left) — Dedicated pane showing three Claude quota bars (5-hour rolling window, weekly total, Sonnet-specific weekly meter) plus one extra bar per registered Claude profile. Height is computed dynamically from the rendered content. Refreshed via SIGUSR1 from a pre-baked `usage.rendered` file.
+- **Usage Meters** (top-left) — Dedicated pane showing three Claude quota bars (5-hour rolling window, weekly total, Sonnet-specific weekly meter). Fixed height (5 rows). Refreshed via SIGUSR1 from a pre-baked `usage.rendered` file.
 - **Project Status** (mid-left) — Live-updating display of all projects and their workers. Shows which project is active (`◄`), each worker's lifecycle state via status icons (braille spinner for working, Unicode symbols for other states), a focus indicator (filled/empty circle) showing which worker is active, and aligned columns for name/status/activity. Auto-sizes to the number of projects.
 - **Garden Pane** (lower-left) — Cycles between three views: garden (bold green `garden>` prompt with auto-dispatch for garden commands), root (general-purpose shell), and logs. `⌥g` jumps to garden, `⌥r` jumps to root, `⌥l` jumps to logs.
 - **Bottom bar** (tmux status line) — Two-sided display. Left side shows the active project name (bold) and its current git branch. Right side shows the garden build version (git short SHA, or "dev" when running via tsx); when unread alerts exist it is prefixed with a red `⚠ N alerts — ⌥l to clear` badge.
