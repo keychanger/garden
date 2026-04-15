@@ -13,6 +13,7 @@ import { readDashState, type DashboardState } from "../dashboard/state.js";
 import { getWorkers, readRegistry, batchUpdateWorkerFields } from "../dashboard/registry.js";
 import { listHiddenWorkerWindows, windowExists, getFirstPaneId, getPaneTitle } from "../dashboard/tmux.js";
 import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/window-names.js";
+import { renderUsageHeader } from "../dashboard/usage.js";
 
 // Display states from STATUS.md. These are the only values the renderer ever
 // emits. `loading`/`ready`/`working`/`idle`/`exited` come from claudeStatus
@@ -124,6 +125,7 @@ export async function status(_args: string[]): Promise<void> {
   const cols = process.stdout.columns || 120;
   const activityMax = Math.max(20, cols - (8 + nameWidth + 2 + statusWidth + 2));
 
+  console.log(renderUsageHeader());
   console.log("");
   for (let pi = 0; pi < statuses.length; pi++) {
     if (pi > 0) console.log("");
@@ -239,6 +241,9 @@ export function renderQuickStatus(state: DashboardState, windowNames?: string[])
   const nameWidth = Math.max(10, ...allWorkers.map(w => w.name.length));
   const statusWidth = STATUS_WIDTH;
 
+  // Prepend the Claude usage header before the project/worker list. The
+  // helper handles loading/error/stale variants and already clears to EOL.
+  lines.push(...renderUsageHeader().split("\n"));
   lines.push("");
   for (let pi = 0; pi < names.length; pi++) {
     if (pi > 0) lines.push("");

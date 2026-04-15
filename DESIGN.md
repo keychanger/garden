@@ -90,7 +90,7 @@ Each project's workers and shell live in hidden tmux windows when not active. Wh
 This preserves both the layout tree (the right pane slot is never destroyed) and all worker state across switches.
 
 ### Hidden Window Naming
-Hidden windows follow the convention: `_<project>-worker-<N>`, `_<project>-shell`, `_<project>-poller`, `_<project>-review-<worker>`, `_garden-garden`, `_garden-root`, and `_garden-logs`. When switching projects, the visible pane is parked as `_<project>-active`. The underscore prefix marks them as managed by garden — not user-facing.
+Hidden windows follow the convention: `_<project>-worker-<N>`, `_<project>-shell`, `_<project>-poller`, `_<project>-review-<worker>`, `_garden-garden`, `_garden-root`, `_garden-logs`, and `_garden-usage-poller`. When switching projects, the visible pane is parked as `_<project>-active`. The underscore prefix marks them as managed by garden — not user-facing.
 
 ### Worker Lifecycle
 1. `⌥n` creates a git worktree at `~/.garden/worktrees/<project>/<worker-name>/`, with a branch named after the worker that points at `origin/<base>` directly. Worker freshness does not depend on the main checkout being clean or fast-forwarded — a stale main checkout raises an alert but does not infect the worker
@@ -175,6 +175,11 @@ A category becomes a *pending suggestion* once it has accumulated ≥3 findings 
 - `garden rules findings [--project <name>]` — raw findings log
 
 Every accepted suggestion permanently raises the review bar for every future worker across every project.
+
+### Claude Usage Meter
+Three quota bars render at the top of the status pane: the 5-hour rolling window, the weekly total, and the Opus-specific weekly meter (shown as `—` on plans that don't track it separately). Bars are colored by utilization — green <60%, yellow <85%, red at or above — with the reset countdown next to each.
+
+Data comes from `GET https://api.anthropic.com/api/oauth/usage`, authenticated with the OAuth token Claude Code already writes to the macOS Keychain under service `Claude Code-credentials`. The endpoint is undocumented and strictly rate-limited (observed `Retry-After` of ~50 minutes after three rapid probes), so a singleton poller (`_garden-usage-poller`) fetches every 5 minutes on success and honors `Retry-After` on 429. Credential discovery probes Keychain first, then `~/.claude/.credentials.json`, then the `GARDEN_CLAUDE_SESSION_KEY` env var. On any failure the snapshot records a short error and the status pane renders a single dim "claude usage: …" line instead of bars — the meter is a progressive enhancement, not a dependency. Fetched snapshots live in `~/.garden/sessions/claude-usage.json`.
 
 ### Alerts
 The dashboard surfaces important events as alerts — persistent messages that require operator attention. Alerts are stored atomically in `~/.garden/sessions/dashboard.alerts.json` (same write-tmp-then-rename pattern as other state files), capped at 100 entries.
@@ -283,6 +288,7 @@ All read commands detect whether stdout is a TTY:
     <project>-<worker>-review-prompt.txt  # Transient review prompt
     <project>-<worker>-review-result.txt  # Transient review output
     status.rendered           # Pre-rendered status snapshot for instant display
+    claude-usage.json         # Claude quota snapshot (5h / weekly / opus)
   worktrees/
     <project>/
       <worker-name>/      # Git worktree for each worker

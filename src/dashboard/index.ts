@@ -15,6 +15,7 @@ import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.j
 import { newWorker, killPane } from "./workers.js";
 import { switchProject, focusWorker, focusShell, focusGarden, focusRoot, focusLogs, cyclePane } from "./navigate.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
+import { runUsagePollerLoop, stopUsagePoller } from "./usage-poller.js";
 import { loadConfig } from "../config.js";
 import { addAlert } from "./alerts.js";
 
@@ -30,6 +31,7 @@ export async function dashboard(args: string[]): Promise<void> {
     }
     log.info("dashboard", "closing dashboard");
     stopAllPollers();
+    stopUsagePoller();
     killDashboardSession();
     try { fs.unlinkSync(STATE_FILE); } catch { /* ignore */ }
     try { fs.unlinkSync(REGISTRY_FILE); } catch { /* ignore */ }
@@ -60,6 +62,10 @@ export async function dashboard(args: string[]): Promise<void> {
     return;
   }
   if (sub === "_post-push") return postPush(args[1]);
+  if (sub === "_usage-poll-loop") {
+    await runUsagePollerLoop();
+    return;
+  }
   if (sub === "_header") return printHeader();
   if (sub === "_claude-hook") return handleClaudeHook(args[1]);
   if (sub === "_pane-died") return handlePaneDied(args[1]);

@@ -21,6 +21,7 @@ import { readRegistry, updateWorkerFields } from "./registry.js";
 import { log, truncateLog } from "./log.js";
 import { validateAndHeal } from "./validate.js";
 import { startProjectPoller, signalFifoPath } from "./poller.js";
+import { startUsagePoller } from "./usage-poller.js";
 import { installPollTriggerHook, worktreeExists as wtExists, resolveBaseBranch, getRemoteHost } from "./git.js";
 import { buildSandboxConfig, type SandboxConfig } from "./sandbox.js";
 import { gardenWindowName, shellWindowName as shellWin, workerWindowName as workerWin, isGardenWindow } from "./window-names.js";
@@ -284,6 +285,11 @@ export function ensureDashboard(): void {
       startProjectPoller(pn, gardenRunner);
     }
   }
+
+  // Start the singleton Claude usage poller (refreshes the quota meters shown
+  // at the top of the status pane). Rate-limited endpoint — the loop handles
+  // cadence internally.
+  startUsagePoller(gardenRunner);
 
   if (firstResumedWindow && state.activePaneId) {
     tmux("select-pane", "-t", state.activePaneId);

@@ -30,6 +30,10 @@ export function gardenWindowName(view: GardenView): string {
   return `_garden-${view}`;
 }
 
+export function usagePollerWindowName(): string {
+  return "_garden-usage-poller";
+}
+
 export function workerWindowPrefix(project: string): string {
   return `_${project}-worker-`;
 }
