@@ -241,8 +241,6 @@ export function renderQuickStatus(state: DashboardState, windowNames?: string[])
   const nameWidth = Math.max(10, ...allWorkers.map(w => w.name.length));
   const statusWidth = STATUS_WIDTH;
 
-  // Prepend the Claude usage header before the project/worker list. The
-  // helper handles loading/error/stale variants and already clears to EOL.
   lines.push(...renderUsageHeader().split("\n"));
   lines.push("");
   for (let pi = 0; pi < names.length; pi++) {

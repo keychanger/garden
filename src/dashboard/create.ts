@@ -286,9 +286,6 @@ export function ensureDashboard(): void {
     }
   }
 
-  // Start the singleton Claude usage poller (refreshes the quota meters shown
-  // at the top of the status pane). Rate-limited endpoint — the loop handles
-  // cadence internally.
   startUsagePoller(gardenRunner);
 
   if (firstResumedWindow && state.activePaneId) {

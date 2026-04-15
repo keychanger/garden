@@ -255,22 +255,17 @@ export async function refreshUsage(): Promise<UsageSnapshot> {
 const BAR_WIDTH = 12;
 const STALE_AFTER_MS = 30 * 60 * 1000; // 30 min — long enough to survive the endpoint's long rate-limit windows
 
-// Returns 3 ANSI-coloured lines suitable for prepending to the status pane.
-// Graceful-degrades: loading (no snapshot) / error / stale variants each
-// render a single neutral summary line + blank line so layout stays stable.
 export function renderUsageHeader(nowMs: number = Date.now()): string {
   const snap = readUsageSnapshot();
   const header: string[] = [];
 
   if (!snap) {
     header.push(dim("  claude usage  loading\u2026"));
-    header.push("");
     return header.map(l => l + "\x1b[K").join("\n");
   }
 
   if (snap.error) {
     header.push(dim(`  claude usage  ${snap.error}`));
-    header.push("");
     return header.map(l => l + "\x1b[K").join("\n");
   }
 
@@ -282,7 +277,6 @@ export function renderUsageHeader(nowMs: number = Date.now()): string {
   header.push(renderMeterLine("5h  ", d.fiveHour, nowMs, staleTag));
   header.push(renderMeterLine("wk  ", d.weekly,   nowMs, staleTag));
   header.push(renderMeterLine("opus", d.opus,     nowMs, staleTag));
-  header.push("");
 
   return header.map(l => l + "\x1b[K").join("\n");
 }

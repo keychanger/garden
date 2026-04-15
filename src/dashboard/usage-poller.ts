@@ -57,6 +57,3 @@ export function stopUsagePoller(): void {
   killWindowSafe(usagePollerWindowName());
 }
 
-export function usagePollerRunning(): boolean {
-  return windowExists(usagePollerWindowName());
-}
