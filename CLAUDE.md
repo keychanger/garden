@@ -38,7 +38,7 @@ npm run dev -- help    # run via tsx during development
   - `names.ts` — worker name generation (adjective-noun pairs)
   - `sandbox.ts` — builds Claude sandbox config (filesystem allowWrite + network allowedDomains) for each worker and reviewer
   - `usage.ts` — Claude quota fetcher/renderer: OAuth-bearer call to `api.anthropic.com/api/oauth/usage`, normalizes the 5h/weekly/sonnet meters, renders three bars for the status pane. Third bar is Sonnet (not Opus) because on Max plans `seven_day_opus` is null and `seven_day_sonnet` is the populated model-specific bucket. Undocumented endpoint, strict rate-limit (~50min Retry-After after rapid probes).
-  - `usage-poller.ts` — singleton poller (`_garden-usage-poller`) refreshing the quota snapshot every 5 min. Honors `Retry-After` on 429. Calls `refreshDashboard()` (not just `refreshStatusPane()`) so the pre-baked status file gets rewritten before SIGUSR1.
+  - `usage-poller.ts` — singleton poller (`_garden-usage-poller`) refreshing the quota snapshot every 5 min. Honors `Retry-After` on 429. Calls `refreshDashboard()` (not just `refreshStatusPane()`) so the pre-baked status file gets rewritten before SIGUSR1. On top of this, `maybeRefreshUsage()` in `usage.ts` is called from the `Stop` hook in `handleClaudeHook` — a fire-and-forget detached `_usage-refresh` subprocess, gated by a 60-second cooldown, so the meter updates right after each end-of-turn.
   - `STATUS.md` — **spec** for the worker status tracking and display system. Source of truth: the code follows this document, not the other way around. See "Specification files" below.
 - `src/dashboard-claude.ts` — internal command: launches claude with rules context
 - `src/commands/config.ts` — `garden config` command: view/set project config

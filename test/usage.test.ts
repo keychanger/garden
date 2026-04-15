@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { normalizeUsage, formatDuration } from "../src/dashboard/usage.js";
+import {
+  normalizeUsage,
+  formatDuration,
+  shouldRefreshOnHookWith,
+  HOOK_REFRESH_COOLDOWN_MS,
+} from "../src/dashboard/usage.js";
 
 describe("normalizeUsage", () => {
   it("extracts all three meters from the observed api.anthropic.com shape", () => {
@@ -59,5 +64,46 @@ describe("formatDuration", () => {
   it("collapses past / zero durations to 'now'", () => {
     expect(formatDuration(0)).toBe("now");
     expect(formatDuration(-5000)).toBe("now");
+  });
+});
+
+describe("shouldRefreshOnHookWith", () => {
+  const now = Date.parse("2026-04-15T20:00:00Z");
+
+  it("refreshes when no snapshot exists yet", () => {
+    expect(shouldRefreshOnHookWith(null, now)).toBe(true);
+  });
+
+  it("refreshes when the snapshot is older than the cooldown", () => {
+    const snap = { fetchedAt: new Date(now - HOOK_REFRESH_COOLDOWN_MS - 1000).toISOString() };
+    expect(shouldRefreshOnHookWith(snap, now)).toBe(true);
+  });
+
+  it("skips when the snapshot is fresher than the cooldown", () => {
+    const snap = { fetchedAt: new Date(now - 30_000).toISOString() };
+    expect(shouldRefreshOnHookWith(snap, now)).toBe(false);
+  });
+
+  it("skips while the server's Retry-After window is still active", () => {
+    const snap = {
+      fetchedAt: new Date(now - 90_000).toISOString(),
+      error: "rate-limited",
+      retryAfterMs: 10 * 60_000,
+    };
+    expect(shouldRefreshOnHookWith(snap, now)).toBe(false);
+  });
+
+  it("allows refresh once the Retry-After window has passed", () => {
+    const snap = {
+      fetchedAt: new Date(now - 11 * 60_000).toISOString(),
+      error: "rate-limited",
+      retryAfterMs: 10 * 60_000,
+    };
+    expect(shouldRefreshOnHookWith(snap, now)).toBe(true);
+  });
+
+  it("refreshes when fetchedAt is unparseable (treat as unknown)", () => {
+    const snap = { fetchedAt: "not-a-date" };
+    expect(shouldRefreshOnHookWith(snap, now)).toBe(true);
   });
 });

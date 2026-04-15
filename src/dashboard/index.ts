@@ -66,6 +66,16 @@ export async function dashboard(args: string[]): Promise<void> {
     await runUsagePollerLoop();
     return;
   }
+  if (sub === "_usage-refresh") {
+    // One-shot refresh invoked by the Claude Code Stop hook (fire-and-forget
+    // detached spawn from maybeRefreshUsage). Completes a fetch, rewrites the
+    // pre-baked status file, and signals the status pane.
+    const { refreshUsage } = await import("./usage.js");
+    const { refreshDashboard } = await import("./header.js");
+    await refreshUsage();
+    try { refreshDashboard(); } catch { /* pane gone, not running, etc. */ }
+    return;
+  }
   if (sub === "_header") return printHeader();
   if (sub === "_claude-hook") return handleClaudeHook(args[1]);
   if (sub === "_pane-died") return handlePaneDied(args[1]);

@@ -10,7 +10,7 @@ import fs from "node:fs";
 import https from "node:https";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { SESSIONS_DIR } from "../config.js";
 import { log } from "./log.js";
 
@@ -322,4 +322,50 @@ export function formatDuration(ms: number): string {
   if (days > 0) return `in ${days}d ${hours}h`;
   if (hours > 0) return `in ${hours}h ${mins}m`;
   return `in ${mins}m`;
+}
+
+// -----------------------------------------------------------------------------
+// Event-driven refresh (called from Claude Code hooks)
+// -----------------------------------------------------------------------------
+
+// Minimum time between hook-triggered fetches. Chosen as a conservative floor
+// against the endpoint's burst rate-limit. The 5-min background poller is the
+// idle fallback; this path only fires when the user is actively working, when
+// the quota has likely just advanced and a fresh number matters most.
+export const HOOK_REFRESH_COOLDOWN_MS = 60 * 1000;
+
+// Pure decision function — returns true when the given snapshot is stale
+// enough that a hook-triggered fetch is justified. Honors any outstanding
+// Retry-After window the server asked us to wait for. Split out for testing;
+// the disk-reading shouldRefreshOnHook() wraps it.
+export function shouldRefreshOnHookWith(
+  snap: UsageSnapshot | null,
+  nowMs: number,
+): boolean {
+  if (!snap) return true;
+  const age = nowMs - Date.parse(snap.fetchedAt);
+  if (!Number.isFinite(age)) return true;
+  if (snap.retryAfterMs && age < snap.retryAfterMs) return false;
+  return age >= HOOK_REFRESH_COOLDOWN_MS;
+}
+
+export function shouldRefreshOnHook(nowMs: number = Date.now()): boolean {
+  return shouldRefreshOnHookWith(readUsageSnapshot(), nowMs);
+}
+
+// Fire-and-forget refresh from a short-lived hook process. The hook has a 5s
+// budget; a detached subprocess keeps the hook fast while the fetch + pane
+// repaint happen in the background. Safe to call on every Stop event — the
+// cooldown check short-circuits most calls.
+export function maybeRefreshUsage(gardenRunner: string): void {
+  if (!shouldRefreshOnHook()) return;
+  try {
+    spawn("sh", ["-c", `${gardenRunner} dashboard _usage-refresh 2>/dev/null`], {
+      detached: true,
+      stdio: "ignore",
+    }).unref();
+  } catch {
+    // If the spawn itself fails, the background poller will still catch up
+    // within 5 minutes — silently degrade rather than disturb the hook path.
+  }
 }
