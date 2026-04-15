@@ -67,9 +67,6 @@ export async function dashboard(args: string[]): Promise<void> {
     return;
   }
   if (sub === "_usage-refresh") {
-    // One-shot refresh invoked by the Claude Code Stop hook (fire-and-forget
-    // detached spawn from maybeRefreshUsage). Completes a fetch, rewrites the
-    // pre-baked status file, and signals the status pane.
     const { refreshUsage } = await import("./usage.js");
     const { refreshDashboard } = await import("./header.js");
     await refreshUsage();

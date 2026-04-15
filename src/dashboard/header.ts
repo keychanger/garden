@@ -264,9 +264,6 @@ export function handleClaudeHook(event: string): void {
   // happens to have commits — a direct violation of STATUS.md invariant 2.
   if (event === "stop") {
     markPendingReviewIfCommitsAhead(workerInfo.project, workerInfo.worker);
-    // End-of-turn is when quota has just advanced. Fire a detached usage
-    // refresh so the meter is current the moment the user looks at it. The
-    // 60s cooldown inside maybeRefreshUsage guards the rate-limited endpoint.
     maybeRefreshUsage(resolveGardenRunner());
   }
 
