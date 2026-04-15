@@ -107,4 +107,15 @@ describe("buildWorktreeRules", () => {
     expect(result).toContain("git checkout -b");
     expect(result).toContain("`swift-oak`");
   });
+
+  it("explicitly forbids sleep/polling loops that watch the poller", async () => {
+    // The poller advances working -> reviewing only on the Claude Code Stop
+    // hook. A worker that sleeps in a bash loop to watch state transitions
+    // keeps its turn alive and blocks the hook from firing — deadlock.
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("test-branch");
+    expect(result).toMatch(/sleep|loop-poll/i);
+    expect(result).toContain("Stop hook");
+    expect(result).toContain("end your turn");
+  });
 });

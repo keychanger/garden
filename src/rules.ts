@@ -42,5 +42,7 @@ You are working in an isolated git worktree on branch \`${branchName}\`. Your wo
 - Commit your work incrementally. Your commit messages are the primary way reviewers understand your intent — write them for an audience that has never seen your task description. The first commit should explain what problem you are solving and your approach. Subsequent commits should explain why each change was made, not just what changed.
 - When your task is complete, push your branch. The poller will automatically rebase, review, and merge your changes into ${baseBranch}.
 - If the poller notifies you of review feedback, check failures, or merge conflicts, fix the issues, commit, and push.
-- Do NOT exit after pushing. Stay alive and wait for further instructions or poller notifications. Garden will terminate your session when appropriate.`;
+- Do NOT exit after pushing. Stay alive and wait for further instructions or poller notifications. Garden will terminate your session when appropriate.
+
+**Do NOT sleep or loop-poll to watch the poller work.** The poller is driven by Claude Code's Stop hook — it only advances \`working → reviewing\` after your turn ends. Constructs like \`for i in 1..6; do sleep 10; check state; done\`, \`until rg prState=reviewing; do sleep N; done\`, or any other long bash sleep that waits for a state transition keep your turn alive and block the very event you are waiting on. It is a deadlock. If you want the poller to pick up your commits, **end your turn.** It will wake you with a new prompt when there is something for you to act on. Short sleeps (a few seconds) to let a subprocess settle are fine; sleeping to observe the poller is not.`;
 }
