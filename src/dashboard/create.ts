@@ -55,6 +55,9 @@ function buildSettingsJson(gardenRunner: string, sandbox: SandboxConfig): string
       }, {
         matcher: "ExitPlanMode",
         hooks: [{ type: "command", command: `${hookCmd} pretooluse`, timeout: 5 }],
+      }, {
+        matcher: "Bash",
+        hooks: [{ type: "command", command: `${gardenRunner} dashboard _judge-bash`, timeout: 15 }],
       }],
       PostToolUse: [{
         matcher: "AskUserQuestion",

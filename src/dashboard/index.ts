@@ -86,6 +86,11 @@ export async function dashboard(args: string[]): Promise<void> {
   }
   if (sub === "_header") return printHeader();
   if (sub === "_claude-hook") return handleClaudeHook(args[1]);
+  if (sub === "_judge-bash") {
+    const { judgeBashHook } = await import("./judge.js");
+    await judgeBashHook();
+    return;
+  }
   if (sub === "_pane-died") return handlePaneDied(args[1]);
   if (sub === "_title-changed") return handleTitleChanged(args[1], args[2]);
   if (sub === "_bootstrap-alert") {
