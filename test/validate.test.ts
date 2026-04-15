@@ -36,6 +36,7 @@ vi.mock("../src/dashboard/poller.js", () => ({
 vi.mock("../src/dashboard/create.js", () => ({
   resolveGardenRunner: vi.fn(() => "garden"),
   createGardenConsoleWindow: vi.fn(),
+  USAGE_PANE_HEIGHT: 4,
 }));
 
 vi.mock("../src/dashboard/layout.js", () => ({
@@ -44,6 +45,7 @@ vi.mock("../src/dashboard/layout.js", () => ({
 
 vi.mock("../src/dashboard/header.js", () => ({
   buildStatusCommand: vi.fn(() => "echo status"),
+  buildUsageCommand: vi.fn(() => "echo usage"),
 }));
 
 vi.mock("../src/dashboard/git.js", () => ({
@@ -57,10 +59,13 @@ import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, tmux
 import { readRegistry, writeRegistry } from "../src/dashboard/registry.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 
+import { setPaneTitle, setPaneLabel } from "../src/dashboard/tmux.js";
+
 function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
   return {
     activeProject: "garden",
     statusPaneId: "%0",
+    usagePaneId: "%3",
     gardenShellPaneId: "%1",
     activePaneId: "%2",
     activePaneType: "worker",
@@ -203,6 +208,36 @@ describe("validateAndHeal", () => {
     });
     const healed = validateAndHeal(state);
     expect(healed.lastActiveWorker.garden).toBe("_garden-worker-bold-ash");
+  });
+
+  it("passes through healthy usage pane unchanged", () => {
+    const state = makeState({ usagePaneId: "%3" });
+    const healed = validateAndHeal(state);
+    expect(healed.usagePaneId).toBe("%3");
+  });
+
+  it("nulls stale usagePaneId when pane is gone", () => {
+    vi.mocked(paneExists).mockImplementation((id: string) => id !== "%3");
+    const state = makeState({ usagePaneId: "%3" });
+    const healed = validateAndHeal(state);
+    expect(healed.usagePaneId).toBe("%50");
+  });
+
+  it("recreates usage pane when missing and status pane exists", () => {
+    vi.mocked(tmuxSplit).mockReturnValue("%60");
+    const state = makeState({ usagePaneId: null, statusPaneId: "%0" });
+    const healed = validateAndHeal(state);
+    expect(healed.usagePaneId).toBe("%60");
+    expect(setPaneTitle).toHaveBeenCalledWith("%60", "usage");
+    expect(setPaneLabel).toHaveBeenCalledWith("%60", "usage");
+  });
+
+  it("leaves usagePaneId null when status pane is also gone and cannot be recreated", () => {
+    vi.mocked(paneExists).mockReturnValue(false);
+    const state = makeState({ usagePaneId: null, statusPaneId: "%0", gardenShellPaneId: "%1" });
+    const healed = validateAndHeal(state);
+    expect(healed.statusPaneId).toBeNull();
+    expect(healed.usagePaneId).toBeNull();
   });
 
   it("keeps registry entries for active window even if not a hidden window", () => {
