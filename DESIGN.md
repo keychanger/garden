@@ -161,6 +161,21 @@ Projects don't block each other — each project has its own poller and merge qu
 ### Sibling Merge Notification
 When code merges, the poller compares the changed files against every other active worker's branch in the same project. If files overlap and the sibling has a live Claude session, it is notified via `tmux send-keys` with the merged worker's commit summary and overlapping file list so it can review and avoid reverting the merged work. Dead workers are skipped — they will hit rebase conflicts naturally on their next review cycle.
 
+### Rules Evolution
+Every reviewer catches the same class of issue eventually — stale tests after a refactor, missing error handling, overly broad scope — and today that signal is thrown away once the merge lands. The rules evolution loop closes that gap.
+
+When the reviewer emits a FIXED or FAILED verdict, its prompt now requires a fenced `findings` JSON block listing each distinct issue it intervened on, tagged with a short kebab-case category (the *class* of issue) and a one-sentence summary. The poller parses that block in `handleReviewing` and appends each finding to `~/.garden/sessions/rules-findings.json` (atomic write, capped at 1000 entries, same conventions as `dashboard.alerts.json`).
+
+A category becomes a *pending suggestion* once it has accumulated ≥3 findings across ≥2 distinct workers within the last 30 days. On the first crossing, a single alert is emitted via the normal `addAlert` path (source: `rules`, level: `warn`) — the nudge piggybacks on the existing alerts surface, so there's no new UI. Subsequent findings accumulate silently.
+
+**Commands:**
+- `garden rules` / `garden rules suggest` — list pending categories, counts, projects, example summaries
+- `garden rules accept <category> [--rule "..."] [--global | --project <name>] [--confirm]` — synthesize a markdown rule block and, after confirmation, append it to the inferred `rules.md` (project if one project is affected, global if multiple)
+- `garden rules dismiss <category>` — mark so the suggestion won't re-surface
+- `garden rules findings [--project <name>]` — raw findings log
+
+Every accepted suggestion permanently raises the review bar for every future worker across every project.
+
 ### Alerts
 The dashboard surfaces important events as alerts — persistent messages that require operator attention. Alerts are stored atomically in `~/.garden/sessions/dashboard.alerts.json` (same write-tmp-then-rename pattern as other state files), capped at 100 entries.
 
@@ -169,6 +184,7 @@ The dashboard surfaces important events as alerts — persistent messages that r
 - Reviewer could not fix issues (FAILED verdict)
 - Merge failure
 - Repeated failures (3+ consecutive failures on the same worker)
+- Rule suggestion ready (a category crossed the findings threshold)
 
 **Visibility:**
 - Header bar shows `[N alerts]` when alerts exist
@@ -227,6 +243,10 @@ garden keys                        # Show dashboard keybindings
 garden status                      # Show all projects and their workers
 garden alerts                      # View dashboard alerts
 garden alerts clear                # Dismiss all alerts
+garden rules                       # View pending rule suggestions from reviewer findings
+garden rules accept <category>     # Append a synthesized rule to rules.md (use --confirm)
+garden rules dismiss <category>    # Dismiss a rule suggestion
+garden rules findings              # Raw reviewer-findings log
 garden logs [options]              # View dashboard logs (pretty-printed)
 garden kick <worker>               # Re-arm a stranded 'working' worker for review
 garden rebuild                     # Rebuild garden and relaunch dashboard
@@ -250,6 +270,7 @@ All read commands detect whether stdout is a TTY:
     dashboard.state.json  # Dashboard pane state
     dashboard.registry.json  # Worker registry (persists across restarts)
     dashboard.alerts.json # Operator alerts (review failures, merge errors)
+    rules-findings.json   # Reviewer findings tally + suggestion status
     dashboard-<project>.context  # System prompt for project's Claude sessions
     dashboard-<project>-<branch>.context  # Worktree worker context
     dashboard.kill-confirm.json  # Transient double-tap kill confirmation

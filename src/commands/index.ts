@@ -16,6 +16,7 @@ import { config } from "./config.js";
 import { focus, unfocus } from "./focus.js";
 import { reorder } from "./reorder.js";
 import { kick } from "./kick.js";
+import { rules } from "./rules.js";
 
 type Command = (args: string[]) => Promise<void>;
 
@@ -38,4 +39,5 @@ export const commands: Record<string, Command> = {
   alerts,
   logs,
   kick,
+  rules,
 };

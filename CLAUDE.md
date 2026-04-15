@@ -33,6 +33,7 @@ npm run dev -- help    # run via tsx during development
   - `prompts.ts` — review prompt building for the reviewer Claude session
   - `window-names.ts` — centralized tmux window naming conventions (construction, parsing, classification)
   - `alerts.ts` — persistent operator alerts (review failures, merge errors, repeated failures)
+  - `findings.ts` — reviewer-findings tally: parses `findings` blocks from review output, persists atomically to `rules-findings.json`, and fires a one-time alert when a category crosses the suggestion threshold
   - `log.ts` — structured JSON logger to `~/.garden/sessions/dashboard.log`
   - `names.ts` — worker name generation (adjective-noun pairs)
   - `sandbox.ts` — builds Claude sandbox config (filesystem allowWrite + network allowedDomains) for each worker and reviewer
@@ -41,6 +42,7 @@ npm run dev -- help    # run via tsx during development
 - `src/commands/config.ts` — `garden config` command: view/set project config
 - `src/commands/focus.ts` — `garden focus` / `garden unfocus`: control dashboard visibility
 - `src/commands/reorder.ts` — `garden reorder`: reorder projects for hotkey assignment
+- `src/commands/rules.ts` — `garden rules` command: view/accept/dismiss pending rule suggestions from reviewer findings
 - `src/config.ts` — reads/writes `~/.garden/config.yml`, project resolution
 - `src/session.ts` — tmux session management (create, kill, attach, list)
 - `src/rules.ts` — assembles global + project rules for Claude sessions
@@ -155,6 +157,10 @@ Claude sessions get a system prompt built from:
 2. Project rules (`<project>/.garden/rules.md`)
 
 Rules are plain markdown. They control commit behavior, testing requirements, PR workflow, and scope discipline.
+
+### Rules evolution
+
+Reviewers emit a fenced `findings` JSON block before their verdict on FIXED/FAILED, tagging each intervention with a short kebab-case `category` and a one-sentence `summary`. The poller tallies these in `~/.garden/sessions/rules-findings.json`. When a category accumulates ≥3 findings across ≥2 distinct workers within 30 days, a one-time alert fires (source: `rules`) and the category becomes a *pending suggestion*. Use `garden rules` to review them and `garden rules accept <category> --rule "..." [--global|--project <name>] --confirm` to append a synthesized rule block to the inferred rules.md. Dismissed categories won't re-surface.
 
 ## Git workflow
 
