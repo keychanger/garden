@@ -10,9 +10,9 @@ import { readDashState, type DashboardState } from "./state.js";
 import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields } from "./registry.js";
 import { currentBranch, resolveBaseBranch } from "./git.js";
 import { renderQuickStatus } from "../commands/status.js";
-import { GARDEN_VERSION } from "../version.js";
 import { triggerProjectPoll } from "./poller.js";
 import { log } from "./log.js";
+import { unreadAlertCount, formatRightBar } from "./alerts.js";
 import { workerWindowName as workerWin, parseWorkerWindow } from "./window-names.js";
 
 const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
@@ -78,11 +78,11 @@ function formatLeft(activeProject: string | null, config: ReturnType<typeof load
 }
 
 // ---------------------------------------------------------------------------
-// Right side: garden build version
+// Right side: alert badge (when unread) + garden build version
 // ---------------------------------------------------------------------------
 
 function formatRight(): string {
-  return `garden ${GARDEN_VERSION} `;
+  return formatRightBar(unreadAlertCount());
 }
 
 // ---------------------------------------------------------------------------

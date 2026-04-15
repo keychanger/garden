@@ -285,10 +285,7 @@ function handleReviewing(
     // Poke it so the next tick processes handleMergePending.
     scheduleDelayedPoke(projectName, 0);
   } else {
-    // "failed" — reviewer couldn't fix the issues
-    log.error("poller", "reviewer could not fix issues", {
-      worker: entry.name,
-    });
+    // "failed" — reviewer couldn't fix the issues. addAlert also logs.
     addAlert({
       level: "error",
       source: "review",

@@ -16,6 +16,7 @@ import {
   setPaneVar,
 } from "./tmux.js";
 import { findWorkerByName } from "./registry.js";
+import { acknowledgeAlerts } from "./alerts.js";
 import { log } from "./log.js";
 import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenConsoleWindow, resolveGardenRunner } from "./create.js";
 import { parkingWindowName, shellWindowName as shellWin, gardenWindowName, parseWorkerSuffix, isWorkerWindow, type GardenView } from "./window-names.js";
@@ -262,6 +263,11 @@ export function focusRoot(): void {
 
 export function focusLogs(): void {
   switchGardenTo("logs");
+  // ⌥l is the sole dismissal path for the alert-bar badge. Always ack, even
+  // if logs was already the active view — an autonomous failure that fires
+  // while the user is away must not silently disappear just because logs
+  // happened to be focused.
+  acknowledgeAlerts();
 }
 
 export function cyclePane(direction: 1 | -1): void {

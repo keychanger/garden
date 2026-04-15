@@ -61,6 +61,10 @@ vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+vi.mock("../src/dashboard/alerts.js", () => ({
+  acknowledgeAlerts: vi.fn(),
+}));
+
 vi.mock("../src/dashboard/create.js", () => ({
   createShellWindow: vi.fn(),
   createLogsWindow: vi.fn(),

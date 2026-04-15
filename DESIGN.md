@@ -49,7 +49,7 @@ Rules are plain markdown. Edit them directly.
 
 - **Project Status** (upper-left) — Live-updating display of all projects and their workers. Shows which project is active (`◄`), each worker's lifecycle state via status icons (braille spinner for working, Unicode symbols for other states), a focus indicator (filled/empty circle) showing which worker is active, and aligned columns for name/status/activity. Auto-sizes to the number of projects.
 - **Garden Pane** (lower-left) — Cycles between three views: garden (bold green `garden>` prompt with auto-dispatch for garden commands), root (general-purpose shell), and logs. `⌥g` jumps to garden, `⌥r` jumps to root, `⌥l` jumps to logs.
-- **Bottom bar** (tmux status line) — Two-sided display. Left side shows the active project name (bold) and its current git branch. Right side shows the garden build version (git short SHA, or "dev" when running via tsx).
+- **Bottom bar** (tmux status line) — Two-sided display. Left side shows the active project name (bold) and its current git branch. Right side shows the garden build version (git short SHA, or "dev" when running via tsx); when unread alerts exist it is prefixed with a red `⚠ N alerts — ⌥l to clear` badge.
 - **Active Pane** (right) — The currently visible pane for the active project. Either a worker (Claude session) or the project shell. Only one is visible at a time; others are parked in hidden tmux windows.
 
 ### Right-side pane model
@@ -76,7 +76,7 @@ Requires terminal setup: iTerm2 → Profiles → Keys → Left Option key → "E
 | `⌥x` | Kill current worker (shell is protected) |
 | `⌥g` | Focus garden view (lower-left) |
 | `⌥r` | Focus root shell (lower-left) |
-| `⌥l` | Focus logs view (lower-left) |
+| `⌥l` | Focus logs view (lower-left); also acknowledges the alert badge |
 
 ## Pane Management
 
@@ -187,10 +187,10 @@ The dashboard surfaces important events as alerts — persistent messages that r
 - Rule suggestion ready (a category crossed the findings threshold)
 
 **Visibility:**
-- Header bar shows `[N alerts]` when alerts exist
-- `garden alerts` lists all alerts with timestamps
-- `garden alerts clear` dismisses all
-- Alert file is cleaned up on `garden dashboard exit`
+- Bottom bar shows a red `⚠ N alerts — ⌥l to clear` badge on the right when unread alerts exist. The badge appears instantly on `addAlert()` via `tmux set-option @garden_right` + `refresh-client -S`.
+- Every alert is also streamed to `dashboard.log` at `error` level, so it appears live in the `garden logs --follow` pane (the `_garden-logs` window) with the `[!]` prefix.
+- Pressing `⌥l` focuses the logs view **and** acknowledges all current alerts, clearing the badge. Acknowledgement is explicit — an alert that fires while the logs pane is already focused still lights the badge, so autonomous failures aren't silently missed when the user is away.
+- `garden alerts` lists full history (read and unread); `garden alerts clear` wipes the store.
 
 ### Worker Isolation Model
 - Every worker operates in its own git worktree — no shared working directory
