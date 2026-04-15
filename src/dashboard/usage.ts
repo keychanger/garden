@@ -253,37 +253,42 @@ export async function refreshUsage(): Promise<UsageSnapshot> {
 // Rendering
 // -----------------------------------------------------------------------------
 
-const BAR_WIDTH = 12;
+const BAR_WIDTH = 24;
+const LABEL_WIDTH = 6; // "sonnet" is the longest label
+const INDENT = "    ";  // 4-space indent mirrors worker rows in the status pane
 const STALE_AFTER_MS = 30 * 60 * 1000; // 30 min — long enough to survive the endpoint's long rate-limit windows
 
-export function renderUsageHeader(nowMs: number = Date.now()): string {
+// Render the three-line content of the dedicated "usage" pane. Returns three
+// lines (or one error/loading line) suitable for direct display; callers
+// append clear-to-EOL themselves if needed for in-place overwrite.
+export function renderUsagePane(nowMs: number = Date.now()): string {
   const snap = readUsageSnapshot();
-  const header: string[] = [];
+  const lines: string[] = [];
 
   if (!snap) {
-    header.push(dim("  claude usage  loading\u2026"));
-    return header.map(l => l + "\x1b[K").join("\n");
+    lines.push(`${INDENT}${dim("claude usage  loading\u2026")}`);
+    return lines.map(l => l + "\x1b[K").join("\n");
   }
 
   if (snap.error) {
-    header.push(dim(`  claude usage  ${snap.error}`));
-    return header.map(l => l + "\x1b[K").join("\n");
+    lines.push(`${INDENT}${dim(`claude usage  ${snap.error}`)}`);
+    return lines.map(l => l + "\x1b[K").join("\n");
   }
 
   const stale = (nowMs - Date.parse(snap.fetchedAt)) > STALE_AFTER_MS;
   const staleTag = stale ? dim(" (stale)") : "";
   const d = snap.data ?? {};
 
-  header.push("");
-  header.push(renderMeterLine("5h    ", d.fiveHour, nowMs, staleTag));
-  header.push(renderMeterLine("week  ", d.weekly,   nowMs, staleTag));
-  header.push(renderMeterLine("sonnet", d.sonnet,   nowMs, staleTag));
+  lines.push(renderMeterLine("5h",     d.fiveHour, nowMs, staleTag));
+  lines.push(renderMeterLine("week",   d.weekly,   nowMs, staleTag));
+  lines.push(renderMeterLine("sonnet", d.sonnet,   nowMs, staleTag));
 
-  return header.map(l => l + "\x1b[K").join("\n");
+  return lines.map(l => l + "\x1b[K").join("\n");
 }
 
 function renderMeterLine(label: string, meter: UsageMeter | undefined, nowMs: number, suffix: string): string {
-  if (!meter) return `  ${label}  ${dim("\u2014")}${suffix}`;
+  const paddedLabel = label.padEnd(LABEL_WIDTH);
+  if (!meter) return `${INDENT}${paddedLabel}  ${dim("\u2014")}${suffix}`;
   const pct = Math.max(0, Math.min(100, meter.pct));
   const bar = renderBar(pct);
   const pctText = `${pct.toFixed(0).padStart(3)}%`;
@@ -291,7 +296,7 @@ function renderMeterLine(label: string, meter: UsageMeter | undefined, nowMs: nu
   const resetText = Number.isFinite(resetsAt)
     ? `resets ${formatDuration(resetsAt - nowMs)}`
     : "";
-  return `  ${label}  ${bar}  ${pctText}  ${dim(resetText)}${suffix}`;
+  return `${INDENT}${paddedLabel}  ${bar}  ${pctText}  ${dim(resetText)}${suffix}`;
 }
 
 function renderBar(pct: number): string {

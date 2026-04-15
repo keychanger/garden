@@ -1,10 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import {
   normalizeUsage,
   formatDuration,
   shouldRefreshOnHookWith,
   HOOK_REFRESH_COOLDOWN_MS,
 } from "../src/dashboard/usage.js";
+import { useTmpHome } from "./helpers.js";
 
 describe("normalizeUsage", () => {
   it("extracts all three meters from the observed api.anthropic.com shape", () => {
@@ -105,5 +108,114 @@ describe("shouldRefreshOnHookWith", () => {
   it("refreshes when fetchedAt is unparseable (treat as unknown)", () => {
     const snap = { fetchedAt: "not-a-date" };
     expect(shouldRefreshOnHookWith(snap, now)).toBe(true);
+  });
+});
+
+describe("renderUsagePane", () => {
+  const env = useTmpHome();
+  const now = Date.parse("2026-04-15T20:00:00Z");
+
+  // usage.ts reads SESSIONS_DIR at module load — reset the cache inside each
+  // test so the dynamic import below picks up the tmp HOME set by useTmpHome.
+  beforeEach(() => { vi.resetModules(); });
+
+  async function importRender() {
+    const mod = await import("../src/dashboard/usage.js");
+    return mod.renderUsagePane;
+  }
+
+  function writeSnapshot(snap: unknown) {
+    fs.writeFileSync(path.join(env.sessionsDir, "claude-usage.json"), JSON.stringify(snap));
+  }
+
+  it("renders a loading line when no snapshot exists", async () => {
+    const render = await importRender();
+    const out = render(now);
+    expect(out).toContain("loading");
+  });
+
+  it("renders an error line when the snapshot has an error", async () => {
+    writeSnapshot({ fetchedAt: new Date(now).toISOString(), error: "rate-limited" });
+    const render = await importRender();
+    const out = render(now);
+    expect(out).toContain("rate-limited");
+  });
+
+  it("renders three meter rows — 5h, week, sonnet", async () => {
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        fiveHour: { pct: 26, resetsAt: new Date(now + 2 * 60 * 60_000).toISOString() },
+        weekly:   { pct: 35, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
+        sonnet:   { pct: 4,  resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
+      },
+    });
+    const render = await importRender();
+    const lines = render(now).split("\n");
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain("5h");
+    expect(lines[1]).toContain("week");
+    expect(lines[2]).toContain("sonnet");
+    expect(lines[0]).toContain("26%");
+    expect(lines[1]).toContain("35%");
+    expect(lines[2]).toContain(" 4%");
+  });
+
+  it("shows at least one filled bar cell for small non-zero percentages", async () => {
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        sonnet: { pct: 4, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
+      },
+    });
+    const render = await importRender();
+    const lines = render(now).split("\n");
+    const sonnetLine = lines.find(l => l.includes("sonnet"));
+    expect(sonnetLine).toBeDefined();
+    // At BAR_WIDTH=24, pct=4 rounds to 1 filled cell.
+    expect(sonnetLine).toMatch(/\u2588/);
+  });
+
+  it("marks data stale after STALE_AFTER_MS", async () => {
+    writeSnapshot({
+      fetchedAt: new Date(now - 60 * 60_000).toISOString(),
+      data: {
+        fiveHour: { pct: 26, resetsAt: new Date(now + 60 * 60_000).toISOString() },
+      },
+    });
+    const render = await importRender();
+    const out = render(now);
+    expect(out).toContain("(stale)");
+  });
+
+  it("appends clear-to-end-of-line to every line", async () => {
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        fiveHour: { pct: 10, resetsAt: new Date(now + 60 * 60_000).toISOString() },
+        weekly:   { pct: 20, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
+        sonnet:   { pct: 30, resetsAt: new Date(now + 3 * 24 * 60 * 60_000).toISOString() },
+      },
+    });
+    const render = await importRender();
+    const lines = render(now).split("\n");
+    for (const l of lines) expect(l).toMatch(/\x1b\[K$/);
+  });
+
+  it("shows an em-dash for missing meter buckets instead of crashing", async () => {
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        fiveHour: { pct: 42, resetsAt: new Date(now + 60 * 60_000).toISOString() },
+        // weekly and sonnet omitted
+      },
+    });
+    const render = await importRender();
+    const lines = render(now).split("\n");
+    // 5h row has a percent
+    expect(lines[0]).toContain("42%");
+    // week and sonnet rows render em-dash placeholder
+    expect(lines[1]).toContain("\u2014");
+    expect(lines[2]).toContain("\u2014");
   });
 });

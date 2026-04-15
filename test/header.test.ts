@@ -92,6 +92,15 @@ vi.mock("../src/commands/status.js", () => ({
   renderQuickStatus: vi.fn(() => "line1\nline2\nline3"),
 }));
 
+vi.mock("../src/dashboard/usage.js", () => ({
+  maybeRefreshUsage: vi.fn(),
+  renderUsagePane: vi.fn(() => "u1\nu2\nu3"),
+}));
+
+vi.mock("../src/dashboard/create.js", () => ({
+  resolveGardenRunner: vi.fn(() => "/usr/local/bin/garden"),
+}));
+
 vi.mock("../src/dashboard/window-names.js", () => ({
   workerWindowName: (project: string, worker: string) => `_${project}-worker-${worker}`,
   parseWorkerWindow: (name: string) => {
@@ -109,7 +118,9 @@ import {
   updateHeaderVar,
   handlePaneDied,
   buildStatusCommand,
+  buildUsageCommand,
   refreshStatusPane,
+  refreshUsagePane,
   refreshDashboard,
 } from "../src/dashboard/header.js";
 
@@ -129,6 +140,7 @@ function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
   return {
     activeProject: "garden",
     statusPaneId: null,
+    usagePaneId: null,
     gardenShellPaneId: null,
     activePaneId: null,
     activePaneType: null,
@@ -506,6 +518,102 @@ describe("writeQuickStatus (via refreshDashboard)", () => {
 // ===========================================================================
 // refreshStatusPane
 // ===========================================================================
+
+describe("buildUsageCommand", () => {
+  it("returns a shell script string", () => {
+    const cmd = buildUsageCommand("/usr/local/bin/garden");
+    expect(typeof cmd).toBe("string");
+    expect(cmd.length).toBeGreaterThan(0);
+  });
+
+  it("sets up SIGUSR1 trap for event-driven refresh", () => {
+    const cmd = buildUsageCommand("garden");
+    expect(cmd).toContain("trap");
+    expect(cmd).toContain("USR1");
+  });
+
+  it("references the pre-baked usage file path", () => {
+    const cmd = buildUsageCommand("garden");
+    expect(cmd).toContain("usage.rendered");
+  });
+
+  it("has no spinner animation (usage has no active state to animate)", () => {
+    const cmd = buildUsageCommand("garden");
+    expect(cmd).not.toContain("sleep 0.08");
+  });
+
+  it("sleeps long on idle (pure event-driven wake)", () => {
+    const cmd = buildUsageCommand("garden");
+    expect(cmd).toContain("sleep 86400");
+  });
+});
+
+describe("refreshUsagePane", () => {
+  it("sends SIGUSR1 to the usage pane process", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ usagePaneId: "%3" }));
+    vi.mocked(getPanePid).mockReturnValue("54321");
+
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    refreshUsagePane();
+
+    expect(getPanePid).toHaveBeenCalledWith("%3");
+    expect(killSpy).toHaveBeenCalledWith(54321, "SIGUSR1");
+    killSpy.mockRestore();
+  });
+
+  it("is a no-op when usagePaneId is null", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ usagePaneId: null }));
+
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    refreshUsagePane();
+
+    expect(getPanePid).not.toHaveBeenCalled();
+    expect(killSpy).not.toHaveBeenCalled();
+    killSpy.mockRestore();
+  });
+
+  it("swallows error when process.kill fails", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ usagePaneId: "%3" }));
+    vi.mocked(getPanePid).mockReturnValue("54321");
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => { throw new Error("No such process"); });
+    expect(() => refreshUsagePane()).not.toThrow();
+    killSpy.mockRestore();
+  });
+});
+
+describe("writeUsageRendered (via refreshDashboard)", () => {
+  it("writes rendered usage to temp file then renames atomically", () => {
+    refreshDashboard();
+
+    const writeCalls = vi.mocked(fs.writeFileSync).mock.calls;
+    const tmpUsagePath = writeCalls.find(c => String(c[0]).includes("usage.rendered."));
+    expect(tmpUsagePath).toBeDefined();
+    expect(String(tmpUsagePath![0])).toContain(".tmp");
+
+    const renameCalls = vi.mocked(fs.renameSync).mock.calls;
+    const usageRename = renameCalls.find(c => String(c[1]).endsWith("usage.rendered"));
+    expect(usageRename).toBeDefined();
+  });
+
+  it("resizes usage pane when height differs", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ usagePaneId: "%3" }));
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 2 });
+
+    refreshDashboard();
+
+    // renderUsagePane mock returns "u1\nu2\nu3" (3 lines) → 3+1 = 4
+    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%3", "-y", "4");
+  });
+
+  it("skips usage resize when current height already matches", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ usagePaneId: "%3" }));
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 4 });
+
+    refreshDashboard();
+
+    expect(tmux).not.toHaveBeenCalledWith("resize-pane", "-t", "%3", "-y", "4");
+  });
+});
 
 describe("refreshStatusPane", () => {
   it("sends SIGUSR1 to the status pane process", () => {

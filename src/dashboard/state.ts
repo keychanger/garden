@@ -58,6 +58,7 @@ export interface DashboardState {
   activeProject: string | null;
   // Left side — garden pane is swappable between shell and logs
   statusPaneId: string | null;
+  usagePaneId: string | null;
   gardenShellPaneId: string | null; // current pane ID in the garden slot (despite the name)
   gardenPaneType: "garden" | "root" | "logs" | null;
   gardenWindowName: string | null; // logical name for parking, e.g. "_garden-root" or "_garden-logs"
@@ -74,6 +75,7 @@ export const STATE_FILE = path.join(SESSIONS_DIR, "dashboard.state.json");
 const DEFAULT_STATE: DashboardState = {
   activeProject: null,
   statusPaneId: null,
+  usagePaneId: null,
   gardenShellPaneId: null,
   gardenPaneType: null,
   gardenWindowName: null,
@@ -96,6 +98,7 @@ export function readDashState(): DashboardState {
       if (raw.gardenWindowName === "_garden-console") raw.gardenWindowName = "_garden-garden";
       if (raw.gardenWindowName === "_garden-shell") raw.gardenWindowName = "_garden-root";
       if (raw.gardenWindowName === undefined) raw.gardenWindowName = null;
+      if (raw.usagePaneId === undefined) raw.usagePaneId = null;
       if (!raw.lastActiveWorker) raw.lastActiveWorker = {};
       return raw;
     }

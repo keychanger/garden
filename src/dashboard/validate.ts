@@ -7,9 +7,9 @@ import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, kill
 import { log } from "./log.js";
 import { worktreeExists, removeWorktree, pruneWorktrees } from "./git.js";
 import { startProjectPoller, projectPollerRunning } from "./poller.js";
-import { resolveGardenRunner, createGardenConsoleWindow } from "./create.js";
+import { resolveGardenRunner, createGardenConsoleWindow, USAGE_PANE_HEIGHT } from "./create.js";
 import { gardenWindowName, workerWindowName } from "./window-names.js";
-import { buildStatusCommand } from "./header.js";
+import { buildStatusCommand, buildUsageCommand } from "./header.js";
 import { gardenRestoreFromHidden } from "./layout.js";
 
 /**
@@ -19,7 +19,8 @@ import { gardenRestoreFromHidden } from "./layout.js";
  */
 export function healStatusPane(): void {
   const state = readDashState();
-  const healed = healStatusPaneInState(state);
+  let healed = healStatusPaneInState(state);
+  healed = healUsagePaneInState(healed);
   if (healed !== state) {
     writeDashState(healed);
   }
@@ -60,6 +61,36 @@ function healGardenPaneInState(state: DashboardState): DashboardState {
       }
     } catch (err) {
       log.warn("validate", "failed to recreate garden pane", { data: { error: String(err) } });
+    }
+  }
+
+  return healed;
+}
+
+function healUsagePaneInState(state: DashboardState): DashboardState {
+  let healed = state;
+
+  if (healed.usagePaneId && !paneExists(healed.usagePaneId)) {
+    log.warn("validate", "usagePaneId is stale");
+    healed = { ...healed, usagePaneId: null };
+  }
+
+  if (!healed.usagePaneId && healed.statusPaneId && paneExists(healed.statusPaneId)) {
+    try {
+      const gardenRunner = resolveGardenRunner();
+      const usageCmd = buildUsageCommand(gardenRunner);
+      const usageId = tmuxSplit("-v", "-b", "-t", healed.statusPaneId, "-l", String(USAGE_PANE_HEIGHT),
+        "sh", "-c", usageCmd);
+
+      try { tmux("resize-pane", "-t", usageId, "-y", String(USAGE_PANE_HEIGHT)); } catch { /* ignore */ }
+      try { tmux("clear-history", "-t", usageId); } catch { /* ignore */ }
+      setPaneTitle(usageId, "usage");
+      setPaneLabel(usageId, "usage");
+
+      healed = { ...healed, usagePaneId: usageId };
+      log.info("validate", "recreated usage pane");
+    } catch (err) {
+      log.warn("validate", "failed to recreate usage pane", { data: { error: String(err) } });
     }
   }
 
@@ -107,6 +138,7 @@ function healStatusPaneInState(state: DashboardState): DashboardState {
  */
 export function validateAndHeal(state: DashboardState): DashboardState {
   let healed = healStatusPaneInState(state);
+  healed = healUsagePaneInState(healed);
   healed = healGardenPaneInState(healed);
   let changed = healed !== state;
 

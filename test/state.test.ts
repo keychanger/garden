@@ -16,6 +16,7 @@ describe("readDashState", () => {
     expect(state).toEqual({
       activeProject: null,
       statusPaneId: null,
+      usagePaneId: null,
       gardenShellPaneId: null,
       gardenPaneType: null,
       gardenWindowName: null,
@@ -40,6 +41,7 @@ describe("writeDashState / readDashState", () => {
     const original = {
       activeProject: "myproject",
       statusPaneId: "%1",
+      usagePaneId: null,
       gardenShellPaneId: "%2",
       gardenPaneType: "garden" as const,
       gardenWindowName: null,

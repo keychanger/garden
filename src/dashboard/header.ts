@@ -14,10 +14,11 @@ import { triggerProjectPoll } from "./poller.js";
 import { log } from "./log.js";
 import { unreadAlertCount, formatRightBar } from "./alerts.js";
 import { workerWindowName as workerWin, parseWorkerWindow } from "./window-names.js";
-import { maybeRefreshUsage } from "./usage.js";
+import { maybeRefreshUsage, renderUsagePane } from "./usage.js";
 import { resolveGardenRunner } from "./create.js";
 
 const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
+const USAGE_RENDERED_FILE = path.join(SESSIONS_DIR, "usage.rendered");
 
 // ---------------------------------------------------------------------------
 // Worker identity from cwd
@@ -437,6 +438,22 @@ export function buildStatusCommand(gardenRunner: string): string {
   ].join("\n");
 }
 
+export function buildUsageCommand(_gardenRunner: string): string {
+  const uf = USAGE_RENDERED_FILE;
+  // Simpler than buildStatusCommand: the usage pane has no spinner and its
+  // content only changes on poller refreshes (SIGUSR1). Initial render reads
+  // the pre-baked file; the trap repaints on each signal. The outer sleep is
+  // effectively infinite — every update is event-driven.
+  return [
+    `printf '\\033[H\\033[2J\\033[3J'`,
+    `uf='${uf}'`,
+    `render() { _t=$(cat "$uf" 2>/dev/null); printf '\\033[H%s\\033[J' "$_t"; }`,
+    `trap 'render' USR1`,
+    `render`,
+    `while true; do sleep 86400 & wait $! 2>/dev/null; done`,
+  ].join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Refresh helpers
 // ---------------------------------------------------------------------------
@@ -450,11 +467,22 @@ export function refreshStatusPane(opts?: RefreshOptions): void {
   } catch { /* pane gone or process exited */ }
 }
 
+export function refreshUsagePane(opts?: RefreshOptions): void {
+  const state = opts?.state ?? readDashState();
+  if (!state.usagePaneId) return;
+  try {
+    const pid = getPanePid(state.usagePaneId);
+    if (pid) process.kill(parseInt(pid, 10), "SIGUSR1");
+  } catch { /* pane gone or process exited */ }
+}
+
 export function refreshDashboard(opts?: RefreshOptions): void {
   updateHeaderVar(opts);
   refreshWorkerTasks();
   writeQuickStatus(opts);
+  writeUsageRendered(opts);
   refreshStatusPane(opts);
+  refreshUsagePane(opts);
 }
 
 // Refresh all workers' task fields from their live tmux pane titles. This
@@ -504,6 +532,25 @@ function writeQuickStatus(opts?: RefreshOptions): void {
       if (!cur || cur.height !== h) {
         try { tmux("resize-pane", "-t", state.statusPaneId, "-y", String(h)); } catch { /* ignore */ }
         // Flush resize to pane before SIGUSR1 — avoids top-line scroll-off race
+        try { tmux("refresh-client", "-S"); } catch { /* ignore */ }
+      }
+    }
+  } catch { /* best effort */ }
+}
+
+function writeUsageRendered(opts?: RefreshOptions): void {
+  try {
+    const state = opts?.state ?? readDashState();
+    const rendered = renderUsagePane();
+    const tmpFile = `${USAGE_RENDERED_FILE}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmpFile, rendered);
+    fs.renameSync(tmpFile, USAGE_RENDERED_FILE);
+    if (state.usagePaneId) {
+      // +1 for the pane-border-status top row.
+      const h = rendered.split("\n").length + 1;
+      const cur = getPaneSize(state.usagePaneId);
+      if (!cur || cur.height !== h) {
+        try { tmux("resize-pane", "-t", state.usagePaneId, "-y", String(h)); } catch { /* ignore */ }
         try { tmux("refresh-client", "-S"); } catch { /* ignore */ }
       }
     }

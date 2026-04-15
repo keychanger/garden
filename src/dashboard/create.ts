@@ -10,7 +10,7 @@ import { buildRulesContext, buildWorktreeRules } from "../rules.js";
 import { type DashboardState, readDashState, writeDashState, STATE_FILE } from "./state.js";
 import { restoreFromHidden } from "./layout.js";
 import { setupKeybindings } from "./hotkeys.js";
-import { setupStatusBar, buildStatusCommand, updateHeaderVar } from "./header.js";
+import { setupStatusBar, buildStatusCommand, buildUsageCommand, updateHeaderVar } from "./header.js";
 import { renderQuickStatus } from "../commands/status.js";
 import {
   tmux, tmuxOutput, tmuxSplit, setPaneTitle, setPaneLabel, setPaneVar,
@@ -28,6 +28,9 @@ import { gardenWindowName, shellWindowName as shellWin, workerWindowName as work
 
 const DASHBOARD_COLS = 250;
 const DASHBOARD_ROWS = 60;
+
+// Usage pane height: 3 meter lines + 1 pane-border-status top row.
+export const USAGE_PANE_HEIGHT = 4;
 
 function buildSettingsJson(gardenRunner: string, sandbox: SandboxConfig): string {
   const hookCmd = `${gardenRunner} dashboard _claude-hook`;
@@ -97,6 +100,13 @@ export function ensureDashboard(): void {
     writeDashState(healed);
 
     respawnStatusPane(healed);
+    if (healed.usagePaneId) {
+      const gardenRunner = resolveGardenRunner();
+      const usageCmd = buildUsageCommand(gardenRunner);
+      try { tmux("respawn-pane", "-k", "-t", healed.usagePaneId, "sh", "-c", usageCmd); } catch { /* ignore */ }
+      try { tmux("resize-pane", "-t", healed.usagePaneId, "-y", String(USAGE_PANE_HEIGHT)); } catch { /* pane may be gone */ }
+      try { tmux("clear-history", "-t", healed.usagePaneId); } catch { /* ignore */ }
+    }
 
     // Pre-size all hidden windows to match their target visible slots so
     // that swap-pane never triggers a SIGWINCH reflow. Without this, hidden
@@ -146,6 +156,15 @@ export function ensureDashboard(): void {
   try { tmux("set-option", "-t", DASHBOARD_SESSION, "-u", "history-limit"); } catch { /* ignore */ }
   try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
 
+  const usageCmd = buildUsageCommand(gardenRunner);
+  const usageId = tmuxSplit("-v", "-b", "-t", statusId, "-l", String(USAGE_PANE_HEIGHT),
+    "sh", "-c", usageCmd);
+  try { tmux("resize-pane", "-t", usageId, "-y", String(USAGE_PANE_HEIGHT)); } catch { /* ignore */ }
+  try { tmux("set-option", "-p", "-t", usageId, "history-limit", "0"); } catch { /* ignore */ }
+  try { tmux("clear-history", "-t", usageId); } catch { /* ignore */ }
+
+  setPaneTitle(usageId, "usage");
+  setPaneLabel(usageId, "usage");
   setPaneTitle(statusId, "status");
   setPaneLabel(statusId, "status");
   setPaneTitle(gardenShellId, "garden");
@@ -184,6 +203,7 @@ export function ensureDashboard(): void {
   const state: DashboardState = {
     activeProject: firstProject,
     statusPaneId: statusId,
+    usagePaneId: usageId,
     gardenShellPaneId: gardenShellId,
     gardenPaneType: "garden",
     gardenWindowName: gardenWindowName("garden"),
