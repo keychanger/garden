@@ -948,11 +948,25 @@ function finalizeMerge(
   // against the newly merged code, not stale working-tree files.
   // mergeToBase only pushes to the remote via refspec — it never touches
   // the local checkout.
-  fastForwardBase(projectPath, baseBranch, { project: projectName, worker: entry.name });
+  const advanced = fastForwardBase(projectPath, baseBranch, { project: projectName, worker: entry.name });
 
   notifySiblingWorkers(projectName, baseBranch, entry);
 
-  runPostMerge(projectName, projectPath, baseBranch);
+  if (advanced) {
+    runPostMerge(projectName, projectPath);
+  } else if (tryGetProject(projectName)?.postMerge) {
+    log.error("poller", "postMerge skipped: local base checkout did not advance", {
+      worker: entry.name,
+      data: { projectPath, baseBranch },
+    });
+    addAlert({
+      level: "error",
+      source: "poller",
+      project: projectName,
+      worker: entry.name,
+      message: `Skipped postMerge: local ${baseBranch} checkout at ${projectPath} did not fast-forward (likely a dirty working tree or divergent branch). Clean the checkout so future merges can rebuild.`,
+    });
+  }
 
   // Per STATUS.md invariant 4: there is no merged history. mergeCount is gone.
   // The race that the old double-check guarded against is gone too: the file
@@ -971,19 +985,11 @@ function finalizeMerge(
   refreshDashboard();
 }
 
-function getBaseBranchCommit(projectPath: string, baseBranch: string): string {
-  try {
-    return execFileSync("git", ["rev-parse", "--short", `origin/${baseBranch}`], { cwd: projectPath, encoding: "utf-8" }).trim();
-  } catch {
-    return "unknown";
-  }
-}
-
-function runPostMerge(projectName: string, projectPath: string, baseBranch: string): void {
+function runPostMerge(projectName: string, projectPath: string): void {
   const project = tryGetProject(projectName);
   if (!project?.postMerge) return;
 
-  const commit = getBaseBranchCommit(projectPath, baseBranch);
+  const commit = getBranchHeadSha(projectPath)?.slice(0, 7) ?? "unknown";
 
   try {
     execSync(project.postMerge, {

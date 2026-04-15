@@ -37,6 +37,7 @@ import {
   ensureNoRebaseInProgress,
   getUnmergedFiles,
   cleanWorktree,
+  fastForwardBase,
   forcePushBranch,
   getChangedFiles,
   getCommitSummary,
@@ -645,6 +646,41 @@ describe("resolveBaseBranch", () => {
       throw new Error("not a symbolic ref");
     });
     expect(resolveBaseBranch("/repo", {})).toBe("main");
+  });
+});
+
+describe("fastForwardBase", () => {
+  it("returns true after a clean fetch + ff-only merge on the base branch", () => {
+    mockExec
+      .mockReturnValueOnce("main\n")  // rev-parse --abbrev-ref HEAD (currentBranch)
+      .mockReturnValueOnce("")        // fetch origin main
+      .mockReturnValueOnce("");       // merge --ff-only origin/main
+    expect(fastForwardBase("/repo", "main")).toBe(true);
+    const calls = mockExec.mock.calls;
+    expect(calls[1]).toEqual(["git", ["fetch", "origin", "main"], expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[2]).toEqual(["git", ["merge", "--ff-only", "origin/main"], expect.objectContaining({ cwd: "/repo" })]);
+  });
+
+  it("returns false when checkout is not on the base branch", () => {
+    mockExec.mockReturnValueOnce("feature-x\n"); // currentBranch
+    expect(fastForwardBase("/repo", "main")).toBe(false);
+    // Only the currentBranch probe should have run — no fetch, no merge.
+    expect(mockExec).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns false when ff-only merge aborts (dirty working tree)", () => {
+    mockExec
+      .mockReturnValueOnce("main\n") // currentBranch
+      .mockReturnValueOnce("")       // fetch
+      .mockImplementationOnce(() => { throw new Error("Your local changes to the following files would be overwritten by merge: rules.md"); });
+    expect(fastForwardBase("/repo", "main")).toBe(false);
+  });
+
+  it("returns false when fetch fails", () => {
+    mockExec
+      .mockReturnValueOnce("main\n") // currentBranch
+      .mockImplementationOnce(() => { throw new Error("network error"); });
+    expect(fastForwardBase("/repo", "main")).toBe(false);
   });
 });
 

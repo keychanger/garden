@@ -573,6 +573,7 @@ describe("poll — merge-pending state", () => {
       }),
     ]);
     vi.mocked(rebaseBranch).mockReturnValue("ok");
+    vi.mocked(fastForwardBase).mockReturnValue(true);
 
     poll("myproject");
 
@@ -589,6 +590,93 @@ describe("poll — merge-pending state", () => {
         mergePendingAt: undefined,
       }),
     );
+  });
+
+  it("runs postMerge and logs checkout HEAD when fastForwardBase advances", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject", checks: undefined, postMerge: "npm run build",
+    } as ReturnType<typeof tryGetProject>);
+    vi.mocked(rebaseBranch).mockReturnValue("ok");
+    vi.mocked(fastForwardBase).mockReturnValue(true);
+    // Simulate the checkout's actual HEAD after fast-forward — not origin/main.
+    vi.mocked(getBranchHeadSha).mockImplementation((p: string) =>
+      p === "/repo/myproject" ? "deadbeefcafebabe" : "abc123",
+    );
+
+    poll("myproject");
+
+    expect(execSync).toHaveBeenCalledWith(
+      "npm run build",
+      expect.objectContaining({ cwd: "/repo/myproject" }),
+    );
+    // Commit field in the log must come from the checkout's HEAD (short SHA),
+    // not origin/<base>. This is the regression guard for the silent stale-build bug.
+    expect(log.info).toHaveBeenCalledWith(
+      "poller", "postMerge completed",
+      expect.objectContaining({ data: expect.objectContaining({ commit: "deadbee" }) }),
+    );
+    expect(addAlert).not.toHaveBeenCalled();
+  });
+
+  it("skips postMerge and alerts when fastForwardBase does not advance", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject", checks: undefined, postMerge: "npm run build",
+    } as ReturnType<typeof tryGetProject>);
+    vi.mocked(rebaseBranch).mockReturnValue("ok");
+    vi.mocked(fastForwardBase).mockReturnValue(false);
+
+    poll("myproject");
+
+    // postMerge command must not execute against a stale checkout.
+    expect(execSync).not.toHaveBeenCalledWith(
+      "npm run build",
+      expect.anything(),
+    );
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        source: "poller",
+        project: "myproject",
+        worker: "bold-ash",
+        message: expect.stringContaining("Skipped postMerge"),
+      }),
+    );
+    // Worker still reaches merged — the remote merge succeeded, only the
+    // local rebuild was deferred.
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merged" }),
+    );
+  });
+
+  it("does not alert when fastForwardBase fails but no postMerge is configured", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    // No postMerge on the project — skipping is a no-op, not an alertable event.
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject", checks: undefined,
+    } as ReturnType<typeof tryGetProject>);
+    vi.mocked(rebaseBranch).mockReturnValue("ok");
+    vi.mocked(fastForwardBase).mockReturnValue(false);
+
+    poll("myproject");
+
+    expect(addAlert).not.toHaveBeenCalled();
   });
 
   it("launches resolver when rebase has conflicts and Claude is idle", () => {
