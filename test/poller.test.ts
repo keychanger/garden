@@ -650,7 +650,7 @@ describe("poll — merge-pending state", () => {
         source: "poller",
         project: "myproject",
         worker: "bold-ash",
-        message: expect.stringContaining("Skipped postMerge"),
+        message: expect.stringMatching(/did not fast-forward.*postMerge was skipped/),
       }),
     );
     // Worker still reaches merged — the remote merge succeeded, only the
@@ -660,14 +660,15 @@ describe("poll — merge-pending state", () => {
     );
   });
 
-  it("does not alert when fastForwardBase fails but no postMerge is configured", () => {
+  it("alerts when fastForwardBase fails even without postMerge configured", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
       }),
     ]);
-    // No postMerge on the project — skipping is a no-op, not an alertable event.
+    // Drift of the local checkout is an alertable event regardless of
+    // whether a postMerge command exists — stale main rots manual workflow.
     vi.mocked(tryGetProject).mockReturnValue({
       path: "/repo/myproject", checks: undefined,
     } as ReturnType<typeof tryGetProject>);
@@ -676,7 +677,15 @@ describe("poll — merge-pending state", () => {
 
     poll("myproject");
 
-    expect(addAlert).not.toHaveBeenCalled();
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        source: "poller",
+        project: "myproject",
+        worker: "bold-ash",
+        message: expect.stringContaining("did not fast-forward"),
+      }),
+    );
   });
 
   it("launches resolver when rebase has conflicts and Claude is idle", () => {

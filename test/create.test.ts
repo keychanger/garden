@@ -121,6 +121,7 @@ import {
   buildWorkerCommand,
   buildResumeCommand,
   buildWorktreeWorkerCommand,
+  buildWorktreeBootstrapScript,
 } from "../src/dashboard/create.js";
 import { tmux, tmuxSplit, getFirstPaneId, setPaneLabel, setPaneTitle, shellEscape } from "../src/dashboard/tmux.js";
 
@@ -284,5 +285,68 @@ describe("createGardenRootWindow", () => {
       "-n", "_garden-root",
     );
     expect(setPaneLabel).toHaveBeenCalledWith("%5", "root");
+  });
+});
+
+describe("buildWorktreeBootstrapScript", () => {
+  it("branches worktree off origin/<base>, not main checkout HEAD", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "main",
+    );
+    const call = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    );
+    expect(call).toBeDefined();
+    const script = call![1] as string;
+    // Must branch off the remote ref so stale main checkout never infects
+    // workers. The literal "origin/main" at the end of the worktree-add
+    // command is the load-bearing piece.
+    expect(script).toMatch(/worktree add \/wt\/myproject\/bold-ash -b 'bold-ash' 'origin\/main'/);
+  });
+
+  it("defaults to branching off origin/main when baseBranch is omitted", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash",
+    );
+    const call = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    );
+    expect(call).toBeDefined();
+    expect(call![1] as string).toMatch(/worktree add .* 'origin\/main'/);
+  });
+
+  it("calls _bootstrap-alert and does not swallow fetch/merge errors", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "develop",
+    );
+    const call = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    );
+    expect(call).toBeDefined();
+    const script = call![1] as string;
+    // Fetch and merge output must not be discarded via 2>/dev/null any more.
+    expect(script).not.toMatch(/git -C .* fetch .* 2>\/dev\/null \|\| true/);
+    expect(script).not.toMatch(/git -C .* merge --ff-only .* 2>\/dev\/null \|\| true/);
+    // On failure, the bootstrap shells out to the internal alert command.
+    expect(script).toContain("dashboard _bootstrap-alert 'myproject' 'develop'");
+  });
+
+  it("uses origin/<base> for the worktree branch when baseBranch has a slash in the name", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "release/2026-04",
+    );
+    const call = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    );
+    expect(call).toBeDefined();
+    expect(call![1] as string).toMatch(/worktree add .* 'origin\/release\/2026-04'/);
   });
 });

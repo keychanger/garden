@@ -93,7 +93,7 @@ This preserves both the layout tree (the right pane slot is never destroyed) and
 Hidden windows follow the convention: `_<project>-worker-<N>`, `_<project>-shell`, `_<project>-poller`, `_<project>-review-<worker>`, `_garden-garden`, `_garden-root`, and `_garden-logs`. When switching projects, the visible pane is parked as `_<project>-active`. The underscore prefix marks them as managed by garden — not user-facing.
 
 ### Worker Lifecycle
-1. `⌥n` creates a git worktree at `~/.garden/worktrees/<project>/<worker-name>/` and a branch named after the worker
+1. `⌥n` creates a git worktree at `~/.garden/worktrees/<project>/<worker-name>/`, with a branch named after the worker that points at `origin/<base>` directly. Worker freshness does not depend on the main checkout being clean or fast-forwarded — a stale main checkout raises an alert but does not infect the worker
 2. Claude launches in the worktree with project rules and worktree workflow instructions
 3. The worker is interactive — you work with it directly
 4. `⌥]`/`⌥[` cycles between workers and shell
@@ -136,7 +136,7 @@ projects:
 
 **checks**: Command the reviewer runs in the worker's worktree after rebasing onto the base branch, so checks validate the combined state of the branch plus latest base. If checks fail, the reviewer fixes the issues and re-runs. No checks configured means the reviewer only does the code review.
 
-**postMerge**: Command that runs on the main checkout after merging, but only when the local checkout successfully fast-forwards to the newly merged code. If the fast-forward fails (dirty working tree, checkout on wrong branch), postMerge is skipped and an alert is raised so the operator can clean the checkout. This is essential for projects like garden itself, where the poller runs the compiled CLI. Without a post-merge rebuild, the poller continues executing stale code even after merging fixes.
+**postMerge**: Command that runs on the main checkout after merging, but only when the local checkout successfully fast-forwards to the newly merged code. If the fast-forward fails (dirty working tree, checkout on wrong branch), postMerge is skipped and an alert is raised so the operator can clean the checkout. An alert also fires when the fast-forward fails even without a postMerge configured — stale main rots manual operator workflow and must be surfaced either way. This is essential for projects like garden itself, where the poller runs the compiled CLI. Without a post-merge rebuild, the poller continues executing stale code even after merging fixes.
 
 **focused**: Controls whether the project appears in the dashboard status display and gets a hotkey assignment. Default is focused (field absent = focused). Set to `false` to hide a project from the dashboard without losing its config. Workers and pollers for unfocused projects continue running. Managed via `garden focus`/`garden unfocus` or `garden config <project> focused false`.
 
@@ -151,7 +151,7 @@ After a review passes, workers enter the `merge-pending` state. The merge queue 
 4. If rebase conflicts: abort rebase, launch a dedicated resolver in the worktree and transition to `resolving`. The resolver completes the rebase and commits the resolution; the poller verifies and pushes. Budget is 2 attempts per merge; exhaustion transitions to `failing` with an operator alert naming the unmerged files.
 5. If rebase is clean: force-push the rebased branch, fast-forward the remote base branch via direct refspec push (no local checkout needed)
 6. Notify live sibling workers with overlapping files (see below)
-7. Fast-forward the local base branch checkout; run postMerge command (if configured) only when the checkout actually advanced. If the fast-forward fails (dirty working tree, divergent branch), postMerge is skipped and an alert is raised
+7. Fast-forward the local base branch checkout; run postMerge command (if configured) only when the checkout actually advanced. If the fast-forward fails (dirty working tree, divergent branch), postMerge is skipped and an alert is raised — always, regardless of whether postMerge was configured, because a stuck main checkout silently drifts out of sync with the remote
 8. Mark the worker as merged in the registry
 
 The worker and its worktree are not automatically cleaned up on merge. Cleanup happens only when the user kills the worker with `opt-x` or runs `garden reset`. This allows inspecting merged work before disposal.

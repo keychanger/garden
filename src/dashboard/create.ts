@@ -440,21 +440,44 @@ export function buildWorktreeBootstrapScript(
 
   const base = baseBranch ?? "main";
   const escapedBase = base.replace(/'/g, "'\\''");
+  const escapedProjectName = projectName.replace(/'/g, "'\\''");
 
   const script = `#!/bin/sh
 set -e
 
 printf 'Setting up worktree %s...\\n' '${branchName}'
 
-# Fast-forward ${base} before branching
-printf '  Fetching origin...\\n'
-git -C ${escapedProjectPath} fetch origin '${escapedBase}' 2>/dev/null || true
-git -C ${escapedProjectPath} merge --ff-only 'origin/${escapedBase}' 2>/dev/null || true
+# Fetch latest base ref. Worker always branches off origin/${base}
+# directly (see "git worktree add" below), so main-checkout freshness is
+# informational only — but a stale main checkout signals operator rot and
+# deserves an alert.
+printf '  Fetching origin/%s...\\n' '${escapedBase}'
+BOOTSTRAP_FAIL=""
+FETCH_RC=0
+FETCH_OUT=$(git -C ${escapedProjectPath} fetch origin '${escapedBase}' 2>&1) || FETCH_RC=$?
+[ -n "$FETCH_OUT" ] && printf '%s\\n' "$FETCH_OUT"
+if [ "$FETCH_RC" -ne 0 ]; then
+  BOOTSTRAP_FAIL="fetch failed: $FETCH_OUT"
+fi
 
-# Create worktree
+printf '  Fast-forwarding main checkout...\\n'
+MERGE_RC=0
+MERGE_OUT=$(git -C ${escapedProjectPath} merge --ff-only 'origin/${escapedBase}' 2>&1) || MERGE_RC=$?
+[ -n "$MERGE_OUT" ] && printf '%s\\n' "$MERGE_OUT"
+if [ "$MERGE_RC" -ne 0 ]; then
+  BOOTSTRAP_FAIL="\${BOOTSTRAP_FAIL:+$BOOTSTRAP_FAIL; }ff-merge failed: $MERGE_OUT"
+fi
+
+if [ -n "$BOOTSTRAP_FAIL" ]; then
+  printf '  WARNING: main checkout did not update cleanly — raising alert.\\n' >&2
+  ${escapedGardenRunner} dashboard _bootstrap-alert '${escapedProjectName}' '${escapedBase}' ${escapedProjectPath} "$BOOTSTRAP_FAIL" 2>/dev/null || true
+fi
+
+# Create worktree. Branch explicitly off origin/${base} so worker freshness
+# does not depend on the main checkout being clean or up to date.
 printf '  Creating worktree...\\n'
 mkdir -p "$(dirname ${escapedWtPath})"
-git -C ${escapedProjectPath} worktree add ${escapedWtPath} -b '${branchName}'
+git -C ${escapedProjectPath} worktree add ${escapedWtPath} -b '${branchName}' 'origin/${escapedBase}'
 
 # Install dependencies if needed
 if [ -f ${escapedWtPath}/package.json ]; then

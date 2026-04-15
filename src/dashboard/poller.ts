@@ -951,8 +951,15 @@ function finalizeMerge(
 
   if (advanced) {
     runPostMerge(projectName, projectPath);
-  } else if (tryGetProject(projectName)?.postMerge) {
-    log.error("poller", "postMerge skipped: local base checkout did not advance", {
+  } else {
+    // Alert regardless of postMerge configuration — local base drift is
+    // the problem on its own. Workers now branch off origin/<base> so this
+    // no longer strands them on stale code, but a silent checkout drift
+    // still rots the operator's manual workflow and must be surfaced.
+    const postMergeNote = tryGetProject(projectName)?.postMerge
+      ? " postMerge was skipped."
+      : "";
+    log.error("poller", "local base checkout did not fast-forward after merge", {
       worker: entry.name,
       data: { projectPath, baseBranch },
     });
@@ -961,7 +968,7 @@ function finalizeMerge(
       source: "poller",
       project: projectName,
       worker: entry.name,
-      message: `Skipped postMerge: local ${baseBranch} checkout at ${projectPath} did not fast-forward (likely a dirty working tree or divergent branch). Clean the checkout so future merges can rebuild.`,
+      message: `Local ${baseBranch} checkout at ${projectPath} did not fast-forward after merge (likely a dirty working tree or divergent branch).${postMergeNote} Clean the checkout so it stays current with merged work.`,
     });
   }
 

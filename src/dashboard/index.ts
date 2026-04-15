@@ -16,6 +16,7 @@ import { newWorker, killPane } from "./workers.js";
 import { switchProject, focusWorker, focusShell, focusGarden, focusRoot, focusLogs, cyclePane } from "./navigate.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
 import { loadConfig } from "../config.js";
+import { addAlert } from "./alerts.js";
 
 export async function dashboard(args: string[]): Promise<void> {
   checkTmux();
@@ -63,6 +64,17 @@ export async function dashboard(args: string[]): Promise<void> {
   if (sub === "_claude-hook") return handleClaudeHook(args[1]);
   if (sub === "_pane-died") return handlePaneDied(args[1]);
   if (sub === "_title-changed") return handleTitleChanged(args[1], args[2]);
+  if (sub === "_bootstrap-alert") {
+    const [, projectName, baseBranch, projectPath, ...rest] = args;
+    const errText = rest.join(" ").slice(0, 400);
+    addAlert({
+      level: "error",
+      source: "bootstrap",
+      project: projectName ?? "unknown",
+      message: `Worker bootstrap could not update ${baseBranch ?? "base"} at ${projectPath ?? "?"}: ${errText}. Worker will still branch off origin/${baseBranch ?? "base"}; clean the main checkout so future workers stay fresh.`,
+    });
+    return;
+  }
 
   if (sub === "help") {
     printDashboardHelp();
