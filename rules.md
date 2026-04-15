@@ -58,12 +58,24 @@ in `<project>/.garden/rules.md` can extend or override these.
 
 ## Git workflow
 
-- Always work on a feature branch. Never commit directly to main.
-- Branch names: `<type>/<short-description>` (e.g., feat/task-remove, fix/worker-signal).
+- Never commit directly to main.
+- If you are a garden worker, you are already on your assigned worker branch
+  (the worktree workflow section spells this out). Commit directly to it. Do
+  NOT create a new feature branch on top — the poller maps a worker to one
+  branch by name, and a side branch will silently fail to merge.
+- If you are NOT a garden worker (i.e., you are working in an ordinary
+  checkout): create a feature branch named `<type>/<short-description>`
+  (e.g., feat/task-remove, fix/worker-signal) and work on it.
 - Push your branch when work is complete. The poller handles review and merge.
 - Use conventional commit messages: feat:, fix:, refactor:, docs:, test:, chore:.
 - Make small, focused commits. One logical change per commit.
-- Commit messages describe why, not what. The diff shows what.
+- Commit messages describe why, not what. The diff shows what changed.
+- The first commit on a branch should explain the problem being solved and the
+  intended approach. Subsequent commits can be shorter but should still explain
+  why each change was made. Reviewers and merge tooling rely on commit messages
+  to understand intent when resolving conflicts and verifying correctness.
+- Include enough context that someone reading only the commit log (not the diff)
+  can understand the goal and reasoning of the branch.
 
 ## Error handling
 
