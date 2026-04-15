@@ -30,8 +30,8 @@ import { gardenWindowName, shellWindowName as shellWin, workerWindowName as work
 const DASHBOARD_COLS = 250;
 const DASHBOARD_ROWS = 60;
 
-// Usage pane height: 3 meter lines + 1 pane-border-status top row.
-export const USAGE_PANE_HEIGHT = 4;
+// Usage pane height: 1 leading blank + 3 meter lines + 1 pane-border-status top row.
+export const USAGE_PANE_HEIGHT = 5;
 
 function buildSettingsJson(gardenRunner: string, sandbox: SandboxConfig): string {
   const hookCmd = `${gardenRunner} dashboard _claude-hook`;
@@ -163,6 +163,9 @@ export function ensureDashboard(): void {
   try { tmux("resize-pane", "-t", usageId, "-y", String(USAGE_PANE_HEIGHT)); } catch { /* ignore */ }
   try { tmux("set-option", "-p", "-t", usageId, "history-limit", "0"); } catch { /* ignore */ }
   try { tmux("clear-history", "-t", usageId); } catch { /* ignore */ }
+  // Splitting the usage pane shrinks the status pane; flush any scrollback
+  // introduced by that shrink so the status pane stays non-scrollable.
+  try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
 
   setPaneTitle(usageId, "usage");
   setPaneLabel(usageId, "usage");

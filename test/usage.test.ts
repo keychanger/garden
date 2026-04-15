@@ -173,13 +173,14 @@ describe("renderUsagePane", () => {
     });
     const render = await importRender();
     const lines = render(now).split("\n");
-    expect(lines).toHaveLength(3);
-    expect(lines[0]).toContain("5h");
-    expect(lines[1]).toContain("week");
-    expect(lines[2]).toContain("sonnet");
-    expect(lines[0]).toContain("26%");
-    expect(lines[1]).toContain("35%");
-    expect(lines[2]).toContain(" 4%");
+    // 1 leading blank (for breathing room under the pane border) + 3 meters.
+    expect(lines).toHaveLength(4);
+    expect(lines[1]).toContain("5h");
+    expect(lines[2]).toContain("week");
+    expect(lines[3]).toContain("sonnet");
+    expect(lines[1]).toContain("26%");
+    expect(lines[2]).toContain("35%");
+    expect(lines[3]).toContain(" 4%");
   });
 
   it("shows at least one filled bar cell for small non-zero percentages", async () => {
@@ -233,10 +234,9 @@ describe("renderUsagePane", () => {
     });
     const render = await importRender();
     const lines = render(now).split("\n");
-    // 5h row has a percent
-    expect(lines[0]).toContain("42%");
-    // week and sonnet rows render em-dash placeholder
-    expect(lines[1]).toContain("\u2014");
+    // lines[0] is the leading blank; meters start at index 1.
+    expect(lines[1]).toContain("42%");
     expect(lines[2]).toContain("\u2014");
+    expect(lines[3]).toContain("\u2014");
   });
 });
