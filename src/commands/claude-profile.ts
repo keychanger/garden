@@ -1,7 +1,3 @@
-// Command: garden claude-profile — manage alternate Claude Code config dirs.
-// Projects opt in via the `claudeProfile` config key; their workers run with
-// CLAUDE_CONFIG_DIR set to the profile's dir, so a separate plan can be used
-// without disturbing the personal Max plan default.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

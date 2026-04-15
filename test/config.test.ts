@@ -138,6 +138,89 @@ describe("sandboxDomains round-trip", () => {
   });
 });
 
+describe("expandHome", () => {
+  it("expands ~ to HOME", async () => {
+    const { expandHome } = await importConfig();
+    expect(expandHome("~/foo/bar")).toBe(path.join(tmpHome, "foo/bar"));
+  });
+
+  it("returns bare ~ as HOME", async () => {
+    const { expandHome } = await importConfig();
+    expect(expandHome("~")).toBe(tmpHome);
+  });
+
+  it("leaves absolute paths unchanged", async () => {
+    const { expandHome } = await importConfig();
+    expect(expandHome("/usr/local")).toBe("/usr/local");
+  });
+});
+
+describe("resolveClaudeProfile", () => {
+  it("returns null when project has no claudeProfile", async () => {
+    const { resolveClaudeProfile } = await importConfig();
+    expect(resolveClaudeProfile({})).toBeNull();
+  });
+
+  it("resolves a registered profile", async () => {
+    const { resolveClaudeProfile } = await importConfig();
+    const config = {
+      projects: {},
+      claudeProfiles: { imp: { configDir: "~/.claude-imp" } },
+    };
+    const result = resolveClaudeProfile({ claudeProfile: "imp" }, config);
+    expect(result).toEqual({
+      name: "imp",
+      configDir: path.join(tmpHome, ".claude-imp"),
+      label: "imp",
+    });
+  });
+
+  it("throws for an unknown profile name", async () => {
+    const { resolveClaudeProfile } = await importConfig();
+    const config = { projects: {}, claudeProfiles: {} };
+    expect(() => resolveClaudeProfile({ claudeProfile: "nope" }, config)).toThrow("unknown claudeProfile");
+  });
+
+  it("uses the label when provided", async () => {
+    const { resolveClaudeProfile } = await importConfig();
+    const config = {
+      projects: {},
+      claudeProfiles: { imp: { configDir: "/tmp/imp", label: "Client Plan" } },
+    };
+    const result = resolveClaudeProfile({ claudeProfile: "imp" }, config);
+    expect(result?.label).toBe("Client Plan");
+  });
+});
+
+describe("tryResolveClaudeProfile", () => {
+  it("returns null instead of throwing for unknown profile", async () => {
+    const { tryResolveClaudeProfile } = await importConfig();
+    const config = { projects: {}, claudeProfiles: {} };
+    expect(tryResolveClaudeProfile({ claudeProfile: "nope" }, config)).toBeNull();
+  });
+});
+
+describe("claudeProfile round-trip", () => {
+  it("persists and reloads claudeProfile", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({
+      projects: { test: { path: "/tmp/test", claudeProfile: "imp" } },
+      claudeProfiles: { imp: { configDir: "~/.claude-imp" } },
+    });
+    const reloaded = loadConfig();
+    expect(reloaded.projects.test.claudeProfile).toBe("imp");
+    expect(reloaded.claudeProfiles?.imp.configDir).toBe("~/.claude-imp");
+  });
+});
+
+describe("isValidConfigKey — claudeProfile", () => {
+  it("accepts claudeProfile as a valid key", async () => {
+    const { isValidConfigKey } = await importConfig();
+    expect(isValidConfigKey("claudeProfile")).toBe(true);
+  });
+});
+
 describe("reorderProject", () => {
   it("moves a project to a new position", async () => {
     const { reorderProject } = await importConfig();

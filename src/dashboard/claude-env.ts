@@ -1,6 +1,3 @@
-// Resolves the CLAUDE_CONFIG_DIR env var for a given project. Returns "" for
-// projects on the default profile so launch sites can unconditionally prepend
-// the result to their claude shell commands.
 import { tryResolveClaudeProfile, type ProjectConfig, type GardenConfig } from "../config.js";
 import { shellEscape } from "./tmux.js";
 

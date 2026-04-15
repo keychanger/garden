@@ -36,6 +36,7 @@ npm run dev -- help    # run via tsx during development
   - `findings.ts` — reviewer-findings tally: parses `findings` blocks from review output, persists atomically to `rules-findings.json`, and fires a one-time alert when a category crosses the suggestion threshold
   - `log.ts` — structured JSON logger to `~/.garden/sessions/dashboard.log`
   - `names.ts` — worker name generation (adjective-noun pairs)
+  - `claude-env.ts` — resolves `CLAUDE_CONFIG_DIR` env var/prefix for per-project Claude profiles
   - `sandbox.ts` — builds Claude sandbox config (filesystem allowWrite + network allowedDomains) for each worker and reviewer
   - `usage.ts` — Claude quota fetcher/renderer: OAuth-bearer call to `api.anthropic.com/api/oauth/usage`, normalizes the 5h/weekly/sonnet meters, renders three bars for the dedicated "usage" pane via `renderUsagePane()`. Third bar is Sonnet (not Opus) because on Max plans `seven_day_opus` is null and `seven_day_sonnet` is the populated model-specific bucket. Undocumented endpoint, strict rate-limit (~50min Retry-After after rapid probes).
   - `usage-poller.ts` — singleton poller (`_garden-usage-poller`) refreshing the quota snapshot every 5 min. Honors `Retry-After` on 429. Calls `refreshDashboard()` (not just `refreshStatusPane()`) so the pre-baked status file gets rewritten before SIGUSR1. On top of this, `maybeRefreshUsage()` in `usage.ts` is called from the `Stop` hook in `handleClaudeHook` — a fire-and-forget detached `_usage-refresh` subprocess, gated by a 60-second cooldown, so the meter updates right after each end-of-turn.
@@ -44,8 +45,9 @@ npm run dev -- help    # run via tsx during development
 - `src/commands/config.ts` — `garden config` command: view/set project config
 - `src/commands/focus.ts` — `garden focus` / `garden unfocus`: control dashboard visibility
 - `src/commands/reorder.ts` — `garden reorder`: reorder projects for hotkey assignment
+- `src/commands/claude-profile.ts` — `garden claude-profile` command: manage alternate Claude config dirs (per-project plan)
 - `src/commands/rules.ts` — `garden rules` command: view/accept/dismiss pending rule suggestions from reviewer findings
-- `src/config.ts` — reads/writes `~/.garden/config.yml`, project resolution
+- `src/config.ts` — reads/writes `~/.garden/config.yml`, project resolution, Claude profile resolution
 - `src/session.ts` — tmux session management (create, kill, attach, list)
 - `src/rules.ts` — assembles global + project rules for Claude sessions
 - `src/output.ts` — TTY detection for JSON vs pretty output
