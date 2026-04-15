@@ -17,18 +17,71 @@ export interface ProjectConfig {
   postMerge?: string;
   focused?: boolean;
   sandboxDomains?: string[];
+  claudeProfile?: string;
 }
 
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
-  "path", "baseBranch", "checks", "postMerge", "focused", "sandboxDomains",
+  "path", "baseBranch", "checks", "postMerge", "focused", "sandboxDomains", "claudeProfile",
 ]);
 
 export function isValidConfigKey(key: string): boolean {
   return VALID_CONFIG_KEYS.has(key);
 }
 
+export interface ClaudeProfile {
+  configDir: string;
+  label?: string;
+}
+
+export interface ResolvedClaudeProfile {
+  name: string;
+  configDir: string;
+  label: string;
+}
+
 export interface GardenConfig {
   projects: Record<string, ProjectConfig>;
+  claudeProfiles?: Record<string, ClaudeProfile>;
+}
+
+export function expandHome(p: string): string {
+  if (p === "~") return process.env.HOME ?? p;
+  if (p.startsWith("~/")) {
+    const home = process.env.HOME;
+    if (home) return path.join(home, p.slice(2));
+  }
+  return p;
+}
+
+export function resolveClaudeProfile(
+  project: Pick<ProjectConfig, "claudeProfile">,
+  config?: GardenConfig,
+): ResolvedClaudeProfile | null {
+  const name = project.claudeProfile;
+  if (!name) return null;
+  const cfg = config ?? loadConfig();
+  const profile = cfg.claudeProfiles?.[name];
+  if (!profile) {
+    throw new Error(
+      `Project references unknown claudeProfile '${name}'. Run 'garden claude-profile add ${name}' or change the project config.`,
+    );
+  }
+  return {
+    name,
+    configDir: expandHome(profile.configDir),
+    label: profile.label ?? name,
+  };
+}
+
+export function tryResolveClaudeProfile(
+  project: Pick<ProjectConfig, "claudeProfile">,
+  config?: GardenConfig,
+): ResolvedClaudeProfile | null {
+  try {
+    return resolveClaudeProfile(project, config);
+  } catch {
+    return null;
+  }
 }
 
 export function loadConfig(): GardenConfig {

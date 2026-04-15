@@ -63,6 +63,8 @@ Projects:
   focus <name>                   Show project in dashboard
   unfocus <name>                 Hide project from dashboard
   reorder <name> <position>      Move project to position (1-based)
+  claude-profile [list|add|remove|login]
+                                 Manage alternate Claude config dirs (per-project plan)
 
 Development:
   test [project] [-- args]       Run project tests (npm test)

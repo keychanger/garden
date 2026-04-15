@@ -77,7 +77,21 @@ garden config garden baseBranch develop # set a key
 garden config garden baseBranch unset   # clear a key
 ```
 
-Available keys: `baseBranch`, `checks`, `postMerge`, `focused`, `sandboxDomains`. The `baseBranch` key controls which branch workers branch from and merge into. Resolution order: explicit config > current branch of main checkout > `origin/HEAD` symref > `"main"` as last resort. The `focused` key controls dashboard visibility (default: focused). Use `garden focus`/`garden unfocus` as shortcuts. The `sandboxDomains` key is a comma-separated list of extra network domains added to each worker/reviewer's sandbox allowlist — use it for private registries, internal services, or other hosts beyond the garden-wide defaults (`garden config <project> sandboxDomains foo.com,bar.com`).
+Available keys: `baseBranch`, `checks`, `postMerge`, `focused`, `sandboxDomains`, `claudeProfile`. The `baseBranch` key controls which branch workers branch from and merge into. Resolution order: explicit config > current branch of main checkout > `origin/HEAD` symref > `"main"` as last resort. The `focused` key controls dashboard visibility (default: focused). Use `garden focus`/`garden unfocus` as shortcuts. The `sandboxDomains` key is a comma-separated list of extra network domains added to each worker/reviewer's sandbox allowlist — use it for private registries, internal services, or other hosts beyond the garden-wide defaults (`garden config <project> sandboxDomains foo.com,bar.com`). The `claudeProfile` key opts a project into an alternate Claude Code config dir (a separate plan); see `garden claude-profile` below.
+
+### Claude profiles
+
+Each project's workers and reviewers default to your personal `~/.claude` credentials. To run a project on a different plan (e.g. a client's Enterprise workspace) without disturbing the default, register a profile and assign it:
+
+```bash
+garden claude-profile add imp                  # creates ~/.claude-imp and registers the profile
+garden claude-profile login imp                # interactive: claude /login pointed at ~/.claude-imp
+garden config <project> claudeProfile imp      # opt the project in
+garden claude-profile list                     # shows profiles and which projects use each
+garden claude-profile remove imp               # refuses while any project still references it
+```
+
+A project's claudeProfile is injected as `CLAUDE_CONFIG_DIR` whenever its worker, reviewer, resolver, or `_dashboard-claude` session spawns. Hooks in `.claude/settings.local.json` shell out to garden and intentionally do not depend on the override. The dashboard usage meter renders one extra bar per registered profile (under `sonnet`), labeled with the profile's name and showing the profile's most-utilized populated bucket.
 
 ## Adding a new command
 

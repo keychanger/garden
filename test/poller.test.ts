@@ -27,6 +27,7 @@ vi.mock("node:fs", () => ({
 
 vi.mock("../src/config.js", () => ({
   tryGetProject: vi.fn(() => ({ path: "/repo/myproject", checks: null })),
+  tryResolveClaudeProfile: vi.fn(() => null),
   loadConfig: vi.fn(() => ({ projects: { myproject: { path: "/repo/myproject" } } })),
   SESSIONS_DIR: "/tmp/fake-sessions",
 }));

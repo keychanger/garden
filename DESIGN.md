@@ -146,6 +146,8 @@ projects:
 
 **sandboxDomains**: Comma-separated list of extra network domains added to each worker/reviewer's sandbox allowlist. Use for private registries, internal services, or other hosts beyond the garden-wide defaults (Anthropic, GitHub, npm, the project's git remote host). Set via `garden config <project> sandboxDomains foo.com,bar.com`.
 
+**claudeProfile**: Name of an alternate Claude Code config dir to use for this project's workers and reviewers. Profiles are registered globally under `claudeProfiles:` in `~/.garden/config.yml` (each entry has a `configDir` and optional display `label`). When set, every `claude` invocation for the project — workers, reviewers, resolvers, the prefix-`C` ad-hoc launcher — runs with `CLAUDE_CONFIG_DIR=<configDir>`, so Claude reads its credentials, settings, and history from that dir instead of `~/.claude`. Projects without `claudeProfile` use the personal default. Manage profiles with `garden claude-profile {list,add,remove,login}`. The dashboard usage meter renders one extra bar per registered profile, labeled with the profile's name and showing the most-utilized populated bucket (5h / weekly / sonnet) in the response.
+
 ### Merge Handling
 After a review passes, workers enter the `merge-pending` state. The merge queue processes one worker at a time per project (ordered by `mergePendingAt` timestamp):
 

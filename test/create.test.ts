@@ -22,6 +22,7 @@ vi.mock("../src/session.js", () => ({
 vi.mock("../src/config.js", () => ({
   loadConfig: vi.fn(() => ({ projects: { myproject: { path: "/repo/myproject" } } })),
   tryGetProject: vi.fn(() => ({ path: "/repo/myproject" })),
+  tryResolveClaudeProfile: vi.fn(() => null),
   getFocusedProjectNames: vi.fn(() => ["myproject"]),
   SESSIONS_DIR: "/tmp/fake-sessions",
 }));

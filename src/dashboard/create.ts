@@ -24,6 +24,7 @@ import { startProjectPoller, signalFifoPath } from "./poller.js";
 import { startUsagePoller } from "./usage-poller.js";
 import { installPollTriggerHook, worktreeExists as wtExists, resolveBaseBranch, getRemoteHost } from "./git.js";
 import { buildSandboxConfig, type SandboxConfig } from "./sandbox.js";
+import { claudeEnvPrefix } from "./claude-env.js";
 import { gardenWindowName, shellWindowName as shellWin, workerWindowName as workerWin, isGardenWindow } from "./window-names.js";
 
 const DASHBOARD_COLS = 250;
@@ -370,7 +371,8 @@ export function buildWorkerCommand(projectName: string, projectPath: string, ses
   installClaudeHooks(projectPath, project);
   const gardenRunner = shellEscape(resolveGardenRunner());
   const contextFile = writeContextFile(projectName, projectPath);
-  const claudeCmd = `claude --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const envPrefix = claudeEnvPrefix(project);
+  const claudeCmd = `${envPrefix}claude --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${claudeCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
 }
@@ -380,7 +382,8 @@ export function buildResumeCommand(projectName: string, projectPath: string, ses
   installClaudeHooks(projectPath, project);
   const gardenRunner = shellEscape(resolveGardenRunner());
   const contextFile = writeContextFile(projectName, projectPath);
-  const claudeCmd = `claude --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const envPrefix = claudeEnvPrefix(project);
+  const claudeCmd = `${envPrefix}claude --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${claudeCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
 }
@@ -394,7 +397,9 @@ export function buildWorktreeWorkerCommand(
   baseBranch?: string,
 ): string {
   const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName, baseBranch);
-  const claudeCmd = `claude --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const project = resolveProjectForHooks(projectName, projectPath);
+  const envPrefix = claudeEnvPrefix(project);
+  const claudeCmd = `${envPrefix}claude --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   return `${claudeCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }
 
@@ -450,6 +455,7 @@ export function buildWorktreeBootstrapScript(
   const sandbox = sandboxForTarget(wtPath, project);
   const settingsJson = buildSettingsJson(gardenRunner, sandbox);
   const escapedHooksJson = settingsJson.replace(/'/g, "'\\''");
+  const envPrefix = claudeEnvPrefix(project);
 
   const base = baseBranch ?? "main";
   const escapedBase = base.replace(/'/g, "'\\''");
@@ -520,7 +526,7 @@ cd ${escapedWtPath}
 printf '  Ready.\\n\\n'
 
 # Launch claude
-claude --session-id ${sessionId} --append-system-prompt-file ${escapedContextFile}
+${envPrefix}claude --session-id ${sessionId} --append-system-prompt-file ${escapedContextFile}
 ${escapedGardenRunner} dashboard _claude-hook stop 2>/dev/null || true
 ${pollSignal}
 exec $SHELL
@@ -542,7 +548,9 @@ export function buildWorktreeResumeCommand(
 ): string {
   const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName, baseBranch);
   const gardenRunner = shellEscape(resolveGardenRunner());
-  const claudeCmd = `claude --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const project = resolveProjectForHooks(projectName, projectPath);
+  const envPrefix = claudeEnvPrefix(project);
+  const claudeCmd = `${envPrefix}claude --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${claudeCmd}; ${exitHook}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }

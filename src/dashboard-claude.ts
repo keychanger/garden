@@ -5,11 +5,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { detectProjectFromPath, getProject, SESSIONS_DIR } from "./config.js";
 import { buildRulesContext } from "./rules.js";
+import { claudeEnvObject } from "./dashboard/claude-env.js";
 
 export async function launchDashboardClaude(args: string[]): Promise<void> {
   const dir = args[0] ?? process.cwd();
   const projectName = detectProjectFromPath(dir);
-  const project = projectName ? { name: projectName, path: getProject(projectName).path } : null;
+  const projectFull = projectName ? getProject(projectName) : null;
+  const project = projectFull ? { name: projectFull.name, path: projectFull.path } : null;
 
   const claudeArgs: string[] = [];
 
@@ -28,6 +30,7 @@ export async function launchDashboardClaude(args: string[]): Promise<void> {
     env: {
       ...process.env,
       ...(project ? { GARDEN_PROJECT: project.name } : {}),
+      ...(projectFull ? claudeEnvObject(projectFull) : {}),
     },
   });
 

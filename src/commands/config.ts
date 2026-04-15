@@ -2,7 +2,7 @@
 import { loadConfig, saveConfig, resolveProject, isValidConfigKey, type ProjectConfig } from "../config.js";
 import { output } from "../output.js";
 
-const SETTABLE_KEYS = ["baseBranch", "checks", "postMerge", "focused", "sandboxDomains"] as const;
+const SETTABLE_KEYS = ["baseBranch", "checks", "postMerge", "focused", "sandboxDomains", "claudeProfile"] as const;
 type SettableKey = typeof SETTABLE_KEYS[number];
 
 export async function config(args: string[]): Promise<void> {
@@ -44,6 +44,8 @@ function showProjectConfig(project: ProjectConfig & { name: string }): void {
       if (project.sandboxDomains && project.sandboxDomains.length > 0) {
         data.sandboxDomains = project.sandboxDomains.join(", ");
       }
+    } else if (key === "claudeProfile") {
+      if (project.claudeProfile) data.claudeProfile = project.claudeProfile;
     } else if (project[key]) {
       data[key] = project[key]!;
     }
@@ -68,6 +70,12 @@ function showConfigKey(project: ProjectConfig & { name: string }, key: SettableK
     } else {
       output({ [key]: null }, () => `(not set)`);
     }
+    return;
+  }
+  if (key === "claudeProfile") {
+    const v = project.claudeProfile;
+    if (v) output({ [key]: v }, () => v);
+    else output({ [key]: null }, () => `(not set)`);
     return;
   }
   const value = project[key];
@@ -99,6 +107,19 @@ function setConfigKey(projectName: string, key: SettableKey, value: string): voi
       const domains = value.split(",").map((d) => d.trim()).filter(Boolean);
       project.sandboxDomains = domains;
       console.log(`Set ${key} = ${domains.join(", ")} for ${projectName}`);
+    }
+  } else if (key === "claudeProfile") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.claudeProfile;
+      console.log(`Cleared ${key} for ${projectName} (default: personal Max plan)`);
+    } else {
+      if (!cfg.claudeProfiles?.[value]) {
+        throw new Error(
+          `Unknown claude profile '${value}'. Register it first with 'garden claude-profile add ${value}'.`,
+        );
+      }
+      project.claudeProfile = value;
+      console.log(`Set ${key} = ${value} for ${projectName}`);
     }
   } else if (value === "" || value === "unset" || value === "null") {
     delete project[key];
