@@ -132,7 +132,7 @@ vi.mock("../src/rules.js", () => ({
 }));
 
 import fs from "node:fs";
-import { poll, postPush } from "../src/dashboard/poller.js";
+import { poll, postPush, restartLongLivedPollers } from "../src/dashboard/poller.js";
 import { tryGetProject } from "../src/config.js";
 import { updateWorkerFields, findWorkerByName } from "../src/dashboard/registry.js";
 import {
@@ -142,7 +142,7 @@ import {
   getChangedFiles, getCommitSummary, getNewCommitSummary, getDiffAgainstBase,
   ensureNoRebaseInProgress, hasRebaseInProgress, isAncestor, getUnmergedFiles,
 } from "../src/dashboard/git.js";
-import { tmux, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
+import { tmux, windowExists, getFirstPaneId, killWindowSafe } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { log } from "../src/dashboard/log.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
@@ -1648,5 +1648,59 @@ describe("poll — alerts", () => {
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "failing", failCount: 2 }),
     );
+  });
+});
+
+describe("restartLongLivedPollers", () => {
+  beforeEach(() => {
+    // start*Poller early-returns when the window already exists. In the real
+    // flow, stop*Poller has already killed it; here the mock doesn't know
+    // about that linkage, so we pretend the windows are gone so the spawn
+    // side of restart runs.
+    vi.mocked(windowExists).mockReturnValue(false);
+  });
+
+  it("stops and respawns the usage poller", () => {
+    restartLongLivedPollers("node /usr/local/bin/garden");
+
+    expect(killWindowSafe).toHaveBeenCalledWith("_garden-usage-poller");
+    const newWindowCalls = vi.mocked(tmux).mock.calls.filter(c => c[0] === "new-window");
+    const windowNames = newWindowCalls.map(c => c[5] as string);
+    expect(windowNames).toContain("_garden-usage-poller");
+  });
+
+  it("restarts every project poller whose registry has live workers", () => {
+    registryMock._setEntries("alpha", [makeWorker({ name: "bold-ash" })]);
+    registryMock._setEntries("beta",  [makeWorker({ name: "hot-moss" })]);
+
+    restartLongLivedPollers("node /usr/local/bin/garden");
+
+    expect(killWindowSafe).toHaveBeenCalledWith("_alpha-poller");
+    expect(killWindowSafe).toHaveBeenCalledWith("_beta-poller");
+
+    const newWindowCalls = vi.mocked(tmux).mock.calls.filter(c => c[0] === "new-window");
+    const windowNames = newWindowCalls.map(c => c[5] as string);
+    expect(windowNames).toContain("_alpha-poller");
+    expect(windowNames).toContain("_beta-poller");
+  });
+
+  it("skips projects that have no live workers", () => {
+    registryMock._setEntries("alpha", []);
+
+    restartLongLivedPollers("node /usr/local/bin/garden");
+
+    expect(killWindowSafe).not.toHaveBeenCalledWith("_alpha-poller");
+  });
+
+  it("keeps going when an individual poller restart throws", () => {
+    registryMock._setEntries("alpha", [makeWorker({ name: "bold-ash" })]);
+    registryMock._setEntries("beta",  [makeWorker({ name: "hot-moss" })]);
+    // usage-poller kill succeeds; throw on alpha so beta still gets restarted.
+    vi.mocked(killWindowSafe).mockImplementation((name: string) => {
+      if (name === "_alpha-poller") throw new Error("tmux gone");
+    });
+
+    expect(() => restartLongLivedPollers("node /usr/local/bin/garden")).not.toThrow();
+    expect(killWindowSafe).toHaveBeenCalledWith("_beta-poller");
   });
 });

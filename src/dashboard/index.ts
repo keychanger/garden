@@ -75,11 +75,17 @@ export async function dashboard(args: string[]): Promise<void> {
   }
   if (sub === "_post-rebuild-refresh") {
     // Spawned via the rebuilt binary so respawnStatusPane bakes in the new code
-    const { respawnStatusPane } = await import("./create.js");
+    const { respawnStatusPane, resolveGardenRunner } = await import("./create.js");
     const { readDashState } = await import("./state.js");
     const { refreshDashboard } = await import("./header.js");
+    const { restartLongLivedPollers } = await import("./poller.js");
     if (dashboardExists()) {
       try { respawnStatusPane(readDashState()); } catch { /* pane gone */ }
+      // Long-lived pollers (usage-poller + per-project pollers) cache the
+      // pre-rebuild bundle in memory. Restart them so they pick up the new
+      // code — otherwise they keep rendering the old status/usage content
+      // until the next manual `garden rebuild`.
+      try { restartLongLivedPollers(resolveGardenRunner()); } catch { /* best effort */ }
       try { refreshDashboard(); } catch { /* no attached client */ }
     }
     return;

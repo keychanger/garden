@@ -33,6 +33,7 @@ import { recordFindings } from "./findings.js";
 import { pollerWindowName, reviewWindowName, workerWindowName } from "./window-names.js";
 import { buildReviewPrompt, buildResolvePrompt } from "./prompts.js";
 import { claudeEnvPrefix } from "./claude-env.js";
+import { stopUsagePoller, startUsagePoller } from "./usage-poller.js";
 
 const RESOLVE_BUDGET = 2;
 
@@ -1206,6 +1207,35 @@ export function ensureProjectPoller(projectName: string, gardenRunner: string): 
 
 export function projectPollerRunning(projectName: string): boolean {
   return windowExists(pollerWindowName(projectName));
+}
+
+// Kill every long-lived poller window (usage-poller + per-project pollers with
+// live workers) and respawn them. Used by `_post-rebuild-refresh` after a
+// successful `npm run build`: the pollers are long-lived node processes that
+// cache the pre-rebuild bundle in memory, so without this they keep running
+// stale code until the next `garden rebuild` or tmux kill-server. FIFO pokes
+// that land during the gap (milliseconds) are dropped, but pokes are
+// idempotent — the next event re-pokes the fresh poller.
+export function restartLongLivedPollers(gardenRunner: string): void {
+  try {
+    stopUsagePoller();
+    startUsagePoller(gardenRunner);
+  } catch (err) {
+    log.warn("poller", "failed to restart usage poller", { data: { error: String(err) } });
+  }
+
+  const registry = readRegistry();
+  for (const [projectName, entries] of Object.entries(registry.workers)) {
+    if (entries.length === 0) continue;
+    try {
+      stopProjectPoller(projectName);
+      startProjectPoller(projectName, gardenRunner);
+    } catch (err) {
+      log.warn("poller", "failed to restart project poller", {
+        data: { project: projectName, error: String(err) },
+      });
+    }
+  }
 }
 
 // Exported for review window cleanup in workers.ts
