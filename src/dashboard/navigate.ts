@@ -263,10 +263,6 @@ export function focusRoot(): void {
 
 export function focusLogs(): void {
   switchGardenTo("logs");
-  // ⌥l is the sole dismissal path for the alert-bar badge. Always ack, even
-  // if logs was already the active view — an autonomous failure that fires
-  // while the user is away must not silently disappear just because logs
-  // happened to be focused.
   acknowledgeAlerts();
 }
 

@@ -103,6 +103,7 @@ import {
   setPaneLabel, setPaneVar,
 } from "../src/dashboard/tmux.js";
 import { findWorkerByName } from "../src/dashboard/registry.js";
+import { acknowledgeAlerts } from "../src/dashboard/alerts.js";
 import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenConsoleWindow } from "../src/dashboard/create.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 
@@ -481,6 +482,14 @@ describe("focusGarden / focusRoot / focusLogs (switchGardenTo)", () => {
     focusLogs();
     expect(tmux).toHaveBeenCalledWith("select-pane", "-t", "%1");
     expect(writeDashState).not.toHaveBeenCalled();
+  });
+
+  it("focusLogs always acknowledges alerts even when already on logs", () => {
+    vi.mocked(readDashState).mockReturnValue(
+      makeState({ gardenPaneType: "logs", gardenShellPaneId: "%1" }),
+    );
+    focusLogs();
+    expect(acknowledgeAlerts).toHaveBeenCalled();
   });
 
   it("creates garden console window if missing and switches to it", () => {
