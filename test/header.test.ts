@@ -468,6 +468,39 @@ describe("writeQuickStatus (via refreshDashboard)", () => {
     // Math.max(4, 1) + 1 = 5
     expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "5");
   });
+
+  it("flushes a tmux client refresh after a resize so SIGWINCH delivers before SIGUSR1", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
+    vi.mocked(renderQuickStatus).mockReturnValue("l1\nl2\nl3\nl4");
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 3 });
+
+    refreshDashboard();
+
+    const calls = vi.mocked(tmux).mock.calls;
+    const resizeIdx = calls.findIndex(c => c[0] === "resize-pane");
+    const refreshIdx = calls.findIndex((c, i) =>
+      i > resizeIdx && c[0] === "refresh-client" && c[1] === "-S",
+    );
+    expect(resizeIdx).toBeGreaterThanOrEqual(0);
+    expect(refreshIdx).toBeGreaterThan(resizeIdx);
+  });
+
+  it("does not flush refresh-client from writeQuickStatus when the height is unchanged", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
+    vi.mocked(renderQuickStatus).mockReturnValue("l1\nl2\nl3\nl4");
+    // height already matches Math.max(4,4)+1 = 5, so no resize
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 5 });
+
+    refreshDashboard();
+
+    // updateHeaderVar (called unconditionally by refreshDashboard) ends with
+    // its own refresh-client -S, so one refresh call is expected. The
+    // writeQuickStatus flush must not add a second one on this no-resize path.
+    const refreshCalls = vi.mocked(tmux).mock.calls.filter(
+      c => c[0] === "refresh-client" && c[1] === "-S",
+    );
+    expect(refreshCalls).toHaveLength(1);
+  });
 });
 
 // ===========================================================================
