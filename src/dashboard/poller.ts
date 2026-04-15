@@ -952,10 +952,7 @@ function finalizeMerge(
   if (advanced) {
     runPostMerge(projectName, projectPath);
   } else {
-    // Alert regardless of postMerge configuration — local base drift is
-    // the problem on its own. Workers now branch off origin/<base> so this
-    // no longer strands them on stale code, but a silent checkout drift
-    // still rots the operator's manual workflow and must be surfaced.
+    // Always alert: checkout drift rots manual workflow regardless of postMerge config.
     const postMergeNote = tryGetProject(projectName)?.postMerge
       ? " postMerge was skipped."
       : "";

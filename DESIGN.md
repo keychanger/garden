@@ -180,9 +180,11 @@ Every accepted suggestion permanently raises the review bar for every future wor
 The dashboard surfaces important events as alerts — persistent messages that require operator attention. Alerts are stored atomically in `~/.garden/sessions/dashboard.alerts.json` (same write-tmp-then-rename pattern as other state files), capped at 100 entries.
 
 **Events that generate alerts:**
+- Worker bootstrap could not fast-forward main checkout (stale main, dirty worktree)
 - Review process failure (Claude unavailable, timeout, unparseable output)
 - Reviewer could not fix issues (FAILED verdict)
 - Merge failure
+- Local checkout did not fast-forward after merge (regardless of postMerge config)
 - Repeated failures (3+ consecutive failures on the same worker)
 - Rule suggestion ready (a category crossed the findings threshold)
 
