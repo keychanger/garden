@@ -252,6 +252,8 @@ garden unfocus <name>              # Hide project from dashboard
 garden reorder <name> <position>   # Move project to position (1-based)
 garden claude-profile [list|add|remove|login]
                                    # Manage alternate Claude config dirs (per-project plan)
+garden login [profile]             # Re-authenticate Claude (personal, or a profile)
+garden auth status                 # Show credential presence, expiry, and displacement
 ```
 
 ### Dashboard

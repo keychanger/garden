@@ -1,9 +1,3 @@
-// Command: garden login [profile] — authenticate Claude Code, optionally to
-// an alternate Claude profile. With no argument, refreshes the personal
-// account into the default credential store. With a profile name, runs
-// `claude /login` against the profile's CLAUDE_CONFIG_DIR and (on macOS)
-// captures the resulting Keychain entry to the profile's .credentials.json
-// so the personal account can be restored on the next `garden login`.
 import fs from "node:fs";
 import path from "node:path";
 import { loadConfig, expandHome } from "../config.js";

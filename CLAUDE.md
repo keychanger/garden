@@ -36,6 +36,7 @@ npm run dev -- help    # run via tsx during development
   - `findings.ts` — reviewer-findings tally: parses `findings` blocks from review output, persists atomically to `rules-findings.json`, and fires a one-time alert when a category crosses the suggestion threshold
   - `log.ts` — structured JSON logger to `~/.garden/sessions/dashboard.log`
   - `names.ts` — worker name generation (adjective-noun pairs)
+  - `credentials.ts` — reads/captures Claude Code OAuth credentials from macOS Keychain and file slots
   - `claude-env.ts` — resolves `CLAUDE_CONFIG_DIR` env var/prefix for per-project Claude profiles
   - `sandbox.ts` — builds Claude sandbox config (filesystem allowWrite + network allowedDomains) for each worker and reviewer
   - `judge.ts` — PreToolUse hook for `Bash`. Pre-filters plain commands (no shell metacharacters) to a zero-cost fall-through; otherwise asks Haiku via the Messages API (OAuth token from `loadCredential()`) whether to auto-approve. Fail-closed: judge can only emit `permissionDecision: "allow"` — any error, timeout, or `uncertain` verdict produces empty output so the built-in permission flow (sandbox auto-allow or user prompt) runs. Decisions are written to `~/.garden/sessions/judge.log` and mirrored through the dashboard `log` to `dashboard.log`. `ExitPlanMode` is routed through the existing status-only `pretooluse` handler and is never seen by the judge.
@@ -47,6 +48,8 @@ npm run dev -- help    # run via tsx during development
 - `src/commands/focus.ts` — `garden focus` / `garden unfocus`: control dashboard visibility
 - `src/commands/reorder.ts` — `garden reorder`: reorder projects for hotkey assignment
 - `src/commands/claude-profile.ts` — `garden claude-profile` command: manage alternate Claude config dirs (per-project plan)
+- `src/commands/login.ts` — `garden login [profile]`: re-authenticate Claude (personal or profile)
+- `src/commands/auth.ts` — `garden auth status`: credential diagnostic (presence, expiry, displacement)
 - `src/commands/rules.ts` — `garden rules` command: view/accept/dismiss pending rule suggestions from reviewer findings
 - `src/config.ts` — reads/writes `~/.garden/config.yml`, project resolution, Claude profile resolution
 - `src/session.ts` — tmux session management (create, kill, attach, list)

@@ -1,7 +1,3 @@
-// Command: garden auth — diagnostic for Claude Code credential state.
-// `garden auth status` prints what's in each credential slot and detects the
-// macOS Keychain-displacement footgun where a recent profile login has
-// silently overwritten the personal token.
 import path from "node:path";
 import { loadConfig, expandHome } from "../config.js";
 import {
@@ -112,9 +108,6 @@ function formatDuration(ms: number): string {
   return `in ${mins}m`;
 }
 
-// Returns the profile name whose file token matches the keychain token, or
-// null. Same token in both places means the most recent login was that
-// profile's, which has displaced the personal account in the keychain.
 function detectDisplacement(
   keychain: CredentialSlot | null,
   profiles: ProfileState[],

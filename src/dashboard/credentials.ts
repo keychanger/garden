@@ -1,11 +1,3 @@
-// Helpers for reading and capturing Claude Code OAuth credentials.
-//
-// On macOS, Claude Code persists credentials to a single Keychain entry
-// ("Claude Code-credentials") regardless of CLAUDE_CONFIG_DIR — see the
-// claudeProfile design notes in CLAUDE.md. To maintain distinct tokens for
-// multiple profiles we capture the Keychain entry to <configDir>/.credentials.json
-// after each profile login, then re-login the default account so the Keychain
-// holds the personal token again.
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -70,9 +62,6 @@ function parseOAuth(raw: string): ClaudeOAuth | null {
   }
 }
 
-// Copy the macOS Keychain entry to <credFile> atomically. Returns true on
-// success. Used after a profile login to lock in the just-issued token before
-// the user re-logs the default account back into the Keychain.
 export function captureKeychainTo(credFile: string): boolean {
   if (process.platform !== "darwin") return false;
   try {
@@ -92,10 +81,7 @@ export function captureKeychainTo(credFile: string): boolean {
   }
 }
 
-// Run `claude /login` interactively. The caller's CLAUDE_CONFIG_DIR is always
-// stripped first so this can be invoked from inside a profile-tagged worker
-// pane without leaking the worker's profile into the login flow; pass
-// `configDir` to opt back in to a specific dir.
+// Strips inherited CLAUDE_CONFIG_DIR so profile-tagged panes don't leak.
 export async function runClaudeLogin(configDir?: string): Promise<void> {
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.CLAUDE_CONFIG_DIR;
