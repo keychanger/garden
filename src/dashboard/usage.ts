@@ -346,8 +346,7 @@ function renderBar(pct: number, barWidth: number, markerPct?: number): string {
   const rst = "\x1b[0m";
   const brightFg = "\x1b[97m";
 
-  // Floor at index 1 so the marker never sits flush against the left edge —
-  // a leading dim cell gives it visual context as "inside the bar".
+  // Floor at cell 1 so a leading dim cell always precedes the marker.
   const markerIdx = (markerPct != null && Number.isFinite(markerPct))
     ? Math.max(1, Math.min(barWidth - 1, Math.round((markerPct / 100) * (barWidth - 1))))
     : -1;
