@@ -82,8 +82,6 @@ export async function dashboard(args: string[]): Promise<void> {
     if (dashboardExists()) {
       const state = readDashState();
       try { respawnStatusPane(state); } catch { /* pane gone */ }
-      // Pollers and the logs follow-process both cache the pre-rebuild bundle
-      // in memory — restart so they run the new code.
       try { restartLongLivedPollers(resolveGardenRunner()); } catch { /* best effort */ }
       try { respawnLogsPane(state); } catch { /* pane gone */ }
       try { refreshDashboard(); } catch { /* no attached client */ }
