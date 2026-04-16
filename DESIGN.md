@@ -202,6 +202,7 @@ The dashboard surfaces important events as alerts — persistent messages that r
 - Repeated failures (3+ consecutive failures on the same worker)
 - Rule suggestion ready (a category crossed the findings threshold)
 - Bash command blocked by the judge (uncertain verdict, missing credential, API failure)
+- Worker needs operator input (Claude hit `AskUserQuestion` or `ExitPlanMode` mid-turn)
 
 **Visibility:**
 - Bottom bar shows a red `⚠ N alerts — ⌥l to clear` badge on the right when unread alerts exist. The badge appears instantly on `addAlert()` via `tmux set-option @garden_right` + `refresh-client -S`.
