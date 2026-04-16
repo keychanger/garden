@@ -431,7 +431,7 @@ function launchResolver(
   const escapedResult = resultFile.replace(/'/g, "'\\''");
   const escapedFifo = signalFifoPath(projectName).replace(/'/g, "'\\''");
   const envPrefix = claudeEnvPrefix(tryGetProject(projectName) ?? {});
-  const cmd = `GARDEN_REVIEWER=1 ${envPrefix}claude --enable-auto-mode -p < '${escapedPrompt}' > '${escapedResult}' 2>&1; [ -p '${escapedFifo}' ] && (echo > '${escapedFifo}') 2>/dev/null`;
+  const cmd = `GARDEN_REVIEWER=1 ${envPrefix}claude -p < '${escapedPrompt}' > '${escapedResult}' 2>&1; [ -p '${escapedFifo}' ] && (echo > '${escapedFifo}') 2>/dev/null`;
 
   if (windowExists(revWindow)) {
     killWindowSafe(revWindow);
@@ -785,7 +785,7 @@ function launchReview(
   // as the worker's Stop hook and would (a) write claudeStatus="idle" for
   // the worker, and (b) poke the poller to start another review.
   const envPrefix = claudeEnvPrefix(tryGetProject(projectName) ?? {});
-  const cmd = `GARDEN_REVIEWER=1 ${envPrefix}claude --enable-auto-mode -p < '${escapedPrompt}' > '${escapedResult}' 2>&1; [ -p '${escapedFifo}' ] && (echo > '${escapedFifo}') 2>/dev/null`;
+  const cmd = `GARDEN_REVIEWER=1 ${envPrefix}claude -p < '${escapedPrompt}' > '${escapedResult}' 2>&1; [ -p '${escapedFifo}' ] && (echo > '${escapedFifo}') 2>/dev/null`;
 
   // Kill any leftover review window
   if (windowExists(revWindow)) {

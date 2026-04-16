@@ -309,10 +309,12 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   classifier escalates a tool call for operator approval — it is the
   only event that reports "a permission dialog is actually being shown"
   (unlike `PreToolUse`, which fires for every tool call and would
-  flicker the dashboard on every auto-approved bash). Workers launch
-  with `claude --enable-auto-mode` so this hook is the one-stop signal
-  for operator-attention-required events across every tool, not just
-  Bash.
+  flicker the dashboard on every auto-approved bash). Each worktree's
+  `.claude/settings.local.json` sets `permissions.defaultMode: "auto"`
+  so every Claude process in that worktree (worker, reviewer,
+  resolver, resume) starts in auto mode and this hook is the one-stop
+  signal for operator-attention-required events across every tool,
+  not just Bash.
 - `PostToolUse` (matched to `AskUserQuestion`, `ExitPlanMode`, `Bash`) →
   `claudeStatus = "working"` (only if currently `idle`). Fires when
   the user has responded and Claude resumes processing. The `Bash`

@@ -206,12 +206,12 @@ describe("installClaudeHooks", () => {
     expect(bashPost.hooks[0].command).toContain("_claude-hook posttooluse");
   });
 
-  it("sets permissions.defaultMode to acceptEdits for autonomous edits inside sandbox", () => {
+  it("sets permissions.defaultMode to auto so workers start in Claude's auto-mode classifier", () => {
     process.argv[1] = "/usr/local/bin/garden";
     installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
     const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
     const parsed = JSON.parse(written);
-    expect(parsed.permissions).toEqual({ defaultMode: "acceptEdits" });
+    expect(parsed.permissions).toEqual({ defaultMode: "auto" });
   });
 });
 
@@ -224,11 +224,6 @@ describe("buildWorkerCommand", () => {
   it("includes append-system-prompt-file flag", () => {
     const cmd = buildWorkerCommand("myproject", "/repo/myproject", "session-123");
     expect(cmd).toContain("--append-system-prompt-file");
-  });
-
-  it("enables auto-mode so Claude's classifier handles per-tool approvals", () => {
-    const cmd = buildWorkerCommand("myproject", "/repo/myproject", "session-123");
-    expect(cmd).toContain("--enable-auto-mode");
   });
 
   it("includes exit hook and shell fallback", () => {
