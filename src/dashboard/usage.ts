@@ -259,15 +259,12 @@ const LABEL_WIDTH = 6; // "sonnet" is the longest label
 const INDENT = "    ";  // 4-space indent mirrors worker rows in the status pane
 const STALE_AFTER_MS = 30 * 60 * 1000; // 30 min — long enough to survive the endpoint's long rate-limit windows
 
-// Display width of the fixed parts of a meter line (no bar, no reset text):
-// INDENT(4) + LABEL(6) + 2 gap + 2 gap + pct(4) = 18.
+// Fixed parts of a meter line (no bar, no reset): INDENT + LABEL + 2gap + 2gap + pct.
 const FIXED_LINE_WIDTH = INDENT.length + LABEL_WIDTH + 2 + 2 + 4;
-// "resets in 10d 23h" is the longest reset phrase; 2-space gap precedes it.
+// "resets in 10d 23h" is the longest reset phrase (2-space gap precedes it).
 const RESET_TEXT_WIDTH = 17;
 
-// When paneWidth is given, pick a bar width and decide whether the reset
-// phrase fits without wrapping. Narrow zooms shrink the bar first, then drop
-// the reset text when even MIN_BAR_WIDTH + reset won't fit.
+// Narrow zooms shrink the bar first, then drop the reset phrase when even MIN_BAR_WIDTH + reset won't fit.
 function computeMeterFit(paneWidth: number | undefined): { barWidth: number; showReset: boolean } {
   if (paneWidth === undefined) return { barWidth: BAR_WIDTH, showReset: true };
   const withReset = paneWidth - FIXED_LINE_WIDTH - 2 - RESET_TEXT_WIDTH;

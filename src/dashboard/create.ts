@@ -112,8 +112,7 @@ export function ensureDashboard(): void {
       try { tmux("clear-history", "-t", healed.usagePaneId); } catch { /* ignore */ }
     }
 
-    // set-hook is idempotent; reinstall on reattach so older dashboards
-    // pick up hooks added in later builds without requiring a full restart.
+    // Reinstall on reattach so existing dashboards pick up hooks from new builds.
     try {
       tmux("set-hook", "-t", DASHBOARD_SESSION, "client-resized",
         `run-shell -b "${gardenRunner} dashboard _client-resized 2>/dev/null"`);
@@ -213,10 +212,7 @@ export function ensureDashboard(): void {
       `run-shell -b "${gardenRunner} dashboard _title-changed '#{window_name}' '#{pane_id}' 2>/dev/null"`);
   } catch { /* hooks may not be supported on very old tmux */ }
 
-  // tmux client-resized hook: when the user zooms in/out (Cmd+/-), the
-  // left column narrows and fixed-width content like the usage meter wraps
-  // and overflows its pane. Regenerate rendered content against the new
-  // pane widths so the bar shrinks to fit instead of wrapping.
+  // Regenerate pane content on zoom so fixed-width meters don't wrap.
   try {
     tmux("set-hook", "-t", DASHBOARD_SESSION, "client-resized",
       `run-shell -b "${gardenRunner} dashboard _client-resized 2>/dev/null"`);
