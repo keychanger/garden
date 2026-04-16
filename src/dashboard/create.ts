@@ -55,9 +55,10 @@ function buildSettingsJson(gardenRunner: string, sandbox: SandboxConfig): string
       }, {
         matcher: "ExitPlanMode",
         hooks: [{ type: "command", command: `${hookCmd} pretooluse`, timeout: 5 }],
-      }, {
-        matcher: "Bash",
-        hooks: [{ type: "command", command: `${gardenRunner} dashboard _judge-bash`, timeout: 15 }],
+      }],
+      PermissionRequest: [{
+        matcher: "",
+        hooks: [{ type: "command", command: `${hookCmd} pretooluse`, timeout: 5 }],
       }],
       PostToolUse: [{
         matcher: "AskUserQuestion",
@@ -66,8 +67,8 @@ function buildSettingsJson(gardenRunner: string, sandbox: SandboxConfig): string
         matcher: "ExitPlanMode",
         hooks: [{ type: "command", command: `${hookCmd} posttooluse`, timeout: 5 }],
       }, {
-        // Bash completion resumes "working" after the judge flipped us to
-        // "idle" on an uncertain verdict and the operator approved the prompt.
+        // Resumes "working" after the operator approves an auto-mode
+        // permission prompt (PermissionRequest flipped us to "idle").
         matcher: "Bash",
         hooks: [{ type: "command", command: `${hookCmd} posttooluse`, timeout: 5 }],
       }],
@@ -388,7 +389,7 @@ export function buildWorkerCommand(projectName: string, projectPath: string, ses
   const gardenRunner = shellEscape(resolveGardenRunner());
   const contextFile = writeContextFile(projectName, projectPath);
   const envPrefix = claudeEnvPrefix(project);
-  const claudeCmd = `${envPrefix}claude --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const claudeCmd = `${envPrefix}claude --enable-auto-mode --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${claudeCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
 }
@@ -399,7 +400,7 @@ export function buildResumeCommand(projectName: string, projectPath: string, ses
   const gardenRunner = shellEscape(resolveGardenRunner());
   const contextFile = writeContextFile(projectName, projectPath);
   const envPrefix = claudeEnvPrefix(project);
-  const claudeCmd = `${envPrefix}claude --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const claudeCmd = `${envPrefix}claude --enable-auto-mode --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${claudeCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
 }
@@ -415,7 +416,7 @@ export function buildWorktreeWorkerCommand(
   const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName, baseBranch);
   const project = resolveProjectForHooks(projectName, projectPath);
   const envPrefix = claudeEnvPrefix(project);
-  const claudeCmd = `${envPrefix}claude --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const claudeCmd = `${envPrefix}claude --enable-auto-mode --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   return `${claudeCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }
 

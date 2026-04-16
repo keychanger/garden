@@ -201,8 +201,7 @@ The dashboard surfaces important events as alerts — persistent messages that r
 - Local checkout did not fast-forward after merge (regardless of postMerge config)
 - Repeated failures (3+ consecutive failures on the same worker)
 - Rule suggestion ready (a category crossed the findings threshold)
-- Bash command needs operator approval (judge uncertain, missing credential, API failure)
-- Worker needs operator input (Claude hit `AskUserQuestion` or `ExitPlanMode` mid-turn)
+- Worker needs operator input (Claude hit `AskUserQuestion`, `ExitPlanMode`, or an auto-mode permission prompt mid-turn)
 
 **Visibility:**
 - Bottom bar shows a red `⚠ N alerts — ⌥l to clear` badge on the right when unread alerts exist. The badge appears instantly on `addAlert()` via `tmux set-option @garden_right` + `refresh-client -S`.
@@ -216,7 +215,7 @@ The dashboard surfaces important events as alerts — persistent messages that r
 - Branch name equals the worker name (e.g., `swift-oak`)
 - Worktrees persist until the worker is killed, enabling the review cycle and manual inspection
 - Each worktree's `.claude/settings.local.json` configures Claude's OS-level sandbox (Seatbelt on macOS, bubblewrap on Linux). Auto-allow mode approves sandboxed bash without prompts while blocking out-of-allowlist filesystem writes and network calls at the kernel, and `permissions.defaultMode: "acceptEdits"` auto-approves file edits so workers proceed without stopping to ask. Workers and reviewers run without `--dangerously-skip-permissions` but remain autonomous inside the sandbox. Allowlist defaults (Anthropic, GitHub, npm, the project's git remote host, plus worktree + standard subprocess caches) are built in `src/dashboard/sandbox.ts` and extended per-project via the `sandboxDomains` config key
-- A **bash permission judge** (`src/dashboard/judge.ts`) runs as a PreToolUse hook on every `Bash` tool call. It is a friction-reducer, not a gate: plain commands (no shell metacharacters) fall through at zero cost to the built-in sandbox auto-allow; commands with pipes, redirects, variable expansion, or other shell features are sent to Haiku via the Messages API for a security verdict. On `allow` it emits `permissionDecision: "allow"`. On `uncertain` (or any error, timeout, missing credential) it emits `permissionDecision: "ask"` so Claude Code renders its native permission prompt in the worker pane, fires an operator alert, and flips `claudeStatus` to `idle` (only when currently `working`) so the dashboard shows the worker is waiting. Decisions are logged to `judge.log` and mirrored to `dashboard.log`
+- Workers, reviewers, and resolvers launch with `claude --enable-auto-mode`: Anthropic's built-in classifier auto-approves low-risk tool calls and only prompts the operator for the rest. Garden wires a `PermissionRequest` hook (no matcher — all tools) that fires **only** when a prompt is actually being shown; it flips `claudeStatus` to `idle` and raises an operator alert so the dashboard reflects the waiting state. The matching `PostToolUse` on `Bash` flips back to `working` once the operator approves
 
 ## Worker Status Detection
 
@@ -299,7 +298,6 @@ All read commands detect whether stdout is a TTY:
     dashboard-<project>-<branch>.context  # Worktree worker context
     dashboard.kill-confirm.json  # Transient double-tap kill confirmation
     dashboard.log           # Structured JSON log
-    judge.log               # Bash permission judge decisions (also mirrored to dashboard.log)
     <project>-poll-signal   # FIFO for waking project pollers
     console-init.zsh              # Garden console init (custom prompt + auto-dispatch)
     bootstrap-<project>-<branch>.sh       # Transient worktree bootstrap script

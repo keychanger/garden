@@ -182,12 +182,21 @@ describe("installClaudeHooks", () => {
     expect(parsed.hooks.UserPromptSubmit).toBeDefined();
     expect(parsed.hooks.Stop).toBeDefined();
     expect(parsed.hooks.PreToolUse).toBeDefined();
+    expect(parsed.hooks.PermissionRequest).toBeDefined();
     expect(parsed.hooks.PostToolUse).toBeDefined();
   });
 
-  it("registers a Bash PostToolUse hook so idle flips back to working after judge-ask", () => {
-    // Without this hook, a judge 'ask' verdict flips the worker to idle and
-    // nothing resumes "working" after the operator approves the native prompt.
+  it("registers a PermissionRequest hook that flips the worker to idle on approval prompts", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
+    const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+    const parsed = JSON.parse(written);
+    const permReq = parsed.hooks.PermissionRequest[0];
+    expect(permReq.matcher).toBe("");
+    expect(permReq.hooks[0].command).toContain("_claude-hook pretooluse");
+  });
+
+  it("registers a Bash PostToolUse hook so idle flips back to working after approval", () => {
     process.argv[1] = "/usr/local/bin/garden";
     installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
     const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
@@ -215,6 +224,11 @@ describe("buildWorkerCommand", () => {
   it("includes append-system-prompt-file flag", () => {
     const cmd = buildWorkerCommand("myproject", "/repo/myproject", "session-123");
     expect(cmd).toContain("--append-system-prompt-file");
+  });
+
+  it("enables auto-mode so Claude's classifier handles per-tool approvals", () => {
+    const cmd = buildWorkerCommand("myproject", "/repo/myproject", "session-123");
+    expect(cmd).toContain("--enable-auto-mode");
   });
 
   it("includes exit hook and shell fallback", () => {

@@ -302,16 +302,23 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   flicker. The `Notification` hook is not used — it matches too broadly
   (all notification types, not just user-attention ones) and the
   user-input cases are fully covered by PreToolUse/PostToolUse on the
-  specific tools. `PreToolUse` for `Bash` is handled by the judge
-  (`_judge-bash`) rather than the status handler; when the judge
-  emits `permissionDecision: "ask"` it writes `claudeStatus = "idle"`
-  itself so the dashboard reflects the pending native permission prompt.
+  specific tools.
+- `PermissionRequest` (no matcher — all tools) →
+  `claudeStatus = "idle"` (only if currently `working`), plus a
+  "worker needs your input" operator alert. Fires when auto-mode's
+  classifier escalates a tool call for operator approval — it is the
+  only event that reports "a permission dialog is actually being shown"
+  (unlike `PreToolUse`, which fires for every tool call and would
+  flicker the dashboard on every auto-approved bash). Workers launch
+  with `claude --enable-auto-mode` so this hook is the one-stop signal
+  for operator-attention-required events across every tool, not just
+  Bash.
 - `PostToolUse` (matched to `AskUserQuestion`, `ExitPlanMode`, `Bash`) →
   `claudeStatus = "working"` (only if currently `idle`). Fires when
   the user has responded and Claude resumes processing. The `Bash`
-  match is what restores `working` after the operator approves a
-  judge-asked command — without it the worker would stay stuck at
-  `idle` for the rest of the turn.
+  match is what restores `working` after the operator approves an
+  auto-mode permission prompt — without it the worker would stay stuck
+  at `idle` for the rest of the turn.
 
 **The poller** writes `prState` in response to the events documented in
 "How transitions are detected." The poller is the only writer of
