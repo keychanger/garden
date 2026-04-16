@@ -104,19 +104,17 @@ export function ensureDashboard(): void {
     writeDashState(healed);
 
     respawnStatusPane(healed);
-    const gardenRunner = resolveGardenRunner();
     if (healed.usagePaneId) {
+      const gardenRunner = resolveGardenRunner();
       const usageCmd = buildUsageCommand(gardenRunner);
       try { tmux("respawn-pane", "-k", "-t", healed.usagePaneId, "sh", "-c", usageCmd); } catch { /* ignore */ }
       try { tmux("resize-pane", "-t", healed.usagePaneId, "-y", String(USAGE_PANE_HEIGHT)); } catch { /* pane may be gone */ }
       try { tmux("clear-history", "-t", healed.usagePaneId); } catch { /* ignore */ }
     }
 
-    // Reinstall on reattach so existing dashboards pick up hooks from new builds.
-    try {
-      tmux("set-hook", "-t", DASHBOARD_SESSION, "client-resized",
-        `run-shell -b "${gardenRunner} dashboard _client-resized 2>/dev/null"`);
-    } catch { /* hooks may not be supported */ }
+    // On reattach, any older client-resized hook from a prior build is removed
+    // so its background refreshDashboard doesn't fight with copy-mode scrolling.
+    try { tmux("set-hook", "-u", "-t", DASHBOARD_SESSION, "client-resized"); } catch { /* ignore */ }
 
     // Pre-size all hidden windows to match their target visible slots so
     // that swap-pane never triggers a SIGWINCH reflow. Without this, hidden
@@ -210,12 +208,6 @@ export function ensureDashboard(): void {
   try {
     tmux("set-hook", "-t", DASHBOARD_SESSION, "pane-title-changed",
       `run-shell -b "${gardenRunner} dashboard _title-changed '#{window_name}' '#{pane_id}' 2>/dev/null"`);
-  } catch { /* hooks may not be supported on very old tmux */ }
-
-  // Regenerate pane content on zoom so fixed-width meters don't wrap.
-  try {
-    tmux("set-hook", "-t", DASHBOARD_SESSION, "client-resized",
-      `run-shell -b "${gardenRunner} dashboard _client-resized 2>/dev/null"`);
   } catch { /* hooks may not be supported on very old tmux */ }
 
   const state: DashboardState = {

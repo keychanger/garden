@@ -96,11 +96,6 @@ export async function dashboard(args: string[]): Promise<void> {
   }
   if (sub === "_pane-died") return handlePaneDied(args[1]);
   if (sub === "_title-changed") return handleTitleChanged(args[1], args[2]);
-  if (sub === "_client-resized") {
-    const { refreshDashboard } = await import("./header.js");
-    try { refreshDashboard(); } catch { /* no attached client */ }
-    return;
-  }
   if (sub === "_bootstrap-alert") {
     const [, projectName, baseBranch, projectPath, ...rest] = args;
     const errText = rest.join(" ").slice(0, 400);
