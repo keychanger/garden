@@ -299,7 +299,8 @@ export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number):
 
   lines.push(renderMeterLine("5h",     d.fiveHour, nowMs, staleTag, FIVE_HOUR_MS, fit));
   lines.push(renderMeterLine("week",   d.weekly,   nowMs, staleTag, SEVEN_DAY_MS, fit));
-  lines.push(renderMeterLine("sonnet", d.sonnet,   nowMs, staleTag, SEVEN_DAY_MS, fit));
+  // Sonnet shares the seven-day window, so weekly.resetsAt is the right fallback when seven_day_sonnet is null.
+  lines.push(renderMeterLine("sonnet", d.sonnet,   nowMs, staleTag, SEVEN_DAY_MS, fit, d.weekly?.resetsAt));
 
   return lines.map(l => l + "\x1b[K").join("\n");
 }
@@ -314,11 +315,13 @@ function renderMeterLine(
   suffix: string,
   windowMs: number | undefined,
   fit: { barWidth: number; showReset: boolean },
+  fallbackResetsAt?: string,
 ): string {
   const paddedLabel = label.padEnd(LABEL_WIDTH);
-  if (!meter) return `${INDENT}${paddedLabel}  ${dim("\u2014")}${suffix}`;
-  const pct = Math.max(0, Math.min(100, meter.pct));
-  const resetsAt = Date.parse(meter.resetsAt);
+  const effective = meter ?? (fallbackResetsAt ? { pct: 0, resetsAt: fallbackResetsAt } : undefined);
+  if (!effective) return `${INDENT}${paddedLabel}  ${dim("\u2014")}${suffix}`;
+  const pct = Math.max(0, Math.min(100, effective.pct));
+  const resetsAt = Date.parse(effective.resetsAt);
   let timePct: number | undefined;
   if (windowMs && Number.isFinite(resetsAt)) {
     const elapsed = windowMs - (resetsAt - nowMs);
@@ -334,7 +337,8 @@ function renderMeterLine(
 }
 
 function renderBar(pct: number, barWidth: number, markerPct?: number): string {
-  const filled = Math.round((pct / 100) * barWidth);
+  const raw = (pct / 100) * barWidth;
+  const filled = pct > 0 ? Math.max(1, Math.round(raw)) : 0;
   const clamped = Math.max(0, Math.min(barWidth, filled));
   const color = colorForPct(pct);
   const fg = "\x1b[" + color + "m";

@@ -166,15 +166,37 @@ describe("renderUsagePane", () => {
     writeSnapshot({
       fetchedAt: new Date(now).toISOString(),
       data: {
-        sonnet: { pct: 4, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
+        // pct: 1 rounds to 0 cells at BAR_WIDTH=24 — the min-one-cell floor
+        // is what guarantees the bar still paints something.
+        sonnet: { pct: 1, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
       },
     });
     const render = await importRender();
     const lines = render(now).split("\n");
     const sonnetLine = lines.find(l => l.includes("sonnet"));
     expect(sonnetLine).toBeDefined();
-    // At BAR_WIDTH=24, pct=4 rounds to 1 filled cell.
     expect(sonnetLine).toMatch(/\u2588/);
+  });
+
+  it("renders an empty sonnet bar with marker when sonnet bucket is null but weekly is present", async () => {
+    // The /api/oauth/usage endpoint returns seven_day_sonnet: null when no
+    // Sonnet usage has accrued. Sonnet shares weekly's 7-day window, so the
+    // marker should still display by borrowing weekly.resetsAt.
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        weekly: { pct: 35, resetsAt: new Date(now + 1 * 24 * 60 * 60_000).toISOString() },
+        // sonnet omitted (simulates seven_day_sonnet: null in API response)
+      },
+    });
+    const render = await importRender();
+    const lines = render(now).split("\n");
+    const sonnetLine = lines.find(l => l.includes("sonnet"));
+    expect(sonnetLine).toBeDefined();
+    expect(sonnetLine).not.toContain("\u2014");
+    expect(sonnetLine).toContain(" 0%");
+    expect(sonnetLine).toContain("\u2502"); // time-tracker marker
+    expect(sonnetLine).toContain("\u2591"); // empty bar cells
   });
 
   it("marks data stale after STALE_AFTER_MS", async () => {
