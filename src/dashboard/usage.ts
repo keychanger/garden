@@ -277,33 +277,64 @@ export function renderUsagePane(nowMs: number = Date.now()): string {
   const staleTag = stale ? dim(" (stale)") : "";
   const d = snap.data ?? {};
 
-  lines.push(renderMeterLine("5h",     d.fiveHour, nowMs, staleTag));
-  lines.push(renderMeterLine("week",   d.weekly,   nowMs, staleTag));
-  lines.push(renderMeterLine("sonnet", d.sonnet,   nowMs, staleTag));
+  lines.push(renderMeterLine("5h",     d.fiveHour, nowMs, staleTag, FIVE_HOUR_MS));
+  lines.push(renderMeterLine("week",   d.weekly,   nowMs, staleTag, SEVEN_DAY_MS));
+  lines.push(renderMeterLine("sonnet", d.sonnet,   nowMs, staleTag, SEVEN_DAY_MS));
 
   return lines.map(l => l + "\x1b[K").join("\n");
 }
 
-function renderMeterLine(label: string, meter: UsageMeter | undefined, nowMs: number, suffix: string): string {
+const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
+const SEVEN_DAY_MS = 7 * 24 * 60 * 60 * 1000;
+
+function renderMeterLine(label: string, meter: UsageMeter | undefined, nowMs: number, suffix: string, windowMs?: number): string {
   const paddedLabel = label.padEnd(LABEL_WIDTH);
   if (!meter) return `${INDENT}${paddedLabel}  ${dim("\u2014")}${suffix}`;
   const pct = Math.max(0, Math.min(100, meter.pct));
-  const bar = renderBar(pct);
-  const pctText = `${pct.toFixed(0).padStart(3)}%`;
   const resetsAt = Date.parse(meter.resetsAt);
+  let timePct: number | undefined;
+  if (windowMs && Number.isFinite(resetsAt)) {
+    const elapsed = windowMs - (resetsAt - nowMs);
+    timePct = Math.max(0, Math.min(100, (elapsed / windowMs) * 100));
+  }
+  const bar = renderBar(pct, timePct);
+  const pctText = `${pct.toFixed(0).padStart(3)}%`;
   const resetText = Number.isFinite(resetsAt)
     ? `resets ${formatDuration(resetsAt - nowMs)}`
     : "";
   return `${INDENT}${paddedLabel}  ${bar}  ${pctText}  ${dim(resetText)}${suffix}`;
 }
 
-function renderBar(pct: number): string {
+function renderBar(pct: number, markerPct?: number): string {
   const filled = Math.round((pct / 100) * BAR_WIDTH);
   const clamped = Math.max(0, Math.min(BAR_WIDTH, filled));
   const color = colorForPct(pct);
   const fg = "\x1b[" + color + "m";
-  const reset = "\x1b[0m";
-  return `${fg}${"\u2588".repeat(clamped)}${reset}${dim("\u2591".repeat(BAR_WIDTH - clamped))}`;
+  const rst = "\x1b[0m";
+
+  if (markerPct == null || !Number.isFinite(markerPct)) {
+    return `${fg}${"\u2588".repeat(clamped)}${rst}${dim("\u2591".repeat(BAR_WIDTH - clamped))}`;
+  }
+
+  const markerIdx = Math.max(0, Math.min(BAR_WIDTH - 1,
+    Math.round((markerPct / 100) * (BAR_WIDTH - 1))));
+  const bright = "\x1b[97m";
+
+  // Three segments: before marker, marker, after marker
+  const beforeFilled = Math.min(clamped, markerIdx);
+  const beforeEmpty = markerIdx - beforeFilled;
+  const afterStart = markerIdx + 1;
+  const afterFilled = Math.max(0, clamped - afterStart);
+  const afterEmpty = BAR_WIDTH - afterStart - afterFilled;
+
+  let result = "";
+  if (beforeFilled > 0) result += `${fg}${"\u2588".repeat(beforeFilled)}${rst}`;
+  if (beforeEmpty > 0) result += dim("\u2591".repeat(beforeEmpty));
+  result += `${bright}\u2502${rst}`;
+  if (afterFilled > 0) result += `${fg}${"\u2588".repeat(afterFilled)}${rst}`;
+  if (afterEmpty > 0) result += dim("\u2591".repeat(afterEmpty));
+
+  return result;
 }
 
 function colorForPct(pct: number): string {

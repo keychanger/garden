@@ -203,6 +203,37 @@ describe("renderUsagePane", () => {
     for (const l of lines) expect(l).toMatch(/\x1b\[K$/);
   });
 
+  it("renders a time marker on each bar based on window elapsed", async () => {
+    // 5h meter: resetsAt in 1h → 4h elapsed out of 5h → 80% through window
+    // week meter: resetsAt in 1d → 6d elapsed out of 7d → ~85.7%
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        fiveHour: { pct: 26, resetsAt: new Date(now + 1 * 60 * 60_000).toISOString() },
+        weekly:   { pct: 35, resetsAt: new Date(now + 1 * 24 * 60 * 60_000).toISOString() },
+      },
+    });
+    const render = await importRender();
+    const lines = render(now).split("\n");
+    // The marker character │ (U+2502) should appear in both meter lines
+    expect(lines[1]).toContain("\u2502"); // 5h
+    expect(lines[2]).toContain("\u2502"); // week
+  });
+
+  it("omits time marker when resetsAt is unparseable", async () => {
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        fiveHour: { pct: 50, resetsAt: "not-a-date" },
+      },
+    });
+    const render = await importRender();
+    const lines = render(now).split("\n");
+    // Should still render the bar, just without a marker
+    expect(lines[1]).toContain("50%");
+    expect(lines[1]).not.toContain("\u2502");
+  });
+
   it("shows an em-dash for missing meter buckets instead of crashing", async () => {
     writeSnapshot({
       fetchedAt: new Date(now).toISOString(),
