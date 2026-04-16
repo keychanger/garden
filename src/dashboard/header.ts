@@ -12,7 +12,7 @@ import { currentBranch, resolveBaseBranch } from "./git.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { triggerProjectPoll } from "./poller.js";
 import { log } from "./log.js";
-import { unreadAlertCount, formatRightBar } from "./alerts.js";
+import { addAlert, unreadAlertCount, formatRightBar } from "./alerts.js";
 import { workerWindowName as workerWin, parseWorkerWindow } from "./window-names.js";
 import { maybeRefreshUsage, renderUsagePane } from "./usage.js";
 import { resolveGardenRunner } from "./create.js";
@@ -202,8 +202,18 @@ export function handleClaudeHook(event: string): void {
     const existing = findWorkerByName(workerInfo.project, workerInfo.worker);
     if (existing?.claudeStatus === "working") {
       fields.claudeStatus = "idle";
+      if (event === "pretooluse") {
+        try {
+          addAlert({
+            level: "warn",
+            source: "worker",
+            project: workerInfo.project,
+            worker: workerInfo.worker,
+            message: `Worker ${workerInfo.worker} needs your input — switch to it to respond`,
+          });
+        } catch { /* best-effort */ }
+      }
     } else {
-      // Not working — log for diagnostics but don't change status.
       log.info("hook", "mid-turn idle hook skipped (not working)", {
         worker: workerInfo.worker,
         data: { project: workerInfo.project, event, claudeStatus: existing?.claudeStatus },

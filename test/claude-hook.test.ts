@@ -95,11 +95,19 @@ vi.mock("../src/version.js", () => ({
   GARDEN_VERSION: "test",
 }));
 
+vi.mock("../src/dashboard/alerts.js", () => ({
+  addAlert: vi.fn(),
+  unreadAlertCount: vi.fn(() => 0),
+  formatRightBar: vi.fn(() => ""),
+  refreshAlertBadge: vi.fn(),
+}));
+
 vi.mock("../src/commands/status.js", () => ({
   renderQuickStatus: vi.fn(() => ""),
 }));
 
 import { handleClaudeHook } from "../src/dashboard/header.js";
+import { addAlert } from "../src/dashboard/alerts.js";
 import { updateWorkerFields } from "../src/dashboard/registry.js";
 import { log } from "../src/dashboard/log.js";
 import { tmux } from "../src/dashboard/tmux.js";
@@ -196,6 +204,32 @@ describe("handleClaudeHook — mid-turn idle", () => {
       "hook", "mid-turn idle hook skipped (not working)",
       expect.anything(),
     );
+  });
+
+  it("pretooluse fires alert when worker needs input", () => {
+    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("pretooluse");
+
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "worker",
+        project: "garden",
+        worker: "bold-ash",
+        message: expect.stringContaining("needs your input"),
+      }),
+    );
+  });
+
+  it("notification does not fire alert", () => {
+    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("notification");
+
+    expect(addAlert).not.toHaveBeenCalled();
   });
 
   it("pretooluse skips when worker is ready", () => {
