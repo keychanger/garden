@@ -65,6 +65,11 @@ function buildSettingsJson(gardenRunner: string, sandbox: SandboxConfig): string
       }, {
         matcher: "ExitPlanMode",
         hooks: [{ type: "command", command: `${hookCmd} posttooluse`, timeout: 5 }],
+      }, {
+        // Bash completion resumes "working" after the judge flipped us to
+        // "idle" on an uncertain verdict and the operator approved the prompt.
+        matcher: "Bash",
+        hooks: [{ type: "command", command: `${hookCmd} posttooluse`, timeout: 5 }],
       }],
     },
     sandbox,

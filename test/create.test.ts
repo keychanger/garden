@@ -185,6 +185,18 @@ describe("installClaudeHooks", () => {
     expect(parsed.hooks.PostToolUse).toBeDefined();
   });
 
+  it("registers a Bash PostToolUse hook so idle flips back to working after judge-ask", () => {
+    // Without this hook, a judge 'ask' verdict flips the worker to idle and
+    // nothing resumes "working" after the operator approves the native prompt.
+    process.argv[1] = "/usr/local/bin/garden";
+    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
+    const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+    const parsed = JSON.parse(written);
+    const bashPost = parsed.hooks.PostToolUse.find((h: { matcher: string }) => h.matcher === "Bash");
+    expect(bashPost).toBeDefined();
+    expect(bashPost.hooks[0].command).toContain("_claude-hook posttooluse");
+  });
+
   it("sets permissions.defaultMode to acceptEdits for autonomous edits inside sandbox", () => {
     process.argv[1] = "/usr/local/bin/garden";
     installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
