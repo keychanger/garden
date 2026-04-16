@@ -43,8 +43,13 @@ const LEVEL_SYMBOLS: Record<string, string> = {
   error: "x",
 };
 
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
 export function relativeTime(isoTs: string): string {
-  const delta = Date.now() - new Date(isoTs).getTime();
+  const d = new Date(isoTs);
+  const delta = Date.now() - d.getTime();
   if (delta < 0) return "just now";
   const secs = Math.floor(delta / 1000);
   if (secs < 60) return `${secs}s ago`;
@@ -52,12 +57,13 @@ export function relativeTime(isoTs: string): string {
   if (mins < 60) return `${mins}m ago`;
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}h ago`;
-  // Fall back to absolute for old entries
-  return isoTs.replace("T", " ").slice(5, 16);
+  // Fall back to absolute (local time) for old entries: MM-DD HH:MM
+  return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
 function absoluteTime(isoTs: string): string {
-  return isoTs.replace("T", " ").slice(11, 19);
+  const d = new Date(isoTs);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 }
 
 function formatData(data: Record<string, unknown>): string {
