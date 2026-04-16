@@ -108,6 +108,9 @@ export function ensureDashboard(): void {
     const healed = validateAndHeal(state);
     writeDashState(healed);
 
+    // Heal sessions created by older builds that leaked history-limit=0.
+    try { tmux("set-option", "-t", DASHBOARD_SESSION, "history-limit", "1000000"); } catch { /* ignore */ }
+
     respawnStatusPane(healed);
     if (healed.usagePaneId) {
       const gardenRunner = resolveGardenRunner();
@@ -155,6 +158,8 @@ export function ensureDashboard(): void {
 
   tmux("set-option", "-t", DASHBOARD_SESSION, "set-titles", "on");
   tmux("set-option", "-t", DASHBOARD_SESSION, "set-titles-string", "garden");
+  // Large scrollback for every pane; default 2000 is tiny for worker Claude output.
+  tmux("set-option", "-t", DASHBOARD_SESSION, "history-limit", "1000000");
 
   const gardenShellId = tmuxOutput(
     "display-message", "-t", `${DASHBOARD_SESSION}:main.0`, "-p", "#{pane_id}");
@@ -165,15 +170,12 @@ export function ensureDashboard(): void {
     "sh", "-c", statusCmd);
 
   try { tmux("resize-pane", "-t", statusId, "-y", String(statusHeight)); } catch { /* ignore */ }
-  try { tmux("set-option", "-p", "-t", statusId, "history-limit", "0"); } catch { /* ignore */ }
-  try { tmux("set-option", "-t", DASHBOARD_SESSION, "-u", "history-limit"); } catch { /* ignore */ }
   try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
 
   const usageCmd = buildUsageCommand(gardenRunner);
   const usageId = tmuxSplit("-v", "-b", "-t", statusId, "-l", String(USAGE_PANE_HEIGHT),
     "sh", "-c", usageCmd);
   try { tmux("resize-pane", "-t", usageId, "-y", String(USAGE_PANE_HEIGHT)); } catch { /* ignore */ }
-  try { tmux("set-option", "-p", "-t", usageId, "history-limit", "0"); } catch { /* ignore */ }
   try { tmux("clear-history", "-t", usageId); } catch { /* ignore */ }
   // Splitting shrinks status pane — flush scrollback so it stays non-scrollable.
   try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
