@@ -336,21 +336,15 @@ function renderMeterLine(
   return `${INDENT}${paddedLabel}  ${bar}  ${pctText}${resetPart}${suffix}`;
 }
 
-// Unicode 1/8 left blocks: index = sub-cells filled (0..7).
-const PARTIAL_BLOCKS = ["", "\u258F", "\u258E", "\u258D", "\u258C", "\u258B", "\u258A", "\u2589"];
-const SUB_CELLS_PER_CELL = 8;
-
 function renderBar(pct: number, barWidth: number, markerPct?: number): string {
-  const totalSubCells = Math.max(0, Math.min(
-    barWidth * SUB_CELLS_PER_CELL,
-    Math.round((pct / 100) * barWidth * SUB_CELLS_PER_CELL),
-  ));
-  const fullCells = Math.floor(totalSubCells / SUB_CELLS_PER_CELL);
-  const partialSubCells = totalSubCells % SUB_CELLS_PER_CELL;
+  const raw = (pct / 100) * barWidth;
+  const filled = Math.max(0, Math.min(barWidth, pct > 0 ? Math.max(1, Math.round(raw)) : 0));
 
-  const fg = `\x1b[${colorForPct(pct)}m`;
+  const colorCode = colorForPct(pct);
+  const fg = `\x1b[${colorCode}m`;
+  const bg = `\x1b[${parseInt(colorCode, 10) + 10}m`;
   const rst = "\x1b[0m";
-  const bright = "\x1b[97m";
+  const brightFg = "\x1b[97m";
 
   const markerIdx = (markerPct != null && Number.isFinite(markerPct))
     ? Math.max(0, Math.min(barWidth - 1, Math.round((markerPct / 100) * (barWidth - 1))))
@@ -358,12 +352,15 @@ function renderBar(pct: number, barWidth: number, markerPct?: number): string {
 
   let result = "";
   for (let i = 0; i < barWidth; i++) {
-    if (i === markerIdx) {
-      result += `${bright}\u2502${rst}`;
-    } else if (i < fullCells) {
+    const isFilled = i < filled;
+    const isMarker = i === markerIdx;
+    if (isMarker && isFilled) {
+      // Marker overlays green: green bg keeps the cell from looking "eaten".
+      result += `${bg}${brightFg}\u2502${rst}`;
+    } else if (isMarker) {
+      result += `${brightFg}\u2502${rst}`;
+    } else if (isFilled) {
       result += `${fg}\u2588${rst}`;
-    } else if (i === fullCells && partialSubCells > 0) {
-      result += `${fg}${PARTIAL_BLOCKS[partialSubCells]}${rst}`;
     } else {
       result += dim("\u2591");
     }

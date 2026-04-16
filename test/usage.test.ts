@@ -162,9 +162,9 @@ describe("renderUsagePane", () => {
     expect(lines[3]).toContain(" 4%");
   });
 
-  it("renders sub-cell partial blocks for small non-zero percentages", async () => {
-    // pct=1 fills 1.92 sub-cells (out of 24*8) and rounds to 2 → renders as
-    // ▎ (U+258E, 2/8 left block) at cell 0 — visible without any min-cell hack.
+  it("shows at least one filled cell for small non-zero percentages", async () => {
+    // pct=1 would round to 0 cells at width 24 — the min-one-cell floor
+    // keeps the bar visible. Marker is at cell 10 (3/7 elapsed), no collision.
     writeSnapshot({
       fetchedAt: new Date(now).toISOString(),
       data: {
@@ -175,15 +175,13 @@ describe("renderUsagePane", () => {
     const lines = render(now).split("\n");
     const sonnetLine = lines.find(l => l.includes("sonnet"));
     expect(sonnetLine).toBeDefined();
-    // Any partial-block char in the U+2588..U+258F range counts.
-    expect(sonnetLine).toMatch(/[\u2588-\u258F]/);
+    expect(sonnetLine).toMatch(/\u2588/);
   });
 
-  it("hides green when marker collides with sub-cell fill", async () => {
-    // pct=3 (sub-cell) + marker at cell 0 (~1.2% of week elapsed) → marker
-    // wins the collision. Honest representation: both quantities are
-    // negligibly small, so showing the marker alone is more informative than
-    // "false green" past it.
+  it("overlays marker on green background when they collide", async () => {
+    // pct=3 rounds to 1 filled cell at cell 0; marker is also at cell 0
+    // (~1.2% of week elapsed). The cell renders as green bg + bright marker
+    // fg so both signals remain visible and the row is distinct from 0%.
     writeSnapshot({
       fetchedAt: new Date(now).toISOString(),
       data: {
@@ -194,31 +192,15 @@ describe("renderUsagePane", () => {
     const lines = render(now).split("\n");
     const weekLine = lines.find(l => l.includes("week"));
     expect(weekLine).toBeDefined();
-    expect(weekLine).toContain("\u2502");          // marker present
-    expect(weekLine).not.toMatch(/[\u2588-\u258F]/); // no green block of any kind
-  });
-
-  it("paints green past the marker when pct meaningfully exceeds elapsed-time pct", async () => {
-    // pct=50%, ~20% of week elapsed → marker at cell 5, full green past it.
-    writeSnapshot({
-      fetchedAt: new Date(now).toISOString(),
-      data: {
-        weekly: { pct: 50, resetsAt: new Date(now + 7 * 24 * 0.8 * 60 * 60_000).toISOString() },
-      },
-    });
-    const render = await importRender();
-    const lines = render(now).split("\n");
-    const weekLine = lines.find(l => l.includes("week"));
-    expect(weekLine).toBeDefined();
-    // After the marker, at least one full green block should appear.
-    const afterMarker = weekLine!.split("\u2502")[1] ?? "";
-    expect(afterMarker).toMatch(/\u2588/);
+    expect(weekLine).toContain("\u2502");   // marker present
+    expect(weekLine).toMatch(/\x1b\[42m/);  // green bg ANSI code applied somewhere
   });
 
   it("renders an empty sonnet bar with marker when sonnet bucket is null but weekly is present", async () => {
-    // The /api/oauth/usage endpoint returns seven_day_sonnet: null when no
-    // Sonnet usage has accrued. Sonnet shares weekly's 7-day window, so the
-    // marker should still display by borrowing weekly.resetsAt.
+    // /api/oauth/usage returns seven_day_sonnet: null when no Sonnet usage has
+    // accrued. Sonnet shares weekly's 7-day window so the marker still renders
+    // by borrowing weekly.resetsAt — and at 0% the marker cell must NOT have
+    // a green bg, keeping it visually distinct from a tiny-but-nonzero row.
     writeSnapshot({
       fetchedAt: new Date(now).toISOString(),
       data: {
@@ -232,8 +214,9 @@ describe("renderUsagePane", () => {
     expect(sonnetLine).toBeDefined();
     expect(sonnetLine).not.toContain("\u2014");
     expect(sonnetLine).toContain(" 0%");
-    expect(sonnetLine).toContain("\u2502"); // time-tracker marker
-    expect(sonnetLine).toContain("\u2591"); // empty bar cells
+    expect(sonnetLine).toContain("\u2502");
+    expect(sonnetLine).toContain("\u2591");
+    expect(sonnetLine).not.toMatch(/\x1b\[4[123]m/); // no fill bg anywhere
   });
 
   it("marks data stale after STALE_AFTER_MS", async () => {
