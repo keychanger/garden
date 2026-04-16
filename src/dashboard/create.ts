@@ -108,7 +108,7 @@ export function ensureDashboard(): void {
     const healed = validateAndHeal(state);
     writeDashState(healed);
 
-    // Heal sessions created by older builds that leaked history-limit=0.
+    // Heal sessions from older builds that left history-limit at tmux's 2000-line default.
     try { tmux("set-option", "-t", DASHBOARD_SESSION, "history-limit", "1000000"); } catch { /* ignore */ }
 
     respawnStatusPane(healed);
