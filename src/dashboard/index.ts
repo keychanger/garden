@@ -90,8 +90,7 @@ export async function dashboard(args: string[]): Promise<void> {
   }
   if (sub === "_header") return printHeader();
   if (sub === "_claude-hook") return handleClaudeHook(args[1]);
-  // Back-compat: pre-auto-mode worktrees wired _judge-bash as a PreToolUse Bash hook.
-  // Safe to remove once no worker's .claude/settings.local.json still references it.
+  // Back-compat: pre-auto-mode worktrees wired _judge-bash as a PreToolUse Bash hook; drop once no settings.local.json references it.
   if (sub === "_judge-bash") return;
   if (sub === "_pane-died") return handlePaneDied(args[1]);
   if (sub === "_title-changed") return handleTitleChanged(args[1], args[2]);
