@@ -1,4 +1,4 @@
-// Fail-closed: judge can only emit "allow" — uncertain verdicts emit "deny" with an operator alert.
+// Fail-closed gate: the model verdict is "allow" or "uncertain"; uncertain (plus any error/timeout/missing-credential) turns into permissionDecision="deny" with an operator alert.
 import fs from "node:fs";
 import https from "node:https";
 import path from "node:path";
