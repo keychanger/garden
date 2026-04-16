@@ -178,6 +178,24 @@ describe("renderUsagePane", () => {
     expect(sonnetLine).toMatch(/\u2588/);
   });
 
+  it("paints green past the marker when pct exceeds elapsed-time pct", async () => {
+    // 3% utilization 2h into the 7-day window: marker lands at index 0 (so
+    // there's no room "before" the marker), but we still want one green cell
+    // visible — placed after the marker.
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        weekly: { pct: 3, resetsAt: new Date(now + (7 * 24 - 2) * 60 * 60_000).toISOString() },
+      },
+    });
+    const render = await importRender();
+    const lines = render(now).split("\n");
+    const weekLine = lines.find(l => l.includes("week"));
+    expect(weekLine).toBeDefined();
+    expect(weekLine).toContain("\u2502"); // marker
+    expect(weekLine).toMatch(/\u2588/);    // at least one filled cell visible
+  });
+
   it("renders an empty sonnet bar with marker when sonnet bucket is null but weekly is present", async () => {
     // The /api/oauth/usage endpoint returns seven_day_sonnet: null when no
     // Sonnet usage has accrued. Sonnet shares weekly's 7-day window, so the

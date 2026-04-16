@@ -352,11 +352,13 @@ function renderBar(pct: number, barWidth: number, markerPct?: number): string {
     Math.round((markerPct / 100) * (barWidth - 1))));
   const bright = "\x1b[97m";
 
-  // Three segments: before marker, marker, after marker
+  // The marker occupies its own cell; green fills before it and spills past it.
+  // Any clamped cells that don't fit before the marker appear after it, so the
+  // total visible green count always equals `clamped` (the marker never eats a cell).
   const beforeFilled = Math.min(clamped, markerIdx);
   const beforeEmpty = markerIdx - beforeFilled;
   const afterStart = markerIdx + 1;
-  const afterFilled = Math.max(0, clamped - afterStart);
+  const afterFilled = Math.max(0, Math.min(clamped - beforeFilled, barWidth - afterStart));
   const afterEmpty = barWidth - afterStart - afterFilled;
 
   let result = "";
