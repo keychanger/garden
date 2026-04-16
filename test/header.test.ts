@@ -122,6 +122,7 @@ import {
   refreshStatusPane,
   refreshUsagePane,
   refreshDashboard,
+  installInputGuard,
 } from "../src/dashboard/header.js";
 
 import { tmux, getPanePid, getPaneSize, getPaneTitle } from "../src/dashboard/tmux.js";
@@ -239,6 +240,38 @@ describe("setupStatusBar", () => {
   it("swallows errors from individual set-option calls", () => {
     vi.mocked(tmux).mockImplementation(() => { throw new Error("fail"); });
     expect(() => setupStatusBar("garden")).not.toThrow();
+  });
+});
+
+// ===========================================================================
+// installInputGuard
+// ===========================================================================
+
+describe("installInputGuard", () => {
+  it("sets pane-focus-in hook matching both status and usage pane ids", () => {
+    installInputGuard(makeState({ statusPaneId: "%7", usagePaneId: "%3" }));
+
+    const calls = vi.mocked(tmux).mock.calls;
+    const hookCall = calls.find(c => c[0] === "set-hook" && c[3] === "pane-focus-in");
+    expect(hookCall).toBeDefined();
+    expect(hookCall![4]).toContain("%7");
+    expect(hookCall![4]).toContain("%3");
+    expect(hookCall![4]).toContain("select-pane -R");
+  });
+
+  it("is a no-op when statusPaneId is null", () => {
+    installInputGuard(makeState({ statusPaneId: null, usagePaneId: "%3" }));
+    expect(tmux).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op when usagePaneId is null", () => {
+    installInputGuard(makeState({ statusPaneId: "%7", usagePaneId: null }));
+    expect(tmux).not.toHaveBeenCalled();
+  });
+
+  it("swallows errors from set-hook (older tmux without hook support)", () => {
+    vi.mocked(tmux).mockImplementation(() => { throw new Error("unknown hook"); });
+    expect(() => installInputGuard(makeState({ statusPaneId: "%7", usagePaneId: "%3" }))).not.toThrow();
   });
 });
 
