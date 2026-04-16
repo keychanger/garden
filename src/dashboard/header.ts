@@ -553,14 +553,14 @@ function writeQuickStatus(opts?: RefreshOptions): void {
 function writeUsageRendered(opts?: RefreshOptions): void {
   try {
     const state = opts?.state ?? readDashState();
-    const rendered = renderUsagePane();
+    const cur = state.usagePaneId ? getPaneSize(state.usagePaneId) : null;
+    const rendered = renderUsagePane(Date.now(), cur?.width);
     const tmpFile = `${USAGE_RENDERED_FILE}.${process.pid}.${Date.now()}.tmp`;
     fs.writeFileSync(tmpFile, rendered);
     fs.renameSync(tmpFile, USAGE_RENDERED_FILE);
     if (state.usagePaneId) {
       // +1 for the pane-border-status top row.
       const h = rendered.split("\n").length + 1;
-      const cur = getPaneSize(state.usagePaneId);
       if (!cur || cur.height !== h) {
         try { tmux("resize-pane", "-t", state.usagePaneId, "-y", String(h)); } catch { /* ignore */ }
         try { tmux("clear-history", "-t", state.usagePaneId); } catch { /* ignore */ }

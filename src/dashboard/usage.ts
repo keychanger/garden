@@ -254,12 +254,34 @@ export async function refreshUsage(): Promise<UsageSnapshot> {
 // -----------------------------------------------------------------------------
 
 const BAR_WIDTH = 24;
+const MIN_BAR_WIDTH = 6;
 const LABEL_WIDTH = 6; // "sonnet" is the longest label
 const INDENT = "    ";  // 4-space indent mirrors worker rows in the status pane
 const STALE_AFTER_MS = 30 * 60 * 1000; // 30 min — long enough to survive the endpoint's long rate-limit windows
 
+// Display width of the fixed parts of a meter line (no bar, no reset text):
+// INDENT(4) + LABEL(6) + 2 gap + 2 gap + pct(4) = 18.
+const FIXED_LINE_WIDTH = INDENT.length + LABEL_WIDTH + 2 + 2 + 4;
+// "resets in 10d 23h" is the longest reset phrase; 2-space gap precedes it.
+const RESET_TEXT_WIDTH = 17;
+
+// When paneWidth is given, pick a bar width and decide whether the reset
+// phrase fits without wrapping. Narrow zooms shrink the bar first, then drop
+// the reset text when even MIN_BAR_WIDTH + reset won't fit.
+function computeMeterFit(paneWidth: number | undefined): { barWidth: number; showReset: boolean } {
+  if (paneWidth === undefined) return { barWidth: BAR_WIDTH, showReset: true };
+  const withReset = paneWidth - FIXED_LINE_WIDTH - 2 - RESET_TEXT_WIDTH;
+  if (withReset >= BAR_WIDTH) return { barWidth: BAR_WIDTH, showReset: true };
+  if (withReset >= MIN_BAR_WIDTH) return { barWidth: withReset, showReset: true };
+  const withoutReset = paneWidth - FIXED_LINE_WIDTH;
+  return {
+    barWidth: Math.max(MIN_BAR_WIDTH, Math.min(BAR_WIDTH, withoutReset)),
+    showReset: false,
+  };
+}
+
 // Leading blank for breathing room under the pane-border label, then three meter rows.
-export function renderUsagePane(nowMs: number = Date.now()): string {
+export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number): string {
   const snap = readUsageSnapshot();
   const lines: string[] = [""];
 
@@ -276,10 +298,11 @@ export function renderUsagePane(nowMs: number = Date.now()): string {
   const stale = (nowMs - Date.parse(snap.fetchedAt)) > STALE_AFTER_MS;
   const staleTag = stale ? dim(" (stale)") : "";
   const d = snap.data ?? {};
+  const fit = computeMeterFit(paneWidth);
 
-  lines.push(renderMeterLine("5h",     d.fiveHour, nowMs, staleTag, FIVE_HOUR_MS));
-  lines.push(renderMeterLine("week",   d.weekly,   nowMs, staleTag, SEVEN_DAY_MS));
-  lines.push(renderMeterLine("sonnet", d.sonnet,   nowMs, staleTag, SEVEN_DAY_MS));
+  lines.push(renderMeterLine("5h",     d.fiveHour, nowMs, staleTag, FIVE_HOUR_MS, fit));
+  lines.push(renderMeterLine("week",   d.weekly,   nowMs, staleTag, SEVEN_DAY_MS, fit));
+  lines.push(renderMeterLine("sonnet", d.sonnet,   nowMs, staleTag, SEVEN_DAY_MS, fit));
 
   return lines.map(l => l + "\x1b[K").join("\n");
 }
@@ -287,7 +310,14 @@ export function renderUsagePane(nowMs: number = Date.now()): string {
 const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
 const SEVEN_DAY_MS = 7 * 24 * 60 * 60 * 1000;
 
-function renderMeterLine(label: string, meter: UsageMeter | undefined, nowMs: number, suffix: string, windowMs?: number): string {
+function renderMeterLine(
+  label: string,
+  meter: UsageMeter | undefined,
+  nowMs: number,
+  suffix: string,
+  windowMs: number | undefined,
+  fit: { barWidth: number; showReset: boolean },
+): string {
   const paddedLabel = label.padEnd(LABEL_WIDTH);
   if (!meter) return `${INDENT}${paddedLabel}  ${dim("\u2014")}${suffix}`;
   const pct = Math.max(0, Math.min(100, meter.pct));
@@ -297,27 +327,28 @@ function renderMeterLine(label: string, meter: UsageMeter | undefined, nowMs: nu
     const elapsed = windowMs - (resetsAt - nowMs);
     timePct = Math.max(0, Math.min(100, (elapsed / windowMs) * 100));
   }
-  const bar = renderBar(pct, timePct);
+  const bar = renderBar(pct, fit.barWidth, timePct);
   const pctText = `${pct.toFixed(0).padStart(3)}%`;
-  const resetText = Number.isFinite(resetsAt)
+  const resetText = fit.showReset && Number.isFinite(resetsAt)
     ? `resets ${formatDuration(resetsAt - nowMs)}`
     : "";
-  return `${INDENT}${paddedLabel}  ${bar}  ${pctText}  ${dim(resetText)}${suffix}`;
+  const resetPart = resetText ? `  ${dim(resetText)}` : "";
+  return `${INDENT}${paddedLabel}  ${bar}  ${pctText}${resetPart}${suffix}`;
 }
 
-function renderBar(pct: number, markerPct?: number): string {
-  const filled = Math.round((pct / 100) * BAR_WIDTH);
-  const clamped = Math.max(0, Math.min(BAR_WIDTH, filled));
+function renderBar(pct: number, barWidth: number, markerPct?: number): string {
+  const filled = Math.round((pct / 100) * barWidth);
+  const clamped = Math.max(0, Math.min(barWidth, filled));
   const color = colorForPct(pct);
   const fg = "\x1b[" + color + "m";
   const rst = "\x1b[0m";
 
   if (markerPct == null || !Number.isFinite(markerPct)) {
-    return `${fg}${"\u2588".repeat(clamped)}${rst}${dim("\u2591".repeat(BAR_WIDTH - clamped))}`;
+    return `${fg}${"\u2588".repeat(clamped)}${rst}${dim("\u2591".repeat(barWidth - clamped))}`;
   }
 
-  const markerIdx = Math.max(0, Math.min(BAR_WIDTH - 1,
-    Math.round((markerPct / 100) * (BAR_WIDTH - 1))));
+  const markerIdx = Math.max(0, Math.min(barWidth - 1,
+    Math.round((markerPct / 100) * (barWidth - 1))));
   const bright = "\x1b[97m";
 
   // Three segments: before marker, marker, after marker
@@ -325,7 +356,7 @@ function renderBar(pct: number, markerPct?: number): string {
   const beforeEmpty = markerIdx - beforeFilled;
   const afterStart = markerIdx + 1;
   const afterFilled = Math.max(0, clamped - afterStart);
-  const afterEmpty = BAR_WIDTH - afterStart - afterFilled;
+  const afterEmpty = barWidth - afterStart - afterFilled;
 
   let result = "";
   if (beforeFilled > 0) result += `${fg}${"\u2588".repeat(beforeFilled)}${rst}`;

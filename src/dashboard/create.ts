@@ -104,13 +104,20 @@ export function ensureDashboard(): void {
     writeDashState(healed);
 
     respawnStatusPane(healed);
+    const gardenRunner = resolveGardenRunner();
     if (healed.usagePaneId) {
-      const gardenRunner = resolveGardenRunner();
       const usageCmd = buildUsageCommand(gardenRunner);
       try { tmux("respawn-pane", "-k", "-t", healed.usagePaneId, "sh", "-c", usageCmd); } catch { /* ignore */ }
       try { tmux("resize-pane", "-t", healed.usagePaneId, "-y", String(USAGE_PANE_HEIGHT)); } catch { /* pane may be gone */ }
       try { tmux("clear-history", "-t", healed.usagePaneId); } catch { /* ignore */ }
     }
+
+    // set-hook is idempotent; reinstall on reattach so older dashboards
+    // pick up hooks added in later builds without requiring a full restart.
+    try {
+      tmux("set-hook", "-t", DASHBOARD_SESSION, "client-resized",
+        `run-shell -b "${gardenRunner} dashboard _client-resized 2>/dev/null"`);
+    } catch { /* hooks may not be supported */ }
 
     // Pre-size all hidden windows to match their target visible slots so
     // that swap-pane never triggers a SIGWINCH reflow. Without this, hidden
@@ -204,6 +211,15 @@ export function ensureDashboard(): void {
   try {
     tmux("set-hook", "-t", DASHBOARD_SESSION, "pane-title-changed",
       `run-shell -b "${gardenRunner} dashboard _title-changed '#{window_name}' '#{pane_id}' 2>/dev/null"`);
+  } catch { /* hooks may not be supported on very old tmux */ }
+
+  // tmux client-resized hook: when the user zooms in/out (Cmd+/-), the
+  // left column narrows and fixed-width content like the usage meter wraps
+  // and overflows its pane. Regenerate rendered content against the new
+  // pane widths so the bar shrinks to fit instead of wrapping.
+  try {
+    tmux("set-hook", "-t", DASHBOARD_SESSION, "client-resized",
+      `run-shell -b "${gardenRunner} dashboard _client-resized 2>/dev/null"`);
   } catch { /* hooks may not be supported on very old tmux */ }
 
   const state: DashboardState = {

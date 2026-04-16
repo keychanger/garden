@@ -249,4 +249,42 @@ describe("renderUsagePane", () => {
     expect(lines[2]).toContain("\u2014");
     expect(lines[3]).toContain("\u2014");
   });
+
+  // Strips ANSI SGR + clear-to-EOL for display-width assertions.
+  function visibleLen(s: string): number {
+    return s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").length;
+  }
+
+  it("fits within a narrow pane by shrinking the bar and dropping reset text", async () => {
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        fiveHour: { pct: 26, resetsAt: new Date(now + 2 * 60 * 60_000).toISOString() },
+        weekly:   { pct: 35, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
+        sonnet:   { pct: 4,  resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
+      },
+    });
+    const render = await importRender();
+    // Simulates Cmd+ zoomed left column: ~32 cols wide.
+    const lines = render(now, 32).split("\n");
+    expect(lines).toHaveLength(4);
+    for (const l of lines) expect(visibleLen(l)).toBeLessThanOrEqual(32);
+    // Reset phrase dropped at this width so the bar still has usable cells.
+    expect(lines[1]).not.toContain("resets");
+    expect(lines[1]).toContain("26%");
+  });
+
+  it("keeps the reset phrase at a moderately narrow width", async () => {
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        fiveHour: { pct: 26, resetsAt: new Date(now + 2 * 60 * 60_000).toISOString() },
+      },
+    });
+    const render = await importRender();
+    // 48 cols has room for fixed(18) + minimum bar(6) + 2 + reset(17) = 43.
+    const lines = render(now, 48).split("\n");
+    for (const l of lines) expect(visibleLen(l)).toBeLessThanOrEqual(48);
+    expect(lines[1]).toContain("resets");
+  });
 });
