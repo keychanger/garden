@@ -201,7 +201,7 @@ The dashboard surfaces important events as alerts — persistent messages that r
 - Local checkout did not fast-forward after merge (regardless of postMerge config)
 - Repeated failures (3+ consecutive failures on the same worker)
 - Rule suggestion ready (a category crossed the findings threshold)
-- Bash command blocked by the judge (uncertain verdict, missing credential, API failure)
+- Bash command needs operator approval (judge uncertain, missing credential, API failure)
 - Worker needs operator input (Claude hit `AskUserQuestion` or `ExitPlanMode` mid-turn)
 
 **Visibility:**
@@ -216,7 +216,7 @@ The dashboard surfaces important events as alerts — persistent messages that r
 - Branch name equals the worker name (e.g., `swift-oak`)
 - Worktrees persist until the worker is killed, enabling the review cycle and manual inspection
 - Each worktree's `.claude/settings.local.json` configures Claude's OS-level sandbox (Seatbelt on macOS, bubblewrap on Linux). Auto-allow mode approves sandboxed bash without prompts while blocking out-of-allowlist filesystem writes and network calls at the kernel, and `permissions.defaultMode: "acceptEdits"` auto-approves file edits so workers proceed without stopping to ask. Workers and reviewers run without `--dangerously-skip-permissions` but remain autonomous inside the sandbox. Allowlist defaults (Anthropic, GitHub, npm, the project's git remote host, plus worktree + standard subprocess caches) are built in `src/dashboard/sandbox.ts` and extended per-project via the `sandboxDomains` config key
-- A **bash permission judge** (`src/dashboard/judge.ts`) runs as a PreToolUse hook on every `Bash` tool call. Plain commands (no shell metacharacters) fall through at zero cost to the built-in sandbox auto-allow. Commands with pipes, redirects, variable expansion, or other shell features are sent to Haiku via the Messages API for a security verdict. The judge is fail-closed: on `allow` it emits `permissionDecision: "allow"`; on `uncertain` (or any error, timeout, missing credential) it emits `permissionDecision: "deny"` and fires an operator alert so the blocked command is visible in `⌥l`. The worker sees the denial reason and can adapt. Decisions are logged to `judge.log` and mirrored to `dashboard.log`
+- A **bash permission judge** (`src/dashboard/judge.ts`) runs as a PreToolUse hook on every `Bash` tool call. It is a friction-reducer, not a gate: plain commands (no shell metacharacters) fall through at zero cost to the built-in sandbox auto-allow; commands with pipes, redirects, variable expansion, or other shell features are sent to Haiku via the Messages API for a security verdict. On `allow` it emits `permissionDecision: "allow"`. On `uncertain` (or any error, timeout, missing credential) it emits `permissionDecision: "ask"` so Claude Code renders its native permission prompt in the worker pane, fires an operator alert, and flips `claudeStatus` to `idle` (only when currently `working`) so the dashboard shows the worker is waiting. Decisions are logged to `judge.log` and mirrored to `dashboard.log`
 
 ## Worker Status Detection
 
