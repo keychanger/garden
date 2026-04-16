@@ -151,9 +151,18 @@ export function abortRebase(worktreePath: string): void {
 
 // True when a rebase is in progress (either interactive/merge-style or am-style).
 // Used to detect leftover rebase state from a crashed or aborted resolver.
+// Uses `git rev-parse --git-path` so it works in worktrees where `.git` is a
+// file pointing at the shared repo, not a directory.
 export function hasRebaseInProgress(worktreePath: string): boolean {
-  return fs.existsSync(path.join(worktreePath, ".git", "rebase-merge")) ||
-    fs.existsSync(path.join(worktreePath, ".git", "rebase-apply"));
+  try {
+    const rebaseMerge = git(worktreePath, "rev-parse", "--git-path", "rebase-merge");
+    if (fs.existsSync(path.resolve(worktreePath, rebaseMerge))) return true;
+  } catch { /* ignore */ }
+  try {
+    const rebaseApply = git(worktreePath, "rev-parse", "--git-path", "rebase-apply");
+    if (fs.existsSync(path.resolve(worktreePath, rebaseApply))) return true;
+  } catch { /* ignore */ }
+  return false;
 }
 
 // True when `ancestor` is an ancestor of `descendant` in the worktree's repo.

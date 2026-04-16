@@ -33,4 +33,39 @@ describe("shellEscape", () => {
     expect(shellEscape("a|b")).toBe("'a|b'");
     expect(shellEscape("a&b")).toBe("'a&b'");
   });
+
+  it("wraps backtick command substitution", () => {
+    expect(shellEscape("`whoami`")).toBe("'`whoami`'");
+  });
+
+  it("wraps double quotes", () => {
+    expect(shellEscape('foo"bar')).toBe("'foo\"bar'");
+  });
+
+  it("wraps parentheses and braces", () => {
+    expect(shellEscape("(cmd)")).toBe("'(cmd)'");
+    expect(shellEscape("{a,b}")).toBe("'{a,b}'");
+  });
+
+  it("wraps strings with newlines", () => {
+    expect(shellEscape("foo\nbar")).toBe("'foo\nbar'");
+  });
+
+  it("wraps backslash sequences", () => {
+    expect(shellEscape("foo\\bar")).toBe("'foo\\bar'");
+  });
+
+  it("wraps tab characters", () => {
+    expect(shellEscape("foo\tbar")).toBe("'foo\tbar'");
+  });
+
+  it("handles combined injection attempt", () => {
+    const payload = "'; rm -rf /; echo '";
+    const result = shellEscape(payload);
+    // Must not be executable as a command — verify it's properly quoted
+    expect(result).toContain("'\\''");
+    // Round-trip: the shell would interpret this as the literal input string
+    expect(result.startsWith("'")).toBe(true);
+    expect(result.endsWith("'")).toBe(true);
+  });
 });

@@ -1,7 +1,5 @@
 // Pane navigation: project switching, worker/shell focus, cycling.
-import fs from "node:fs";
-import path from "node:path";
-import { loadConfig, getProject, getFocusedProjectNames, SESSIONS_DIR } from "../config.js";
+import { loadConfig, getProject, getFocusedProjectNames } from "../config.js";
 import { readDashState, writeDashState, withStateLock } from "./state.js";
 import { parkToHidden, swapToHidden, swapDirect } from "./layout.js";
 import { restoreFromHidden } from "./layout.js";
@@ -20,38 +18,6 @@ import { acknowledgeAlerts } from "./alerts.js";
 import { log } from "./log.js";
 import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenConsoleWindow, resolveGardenRunner } from "./create.js";
 import { parkingWindowName, shellWindowName as shellWin, gardenWindowName, parseWorkerSuffix, isWorkerWindow, type GardenView } from "./window-names.js";
-
-const CYCLE_LOCK = path.join(SESSIONS_DIR, "cycle.lock");
-
-function withCycleLock<T>(fn: () => T): T {
-  let fd: number | null = null;
-  const maxWait = 500;
-  const start = Date.now();
-
-  // Spin until we acquire the lock or timeout
-  while (true) {
-    try {
-      fd = fs.openSync(CYCLE_LOCK, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
-      break;
-    } catch {
-      if (Date.now() - start > maxWait) {
-        // Stale lock — force acquire
-        try { fs.unlinkSync(CYCLE_LOCK); } catch { /* ignore */ }
-        continue;
-      }
-      // Brief wait without burning CPU (same pattern as registry lock)
-      const wait = new Int32Array(new SharedArrayBuffer(4));
-      Atomics.wait(wait, 0, 0, 1);
-    }
-  }
-
-  try {
-    return fn();
-  } finally {
-    try { fs.closeSync(fd!); } catch { /* ignore */ }
-    try { fs.unlinkSync(CYCLE_LOCK); } catch { /* ignore */ }
-  }
-}
 
 /**
  * Re-apply pane variables after a worker pane is swapped into the visible
@@ -243,7 +209,7 @@ function switchGardenTo(view: GardenView): void {
     gardenSwapToHidden(parkName, gardenWindowName(view), state);
     state.gardenPaneType = view;
     state.gardenWindowName = gardenWindowName(view);
-    setPaneLabel(state.gardenShellPaneId!, view);
+    if (state.gardenShellPaneId) setPaneLabel(state.gardenShellPaneId, view);
     writeDashState(state);
     refreshDashboard({ state });
 
@@ -267,9 +233,9 @@ export function focusLogs(): void {
 }
 
 export function cyclePane(direction: 1 | -1): void {
-  // Serialize concurrent cycles to prevent race conditions
-  withCycleLock(() => {
-    // Re-read state inside lock to see updates from any prior queued cycle
+  // All state mutations must go through withStateLock to prevent races with
+  // switchProject/focusWorker/focusShell which hold the same lock.
+  withStateLock(() => {
     const lockedState = readDashState();
 
     if (!lockedState.activeProject) {

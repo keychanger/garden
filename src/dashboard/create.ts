@@ -465,11 +465,12 @@ export function buildWorktreeBootstrapScript(
   const base = baseBranch ?? "main";
   const escapedBase = base.replace(/'/g, "'\\''");
   const escapedProjectName = projectName.replace(/'/g, "'\\''");
+  const escapedBranch = branchName.replace(/'/g, "'\\''");
 
   const script = `#!/bin/sh
 set -e
 
-printf 'Setting up worktree %s...\\n' '${branchName}'
+printf 'Setting up worktree %s...\\n' '${escapedBranch}'
 
 # Fetch latest base ref. Worker always branches off origin/${base}
 # directly (see "git worktree add" below), so main-checkout freshness is
@@ -501,7 +502,7 @@ fi
 # does not depend on the main checkout being clean or up to date.
 printf '  Creating worktree...\\n'
 mkdir -p "$(dirname ${escapedWtPath})"
-git -C ${escapedProjectPath} worktree add ${escapedWtPath} -b '${branchName}' 'origin/${escapedBase}'
+git -C ${escapedProjectPath} worktree add ${escapedWtPath} -b '${escapedBranch}' 'origin/${escapedBase}'
 
 # Install dependencies if needed
 if [ -f ${escapedWtPath}/package.json ]; then

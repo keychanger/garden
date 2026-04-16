@@ -110,6 +110,26 @@ describe("garden add", () => {
     expect(refreshDashboard).toHaveBeenCalled();
   });
 
+  it("rejects project names with tmux-special characters", async () => {
+    const config = await setup();
+    config.saveConfig({ projects: {} });
+    const projectDir = path.join(tmpHome, "my.project");
+    fs.mkdirSync(projectDir);
+
+    const { add } = await importAdd();
+    await expect(add([projectDir])).rejects.toThrow("Invalid project name");
+  });
+
+  it("rejects project names containing reserved substrings", async () => {
+    const config = await setup();
+    config.saveConfig({ projects: {} });
+    const projectDir = path.join(tmpHome, "my-worker-test");
+    fs.mkdirSync(projectDir);
+
+    const { add } = await importAdd();
+    await expect(add([projectDir])).rejects.toThrow("reserved for tmux");
+  });
+
   it("does not call refreshDashboard when no dashboard", async () => {
     const config = await setup();
     config.saveConfig({ projects: {} });

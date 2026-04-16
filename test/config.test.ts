@@ -221,6 +221,38 @@ describe("isValidConfigKey — claudeProfile", () => {
   });
 });
 
+describe("detectProjectFromPath", () => {
+  it("returns the deepest matching project", async () => {
+    const { detectProjectFromPath, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({
+      projects: {
+        code: { path: "/home/user/code" },
+        sub: { path: "/home/user/code/sub" },
+      },
+    });
+    expect(detectProjectFromPath("/home/user/code/sub/dir")).toBe("sub");
+  });
+
+  it("returns the only matching project", async () => {
+    const { detectProjectFromPath, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({
+      projects: {
+        code: { path: "/home/user/code" },
+      },
+    });
+    expect(detectProjectFromPath("/home/user/code/nested")).toBe("code");
+  });
+
+  it("returns undefined when no project matches", async () => {
+    const { detectProjectFromPath, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { code: { path: "/home/user/code" } } });
+    expect(detectProjectFromPath("/other/path")).toBeUndefined();
+  });
+});
+
 describe("reorderProject", () => {
   it("moves a project to a new position", async () => {
     const { reorderProject } = await importConfig();

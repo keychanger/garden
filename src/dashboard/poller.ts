@@ -361,7 +361,16 @@ function handleMergePending(
       worker: entry.name,
       message: `Rebase failed (not a conflict) — manual intervention needed`,
     });
-    return false;
+    const headSha = getBranchHeadSha(wtPath);
+    transitionState(projectName, entry.name, "failing", {
+      failCount: (entry.failCount ?? 0) + 1,
+      failingSha: headSha ?? undefined,
+      lastSeenSha: headSha ?? undefined,
+      lastShaChangeAt: new Date().toISOString(),
+      mergePendingAt: undefined,
+    });
+    refreshDashboard();
+    return true;
   }
 
   // Force-push rebased branch
@@ -917,6 +926,12 @@ function finalizeMerge(
 ): void {
   const branchName = entry.branchName ?? entry.name;
 
+  // Snapshot changed files BEFORE merge — after mergeToBase pushes, the
+  // remote tracking ref advances to include our commits and the diff is empty.
+  const preMergeChangedFiles = entry.worktreePath
+    ? getChangedFiles(entry.worktreePath, baseBranch)
+    : [];
+
   try {
     mergeToBase(projectPath, branchName, baseBranch);
   } catch (err) {
@@ -951,7 +966,7 @@ function finalizeMerge(
   // the local checkout.
   const advanced = fastForwardBase(projectPath, baseBranch, { project: projectName, worker: entry.name });
 
-  notifySiblingWorkers(projectName, baseBranch, entry);
+  notifySiblingWorkers(projectName, baseBranch, entry, preMergeChangedFiles);
 
   if (advanced) {
     runPostMerge(projectName, projectPath);
@@ -1054,10 +1069,9 @@ function notifySiblingWorkers(
   projectName: string,
   baseBranch: string,
   mergedEntry: WorkerEntry,
+  mergedFiles: string[],
 ): void {
   if (!mergedEntry.worktreePath) return;
-
-  const mergedFiles = getChangedFiles(mergedEntry.worktreePath, baseBranch);
   if (mergedFiles.length === 0) return;
 
   const commitSummary = getCommitSummary(mergedEntry.worktreePath, baseBranch);

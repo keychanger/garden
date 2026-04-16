@@ -29,7 +29,7 @@ export function listTmuxSessions(): string[] {
       .trim()
       .split("\n")
       .filter((s) => s.startsWith("garden-"))
-      .map((s) => s.replace("garden-", ""));
+      .map((s) => s.slice("garden-".length));
   } catch {
     return [];
   }

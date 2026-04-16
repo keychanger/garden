@@ -136,8 +136,14 @@ export function parseAcceptFlags(args: string[]): AcceptFlags {
   for (let i = 1; i < args.length; i++) {
     const a = args[i];
     if (a === "--global") flags.global = true;
-    else if (a === "--project") flags.project = args[++i];
-    else if (a === "--rule") flags.rule = args[++i];
+    else if (a === "--project") {
+      if (!args[i + 1]) throw new Error("--project requires a value");
+      flags.project = args[++i];
+    }
+    else if (a === "--rule") {
+      if (!args[i + 1]) throw new Error("--rule requires a value");
+      flags.rule = args[++i];
+    }
     else if (a === "--confirm") flags.confirm = true;
     else throw new Error(`Unknown flag: ${a}`);
   }
@@ -269,7 +275,10 @@ function handleDismiss(args: string[]): void {
 function handleFindings(args: string[]): void {
   let project: string | undefined;
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--project") project = args[++i];
+    if (args[i] === "--project") {
+      if (!args[i + 1]) throw new Error("--project requires a value");
+      project = args[++i];
+    }
     else throw new Error(`Unknown flag: ${args[i]}`);
   }
 

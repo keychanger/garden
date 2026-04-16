@@ -87,25 +87,25 @@ const DEFAULT_STATE: DashboardState = {
 
 export function readDashState(): DashboardState {
   try {
-    if (fs.existsSync(STATE_FILE)) {
-      const raw = JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
-      // Backfill new fields for state files from older versions
-      // Migrate old view names
-      if (raw.gardenPaneType === "console") raw.gardenPaneType = "garden";
-      if (raw.gardenPaneType === "shell") raw.gardenPaneType = "root";
-      if (raw.gardenPaneType === undefined) raw.gardenPaneType = "garden";
-      if (raw.gardenPaneType === "root" && raw.gardenWindowName === null) raw.gardenPaneType = "garden";
-      if (raw.gardenWindowName === "_garden-console") raw.gardenWindowName = "_garden-garden";
-      if (raw.gardenWindowName === "_garden-shell") raw.gardenWindowName = "_garden-root";
-      if (raw.gardenWindowName === undefined) raw.gardenWindowName = null;
-      if (raw.usagePaneId === undefined) raw.usagePaneId = null;
-      if (!raw.lastActiveWorker) raw.lastActiveWorker = {};
-      return raw;
+    const raw = JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
+    // Backfill new fields for state files from older versions
+    // Migrate old view names
+    if (raw.gardenPaneType === "console") raw.gardenPaneType = "garden";
+    if (raw.gardenPaneType === "shell") raw.gardenPaneType = "root";
+    if (raw.gardenPaneType === undefined) raw.gardenPaneType = "garden";
+    if (raw.gardenPaneType === "root" && raw.gardenWindowName === null) raw.gardenPaneType = "garden";
+    if (raw.gardenWindowName === "_garden-console") raw.gardenWindowName = "_garden-garden";
+    if (raw.gardenWindowName === "_garden-shell") raw.gardenWindowName = "_garden-root";
+    if (raw.gardenWindowName === undefined) raw.gardenWindowName = null;
+    if (raw.usagePaneId === undefined) raw.usagePaneId = null;
+    if (!raw.lastActiveWorker) raw.lastActiveWorker = {};
+    return raw;
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      log.warn("state", "failed to read state file, using defaults", {
+        data: { error: String(err) },
+      });
     }
-  } catch (err) {
-    log.warn("state", "failed to read state file, using defaults", {
-      data: { error: String(err) },
-    });
   }
   return { ...DEFAULT_STATE };
 }

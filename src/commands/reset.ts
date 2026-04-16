@@ -39,6 +39,6 @@ export async function reset(_args: string[]): Promise<void> {
     }
   }
 
-  fs.unlinkSync(REGISTRY_FILE);
+  try { fs.unlinkSync(REGISTRY_FILE); } catch { /* already gone */ }
   console.log("Registry cleared.");
 }

@@ -74,8 +74,14 @@ function parseAddFlags(args: string[]): AddFlags {
   const flags: AddFlags = { name: args[0] };
   for (let i = 1; i < args.length; i++) {
     const a = args[i];
-    if (a === "--config-dir") flags.configDir = args[++i];
-    else if (a === "--label") flags.label = args[++i];
+    if (a === "--config-dir") {
+      if (!args[i + 1]) throw new Error("--config-dir requires a value");
+      flags.configDir = args[++i];
+    }
+    else if (a === "--label") {
+      if (!args[i + 1]) throw new Error("--label requires a value");
+      flags.label = args[++i];
+    }
     else throw new Error(`Unknown flag: ${a}`);
   }
   if (!/^[a-z0-9][a-z0-9_-]*$/i.test(flags.name)) {

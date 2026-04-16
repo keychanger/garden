@@ -3,10 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
 
-export const GARDEN_DIR = path.join(
-  process.env.HOME ?? process.env.USERPROFILE ?? "~",
-  ".garden"
-);
+function requireHome(): string {
+  const h = process.env.HOME ?? process.env.USERPROFILE;
+  if (!h) throw new Error("Cannot determine home directory: neither HOME nor USERPROFILE is set.");
+  return h;
+}
+const HOME = requireHome();
+export const GARDEN_DIR = path.join(HOME, ".garden");
 export const CONFIG_PATH = path.join(GARDEN_DIR, "config.yml");
 export const SESSIONS_DIR = path.join(GARDEN_DIR, "sessions");
 
@@ -45,11 +48,8 @@ export interface GardenConfig {
 }
 
 export function expandHome(p: string): string {
-  if (p === "~") return process.env.HOME ?? p;
-  if (p.startsWith("~/")) {
-    const home = process.env.HOME;
-    if (home) return path.join(home, p.slice(2));
-  }
+  if (p === "~") return HOME;
+  if (p.startsWith("~/")) return path.join(HOME, p.slice(2));
   return p;
 }
 
@@ -192,11 +192,17 @@ export function detectProjectFromPath(dir?: string): string | undefined {
   try {
     const config = loadConfig();
     const target = dir ?? process.cwd();
+    let bestName: string | undefined;
+    let bestLen = 0;
     for (const [name, project] of Object.entries(config.projects)) {
       if (target === project.path || target.startsWith(project.path + "/")) {
-        return name;
+        if (project.path.length > bestLen) {
+          bestLen = project.path.length;
+          bestName = name;
+        }
       }
     }
+    return bestName;
   } catch {
     // Config not initialized yet
   }

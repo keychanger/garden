@@ -415,6 +415,12 @@ describe("abortRebase", () => {
 
 describe("hasRebaseInProgress", () => {
   it("returns true when rebase-merge directory exists", () => {
+    // git rev-parse --git-path returns the resolved path for the worktree
+    mockExec.mockImplementation((_bin: string, args: string[]) => {
+      if (args.includes("rebase-merge")) return ".git/worktrees/wt/rebase-merge\n";
+      if (args.includes("rebase-apply")) return ".git/worktrees/wt/rebase-apply\n";
+      return "";
+    });
     mockFs.existsSync.mockImplementation((p: unknown) =>
       String(p).includes("rebase-merge"),
     );
@@ -422,6 +428,11 @@ describe("hasRebaseInProgress", () => {
   });
 
   it("returns true when rebase-apply directory exists", () => {
+    mockExec.mockImplementation((_bin: string, args: string[]) => {
+      if (args.includes("rebase-merge")) return ".git/worktrees/wt/rebase-merge\n";
+      if (args.includes("rebase-apply")) return ".git/worktrees/wt/rebase-apply\n";
+      return "";
+    });
     mockFs.existsSync.mockImplementation((p: unknown) =>
       String(p).includes("rebase-apply"),
     );
@@ -429,6 +440,7 @@ describe("hasRebaseInProgress", () => {
   });
 
   it("returns false when neither directory exists", () => {
+    mockExec.mockReturnValue(".git/worktrees/wt/rebase-merge\n");
     mockFs.existsSync.mockReturnValue(false);
     expect(hasRebaseInProgress("/tmp/wt")).toBe(false);
   });
@@ -454,6 +466,11 @@ describe("isAncestor", () => {
 
 describe("ensureNoRebaseInProgress", () => {
   it("aborts rebase when one is in progress", () => {
+    mockExec.mockImplementation((_bin: string, args: string[]) => {
+      if (args.includes("rebase-merge")) return ".git/worktrees/wt/rebase-merge\n";
+      if (args.includes("rebase-apply")) return ".git/worktrees/wt/rebase-apply\n";
+      return "";
+    });
     mockFs.existsSync.mockImplementation((p: unknown) =>
       String(p).includes("rebase-merge"),
     );
@@ -466,9 +483,15 @@ describe("ensureNoRebaseInProgress", () => {
   });
 
   it("does nothing when no rebase is in progress", () => {
+    mockExec.mockReturnValue(".git/worktrees/wt/rebase-merge\n");
     mockFs.existsSync.mockReturnValue(false);
     ensureNoRebaseInProgress("/tmp/wt");
-    expect(mockExec).not.toHaveBeenCalled();
+    // Only git rev-parse calls, no rebase --abort
+    expect(mockExec).not.toHaveBeenCalledWith(
+      "git",
+      ["rebase", "--abort"],
+      expect.anything(),
+    );
   });
 });
 

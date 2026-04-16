@@ -16,7 +16,7 @@ export async function rebuild(_args: string[]): Promise<void> {
     # Kill iTerm and tmux
     osascript -e 'tell application "iTerm" to quit' 2>/dev/null
     sleep 0.3
-    tmux kill-server 2>/dev/null
+    tmux kill-session -t garden-dashboard 2>/dev/null
     sleep 0.3
 
     # Pull latest and build
