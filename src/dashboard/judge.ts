@@ -1,4 +1,8 @@
-// Fail-closed gate: the model verdict is "allow" or "uncertain"; uncertain (plus any error/timeout/missing-credential) turns into permissionDecision="deny" with an operator alert.
+// Friction-reducer, not a gate: the model verdict is "allow" or "uncertain".
+// Uncertain (plus any error/timeout/missing-credential) turns into
+// permissionDecision="ask" so Claude Code surfaces the native permission
+// prompt in the worker's pane; an alert + claudeStatus="idle" signal the
+// operator that a worker is waiting for them.
 import fs from "node:fs";
 import https from "node:https";
 import path from "node:path";
@@ -6,6 +10,7 @@ import { SESSIONS_DIR } from "../config.js";
 import { loadCredential } from "./usage.js";
 import { log } from "./log.js";
 import { addAlert } from "./alerts.js";
+import { findWorkerByName, updateWorkerFields } from "./registry.js";
 
 export const JUDGE_LOG = path.join(SESSIONS_DIR, "judge.log");
 const MODEL = "claude-haiku-4-5-20251001";
@@ -182,32 +187,47 @@ function emitAllow(reason: string): void {
   }));
 }
 
-function emitDeny(reason: string): void {
+function emitAsk(reason: string): void {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
-      permissionDecision: "deny",
+      permissionDecision: "ask",
       permissionDecisionReason: `judge: ${reason}`,
     },
   }));
 }
 
-function alertOnDeny(_session: string | null, cwd: string | null, cmd: string, reason: string): void {
+function alertAndMarkIdle(cwd: string | null, cmd: string, reason: string): void {
+  const { project, worker } = parseWorktreeCwd(cwd);
   try {
     addAlert({
       level: "warn",
       source: "judge",
-      project: detectProjectFromCwd(cwd),
-      message: `Blocked command (${reason}): ${cmd.slice(0, 200)}`,
+      project,
+      worker,
+      message: `Worker needs your approval (${reason}): ${cmd.slice(0, 200)}`,
     });
   } catch { /* best-effort — never block the hook on alert failure */ }
+
+  // Flip claudeStatus to "idle" so the dashboard shows the worker is waiting.
+  // Mirror AskUserQuestion handling: only transition if currently "working",
+  // so we don't stomp on "ready" from a fresh worker.
+  if (worker && project !== "unknown") {
+    try {
+      const existing = findWorkerByName(project, worker);
+      if (existing?.claudeStatus === "working") {
+        updateWorkerFields(project, worker, { claudeStatus: "idle" });
+      }
+    } catch { /* best-effort */ }
+  }
 }
 
-function detectProjectFromCwd(cwd: string | null): string {
-  if (!cwd) return "unknown";
+function parseWorktreeCwd(cwd: string | null): { project: string; worker: string | undefined } {
+  if (!cwd) return { project: "unknown", worker: undefined };
   // Worktree paths follow ~/.garden/worktrees/<project>/<worker>/...
-  const match = cwd.match(/\.garden\/worktrees\/([^/]+)\//);
-  return match ? match[1] : "unknown";
+  const match = cwd.match(/\.garden\/worktrees\/([^/]+)\/([^/]+)/);
+  if (match) return { project: match[1], worker: match[2] };
+  return { project: "unknown", worker: undefined };
 }
 
 export async function judgeBashHook(): Promise<void> {
@@ -242,7 +262,8 @@ export async function judgeBashHook(): Promise<void> {
       reason: "no credential",
       latencyMs: Date.now() - started,
     });
-    emitDeny("no credential available to evaluate command");
+    emitAsk("no credential available to evaluate command");
+    alertAndMarkIdle(cwd, cmd, "no credential available");
     return;
   }
 
@@ -259,7 +280,7 @@ export async function judgeBashHook(): Promise<void> {
   if (verdict.decision === "allow") {
     emitAllow(verdict.reason);
   } else {
-    emitDeny(verdict.reason);
-    alertOnDeny(session, cwd, cmd, verdict.reason);
+    emitAsk(verdict.reason);
+    alertAndMarkIdle(cwd, cmd, verdict.reason);
   }
 }
