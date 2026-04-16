@@ -881,7 +881,7 @@ describe("poll — merge-pending state", () => {
     expect(ensureNoRebaseInProgress).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
   });
 
-  it("alerts operator on non-conflict rebase error", () => {
+  it("alerts operator and transitions to failing on non-conflict rebase error", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
@@ -900,6 +900,13 @@ describe("poll — merge-pending state", () => {
         source: "poller",
         project: "myproject",
         worker: "bold-ash",
+      }),
+    );
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "failing",
+        failCount: 1,
+        mergePendingAt: undefined,
       }),
     );
   });
