@@ -179,21 +179,42 @@ describe("renderUsagePane", () => {
   });
 
   it("overlays marker on green background when they collide", async () => {
-    // pct=3 rounds to 1 filled cell at cell 0; marker is also at cell 0
-    // (~1.2% of week elapsed). The cell renders as green bg + bright marker
-    // fg so both signals remain visible and the row is distinct from 0%.
+    // pct=10 rounds to 2 filled cells (cells 0-1); marker is also at cell 1
+    // (~4.3% of week elapsed). Cell 1 renders as green bg + bright marker fg
+    // so both signals remain visible without the marker "eating" a cell.
     writeSnapshot({
       fetchedAt: new Date(now).toISOString(),
       data: {
-        weekly: { pct: 3, resetsAt: new Date(now + (7 * 24 - 2) * 60 * 60_000).toISOString() },
+        weekly: { pct: 10, resetsAt: new Date(now + (7 * 24 - 7.3) * 60 * 60_000).toISOString() },
       },
     });
     const render = await importRender();
     const lines = render(now).split("\n");
     const weekLine = lines.find(l => l.includes("week"));
     expect(weekLine).toBeDefined();
-    expect(weekLine).toContain("\u2502");   // marker present
-    expect(weekLine).toMatch(/\x1b\[42m/);  // green bg ANSI code applied somewhere
+    expect(weekLine).toContain("\u2502");
+    expect(weekLine).toMatch(/\x1b\[42m/);
+  });
+
+  it("never places the marker in cell 0 — a dim cell always precedes it", async () => {
+    // Even at 0% time elapsed the marker shifts to cell 1, so the bar always
+    // shows at least one leading dim cell to give the marker visual context.
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        weekly: { pct: 0, resetsAt: new Date(now + 7 * 24 * 60 * 60_000).toISOString() },
+      },
+    });
+    const render = await importRender();
+    const lines = render(now).split("\n");
+    const weekLine = lines.find(l => l.includes("week"));
+    expect(weekLine).toBeDefined();
+    // Strip ANSI to inspect cell positions.
+    const visible = weekLine!.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+    const barStart = visible.indexOf("\u2591"); // first dim cell
+    const markerPos = visible.indexOf("\u2502");
+    expect(barStart).toBeGreaterThanOrEqual(0);
+    expect(markerPos).toBeGreaterThan(barStart);
   });
 
   it("renders an empty sonnet bar with marker when sonnet bucket is null but weekly is present", async () => {
