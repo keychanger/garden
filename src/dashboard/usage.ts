@@ -336,38 +336,38 @@ function renderMeterLine(
   return `${INDENT}${paddedLabel}  ${bar}  ${pctText}${resetPart}${suffix}`;
 }
 
+// Unicode 1/8 left blocks: index = sub-cells filled (0..7).
+const PARTIAL_BLOCKS = ["", "\u258F", "\u258E", "\u258D", "\u258C", "\u258B", "\u258A", "\u2589"];
+const SUB_CELLS_PER_CELL = 8;
+
 function renderBar(pct: number, barWidth: number, markerPct?: number): string {
-  const raw = (pct / 100) * barWidth;
-  const filled = pct > 0 ? Math.max(1, Math.round(raw)) : 0;
-  const clamped = Math.max(0, Math.min(barWidth, filled));
-  const color = colorForPct(pct);
-  const fg = "\x1b[" + color + "m";
+  const totalSubCells = Math.max(0, Math.min(
+    barWidth * SUB_CELLS_PER_CELL,
+    Math.round((pct / 100) * barWidth * SUB_CELLS_PER_CELL),
+  ));
+  const fullCells = Math.floor(totalSubCells / SUB_CELLS_PER_CELL);
+  const partialSubCells = totalSubCells % SUB_CELLS_PER_CELL;
+
+  const fg = `\x1b[${colorForPct(pct)}m`;
   const rst = "\x1b[0m";
-
-  if (markerPct == null || !Number.isFinite(markerPct)) {
-    return `${fg}${"\u2588".repeat(clamped)}${rst}${dim("\u2591".repeat(barWidth - clamped))}`;
-  }
-
-  const markerIdx = Math.max(0, Math.min(barWidth - 1,
-    Math.round((markerPct / 100) * (barWidth - 1))));
   const bright = "\x1b[97m";
 
-  // The marker occupies its own cell; green fills before it and spills past it.
-  // Any clamped cells that don't fit before the marker appear after it, so the
-  // total visible green count always equals `clamped` (the marker never eats a cell).
-  const beforeFilled = Math.min(clamped, markerIdx);
-  const beforeEmpty = markerIdx - beforeFilled;
-  const afterStart = markerIdx + 1;
-  const afterFilled = Math.max(0, Math.min(clamped - beforeFilled, barWidth - afterStart));
-  const afterEmpty = barWidth - afterStart - afterFilled;
+  const markerIdx = (markerPct != null && Number.isFinite(markerPct))
+    ? Math.max(0, Math.min(barWidth - 1, Math.round((markerPct / 100) * (barWidth - 1))))
+    : -1;
 
   let result = "";
-  if (beforeFilled > 0) result += `${fg}${"\u2588".repeat(beforeFilled)}${rst}`;
-  if (beforeEmpty > 0) result += dim("\u2591".repeat(beforeEmpty));
-  result += `${bright}\u2502${rst}`;
-  if (afterFilled > 0) result += `${fg}${"\u2588".repeat(afterFilled)}${rst}`;
-  if (afterEmpty > 0) result += dim("\u2591".repeat(afterEmpty));
-
+  for (let i = 0; i < barWidth; i++) {
+    if (i === markerIdx) {
+      result += `${bright}\u2502${rst}`;
+    } else if (i < fullCells) {
+      result += `${fg}\u2588${rst}`;
+    } else if (i === fullCells && partialSubCells > 0) {
+      result += `${fg}${PARTIAL_BLOCKS[partialSubCells]}${rst}`;
+    } else {
+      result += dim("\u2591");
+    }
+  }
   return result;
 }
 
