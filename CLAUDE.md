@@ -96,6 +96,24 @@ garden claude-profile remove imp               # refuses while any project still
 
 A project's claudeProfile is injected as `CLAUDE_CONFIG_DIR` whenever its worker, reviewer, resolver, or `_dashboard-claude` session spawns. Hooks in `.claude/settings.local.json` shell out to garden and intentionally do not depend on the override. The dashboard usage meter is not split per-profile: Anthropic's `/api/oauth/usage` aggregates by user identity, so two workspace tokens tied to the same email return identical data — a per-profile bar would just mirror `week`. Whatever per-workspace quota the alternate plan has is visible only via the org owner's admin dashboard.
 
+### Auth recovery
+
+OAuth tokens expire roughly weekly. When a worker hits an expired token it'll prompt for `/login`. Use `garden login` rather than typing `claude /login` directly — `garden login` strips `CLAUDE_CONFIG_DIR` from the spawned env, so it's safe to invoke from anywhere (including inside a profile-tagged worker pane, where a raw `claude /login` would be routed at the wrong config dir).
+
+```bash
+garden login            # personal expired — re-auths the default account
+garden login imp        # profile expired — re-auths imp, captures the macOS Keychain
+                        # entry to ~/.claude-imp/.credentials.json, and reminds you to
+                        # follow up with 'garden login' so the Keychain holds personal again
+garden auth status      # diagnostic table: shows where each credential lives, when it
+                        # expires, and detects Keychain displacement (keychain matching a
+                        # profile's file means a profile login displaced the personal token)
+```
+
+`garden claude-profile login <name>` is kept as an alias for `garden login <name>`.
+
+The macOS Keychain footgun: Claude Code on macOS persists every login to one shared Keychain entry (`Claude Code-credentials`), regardless of `CLAUDE_CONFIG_DIR`. The capture-keychain-to-file step inside `garden login <profile>` is the only way to keep two distinct credential sets — without it, every profile login silently overwrites the personal token in the Keychain.
+
 ## Adding a new command
 
 1. Create `src/commands/<name>.ts` exporting an async function that takes `args: string[]`

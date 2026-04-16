@@ -18,6 +18,8 @@ import { reorder } from "./reorder.js";
 import { kick } from "./kick.js";
 import { rules } from "./rules.js";
 import { claudeProfile } from "./claude-profile.js";
+import { login } from "./login.js";
+import { auth } from "./auth.js";
 
 type Command = (args: string[]) => Promise<void>;
 
@@ -42,4 +44,6 @@ export const commands: Record<string, Command> = {
   kick,
   rules,
   "claude-profile": claudeProfile,
+  login,
+  auth,
 };

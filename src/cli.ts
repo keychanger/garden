@@ -66,6 +66,10 @@ Projects:
   claude-profile [list|add|remove|login]
                                  Manage alternate Claude config dirs (per-project plan)
 
+Auth:
+  login [profile]                Re-authenticate Claude (personal, or a profile)
+  auth status                    Show which Claude credentials are present and where
+
 Development:
   test [project] [-- args]       Run project tests (npm test)
 

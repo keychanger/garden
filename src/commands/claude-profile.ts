@@ -1,11 +1,10 @@
-import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
 import {
   loadConfig, saveConfig, expandHome,
   type ClaudeProfile, type GardenConfig,
 } from "../config.js";
 import { isTTY } from "../output.js";
+import { login } from "./login.js";
 
 export async function claudeProfile(args: string[]): Promise<void> {
   const sub = args[0] ?? "list";
@@ -132,63 +131,6 @@ function handleRemove(args: string[]): void {
 async function handleLogin(args: string[]): Promise<void> {
   const name = args[0];
   if (!name) throw new Error(`Usage: garden claude-profile login <name>`);
-  const cfg = loadConfig();
-  const profile = cfg.claudeProfiles?.[name];
-  if (!profile) throw new Error(`Unknown profile: ${name}. Add it with 'garden claude-profile add ${name}'.`);
-
-  const configDir = expandHome(profile.configDir);
-  fs.mkdirSync(configDir, { recursive: true });
-
-  console.log(`Launching: CLAUDE_CONFIG_DIR=${configDir} claude /login`);
-  console.log(`Pick the workspace bound to the '${name}' plan when prompted.`);
-  console.log(`Your personal ~/.claude credentials are NOT touched.`);
-
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn("claude", ["/login"], {
-      stdio: "inherit",
-      env: {
-        ...process.env,
-        CLAUDE_CONFIG_DIR: configDir,
-      },
-    });
-    child.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`claude /login exited with code ${code}`));
-    });
-    child.on("error", (err) => reject(err));
-  });
-
-  const credFile = path.join(configDir, ".credentials.json");
-  if (fs.existsSync(credFile)) {
-    console.log(`Credentials written to ${credFile}`);
-    return;
-  }
-
-  // Keychain uses a single shared service name, ignoring CLAUDE_CONFIG_DIR — capture to file to avoid collisions.
-  if (process.platform === "darwin" && captureKeychainTo(credFile)) {
-    console.log(`macOS keychain detected — captured token to ${credFile}.`);
-    console.log(`IMPORTANT: the keychain currently holds the '${name}' token, which displaced your personal account.`);
-    console.log(`Run 'claude /login' (no env) now to re-authenticate your default account and restore the keychain.`);
-    return;
-  }
-
-  console.log(`Warning: ${credFile} not found after login. Claude may not have written credentials.`);
-}
-
-function captureKeychainTo(credFile: string): boolean {
-  try {
-    const raw = execFileSync(
-      "security",
-      ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-    ).trim();
-    if (!raw) return false;
-    fs.mkdirSync(path.dirname(credFile), { recursive: true });
-    const tmp = `${credFile}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(tmp, raw, { mode: 0o600 });
-    fs.renameSync(tmp, credFile);
-    return true;
-  } catch {
-    return false;
-  }
+  // Delegate to `garden login <name>` so both entry points share one path.
+  await login([name]);
 }
