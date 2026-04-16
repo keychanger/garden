@@ -223,7 +223,12 @@ recurring re-check, or "fallback poll."
    states take priority over what Claude is doing — they represent
    in-progress pipeline work. `merged` persists only until the worker
    receives new input, then clears immediately. There is no "merged
-   history" — each cycle is independent.
+   history" — each cycle is independent. Race case: if the worker
+   received new input while the merge cycle was in progress, the prompt
+   hook cannot clear "merged" (because prState was still an active
+   pipeline state at prompt time). `finalizeMerge` handles this by
+   checking `claudeStatus` after setting "merged" — if the worker is
+   already working, it transitions immediately to "working".
 
 5. **There is no `pushed` state.** Earlier versions of this system carried
    an internal `pushed` lifecycle state between "commits exist" and
