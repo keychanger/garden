@@ -626,6 +626,24 @@ export function respawnStatusPane(state: DashboardState): void {
   try { tmux("clear-history", "-t", state.statusPaneId); } catch { /* ignore */ }
 }
 
+// The logs pane runs `garden logs --follow`, a long-lived Node process that
+// caches the pre-rebuild bundle in memory. After a rebuild, respawn it so the
+// new code takes effect — mirrors what restartLongLivedPollers does for the
+// usage/project pollers.
+export function respawnLogsPane(state: DashboardState): void {
+  let target: string | null = null;
+  if (state.gardenWindowName === "_garden-logs" && state.gardenShellPaneId) {
+    target = state.gardenShellPaneId;
+  } else {
+    try { target = getFirstPaneId(`${DASHBOARD_SESSION}:_garden-logs`); } catch { /* window doesn't exist */ }
+  }
+  if (!target) return;
+  const scriptFile = writeLogsScript();
+  try {
+    tmux("respawn-pane", "-k", "-t", target, "sh", "-c", `sh ${shellEscape(scriptFile)}`);
+  } catch { /* pane gone */ }
+}
+
 export function resolveGardenRunner(): string {
   const gardenBin = path.resolve(process.argv[1]);
   if (gardenBin.endsWith(".ts")) {
