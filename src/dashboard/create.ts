@@ -177,7 +177,7 @@ export function ensureDashboard(): void {
     "sh", "-c", usageCmd);
   try { tmux("resize-pane", "-t", usageId, "-y", String(USAGE_PANE_HEIGHT)); } catch { /* ignore */ }
   try { tmux("clear-history", "-t", usageId); } catch { /* ignore */ }
-  // Splitting shrinks status pane — flush scrollback so it stays non-scrollable.
+  // Splitting shrinks status pane — flush the ghost rows pushed into scrollback by the resize.
   try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
 
   setPaneTitle(usageId, "usage");
