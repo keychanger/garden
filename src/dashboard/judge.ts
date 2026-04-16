@@ -1,10 +1,11 @@
-// Fail-closed: judge can only emit "allow" — any error/timeout/uncertainty falls through to normal permission flow.
+// Fail-closed: judge can only emit "allow" — uncertain verdicts emit "deny" with an operator alert.
 import fs from "node:fs";
 import https from "node:https";
 import path from "node:path";
 import { SESSIONS_DIR } from "../config.js";
 import { loadCredential } from "./usage.js";
 import { log } from "./log.js";
+import { addAlert } from "./alerts.js";
 
 export const JUDGE_LOG = path.join(SESSIONS_DIR, "judge.log");
 const MODEL = "claude-haiku-4-5-20251001";
@@ -181,6 +182,34 @@ function emitAllow(reason: string): void {
   }));
 }
 
+function emitDeny(reason: string): void {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: `judge: ${reason}`,
+    },
+  }));
+}
+
+function alertOnDeny(_session: string | null, cwd: string | null, cmd: string, reason: string): void {
+  try {
+    addAlert({
+      level: "warn",
+      source: "judge",
+      project: detectProjectFromCwd(cwd),
+      message: `Blocked command (${reason}): ${cmd.slice(0, 200)}`,
+    });
+  } catch { /* best-effort — never block the hook on alert failure */ }
+}
+
+function detectProjectFromCwd(cwd: string | null): string {
+  if (!cwd) return "unknown";
+  // Worktree paths follow ~/.garden/worktrees/<project>/<worker>/...
+  const match = cwd.match(/\.garden\/worktrees\/([^/]+)\//);
+  return match ? match[1] : "unknown";
+}
+
 export async function judgeBashHook(): Promise<void> {
   const started = Date.now();
   const raw = await readStdin();
@@ -213,6 +242,7 @@ export async function judgeBashHook(): Promise<void> {
       reason: "no credential",
       latencyMs: Date.now() - started,
     });
+    emitDeny("no credential available to evaluate command");
     return;
   }
 
@@ -228,5 +258,8 @@ export async function judgeBashHook(): Promise<void> {
 
   if (verdict.decision === "allow") {
     emitAllow(verdict.reason);
+  } else {
+    emitDeny(verdict.reason);
+    alertOnDeny(session, cwd, cmd, verdict.reason);
   }
 }
