@@ -987,11 +987,8 @@ function finalizeMerge(
     lastResolveBody: undefined,
   });
 
-  // Race: the worker may have received new input (UserPromptSubmit) while the
-  // review/merge cycle was in progress. The prompt hook only clears "merged"
-  // prState, so it couldn't clear "reviewing"/"merge-pending" at the time.
-  // If Claude is already working, skip the sticky "merged" display and go
-  // straight to "working" — the merge succeeded, but the worker has moved on.
+  // STATUS.md invariant 4 race: prompt hook can't clear active pipeline states,
+  // so if the worker is already working, clear the stale "merged" immediately.
   const fresh = findWorkerByName(projectName, entry.name);
   if (fresh?.claudeStatus === "working") {
     log.info("poller", "worker already active after merge, clearing merged state", {

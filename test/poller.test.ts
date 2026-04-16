@@ -602,6 +602,56 @@ describe("poll — merge-pending state", () => {
     );
   });
 
+  it("clears merged to working when worker is already active (race)", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        claudeStatus: "working",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue("ok");
+    vi.mocked(fastForwardBase).mockReturnValue(true);
+
+    poll("myproject");
+
+    // finalizeMerge should detect the race and clear "merged" immediately.
+    const calls = vi.mocked(updateWorkerFields).mock.calls.filter(
+      c => c[1] === "bold-ash",
+    );
+    // First call sets "merged", second clears it to "working".
+    const mergedCall = calls.find(c => (c[2] as Record<string, unknown>).prState === "merged");
+    const workingCall = calls.find(c => (c[2] as Record<string, unknown>).prState === "working");
+    expect(mergedCall).toBeDefined();
+    expect(workingCall).toBeDefined();
+    expect((workingCall![2] as Record<string, unknown>).mergedAt).toBeUndefined();
+    expect(log.info).toHaveBeenCalledWith(
+      "poller", "worker already active after merge, clearing merged state",
+      expect.objectContaining({ worker: "bold-ash" }),
+    );
+  });
+
+  it("keeps merged when worker is idle (no race)", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        claudeStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue("ok");
+    vi.mocked(fastForwardBase).mockReturnValue(true);
+
+    poll("myproject");
+
+    const calls = vi.mocked(updateWorkerFields).mock.calls.filter(
+      c => c[1] === "bold-ash",
+    );
+    // Only the "merged" transition — no follow-up "working" clear.
+    expect(calls).toHaveLength(1);
+    expect((calls[0][2] as Record<string, unknown>).prState).toBe("merged");
+  });
+
   it("runs postMerge and logs checkout HEAD when fastForwardBase advances", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
