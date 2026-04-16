@@ -10,7 +10,7 @@ import { buildRulesContext, buildWorktreeRules } from "../rules.js";
 import { type DashboardState, readDashState, writeDashState, STATE_FILE } from "./state.js";
 import { restoreFromHidden } from "./layout.js";
 import { setupKeybindings } from "./hotkeys.js";
-import { setupStatusBar, buildStatusCommand, buildUsageCommand, updateHeaderVar } from "./header.js";
+import { setupStatusBar, buildStatusCommand, buildUsageCommand, updateHeaderVar, installInputGuard } from "./header.js";
 import { renderQuickStatus } from "../commands/status.js";
 import {
   tmux, tmuxOutput, tmuxSplit, setPaneTitle, setPaneLabel, setPaneVar,
@@ -130,6 +130,9 @@ export function ensureDashboard(): void {
     // windows sit at full session width and the first swap causes jitter.
     presizeHiddenWindows(healed);
 
+    // Re-install on reattach so dashboards from older builds pick up the guard.
+    installInputGuard(healed);
+
     return;
   }
 
@@ -233,6 +236,7 @@ export function ensureDashboard(): void {
 
   writeDashState(state);
   updateHeaderVar();
+  installInputGuard(state);
 
   if (!firstProject) {
     tmux("send-keys", "-t", rightPaneId,

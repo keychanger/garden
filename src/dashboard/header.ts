@@ -138,6 +138,21 @@ function suppressWindowNames(): void {
   } catch { /* session gone */ }
 }
 
+// The status and usage panes run an interruptible-sleep loop with no shell
+// prompt — keystrokes go to /dev/null, but focus on those panes still steals
+// input from whatever the user actually meant to type into. This hook bounces
+// focus from either pane back to the right column. `select-pane -R` is
+// layout-relative: it always lands on the (single) right-column pane no matter
+// which content is currently swapped into it.
+export function installInputGuard(state: DashboardState): void {
+  if (!state.statusPaneId || !state.usagePaneId) return;
+  const condition = `#{||:#{==:#{pane_id},${state.statusPaneId}},#{==:#{pane_id},${state.usagePaneId}}}`;
+  try {
+    tmux("set-hook", "-t", DASHBOARD_SESSION, "pane-focus-in",
+      `if-shell -F "${condition}" "select-pane -R"`);
+  } catch { /* hooks may not be supported on very old tmux */ }
+}
+
 
 // ---------------------------------------------------------------------------
 // Claude hook handler
