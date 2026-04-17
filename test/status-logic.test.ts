@@ -189,12 +189,14 @@ describe("lifecycle state display (prState takes priority)", () => {
     expect(lines.some(l => l.includes("merging"))).toBe(true);
   });
 
-  it("shows failing without count", async () => {
+  it("shows failing without count and wraps the row in bold-red", async () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "failing", failCount: 3 },
     ]);
     const lines = await captureConsoleLog(() => status([]));
-    expect(lines.some(l => l.includes("failing"))).toBe(true);
+    const failingLine = lines.find(l => l.includes("failing") && l.includes("bold-ash"));
+    expect(failingLine).toBeDefined();
+    expect(failingLine).toMatch(/\x1b\[1;31m/);
   });
 
   it("shows merged from prState", async () => {
@@ -258,6 +260,23 @@ describe("renderQuickStatus", () => {
     const result = renderQuickStatus(state);
     // bold-yellow is asking-only; an idle row must not carry it
     expect(result).not.toMatch(/\x1b\[1;33m[^\n]*bold-ash/);
+  });
+
+  it("renders failing rows wrapped in bold-red ANSI", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "failing" },
+    ]);
+    const result = renderQuickStatus(state);
+    expect(result).toContain("failing");
+    expect(result).toMatch(/\x1b\[1;31m[^\n]*bold-ash[^\n]*\x1b\[0m/);
+  });
+
+  it("does not wrap non-failing rows in bold-red", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "idle" },
+    ]);
+    const result = renderQuickStatus(state);
+    expect(result).not.toMatch(/\x1b\[1;31m[^\n]*bold-ash/);
   });
 
   it("renders reviewing even if claudeStatus is working", () => {
