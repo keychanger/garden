@@ -165,6 +165,7 @@ function formatStatus(worker: WorkerInfo): string {
 function colorizeRow(status: WorkerStatus, line: string): string {
   if (status === "asking") return `\x1b[1;33m${line}\x1b[0m`;
   if (status === "failing") return `\x1b[1;31m${line}\x1b[0m`;
+  if (status === "merged") return `\x1b[1;32m${line}\x1b[0m`;
   return line;
 }
 
