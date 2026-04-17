@@ -102,7 +102,7 @@ Hidden windows follow the convention: `_<project>-worker-<N>`, `_<project>-shell
 2. Claude launches in the worktree with project rules and worktree workflow instructions
 3. The worker is interactive — you work with it directly
 4. `⌥]`/`⌥[` cycles between workers and shell
-5. `⌥x` kills the focused worker, removes its worktree and branch. If the worktree has uncommitted changes, the first `⌥x` shows a warning and a second `⌥x` within 5 seconds confirms the kill — guarding against silently losing work that the poller never saw because it was never committed
+5. `⌥x` kills the focused worker, removes its worktree and branch. Kills unconditionally — no confirmation, even on dirty worktrees — so a worker stuck in loading or otherwise unresponsive can always be torn down
 6. Switching projects parks everything in hidden windows; switching back restores
 
 ### Poller and Auto-Merge
@@ -305,7 +305,6 @@ All read commands detect whether stdout is a TTY:
     rules-findings.json   # Reviewer findings tally + suggestion status
     dashboard-<project>.context  # System prompt for project's Claude sessions
     dashboard-<project>-<branch>.context  # Worktree worker context
-    dashboard.kill-confirm.json  # Transient double-tap kill confirmation
     dashboard.log           # Structured JSON log
     <project>-poll-signal   # FIFO for waking project pollers
     console-init.zsh              # Garden console init (custom prompt + auto-dispatch)

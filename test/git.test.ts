@@ -23,7 +23,6 @@ import {
   createWorktree,
   removeWorktree,
   worktreeExists,
-  isWorktreeDirty,
   deleteBranch,
   getBranchHeadSha,
   getRemoteTrackingSha,
@@ -134,40 +133,6 @@ describe("worktreeExists", () => {
   it("returns false when .git does not exist", () => {
     mockFs.existsSync.mockReturnValue(false);
     expect(worktreeExists("/tmp/wt")).toBe(false);
-  });
-});
-
-describe("isWorktreeDirty", () => {
-  it("returns true when git status --porcelain has output", () => {
-    mockFs.existsSync.mockReturnValue(true);
-    mockExec.mockReturnValue(" M src/foo.ts\n?? src/new.ts");
-    expect(isWorktreeDirty("/tmp/wt")).toBe(true);
-    expect(mockExec).toHaveBeenCalledWith(
-      "git",
-      ["status", "--porcelain"],
-      expect.objectContaining({ cwd: "/tmp/wt" }),
-    );
-  });
-
-  it("returns false when worktree is clean", () => {
-    mockFs.existsSync.mockReturnValue(true);
-    mockExec.mockReturnValue("");
-    expect(isWorktreeDirty("/tmp/wt")).toBe(false);
-  });
-
-  it("returns false when worktree path does not exist", () => {
-    mockFs.existsSync.mockReturnValue(false);
-    expect(isWorktreeDirty("/tmp/wt")).toBe(false);
-    // Should not invoke git at all when the path is missing.
-    expect(mockExec).not.toHaveBeenCalled();
-  });
-
-  it("returns true when git fails (fail-safe: assume dirty to show kill confirmation)", () => {
-    mockFs.existsSync.mockReturnValue(true);
-    mockExec.mockImplementation(() => {
-      throw new Error("not a git repo");
-    });
-    expect(isWorktreeDirty("/tmp/wt")).toBe(true);
   });
 });
 

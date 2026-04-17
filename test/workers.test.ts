@@ -93,7 +93,6 @@ vi.mock("../src/dashboard/git.js", () => ({
   worktreePath: vi.fn(() => "/home/user/.garden/worktrees/myproject/bold-ash"),
   resolveBaseBranch: vi.fn(() => "main"),
   branchExistsOnOrigin: vi.fn(() => true),
-  isWorktreeDirty: vi.fn(() => false),
 }));
 
 vi.mock("../src/dashboard/poller.js", () => ({
@@ -123,7 +122,7 @@ import {
   buildWorktreeBootstrapScript, buildWorktreeResumeCommand, buildResumeCommand,
   createShellWindow, resolveGardenRunner, installClaudeHooks,
 } from "../src/dashboard/create.js";
-import { worktreePath, resolveBaseBranch, isWorktreeDirty, branchExistsOnOrigin } from "../src/dashboard/git.js";
+import { worktreePath, resolveBaseBranch, branchExistsOnOrigin } from "../src/dashboard/git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "../src/dashboard/poller.js";
 import { workerWindowName as workerWin, shellWindowName as shellWin, parseWorkerSuffix } from "../src/dashboard/window-names.js";
 import { getProject } from "../src/config.js";
@@ -157,7 +156,6 @@ beforeEach(() => {
   vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
   vi.mocked(getWorkers).mockReturnValue([]);
   vi.mocked(findWorkerByName).mockReturnValue(null);
-  vi.mocked(isWorktreeDirty).mockReturnValue(false);
   vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 50 });
   vi.mocked(fs.readFileSync).mockImplementation(() => { throw new Error("ENOENT"); });
 });
@@ -576,102 +574,13 @@ describe("killPane", () => {
 });
 
 // =============================================================================
-// killPane — dirty worktree double-tap confirmation
+// killPane — always kills unconditionally
 // =============================================================================
 
-describe("killPane dirty worktree double-tap", () => {
-  function setupDirtyWorker() {
+describe("killPane always kills", () => {
+  it("kills a dirty worktree without any confirmation prompt", () => {
     const state = makeState();
     vi.mocked(readDashState).mockReturnValue(state);
-    vi.mocked(isWorktreeDirty).mockReturnValue(true);
-
-    vi.mocked(findWorkerByName).mockReturnValue({
-      name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak",
-      worktreePath: "/wt/swift-oak",
-    });
-    return state;
-  }
-
-  it("first tap on dirty worktree prompts and does not kill", () => {
-    setupDirtyWorker();
-
-    killPane();
-
-    expect(vi.mocked(tmuxDisplay)).toHaveBeenCalledWith(
-      expect.stringContaining("uncommitted changes"),
-    );
-    expect(vi.mocked(removeWorker)).not.toHaveBeenCalled();
-    expect(vi.mocked(fs.writeFileSync)).toHaveBeenCalled();
-  });
-
-  it("second tap within timeout confirms and kills", () => {
-    setupDirtyWorker();
-    vi.mocked(getFirstPaneId).mockReturnValue("%25");
-
-    // Simulate existing confirm file with recent timestamp
-    vi.mocked(fs.readFileSync).mockReturnValue(
-      JSON.stringify({ workerName: "swift-oak", timestamp: Date.now() }),
-    );
-
-    killPane();
-
-    // Should NOT show warning — should proceed to kill
-    expect(vi.mocked(tmuxDisplay)).not.toHaveBeenCalledWith(
-      expect.stringContaining("uncommitted changes"),
-    );
-    expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "swift-oak");
-    // Should clear the confirm file
-    expect(vi.mocked(fs.unlinkSync)).toHaveBeenCalled();
-  });
-
-  it("stale timeout re-prompts instead of killing", () => {
-    setupDirtyWorker();
-
-    // Simulate existing confirm file with old timestamp (6 seconds ago)
-    vi.mocked(fs.readFileSync).mockReturnValue(
-      JSON.stringify({ workerName: "swift-oak", timestamp: Date.now() - 6000 }),
-    );
-
-    killPane();
-
-    expect(vi.mocked(tmuxDisplay)).toHaveBeenCalledWith(
-      expect.stringContaining("uncommitted changes"),
-    );
-    expect(vi.mocked(removeWorker)).not.toHaveBeenCalled();
-  });
-
-  it("different worker name re-prompts instead of confirming", () => {
-    setupDirtyWorker();
-
-    // Simulate confirm file for a different worker
-    vi.mocked(fs.readFileSync).mockReturnValue(
-      JSON.stringify({ workerName: "other-worker", timestamp: Date.now() }),
-    );
-
-    killPane();
-
-    expect(vi.mocked(tmuxDisplay)).toHaveBeenCalledWith(
-      expect.stringContaining("uncommitted changes"),
-    );
-    expect(vi.mocked(removeWorker)).not.toHaveBeenCalled();
-  });
-
-  it("force flag skips dirty check entirely", () => {
-    setupDirtyWorker();
-    vi.mocked(getFirstPaneId).mockReturnValue("%25");
-
-    killPane({ force: true });
-
-    expect(vi.mocked(tmuxDisplay)).not.toHaveBeenCalledWith(
-      expect.stringContaining("uncommitted changes"),
-    );
-    expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "swift-oak");
-  });
-
-  it("clean worktree kills immediately without prompting", () => {
-    const state = makeState();
-    vi.mocked(readDashState).mockReturnValue(state);
-    vi.mocked(isWorktreeDirty).mockReturnValue(false);
     vi.mocked(getFirstPaneId).mockReturnValue("%25");
 
     vi.mocked(findWorkerByName).mockReturnValue({

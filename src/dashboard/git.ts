@@ -89,20 +89,6 @@ export function worktreeExists(wtPath: string): boolean {
   }
 }
 
-// Returns true if the worktree has any uncommitted changes — modified,
-// staged, or untracked files. Returns false only when the worktree is
-// confirmed clean. Returns true on git failure (fail-safe: assume dirty so
-// the kill confirmation prompt is shown rather than silently destroying work).
-export function isWorktreeDirty(wtPath: string): boolean {
-  if (!worktreeExists(wtPath)) return false;
-  try {
-    const out = git(wtPath, "status", "--porcelain");
-    return out.length > 0;
-  } catch {
-    return true;
-  }
-}
-
 export function deleteBranch(repoPath: string, branchName: string): void {
   try {
     git(repoPath, "branch", "-D", branchName);

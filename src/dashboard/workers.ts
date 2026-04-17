@@ -1,10 +1,8 @@
 // Worker lifecycle: creation and destruction of Claude worker sessions.
 import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
 import { spawn } from "node:child_process";
 import { DASHBOARD_SESSION } from "../session.js";
-import { getProject, tryGetProject, SESSIONS_DIR } from "../config.js";
+import { getProject, tryGetProject } from "../config.js";
 import { readDashState, writeDashState, withStateLock } from "./state.js";
 import { parkToHidden, restoreFromHidden } from "./layout.js";
 import { refreshDashboard } from "./header.js";
@@ -24,28 +22,9 @@ import {
   buildWorktreeBootstrapScript, buildWorktreeResumeCommand, buildResumeCommand,
   createShellWindow, resolveGardenRunner, installClaudeHooks,
 } from "./create.js";
-import { worktreePath, resolveBaseBranch, isWorktreeDirty, branchExistsOnOrigin } from "./git.js";
+import { worktreePath, resolveBaseBranch, branchExistsOnOrigin } from "./git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
 import { workerWindowName as workerWin, parkingWindowName, shellWindowName as shellWin, parseWorkerSuffix } from "./window-names.js";
-
-const KILL_CONFIRM_FILE = path.join(SESSIONS_DIR, "dashboard.kill-confirm.json");
-const KILL_CONFIRM_TIMEOUT_MS = 5000;
-
-function readKillConfirm(): { workerName: string; timestamp: number } | null {
-  try {
-    return JSON.parse(fs.readFileSync(KILL_CONFIRM_FILE, "utf-8"));
-  } catch { return null; }
-}
-
-function writeKillConfirm(workerName: string): void {
-  const tmpFile = `${KILL_CONFIRM_FILE}.${process.pid}.tmp`;
-  fs.writeFileSync(tmpFile, JSON.stringify({ workerName, timestamp: Date.now() }));
-  fs.renameSync(tmpFile, KILL_CONFIRM_FILE);
-}
-
-function clearKillConfirm(): void {
-  try { fs.unlinkSync(KILL_CONFIRM_FILE); } catch { /* ignore */ }
-}
 
 export function newWorker(): void {
   withStateLock(() => {
@@ -129,7 +108,7 @@ export function newWorker(): void {
   });
 }
 
-export function killPane(opts: { force?: boolean } = {}): void {
+export function killPane(): void {
   // Declare cleanup vars outside the lock so backgroundGitCleanup can run
   // after the lock is released — it only spawns a child process and does not
   // touch state.
@@ -158,34 +137,6 @@ export function killPane(opts: { force?: boolean } = {}): void {
     const killedWindowName = state.activeWindowName;
     const workerWindows = listHiddenWorkerWindows(state.activeProject);
     const project = getProject(state.activeProject);
-
-    // Guard against silently destroying uncommitted work. The poller is blind
-    // to anything that hasn't been committed, so a worker that did substantive
-    // work but never ran `git commit` looks identical to an empty worker.
-    // Without this check, ⌥x on a dirty worker tears down the worktree and
-    // the work is gone with no recovery path.
-    //
-    // Uses a double-tap pattern: first ⌥x shows a warning, second ⌥x within
-    // 5 seconds confirms the kill. This avoids tmux confirm-before which
-    // silently fails when its run-shell callback can't launch a new process.
-    if (!opts.force && killedWindowName && state.activeProject) {
-      const workerName = parseWorkerSuffix(killedWindowName);
-      if (workerName) {
-        const entry = findWorkerByName(state.activeProject, workerName);
-        if (entry?.worktreePath && isWorktreeDirty(entry.worktreePath)) {
-          const pending = readKillConfirm();
-          if (pending && pending.workerName === workerName
-              && (Date.now() - pending.timestamp) < KILL_CONFIRM_TIMEOUT_MS) {
-            clearKillConfirm();
-            // Fall through to kill
-          } else {
-            writeKillConfirm(workerName);
-            tmuxDisplay(`Worker '${workerName}' has uncommitted changes. ⌥x again to force kill.`);
-            return;
-          }
-        }
-      }
-    }
 
     if (workerWindows.length > 0) {
       const targetWindow = workerWindows[0];
