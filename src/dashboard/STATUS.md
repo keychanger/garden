@@ -337,17 +337,20 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   events across every tool, not just Bash. No operator alert fires —
   the `asking` status (yellow row in the status pane) is the signal;
   the bottom-bar alert badge is reserved for failures and errors.
-- `PostToolUse` (matched to `AskUserQuestion`, `ExitPlanMode`, `Bash`) →
+- `PostToolUse` (no matcher — fires for all tools) →
   `claudeStatus = "working"` if currently `asking` or `idle`. Fires
-  when the user has responded and Claude resumes processing. The `Bash`
-  match is what restores `working` after the operator approves an
-  auto-mode permission prompt — without it the worker would stay stuck
-  at `asking` for the rest of the turn. The `idle` path is a self-heal:
-  a tool-use event arriving while `idle` means the turn is actually
-  active and the registry state is stale (e.g. survived a build
-  migration that left `idle` behind). The practical risk — a stray
-  Bash PostToolUse flipping a genuinely-ended turn back to `working` —
-  is a brief flicker; the next `Stop` re-idles within one tool round.
+  when the user has responded and Claude resumes processing. The
+  catch-all matcher is what restores `working` after the operator
+  approves an auto-mode permission prompt — auto-mode escalates any
+  tool the classifier flags (Write, Edit, Read, Bash, WebFetch, ...),
+  so a narrower matcher would leave the worker stuck at `asking` for
+  the rest of the turn whenever the escalated tool was not in the
+  matcher list. The `idle` path is a self-heal: a tool-use event
+  arriving while `idle` means the turn is actually active and the
+  registry state is stale (e.g. survived a build migration that left
+  `idle` behind). The practical risk — a stray PostToolUse flipping a
+  genuinely-ended turn back to `working` — is a brief flicker; the
+  next `Stop` re-idles within one tool round.
 
 **The poller** writes `prState` in response to the events documented in
 "How transitions are detected." The poller is the only writer of

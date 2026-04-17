@@ -61,15 +61,10 @@ function buildSettingsJson(gardenRunner: string, sandbox: SandboxConfig): string
         hooks: [{ type: "command", command: `${hookCmd} pretooluse`, timeout: 5 }],
       }],
       PostToolUse: [{
-        matcher: "AskUserQuestion",
-        hooks: [{ type: "command", command: `${hookCmd} posttooluse`, timeout: 5 }],
-      }, {
-        matcher: "ExitPlanMode",
-        hooks: [{ type: "command", command: `${hookCmd} posttooluse`, timeout: 5 }],
-      }, {
-        // Resumes "working" after the operator approves an auto-mode
-        // permission prompt (PermissionRequest flipped us to "asking").
-        matcher: "Bash",
+        // Catch-all: auto-mode escalates any tool the classifier flags (Write,
+        // Edit, Read, Bash, WebFetch, ...), not just Bash — so we need to see
+        // every tool completion to clear "asking" after the operator approves.
+        matcher: "",
         hooks: [{ type: "command", command: `${hookCmd} posttooluse`, timeout: 5 }],
       }],
     },

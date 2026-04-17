@@ -197,14 +197,14 @@ describe("installClaudeHooks", () => {
     expect(permReq.hooks[0].command).toContain("_claude-hook pretooluse");
   });
 
-  it("registers a Bash PostToolUse hook so idle flips back to working after approval", () => {
+  it("registers a catch-all PostToolUse hook so asking flips back to working after any tool completes", () => {
     process.argv[1] = "/usr/local/bin/garden";
     installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
     const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
     const parsed = JSON.parse(written);
-    const bashPost = parsed.hooks.PostToolUse.find((h: { matcher: string }) => h.matcher === "Bash");
-    expect(bashPost).toBeDefined();
-    expect(bashPost.hooks[0].command).toContain("_claude-hook posttooluse");
+    const catchAll = parsed.hooks.PostToolUse.find((h: { matcher: string }) => h.matcher === "");
+    expect(catchAll).toBeDefined();
+    expect(catchAll.hooks[0].command).toContain("_claude-hook posttooluse");
   });
 
   it("sets permissions.defaultMode to auto so workers start in Claude's auto-mode classifier", () => {
