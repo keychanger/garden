@@ -12,7 +12,7 @@ import { ALERTS_FILE } from "./alerts.js";
 import { printHeader, handleClaudeHook, handlePaneDied, handleTitleChanged } from "./header.js";
 import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
-import { newWorker, killPane } from "./workers.js";
+import { newWorker, killPane, bounceActiveWorker } from "./workers.js";
 import { switchProject, focusWorker, focusShell, focusGarden, focusRoot, focusLogs, cyclePane } from "./navigate.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
 import { runUsagePollerLoop, stopUsagePoller } from "./usage-poller.js";
@@ -51,6 +51,7 @@ export async function dashboard(args: string[]): Promise<void> {
   if (sub === "_focus-logs") return focusLogs();
   if (sub === "_cycle-pane") return cyclePane(args[1] === "prev" ? -1 : 1);
   if (sub === "_kill-pane") return killPane({ force: args.includes("--force") });
+  if (sub === "_bounce") return bounceActiveWorker();
   if (sub === "_poll") {
     poll(args[1]);
     return;
@@ -140,6 +141,7 @@ Hotkeys (⌥ = Option/Alt, no prefix needed):
   ⌥s           Jump to project shell
   ⌥] / ⌥[     Cycle workers and shell
   ⌥x           Kill current worker (shell is protected)
+  ⌥b           Bounce current worker (restart Claude, preserve session history)
   ⌥g           Focus garden (console with garden> prompt)
   ⌥r           Focus root shell
   ⌥l           Focus logs

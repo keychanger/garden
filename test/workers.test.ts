@@ -28,6 +28,7 @@ vi.mock("../src/session.js", () => ({
 
 vi.mock("../src/config.js", () => ({
   getProject: vi.fn(() => ({ name: "myproject", path: "/repo/myproject" })),
+  tryGetProject: vi.fn(() => ({ name: "myproject", path: "/repo/myproject" })),
   SESSIONS_DIR: "/tmp/fake-sessions",
 }));
 
@@ -72,6 +73,7 @@ vi.mock("../src/dashboard/registry.js", () => ({
   findWorkerByName: vi.fn(() => null),
   getAllWorkerNames: vi.fn(() => []),
   getWorkers: vi.fn(() => []),
+  updateWorkerFields: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/log.js", () => ({
@@ -80,6 +82,8 @@ vi.mock("../src/dashboard/log.js", () => ({
 
 vi.mock("../src/dashboard/create.js", () => ({
   buildWorktreeBootstrapScript: vi.fn(() => "/tmp/fake-bootstrap.sh"),
+  buildWorktreeResumeCommand: vi.fn(() => "claude --resume FAKE-ID"),
+  buildResumeCommand: vi.fn(() => "claude --resume FAKE-ID-NW"),
   createShellWindow: vi.fn(),
   resolveGardenRunner: vi.fn(() => "garden"),
 }));
@@ -99,7 +103,7 @@ vi.mock("../src/dashboard/poller.js", () => ({
 
 // --- Imports (after mocks) ---
 
-import { newWorker, killPane } from "../src/dashboard/workers.js";
+import { newWorker, killPane, bounceWorker, bounceActiveWorker } from "../src/dashboard/workers.js";
 import { readDashState, writeDashState, withStateLock } from "../src/dashboard/state.js";
 import { parkToHidden, restoreFromHidden } from "../src/dashboard/layout.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
@@ -112,8 +116,12 @@ import {
 import { generateWorkerName } from "../src/dashboard/names.js";
 import {
   addWorker, removeWorker, findWorkerByName, getAllWorkerNames, getWorkers,
+  updateWorkerFields,
 } from "../src/dashboard/registry.js";
-import { buildWorktreeBootstrapScript, createShellWindow, resolveGardenRunner } from "../src/dashboard/create.js";
+import {
+  buildWorktreeBootstrapScript, buildWorktreeResumeCommand, buildResumeCommand,
+  createShellWindow, resolveGardenRunner,
+} from "../src/dashboard/create.js";
 import { worktreePath, resolveBaseBranch, isWorktreeDirty, branchExistsOnOrigin } from "../src/dashboard/git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "../src/dashboard/poller.js";
 import { workerWindowName as workerWin, shellWindowName as shellWin, parseWorkerSuffix } from "../src/dashboard/window-names.js";
@@ -676,5 +684,120 @@ describe("killPane dirty worktree double-tap", () => {
       expect.stringContaining("uncommitted changes"),
     );
     expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "swift-oak");
+  });
+});
+
+// =============================================================================
+// bounceWorker
+// =============================================================================
+
+describe("bounceWorker", () => {
+  beforeEach(() => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak",
+      sessionId: "sess-abc",
+      task: "",
+      branchName: "swift-oak",
+      worktreePath: "/wt/swift-oak",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState());
+  });
+
+  it("respawns the worker pane with the resume command, preserving pane ID", () => {
+    bounceWorker("myproject", "swift-oak");
+
+    expect(vi.mocked(buildWorktreeResumeCommand)).toHaveBeenCalledWith(
+      "myproject", "/repo/myproject", "swift-oak", "swift-oak", "sess-abc", "main",
+    );
+    const respawnCall = vi.mocked(tmux).mock.calls.find(c => c[0] === "respawn-pane");
+    expect(respawnCall).toBeDefined();
+    expect(respawnCall).toEqual(expect.arrayContaining([
+      "respawn-pane", "-k", "-c", "/wt/swift-oak", "-t", "%2",
+      "sh", "-c", "claude --resume FAKE-ID",
+    ]));
+  });
+
+  it("writes claudeStatus=idle because --resume skips SessionStart", () => {
+    bounceWorker("myproject", "swift-oak");
+
+    expect(vi.mocked(updateWorkerFields)).toHaveBeenCalledWith(
+      "myproject", "swift-oak", { claudeStatus: "idle" },
+    );
+  });
+
+  it("uses the parked-window pane id when the worker is not the active one", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-other",
+      activePaneId: "%99",
+    }));
+    vi.mocked(windowExists).mockReturnValue(true);
+    vi.mocked(getFirstPaneId).mockReturnValue("%77");
+
+    bounceWorker("myproject", "swift-oak");
+
+    const respawnCall = vi.mocked(tmux).mock.calls.find(c => c[0] === "respawn-pane");
+    expect(respawnCall).toContain("%77");
+    expect(respawnCall).not.toContain("%99");
+  });
+
+  it("throws when the worker has no sessionId (can't resume without one)", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: undefined as unknown as string,
+      task: "", branchName: "swift-oak", worktreePath: "/wt/swift-oak",
+    });
+
+    expect(() => bounceWorker("myproject", "swift-oak")).toThrow(/no sessionId/);
+    expect(vi.mocked(tmux)).not.toHaveBeenCalledWith(
+      "respawn-pane", expect.any(String), expect.any(String),
+    );
+  });
+
+  it("throws when the worker is missing from the registry", () => {
+    vi.mocked(findWorkerByName).mockReturnValue(null);
+
+    expect(() => bounceWorker("myproject", "ghost")).toThrow(/No worker 'ghost'/);
+  });
+
+  it("throws when the pane can't be located", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-other",
+    }));
+    vi.mocked(windowExists).mockReturnValue(false);
+
+    expect(() => bounceWorker("myproject", "swift-oak")).toThrow(/no live pane/);
+  });
+});
+
+describe("bounceActiveWorker", () => {
+  it("bounces the active worker pane", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "sess-abc", task: "",
+      branchName: "swift-oak", worktreePath: "/wt/swift-oak",
+    });
+
+    bounceActiveWorker();
+
+    expect(vi.mocked(tmux)).toHaveBeenCalledWith(
+      "respawn-pane", "-k", "-c", "/wt/swift-oak", "-t", "%2",
+      "sh", "-c", "claude --resume FAKE-ID",
+    );
+    expect(vi.mocked(tmuxDisplay)).toHaveBeenCalledWith(expect.stringContaining("Bounced"));
+  });
+
+  it("refuses when the active pane is the project shell", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activePaneType: "shell",
+      activeWindowName: "_myproject-shell",
+    }));
+
+    bounceActiveWorker();
+
+    expect(vi.mocked(tmux)).not.toHaveBeenCalledWith(
+      "respawn-pane", expect.any(String), expect.any(String),
+    );
+    expect(vi.mocked(tmuxDisplay)).toHaveBeenCalledWith(
+      expect.stringContaining("worker panes"),
+    );
   });
 });

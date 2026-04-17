@@ -16,6 +16,7 @@ Garden Dashboard Keybindings (⌥ = Option/Alt)
   Workers
     ⌥n           New worker (Claude session)
     ⌥x           Kill current worker (shell protected)
+    ⌥b           Bounce current worker (restart Claude, preserve history)
 
   General
     ⌥k           Refresh/redraw screen

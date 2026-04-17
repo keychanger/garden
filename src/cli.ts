@@ -92,6 +92,7 @@ Dashboard:
   logs -w <name>                 Filter by worker name
   health                         Check dashboard state consistency
   kick <worker>                  Re-arm a stranded 'working' worker for review
+  bounce <worker>                Restart a worker's Claude process (preserves session history)
   reset                          Clear the worker registry
   rebuild                        Rebuild garden and relaunch dashboard
 

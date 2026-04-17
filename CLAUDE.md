@@ -148,6 +148,7 @@ The dashboard uses a permanent tmux layout with content swapped in and out of pa
 - **Logging** (`src/dashboard/log.ts`): Structured JSON log to `~/.garden/sessions/dashboard.log`. Logs state mutations, swap operations, and validation results.
 - **Health check**: `garden health` diagnoses state/tmux divergence. `garden health --fix` runs the self-healing validator.
 - **Kick**: `garden kick <worker>` re-arms a worker stranded in `working` for review (sets `pendingReviewAt` and pokes the project poller). Use when a reviewer-push race or a crashed poller has left a worker with no event to wake it. Refuses workers whose `prState` is set to a lifecycle state (reviewing, merge-pending, etc.), whose `claudeStatus` is `working` or `asking` (Claude is mid-turn — launching a reviewer would race live commits), or with no commits ahead of base.
+- **Bounce**: `garden bounce <worker>` (or `⌥b` on an active worker pane) kills the Claude process and restarts it via `claude --resume <sessionId>` in the same pane. The conversation history is preserved, but transient session state is dropped — fresh read of `.claude/settings.local.json` (hook config, `permissions.defaultMode`), new permission-mode cycle. Use when a worker is stuck in plan/acceptEdits with no way back to auto, when hook config was changed by a new build, or when Claude has wedged into a bad state. Writes `claudeStatus = "idle"` afterwards (`--resume` skips SessionStart).
 
 ## Worker isolation (worktrees)
 

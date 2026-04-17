@@ -78,6 +78,7 @@ Requires terminal setup: iTerm2 → Profiles → Keys → Left Option key → "E
 | `⌥s` | Jump to project shell |
 | `⌥]` / `⌥[` | Cycle workers and shell |
 | `⌥x` | Kill current worker (shell is protected) |
+| `⌥b` | Bounce current worker (restart Claude via `--resume`, preserve history) |
 | `⌥g` | Focus garden view (lower-left) |
 | `⌥r` | Focus root shell (lower-left) |
 | `⌥l` | Focus logs view (lower-left); also acknowledges the alert badge |

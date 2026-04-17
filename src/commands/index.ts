@@ -16,6 +16,7 @@ import { config } from "./config.js";
 import { focus, unfocus } from "./focus.js";
 import { reorder } from "./reorder.js";
 import { kick } from "./kick.js";
+import { bounce } from "./bounce.js";
 import { rules } from "./rules.js";
 import { claudeProfile } from "./claude-profile.js";
 import { login } from "./login.js";
@@ -42,6 +43,7 @@ export const commands: Record<string, Command> = {
   alerts,
   logs,
   kick,
+  bounce,
   rules,
   "claude-profile": claudeProfile,
   login,

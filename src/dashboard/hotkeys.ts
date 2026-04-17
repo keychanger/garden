@@ -15,6 +15,7 @@ export function setupKeybindings(gardenRunner: string): void {
   bindMeta("n", `${gr} dashboard _new-worker`);
   bindMeta("w", `${gr} dashboard _focus-worker`);
   bindMeta("x", `${gr} dashboard _kill-pane`);
+  bindMeta("b", `${gr} dashboard _bounce`);
 
   // Navigation
   bindMeta("]", `${gr} dashboard _cycle-pane next`);

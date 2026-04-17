@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { DASHBOARD_SESSION } from "../session.js";
-import { getProject, SESSIONS_DIR } from "../config.js";
+import { getProject, tryGetProject, SESSIONS_DIR } from "../config.js";
 import { readDashState, writeDashState, withStateLock } from "./state.js";
 import { parkToHidden, restoreFromHidden } from "./layout.js";
 import { refreshDashboard } from "./header.js";
@@ -17,12 +17,15 @@ import {
 import { generateWorkerName } from "./names.js";
 import {
   addWorker, removeWorker, findWorkerByName, getAllWorkerNames,
+  updateWorkerFields, getWorkers,
 } from "./registry.js";
 import { log } from "./log.js";
-import { buildWorktreeBootstrapScript, createShellWindow, resolveGardenRunner } from "./create.js";
+import {
+  buildWorktreeBootstrapScript, buildWorktreeResumeCommand, buildResumeCommand,
+  createShellWindow, resolveGardenRunner,
+} from "./create.js";
 import { worktreePath, resolveBaseBranch, isWorktreeDirty, branchExistsOnOrigin } from "./git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
-import { getWorkers } from "./registry.js";
 import { workerWindowName as workerWin, parkingWindowName, shellWindowName as shellWin, parseWorkerSuffix } from "./window-names.js";
 
 const KILL_CONFIRM_FILE = path.join(SESSIONS_DIR, "dashboard.kill-confirm.json");
@@ -256,6 +259,102 @@ export function killPane(opts: { force?: boolean } = {}): void {
   if (cleanupRepoPath) {
     backgroundGitCleanup(cleanupRepoPath, cleanupWtPath, cleanupBranch);
   }
+}
+
+// Kill and restart the Claude process in a worker's pane via `claude --resume`.
+// The pane, pane ID, worktree, and registry entry all stay put; only the Claude
+// process is replaced, which forces a fresh read of .claude/settings.local.json
+// (hook config, permissions.defaultMode) and drops any transient session state
+// that's interrupting the operator (e.g., stuck in plan mode with no cycle back
+// to auto). Works on both visible and parked workers — we resolve the pane by
+// the worker's tracked window name, not the currently-active pane.
+export function bounceWorker(projectName: string, workerName: string): void {
+  const entry = findWorkerByName(projectName, workerName);
+  if (!entry) {
+    throw new Error(`No worker '${workerName}' in project '${projectName}'.`);
+  }
+  if (!entry.sessionId) {
+    throw new Error(
+      `Worker ${projectName}/${workerName} has no sessionId — can't resume. ` +
+      `It may pre-date the worktree workflow; kill and recreate it instead.`,
+    );
+  }
+
+  const paneId = resolveWorkerPaneId(projectName, workerName);
+  if (!paneId) {
+    throw new Error(
+      `Worker ${projectName}/${workerName} has no live pane. Reattach the dashboard first.`,
+    );
+  }
+
+  const projectInfo = tryGetProject(projectName);
+  // Prefer the baseBranch pinned at worker creation — resolving fresh here
+  // would pick up a new main-checkout branch and silently break the worker
+  // (same failure mode WorkerEntry.baseBranch was added to prevent).
+  const baseBranch = entry.baseBranch
+    ?? (projectInfo ? resolveBaseBranch(projectInfo.path, projectInfo) : undefined);
+
+  const resumeCmd = entry.worktreePath && entry.branchName && projectInfo
+    ? buildWorktreeResumeCommand(
+        projectName, projectInfo.path, entry.name, entry.branchName,
+        entry.sessionId, baseBranch,
+      )
+    : buildResumeCommand(
+        projectName,
+        projectInfo?.path ?? entry.worktreePath ?? "",
+        entry.sessionId,
+      );
+
+  const cwd = entry.worktreePath ?? projectInfo?.path;
+  const respawnArgs = ["respawn-pane", "-k"];
+  if (cwd) respawnArgs.push("-c", cwd);
+  respawnArgs.push("-t", paneId, "sh", "-c", resumeCmd);
+  tmux(...respawnArgs);
+
+  // --resume does not fire SessionStart, so write claudeStatus directly.
+  // Mirrors the attach-time resume path in ensureDashboard().
+  updateWorkerFields(projectName, workerName, { claudeStatus: "idle" });
+
+  log.info("workers", "bounced", {
+    worker: workerName,
+    data: { project: projectName, sessionId: entry.sessionId },
+  });
+
+  refreshDashboard();
+}
+
+// Bounce the worker whose pane is currently active in the dashboard. Used by
+// the ⌥b hotkey. Refuses on the project shell (no session to resume).
+export function bounceActiveWorker(): void {
+  const state = readDashState();
+  if (state.activePaneType !== "worker" || !state.activeProject || !state.activeWindowName) {
+    tmuxDisplay("Bounce only works on worker panes.");
+    return;
+  }
+  const workerName = parseWorkerSuffix(state.activeWindowName);
+  if (!workerName) {
+    tmuxDisplay("Could not identify active worker.");
+    return;
+  }
+  try {
+    bounceWorker(state.activeProject, workerName);
+    tmuxDisplay(`Bounced ${workerName}.`);
+  } catch (err) {
+    tmuxDisplay(`Bounce failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function resolveWorkerPaneId(project: string, worker: string): string | null {
+  const windowName = workerWin(project, worker);
+  const state = readDashState();
+  if (state.activeWindowName === windowName && state.activePaneId
+      && paneExists(state.activePaneId)) {
+    return state.activePaneId;
+  }
+  if (windowExists(windowName)) {
+    return getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
+  }
+  return null;
 }
 
 function backgroundGitCleanup(
