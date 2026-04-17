@@ -45,6 +45,12 @@ export interface WorkerEntry {
   // entry point to the review cycle" — pendingReviewAt makes that explicit.
   pendingReviewAt?: number;
   reviewWindowName?: string;
+  // Epoch ms when the current reviewer/resolver window was launched. Set by
+  // launchReview/launchResolver, cleared whenever reviewWindowName is cleared.
+  // The poller uses this to enforce REVIEW_TIMEOUT_MS — a reviewer stuck on a
+  // hung subprocess (e.g. tests with no timeout blocked by the sandbox) is
+  // killed and escalated to `failing` rather than wedging the state machine.
+  reviewStartedAt?: number;
   mergePendingAt?: string;
   lastReviewBody?: string;
   // Resolver state (see STATUS.md invariants 7 and 8). preResolveSha is the

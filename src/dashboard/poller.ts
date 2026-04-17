@@ -39,6 +39,13 @@ const RESOLVE_BUDGET = 2;
 
 const DEBOUNCE_MS = 30_000;
 
+// Wall-clock ceiling on a single reviewer or resolver run. If the tmux window
+// is still alive past this, the poller kills it and escalates to `failing`.
+// Catches hung subprocesses the reviewer can't escape from (e.g. a `npm test`
+// that blocks forever because tests have no timeout and the sandbox silently
+// denies their network calls).
+const REVIEW_TIMEOUT_MS = 30 * 60 * 1000;
+
 // Valid state transitions per STATUS.md. transitionState warns (but does not
 // block) if a transition is not in this table, surfacing bugs in the log
 // without breaking production.
@@ -189,6 +196,10 @@ function handleReviewing(
   baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
+  if (isReviewTimedOut(entry)) {
+    return handleReviewTimeout(projectName, projectPath, entry, "review");
+  }
+
   // If the reviewer window is alive, the reviewer is still working — any SHA
   // change we might observe is the reviewer's own push, not a worker push.
   // Check window existence FIRST so we do not falsely reset to working because
@@ -235,6 +246,7 @@ function handleReviewing(
       lastSeenSha: headSha ?? undefined,
       lastShaChangeAt: new Date().toISOString(),
       reviewWindowName: undefined,
+      reviewStartedAt: undefined,
     });
     refreshDashboard();
     return true;
@@ -275,6 +287,7 @@ function handleReviewing(
       });
       transitionState(projectName, entry.name, "working", {
         reviewWindowName: undefined,
+        reviewStartedAt: undefined,
       });
       refreshDashboard();
       return true;
@@ -285,6 +298,7 @@ function handleReviewing(
       mergePendingAt: new Date().toISOString(),
       lastReviewBody: review.body,
       reviewWindowName: undefined,
+      reviewStartedAt: undefined,
     });
     refreshDashboard();
     // The poller is event-driven and will block on the FIFO after this tick.
@@ -308,6 +322,7 @@ function handleReviewing(
       lastSeenSha: headSha ?? undefined,
       lastShaChangeAt: new Date().toISOString(),
       reviewWindowName: undefined,
+      reviewStartedAt: undefined,
     });
     refreshDashboard();
   }
@@ -443,6 +458,7 @@ function launchResolver(
 
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", revWindow,
     "-c", wtPath, "bash", "-c", cmd);
+  scheduleReviewTimeoutPoke(projectName);
 
   const preResolveSha = getBranchHeadSha(wtPath);
   const launchSha = getRemoteTrackingSha(wtPath, entry.branchName ?? entry.name)
@@ -450,6 +466,7 @@ function launchResolver(
 
   transitionState(projectName, entry.name, "resolving", {
     reviewWindowName: revWindow,
+    reviewStartedAt: Date.now(),
     preResolveSha: preResolveSha ?? undefined,
     resolveAttempts: attempts + 1,
     lastSeenSha: launchSha,
@@ -495,6 +512,7 @@ function escalateResolveBudget(
     lastSeenSha: headSha ?? undefined,
     lastShaChangeAt: new Date().toISOString(),
     reviewWindowName: undefined,
+    reviewStartedAt: undefined,
     mergePendingAt: undefined,
   });
   refreshDashboard();
@@ -509,6 +527,10 @@ function handleResolving(
   baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
+  if (isReviewTimedOut(entry)) {
+    return handleReviewTimeout(projectName, projectPath, entry, "resolve");
+  }
+
   const revWindow = entry.reviewWindowName;
   if (revWindow && windowExists(revWindow)) {
     return false; // still in-flight
@@ -575,6 +597,7 @@ function handleResolving(
     transitionState(projectName, entry.name, "merge-pending", {
       mergePendingAt: entry.mergePendingAt ?? new Date().toISOString(),
       reviewWindowName: undefined,
+      reviewStartedAt: undefined,
     });
     refreshDashboard();
     scheduleDelayedPoke(projectName, 0);
@@ -597,6 +620,7 @@ function handleResolving(
     });
     transitionState(projectName, entry.name, "working", {
       reviewWindowName: undefined,
+      reviewStartedAt: undefined,
       mergePendingAt: undefined,
     });
     refreshDashboard();
@@ -606,6 +630,7 @@ function handleResolving(
   transitionState(projectName, entry.name, "merge-pending", {
     mergePendingAt: entry.mergePendingAt ?? new Date().toISOString(),
     reviewWindowName: undefined,
+    reviewStartedAt: undefined,
   });
   refreshDashboard();
   scheduleDelayedPoke(projectName, 0);
@@ -639,6 +664,7 @@ function resetToWorkingOnWorkerPush(
   transitionState(projectName, entry.name, "working", {
     lastShaChangeAt: new Date().toISOString(),
     reviewWindowName: undefined,
+    reviewStartedAt: undefined,
     resolveAttempts: 0,
     preResolveSha: undefined,
     lastResolveBody: undefined,
@@ -740,6 +766,60 @@ function handleMerged(
 
 // --- Review launching and result parsing ---
 
+// Spawn a detached timer that pokes the project's FIFO after REVIEW_TIMEOUT_MS.
+// The poller is event-driven and only wakes on pokes — a hung reviewer produces
+// no events on its own, so without this the timeout check below would never
+// run. Spurious pokes after normal completion are harmless (the handlers no-op).
+function scheduleReviewTimeoutPoke(projectName: string): void {
+  const fifo = signalFifoPath(projectName);
+  const escapedFifo = fifo.replace(/'/g, "'\\''");
+  const seconds = Math.ceil(REVIEW_TIMEOUT_MS / 1000);
+  const cmd = `sleep ${seconds} && [ -p '${escapedFifo}' ] && (echo > '${escapedFifo}') 2>/dev/null`;
+  const child = spawn("bash", ["-c", cmd], { detached: true, stdio: "ignore" });
+  child.unref();
+}
+
+function isReviewTimedOut(entry: WorkerEntry): boolean {
+  if (!entry.reviewStartedAt || !entry.reviewWindowName) return false;
+  if (!windowExists(entry.reviewWindowName)) return false;
+  return Date.now() - entry.reviewStartedAt > REVIEW_TIMEOUT_MS;
+}
+
+function handleReviewTimeout(
+  projectName: string,
+  projectPath: string,
+  entry: WorkerEntry,
+  kind: "review" | "resolve",
+): boolean {
+  const elapsedMs = Date.now() - (entry.reviewStartedAt ?? 0);
+  log.warn("poller", "review timed out, killing window", {
+    worker: entry.name,
+    data: { kind, elapsedMs, timeoutMs: REVIEW_TIMEOUT_MS },
+  });
+  if (entry.reviewWindowName) killWindowSafe(entry.reviewWindowName);
+  cleanReviewFiles(projectName, entry.name);
+  addAlert({
+    level: "error",
+    source: "review",
+    project: projectName,
+    worker: entry.name,
+    message: `${kind === "review" ? "Reviewer" : "Resolver"} for ${entry.name} exceeded ${Math.floor(REVIEW_TIMEOUT_MS / 60000)}-minute timeout and was killed. Check the worktree for hung subprocesses (commonly tests with no timeout blocked by the sandbox).`,
+  });
+  const wtPath = entry.worktreePath ?? projectPath;
+  const headSha = getBranchHeadSha(wtPath);
+  transitionState(projectName, entry.name, "failing", {
+    failCount: (entry.failCount ?? 0) + 1,
+    failingSha: headSha ?? undefined,
+    lastSeenSha: headSha ?? undefined,
+    lastShaChangeAt: new Date().toISOString(),
+    reviewWindowName: undefined,
+    reviewStartedAt: undefined,
+    mergePendingAt: kind === "resolve" ? undefined : entry.mergePendingAt,
+  });
+  refreshDashboard();
+  return true;
+}
+
 function launchReview(
   projectName: string,
   projectPath: string,
@@ -798,6 +878,7 @@ function launchReview(
 
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", revWindow,
     "-c", wtPath, "bash", "-c", cmd);
+  scheduleReviewTimeoutPoke(projectName);
 
   // Capture the remote tracking SHA at launch time. handleReviewing compares
   // origin/<branch> against this baseline to detect mid-review pushes. We use
@@ -807,6 +888,7 @@ function launchReview(
   const launchSha = getRemoteTrackingSha(wtPath, branchName) ?? getBranchHeadSha(wtPath) ?? entry.lastSeenSha;
   transitionState(projectName, entry.name, "reviewing", {
     reviewWindowName: revWindow,
+    reviewStartedAt: Date.now(),
     lastSeenSha: launchSha,
     lastShaChangeAt: new Date().toISOString(),
     pendingReviewAt: undefined,
@@ -1000,6 +1082,7 @@ function finalizeMerge(
     failCount: 0,
     mergePendingAt: undefined,
     reviewWindowName: undefined,
+    reviewStartedAt: undefined,
     lastReviewBody: undefined,
     resolveAttempts: 0,
     preResolveSha: undefined,
