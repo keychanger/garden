@@ -205,12 +205,12 @@ export function handleClaudeHook(event: string): void {
   } else if (event === "stop") {
     fields.claudeStatus = "idle";
   } else if (event === "notification" || event === "pretooluse") {
-    // Mid-turn idle: Claude needs user input (plan approval, question, etc.).
+    // Mid-turn block: Claude needs user input (plan approval, question, etc.).
     // Only transition if currently working — avoid overwriting "idle" from a
     // Stop that already fired, or "ready" from a fresh worker.
     const existing = findWorkerByName(workerInfo.project, workerInfo.worker);
     if (existing?.claudeStatus === "working") {
-      fields.claudeStatus = "idle";
+      fields.claudeStatus = "asking";
       if (event === "pretooluse") {
         try {
           addAlert({
@@ -218,21 +218,21 @@ export function handleClaudeHook(event: string): void {
             source: "worker",
             project: workerInfo.project,
             worker: workerInfo.worker,
-            message: `Worker ${workerInfo.worker} needs your input — switch to it to respond`,
+            message: `Worker ${workerInfo.worker} is asking for input — switch to it to respond`,
           });
         } catch { /* best-effort */ }
       }
     } else {
-      log.info("hook", "mid-turn idle hook skipped (not working)", {
+      log.info("hook", "mid-turn asking hook skipped (not working)", {
         worker: workerInfo.worker,
         data: { project: workerInfo.project, event, claudeStatus: existing?.claudeStatus },
       });
     }
   } else if (event === "posttooluse") {
     // User responded to a mid-turn prompt (plan approved, question answered).
-    // Flip back to working so the dashboard shows Claude is processing again.
+    // Only asking flips back — an idle (turn ended) worker must not revive.
     const existing = findWorkerByName(workerInfo.project, workerInfo.worker);
-    if (existing?.claudeStatus === "idle") {
+    if (existing?.claudeStatus === "asking") {
       fields.claudeStatus = "working";
     }
   } else {

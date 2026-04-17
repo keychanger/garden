@@ -154,8 +154,8 @@ afterAll(() => {
   }
 });
 
-describe("handleClaudeHook — mid-turn idle", () => {
-  it("notification sets idle when worker is working", () => {
+describe("handleClaudeHook — mid-turn asking", () => {
+  it("notification sets asking when worker is working", () => {
     seedWorker("garden", "bold-ash", { claudeStatus: "working" });
     setCwd("garden", "bold-ash");
 
@@ -173,11 +173,11 @@ describe("handleClaudeHook — mid-turn idle", () => {
 
     expect(updateWorkerFields).toHaveBeenCalledWith(
       "garden", "bold-ash",
-      expect.objectContaining({ claudeStatus: "idle" }),
+      expect.objectContaining({ claudeStatus: "asking" }),
     );
   });
 
-  it("pretooluse sets idle when worker is working", () => {
+  it("pretooluse sets asking when worker is working", () => {
     seedWorker("garden", "bold-ash", { claudeStatus: "working" });
     setCwd("garden", "bold-ash");
 
@@ -185,7 +185,7 @@ describe("handleClaudeHook — mid-turn idle", () => {
 
     expect(updateWorkerFields).toHaveBeenCalledWith(
       "garden", "bold-ash",
-      expect.objectContaining({ claudeStatus: "idle" }),
+      expect.objectContaining({ claudeStatus: "asking" }),
     );
   });
 
@@ -201,12 +201,12 @@ describe("handleClaudeHook — mid-turn idle", () => {
       expect.not.objectContaining({ claudeStatus: expect.anything() }),
     );
     expect(log.info).toHaveBeenCalledWith(
-      "hook", "mid-turn idle hook skipped (not working)",
+      "hook", "mid-turn asking hook skipped (not working)",
       expect.anything(),
     );
   });
 
-  it("pretooluse fires alert when worker needs input", () => {
+  it("pretooluse fires alert when worker is asking for input", () => {
     seedWorker("garden", "bold-ash", { claudeStatus: "working" });
     setCwd("garden", "bold-ash");
 
@@ -218,7 +218,7 @@ describe("handleClaudeHook — mid-turn idle", () => {
         source: "worker",
         project: "garden",
         worker: "bold-ash",
-        message: expect.stringContaining("needs your input"),
+        message: expect.stringContaining("is asking for input"),
       }),
     );
   });
@@ -244,8 +244,8 @@ describe("handleClaudeHook — mid-turn idle", () => {
     );
   });
 
-  it("posttooluse sets working when worker is idle", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "idle" });
+  it("posttooluse sets working when worker is asking", () => {
+    seedWorker("garden", "bold-ash", { claudeStatus: "asking" });
     setCwd("garden", "bold-ash");
 
     handleClaudeHook("posttooluse");
@@ -256,13 +256,28 @@ describe("handleClaudeHook — mid-turn idle", () => {
     );
   });
 
-  it("posttooluse skips when worker is not idle", () => {
+  it("posttooluse does not revive a worker whose turn ended (idle)", () => {
+    seedWorker("garden", "bold-ash", { claudeStatus: "idle" });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("posttooluse");
+
+    // idle means the Stop hook already fired. A stray PostToolUse must not
+    // flip the worker back to working — that would show the wrong state for
+    // the remainder of the time between turns.
+    expect(updateWorkerFields).toHaveBeenCalledWith(
+      "garden", "bold-ash",
+      expect.not.objectContaining({ claudeStatus: expect.anything() }),
+    );
+  });
+
+  it("posttooluse skips when worker is working", () => {
     seedWorker("garden", "bold-ash", { claudeStatus: "working" });
     setCwd("garden", "bold-ash");
 
     handleClaudeHook("posttooluse");
 
-    // Should not overwrite working with working — the guard prevents transition
+    // Should not overwrite working with working — the guard only fires on asking
     expect(updateWorkerFields).toHaveBeenCalledWith(
       "garden", "bold-ash",
       expect.not.objectContaining({ claudeStatus: expect.anything() }),

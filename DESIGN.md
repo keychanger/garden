@@ -205,7 +205,7 @@ The dashboard surfaces important events as alerts — persistent messages that r
 
 **Visibility:**
 - Bottom bar shows a red `⚠ N alerts — ⌥l to clear` badge on the right when unread alerts exist. The badge appears instantly on `addAlert()` via `tmux set-option @garden_right` + `refresh-client -S`.
-- Every alert is also streamed to `dashboard.log` at `error` level, so it appears live in the `garden logs --follow` pane (the `_garden-logs` window) with the `[!]` prefix.
+- Every alert is also streamed to `dashboard.log` at its declared level (`warn` or `error`), so it appears live in the `garden logs --follow` pane (the `_garden-logs` window) with the `[!]` prefix. "Worker is asking for input" alerts land at `warn`; review/merge failures land at `error`.
 - Pressing `⌥l` focuses the logs view **and** acknowledges all current alerts, clearing the badge. Acknowledgement is explicit — an alert that fires while the logs pane is already focused still lights the badge, so autonomous failures aren't silently missed when the user is away.
 - `garden alerts` lists full history (read and unread); `garden alerts clear` wipes the store.
 
@@ -215,7 +215,7 @@ The dashboard surfaces important events as alerts — persistent messages that r
 - Branch name equals the worker name (e.g., `swift-oak`)
 - Worktrees persist until the worker is killed, enabling the review cycle and manual inspection
 - Each worktree's `.claude/settings.local.json` configures Claude's OS-level sandbox (Seatbelt on macOS, bubblewrap on Linux) — auto-allow mode approves sandboxed bash without prompts while blocking out-of-allowlist filesystem writes and network calls at the kernel. Workers and reviewers run without `--dangerously-skip-permissions` but remain autonomous inside the sandbox. Allowlist defaults (Anthropic, GitHub, npm, the project's git remote host, plus worktree + standard subprocess caches) are built in `src/dashboard/sandbox.ts` and extended per-project via the `sandboxDomains` config key
-- The same `settings.local.json` sets `permissions.defaultMode: "auto"`, so every Claude process in the worktree (worker, reviewer, resolver, resume) starts in Anthropic's built-in auto mode. The classifier auto-approves low-risk tool calls and only prompts the operator for the rest. Garden wires a `PermissionRequest` hook (no matcher — all tools) that fires **only** when a prompt is actually being shown; it flips `claudeStatus` to `idle` and raises an operator alert so the dashboard reflects the waiting state. The matching `PostToolUse` on `Bash` flips back to `working` once the operator approves
+- The same `settings.local.json` sets `permissions.defaultMode: "auto"`, so every Claude process in the worktree (worker, reviewer, resolver, resume) starts in Anthropic's built-in auto mode. The classifier auto-approves low-risk tool calls and only prompts the operator for the rest. Garden wires a `PermissionRequest` hook (no matcher — all tools) that fires **only** when a prompt is actually being shown; it flips `claudeStatus` to `asking` and raises an operator alert so the dashboard reflects the waiting state. The matching `PostToolUse` on `Bash` flips `asking` back to `working` once the operator approves
 
 ## Worker Status Detection
 
@@ -225,7 +225,8 @@ Each worker has two independent status axes:
 - ⏳ **loading** — worker pane started, bootstrap script running, Claude not yet launched
 - ◇ **ready** — Claude launched but not yet tasked
 - ⠋ **working** — Claude is processing a submitted prompt (braille spinner animation)
-- ◆ **idle** — Claude is at the prompt, waiting for input
+- ⚑ **asking** — Claude is blocked mid-turn on operator input (plan approval, question, permission escalation); row is highlighted bold-yellow in the status pane
+- ◆ **idle** — turn has ended, Claude is at the prompt waiting for the next message
 - ○ **exited** — process has terminated
 
 **Lifecycle status** — where the worker's code is in the review pipeline, written by the poller:

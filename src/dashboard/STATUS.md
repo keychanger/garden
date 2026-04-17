@@ -15,7 +15,8 @@ These are the only states the user sees in the status pane.
 | loading       | `H`  | Worker pane started, bootstrap running, Claude not yet launched. |
 | ready         | `*`  | Fresh worker. Claude loaded, waiting for first input. |
 | working       | `@`  | Claude is generating a response to a submitted prompt. See "What 'working' means" below. |
-| idle          | `#`  | Ball is in the user's court — Claude is at the prompt, waiting for plan approval, answering a question, or has a response to read. Not in the review cycle. |
+| asking        | `?`  | Claude is blocked mid-turn waiting for operator input — plan approval, a question answer, or a permission-request escalation. The turn has not ended. |
+| idle          | `#`  | Turn has ended — Claude finished its response and is waiting at the prompt for the next user message. Not in the review cycle. |
 | reviewing     | `%`  | Automated reviewer is checking the worker's code. |
 | merge-pending | `&`  | Review passed. Queued for merge.                 |
 | resolving     | `~`  | Automated resolver is fixing a merge-queue rebase conflict. |
@@ -45,11 +46,12 @@ Things that are *not* working:
 - The user reading Claude's last response
 - Claude sitting at the prompt with nothing to do
 - The session being open in a pane the user isn't looking at
-- Claude waiting for the user to approve a plan or answer a question (mid-turn idle)
+- Claude waiting for the user to approve a plan or answer a question (that is `asking`, not `working`)
 
 If a worker shows `working` while Claude is waiting for user input, that
 is a bug — the PreToolUse hook for the blocking tool (`ExitPlanMode`,
-`AskUserQuestion`) didn't fire or didn't reach the registry.
+`AskUserQuestion`) didn't fire or didn't reach the registry. The correct
+state in that situation is `asking`.
 
 ## State transitions
 
@@ -60,11 +62,14 @@ stateDiagram-v2
     ready --> working : UserPromptSubmit
 
     working --> idle : Stop / no new commits
-    working --> idle : PreToolUse (mid-turn user-input)
+    working --> asking : PreToolUse (mid-turn user-input)
+    working --> asking : PermissionRequest
     working --> reviewing : Stop / new commits
 
     idle --> working : UserPromptSubmit
-    idle --> working : PostToolUse (mid-turn resume)
+
+    asking --> working : UserPromptSubmit
+    asking --> working : PostToolUse (mid-turn resume)
 
     reviewing --> merge_pending : reviewer Stop (passes)
     reviewing --> failing : reviewer Stop (fails)
@@ -91,9 +96,14 @@ stateDiagram-v2
     end note
 ```
 
-The two exits from `working` are the core branching point:
-- **No new commits** → `idle` (ball in user's court)
+The two exits from `working` via `Stop` are the core branching point:
+- **No new commits** → `idle` (turn ended, ball in user's court)
 - **New commits** → `reviewing` (skips idle, enters review cycle)
+
+`working` also exits to `asking` mid-turn (PreToolUse / PermissionRequest)
+when Claude needs operator input before it can continue. `asking` is not
+a terminal state — it returns to `working` when the operator responds
+(PostToolUse) or submits a new prompt.
 
 ### Transition rules
 
@@ -102,10 +112,12 @@ The two exits from `working` are the core branching point:
 | loading       | ready         | Worker `SessionStart` hook                           |
 | ready         | working       | Worker `UserPromptSubmit` (first)                    |
 | working       | idle          | Worker `Stop`; no new commits ahead of base          |
-| working       | idle          | Worker `PreToolUse` (mid-turn user-input tool)       |
+| working       | asking        | Worker `PreToolUse` (mid-turn user-input tool)       |
+| working       | asking        | Worker `PermissionRequest` (+ operator alert)        |
 | working       | reviewing     | Worker `Stop`; new commits ahead of base             |
 | idle          | working       | Worker `UserPromptSubmit`                            |
-| idle          | working       | Worker `PostToolUse` (mid-turn resume)               |
+| asking        | working       | Worker `UserPromptSubmit`                            |
+| asking        | working       | Worker `PostToolUse` (mid-turn resume)               |
 | reviewing     | merge-pending | Reviewer `Stop` with verdict CLEAN or FIXED          |
 | reviewing     | failing       | Reviewer `Stop` with verdict FAILED                  |
 | reviewing     | working       | Worker push event (commits during review, aborted)   |
@@ -142,10 +154,10 @@ These bracket the lifecycle of every Claude conversation and fire from
 signals the status pane. They drive:
 
 - `loading → ready` (worker's `SessionStart`)
-- `ready → working`, `idle → working`, `merged → working` (worker's `UserPromptSubmit`)
+- `ready → working`, `idle → working`, `asking → working`, `merged → working` (worker's `UserPromptSubmit`)
 - `working → idle`, `working → reviewing` (worker's `Stop`)
-- `working → idle` (worker's `PreToolUse` for user-input tools)
-- `idle → working` (worker's `PostToolUse` for user-input tools)
+- `working → asking` (worker's `PreToolUse` for user-input tools, `PermissionRequest`)
+- `asking → working` (worker's `PostToolUse` for user-input tools)
 - `reviewing → merge-pending`, `reviewing → failing` (reviewer's `Stop`)
 - `resolving → merge-pending`, `resolving → failing` (resolver's `Stop`)
 
@@ -207,9 +219,10 @@ recurring re-check, or "fallback poll."
 
 ## Key invariants
 
-1. **`idle` and the review cycle are mutually exclusive.** A worker in
-   `reviewing`, `merge-pending`, `resolving`, or `failing` never shows
-   `idle`. If it shows `idle`, it is not in the review cycle.
+1. **`idle`/`asking` and the review cycle are mutually exclusive.** A
+   worker in `reviewing`, `merge-pending`, `resolving`, or `failing`
+   never shows `idle` or `asking`. If it shows either, it is not in the
+   review cycle.
 
 2. **`working` is the only entry point to the review cycle.** The poller
    only transitions to `reviewing` when Claude stops working *and* new
@@ -293,19 +306,19 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   only the poller's working→reviewing transition reads it, and
   `launchReview` clears it.
 - `PreToolUse` (matched to `AskUserQuestion`, `ExitPlanMode`) →
-  `claudeStatus = "idle"` (only if currently `working`). Fires when
+  `claudeStatus = "asking"` (only if currently `working`). Fires when
   Claude is about to execute a tool that requires user input.
   `ExitPlanMode` is the blocking tool — it presents the plan for user
   approval. `EnterPlanMode` is non-blocking (Claude entering plan mode
   to write the plan) and must NOT be hooked, as its PreToolUse/PostToolUse
-  fire during active generation and would cause spurious working↔idle
+  fire during active generation and would cause spurious working↔asking
   flicker. The `Notification` hook is not used — it matches too broadly
   (all notification types, not just user-attention ones) and the
   user-input cases are fully covered by PreToolUse/PostToolUse on the
   specific tools.
 - `PermissionRequest` (no matcher — all tools) →
-  `claudeStatus = "idle"` (only if currently `working`), plus a
-  "worker needs your input" operator alert. Fires when auto-mode's
+  `claudeStatus = "asking"` (only if currently `working`), plus a
+  "worker is asking for input" operator alert. Fires when auto-mode's
   classifier escalates a tool call for operator approval — it is the
   only event that reports "a permission dialog is actually being shown"
   (unlike `PreToolUse`, which fires for every tool call and would
@@ -316,11 +329,13 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   signal for operator-attention-required events across every tool,
   not just Bash.
 - `PostToolUse` (matched to `AskUserQuestion`, `ExitPlanMode`, `Bash`) →
-  `claudeStatus = "working"` (only if currently `idle`). Fires when
+  `claudeStatus = "working"` (only if currently `asking`). Fires when
   the user has responded and Claude resumes processing. The `Bash`
   match is what restores `working` after the operator approves an
   auto-mode permission prompt — without it the worker would stay stuck
-  at `idle` for the rest of the turn.
+  at `asking` for the rest of the turn. The guard on `asking` (not
+  `idle`) prevents a stray PostToolUse from reviving a worker whose
+  turn has already ended.
 
 **The poller** writes `prState` in response to the events documented in
 "How transitions are detected." The poller is the only writer of
@@ -382,7 +397,7 @@ sequenceDiagram
     StatusPane->>User: shows "idle"
 ```
 
-#### Mid-turn idle (plan mode, questions)
+#### Mid-turn asking (plan mode, questions, permission escalations)
 
 ```mermaid
 sequenceDiagram
@@ -400,15 +415,15 @@ sequenceDiagram
 
     Note over Claude: processing...
 
-    Claude->>Hook: PreToolUse fires (ExitPlanMode / AskUserQuestion)
-    Hook->>Registry: claudeStatus = "idle" (was "working")
+    Claude->>Hook: PreToolUse fires (ExitPlanMode / AskUserQuestion / PermissionRequest)
+    Hook->>Registry: claudeStatus = "asking" (was "working")
     Hook->>StatusPane: SIGUSR1
-    StatusPane->>User: shows "idle"
+    StatusPane->>User: shows "asking"
 
     Note over User: approves plan / answers question
 
     Claude->>Hook: PostToolUse fires
-    Hook->>Registry: claudeStatus = "working" (was "idle")
+    Hook->>Registry: claudeStatus = "working" (was "asking")
     Hook->>StatusPane: SIGUSR1
     StatusPane->>User: shows "working"
 

@@ -62,9 +62,9 @@ export function addAlert(
   writeAlerts(store);
 
   // Emit to dashboard.log so the line streams live into `garden logs --follow`
-  // (the _garden-logs pane). The logs view is the primary surface; the bar
-  // badge just signals that there's something new to look at.
-  log.error("alert", fields.message, {
+  // (the _garden-logs pane). Route by the alert's own level — warn alerts
+  // (e.g. "worker is asking for input") must not be miscategorized as errors.
+  log[fields.level]("alert", fields.message, {
     worker: fields.worker,
     data: { project: fields.project, source: fields.source, level: fields.level },
   });

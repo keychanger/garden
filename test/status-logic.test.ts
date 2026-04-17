@@ -81,6 +81,7 @@ describe("resolveWorkerStatus", () => {
     expect(resolveWorkerStatus({ claudeStatus: "loading" })).toBe("loading");
     expect(resolveWorkerStatus({ claudeStatus: "ready" })).toBe("ready");
     expect(resolveWorkerStatus({ claudeStatus: "working" })).toBe("working");
+    expect(resolveWorkerStatus({ claudeStatus: "asking" })).toBe("asking");
     expect(resolveWorkerStatus({ claudeStatus: "idle" })).toBe("idle");
     expect(resolveWorkerStatus({ claudeStatus: "exited" })).toBe("exited");
   });
@@ -149,6 +150,16 @@ describe("status display", () => {
     ]);
     const lines = await captureConsoleLog(() => status([]));
     expect(lines.some(l => l.includes("idle"))).toBe(true);
+  });
+
+  it("shows asking from registry and wraps the row in bold-yellow", async () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "awaiting plan approval", claudeStatus: "asking" },
+    ]);
+    const lines = await captureConsoleLog(() => status([]));
+    const askingLine = lines.find(l => l.includes("asking") && l.includes("bold-ash"));
+    expect(askingLine).toBeDefined();
+    expect(askingLine).toMatch(/\x1b\[1;33m/);
   });
 
   it("shows exited from registry", async () => {
@@ -228,6 +239,25 @@ describe("renderQuickStatus", () => {
     ]);
     const result = renderQuickStatus(state);
     expect(result).toContain("idle");
+  });
+
+  it("renders asking rows wrapped in bold-yellow ANSI", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "awaiting plan approval", claudeStatus: "asking" },
+    ]);
+    const result = renderQuickStatus(state);
+    expect(result).toContain("asking");
+    // Whole row wrapped in bold-yellow; reset precedes the line-clear escape.
+    expect(result).toMatch(/\x1b\[1;33m[^\n]*bold-ash[^\n]*\x1b\[0m/);
+  });
+
+  it("does not wrap non-asking rows in bold-yellow", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "idle" },
+    ]);
+    const result = renderQuickStatus(state);
+    // bold-yellow is asking-only; an idle row must not carry it
+    expect(result).not.toMatch(/\x1b\[1;33m[^\n]*bold-ash/);
   });
 
   it("renders reviewing even if claudeStatus is working", () => {

@@ -19,7 +19,7 @@ import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/w
 // (written by hooks). `reviewing`/`merge-pending`/`failing`/`merged` come
 // from prState (written by the poller). The combine function gives prState
 // priority because it describes where the worker's *code* is.
-export type ProcessStatus = "loading" | "ready" | "working" | "idle" | "exited";
+export type ProcessStatus = "loading" | "ready" | "working" | "asking" | "idle" | "exited";
 type LifecycleStatus = "reviewing" | "merge-pending" | "resolving" | "failing" | "merged";
 type WorkerStatus = ProcessStatus | LifecycleStatus;
 
@@ -43,6 +43,7 @@ const STATUS_ICONS: Record<WorkerStatus, string> = {
   loading:        "\u29D7",     // hourglass
   ready:          "\u25C7",     // open diamond
   working:        SPINNER_FRAMES[0],
+  asking:         "\u2691",     // black flag — worker is blocked on operator input
   idle:           "\u25C6",     // filled diamond
   reviewing:      "\u25CE",     // bullseye
   "merge-pending": "\u25F7",    // circle with right half - queued
@@ -141,7 +142,8 @@ export async function status(_args: string[]): Promise<void> {
         const wname = worker.name.padEnd(nameWidth);
         const wstatus = formatStatus(worker).padEnd(statusWidth);
         const activity = worker.activity ? `  ${truncateActivity(worker.activity, activityMax)}` : "";
-        console.log(`    ${focus} ${icon} ${wname}  ${wstatus}${activity}`);
+        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${activity}`;
+        console.log(worker.status === "asking" ? `\x1b[1;33m${line}\x1b[0m` : line);
       }
     }
   }
@@ -258,7 +260,8 @@ export function renderQuickStatus(state: DashboardState, windowNames?: string[])
         const wname = worker.name.padEnd(nameWidth);
         const wstatus = formatStatus(worker).padEnd(statusWidth);
         const activity = worker.activity ? `  ${worker.activity}` : "";
-        lines.push(`    ${focus} ${icon} ${wname}  ${wstatus}${activity}`);
+        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${activity}`;
+        lines.push(worker.status === "asking" ? `\x1b[1;33m${line}\x1b[0m` : line);
       }
     }
   }

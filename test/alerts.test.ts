@@ -40,6 +40,7 @@ import {
   readAlerts, addAlert, clearAlerts, alertCount,
   unreadAlertCount, acknowledgeAlerts, formatRightBar,
 } from "../src/dashboard/alerts.js";
+import { log } from "../src/dashboard/log.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -86,6 +87,44 @@ describe("addAlert", () => {
       expect.stringContaining("test-uuid-1"),
     );
     expect(fs.renameSync).toHaveBeenCalled();
+  });
+
+  it("routes warn alerts through log.warn, not log.error", () => {
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    addAlert({
+      level: "warn",
+      source: "worker",
+      project: "myproject",
+      worker: "bold-ash",
+      message: "Worker bold-ash is asking for input — switch to it to respond",
+    });
+
+    expect(log.warn).toHaveBeenCalledWith(
+      "alert",
+      expect.stringContaining("asking for input"),
+      expect.objectContaining({ worker: "bold-ash" }),
+    );
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it("routes error alerts through log.error", () => {
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    addAlert({
+      level: "error",
+      source: "review",
+      project: "myproject",
+      worker: "bold-ash",
+      message: "Review failed",
+    });
+
+    expect(log.error).toHaveBeenCalledWith(
+      "alert",
+      "Review failed",
+      expect.objectContaining({ worker: "bold-ash" }),
+    );
+    expect(log.warn).not.toHaveBeenCalled();
   });
 });
 

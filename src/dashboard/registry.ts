@@ -14,7 +14,7 @@ import { log } from "./log.js";
 
 // claudeStatus is written by Claude Code hooks and the tmux pane-died handler.
 // prState is written by the poller. There are no other writers. See STATUS.md.
-export type ClaudeStatus = "loading" | "ready" | "working" | "idle" | "exited";
+export type ClaudeStatus = "loading" | "ready" | "working" | "asking" | "idle" | "exited";
 export type PrState = "working" | "reviewing" | "merge-pending" | "resolving" | "merged" | "failing";
 
 export interface WorkerEntry {
