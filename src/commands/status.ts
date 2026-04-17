@@ -143,7 +143,7 @@ export async function status(_args: string[]): Promise<void> {
         const wstatus = formatStatus(worker).padEnd(statusWidth);
         const activity = worker.activity ? `  ${truncateActivity(worker.activity, activityMax)}` : "";
         const line = `    ${focus} ${icon} ${wname}  ${wstatus}${activity}`;
-        console.log(worker.status === "asking" ? `\x1b[1;33m${line}\x1b[0m` : line);
+        console.log(colorizeRow(worker.status, line));
       }
     }
   }
@@ -160,6 +160,12 @@ const STATUS_WIDTH = 9; // "resolving" / "reviewing" are the widest
 function formatStatus(worker: WorkerInfo): string {
   if (worker.status === "merge-pending") return "merging";
   return worker.status;
+}
+
+function colorizeRow(status: WorkerStatus, line: string): string {
+  if (status === "asking") return `\x1b[1;33m${line}\x1b[0m`;
+  if (status === "failing") return `\x1b[1;31m${line}\x1b[0m`;
+  return line;
 }
 
 // Combine claudeStatus and prState into a single display state.
@@ -261,7 +267,7 @@ export function renderQuickStatus(state: DashboardState, windowNames?: string[])
         const wstatus = formatStatus(worker).padEnd(statusWidth);
         const activity = worker.activity ? `  ${worker.activity}` : "";
         const line = `    ${focus} ${icon} ${wname}  ${wstatus}${activity}`;
-        lines.push(worker.status === "asking" ? `\x1b[1;33m${line}\x1b[0m` : line);
+        lines.push(colorizeRow(worker.status, line));
       }
     }
   }
