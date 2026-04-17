@@ -280,6 +280,7 @@ garden rules dismiss <category>    # Dismiss a rule suggestion
 garden rules findings              # Raw reviewer-findings log
 garden logs [options]              # View dashboard logs (pretty-printed)
 garden kick <worker>               # Re-arm a stranded 'working' worker for review
+garden bounce <worker>             # Restart a worker's Claude process (preserves session history)
 garden rebuild                     # Rebuild garden and relaunch dashboard
 ```
 

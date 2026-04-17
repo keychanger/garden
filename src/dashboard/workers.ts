@@ -22,7 +22,7 @@ import {
 import { log } from "./log.js";
 import {
   buildWorktreeBootstrapScript, buildWorktreeResumeCommand, buildResumeCommand,
-  createShellWindow, resolveGardenRunner,
+  createShellWindow, resolveGardenRunner, installClaudeHooks,
 } from "./create.js";
 import { worktreePath, resolveBaseBranch, isWorktreeDirty, branchExistsOnOrigin } from "./git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
@@ -293,6 +293,14 @@ export function bounceWorker(projectName: string, workerName: string): void {
   // (same failure mode WorkerEntry.baseBranch was added to prevent).
   const baseBranch = entry.baseBranch
     ?? (projectInfo ? resolveBaseBranch(projectInfo.path, projectInfo) : undefined);
+
+  // Rewrite .claude/settings.local.json so bounce picks up hook/sandbox
+  // changes from a rebuilt garden. buildWorktreeResumeCommand doesn't do
+  // this on its own (unlike buildResumeCommand); the attach-time resume
+  // path in ensureDashboard() calls it for the same reason.
+  if (entry.worktreePath && projectInfo) {
+    installClaudeHooks(entry.worktreePath, projectInfo);
+  }
 
   const resumeCmd = entry.worktreePath && entry.branchName && projectInfo
     ? buildWorktreeResumeCommand(

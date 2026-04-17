@@ -86,6 +86,7 @@ vi.mock("../src/dashboard/create.js", () => ({
   buildResumeCommand: vi.fn(() => "claude --resume FAKE-ID-NW"),
   createShellWindow: vi.fn(),
   resolveGardenRunner: vi.fn(() => "garden"),
+  installClaudeHooks: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/git.js", () => ({
@@ -120,7 +121,7 @@ import {
 } from "../src/dashboard/registry.js";
 import {
   buildWorktreeBootstrapScript, buildWorktreeResumeCommand, buildResumeCommand,
-  createShellWindow, resolveGardenRunner,
+  createShellWindow, resolveGardenRunner, installClaudeHooks,
 } from "../src/dashboard/create.js";
 import { worktreePath, resolveBaseBranch, isWorktreeDirty, branchExistsOnOrigin } from "../src/dashboard/git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "../src/dashboard/poller.js";
@@ -723,6 +724,29 @@ describe("bounceWorker", () => {
     expect(vi.mocked(updateWorkerFields)).toHaveBeenCalledWith(
       "myproject", "swift-oak", { claudeStatus: "idle" },
     );
+  });
+
+  it("reinstalls claude hooks so settings.local.json picks up rebuild changes", () => {
+    bounceWorker("myproject", "swift-oak");
+
+    expect(vi.mocked(installClaudeHooks)).toHaveBeenCalledWith(
+      "/wt/swift-oak", expect.objectContaining({ path: "/repo/myproject" }),
+    );
+  });
+
+  it("prefers the pinned entry.baseBranch over re-resolving", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "sess-abc", task: "",
+      branchName: "swift-oak", worktreePath: "/wt/swift-oak",
+      baseBranch: "develop",
+    });
+
+    bounceWorker("myproject", "swift-oak");
+
+    expect(vi.mocked(buildWorktreeResumeCommand)).toHaveBeenCalledWith(
+      "myproject", "/repo/myproject", "swift-oak", "swift-oak", "sess-abc", "develop",
+    );
+    expect(vi.mocked(resolveBaseBranch)).not.toHaveBeenCalled();
   });
 
   it("uses the parked-window pane id when the worker is not the active one", () => {
