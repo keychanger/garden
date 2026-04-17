@@ -12,7 +12,7 @@ import { currentBranch, resolveBaseBranch } from "./git.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { triggerProjectPoll } from "./poller.js";
 import { log } from "./log.js";
-import { addAlert, unreadAlertCount, formatRightBar } from "./alerts.js";
+import { unreadAlertCount, formatRightBar } from "./alerts.js";
 import { workerWindowName as workerWin, parseWorkerWindow } from "./window-names.js";
 import { maybeRefreshUsage, renderUsagePane } from "./usage.js";
 import { resolveGardenRunner } from "./create.js";
@@ -200,22 +200,12 @@ export function handleClaudeHook(event: string): void {
     fields.claudeStatus = "idle";
   } else if (event === "notification" || event === "pretooluse") {
     // Mid-turn block: Claude needs user input (plan approval, question, etc.).
-    // Only transition if currently working — avoid overwriting "idle" from a
-    // Stop that already fired, or "ready" from a fresh worker.
+    // The `asking` status + yellow row in the status pane IS the signal — no
+    // operator alert fires, because the bottom-bar badge is reserved for
+    // things that warrant attention beyond "a worker is waiting on you."
     const existing = findWorkerByName(workerInfo.project, workerInfo.worker);
     if (existing?.claudeStatus === "working") {
       fields.claudeStatus = "asking";
-      if (event === "pretooluse") {
-        try {
-          addAlert({
-            level: "warn",
-            source: "worker",
-            project: workerInfo.project,
-            worker: workerInfo.worker,
-            message: `Worker ${workerInfo.worker} is asking for input — switch to it to respond`,
-          });
-        } catch { /* best-effort */ }
-      }
     } else {
       log.info("hook", "mid-turn asking hook skipped (not working)", {
         worker: workerInfo.worker,

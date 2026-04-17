@@ -113,7 +113,7 @@ a terminal state — it returns to `working` when the operator responds
 | ready         | working       | Worker `UserPromptSubmit` (first)                    |
 | working       | idle          | Worker `Stop`; no new commits ahead of base          |
 | working       | asking        | Worker `PreToolUse` (mid-turn user-input tool)       |
-| working       | asking        | Worker `PermissionRequest` (+ operator alert)        |
+| working       | asking        | Worker `PermissionRequest`                           |
 | working       | reviewing     | Worker `Stop`; new commits ahead of base             |
 | idle          | working       | Worker `UserPromptSubmit`                            |
 | asking        | working       | Worker `UserPromptSubmit`                            |
@@ -317,17 +317,18 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   user-input cases are fully covered by PreToolUse/PostToolUse on the
   specific tools.
 - `PermissionRequest` (no matcher — all tools) →
-  `claudeStatus = "asking"` (only if currently `working`), plus a
-  "worker is asking for input" operator alert. Fires when auto-mode's
-  classifier escalates a tool call for operator approval — it is the
-  only event that reports "a permission dialog is actually being shown"
-  (unlike `PreToolUse`, which fires for every tool call and would
-  flicker the dashboard on every auto-approved bash). Each worktree's
-  `.claude/settings.local.json` sets `permissions.defaultMode: "auto"`
-  so every Claude process in that worktree (worker, reviewer,
-  resolver, resume) starts in auto mode and this hook is the one-stop
-  signal for operator-attention-required events across every tool,
-  not just Bash.
+  `claudeStatus = "asking"` (only if currently `working`). Fires when
+  auto-mode's classifier escalates a tool call for operator approval —
+  it is the only event that reports "a permission dialog is actually
+  being shown" (unlike `PreToolUse`, which fires for every tool call
+  and would flicker the dashboard on every auto-approved bash). Each
+  worktree's `.claude/settings.local.json` sets
+  `permissions.defaultMode: "auto"` so every Claude process in that
+  worktree (worker, reviewer, resolver, resume) starts in auto mode
+  and this hook is the one-stop signal for operator-attention-required
+  events across every tool, not just Bash. No operator alert fires —
+  the `asking` status (yellow row in the status pane) is the signal;
+  the bottom-bar alert badge is reserved for failures and errors.
 - `PostToolUse` (matched to `AskUserQuestion`, `ExitPlanMode`, `Bash`) →
   `claudeStatus = "working"` (only if currently `asking`). Fires when
   the user has responded and Claude resumes processing. The `Bash`

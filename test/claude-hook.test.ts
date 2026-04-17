@@ -206,21 +206,16 @@ describe("handleClaudeHook — mid-turn asking", () => {
     );
   });
 
-  it("pretooluse fires alert when worker is asking for input", () => {
+  it("pretooluse does not fire an operator alert (status pane is the signal)", () => {
     seedWorker("garden", "bold-ash", { claudeStatus: "working" });
     setCwd("garden", "bold-ash");
 
     handleClaudeHook("pretooluse");
 
-    expect(addAlert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        level: "warn",
-        source: "worker",
-        project: "garden",
-        worker: "bold-ash",
-        message: expect.stringContaining("is asking for input"),
-      }),
-    );
+    // The `asking` status + yellow row is the visual signal; the bottom-bar
+    // alert badge is reserved for things that warrant attention beyond
+    // "a worker is waiting on you."
+    expect(addAlert).not.toHaveBeenCalled();
   });
 
   it("notification does not fire alert", () => {
