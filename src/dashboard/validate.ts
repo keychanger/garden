@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { SESSIONS_DIR, loadConfig } from "../config.js";
 import { type DashboardState, readDashState, writeDashState } from "./state.js";
 import { readRegistry, writeRegistry, updateWorkerFields, type WorkerRegistry } from "./registry.js";
-import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, killWindowSafe, tmuxSplit, setPaneTitle, setPaneLabel, tmux } from "./tmux.js";
+import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, killWindowSafe, tmuxSplit, setPaneTitle, setPaneLabel, tmux, disablePaneInput } from "./tmux.js";
 import { log } from "./log.js";
 import { worktreeExists, removeWorktree, pruneWorktrees } from "./git.js";
 import { startProjectPoller, projectPollerRunning } from "./poller.js";
@@ -88,6 +88,7 @@ function healUsagePaneInState(state: DashboardState): DashboardState {
       try { tmux("clear-history", "-t", healed.statusPaneId); } catch { /* ignore */ }
       setPaneTitle(usageId, "usage");
       setPaneLabel(usageId, "usage");
+      disablePaneInput(usageId);
 
       healed = { ...healed, usagePaneId: usageId };
       log.info("validate", "recreated usage pane");
@@ -123,6 +124,7 @@ function healStatusPaneInState(state: DashboardState): DashboardState {
       try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
       setPaneTitle(statusId, "status");
       setPaneLabel(statusId, "status");
+      disablePaneInput(statusId);
 
       healed = { ...healed, statusPaneId: statusId };
       log.info("validate", "recreated status pane");

@@ -11,6 +11,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   setPaneLabel: vi.fn(),
   getPaneSize: vi.fn(() => null),
   tmux: vi.fn(),
+  disablePaneInput: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/registry.js", () => ({
@@ -59,7 +60,7 @@ import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, tmux
 import { readRegistry, writeRegistry } from "../src/dashboard/registry.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 
-import { setPaneTitle, setPaneLabel } from "../src/dashboard/tmux.js";
+import { setPaneTitle, setPaneLabel, disablePaneInput } from "../src/dashboard/tmux.js";
 
 function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
   return {
@@ -97,6 +98,9 @@ describe("validateAndHeal", () => {
     const healed = validateAndHeal(state);
     expect(healed.statusPaneId).toBe("%50");
     expect(vi.mocked(tmuxSplit)).toHaveBeenCalled();
+    // Healed status pane must be input-disabled; otherwise operator keystrokes
+    // echo into it after a mid-session recreate.
+    expect(disablePaneInput).toHaveBeenCalledWith("%50");
   });
 
   it("recreates garden pane when gardenShellPaneId is stale", () => {
@@ -230,6 +234,7 @@ describe("validateAndHeal", () => {
     expect(healed.usagePaneId).toBe("%60");
     expect(setPaneTitle).toHaveBeenCalledWith("%60", "usage");
     expect(setPaneLabel).toHaveBeenCalledWith("%60", "usage");
+    expect(disablePaneInput).toHaveBeenCalledWith("%60");
   });
 
   it("leaves usagePaneId null when status pane is also gone and cannot be recreated", () => {
