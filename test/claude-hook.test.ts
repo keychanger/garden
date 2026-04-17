@@ -189,20 +189,17 @@ describe("handleClaudeHook — mid-turn asking", () => {
     );
   });
 
-  it("notification skips when worker is already idle", () => {
+  it("notification self-heals idle to asking", () => {
+    // A user-input tool firing is definitive proof of active turn, so an
+    // idle worker at this point has stale status — transition to asking.
     seedWorker("garden", "bold-ash", { claudeStatus: "idle" });
     setCwd("garden", "bold-ash");
 
     handleClaudeHook("notification");
 
-    // updateWorkerFields still called for lastHookAt, but without claudeStatus
     expect(updateWorkerFields).toHaveBeenCalledWith(
       "garden", "bold-ash",
-      expect.not.objectContaining({ claudeStatus: expect.anything() }),
-    );
-    expect(log.info).toHaveBeenCalledWith(
-      "hook", "mid-turn asking hook skipped (not working)",
-      expect.anything(),
+      expect.objectContaining({ claudeStatus: "asking" }),
     );
   });
 
@@ -251,18 +248,17 @@ describe("handleClaudeHook — mid-turn asking", () => {
     );
   });
 
-  it("posttooluse does not revive a worker whose turn ended (idle)", () => {
+  it("posttooluse self-heals idle to working", () => {
+    // A tool-use event arriving while idle means the turn is actually
+    // active and the status is stale — trust the event and flip to working.
     seedWorker("garden", "bold-ash", { claudeStatus: "idle" });
     setCwd("garden", "bold-ash");
 
     handleClaudeHook("posttooluse");
 
-    // idle means the Stop hook already fired. A stray PostToolUse must not
-    // flip the worker back to working — that would show the wrong state for
-    // the remainder of the time between turns.
     expect(updateWorkerFields).toHaveBeenCalledWith(
       "garden", "bold-ash",
-      expect.not.objectContaining({ claudeStatus: expect.anything() }),
+      expect.objectContaining({ claudeStatus: "working" }),
     );
   });
 

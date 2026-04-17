@@ -67,6 +67,8 @@ stateDiagram-v2
     working --> reviewing : Stop / new commits
 
     idle --> working : UserPromptSubmit
+    idle --> working : PostToolUse (self-heal)
+    idle --> asking : PreToolUse (self-heal)
 
     asking --> working : UserPromptSubmit
     asking --> working : PostToolUse (mid-turn resume)
@@ -116,6 +118,8 @@ a terminal state — it returns to `working` when the operator responds
 | working       | asking        | Worker `PermissionRequest`                           |
 | working       | reviewing     | Worker `Stop`; new commits ahead of base             |
 | idle          | working       | Worker `UserPromptSubmit`                            |
+| idle          | working       | Worker `PostToolUse` (self-heal; stale idle)         |
+| idle          | asking        | Worker `PreToolUse` (self-heal; stale idle)          |
 | asking        | working       | Worker `UserPromptSubmit`                            |
 | asking        | working       | Worker `PostToolUse` (mid-turn resume)               |
 | reviewing     | merge-pending | Reviewer `Stop` with verdict CLEAN or FIXED          |
@@ -306,8 +310,12 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   only the poller's working→reviewing transition reads it, and
   `launchReview` clears it.
 - `PreToolUse` (matched to `AskUserQuestion`, `ExitPlanMode`) →
-  `claudeStatus = "asking"` (only if currently `working`). Fires when
-  Claude is about to execute a tool that requires user input.
+  `claudeStatus = "asking"` if currently `working` or `idle`. Fires when
+  Claude is about to execute a tool that requires user input. The `idle`
+  path is a self-heal: a user-input tool only fires mid-turn, so an
+  `idle` worker at this point has a stale status (usually left over from
+  a prior build that wrote this hook differently) and the event itself
+  is proof of active work.
   `ExitPlanMode` is the blocking tool — it presents the plan for user
   approval. `EnterPlanMode` is non-blocking (Claude entering plan mode
   to write the plan) and must NOT be hooked, as its PreToolUse/PostToolUse
@@ -330,13 +338,16 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   the `asking` status (yellow row in the status pane) is the signal;
   the bottom-bar alert badge is reserved for failures and errors.
 - `PostToolUse` (matched to `AskUserQuestion`, `ExitPlanMode`, `Bash`) →
-  `claudeStatus = "working"` (only if currently `asking`). Fires when
-  the user has responded and Claude resumes processing. The `Bash`
+  `claudeStatus = "working"` if currently `asking` or `idle`. Fires
+  when the user has responded and Claude resumes processing. The `Bash`
   match is what restores `working` after the operator approves an
   auto-mode permission prompt — without it the worker would stay stuck
-  at `asking` for the rest of the turn. The guard on `asking` (not
-  `idle`) prevents a stray PostToolUse from reviving a worker whose
-  turn has already ended.
+  at `asking` for the rest of the turn. The `idle` path is a self-heal:
+  a tool-use event arriving while `idle` means the turn is actually
+  active and the registry state is stale (e.g. survived a build
+  migration that left `idle` behind). The practical risk — a stray
+  Bash PostToolUse flipping a genuinely-ended turn back to `working` —
+  is a brief flicker; the next `Stop` re-idles within one tool round.
 
 **The poller** writes `prState` in response to the events documented in
 "How transitions are detected." The poller is the only writer of

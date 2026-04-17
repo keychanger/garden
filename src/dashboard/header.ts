@@ -199,24 +199,25 @@ export function handleClaudeHook(event: string): void {
   } else if (event === "stop") {
     fields.claudeStatus = "idle";
   } else if (event === "notification" || event === "pretooluse") {
-    // Mid-turn block: Claude needs user input (plan approval, question, etc.).
-    // The `asking` status + yellow row in the status pane IS the signal — no
-    // operator alert fires, because the bottom-bar badge is reserved for
-    // things that warrant attention beyond "a worker is waiting on you."
+    // Accept "working" (normal path) or "idle" (self-heal: a user-input
+    // tool firing is proof of active turn, so idle status is stale).
     const existing = findWorkerByName(workerInfo.project, workerInfo.worker);
-    if (existing?.claudeStatus === "working") {
+    const cs = existing?.claudeStatus;
+    if (cs === "working" || cs === "idle") {
       fields.claudeStatus = "asking";
     } else {
-      log.info("hook", "mid-turn asking hook skipped (not working)", {
+      log.info("hook", "mid-turn asking hook skipped (non-working, non-idle)", {
         worker: workerInfo.worker,
-        data: { project: workerInfo.project, event, claudeStatus: existing?.claudeStatus },
+        data: { project: workerInfo.project, event, claudeStatus: cs },
       });
     }
   } else if (event === "posttooluse") {
-    // User responded to a mid-turn prompt (plan approved, question answered).
-    // Only asking flips back — an idle (turn ended) worker must not revive.
+    // asking → working is the primary path (user answered, Claude resumes).
+    // idle → working is a self-heal: a PostToolUse arriving while idle means
+    // the turn is still active and our state is stale; trust the event.
     const existing = findWorkerByName(workerInfo.project, workerInfo.worker);
-    if (existing?.claudeStatus === "asking") {
+    const cs = existing?.claudeStatus;
+    if (cs === "asking" || cs === "idle") {
       fields.claudeStatus = "working";
     }
   } else {
