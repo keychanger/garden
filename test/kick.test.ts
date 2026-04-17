@@ -21,6 +21,7 @@ vi.mock("../src/dashboard/poller.js", () => ({
 
 vi.mock("../src/dashboard/git.js", () => ({
   resolveBaseBranch: vi.fn(() => "main"),
+  getWorkerBaseBranch: vi.fn((entry: { baseBranch?: string }) => entry.baseBranch ?? "main"),
   getCommitSummary: vi.fn(() => "abc123 some commit"),
 }));
 

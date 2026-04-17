@@ -87,6 +87,7 @@ vi.mock("../src/dashboard/create.js", () => ({
 vi.mock("../src/dashboard/git.js", () => ({
   worktreePath: vi.fn(() => "/home/user/.garden/worktrees/myproject/bold-ash"),
   resolveBaseBranch: vi.fn(() => "main"),
+  branchExistsOnOrigin: vi.fn(() => true),
   isWorktreeDirty: vi.fn(() => false),
 }));
 
@@ -113,7 +114,7 @@ import {
   addWorker, removeWorker, findWorkerByName, getAllWorkerNames, getWorkers,
 } from "../src/dashboard/registry.js";
 import { buildWorktreeBootstrapScript, createShellWindow, resolveGardenRunner } from "../src/dashboard/create.js";
-import { worktreePath, resolveBaseBranch, isWorktreeDirty } from "../src/dashboard/git.js";
+import { worktreePath, resolveBaseBranch, isWorktreeDirty, branchExistsOnOrigin } from "../src/dashboard/git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "../src/dashboard/poller.js";
 import { workerWindowName as workerWin, shellWindowName as shellWin, parseWorkerSuffix } from "../src/dashboard/window-names.js";
 import { getProject } from "../src/config.js";
@@ -260,6 +261,7 @@ describe("newWorker", () => {
       task: "",
       worktreePath: "/home/user/.garden/worktrees/myproject/bold-ash",
       branchName: "bold-ash",
+      baseBranch: "main",
       claudeStatus: "loading",
     });
   });
@@ -285,6 +287,17 @@ describe("newWorker", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     newWorker();
     expect(vi.mocked(refreshDashboard)).toHaveBeenCalledWith({ state: expect.any(Object) });
+  });
+
+  it("rejects creation when base branch is not on origin", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(branchExistsOnOrigin).mockReturnValueOnce(false);
+    newWorker();
+    expect(vi.mocked(addWorker)).not.toHaveBeenCalled();
+    expect(vi.mocked(tmuxDisplay)).toHaveBeenCalled();
+    const msg = vi.mocked(tmuxDisplay).mock.calls[0][0] as string;
+    expect(msg).toContain("not on origin");
+    expect(msg).toContain("main");
   });
 });
 

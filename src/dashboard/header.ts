@@ -8,11 +8,11 @@ import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
 import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields } from "./registry.js";
-import { currentBranch, resolveBaseBranch } from "./git.js";
+import { currentBranch, getWorkerBaseBranch } from "./git.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { triggerProjectPoll } from "./poller.js";
 import { log } from "./log.js";
-import { unreadAlertCount, formatRightBar } from "./alerts.js";
+import { unreadAlertCount, formatRightBar, addAlert, readAlerts } from "./alerts.js";
 import { workerWindowName as workerWin, parseWorkerWindow } from "./window-names.js";
 import { maybeRefreshUsage, renderUsagePane } from "./usage.js";
 import { resolveGardenRunner } from "./create.js";
@@ -276,11 +276,13 @@ export function handleClaudeHook(event: string): void {
 }
 
 function markPendingReviewIfCommitsAhead(projectName: string, workerName: string): void {
+  const project = tryGetProject(projectName);
+  if (!project) return;
+  const entry = findWorkerByName(projectName, workerName);
+  if (!entry) return;
+  const baseBranch = getWorkerBaseBranch(entry, project.path, project);
+  const cwd = process.cwd();
   try {
-    const project = tryGetProject(projectName);
-    if (!project) return;
-    const baseBranch = resolveBaseBranch(project.path, project);
-    const cwd = process.cwd();
     // git rev-list --count <base>..HEAD — counts commits ahead of base.
     // Returns "0" if no commits ahead, a positive number otherwise.
     const out = execFileSync("git", ["rev-list", "--count", `origin/${baseBranch}..HEAD`], {
@@ -298,12 +300,46 @@ function markPendingReviewIfCommitsAhead(projectName: string, workerName: string
       });
     }
   } catch (err) {
-    // Common: not a git dir, base branch missing, etc. The poller will
-    // recover on the next event source — do not fall back to a poll.
-    log.info("hook", "skipped poller poke (git check failed)", {
+    const errStr = String(err).slice(0, 200);
+    log.warn("hook", "skipped poller poke (git check failed)", {
       worker: workerName,
-      data: { project: projectName, error: String(err).slice(0, 200) },
+      data: { project: projectName, baseBranch, error: errStr },
     });
+    // Surface silent breakage: base branch drift is the primary way this
+    // catch fires in practice — without an alert, the worker looks idle
+    // forever and nobody notices the review cycle isn't running.
+    if (!hasRecentWorkerAlert(projectName, workerName, "base-drift")) {
+      addAlert({
+        level: "warn",
+        source: "worker",
+        project: projectName,
+        worker: workerName,
+        message: `Worker ${workerName}: cannot check commits against origin/${baseBranch} — base branch may be missing on origin or the worktree may be broken. Review cycle is stalled. [base-drift]`,
+      });
+    }
+  }
+}
+
+// Dedup: only fire a given "base-drift" alert once per worker per hour. The
+// Stop hook fires on every end-of-turn, so a persistently broken base would
+// otherwise spam the alert queue. The tag in the message is the dedup key.
+function hasRecentWorkerAlert(
+  projectName: string,
+  workerName: string,
+  tag: string,
+  withinMs = 60 * 60 * 1000,
+): boolean {
+  try {
+    const cutoff = Date.now() - withinMs;
+    return readAlerts().alerts.some(a =>
+      a.source === "worker" &&
+      a.project === projectName &&
+      a.worker === workerName &&
+      a.message.includes(`[${tag}]`) &&
+      new Date(a.ts).getTime() > cutoff,
+    );
+  } catch {
+    return false;
   }
 }
 

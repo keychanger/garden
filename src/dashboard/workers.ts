@@ -20,7 +20,7 @@ import {
 } from "./registry.js";
 import { log } from "./log.js";
 import { buildWorktreeBootstrapScript, createShellWindow, resolveGardenRunner } from "./create.js";
-import { worktreePath, resolveBaseBranch, isWorktreeDirty } from "./git.js";
+import { worktreePath, resolveBaseBranch, isWorktreeDirty, branchExistsOnOrigin } from "./git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
 import { getWorkers } from "./registry.js";
 import { workerWindowName as workerWin, parkingWindowName, shellWindowName as shellWin, parseWorkerSuffix } from "./window-names.js";
@@ -62,6 +62,21 @@ export function newWorker(): void {
 
     const baseBranch = resolveBaseBranch(project.path, project);
 
+    // A worker whose base branch isn't on origin breaks silently: every
+    // `origin/<base>..HEAD` check in the Stop hook and poller fails, so the
+    // review cycle never starts. Reject up front with clear remediation.
+    if (!branchExistsOnOrigin(project.path, baseBranch)) {
+      const msg = project.baseBranch
+        ? `Base branch '${baseBranch}' (from garden config) is not on origin. Push it, or run 'garden config ${project.name} baseBranch <branch>' with a branch that is.`
+        : `Base branch '${baseBranch}' (current branch of ${project.path}) is not on origin. Push it, switch the main checkout to a pushed branch, or run 'garden config ${project.name} baseBranch <branch>' to pin one explicitly.`;
+      tmuxDisplay(msg);
+      log.error("workers", "rejected newWorker: base branch not on origin", {
+        worker: workerName,
+        data: { project: state.activeProject, baseBranch },
+      });
+      return;
+    }
+
     // Write the bootstrap script that handles slow setup (git fetch, worktree
     // creation, npm install) inside the tmux pane so the window appears instantly
     // with progress output instead of blocking the hotkey handler.
@@ -92,6 +107,7 @@ export function newWorker(): void {
       task: "",
       worktreePath: wtPath,
       branchName,
+      baseBranch,
       claudeStatus: "loading",
     });
 

@@ -74,6 +74,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   installPollTriggerHook: vi.fn(),
   worktreeExists: vi.fn(),
   resolveBaseBranch: vi.fn(),
+  getWorkerBaseBranch: vi.fn(() => "main"),
 }));
 
 import { presizeHiddenWindows } from "../src/dashboard/create.js";

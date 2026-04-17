@@ -23,6 +23,13 @@ export interface WorkerEntry {
   task: string;       // last known task summary from pane title
   worktreePath?: string;
   branchName?: string;
+  // Base branch pinned at worker creation. Set by newWorker() after verifying
+  // origin/<baseBranch> exists. All consumers (poller, Stop hook, kick, resume)
+  // must prefer this over re-resolving from projectConfig/main-checkout —
+  // otherwise the worker silently breaks when the main checkout is switched
+  // to a local-only branch. Optional only for backward compat with workers
+  // created before this field existed; new workers always set it.
+  baseBranch?: string;
   prState?: PrState;
   lastSeenSha?: string;
   lastShaChangeAt?: string;

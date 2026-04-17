@@ -1,6 +1,6 @@
 import { readRegistry, updateWorkerFields } from "../dashboard/registry.js";
 import { triggerProjectPoll } from "../dashboard/poller.js";
-import { getCommitSummary, resolveBaseBranch } from "../dashboard/git.js";
+import { getCommitSummary, getWorkerBaseBranch } from "../dashboard/git.js";
 import { tryGetProject } from "../config.js";
 
 export async function kick(args: string[]): Promise<void> {
@@ -55,9 +55,9 @@ export async function kick(args: string[]): Promise<void> {
 
   const projectInfo = tryGetProject(project);
   if (projectInfo) {
-    const wtPath = registry.workers[project].find(e => e.name === workerName)?.worktreePath
-      ?? projectInfo.path;
-    const baseBranch = resolveBaseBranch(projectInfo.path, projectInfo);
+    const entry = registry.workers[project].find(e => e.name === workerName);
+    const wtPath = entry?.worktreePath ?? projectInfo.path;
+    const baseBranch = getWorkerBaseBranch(entry ?? {}, projectInfo.path, projectInfo);
     const commits = getCommitSummary(wtPath, baseBranch);
     if (!commits) {
       throw new Error(

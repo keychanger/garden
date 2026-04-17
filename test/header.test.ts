@@ -72,6 +72,7 @@ vi.mock("../src/dashboard/registry.js", () => ({
 
 vi.mock("../src/dashboard/git.js", () => ({
   resolveBaseBranch: vi.fn(() => "main"),
+  getWorkerBaseBranch: vi.fn((entry: { baseBranch?: string }) => entry.baseBranch ?? "main"),
   currentBranch: vi.fn(() => "main"),
 }));
 

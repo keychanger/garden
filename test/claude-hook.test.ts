@@ -79,6 +79,7 @@ vi.mock("../src/dashboard/registry.js", () => ({
 
 vi.mock("../src/dashboard/git.js", () => ({
   resolveBaseBranch: vi.fn(() => "main"),
+  getWorkerBaseBranch: vi.fn((entry: { baseBranch?: string }) => entry.baseBranch ?? "main"),
   currentBranch: vi.fn(() => "main"),
 }));
 
@@ -97,6 +98,7 @@ vi.mock("../src/version.js", () => ({
 
 vi.mock("../src/dashboard/alerts.js", () => ({
   addAlert: vi.fn(),
+  readAlerts: vi.fn(() => ({ alerts: [] })),
   unreadAlertCount: vi.fn(() => 0),
   formatRightBar: vi.fn(() => ""),
   refreshAlertBadge: vi.fn(),
@@ -311,6 +313,72 @@ describe("handleClaudeHook — core events", () => {
       "garden", "bold-ash",
       expect.objectContaining({ claudeStatus: "idle" }),
     );
+  });
+
+  it("stop fires base-drift alert when rev-list against origin/<base> throws", async () => {
+    seedWorker("garden", "bold-ash", {
+      claudeStatus: "working",
+      baseBranch: "improvement/hardening",
+    });
+    setCwd("garden", "bold-ash");
+
+    const { execFileSync } = await import("node:child_process");
+    // Stop handler runs rev-list, which should fail when origin/<base> is missing.
+    // Other execFileSync callers (e.g., git helpers, renderQuickStatus) should not
+    // be disturbed, so only the rev-list call throws.
+    vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[] | undefined;
+      if (argv && argv[0] === "rev-list") {
+        throw new Error("unknown revision origin/improvement/hardening");
+      }
+      return "0" as unknown as Buffer;
+    });
+
+    handleClaudeHook("stop");
+
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      level: "warn",
+      source: "worker",
+      project: "garden",
+      worker: "bold-ash",
+      message: expect.stringContaining("origin/improvement/hardening"),
+    }));
+    const msg = vi.mocked(addAlert).mock.calls[0][0].message;
+    expect(msg).toContain("[base-drift]");
+  });
+
+  it("stop skips duplicate base-drift alert within cooldown window", async () => {
+    seedWorker("garden", "bold-ash", {
+      claudeStatus: "working",
+      baseBranch: "improvement/hardening",
+    });
+    setCwd("garden", "bold-ash");
+
+    const { execFileSync } = await import("node:child_process");
+    vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[] | undefined;
+      if (argv && argv[0] === "rev-list") {
+        throw new Error("unknown revision");
+      }
+      return "0" as unknown as Buffer;
+    });
+
+    const { readAlerts } = await import("../src/dashboard/alerts.js");
+    vi.mocked(readAlerts).mockReturnValue({
+      alerts: [{
+        id: "prev",
+        ts: new Date().toISOString(),
+        level: "warn",
+        source: "worker",
+        project: "garden",
+        worker: "bold-ash",
+        message: "earlier alert [base-drift]",
+      }],
+    });
+
+    handleClaudeHook("stop");
+
+    expect(addAlert).not.toHaveBeenCalled();
   });
 
   it("unknown event logs warning and does not update", () => {

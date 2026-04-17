@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
 import { SESSIONS_DIR, type ProjectConfig } from "../config.js";
+import type { WorkerEntry } from "./registry.js";
 import { log } from "./log.js";
 
 const WORKTREE_BASE = path.join(
@@ -25,6 +26,32 @@ export function resolveBaseBranch(repoPath: string, projectConfig?: Pick<Project
     // origin/HEAD not set — common for --single-branch clones
   }
   return "main";
+}
+
+// Returns true if the named branch exists on the origin remote. Used to
+// validate a candidate base branch at worker creation — a worker targeting a
+// local-only branch breaks silently (every `origin/<base>..HEAD` check fails),
+// so we reject it up front.
+export function branchExistsOnOrigin(repoPath: string, branchName: string): boolean {
+  try {
+    const out = git(repoPath, "ls-remote", "--heads", "origin", branchName);
+    return out.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+// Return the worker's pinned base branch, falling back to project-level
+// resolution for legacy workers that predate the pinning. New workers always
+// carry entry.baseBranch; the fallback is only reached for entries written
+// before the field existed.
+export function getWorkerBaseBranch(
+  entry: Pick<WorkerEntry, "baseBranch">,
+  projectPath: string,
+  projectConfig?: Pick<ProjectConfig, "baseBranch">,
+): string {
+  if (entry.baseBranch) return entry.baseBranch;
+  return resolveBaseBranch(projectPath, projectConfig);
 }
 
 export function worktreePath(project: string, workerName: string): string {

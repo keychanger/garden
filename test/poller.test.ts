@@ -121,6 +121,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   getCommitSummary: vi.fn(() => "abc123 fix something"),
   getNewCommitSummary: vi.fn(() => "def456 address review feedback"),
   resolveBaseBranch: vi.fn(() => "main"),
+  getWorkerBaseBranch: vi.fn((entry: { baseBranch?: string }) => entry.baseBranch ?? "main"),
   ensureNoRebaseInProgress: vi.fn(),
   hasRebaseInProgress: vi.fn(() => false),
   isAncestor: vi.fn(() => true),

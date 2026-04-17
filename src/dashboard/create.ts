@@ -22,7 +22,7 @@ import { log, truncateLog } from "./log.js";
 import { validateAndHeal } from "./validate.js";
 import { startProjectPoller, signalFifoPath } from "./poller.js";
 import { startUsagePoller } from "./usage-poller.js";
-import { installPollTriggerHook, worktreeExists as wtExists, resolveBaseBranch, getRemoteHost } from "./git.js";
+import { installPollTriggerHook, worktreeExists as wtExists, getWorkerBaseBranch, getRemoteHost } from "./git.js";
 import { buildSandboxConfig, type SandboxConfig } from "./sandbox.js";
 import { claudeEnvPrefix } from "./claude-env.js";
 import { gardenWindowName, shellWindowName as shellWin, workerWindowName as workerWin, isGardenWindow } from "./window-names.js";
@@ -256,9 +256,11 @@ export function ensureDashboard(): void {
     const projectConfig = tryGetProject(projectName);
     if (!projectConfig) continue;
 
-    const baseBranch = resolveBaseBranch(projectConfig.path, projectConfig);
     for (const entry of entries) {
       if (!entry.sessionId) continue;
+      // Per-worker base: honors entry.baseBranch pinned at creation, falls
+      // back to project-level resolution for legacy entries.
+      const baseBranch = getWorkerBaseBranch(entry, projectConfig.path, projectConfig);
       if (entry.worktreePath && wtExists(entry.worktreePath)) {
         installPollTriggerHook(entry.worktreePath, gardenRunner, projectName);
         installClaudeHooks(entry.worktreePath, projectConfig);

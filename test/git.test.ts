@@ -45,6 +45,8 @@ import {
   resolveBaseBranch,
   currentBranch,
   getRemoteHost,
+  branchExistsOnOrigin,
+  getWorkerBaseBranch,
 } from "../src/dashboard/git.js";
 
 const mockExec = vi.mocked(execFileSync);
@@ -669,6 +671,45 @@ describe("resolveBaseBranch", () => {
       throw new Error("not a symbolic ref");
     });
     expect(resolveBaseBranch("/repo", {})).toBe("main");
+  });
+});
+
+describe("branchExistsOnOrigin", () => {
+  it("returns true when ls-remote --heads returns a ref", () => {
+    mockExec.mockReturnValue("abc123\trefs/heads/develop\n");
+    expect(branchExistsOnOrigin("/repo", "develop")).toBe(true);
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["ls-remote", "--heads", "origin", "develop"],
+      expect.objectContaining({ cwd: "/repo" }),
+    );
+  });
+
+  it("returns false when ls-remote output is empty", () => {
+    mockExec.mockReturnValue("");
+    expect(branchExistsOnOrigin("/repo", "phantom")).toBe(false);
+  });
+
+  it("returns false when git fails (no origin, network, etc.)", () => {
+    mockExec.mockImplementation(() => { throw new Error("no origin"); });
+    expect(branchExistsOnOrigin("/repo", "develop")).toBe(false);
+  });
+});
+
+describe("getWorkerBaseBranch", () => {
+  it("returns pinned entry.baseBranch without touching git", () => {
+    expect(getWorkerBaseBranch({ baseBranch: "develop" }, "/repo")).toBe("develop");
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
+  it("falls back to resolveBaseBranch when entry has no pinned base", () => {
+    mockExec.mockReturnValue("feature/x");
+    expect(getWorkerBaseBranch({}, "/repo")).toBe("feature/x");
+  });
+
+  it("falls back even when legacy entry passes through projectConfig", () => {
+    expect(getWorkerBaseBranch({}, "/repo", { baseBranch: "trunk" })).toBe("trunk");
+    expect(mockExec).not.toHaveBeenCalled();
   });
 });
 

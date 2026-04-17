@@ -19,7 +19,7 @@ import {
   rebaseBranch, abortRebase, cleanWorktree,
   forcePushBranch, mergeToBase, fastForwardBase, deleteRemoteBranch,
   getChangedFiles, getCommitSummary, getNewCommitSummary,
-  resolveBaseBranch,
+  getWorkerBaseBranch,
   ensureNoRebaseInProgress, hasRebaseInProgress, isAncestor, getUnmergedFiles,
 } from "./git.js";
 import { refreshDashboard, setupStatusBar } from "./header.js";
@@ -87,7 +87,6 @@ function pollProject(projectName: string): boolean {
   const project = tryGetProject(projectName);
   if (!project) return false;
 
-  const baseBranch = resolveBaseBranch(project.path, project);
   const workers = getWorkers(projectName);
   let changed = false;
 
@@ -96,6 +95,11 @@ function pollProject(projectName: string): boolean {
   });
 
   for (const entry of workers) {
+    // Resolve per-worker: baseBranch is pinned at creation (entry.baseBranch)
+    // so different workers in the same project can target different bases
+    // (e.g., config changed mid-flight). Legacy workers without the field
+    // fall back to project-level resolution.
+    const baseBranch = getWorkerBaseBranch(entry, project.path, project);
     try {
       if (pollWorker(projectName, project.path, baseBranch, entry)) {
         changed = true;

@@ -136,7 +136,11 @@ projects:
     postMerge: npm install && npm run build
 ```
 
-**baseBranch**: The branch that workers branch from and merge into. Resolution order: explicit config > current branch of main checkout > `origin/HEAD` symref > `"main"` as last resort. Most repos work without setting this.
+**baseBranch**: The branch that workers branch from and merge into. Resolution order at worker creation: explicit config > current branch of main checkout > `origin/HEAD` symref > `"main"` as last resort. Most repos work without setting this.
+
+The resolved value is validated against origin (`git ls-remote --heads origin <base>`) and pinned to the worker in the registry (`WorkerEntry.baseBranch`). A worker targeting a branch that isn't on origin is rejected at creation with a clear error, because every `origin/<base>..HEAD` check in the Stop hook and poller would fail silently and the review cycle would never start. Once pinned, all consumers (poller, Stop hook, kick, resume) use `getWorkerBaseBranch(entry, ...)` — they never re-resolve from `projectConfig` or the main checkout, so switching the main checkout's branch after a worker is spawned does not retarget that worker.
+
+If the Stop hook still fails to count commits ahead of `origin/<pinned-base>` (e.g., the base branch was deleted from origin after creation), it raises a one-per-hour `base-drift` alert (`source: worker`, `level: warn`) rather than silently swallowing the error.
 
 **checks**: Command the reviewer runs in the worker's worktree after rebasing onto the base branch, so checks validate the combined state of the branch plus latest base. If checks fail, the reviewer fixes the issues and re-runs. No checks configured means the reviewer only does the code review.
 

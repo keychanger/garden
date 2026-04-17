@@ -104,6 +104,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   installPollTriggerHook: vi.fn(),
   worktreeExists: vi.fn(() => true),
   resolveBaseBranch: vi.fn(() => "main"),
+  getWorkerBaseBranch: vi.fn((entry: { baseBranch?: string }) => entry.baseBranch ?? "main"),
   getRemoteHost: vi.fn(() => "github.com"),
 }));
 
