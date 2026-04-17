@@ -134,8 +134,7 @@ export function ensureDashboard(): void {
     // Re-install on reattach so dashboards from older builds pick up the guard.
     installInputGuard(healed);
 
-    // Heal any pre-existing logs pane from older builds (the disable flag is
-    // applied at creation, so dashboards started before this change miss it).
+    // Heal logs panes from older builds that pre-date the creation-time disable.
     try {
       const logsPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:_garden-logs`);
       if (logsPaneId) disablePaneInput(logsPaneId);
@@ -347,8 +346,6 @@ export function createLogsWindow(): void {
   if (paneId) {
     setPaneLabel(paneId, "logs");
     setPaneTitle(paneId, "logs");
-    // The flag travels with the pane content through swap-pane, so disabling
-    // here once means logs stays read-only every time it's swapped back in.
     disablePaneInput(paneId);
   }
 }

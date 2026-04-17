@@ -125,7 +125,7 @@ import {
   buildWorktreeWorkerCommand,
   buildWorktreeBootstrapScript,
 } from "../src/dashboard/create.js";
-import { tmux, tmuxSplit, getFirstPaneId, setPaneLabel, setPaneTitle, shellEscape } from "../src/dashboard/tmux.js";
+import { tmux, tmuxSplit, getFirstPaneId, setPaneLabel, setPaneTitle, shellEscape, disablePaneInput } from "../src/dashboard/tmux.js";
 
 const savedArgv1 = process.argv[1];
 afterAll(() => { process.argv[1] = savedArgv1; });
@@ -285,6 +285,11 @@ describe("createLogsWindow", () => {
   it("sets pane label to logs", () => {
     createLogsWindow();
     expect(setPaneLabel).toHaveBeenCalledWith("%5", "logs");
+  });
+
+  it("hard-disables pane input so logs stays read-only across swaps", () => {
+    createLogsWindow();
+    expect(disablePaneInput).toHaveBeenCalledWith("%5");
   });
 });
 
