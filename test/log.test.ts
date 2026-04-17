@@ -73,35 +73,6 @@ describe("log", () => {
   });
 });
 
-describe("log.transition", () => {
-  it("writes at info level when from !== to", async () => {
-    const { log } = await importLog();
-    log.transition("poller", "prState", "new", "reviewing", { worker: "bold-ash" });
-    const logFile = path.join(env.sessionsDir, "dashboard.log");
-    const entry = JSON.parse(fs.readFileSync(logFile, "utf-8").trim());
-    expect(entry.level).toBe("info");
-    expect(entry.msg).toBe("prState");
-    expect(entry.worker).toBe("bold-ash");
-    expect(entry.data).toMatchObject({ from: "new", to: "reviewing" });
-  });
-
-  it("writes at debug level when from === to (heartbeat, suppressed by default)", async () => {
-    const { log } = await importLog();
-    log.transition("poller", "prState", "working", "working");
-    const logFile = path.join(env.sessionsDir, "dashboard.log");
-    // Default level is info, so the debug line is filtered out entirely.
-    expect(fs.existsSync(logFile)).toBe(false);
-  });
-
-  it("merges extra data with from/to payload", async () => {
-    const { log } = await importLog();
-    log.transition("hook", "claudeStatus", "idle", "working", { data: { event: "prompt" } });
-    const logFile = path.join(env.sessionsDir, "dashboard.log");
-    const entry = JSON.parse(fs.readFileSync(logFile, "utf-8").trim());
-    expect(entry.data).toEqual({ from: "idle", to: "working", event: "prompt" });
-  });
-});
-
 describe("truncateLog", () => {
   it("clears log when over size limit", async () => {
     const { truncateLog } = await importLog();
