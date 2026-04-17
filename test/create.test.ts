@@ -208,12 +208,15 @@ describe("installClaudeHooks", () => {
     expect(catchAll.hooks[0].command).toContain("_claude-hook posttooluse");
   });
 
-  it("sets permissions.defaultMode to auto so workers start in Claude's auto-mode classifier", () => {
+  it("sets permissions.defaultMode to auto and pre-allows tmux so workers don't get prompted for harmless pane/window queries", () => {
     process.argv[1] = "/usr/local/bin/garden";
     installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
     const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
     const parsed = JSON.parse(written);
-    expect(parsed.permissions).toEqual({ defaultMode: "auto" });
+    expect(parsed.permissions).toEqual({
+      defaultMode: "auto",
+      allow: ["Bash(tmux:*)"],
+    });
   });
 });
 

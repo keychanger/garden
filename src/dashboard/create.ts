@@ -69,7 +69,10 @@ function buildSettingsJson(gardenRunner: string, sandbox: SandboxConfig): string
       }],
     },
     sandbox,
-    permissions: { defaultMode: "auto" },
+    permissions: {
+      defaultMode: "auto",
+      allow: ["Bash(tmux:*)"],
+    },
   }, null, 2);
 }
 
