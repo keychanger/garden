@@ -68,7 +68,7 @@ function buildSettingsJson(gardenRunner: string, sandbox: SandboxConfig): string
         hooks: [{ type: "command", command: `${hookCmd} posttooluse`, timeout: 5 }],
       }, {
         // Resumes "working" after the operator approves an auto-mode
-        // permission prompt (PermissionRequest flipped us to "idle").
+        // permission prompt (PermissionRequest flipped us to "asking").
         matcher: "Bash",
         hooks: [{ type: "command", command: `${hookCmd} posttooluse`, timeout: 5 }],
       }],

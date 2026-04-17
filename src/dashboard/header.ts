@@ -180,13 +180,7 @@ export function handleClaudeHook(event: string): void {
     return;
   }
 
-  // Branch on the Claude Code event:
-  //   sessionstart → claudeStatus = "ready"   (fresh worker, Claude loaded)
-  //   prompt       → claudeStatus = "working" (and clear stale `merged` prState)
-  //   stop         → claudeStatus = "idle"    (and poke poller if commits exist)
-  //   pretooluse   → claudeStatus = "idle"    (user-input tool about to execute)
-  //   posttooluse  → claudeStatus = "working" (user responded, Claude continues)
-  //   notification → claudeStatus = "idle"    (legacy, no longer configured)
+  // Branch on the Claude Code event: see STATUS.md for the full transition table.
   const fields: Partial<Pick<import("./registry.js").WorkerEntry,
     "claudeStatus" | "lastHookAt" | "prState" | "task">> = {
     lastHookAt: Date.now(),
