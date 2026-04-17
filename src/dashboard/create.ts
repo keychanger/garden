@@ -134,6 +134,13 @@ export function ensureDashboard(): void {
     // Re-install on reattach so dashboards from older builds pick up the guard.
     installInputGuard(healed);
 
+    // Heal any pre-existing logs pane from older builds (the disable flag is
+    // applied at creation, so dashboards started before this change miss it).
+    try {
+      const logsPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:_garden-logs`);
+      if (logsPaneId) disablePaneInput(logsPaneId);
+    } catch { /* window doesn't exist */ }
+
     return;
   }
 
@@ -340,6 +347,9 @@ export function createLogsWindow(): void {
   if (paneId) {
     setPaneLabel(paneId, "logs");
     setPaneTitle(paneId, "logs");
+    // The flag travels with the pane content through swap-pane, so disabling
+    // here once means logs stays read-only every time it's swapped back in.
+    disablePaneInput(paneId);
   }
 }
 
@@ -647,6 +657,8 @@ export function respawnLogsPane(state: DashboardState): void {
   try {
     tmux("respawn-pane", "-k", "-t", target, "sh", "-c", `sh ${shellEscape(scriptFile)}`);
   } catch { /* pane gone */ }
+  // Re-apply in case respawn-pane resets the flag.
+  disablePaneInput(target);
 }
 
 export function resolveGardenRunner(): string {
