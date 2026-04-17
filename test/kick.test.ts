@@ -100,8 +100,7 @@ describe("kick command", () => {
   });
 
   it("errors when Claude is mid-turn (claudeStatus=working)", async () => {
-    // Launching a reviewer against a live worktree races the worker's own
-    // in-flight commits, so kick refuses while Claude is still generating.
+    // A reviewer racing a live worker can force-push over unfinished commits.
     registryMock._setEntries("myproject", [makeWorker({ claudeStatus: "working" })]);
 
     await expect(kick(["bold-ash"])).rejects.toThrow(/currently working/);

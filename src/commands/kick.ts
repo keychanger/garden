@@ -43,12 +43,7 @@ export async function kick(args: string[]): Promise<void> {
       `poller log or the alerts panel.`,
     );
   }
-  // Refuse to kick a worker Claude is actively using — launching a reviewer
-  // against a live worktree races the worker's own in-flight commits and can
-  // let the reviewer force-push over unfinished work. The self-heal
-  // transitions in handleClaudeHook keep claudeStatus truthful: any tool-use
-  // hook flips a stale idle back to working, so checking the field here is
-  // safe.
+  // A reviewer racing a live worker can force-push over unfinished commits.
   if (claudeStatus === "working" || claudeStatus === "asking") {
     throw new Error(
       `Worker ${project}/${workerName} is currently ${claudeStatus} — Claude is ` +
