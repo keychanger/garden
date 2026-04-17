@@ -125,6 +125,17 @@ export function getPanePid(paneId: string): string | null {
   }
 }
 
+// `select-pane -d` blocks tmux from forwarding keystrokes to the pane's pty —
+// the chars never reach the terminal driver, so no echo, no buffering. Used on
+// the status/usage panes which run a passive sleep loop with nothing to read
+// stdin. Survives swap-pane (input-disabled is a pane-level flag) but not
+// respawn-pane, so callers must re-apply after each respawn.
+export function disablePaneInput(paneId: string): void {
+  try {
+    tmux("select-pane", "-d", "-t", paneId);
+  } catch { log.debug("tmux", "disablePaneInput failed", { data: { paneId } }); }
+}
+
 export function getPaneLabel(paneId: string): string | null {
   try {
     const label = tmuxOutput("display-message", "-t", paneId, "-p", "#{@garden_name}");

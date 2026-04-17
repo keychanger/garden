@@ -15,7 +15,7 @@ import { renderQuickStatus } from "../commands/status.js";
 import {
   tmux, tmuxOutput, tmuxSplit, setPaneTitle, setPaneLabel, setPaneVar,
   getFirstPaneId, shellEscape,
-  getPaneSize, resizeWindow, listAllWindowNames,
+  getPaneSize, resizeWindow, listAllWindowNames, disablePaneInput,
 } from "./tmux.js";
 import { readRegistry, updateWorkerFields } from "./registry.js";
 import { log, truncateLog } from "./log.js";
@@ -119,6 +119,7 @@ export function ensureDashboard(): void {
       try { tmux("respawn-pane", "-k", "-t", healed.usagePaneId, "sh", "-c", usageCmd); } catch { /* ignore */ }
       try { tmux("resize-pane", "-t", healed.usagePaneId, "-y", String(USAGE_PANE_HEIGHT)); } catch { /* pane may be gone */ }
       try { tmux("clear-history", "-t", healed.usagePaneId); } catch { /* ignore */ }
+      disablePaneInput(healed.usagePaneId);
     }
 
     // On reattach, any older client-resized hook from a prior build is removed
@@ -190,6 +191,8 @@ export function ensureDashboard(): void {
   setPaneLabel(statusId, "status");
   setPaneTitle(gardenShellId, "garden");
   setPaneLabel(gardenShellId, "garden");
+  disablePaneInput(usageId);
+  disablePaneInput(statusId);
   if (firstProject) {
     setPaneLabel(rightPaneId, `shell-${firstProject}`);
     setPaneTitle(rightPaneId, firstProject);
@@ -628,6 +631,7 @@ export function respawnStatusPane(state: DashboardState): void {
   try { tmux("respawn-pane", "-k", "-t", state.statusPaneId, "sh", "-c", statusCmd); } catch { /* ignore */ }
   try { tmux("resize-pane", "-t", state.statusPaneId, "-y", String(statusHeight)); } catch { /* pane may be gone */ }
   try { tmux("clear-history", "-t", state.statusPaneId); } catch { /* ignore */ }
+  disablePaneInput(state.statusPaneId);
 }
 
 // `garden logs --follow` caches the pre-rebuild bundle in memory; respawn so it picks up new code.
