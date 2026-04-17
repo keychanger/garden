@@ -34,7 +34,7 @@ export function parkToHidden(windowName: string, state: DashboardState): string 
 
   // Swap: active content goes to hidden window, temp comes to right slot
   tmux("swap-pane", "-s", state.activePaneId, "-t", tempPaneId);
-  log.info("layout", "parked to hidden", { data: { windowName } });
+  log.debug("layout", "parked to hidden", { data: { windowName } });
   state.activePaneId = tempPaneId;
   state.activePaneType = null;
   state.activeWindowName = null;
@@ -61,7 +61,7 @@ export function restoreFromHidden(windowName: string, state: DashboardState): vo
 
   tmux("swap-pane", "-s", state.activePaneId, "-t", targetPaneId);
   killWindowSafe(windowName);
-  log.info("layout", "restored from hidden", { data: { windowName } });
+  log.debug("layout", "restored from hidden", { data: { windowName } });
   state.activePaneId = targetPaneId;
 }
 
@@ -103,7 +103,7 @@ export function swapDirect(parkWindowName: string, restoreWindowName: string, st
   // Rename the hidden window (now holding old visible content) to the park name
   renameWindow(restoreWindowName, parkWindowName);
 
-  log.info("layout", "swapDirect", { data: { from: parkWindowName, to: restoreWindowName } });
+  log.debug("layout", "swapDirect", { data: { from: parkWindowName, to: restoreWindowName } });
   state.activePaneId = targetPaneId;
   return true;
 }
@@ -133,7 +133,7 @@ export function gardenParkToHidden(windowName: string, state: DashboardState): s
   }
 
   tmux("swap-pane", "-s", state.gardenShellPaneId, "-t", tempPaneId);
-  log.info("layout", "garden parked", { data: { windowName } });
+  log.debug("layout", "garden parked", { data: { windowName } });
   state.gardenShellPaneId = tempPaneId;
   state.gardenPaneType = null;
   state.gardenWindowName = null;
@@ -158,7 +158,7 @@ export function gardenRestoreFromHidden(windowName: string, state: DashboardStat
 
   tmux("swap-pane", "-s", state.gardenShellPaneId, "-t", targetPaneId);
   killWindowSafe(windowName);
-  log.info("layout", "garden restored", { data: { windowName } });
+  log.debug("layout", "garden restored", { data: { windowName } });
   state.gardenShellPaneId = targetPaneId;
 }
 

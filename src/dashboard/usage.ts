@@ -205,7 +205,7 @@ export async function refreshUsage(): Promise<UsageSnapshot> {
       const data = normalizeUsage(parsed);
       const snap: UsageSnapshot = { fetchedAt, data };
       writeUsageSnapshot(snap);
-      log.info("usage", "fetched", {
+      log.debug("usage", "fetched", {
         data: {
           source: cred.source,
           fiveHour: data.fiveHour?.pct,

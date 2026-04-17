@@ -97,7 +97,9 @@ function pollProject(projectName: string): boolean {
   const workers = getWorkers(projectName);
   let changed = false;
 
-  log.info("poller", "poll cycle", {
+  // Debug: fires on every FIFO poke, most of which produce no transition.
+  // Real state changes log at info via updateWorkerFields (registry.ts).
+  log.debug("poller", "poll cycle", {
     data: { project: projectName, workers: workers.map(w => w.name) },
   });
 
@@ -1250,7 +1252,7 @@ export function triggerProjectPoll(projectName: string): void {
     const fd = fs.openSync(fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
     fs.writeSync(fd, "\n");
     fs.closeSync(fd);
-    log.info("poller", "triggered poll", { data: { project: projectName } });
+    log.debug("poller", "triggered poll", { data: { project: projectName } });
   } catch {
     // FIFO not ready or poller not running
   }

@@ -250,8 +250,14 @@ export function handleClaudeHook(event: string): void {
     });
   }
 
-  // Structured diagnostic trail for "missed event" debugging.
-  log.info("hook", "claude hook", {
+  // Info only when something actually moved: a lifecycle event (sessionstart /
+  // prompt / stop) or a claudeStatus flip. Raw posttooluse/pretooluse that
+  // don't change state are heartbeats — demoted to debug so the default log
+  // level shows signal, not the per-tool-call stream.
+  const isLifecycle = event === "sessionstart" || event === "prompt" || event === "stop";
+  const stateChanged = fields.claudeStatus !== undefined || fields.prState !== undefined;
+  const level = isLifecycle || stateChanged ? "info" : "debug";
+  log[level]("hook", "claude hook", {
     worker: workerInfo.worker,
     data: {
       project: workerInfo.project,
