@@ -293,6 +293,144 @@ describe("poll — working state", () => {
       expect.objectContaining({ prState: "reviewing" }),
     );
   });
+
+  it("launchReview stamps reviewStartedAt and arms the timeout poke", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", claudeStatus: "idle", pendingReviewAt: Date.now() }),
+    ]);
+
+    poll("myproject");
+
+    const launchCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "reviewing",
+    );
+    expect(launchCall).toBeDefined();
+    expect((launchCall![2] as Record<string, unknown>).reviewStartedAt).toEqual(expect.any(Number));
+    // A 30-minute sleep must be armed so a hung reviewer eventually pokes the FIFO.
+    const timeoutSpawn = vi.mocked(spawn).mock.calls.find(
+      c => String(c[1]?.[1] ?? "").startsWith("sleep 1800"),
+    );
+    expect(timeoutSpawn).toBeDefined();
+  });
+});
+
+describe("poll — review/resolve timeout", () => {
+  const THIRTY_ONE_MIN_AGO = Date.now() - 31 * 60 * 1000;
+
+  it("reviewing → failing when the reviewer exceeds the 30-minute cap", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        reviewStartedAt: THIRTY_ONE_MIN_AGO,
+        lastSeenSha: "abc123",
+      }),
+    ]);
+    // Reviewer window is still alive — that is what makes this a timeout,
+    // not a normal completion.
+    vi.mocked(windowExists).mockReturnValue(true);
+
+    poll("myproject");
+
+    expect(killWindowSafe).toHaveBeenCalledWith("_myproject-review-bold-ash");
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        source: "review",
+        worker: "bold-ash",
+        message: expect.stringContaining("30-minute timeout"),
+      }),
+    );
+    const call = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "failing",
+    );
+    expect(call).toBeDefined();
+    const fields = call![2] as Record<string, unknown>;
+    expect(fields.failCount).toBe(1);
+    expect(fields.reviewWindowName).toBeUndefined();
+    expect(fields.reviewStartedAt).toBeUndefined();
+  });
+
+  it("resolving → failing when the resolver exceeds the cap, clears mergePendingAt", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "resolving",
+        reviewWindowName: "_myproject-review-bold-ash",
+        reviewStartedAt: THIRTY_ONE_MIN_AGO,
+        mergePendingAt: new Date(Date.now() - 2000).toISOString(),
+        preResolveSha: "pre-sha",
+        resolveAttempts: 1,
+        lastSeenSha: "abc123",
+      }),
+    ]);
+    vi.mocked(windowExists).mockReturnValue(true);
+
+    poll("myproject");
+
+    expect(killWindowSafe).toHaveBeenCalledWith("_myproject-review-bold-ash");
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        source: "review",
+        message: expect.stringContaining("Resolver"),
+      }),
+    );
+    const call = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "failing",
+    );
+    expect(call).toBeDefined();
+    const fields = call![2] as Record<string, unknown>;
+    // Resolver timeouts abandon the merge slot; the budget retry path is
+    // skipped because the timer's job is to break a wedge, not to keep
+    // retrying a wedged run.
+    expect(fields.mergePendingAt).toBeUndefined();
+    expect(fields.reviewStartedAt).toBeUndefined();
+  });
+
+  it("does not fire when the review window is already gone (normal completion)", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        reviewStartedAt: THIRTY_ONE_MIN_AGO,
+        lastSeenSha: "abc123",
+      }),
+    ]);
+    // Window is gone and no result file — this is a regular "review process
+    // failed" path, which must increment failCount via the normal flow, not
+    // via the timeout alert message.
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    poll("myproject");
+
+    expect(killWindowSafe).not.toHaveBeenCalled();
+    const timeoutAlert = vi.mocked(addAlert).mock.calls.find(
+      c => String((c[0] as { message: string }).message).includes("30-minute timeout"),
+    );
+    expect(timeoutAlert).toBeUndefined();
+  });
+
+  it("does not fire when the reviewer is still within the cap", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        reviewStartedAt: Date.now() - 60_000, // 1 minute ago
+        lastSeenSha: "abc123",
+      }),
+    ]);
+    vi.mocked(windowExists).mockReturnValue(true);
+
+    poll("myproject");
+
+    expect(killWindowSafe).not.toHaveBeenCalled();
+    expect(addAlert).not.toHaveBeenCalled();
+    // Normal "still in-flight" path — no transition.
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
 });
 
 describe("poll — reviewing state (async)", () => {
