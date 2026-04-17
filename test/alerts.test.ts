@@ -94,16 +94,15 @@ describe("addAlert", () => {
 
     addAlert({
       level: "warn",
-      source: "worker",
+      source: "rules",
       project: "myproject",
-      worker: "bold-ash",
-      message: "Worker bold-ash is asking for input — switch to it to respond",
+      message: `Rule suggestion ready: "overly-verbose-comments" (3 findings across 2 workers). Run \`garden rules suggest\`.`,
     });
 
     expect(log.warn).toHaveBeenCalledWith(
       "alert",
-      expect.stringContaining("asking for input"),
-      expect.objectContaining({ worker: "bold-ash" }),
+      expect.stringContaining("Rule suggestion ready"),
+      expect.objectContaining({ data: expect.objectContaining({ source: "rules" }) }),
     );
     expect(log.error).not.toHaveBeenCalled();
   });

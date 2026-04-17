@@ -63,7 +63,7 @@ export function addAlert(
 
   // Emit to dashboard.log so the line streams live into `garden logs --follow`
   // (the _garden-logs pane). Route by the alert's own level — warn alerts
-  // (e.g. "worker is asking for input") must not be miscategorized as errors.
+  // (e.g. rule suggestions) must not be miscategorized as errors.
   log[fields.level]("alert", fields.message, {
     worker: fields.worker,
     data: { project: fields.project, source: fields.source, level: fields.level },

@@ -206,7 +206,7 @@ Worker "needs operator input" events (AskUserQuestion, ExitPlanMode, auto-mode p
 
 **Visibility:**
 - Bottom bar shows a red `⚠ N alerts — ⌥l to clear` badge on the right when unread alerts exist. The badge appears instantly on `addAlert()` via `tmux set-option @garden_right` + `refresh-client -S`.
-- Every alert is also streamed to `dashboard.log` at its declared level (`warn` or `error`), so it appears live in the `garden logs --follow` pane (the `_garden-logs` window) with the `[!]` prefix. "Worker is asking for input" alerts land at `warn`; review/merge failures land at `error`.
+- Every alert is also streamed to `dashboard.log` at its declared level (`warn` or `error`), so it appears live in the `garden logs --follow` pane (the `_garden-logs` window) with the `[!]` prefix. Rule-suggestion alerts land at `warn`; review/merge failures land at `error`.
 - Pressing `⌥l` focuses the logs view **and** acknowledges all current alerts, clearing the badge. Acknowledgement is explicit — an alert that fires while the logs pane is already focused still lights the badge, so autonomous failures aren't silently missed when the user is away.
 - `garden alerts` lists full history (read and unread); `garden alerts clear` wipes the store.
 
