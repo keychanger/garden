@@ -99,6 +99,24 @@ describe("kick command", () => {
     expect(triggerProjectPoll).not.toHaveBeenCalled();
   });
 
+  it("errors when Claude is mid-turn (claudeStatus=working)", async () => {
+    // Launching a reviewer against a live worktree races the worker's own
+    // in-flight commits, so kick refuses while Claude is still generating.
+    registryMock._setEntries("myproject", [makeWorker({ claudeStatus: "working" })]);
+
+    await expect(kick(["bold-ash"])).rejects.toThrow(/currently working/);
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+    expect(triggerProjectPoll).not.toHaveBeenCalled();
+  });
+
+  it("errors when Claude is mid-turn (claudeStatus=asking)", async () => {
+    registryMock._setEntries("myproject", [makeWorker({ claudeStatus: "asking" })]);
+
+    await expect(kick(["bold-ash"])).rejects.toThrow(/currently asking/);
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+    expect(triggerProjectPoll).not.toHaveBeenCalled();
+  });
+
   it("errors when the worker has no commits ahead of base", async () => {
     registryMock._setEntries("myproject", [makeWorker()]);
     vi.mocked(getCommitSummary).mockReturnValue("");

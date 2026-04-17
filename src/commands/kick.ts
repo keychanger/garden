@@ -8,11 +8,21 @@ export async function kick(args: string[]): Promise<void> {
   if (!workerName) throw new Error("Usage: garden kick <worker>");
 
   const registry = readRegistry();
-  const matches: Array<{ project: string; worker: string; state?: string }> = [];
+  const matches: Array<{
+    project: string;
+    worker: string;
+    state?: string;
+    claudeStatus?: string;
+  }> = [];
   for (const [project, entries] of Object.entries(registry.workers)) {
     for (const entry of entries) {
       if (entry.name === workerName) {
-        matches.push({ project, worker: entry.name, state: entry.prState });
+        matches.push({
+          project,
+          worker: entry.name,
+          state: entry.prState,
+          claudeStatus: entry.claudeStatus,
+        });
       }
     }
   }
@@ -25,12 +35,26 @@ export async function kick(args: string[]): Promise<void> {
     throw new Error(`Multiple workers match '${workerName}':\n${list}\nKill or rename one first.`);
   }
 
-  const { project, state } = matches[0];
+  const { project, state, claudeStatus } = matches[0];
   if (state && state !== "working") {
     throw new Error(
       `Worker ${project}/${workerName} is in state '${state}', not 'working'. ` +
       `Kick only re-arms workers stranded in working — for other states, investigate the ` +
       `poller log or the alerts panel.`,
+    );
+  }
+  // Refuse to kick a worker Claude is actively using — launching a reviewer
+  // against a live worktree races the worker's own in-flight commits and can
+  // let the reviewer force-push over unfinished work. The self-heal
+  // transitions in handleClaudeHook keep claudeStatus truthful: any tool-use
+  // hook flips a stale idle back to working, so checking the field here is
+  // safe.
+  if (claudeStatus === "working" || claudeStatus === "asking") {
+    throw new Error(
+      `Worker ${project}/${workerName} is currently ${claudeStatus} — Claude is ` +
+      `still mid-turn. Kick only re-arms workers whose turn has ended ` +
+      `(claudeStatus=idle). Wait for the Stop hook, or if you believe the ` +
+      `status is truly stuck, edit the registry directly.`,
     );
   }
 
