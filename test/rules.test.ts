@@ -97,6 +97,25 @@ describe("buildWorktreeRules", () => {
     expect(result).not.toContain("into main");
   });
 
+  it("treats docs and configs as deliverables, not just code", async () => {
+    // Workers have regressed on doc-only tasks (e.g. "create CLAUDE.md"):
+    // they wrote the file, considered the task done, and stopped without
+    // committing or pushing. The wording must explicitly cover non-code files.
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("test-branch");
+    expect(result).toContain("docs");
+    expect(result).toContain("CLAUDE.md");
+  });
+
+  it("instructs to verify clean tree before ending turn", async () => {
+    // A pre-stop self-check is the cheapest way to catch the worker that
+    // wrote a file but never committed or pushed it.
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("test-branch");
+    expect(result).toContain("git status");
+    expect(result).toContain("@{u}..HEAD");
+  });
+
   it("explicitly forbids creating a side branch", async () => {
     // This directive prevents the worker side-branch trap that loops the
     // poller forever. See `feedback_worker_branch_trap` in agent memory and
