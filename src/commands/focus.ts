@@ -20,7 +20,7 @@ function setFocus(name: string, focused: boolean): void {
   if (!tryGetPlot(config, name)) {
     if (tryGetProject(name)) {
       throw new Error(
-        `'${name}' is a project, not a plot. Use 'garden plot add <plot> ${name}' to add it to a plot, or 'garden plot focus <plot>' to toggle a plot.`,
+        `'${name}' is a project, not a plot. Use 'garden plot add <plot> ${name}' to add it to a plot.`,
       );
     }
     throw new Error(`Unknown plot: ${name}. Run 'garden plot' to see plots.`);

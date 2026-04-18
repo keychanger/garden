@@ -20,6 +20,8 @@ vi.mock("../src/config.js", () => ({
   })),
   getProject: vi.fn((name: string) => ({ name, path: `/repo/${name}` })),
   getFocusedProjectNames: vi.fn(() => ["garden", "other"]),
+  plotsMap: vi.fn(() => ({})),
+  isPlotFocused: (plot: { focused?: boolean }) => plot.focused !== false,
   SESSIONS_DIR: "/tmp/fake-sessions",
 }));
 
@@ -93,6 +95,7 @@ import {
   focusRoot,
   focusLogs,
   cyclePane,
+  cyclePlot,
 } from "../src/dashboard/navigate.js";
 
 import { readDashState, writeDashState } from "../src/dashboard/state.js";
@@ -104,6 +107,7 @@ import {
   setPaneLabel, setPaneVar,
 } from "../src/dashboard/tmux.js";
 import { findWorkerByName } from "../src/dashboard/registry.js";
+import { plotsMap, getFocusedProjectNames } from "../src/config.js";
 import { acknowledgeAlerts } from "../src/dashboard/alerts.js";
 import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenConsoleWindow } from "../src/dashboard/create.js";
 import type { DashboardState } from "../src/dashboard/state.js";
@@ -771,5 +775,124 @@ describe("cyclePane", () => {
       state,
       windowNames: expect.arrayContaining(["_garden-worker-aaa"]),
     });
+  });
+});
+
+// =============================================================================
+// cyclePlot
+// =============================================================================
+
+describe("cyclePlot", () => {
+  it("displays message when no focused plots exist", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(plotsMap).mockReturnValue({
+      hidden: { projects: [], focused: false },
+    });
+
+    cyclePlot(1);
+
+    expect(tmuxDisplay).toHaveBeenCalledWith(
+      expect.stringContaining("No focused plots"),
+    );
+    expect(writeDashState).not.toHaveBeenCalled();
+  });
+
+  it("displays message when only one focused plot exists", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ activePlot: "lone" }));
+    vi.mocked(plotsMap).mockReturnValue({
+      lone: { projects: [] },
+    });
+
+    cyclePlot(1);
+
+    expect(tmuxDisplay).toHaveBeenCalledWith(
+      expect.stringContaining("Only one focused plot"),
+    );
+    expect(writeDashState).not.toHaveBeenCalled();
+  });
+
+  it("cycles forward from current to next focused plot, wrapping around", () => {
+    const state = makeState({ activePlot: "b", activeProject: "garden" });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(plotsMap).mockReturnValue({
+      a: { projects: ["garden"] },
+      b: { projects: ["garden"] },
+      c: { projects: ["garden"] },
+    });
+    vi.mocked(getFocusedProjectNames).mockReturnValue(["garden"]);
+
+    cyclePlot(1);
+    expect(state.activePlot).toBe("c");
+    expect(writeDashState).toHaveBeenCalledWith(state);
+  });
+
+  it("cycles backward, wrapping past index 0", () => {
+    const state = makeState({ activePlot: "a", activeProject: "garden" });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(plotsMap).mockReturnValue({
+      a: { projects: ["garden"] },
+      b: { projects: ["garden"] },
+      c: { projects: ["garden"] },
+    });
+    vi.mocked(getFocusedProjectNames).mockReturnValue(["garden"]);
+
+    cyclePlot(-1);
+    expect(state.activePlot).toBe("c");
+  });
+
+  it("skips unfocused plots entirely", () => {
+    const state = makeState({ activePlot: "a", activeProject: "garden" });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(plotsMap).mockReturnValue({
+      a: { projects: ["garden"] },
+      hidden: { projects: [], focused: false },
+      c: { projects: ["garden"] },
+    });
+    vi.mocked(getFocusedProjectNames).mockReturnValue(["garden"]);
+
+    cyclePlot(1);
+    expect(state.activePlot).toBe("c");
+  });
+
+  it("lands on first focused plot when current activePlot is not focused", () => {
+    const state = makeState({ activePlot: "hidden", activeProject: "garden" });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(plotsMap).mockReturnValue({
+      a: { projects: ["garden"] },
+      b: { projects: ["garden"] },
+      hidden: { projects: [], focused: false },
+    });
+    vi.mocked(getFocusedProjectNames).mockReturnValue(["garden"]);
+
+    cyclePlot(1);
+    expect(state.activePlot).toBe("a");
+  });
+
+  it("clamps activeProject to the new plot when current project is missing", () => {
+    const state = makeState({ activePlot: "a", activeProject: "garden" });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(plotsMap).mockReturnValue({
+      a: { projects: ["garden"] },
+      b: { projects: ["other"] },
+    });
+    vi.mocked(getFocusedProjectNames).mockReturnValue(["other"]);
+
+    cyclePlot(1);
+    expect(state.activePlot).toBe("b");
+    expect(state.activeProject).toBe("other");
+  });
+
+  it("keeps activeProject when it is a member of the new plot", () => {
+    const state = makeState({ activePlot: "a", activeProject: "garden" });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(plotsMap).mockReturnValue({
+      a: { projects: ["garden"] },
+      b: { projects: ["garden", "other"] },
+    });
+    vi.mocked(getFocusedProjectNames).mockReturnValue(["garden", "other"]);
+
+    cyclePlot(1);
+    expect(state.activePlot).toBe("b");
+    expect(state.activeProject).toBe("garden");
   });
 });

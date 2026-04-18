@@ -6,7 +6,7 @@
 // pgrep and does not read marker files. Before rendering, it refreshes
 // worker task summaries from live tmux pane titles so the registry stays
 // current between hook events.
-import { loadConfig, getFocusedProjectNames } from "../config.js";
+import { loadConfig, getFocusedProjectNames, PLOT_MAX_PROJECTS } from "../config.js";
 import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
@@ -126,7 +126,7 @@ export async function status(_args: string[]): Promise<void> {
 
   console.log("");
   if (dashState.activePlot) {
-    console.log(`  \x1b[2mplot: ${dashState.activePlot} (${names.length}/9)\x1b[0m`);
+    console.log(`  \x1b[2mplot: ${dashState.activePlot} (${names.length}/${PLOT_MAX_PROJECTS})\x1b[0m`);
     console.log("");
   }
   for (let pi = 0; pi < statuses.length; pi++) {
@@ -253,7 +253,7 @@ export function renderQuickStatus(state: DashboardState, windowNames?: string[])
 
   lines.push("");
   if (state.activePlot) {
-    lines.push(`  \x1b[2mplot: ${state.activePlot} (${names.length}/9)\x1b[0m`);
+    lines.push(`  \x1b[2mplot: ${state.activePlot} (${names.length}/${PLOT_MAX_PROJECTS})\x1b[0m`);
   }
   for (let pi = 0; pi < names.length; pi++) {
     if (pi > 0) lines.push("");
