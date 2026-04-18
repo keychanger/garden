@@ -37,7 +37,7 @@ beforeEach(() => {
 describe("parseArgs", () => {
   it("returns defaults with no arguments", () => {
     const f = parseArgs([]);
-    expect(f).toEqual({ count: 40, follow: false });
+    expect(f).toEqual({ count: 40, follow: false, showAll: false });
   });
 
   it("parses --follow / -f", () => {
@@ -76,6 +76,20 @@ describe("parseArgs", () => {
   it("ignores flags without values", () => {
     const f = parseArgs(["--level"]);
     expect(f.level).toBeUndefined();
+  });
+
+  it("parses --all / -a", () => {
+    expect(parseArgs(["--all"]).showAll).toBe(true);
+    expect(parseArgs(["-a"]).showAll).toBe(true);
+  });
+
+  it("parses --raw and --pretty as mode overrides", () => {
+    expect(parseArgs(["--raw"]).modeOverride).toBe("raw");
+    expect(parseArgs(["--pretty"]).modeOverride).toBe("pretty");
+  });
+
+  it("leaves modeOverride undefined by default", () => {
+    expect(parseArgs([]).modeOverride).toBeUndefined();
   });
 });
 

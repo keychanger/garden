@@ -281,3 +281,36 @@ describe("reorderProject", () => {
     expect(() => reorderProject(config, "a", 3)).toThrow("Position must be 1-2");
   });
 });
+
+describe("logs mode", () => {
+  it("defaults to pretty when nothing is persisted", async () => {
+    const { getLogsMode, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: {} });
+    expect(getLogsMode()).toBe("pretty");
+  });
+
+  it("returns the persisted mode when set to raw", async () => {
+    const { getLogsMode, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: {}, logs: { mode: "raw" } });
+    expect(getLogsMode()).toBe("raw");
+  });
+
+  it("setLogsMode round-trips through the config file", async () => {
+    const { getLogsMode, setLogsMode, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: {} });
+    setLogsMode("raw");
+    expect(getLogsMode()).toBe("raw");
+    setLogsMode("pretty");
+    expect(getLogsMode()).toBe("pretty");
+  });
+
+  it("treats an unknown stored value as pretty", async () => {
+    const { getLogsMode, GARDEN_DIR, CONFIG_PATH } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, "projects: {}\nlogs:\n  mode: gibberish\n");
+    expect(getLogsMode()).toBe("pretty");
+  });
+});
