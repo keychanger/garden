@@ -531,10 +531,7 @@ export function refreshDashboard(opts?: RefreshOptions): void {
   refreshUsagePane(opts);
 }
 
-// Lean refresh for worker cycling within a project: only the status pane's
-// active marker moves. Header (same project, same branch, same alerts),
-// worker tasks (unchanged by tabbing), and usage meters (unchanged by tabbing)
-// are all skipped so the keypress ends in one file write plus one SIGUSR1.
+// Lean refresh for worker cycling: skip header/tasks/usage since only the status marker moves.
 export function refreshDashboardCycle(opts?: RefreshOptions): void {
   writeQuickStatus(opts);
   refreshStatusPane(opts);
