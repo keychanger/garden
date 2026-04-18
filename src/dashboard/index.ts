@@ -79,12 +79,14 @@ export async function dashboard(args: string[]): Promise<void> {
     // Spawned via the rebuilt binary so respawnStatusPane bakes in the new code
     const { respawnStatusPane, respawnLogsPane, resolveGardenRunner } = await import("./create.js");
     const { readDashState } = await import("./state.js");
-    const { refreshDashboard } = await import("./header.js");
+    const { refreshDashboard, setupStatusBar } = await import("./header.js");
     const { restartLongLivedPollers } = await import("./poller.js");
     if (dashboardExists()) {
       const state = readDashState();
+      const runner = resolveGardenRunner();
+      try { setupStatusBar(runner); } catch { /* best effort — pick up format-string changes */ }
       try { respawnStatusPane(state); } catch { /* pane gone */ }
-      try { restartLongLivedPollers(resolveGardenRunner()); } catch { /* best effort */ }
+      try { restartLongLivedPollers(runner); } catch { /* best effort */ }
       try { respawnLogsPane(state); } catch { /* pane gone */ }
       try { refreshDashboard(); } catch { /* no attached client */ }
     }
