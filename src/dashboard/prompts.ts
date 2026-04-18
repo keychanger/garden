@@ -40,14 +40,9 @@ export function buildReviewPrompt(
   // Spec warning (if any spec files changed)
   sections.push(...specWarning);
 
-  // Step: Rebase
-  // `origin/${baseBranch}` is load-bearing: a worktree shares the object store
-  // with the main checkout, so the local `${baseBranch}` ref can be stuck
-  // behind origin when earlier merges failed to fast-forward the main checkout.
-  // Rebasing onto the stale local ref re-picks commits that origin already has
-  // with different SHAs, which cascades into unresolvable dup-SHA conflicts in
-  // the merge queue. The resolver (below) and the merge-queue rebase both use
-  // `origin/<base>` for this same reason.
+  // Rebase onto `origin/<base>`, not the local ref: the worktree's local base can
+  // lag behind origin when a prior main-checkout fast-forward failed, and rebasing
+  // on a stale ref produces dup-SHA conflicts downstream in the merge queue.
   sections.push(
     `## Step ${rebaseStep}: Rebase onto origin/${baseBranch}`,
     "",
