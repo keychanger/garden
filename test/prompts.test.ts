@@ -50,9 +50,15 @@ beforeEach(() => {
 });
 
 describe("buildReviewPrompt — initial review", () => {
-  it("includes rebase instructions", () => {
+  it("rebases onto origin, not the local base ref", () => {
+    // The local base ref in a worktree can be stuck behind origin (prior
+    // merges that failed to fast-forward the main checkout). Rebasing onto
+    // the stale local ref re-picks commits that origin already has with
+    // different SHAs, which cascades into unresolvable dup-SHA conflicts
+    // in the merge queue.
     const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry());
-    expect(result).toContain("git rebase main");
+    expect(result).toContain("git rebase origin/main");
+    expect(result).not.toMatch(/git rebase main\b/);
   });
 
   it("includes full code review step", () => {

@@ -41,10 +41,17 @@ export function buildReviewPrompt(
   sections.push(...specWarning);
 
   // Step: Rebase
+  // `origin/${baseBranch}` is load-bearing: a worktree shares the object store
+  // with the main checkout, so the local `${baseBranch}` ref can be stuck
+  // behind origin when earlier merges failed to fast-forward the main checkout.
+  // Rebasing onto the stale local ref re-picks commits that origin already has
+  // with different SHAs, which cascades into unresolvable dup-SHA conflicts in
+  // the merge queue. The resolver (below) and the merge-queue rebase both use
+  // `origin/<base>` for this same reason.
   sections.push(
-    `## Step ${rebaseStep}: Rebase onto ${baseBranch}`,
+    `## Step ${rebaseStep}: Rebase onto origin/${baseBranch}`,
     "",
-    `Run \`git rebase ${baseBranch}\` in the worktree. If there are conflicts:`,
+    `Run \`git rebase origin/${baseBranch}\` in the worktree. If there are conflicts:`,
     "- Resolve them sensibly (preserve the intent of both sides)",
     "- `git add` resolved files and `git rebase --continue`",
     "- If a conflict is truly unresolvable, abort the rebase and report FAILED",

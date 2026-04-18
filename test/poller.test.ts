@@ -1356,7 +1356,7 @@ describe("poll — reviewer prompt", () => {
     ]);
   }
 
-  it("includes rebase instructions", () => {
+  it("rebases onto origin, not the local base ref", () => {
     setupForReview();
 
     poll("myproject");
@@ -1366,7 +1366,8 @@ describe("poll — reviewer prompt", () => {
       String(c[0]).includes("review-prompt"),
     );
     expect(promptCall).toBeDefined();
-    expect(String(promptCall![1])).toContain("git rebase main");
+    expect(String(promptCall![1])).toContain("git rebase origin/main");
+    expect(String(promptCall![1])).not.toMatch(/git rebase main\b/);
   });
 
   it("includes checks command when configured", () => {
