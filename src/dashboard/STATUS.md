@@ -330,7 +330,7 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   it is the only event that reports "a permission dialog is actually
   being shown" (unlike `PreToolUse`, which fires for every tool call
   and would flicker the dashboard on every auto-approved bash). Each
-  worktree's `.claude/settings.local.json` sets
+  worktree's `.claude/settings.json` sets
   `permissions.defaultMode: "auto"` so every Claude process in that
   worktree (worker, reviewer, resolver, resume) starts in auto mode
   and this hook is the one-stop signal for operator-attention-required

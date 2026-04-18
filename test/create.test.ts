@@ -384,6 +384,21 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(script).toContain("dashboard _bootstrap-alert 'myproject' 'develop'");
   });
 
+  it("writes Claude hooks to .claude/settings.json, not settings.local.json", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "main",
+    );
+    const call = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    );
+    expect(call).toBeDefined();
+    const script = call![1] as string;
+    expect(script).toContain("/.claude/settings.json");
+    expect(script).not.toContain("/.claude/settings.local.json");
+  });
+
   it("uses origin/<base> for the worktree branch when baseBranch has a slash in the name", () => {
     process.argv[1] = "/usr/local/bin/garden";
     buildWorktreeBootstrapScript(
