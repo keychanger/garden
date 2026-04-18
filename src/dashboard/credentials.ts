@@ -81,18 +81,72 @@ export function captureKeychainTo(credFile: string): boolean {
   }
 }
 
+// Fingerprints the current OAuth credential so we can detect when /login writes
+// a new one. macOS stores in the shared Keychain regardless of CLAUDE_CONFIG_DIR;
+// Linux stores per-config-dir on disk.
+function credentialFingerprint(configDir?: string): string {
+  if (process.platform === "darwin") {
+    try {
+      return execFileSync(
+        "security",
+        ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+      ).trim();
+    } catch {
+      return "";
+    }
+  }
+  const dir = configDir ?? path.join(os.homedir(), ".claude");
+  const file = path.join(dir, ".credentials.json");
+  try {
+    const s = fs.statSync(file);
+    return `${s.mtimeMs}:${s.size}`;
+  } catch {
+    return "";
+  }
+}
+
 // Strips inherited CLAUDE_CONFIG_DIR so profile-tagged panes don't leak.
+// `claude /login` drops into the REPL after success; we poll the credential
+// store and send SIGTERM once it updates so the caller returns to shell.
 export async function runClaudeLogin(configDir?: string): Promise<void> {
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.CLAUDE_CONFIG_DIR;
   if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
 
+  const initial = credentialFingerprint(configDir);
+
   await new Promise<void>((resolve, reject) => {
     const child = spawn("claude", ["/login"], { stdio: "inherit", env });
+
+    let succeeded = false;
+    const poll = setInterval(() => {
+      const current = credentialFingerprint(configDir);
+      if (current && current !== initial) {
+        succeeded = true;
+        clearInterval(poll);
+        // Let claude render "Login successful" before killing.
+        setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) {
+            child.kill("SIGTERM");
+            setTimeout(() => {
+              if (child.exitCode === null && child.signalCode === null) {
+                child.kill("SIGKILL");
+              }
+            }, 3000);
+          }
+        }, 1000);
+      }
+    }, 500);
+
     child.on("close", (code) => {
-      if (code === 0) resolve();
+      clearInterval(poll);
+      if (succeeded || code === 0) resolve();
       else reject(new Error(`claude /login exited with code ${code}`));
     });
-    child.on("error", reject);
+    child.on("error", (err) => {
+      clearInterval(poll);
+      reject(err);
+    });
   });
 }
