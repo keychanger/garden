@@ -15,6 +15,7 @@ describe("readDashState", () => {
     const state = readDashState();
     expect(state).toEqual({
       activeProject: null,
+      activePlot: null,
       statusPaneId: null,
       usagePaneId: null,
       gardenShellPaneId: null,
@@ -40,6 +41,7 @@ describe("writeDashState / readDashState", () => {
     const { readDashState, writeDashState } = await importState();
     const original = {
       activeProject: "myproject",
+      activePlot: null,
       statusPaneId: "%1",
       usagePaneId: null,
       gardenShellPaneId: "%2",

@@ -13,7 +13,7 @@ import { printHeader, handleClaudeHook, handlePaneDied, handleTitleChanged } fro
 import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
 import { newWorker, killPane, bounceActiveWorker } from "./workers.js";
-import { switchProject, focusWorker, focusShell, focusGarden, focusRoot, focusLogs, cyclePane } from "./navigate.js";
+import { switchProject, focusWorker, focusShell, focusGarden, focusRoot, focusLogs, cyclePane, cyclePlot } from "./navigate.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
 import { runUsagePollerLoop, stopUsagePoller } from "./usage-poller.js";
 import { loadConfig } from "../config.js";
@@ -50,6 +50,7 @@ export async function dashboard(args: string[]): Promise<void> {
   if (sub === "_focus-root") return focusRoot();
   if (sub === "_focus-logs") return focusLogs();
   if (sub === "_cycle-pane") return cyclePane(args[1] === "prev" ? -1 : 1);
+  if (sub === "_cycle-plot") return cyclePlot(args[1] === "prev" ? -1 : 1);
   if (sub === "_kill-pane") return killPane();
   if (sub === "_bounce") return bounceActiveWorker();
   if (sub === "_poll") {
@@ -135,7 +136,8 @@ Layout:
   Right: active pane (worker or shell). Info in status bar.
 
 Hotkeys (⌥ = Option/Alt, no prefix needed):
-  ⌥1 – ⌥9     Switch to project by number
+  ⌥1 – ⌥9     Switch to project by number (within active plot)
+  ⌥p / ⌥P     Cycle to next/previous focused plot
   ⌥n           New worker (Claude session)
   ⌥w           Jump to first worker
   ⌥s           Jump to project shell

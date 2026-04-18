@@ -1,5 +1,5 @@
 // Removes a project from the garden config.
-import { loadConfig, saveConfig } from "../config.js";
+import { loadConfig, saveConfig, purgeProjectFromPlots } from "../config.js";
 
 export async function remove(args: string[]): Promise<void> {
   const name = args[0];
@@ -13,6 +13,7 @@ export async function remove(args: string[]): Promise<void> {
   }
 
   delete config.projects[name];
+  purgeProjectFromPlots(config, name);
   saveConfig(config);
   console.log(`Removed project '${name}'`);
 }

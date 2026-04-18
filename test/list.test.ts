@@ -58,27 +58,9 @@ describe("garden list", () => {
     expect(mockOutput).toHaveBeenCalledOnce();
     const data = mockOutput.mock.calls[0][0];
     expect(data).toEqual([
-      { name: "alpha", path: "/alpha", index: 1, focused: true },
-      { name: "beta", path: "/beta", index: 2, focused: true },
+      { name: "alpha", path: "/alpha", index: 1 },
+      { name: "beta", path: "/beta", index: 2 },
     ]);
-  });
-
-  it("marks unfocused projects in pretty output", async () => {
-    const config = await setup();
-    config.saveConfig({
-      projects: {
-        alpha: { path: "/alpha" },
-        beta: { path: "/beta", focused: false },
-      },
-    });
-
-    const { list } = await importList();
-    await list();
-
-    const pretty = mockOutput.mock.calls[0][1] as (data: unknown) => string;
-    const formatted = pretty(mockOutput.mock.calls[0][0]);
-    expect(formatted).toContain("unfocused");
-    expect(formatted).toContain("beta");
   });
 
   it("pretty-printer shows index, name, and path", async () => {
@@ -93,16 +75,5 @@ describe("garden list", () => {
     expect(formatted).toContain("1.");
     expect(formatted).toContain("myproj");
     expect(formatted).toContain("/my/project");
-  });
-
-  it("treats missing focused field as focused (default true)", async () => {
-    const config = await setup();
-    config.saveConfig({ projects: { proj: { path: "/proj" } } });
-
-    const { list } = await importList();
-    await list();
-
-    const data = mockOutput.mock.calls[0][0];
-    expect(data[0].focused).toBe(true);
   });
 });

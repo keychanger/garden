@@ -10,6 +10,9 @@ let originalHome: string | undefined;
 vi.mock("../src/dashboard/header.js", () => ({
   refreshDashboard: vi.fn(),
 }));
+vi.mock("../src/session.js", () => ({
+  dashboardExists: () => false,
+}));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -31,44 +34,46 @@ async function setup() {
   return config;
 }
 
-import { refreshDashboard } from "../src/dashboard/header.js";
-
 describe("garden focus", () => {
   it("throws when no name arg given", async () => {
     await setup();
     const { focus } = await import("../src/commands/focus.js");
-    await expect(focus([])).rejects.toThrow("Usage: garden focus <project>");
+    await expect(focus([])).rejects.toThrow("Usage: garden focus <plot>");
   });
 
-  it("throws for unknown project", async () => {
+  it("throws for unknown plot", async () => {
     const config = await setup();
-    config.saveConfig({ projects: {} });
+    config.saveConfig({ projects: {}, plots: {} });
     const { focus } = await import("../src/commands/focus.js");
-    await expect(focus(["ghost"])).rejects.toThrow("Unknown project: ghost");
+    await expect(focus(["ghost"])).rejects.toThrow("Unknown plot: ghost");
   });
 
-  it("reports already focused when project has no focused field", async () => {
+  it("steers users who pass a project name toward the plot commands", async () => {
     const config = await setup();
-    config.saveConfig({ projects: { a: { path: "/a" } } });
+    config.saveConfig({ projects: { a: { path: "/a" } }, plots: {} });
     const { focus } = await import("../src/commands/focus.js");
+    await expect(focus(["a"])).rejects.toThrow(/is a project, not a plot/);
+  });
 
-    const lines = await captureConsoleLog(() => focus(["a"]));
+  it("reports already focused for a focused plot", async () => {
+    const config = await setup();
+    config.saveConfig({ projects: {}, plots: { imp: { projects: [] } } });
+    const { focus } = await import("../src/commands/focus.js");
+    const lines = await captureConsoleLog(() => focus(["imp"]));
     expect(lines.some(l => l.includes("already focused"))).toBe(true);
-    expect(refreshDashboard).not.toHaveBeenCalled();
   });
 
-  it("focuses a previously unfocused project", async () => {
+  it("focuses a previously unfocused plot", async () => {
     const config = await setup();
-    config.saveConfig({ projects: { a: { path: "/a", focused: false } } });
+    config.saveConfig({
+      projects: {},
+      plots: { imp: { projects: [], focused: false } },
+    });
     const { focus } = await import("../src/commands/focus.js");
-
-    const lines = await captureConsoleLog(() => focus(["a"]));
-
-    expect(lines.some(l => l.includes("Focused 'a'"))).toBe(true);
-    expect(refreshDashboard).toHaveBeenCalled();
-
+    const lines = await captureConsoleLog(() => focus(["imp"]));
+    expect(lines.some(l => l.includes("Focused plot 'imp'"))).toBe(true);
     const loaded = config.loadConfig();
-    expect(loaded.projects["a"].focused).toBeUndefined();
+    expect(loaded.plots?.imp).not.toHaveProperty("focused");
   });
 });
 
@@ -76,37 +81,34 @@ describe("garden unfocus", () => {
   it("throws when no name arg given", async () => {
     await setup();
     const { unfocus } = await import("../src/commands/focus.js");
-    await expect(unfocus([])).rejects.toThrow("Usage: garden unfocus <project>");
+    await expect(unfocus([])).rejects.toThrow("Usage: garden unfocus <plot>");
   });
 
-  it("throws for unknown project", async () => {
+  it("throws for unknown plot", async () => {
     const config = await setup();
-    config.saveConfig({ projects: {} });
+    config.saveConfig({ projects: {}, plots: {} });
     const { unfocus } = await import("../src/commands/focus.js");
-    await expect(unfocus(["ghost"])).rejects.toThrow("Unknown project: ghost");
+    await expect(unfocus(["ghost"])).rejects.toThrow("Unknown plot: ghost");
   });
 
   it("reports already unfocused", async () => {
     const config = await setup();
-    config.saveConfig({ projects: { a: { path: "/a", focused: false } } });
+    config.saveConfig({
+      projects: {},
+      plots: { imp: { projects: [], focused: false } },
+    });
     const { unfocus } = await import("../src/commands/focus.js");
-
-    const lines = await captureConsoleLog(() => unfocus(["a"]));
+    const lines = await captureConsoleLog(() => unfocus(["imp"]));
     expect(lines.some(l => l.includes("already unfocused"))).toBe(true);
-    expect(refreshDashboard).not.toHaveBeenCalled();
   });
 
-  it("unfocuses a focused project", async () => {
+  it("unfocuses a focused plot", async () => {
     const config = await setup();
-    config.saveConfig({ projects: { a: { path: "/a" } } });
+    config.saveConfig({ projects: {}, plots: { imp: { projects: [] } } });
     const { unfocus } = await import("../src/commands/focus.js");
-
-    const lines = await captureConsoleLog(() => unfocus(["a"]));
-
-    expect(lines.some(l => l.includes("Unfocused 'a'"))).toBe(true);
-    expect(refreshDashboard).toHaveBeenCalled();
-
+    const lines = await captureConsoleLog(() => unfocus(["imp"]));
+    expect(lines.some(l => l.includes("Unfocused plot 'imp'"))).toBe(true);
     const loaded = config.loadConfig();
-    expect(loaded.projects["a"].focused).toBe(false);
+    expect(loaded.plots?.imp.focused).toBe(false);
   });
 });

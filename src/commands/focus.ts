@@ -1,37 +1,37 @@
-// Focus or unfocus projects to control dashboard visibility.
-import { loadConfig, saveConfig, getProject } from "../config.js";
+// Focus or unfocus plots: controls whether a plot appears in the ⌥p cycle.
+import { loadConfig, saveConfig, getPlot, tryGetPlot, setPlotFocused, isPlotFocused, tryGetProject } from "../config.js";
+import { dashboardExists } from "../session.js";
 import { refreshDashboard } from "../dashboard/header.js";
 
 export async function focus(args: string[]): Promise<void> {
   const name = args[0];
-  if (!name) throw new Error("Usage: garden focus <project>");
-
-  const project = getProject(name);
-  if (project.focused !== false) {
-    console.log(`Project '${name}' is already focused.`);
-    return;
-  }
-
-  const config = loadConfig();
-  delete config.projects[name].focused;
-  saveConfig(config);
-  refreshDashboard();
-  console.log(`Focused '${name}'`);
+  if (!name) throw new Error("Usage: garden focus <plot>");
+  setFocus(name, true);
 }
 
 export async function unfocus(args: string[]): Promise<void> {
   const name = args[0];
-  if (!name) throw new Error("Usage: garden unfocus <project>");
+  if (!name) throw new Error("Usage: garden unfocus <plot>");
+  setFocus(name, false);
+}
 
-  const project = getProject(name);
-  if (project.focused === false) {
-    console.log(`Project '${name}' is already unfocused.`);
+function setFocus(name: string, focused: boolean): void {
+  const config = loadConfig();
+  if (!tryGetPlot(config, name)) {
+    if (tryGetProject(name)) {
+      throw new Error(
+        `'${name}' is a project, not a plot. Use 'garden plot add <plot> ${name}' to add it to a plot, or 'garden plot focus <plot>' to toggle a plot.`,
+      );
+    }
+    throw new Error(`Unknown plot: ${name}. Run 'garden plot' to see plots.`);
+  }
+  const plot = getPlot(config, name);
+  if (isPlotFocused(plot) === focused) {
+    console.log(`Plot '${name}' is already ${focused ? "focused" : "unfocused"}.`);
     return;
   }
-
-  const config = loadConfig();
-  config.projects[name].focused = false;
+  setPlotFocused(config, name, focused);
   saveConfig(config);
-  refreshDashboard();
-  console.log(`Unfocused '${name}'`);
+  console.log(`${focused ? "Focused" : "Unfocused"} plot '${name}'.`);
+  if (dashboardExists()) refreshDashboard();
 }

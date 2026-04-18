@@ -72,12 +72,17 @@ const SPINNER_FRAMES = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u283
 // Left side: active project and its base branch
 // ---------------------------------------------------------------------------
 
-function formatLeft(activeProject: string | null, config: ReturnType<typeof loadConfig>): string {
+function formatLeft(
+  activeProject: string | null,
+  activePlot: string | null,
+  config: ReturnType<typeof loadConfig>,
+): string {
   if (!activeProject) return " no projects";
   const projectConfig = config.projects[activeProject];
   const repoPath = projectConfig?.path ?? "";
   const branch = repoPath ? (currentBranch(repoPath) ?? "main") : "main";
-  return ` #[bold]${activeProject}#[default]  ${branch} `;
+  const plotPrefix = activePlot ? `${activePlot} #[fg=colour244]\u203a#[default] ` : "";
+  return ` ${plotPrefix}#[bold]${activeProject}#[default]  ${branch} `;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,7 +105,7 @@ export function updateHeaderVar(opts?: RefreshOptions): void {
   const state = opts?.state ?? readDashState();
   const config = loadConfig();
 
-  const left = formatLeft(state.activeProject, config);
+  const left = formatLeft(state.activeProject, state.activePlot, config);
   const right = formatRight();
   setBarVars(left, right);
 }

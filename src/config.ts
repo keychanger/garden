@@ -13,22 +13,29 @@ export const GARDEN_DIR = path.join(HOME, ".garden");
 export const CONFIG_PATH = path.join(GARDEN_DIR, "config.yml");
 export const SESSIONS_DIR = path.join(GARDEN_DIR, "sessions");
 
+export const PLOT_MAX_PROJECTS = 9;
+export const DEFAULT_PLOT = "all";
+
 export interface ProjectConfig {
   path: string;
   baseBranch?: string;
   checks?: string;
   postMerge?: string;
-  focused?: boolean;
   sandboxDomains?: string[];
   claudeProfile?: string;
 }
 
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
-  "path", "baseBranch", "checks", "postMerge", "focused", "sandboxDomains", "claudeProfile",
+  "path", "baseBranch", "checks", "postMerge", "sandboxDomains", "claudeProfile",
 ]);
 
 export function isValidConfigKey(key: string): boolean {
   return VALID_CONFIG_KEYS.has(key);
+}
+
+export interface PlotConfig {
+  projects: string[];
+  focused?: boolean;
 }
 
 export interface ClaudeProfile {
@@ -50,6 +57,7 @@ export interface LogsConfig {
 
 export interface GardenConfig {
   projects: Record<string, ProjectConfig>;
+  plots?: Record<string, PlotConfig>;
   claudeProfiles?: Record<string, ClaudeProfile>;
   logs?: LogsConfig;
 }
@@ -109,8 +117,27 @@ export function loadConfig(): GardenConfig {
     );
   }
   const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
-  const parsed = yaml.load(raw) as GardenConfig | null;
-  return parsed ?? { projects: {} };
+  const parsed = (yaml.load(raw) as GardenConfig | null) ?? { projects: {} };
+  if (!parsed.projects) parsed.projects = {};
+  if (migratePlots(parsed)) {
+    saveConfig(parsed);
+  }
+  return parsed;
+}
+
+// One-shot migration: when a config predates plots, synthesize `all` from
+// currently focused projects and strip the now-unused `focused` project flag.
+// Idempotent — re-running on a migrated config is a no-op.
+function migratePlots(config: GardenConfig): boolean {
+  if (config.plots) return false;
+  const focusedNames = Object.keys(config.projects).filter(
+    name => (config.projects[name] as ProjectConfig & { focused?: boolean }).focused !== false,
+  );
+  config.plots = { [DEFAULT_PLOT]: { projects: focusedNames } };
+  for (const project of Object.values(config.projects)) {
+    delete (project as ProjectConfig & { focused?: boolean }).focused;
+  }
+  return true;
 }
 
 export function saveConfig(config: GardenConfig): void {
@@ -182,36 +209,23 @@ export function resolveProject(nameArg?: string): ProjectConfig & { name: string
 }
 
 /**
- * Detect project name by matching a directory against registered project paths.
- * Defaults to cwd when no directory is provided.
+ * Project names visible in the dashboard, in the order ⌥1–⌥N should index them.
+ * Resolution: the active plot if set and valid; otherwise the first focused plot;
+ * otherwise the DEFAULT_PLOT ("all"). Stale project names are defensively filtered.
  */
-export function getFocusedProjectNames(config?: GardenConfig): string[] {
+export function getFocusedProjectNames(
+  config?: GardenConfig,
+  activePlot?: string | null,
+): string[] {
   const cfg = config ?? loadConfig();
-  return Object.keys(cfg.projects).filter(
-    name => cfg.projects[name].focused !== false
-  );
-}
-
-export function orderProject(config: GardenConfig, name: string, position: number): void {
-  const keys = Object.keys(config.projects);
-  if (!keys.includes(name)) throw new Error(`Unknown project: ${name}`);
-  if (config.projects[name].focused === false) {
-    throw new Error(`Cannot order unfocused project '${name}' — focus it first.`);
-  }
-  const focusedNames = keys.filter(k => config.projects[k].focused !== false);
-  const index = position - 1;
-  if (index < 0 || index >= focusedNames.length) {
-    throw new Error(`Position must be 1-${focusedNames.length}`);
-  }
-  const newFocused = focusedNames.filter(k => k !== name);
-  newFocused.splice(index, 0, name);
-  let cursor = 0;
-  const reordered: Record<string, ProjectConfig> = {};
-  for (const k of keys) {
-    const key = config.projects[k].focused === false ? k : newFocused[cursor++];
-    reordered[key] = config.projects[key];
-  }
-  config.projects = reordered;
+  const plots = cfg.plots ?? {};
+  const plotName =
+    (activePlot && plots[activePlot] ? activePlot : null) ??
+    firstFocusedPlotName(cfg) ??
+    (plots[DEFAULT_PLOT] ? DEFAULT_PLOT : null);
+  if (!plotName) return [];
+  const plot = plots[plotName];
+  return plot.projects.filter(n => n in cfg.projects);
 }
 
 export function detectProjectFromPath(dir?: string): string | undefined {
@@ -233,4 +247,178 @@ export function detectProjectFromPath(dir?: string): string | undefined {
     // Config not initialized yet
   }
   return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Plots: CRUD + validation
+// ---------------------------------------------------------------------------
+
+export function plotsMap(config: GardenConfig): Record<string, PlotConfig> {
+  if (!config.plots) config.plots = {};
+  return config.plots;
+}
+
+export function plotNames(config: GardenConfig): string[] {
+  return Object.keys(plotsMap(config));
+}
+
+export function getPlot(config: GardenConfig, name: string): PlotConfig {
+  const plot = plotsMap(config)[name];
+  if (!plot) {
+    throw new Error(`Unknown plot: ${name}. Run 'garden plot' to see plots.`);
+  }
+  return plot;
+}
+
+export function tryGetPlot(config: GardenConfig, name: string): PlotConfig | null {
+  return plotsMap(config)[name] ?? null;
+}
+
+export function isPlotFocused(plot: PlotConfig): boolean {
+  return plot.focused !== false;
+}
+
+export function firstFocusedPlotName(config: GardenConfig): string | null {
+  for (const [name, plot] of Object.entries(plotsMap(config))) {
+    if (isPlotFocused(plot)) return name;
+  }
+  return null;
+}
+
+function assertPlotName(name: string): void {
+  if (!name || /\s/.test(name)) {
+    throw new Error(`Invalid plot name: '${name}'. Use a short, whitespace-free identifier.`);
+  }
+}
+
+function assertProjectsExist(config: GardenConfig, names: string[]): void {
+  for (const n of names) {
+    if (!config.projects[n]) {
+      throw new Error(`Unknown project: ${n}. Run 'garden list' to see projects.`);
+    }
+  }
+}
+
+export function createPlot(config: GardenConfig, name: string, projects: string[]): void {
+  assertPlotName(name);
+  if (plotsMap(config)[name]) {
+    throw new Error(`Plot '${name}' already exists.`);
+  }
+  if (projects.length > PLOT_MAX_PROJECTS) {
+    throw new Error(`Plot '${name}' exceeds the ${PLOT_MAX_PROJECTS}-project limit.`);
+  }
+  assertProjectsExist(config, projects);
+  const deduped = [...new Set(projects)];
+  plotsMap(config)[name] = { projects: deduped };
+}
+
+export function deletePlot(config: GardenConfig, name: string): void {
+  if (!plotsMap(config)[name]) {
+    throw new Error(`Unknown plot: ${name}.`);
+  }
+  delete plotsMap(config)[name];
+}
+
+export function renamePlot(config: GardenConfig, oldName: string, newName: string): void {
+  assertPlotName(newName);
+  const plots = plotsMap(config);
+  if (!plots[oldName]) throw new Error(`Unknown plot: ${oldName}.`);
+  if (plots[newName]) throw new Error(`Plot '${newName}' already exists.`);
+  const rebuilt: Record<string, PlotConfig> = {};
+  for (const [k, v] of Object.entries(plots)) {
+    rebuilt[k === oldName ? newName : k] = v;
+  }
+  config.plots = rebuilt;
+}
+
+export function addProjectToPlot(
+  config: GardenConfig,
+  plotName: string,
+  projectName: string,
+  position?: number,
+): void {
+  const plot = getPlot(config, plotName);
+  assertProjectsExist(config, [projectName]);
+  if (plot.projects.includes(projectName)) {
+    throw new Error(`Project '${projectName}' is already in plot '${plotName}'.`);
+  }
+  if (plot.projects.length >= PLOT_MAX_PROJECTS) {
+    throw new Error(`Plot '${plotName}' is full (${PLOT_MAX_PROJECTS}).`);
+  }
+  if (position == null) {
+    plot.projects.push(projectName);
+    return;
+  }
+  const idx = position - 1;
+  if (idx < 0 || idx > plot.projects.length) {
+    throw new Error(`Position must be 1-${plot.projects.length + 1}.`);
+  }
+  plot.projects.splice(idx, 0, projectName);
+}
+
+export function removeProjectFromPlot(
+  config: GardenConfig,
+  plotName: string,
+  projectName: string,
+): void {
+  const plot = getPlot(config, plotName);
+  const idx = plot.projects.indexOf(projectName);
+  if (idx === -1) {
+    throw new Error(`Project '${projectName}' is not in plot '${plotName}'.`);
+  }
+  plot.projects.splice(idx, 1);
+}
+
+export function reorderProjectInPlot(
+  config: GardenConfig,
+  plotName: string,
+  projectName: string,
+  position: number,
+): void {
+  const plot = getPlot(config, plotName);
+  const idx = plot.projects.indexOf(projectName);
+  if (idx === -1) {
+    throw new Error(`Project '${projectName}' is not in plot '${plotName}'.`);
+  }
+  const target = position - 1;
+  if (target < 0 || target >= plot.projects.length) {
+    throw new Error(`Position must be 1-${plot.projects.length}.`);
+  }
+  plot.projects.splice(idx, 1);
+  plot.projects.splice(target, 0, projectName);
+}
+
+export function reorderPlotInCycle(
+  config: GardenConfig,
+  plotName: string,
+  position: number,
+): void {
+  const plots = plotsMap(config);
+  const keys = Object.keys(plots);
+  if (!keys.includes(plotName)) throw new Error(`Unknown plot: ${plotName}.`);
+  const target = position - 1;
+  if (target < 0 || target >= keys.length) {
+    throw new Error(`Position must be 1-${keys.length}.`);
+  }
+  const filtered = keys.filter(k => k !== plotName);
+  filtered.splice(target, 0, plotName);
+  const rebuilt: Record<string, PlotConfig> = {};
+  for (const k of filtered) rebuilt[k] = plots[k];
+  config.plots = rebuilt;
+}
+
+export function setPlotFocused(
+  config: GardenConfig,
+  plotName: string,
+  focused: boolean,
+): void {
+  const plot = getPlot(config, plotName);
+  if (focused) delete plot.focused;
+  else plot.focused = false;
+}
+
+export function purgeProjectFromPlots(config: GardenConfig, projectName: string): void {
+  for (const plot of Object.values(plotsMap(config))) {
+    plot.projects = plot.projects.filter(n => n !== projectName);
+  }
 }

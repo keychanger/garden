@@ -11,7 +11,8 @@ Garden Dashboard Keybindings (⌥ = Option/Alt)
     ⌥] / ⌥[     Cycle workers (right pane) or views (garden pane)
 
   Projects
-    ⌥1 – ⌥9     Switch to project by number
+    ⌥1 – ⌥9     Switch to project by number (within active plot)
+    ⌥p / ⌥P     Cycle to next/previous focused plot
 
   Workers
     ⌥n           New worker (Claude session)

@@ -6,7 +6,6 @@ interface ProjectInfo {
   name: string;
   path: string;
   index: number;
-  focused: boolean;
 }
 
 export async function list(): Promise<void> {
@@ -22,16 +21,12 @@ export async function list(): Promise<void> {
     name,
     path: config.projects[name].path,
     index: i + 1,
-    focused: config.projects[name].focused !== false,
   }));
 
   output(projects, (data) => {
     const items = data as ProjectInfo[];
     return items
-      .map((p) => {
-        const suffix = p.focused ? "" : "  \x1b[2m(unfocused)\x1b[0m";
-        return `  ${p.index}. ${p.name.padEnd(16)} ${p.path}${suffix}`;
-      })
+      .map((p) => `  ${p.index}. ${p.name.padEnd(16)} ${p.path}`)
       .join("\n");
   });
 }

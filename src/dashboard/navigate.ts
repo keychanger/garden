@@ -1,5 +1,5 @@
 // Pane navigation: project switching, worker/shell focus, cycling.
-import { loadConfig, getProject, getFocusedProjectNames } from "../config.js";
+import { loadConfig, getProject, getFocusedProjectNames, plotsMap, isPlotFocused } from "../config.js";
 import { readDashState, writeDashState, withStateLock } from "./state.js";
 import { parkToHidden, swapToHidden, swapDirect } from "./layout.js";
 import { restoreFromHidden } from "./layout.js";
@@ -38,7 +38,8 @@ export function switchProject(indexArg: string): void {
   log.info("navigate", "switchProject", { data: { index: indexArg } });
   const index = parseInt(indexArg, 10) - 1;
   const config = loadConfig();
-  const projectNames = getFocusedProjectNames(config);
+  const initialState = readDashState();
+  const projectNames = getFocusedProjectNames(config, initialState.activePlot);
 
   if (index < 0 || index >= projectNames.length) {
     tmuxDisplay(`No project at index ${index + 1}`);
@@ -230,6 +231,46 @@ export function focusRoot(): void {
 export function focusLogs(): void {
   switchGardenTo("logs");
   acknowledgeAlerts();
+}
+
+export function cyclePlot(direction: 1 | -1): void {
+  withStateLock(() => {
+    const config = loadConfig();
+    const plots = plotsMap(config);
+    const focusedNames = Object.keys(plots).filter(name => isPlotFocused(plots[name]));
+
+    if (focusedNames.length === 0) {
+      tmuxDisplay("No focused plots. Use 'garden focus <plot>' to add one to the cycle.");
+      return;
+    }
+    if (focusedNames.length === 1) {
+      tmuxDisplay(`Only one focused plot ('${focusedNames[0]}').`);
+      return;
+    }
+
+    const state = readDashState();
+    const currentIdx = state.activePlot ? focusedNames.indexOf(state.activePlot) : -1;
+    const nextIdx = currentIdx === -1
+      ? (direction === 1 ? 0 : focusedNames.length - 1)
+      : (currentIdx + direction + focusedNames.length) % focusedNames.length;
+
+    const target = focusedNames[nextIdx];
+    if (target === state.activePlot) return;
+
+    log.info("navigate", "cyclePlot", { data: { direction, from: state.activePlot, to: target } });
+    state.activePlot = target;
+
+    // Clamp activeProject to the new plot's membership so ⌥1–⌥9 address the
+    // right set immediately. If the current activeProject isn't in the new
+    // plot, fall back to the first project in the plot.
+    const newProjects = getFocusedProjectNames(config, target);
+    if (state.activeProject && !newProjects.includes(state.activeProject)) {
+      state.activeProject = newProjects[0] ?? null;
+    }
+
+    writeDashState(state);
+    refreshDashboard({ state });
+  });
 }
 
 export function cyclePane(direction: 1 | -1): void {

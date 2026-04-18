@@ -23,7 +23,7 @@ const aliases: Record<string, string> = {
   dash: "dashboard",
   register: "add",
   unregister: "remove",
-  reorder: "order",
+  p: "plot",
 };
 
 // Top-level shortcut: garden exit → garden dashboard exit
@@ -58,14 +58,25 @@ Usage: garden <command> [args]
 Projects:
   init                           Initialize garden config
   add [path]                     Add a project (defaults to current directory)
-  remove <name>                  Remove a project
+  remove <name>                  Remove a project (also purges from plots)
   list, ls                       List all projects
   config <project> [key] [value] View or set project config
-  focus <name>                   Show project in dashboard
-  unfocus <name>                 Hide project from dashboard
-  order <name> <position>        Move project to position (1-based, among focused)
   claude-profile [list|add|remove|login]
                                  Manage alternate Claude config dirs (per-project plan)
+
+Plots (named, ordered subsets of projects — drive the dashboard view):
+  plot, p                        List plots (marks active with *)
+  plot <name>                    Activate plot (switch view)
+  plot create <name> [proj...]   Create a plot (auto-activates if none active)
+  plot delete <name>             Delete a plot
+  plot rename <old> <new>        Rename a plot
+  plot add <plot> <project> [at N]    Add a project to a plot
+  plot remove <plot> <project>   Remove a project from a plot
+  plot reorder <plot> <proj> <N> Move project within a plot
+  plot show <name>               Print a plot's ordered contents
+  focus <plot>                   Include plot in the ⌥p cycle
+  unfocus <plot>                 Exclude plot from the ⌥p cycle
+  reorder <plot> <position>      Move plot within the ⌥p cycle
 
 Auth:
   login [profile]                Re-authenticate Claude (personal, or a profile)

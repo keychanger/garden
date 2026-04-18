@@ -95,25 +95,88 @@ describe("resolveProject", () => {
 });
 
 describe("getFocusedProjectNames", () => {
-  it("returns all projects when none are unfocused", async () => {
+  it("returns all plot projects when no focused filter is needed", async () => {
     const { getFocusedProjectNames, saveConfig, GARDEN_DIR } = await importConfig();
     fs.mkdirSync(GARDEN_DIR, { recursive: true });
-    saveConfig({ projects: { a: { path: "/a" }, b: { path: "/b" } } });
+    saveConfig({
+      projects: { a: { path: "/a" }, b: { path: "/b" } },
+      plots: { all: { projects: ["a", "b"] } },
+    });
     expect(getFocusedProjectNames()).toEqual(["a", "b"]);
   });
 
-  it("excludes projects with focused: false", async () => {
+  it("returns the active plot's projects when specified", async () => {
     const { getFocusedProjectNames, saveConfig, GARDEN_DIR } = await importConfig();
     fs.mkdirSync(GARDEN_DIR, { recursive: true });
-    saveConfig({ projects: { a: { path: "/a" }, b: { path: "/b", focused: false }, c: { path: "/c" } } });
-    expect(getFocusedProjectNames()).toEqual(["a", "c"]);
+    saveConfig({
+      projects: { a: { path: "/a" }, b: { path: "/b" }, c: { path: "/c" } },
+      plots: {
+        all: { projects: ["a", "b", "c"] },
+        mini: { projects: ["b"] },
+      },
+    });
+    expect(getFocusedProjectNames(undefined, "mini")).toEqual(["b"]);
   });
 
-  it("accepts a config argument", async () => {
+  it("falls back to the first focused plot when active plot is missing", async () => {
+    const { getFocusedProjectNames, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({
+      projects: { a: { path: "/a" }, b: { path: "/b" } },
+      plots: {
+        hidden: { projects: ["a"], focused: false },
+        main: { projects: ["b"] },
+      },
+    });
+    expect(getFocusedProjectNames(undefined, "nonexistent")).toEqual(["b"]);
+  });
+
+  it("filters projects that no longer exist in config", async () => {
     const { getFocusedProjectNames, GARDEN_DIR } = await importConfig();
     fs.mkdirSync(GARDEN_DIR, { recursive: true });
-    const config = { projects: { x: { path: "/x", focused: false }, y: { path: "/y" } } };
-    expect(getFocusedProjectNames(config)).toEqual(["y"]);
+    const config = {
+      projects: { a: { path: "/a" } },
+      plots: { all: { projects: ["a", "ghost"] } },
+    };
+    expect(getFocusedProjectNames(config, "all")).toEqual(["a"]);
+  });
+});
+
+describe("plots migration", () => {
+  it("synthesizes an 'all' plot from currently focused projects", async () => {
+    const { loadConfig, GARDEN_DIR, CONFIG_PATH } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    fs.writeFileSync(
+      CONFIG_PATH,
+      "projects:\n  a:\n    path: /a\n  b:\n    path: /b\n    focused: false\n  c:\n    path: /c\n",
+    );
+    const config = loadConfig();
+    expect(config.plots).toEqual({ all: { projects: ["a", "c"] } });
+  });
+
+  it("drops the deprecated per-project focused flag during migration", async () => {
+    const { loadConfig, GARDEN_DIR, CONFIG_PATH } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    fs.writeFileSync(
+      CONFIG_PATH,
+      "projects:\n  a:\n    path: /a\n  b:\n    path: /b\n    focused: false\n",
+    );
+    loadConfig();
+    const after = loadConfig();
+    expect(after.projects.b).not.toHaveProperty("focused");
+  });
+
+  it("is idempotent when plots already exist", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR, CONFIG_PATH } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({
+      projects: { a: { path: "/a" } },
+      plots: { custom: { projects: ["a"] } },
+    });
+    const before = fs.readFileSync(CONFIG_PATH, "utf-8");
+    loadConfig();
+    const after = fs.readFileSync(CONFIG_PATH, "utf-8");
+    expect(after).toBe(before);
   });
 });
 
@@ -250,74 +313,6 @@ describe("detectProjectFromPath", () => {
     fs.mkdirSync(GARDEN_DIR, { recursive: true });
     saveConfig({ projects: { code: { path: "/home/user/code" } } });
     expect(detectProjectFromPath("/other/path")).toBeUndefined();
-  });
-});
-
-describe("orderProject", () => {
-  it("moves a project to a new position", async () => {
-    const { orderProject } = await importConfig();
-    const config = { projects: { a: { path: "/a" }, b: { path: "/b" }, c: { path: "/c" } } };
-    orderProject(config, "c", 1);
-    expect(Object.keys(config.projects)).toEqual(["c", "a", "b"]);
-  });
-
-  it("moves a project to the end", async () => {
-    const { orderProject } = await importConfig();
-    const config = { projects: { a: { path: "/a" }, b: { path: "/b" }, c: { path: "/c" } } };
-    orderProject(config, "a", 3);
-    expect(Object.keys(config.projects)).toEqual(["b", "c", "a"]);
-  });
-
-  it("positions are relative to focused projects only", async () => {
-    const { orderProject } = await importConfig();
-    const config = {
-      projects: {
-        a: { path: "/a" },
-        b: { path: "/b", focused: false },
-        c: { path: "/c" },
-        d: { path: "/d" },
-      },
-    };
-    orderProject(config, "d", 1);
-    expect(Object.keys(config.projects)).toEqual(["d", "b", "a", "c"]);
-  });
-
-  it("rejects positions beyond the focused count", async () => {
-    const { orderProject } = await importConfig();
-    const config = {
-      projects: {
-        a: { path: "/a" },
-        b: { path: "/b", focused: false },
-        c: { path: "/c" },
-      },
-    };
-    expect(() => orderProject(config, "a", 3)).toThrow("Position must be 1-2");
-  });
-
-  it("throws when target is unfocused", async () => {
-    const { orderProject } = await importConfig();
-    const config = {
-      projects: {
-        a: { path: "/a" },
-        b: { path: "/b", focused: false },
-      },
-    };
-    expect(() => orderProject(config, "b", 1)).toThrow(
-      "Cannot order unfocused project 'b'"
-    );
-  });
-
-  it("throws for unknown project", async () => {
-    const { orderProject } = await importConfig();
-    const config = { projects: { a: { path: "/a" } } };
-    expect(() => orderProject(config, "z", 1)).toThrow("Unknown project: z");
-  });
-
-  it("throws for out-of-range position", async () => {
-    const { orderProject } = await importConfig();
-    const config = { projects: { a: { path: "/a" }, b: { path: "/b" } } };
-    expect(() => orderProject(config, "a", 0)).toThrow("Position must be 1-2");
-    expect(() => orderProject(config, "a", 3)).toThrow("Position must be 1-2");
   });
 });
 

@@ -93,14 +93,13 @@ function refreshWorkerTasks(state: DashboardState): void {
 
 export async function status(_args: string[]): Promise<void> {
   const config = loadConfig();
-  const names = getFocusedProjectNames(config);
+  const dashState = readDashState();
+  const names = getFocusedProjectNames(config, dashState.activePlot);
 
   if (names.length === 0) {
     console.log("No projects added.");
     return;
   }
-
-  const dashState = readDashState();
   const hasDashboard = dashboardExists();
 
   if (hasDashboard) refreshWorkerTasks(dashState);
@@ -126,6 +125,10 @@ export async function status(_args: string[]): Promise<void> {
   const activityMax = Math.max(20, cols - (8 + nameWidth + 2 + statusWidth + 2));
 
   console.log("");
+  if (dashState.activePlot) {
+    console.log(`  \x1b[2mplot: ${dashState.activePlot} (${names.length}/9)\x1b[0m`);
+    console.log("");
+  }
   for (let pi = 0; pi < statuses.length; pi++) {
     if (pi > 0) console.log("");
     const project = statuses[pi];
@@ -233,7 +236,7 @@ function collectWorkers(
  */
 export function renderQuickStatus(state: DashboardState, windowNames?: string[]): string {
   const config = loadConfig();
-  const names = getFocusedProjectNames(config);
+  const names = getFocusedProjectNames(config, state.activePlot);
   if (names.length === 0) return "No projects added.";
 
   const lines: string[] = [];
@@ -249,6 +252,9 @@ export function renderQuickStatus(state: DashboardState, windowNames?: string[])
   const statusWidth = STATUS_WIDTH;
 
   lines.push("");
+  if (state.activePlot) {
+    lines.push(`  \x1b[2mplot: ${state.activePlot} (${names.length}/9)\x1b[0m`);
+  }
   for (let pi = 0; pi < names.length; pi++) {
     if (pi > 0) lines.push("");
     const name = names[pi];

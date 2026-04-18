@@ -5,7 +5,7 @@ import {
   dashboardExists,
   DASHBOARD_SESSION,
 } from "../session.js";
-import { loadConfig, tryGetProject, getFocusedProjectNames, SESSIONS_DIR, type ProjectConfig } from "../config.js";
+import { loadConfig, tryGetProject, getFocusedProjectNames, firstFocusedPlotName, plotNames, SESSIONS_DIR, type ProjectConfig } from "../config.js";
 import { buildRulesContext, buildWorktreeRules } from "../rules.js";
 import { type DashboardState, readDashState, writeDashState, STATE_FILE } from "./state.js";
 import { restoreFromHidden } from "./layout.js";
@@ -144,6 +144,9 @@ export function ensureDashboard(): void {
 
   truncateLog();
   log.info("dashboard", "creating new dashboard");
+  // Preserve the previous activePlot across dashboard recreation so a user
+  // who ran `garden plot imp` before launching the dashboard lands on imp.
+  const priorActivePlot = readDashState().activePlot;
   try { fs.unlinkSync(STATE_FILE); } catch { /* ignore */ }
 
   const gardenRunner = resolveGardenRunner();
@@ -151,7 +154,10 @@ export function ensureDashboard(): void {
   const statusCmd = buildStatusCommand(gardenRunner);
 
   const config = loadConfig();
-  const focusedNames = getFocusedProjectNames(config);
+  const initialActivePlot =
+    (priorActivePlot && plotNames(config).includes(priorActivePlot) ? priorActivePlot : null) ??
+    firstFocusedPlotName(config);
+  const focusedNames = getFocusedProjectNames(config, initialActivePlot);
   const projectCount = focusedNames.length;
   const statusHeight = Math.max(4, projectCount * 2 + 2);
 
@@ -231,6 +237,7 @@ export function ensureDashboard(): void {
 
   const state: DashboardState = {
     activeProject: firstProject,
+    activePlot: initialActivePlot,
     statusPaneId: statusId,
     usagePaneId: usageId,
     gardenShellPaneId: gardenShellId,
