@@ -60,9 +60,22 @@ const PRETTY_LEVEL_GLYPHS: Record<string, string> = {
   error: "✗",
 };
 
-// Stable per-project color from a small palette. Red is reserved for errors so
-// it isn't in the rotation.
-const PROJECT_PALETTE = [color.cyan, color.magenta, color.blue, color.yellow, color.green];
+// Stable per-project color from a 9-slot palette spread around the hue wheel.
+// 256-color codes so adjacent projects look unmistakably different at a glance;
+// reds are skipped to keep error coloring distinct.
+const PROJECT_PALETTE = isTTY
+  ? [
+      "\x1b[38;5;39m",  // cyan
+      "\x1b[38;5;75m",  // sky blue
+      "\x1b[38;5;141m", // lavender
+      "\x1b[38;5;213m", // pink
+      "\x1b[38;5;208m", // orange
+      "\x1b[38;5;220m", // gold
+      "\x1b[38;5;156m", // lime
+      "\x1b[38;5;84m",  // green
+      "\x1b[38;5;50m",  // turquoise
+    ]
+  : [""];
 
 function colorForProject(name: string): string {
   let h = 0;
