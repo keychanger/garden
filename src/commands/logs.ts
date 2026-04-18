@@ -1,7 +1,17 @@
-// Command: garden logs — view dashboard logs with pretty formatting.
+// Command: garden logs — view dashboard logs.
+//
+// Two presentation modes share the same JSON file (~/.garden/sessions/dashboard.log):
+//   - "pretty" (default): project-first columns, suppression of housekeeping noise,
+//     per-message data summarization. Built for humans tailing the logs pane.
+//   - "raw": every entry, src column included, no suppression. The shape that
+//     existed before. Useful for debugging or grepping the firehose.
+//
+// Mode resolution: --raw / --pretty flag > config (logs.mode in ~/.garden/config.yml)
+// > "pretty" default. Persistent toggle via subcommands: `garden logs raw`,
+// `garden logs pretty`, `garden logs mode`.
 import fs from "node:fs";
 import path from "node:path";
-import { SESSIONS_DIR } from "../config.js";
+import { SESSIONS_DIR, getLogsMode, setLogsMode, type LogsMode } from "../config.js";
 import { isTTY } from "../output.js";
 
 const LOG_FILE = path.join(SESSIONS_DIR, "dashboard.log");
@@ -15,19 +25,19 @@ export interface LogEntry {
   data?: Record<string, unknown>;
 }
 
-// ANSI color helpers — only emit codes when outputting to a TTY.
 const color = isTTY
   ? {
       reset: "\x1b[0m",
       dim: "\x1b[2m",
       bold: "\x1b[1m",
+      red: "\x1b[31m",
       green: "\x1b[32m",
       yellow: "\x1b[33m",
-      red: "\x1b[31m",
-      cyan: "\x1b[36m",
+      blue: "\x1b[34m",
       magenta: "\x1b[35m",
+      cyan: "\x1b[36m",
     }
-  : { reset: "", dim: "", bold: "", green: "", yellow: "", red: "", cyan: "", magenta: "" };
+  : { reset: "", dim: "", bold: "", red: "", green: "", yellow: "", blue: "", magenta: "", cyan: "" };
 
 const LEVEL_COLORS: Record<string, string> = {
   debug: color.dim,
@@ -36,12 +46,29 @@ const LEVEL_COLORS: Record<string, string> = {
   error: color.red,
 };
 
-const LEVEL_SYMBOLS: Record<string, string> = {
+const RAW_LEVEL_SYMBOLS: Record<string, string> = {
   debug: ".",
   info: "-",
   warn: "!",
   error: "x",
 };
+
+const PRETTY_LEVEL_GLYPHS: Record<string, string> = {
+  debug: " ",
+  info: "·",
+  warn: "!",
+  error: "✗",
+};
+
+// Stable per-project color from a small palette. Red is reserved for errors so
+// it isn't in the rotation.
+const PROJECT_PALETTE = [color.cyan, color.magenta, color.blue, color.yellow, color.green];
+
+function colorForProject(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
+  return PROJECT_PALETTE[Math.abs(h) % PROJECT_PALETTE.length];
+}
 
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
@@ -57,7 +84,6 @@ export function relativeTime(isoTs: string): string {
   if (mins < 60) return `${mins}m ago`;
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}h ago`;
-  // Fall back to absolute (local time) for old entries: MM-DD HH:MM
   return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
@@ -66,22 +92,222 @@ function absoluteTime(isoTs: string): string {
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 }
 
-function formatData(data: Record<string, unknown>): string {
-  return Object.entries(data)
-    .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
-    .join(" ");
+// ---- worker → project lookup -----------------------------------------------
+//
+// Many entries carry only `worker` (e.g. `poller new -> reviewing`); the project
+// they belong to lives in the registry. Cached at first read; lazy-refreshed
+// on cache miss so workers created mid-tail eventually map.
+
+let workerToProjectCache: Map<string, string> | null = null;
+let registryLoadFailed = false;
+let knownProjectNames: string[] = [];
+
+function loadWorkerMap(): Map<string, string> {
+  const map = new Map<string, string>();
+  if (registryLoadFailed) return map;
+  try {
+    // Defer the import so non-dashboard callers (raw `garden logs | head`)
+    // don't pay for it; also avoids a hard dep on dashboard internals here.
+    const registryFile = path.join(SESSIONS_DIR, "dashboard.registry.json");
+    if (!fs.existsSync(registryFile)) return map;
+    const raw = JSON.parse(fs.readFileSync(registryFile, "utf-8")) as {
+      workers?: Record<string, Array<{ name?: string }>>;
+    };
+    const workers = raw.workers ?? {};
+    knownProjectNames = Object.keys(workers);
+    for (const [project, entries] of Object.entries(workers)) {
+      for (const e of entries) {
+        if (e?.name) map.set(e.name, project);
+      }
+    }
+  } catch {
+    registryLoadFailed = true;
+  }
+  return map;
 }
 
-function formatEntry(entry: LogEntry, useRelativeTime: boolean): string {
+function projectForEntry(entry: LogEntry): string | null {
+  const fromData = entry.data?.project;
+  if (typeof fromData === "string") return fromData;
+  if (entry.worker) {
+    if (!workerToProjectCache) workerToProjectCache = loadWorkerMap();
+    let p = workerToProjectCache.get(entry.worker);
+    if (!p) {
+      // Cache miss — refresh once in case a new worker was just created.
+      workerToProjectCache = loadWorkerMap();
+      p = workerToProjectCache.get(entry.worker);
+    }
+    if (p) return p;
+  }
+  return null;
+}
+
+function projectColumnWidth(): number {
+  if (!workerToProjectCache) workerToProjectCache = loadWorkerMap();
+  const names = knownProjectNames.length ? knownProjectNames : ["system"];
+  const widest = names.reduce((m, n) => Math.max(m, n.length), "system".length);
+  return Math.min(widest, 16);
+}
+
+// ---- suppression ------------------------------------------------------------
+
+interface SuppressRule {
+  src: string;
+  msg?: string | RegExp;
+  // If set, every key/value pair must match `entry.data`.
+  data?: Record<string, unknown>;
+  // If set, suppression only applies up to this level; warn/error pass through.
+  // Default: suppress at info+debug; warn and error always pass through.
+}
+
+const SUPPRESSED: SuppressRule[] = [
+  // User's own keystrokes — they know they pressed the key.
+  { src: "navigate" },
+  // Mechanical pair-halves of navigation.
+  { src: "layout", msg: "parked to hidden" },
+  { src: "layout", msg: "restored from hidden" },
+  { src: "layout", msg: "swapDirect" },
+  // Per-tool-call hook spam.
+  { src: "hook", msg: "claude hook", data: { event: "posttooluse" } },
+  // Bulk on startup; only the *first* sessionstart per worker is interesting,
+  // and that's hard to detect without extra state. Ready-state ones are the
+  // mechanical bulk; non-ready ones still pass through.
+  { src: "hook", msg: "claude hook", data: { event: "sessionstart", claudeStatus: "ready" } },
+  // No-transition wakes.
+  { src: "poller", msg: "poll cycle" },
+  // Verbose, not actionable; full bash command in payload.
+  { src: "judge", msg: "bash allow" },
+  // 5-minute heartbeat.
+  { src: "usage", msg: "fetched" },
+  // Startup ceremony.
+  { src: "usage-poller", msg: "started" },
+  { src: "usage-poller", msg: "spawned window" },
+  { src: "git", msg: "installed poll trigger hook" },
+];
+
+function ruleMatches(rule: SuppressRule, entry: LogEntry): boolean {
+  if (rule.src !== entry.src) return false;
+  if (rule.msg !== undefined) {
+    if (typeof rule.msg === "string") {
+      if (rule.msg !== entry.msg) return false;
+    } else if (!rule.msg.test(entry.msg)) {
+      return false;
+    }
+  }
+  if (rule.data) {
+    if (!entry.data) return false;
+    for (const [k, v] of Object.entries(rule.data)) {
+      if (entry.data[k] !== v) return false;
+    }
+  }
+  return true;
+}
+
+function isSuppressed(entry: LogEntry): boolean {
+  // Errors and warns are never suppressed regardless of source.
+  if (entry.level === "error" || entry.level === "warn") return false;
+  for (const rule of SUPPRESSED) {
+    if (ruleMatches(rule, entry)) return true;
+  }
+  return false;
+}
+
+// ---- summarization ----------------------------------------------------------
+//
+// For known (src, msg) pairs, render a compact human sentence. For unknown
+// entries, fall back to msg + the non-boring data fields. Errors keep their
+// raw msg unconditionally — the original wording is the alert.
+
+const BORING_DATA_KEYS = new Set([
+  "project", "branch", "branchName", "workers",
+  "prStateCleared", "windowName", "source", "level",
+]);
+
+function compactData(data: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(data)) {
+    if (BORING_DATA_KEYS.has(k)) continue;
+    const s = typeof v === "string" ? v : JSON.stringify(v);
+    if (s.length > 80) {
+      parts.push(`${k}=${s.slice(0, 77)}…`);
+    } else {
+      parts.push(`${k}=${s}`);
+    }
+  }
+  return parts.join(" ");
+}
+
+type Summarizer = (entry: LogEntry) => string;
+
+const SUMMARIZERS: Record<string, Summarizer> = {
+  "poller:started": () => "poller started",
+  "poller:new -> reviewing": () => "→ reviewing",
+  "poller:reviewing -> merge-pending": () => "→ merge-pending",
+  "poller:reviewing -> failing": () => "✗ review failed",
+  "poller:resolving -> merge-pending": () => "→ merge-pending (resolved)",
+  "poller:resolving -> failing": () => "✗ resolver failed",
+  "poller:launched review": () => "launched reviewer",
+  "poller:launched resolver": () => "launched resolver",
+  "poller:merged to base branch": (e) => {
+    const base = e.data?.baseBranch;
+    return typeof base === "string" ? `✓ merged into ${base}` : "✓ merged";
+  },
+  "hook:claude hook": (e) => {
+    const event = String(e.data?.event ?? "?");
+    const status = e.data?.claudeStatus;
+    return typeof status === "string" ? `${event} → ${status}` : event;
+  },
+  "workers:created": () => "worker created",
+  "workers:killed": () => "worker killed",
+  "alert:": (e) => e.msg,
+};
+
+function summarize(entry: LogEntry): string {
+  // Alert entries: any msg, just print verbatim.
+  if (entry.src === "alert") return entry.msg;
+  const key = `${entry.src}:${entry.msg}`;
+  const fn = SUMMARIZERS[key];
+  if (fn) return fn(entry);
+  if (entry.data) {
+    const compact = compactData(entry.data);
+    return compact ? `${entry.msg}  ${color.dim}${compact}${color.reset}` : entry.msg;
+  }
+  return entry.msg;
+}
+
+// ---- rendering --------------------------------------------------------------
+
+function formatRawEntry(entry: LogEntry, useRelativeTime: boolean): string {
   const ts = useRelativeTime ? relativeTime(entry.ts).padStart(8) : absoluteTime(entry.ts);
   const levelColor = LEVEL_COLORS[entry.level] ?? "";
-  const symbol = LEVEL_SYMBOLS[entry.level] ?? " ";
+  const symbol = RAW_LEVEL_SYMBOLS[entry.level] ?? " ";
   const level = entry.level.toUpperCase().padEnd(5);
   const src = entry.src.padEnd(8);
   const workerStr = entry.worker ? `${color.magenta}${entry.worker.padEnd(20)}${color.reset} ` : "";
-  const dataStr = entry.data ? `  ${color.dim}${formatData(entry.data)}${color.reset}` : "";
-
+  const dataStr = entry.data
+    ? `  ${color.dim}${Object.entries(entry.data).map(([k, v]) =>
+        `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join(" ")}${color.reset}`
+    : "";
   return `${color.dim}${ts}${color.reset} ${levelColor}${symbol} ${level}${color.reset} ${color.cyan}${src}${color.reset} ${workerStr}${entry.msg}${dataStr}`;
+}
+
+function formatPrettyEntry(entry: LogEntry, useRelativeTime: boolean): string {
+  const ts = useRelativeTime ? relativeTime(entry.ts).padStart(8) : absoluteTime(entry.ts);
+  const project = projectForEntry(entry);
+  const projectWidth = projectColumnWidth();
+  const rawLabel = project ?? "system";
+  const projectLabel = rawLabel.length > projectWidth ? rawLabel.slice(0, projectWidth) : rawLabel.padEnd(projectWidth);
+  const projectColor = project ? colorForProject(project) : color.dim;
+  const projectStr = `${projectColor}${projectLabel}${color.reset}`;
+  const workerStr = entry.worker
+    ? `${color.dim}${entry.worker.padEnd(20)}${color.reset}`
+    : " ".repeat(20);
+  const glyph = PRETTY_LEVEL_GLYPHS[entry.level] ?? " ";
+  const glyphColor = LEVEL_COLORS[entry.level] ?? "";
+  const message = summarize(entry);
+  const msgColor = entry.level === "error" ? color.red : entry.level === "warn" ? color.yellow : "";
+  const msgReset = msgColor ? color.reset : "";
+  return `${color.dim}${ts}${color.reset}  ${projectStr}  ${workerStr} ${glyphColor}${glyph}${color.reset} ${msgColor}${message}${msgReset}`;
 }
 
 function parseLine(line: string): LogEntry | null {
@@ -108,10 +334,12 @@ export interface Filters {
   worker?: string;
   count: number;
   follow: boolean;
+  modeOverride?: LogsMode;
+  showAll: boolean;
 }
 
 export function parseArgs(args: string[]): Filters {
-  const filters: Filters = { count: 40, follow: false };
+  const filters: Filters = { count: 40, follow: false, showAll: false };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if ((arg === "--level" || arg === "-l") && args[i + 1]) {
@@ -124,6 +352,12 @@ export function parseArgs(args: string[]): Filters {
       filters.count = parseInt(args[++i], 10) || 40;
     } else if (arg === "--follow" || arg === "-f") {
       filters.follow = true;
+    } else if (arg === "--all" || arg === "-a") {
+      filters.showAll = true;
+    } else if (arg === "--raw") {
+      filters.modeOverride = "raw";
+    } else if (arg === "--pretty") {
+      filters.modeOverride = "pretty";
     }
   }
   return filters;
@@ -163,7 +397,7 @@ export function dedup(entries: LogEntry[]): DedupedEntry[] {
     const last = result[result.length - 1];
     if (last && dedupKey(last.entry) === key) {
       last.count++;
-      last.entry = entry; // keep the latest timestamp
+      last.entry = entry;
     } else {
       result.push({ entry, count: 1 });
     }
@@ -171,17 +405,34 @@ export function dedup(entries: LogEntry[]): DedupedEntry[] {
   return result;
 }
 
-function formatDedupedEntry(d: DedupedEntry, useRelativeTime: boolean): string {
-  const line = formatEntry(d.entry, useRelativeTime);
+function formatEntry(entry: LogEntry, mode: LogsMode, useRelativeTime: boolean): string {
+  return mode === "raw"
+    ? formatRawEntry(entry, useRelativeTime)
+    : formatPrettyEntry(entry, useRelativeTime);
+}
+
+function formatDedupedEntry(d: DedupedEntry, mode: LogsMode, useRelativeTime: boolean): string {
+  const line = formatEntry(d.entry, mode, useRelativeTime);
   if (d.count > 1) {
-    return `${line}  ${color.dim}(x${d.count})${color.reset}`;
+    return `${line}  ${color.dim}(×${d.count})${color.reset}`;
   }
   return line;
 }
 
-function printEntries(entries: LogEntry[], filters: Filters, useRelativeTime: boolean): void {
+interface RenderOptions {
+  mode: LogsMode;
+  showAll: boolean;
+}
+
+function applyPresentation(entries: LogEntry[], opts: RenderOptions): LogEntry[] {
+  if (opts.mode === "raw" || opts.showAll) return entries;
+  return entries.filter((e) => !isSuppressed(e));
+}
+
+function printEntries(entries: LogEntry[], filters: Filters, opts: RenderOptions, useRelativeTime: boolean): void {
   const filtered = entries.filter((e) => matchesFilters(e, filters));
-  const tail = filtered.slice(-filters.count);
+  const presented = applyPresentation(filtered, opts);
+  const tail = presented.slice(-filters.count);
   const deduped = dedup(tail);
 
   if (!isTTY) {
@@ -197,22 +448,20 @@ function printEntries(entries: LogEntry[], filters: Filters, useRelativeTime: bo
   }
 
   for (const d of deduped) {
-    console.log(formatDedupedEntry(d, useRelativeTime));
+    console.log(formatDedupedEntry(d, opts.mode, useRelativeTime));
   }
 }
 
-async function follow(filters: Filters): Promise<void> {
+async function follow(filters: Filters, opts: RenderOptions): Promise<void> {
   let lastSize = 0;
   try {
     lastSize = fs.statSync(LOG_FILE).size;
   } catch { /* file doesn't exist yet */ }
 
-  // Print existing entries first
   const lines = readLogLines();
   const entries = lines.map(parseLine).filter((e): e is LogEntry => e !== null);
-  printEntries(entries, filters, false);
+  printEntries(entries, filters, opts, false);
 
-  // Poll for new lines
   process.stdout.write(`\n${color.dim}--- following (ctrl-c to stop) ---${color.reset}\n\n`);
 
   let prevKey = "";
@@ -227,7 +476,7 @@ async function follow(filters: Filters): Promise<void> {
     }
 
     if (currentSize <= lastSize) {
-      if (currentSize < lastSize) lastSize = 0; // file was truncated
+      if (currentSize < lastSize) lastSize = 0;
       else return;
     }
 
@@ -241,22 +490,21 @@ async function follow(filters: Filters): Promise<void> {
     for (const line of newLines) {
       const entry = parseLine(line);
       if (!entry || !matchesFilters(entry, filters)) continue;
+      if (opts.mode === "pretty" && !opts.showAll && isSuppressed(entry)) continue;
 
       const key = dedupKey(entry);
       if (key === prevKey) {
         repeatCount++;
-        // Overwrite the previous line's repeat count
-        process.stdout.write(`\r\x1b[K${formatEntry(entry, false)}  ${color.dim}(x${repeatCount})${color.reset}`);
+        process.stdout.write(`\r\x1b[K${formatEntry(entry, opts.mode, false)}  ${color.dim}(×${repeatCount})${color.reset}`);
       } else {
         if (prevKey) process.stdout.write("\n");
-        process.stdout.write(formatEntry(entry, false));
+        process.stdout.write(formatEntry(entry, opts.mode, false));
         prevKey = key;
         repeatCount = 1;
       }
     }
   }, 1000);
 
-  // Keep alive until interrupted
   await new Promise<void>((resolve) => {
     const cleanup = () => {
       clearInterval(poll);
@@ -268,15 +516,52 @@ async function follow(filters: Filters): Promise<void> {
   });
 }
 
+// ---- subcommand handling: persistent mode toggle ---------------------------
+
+async function setModeAndRefresh(mode: LogsMode): Promise<void> {
+  setLogsMode(mode);
+  console.log(`logs mode set to ${color.bold}${mode}${color.reset}`);
+  // If a dashboard is running, respawn the logs pane so the change takes
+  // effect immediately. Otherwise this is a no-op (next launch picks it up).
+  try {
+    const { dashboardExists } = await import("../session.js");
+    if (!dashboardExists()) return;
+    const { readDashState } = await import("../dashboard/state.js");
+    const { respawnLogsPane } = await import("../dashboard/create.js");
+    respawnLogsPane(readDashState());
+  } catch { /* dashboard not loadable; config write is enough */ }
+}
+
+async function handleModeSubcommand(args: string[]): Promise<boolean> {
+  const sub = args[0];
+  if (sub === "raw" || sub === "pretty") {
+    await setModeAndRefresh(sub);
+    return true;
+  }
+  if (sub === "mode") {
+    if (args[1] === "raw" || args[1] === "pretty") {
+      await setModeAndRefresh(args[1]);
+    } else {
+      console.log(getLogsMode());
+    }
+    return true;
+  }
+  return false;
+}
+
 export async function logs(args: string[]): Promise<void> {
+  if (await handleModeSubcommand(args)) return;
+
   const filters = parseArgs(args);
+  const mode: LogsMode = filters.modeOverride ?? getLogsMode();
+  const opts: RenderOptions = { mode, showAll: filters.showAll };
 
   if (filters.follow) {
-    await follow(filters);
+    await follow(filters, opts);
     return;
   }
 
   const lines = readLogLines();
   const entries = lines.map(parseLine).filter((e): e is LogEntry => e !== null);
-  printEntries(entries, filters, true);
+  printEntries(entries, filters, opts, true);
 }

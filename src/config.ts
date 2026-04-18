@@ -42,9 +42,27 @@ export interface ResolvedClaudeProfile {
   label: string;
 }
 
+export type LogsMode = "pretty" | "raw";
+
+export interface LogsConfig {
+  mode?: LogsMode;
+}
+
 export interface GardenConfig {
   projects: Record<string, ProjectConfig>;
   claudeProfiles?: Record<string, ClaudeProfile>;
+  logs?: LogsConfig;
+}
+
+export function getLogsMode(config?: GardenConfig): LogsMode {
+  const cfg = config ?? loadConfig();
+  return cfg.logs?.mode === "raw" ? "raw" : "pretty";
+}
+
+export function setLogsMode(mode: LogsMode): void {
+  const cfg = loadConfig();
+  cfg.logs = { ...(cfg.logs ?? {}), mode };
+  saveConfig(cfg);
 }
 
 export function expandHome(p: string): string {

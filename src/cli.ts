@@ -85,11 +85,15 @@ Dashboard:
   rules accept <category>        Append a suggested rule to rules.md (use --confirm)
   rules dismiss <category>       Dismiss a rule suggestion
   rules findings                 Raw reviewer-findings log
-  logs [options]                 View dashboard logs (pretty-printed)
+  logs [options]                 View dashboard logs (pretty by default)
   logs -f                        Follow logs in real time
   logs -l warn                   Filter by minimum level
   logs -s poller                 Filter by source module
   logs -w <name>                 Filter by worker name
+  logs -a, --all                 Show suppressed housekeeping entries (one-shot)
+  logs --raw, --pretty           Override render mode for one invocation
+  logs raw | pretty              Persist mode (live pane respawns to apply)
+  logs mode [raw|pretty]         Read or set the persisted mode
   health                         Check dashboard state consistency
   kick <worker>                  Re-arm a stranded 'working' worker for review
   bounce <worker>                Restart a worker's Claude process (preserves session history)
