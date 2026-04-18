@@ -214,7 +214,7 @@ export function killPane(): void {
 
 // Kill and restart the Claude process in a worker's pane via `claude --resume`.
 // The pane, pane ID, worktree, and registry entry all stay put; only the Claude
-// process is replaced, which forces a fresh read of .claude/settings.local.json
+// process is replaced, which forces a fresh read of .claude/settings.json
 // (hook config, permissions.defaultMode) and drops any transient session state
 // that's interrupting the operator (e.g., stuck in plan mode with no cycle back
 // to auto). Works on both visible and parked workers — we resolve the pane by
@@ -245,7 +245,7 @@ export function bounceWorker(projectName: string, workerName: string): void {
   const baseBranch = entry.baseBranch
     ?? (projectInfo ? resolveBaseBranch(projectInfo.path, projectInfo) : undefined);
 
-  // Rewrite .claude/settings.local.json so bounce picks up hook/sandbox
+  // Rewrite .claude/settings.json so bounce picks up hook/sandbox
   // changes from a rebuilt garden. buildWorktreeResumeCommand doesn't do
   // this on its own (unlike buildResumeCommand); the attach-time resume
   // path in ensureDashboard() calls it for the same reason.

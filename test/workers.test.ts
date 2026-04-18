@@ -635,7 +635,7 @@ describe("bounceWorker", () => {
     );
   });
 
-  it("reinstalls claude hooks so settings.local.json picks up rebuild changes", () => {
+  it("reinstalls claude hooks so settings.json picks up rebuild changes", () => {
     bounceWorker("myproject", "swift-oak");
 
     expect(vi.mocked(installClaudeHooks)).toHaveBeenCalledWith(

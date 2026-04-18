@@ -162,7 +162,7 @@ describe("resolveGardenRunner", () => {
 });
 
 describe("installClaudeHooks", () => {
-  it("writes hooks JSON to .claude/settings.local.json", () => {
+  it("writes hooks JSON to .claude/settings.json", () => {
     process.argv[1] = "/usr/local/bin/garden";
     installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
     expect(fs.mkdirSync).toHaveBeenCalledWith(
@@ -170,9 +170,16 @@ describe("installClaudeHooks", () => {
       { recursive: true },
     );
     expect(fs.writeFileSync).toHaveBeenCalledWith(
-      expect.stringContaining("settings.local.json"),
+      expect.stringMatching(/\.claude\/settings\.json$/),
       expect.any(String),
     );
+  });
+
+  it("does not write to settings.local.json (Claude Code auto-edits it)", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
+    const paths = vi.mocked(fs.writeFileSync).mock.calls.map(c => String(c[0]));
+    expect(paths.every(p => !p.endsWith("settings.local.json"))).toBe(true);
   });
 
   it("includes all required hook events", () => {

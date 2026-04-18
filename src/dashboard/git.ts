@@ -126,15 +126,7 @@ export function getDiffAgainstBase(wtPath: string, baseBranch: string): string {
 
 export function cleanWorktree(worktreePath: string): void {
   try {
-    // Exclude settings.local.json: on repos that track it, a plain checkout
-    // would strip garden's hooks and wedge the worker on claudeStatus="working".
-    git(
-      worktreePath,
-      "checkout",
-      "--",
-      ".",
-      ":(exclude).claude/settings.local.json",
-    );
+    git(worktreePath, "checkout", "--", ".");
     log.info("git", "cleaned unstaged changes before rebase", {
       data: { worktreePath },
     });

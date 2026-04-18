@@ -87,12 +87,15 @@ function sandboxForTarget(targetDir: string, project: ProjectConfig): SandboxCon
   });
 }
 
+// Hook/sandbox config lives in settings.json, not settings.local.json: Claude
+// Code writes permission approvals to settings.local.json and can clobber other
+// keys there, silently stripping our Stop hook and wedging the worker.
 export function installClaudeHooks(targetDir: string, project: ProjectConfig): void {
   const sandbox = sandboxForTarget(targetDir, project);
   const json = buildSettingsJson(resolveGardenRunner(), sandbox);
   const claudeDir = path.join(targetDir, ".claude");
   fs.mkdirSync(claudeDir, { recursive: true });
-  fs.writeFileSync(path.join(claudeDir, "settings.local.json"), json);
+  fs.writeFileSync(path.join(claudeDir, "settings.json"), json);
 }
 
 export function resizeTerminal(): void {
@@ -542,9 +545,11 @@ printf '${hookContent}\\n' > ${escapedHookPath}
 chmod 755 ${escapedHookPath}
 git -C ${escapedWtPath} config --local core.hooksPath ${escapedHooksDir}
 
-# Install Claude Code hooks for event-driven status updates
+# Install Claude Code hooks for event-driven status updates.
+# Written to settings.json (not settings.local.json) because Claude Code
+# writes permission approvals to the latter and can clobber our hooks.
 mkdir -p ${escapedWtPath}/.claude
-printf '%s' '${escapedHooksJson}' > ${escapedWtPath}/.claude/settings.local.json
+printf '%s' '${escapedHooksJson}' > ${escapedWtPath}/.claude/settings.json
 
 # Ensure garden-managed dirs are excluded from git status.
 # Writing to the common info/exclude covers all worktrees and never gets committed.

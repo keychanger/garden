@@ -304,11 +304,11 @@ describe("deleteRemoteBranch", () => {
 });
 
 describe("cleanWorktree", () => {
-  it("discards unstaged changes but preserves the worker's claude settings", () => {
+  it("discards all unstaged changes before rebase", () => {
     cleanWorktree("/tmp/wt");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["checkout", "--", ".", ":(exclude).claude/settings.local.json"],
+      ["checkout", "--", "."],
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
