@@ -33,6 +33,7 @@ vi.mock("../src/config.js", () => ({
   })),
   SESSIONS_DIR: "/tmp/fake-sessions",
   getFocusedProjectNames: vi.fn(() => ["garden"]),
+  PLOT_MAX_PROJECTS: 9,
 }));
 
 vi.mock("../src/session.js", () => ({
@@ -126,7 +127,7 @@ import {
   installInputGuard,
 } from "../src/dashboard/header.js";
 
-import { tmux, getPanePid, getPaneSize, getPaneTitle } from "../src/dashboard/tmux.js";
+import { tmux, getPanePid, getPaneSize, getPaneTitle, setPaneVar } from "../src/dashboard/tmux.js";
 import { readDashState, type DashboardState } from "../src/dashboard/state.js";
 import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields } from "../src/dashboard/registry.js";
 import { currentBranch } from "../src/dashboard/git.js";
@@ -333,6 +334,22 @@ describe("updateHeaderVar", () => {
   it("swallows error when session is gone", () => {
     vi.mocked(tmux).mockImplementation(() => { throw new Error("no session"); });
     expect(() => updateHeaderVar()).not.toThrow();
+  });
+
+  it("sets @garden_plot on the status pane with plot name and count when a plot is active", () => {
+    updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "imp" }) });
+    expect(setPaneVar).toHaveBeenCalledWith("%0", "garden_plot", "plot: imp (1/9)");
+  });
+
+  it("sets @garden_plot to empty string on the status pane when no plot is active", () => {
+    updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: null }) });
+    expect(setPaneVar).toHaveBeenCalledWith("%0", "garden_plot", "");
+  });
+
+  it("does not touch @garden_plot when statusPaneId is null", () => {
+    updateHeaderVar({ state: makeState({ statusPaneId: null, activePlot: "imp" }) });
+    const plotCalls = vi.mocked(setPaneVar).mock.calls.filter(c => c[1] === "garden_plot");
+    expect(plotCalls).toHaveLength(0);
   });
 });
 
