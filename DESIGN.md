@@ -259,7 +259,7 @@ garden list                        # List all projects
 garden config <project> [key] [val]  # View or set project config
 garden focus <name>                # Show project in dashboard
 garden unfocus <name>              # Hide project from dashboard
-garden reorder <name> <position>   # Move project to position (1-based)
+garden order <name> <position>     # Move project to position (1-based, among focused projects)
 garden claude-profile [list|add|remove|login]
                                    # Manage alternate Claude config dirs (per-project plan)
 garden login [profile]             # Re-authenticate Claude (personal, or a profile)

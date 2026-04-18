@@ -14,7 +14,7 @@ import { alerts } from "./alerts.js";
 import { logs } from "./logs.js";
 import { config } from "./config.js";
 import { focus, unfocus } from "./focus.js";
-import { reorder } from "./reorder.js";
+import { order } from "./order.js";
 import { kick } from "./kick.js";
 import { bounce } from "./bounce.js";
 import { rules } from "./rules.js";
@@ -32,7 +32,7 @@ export const commands: Record<string, Command> = {
   config,
   focus,
   unfocus,
-  reorder,
+  order,
   status,
   dashboard,
   keys,

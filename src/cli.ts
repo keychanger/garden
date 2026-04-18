@@ -23,6 +23,7 @@ const aliases: Record<string, string> = {
   dash: "dashboard",
   register: "add",
   unregister: "remove",
+  reorder: "order",
 };
 
 // Top-level shortcut: garden exit → garden dashboard exit
@@ -62,7 +63,7 @@ Projects:
   config <project> [key] [value] View or set project config
   focus <name>                   Show project in dashboard
   unfocus <name>                 Hide project from dashboard
-  reorder <name> <position>      Move project to position (1-based)
+  order <name> <position>        Move project to position (1-based, among focused)
   claude-profile [list|add|remove|login]
                                  Manage alternate Claude config dirs (per-project plan)
 

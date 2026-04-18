@@ -253,32 +253,71 @@ describe("detectProjectFromPath", () => {
   });
 });
 
-describe("reorderProject", () => {
+describe("orderProject", () => {
   it("moves a project to a new position", async () => {
-    const { reorderProject } = await importConfig();
+    const { orderProject } = await importConfig();
     const config = { projects: { a: { path: "/a" }, b: { path: "/b" }, c: { path: "/c" } } };
-    reorderProject(config, "c", 1);
+    orderProject(config, "c", 1);
     expect(Object.keys(config.projects)).toEqual(["c", "a", "b"]);
   });
 
   it("moves a project to the end", async () => {
-    const { reorderProject } = await importConfig();
+    const { orderProject } = await importConfig();
     const config = { projects: { a: { path: "/a" }, b: { path: "/b" }, c: { path: "/c" } } };
-    reorderProject(config, "a", 3);
+    orderProject(config, "a", 3);
     expect(Object.keys(config.projects)).toEqual(["b", "c", "a"]);
   });
 
+  it("positions are relative to focused projects only", async () => {
+    const { orderProject } = await importConfig();
+    const config = {
+      projects: {
+        a: { path: "/a" },
+        b: { path: "/b", focused: false },
+        c: { path: "/c" },
+        d: { path: "/d" },
+      },
+    };
+    orderProject(config, "d", 1);
+    expect(Object.keys(config.projects)).toEqual(["d", "b", "a", "c"]);
+  });
+
+  it("rejects positions beyond the focused count", async () => {
+    const { orderProject } = await importConfig();
+    const config = {
+      projects: {
+        a: { path: "/a" },
+        b: { path: "/b", focused: false },
+        c: { path: "/c" },
+      },
+    };
+    expect(() => orderProject(config, "a", 3)).toThrow("Position must be 1-2");
+  });
+
+  it("throws when target is unfocused", async () => {
+    const { orderProject } = await importConfig();
+    const config = {
+      projects: {
+        a: { path: "/a" },
+        b: { path: "/b", focused: false },
+      },
+    };
+    expect(() => orderProject(config, "b", 1)).toThrow(
+      "Cannot order unfocused project 'b'"
+    );
+  });
+
   it("throws for unknown project", async () => {
-    const { reorderProject } = await importConfig();
+    const { orderProject } = await importConfig();
     const config = { projects: { a: { path: "/a" } } };
-    expect(() => reorderProject(config, "z", 1)).toThrow("Unknown project: z");
+    expect(() => orderProject(config, "z", 1)).toThrow("Unknown project: z");
   });
 
   it("throws for out-of-range position", async () => {
-    const { reorderProject } = await importConfig();
+    const { orderProject } = await importConfig();
     const config = { projects: { a: { path: "/a" }, b: { path: "/b" } } };
-    expect(() => reorderProject(config, "a", 0)).toThrow("Position must be 1-2");
-    expect(() => reorderProject(config, "a", 3)).toThrow("Position must be 1-2");
+    expect(() => orderProject(config, "a", 0)).toThrow("Position must be 1-2");
+    expect(() => orderProject(config, "a", 3)).toThrow("Position must be 1-2");
   });
 });
 

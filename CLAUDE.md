@@ -45,7 +45,7 @@ npm run dev -- help    # run via tsx during development
 - `src/dashboard-claude.ts` — internal command: launches claude with rules context
 - `src/commands/config.ts` — `garden config` command: view/set project config
 - `src/commands/focus.ts` — `garden focus` / `garden unfocus`: control dashboard visibility
-- `src/commands/reorder.ts` — `garden reorder`: reorder projects for hotkey assignment
+- `src/commands/order.ts` — `garden order`: reorder focused projects for hotkey assignment (position is 1-based among focused)
 - `src/commands/claude-profile.ts` — `garden claude-profile` command: manage alternate Claude config dirs (per-project plan)
 - `src/commands/login.ts` — `garden login [profile]`: re-authenticate Claude (personal or profile)
 - `src/commands/auth.ts` — `garden auth status`: credential diagnostic (presence, expiry, displacement)
@@ -66,7 +66,7 @@ garden remove <name>   # name = directory basename
 garden config <project> [key] [value]  # view or set project config
 garden focus <name>    # show project in dashboard
 garden unfocus <name>  # hide project from dashboard
-garden reorder <name> <N> # move project to position N
+garden order <name> <N> # move project to position N (among focused)
 ```
 
 `register`/`unregister` are kept as aliases for backward compatibility.

@@ -192,17 +192,25 @@ export function getFocusedProjectNames(config?: GardenConfig): string[] {
   );
 }
 
-export function reorderProject(config: GardenConfig, name: string, position: number): void {
+export function orderProject(config: GardenConfig, name: string, position: number): void {
   const keys = Object.keys(config.projects);
   if (!keys.includes(name)) throw new Error(`Unknown project: ${name}`);
-  const index = position - 1;
-  if (index < 0 || index >= keys.length) {
-    throw new Error(`Position must be 1-${keys.length}`);
+  if (config.projects[name].focused === false) {
+    throw new Error(`Cannot order unfocused project '${name}' — focus it first.`);
   }
-  const filtered = keys.filter(k => k !== name);
-  filtered.splice(index, 0, name);
+  const focusedNames = keys.filter(k => config.projects[k].focused !== false);
+  const index = position - 1;
+  if (index < 0 || index >= focusedNames.length) {
+    throw new Error(`Position must be 1-${focusedNames.length}`);
+  }
+  const newFocused = focusedNames.filter(k => k !== name);
+  newFocused.splice(index, 0, name);
+  let cursor = 0;
   const reordered: Record<string, ProjectConfig> = {};
-  for (const k of filtered) reordered[k] = config.projects[k];
+  for (const k of keys) {
+    const key = config.projects[k].focused === false ? k : newFocused[cursor++];
+    reordered[key] = config.projects[key];
+  }
   config.projects = reordered;
 }
 
