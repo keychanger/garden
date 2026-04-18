@@ -130,12 +130,12 @@ function cmdRename(args: string[]): void {
   if (!oldName || !newName) throw new Error("Usage: garden plot rename <old> <new>");
 
   const config = loadConfig();
+  // Capture the active-plot pointer *before* renaming — once the config no
+  // longer contains oldName, currentActivePlot(config) can't recognize it.
+  const priorActivePlot = readDashState().activePlot;
   renamePlotCfg(config, oldName, newName);
-
-  // Migrate the active plot pointer if it referenced the renamed plot.
-  const active = currentActivePlot(config);
   saveConfig(config);
-  if (active === oldName) setActivePlot(newName);
+  if (priorActivePlot === oldName) setActivePlot(newName);
 
   console.log(`Renamed plot '${oldName}' → '${newName}'.`);
   if (dashboardExists()) refreshDashboard();
