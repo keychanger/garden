@@ -75,8 +75,7 @@ const PROJECT_PALETTE = isTTY
     ]
   : [""];
 
-// Garden is always green — the project sharing the tool's name is the operator's
-// most-frequent context and gets a fixed slot so it doesn't drift on rehash.
+// Garden pins to green so its color never drifts on rehash — it's the most-frequent context.
 const PINNED_PROJECT_COLORS: Record<string, string> = isTTY
   ? { garden: "\x1b[38;5;84m" }
   : {};
