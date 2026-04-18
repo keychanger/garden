@@ -91,10 +91,12 @@ export function swapDirect(parkWindowName: string, restoreWindowName: string, st
     return false;
   }
 
-  // Pre-size the hidden window to match the visible slot so swap-pane
-  // does not trigger a SIGWINCH reflow on either pane.
+  // Pre-size the hidden window to match the visible slot only when sizes
+  // differ — a resize-window fires SIGWINCH, which causes a full Claude
+  // redraw on every tab. In steady state hidden panes track the slot size.
   const visibleSize = getPaneSize(state.activePaneId);
-  if (visibleSize) {
+  const targetSize = getPaneSize(targetPaneId);
+  if (visibleSize && (!targetSize || targetSize.width !== visibleSize.width || targetSize.height !== visibleSize.height)) {
     resizeWindow(restoreWindowName, visibleSize.width, visibleSize.height);
   }
 

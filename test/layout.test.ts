@@ -158,7 +158,6 @@ describe("swapDirect", () => {
     const result = swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
 
     expect(result).toBe(true);
-    expect(vi.mocked(resizeWindow)).toHaveBeenCalledWith("_garden-worker-calm-bay", 129, 58);
     expect(vi.mocked(tmux)).toHaveBeenCalledWith(
       "swap-pane", "-s", "%2", "-t", "%20"
     );
@@ -166,6 +165,24 @@ describe("swapDirect", () => {
       "_garden-worker-calm-bay", "_garden-worker-bold-ash"
     );
     expect(state.activePaneId).toBe("%20");
+  });
+
+  it("skips resize when hidden pane already matches visible slot size", () => {
+    vi.mocked(getFirstPaneId).mockReturnValue("%20");
+    // Both getPaneSize calls return the same size (visible + target match)
+    const state = makeState();
+    swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
+    expect(vi.mocked(resizeWindow)).not.toHaveBeenCalled();
+  });
+
+  it("resizes when hidden pane differs from visible slot size", () => {
+    vi.mocked(getFirstPaneId).mockReturnValue("%20");
+    vi.mocked(getPaneSize)
+      .mockReturnValueOnce({ width: 129, height: 58 })
+      .mockReturnValueOnce({ width: 100, height: 40 });
+    const state = makeState();
+    swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
+    expect(vi.mocked(resizeWindow)).toHaveBeenCalledWith("_garden-worker-calm-bay", 129, 58);
   });
 
   it("does not create or kill any windows", () => {

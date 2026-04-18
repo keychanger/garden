@@ -40,6 +40,7 @@ vi.mock("../src/dashboard/layout.js", () => ({
 
 vi.mock("../src/dashboard/header.js", () => ({
   refreshDashboard: vi.fn(),
+  refreshDashboardCycle: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/tmux.js", () => ({
@@ -748,7 +749,7 @@ describe("cyclePane", () => {
     );
   });
 
-  it("updates window names for refreshDashboard after cycle", () => {
+  it("updates window names for refresh after cycle", async () => {
     const state = makeState({
       activePaneType: "worker",
       activeWindowName: "_garden-worker-aaa",
@@ -765,7 +766,8 @@ describe("cyclePane", () => {
 
     // After swap, target (bbb) is renamed to park name (aaa in this case).
     // The windowNames map replaces "bbb" with "aaa".
-    expect(refreshDashboard).toHaveBeenCalledWith({
+    const { refreshDashboardCycle } = await import("../src/dashboard/header.js");
+    expect(refreshDashboardCycle).toHaveBeenCalledWith({
       state,
       windowNames: expect.arrayContaining(["_garden-worker-aaa"]),
     });

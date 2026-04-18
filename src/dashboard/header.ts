@@ -531,6 +531,15 @@ export function refreshDashboard(opts?: RefreshOptions): void {
   refreshUsagePane(opts);
 }
 
+// Lean refresh for worker cycling within a project: only the status pane's
+// active marker moves. Header (same project, same branch, same alerts),
+// worker tasks (unchanged by tabbing), and usage meters (unchanged by tabbing)
+// are all skipped so the keypress ends in one file write plus one SIGUSR1.
+export function refreshDashboardCycle(opts?: RefreshOptions): void {
+  writeQuickStatus(opts);
+  refreshStatusPane(opts);
+}
+
 // Refresh all workers' task fields from their live tmux pane titles. This
 // catches tasks set by Claude during work — the hook handler only captures
 // the title at hook time, but Claude updates the pane title continuously as

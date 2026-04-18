@@ -4,7 +4,7 @@ import { readDashState, writeDashState, withStateLock } from "./state.js";
 import { parkToHidden, swapToHidden, swapDirect } from "./layout.js";
 import { restoreFromHidden } from "./layout.js";
 import { gardenSwapToHidden, gardenRestoreFromHidden } from "./layout.js";
-import { refreshDashboard } from "./header.js";
+import { refreshDashboard, refreshDashboardCycle } from "./header.js";
 import {
   tmux, tmuxDisplay,
   paneExists, windowExists,
@@ -291,6 +291,6 @@ export function cyclePane(direction: 1 | -1): void {
 
     // Update window list in memory: target was renamed to park name
     const updatedNames = windowNames.map(n => n === targetWindow ? parkName : n);
-    refreshDashboard({ state: lockedState, windowNames: updatedNames });
+    refreshDashboardCycle({ state: lockedState, windowNames: updatedNames });
   });
 }
