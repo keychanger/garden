@@ -112,7 +112,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   getDiffAgainstBase: vi.fn(() => "diff --git a/file.ts b/file.ts"),
   forcePushBranch: vi.fn(),
   mergeToBase: vi.fn(),
-  rebaseBranch: vi.fn(() => "ok"),
+  rebaseBranch: vi.fn(() => ({ kind: "ok" })),
   abortRebase: vi.fn(),
   cleanWorktree: vi.fn(),
   deleteRemoteBranch: vi.fn(),
