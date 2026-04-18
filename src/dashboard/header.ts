@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { SESSIONS_DIR, loadConfig, tryGetProject } from "../config.js";
+import { SESSIONS_DIR, loadConfig, tryGetProject, getFocusedProjectNames, PLOT_MAX_PROJECTS } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
@@ -55,7 +55,7 @@ export function setupStatusBar(_gardenRunner: string): void {
     [["-t", mainWindow, "window-status-format", ""], "window-status-format"],
     [["-t", mainWindow, "pane-border-status", "top"], "pane-border-status"],
     [["-t", mainWindow, "pane-border-format",
-      "#{?@garden_name, #{@garden_name}#{?@garden_task, - #{@garden_task},} ,}"], "pane-border-format"],
+      "#{?@garden_name, #{@garden_name}#{?@garden_plot, #[fg=colour244]\u2500\u2500 #{@garden_plot}#[default],}#{?@garden_task, - #{@garden_task},} ,}"], "pane-border-format"],
   ];
   for (const [args] of opts) {
     try { tmux("set-option", ...args); } catch { /* ignore */ }
@@ -108,6 +108,14 @@ export function updateHeaderVar(opts?: RefreshOptions): void {
   const left = formatLeft(state.activeProject, state.activePlot, config);
   const right = formatRight();
   setBarVars(left, right);
+
+  if (state.statusPaneId) {
+    const names = getFocusedProjectNames(config, state.activePlot);
+    const plotLabel = state.activePlot
+      ? `plot: ${state.activePlot} (${names.length}/${PLOT_MAX_PROJECTS})`
+      : "";
+    setPaneVar(state.statusPaneId, "garden_plot", plotLabel);
+  }
 }
 
 // ---------------------------------------------------------------------------

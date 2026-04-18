@@ -80,7 +80,7 @@ Plots scale past the nine-project hotkey ceiling: you can register as many proje
 - `⌥1`–`⌥9` resolves against `getFocusedProjectNames(config, state.activePlot)` — the active plot's projects, filtered to those still registered. Indices beyond the plot's length show a "No project at index N" hint.
 - `⌥p` / `⌥P` (`cyclePlot` in `src/dashboard/navigate.ts`) iterates only focused plots. If the active plot isn't focused, the next press lands on the first focused plot. When cycling, `activeProject` is clamped to the new plot's membership so the hotkey grid updates immediately.
 
-**Header rendering**: `formatLeft` prefixes the active-project string with the plot name (e.g., `imp › garden • main`). The status pane prints a `plot: imp (3/9)` header line above the project list.
+**Header rendering**: `formatLeft` prefixes the active-project string with the plot name (e.g., `imp › garden • main`). The status pane's border shows `status ── plot: imp (3/9)` by setting `@garden_plot` on the status pane; the `pane-border-format` renders it in gray next to the pane name.
 
 **Project removal** (`garden remove <project>`) also calls `purgeProjectFromPlots` to strip the project from every plot's project list. Empty plots are kept — delete explicitly with `garden plot delete`.
 
