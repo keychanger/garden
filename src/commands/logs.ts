@@ -60,9 +60,7 @@ const PRETTY_LEVEL_GLYPHS: Record<string, string> = {
   error: "✗",
 };
 
-// Stable per-project color from a 9-slot palette spread around the hue wheel.
-// 256-color codes so adjacent projects look unmistakably different at a glance;
-// reds are skipped to keep error coloring distinct.
+// 9-slot 256-color palette; reds are skipped so project color never collides with error coloring.
 const PROJECT_PALETTE = isTTY
   ? [
       "\x1b[38;5;39m",  // cyan
