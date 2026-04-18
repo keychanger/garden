@@ -75,7 +75,15 @@ const PROJECT_PALETTE = isTTY
     ]
   : [""];
 
+// Garden is always green — the project sharing the tool's name is the operator's
+// most-frequent context and gets a fixed slot so it doesn't drift on rehash.
+const PINNED_PROJECT_COLORS: Record<string, string> = isTTY
+  ? { garden: "\x1b[38;5;84m" }
+  : {};
+
 function colorForProject(name: string): string {
+  const pinned = PINNED_PROJECT_COLORS[name];
+  if (pinned !== undefined) return pinned;
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
   return PROJECT_PALETTE[Math.abs(h) % PROJECT_PALETTE.length];
