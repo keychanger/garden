@@ -1039,6 +1039,7 @@ describe("poll — merge-pending state", () => {
         source: "poller",
         project: "myproject",
         worker: "bold-ash",
+        message: expect.stringContaining("fatal: boom"),
       }),
     );
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
