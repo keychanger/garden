@@ -87,9 +87,7 @@ function sandboxForTarget(targetDir: string, project: ProjectConfig): SandboxCon
   });
 }
 
-// Hook/sandbox config lives in settings.json, not settings.local.json: Claude
-// Code writes permission approvals to settings.local.json and can clobber other
-// keys there, silently stripping our Stop hook and wedging the worker.
+// Write to settings.json, not settings.local.json — Claude Code auto-edits the latter (permission approvals) and clobbers our hooks.
 export function installClaudeHooks(targetDir: string, project: ProjectConfig): void {
   const sandbox = sandboxForTarget(targetDir, project);
   const json = buildSettingsJson(resolveGardenRunner(), sandbox);
@@ -545,9 +543,7 @@ printf '${hookContent}\\n' > ${escapedHookPath}
 chmod 755 ${escapedHookPath}
 git -C ${escapedWtPath} config --local core.hooksPath ${escapedHooksDir}
 
-# Install Claude Code hooks for event-driven status updates.
-# Written to settings.json (not settings.local.json) because Claude Code
-# writes permission approvals to the latter and can clobber our hooks.
+# Install Claude Code hooks — settings.json (not .local.json, which Claude Code auto-edits and would clobber).
 mkdir -p ${escapedWtPath}/.claude
 printf '%s' '${escapedHooksJson}' > ${escapedWtPath}/.claude/settings.json
 
