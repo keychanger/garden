@@ -126,7 +126,21 @@ export function getDiffAgainstBase(wtPath: string, baseBranch: string): string {
 
 export function cleanWorktree(worktreePath: string): void {
   try {
-    git(worktreePath, "checkout", "--", ".");
+    // Exclude `.claude/settings.local.json` so we don't clobber the hooks
+    // garden installs for the worker. Some repos track that file (Claude Code's
+    // convention is to gitignore it, but not every project follows the
+    // convention); when it's tracked, a bare `git checkout -- .` resets it to
+    // the committed version, stripping the worker's hooks. Without hooks, the
+    // worker's Stop event never reaches the registry and `claudeStatus` stays
+    // stuck on "working", which in turn blocks the resolver from launching
+    // (isWorkerClaudeWorking short-circuits it silently).
+    git(
+      worktreePath,
+      "checkout",
+      "--",
+      ".",
+      ":(exclude).claude/settings.local.json",
+    );
     log.info("git", "cleaned unstaged changes before rebase", {
       data: { worktreePath },
     });

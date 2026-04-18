@@ -304,11 +304,15 @@ describe("deleteRemoteBranch", () => {
 });
 
 describe("cleanWorktree", () => {
-  it("runs git checkout -- . to discard unstaged changes", () => {
+  it("discards unstaged changes but preserves the worker's claude settings", () => {
+    // `.claude/settings.local.json` is where garden installs the worker's
+    // hooks. A plain `git checkout -- .` resets it to the tracked version
+    // whenever the project tracks it, stripping hooks and wedging the status
+    // machinery — see the matching comment in git.ts.
     cleanWorktree("/tmp/wt");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["checkout", "--", "."],
+      ["checkout", "--", ".", ":(exclude).claude/settings.local.json"],
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
