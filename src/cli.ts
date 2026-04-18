@@ -70,6 +70,7 @@ Projects:
 Auth:
   login [profile]                Re-authenticate Claude (personal, or a profile)
   auth status                    Show which Claude credentials are present and where
+  usage [refresh]                Show or force-refresh the Claude usage meter
 
 Development:
   test [project] [-- args]       Run project tests (npm test)

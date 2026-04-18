@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadConfig, expandHome } from "../config.js";
 import { captureKeychainTo, runClaudeLogin } from "../dashboard/credentials.js";
+import { refreshUsage } from "../dashboard/usage.js";
+import { refreshDashboard } from "../dashboard/header.js";
 
 export async function login(args: string[]): Promise<void> {
   const profileName = args[0];
@@ -17,6 +19,7 @@ async function loginPersonal(): Promise<void> {
   console.log(`Pick your personal workspace when prompted.`);
   await runClaudeLogin();
   console.log(`✓ Personal credentials refreshed.`);
+  await healUsageMeter();
 }
 
 async function loginProfile(name: string): Promise<void> {
@@ -47,4 +50,20 @@ async function loginProfile(name: string): Promise<void> {
   }
 
   console.log(`Warning: ${credFile} not found after login. Claude may not have written credentials.`);
+}
+
+// Re-fetch the usage snapshot so the dashboard meter heals immediately instead
+// of waiting for the poller to come out of its auth-failure backoff.
+async function healUsageMeter(): Promise<void> {
+  try {
+    const snap = await refreshUsage();
+    try { refreshDashboard(); } catch { /* no dashboard running */ }
+    if (snap.error) {
+      console.log(`⚠ Usage refresh: ${snap.error}`);
+    } else {
+      console.log(`✓ Usage meter refreshed.`);
+    }
+  } catch (err) {
+    console.log(`⚠ Usage refresh skipped: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }

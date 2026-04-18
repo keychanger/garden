@@ -228,7 +228,14 @@ export async function refreshUsage(): Promise<UsageSnapshot> {
     }
 
     if (res.status === 401 || res.status === 403) {
-      const snap: UsageSnapshot = { fetchedAt, error: "login expired" };
+      // Back off hard on auth failures — 401 is not transient, and retrying every
+      // 10 min with a dead token was triggering the endpoint's 429 cascade.
+      // `garden login` overwrites this snapshot so the poller wakes early.
+      const snap: UsageSnapshot = {
+        fetchedAt,
+        error: "login expired",
+        retryAfterMs: AUTH_BACKOFF_MS,
+      };
       writeUsageSnapshot(snap);
       log.warn("usage", "auth failed", { data: { status: res.status } });
       return snap;
@@ -396,6 +403,9 @@ export function formatDuration(ms: number): string {
 
 // Conservative floor against the endpoint's burst rate-limit.
 export const HOOK_REFRESH_COOLDOWN_MS = 60 * 1000;
+
+// Poller backoff applied to 401/403. Not transient — waits for a login.
+export const AUTH_BACKOFF_MS = 30 * 60 * 1000;
 
 export function shouldRefreshOnHookWith(
   snap: UsageSnapshot | null,
