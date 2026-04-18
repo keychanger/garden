@@ -81,9 +81,7 @@ export function captureKeychainTo(credFile: string): boolean {
   }
 }
 
-// Fingerprints the current OAuth credential so we can detect when /login writes
-// a new one. macOS stores in the shared Keychain regardless of CLAUDE_CONFIG_DIR;
-// Linux stores per-config-dir on disk.
+// Detects /login writes. macOS: shared Keychain (ignores CLAUDE_CONFIG_DIR); Linux: per-config-dir file.
 function credentialFingerprint(configDir?: string): string {
   if (process.platform === "darwin") {
     try {
@@ -107,8 +105,7 @@ function credentialFingerprint(configDir?: string): string {
 }
 
 // Strips inherited CLAUDE_CONFIG_DIR so profile-tagged panes don't leak.
-// `claude /login` drops into the REPL after success; we poll the credential
-// store and send SIGTERM once it updates so the caller returns to shell.
+// `claude /login` drops into REPL after success; poll credentials and SIGTERM on change.
 export async function runClaudeLogin(configDir?: string): Promise<void> {
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.CLAUDE_CONFIG_DIR;
