@@ -143,22 +143,21 @@ export function cleanWorktree(worktreePath: string): void {
   }
 }
 
-export type RebaseResult = "ok" | "conflict" | "error";
+export type RebaseResult =
+  | { kind: "ok" }
+  | { kind: "conflict" }
+  | { kind: "error"; error: string };
 
 export function rebaseBranch(worktreePath: string, baseBranch: string): RebaseResult {
   try {
     git(worktreePath, "rebase", `origin/${baseBranch}`);
-    return "ok";
+    return { kind: "ok" };
   } catch (err) {
     const msg = String(err);
-    // Actual merge conflicts mention CONFLICT or "could not apply"
     if (msg.includes("CONFLICT") || msg.includes("could not apply")) {
-      return "conflict";
+      return { kind: "conflict" };
     }
-    log.error("git", "rebase failed (not a conflict)", {
-      data: { baseBranch, error: msg },
-    });
-    return "error";
+    return { kind: "error", error: msg };
   }
 }
 

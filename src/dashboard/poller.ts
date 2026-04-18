@@ -369,18 +369,19 @@ function handleMergePending(
 
   // Rebase onto current base branch
   const rebaseResult = rebaseBranch(wtPath, baseBranch);
-  if (rebaseResult === "conflict") {
+  if (rebaseResult.kind === "conflict") {
     abortRebase(wtPath);
     return launchResolver(projectName, projectPath, baseBranch, entry);
   }
-  if (rebaseResult === "error") {
+  if (rebaseResult.kind === "error") {
     abortRebase(wtPath);
+    const detail = rebaseResult.error.slice(0, 300);
     addAlert({
       level: "error",
       source: "poller",
       project: projectName,
       worker: entry.name,
-      message: `Rebase failed (not a conflict) — manual intervention needed`,
+      message: `Rebase failed (not a conflict) — manual intervention needed: ${detail}`,
     });
     const headSha = getBranchHeadSha(wtPath);
     transitionState(projectName, entry.name, "failing", {

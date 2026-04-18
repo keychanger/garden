@@ -177,7 +177,7 @@ beforeEach(() => {
   vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject", checks: undefined } as ReturnType<typeof tryGetProject>);
   vi.mocked(getBranchHeadSha).mockReturnValue("abc123");
   vi.mocked(getRemoteTrackingSha).mockReturnValue("abc123");
-  vi.mocked(rebaseBranch).mockReturnValue("ok");
+  vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
   vi.mocked(hasRebaseInProgress).mockReturnValue(false);
   vi.mocked(isAncestor).mockReturnValue(true);
   vi.mocked(getUnmergedFiles).mockReturnValue([]);
@@ -721,7 +721,7 @@ describe("poll — merge-pending state", () => {
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
       }),
     ]);
-    vi.mocked(rebaseBranch).mockReturnValue("ok");
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
     vi.mocked(fastForwardBase).mockReturnValue(true);
 
     poll("myproject");
@@ -749,7 +749,7 @@ describe("poll — merge-pending state", () => {
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
       }),
     ]);
-    vi.mocked(rebaseBranch).mockReturnValue("ok");
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
     vi.mocked(fastForwardBase).mockReturnValue(true);
 
     poll("myproject");
@@ -778,7 +778,7 @@ describe("poll — merge-pending state", () => {
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
       }),
     ]);
-    vi.mocked(rebaseBranch).mockReturnValue("ok");
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
     vi.mocked(fastForwardBase).mockReturnValue(true);
 
     poll("myproject");
@@ -801,7 +801,7 @@ describe("poll — merge-pending state", () => {
     vi.mocked(tryGetProject).mockReturnValue({
       path: "/repo/myproject", checks: undefined, postMerge: "npm run build",
     } as ReturnType<typeof tryGetProject>);
-    vi.mocked(rebaseBranch).mockReturnValue("ok");
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
     vi.mocked(fastForwardBase).mockReturnValue(true);
     // Simulate the checkout's actual HEAD after fast-forward — not origin/main.
     vi.mocked(getBranchHeadSha).mockImplementation((p: string) =>
@@ -833,7 +833,7 @@ describe("poll — merge-pending state", () => {
     vi.mocked(tryGetProject).mockReturnValue({
       path: "/repo/myproject", checks: undefined, postMerge: "npm run build",
     } as ReturnType<typeof tryGetProject>);
-    vi.mocked(rebaseBranch).mockReturnValue("ok");
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
     vi.mocked(fastForwardBase).mockReturnValue(false);
 
     poll("myproject");
@@ -871,7 +871,7 @@ describe("poll — merge-pending state", () => {
     vi.mocked(tryGetProject).mockReturnValue({
       path: "/repo/myproject", checks: undefined,
     } as ReturnType<typeof tryGetProject>);
-    vi.mocked(rebaseBranch).mockReturnValue("ok");
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
     vi.mocked(fastForwardBase).mockReturnValue(false);
 
     poll("myproject");
@@ -898,7 +898,7 @@ describe("poll — merge-pending state", () => {
     vi.mocked(tryGetProject).mockReturnValue({
       path: "/repo/garden", checks: undefined, postMerge: "npm run build",
     } as ReturnType<typeof tryGetProject>);
-    vi.mocked(rebaseBranch).mockReturnValue("ok");
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
     vi.mocked(fastForwardBase).mockReturnValue(true);
 
     poll("garden");
@@ -925,7 +925,7 @@ describe("poll — merge-pending state", () => {
         task: "fix the bug",
       }),
     ]);
-    vi.mocked(rebaseBranch).mockReturnValue("conflict");
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "conflict" });
     vi.mocked(getBranchHeadSha).mockReturnValue("pre-resolve-sha");
 
     poll("myproject");
@@ -955,7 +955,7 @@ describe("poll — merge-pending state", () => {
         resolveAttempts: 2, // budget already consumed
       }),
     ]);
-    vi.mocked(rebaseBranch).mockReturnValue("conflict");
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "conflict" });
     vi.mocked(getUnmergedFiles).mockReturnValue(["src/foo.ts", "src/bar.ts"]);
 
     poll("myproject");
@@ -993,7 +993,7 @@ describe("poll — merge-pending state", () => {
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
       }),
     ]);
-    vi.mocked(rebaseBranch).mockReturnValue("conflict");
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "conflict" });
 
     poll("myproject");
 
@@ -1027,7 +1027,7 @@ describe("poll — merge-pending state", () => {
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
       }),
     ]);
-    vi.mocked(rebaseBranch).mockReturnValue("error");
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "error", error: "fatal: boom" });
 
     poll("myproject");
 
@@ -1060,7 +1060,7 @@ describe("poll — merge-pending state", () => {
         task: "add retry logic",
       }),
     ]);
-    vi.mocked(rebaseBranch).mockReturnValue("conflict");
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "conflict" });
 
     poll("myproject");
 

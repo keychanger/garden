@@ -323,7 +323,7 @@ describe("cleanWorktree", () => {
 
 describe("rebaseBranch", () => {
   it("returns 'ok' on successful rebase", () => {
-    expect(rebaseBranch("/tmp/wt", "main")).toBe("ok");
+    expect(rebaseBranch("/tmp/wt", "main")).toEqual({ kind: "ok" });
     expect(mockExec).toHaveBeenCalledWith(
       "git",
       ["rebase", "origin/main"],
@@ -344,21 +344,26 @@ describe("rebaseBranch", () => {
     mockExec.mockImplementation(() => {
       throw new Error("CONFLICT (content): Merge conflict in file.ts");
     });
-    expect(rebaseBranch("/tmp/wt", "main")).toBe("conflict");
+    expect(rebaseBranch("/tmp/wt", "main")).toEqual({ kind: "conflict" });
   });
 
   it("returns 'conflict' when rebase could not apply a commit", () => {
     mockExec.mockImplementation(() => {
       throw new Error("error: could not apply abc1234... some commit message");
     });
-    expect(rebaseBranch("/tmp/wt", "main")).toBe("conflict");
+    expect(rebaseBranch("/tmp/wt", "main")).toEqual({ kind: "conflict" });
   });
 
-  it("returns 'error' for non-conflict failures", () => {
+  it("returns an error result carrying the git error for non-conflict failures", () => {
+    const msg = "fatal: Unable to create '.git/index.lock': File exists.";
     mockExec.mockImplementation(() => {
-      throw new Error("fatal: Unable to create '.git/index.lock': File exists.");
+      throw new Error(msg);
     });
-    expect(rebaseBranch("/tmp/wt", "main")).toBe("error");
+    const result = rebaseBranch("/tmp/wt", "main");
+    expect(result.kind).toBe("error");
+    if (result.kind === "error") {
+      expect(result.error).toContain(msg);
+    }
   });
 });
 
