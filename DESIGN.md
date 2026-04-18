@@ -64,6 +64,26 @@ Each project has:
 
 Only one pane is visible at a time. `⌥]`/`⌥[` cycles through all of them. `⌥w` jumps to the first worker, `⌥s` jumps to the shell.
 
+## Plots
+
+A **plot** is a named, ordered subset of projects (max 9) that drives what the dashboard shows. `⌥1`–`⌥9` index into the *active* plot. `⌥p` / `⌥P` cycle through focused plots. Projects can appear in any number of plots.
+
+Plots scale past the nine-project hotkey ceiling: you can register as many projects as you want in `~/.garden/config.yml`, group them into purpose-specific plots (`client`, `lab`, `imp`, …), and swap views with a single keystroke. Each plot has a `focused` flag controlling whether it appears in the `⌥p` cycle — unfocused plots are still reachable by name (`garden plot <name>`) but don't clutter the hot-cycle.
+
+**Storage**:
+- Plot definitions live in `~/.garden/config.yml` under `plots:`. Order is semantic: plot insertion order drives `⌥p` cycle position, project order inside a plot drives `⌥1`–`⌥9`.
+- Active plot is runtime UI state in `~/.garden/sessions/dashboard.state.json` (`activePlot` field). A user who runs `garden plot imp` before the dashboard is open will still land on `imp` when it launches — `ensureDashboard` preserves the pre-existing `activePlot` across fresh-creation of the state file.
+
+**Migration**: The first `loadConfig()` after upgrading synthesizes `plots.all = [currently-focused projects]` (preserving pre-plot visibility) and drops the deprecated per-project `focused` flag. Idempotent once migrated.
+
+**Hotkey behavior**:
+- `⌥1`–`⌥9` resolves against `getFocusedProjectNames(config, state.activePlot)` — the active plot's projects, filtered to those still registered. Indices beyond the plot's length show a "No project at index N" hint.
+- `⌥p` / `⌥P` (`cyclePlot` in `src/dashboard/navigate.ts`) iterates only focused plots. If the active plot isn't focused, the next press lands on the first focused plot. When cycling, `activeProject` is clamped to the new plot's membership so the hotkey grid updates immediately.
+
+**Header rendering**: `formatLeft` prefixes the active-project string with the plot name (e.g., `imp › garden • main`). The status pane prints a `plot: imp (3/9)` header line above the project list.
+
+**Project removal** (`garden remove <project>`) also calls `purgeProjectFromPlots` to strip the project from every plot's project list. Empty plots are kept — delete explicitly with `garden plot delete`.
+
 ## Hotkeys
 
 All hotkeys use Alt/Option with no prefix — single keypress, instant.
@@ -72,7 +92,8 @@ Requires terminal setup: iTerm2 → Profiles → Keys → Left Option key → "E
 
 | Key | Action |
 |-----|--------|
-| `⌥1` – `⌥9` | Switch to project by registration order |
+| `⌥1` – `⌥9` | Switch to project by index within the active plot |
+| `⌥p` / `⌥P` | Cycle to next/previous focused plot |
 | `⌥n` | New worker (Claude session) |
 | `⌥w` | Jump to first worker |
 | `⌥s` | Jump to project shell |
@@ -146,8 +167,6 @@ If the Stop hook still fails to count commits ahead of `origin/<pinned-base>` (e
 **checks**: Command the reviewer runs in the worker's worktree after rebasing onto the base branch, so checks validate the combined state of the branch plus latest base. If checks fail, the reviewer fixes the issues and re-runs. No checks configured means the reviewer only does the code review.
 
 **postMerge**: Command that runs on the main checkout after merging, but only when the local checkout successfully fast-forwards to the newly merged code. If the fast-forward fails (dirty working tree, checkout on wrong branch), postMerge is skipped and an alert is raised so the operator can clean the checkout. An alert also fires when the fast-forward fails even without a postMerge configured — stale main rots manual operator workflow and must be surfaced either way. This is essential for projects like garden itself, where the poller runs the compiled CLI. When the garden project itself rebuilds successfully, the poller spawns a detached `_post-rebuild-refresh` via the freshly-built binary; it respawns the status pane, calls `restartLongLivedPollers()` so the usage-poller and per-project pollers reload the new bundle (they cache JS in memory at spawn time), and refreshes the dashboard.
-
-**focused**: Controls whether the project appears in the dashboard status display and gets a hotkey assignment. Default is focused (field absent = focused). Set to `false` to hide a project from the dashboard without losing its config. Workers and pollers for unfocused projects continue running. Managed via `garden focus`/`garden unfocus` or `garden config <project> focused false`.
 
 **sandboxDomains**: Comma-separated list of extra network domains added to each worker/reviewer's sandbox allowlist. Use for private registries, internal services, or other hosts beyond the garden-wide defaults (Anthropic, GitHub, npm, the project's git remote host). Set via `garden config <project> sandboxDomains foo.com,bar.com`.
 
@@ -257,9 +276,14 @@ garden add [path]                  # Add a project (defaults to cwd, name = base
 garden remove <name>               # Remove a project
 garden list                        # List all projects
 garden config <project> [key] [val]  # View or set project config
-garden focus <name>                # Show project in dashboard
-garden unfocus <name>              # Hide project from dashboard
-garden order <name> <position>     # Move project to position (1-based, among focused projects)
+garden plot [name]                 # List plots (no arg) or activate a plot
+garden plot create <name> [proj...]# Create a plot (auto-activates if none active)
+garden plot add <plot> <project>   # Add a project to a plot (append)
+garden plot remove <plot> <project># Remove a project from a plot
+garden plot reorder <plot> <proj> <N> # Move project within a plot
+garden focus <plot>                # Include plot in the ⌥p cycle
+garden unfocus <plot>              # Exclude plot from the ⌥p cycle
+garden reorder <plot> <position>   # Move plot within the ⌥p cycle
 garden claude-profile [list|add|remove|login]
                                    # Manage alternate Claude config dirs (per-project plan)
 garden login [profile]             # Re-authenticate Claude (personal, or a profile)

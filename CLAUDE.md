@@ -44,8 +44,9 @@ npm run dev -- help    # run via tsx during development
   - `STATUS.md` — **spec** for the worker status tracking and display system. Source of truth: the code follows this document, not the other way around. See "Specification files" below.
 - `src/dashboard-claude.ts` — internal command: launches claude with rules context
 - `src/commands/config.ts` — `garden config` command: view/set project config
-- `src/commands/focus.ts` — `garden focus` / `garden unfocus`: control dashboard visibility
-- `src/commands/order.ts` — `garden order`: reorder focused projects for hotkey assignment (position is 1-based among focused)
+- `src/commands/plot.ts` — `garden plot`: list/activate/create/delete/rename/add/remove/reorder/show; drives the dashboard view
+- `src/commands/focus.ts` — `garden focus` / `garden unfocus`: toggle whether a plot is in the ⌥p cycle
+- `src/commands/reorder.ts` — `garden reorder`: reorder plots within the ⌥p cycle
 - `src/commands/claude-profile.ts` — `garden claude-profile` command: manage alternate Claude config dirs (per-project plan)
 - `src/commands/login.ts` — `garden login [profile]`: re-authenticate Claude (personal or profile)
 - `src/commands/auth.ts` — `garden auth status`: credential diagnostic (presence, expiry, displacement)
@@ -62,14 +63,34 @@ Projects are added by directory path. The project name is always the directory b
 
 ```bash
 garden add [path]      # defaults to cwd
-garden remove <name>   # name = directory basename
+garden remove <name>   # name = directory basename (also purges from all plots)
 garden config <project> [key] [value]  # view or set project config
-garden focus <name>    # show project in dashboard
-garden unfocus <name>  # hide project from dashboard
-garden order <name> <N> # move project to position N (among focused)
 ```
 
 `register`/`unregister` are kept as aliases for backward compatibility.
+
+### Plots
+
+A **plot** is a named, ordered subset of projects (max 9). Plots drive what the dashboard shows: ⌥1–⌥9 index into the active plot, ⌥p cycles focused plots. Projects can appear in any number of plots. Plots themselves have a `focused` flag that gates inclusion in the ⌥p cycle, so you can keep a large catalogue of plots while hot-cycling only a few.
+
+```bash
+garden plot                              # list plots (active marked with *)
+garden plot <name>                       # activate a plot
+garden plot create <name> [project...]   # one-liner; auto-activates if none active
+garden plot delete <name>                # refuses if the plot is active
+garden plot rename <old> <new>
+garden plot add <plot> <project> [at N]  # append by default; enforces 9-cap
+garden plot remove <plot> <project>
+garden plot reorder <plot> <project> <N> # move a project within a plot
+garden plot show <name>                  # print a plot's ordered contents
+garden focus <plot>                      # include plot in the ⌥p cycle
+garden unfocus <plot>                    # exclude plot from the ⌥p cycle
+garden reorder <plot> <N>                # move plot within the ⌥p cycle
+```
+
+`p` is a shortcut alias for `plot`. Removing a project (`garden remove`) purges it from every plot.
+
+Plot storage lives in `~/.garden/config.yml` under the `plots` key; the active plot (runtime UI state) lives in `dashboard.state.json`. A one-shot migration runs on first `loadConfig()` post-upgrade: it synthesizes `plots.all` from the currently focused projects and drops the deprecated per-project `focused` flag.
 
 ### Project configuration
 
@@ -82,7 +103,7 @@ garden config garden baseBranch develop # set a key
 garden config garden baseBranch unset   # clear a key
 ```
 
-Available keys: `baseBranch`, `checks`, `postMerge`, `focused`, `sandboxDomains`, `claudeProfile`. The `baseBranch` key controls which branch workers branch from and merge into. Resolution order at worker creation: explicit config > current branch of main checkout > `origin/HEAD` symref > `"main"` as last resort. The resolved base is validated against origin and pinned to the worker entry (`WorkerEntry.baseBranch`) — a worker whose base isn't on origin is rejected up front, and post-creation consumers read the pinned value via `getWorkerBaseBranch` so switching the main checkout's branch never retargets an existing worker. The `focused` key controls dashboard visibility (default: focused). Use `garden focus`/`garden unfocus` as shortcuts. The `sandboxDomains` key is a comma-separated list of extra network domains added to each worker/reviewer's sandbox allowlist — use it for private registries, internal services, or other hosts beyond the garden-wide defaults (`garden config <project> sandboxDomains foo.com,bar.com`). The `claudeProfile` key opts a project into an alternate Claude Code config dir (a separate plan); see `garden claude-profile` below.
+Available keys: `baseBranch`, `checks`, `postMerge`, `sandboxDomains`, `claudeProfile`. The `baseBranch` key controls which branch workers branch from and merge into. Resolution order at worker creation: explicit config > current branch of main checkout > `origin/HEAD` symref > `"main"` as last resort. The resolved base is validated against origin and pinned to the worker entry (`WorkerEntry.baseBranch`) — a worker whose base isn't on origin is rejected up front, and post-creation consumers read the pinned value via `getWorkerBaseBranch` so switching the main checkout's branch never retargets an existing worker. The `sandboxDomains` key is a comma-separated list of extra network domains added to each worker/reviewer's sandbox allowlist — use it for private registries, internal services, or other hosts beyond the garden-wide defaults (`garden config <project> sandboxDomains foo.com,bar.com`). The `claudeProfile` key opts a project into an alternate Claude Code config dir (a separate plan); see `garden claude-profile` below. Dashboard visibility is controlled by plots (see above) — there is no per-project `focused` flag anymore.
 
 ### Claude profiles
 
