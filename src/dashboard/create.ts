@@ -602,9 +602,7 @@ export function buildWorktreeResumeCommand(
   return `${identityExports} ${claudeCmd}; ${exitHook}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }
 
-// Worker identity env vars, propagated into claude and the interactive
-// fallback shell. `garden whoami` and `garden logs -w $GARDEN_WORKER` rely
-// on these being set.
+// Injects worker identity into claude and the fallback shell so `garden whoami` and `garden logs -w $GARDEN_WORKER` work inside a worker pane.
 function workerEnvExports(
   projectName: string,
   workerName: string,

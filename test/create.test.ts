@@ -125,6 +125,7 @@ import {
   buildResumeCommand,
   buildWorktreeWorkerCommand,
   buildWorktreeBootstrapScript,
+  buildWorktreeResumeCommand,
 } from "../src/dashboard/create.js";
 import { tmux, tmuxSplit, getFirstPaneId, setPaneLabel, setPaneTitle, shellEscape, disablePaneInput } from "../src/dashboard/tmux.js";
 
@@ -410,5 +411,45 @@ describe("buildWorktreeBootstrapScript", () => {
     );
     expect(call).toBeDefined();
     expect(call![1] as string).toMatch(/worktree add .* 'origin\/release\/2026-04'/);
+  });
+
+  it("exports worker identity env vars so `garden whoami` and `garden logs -w $GARDEN_WORKER` work inside the worker shell", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "develop",
+    );
+    const call = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    );
+    expect(call).toBeDefined();
+    const script = call![1] as string;
+    expect(script).toContain("export GARDEN_PROJECT='myproject'");
+    expect(script).toContain("export GARDEN_WORKER='bold-ash'");
+    expect(script).toContain("export GARDEN_BRANCH='bold-ash'");
+    expect(script).toContain("export GARDEN_BASE_BRANCH='develop'");
+  });
+});
+
+describe("buildWorktreeResumeCommand", () => {
+  it("prefixes claude with worker identity exports so the interactive shell inherits them after claude exits", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    const cmd = buildWorktreeResumeCommand(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "develop",
+    );
+    expect(cmd).toContain("GARDEN_PROJECT=myproject");
+    expect(cmd).toContain("GARDEN_WORKER=bold-ash");
+    expect(cmd).toContain("GARDEN_BRANCH=bold-ash");
+    expect(cmd).toContain("GARDEN_BASE_BRANCH=develop");
+    expect(cmd).toContain("--resume session-123");
+  });
+
+  it("defaults GARDEN_BASE_BRANCH to main when baseBranch is omitted", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    const cmd = buildWorktreeResumeCommand(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash", "session-123",
+    );
+    expect(cmd).toContain("GARDEN_BASE_BRANCH=main");
   });
 });

@@ -297,6 +297,7 @@ garden dashboard                   # Open the dashboard (creates if needed)
 garden dashboard exit              # Close the dashboard
 garden keys                        # Show dashboard keybindings
 garden status                      # Show all projects and their workers
+garden whoami [worker]             # Show the current worker's registry entry (uses $GARDEN_WORKER)
 garden alerts                      # View dashboard alerts
 garden alerts clear                # Dismiss all alerts
 garden rules                       # Interactive accept/dismiss for pending rule suggestions
@@ -310,7 +311,7 @@ garden bounce <worker>             # Restart a worker's Claude process (preserve
 garden rebuild                     # Rebuild garden and relaunch dashboard
 ```
 
-Project name is auto-detected from cwd when inside a project directory. `GARDEN_PROJECT` env var overrides.
+Project name is auto-detected from cwd when inside a project directory. `GARDEN_PROJECT` env var overrides. Worker panes also export `GARDEN_WORKER`, `GARDEN_BRANCH`, and `GARDEN_BASE_BRANCH` so workers can self-identify via `garden whoami` and filter their own log history with `garden logs -w $GARDEN_WORKER`.
 
 ## Output Format
 

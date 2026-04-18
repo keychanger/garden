@@ -1,7 +1,3 @@
-// Command: garden whoami — prints the current worker's registry entry.
-// Reads GARDEN_PROJECT/GARDEN_WORKER from the shell env injected at worker
-// spawn time (see workerEnvExports / buildWorktreeBootstrapScript). Falls
-// back to arg lookup when run from outside a worker pane.
 import { readRegistry, findWorkerByName, type WorkerEntry } from "../dashboard/registry.js";
 import { output, isTTY } from "../output.js";
 import { resolveWorkerStatus } from "./status.js";
@@ -45,7 +41,6 @@ export async function whoami(args: string[]): Promise<void> {
     entry = findWorkerByName(resolvedProject, worker);
   }
   if (!entry) {
-    // Search all projects — handles explicit arg without GARDEN_PROJECT set.
     for (const [p, entries] of Object.entries(registry.workers)) {
       const match = entries.find(e => e.name === worker);
       if (match) {
