@@ -500,9 +500,15 @@ export function buildWorktreeBootstrapScript(
   const escapedBase = base.replace(/'/g, "'\\''");
   const escapedProjectName = projectName.replace(/'/g, "'\\''");
   const escapedBranch = branchName.replace(/'/g, "'\\''");
+  const escapedWorker = workerName.replace(/'/g, "'\\''");
 
   const script = `#!/bin/sh
 set -e
+
+export GARDEN_PROJECT='${escapedProjectName}'
+export GARDEN_WORKER='${escapedWorker}'
+export GARDEN_BRANCH='${escapedBranch}'
+export GARDEN_BASE_BRANCH='${escapedBase}'
 
 printf 'Setting up worktree %s...\\n' '${escapedBranch}'
 
@@ -590,9 +596,28 @@ export function buildWorktreeResumeCommand(
   const gardenRunner = shellEscape(resolveGardenRunner());
   const project = resolveProjectForHooks(projectName, projectPath);
   const envPrefix = claudeEnvPrefix(project);
+  const identityExports = workerEnvExports(projectName, workerName, branchName, baseBranch);
   const claudeCmd = `${envPrefix}claude --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
-  return `${claudeCmd}; ${exitHook}; ${pollSignalSnippet(projectName)} exec $SHELL`;
+  return `${identityExports} ${claudeCmd}; ${exitHook}; ${pollSignalSnippet(projectName)} exec $SHELL`;
+}
+
+// Worker identity env vars, propagated into claude and the interactive
+// fallback shell. `garden whoami` and `garden logs -w $GARDEN_WORKER` rely
+// on these being set.
+function workerEnvExports(
+  projectName: string,
+  workerName: string,
+  branchName: string,
+  baseBranch: string | undefined,
+): string {
+  const base = baseBranch ?? "main";
+  return (
+    `export GARDEN_PROJECT=${shellEscape(projectName)} ` +
+    `GARDEN_WORKER=${shellEscape(workerName)} ` +
+    `GARDEN_BRANCH=${shellEscape(branchName)} ` +
+    `GARDEN_BASE_BRANCH=${shellEscape(base)};`
+  );
 }
 
 function pollSignalSnippet(projectName: string): string {

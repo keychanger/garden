@@ -91,6 +91,7 @@ Dashboard:
   dashboard exit, exit           Close the dashboard
   keys                           Show dashboard keybindings
   status                         Show project and worker status
+  whoami [worker]                Show the current worker's registry entry (uses $GARDEN_WORKER)
   alerts                         View dashboard alerts
   alerts clear                   Dismiss all alerts
   rules                          Interactive accept/dismiss for pending rule suggestions

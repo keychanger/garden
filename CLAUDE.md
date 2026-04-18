@@ -209,7 +209,7 @@ Current specs in this project:
 
 - All read commands: JSON when piped, pretty in TTY. Use `src/output.ts`.
 - tmux sessions are named `garden-dashboard`.
-- `GARDEN_PROJECT` env var scopes commands inside sessions.
+- `GARDEN_PROJECT` env var scopes commands inside sessions. Worker panes also export `GARDEN_WORKER`, `GARDEN_BRANCH`, `GARDEN_BASE_BRANCH` so workers can self-identify; `garden whoami` reads these to print the current worker's registry entry, and `garden logs -w $GARDEN_WORKER` filters to the worker's own history.
 - Project name is auto-detected from cwd when inside a registered project.
 - Dashboard workers are interactive Claude sessions in isolated git worktrees, launched with project rules via `--append-system-prompt-file`. Workers operate autonomously — they commit and push without asking for confirmation, since each worktree is fully isolated. The poller handles review and merge automatically.
 
