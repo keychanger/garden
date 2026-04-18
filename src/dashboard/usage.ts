@@ -228,9 +228,7 @@ export async function refreshUsage(): Promise<UsageSnapshot> {
     }
 
     if (res.status === 401 || res.status === 403) {
-      // Back off hard on auth failures — 401 is not transient, and retrying every
-      // 10 min with a dead token was triggering the endpoint's 429 cascade.
-      // `garden login` overwrites this snapshot so the poller wakes early.
+      // 401/403 isn't transient; back off AUTH_BACKOFF_MS so a dead token doesn't trigger the endpoint's 429 cascade (garden login overwrites the snapshot to heal early).
       const snap: UsageSnapshot = {
         fetchedAt,
         error: "login expired",

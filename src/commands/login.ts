@@ -52,8 +52,7 @@ async function loginProfile(name: string): Promise<void> {
   console.log(`Warning: ${credFile} not found after login. Claude may not have written credentials.`);
 }
 
-// Re-fetch the usage snapshot so the dashboard meter heals immediately instead
-// of waiting for the poller to come out of its auth-failure backoff.
+// Heal the dashboard meter now instead of waiting for the poller's auth backoff to elapse.
 async function healUsageMeter(): Promise<void> {
   try {
     const snap = await refreshUsage();

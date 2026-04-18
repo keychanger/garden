@@ -264,6 +264,7 @@ garden claude-profile [list|add|remove|login]
                                    # Manage alternate Claude config dirs (per-project plan)
 garden login [profile]             # Re-authenticate Claude (personal, or a profile)
 garden auth status                 # Show credential presence, expiry, and displacement
+garden usage [refresh]             # Show or force-refresh the Claude usage meter
 ```
 
 ### Dashboard
