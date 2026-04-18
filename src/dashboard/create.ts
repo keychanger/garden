@@ -71,7 +71,16 @@ function buildSettingsJson(gardenRunner: string, sandbox: SandboxConfig): string
     sandbox,
     permissions: {
       defaultMode: "auto",
-      allow: ["Bash(tmux:*)"],
+      // Every subcommand of a compound bash call must match a rule, so tmux chains like `tmux ... | head` still prompt without tail-utility allowances.
+      allow: [
+        "Bash(tmux:*)",
+        "Bash(echo:*)",
+        "Bash(head:*)",
+        "Bash(tail:*)",
+        "Bash(cat:*)",
+        "Bash(grep:*)",
+        "Bash(wc:*)",
+      ],
     },
   }, null, 2);
 }
