@@ -278,11 +278,6 @@ export function cyclePlot(direction: 1 | -1): void {
 
     state.activePlot = target;
 
-    // Resolve the desired project for the new plot, preferring (in order) the
-    // remembered selection, the current selection if it still belongs, then
-    // the plot's first project. swapVisibleToProject keeps activeWindowName
-    // aligned with activeProject — leaving it stale would make the status
-    // pane attribute the old project's worker to the new project.
     const newProjects = getFocusedProjectNames(config, target);
     const remembered = state.lastActiveProjectByPlot[target];
     const desired =
@@ -290,6 +285,9 @@ export function cyclePlot(direction: 1 | -1): void {
       (state.activeProject && newProjects.includes(state.activeProject)) ? state.activeProject :
       (newProjects[0] ?? null);
 
+    // Swap the visible pane when the target project changes so
+    // activeWindowName stays aligned with activeProject (the status pane
+    // reads activeWindowName to label the active worker).
     if (desired && desired !== state.activeProject) {
       swapVisibleToProject(desired, config.projects[desired], state);
     } else if (!desired) {
