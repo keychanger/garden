@@ -43,6 +43,7 @@ vi.mock("../src/dashboard/state.js", () => ({
     activePaneType: null,
     activeWindowName: null,
     lastActiveWorker: {},
+    lastActiveProjectByPlot: {},
   })),
   writeDashState: vi.fn(),
   STATE_FILE: "/tmp/fake-sessions/dashboard.state.json",

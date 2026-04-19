@@ -69,6 +69,9 @@ export interface DashboardState {
   activeWindowName: string | null; // logical name for parking, e.g. "_proj-shell" or "_proj-worker-2"
   // Per-project last-active worker window name (not persisted across sessions)
   lastActiveWorker: Record<string, string>;
+  // Per-plot last-active project — lets ⌥p restore the prior selection when
+  // cycling back to a plot, rather than always clamping to the first project.
+  lastActiveProjectByPlot: Record<string, string>;
 }
 
 export const STATE_FILE = path.join(SESSIONS_DIR, "dashboard.state.json");
@@ -85,6 +88,7 @@ const DEFAULT_STATE: DashboardState = {
   activePaneType: null,
   activeWindowName: null,
   lastActiveWorker: {},
+  lastActiveProjectByPlot: {},
 };
 
 export function readDashState(): DashboardState {
@@ -102,6 +106,7 @@ export function readDashState(): DashboardState {
     if (raw.usagePaneId === undefined) raw.usagePaneId = null;
     if (raw.activePlot === undefined) raw.activePlot = null;
     if (!raw.lastActiveWorker) raw.lastActiveWorker = {};
+    if (!raw.lastActiveProjectByPlot) raw.lastActiveProjectByPlot = {};
     return raw;
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {

@@ -142,6 +142,7 @@ function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
     activePaneType: "worker",
     activeWindowName: "_myproject-worker-swift-oak",
     lastActiveWorker: {},
+    lastActiveProjectByPlot: {},
     ...overrides,
   };
 }

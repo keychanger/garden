@@ -48,6 +48,7 @@ async function writeActivePlot(plot: string | null): Promise<void> {
     activePaneType: null,
     activeWindowName: null,
     lastActiveWorker: {},
+    lastActiveProjectByPlot: {},
   });
 }
 

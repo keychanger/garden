@@ -256,6 +256,7 @@ export function ensureDashboard(): void {
     activePaneType: firstProject ? "shell" : null,
     activeWindowName: firstProject ? shellWin(firstProject) : null,
     lastActiveWorker: {},
+    lastActiveProjectByPlot: {},
   };
 
   writeDashState(state);

@@ -25,6 +25,7 @@ describe("readDashState", () => {
       activePaneType: null,
       activeWindowName: null,
       lastActiveWorker: {},
+      lastActiveProjectByPlot: {},
     });
   });
 
@@ -51,6 +52,7 @@ describe("writeDashState / readDashState", () => {
       activePaneType: "worker" as const,
       activeWindowName: "_myproject-worker-bold-ash",
       lastActiveWorker: {},
+      lastActiveProjectByPlot: {},
     };
     writeDashState(original);
     const loaded = readDashState();
@@ -108,6 +110,7 @@ describe("writeDashState / readDashState", () => {
     fs.writeFileSync(STATE_FILE, JSON.stringify(oldState));
     const loaded = readDashState();
     expect(loaded.lastActiveWorker).toEqual({});
+    expect(loaded.lastActiveProjectByPlot).toEqual({});
   });
 
   it("migrates old root-with-null-window to garden", async () => {
@@ -141,6 +144,7 @@ describe("writeDashState / readDashState", () => {
       activePaneType: null,
       activeWindowName: null,
       lastActiveWorker: {},
+      lastActiveProjectByPlot: {},
     });
     expect(fs.existsSync(STATE_FILE)).toBe(true);
   });

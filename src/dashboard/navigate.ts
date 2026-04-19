@@ -269,22 +269,31 @@ export function cyclePlot(direction: 1 | -1): void {
     if (target === state.activePlot) return;
 
     log.info("navigate", "cyclePlot", { data: { direction, from: state.activePlot, to: target } });
+
+    // Snapshot the leaving plot's active project so cycling back restores it
+    // instead of clamping to the new plot's first project.
+    if (state.activePlot && state.activeProject) {
+      state.lastActiveProjectByPlot[state.activePlot] = state.activeProject;
+    }
+
     state.activePlot = target;
 
-    // If the active project isn't in the new plot, swap the visible pane to
-    // the new plot's first project. swapVisibleToProject keeps
-    // activeWindowName aligned with activeProject — leaving it stale would
-    // make the status pane attribute the old project's worker to the new
-    // project (renderQuickStatus parses activeWindowName to label the
-    // active worker for activeProject).
+    // Resolve the desired project for the new plot, preferring (in order) the
+    // remembered selection, the current selection if it still belongs, then
+    // the plot's first project. swapVisibleToProject keeps activeWindowName
+    // aligned with activeProject — leaving it stale would make the status
+    // pane attribute the old project's worker to the new project.
     const newProjects = getFocusedProjectNames(config, target);
-    if (state.activeProject && !newProjects.includes(state.activeProject)) {
-      const newProjectName = newProjects[0] ?? null;
-      if (newProjectName) {
-        swapVisibleToProject(newProjectName, config.projects[newProjectName], state);
-      } else {
-        state.activeProject = null;
-      }
+    const remembered = state.lastActiveProjectByPlot[target];
+    const desired =
+      (remembered && newProjects.includes(remembered)) ? remembered :
+      (state.activeProject && newProjects.includes(state.activeProject)) ? state.activeProject :
+      (newProjects[0] ?? null);
+
+    if (desired && desired !== state.activeProject) {
+      swapVisibleToProject(desired, config.projects[desired], state);
+    } else if (!desired) {
+      state.activeProject = null;
     }
 
     writeDashState(state);

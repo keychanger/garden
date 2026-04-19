@@ -125,6 +125,7 @@ function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
     activePaneType: "worker",
     activeWindowName: "_garden-worker-bold-ash",
     lastActiveWorker: {},
+    lastActiveProjectByPlot: {},
     ...overrides,
   };
 }
@@ -946,5 +947,89 @@ describe("cyclePlot", () => {
     expect(state.activeWindowName).toBe("_garden-worker-bold-ash");
     expect(parkToHidden).not.toHaveBeenCalled();
     expect(restoreFromHidden).not.toHaveBeenCalled();
+  });
+
+  it("records the leaving plot's active project in lastActiveProjectByPlot", () => {
+    const state = makeState({ activePlot: "a", activeProject: "garden" });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(plotsMap).mockReturnValue({
+      a: { projects: ["garden"] },
+      b: { projects: ["other"] },
+    });
+    vi.mocked(getFocusedProjectNames).mockReturnValue(["other"]);
+
+    cyclePlot(1);
+
+    expect(state.lastActiveProjectByPlot.a).toBe("garden");
+  });
+
+  it("restores the remembered project when cycling back to a plot", () => {
+    // Target plot "a" had "garden" active last; current activeProject "other"
+    // is not in "a" — without memory we'd fall back to first project ("foo").
+    const state = makeState({
+      activePlot: "b",
+      activeProject: "other",
+      activeWindowName: "_other-shell",
+      activePaneType: "shell",
+      lastActiveProjectByPlot: { a: "garden" },
+    });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(plotsMap).mockReturnValue({
+      a: { projects: ["foo", "garden"] },
+      b: { projects: ["other"] },
+    });
+    vi.mocked(getFocusedProjectNames).mockReturnValue(["foo", "garden"]);
+    vi.mocked(listAllWindowNames).mockReturnValue(["_garden-shell"]);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+
+    cyclePlot(-1);
+
+    expect(state.activePlot).toBe("a");
+    expect(state.activeProject).toBe("garden");
+  });
+
+  it("falls back to first project when remembered project is no longer in the plot", () => {
+    const state = makeState({
+      activePlot: "b",
+      activeProject: "other",
+      lastActiveProjectByPlot: { a: "gone" },
+    });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(plotsMap).mockReturnValue({
+      a: { projects: ["foo", "garden"] },
+      b: { projects: ["other"] },
+    });
+    vi.mocked(getFocusedProjectNames).mockReturnValue(["foo", "garden"]);
+    vi.mocked(listAllWindowNames).mockReturnValue(["_foo-shell"]);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+
+    cyclePlot(-1);
+
+    expect(state.activeProject).toBe("foo");
+  });
+
+  it("prefers remembered project even when current activeProject is also valid", () => {
+    // Both plots share "garden"; current is "garden" but plot "b" remembers
+    // "other" — cycling to "b" should land on the remembered "other".
+    const state = makeState({
+      activePlot: "a",
+      activeProject: "garden",
+      activeWindowName: "_garden-worker-bold-ash",
+      activePaneType: "worker",
+      lastActiveProjectByPlot: { b: "other" },
+    });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(plotsMap).mockReturnValue({
+      a: { projects: ["garden"] },
+      b: { projects: ["garden", "other"] },
+    });
+    vi.mocked(getFocusedProjectNames).mockReturnValue(["garden", "other"]);
+    vi.mocked(listAllWindowNames).mockReturnValue(["_other-shell"]);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+
+    cyclePlot(1);
+
+    expect(state.activePlot).toBe("b");
+    expect(state.activeProject).toBe("other");
   });
 });
