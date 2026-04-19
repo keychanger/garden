@@ -882,6 +882,37 @@ describe("cyclePlot", () => {
     expect(state.activeProject).toBe("other");
   });
 
+  it("swaps the visible pane when clamping so activeWindowName matches the new project", () => {
+    // Regression: without the swap, activeWindowName stayed at
+    // _garden-worker-bold-ash even though activeProject became "other",
+    // and renderQuickStatus attributed the garden worker to project "other".
+    const state = makeState({
+      activePlot: "a",
+      activeProject: "garden",
+      activeWindowName: "_garden-worker-bold-ash",
+      activePaneType: "worker",
+    });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(plotsMap).mockReturnValue({
+      a: { projects: ["garden"] },
+      b: { projects: ["other"] },
+    });
+    vi.mocked(getFocusedProjectNames).mockReturnValue(["other"]);
+    // New project has no parked worker and no hidden workers — should land on its shell.
+    vi.mocked(listAllWindowNames).mockReturnValue(["_other-shell"]);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+
+    cyclePlot(1);
+
+    expect(state.activeProject).toBe("other");
+    expect(state.activeWindowName).toBe("_other-shell");
+    expect(state.activePaneType).toBe("shell");
+    expect(parkToHidden).toHaveBeenCalledWith("_garden-worker-bold-ash", state);
+    expect(restoreFromHidden).toHaveBeenCalledWith("_other-shell", state);
+    // Last worker for garden recorded so re-entry restores it.
+    expect(state.lastActiveWorker.garden).toBe("_garden-worker-bold-ash");
+  });
+
   it("keeps activeProject when it is a member of the new plot", () => {
     const state = makeState({ activePlot: "a", activeProject: "garden" });
     vi.mocked(readDashState).mockReturnValue(state);
@@ -894,5 +925,26 @@ describe("cyclePlot", () => {
     cyclePlot(1);
     expect(state.activePlot).toBe("b");
     expect(state.activeProject).toBe("garden");
+  });
+
+  it("does not swap panes when activeProject stays in the new plot", () => {
+    const state = makeState({
+      activePlot: "a",
+      activeProject: "garden",
+      activeWindowName: "_garden-worker-bold-ash",
+      activePaneType: "worker",
+    });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(plotsMap).mockReturnValue({
+      a: { projects: ["garden"] },
+      b: { projects: ["garden", "other"] },
+    });
+    vi.mocked(getFocusedProjectNames).mockReturnValue(["garden", "other"]);
+
+    cyclePlot(1);
+
+    expect(state.activeWindowName).toBe("_garden-worker-bold-ash");
+    expect(parkToHidden).not.toHaveBeenCalled();
+    expect(restoreFromHidden).not.toHaveBeenCalled();
   });
 });

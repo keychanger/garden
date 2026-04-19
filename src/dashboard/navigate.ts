@@ -1,6 +1,6 @@
 // Pane navigation: project switching, worker/shell focus, cycling.
 import { loadConfig, getProject, getFocusedProjectNames, plotsMap, isPlotFocused } from "../config.js";
-import { readDashState, writeDashState, withStateLock } from "./state.js";
+import { readDashState, writeDashState, withStateLock, type DashboardState } from "./state.js";
 import { parkToHidden, swapToHidden, swapDirect } from "./layout.js";
 import { restoreFromHidden } from "./layout.js";
 import { gardenSwapToHidden, gardenRestoreFromHidden } from "./layout.js";
@@ -34,6 +34,62 @@ function restoreWorkerPaneVars(paneId: string, project: string, windowName: stri
   }
 }
 
+// Park the currently visible pane and restore (or create) a pane for
+// `projectName`: prefers the parked worker, then any hidden worker, then the
+// project shell. Mutates `state` (activeProject, activePaneType,
+// activeWindowName, lastActiveWorker) but does NOT writeDashState — the
+// caller is responsible for persisting and refreshing.
+function swapVisibleToProject(
+  projectName: string,
+  project: { path: string },
+  state: DashboardState,
+  windowNames?: string[],
+): void {
+  if (state.activeProject && state.activePaneType === "worker" && state.activeWindowName) {
+    state.lastActiveWorker[state.activeProject] = state.activeWindowName;
+  }
+
+  const names = windowNames ?? listAllWindowNames();
+  const has = (name: string) => names.includes(name);
+
+  const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject ?? "none");
+  parkToHidden(parkName, state);
+
+  const parkTarget = parkingWindowName(projectName);
+  const shellTarget = shellWin(projectName);
+  if (has(parkTarget)) {
+    restoreFromHidden(parkTarget, state);
+    state.activePaneType = "worker";
+    state.activeWindowName = parkTarget;
+  } else {
+    const workerWindows = listHiddenWorkerWindows(projectName, names);
+    const preferred = state.lastActiveWorker[projectName];
+    const targetWorker = preferred && workerWindows.includes(preferred)
+      ? preferred
+      : workerWindows[0];
+    if (targetWorker) {
+      restoreFromHidden(targetWorker, state);
+      state.activePaneType = "worker";
+      state.activeWindowName = targetWorker;
+    } else if (has(shellTarget)) {
+      restoreFromHidden(shellTarget, state);
+      state.activePaneType = "shell";
+      state.activeWindowName = shellTarget;
+    } else {
+      createShellWindow(projectName, project.path);
+      restoreFromHidden(shellTarget, state);
+      state.activePaneType = "shell";
+      state.activeWindowName = shellTarget;
+    }
+  }
+
+  if (state.activePaneType === "worker" && state.activePaneId && state.activeWindowName) {
+    restoreWorkerPaneVars(state.activePaneId, projectName, state.activeWindowName);
+  }
+
+  state.activeProject = projectName;
+}
+
 export function switchProject(indexArg: string): void {
   log.info("navigate", "switchProject", { data: { index: indexArg } });
   const index = parseInt(indexArg, 10) - 1;
@@ -57,52 +113,7 @@ export function switchProject(indexArg: string): void {
       return;
     }
 
-    // Record last active worker for the project we're leaving
-    if (state.activeProject && state.activePaneType === "worker" && state.activeWindowName) {
-      state.lastActiveWorker[state.activeProject] = state.activeWindowName;
-    }
-
-    // Single list-windows call replaces multiple windowExists checks
-    const windowNames = listAllWindowNames();
-    const has = (name: string) => windowNames.includes(name);
-
-    const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject ?? "none");
-    parkToHidden(parkName, state);
-
-    const parkTarget = parkingWindowName(projectName);
-    const shellTarget = shellWin(projectName);
-    if (has(parkTarget)) {
-      restoreFromHidden(parkTarget, state);
-      state.activePaneType = "worker";
-      state.activeWindowName = parkTarget;
-    } else {
-      const workerWindows = listHiddenWorkerWindows(projectName, windowNames);
-      // Prefer the last-touched worker, fall back to first available
-      const preferred = state.lastActiveWorker[projectName];
-      const targetWorker = preferred && workerWindows.includes(preferred)
-        ? preferred
-        : workerWindows[0];
-      if (targetWorker) {
-        restoreFromHidden(targetWorker, state);
-        state.activePaneType = "worker";
-        state.activeWindowName = targetWorker;
-      } else if (has(shellTarget)) {
-        restoreFromHidden(shellTarget, state);
-        state.activePaneType = "shell";
-        state.activeWindowName = shellTarget;
-      } else {
-        createShellWindow(projectName, project.path);
-        restoreFromHidden(shellTarget, state);
-        state.activePaneType = "shell";
-        state.activeWindowName = shellTarget;
-      }
-    }
-
-    if (state.activePaneType === "worker" && state.activePaneId && state.activeWindowName) {
-      restoreWorkerPaneVars(state.activePaneId, projectName, state.activeWindowName);
-    }
-
-    state.activeProject = projectName;
+    swapVisibleToProject(projectName, project, state);
     writeDashState(state);
     refreshDashboard({ state });
   });
@@ -260,12 +271,20 @@ export function cyclePlot(direction: 1 | -1): void {
     log.info("navigate", "cyclePlot", { data: { direction, from: state.activePlot, to: target } });
     state.activePlot = target;
 
-    // Clamp activeProject to the new plot's membership so ⌥1–⌥9 address the
-    // right set immediately. If the current activeProject isn't in the new
-    // plot, fall back to the first project in the plot.
+    // If the active project isn't in the new plot, swap the visible pane to
+    // the new plot's first project. swapVisibleToProject keeps
+    // activeWindowName aligned with activeProject — leaving it stale would
+    // make the status pane attribute the old project's worker to the new
+    // project (renderQuickStatus parses activeWindowName to label the
+    // active worker for activeProject).
     const newProjects = getFocusedProjectNames(config, target);
     if (state.activeProject && !newProjects.includes(state.activeProject)) {
-      state.activeProject = newProjects[0] ?? null;
+      const newProjectName = newProjects[0] ?? null;
+      if (newProjectName) {
+        swapVisibleToProject(newProjectName, config.projects[newProjectName], state);
+      } else {
+        state.activeProject = null;
+      }
     }
 
     writeDashState(state);
