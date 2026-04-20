@@ -478,9 +478,7 @@ export function buildStatusCommand(gardenRunner: string): string {
     `  if printf '%s' "$cur" | grep -q '${brailleClass}'; then`,
     `    sc=0;`,
     `    while [ $sc -lt 500 ]; do`,
-    // Kill the backgrounded sleep after wait returns — SIGUSR1 interrupts
-    // `wait` but leaves the sleep running, which would leak one process per
-    // signal. See the else branch below for the longer-sleep variant.
+    // SIGUSR1 interrupts `wait`; kill the sleep so it doesn't leak.
     `      sleep 0.08 & _sp=$!; wait $_sp 2>/dev/null; kill $_sp 2>/dev/null;`,
     `      if [ $sig -eq 1 ]; then break; fi;`,
     `      sc=$((sc + 1));`,
@@ -491,11 +489,9 @@ export function buildStatusCommand(gardenRunner: string): string {
     `      printf '\\033[H%s\\033[J' "$animated";`,
     `    done;`,
     `  else`,
-    // Block until a SIGUSR1 from refreshStatusPane() wakes us. The trap
-    // interrupts the wait, the next loop iteration re-renders. No timer.
-    // 86400 = 24h, large enough to be effectively infinite for an idle pane.
-    // Must kill the backgrounded sleep: SIGUSR1 returns from `wait` but the
-    // sleep keeps running, leaking one zombie per refresh.
+    // Block until refreshStatusPane() sends SIGUSR1; the trap interrupts
+    // wait and the next iteration re-renders. 86400 is a 24h backstop — kill
+    // the sleep after wait returns so every signal doesn't leak one process.
     `    sleep 86400 & _sp=$!; wait $_sp 2>/dev/null; kill $_sp 2>/dev/null;`,
     `  fi;`,
     `done`,
@@ -504,12 +500,9 @@ export function buildStatusCommand(gardenRunner: string): string {
 
 export function buildUsageCommand(_gardenRunner: string): string {
   const uf = USAGE_RENDERED_FILE;
-  // Simpler than buildStatusCommand: the usage pane has no spinner and its
-  // content only changes on poller refreshes (SIGUSR1). Initial render reads
-  // the pre-baked file; the trap repaints on each signal. The outer sleep is
-  // effectively infinite — every update is event-driven. Must kill the
-  // backgrounded sleep after wait: SIGUSR1 returns from `wait` but leaves the
-  // sleep alive, which would leak one zombie per refresh.
+  // Simpler than buildStatusCommand: no spinner — a SIGUSR1 trap repaints the
+  // pre-baked file. The 24h sleep is a backstop; kill it after wait returns
+  // so every signal doesn't leak one process.
   return [
     `printf '\\033[H\\033[2J\\033[3J'`,
     `uf='${uf}'`,

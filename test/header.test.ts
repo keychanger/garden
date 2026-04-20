@@ -201,6 +201,12 @@ describe("buildStatusCommand", () => {
     expect(cmd).toContain("sleep 86400");
   });
 
+  it("kills backgrounded sleeps after wait so SIGUSR1 doesn't leak them", () => {
+    const cmd = buildStatusCommand("garden");
+    expect(cmd).toMatch(/sleep 0\.08 & _sp=\$!; wait \$_sp 2>\/dev\/null; kill \$_sp 2>\/dev\/null;/);
+    expect(cmd).toMatch(/sleep 86400 & _sp=\$!; wait \$_sp 2>\/dev\/null; kill \$_sp 2>\/dev\/null;/);
+  });
+
   it("references the pre-baked status file path", () => {
     const cmd = buildStatusCommand("garden");
     // STATUS_RENDERED_FILE = SESSIONS_DIR/status.rendered
@@ -596,6 +602,11 @@ describe("buildUsageCommand", () => {
   it("sleeps long on idle (pure event-driven wake)", () => {
     const cmd = buildUsageCommand("garden");
     expect(cmd).toContain("sleep 86400");
+  });
+
+  it("kills the backgrounded sleep after wait so SIGUSR1 doesn't leak it", () => {
+    const cmd = buildUsageCommand("garden");
+    expect(cmd).toMatch(/sleep 86400 & _sp=\$!; wait \$_sp 2>\/dev\/null; kill \$_sp 2>\/dev\/null;/);
   });
 });
 
