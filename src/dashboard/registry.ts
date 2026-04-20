@@ -62,6 +62,16 @@ export interface WorkerEntry {
   preResolveSha?: string;
   resolveAttempts?: number;
   lastResolveBody?: string;
+  // Local HEAD SHA captured when a review is launched. Used by handleReviewing
+  // to detect whether the reviewer actually committed anything (rebase + fixes)
+  // so that an unparseable verdict with real work attached can be recovered
+  // instead of silently discarded.
+  preReviewSha?: string;
+  // Set when handleReviewing receives an unparseable verdict but the reviewer
+  // advanced HEAD; the poller force-pushes and re-queues one more review. A
+  // second unparseable verdict falls through to the normal failing path.
+  // Cleared on any parseable verdict (clean/fixed/failed).
+  unparseableReviewAt?: number;
   role?: string;
   parentWorker?: string;
 }

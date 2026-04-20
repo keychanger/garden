@@ -618,6 +618,135 @@ describe("poll — reviewing state (async)", () => {
     );
   });
 
+  it("parses verdict that appears mid-output, not on the last line", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123" }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) {
+        return "Reviewed 3 findings.\nFIXED\nTSC CLEAN, VITEST 856/856";
+      }
+      return "{}";
+    });
+
+    poll("myproject");
+
+    expect(forcePushBranch).toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merge-pending" }),
+    );
+  });
+
+  it("re-queues review when verdict is unparseable but reviewer committed work", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123",
+        preReviewSha: "pre456",
+      }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) {
+        return "TSC CLEAN, VITEST 856/856 (WAS 848 BEFORE THE 8 NEW TESTS)";
+      }
+      return "{}";
+    });
+    // Reviewer advanced HEAD past the pre-launch SHA.
+    vi.mocked(getBranchHeadSha).mockReturnValue("post789");
+
+    poll("myproject");
+
+    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "working",
+        pendingReviewAt: expect.any(Number),
+        unparseableReviewAt: expect.any(Number),
+        reviewWindowName: undefined,
+        preReviewSha: undefined,
+      }),
+    );
+  });
+
+  it("falls through to failing when unparseable verdict retry is already exhausted", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123",
+        preReviewSha: "pre456",
+        unparseableReviewAt: Date.now() - 1000,
+      }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) return "still no verdict line";
+      return "{}";
+    });
+    vi.mocked(getBranchHeadSha).mockReturnValue("post789");
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "failing",
+        failCount: 1,
+      }),
+    );
+  });
+
+  it("falls through to failing when verdict unparseable and reviewer made no commits", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123",
+        preReviewSha: "pre456",
+      }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) return "something went wrong";
+      return "{}";
+    });
+    // HEAD still at the pre-review SHA — reviewer did nothing.
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre456");
+
+    poll("myproject");
+
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "failing",
+        failCount: 1,
+      }),
+    );
+  });
+
   it("transitions to failing when review result is missing", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",

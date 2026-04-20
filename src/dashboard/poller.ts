@@ -230,6 +230,54 @@ function handleReviewing(
   cleanReviewFiles(projectName, entry.name);
 
   if (review === null) {
+    const wtPath = entry.worktreePath ?? projectPath;
+    const headSha = getBranchHeadSha(wtPath);
+    const headAdvanced = headSha !== null && entry.preReviewSha !== undefined &&
+      headSha !== entry.preReviewSha;
+    const alreadyRetried = entry.unparseableReviewAt !== undefined;
+
+    // Non-destructive recovery: if the reviewer's output didn't emit a
+    // recognizable verdict but the reviewer did commit something (rebase or
+    // fixes), push those commits and re-queue one more review. The second
+    // reviewer sees a clean state and typically emits CLEAN. Capped at one
+    // retry so a reviewer that repeatedly fails to verbalize doesn't loop.
+    if (headAdvanced && !alreadyRetried) {
+      const branchName = entry.branchName ?? entry.name;
+      try {
+        forcePushBranch(wtPath, branchName);
+      } catch (err) {
+        log.error("poller", "force-push on unparseable-verdict retry failed", {
+          worker: entry.name,
+          data: { error: String(err) },
+        });
+        transitionState(projectName, entry.name, "failing", {
+          failCount: (entry.failCount ?? 0) + 1,
+          failingSha: undefined,
+          lastSeenSha: headSha ?? undefined,
+          lastShaChangeAt: new Date().toISOString(),
+          reviewWindowName: undefined,
+          reviewStartedAt: undefined,
+        });
+        refreshDashboard();
+        return true;
+      }
+      log.info("poller", "unparseable verdict with reviewer commits; re-queueing review", {
+        worker: entry.name,
+      });
+      transitionState(projectName, entry.name, "working", {
+        pendingReviewAt: Date.now(),
+        unparseableReviewAt: Date.now(),
+        lastSeenSha: headSha ?? undefined,
+        lastShaChangeAt: new Date().toISOString(),
+        reviewWindowName: undefined,
+        reviewStartedAt: undefined,
+        preReviewSha: undefined,
+      });
+      refreshDashboard();
+      scheduleDelayedPoke(projectName, 0);
+      return true;
+    }
+
     log.warn("poller", "review process failed, transitioning to failing", {
       worker: entry.name,
     });
@@ -240,8 +288,6 @@ function handleReviewing(
       worker: entry.name,
       message: `Review failed for worker ${entry.name}: Claude unavailable or unparseable output`,
     });
-    const wtPath = entry.worktreePath ?? projectPath;
-    const headSha = getBranchHeadSha(wtPath);
     transitionState(projectName, entry.name, "failing", {
       failCount: (entry.failCount ?? 0) + 1,
       failingSha: undefined,
@@ -301,6 +347,8 @@ function handleReviewing(
       lastReviewBody: review.body,
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
+      preReviewSha: undefined,
+      unparseableReviewAt: undefined,
     });
     refreshDashboard();
     // The poller is event-driven and will block on the FIFO after this tick.
@@ -325,6 +373,8 @@ function handleReviewing(
       lastShaChangeAt: new Date().toISOString(),
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
+      preReviewSha: undefined,
+      unparseableReviewAt: undefined,
     });
     refreshDashboard();
   }
@@ -889,6 +939,7 @@ function launchReview(
   // which changes HEAD but not origin/<branch>.
   const branchName = entry.branchName ?? entry.name;
   const launchSha = getRemoteTrackingSha(wtPath, branchName) ?? getBranchHeadSha(wtPath) ?? entry.lastSeenSha;
+  const preReviewSha = getBranchHeadSha(wtPath) ?? undefined;
   transitionState(projectName, entry.name, "reviewing", {
     reviewWindowName: revWindow,
     reviewStartedAt: Date.now(),
@@ -896,6 +947,7 @@ function launchReview(
     lastShaChangeAt: new Date().toISOString(),
     pendingReviewAt: undefined,
     mergePendingAt: entry.mergePendingAt,
+    preReviewSha,
   });
   refreshDashboard();
 
@@ -980,9 +1032,17 @@ function readReviewResult(
   }
 }
 
+// Scan the last N non-empty lines for a line that is a standalone verdict
+// token (optionally with trailing punctuation). Reviewers sometimes emit the
+// verdict and then add trailing summary output; they also sometimes forget
+// the fenced verdict entirely. Looking at the last N lines handles the first
+// case. The second case is handled in handleReviewing by detecting HEAD
+// advancement and re-queueing the review.
+const VERDICT_SCAN_LINES = 20;
+const VERDICT_LINE = /^(CLEAN|FIXED|FAILED)[.\s!]*$/i;
+
 function parseReviewResult(output: string, workerName: string): ReviewResult | null {
   const lines = output.split("\n");
-  // Skip trailing blank lines to find the actual verdict line.
   let lastLineIdx = lines.length - 1;
   while (lastLineIdx >= 0 && !lines[lastLineIdx].trim()) lastLineIdx--;
   if (lastLineIdx < 0) {
@@ -990,17 +1050,20 @@ function parseReviewResult(output: string, workerName: string): ReviewResult | n
     return null;
   }
 
-  // Strip trailing punctuation/whitespace before matching, so "CLEAN." works.
-  const lastLine = lines[lastLineIdx].trim().toUpperCase().replace(/[.\s!]+$/, "");
-  const body = lines.slice(0, lastLineIdx).join("\n").trim() || "No additional comments.";
-
-  if (lastLine === "CLEAN") return { verdict: "clean", body };
-  if (lastLine === "FIXED") return { verdict: "fixed", body };
-  if (lastLine === "FAILED") return { verdict: "failed", body };
+  const scanStart = Math.max(0, lastLineIdx - VERDICT_SCAN_LINES + 1);
+  for (let i = lastLineIdx; i >= scanStart; i--) {
+    const match = lines[i].trim().match(VERDICT_LINE);
+    if (!match) continue;
+    const verdict = match[1].toUpperCase();
+    const body = lines.slice(0, i).join("\n").trim() || "No additional comments.";
+    if (verdict === "CLEAN") return { verdict: "clean", body };
+    if (verdict === "FIXED") return { verdict: "fixed", body };
+    if (verdict === "FAILED") return { verdict: "failed", body };
+  }
 
   log.warn("poller", "could not parse review verdict", {
     worker: workerName,
-    data: { lastLine },
+    data: { lastLine: lines[lastLineIdx].trim() },
   });
   return null;
 }
