@@ -478,7 +478,10 @@ export function buildStatusCommand(gardenRunner: string): string {
     `  if printf '%s' "$cur" | grep -q '${brailleClass}'; then`,
     `    sc=0;`,
     `    while [ $sc -lt 500 ]; do`,
-    `      sleep 0.08 & wait $! 2>/dev/null;`,
+    // Kill the backgrounded sleep after wait returns — SIGUSR1 interrupts
+    // `wait` but leaves the sleep running, which would leak one process per
+    // signal. See the else branch below for the longer-sleep variant.
+    `      sleep 0.08 & _sp=$!; wait $_sp 2>/dev/null; kill $_sp 2>/dev/null;`,
     `      if [ $sig -eq 1 ]; then break; fi;`,
     `      sc=$((sc + 1));`,
     `      fc=$((fc + 1));`,
@@ -491,7 +494,9 @@ export function buildStatusCommand(gardenRunner: string): string {
     // Block until a SIGUSR1 from refreshStatusPane() wakes us. The trap
     // interrupts the wait, the next loop iteration re-renders. No timer.
     // 86400 = 24h, large enough to be effectively infinite for an idle pane.
-    `    sleep 86400 & wait $! 2>/dev/null;`,
+    // Must kill the backgrounded sleep: SIGUSR1 returns from `wait` but the
+    // sleep keeps running, leaking one zombie per refresh.
+    `    sleep 86400 & _sp=$!; wait $_sp 2>/dev/null; kill $_sp 2>/dev/null;`,
     `  fi;`,
     `done`,
   ].join("\n");
@@ -502,14 +507,16 @@ export function buildUsageCommand(_gardenRunner: string): string {
   // Simpler than buildStatusCommand: the usage pane has no spinner and its
   // content only changes on poller refreshes (SIGUSR1). Initial render reads
   // the pre-baked file; the trap repaints on each signal. The outer sleep is
-  // effectively infinite — every update is event-driven.
+  // effectively infinite — every update is event-driven. Must kill the
+  // backgrounded sleep after wait: SIGUSR1 returns from `wait` but leaves the
+  // sleep alive, which would leak one zombie per refresh.
   return [
     `printf '\\033[H\\033[2J\\033[3J'`,
     `uf='${uf}'`,
     `render() { _t=$(cat "$uf" 2>/dev/null); printf '\\033[H%s\\033[J' "$_t"; }`,
     `trap 'render' USR1`,
     `render`,
-    `while true; do sleep 86400 & wait $! 2>/dev/null; done`,
+    `while true; do sleep 86400 & _sp=$!; wait $_sp 2>/dev/null; kill $_sp 2>/dev/null; done`,
   ].join("\n");
 }
 
