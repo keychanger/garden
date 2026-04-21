@@ -613,6 +613,46 @@ describe("writeQuickStatus (via refreshDashboard)", () => {
     );
     expect(refreshCalls).toHaveLength(1);
   });
+
+  it("signals the pane before shrinking so old content doesn't briefly show in the smaller pane", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
+    // new rendered is shorter than current pane height
+    vi.mocked(renderQuickStatus).mockReturnValue("l1\nl2");
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 20 });
+    vi.mocked(getPanePid).mockReturnValue("999");
+
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    refreshDashboard();
+
+    const killOrder = killSpy.mock.invocationCallOrder[0];
+    const tmuxCalls = vi.mocked(tmux).mock.calls;
+    const tmuxOrders = vi.mocked(tmux).mock.invocationCallOrder;
+    const resizeOrder = tmuxOrders[tmuxCalls.findIndex(c => c[0] === "resize-pane" && c[1] === "-t" && c[2] === "%0")];
+    expect(killOrder).toBeDefined();
+    expect(resizeOrder).toBeDefined();
+    // SIGUSR1 must fire BEFORE resize on shrink
+    expect(killOrder).toBeLessThan(resizeOrder);
+    killSpy.mockRestore();
+  });
+
+  it("grows the pane before signaling so new content doesn't scroll its top off", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
+    // new rendered is taller than current pane height
+    vi.mocked(renderQuickStatus).mockReturnValue("l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10");
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 5 });
+    vi.mocked(getPanePid).mockReturnValue("999");
+
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    refreshDashboard();
+
+    const killOrder = killSpy.mock.invocationCallOrder[0];
+    const tmuxCalls = vi.mocked(tmux).mock.calls;
+    const tmuxOrders = vi.mocked(tmux).mock.invocationCallOrder;
+    const resizeOrder = tmuxOrders[tmuxCalls.findIndex(c => c[0] === "resize-pane" && c[1] === "-t" && c[2] === "%0")];
+    // resize must happen BEFORE SIGUSR1 on grow
+    expect(resizeOrder).toBeLessThan(killOrder);
+    killSpy.mockRestore();
+  });
 });
 
 // ===========================================================================

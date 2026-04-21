@@ -595,25 +595,12 @@ function writeQuickStatus(opts?: RefreshOptions): void {
     const tmpFile = `${STATUS_RENDERED_FILE}.${process.pid}.${Date.now()}.tmp`;
     fs.writeFileSync(tmpFile, rendered);
     fs.renameSync(tmpFile, STATUS_RENDERED_FILE);
-    // Resize only when line count changes. Resizing on every hook event would
-    // send SIGWINCH to the status pane process each time, interrupting its
-    // sleep and causing the else-branch garden-status fallback to fire on
-    // events that don't change the layout — which races with the SIGUSR1 that
-    // follows and can leave the pane in a broken state.
     if (state.statusPaneId) {
       // +1 for the pane-border-status top row, which is included in pane_height
       // but not in the rendered line count.
       const h = Math.max(4, rendered.split("\n").length) + 1;
       const cur = getPaneSize(state.statusPaneId);
-      if (!cur || cur.height !== h) {
-        try { tmux("resize-pane", "-t", state.statusPaneId, "-y", String(h)); } catch { /* ignore */ }
-        // Shrinking scrolls truncated rows into scrollback — flush to prevent ghost renders.
-        try { tmux("clear-history", "-t", state.statusPaneId); } catch { /* ignore */ }
-        // Flush resize to pane before SIGUSR1 — avoids top-line scroll-off race.
-        try { tmux("refresh-client", "-S"); } catch { /* ignore */ }
-      }
-      // Inline signal so the repaint lands right after the file write.
-      signalPane(state.statusPaneId);
+      resizeAndSignal(state.statusPaneId, h, cur?.height ?? null);
     }
   } catch { /* best effort */ }
 }
@@ -629,12 +616,34 @@ function writeUsageRendered(opts?: RefreshOptions): void {
     if (state.usagePaneId) {
       // +1 for the pane-border-status top row.
       const h = rendered.split("\n").length + 1;
-      if (!cur || cur.height !== h) {
-        try { tmux("resize-pane", "-t", state.usagePaneId, "-y", String(h)); } catch { /* ignore */ }
-        try { tmux("clear-history", "-t", state.usagePaneId); } catch { /* ignore */ }
-        try { tmux("refresh-client", "-S"); } catch { /* ignore */ }
-      }
-      signalPane(state.usagePaneId);
+      resizeAndSignal(state.usagePaneId, h, cur?.height ?? null);
     }
   } catch { /* best effort */ }
+}
+
+// Sequence resize + SIGUSR1 based on direction:
+//   grow   — resize (and flush via refresh-client -S) before the signal so the
+//            new, taller content doesn't scroll its top rows off when painted
+//            into the pre-resize pane buffer.
+//   shrink — signal first so the trap paints the new, shorter content into the
+//            still-large pane (trailing rows become blanks that \033[J clears);
+//            then shrink, which only discards those blanks. The other order
+//            briefly shows cropped top rows of the OLD content in the newly-
+//            shrunken pane — the flash users see on e.g. `all → imp` plot swap.
+//   equal  — just signal.
+function resizeAndSignal(paneId: string, newH: number, curH: number | null): void {
+  if (curH == null || newH > curH) {
+    try { tmux("resize-pane", "-t", paneId, "-y", String(newH)); } catch { /* ignore */ }
+    try { tmux("clear-history", "-t", paneId); } catch { /* ignore */ }
+    try { tmux("refresh-client", "-S"); } catch { /* ignore */ }
+    signalPane(paneId);
+    return;
+  }
+  if (newH < curH) {
+    signalPane(paneId);
+    try { tmux("resize-pane", "-t", paneId, "-y", String(newH)); } catch { /* ignore */ }
+    try { tmux("clear-history", "-t", paneId); } catch { /* ignore */ }
+    return;
+  }
+  signalPane(paneId);
 }
