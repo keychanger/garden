@@ -105,9 +105,7 @@ export function updateHeaderVar(opts?: RefreshOptions): void {
   const state = opts?.state ?? readDashState();
   const config = loadConfig();
 
-  // Set pane-level border vars *before* the single refresh-client -S inside
-  // setBarVars so the status pane's border repaints with the new plot strip
-  // immediately, instead of waiting for the next status-interval tick.
+  // Pane-border vars must be set before setBarVars's refresh-client -S, or the border waits for the next status-interval tick.
   if (state.statusPaneId) {
     setPaneVar(state.statusPaneId, "garden_name", formatPlotStrip(config, state.activePlot));
     setPaneVar(state.statusPaneId, "garden_plot", "");
