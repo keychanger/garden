@@ -27,9 +27,13 @@ vi.mock("node:fs", () => ({
 
 vi.mock("../src/config.js", () => ({
   tryGetProject: vi.fn(() => ({ path: "/repo/garden" })),
-  loadConfig: vi.fn(() => ({ projects: { garden: { path: "/repo/garden" } } })),
+  loadConfig: vi.fn(() => ({
+    projects: { garden: { path: "/repo/garden" } },
+    plots: { all: { projects: ["garden"] } },
+  })),
   SESSIONS_DIR: "/tmp/fake-sessions",
   getFocusedProjectNames: vi.fn(() => ["garden"]),
+  plotsMap: vi.fn((cfg: { plots?: Record<string, unknown> }) => cfg.plots ?? {}),
 }));
 
 vi.mock("../src/dashboard/log.js", () => ({

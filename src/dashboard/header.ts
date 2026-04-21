@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { SESSIONS_DIR, loadConfig, tryGetProject, getFocusedProjectNames, PLOT_MAX_PROJECTS } from "../config.js";
+import { SESSIONS_DIR, loadConfig, tryGetProject, plotsMap } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
@@ -110,12 +110,25 @@ export function updateHeaderVar(opts?: RefreshOptions): void {
   setBarVars(left, right);
 
   if (state.statusPaneId) {
-    const names = getFocusedProjectNames(config, state.activePlot);
-    const plotLabel = state.activePlot
-      ? `plot: ${state.activePlot} (${names.length}/${PLOT_MAX_PROJECTS})`
-      : "";
-    setPaneVar(state.statusPaneId, "garden_plot", plotLabel);
+    setPaneVar(state.statusPaneId, "garden_name", formatPlotStrip(config, state.activePlot));
+    setPaneVar(state.statusPaneId, "garden_plot", "");
   }
+}
+
+// Plot strip for the status pane's top border: every plot is listed with a
+// filled circle on the active one and an empty circle on the others, mirroring
+// the worker focus marker used below it in the pane.
+function formatPlotStrip(
+  config: ReturnType<typeof loadConfig>,
+  activePlot: string | null,
+): string {
+  const names = Object.keys(plotsMap(config));
+  if (names.length === 0) return "";
+  return names.map(name => {
+    const isActive = name === activePlot;
+    if (isActive) return `#[bold]● ${name}#[default]`;
+    return `#[fg=colour244]○ ${name}#[default]`;
+  }).join("  ");
 }
 
 // ---------------------------------------------------------------------------

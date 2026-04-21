@@ -208,7 +208,7 @@ export function ensureDashboard(): void {
   setPaneTitle(usageId, "usage");
   setPaneLabel(usageId, "usage");
   setPaneTitle(statusId, "status");
-  setPaneLabel(statusId, "status");
+  // @garden_name is overwritten by updateHeaderVar() with the plot strip; leave it unset here.
   setPaneTitle(gardenShellId, "garden");
   setPaneLabel(gardenShellId, "garden");
   disablePaneInput(usageId);

@@ -123,7 +123,6 @@ function healStatusPaneInState(state: DashboardState): DashboardState {
       try { tmux("resize-pane", "-t", statusId, "-y", String(statusHeight)); } catch { /* ignore */ }
       try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
       setPaneTitle(statusId, "status");
-      setPaneLabel(statusId, "status");
       disablePaneInput(statusId);
 
       healed = { ...healed, statusPaneId: statusId };

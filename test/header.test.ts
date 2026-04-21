@@ -30,10 +30,13 @@ vi.mock("../src/config.js", () => ({
   tryGetProject: vi.fn(() => ({ path: "/repo/garden" })),
   loadConfig: vi.fn(() => ({
     projects: { garden: { path: "/repo/garden" }, other: { path: "/repo/other" } },
+    plots: {
+      all: { projects: ["garden", "other"] },
+      imp: { projects: ["garden"] },
+    },
   })),
   SESSIONS_DIR: "/tmp/fake-sessions",
-  getFocusedProjectNames: vi.fn(() => ["garden"]),
-  PLOT_MAX_PROJECTS: 9,
+  plotsMap: vi.fn((cfg: { plots?: Record<string, unknown> }) => cfg.plots ?? {}),
 }));
 
 vi.mock("../src/session.js", () => ({
@@ -344,20 +347,34 @@ describe("updateHeaderVar", () => {
     expect(() => updateHeaderVar()).not.toThrow();
   });
 
-  it("sets @garden_plot on the status pane with plot name and count when a plot is active", () => {
+  it("sets @garden_name on the status pane to a plot strip marking the active plot with a filled circle", () => {
     updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "imp" }) });
-    expect(setPaneVar).toHaveBeenCalledWith("%0", "garden_plot", "plot: imp (1/9)");
+    const nameCalls = vi.mocked(setPaneVar).mock.calls.filter(c => c[0] === "%0" && c[1] === "garden_name");
+    expect(nameCalls).toHaveLength(1);
+    const strip = nameCalls[0][2];
+    // Active plot is filled + bold; others empty + dim.
+    expect(strip).toContain("#[bold]● imp#[default]");
+    expect(strip).toContain("#[fg=colour244]○ all#[default]");
   });
 
-  it("sets @garden_plot to empty string on the status pane when no plot is active", () => {
+  it("sets @garden_name on the status pane with all circles empty when no plot is active", () => {
     updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: null }) });
+    const nameCalls = vi.mocked(setPaneVar).mock.calls.filter(c => c[0] === "%0" && c[1] === "garden_name");
+    expect(nameCalls).toHaveLength(1);
+    const strip = nameCalls[0][2];
+    expect(strip).toContain("#[fg=colour244]○ all#[default]");
+    expect(strip).toContain("#[fg=colour244]○ imp#[default]");
+    expect(strip).not.toContain("#[bold]●");
+  });
+
+  it("clears @garden_plot on the status pane (plot strip lives in @garden_name now)", () => {
+    updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "imp" }) });
     expect(setPaneVar).toHaveBeenCalledWith("%0", "garden_plot", "");
   });
 
-  it("does not touch @garden_plot when statusPaneId is null", () => {
+  it("does not touch @garden_name or @garden_plot when statusPaneId is null", () => {
     updateHeaderVar({ state: makeState({ statusPaneId: null, activePlot: "imp" }) });
-    const plotCalls = vi.mocked(setPaneVar).mock.calls.filter(c => c[1] === "garden_plot");
-    expect(plotCalls).toHaveLength(0);
+    expect(setPaneVar).not.toHaveBeenCalled();
   });
 });
 
