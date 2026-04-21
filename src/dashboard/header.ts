@@ -143,13 +143,14 @@ function setBarVars(left: string, right: string): void {
     tmux("set-option", "-t", t, "status-right", "#{@garden_right}");
     tmux("set-option", "-t", t, "@garden_left", left);
     tmux("set-option", "-t", t, "@garden_right", right);
-    // Suppress window names in the status bar center area. Hidden worker
-    // windows would otherwise leak their names into the window list.
-    suppressWindowNames();
     tmux("refresh-client", "-S");
   } catch { /* no client attached or session gone */ }
 }
 
+// Idempotent per-window set-option that suppresses window-name leakage into
+// the tmux status bar's middle strip. A session with ~16 windows is ~32 tmux
+// subprocess calls (~200ms); callers schedule this *after* user-visible
+// updates so the latency doesn't show up on the critical path.
 function suppressWindowNames(): void {
   try {
     const windows = tmuxOutput("list-windows", "-t", DASHBOARD_SESSION, "-F", "#{window_name}");
@@ -550,10 +551,13 @@ export function refreshUsagePane(opts?: RefreshOptions): void {
 
 export function refreshDashboard(opts?: RefreshOptions): void {
   // Paint first (writeQuickStatus/writeUsageRendered signal their panes inline);
-  // the tmux-subprocess-heavy refreshWorkerTasks runs after to minimize switch latency.
+  // heavy tmux housekeeping runs after so latency doesn't land on plot switches.
+  //   suppressWindowNames: 2 × N set-option calls per window (~200ms at 16 windows)
+  //   refreshWorkerTasks:  one getPaneTitle per worker (~50-100ms)
   updateHeaderVar(opts);
   writeQuickStatus(opts);
   writeUsageRendered(opts);
+  suppressWindowNames();
   refreshWorkerTasks();
 }
 
