@@ -621,18 +621,9 @@ function writeUsageRendered(opts?: RefreshOptions): void {
   } catch { /* best effort */ }
 }
 
-// Sequence resize + SIGUSR1 based on direction:
-//   grow   — resize (and flush via refresh-client -S) before the signal so the
-//            new, taller content doesn't scroll its top rows off when painted
-//            into the pre-resize pane buffer.
-//   shrink — signal first so the trap paints the new, shorter content into the
-//            still-large pane (trailing rows become blanks that \033[J clears);
-//            then shrink, which only discards those blanks. The other order
-//            briefly shows cropped top rows of the OLD content in the newly-
-//            shrunken pane — the flash users see on e.g. `all → imp` plot swap.
-//   equal  — just signal.
 function resizeAndSignal(paneId: string, newH: number, curH: number | null): void {
   if (curH == null || newH > curH) {
+    // Grow first: else taller content scrolls its top rows off the still-small pane buffer.
     try { tmux("resize-pane", "-t", paneId, "-y", String(newH)); } catch { /* ignore */ }
     try { tmux("clear-history", "-t", paneId); } catch { /* ignore */ }
     try { tmux("refresh-client", "-S"); } catch { /* ignore */ }
@@ -640,6 +631,8 @@ function resizeAndSignal(paneId: string, newH: number, curH: number | null): voi
     return;
   }
   if (newH < curH) {
+    // Signal before shrink: trap paints short content into the still-large pane (\033[J
+    // clears the surplus); reverse order briefly shows cropped OLD content in the new pane.
     signalPane(paneId);
     try { tmux("resize-pane", "-t", paneId, "-y", String(newH)); } catch { /* ignore */ }
     try { tmux("clear-history", "-t", paneId); } catch { /* ignore */ }
