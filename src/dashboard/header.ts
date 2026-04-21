@@ -478,9 +478,8 @@ export function buildStatusCommand(gardenRunner: string): string {
     `  if printf '%s' "$cur" | grep -q '${brailleClass}'; then`,
     `    sc=0;`,
     `    while [ $sc -lt 500 ]; do`,
-    // SIGUSR1 interrupts `wait`; kill the sleep so it doesn't leak, then
-    // `wait` again to reap it synchronously — otherwise bash prints a job-
-    // completion notice ("sh: line N: PID Terminated: 15 sleep ...") into the pane.
+    // SIGUSR1 interrupts `wait`; kill the sleep, then `wait` again to reap it
+    // synchronously — else bash prints "PID Terminated: 15 sleep ..." into the pane.
     `      sleep 0.08 & _sp=$!; wait $_sp 2>/dev/null; kill $_sp 2>/dev/null; wait $_sp 2>/dev/null;`,
     `      if [ $sig -eq 1 ]; then break; fi;`,
     `      sc=$((sc + 1));`,
@@ -491,11 +490,8 @@ export function buildStatusCommand(gardenRunner: string): string {
     `      printf '\\033[H%s\\033[J' "$animated";`,
     `    done;`,
     `  else`,
-    // Block until refreshStatusPane() sends SIGUSR1; the trap interrupts
-    // wait and the next iteration re-renders. 86400 is a 24h backstop. Kill
-    // the sleep after wait returns so every signal doesn't leak a process,
-    // then wait again to reap it synchronously — otherwise bash prints an
-    // async "sh: line N: PID Terminated: 15 sleep ..." notice into the pane.
+    // Block until refreshStatusPane() sends SIGUSR1; 86400 is a 24h backstop.
+    // Same kill+wait-reap pattern as the spinner sleep above.
     `    sleep 86400 & _sp=$!; wait $_sp 2>/dev/null; kill $_sp 2>/dev/null; wait $_sp 2>/dev/null;`,
     `  fi;`,
     `done`,
@@ -504,10 +500,9 @@ export function buildStatusCommand(gardenRunner: string): string {
 
 export function buildUsageCommand(_gardenRunner: string): string {
   const uf = USAGE_RENDERED_FILE;
-  // Simpler than buildStatusCommand: no spinner — a SIGUSR1 trap repaints the
-  // pre-baked file. The 24h sleep is a backstop; kill it after wait returns so
-  // every signal doesn't leak a process, then wait again to reap it — else
-  // bash prints an async "sh: line N: PID Terminated: 15 ..." notice.
+  // Simpler than buildStatusCommand: SIGUSR1 trap repaints the pre-baked file.
+  // The 24h sleep is a backstop; kill+wait-reap keeps bash from printing an
+  // async "PID Terminated: 15 sleep ..." notice after each signal.
   return [
     `printf '\\033[H\\033[2J\\033[3J'`,
     `uf='${uf}'`,
