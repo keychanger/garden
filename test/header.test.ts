@@ -199,6 +199,12 @@ describe("buildStatusCommand", () => {
     expect(cmd).toContain("sleep 0.08");
   });
 
+  it("animates via a per-line partial repaint so static lines don't flicker every frame", () => {
+    const cmd = buildStatusCommand("garden");
+    // awk emits cursor-positioned updates for spinner lines only — no full-pane redraw per frame.
+    expect(cmd).toMatch(/awk .* gsub\(b, f\); printf "\\033\[%d;1H%s"/);
+  });
+
   it("contains the idle sleep with long timeout", () => {
     const cmd = buildStatusCommand("garden");
     expect(cmd).toContain("sleep 86400");

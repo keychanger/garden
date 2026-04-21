@@ -448,7 +448,6 @@ export function handleTitleChanged(windowName: string | undefined, paneId: strin
   }
 
   writeQuickStatus();
-  refreshStatusPane();
 }
 
 // ---------------------------------------------------------------------------
@@ -487,6 +486,9 @@ export function buildStatusCommand(gardenRunner: string): string {
     `    fi;`,
     `  fi;`,
     // Animate spinner when any worker has a braille spinner character.
+    // Repaint only the lines that contain a spinner (via awk, once per frame),
+    // not the whole pane — a full repaint every 80ms makes the static lines
+    // visibly flicker.
     `  if printf '%s' "$cur" | grep -q '${brailleClass}'; then`,
     `    sc=0;`,
     `    while [ $sc -lt 500 ]; do`,
@@ -498,8 +500,7 @@ export function buildStatusCommand(gardenRunner: string): string {
     `      fc=$((fc + 1));`,
     `      si=$((fc % ${SPINNER_FRAMES.length}));`,
     `      case $si in ${caseBranches} esac;`,
-    `      animated=$(printf '%s' "$cur" | sed "s/${brailleClass}/$sf_char/g");`,
-    `      printf '\\033[H%s\\033[J' "$animated";`,
+    `      printf '%s\\n' "$cur" | awk -v b='${brailleClass}' -v f="$sf_char" '$0 ~ b { gsub(b, f); printf "\\033[%d;1H%s", NR, $0 }';`,
     `    done;`,
     `  else`,
     // Block until refreshStatusPane() sends SIGUSR1; 86400 is a 24h backstop.
@@ -529,37 +530,44 @@ export function buildUsageCommand(_gardenRunner: string): string {
 // Refresh helpers
 // ---------------------------------------------------------------------------
 
+// SIGUSR1 to a pane's shell. Cheap: one tmux subprocess (getPanePid) + one
+// process.kill syscall. Exported helpers below delegate here.
+function signalPane(paneId: string): void {
+  try {
+    const pid = getPanePid(paneId);
+    if (pid) process.kill(parseInt(pid, 10), "SIGUSR1");
+  } catch { /* pane gone or process exited */ }
+}
+
 export function refreshStatusPane(opts?: RefreshOptions): void {
   const state = opts?.state ?? readDashState();
   if (!state.statusPaneId) return;
-  try {
-    const pid = getPanePid(state.statusPaneId);
-    if (pid) process.kill(parseInt(pid, 10), "SIGUSR1");
-  } catch { /* pane gone or process exited */ }
+  signalPane(state.statusPaneId);
 }
 
 export function refreshUsagePane(opts?: RefreshOptions): void {
   const state = opts?.state ?? readDashState();
   if (!state.usagePaneId) return;
-  try {
-    const pid = getPanePid(state.usagePaneId);
-    if (pid) process.kill(parseInt(pid, 10), "SIGUSR1");
-  } catch { /* pane gone or process exited */ }
+  signalPane(state.usagePaneId);
 }
 
 export function refreshDashboard(opts?: RefreshOptions): void {
+  // Phase 1 — get the new state on screen as fast as possible. writeQuickStatus
+  // and writeUsageRendered each signal their pane inline (see below), so there
+  // is no separate refreshStatusPane/refreshUsagePane call here.
   updateHeaderVar(opts);
-  refreshWorkerTasks();
   writeQuickStatus(opts);
   writeUsageRendered(opts);
-  refreshStatusPane(opts);
-  refreshUsagePane(opts);
+
+  // Phase 2 — refresh ancillary registry state for the *next* render. This is
+  // a tmux-subprocess-heavy loop over workers; running it after the paint
+  // keeps user-visible latency low on plot switches and similar events.
+  refreshWorkerTasks();
 }
 
 // Lean refresh for worker cycling: skip header/tasks/usage since only the status marker moves.
 export function refreshDashboardCycle(opts?: RefreshOptions): void {
   writeQuickStatus(opts);
-  refreshStatusPane(opts);
 }
 
 // Refresh all workers' task fields from their live tmux pane titles. This
@@ -610,9 +618,12 @@ function writeQuickStatus(opts?: RefreshOptions): void {
         try { tmux("resize-pane", "-t", state.statusPaneId, "-y", String(h)); } catch { /* ignore */ }
         // Shrinking scrolls truncated rows into scrollback — flush to prevent ghost renders.
         try { tmux("clear-history", "-t", state.statusPaneId); } catch { /* ignore */ }
-        // Flush resize to pane before SIGUSR1 — avoids top-line scroll-off race
+        // Flush resize to pane before SIGUSR1 — avoids top-line scroll-off race.
         try { tmux("refresh-client", "-S"); } catch { /* ignore */ }
       }
+      // Signal the pane shell inline so the repaint lands right after the file
+      // write, not after the rest of refreshDashboard's tmux-subprocess calls.
+      signalPane(state.statusPaneId);
     }
   } catch { /* best effort */ }
 }
@@ -633,6 +644,7 @@ function writeUsageRendered(opts?: RefreshOptions): void {
         try { tmux("clear-history", "-t", state.usagePaneId); } catch { /* ignore */ }
         try { tmux("refresh-client", "-S"); } catch { /* ignore */ }
       }
+      signalPane(state.usagePaneId);
     }
   } catch { /* best effort */ }
 }
