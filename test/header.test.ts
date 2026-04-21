@@ -376,6 +376,24 @@ describe("updateHeaderVar", () => {
     updateHeaderVar({ state: makeState({ statusPaneId: null, activePlot: "imp" }) });
     expect(setPaneVar).not.toHaveBeenCalled();
   });
+
+  it("sets status-pane border vars before the refresh-client -S so the border repaints immediately", () => {
+    updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "imp" }) });
+
+    // setPaneVar writes pane-scoped @garden_name via the tmux mock too.
+    // Interleave its call order with tmux's to find the refresh-client -S index.
+    const setPaneVarMock = vi.mocked(setPaneVar);
+    const nameCallIdx = setPaneVarMock.mock.invocationCallOrder[
+      setPaneVarMock.mock.calls.findIndex(c => c[1] === "garden_name")
+    ];
+    const tmuxMock = vi.mocked(tmux);
+    const refreshIdx = tmuxMock.mock.invocationCallOrder[
+      tmuxMock.mock.calls.findIndex(c => c[0] === "refresh-client" && c[1] === "-S")
+    ];
+    expect(nameCallIdx).toBeDefined();
+    expect(refreshIdx).toBeDefined();
+    expect(nameCallIdx).toBeLessThan(refreshIdx);
+  });
 });
 
 // ===========================================================================

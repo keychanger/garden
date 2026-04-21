@@ -105,14 +105,17 @@ export function updateHeaderVar(opts?: RefreshOptions): void {
   const state = opts?.state ?? readDashState();
   const config = loadConfig();
 
-  const left = formatLeft(state.activeProject, state.activePlot, config);
-  const right = formatRight();
-  setBarVars(left, right);
-
+  // Set pane-level border vars *before* the single refresh-client -S inside
+  // setBarVars so the status pane's border repaints with the new plot strip
+  // immediately, instead of waiting for the next status-interval tick.
   if (state.statusPaneId) {
     setPaneVar(state.statusPaneId, "garden_name", formatPlotStrip(config, state.activePlot));
     setPaneVar(state.statusPaneId, "garden_plot", "");
   }
+
+  const left = formatLeft(state.activeProject, state.activePlot, config);
+  const right = formatRight();
+  setBarVars(left, right);
 }
 
 // Circles mirror the worker focus marker rendered directly below this pane.
