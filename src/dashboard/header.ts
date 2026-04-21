@@ -115,9 +115,7 @@ export function updateHeaderVar(opts?: RefreshOptions): void {
   }
 }
 
-// Plot strip for the status pane's top border: every plot is listed with a
-// filled circle on the active one and an empty circle on the others, mirroring
-// the worker focus marker used below it in the pane.
+// Circles mirror the worker focus marker rendered directly below this pane.
 function formatPlotStrip(
   config: ReturnType<typeof loadConfig>,
   activePlot: string | null,
