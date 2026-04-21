@@ -486,9 +486,7 @@ export function buildStatusCommand(gardenRunner: string): string {
     `    fi;`,
     `  fi;`,
     // Animate spinner when any worker has a braille spinner character.
-    // Repaint only the lines that contain a spinner (via awk, once per frame),
-    // not the whole pane — a full repaint every 80ms makes the static lines
-    // visibly flicker.
+    // Partial per-line repaint via awk — full-pane redraw every 80ms visibly flickers static lines.
     `  if printf '%s' "$cur" | grep -q '${brailleClass}'; then`,
     `    sc=0;`,
     `    while [ $sc -lt 500 ]; do`,
@@ -530,8 +528,7 @@ export function buildUsageCommand(_gardenRunner: string): string {
 // Refresh helpers
 // ---------------------------------------------------------------------------
 
-// SIGUSR1 to a pane's shell. Cheap: one tmux subprocess (getPanePid) + one
-// process.kill syscall. Exported helpers below delegate here.
+// Shared SIGUSR1 helper — refreshStatusPane and refreshUsagePane delegate here.
 function signalPane(paneId: string): void {
   try {
     const pid = getPanePid(paneId);
@@ -552,16 +549,11 @@ export function refreshUsagePane(opts?: RefreshOptions): void {
 }
 
 export function refreshDashboard(opts?: RefreshOptions): void {
-  // Phase 1 — get the new state on screen as fast as possible. writeQuickStatus
-  // and writeUsageRendered each signal their pane inline (see below), so there
-  // is no separate refreshStatusPane/refreshUsagePane call here.
+  // Paint first (writeQuickStatus/writeUsageRendered signal their panes inline);
+  // the tmux-subprocess-heavy refreshWorkerTasks runs after to minimize switch latency.
   updateHeaderVar(opts);
   writeQuickStatus(opts);
   writeUsageRendered(opts);
-
-  // Phase 2 — refresh ancillary registry state for the *next* render. This is
-  // a tmux-subprocess-heavy loop over workers; running it after the paint
-  // keeps user-visible latency low on plot switches and similar events.
   refreshWorkerTasks();
 }
 
@@ -621,8 +613,7 @@ function writeQuickStatus(opts?: RefreshOptions): void {
         // Flush resize to pane before SIGUSR1 — avoids top-line scroll-off race.
         try { tmux("refresh-client", "-S"); } catch { /* ignore */ }
       }
-      // Signal the pane shell inline so the repaint lands right after the file
-      // write, not after the rest of refreshDashboard's tmux-subprocess calls.
+      // Inline signal so the repaint lands right after the file write.
       signalPane(state.statusPaneId);
     }
   } catch { /* best effort */ }
