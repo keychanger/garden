@@ -232,6 +232,14 @@ describe("buildStatusCommand", () => {
     expect(cmd).toContain("while true; do");
     expect(cmd).toContain("done");
   });
+
+  it("animates the plot strip at pane level so the pane-scoped @garden_name set by setPaneVar isn't shadowed", () => {
+    const cmd = buildStatusCommand("garden");
+    // Session-level set would be shadowed by the pane-level @garden_name set
+    // in updateHeaderVar. Must use -p -t "$TMUX_PANE" to update the same scope.
+    expect(cmd).toMatch(/tmux set-option -p -t "\$TMUX_PANE" @garden_name/);
+    expect(cmd).not.toMatch(/tmux set-option -t 'garden-dashboard' @garden_name/);
+  });
 });
 
 // ===========================================================================

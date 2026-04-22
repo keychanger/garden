@@ -512,7 +512,6 @@ export function buildStatusCommand(gardenRunner: string): string {
   const sf = STATUS_RENDERED_FILE;
   const pst = PLOT_STRIP_TEMPLATE_FILE;
   const sent = PLOT_SPINNER_SENTINEL;
-  const session = DASHBOARD_SESSION;
   const brailleClass = `[${SPINNER_FRAMES.join("")}]`;
   const caseBranches = SPINNER_FRAMES.map((f, i) => `${i}) sf_char='${f}';;`).join(" ");
   // Event-driven status pane loop:
@@ -563,8 +562,9 @@ export function buildStatusCommand(gardenRunner: string): string {
     `      if [ $has_cs -eq 1 ]; then`,
     `        printf '%s\\n' "$cur" | awk -v b='${brailleClass}' -v f="$sf_char" '$0 ~ b { gsub(b, f); printf "\\033[%d;1H%s", NR, $0 }';`,
     `      fi;`,
+    // Must be pane-level: setPaneVar's pane scope shadows session-level writes.
     `      if [ $has_ps -eq 1 ] && [ -r "$pst" ]; then`,
-    `        pt=$(<"$pst"); tmux set-option -t '${session}' @garden_name "\${pt//${sent}/$sf_char}" 2>/dev/null;`,
+    `        pt=$(<"$pst"); tmux set-option -p -t "$TMUX_PANE" @garden_name "\${pt//${sent}/$sf_char}" 2>/dev/null;`,
     `      fi;`,
     `    done;`,
     `  else`,
