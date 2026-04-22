@@ -34,6 +34,7 @@ vi.mock("../src/config.js", () => ({
   SESSIONS_DIR: "/tmp/fake-sessions",
   getFocusedProjectNames: vi.fn(() => ["garden"]),
   plotsMap: vi.fn((cfg: { plots?: Record<string, unknown> }) => cfg.plots ?? {}),
+  isPlotFocused: vi.fn((plot: { focused?: boolean }) => plot.focused !== false),
 }));
 
 vi.mock("../src/dashboard/log.js", () => ({
@@ -110,6 +111,7 @@ vi.mock("../src/dashboard/alerts.js", () => ({
 
 vi.mock("../src/commands/status.js", () => ({
   renderQuickStatus: vi.fn(() => ""),
+  resolveWorkerStatus: vi.fn(() => "idle"),
 }));
 
 import { handleClaudeHook } from "../src/dashboard/header.js";

@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { SESSIONS_DIR, loadConfig, tryGetProject, plotsMap } from "../config.js";
+import { SESSIONS_DIR, loadConfig, tryGetProject, plotsMap, isPlotFocused } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
@@ -16,9 +16,14 @@ import { unreadAlertCount, formatRightBar, addAlert, readAlerts } from "./alerts
 import { workerWindowName as workerWin, parseWorkerWindow } from "./window-names.js";
 import { maybeRefreshUsage, renderUsagePane } from "./usage.js";
 import { resolveGardenRunner } from "./create.js";
+import { resolvePlotStatus, type PlotState } from "./plot-status.js";
 
 const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
 const USAGE_RENDERED_FILE = path.join(SESSIONS_DIR, "usage.rendered");
+const PLOT_STRIP_TEMPLATE_FILE = path.join(SESSIONS_DIR, "plot-strip.template");
+// Sentinel in the plot-strip template file; the status pane's animation loop
+// substitutes it with the current spinner frame each tick.
+const PLOT_SPINNER_SENTINEL = "__GSP__";
 
 // ---------------------------------------------------------------------------
 // Worker identity from cwd
@@ -107,8 +112,10 @@ export function updateHeaderVar(opts?: RefreshOptions): void {
 
   // Pane-border vars must be set before setBarVars's refresh-client -S, or the border waits for the next status-interval tick.
   if (state.statusPaneId) {
-    setPaneVar(state.statusPaneId, "garden_name", formatPlotStrip(config, state.activePlot));
+    const { display, template } = buildPlotStrip(config, state.activePlot);
+    setPaneVar(state.statusPaneId, "garden_name", display);
     setPaneVar(state.statusPaneId, "garden_plot", "");
+    writePlotStripTemplate(template);
   }
 
   const left = formatLeft(state.activeProject, state.activePlot, config);
@@ -116,18 +123,67 @@ export function updateHeaderVar(opts?: RefreshOptions): void {
   setBarVars(left, right);
 }
 
+const PLOT_ICONS: Record<Exclude<PlotState, "idle">, string> = {
+  failing: "✖",  // heavy x
+  asking:  "⚑",  // flag
+  merged:  "✓",  // check
+  working: PLOT_SPINNER_SENTINEL,
+};
+const PLOT_COLORS: Record<Exclude<PlotState, "idle" | "working">, string> = {
+  failing: "red",
+  asking:  "yellow",
+  merged:  "green",
+};
+
 // Circles mirror the worker focus marker rendered directly below this pane.
-function formatPlotStrip(
+// Returns both the display string (spinner resolved to the current frame for
+// immediate paint) and a template string (sentinel in place of the spinner)
+// that the status pane loop re-bakes each animation tick.
+function buildPlotStrip(
   config: ReturnType<typeof loadConfig>,
   activePlot: string | null,
-): string {
-  const names = Object.keys(plotsMap(config));
-  if (names.length === 0) return "";
-  return names.map(name => {
+): { display: string; template: string } {
+  const entries = Object.entries(plotsMap(config)).filter(([, plot]) => isPlotFocused(plot));
+  if (entries.length === 0) return { display: "", template: "" };
+
+  const registry = readRegistry();
+  const segments = entries.map(([name, plot]) => {
     const isActive = name === activePlot;
-    if (isActive) return `#[bold]● ${name}#[default]`;
-    return `#[fg=colour244]○ ${name}#[default]`;
-  }).join("  ");
+    const status = resolvePlotStatus(plot, registry);
+    return formatPlotSegment(name, isActive, status);
+  });
+  const template = segments.join("  ");
+  const frame = SPINNER_FRAMES[Math.floor(Date.now() / 200) % SPINNER_FRAMES.length];
+  const display = template.split(PLOT_SPINNER_SENTINEL).join(frame);
+  return { display, template };
+}
+
+function formatPlotSegment(name: string, isActive: boolean, status: PlotState): string {
+  const circle = isActive ? "●" : "○";
+  if (status === "idle") {
+    return isActive
+      ? `#[bold]${circle} ${name}#[default]`
+      : `#[fg=colour244]${circle} ${name}#[default]`;
+  }
+  const icon = PLOT_ICONS[status];
+  if (status === "working") {
+    // Keep active/inactive bold/dim on circle+name; spinner stays bright so
+    // "something's happening" reads at a glance even on unselected plots.
+    return isActive
+      ? `#[bold]${circle} ${icon} ${name}#[default]`
+      : `#[fg=colour244]${circle}#[default] ${icon} #[fg=colour244]${name}#[default]`;
+  }
+  const color = PLOT_COLORS[status];
+  const style = isActive ? `fg=${color},bold` : `fg=${color}`;
+  return `#[${style}]${circle} ${icon} ${name}#[default]`;
+}
+
+function writePlotStripTemplate(template: string): void {
+  try {
+    const tmp = `${PLOT_STRIP_TEMPLATE_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, template);
+    fs.renameSync(tmp, PLOT_STRIP_TEMPLATE_FILE);
+  } catch { /* sessions dir not yet created; best effort */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -454,6 +510,9 @@ export function handleTitleChanged(windowName: string | undefined, paneId: strin
 
 export function buildStatusCommand(gardenRunner: string): string {
   const sf = STATUS_RENDERED_FILE;
+  const pst = PLOT_STRIP_TEMPLATE_FILE;
+  const sent = PLOT_SPINNER_SENTINEL;
+  const session = DASHBOARD_SESSION;
   const brailleClass = `[${SPINNER_FRAMES.join("")}]`;
   const caseBranches = SPINNER_FRAMES.map((f, i) => `${i}) sf_char='${f}';;`).join(" ");
   // Event-driven status pane loop:
@@ -462,9 +521,13 @@ export function buildStatusCommand(gardenRunner: string): string {
   //   - When a spinner is on screen, animate it locally; otherwise block.
   //   - There is no recurring re-check, no safety-net sleep, no fallback poll.
   //     Per STATUS.md invariant 6, every transition is event-triggered.
+  //   - The plot strip (top bar) is animated here too — its template file
+  //     carries a sentinel that this loop substitutes with the current frame
+  //     on each tick, then writes to tmux @garden_name.
   return [
     `printf '\\033[H\\033[2J\\033[3J'`,
     `sf='${sf}'`,
+    `pst='${pst}'`,
     `sig=0`,
     `trap '_t=$(cat "$sf" 2>/dev/null); printf "\\033[H%s\\033[J" "$_t"; prev="$_t"; sig=1' USR1`,
     `prev=""`,
@@ -472,8 +535,6 @@ export function buildStatusCommand(gardenRunner: string): string {
     `while true; do`,
     `  if [ $sig -eq 1 ]; then`,
     // Signal trap already displayed the pre-rendered content and set prev.
-    // Reuse it as cur to skip the status subprocess and go straight into
-    // the animation loop.
     `    cur="$prev";`,
     `    sig=0;`,
     `  else`,
@@ -483,9 +544,11 @@ export function buildStatusCommand(gardenRunner: string): string {
     `      prev="$cur";`,
     `    fi;`,
     `  fi;`,
-    // Animate spinner when any worker has a braille spinner character.
-    // Partial per-line repaint via awk — full-pane redraw every 80ms visibly flickers static lines.
-    `  if printf '%s' "$cur" | grep -q '${brailleClass}'; then`,
+    // Animate if either the pane content or the plot strip has a live spinner.
+    `  has_cs=0; has_ps=0;`,
+    `  if printf '%s' "$cur" | grep -q '${brailleClass}'; then has_cs=1; fi;`,
+    `  if [ -r "$pst" ] && grep -q -F '${sent}' "$pst" 2>/dev/null; then has_ps=1; fi;`,
+    `  if [ $has_cs -eq 1 ] || [ $has_ps -eq 1 ]; then`,
     `    sc=0;`,
     `    while [ $sc -lt 500 ]; do`,
     // SIGUSR1 interrupts `wait`; kill the sleep, then `wait` again to reap it
@@ -496,7 +559,13 @@ export function buildStatusCommand(gardenRunner: string): string {
     `      fc=$((fc + 1));`,
     `      si=$((fc % ${SPINNER_FRAMES.length}));`,
     `      case $si in ${caseBranches} esac;`,
-    `      printf '%s\\n' "$cur" | awk -v b='${brailleClass}' -v f="$sf_char" '$0 ~ b { gsub(b, f); printf "\\033[%d;1H%s", NR, $0 }';`,
+    // Partial per-line repaint via awk — full-pane redraw every 80ms visibly flickers static lines.
+    `      if [ $has_cs -eq 1 ]; then`,
+    `        printf '%s\\n' "$cur" | awk -v b='${brailleClass}' -v f="$sf_char" '$0 ~ b { gsub(b, f); printf "\\033[%d;1H%s", NR, $0 }';`,
+    `      fi;`,
+    `      if [ $has_ps -eq 1 ] && [ -r "$pst" ]; then`,
+    `        pt=$(<"$pst"); tmux set-option -t '${session}' @garden_name "\${pt//${sent}/$sf_char}" 2>/dev/null;`,
+    `      fi;`,
     `    done;`,
     `  else`,
     // Block until refreshStatusPane() sends SIGUSR1; 86400 is a 24h backstop.

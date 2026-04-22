@@ -25,7 +25,8 @@ npm run dev -- help    # run via tsx during development
   - `registry.ts` — worker registry, atomic read/write to `dashboard.registry.json`
   - `layout.ts` — pane parking/restoring via tmux swap-pane
   - `hotkeys.ts` — Alt/Option keybinding setup
-  - `header.ts` — tmux status bar: active project context (left) via `@garden_left`, build version (right) via `@garden_right`
+  - `header.ts` — tmux status bar: active project context (left) via `@garden_left`, build version (right) via `@garden_right`. Also renders the top-of-status-pane plot strip (`@garden_name`) with per-plot status icons (failing/asking/merged/working/idle) and animates the "working" spinner by piggybacking on the status pane's SIGUSR1 tick via `~/.garden/sessions/plot-strip.template`.
+  - `plot-status.ts` — aggregates worker states across a plot's projects into a single `PlotState` (`failing` > `asking` > `merged` > `working` > `idle`). Drives the plot-strip icon.
   - `tmux.ts` — low-level tmux helpers (shared by dashboard and status command)
   - `validate.ts` — state/tmux consistency validation and self-healing
   - `git.ts` — git CLI wrappers for worktree and merge operations

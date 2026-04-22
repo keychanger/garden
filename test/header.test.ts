@@ -37,6 +37,7 @@ vi.mock("../src/config.js", () => ({
   })),
   SESSIONS_DIR: "/tmp/fake-sessions",
   plotsMap: vi.fn((cfg: { plots?: Record<string, unknown> }) => cfg.plots ?? {}),
+  isPlotFocused: vi.fn((plot: { focused?: boolean }) => plot.focused !== false),
 }));
 
 vi.mock("../src/session.js", () => ({
@@ -95,6 +96,7 @@ vi.mock("../src/version.js", () => ({
 
 vi.mock("../src/commands/status.js", () => ({
   renderQuickStatus: vi.fn(() => "line1\nline2\nline3"),
+  resolveWorkerStatus: vi.fn(() => "idle"),
 }));
 
 vi.mock("../src/dashboard/usage.js", () => ({
@@ -134,7 +136,8 @@ import { tmux, getPanePid, getPaneSize, getPaneTitle, setPaneVar } from "../src/
 import { readDashState, type DashboardState } from "../src/dashboard/state.js";
 import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields } from "../src/dashboard/registry.js";
 import { currentBranch } from "../src/dashboard/git.js";
-import { renderQuickStatus } from "../src/commands/status.js";
+import { renderQuickStatus, resolveWorkerStatus } from "../src/commands/status.js";
+import { isPlotFocused, loadConfig } from "../src/config.js";
 import { log } from "../src/dashboard/log.js";
 import fs from "node:fs";
 
@@ -381,6 +384,102 @@ describe("updateHeaderVar", () => {
   it("does not touch @garden_name or @garden_plot when statusPaneId is null", () => {
     updateHeaderVar({ state: makeState({ statusPaneId: null, activePlot: "imp" }) });
     expect(setPaneVar).not.toHaveBeenCalled();
+  });
+
+  it("excludes unfocused plots from the strip", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: { garden: { path: "/repo/garden" }, other: { path: "/repo/other" } },
+      plots: {
+        all: { projects: ["garden", "other"] },
+        imp: { projects: ["garden"], focused: false },
+      },
+    } as unknown as ReturnType<typeof loadConfig>);
+    vi.mocked(isPlotFocused).mockImplementation((plot: { focused?: boolean }) => plot.focused !== false);
+
+    updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "all" }) });
+    const nameCalls = vi.mocked(setPaneVar).mock.calls.filter(c => c[0] === "%0" && c[1] === "garden_name");
+    const strip = nameCalls[0][2];
+    expect(strip).toContain("all");
+    expect(strip).not.toContain("imp");
+  });
+
+  it("renders a red ✖ icon when any worker in the plot is failing", () => {
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: { garden: [{ name: "w1", sessionId: "s", task: "", prState: "failing" }] },
+    } as never);
+    vi.mocked(resolveWorkerStatus).mockImplementation((e: { prState?: string } | undefined) => {
+      return (e?.prState ?? "idle") as never;
+    });
+
+    updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "imp" }) });
+    const strip = vi.mocked(setPaneVar).mock.calls.find(c => c[1] === "garden_name")?.[2] ?? "";
+    expect(strip).toContain("#[fg=red,bold]● ✖ imp#[default]");
+  });
+
+  it("renders a yellow ⚑ icon when any worker in the plot is asking", () => {
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: { garden: [{ name: "w1", sessionId: "s", task: "", claudeStatus: "asking" }] },
+    } as never);
+    vi.mocked(resolveWorkerStatus).mockReturnValue("asking" as never);
+
+    updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "imp" }) });
+    const strip = vi.mocked(setPaneVar).mock.calls.find(c => c[1] === "garden_name")?.[2] ?? "";
+    expect(strip).toContain("#[fg=yellow,bold]● ⚑ imp#[default]");
+  });
+
+  it("renders a green ✓ icon only when a worker has merged (not for merge-pending)", () => {
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: { garden: [{ name: "w1", sessionId: "s", task: "", prState: "merged" }] },
+    } as never);
+    vi.mocked(resolveWorkerStatus).mockReturnValue("merged" as never);
+
+    updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "imp" }) });
+    const strip = vi.mocked(setPaneVar).mock.calls.find(c => c[1] === "garden_name")?.[2] ?? "";
+    expect(strip).toContain("#[fg=green,bold]● ✓ imp#[default]");
+  });
+
+  it("renders a spinner frame when a worker is working, and writes the template with a sentinel", () => {
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: { garden: [{ name: "w1", sessionId: "s", task: "", claudeStatus: "working" }] },
+    } as never);
+    vi.mocked(resolveWorkerStatus).mockReturnValue("working" as never);
+
+    const writeFileSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {});
+    const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation(() => {});
+
+    updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "imp" }) });
+
+    const strip = vi.mocked(setPaneVar).mock.calls.find(c => c[1] === "garden_name")?.[2] ?? "";
+    // The display carries a current braille frame (not the sentinel).
+    expect(strip).toMatch(/#\[bold\]● [⠀-⣿] imp#\[default\]/);
+
+    // The template written to disk carries the sentinel instead of the frame.
+    const writeCall = writeFileSpy.mock.calls.find(c => String(c[0]).includes("plot-strip.template."));
+    expect(writeCall).toBeDefined();
+    expect(String(writeCall![1])).toContain("__GSP__");
+    expect(renameSpy).toHaveBeenCalled();
+
+    writeFileSpy.mockRestore();
+    renameSpy.mockRestore();
+  });
+
+  it("prioritizes failing > asking > merged > working > idle across workers in a plot", () => {
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: { garden: [
+        { name: "w1", sessionId: "s", task: "", claudeStatus: "working" },
+        { name: "w2", sessionId: "s", task: "", claudeStatus: "asking" },
+        { name: "w3", sessionId: "s", task: "", prState: "failing" },
+      ]},
+    } as never);
+    vi.mocked(resolveWorkerStatus).mockImplementation((e: { prState?: string; claudeStatus?: string } | undefined) => {
+      return (e?.prState ?? e?.claudeStatus ?? "idle") as never;
+    });
+
+    updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "imp" }) });
+    const strip = vi.mocked(setPaneVar).mock.calls.find(c => c[1] === "garden_name")?.[2] ?? "";
+    expect(strip).toContain("✖");
+    expect(strip).not.toContain("⚑");
+    expect(strip).not.toContain("✓");
   });
 
   it("sets status-pane border vars before the refresh-client -S so the border repaints immediately", () => {
