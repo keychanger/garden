@@ -388,6 +388,7 @@ describe("focusWorker", () => {
 
     expect(setPaneLabel).toHaveBeenCalledWith("%2", "bold-ash");
     expect(setPaneVar).toHaveBeenCalledWith("%2", "garden_task", "do stuff");
+    expect(setPaneVar).toHaveBeenCalledWith("%2", "garden_worker", "1");
   });
 });
 

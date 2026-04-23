@@ -260,6 +260,20 @@ describe("newWorker", () => {
     expect(calls[1]).toEqual(["%2", "bold-ash"]);
   });
 
+  it("tags worker panes with @garden_worker=1 so WheelUpPane can clear-history on them", () => {
+    // Load-bearing for the wheel-up scroll-loop fix: without the tag on both
+    // the hidden window pane and the post-swap visible pane, the WheelUpPane
+    // format check fails and clear-history never runs.
+    const state = makeState();
+    vi.mocked(readDashState).mockReturnValue(state);
+    newWorker();
+    const calls = vi.mocked(setPaneVar).mock.calls.filter(c => c[1] === "garden_worker");
+    expect(calls).toEqual([
+      ["%10", "garden_worker", "1"],
+      ["%2", "garden_worker", "1"],
+    ]);
+  });
+
   it("adds worker to registry with correct fields", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     newWorker();
@@ -404,6 +418,7 @@ describe("killPane", () => {
 
     expect(vi.mocked(setPaneLabel)).toHaveBeenCalledWith("%30", "next-one");
     expect(vi.mocked(setPaneVar)).toHaveBeenCalledWith("%30", "garden_task", "do stuff");
+    expect(vi.mocked(setPaneVar)).toHaveBeenCalledWith("%30", "garden_worker", "1");
   });
 
   it("falls back to shell when no hidden workers", () => {
