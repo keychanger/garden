@@ -78,10 +78,16 @@ export function newWorker(): void {
     // the start, avoiding SIGWINCH jitter when restoreFromHidden swaps it in.
     const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
     if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
-    if (workerPaneId) setPaneLabel(workerPaneId, workerName);
+    if (workerPaneId) {
+      setPaneLabel(workerPaneId, workerName);
+      setPaneVar(workerPaneId, "garden_worker", "1");
+    }
     restoreFromHidden(workerWindowName, state);
     // Re-apply label after swap (swap-pane may not preserve pane options)
-    if (state.activePaneId) setPaneLabel(state.activePaneId, workerName);
+    if (state.activePaneId) {
+      setPaneLabel(state.activePaneId, workerName);
+      setPaneVar(state.activePaneId, "garden_worker", "1");
+    }
 
     addWorker(state.activeProject, {
       name: workerName,
@@ -153,6 +159,7 @@ export function killPane(): void {
         const nextLabel = parseWorkerSuffix(targetWindow);
         if (nextLabel) {
           setPaneLabel(targetPaneId, nextLabel);
+          setPaneVar(targetPaneId, "garden_worker", "1");
           const nextEntry = findWorkerByName(state.activeProject, nextLabel);
           if (nextEntry?.task) setPaneVar(targetPaneId, "garden_task", nextEntry.task);
         }

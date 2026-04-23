@@ -28,6 +28,7 @@ function restoreWorkerPaneVars(paneId: string, project: string, windowName: stri
   const workerLabel = parseWorkerSuffix(windowName);
   if (!workerLabel) return;
   setPaneLabel(paneId, workerLabel);
+  setPaneVar(paneId, "garden_worker", "1");
   const entry = findWorkerByName(project, workerLabel);
   if (entry?.task) {
     setPaneVar(paneId, "garden_task", entry.task);
