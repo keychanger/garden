@@ -664,12 +664,27 @@ function refreshWorkerTasks(): void {
   } catch { /* best effort — don't block dashboard refresh */ }
 }
 
-function largestPlotSize(): number {
+// Floor lines for the status pane: the tallest rendered height among all plots
+// (first 5 projects only). Each project renders as a header + one line per
+// worker (or "(no workers)"); adjacent projects are separated by a blank line;
+// the pane has a top/bottom blank. Using rendered height — not just project
+// count — means switching from a bigger-by-workers plot doesn't cause a shrink.
+function statusPaneFloorLines(): number {
   try {
     const plots = plotsMap(loadConfig());
+    const reg = readRegistry();
     let max = 0;
-    for (const p of Object.values(plots)) {
-      if (p.projects.length > max) max = p.projects.length;
+    for (const plot of Object.values(plots)) {
+      const projects = plot.projects.slice(0, 5);
+      if (projects.length === 0) continue;
+      let bodySum = 0;
+      for (const name of projects) {
+        const workers = reg.workers[name] ?? [];
+        bodySum += Math.max(1, workers.length);
+      }
+      const N = projects.length;
+      const lines = 2 * N + 1 + bodySum; // top(1)+headers(N)+bodies+seps(N-1)+bottom(1)
+      if (lines > max) max = lines;
     }
     return max;
   } catch { return 0; }
@@ -683,13 +698,9 @@ function writeQuickStatus(opts?: RefreshOptions): void {
     fs.writeFileSync(tmpFile, rendered);
     fs.renameSync(tmpFile, STATUS_RENDERED_FILE);
     if (state.statusPaneId) {
-      // Floor the pane at the largest plot's footprint (capped at 5) so switching
-      // plots doesn't force a resize every time. Per project: 2 lines (header +
-      // body) + 1 inter-project separator; plus top/bottom pad. +1 for the
-      // pane-border-status top row.
-      const floorProjects = Math.min(5, largestPlotSize());
-      const floorLines = floorProjects > 0 ? 3 * floorProjects + 1 : 0;
-      const h = Math.max(floorLines, rendered.split("\n").length) + 1;
+      // +1 for the pane-border-status top row, which is included in pane_height
+      // but not in the rendered line count.
+      const h = Math.max(statusPaneFloorLines(), rendered.split("\n").length) + 1;
       const cur = getPaneSize(state.statusPaneId);
       resizeAndSignal(state.statusPaneId, h, cur?.height ?? null);
     }
