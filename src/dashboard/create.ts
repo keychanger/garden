@@ -307,7 +307,6 @@ export function ensureDashboard(): void {
       const workerPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindowName}`);
       if (workerPaneId) {
         setPaneLabel(workerPaneId, entry.name);
-        setPaneVar(workerPaneId, "garden_worker", "1");
         if (entry.task) {
           setPaneVar(workerPaneId, "garden_task", entry.task);
           setPaneTitle(workerPaneId, entry.task);

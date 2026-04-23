@@ -29,17 +29,13 @@ export function setupKeybindings(gardenRunner: string): void {
   bindMeta("k", "tmux clear-history; tmux send-keys -R C-l");
 
   // Mouse scroll: always enter copy-mode on wheel-up instead of passing
-  // events to alternate-screen apps (like Claude Code). Worker panes also
-  // clear scrollback on entry so duplicate Claude re-renders from past
-  // SIGWINCHes don't make scroll-up feel like it loops on itself.
+  // events to alternate-screen apps (like Claude Code).
   try {
     execFileSync("tmux", [
       "bind-key", "-n", "WheelUpPane",
       "if-shell", "-F", "#{pane_in_mode}",
       "send-keys -M",
-      "if-shell -F '#{@garden_worker}'"
-        + " 'clear-history; copy-mode -e; send-keys -M'"
-        + " 'copy-mode -e; send-keys -M'"
+      "copy-mode -e; send-keys -M"
     ], { stdio: "ignore" });
   } catch { /* ignore */ }
   try {
