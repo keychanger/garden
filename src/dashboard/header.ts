@@ -630,10 +630,8 @@ export function refreshDashboardCycle(opts?: RefreshOptions): void {
   writeQuickStatus(opts);
 }
 
-// Lean refresh for plot cycling: plot strip + status marker only. Skips
-// writeUsageRendered (usage is account-wide, not per-plot), suppressWindowNames
-// (~200ms tmux loop), and refreshWorkerTasks (registry + per-pane title queries).
-// These run on the next full refresh from a hook or poller event.
+// Lean refresh for plot cycling: plot strip + status only. Skips usage (account-wide,
+// not per-plot), suppressWindowNames, and refreshWorkerTasks — the next hook/poller event picks them up.
 export function refreshDashboardPlotCycle(opts?: RefreshOptions): void {
   updateHeaderVar(opts);
   writeQuickStatus(opts);
