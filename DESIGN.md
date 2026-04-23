@@ -78,7 +78,7 @@ Plots scale past the nine-project hotkey ceiling: you can register as many proje
 
 **Hotkey behavior**:
 - `⌥1`–`⌥9` resolves against `getFocusedProjectNames(config, state.activePlot)` — the active plot's projects, filtered to those still registered. Indices beyond the plot's length show a "No project at index N" hint.
-- `⌥p` / `⌥P` (`cyclePlot` in `src/dashboard/navigate.ts`) iterates only focused plots. If the active plot isn't focused, the next press lands on the first focused plot. When cycling, `activeProject` is clamped to the new plot's membership so the hotkey grid updates immediately. The leaving plot's `activeProject` is stashed in `state.lastActiveProjectByPlot`, so cycling back restores the prior selection instead of re-clamping to the first project.
+- `⌥p` / `⌥P` (`cyclePlot` in `src/dashboard/navigate.ts`) iterates only focused plots. `⌥o` is an alias for `⌥P` (cycle previous), for ergonomic left/right cycling with `⌥p`. If the active plot isn't focused, the next press lands on the first focused plot. When cycling, `activeProject` is clamped to the new plot's membership so the hotkey grid updates immediately. The leaving plot's `activeProject` is stashed in `state.lastActiveProjectByPlot`, so cycling back restores the prior selection instead of re-clamping to the first project.
 
 **Header rendering**: `formatLeft` prefixes the active-project string with the plot name (e.g., `imp › garden • main`). The status pane's border renders a plot strip — one segment per focused plot, showing a filled circle on the active one and an empty circle on the others (mirroring the worker focus marker below it) — by writing the formatted string into `@garden_name` on the status pane (`buildPlotStrip` in `src/dashboard/header.ts`). Unfocused plots are omitted. `@garden_plot` is unused on that pane.
 
@@ -95,7 +95,7 @@ Requires terminal setup: iTerm2 → Profiles → Keys → Left Option key → "E
 | Key | Action |
 |-----|--------|
 | `⌥1` – `⌥9` | Switch to project by index within the active plot |
-| `⌥p` / `⌥P` | Cycle to next/previous focused plot |
+| `⌥p` / `⌥P` | Cycle to next/previous focused plot (`⌥o` also cycles previous) |
 | `⌥n` | New worker (Claude session) |
 | `⌥w` | Jump to first worker |
 | `⌥s` | Jump to project shell |
