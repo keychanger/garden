@@ -630,6 +630,15 @@ export function refreshDashboardCycle(opts?: RefreshOptions): void {
   writeQuickStatus(opts);
 }
 
+// Lean refresh for plot cycling: plot strip + status marker only. Skips
+// writeUsageRendered (usage is account-wide, not per-plot), suppressWindowNames
+// (~200ms tmux loop), and refreshWorkerTasks (registry + per-pane title queries).
+// These run on the next full refresh from a hook or poller event.
+export function refreshDashboardPlotCycle(opts?: RefreshOptions): void {
+  updateHeaderVar(opts);
+  writeQuickStatus(opts);
+}
+
 // Refresh all workers' task fields from their live tmux pane titles. This
 // catches tasks set by Claude during work — the hook handler only captures
 // the title at hook time, but Claude updates the pane title continuously as

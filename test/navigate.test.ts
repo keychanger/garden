@@ -43,6 +43,7 @@ vi.mock("../src/dashboard/layout.js", () => ({
 vi.mock("../src/dashboard/header.js", () => ({
   refreshDashboard: vi.fn(),
   refreshDashboardCycle: vi.fn(),
+  refreshDashboardPlotCycle: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/tmux.js", () => ({
@@ -200,8 +201,7 @@ describe("switchProject", () => {
 
     switchProject("2");
 
-    expect(parkToHidden).toHaveBeenCalled();
-    expect(restoreFromHidden).toHaveBeenCalledWith("_other-active", state);
+    expect(swapDirect).toHaveBeenCalledWith("_garden-worker-bold-ash", "_other-active", state);
     expect(state.activePaneType).toBe("worker");
     expect(state.activeWindowName).toBe("_other-active");
   });
@@ -220,7 +220,7 @@ describe("switchProject", () => {
 
     switchProject("2");
 
-    expect(restoreFromHidden).toHaveBeenCalledWith("_other-worker-calm-bay", state);
+    expect(swapDirect).toHaveBeenCalledWith("_garden-worker-bold-ash", "_other-worker-calm-bay", state);
     expect(state.activeWindowName).toBe("_other-worker-calm-bay");
   });
 
@@ -238,7 +238,7 @@ describe("switchProject", () => {
 
     switchProject("2");
 
-    expect(restoreFromHidden).toHaveBeenCalledWith("_other-worker-bold-ash", state);
+    expect(swapDirect).toHaveBeenCalledWith("_garden-worker-bold-ash", "_other-worker-bold-ash", state);
   });
 
   it("restores shell when no workers exist but shell window exists", () => {
@@ -249,7 +249,7 @@ describe("switchProject", () => {
 
     switchProject("2");
 
-    expect(restoreFromHidden).toHaveBeenCalledWith("_other-shell", state);
+    expect(swapDirect).toHaveBeenCalledWith("_garden-worker-bold-ash", "_other-shell", state);
     expect(state.activePaneType).toBe("shell");
     expect(state.activeWindowName).toBe("_other-shell");
   });
@@ -263,7 +263,7 @@ describe("switchProject", () => {
     switchProject("2");
 
     expect(createShellWindow).toHaveBeenCalledWith("other", "/repo/other");
-    expect(restoreFromHidden).toHaveBeenCalledWith("_other-shell", state);
+    expect(swapDirect).toHaveBeenCalledWith("_garden-worker-bold-ash", "_other-shell", state);
     expect(state.activePaneType).toBe("shell");
   });
 
@@ -909,8 +909,7 @@ describe("cyclePlot", () => {
     expect(state.activeProject).toBe("other");
     expect(state.activeWindowName).toBe("_other-shell");
     expect(state.activePaneType).toBe("shell");
-    expect(parkToHidden).toHaveBeenCalledWith("_garden-worker-bold-ash", state);
-    expect(restoreFromHidden).toHaveBeenCalledWith("_other-shell", state);
+    expect(swapDirect).toHaveBeenCalledWith("_garden-worker-bold-ash", "_other-shell", state);
     // Last worker for garden recorded so re-entry restores it.
     expect(state.lastActiveWorker.garden).toBe("_garden-worker-bold-ash");
   });

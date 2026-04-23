@@ -1,10 +1,9 @@
 // Pane navigation: project switching, worker/shell focus, cycling.
 import { loadConfig, getProject, getFocusedProjectNames, plotsMap, isPlotFocused } from "../config.js";
 import { readDashState, writeDashState, withStateLock, type DashboardState } from "./state.js";
-import { parkToHidden, swapToHidden, swapDirect } from "./layout.js";
-import { restoreFromHidden } from "./layout.js";
-import { gardenSwapToHidden, gardenRestoreFromHidden } from "./layout.js";
-import { refreshDashboard, refreshDashboardCycle } from "./header.js";
+import { swapToHidden, swapDirect } from "./layout.js";
+import { gardenSwapToHidden } from "./layout.js";
+import { refreshDashboard, refreshDashboardCycle, refreshDashboardPlotCycle } from "./header.js";
 import {
   tmux, tmuxDisplay,
   paneExists, windowExists,
@@ -53,15 +52,16 @@ function swapVisibleToProject(
   const names = windowNames ?? listAllWindowNames();
   const has = (name: string) => names.includes(name);
 
-  const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject ?? "none");
-  parkToHidden(parkName, state);
-
+  // Pick the restore target first so we can use swapDirect (single swap-pane +
+  // rename) instead of parkToHidden + restoreFromHidden (which creates and
+  // destroys a temp window). Matches the fast path in cyclePane.
   const parkTarget = parkingWindowName(projectName);
   const shellTarget = shellWin(projectName);
+  let restoreWindow: string;
+  let paneType: "worker" | "shell";
   if (has(parkTarget)) {
-    restoreFromHidden(parkTarget, state);
-    state.activePaneType = "worker";
-    state.activeWindowName = parkTarget;
+    restoreWindow = parkTarget;
+    paneType = "worker";
   } else {
     const workerWindows = listHiddenWorkerWindows(projectName, names);
     const preferred = state.lastActiveWorker[projectName];
@@ -69,23 +69,27 @@ function swapVisibleToProject(
       ? preferred
       : workerWindows[0];
     if (targetWorker) {
-      restoreFromHidden(targetWorker, state);
-      state.activePaneType = "worker";
-      state.activeWindowName = targetWorker;
+      restoreWindow = targetWorker;
+      paneType = "worker";
     } else if (has(shellTarget)) {
-      restoreFromHidden(shellTarget, state);
-      state.activePaneType = "shell";
-      state.activeWindowName = shellTarget;
+      restoreWindow = shellTarget;
+      paneType = "shell";
     } else {
       createShellWindow(projectName, project.path);
-      restoreFromHidden(shellTarget, state);
-      state.activePaneType = "shell";
-      state.activeWindowName = shellTarget;
+      restoreWindow = shellTarget;
+      paneType = "shell";
     }
   }
 
-  if (state.activePaneType === "worker" && state.activePaneId && state.activeWindowName) {
-    restoreWorkerPaneVars(state.activePaneId, projectName, state.activeWindowName);
+  const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject ?? "none");
+  if (!swapDirect(parkName, restoreWindow, state)) {
+    swapToHidden(parkName, restoreWindow, state);
+  }
+  state.activePaneType = paneType;
+  state.activeWindowName = restoreWindow;
+
+  if (paneType === "worker" && state.activePaneId) {
+    restoreWorkerPaneVars(state.activePaneId, projectName, restoreWindow);
   }
 
   state.activeProject = projectName;
@@ -296,7 +300,7 @@ export function cyclePlot(direction: 1 | -1): void {
     }
 
     writeDashState(state);
-    refreshDashboard({ state });
+    refreshDashboardPlotCycle({ state });
   });
 }
 
