@@ -662,30 +662,42 @@ describe("writeQuickStatus (via refreshDashboard)", () => {
 
     refreshDashboard();
 
-    // 4 lines -> Math.max(4, 4) + 1 = 5
-    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "5");
+    // 4 lines -> Math.max(16, 4) + 1 = 17
+    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "17");
   });
 
   it("skips resize when current height already matches", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
     vi.mocked(renderQuickStatus).mockReturnValue("line1\nline2\nline3\nline4");
-    // height 5 = Math.max(4, 4) + 1
-    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 5 });
+    // height 17 = Math.max(16, 4) + 1
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 17 });
 
     refreshDashboard();
 
-    expect(tmux).not.toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "5");
+    expect(tmux).not.toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "17");
   });
 
-  it("uses minimum height of 4 lines + 1 for pane border", () => {
+  it("uses minimum height of 16 lines + 1 for pane border (5-project floor)", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
     vi.mocked(renderQuickStatus).mockReturnValue("x"); // 1 line
     vi.mocked(getPaneSize).mockReturnValue(null); // unknown size triggers resize
 
     refreshDashboard();
 
-    // Math.max(4, 1) + 1 = 5
-    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "5");
+    // Math.max(16, 1) + 1 = 17
+    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "17");
+  });
+
+  it("grows past the floor when the rendered content is taller than 16 lines", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
+    // 20 rendered lines — exceeds the 16-line floor
+    vi.mocked(renderQuickStatus).mockReturnValue(Array.from({ length: 20 }, (_, i) => `l${i}`).join("\n"));
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 5 });
+
+    refreshDashboard();
+
+    // Math.max(16, 20) + 1 = 21
+    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "21");
   });
 
   it("flushes a tmux client refresh after a resize so SIGWINCH delivers before SIGUSR1", () => {
@@ -707,8 +719,8 @@ describe("writeQuickStatus (via refreshDashboard)", () => {
   it("does not flush refresh-client from writeQuickStatus when the height is unchanged", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
     vi.mocked(renderQuickStatus).mockReturnValue("l1\nl2\nl3\nl4");
-    // height already matches Math.max(4,4)+1 = 5, so no resize
-    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 5 });
+    // height already matches Math.max(16,4)+1 = 17, so no resize
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 17 });
 
     refreshDashboard();
 

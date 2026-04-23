@@ -427,8 +427,9 @@ describe("writeQuickStatus — status pane resize", () => {
     handleClaudeHook("stop");
 
     // renderQuickStatus is mocked to return ""; "".split("\n").length === 1,
-    // Math.max(4, 1) + 1 === 5 (the +1 accounts for pane-border-status top)
-    expect(vi.mocked(tmux)).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "5");
+    // Math.max(16, 1) + 1 === 17 (the +1 accounts for pane-border-status top;
+    // the 16 is the 5-project floor: 2 pad + 5*(header+body) + 4 separators)
+    expect(vi.mocked(tmux)).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "17");
   });
 
   it("skips resize when statusPaneId is null", () => {
