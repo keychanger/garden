@@ -31,7 +31,8 @@ vi.mock("../src/config.js", () => ({
   loadConfig: vi.fn(() => ({
     projects: { garden: { path: "/repo/garden" }, other: { path: "/repo/other" } },
     // 5+ projects in the largest plot so the derived floor hits the 5-project
-    // cap (largestPlotSize → Math.min(5, ...) → floorLines = 3*5 + 1 = 16).
+    // cap (slice(0, 5)). With an empty registry, bodySum = 5 and N = 5,
+    // so floorLines = 2*5 + 5 + 1 = 16.
     plots: {
       all: { projects: ["garden", "other", "p3", "p4", "p5"] },
       imp: { projects: ["garden"] },
@@ -688,6 +689,29 @@ describe("writeQuickStatus (via refreshDashboard)", () => {
 
     // Math.max(16, 1) + 1 = 17
     expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "17");
+  });
+
+  it("floor grows with worker counts so a busy project doesn't cause a shrink on plot switch", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
+    vi.mocked(renderQuickStatus).mockReturnValue("x"); // 1 line — well under the floor
+    vi.mocked(getPaneSize).mockReturnValue(null);
+    // Plot "all" has 5 projects; "garden" has 4 workers, others 0.
+    // bodySum = 4 + 1 + 1 + 1 + 1 = 8; N = 5; floor = 2*5 + 8 + 1 = 19.
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: {
+        garden: [
+          { name: "w1", sessionId: "s", task: "" },
+          { name: "w2", sessionId: "s", task: "" },
+          { name: "w3", sessionId: "s", task: "" },
+          { name: "w4", sessionId: "s", task: "" },
+        ],
+      },
+    } as never);
+
+    refreshDashboard();
+
+    // Math.max(19, 1) + 1 = 20
+    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "20");
   });
 
   it("grows past the floor when the rendered content is taller than 16 lines", () => {
