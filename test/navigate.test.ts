@@ -92,7 +92,7 @@ import {
   switchProject,
   focusWorker,
   focusShell,
-  focusGarden,
+  focusConsole,
   focusRoot,
   focusLogs,
   cyclePane,
@@ -120,8 +120,8 @@ function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
     activeProject: "garden",
     statusPaneId: "%0",
     gardenShellPaneId: "%1",
-    gardenPaneType: "garden",
-    gardenWindowName: "_garden-garden",
+    gardenPaneType: "console",
+    gardenWindowName: "_garden-console",
     activePaneId: "%2",
     activePaneType: "worker",
     activeWindowName: "_garden-worker-bold-ash",
@@ -459,15 +459,15 @@ describe("focusShell", () => {
 });
 
 // =============================================================================
-// switchGardenTo (via focusGarden, focusRoot, focusLogs)
+// switchGardenTo (via focusConsole, focusRoot, focusLogs)
 // =============================================================================
 
-describe("focusGarden / focusRoot / focusLogs (switchGardenTo)", () => {
-  it("focusGarden selects existing pane when already on garden view", () => {
+describe("focusConsole / focusRoot / focusLogs (switchGardenTo)", () => {
+  it("focusConsole selects existing pane when already on console view", () => {
     vi.mocked(readDashState).mockReturnValue(
-      makeState({ gardenPaneType: "garden", gardenShellPaneId: "%1" }),
+      makeState({ gardenPaneType: "console", gardenShellPaneId: "%1" }),
     );
-    focusGarden();
+    focusConsole();
     expect(tmux).toHaveBeenCalledWith("select-pane", "-t", "%1");
     expect(writeDashState).not.toHaveBeenCalled();
   });
@@ -498,7 +498,7 @@ describe("focusGarden / focusRoot / focusLogs (switchGardenTo)", () => {
     expect(acknowledgeAlerts).toHaveBeenCalled();
   });
 
-  it("creates garden console window if missing and switches to it", () => {
+  it("creates console window if missing and switches to it", () => {
     const state = makeState({
       gardenPaneType: "root",
       gardenWindowName: "_garden-root",
@@ -507,21 +507,21 @@ describe("focusGarden / focusRoot / focusLogs (switchGardenTo)", () => {
     // windowExists returns false -> ensureGardenView creates the window
     vi.mocked(windowExists).mockReturnValue(false);
 
-    focusGarden();
+    focusConsole();
 
     expect(createGardenConsoleWindow).toHaveBeenCalledWith("/usr/bin/garden");
     expect(gardenSwapToHidden).toHaveBeenCalledWith(
-      "_garden-root", "_garden-garden", state,
+      "_garden-root", "_garden-console", state,
     );
-    expect(state.gardenPaneType).toBe("garden");
-    expect(state.gardenWindowName).toBe("_garden-garden");
+    expect(state.gardenPaneType).toBe("console");
+    expect(state.gardenWindowName).toBe("_garden-console");
     expect(writeDashState).toHaveBeenCalledWith(state);
   });
 
   it("creates root window if missing when switching to root", () => {
     const state = makeState({
-      gardenPaneType: "garden",
-      gardenWindowName: "_garden-garden",
+      gardenPaneType: "console",
+      gardenWindowName: "_garden-console",
     });
     vi.mocked(readDashState).mockReturnValue(state);
     vi.mocked(windowExists).mockReturnValue(false);
@@ -530,15 +530,15 @@ describe("focusGarden / focusRoot / focusLogs (switchGardenTo)", () => {
 
     expect(createGardenRootWindow).toHaveBeenCalled();
     expect(gardenSwapToHidden).toHaveBeenCalledWith(
-      "_garden-garden", "_garden-root", state,
+      "_garden-console", "_garden-root", state,
     );
     expect(state.gardenPaneType).toBe("root");
   });
 
   it("creates logs window if missing when switching to logs", () => {
     const state = makeState({
-      gardenPaneType: "garden",
-      gardenWindowName: "_garden-garden",
+      gardenPaneType: "console",
+      gardenWindowName: "_garden-console",
     });
     vi.mocked(readDashState).mockReturnValue(state);
     vi.mocked(windowExists).mockReturnValue(false);
@@ -550,10 +550,10 @@ describe("focusGarden / focusRoot / focusLogs (switchGardenTo)", () => {
     expect(state.gardenWindowName).toBe("_garden-logs");
   });
 
-  it("swaps garden pane and sets label", () => {
+  it("swaps console pane and sets label", () => {
     const state = makeState({
-      gardenPaneType: "garden",
-      gardenWindowName: "_garden-garden",
+      gardenPaneType: "console",
+      gardenWindowName: "_garden-console",
       gardenShellPaneId: "%1",
     });
     vi.mocked(readDashState).mockReturnValue(state);
@@ -562,7 +562,7 @@ describe("focusGarden / focusRoot / focusLogs (switchGardenTo)", () => {
     focusRoot();
 
     expect(gardenSwapToHidden).toHaveBeenCalledWith(
-      "_garden-garden", "_garden-root", state,
+      "_garden-console", "_garden-root", state,
     );
     expect(setPaneLabel).toHaveBeenCalledWith("%1", "root");
     expect(refreshDashboard).toHaveBeenCalledWith({ state });

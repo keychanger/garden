@@ -21,7 +21,7 @@ export function setupKeybindings(gardenRunner: string): void {
   bindMeta("]", `${gr} dashboard _cycle-pane next`);
   bindMeta("[", `${gr} dashboard _cycle-pane prev`);
   bindMeta("s", `${gr} dashboard _focus-shell`);
-  bindMeta("g", `${gr} dashboard _focus-garden`);
+  bindMeta("c", `${gr} dashboard _focus-console`);
   bindMeta("r", `${gr} dashboard _focus-root`);
   bindMeta("l", `${gr} dashboard _focus-logs`);
   bindMeta("p", `${gr} dashboard _cycle-plot next`);

@@ -60,9 +60,9 @@ export interface DashboardState {
   // Left side — garden pane is swappable between shell and logs
   statusPaneId: string | null;
   usagePaneId: string | null;
-  gardenShellPaneId: string | null; // current pane ID in the garden slot (despite the name)
-  gardenPaneType: "garden" | "root" | "logs" | null;
-  gardenWindowName: string | null; // logical name for parking, e.g. "_garden-root" or "_garden-logs"
+  gardenShellPaneId: string | null; // current pane ID in the console slot (lower-left)
+  gardenPaneType: "console" | "root" | "logs" | null;
+  gardenWindowName: string | null; // logical name for parking, e.g. "_garden-console" or "_garden-logs"
   // Right side — activePaneId is the pane currently in the right slot
   activePaneId: string | null;
   activePaneType: "worker" | "shell" | null;
@@ -94,14 +94,10 @@ const DEFAULT_STATE: DashboardState = {
 export function readDashState(): DashboardState {
   try {
     const raw = JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
-    // Backfill new fields for state files from older versions
-    // Migrate old view names
-    if (raw.gardenPaneType === "console") raw.gardenPaneType = "garden";
-    if (raw.gardenPaneType === "shell") raw.gardenPaneType = "root";
-    if (raw.gardenPaneType === undefined) raw.gardenPaneType = "garden";
-    if (raw.gardenPaneType === "root" && raw.gardenWindowName === null) raw.gardenPaneType = "garden";
-    if (raw.gardenWindowName === "_garden-console") raw.gardenWindowName = "_garden-garden";
-    if (raw.gardenWindowName === "_garden-shell") raw.gardenWindowName = "_garden-root";
+    if (raw.gardenPaneType === "garden") raw.gardenPaneType = "console";
+    if (raw.gardenPaneType === undefined) raw.gardenPaneType = "console";
+    if (raw.gardenPaneType === "root" && raw.gardenWindowName === null) raw.gardenPaneType = "console";
+    if (raw.gardenWindowName === "_garden-garden") raw.gardenWindowName = "_garden-console";
     if (raw.gardenWindowName === undefined) raw.gardenWindowName = null;
     if (raw.usagePaneId === undefined) raw.usagePaneId = null;
     if (raw.activePlot === undefined) raw.activePlot = null;

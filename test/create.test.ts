@@ -319,7 +319,7 @@ describe("createGardenConsoleWindow", () => {
     createGardenConsoleWindow("garden-runner");
     expect(tmux).toHaveBeenCalledWith(
       "new-window", "-d", "-t", "garden-dashboard",
-      "-n", "_garden-garden",
+      "-n", "_garden-console",
     );
     expect(tmux).toHaveBeenCalledWith(
       "send-keys", "-t", "%5",
@@ -328,9 +328,9 @@ describe("createGardenConsoleWindow", () => {
     );
   });
 
-  it("sets pane label to garden", () => {
+  it("sets pane label to console", () => {
     createGardenConsoleWindow("garden-runner");
-    expect(setPaneLabel).toHaveBeenCalledWith("%5", "garden");
+    expect(setPaneLabel).toHaveBeenCalledWith("%5", "console");
   });
 });
 

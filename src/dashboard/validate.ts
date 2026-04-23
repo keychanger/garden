@@ -38,26 +38,26 @@ function healGardenPaneInState(state: DashboardState): DashboardState {
     try {
       const newPaneId = tmuxSplit("-v", "-t", healed.statusPaneId);
       if (newPaneId) {
-        setPaneTitle(newPaneId, "garden");
-        setPaneLabel(newPaneId, "garden");
+        setPaneTitle(newPaneId, "console");
+        setPaneLabel(newPaneId, "console");
 
         // gardenRestoreFromHidden mutates state.gardenShellPaneId in-place,
         // so work with a mutable interim object before the final spread.
         const interim = { ...healed, gardenShellPaneId: newPaneId };
 
         const gardenRunner = resolveGardenRunner();
-        const gardenWin = gardenWindowName("garden");
-        if (!windowExists(gardenWin)) {
+        const consoleWin = gardenWindowName("console");
+        if (!windowExists(consoleWin)) {
           createGardenConsoleWindow(gardenRunner);
         }
-        gardenRestoreFromHidden(gardenWin, interim);
+        gardenRestoreFromHidden(consoleWin, interim);
 
         healed = {
           ...interim,
-          gardenPaneType: "garden" as const,
-          gardenWindowName: gardenWin,
+          gardenPaneType: "console" as const,
+          gardenWindowName: consoleWin,
         };
-        log.info("validate", "recreated garden pane");
+        log.info("validate", "recreated console pane");
       }
     } catch (err) {
       log.warn("validate", "failed to recreate garden pane", { data: { error: String(err) } });
@@ -86,8 +86,8 @@ function healUsagePaneInState(state: DashboardState): DashboardState {
       try { tmux("clear-history", "-t", usageId); } catch { /* ignore */ }
       // Splitting shrinks status pane — flush the ghost rows pushed into scrollback by the resize.
       try { tmux("clear-history", "-t", healed.statusPaneId); } catch { /* ignore */ }
-      setPaneTitle(usageId, "usage");
-      setPaneLabel(usageId, "usage");
+      setPaneTitle(usageId, "garden");
+      setPaneLabel(usageId, "#[fg=green,bold]garden#[default]");
       disablePaneInput(usageId);
 
       healed = { ...healed, usagePaneId: usageId };

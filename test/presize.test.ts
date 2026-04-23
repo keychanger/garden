@@ -115,12 +115,12 @@ describe("presizeHiddenWindows", () => {
       .mockReturnValueOnce({ width: 129, height: 58 })
       .mockReturnValueOnce({ width: 60, height: 20 });
     vi.mocked(listAllWindowNames).mockReturnValue([
-      "main", "_garden-garden", "_garden-root", "_garden-logs",
+      "main", "_garden-console", "_garden-root", "_garden-logs",
     ]);
 
     presizeHiddenWindows(makeState());
 
-    expect(resizeWindow).toHaveBeenCalledWith("_garden-garden", 60, 20);
+    expect(resizeWindow).toHaveBeenCalledWith("_garden-console", 60, 20);
     expect(resizeWindow).toHaveBeenCalledWith("_garden-root", 60, 20);
     expect(resizeWindow).toHaveBeenCalledWith("_garden-logs", 60, 20);
     expect(resizeWindow).toHaveBeenCalledTimes(3);
@@ -161,14 +161,14 @@ describe("presizeHiddenWindows", () => {
       .mockReturnValueOnce({ width: 60, height: 20 });
     vi.mocked(listAllWindowNames).mockReturnValue([
       "main",
-      "_garden-garden", "_garden-root", "_garden-logs",
+      "_garden-console", "_garden-root", "_garden-logs",
       "_garden-worker-bold-ash", "_api-shell",
       "_garden-poller", "_api-review-calm-bay",
     ]);
 
     presizeHiddenWindows(makeState());
 
-    expect(resizeWindow).toHaveBeenCalledWith("_garden-garden", 60, 20);
+    expect(resizeWindow).toHaveBeenCalledWith("_garden-console", 60, 20);
     expect(resizeWindow).toHaveBeenCalledWith("_garden-root", 60, 20);
     expect(resizeWindow).toHaveBeenCalledWith("_garden-logs", 60, 20);
     expect(resizeWindow).toHaveBeenCalledWith("_garden-worker-bold-ash", 129, 58);
@@ -181,12 +181,12 @@ describe("presizeHiddenWindows", () => {
       .mockReturnValueOnce(null)
       .mockReturnValueOnce({ width: 60, height: 20 });
     vi.mocked(listAllWindowNames).mockReturnValue([
-      "main", "_garden-garden", "_garden-worker-bold-ash",
+      "main", "_garden-console", "_garden-worker-bold-ash",
     ]);
 
     presizeHiddenWindows(makeState());
 
-    expect(resizeWindow).toHaveBeenCalledWith("_garden-garden", 60, 20);
+    expect(resizeWindow).toHaveBeenCalledWith("_garden-console", 60, 20);
     expect(resizeWindow).toHaveBeenCalledTimes(1);
   });
 });

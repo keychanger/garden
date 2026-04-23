@@ -202,7 +202,7 @@ export function focusShell(): void {
 function ensureGardenView(view: GardenView): void {
   const wn = gardenWindowName(view);
   if (windowExists(wn)) return;
-  if (view === "garden") createGardenConsoleWindow(resolveGardenRunner());
+  if (view === "console") createGardenConsoleWindow(resolveGardenRunner());
   else if (view === "root") createGardenRootWindow();
   else if (view === "logs") createLogsWindow();
 }
@@ -220,7 +220,7 @@ function switchGardenTo(view: GardenView): void {
 
     log.info("navigate", "switchGardenTo", { data: { view, from: state.gardenPaneType } });
 
-    const parkName = state.gardenWindowName ?? gardenWindowName("garden");
+    const parkName = state.gardenWindowName ?? gardenWindowName("console");
     ensureGardenView(view);
     gardenSwapToHidden(parkName, gardenWindowName(view), state);
     state.gardenPaneType = view;
@@ -235,8 +235,8 @@ function switchGardenTo(view: GardenView): void {
   });
 }
 
-export function focusGarden(): void {
-  switchGardenTo("garden");
+export function focusConsole(): void {
+  switchGardenTo("console");
 }
 
 export function focusRoot(): void {

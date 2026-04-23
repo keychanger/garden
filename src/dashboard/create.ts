@@ -205,12 +205,12 @@ export function ensureDashboard(): void {
   // Splitting shrinks status pane — flush the ghost rows pushed into scrollback by the resize.
   try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
 
-  setPaneTitle(usageId, "usage");
-  setPaneLabel(usageId, "usage");
+  setPaneTitle(usageId, "garden");
+  setPaneLabel(usageId, "#[fg=green,bold]garden#[default]");
   setPaneTitle(statusId, "status");
   // @garden_name is overwritten by updateHeaderVar() with the plot strip; leave it unset here.
-  setPaneTitle(gardenShellId, "garden");
-  setPaneLabel(gardenShellId, "garden");
+  setPaneTitle(gardenShellId, "console");
+  setPaneLabel(gardenShellId, "console");
   disablePaneInput(usageId);
   disablePaneInput(statusId);
   if (firstProject) {
@@ -250,8 +250,8 @@ export function ensureDashboard(): void {
     statusPaneId: statusId,
     usagePaneId: usageId,
     gardenShellPaneId: gardenShellId,
-    gardenPaneType: "garden",
-    gardenWindowName: gardenWindowName("garden"),
+    gardenPaneType: "console",
+    gardenWindowName: gardenWindowName("console"),
     activePaneId: rightPaneId,
     activePaneType: firstProject ? "shell" : null,
     activeWindowName: firstProject ? shellWin(firstProject) : null,
@@ -385,12 +385,12 @@ exec garden logs --follow
 
 export function createGardenConsoleWindow(gardenRunner: string): void {
   const consoleInit = writeConsoleInitScript(gardenRunner);
-  const windowName = gardenWindowName("garden");
+  const windowName = gardenWindowName("console");
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName);
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (paneId) {
-    setPaneLabel(paneId, "garden");
-    setPaneTitle(paneId, "garden");
+    setPaneLabel(paneId, "console");
+    setPaneTitle(paneId, "console");
     tmux("send-keys", "-t", paneId, `source ${shellEscape(consoleInit)} && clear`, "Enter");
   }
 }
@@ -685,7 +685,7 @@ export function respawnStatusPane(state: DashboardState): void {
 // `garden logs --follow` caches the pre-rebuild bundle in memory; respawn so it picks up new code.
 export function respawnLogsPane(state: DashboardState): void {
   let target: string | null = null;
-  if (state.gardenWindowName === "_garden-logs" && state.gardenShellPaneId) {
+  if (state.gardenPaneType === "logs" && state.gardenShellPaneId) {
     target = state.gardenShellPaneId;
   } else {
     try { target = getFirstPaneId(`${DASHBOARD_SESSION}:_garden-logs`); } catch { /* window doesn't exist */ }

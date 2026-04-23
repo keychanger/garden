@@ -232,8 +232,8 @@ describe("validateAndHeal", () => {
     const state = makeState({ usagePaneId: null, statusPaneId: "%0" });
     const healed = validateAndHeal(state);
     expect(healed.usagePaneId).toBe("%60");
-    expect(setPaneTitle).toHaveBeenCalledWith("%60", "usage");
-    expect(setPaneLabel).toHaveBeenCalledWith("%60", "usage");
+    expect(setPaneTitle).toHaveBeenCalledWith("%60", "garden");
+    expect(setPaneLabel).toHaveBeenCalledWith("%60", "#[fg=green,bold]garden#[default]");
     expect(disablePaneInput).toHaveBeenCalledWith("%60");
   });
 
