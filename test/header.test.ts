@@ -30,8 +30,10 @@ vi.mock("../src/config.js", () => ({
   tryGetProject: vi.fn(() => ({ path: "/repo/garden" })),
   loadConfig: vi.fn(() => ({
     projects: { garden: { path: "/repo/garden" }, other: { path: "/repo/other" } },
+    // 5+ projects in the largest plot so the derived floor hits the 5-project
+    // cap (largestPlotSize → Math.min(5, ...) → floorLines = 3*5 + 1 = 16).
     plots: {
-      all: { projects: ["garden", "other"] },
+      all: { projects: ["garden", "other", "p3", "p4", "p5"] },
       imp: { projects: ["garden"] },
     },
   })),

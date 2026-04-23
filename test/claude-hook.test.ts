@@ -29,7 +29,9 @@ vi.mock("../src/config.js", () => ({
   tryGetProject: vi.fn(() => ({ path: "/repo/garden" })),
   loadConfig: vi.fn(() => ({
     projects: { garden: { path: "/repo/garden" } },
-    plots: { all: { projects: ["garden"] } },
+    // 5+ projects in a plot so the derived floor hits the 5-project cap
+    // (largestPlotSize → Math.min(5, ...) → floorLines = 3*5 + 1 = 16).
+    plots: { all: { projects: ["garden", "p2", "p3", "p4", "p5"] } },
   })),
   SESSIONS_DIR: "/tmp/fake-sessions",
   getFocusedProjectNames: vi.fn(() => ["garden"]),
