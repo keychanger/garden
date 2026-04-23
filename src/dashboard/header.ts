@@ -672,9 +672,10 @@ function writeQuickStatus(opts?: RefreshOptions): void {
     fs.writeFileSync(tmpFile, rendered);
     fs.renameSync(tmpFile, STATUS_RENDERED_FILE);
     if (state.statusPaneId) {
-      // +1 for the pane-border-status top row, which is included in pane_height
-      // but not in the rendered line count.
-      const h = Math.max(4, rendered.split("\n").length) + 1;
+      // Floor the pane at a 5-project footprint so it doesn't collapse when
+      // the active plot is sparse: top/bottom pad (2) + 5 × (header + body) +
+      // 4 inter-project separators = 16 rendered lines. +1 for pane-border-status top.
+      const h = Math.max(16, rendered.split("\n").length) + 1;
       const cur = getPaneSize(state.statusPaneId);
       resizeAndSignal(state.statusPaneId, h, cur?.height ?? null);
     }
