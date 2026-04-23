@@ -664,6 +664,17 @@ function refreshWorkerTasks(): void {
   } catch { /* best effort — don't block dashboard refresh */ }
 }
 
+function largestPlotSize(): number {
+  try {
+    const plots = plotsMap(loadConfig());
+    let max = 0;
+    for (const p of Object.values(plots)) {
+      if (p.projects.length > max) max = p.projects.length;
+    }
+    return max;
+  } catch { return 0; }
+}
+
 function writeQuickStatus(opts?: RefreshOptions): void {
   try {
     const state = opts?.state ?? readDashState();
@@ -672,10 +683,13 @@ function writeQuickStatus(opts?: RefreshOptions): void {
     fs.writeFileSync(tmpFile, rendered);
     fs.renameSync(tmpFile, STATUS_RENDERED_FILE);
     if (state.statusPaneId) {
-      // Floor the pane at a 5-project footprint so it doesn't collapse when
-      // the active plot is sparse: top/bottom pad (2) + 5 × (header + body) +
-      // 4 inter-project separators = 16 rendered lines. +1 for pane-border-status top.
-      const h = Math.max(16, rendered.split("\n").length) + 1;
+      // Floor the pane at the largest plot's footprint (capped at 5) so switching
+      // plots doesn't force a resize every time. Per project: 2 lines (header +
+      // body) + 1 inter-project separator; plus top/bottom pad. +1 for the
+      // pane-border-status top row.
+      const floorProjects = Math.min(5, largestPlotSize());
+      const floorLines = floorProjects > 0 ? 3 * floorProjects + 1 : 0;
+      const h = Math.max(floorLines, rendered.split("\n").length) + 1;
       const cur = getPaneSize(state.statusPaneId);
       resizeAndSignal(state.statusPaneId, h, cur?.height ?? null);
     }
