@@ -139,7 +139,7 @@ Layout:
 
 Hotkeys (⌥ = Option/Alt, no prefix needed):
   ⌥1 – ⌥9     Switch to project by number (within active plot)
-  ⌥p / ⌥P     Cycle to next/previous focused plot
+  ⌥p / ⌥P     Cycle to next/previous focused plot (⌥o also cycles previous)
   ⌥n           New worker (Claude session)
   ⌥w           Jump to first worker
   ⌥s           Jump to project shell
