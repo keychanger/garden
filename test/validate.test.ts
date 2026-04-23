@@ -233,7 +233,7 @@ describe("validateAndHeal", () => {
     const healed = validateAndHeal(state);
     expect(healed.usagePaneId).toBe("%60");
     expect(setPaneTitle).toHaveBeenCalledWith("%60", "garden");
-    expect(setPaneLabel).toHaveBeenCalledWith("%60", "#[fg=green,bold]garden#[default]");
+    expect(setPaneLabel).toHaveBeenCalledWith("%60", "#[fg=green,bold]garden#[default] 🌱");
     expect(disablePaneInput).toHaveBeenCalledWith("%60");
   });
 
