@@ -18,7 +18,6 @@ export const DEFAULT_PLOT = "all";
 
 export interface ProjectConfig {
   path: string;
-  baseBranch?: string;
   checks?: string;
   postMerge?: string;
   sandboxDomains?: string[];
@@ -26,7 +25,7 @@ export interface ProjectConfig {
 }
 
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
-  "path", "baseBranch", "checks", "postMerge", "sandboxDomains", "claudeProfile",
+  "path", "checks", "postMerge", "sandboxDomains", "claudeProfile",
 ]);
 
 export function isValidConfigKey(key: string): boolean {

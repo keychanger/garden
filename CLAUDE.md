@@ -98,13 +98,13 @@ Plot storage lives in `~/.garden/config.yml` under the `plots` key; the active p
 Per-project settings can be viewed and set via `garden config`:
 
 ```bash
-garden config garden                    # show all config for project
-garden config garden baseBranch         # get a single key
-garden config garden baseBranch develop # set a key
-garden config garden baseBranch unset   # clear a key
+garden config garden                      # show all config for project
+garden config garden checks               # get a single key
+garden config garden checks "npm test"    # set a key
+garden config garden checks unset         # clear a key
 ```
 
-Available keys: `baseBranch`, `checks`, `postMerge`, `sandboxDomains`, `claudeProfile`. The `baseBranch` key controls which branch workers branch from and merge into. Resolution order at worker creation: explicit config > current branch of main checkout > `origin/HEAD` symref > `"main"` as last resort. The resolved base is validated against origin and pinned to the worker entry (`WorkerEntry.baseBranch`) — a worker whose base isn't on origin is rejected up front, and post-creation consumers read the pinned value via `getWorkerBaseBranch` so switching the main checkout's branch never retargets an existing worker. The `sandboxDomains` key is a comma-separated list of extra network domains added to each worker/reviewer's sandbox allowlist — use it for private registries, internal services, or other hosts beyond the garden-wide defaults (`garden config <project> sandboxDomains foo.com,bar.com`). The `claudeProfile` key opts a project into an alternate Claude Code config dir (a separate plan); see `garden claude-profile` below. Dashboard visibility is controlled by plots (see above) — there is no per-project `focused` flag anymore.
+Available keys: `checks`, `postMerge`, `sandboxDomains`, `claudeProfile`. Workers always target the current branch of the main checkout at creation time (fallbacks: `origin/HEAD` symref, then `"main"`). That choice is pinned to the worker entry (`WorkerEntry.baseBranch`) so switching the main checkout's branch never retargets an existing worker; the base is validated against origin up front — workers with a base not on origin are rejected. The `sandboxDomains` key is a comma-separated list of extra network domains added to each worker/reviewer's sandbox allowlist — use it for private registries, internal services, or other hosts beyond the garden-wide defaults (`garden config <project> sandboxDomains foo.com,bar.com`). The `claudeProfile` key opts a project into an alternate Claude Code config dir (a separate plan); see `garden claude-profile` below. Dashboard visibility is controlled by plots (see above) — there is no per-project `focused` flag anymore.
 
 ### Claude profiles
 

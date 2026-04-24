@@ -57,7 +57,7 @@ export async function kick(args: string[]): Promise<void> {
   if (projectInfo) {
     const entry = registry.workers[project].find(e => e.name === workerName);
     const wtPath = entry?.worktreePath ?? projectInfo.path;
-    const baseBranch = getWorkerBaseBranch(entry ?? {}, projectInfo.path, projectInfo);
+    const baseBranch = getWorkerBaseBranch(entry ?? {}, projectInfo.path);
     const commits = getCommitSummary(wtPath, baseBranch);
     if (!commits) {
       throw new Error(

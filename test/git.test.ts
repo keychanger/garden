@@ -600,12 +600,7 @@ describe("pruneWorktrees", () => {
 });
 
 describe("resolveBaseBranch", () => {
-  it("returns explicit baseBranch from project config", () => {
-    expect(resolveBaseBranch("/repo", { baseBranch: "develop" })).toBe("develop");
-    expect(mockExec).not.toHaveBeenCalled();
-  });
-
-  it("uses current branch of main checkout when no config", () => {
+  it("uses current branch of main checkout", () => {
     mockExec.mockReturnValue("develop");
     expect(resolveBaseBranch("/repo")).toBe("develop");
     expect(mockExec).toHaveBeenCalledWith(
@@ -634,13 +629,6 @@ describe("resolveBaseBranch", () => {
       throw new Error("not a symbolic ref");
     });
     expect(resolveBaseBranch("/repo")).toBe("main");
-  });
-
-  it("falls back to main when config has no baseBranch and nothing works", () => {
-    mockExec.mockImplementation(() => {
-      throw new Error("not a symbolic ref");
-    });
-    expect(resolveBaseBranch("/repo", {})).toBe("main");
   });
 });
 
@@ -675,11 +663,6 @@ describe("getWorkerBaseBranch", () => {
   it("falls back to resolveBaseBranch when entry has no pinned base", () => {
     mockExec.mockReturnValue("feature/x");
     expect(getWorkerBaseBranch({}, "/repo")).toBe("feature/x");
-  });
-
-  it("falls back even when legacy entry passes through projectConfig", () => {
-    expect(getWorkerBaseBranch({}, "/repo", { baseBranch: "trunk" })).toBe("trunk");
-    expect(mockExec).not.toHaveBeenCalled();
   });
 });
 

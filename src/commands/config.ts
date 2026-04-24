@@ -2,7 +2,7 @@
 import { loadConfig, saveConfig, resolveProject, isValidConfigKey, type ProjectConfig } from "../config.js";
 import { output } from "../output.js";
 
-const SETTABLE_KEYS = ["baseBranch", "checks", "postMerge", "sandboxDomains", "claudeProfile"] as const;
+const SETTABLE_KEYS = ["checks", "postMerge", "sandboxDomains", "claudeProfile"] as const;
 type SettableKey = typeof SETTABLE_KEYS[number];
 
 export async function config(args: string[]): Promise<void> {

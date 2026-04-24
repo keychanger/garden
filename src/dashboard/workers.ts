@@ -42,15 +42,13 @@ export function newWorker(): void {
     const wtPath = worktreePath(state.activeProject, workerName);
     const gardenRunner = resolveGardenRunner();
 
-    const baseBranch = resolveBaseBranch(project.path, project);
+    const baseBranch = resolveBaseBranch(project.path);
 
     // A worker whose base branch isn't on origin breaks silently: every
     // `origin/<base>..HEAD` check in the Stop hook and poller fails, so the
     // review cycle never starts. Reject up front with clear remediation.
     if (!branchExistsOnOrigin(project.path, baseBranch)) {
-      const msg = project.baseBranch
-        ? `Base branch '${baseBranch}' (from garden config) is not on origin. Push it, or run 'garden config ${project.name} baseBranch <branch>' with a branch that is.`
-        : `Base branch '${baseBranch}' (current branch of ${project.path}) is not on origin. Push it, switch the main checkout to a pushed branch, or run 'garden config ${project.name} baseBranch <branch>' to pin one explicitly.`;
+      const msg = `Base branch '${baseBranch}' (current branch of ${project.path}) is not on origin. Push it, or switch the main checkout to a pushed branch.`;
       tmuxDisplay(msg);
       log.error("workers", "rejected newWorker: base branch not on origin", {
         worker: workerName,
@@ -243,7 +241,7 @@ export function bounceWorker(projectName: string, workerName: string): void {
   // would pick up a new main-checkout branch and silently break the worker
   // (same failure mode WorkerEntry.baseBranch was added to prevent).
   const baseBranch = entry.baseBranch
-    ?? (projectInfo ? resolveBaseBranch(projectInfo.path, projectInfo) : undefined);
+    ?? (projectInfo ? resolveBaseBranch(projectInfo.path) : undefined);
 
   // Rewrite .claude/settings.json so bounce picks up hook/sandbox
   // changes from a rebuilt garden. buildWorktreeResumeCommand doesn't do

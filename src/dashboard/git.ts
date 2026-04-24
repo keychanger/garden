@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
-import { SESSIONS_DIR, type ProjectConfig } from "../config.js";
+import { SESSIONS_DIR } from "../config.js";
 import type { WorkerEntry } from "./registry.js";
 import { log } from "./log.js";
 
@@ -12,8 +12,7 @@ const WORKTREE_BASE = path.join(
   "worktrees",
 );
 
-export function resolveBaseBranch(repoPath: string, projectConfig?: Pick<ProjectConfig, "baseBranch">): string {
-  if (projectConfig?.baseBranch) return projectConfig.baseBranch;
+export function resolveBaseBranch(repoPath: string): string {
   // Use whatever branch is checked out in the main project directory —
   // that's the branch workers should merge into.
   const current = currentBranch(repoPath);
@@ -41,17 +40,16 @@ export function branchExistsOnOrigin(repoPath: string, branchName: string): bool
   }
 }
 
-// Return the worker's pinned base branch, falling back to project-level
+// Return the worker's pinned base branch, falling back to current-checkout
 // resolution for legacy workers that predate the pinning. New workers always
 // carry entry.baseBranch; the fallback is only reached for entries written
 // before the field existed.
 export function getWorkerBaseBranch(
   entry: Pick<WorkerEntry, "baseBranch">,
   projectPath: string,
-  projectConfig?: Pick<ProjectConfig, "baseBranch">,
 ): string {
   if (entry.baseBranch) return entry.baseBranch;
-  return resolveBaseBranch(projectPath, projectConfig);
+  return resolveBaseBranch(projectPath);
 }
 
 export function worktreePath(project: string, workerName: string): string {

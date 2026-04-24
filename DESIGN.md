@@ -156,14 +156,13 @@ Projects can define settings in `~/.garden/config.yml`, either by editing the fi
 projects:
   garden:
     path: /Users/joshua/code/keychange/garden
-    baseBranch: main
     checks: npx tsc --noEmit && npx vitest run
     postMerge: npm install && npm run build
 ```
 
-**baseBranch**: The branch that workers branch from and merge into. Resolution order at worker creation: explicit config > current branch of main checkout > `origin/HEAD` symref > `"main"` as last resort. Most repos work without setting this.
+**Base branch**: Workers branch from and merge into the current branch of the main checkout at creation time. Resolution falls through to `origin/HEAD` symref, then `"main"`, when the checkout has no useful HEAD (e.g., detached). There is no config override — if you need a different base, switch the main checkout before creating the worker.
 
-The resolved value is validated against origin (`git ls-remote --heads origin <base>`) and pinned to the worker in the registry (`WorkerEntry.baseBranch`). A worker targeting a branch that isn't on origin is rejected at creation with a clear error, because every `origin/<base>..HEAD` check in the Stop hook and poller would fail silently and the review cycle would never start. Once pinned, all consumers (poller, Stop hook, kick, resume) use `getWorkerBaseBranch(entry, ...)` — they never re-resolve from `projectConfig` or the main checkout, so switching the main checkout's branch after a worker is spawned does not retarget that worker.
+The resolved value is validated against origin (`git ls-remote --heads origin <base>`) and pinned to the worker in the registry (`WorkerEntry.baseBranch`). A worker targeting a branch that isn't on origin is rejected at creation with a clear error, because every `origin/<base>..HEAD` check in the Stop hook and poller would fail silently and the review cycle would never start. Once pinned, all consumers (poller, Stop hook, kick, resume) use `getWorkerBaseBranch(entry, ...)` — they never re-resolve from the main checkout, so switching the main checkout's branch after a worker is spawned does not retarget that worker.
 
 If the Stop hook still fails to count commits ahead of `origin/<pinned-base>` (e.g., the base branch was deleted from origin after creation), it raises a one-per-hour `base-drift` alert (`source: worker`, `level: warn`) rather than silently swallowing the error.
 

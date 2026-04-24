@@ -280,8 +280,8 @@ export function ensureDashboard(): void {
     for (const entry of entries) {
       if (!entry.sessionId) continue;
       // Per-worker base: honors entry.baseBranch pinned at creation, falls
-      // back to project-level resolution for legacy entries.
-      const baseBranch = getWorkerBaseBranch(entry, projectConfig.path, projectConfig);
+      // back to current-checkout resolution for legacy entries.
+      const baseBranch = getWorkerBaseBranch(entry, projectConfig.path);
       if (entry.worktreePath && wtExists(entry.worktreePath)) {
         installPollTriggerHook(entry.worktreePath, gardenRunner, projectName);
         installClaudeHooks(entry.worktreePath, projectConfig);

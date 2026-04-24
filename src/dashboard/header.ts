@@ -365,7 +365,7 @@ function markPendingReviewIfCommitsAhead(projectName: string, workerName: string
   if (!project) return;
   const entry = findWorkerByName(projectName, workerName);
   if (!entry) return;
-  const baseBranch = getWorkerBaseBranch(entry, project.path, project);
+  const baseBranch = getWorkerBaseBranch(entry, project.path);
   const cwd = process.cwd();
   try {
     // git rev-list --count <base>..HEAD — counts commits ahead of base.

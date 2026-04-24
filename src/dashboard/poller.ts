@@ -104,11 +104,9 @@ function pollProject(projectName: string): boolean {
   });
 
   for (const entry of workers) {
-    // Resolve per-worker: baseBranch is pinned at creation (entry.baseBranch)
-    // so different workers in the same project can target different bases
-    // (e.g., config changed mid-flight). Legacy workers without the field
-    // fall back to project-level resolution.
-    const baseBranch = getWorkerBaseBranch(entry, project.path, project);
+    // baseBranch is pinned per-worker at creation (entry.baseBranch); legacy
+    // workers without the field fall back to the current main-checkout branch.
+    const baseBranch = getWorkerBaseBranch(entry, project.path);
     try {
       if (pollWorker(projectName, project.path, baseBranch, entry)) {
         changed = true;
