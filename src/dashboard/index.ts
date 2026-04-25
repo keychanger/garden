@@ -82,7 +82,7 @@ export async function dashboard(args: string[]): Promise<void> {
   }
   if (sub === "_post-rebuild-refresh") {
     // Spawned via the rebuilt binary so respawnStatusPane bakes in the new code
-    const { respawnStatusPane, respawnLogsPane, resolveGardenRunner } = await import("./create.js");
+    const { respawnStatusPane, respawnLogsPane, respawnGrowhousePane, resolveGardenRunner } = await import("./create.js");
     const { readDashState } = await import("./state.js");
     const { refreshDashboard, setupStatusBar } = await import("./header.js");
     const { restartLongLivedPollers } = await import("./poller.js");
@@ -93,6 +93,7 @@ export async function dashboard(args: string[]): Promise<void> {
       try { respawnStatusPane(state); } catch { /* pane gone */ }
       try { restartLongLivedPollers(runner); } catch { /* best effort */ }
       try { respawnLogsPane(state); } catch { /* pane gone */ }
+      try { respawnGrowhousePane(state, runner); } catch { /* pane gone */ }
       try { refreshDashboard(); } catch { /* no attached client */ }
     }
     return;

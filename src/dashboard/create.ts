@@ -718,6 +718,21 @@ export function respawnLogsPane(state: DashboardState): void {
   disablePaneInput(target);
 }
 
+// Pick up new ZDOTDIR/.zshrc content (PS1, padding) on rebuild.
+export function respawnGrowhousePane(state: DashboardState, gardenRunner: string): void {
+  let target: string | null = null;
+  if (state.gardenPaneType === "growhouse" && state.gardenShellPaneId) {
+    target = state.gardenShellPaneId;
+  } else {
+    try { target = getFirstPaneId(`${DASHBOARD_SESSION}:_garden-growhouse`); } catch { /* window doesn't exist */ }
+  }
+  if (!target) return;
+  const zdotdir = writeGrowhouseZdotdir(gardenRunner);
+  try {
+    tmux("respawn-pane", "-k", "-t", target, "env", `ZDOTDIR=${zdotdir}`, "zsh");
+  } catch { /* pane gone */ }
+}
+
 export function resolveGardenRunner(): string {
   const gardenBin = path.resolve(process.argv[1]);
   if (gardenBin.endsWith(".ts")) {
