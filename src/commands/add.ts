@@ -9,7 +9,7 @@ import { refreshDashboard } from "../dashboard/header.js";
 // collide with the underscore-prefixed window naming convention in window-names.ts.
 const RESERVED_SUBSTRINGS = ["-worker-", "-shell", "-active", "-poller", "-review-"];
 
-function validateProjectName(name: string): void {
+export function validateProjectName(name: string): void {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(name)) {
     throw new Error(
       `Invalid project name '${name}': must start with alphanumeric and contain only letters, digits, hyphens, and underscores. ` +

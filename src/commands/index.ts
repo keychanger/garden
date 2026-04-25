@@ -1,6 +1,7 @@
 // Command registry: maps command names to their handler functions.
 import { init } from "./init.js";
 import { add } from "./add.js";
+import { create } from "./create.js";
 import { remove } from "./remove.js";
 import { list } from "./list.js";
 import { status } from "./status.js";
@@ -30,6 +31,7 @@ type Command = (args: string[]) => Promise<void>;
 export const commands: Record<string, Command> = {
   init,
   add,
+  create,
   remove,
   list,
   config,

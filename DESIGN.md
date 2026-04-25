@@ -275,6 +275,7 @@ The full specification for status tracking and display lives in `src/dashboard/S
 ```
 garden init                        # Initialize ~/.garden, check for tmux
 garden add [path]                  # Add a project (defaults to cwd, name = basename)
+garden create <path>               # Scaffold a new project: mkdir, git init -b main, GitHub repo (keychange/<name>, private), add to active plot
 garden remove <name>               # Remove a project
 garden list                        # List all projects
 garden config <project> [key] [val]  # View or set project config
