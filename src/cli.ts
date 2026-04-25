@@ -58,7 +58,7 @@ Usage: garden <command> [args]
 Projects:
   init                           Initialize garden config
   add [path]                     Add a project (defaults to current directory)
-  create <path>                  Scaffold a new project: mkdir, git init, GitHub repo, add to active plot
+  create <path>                  Scaffold a new project: mkdir, git init, private GitHub repo under the gh-authed account, add to active plot
   remove <name>                  Remove a project (also purges from plots)
   list, ls                       List all projects
   config <project> [key] [value] View or set project config

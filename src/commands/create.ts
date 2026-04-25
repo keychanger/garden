@@ -1,4 +1,4 @@
-// Scaffolds a new project: mkdir + git init + private GitHub repo, then registers it (and adds to active plot if any).
+// Scaffolds a new project: creates a private GitHub repo under the gh-authed account, then mkdir + git init + push, then registers it (and adds to active plot if any).
 import path from "node:path";
 import fs from "node:fs";
 import readline from "node:readline";
@@ -8,8 +8,6 @@ import { readDashState } from "../dashboard/state.js";
 import { dashboardExists } from "../session.js";
 import { refreshDashboard } from "../dashboard/header.js";
 import { validateProjectName } from "./add.js";
-
-const GITHUB_ORG = "keychange";
 
 export async function create(args: string[]): Promise<void> {
   const rawPath = args[0];
@@ -46,11 +44,14 @@ export async function create(args: string[]): Promise<void> {
   // Pre-flight before any side effects so a missing token doesn't leave a half-initialized dir behind.
   await ensureGhAuth();
 
-  // Remote-first: org-permission failures must abort before we touch the filesystem.
-  const slug = `${GITHUB_ORG}/${name}`;
+  // Remote-first: any failure here must abort before we touch the filesystem.
+  // The repo is created under whichever account 'gh' is currently authed as —
+  // we don't hardcode a namespace.
+  const ghUser = currentGhUser();
+  const slug = `${ghUser}/${name}`;
   console.log(`Creating GitHub repo ${slug}...`);
   try {
-    execFileSync("gh", ["repo", "create", slug, "--private"], { stdio: "inherit" });
+    execFileSync("gh", ["repo", "create", name, "--private"], { stdio: "inherit" });
   } catch {
     throw new Error(
       `'gh repo create ${slug}' failed (see gh's error above). Auth pre-flight passed, so re-running 'gh auth login' will not change this.`,
@@ -84,6 +85,14 @@ export async function create(args: string[]): Promise<void> {
   }
 
   if (dashboardExists()) refreshDashboard();
+}
+
+function currentGhUser(): string {
+  const r = spawnSync("gh", ["api", "user", "-q", ".login"], { encoding: "utf-8" });
+  if (r.status !== 0 || !r.stdout?.trim()) {
+    throw new Error("Could not read the authenticated gh user. Run 'gh auth status' to inspect.");
+  }
+  return r.stdout.trim();
 }
 
 function remoteUrlFor(slug: string): string {

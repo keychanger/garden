@@ -64,7 +64,7 @@ Projects are added by directory path. The project name is always the directory b
 
 ```bash
 garden add [path]      # defaults to cwd
-garden create <path>   # scaffold new dir + git init -b main + private GitHub repo (keychange org) + add to active plot
+garden create <path>   # scaffold new dir + git init -b main + private GitHub repo (under the gh-authed account) + add to active plot
 garden remove <name>   # name = directory basename (also purges from all plots)
 garden config <project> [key] [value]  # view or set project config
 ```

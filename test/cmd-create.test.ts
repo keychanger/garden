@@ -31,7 +31,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   activePlot = null;
   execFileSyncMock.mockImplementation(() => "");
-  spawnSyncMock.mockImplementation(() => ({ status: 0 }));
+  spawnSyncMock.mockImplementation((cmd: string, args: string[]) => {
+    if (cmd === "gh" && args[0] === "api" && args[1] === "user") {
+      return { status: 0, stdout: "tester\n" };
+    }
+    return { status: 0 };
+  });
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "garden-create-test-"));
   originalHome = process.env.HOME;
   process.env.HOME = tmpHome;
@@ -127,6 +132,7 @@ describe("garden create", () => {
     });
     activePlot = "all";
     spawnSyncMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "gh" && args[0] === "api" && args[1] === "user") return { status: 0, stdout: "tester\n" };
       if (cmd === "gh" && args[0] === "config") return { status: 0, stdout: "ssh\n" };
       return { status: 0 };
     });
@@ -140,11 +146,11 @@ describe("garden create", () => {
 
     const calls = execFileSyncMock.mock.calls.map(c => [c[0], c[1]]);
     expect(calls).toEqual([
-      ["gh", ["repo", "create", "keychange/shiny", "--private"]],
+      ["gh", ["repo", "create", "shiny", "--private"]],
       ["git", ["init", "-b", "main"]],
       ["git", ["add", "README.md"]],
       ["git", ["commit", "-m", "Initial commit"]],
-      ["git", ["remote", "add", "origin", "git@github.com:keychange/shiny.git"]],
+      ["git", ["remote", "add", "origin", "git@github.com:tester/shiny.git"]],
       ["git", ["push", "-u", "origin", "main"]],
     ]);
 
@@ -153,14 +159,14 @@ describe("garden create", () => {
     expect(loaded.plots?.all.projects).toContain("shiny");
   });
 
-  it("leaves no local directory behind when 'gh repo create' fails (e.g. org permission)", async () => {
+  it("leaves no local directory behind when 'gh repo create' fails", async () => {
     const config = await setup();
     config.saveConfig({ projects: {}, plots: { all: { projects: [] } } });
     activePlot = "all";
 
     execFileSyncMock.mockImplementation((cmd: string, args: string[]) => {
       if (cmd === "gh" && args[0] === "repo" && args[1] === "create") {
-        throw new Error("GraphQL: keychanger cannot create a repository for keychange.");
+        throw new Error("Name already exists on this account");
       }
       return "";
     });
@@ -178,6 +184,7 @@ describe("garden create", () => {
     config.saveConfig({ projects: {}, plots: { all: { projects: [] } } });
     activePlot = "all";
     spawnSyncMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "gh" && args[0] === "api" && args[1] === "user") return { status: 0, stdout: "tester\n" };
       if (cmd === "gh" && args[0] === "config") return { status: 0, stdout: "https\n" };
       return { status: 0 };
     });
@@ -190,7 +197,7 @@ describe("garden create", () => {
       c => c[0] === "git" && Array.isArray(c[1]) && (c[1] as string[])[0] === "remote",
     );
     expect(remoteAddCall?.[1]).toEqual([
-      "remote", "add", "origin", "https://github.com/keychange/webby.git",
+      "remote", "add", "origin", "https://github.com/tester/webby.git",
     ]);
   });
 
