@@ -43,8 +43,7 @@ export async function create(args: string[]): Promise<void> {
     }
   }
 
-  // Pre-flight gh auth before any filesystem/network side effects so a missing
-  // token doesn't leave a half-initialized directory behind.
+  // Pre-flight before any side effects so a missing token doesn't leave a half-initialized dir behind.
   await ensureGhAuth();
 
   fs.mkdirSync(resolved, { recursive: true });

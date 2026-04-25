@@ -20,15 +20,18 @@ vi.mock("../src/dashboard/header.js", () => ({
 }));
 
 const execFileSyncMock = vi.fn();
+const spawnSyncMock = vi.fn();
 
 vi.mock("node:child_process", () => ({
   execFileSync: (...args: unknown[]) => execFileSyncMock(...args),
+  spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
 }));
 
 beforeEach(() => {
   vi.clearAllMocks();
   activePlot = null;
   execFileSyncMock.mockImplementation(() => "");
+  spawnSyncMock.mockImplementation(() => ({ status: 0 }));
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "garden-create-test-"));
   originalHome = process.env.HOME;
   process.env.HOME = tmpHome;
@@ -142,6 +145,29 @@ describe("garden create", () => {
     const loaded = config.loadConfig();
     expect(loaded.projects["shiny"].path).toBe(target);
     expect(loaded.plots?.all.projects).toContain("shiny");
+  });
+
+  it("aborts before any side effects when gh is not authenticated and stdin is not a TTY", async () => {
+    const config = await setup();
+    config.saveConfig({ projects: {}, plots: { all: { projects: [] } } });
+    activePlot = "all";
+    spawnSyncMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "gh" && args[0] === "auth" && args[1] === "status") return { status: 1 };
+      return { status: 0 };
+    });
+    const originalIsTTY = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+
+    const target = path.join(tmpHome, "noauth");
+    try {
+      const { create } = await importCreate();
+      await expect(create([target])).rejects.toThrow(/gh auth required/);
+    } finally {
+      Object.defineProperty(process.stdin, "isTTY", { value: originalIsTTY, configurable: true });
+    }
+
+    expect(fs.existsSync(target)).toBe(false);
+    expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 
   it("registers without a plot when none is active and prints a hint", async () => {
