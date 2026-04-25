@@ -222,7 +222,7 @@ export function ensureDashboard(): void {
   try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
 
   const growhouseInit = writeGrowhouseInitScript(gardenRunner);
-  tmux("send-keys", "-t", gardenShellId, `source ${shellEscape(growhouseInit)} && clear`, "Enter");
+  tmux("send-keys", "-t", gardenShellId, `source ${shellEscape(growhouseInit)} && clear && printf '\\n'`, "Enter");
 
   setupStatusBar(gardenRunner);
 
@@ -390,7 +390,7 @@ export function createGardenGrowhouseWindow(gardenRunner: string): void {
   if (paneId) {
     setPaneLabel(paneId, "growhouse");
     setPaneTitle(paneId, "growhouse");
-    tmux("send-keys", "-t", paneId, `source ${shellEscape(growhouseInit)} && clear`, "Enter");
+    tmux("send-keys", "-t", paneId, `source ${shellEscape(growhouseInit)} && clear && printf '\\n'`, "Enter");
   }
 }
 
