@@ -119,13 +119,17 @@ describe("garden create", () => {
     expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 
-  it("scaffolds dir, runs git + gh, and registers project on the active plot", async () => {
+  it("creates remote first, then scaffolds locally and registers on the active plot", async () => {
     const config = await setup();
     config.saveConfig({
       projects: {},
       plots: { all: { projects: [] } },
     });
     activePlot = "all";
+    spawnSyncMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "gh" && args[0] === "config") return { status: 0, stdout: "ssh\n" };
+      return { status: 0 };
+    });
 
     const target = path.join(tmpHome, "shiny");
     const { create } = await importCreate();
@@ -136,15 +140,58 @@ describe("garden create", () => {
 
     const calls = execFileSyncMock.mock.calls.map(c => [c[0], c[1]]);
     expect(calls).toEqual([
+      ["gh", ["repo", "create", "keychange/shiny", "--private"]],
       ["git", ["init", "-b", "main"]],
       ["git", ["add", "README.md"]],
       ["git", ["commit", "-m", "Initial commit"]],
-      ["gh", ["repo", "create", "keychange/shiny", "--private", "--source=.", "--remote=origin", "--push"]],
+      ["git", ["remote", "add", "origin", "git@github.com:keychange/shiny.git"]],
+      ["git", ["push", "-u", "origin", "main"]],
     ]);
 
     const loaded = config.loadConfig();
     expect(loaded.projects["shiny"].path).toBe(target);
     expect(loaded.plots?.all.projects).toContain("shiny");
+  });
+
+  it("leaves no local directory behind when 'gh repo create' fails (e.g. org permission)", async () => {
+    const config = await setup();
+    config.saveConfig({ projects: {}, plots: { all: { projects: [] } } });
+    activePlot = "all";
+
+    execFileSyncMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "gh" && args[0] === "repo" && args[1] === "create") {
+        throw new Error("GraphQL: keychanger cannot create a repository for keychange.");
+      }
+      return "";
+    });
+
+    const target = path.join(tmpHome, "denied");
+    const { create } = await importCreate();
+    await expect(create([target])).rejects.toThrow(/cannot create a repository/);
+    expect(fs.existsSync(target)).toBe(false);
+    const loaded = config.loadConfig();
+    expect(loaded.projects["denied"]).toBeUndefined();
+  });
+
+  it("uses HTTPS remote when gh git_protocol is not ssh", async () => {
+    const config = await setup();
+    config.saveConfig({ projects: {}, plots: { all: { projects: [] } } });
+    activePlot = "all";
+    spawnSyncMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "gh" && args[0] === "config") return { status: 0, stdout: "https\n" };
+      return { status: 0 };
+    });
+
+    const target = path.join(tmpHome, "webby");
+    const { create } = await importCreate();
+    await create([target]);
+
+    const remoteAddCall = execFileSyncMock.mock.calls.find(
+      c => c[0] === "git" && Array.isArray(c[1]) && (c[1] as string[])[0] === "remote",
+    );
+    expect(remoteAddCall?.[1]).toEqual([
+      "remote", "add", "origin", "https://github.com/keychange/webby.git",
+    ]);
   });
 
   it("aborts before any side effects when gh is not authenticated and stdin is not a TTY", async () => {

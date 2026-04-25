@@ -46,6 +46,13 @@ export async function create(args: string[]): Promise<void> {
   // Pre-flight before any side effects so a missing token doesn't leave a half-initialized dir behind.
   await ensureGhAuth();
 
+  // Create the empty GitHub repo BEFORE any local work. This is the only step
+  // that can fail on remote permissions (e.g. user can't create in the org),
+  // and surfacing that failure first means we never leave a half-init dir.
+  const slug = `${GITHUB_ORG}/${name}`;
+  console.log(`Creating GitHub repo ${slug}...`);
+  execFileSync("gh", ["repo", "create", slug, "--private"], { stdio: "inherit" });
+
   fs.mkdirSync(resolved, { recursive: true });
 
   const readmePath = path.join(resolved, "README.md");
@@ -57,14 +64,8 @@ export async function create(args: string[]): Promise<void> {
   git(["init", "-b", "main"]);
   git(["add", "README.md"]);
   git(["commit", "-m", "Initial commit"]);
-
-  const slug = `${GITHUB_ORG}/${name}`;
-  console.log(`Creating GitHub repo ${slug}...`);
-  execFileSync(
-    "gh",
-    ["repo", "create", slug, "--private", "--source=.", "--remote=origin", "--push"],
-    { cwd: resolved, stdio: "inherit" },
-  );
+  git(["remote", "add", "origin", remoteUrlFor(slug)]);
+  git(["push", "-u", "origin", "main"]);
 
   config.projects[name] = { path: resolved };
   if (activePlot) {
@@ -79,6 +80,14 @@ export async function create(args: string[]): Promise<void> {
   }
 
   if (dashboardExists()) refreshDashboard();
+}
+
+function remoteUrlFor(slug: string): string {
+  const r = spawnSync("gh", ["config", "get", "git_protocol"], { encoding: "utf-8" });
+  const protocol = r.status === 0 ? (r.stdout ?? "").trim() : "";
+  return protocol === "ssh"
+    ? `git@github.com:${slug}.git`
+    : `https://github.com/${slug}.git`;
 }
 
 function ghAuthOk(): boolean {
