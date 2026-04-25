@@ -45,8 +45,6 @@ export async function create(args: string[]): Promise<void> {
   await ensureGhAuth();
 
   // Remote-first: any failure here must abort before we touch the filesystem.
-  // The repo is created under whichever account 'gh' is currently authed as —
-  // we don't hardcode a namespace.
   const ghUser = currentGhUser();
   const slug = `${ghUser}/${name}`;
   console.log(`Creating GitHub repo ${slug}...`);
