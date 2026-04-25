@@ -633,24 +633,19 @@ describe("resolveBaseBranch", () => {
 });
 
 describe("branchExistsOnOrigin", () => {
-  it("returns true when ls-remote --heads returns a ref", () => {
-    mockExec.mockReturnValue("abc123\trefs/heads/develop\n");
+  it("returns true when local origin ref exists (no network call)", () => {
+    mockExec.mockReturnValue("");
     expect(branchExistsOnOrigin("/repo", "develop")).toBe(true);
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["ls-remote", "--heads", "origin", "develop"],
+      ["show-ref", "--verify", "--quiet", "refs/remotes/origin/develop"],
       expect.objectContaining({ cwd: "/repo" }),
     );
   });
 
-  it("returns false when ls-remote output is empty", () => {
-    mockExec.mockReturnValue("");
+  it("returns false when show-ref exits non-zero", () => {
+    mockExec.mockImplementation(() => { throw new Error("not a valid ref"); });
     expect(branchExistsOnOrigin("/repo", "phantom")).toBe(false);
-  });
-
-  it("returns false when git fails (no origin, network, etc.)", () => {
-    mockExec.mockImplementation(() => { throw new Error("no origin"); });
-    expect(branchExistsOnOrigin("/repo", "develop")).toBe(false);
   });
 });
 

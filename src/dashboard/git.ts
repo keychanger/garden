@@ -27,14 +27,20 @@ export function resolveBaseBranch(repoPath: string): string {
   return "main";
 }
 
-// Returns true if the named branch exists on the origin remote. Used to
-// validate a candidate base branch at worker creation — a worker targeting a
-// local-only branch breaks silently (every `origin/<base>..HEAD` check fails),
-// so we reject it up front.
+// Returns true if the named branch is known on origin per local refs. Used
+// to validate a candidate base branch at worker creation — a worker targeting
+// a local-only branch breaks silently (every `origin/<base>..HEAD` check
+// fails), so we reject it up front. Local-only check (no `git ls-remote`):
+// on slow links the network round-trip blocks the ⌥n hotkey for as long as
+// it takes, freezing the status pane before the new worker row appears.
+// The bootstrap script in the new pane does a fresh fetch and worktree-add
+// against `origin/<branch>` and surfaces a `bootstrap` alert if the remote
+// branch has actually been deleted, so missing-on-origin still doesn't slip
+// through silently.
 export function branchExistsOnOrigin(repoPath: string, branchName: string): boolean {
   try {
-    const out = git(repoPath, "ls-remote", "--heads", "origin", branchName);
-    return out.trim().length > 0;
+    git(repoPath, "show-ref", "--verify", "--quiet", `refs/remotes/origin/${branchName}`);
+    return true;
   } catch {
     return false;
   }

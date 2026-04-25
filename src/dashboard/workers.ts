@@ -48,8 +48,9 @@ export function newWorker(): void {
     // A worker whose base branch isn't on origin breaks silently: every
     // `origin/<base>..HEAD` check in the Stop hook and poller fails, so the
     // review cycle never starts. Reject up front with clear remediation.
+    // Check is local-refs only — see branchExistsOnOrigin doc.
     if (!branchExistsOnOrigin(project.path, baseBranch)) {
-      const msg = `Base branch '${baseBranch}' (current branch of ${project.path}) is not on origin. Push it, or switch the main checkout to a pushed branch.`;
+      const msg = `Base branch '${baseBranch}' (current branch of ${project.path}) has no local origin/${baseBranch} ref. Push it, fetch it, or switch the main checkout to a pushed branch.`;
       tmuxDisplay(msg);
       log.error("workers", "rejected newWorker: base branch not on origin", {
         worker: workerName,

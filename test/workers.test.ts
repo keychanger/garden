@@ -304,7 +304,7 @@ describe("newWorker", () => {
     expect(vi.mocked(addWorker)).not.toHaveBeenCalled();
     expect(vi.mocked(tmuxDisplay)).toHaveBeenCalled();
     const msg = vi.mocked(tmuxDisplay).mock.calls[0][0] as string;
-    expect(msg).toContain("not on origin");
+    expect(msg).toContain("no local origin/main ref");
     expect(msg).toContain("main");
   });
 });
