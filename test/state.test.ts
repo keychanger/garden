@@ -46,7 +46,7 @@ describe("writeDashState / readDashState", () => {
       statusPaneId: "%1",
       usagePaneId: null,
       gardenShellPaneId: "%2",
-      gardenPaneType: "console" as const,
+      gardenPaneType: "growhouse" as const,
       gardenWindowName: null,
       activePaneId: "%3",
       activePaneType: "worker" as const,
@@ -59,7 +59,7 @@ describe("writeDashState / readDashState", () => {
     expect(loaded).toEqual(original);
   });
 
-  it("migrates old garden view to console", async () => {
+  it("migrates old garden view to growhouse", async () => {
     const { readDashState, STATE_FILE } = await importState();
     const oldState = {
       activeProject: "myproject",
@@ -73,11 +73,11 @@ describe("writeDashState / readDashState", () => {
     };
     fs.writeFileSync(STATE_FILE, JSON.stringify(oldState));
     const loaded = readDashState();
-    expect(loaded.gardenPaneType).toBe("console");
-    expect(loaded.gardenWindowName).toBe("_garden-console");
+    expect(loaded.gardenPaneType).toBe("growhouse");
+    expect(loaded.gardenWindowName).toBe("_garden-growhouse");
   });
 
-  it("backfills lastActiveWorker for old state files", async () => {
+  it("migrates console to growhouse", async () => {
     const { readDashState, STATE_FILE } = await importState();
     const oldState = {
       activeProject: "myproject",
@@ -91,11 +91,29 @@ describe("writeDashState / readDashState", () => {
     };
     fs.writeFileSync(STATE_FILE, JSON.stringify(oldState));
     const loaded = readDashState();
+    expect(loaded.gardenPaneType).toBe("growhouse");
+    expect(loaded.gardenWindowName).toBe("_garden-growhouse");
+  });
+
+  it("backfills lastActiveWorker for old state files", async () => {
+    const { readDashState, STATE_FILE } = await importState();
+    const oldState = {
+      activeProject: "myproject",
+      statusPaneId: "%1",
+      gardenShellPaneId: "%2",
+      gardenPaneType: "growhouse",
+      gardenWindowName: "_garden-growhouse",
+      activePaneId: "%3",
+      activePaneType: "worker",
+      activeWindowName: "_myproject-worker-bold-ash",
+    };
+    fs.writeFileSync(STATE_FILE, JSON.stringify(oldState));
+    const loaded = readDashState();
     expect(loaded.lastActiveWorker).toEqual({});
     expect(loaded.lastActiveProjectByPlot).toEqual({});
   });
 
-  it("recovers root-with-null-window to console", async () => {
+  it("recovers root-with-null-window to growhouse", async () => {
     const { readDashState, STATE_FILE } = await importState();
     const oldState = {
       activeProject: "myproject",
@@ -109,7 +127,7 @@ describe("writeDashState / readDashState", () => {
     };
     fs.writeFileSync(STATE_FILE, JSON.stringify(oldState));
     const loaded = readDashState();
-    expect(loaded.gardenPaneType).toBe("console");
+    expect(loaded.gardenPaneType).toBe("growhouse");
   });
 
   it("creates directory if missing", async () => {

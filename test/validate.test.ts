@@ -36,7 +36,7 @@ vi.mock("../src/dashboard/poller.js", () => ({
 
 vi.mock("../src/dashboard/create.js", () => ({
   resolveGardenRunner: vi.fn(() => "garden"),
-  createGardenConsoleWindow: vi.fn(),
+  createGardenGrowhouseWindow: vi.fn(),
   USAGE_PANE_HEIGHT: 5,
 }));
 

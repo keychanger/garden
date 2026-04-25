@@ -209,8 +209,8 @@ export function ensureDashboard(): void {
   setPaneLabel(usageId, "🌱 #[fg=green,bold]garden#[default]");
   setPaneTitle(statusId, "status");
   // @garden_name is overwritten by updateHeaderVar() with the plot strip; leave it unset here.
-  setPaneTitle(gardenShellId, "console");
-  setPaneLabel(gardenShellId, "console");
+  setPaneTitle(gardenShellId, "growhouse");
+  setPaneLabel(gardenShellId, "growhouse");
   disablePaneInput(usageId);
   disablePaneInput(statusId);
   if (firstProject) {
@@ -221,9 +221,8 @@ export function ensureDashboard(): void {
   // Clear scrollback created by resize events during split setup
   try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
 
-  // Initialize the garden console with custom prompt and command dispatch
-  const consoleInit = writeConsoleInitScript(gardenRunner);
-  tmux("send-keys", "-t", gardenShellId, `source ${shellEscape(consoleInit)} && clear`, "Enter");
+  const growhouseInit = writeGrowhouseInitScript(gardenRunner);
+  tmux("send-keys", "-t", gardenShellId, `source ${shellEscape(growhouseInit)} && clear`, "Enter");
 
   setupStatusBar(gardenRunner);
 
@@ -250,8 +249,8 @@ export function ensureDashboard(): void {
     statusPaneId: statusId,
     usagePaneId: usageId,
     gardenShellPaneId: gardenShellId,
-    gardenPaneType: "console",
-    gardenWindowName: gardenWindowName("console"),
+    gardenPaneType: "growhouse",
+    gardenWindowName: gardenWindowName("growhouse"),
     activePaneId: rightPaneId,
     activePaneType: firstProject ? "shell" : null,
     activeWindowName: firstProject ? shellWin(firstProject) : null,
@@ -383,15 +382,15 @@ exec garden logs --follow
   return scriptFile;
 }
 
-export function createGardenConsoleWindow(gardenRunner: string): void {
-  const consoleInit = writeConsoleInitScript(gardenRunner);
-  const windowName = gardenWindowName("console");
+export function createGardenGrowhouseWindow(gardenRunner: string): void {
+  const growhouseInit = writeGrowhouseInitScript(gardenRunner);
+  const windowName = gardenWindowName("growhouse");
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName);
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (paneId) {
-    setPaneLabel(paneId, "console");
-    setPaneTitle(paneId, "console");
-    tmux("send-keys", "-t", paneId, `source ${shellEscape(consoleInit)} && clear`, "Enter");
+    setPaneLabel(paneId, "growhouse");
+    setPaneTitle(paneId, "growhouse");
+    tmux("send-keys", "-t", paneId, `source ${shellEscape(growhouseInit)} && clear`, "Enter");
   }
 }
 
@@ -656,15 +655,15 @@ function writeWorktreeContextFile(
   return contextFile;
 }
 
-function writeConsoleInitScript(gardenRunner: string): string {
-  const script = `# Garden console init — custom prompt with auto-dispatch
+function writeGrowhouseInitScript(gardenRunner: string): string {
+  const script = `# Garden growhouse init — custom prompt with auto-dispatch
 PS1=$'\\033[1;32mgarden>\\033[0m '
 
 command_not_found_handler() {
   ${gardenRunner} "$@"
 }
 `;
-  const scriptFile = path.join(SESSIONS_DIR, "console-init.zsh");
+  const scriptFile = path.join(SESSIONS_DIR, "growhouse-init.zsh");
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
   fs.writeFileSync(scriptFile, script, { mode: 0o644 });
   return scriptFile;

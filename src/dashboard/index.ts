@@ -13,7 +13,7 @@ import { printHeader, handleClaudeHook, handlePaneDied, handleTitleChanged } fro
 import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
 import { newWorker, killPane, bounceActiveWorker } from "./workers.js";
-import { switchProject, focusWorker, focusShell, focusConsole, focusRoot, focusLogs, cyclePane, cyclePlot } from "./navigate.js";
+import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, cyclePane, cyclePlot } from "./navigate.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
 import { runUsagePollerLoop, stopUsagePoller } from "./usage-poller.js";
 import { loadConfig } from "../config.js";
@@ -46,7 +46,7 @@ export async function dashboard(args: string[]): Promise<void> {
   if (sub === "_new-worker") return newWorker();
   if (sub === "_focus-worker") return focusWorker();
   if (sub === "_focus-shell") return focusShell();
-  if (sub === "_focus-console") return focusConsole();
+  if (sub === "_focus-growhouse") return focusGrowhouse();
   if (sub === "_focus-root") return focusRoot();
   if (sub === "_focus-logs") return focusLogs();
   if (sub === "_cycle-pane") return cyclePane(args[1] === "prev" ? -1 : 1);
@@ -134,7 +134,7 @@ Usage:
   garden dashboard                 Open the dashboard (creates if needed)
   garden dashboard exit            Close the dashboard
 Layout:
-  Left: garden title + usage meters (top), project status (middle), console pane (bottom: console, root, or logs).
+  Left: garden title + usage meters (top), project status (middle), growhouse pane (bottom: growhouse, root, or logs).
   Right: active pane (worker or shell). Info in status bar.
 
 Hotkeys (⌥ = Option/Alt, no prefix needed):
@@ -146,7 +146,7 @@ Hotkeys (⌥ = Option/Alt, no prefix needed):
   ⌥] / ⌥[     Cycle workers and shell
   ⌥x           Kill current worker (shell is protected)
   ⌥b           Bounce current worker (restart Claude, preserve session history)
-  ⌥c           Focus console (garden> prompt with auto-dispatch)
+  ⌥g           Focus growhouse (garden> prompt with auto-dispatch)
   ⌥r           Focus root shell
   ⌥l           Focus logs
 

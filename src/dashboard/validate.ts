@@ -3,11 +3,11 @@ import fs from "node:fs";
 import { SESSIONS_DIR, loadConfig } from "../config.js";
 import { type DashboardState, readDashState, writeDashState } from "./state.js";
 import { readRegistry, writeRegistry, updateWorkerFields, type WorkerRegistry } from "./registry.js";
-import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, killWindowSafe, tmuxSplit, setPaneTitle, setPaneLabel, tmux, disablePaneInput } from "./tmux.js";
+import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, killWindowSafe, tmuxSplit, setPaneTitle, setPaneLabel, tmux, disablePaneInput, renameWindow } from "./tmux.js";
 import { log } from "./log.js";
 import { worktreeExists, removeWorktree, pruneWorktrees } from "./git.js";
 import { startProjectPoller, projectPollerRunning } from "./poller.js";
-import { resolveGardenRunner, createGardenConsoleWindow, USAGE_PANE_HEIGHT } from "./create.js";
+import { resolveGardenRunner, createGardenGrowhouseWindow, USAGE_PANE_HEIGHT } from "./create.js";
 import { gardenWindowName, workerWindowName } from "./window-names.js";
 import { buildStatusCommand, buildUsageCommand } from "./header.js";
 import { gardenRestoreFromHidden } from "./layout.js";
@@ -38,26 +38,26 @@ function healGardenPaneInState(state: DashboardState): DashboardState {
     try {
       const newPaneId = tmuxSplit("-v", "-t", healed.statusPaneId);
       if (newPaneId) {
-        setPaneTitle(newPaneId, "console");
-        setPaneLabel(newPaneId, "console");
+        setPaneTitle(newPaneId, "growhouse");
+        setPaneLabel(newPaneId, "growhouse");
 
         // gardenRestoreFromHidden mutates state.gardenShellPaneId in-place,
         // so work with a mutable interim object before the final spread.
         const interim = { ...healed, gardenShellPaneId: newPaneId };
 
         const gardenRunner = resolveGardenRunner();
-        const consoleWin = gardenWindowName("console");
-        if (!windowExists(consoleWin)) {
-          createGardenConsoleWindow(gardenRunner);
+        const growhouseWin = gardenWindowName("growhouse");
+        if (!windowExists(growhouseWin)) {
+          createGardenGrowhouseWindow(gardenRunner);
         }
-        gardenRestoreFromHidden(consoleWin, interim);
+        gardenRestoreFromHidden(growhouseWin, interim);
 
         healed = {
           ...interim,
-          gardenPaneType: "console" as const,
-          gardenWindowName: consoleWin,
+          gardenPaneType: "growhouse" as const,
+          gardenWindowName: growhouseWin,
         };
-        log.info("validate", "recreated console pane");
+        log.info("validate", "recreated growhouse pane");
       }
     } catch (err) {
       log.warn("validate", "failed to recreate garden pane", { data: { error: String(err) } });
@@ -140,6 +140,15 @@ function healStatusPaneInState(state: DashboardState): DashboardState {
  * Returns the healed state (may be identical if everything is consistent).
  */
 export function validateAndHeal(state: DashboardState): DashboardState {
+  if (windowExists("_garden-console") && !windowExists("_garden-growhouse")) {
+    renameWindow("_garden-console", "_garden-growhouse");
+    log.info("validate", "renamed _garden-console to _garden-growhouse");
+  }
+  if (state.gardenShellPaneId && state.gardenPaneType === "growhouse" && paneExists(state.gardenShellPaneId)) {
+    setPaneTitle(state.gardenShellPaneId, "growhouse");
+    setPaneLabel(state.gardenShellPaneId, "growhouse");
+  }
+
   let healed = healStatusPaneInState(state);
   healed = healUsagePaneInState(healed);
   healed = healGardenPaneInState(healed);

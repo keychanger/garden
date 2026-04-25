@@ -36,7 +36,7 @@ describe("window name construction", () => {
   });
 
   it("gardenWindowName", () => {
-    expect(gardenWindowName("console")).toBe("_garden-console");
+    expect(gardenWindowName("growhouse")).toBe("_garden-growhouse");
     expect(gardenWindowName("root")).toBe("_garden-root");
     expect(gardenWindowName("logs")).toBe("_garden-logs");
   });
@@ -94,8 +94,8 @@ describe("roundtrip", () => {
 });
 
 describe("isGardenWindow", () => {
-  it("returns true for console/root/logs windows", () => {
-    expect(isGardenWindow("_garden-console")).toBe(true);
+  it("returns true for growhouse/root/logs windows", () => {
+    expect(isGardenWindow("_garden-growhouse")).toBe(true);
     expect(isGardenWindow("_garden-root")).toBe(true);
     expect(isGardenWindow("_garden-logs")).toBe(true);
   });

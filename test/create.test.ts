@@ -119,7 +119,7 @@ import {
   resolveGardenRunner,
   createShellWindow,
   createLogsWindow,
-  createGardenConsoleWindow,
+  createGardenGrowhouseWindow,
   createGardenRootWindow,
   installClaudeHooks,
   buildWorkerCommand,
@@ -314,12 +314,12 @@ describe("createLogsWindow", () => {
   });
 });
 
-describe("createGardenConsoleWindow", () => {
+describe("createGardenGrowhouseWindow", () => {
   it("creates window and sends init command", () => {
-    createGardenConsoleWindow("garden-runner");
+    createGardenGrowhouseWindow("garden-runner");
     expect(tmux).toHaveBeenCalledWith(
       "new-window", "-d", "-t", "garden-dashboard",
-      "-n", "_garden-console",
+      "-n", "_garden-growhouse",
     );
     expect(tmux).toHaveBeenCalledWith(
       "send-keys", "-t", "%5",
@@ -328,9 +328,9 @@ describe("createGardenConsoleWindow", () => {
     );
   });
 
-  it("sets pane label to console", () => {
-    createGardenConsoleWindow("garden-runner");
-    expect(setPaneLabel).toHaveBeenCalledWith("%5", "console");
+  it("sets pane label to growhouse", () => {
+    createGardenGrowhouseWindow("garden-runner");
+    expect(setPaneLabel).toHaveBeenCalledWith("%5", "growhouse");
   });
 });
 

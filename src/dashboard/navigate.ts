@@ -15,7 +15,7 @@ import {
 import { findWorkerByName } from "./registry.js";
 import { acknowledgeAlerts } from "./alerts.js";
 import { log } from "./log.js";
-import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenConsoleWindow, resolveGardenRunner } from "./create.js";
+import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow, resolveGardenRunner } from "./create.js";
 import { parkingWindowName, shellWindowName as shellWin, gardenWindowName, parseWorkerSuffix, isWorkerWindow, type GardenView } from "./window-names.js";
 
 /**
@@ -202,7 +202,7 @@ export function focusShell(): void {
 function ensureGardenView(view: GardenView): void {
   const wn = gardenWindowName(view);
   if (windowExists(wn)) return;
-  if (view === "console") createGardenConsoleWindow(resolveGardenRunner());
+  if (view === "growhouse") createGardenGrowhouseWindow(resolveGardenRunner());
   else if (view === "root") createGardenRootWindow();
   else if (view === "logs") createLogsWindow();
 }
@@ -220,7 +220,7 @@ function switchGardenTo(view: GardenView): void {
 
     log.info("navigate", "switchGardenTo", { data: { view, from: state.gardenPaneType } });
 
-    const parkName = state.gardenWindowName ?? gardenWindowName("console");
+    const parkName = state.gardenWindowName ?? gardenWindowName("growhouse");
     ensureGardenView(view);
     gardenSwapToHidden(parkName, gardenWindowName(view), state);
     state.gardenPaneType = view;
@@ -235,8 +235,8 @@ function switchGardenTo(view: GardenView): void {
   });
 }
 
-export function focusConsole(): void {
-  switchGardenTo("console");
+export function focusGrowhouse(): void {
+  switchGardenTo("growhouse");
 }
 
 export function focusRoot(): void {
