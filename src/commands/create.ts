@@ -1,7 +1,8 @@
 // Scaffolds a new project: mkdir + git init + private GitHub repo, then registers it (and adds to active plot if any).
 import path from "node:path";
 import fs from "node:fs";
-import { execFileSync } from "node:child_process";
+import readline from "node:readline";
+import { execFileSync, spawnSync } from "node:child_process";
 import { loadConfig, saveConfig, addProjectToPlot, tryGetPlot, PLOT_MAX_PROJECTS } from "../config.js";
 import { readDashState } from "../dashboard/state.js";
 import { dashboardExists } from "../session.js";
@@ -42,6 +43,10 @@ export async function create(args: string[]): Promise<void> {
     }
   }
 
+  // Pre-flight gh auth before any filesystem/network side effects so a missing
+  // token doesn't leave a half-initialized directory behind.
+  await ensureGhAuth();
+
   fs.mkdirSync(resolved, { recursive: true });
 
   const readmePath = path.join(resolved, "README.md");
@@ -75,4 +80,36 @@ export async function create(args: string[]): Promise<void> {
   }
 
   if (dashboardExists()) refreshDashboard();
+}
+
+function ghAuthOk(): boolean {
+  const result = spawnSync("gh", ["auth", "status"], { stdio: "ignore" });
+  return result.status === 0;
+}
+
+async function ensureGhAuth(): Promise<void> {
+  if (ghAuthOk()) return;
+
+  console.log("\x1b[33mGitHub CLI is not authenticated.\x1b[0m");
+  if (!process.stdin.isTTY) {
+    throw new Error("gh auth required. Run 'gh auth login -h github.com' and retry.");
+  }
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await new Promise<string>(resolve => {
+    rl.question("Run 'gh auth login' now? [y/N] ", resolve);
+  });
+  rl.close();
+
+  if (answer.trim().toLowerCase() !== "y") {
+    throw new Error("Aborted: gh auth required.");
+  }
+
+  const login = spawnSync("gh", ["auth", "login", "-h", "github.com"], { stdio: "inherit" });
+  if (login.status !== 0) {
+    throw new Error("gh auth login failed or was cancelled.");
+  }
+  if (!ghAuthOk()) {
+    throw new Error("gh auth still not active after login. Inspect with 'gh auth status'.");
+  }
 }
