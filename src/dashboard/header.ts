@@ -54,7 +54,7 @@ export function setupStatusBar(_gardenRunner: string): void {
     [["-t", target, "status-left", "#{@garden_left}"], "status-left"],
     [["-t", target, "status-right-length", "120"], "status-right-length"],
     [["-t", target, "status-right", "#{@garden_right}"], "status-right"],
-    [["-t", target, "status-interval", "2"], "status-interval"],
+    [["-t", target, "status-interval", "30"], "status-interval"],
     // Window options — suppress window names for all windows in this session
     [["-t", mainWindow, "window-status-current-format", ""], "window-status-current-format"],
     [["-t", mainWindow, "window-status-format", ""], "window-status-format"],
@@ -528,7 +528,10 @@ export function buildStatusCommand(gardenRunner: string): string {
     `sf='${sf}'`,
     `pst='${pst}'`,
     `sig=0`,
-    `trap '_t=$(cat "$sf" 2>/dev/null); printf "\\033[H%s\\033[J" "$_t"; prev="$_t"; sig=1' USR1`,
+    // pt_tpl caches the plot-strip template; only re-read on SIGUSR1 (writers always signal after writing).
+    `pt_tpl=""`,
+    `[ -r "$pst" ] && pt_tpl=$(cat "$pst" 2>/dev/null)`,
+    `trap '_t=$(cat "$sf" 2>/dev/null); printf "\\033[H%s\\033[J" "$_t"; prev="$_t"; pt_tpl=$(cat "$pst" 2>/dev/null); sig=1' USR1`,
     `prev=""`,
     `fc=0`,
     `while true; do`,
@@ -546,25 +549,25 @@ export function buildStatusCommand(gardenRunner: string): string {
     // Animate if either the pane content or the plot strip has a live spinner.
     `  has_cs=0; has_ps=0;`,
     `  if printf '%s' "$cur" | grep -q '${brailleClass}'; then has_cs=1; fi;`,
-    `  if [ -r "$pst" ] && grep -q -F '${sent}' "$pst" 2>/dev/null; then has_ps=1; fi;`,
+    `  case "$pt_tpl" in *"${sent}"*) has_ps=1 ;; esac;`,
     `  if [ $has_cs -eq 1 ] || [ $has_ps -eq 1 ]; then`,
     `    sc=0;`,
     `    while [ $sc -lt 500 ]; do`,
     // SIGUSR1 interrupts `wait`; kill the sleep, then `wait` again to reap it
     // synchronously — else bash prints "PID Terminated: 15 sleep ..." into the pane.
-    `      sleep 0.08 & _sp=$!; wait $_sp 2>/dev/null; kill $_sp 2>/dev/null; wait $_sp 2>/dev/null;`,
+    `      sleep 0.12 & _sp=$!; wait $_sp 2>/dev/null; kill $_sp 2>/dev/null; wait $_sp 2>/dev/null;`,
     `      if [ $sig -eq 1 ]; then break; fi;`,
     `      sc=$((sc + 1));`,
     `      fc=$((fc + 1));`,
     `      si=$((fc % ${SPINNER_FRAMES.length}));`,
     `      case $si in ${caseBranches} esac;`,
-    // Partial per-line repaint via awk — full-pane redraw every 80ms visibly flickers static lines.
+    // Partial per-line repaint via awk — full-pane redraw every frame visibly flickers static lines.
     `      if [ $has_cs -eq 1 ]; then`,
-    `        printf '%s\\n' "$cur" | awk -v b='${brailleClass}' -v f="$sf_char" '$0 ~ b { gsub(b, f); printf "\\033[%d;1H%s", NR, $0 }';`,
+    `        awk -v b='${brailleClass}' -v f="$sf_char" '$0 ~ b { gsub(b, f); printf "\\033[%d;1H%s", NR, $0 }' <<<"$cur";`,
     `      fi;`,
     // Must be pane-level: setPaneVar's pane scope shadows session-level writes.
-    `      if [ $has_ps -eq 1 ] && [ -r "$pst" ]; then`,
-    `        pt=$(<"$pst"); tmux set-option -p -t "$TMUX_PANE" @garden_name "\${pt//${sent}/$sf_char}" 2>/dev/null;`,
+    `      if [ $has_ps -eq 1 ]; then`,
+    `        tmux set-option -p -t "$TMUX_PANE" @garden_name "\${pt_tpl//${sent}/$sf_char}" 2>/dev/null;`,
     `      fi;`,
     `    done;`,
     `  else`,

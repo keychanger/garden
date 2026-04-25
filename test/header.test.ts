@@ -202,7 +202,7 @@ describe("buildStatusCommand", () => {
     const cmd = buildStatusCommand("garden");
     // Should contain at least one braille spinner frame
     expect(cmd).toContain("\u280B");
-    expect(cmd).toContain("sleep 0.08");
+    expect(cmd).toContain("sleep 0.12");
   });
 
   it("animates via a per-line partial repaint so static lines don't flicker every frame", () => {
@@ -220,7 +220,7 @@ describe("buildStatusCommand", () => {
     const cmd = buildStatusCommand("garden");
     // Trailing `wait $_sp` reaps the killed sleep synchronously; without it
     // bash emits an async "sh: line N: PID Terminated: 15 ..." job notice.
-    expect(cmd).toMatch(/sleep 0\.08 & _sp=\$!; wait \$_sp 2>\/dev\/null; kill \$_sp 2>\/dev\/null; wait \$_sp 2>\/dev\/null;/);
+    expect(cmd).toMatch(/sleep 0\.12 & _sp=\$!; wait \$_sp 2>\/dev\/null; kill \$_sp 2>\/dev\/null; wait \$_sp 2>\/dev\/null;/);
     expect(cmd).toMatch(/sleep 86400 & _sp=\$!; wait \$_sp 2>\/dev\/null; kill \$_sp 2>\/dev\/null; wait \$_sp 2>\/dev\/null;/);
   });
 
@@ -264,10 +264,10 @@ describe("setupStatusBar", () => {
     expect(calls).toContainEqual(expect.arrayContaining(["set-option", "-t", "garden-dashboard:main", "pane-border-status", "top"]));
   });
 
-  it("sets status-interval to 2 seconds", () => {
+  it("sets status-interval to 30 seconds", () => {
     setupStatusBar("garden");
     const calls = vi.mocked(tmux).mock.calls;
-    expect(calls).toContainEqual(["set-option", "-t", "garden-dashboard", "status-interval", "2"]);
+    expect(calls).toContainEqual(["set-option", "-t", "garden-dashboard", "status-interval", "30"]);
   });
 
   it("swallows errors from individual set-option calls", () => {
