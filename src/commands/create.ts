@@ -49,7 +49,15 @@ export async function create(args: string[]): Promise<void> {
   // Remote-first: org-permission failures must abort before we touch the filesystem.
   const slug = `${GITHUB_ORG}/${name}`;
   console.log(`Creating GitHub repo ${slug}...`);
-  execFileSync("gh", ["repo", "create", slug, "--private"], { stdio: "inherit" });
+  try {
+    execFileSync("gh", ["repo", "create", slug, "--private"], { stdio: "inherit" });
+  } catch {
+    throw new Error(
+      `Failed to create GitHub repo ${slug}. Auth pre-flight already passed, so 'gh auth login' won't help. ` +
+      `The active gh account is most likely not authorized to create repos in the '${GITHUB_ORG}' org ` +
+      `(or the repo name is taken). Try 'gh auth switch' to a different account, or ask an org admin for access.`,
+    );
+  }
 
   fs.mkdirSync(resolved, { recursive: true });
 

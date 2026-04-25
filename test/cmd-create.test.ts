@@ -167,7 +167,7 @@ describe("garden create", () => {
 
     const target = path.join(tmpHome, "denied");
     const { create } = await importCreate();
-    await expect(create([target])).rejects.toThrow(/cannot create a repository/);
+    await expect(create([target])).rejects.toThrow(/Auth pre-flight already passed/);
     expect(fs.existsSync(target)).toBe(false);
     const loaded = config.loadConfig();
     expect(loaded.projects["denied"]).toBeUndefined();
