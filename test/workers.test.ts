@@ -700,6 +700,60 @@ describe("bounceWorker", () => {
 
     expect(() => bounceWorker("myproject", "swift-oak")).toThrow(/no live pane/);
   });
+
+  it("dispatches a delayed continue prompt when the worker was mid-turn at bounce", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "sess-abc", task: "",
+      branchName: "swift-oak", worktreePath: "/wt/swift-oak",
+      claudeStatus: "working",
+    });
+
+    bounceWorker("myproject", "swift-oak");
+
+    const continueCall = vi.mocked(spawn).mock.calls.find(c =>
+      Array.isArray(c[1]) && (c[1] as string[])[1]?.includes("_continue-worker"),
+    );
+    expect(continueCall).toBeDefined();
+    const cmd = (continueCall![1] as string[])[1];
+    expect(cmd).toMatch(/^sleep 3 && /);
+    expect(cmd).toContain("'myproject'");
+    expect(cmd).toContain("'swift-oak'");
+  });
+
+  it("does not dispatch a continue prompt when the worker was idle at bounce", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "sess-abc", task: "",
+      branchName: "swift-oak", worktreePath: "/wt/swift-oak",
+      claudeStatus: "idle",
+    });
+
+    bounceWorker("myproject", "swift-oak");
+
+    const continueCall = vi.mocked(spawn).mock.calls.find(c =>
+      Array.isArray(c[1]) && (c[1] as string[])[1]?.includes("_continue-worker"),
+    );
+    expect(continueCall).toBeUndefined();
+  });
+
+  it("captures wasWorking before overwriting claudeStatus to idle (call order)", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "sess-abc", task: "",
+      branchName: "swift-oak", worktreePath: "/wt/swift-oak",
+      claudeStatus: "working",
+    });
+
+    bounceWorker("myproject", "swift-oak");
+
+    // updateWorkerFields(...claudeStatus: idle) is called; the dispatch must
+    // still see "working" because we snapshotted entry.claudeStatus pre-write.
+    expect(vi.mocked(updateWorkerFields)).toHaveBeenCalledWith(
+      "myproject", "swift-oak", { claudeStatus: "idle" },
+    );
+    const continueCall = vi.mocked(spawn).mock.calls.find(c =>
+      Array.isArray(c[1]) && (c[1] as string[])[1]?.includes("_continue-worker"),
+    );
+    expect(continueCall).toBeDefined();
+  });
 });
 
 describe("bounceActiveWorker", () => {
