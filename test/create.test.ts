@@ -315,17 +315,21 @@ describe("createLogsWindow", () => {
 });
 
 describe("createGardenGrowhouseWindow", () => {
-  it("creates window and sends init command", () => {
+  it("spawns zsh under a dedicated ZDOTDIR so the leading newline is applied before the first prompt renders", () => {
     createGardenGrowhouseWindow("garden-runner");
     expect(tmux).toHaveBeenCalledWith(
       "new-window", "-d", "-t", "garden-dashboard",
       "-n", "_garden-growhouse",
+      "env", expect.stringMatching(/^ZDOTDIR=.*growhouse-zdotdir/), "zsh",
     );
-    expect(tmux).toHaveBeenCalledWith(
-      "send-keys", "-t", "%5",
-      expect.stringContaining("source"),
-      "Enter",
+  });
+
+  it("does not send-keys a source command after the pane is already running zsh", () => {
+    createGardenGrowhouseWindow("garden-runner");
+    const sendKeysCall = vi.mocked(tmux).mock.calls.find(
+      c => c[0] === "send-keys" && typeof c[4] === "string" && c[4].includes("source"),
     );
+    expect(sendKeysCall).toBeUndefined();
   });
 
   it("sets pane label to growhouse", () => {
@@ -335,13 +339,20 @@ describe("createGardenGrowhouseWindow", () => {
 });
 
 describe("createGardenRootWindow", () => {
-  it("creates window with root label", () => {
+  it("wraps the shell in sh -c so the leading newline lands before the first prompt — no flash from a default prompt rendering on row 1", () => {
     createGardenRootWindow();
     expect(tmux).toHaveBeenCalledWith(
       "new-window", "-d", "-t", "garden-dashboard",
       "-n", "_garden-root",
+      "sh", "-c", expect.stringContaining("printf '\\n'; exec"),
     );
     expect(setPaneLabel).toHaveBeenCalledWith("%5", "root");
+  });
+
+  it("does not send-keys a clear command after spawn — the wrapper already padded the pane", () => {
+    createGardenRootWindow();
+    const sendKeysCall = vi.mocked(tmux).mock.calls.find(c => c[0] === "send-keys");
+    expect(sendKeysCall).toBeUndefined();
   });
 });
 
