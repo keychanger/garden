@@ -4,7 +4,7 @@ export async function keys(): Promise<void> {
 Garden Dashboard Keybindings (⌥ = Option/Alt)
 
   Navigation
-    ⌥c           Focus console (garden> prompt)
+    ⌥g           Focus growhouse (garden> prompt)
     ⌥r           Focus root shell
     ⌥l           Focus logs
     ⌥w           Jump to first worker
