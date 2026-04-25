@@ -1,10 +1,8 @@
-// Creates a new project: scaffolds a directory, inits git on main, creates a
-// GitHub repo under the keychange org, registers the project, and adds it to
-// the active plot.
+// Scaffolds a new project: mkdir + git init + private GitHub repo, then registers it (and adds to active plot if any).
 import path from "node:path";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
-import { loadConfig, saveConfig, addProjectToPlot, tryGetPlot } from "../config.js";
+import { loadConfig, saveConfig, addProjectToPlot, tryGetPlot, PLOT_MAX_PROJECTS } from "../config.js";
 import { readDashState } from "../dashboard/state.js";
 import { dashboardExists } from "../session.js";
 import { refreshDashboard } from "../dashboard/header.js";
@@ -32,8 +30,16 @@ export async function create(args: string[]): Promise<void> {
   }
 
   const activePlot = readDashState().activePlot;
-  if (activePlot && !tryGetPlot(config, activePlot)) {
-    throw new Error(`Active plot '${activePlot}' is missing from config.`);
+  if (activePlot) {
+    const plot = tryGetPlot(config, activePlot);
+    if (!plot) {
+      throw new Error(`Active plot '${activePlot}' is missing from config.`);
+    }
+    if (plot.projects.length >= PLOT_MAX_PROJECTS) {
+      throw new Error(
+        `Active plot '${activePlot}' is full (${PLOT_MAX_PROJECTS} projects). Activate a different plot or remove a project first.`,
+      );
+    }
   }
 
   fs.mkdirSync(resolved, { recursive: true });
