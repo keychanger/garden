@@ -53,9 +53,7 @@ export async function create(args: string[]): Promise<void> {
     execFileSync("gh", ["repo", "create", slug, "--private"], { stdio: "inherit" });
   } catch {
     throw new Error(
-      `Failed to create GitHub repo ${slug}. Auth pre-flight already passed, so 'gh auth login' won't help. ` +
-      `The active gh account is most likely not authorized to create repos in the '${GITHUB_ORG}' org ` +
-      `(or the repo name is taken). Try 'gh auth switch' to a different account, or ask an org admin for access.`,
+      `'gh repo create ${slug}' failed (see gh's error above). Auth pre-flight passed, so re-running 'gh auth login' will not change this.`,
     );
   }
 
