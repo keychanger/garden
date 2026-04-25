@@ -46,9 +46,7 @@ export async function create(args: string[]): Promise<void> {
   // Pre-flight before any side effects so a missing token doesn't leave a half-initialized dir behind.
   await ensureGhAuth();
 
-  // Create the empty GitHub repo BEFORE any local work. This is the only step
-  // that can fail on remote permissions (e.g. user can't create in the org),
-  // and surfacing that failure first means we never leave a half-init dir.
+  // Remote-first: org-permission failures must abort before we touch the filesystem.
   const slug = `${GITHUB_ORG}/${name}`;
   console.log(`Creating GitHub repo ${slug}...`);
   execFileSync("gh", ["repo", "create", slug, "--private"], { stdio: "inherit" });
