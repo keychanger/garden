@@ -23,6 +23,7 @@ import { validateAndHeal } from "./validate.js";
 import { startProjectPoller, signalFifoPath } from "./poller.js";
 import { startUsagePoller } from "./usage-poller.js";
 import { installPollTriggerHook, worktreeExists as wtExists, getWorkerBaseBranch, getRemoteHost } from "./git.js";
+import { dispatchDelayedContinue } from "./continue.js";
 import { buildSandboxConfig, type SandboxConfig } from "./sandbox.js";
 import { claudeEnvPrefix } from "./claude-env.js";
 import { gardenWindowName, shellWindowName as shellWin, workerWindowName as workerWin, isGardenWindow } from "./window-names.js";
@@ -285,6 +286,12 @@ export function ensureDashboard(): void {
         installPollTriggerHook(entry.worktreePath, gardenRunner, projectName);
         installClaudeHooks(entry.worktreePath, projectConfig);
       }
+      // Capture mid-turn interruption before we overwrite claudeStatus below.
+      // pane-died sets interruptedWhileWorking when claudeStatus was "working"
+      // at exit; if pane-died never fired (tmux server crash), claudeStatus
+      // itself will still be "working".
+      const wasInterrupted = entry.interruptedWhileWorking === true
+        || entry.claudeStatus === "working";
       // Claude Code does not fire SessionStart on --resume, so the SessionStart
       // hook will not write claudeStatus for resumed workers. Write "idle"
       // directly: a resumed worker is at the prompt by definition, and the
@@ -314,6 +321,10 @@ export function ensureDashboard(): void {
 
       if (projectName === state.activeProject && !firstResumedWindow) {
         firstResumedWindow = workerWindowName;
+      }
+
+      if (wasInterrupted) {
+        dispatchDelayedContinue(gardenRunner, projectName, entry.name);
       }
     }
   }

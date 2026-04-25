@@ -538,12 +538,27 @@ describe("handlePaneDied", () => {
     expect(updateWorkerFields).not.toHaveBeenCalled();
   });
 
-  it("sets claudeStatus to exited when worker entry exists", () => {
+  it("sets claudeStatus to exited and flags mid-turn interruption when worker was working", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "bold-ash",
       sessionId: "test",
       task: "",
       claudeStatus: "working",
+    });
+    handlePaneDied("_garden-worker-bold-ash");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith(
+      "garden", "bold-ash",
+      { claudeStatus: "exited", interruptedWhileWorking: true },
+    );
+  });
+
+  it("does not set the interruption flag when the worker was idle at exit", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash",
+      sessionId: "test",
+      task: "",
+      claudeStatus: "idle",
     });
     handlePaneDied("_garden-worker-bold-ash");
 
@@ -566,7 +581,11 @@ describe("handlePaneDied", () => {
       "hook", "pane-died \u2192 exited",
       expect.objectContaining({
         worker: "bold-ash",
-        data: { project: "garden", windowName: "_garden-worker-bold-ash" },
+        data: {
+          project: "garden",
+          windowName: "_garden-worker-bold-ash",
+          interrupted: true,
+        },
       }),
     );
   });

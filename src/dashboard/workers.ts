@@ -24,6 +24,7 @@ import {
 } from "./create.js";
 import { worktreePath, resolveBaseBranch, branchExistsOnOrigin } from "./git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
+import { dispatchDelayedContinue } from "./continue.js";
 import { workerWindowName as workerWin, parkingWindowName, shellWindowName as shellWin, parseWorkerSuffix } from "./window-names.js";
 
 export function newWorker(): void {
@@ -262,6 +263,10 @@ export function bounceWorker(projectName: string, workerName: string): void {
         entry.sessionId,
       );
 
+  // Capture pre-bounce status before we overwrite to "idle" — used to decide
+  // whether to auto-send a continue prompt below.
+  const wasWorking = entry.claudeStatus === "working";
+
   const cwd = entry.worktreePath ?? projectInfo?.path;
   const respawnArgs = ["respawn-pane", "-k"];
   if (cwd) respawnArgs.push("-c", cwd);
@@ -272,9 +277,13 @@ export function bounceWorker(projectName: string, workerName: string): void {
   // Mirrors the attach-time resume path in ensureDashboard().
   updateWorkerFields(projectName, workerName, { claudeStatus: "idle" });
 
+  if (wasWorking) {
+    dispatchDelayedContinue(resolveGardenRunner(), projectName, workerName);
+  }
+
   log.info("workers", "bounced", {
     worker: workerName,
-    data: { project: projectName, sessionId: entry.sessionId },
+    data: { project: projectName, sessionId: entry.sessionId, wasWorking },
   });
 
   refreshDashboard();

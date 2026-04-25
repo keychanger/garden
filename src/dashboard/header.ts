@@ -443,12 +443,16 @@ export function handlePaneDied(windowName: string | undefined): void {
   const { project, worker } = parsed;
   const entry = findWorkerByName(project, worker);
   if (!entry) return;
+  const wasWorking = entry.claudeStatus === "working";
   try {
-    updateWorkerFields(project, worker, { claudeStatus: "exited" });
+    updateWorkerFields(project, worker, {
+      claudeStatus: "exited",
+      ...(wasWorking ? { interruptedWhileWorking: true } : {}),
+    });
   } catch { /* best effort */ }
   log.info("hook", "pane-died → exited", {
     worker,
-    data: { project, windowName },
+    data: { project, windowName, interrupted: wasWorking },
   });
   refreshDashboard();
 }

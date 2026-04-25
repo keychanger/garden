@@ -19,7 +19,8 @@ npm run dev -- help    # run via tsx during development
 - `src/dashboard/` — dashboard implementation, split by concern:
   - `index.ts` — entry point, subcommand dispatch
   - `create.ts` — dashboard creation, worker command building, terminal resize
-  - `workers.ts` — worker lifecycle (create, kill)
+  - `workers.ts` — worker lifecycle (create, kill, bounce)
+  - `continue.ts` — auto-continue prompt for workers interrupted mid-turn (dispatched by ensureDashboard resume and bounceWorker)
   - `navigate.ts` — project switching, pane focus, worker cycling
   - `state.ts` — DashboardState type, atomic read/write to `dashboard.state.json`
   - `registry.ts` — worker registry, atomic read/write to `dashboard.registry.json`
@@ -172,6 +173,7 @@ The dashboard uses a permanent tmux layout with content swapped in and out of pa
 - **Health check**: `garden health` diagnoses state/tmux divergence. `garden health --fix` runs the self-healing validator.
 - **Kick**: `garden kick <worker>` re-arms a worker stranded in `working` for review (sets `pendingReviewAt` and pokes the project poller). Use when a reviewer-push race or a crashed poller has left a worker with no event to wake it. Refuses workers whose `prState` is set to a lifecycle state (reviewing, merge-pending, etc.), whose `claudeStatus` is `working` or `asking` (Claude is mid-turn — launching a reviewer would race live commits), or with no commits ahead of base.
 - **Bounce**: `garden bounce <worker>` (or `⌥b` on an active worker pane) kills the Claude process and restarts it via `claude --resume <sessionId>` in the same pane. The conversation history is preserved, but transient session state is dropped — fresh read of `.claude/settings.json` (hook config, `permissions.defaultMode`), new permission-mode cycle. Use when a worker is stuck in plan/acceptEdits with no way back to auto, when hook config was changed by a new build, or when Claude has wedged into a bad state. Writes `claudeStatus = "idle"` afterwards (`--resume` skips SessionStart).
+- **Auto-continue on resume** (`src/dashboard/continue.ts`): When a worker is interrupted mid-turn (dashboard kill, tmux server crash, manual bounce while `claudeStatus === "working"`), the resume path auto-sends a "continue from where you left off" prompt a few seconds after the pane comes back. Detection signals: `pane-died` writes `interruptedWhileWorking: true` to the registry entry when claudeStatus was `working` at exit; `ensureDashboard` also treats a still-`working` claudeStatus as interrupted (covers the no-pane-died-fired case). Bounce snapshots `claudeStatus` in-memory before overwriting to `idle`. The actual send is dispatched via a detached `sleep 3 && garden dashboard _continue-worker` subprocess so Claude `--resume` has time to take over the pane's stdin; `_continue-worker` skips silently if the operator already started typing (status is `working`/`asking` again).
 
 ## Worker isolation (worktrees)
 

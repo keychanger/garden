@@ -13,6 +13,7 @@ import { printHeader, handleClaudeHook, handlePaneDied, handleTitleChanged } fro
 import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
 import { newWorker, killPane, bounceActiveWorker } from "./workers.js";
+import { continueWorker } from "./continue.js";
 import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, cyclePane, cyclePlot } from "./navigate.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
 import { runUsagePollerLoop, stopUsagePoller } from "./usage-poller.js";
@@ -53,6 +54,10 @@ export async function dashboard(args: string[]): Promise<void> {
   if (sub === "_cycle-plot") return cyclePlot(args[1] === "prev" ? -1 : 1);
   if (sub === "_kill-pane") return killPane();
   if (sub === "_bounce") return bounceActiveWorker();
+  if (sub === "_continue-worker") {
+    if (args[1] && args[2]) continueWorker(args[1], args[2]);
+    return;
+  }
   if (sub === "_poll") {
     poll(args[1]);
     return;

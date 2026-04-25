@@ -72,6 +72,12 @@ export interface WorkerEntry {
   // second unparseable verdict falls through to the normal failing path.
   // Cleared on any parseable verdict (clean/fixed/failed).
   unparseableReviewAt?: number;
+  // Set by handlePaneDied when claudeStatus was "working" at the moment the
+  // pane died (dashboard kill, tmux server gone). Read by ensureDashboard's
+  // resume loop to decide whether to auto-send a "continue" prompt after the
+  // worker is brought back via `claude --resume`. Cleared by _continue-worker
+  // once the prompt is dispatched.
+  interruptedWhileWorking?: boolean;
   role?: string;
   parentWorker?: string;
 }
