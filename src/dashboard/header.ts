@@ -532,11 +532,12 @@ export function buildStatusCommand(gardenRunner: string): string {
     `sf='${sf}'`,
     `pst='${pst}'`,
     `sig=0`,
-    // pt_tpl caches the plot-strip template; only re-read on SIGUSR1 (writers always signal after writing).
-    `pt_tpl=""`,
-    `[ -r "$pst" ] && pt_tpl=$(cat "$pst" 2>/dev/null)`,
-    `trap '_t=$(cat "$sf" 2>/dev/null); printf "\\033[H%s\\033[J" "$_t"; prev="$_t"; pt_tpl=$(cat "$pst" 2>/dev/null); sig=1' USR1`,
+    // Trap stays narrow: one $(cat) only. A heavier trap (e.g. also reloading
+    // $pst) stacks SIGCHLD events from extra subshells on top of the inner
+    // loop's `wait $_sp`, which can wedge bash so USR1 stops being delivered.
+    `trap '_t=$(cat "$sf" 2>/dev/null); printf "\\033[H%s\\033[J" "$_t"; prev="$_t"; sig=1' USR1`,
     `prev=""`,
+    `pt_tpl=""`,
     `fc=0`,
     `while true; do`,
     `  if [ $sig -eq 1 ]; then`,
@@ -550,6 +551,9 @@ export function buildStatusCommand(gardenRunner: string): string {
     `      prev="$cur";`,
     `    fi;`,
     `  fi;`,
+    // Reload pt_tpl outside the trap. Outer loop runs once per USR1 wake or
+    // per 60s of continuous animation, so this is one cat per ~animation cycle.
+    `  pt_tpl=""; [ -r "$pst" ] && pt_tpl=$(cat "$pst" 2>/dev/null);`,
     // Animate if either the pane content or the plot strip has a live spinner.
     `  has_cs=0; has_ps=0;`,
     `  if printf '%s' "$cur" | grep -q '${brailleClass}'; then has_cs=1; fi;`,
@@ -566,8 +570,11 @@ export function buildStatusCommand(gardenRunner: string): string {
     `      si=$((fc % ${SPINNER_FRAMES.length}));`,
     `      case $si in ${caseBranches} esac;`,
     // Partial per-line repaint via awk — full-pane redraw every frame visibly flickers static lines.
+    // Pipe form (printf | awk) instead of `awk <<<"$cur"`; the here-string's
+    // hidden temp-file fork compounds with USR1 trap forks and contributed
+    // to the wedge that motivated the trap-narrowing above.
     `      if [ $has_cs -eq 1 ]; then`,
-    `        awk -v b='${brailleClass}' -v f="$sf_char" '$0 ~ b { gsub(b, f); printf "\\033[%d;1H%s", NR, $0 }' <<<"$cur";`,
+    `        printf '%s\\n' "$cur" | awk -v b='${brailleClass}' -v f="$sf_char" '$0 ~ b { gsub(b, f); printf "\\033[%d;1H%s", NR, $0 }';`,
     `      fi;`,
     // Must be pane-level: setPaneVar's pane scope shadows session-level writes.
     `      if [ $has_ps -eq 1 ]; then`,

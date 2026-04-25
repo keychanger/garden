@@ -209,6 +209,21 @@ describe("buildStatusCommand", () => {
     const cmd = buildStatusCommand("garden");
     // awk emits cursor-positioned updates for spinner lines only — no full-pane redraw per frame.
     expect(cmd).toMatch(/awk .* gsub\(b, f\); printf "\\033\[%d;1H%s"/);
+    // Pipe form, not here-string: `awk <<<"$cur"` raced with the USR1 trap and wedged the loop.
+    expect(cmd).toContain(`printf '%s\\n' "$cur" | awk`);
+  });
+
+  it("keeps the SIGUSR1 trap narrow (only re-reads $sf, not $pst)", () => {
+    const cmd = buildStatusCommand("garden");
+    // Extract the trap action body (between the first quote after `trap '` and the matching `'`).
+    const m = cmd.match(/trap '([^']*)' USR1/);
+    expect(m).not.toBeNull();
+    const body = m![1];
+    expect(body).toContain(`cat "$sf"`);
+    // pt_tpl reload must NOT live inside the trap — extra $(cat) in the handler
+    // stacks SIGCHLDs on the inner loop's `wait` and wedges signal delivery.
+    expect(body).not.toContain("pt_tpl=");
+    expect(body).not.toContain(`cat "$pst"`);
   });
 
   it("contains the idle sleep with long timeout", () => {
