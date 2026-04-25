@@ -385,6 +385,7 @@ function writeLogsScript(): string {
   // GARDEN_PRETTY=1 forces TTY-style color output inside the tmux pane.
   const script = `#!/bin/sh
 export GARDEN_PRETTY=1
+printf '\\n'
 exec garden logs --follow
 `;
 
@@ -412,6 +413,7 @@ export function createGardenRootWindow(): void {
   if (paneId) {
     setPaneLabel(paneId, "root");
     setPaneTitle(paneId, "root");
+    tmux("send-keys", "-t", paneId, `clear && printf '\\n'`, "Enter");
   }
 }
 
