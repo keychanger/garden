@@ -222,8 +222,8 @@ export function ensureDashboard(): void {
   // Clear scrollback created by resize events during split setup
   try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
 
-  const growhouseInit = writeGrowhouseInitScript(gardenRunner);
-  tmux("send-keys", "-t", gardenShellId, `source ${shellEscape(growhouseInit)} && clear && printf '\\n'`, "Enter");
+  const growhouseZdotdir = writeGrowhouseZdotdir(gardenRunner);
+  tmux("respawn-pane", "-k", "-t", gardenShellId, "env", `ZDOTDIR=${growhouseZdotdir}`, "zsh");
 
   setupStatusBar(gardenRunner);
 
@@ -395,25 +395,28 @@ exec garden logs --follow
 }
 
 export function createGardenGrowhouseWindow(gardenRunner: string): void {
-  const growhouseInit = writeGrowhouseInitScript(gardenRunner);
+  const growhouseZdotdir = writeGrowhouseZdotdir(gardenRunner);
   const windowName = gardenWindowName("growhouse");
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName);
+  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName,
+    "env", `ZDOTDIR=${growhouseZdotdir}`, "zsh");
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (paneId) {
     setPaneLabel(paneId, "growhouse");
     setPaneTitle(paneId, "growhouse");
-    tmux("send-keys", "-t", paneId, `source ${shellEscape(growhouseInit)} && clear && printf '\\n'`, "Enter");
   }
 }
 
 export function createGardenRootWindow(): void {
   const windowName = gardenWindowName("root");
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName);
+  const shell = process.env.SHELL || "/bin/zsh";
+  // Wrapper prints the padding before exec'ing the shell, so the first prompt
+  // already sits on row 2 — no flash from a default prompt rendering on row 1.
+  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName,
+    "sh", "-c", `printf '\\n'; exec ${shellEscape(shell)} -i`);
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (paneId) {
     setPaneLabel(paneId, "root");
     setPaneTitle(paneId, "root");
-    tmux("send-keys", "-t", paneId, `clear && printf '\\n'`, "Enter");
   }
 }
 
@@ -668,18 +671,22 @@ function writeWorktreeContextFile(
   return contextFile;
 }
 
-function writeGrowhouseInitScript(gardenRunner: string): string {
-  const script = `# Garden growhouse init — custom prompt with auto-dispatch
+// Dedicated ZDOTDIR so the leading newline + custom prompt are applied before
+// zsh renders its first prompt — no flash from the default shell prompt.
+function writeGrowhouseZdotdir(gardenRunner: string): string {
+  const dir = path.join(SESSIONS_DIR, "growhouse-zdotdir");
+  fs.mkdirSync(dir, { recursive: true });
+  const zshrc = `# Garden growhouse init — custom prompt with auto-dispatch
 PS1=$'\\033[1;32mgarden>\\033[0m '
 
 command_not_found_handler() {
   ${gardenRunner} "$@"
 }
+
+print
 `;
-  const scriptFile = path.join(SESSIONS_DIR, "growhouse-init.zsh");
-  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  fs.writeFileSync(scriptFile, script, { mode: 0o644 });
-  return scriptFile;
+  fs.writeFileSync(path.join(dir, ".zshrc"), zshrc, { mode: 0o644 });
+  return dir;
 }
 
 // +1 because pane-border-status top adds one row to the total pane height
