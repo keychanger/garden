@@ -683,6 +683,15 @@ command_not_found_handler() {
   ${gardenRunner} "$@"
 }
 
+# Override ^L (used by ⌥k) so clearing the screen preserves the leading
+# blank row above the prompt instead of redrawing flush at row 1.
+clear-screen-with-padding() {
+  print -n $'\\033[H\\033[2J\\n'
+  zle reset-prompt
+}
+zle -N clear-screen-with-padding
+bindkey '^L' clear-screen-with-padding
+
 print
 `;
   fs.writeFileSync(path.join(dir, ".zshrc"), zshrc, { mode: 0o644 });
