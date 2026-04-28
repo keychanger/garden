@@ -182,6 +182,13 @@ export function ensureDashboard(): void {
     "-x", cols, "-y", rows
   );
 
+  // The growhouse pane is spawned with ZDOTDIR set; any 'garden' invocation
+  // dispatched from there inherits it, and if that invocation forked the tmux
+  // server, ZDOTDIR is stuck in the session env — every subsequent shell
+  // (project shells, root) would source the growhouse .zshrc. Scrub it once
+  // here so non-growhouse panes always start clean.
+  tmux("set-environment", "-t", DASHBOARD_SESSION, "-u", "ZDOTDIR");
+
   tmux("set-option", "-t", DASHBOARD_SESSION, "set-titles", "on");
   tmux("set-option", "-t", DASHBOARD_SESSION, "set-titles-string", "garden");
   // Large scrollback for every pane; default 2000 is tiny for worker Claude output.
@@ -677,6 +684,10 @@ function writeGrowhouseZdotdir(gardenRunner: string): string {
   const dir = path.join(SESSIONS_DIR, "growhouse-zdotdir");
   fs.mkdirSync(dir, { recursive: true });
   const zshrc = `# Garden growhouse init — custom prompt with auto-dispatch
+# Drop ZDOTDIR so any child (notably 'garden' dispatched via
+# command_not_found_handler) doesn't inherit it and re-source this rc.
+unset ZDOTDIR
+
 PS1=$'\\033[1;32mgarden>\\033[0m '
 
 command_not_found_handler() {
