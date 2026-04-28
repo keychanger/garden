@@ -182,11 +182,7 @@ export function ensureDashboard(): void {
     "-x", cols, "-y", rows
   );
 
-  // The growhouse pane is spawned with ZDOTDIR set; any 'garden' invocation
-  // dispatched from there inherits it, and if that invocation forked the tmux
-  // server, ZDOTDIR is stuck in the session env — every subsequent shell
-  // (project shells, root) would source the growhouse .zshrc. Scrub it once
-  // here so non-growhouse panes always start clean.
+  // Scrub ZDOTDIR from the session env in case a prior tmux server fork inherited it from a growhouse-dispatched garden invocation.
   tmux("set-environment", "-t", DASHBOARD_SESSION, "-u", "ZDOTDIR");
 
   tmux("set-option", "-t", DASHBOARD_SESSION, "set-titles", "on");

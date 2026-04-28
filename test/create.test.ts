@@ -336,6 +336,15 @@ describe("createGardenGrowhouseWindow", () => {
     createGardenGrowhouseWindow("garden-runner");
     expect(setPaneLabel).toHaveBeenCalledWith("%5", "growhouse");
   });
+
+  it("writes a zshrc that unsets ZDOTDIR so children (e.g. garden via command_not_found_handler) don't re-source it", () => {
+    createGardenGrowhouseWindow("garden-runner");
+    const zshrcCall = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].endsWith("growhouse-zdotdir/.zshrc"),
+    );
+    expect(zshrcCall).toBeDefined();
+    expect(zshrcCall![1] as string).toContain("unset ZDOTDIR");
+  });
 });
 
 describe("createGardenRootWindow", () => {
