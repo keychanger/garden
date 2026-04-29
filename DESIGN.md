@@ -168,7 +168,7 @@ If the Stop hook still fails to count commits ahead of `origin/<pinned-base>` (e
 
 **checks**: Command the reviewer runs in the worker's worktree after rebasing onto the base branch, so checks validate the combined state of the branch plus latest base. If checks fail, the reviewer fixes the issues and re-runs. No checks configured means the reviewer only does the code review.
 
-**postMerge**: Command that runs on the main checkout after merging, but only when the local checkout successfully fast-forwards to the newly merged code. If the fast-forward fails (dirty working tree, checkout on wrong branch), postMerge is skipped and an alert is raised so the operator can clean the checkout. An alert also fires when the fast-forward fails even without a postMerge configured — stale main rots manual operator workflow and must be surfaced either way. This is essential for projects like garden itself, where the poller runs the compiled CLI. When the garden project itself rebuilds successfully, the poller spawns a detached `_post-rebuild-refresh` via the freshly-built binary; it respawns the status, logs, and growhouse panes, calls `restartLongLivedPollers()` so the usage-poller and per-project pollers reload the new bundle (they cache JS in memory at spawn time), and refreshes the dashboard.
+**postMerge**: Command that runs on the main checkout after merging, but only when the local checkout successfully fast-forwards to the newly merged code. If the fast-forward fails (dirty working tree, checkout on wrong branch), postMerge is skipped and an alert is raised so the operator can clean the checkout. An alert also fires when the fast-forward fails even without a postMerge configured — stale main rots manual operator workflow and must be surfaced either way. This is essential for projects like garden itself, where the poller runs the compiled CLI. When the garden project itself rebuilds successfully, the poller spawns a detached `_post-rebuild-refresh` via the freshly-built binary; it respawns the status and logs panes, calls `restartLongLivedPollers()` so the usage-poller and per-project pollers reload the new bundle (they cache JS in memory at spawn time), and refreshes the dashboard.
 
 **sandboxDomains**: Comma-separated list of extra network domains added to each worker/reviewer's sandbox allowlist. Use for private registries, internal services, or other hosts beyond the garden-wide defaults (Anthropic, GitHub, npm, the project's git remote host). Set via `garden config <project> sandboxDomains foo.com,bar.com`.
 
@@ -337,7 +337,7 @@ All read commands detect whether stdout is a TTY:
     dashboard-<project>-<branch>.context  # Worktree worker context
     dashboard.log           # Structured JSON log
     <project>-poll-signal   # FIFO for waking project pollers
-    growhouse-zdotdir/.zshrc      # Garden growhouse init (custom prompt + auto-dispatch); spawned with ZDOTDIR pointing here
+    growhouse-init.zsh            # Garden growhouse init (custom prompt + auto-dispatch)
     bootstrap-<project>-<branch>.sh       # Transient worktree bootstrap script
     <project>-<worker>-review-prompt.txt  # Transient review prompt
     <project>-<worker>-review-result.txt  # Transient review output
