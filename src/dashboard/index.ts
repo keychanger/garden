@@ -103,6 +103,21 @@ export async function dashboard(args: string[]): Promise<void> {
   if (sub === "_judge-bash") return;
   if (sub === "_pane-died") return handlePaneDied(args[1]);
   if (sub === "_title-changed") return handleTitleChanged(args[1], args[2]);
+  if (sub === "_client-resized") {
+    // Re-pin usage pane height: tmux redistributes pane sizes proportionally on
+    // terminal resize, leaving blank rows below the meters until the next refresh.
+    // Skip refresh-client/full refresh — those broke copy-mode scrolling (a10642c).
+    const { readDashState } = await import("./state.js");
+    const { tmux } = await import("./tmux.js");
+    const { USAGE_PANE_HEIGHT } = await import("./create.js");
+    try {
+      const state = readDashState();
+      if (state.usagePaneId) {
+        tmux("resize-pane", "-t", state.usagePaneId, "-y", String(USAGE_PANE_HEIGHT));
+      }
+    } catch { /* pane gone or no client */ }
+    return;
+  }
   if (sub === "_bootstrap-alert") {
     const [, projectName, baseBranch, projectPath, ...rest] = args;
     const errText = rest.join(" ").slice(0, 400);

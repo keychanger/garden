@@ -131,9 +131,13 @@ export function ensureDashboard(): void {
       disablePaneInput(healed.usagePaneId);
     }
 
-    // On reattach, any older client-resized hook from a prior build is removed
-    // so its background refreshDashboard doesn't fight with copy-mode scrolling.
-    try { tmux("set-hook", "-u", "-t", DASHBOARD_SESSION, "client-resized"); } catch { /* ignore */ }
+    // Re-pin the usage pane on terminal resize. Minimal handler (resize-pane only)
+    // so it doesn't disturb copy-mode in worker/logs panes the way the old refreshDashboard-based hook did (a10642c).
+    try {
+      const gardenRunner = resolveGardenRunner();
+      tmux("set-hook", "-t", DASHBOARD_SESSION, "client-resized",
+        `run-shell -b "${gardenRunner} dashboard _client-resized 2>/dev/null"`);
+    } catch { /* hooks may not be supported on very old tmux */ }
 
     // Pre-size all hidden windows to match their target visible slots so
     // that swap-pane never triggers a SIGWINCH reflow. Without this, hidden
@@ -242,6 +246,12 @@ export function ensureDashboard(): void {
   try {
     tmux("set-hook", "-t", DASHBOARD_SESSION, "pane-title-changed",
       `run-shell -b "${gardenRunner} dashboard _title-changed '#{window_name}' '#{pane_id}' 2>/dev/null"`);
+  } catch { /* hooks may not be supported on very old tmux */ }
+
+  // Re-pin usage pane on terminal resize (see reattach path for rationale).
+  try {
+    tmux("set-hook", "-t", DASHBOARD_SESSION, "client-resized",
+      `run-shell -b "${gardenRunner} dashboard _client-resized 2>/dev/null"`);
   } catch { /* hooks may not be supported on very old tmux */ }
 
   const state: DashboardState = {
