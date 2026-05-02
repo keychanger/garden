@@ -1184,7 +1184,7 @@ function maybeAutoContinue(
   branchName: string,
   entry: WorkerEntry,
 ): void {
-  const reason = autoContinueSkipReason(projectName, entry);
+  const reason = autoContinueSkipReason(entry);
   if (reason) {
     log.debug("poller", "auto-continue skipped", {
       worker: entry.name,
@@ -1200,10 +1200,7 @@ function maybeAutoContinue(
   dispatchDelayedAutoContinue(resolveGardenRunner(), projectName, entry.name);
 }
 
-function autoContinueSkipReason(
-  _projectName: string,
-  entry: WorkerEntry,
-): string | null {
+function autoContinueSkipReason(entry: WorkerEntry): string | null {
   if (isDoneSet(entry.worktreePath)) return "done-sentinel";
   if (entry.claudeStatus === "working" || entry.claudeStatus === "asking") {
     return `claude-${entry.claudeStatus}`;
