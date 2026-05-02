@@ -295,10 +295,11 @@ describe("continueWorkerAfterMerge", () => {
     expect(message).toContain("(and 5 more)");
   });
 
-  it("appends a manual-sync nudge when the post-merge sync failed", () => {
+  it("appends a manual-sync nudge targeting the base branch when the post-merge sync failed", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
       branchName: "bold-ash",
+      baseBranch: "main",
       pendingContinueSyncFailed: true,
     });
     vi.mocked(readDashState).mockReturnValue(makeState({
@@ -310,7 +311,10 @@ describe("continueWorkerAfterMerge", () => {
 
     const message = vi.mocked(tmux).mock.calls[0][4] as string;
     expect(message).toContain("could not auto-sync");
-    expect(message).toContain("git fetch && git reset --hard origin/bold-ash");
+    // The worker branch is deleted from origin post-merge, so the hint must
+    // target origin/<base>, not origin/<branch>.
+    expect(message).toContain("git fetch origin main && git reset --hard origin/main");
+    expect(message).not.toContain("origin/bold-ash");
   });
 
   it("uses the bare base prompt when no transient fields are set", () => {

@@ -1187,6 +1187,60 @@ describe("poll — merge-pending state", () => {
     });
   });
 
+  it("skips worktree sync entirely when .garden-done sentinel is set", () => {
+    // The .garden-done sentinel always shows as untracked in
+    // `git status --porcelain`, so syncing a done worker would always trip
+    // the dirty check and fire a misleading alert. Done workers don't need
+    // syncing — auto-continue won't fire on them.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        claudeStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        preReviewSha: "pre-review-sha",
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(isDoneSet).mockReturnValue(true);
+
+    poll("myproject");
+
+    expect(syncWorktreeToRemote).not.toHaveBeenCalled();
+    expect(addAlert).not.toHaveBeenCalled();
+    const doneCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "done",
+    );
+    expect(doneCall).toBeDefined();
+    expect((doneCall![2] as Record<string, unknown>).pendingContinueSyncFailed).toBeUndefined();
+  });
+
+  it("syncs worktree before deleting the remote branch (refs are shared)", () => {
+    // Worktrees share refs with the main repo, so deleteRemoteBranch wipes
+    // origin/<branch> from the worktree's ref store too. Sync MUST run first
+    // or `git fetch origin <branch>` and `git reset --hard origin/<branch>`
+    // both fail, leaving every clean merge with syncFailed=true.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        claudeStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        preReviewSha: "pre-review-sha",
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(syncWorktreeToRemote).mockReturnValue({ ok: true });
+
+    poll("myproject");
+
+    const syncOrder = vi.mocked(syncWorktreeToRemote).mock.invocationCallOrder[0];
+    const deleteOrder = vi.mocked(deleteRemoteBranch).mock.invocationCallOrder[0];
+    expect(syncOrder).toBeDefined();
+    expect(deleteOrder).toBeDefined();
+    expect(syncOrder).toBeLessThan(deleteOrder);
+  });
+
   it("runs postMerge and logs checkout HEAD when fastForwardBase advances", () => {
     registryMock._setEntries("myproject", [
       makeWorker({

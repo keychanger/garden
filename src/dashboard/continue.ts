@@ -48,7 +48,7 @@ const MAX_LISTED_FILES = 20;
 function buildMergeContinuePrompt(
   changedFiles: string[] | undefined,
   syncFailed: boolean | undefined,
-  branchName: string | undefined,
+  baseBranch: string | undefined,
 ): string {
   const parts: string[] = [];
   if (changedFiles && changedFiles.length > 0) {
@@ -62,12 +62,15 @@ function buildMergeContinuePrompt(
     );
   }
   if (syncFailed) {
-    const branchHint = branchName ? `origin/${branchName}` : "origin/<your-branch>";
+    // Branch ref on origin is gone (deleted post-merge), so target the base
+    // branch — its tip equals the merged commit.
+    const base = baseBranch ?? "<base-branch>";
     parts.push(
       "[garden] I could not auto-sync your worktree to the merged tip "
-      + "(uncommitted changes or git error). Run "
-      + `\`git fetch && git reset --hard ${branchHint}\` after committing or `
-      + "stashing local changes before resuming work.",
+      + "(uncommitted changes or git error). Your worker branch was already "
+      + "deleted from origin after merge, so commit or stash any local edits "
+      + `and run \`git fetch origin ${base} && git reset --hard origin/${base}\` `
+      + "before resuming work.",
     );
   }
   parts.push(MERGE_CONTINUE_BASE);
@@ -158,7 +161,7 @@ export function continueWorkerAfterMerge(projectName: string, workerName: string
   const message = buildMergeContinuePrompt(
     entry?.pendingContinueChangedFiles,
     entry?.pendingContinueSyncFailed,
-    entry?.branchName,
+    entry?.baseBranch,
   );
   continueWorker(projectName, workerName, message);
   if (entry?.pendingContinueChangedFiles || entry?.pendingContinueSyncFailed) {
