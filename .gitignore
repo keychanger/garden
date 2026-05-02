@@ -4,3 +4,4 @@ dist/
 .garden-hooks/
 .claude/
 config.yml
+.garden-done
