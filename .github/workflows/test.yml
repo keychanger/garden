@@ -16,7 +16,7 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run lint
-      - run: npm test
+      - run: npm run test:coverage
       - name: Configure git for integration tests
         run: |
           git config --global user.email ci@garden.test
