@@ -910,7 +910,7 @@ describe("poll — merge-pending state", () => {
     );
   });
 
-  it("dispatches auto-continue when worker is idle and no .done sentinel", () => {
+  it("dispatches auto-continue when worker is idle and no .garden-done sentinel", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
@@ -933,7 +933,7 @@ describe("poll — merge-pending state", () => {
     );
   });
 
-  it("skips auto-continue when the .done sentinel is set", () => {
+  it("skips auto-continue when the .garden-done sentinel is set", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
@@ -1021,7 +1021,7 @@ describe("poll — merge-pending state", () => {
     expect(mergedCall).toBeDefined();
     // No follow-up "working" clear — that path is the race-handler test.
     expect(workingCall).toBeUndefined();
-    // Auto-continue fires on idle worker with no .done sentinel.
+    // Auto-continue fires on idle worker with no .garden-done sentinel.
     expect(autoContinueCall).toBeDefined();
   });
 

@@ -221,7 +221,7 @@ describe("dispatchDelayedAutoContinue", () => {
 });
 
 describe("continueWorkerAfterMerge", () => {
-  it("sends the merge-flavored prompt referencing the .done sentinel", () => {
+  it("sends the merge-flavored prompt referencing the .garden-done sentinel", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
     });
