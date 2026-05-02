@@ -225,7 +225,7 @@ Current specs in this project:
 ## Rules system
 
 Claude sessions get a system prompt built from:
-1. Global rules (`~/.garden/rules.md`)
+1. Global rules (`<garden-repo>/rules.md`) — version-controlled in the garden repo itself, resolved at runtime relative to `dist/cli.js` / `src/rules.ts`. Override with `GARDEN_RULES_PATH` (used by tests).
 2. Project rules (`<project>/.garden/rules.md`)
 
 Rules are plain markdown. They control commit behavior, testing requirements, PR workflow, and scope discipline.

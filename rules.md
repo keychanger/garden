@@ -11,6 +11,20 @@ in `<project>/.garden/rules.md` can extend or override these.
 - Follow established patterns in the codebase. Match the style of surrounding code.
 - When in doubt, do less.
 
+## Planning
+
+- When asked to plan, produce a phased plan: each phase is independently
+  reviewable, mergeable, and leaves the codebase in a working state. Prefer
+  3–6 small phases over one large undivided plan.
+- Each phase should have a clear deliverable and a clear stopping point.
+  Phases build on each other: later phases assume earlier ones merged.
+- Use judgment on phase count. A trivial change is one phase — do not
+  decompose for its own sake. Err toward more phases when scope is unclear,
+  when the change touches multiple subsystems, or when early phases de-risk
+  later ones.
+- State the phases up front so the operator can redirect before
+  implementation starts.
+
 ## Specifications and documentation
 
 - Specs scale with scope. A milestone gets a design doc. A feature that touches multiple
@@ -104,3 +118,10 @@ in `<project>/.garden/rules.md` can extend or override these.
   surrounding code, or "improve" things you were not asked to change.
 - Tests, documentation, and type-checking for code you changed are always in scope.
   Passing `tsc --noEmit` and the full test suite is part of completing the task.
+
+## Stale Test After Refactor
+
+Observed in 3 reviewer findings across 3 workers:
+- non-conflict rebase error test did not verify the new failing state transition added by the diff.
+- test_nlv_based_sizing and test_compounding_across_legs docstrings described the old NLV-based/cross-leg sizing model, not the new per-leg cash model.
+- alerts.test.ts warn-routing test used a 'Worker is asking for input' message that no code path ever produces anymore; retargeted to a rule-suggestion alert.

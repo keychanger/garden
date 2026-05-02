@@ -1,7 +1,16 @@
 // Loads and assembles global and project-level rules for Claude sessions.
 import fs from "node:fs";
 import path from "node:path";
-import { GARDEN_DIR } from "./config.js";
+import { fileURLToPath } from "node:url";
+
+// Global rules live in the garden repo itself (one source of truth, version-
+// controlled). Resolves to <repo>/rules.md whether running from dist/cli.js
+// (bundled) or src/rules.ts (tsx dev). GARDEN_RULES_PATH overrides for tests.
+export function globalRulesPath(): string {
+  if (process.env.GARDEN_RULES_PATH) return process.env.GARDEN_RULES_PATH;
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.join(here, "..", "rules.md");
+}
 
 function loadRulesFile(filePath: string): string {
   if (fs.existsSync(filePath)) {
@@ -19,7 +28,7 @@ export function buildRulesContext(projectName: string, projectPath: string): str
 
   sections.push(`You are working in a garden-managed project called "${projectName}".`);
 
-  const globalRules = loadRulesFile(path.join(GARDEN_DIR, "rules.md"));
+  const globalRules = loadRulesFile(globalRulesPath());
   if (globalRules) {
     sections.push(`## Global rules\n\n${globalRules}`);
   }

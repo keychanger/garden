@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("node:fs", () => ({
   default: {
@@ -86,6 +86,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   rlAnswers.length = 0;
   Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+  process.env.GARDEN_RULES_PATH = "/tmp/garden/rules.md";
+});
+
+afterEach(() => {
+  delete process.env.GARDEN_RULES_PATH;
 });
 
 // --- parseAcceptFlags ---

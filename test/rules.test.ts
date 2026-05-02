@@ -1,9 +1,18 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { useTmpHome } from "./helpers.js";
 
 const env = useTmpHome();
+
+let globalRulesFile: string;
+beforeEach(() => {
+  globalRulesFile = path.join(env.gardenDir, "rules.md");
+  process.env.GARDEN_RULES_PATH = globalRulesFile;
+});
+afterEach(() => {
+  delete process.env.GARDEN_RULES_PATH;
+});
 
 async function importRules() {
   return await import("../src/rules.js");

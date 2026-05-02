@@ -4,11 +4,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
-import { GARDEN_DIR, getProject, tryGetProject } from "../config.js";
+import { getProject, tryGetProject } from "../config.js";
 import {
   pendingSuggestions, getSuggestion, markSuggestion, listFindings,
   type SuggestionSummary, type Finding,
 } from "../dashboard/findings.js";
+import { globalRulesPath } from "../rules.js";
 import { isTTY, outputLines } from "../output.js";
 
 export async function rules(args: string[]): Promise<void> {
@@ -192,7 +193,7 @@ interface AcceptTarget {
 
 function resolveTarget(summary: SuggestionSummary, flags: AcceptFlags): AcceptTarget {
   if (flags.global) {
-    return { filePath: path.join(GARDEN_DIR, "rules.md"), label: "global rules" };
+    return { filePath: globalRulesPath(), label: "global rules" };
   }
   if (flags.project) {
     const proj = getProject(flags.project);
@@ -213,7 +214,7 @@ function resolveTarget(summary: SuggestionSummary, flags: AcceptFlags): AcceptTa
     }
   }
   return {
-    filePath: path.join(GARDEN_DIR, "rules.md"),
+    filePath: globalRulesPath(),
     label: `global rules — inferred (${summary.projects.length} projects affected)`,
   };
 }

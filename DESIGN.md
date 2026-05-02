@@ -18,7 +18,7 @@ Interactive Claude Code sessions running inside the dashboard. Each project can 
 ### Rules System
 Claude sessions are configured with layered rules files injected via `--append-system-prompt-file`:
 
-1. **Global rules** (`~/.garden/rules.md`) — methodology, testing, git workflow
+1. **Global rules** (`<garden-repo>/rules.md`) — methodology, testing, git workflow. Lives in the garden repo itself (version-controlled). Resolved at runtime relative to `dist/cli.js` (or `src/rules.ts` in dev). Override via `GARDEN_RULES_PATH` env var.
 2. **Project rules** (`<project>/.garden/rules.md`) — project-specific conventions
 
 Rules are plain markdown. Edit them directly.
@@ -355,7 +355,6 @@ All read commands detect whether stdout is a TTY:
 ```
 ~/.garden/
   config.yml              # Project registry
-  rules.md                # Global rules
   sessions/
     dashboard.state.json  # Dashboard pane state
     dashboard.registry.json  # Worker registry (persists across restarts)
@@ -379,6 +378,9 @@ All read commands detect whether stdout is a TTY:
 <project-root>/
   .garden/
     rules.md              # Project-specific rules (optional)
+
+<garden-repo>/
+  rules.md                # Global rules (version-controlled)
 ```
 
 ## Technology
