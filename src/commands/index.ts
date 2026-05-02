@@ -19,6 +19,8 @@ import { reorder } from "./reorder.js";
 import { plot } from "./plot.js";
 import { kick } from "./kick.js";
 import { bounce } from "./bounce.js";
+import { pause } from "./pause.js";
+import { resume } from "./resume.js";
 import { rules } from "./rules.js";
 import { claudeProfile } from "./claude-profile.js";
 import { login } from "./login.js";
@@ -50,6 +52,8 @@ export const commands: Record<string, Command> = {
   logs,
   kick,
   bounce,
+  pause,
+  resume,
   rules,
   "claude-profile": claudeProfile,
   login,

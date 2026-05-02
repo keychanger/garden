@@ -112,6 +112,8 @@ Dashboard:
   health                         Check dashboard state consistency
   kick <worker>                  Re-arm a stranded 'working' worker for review
   bounce <worker>                Restart a worker's Claude process (preserves session history)
+  pause <worker>                 Suppress post-merge auto-continue (writes the .done sentinel)
+  resume <worker>                Re-arm post-merge auto-continue (clears the .done sentinel)
   reset                          Clear the worker registry
   rebuild                        Rebuild garden and relaunch dashboard
 

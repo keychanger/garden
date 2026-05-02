@@ -4,6 +4,17 @@ vi.mock("node:child_process", () => ({
   spawn: vi.fn(() => ({ unref: vi.fn() })),
 }));
 
+vi.mock("node:fs", () => ({
+  default: {
+    existsSync: vi.fn(() => false),
+    unlinkSync: vi.fn(),
+  },
+}));
+
+vi.mock("../src/config.js", () => ({
+  SESSIONS_DIR: "/tmp/fake-sessions",
+}));
+
 vi.mock("../src/session.js", () => ({
   DASHBOARD_SESSION: "garden-dashboard",
 }));
@@ -33,11 +44,16 @@ vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { continueWorker, dispatchDelayedContinue } from "../src/dashboard/continue.js";
+import {
+  continueWorker, continueWorkerAfterMerge,
+  dispatchDelayedContinue, dispatchDelayedAutoContinue,
+  donePath, isDoneSet, clearDoneSentinel,
+} from "../src/dashboard/continue.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { findWorkerByName, updateWorkerFields } from "../src/dashboard/registry.js";
 import { tmux, paneExists, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import type { DashboardState } from "../src/dashboard/state.js";
 
 function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
@@ -186,5 +202,81 @@ describe("dispatchDelayedContinue", () => {
   it("swallows spawn errors so a failed dispatch never crashes the caller", () => {
     vi.mocked(spawn).mockImplementation(() => { throw new Error("EAGAIN"); });
     expect(() => dispatchDelayedContinue("garden", "p", "w")).not.toThrow();
+  });
+});
+
+describe("dispatchDelayedAutoContinue", () => {
+  it("spawns a detached sh -c that invokes _continue-worker-after-merge with a longer delay", () => {
+    dispatchDelayedAutoContinue("/usr/local/bin/garden", "myproject", "bold-ash");
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    const [, args] = vi.mocked(spawn).mock.calls[0];
+    const cmd = (args as string[])[1];
+    expect(cmd).toMatch(/^sleep 5 && /);
+    expect(cmd).toContain("/usr/local/bin/garden dashboard _continue-worker-after-merge");
+    expect(cmd).toContain("'myproject'");
+    expect(cmd).toContain("'bold-ash'");
+  });
+
+  it("swallows spawn errors", () => {
+    vi.mocked(spawn).mockImplementation(() => { throw new Error("EAGAIN"); });
+    expect(() => dispatchDelayedAutoContinue("garden", "p", "w")).not.toThrow();
+  });
+});
+
+describe("continueWorkerAfterMerge", () => {
+  it("sends the merge-flavored prompt referencing the .done sentinel", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+
+    continueWorkerAfterMerge("myproject", "bold-ash");
+
+    const sendKeysCall = vi.mocked(tmux).mock.calls[0];
+    expect(sendKeysCall[0]).toBe("send-keys");
+    expect(sendKeysCall[3]).toBe("-l");
+    const message = sendKeysCall[4] as string;
+    expect(message).toContain("[garden]");
+    expect(message).toContain("merged");
+    expect(message).toContain(".done");
+  });
+
+  it("skips when the worker is already working", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "working",
+    });
+    continueWorkerAfterMerge("myproject", "bold-ash");
+    expect(tmux).not.toHaveBeenCalled();
+  });
+});
+
+describe("done-sentinel helpers", () => {
+  it("donePath joins SESSIONS_DIR with project-worker.done", () => {
+    expect(donePath("myproject", "bold-ash")).toBe(
+      "/tmp/fake-sessions/myproject-bold-ash.done",
+    );
+  });
+
+  it("isDoneSet reflects fs.existsSync at the donePath", () => {
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true);
+    expect(isDoneSet("myproject", "bold-ash")).toBe(true);
+    vi.mocked(fs.existsSync).mockReturnValueOnce(false);
+    expect(isDoneSet("myproject", "bold-ash")).toBe(false);
+  });
+
+  it("clearDoneSentinel unlinks the donePath and tolerates ENOENT", () => {
+    clearDoneSentinel("myproject", "bold-ash");
+    expect(fs.unlinkSync).toHaveBeenCalledWith(
+      "/tmp/fake-sessions/myproject-bold-ash.done",
+    );
+
+    vi.mocked(fs.unlinkSync).mockImplementationOnce(() => {
+      throw new Error("ENOENT");
+    });
+    expect(() => clearDoneSentinel("myproject", "bold-ash")).not.toThrow();
   });
 });

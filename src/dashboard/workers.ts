@@ -24,7 +24,7 @@ import {
 } from "./create.js";
 import { worktreePath, resolveBaseBranch, branchExistsOnOrigin } from "./git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
-import { dispatchDelayedContinue } from "./continue.js";
+import { dispatchDelayedContinue, clearDoneSentinel } from "./continue.js";
 import { workerWindowName as workerWin, parkingWindowName, shellWindowName as shellWin, parseWorkerSuffix } from "./window-names.js";
 
 export function newWorker(): void {
@@ -183,6 +183,7 @@ export function killPane(): void {
         const entry = findWorkerByName(state.activeProject, killedWorkerName);
 
         killReviewWindow(state.activeProject, killedWorkerName);
+        clearDoneSentinel(state.activeProject, killedWorkerName);
         removeWorker(state.activeProject, killedWorkerName);
         log.info("workers", "killed", {
           worker: killedWorkerName,

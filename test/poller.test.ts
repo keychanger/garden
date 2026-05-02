@@ -132,6 +132,16 @@ vi.mock("../src/rules.js", () => ({
   buildRulesContext: vi.fn(() => "test rules"),
 }));
 
+vi.mock("../src/dashboard/continue.js", () => ({
+  dispatchDelayedAutoContinue: vi.fn(),
+  dispatchDelayedContinue: vi.fn(),
+  continueWorker: vi.fn(),
+  continueWorkerAfterMerge: vi.fn(),
+  isDoneSet: vi.fn(() => false),
+  donePath: vi.fn((p: string, w: string) => `/tmp/fake-sessions/${p}-${w}.done`),
+  clearDoneSentinel: vi.fn(),
+}));
+
 import fs from "node:fs";
 import { poll, postPush, restartLongLivedPollers } from "../src/dashboard/poller.js";
 import { tryGetProject } from "../src/config.js";
@@ -146,6 +156,7 @@ import {
 import { tmux, windowExists, getFirstPaneId, killWindowSafe } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { log } from "../src/dashboard/log.js";
+import { dispatchDelayedAutoContinue, isDoneSet } from "../src/dashboard/continue.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 const registryMock = await import("../src/dashboard/registry.js") as {
@@ -899,7 +910,94 @@ describe("poll — merge-pending state", () => {
     );
   });
 
-  it("keeps merged when worker is idle (no race)", () => {
+  it("dispatches auto-continue when worker is idle and no .done sentinel", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        claudeStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(isDoneSet).mockReturnValue(false);
+
+    poll("myproject");
+
+    expect(dispatchDelayedAutoContinue).toHaveBeenCalledWith(
+      expect.any(String), "myproject", "bold-ash",
+    );
+    expect(log.info).toHaveBeenCalledWith(
+      "poller", "auto-continued worker after merge",
+      expect.objectContaining({ worker: "bold-ash" }),
+    );
+  });
+
+  it("skips auto-continue when the .done sentinel is set", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        claudeStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(isDoneSet).mockReturnValue(true);
+
+    poll("myproject");
+
+    expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalledWith(
+      "poller", "auto-continue skipped",
+      expect.objectContaining({
+        worker: "bold-ash",
+        data: expect.objectContaining({ reason: "done-sentinel" }),
+      }),
+    );
+  });
+
+  it("skips auto-continue when claudeStatus is working (race)", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        claudeStatus: "working",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue(true);
+
+    poll("myproject");
+
+    expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
+  });
+
+  it("skips auto-continue inside the idempotency window", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        claudeStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        lastAutoContinueAt: Date.now() - 1000, // 1s ago, well inside the 10s window
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(isDoneSet).mockReturnValue(false);
+
+    poll("myproject");
+
+    expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalledWith(
+      "poller", "auto-continue skipped",
+      expect.objectContaining({
+        data: expect.objectContaining({ reason: "idempotency-window" }),
+      }),
+    );
+  });
+
+  it("keeps merged when worker is idle (no race) and dispatches auto-continue", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
@@ -915,9 +1013,16 @@ describe("poll — merge-pending state", () => {
     const calls = vi.mocked(updateWorkerFields).mock.calls.filter(
       c => c[1] === "bold-ash",
     );
-    // Only the "merged" transition — no follow-up "working" clear.
-    expect(calls).toHaveLength(1);
-    expect((calls[0][2] as Record<string, unknown>).prState).toBe("merged");
+    const mergedCall = calls.find(c => (c[2] as Record<string, unknown>).prState === "merged");
+    const workingCall = calls.find(c => (c[2] as Record<string, unknown>).prState === "working");
+    const autoContinueCall = calls.find(
+      c => (c[2] as Record<string, unknown>).lastAutoContinueAt !== undefined,
+    );
+    expect(mergedCall).toBeDefined();
+    // No follow-up "working" clear — that path is the race-handler test.
+    expect(workingCall).toBeUndefined();
+    // Auto-continue fires on idle worker with no .done sentinel.
+    expect(autoContinueCall).toBeDefined();
   });
 
   it("runs postMerge and logs checkout HEAD when fastForwardBase advances", () => {

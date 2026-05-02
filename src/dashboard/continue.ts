@@ -1,17 +1,26 @@
-// Auto-continue for workers that were mid-turn when their pane died.
+// Auto-continue prompts for workers.
 //
-// When the dashboard is killed (or a worker is bounced) while claudeStatus is
-// "working", the worker has no way to resume on its own — `claude --resume`
-// brings the conversation history back but parks at an empty prompt. The
-// pane-died hook records `interruptedWhileWorking` on the registry entry; on
-// resume, ensureDashboard fires a delayed subprocess that calls back into
-// `dashboard _continue-worker`, which sends a short prompt nudging the worker
-// to pick up where it left off.
+// Two flavors:
 //
-// Living in its own file (rather than workers.ts) so create.ts can dispatch
-// the delayed continue without forming a workers↔create circular import.
+// 1) Interrupt recovery — when the dashboard is killed (or a worker is
+//    bounced) while claudeStatus is "working", the worker has no way to
+//    resume on its own. The pane-died hook records `interruptedWhileWorking`
+//    on the registry entry; on resume, ensureDashboard fires a delayed
+//    subprocess that sends a "continue from where you left off" prompt.
+//
+// 2) Post-merge auto-continue — when the poller successfully merges a
+//    worker's branch into its base, finalizeMerge dispatches a continue
+//    prompt so the worker keeps building on the merged base without manual
+//    intervention. The worker opts out by writing the .done sentinel file
+//    (see `donePath` below).
+//
+// Living in its own file (rather than workers.ts) so create.ts and poller.ts
+// can dispatch the delayed continue without forming circular imports.
 
 import { spawn } from "node:child_process";
+import path from "node:path";
+import fs from "node:fs";
+import { SESSIONS_DIR } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { readDashState } from "./state.js";
 import { findWorkerByName, updateWorkerFields } from "./registry.js";
@@ -27,6 +36,28 @@ const CONTINUE_PROMPT =
   "[garden] You were interrupted by a restart. Continue from where you left "
   + "off, or say so if your task was already finished.";
 
+const MERGE_CONTINUE_PROMPT =
+  "[garden] Your previous changes were reviewed and merged. Continue with the "
+  + "next phase of the work. If you have finished everything the operator "
+  + "asked for, write the sentinel file at "
+  + "~/.garden/sessions/$GARDEN_PROJECT-$GARDEN_WORKER.done before ending your "
+  + "turn so future merges do not auto-continue.";
+
+// Sentinel file: when present, the post-merge auto-continue is suppressed for
+// this worker. Worker writes it on completion; `garden pause` writes it on
+// demand; `garden resume` and killPane unlink it.
+export function donePath(projectName: string, workerName: string): string {
+  return path.join(SESSIONS_DIR, `${projectName}-${workerName}.done`);
+}
+
+export function isDoneSet(projectName: string, workerName: string): boolean {
+  return fs.existsSync(donePath(projectName, workerName));
+}
+
+export function clearDoneSentinel(projectName: string, workerName: string): void {
+  try { fs.unlinkSync(donePath(projectName, workerName)); } catch { /* not present */ }
+}
+
 function resolveWorkerPaneId(project: string, worker: string): string | null {
   const windowName = workerWin(project, worker);
   const state = readDashState();
@@ -40,11 +71,15 @@ function resolveWorkerPaneId(project: string, worker: string): string | null {
   return null;
 }
 
-// Send the continue prompt to a worker pane. Called via the _continue-worker
+// Send a continue prompt to a worker pane. Called via the _continue-worker
 // internal command after a short delay so Claude --resume has time to take
 // over the pane's stdin. Skips if the worker has already started working
 // (operator typed something first) to avoid stomping on a real prompt.
-export function continueWorker(projectName: string, workerName: string): void {
+export function continueWorker(
+  projectName: string,
+  workerName: string,
+  message: string = CONTINUE_PROMPT,
+): void {
   const entry = findWorkerByName(projectName, workerName);
   if (!entry) return;
   const paneId = resolveWorkerPaneId(projectName, workerName);
@@ -64,7 +99,7 @@ export function continueWorker(projectName: string, workerName: string): void {
     return;
   }
   try {
-    tmux("send-keys", "-t", paneId, "-l", CONTINUE_PROMPT);
+    tmux("send-keys", "-t", paneId, "-l", message);
     tmux("send-keys", "-t", paneId, "Enter");
   } catch (err) {
     log.warn("workers", "continue send-keys failed", {
@@ -80,6 +115,13 @@ export function continueWorker(projectName: string, workerName: string): void {
   });
 }
 
+// Send the post-merge continuation prompt. Same machinery as continueWorker
+// but with the merge-flavored message. Kept as a separate exported function
+// so the wiring in dashboard/index.ts is explicit.
+export function continueWorkerAfterMerge(projectName: string, workerName: string): void {
+  continueWorker(projectName, workerName, MERGE_CONTINUE_PROMPT);
+}
+
 // Fire-and-forget detached subprocess that delays a few seconds, then invokes
 // the _continue-worker internal command. The delay lets `claude --resume` take
 // over the pane's stdin before we send keys; without it, keystrokes go to the
@@ -91,6 +133,24 @@ export function dispatchDelayedContinue(
 ): void {
   const cmd =
     `sleep 3 && ${gardenRunner} dashboard _continue-worker `
+    + `${shellEscape(projectName)} ${shellEscape(workerName)} 2>/dev/null`;
+  try {
+    const child = spawn("sh", ["-c", cmd], { detached: true, stdio: "ignore" });
+    child.unref();
+  } catch { /* best effort — operator can re-prompt manually */ }
+}
+
+// Post-merge variant. Slightly longer delay because the merge path force-pushes
+// the worker's branch and runs postMerge before this fires; we want the worker
+// pane to be unambiguously idle (Stop hook returned, no Claude UI redraw in
+// progress) before sending keys.
+export function dispatchDelayedAutoContinue(
+  gardenRunner: string,
+  projectName: string,
+  workerName: string,
+): void {
+  const cmd =
+    `sleep 5 && ${gardenRunner} dashboard _continue-worker-after-merge `
     + `${shellEscape(projectName)} ${shellEscape(workerName)} 2>/dev/null`;
   try {
     const child = spawn("sh", ["-c", cmd], { detached: true, stdio: "ignore" });

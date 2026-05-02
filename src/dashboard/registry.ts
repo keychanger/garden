@@ -78,6 +78,10 @@ export interface WorkerEntry {
   // worker is brought back via `claude --resume`. Cleared by _continue-worker
   // once the prompt is dispatched.
   interruptedWhileWorking?: boolean;
+  // Set by finalizeMerge after dispatching the post-merge auto-continue prompt.
+  // Idempotency guard: if a merge event somehow replays within a short window,
+  // we don't double-fire the continue. See dashboard/continue.ts and STATUS.md.
+  lastAutoContinueAt?: number;
   role?: string;
   parentWorker?: string;
 }

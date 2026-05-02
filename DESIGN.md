@@ -190,6 +190,20 @@ The worker and its worktree are not automatically cleaned up on merge. Cleanup h
 
 Projects don't block each other — each project has its own poller and merge queue.
 
+### Auto-Continue Across the Merge Boundary
+Multi-phase work (build → review → merge → keep building) used to require the operator to type "please proceed" after every merge. Garden eliminates that step: `finalizeMerge` ends with a call to `maybeAutoContinue`, which dispatches a delayed `_continue-worker-after-merge` subprocess that sends a "previous changes were merged, continue with the next phase" prompt to the worker pane.
+
+The worker opts out by writing the sentinel file `~/.garden/sessions/<project>-<worker>.done` before ending its turn. The worktree system prompt instructs every worker to write this file once the operator's full request is complete; if the file is missing on merge, garden assumes there is more to do. False positives are cheap (the worker says "nothing left" and ends the turn); false negatives — the historical state — are exactly what this removes.
+
+Skip conditions (logged at `debug`):
+- The `.done` sentinel exists for this worker.
+- `claudeStatus` is `working` or `asking` — the operator is already typing, same guard the interrupt-recovery path uses.
+- `lastAutoContinueAt` is within the last 10 seconds (idempotency guard against any merge-event replay).
+
+A successful dispatch logs at `info` (`auto-continued worker after merge`) so the operator sees the lifecycle transition in `⌥l` logs alongside the `merged` line. The 5s subprocess delay (longer than the 3s interrupt-recovery delay) lets postMerge and the reviewer's force-push settle before keys land in the pane.
+
+`garden pause <worker>` writes the sentinel; `garden resume <worker>` deletes it. Killing a worker (`opt-x`) also unlinks the sentinel so a future worker that happens to reuse the name doesn't inherit a stale "I'm done" state.
+
 ### Sibling Merge Notification
 When code merges, the poller compares the changed files against every other active worker's branch in the same project. If files overlap and the sibling has a live Claude session, it is notified via `tmux send-keys` with the merged worker's commit summary and overlapping file list so it can review and avoid reverting the merged work. Dead workers are skipped — they will hit rebase conflicts naturally on their next review cycle.
 
@@ -311,6 +325,8 @@ garden rules findings              # Raw reviewer-findings log
 garden logs [options]              # View dashboard logs (pretty-printed)
 garden kick <worker>               # Re-arm a stranded 'working' worker for review
 garden bounce <worker>             # Restart a worker's Claude process (preserves session history)
+garden pause <worker>              # Suppress post-merge auto-continue (writes the .done sentinel)
+garden resume <worker>             # Re-arm post-merge auto-continue (clears the .done sentinel)
 garden rebuild                     # Rebuild garden and relaunch dashboard
 ```
 

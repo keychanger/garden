@@ -34,6 +34,9 @@ import { pollerWindowName, reviewWindowName, workerWindowName } from "./window-n
 import { buildReviewPrompt, buildResolvePrompt } from "./prompts.js";
 import { claudeEnvPrefix } from "./claude-env.js";
 import { stopUsagePoller, startUsagePoller } from "./usage-poller.js";
+import { dispatchDelayedAutoContinue, isDoneSet } from "./continue.js";
+
+const AUTO_CONTINUE_DEBOUNCE_MS = 10_000;
 
 const RESOLVE_BUDGET = 2;
 
@@ -1166,7 +1169,50 @@ function finalizeMerge(
     });
   }
 
+  maybeAutoContinue(projectName, branchName, fresh ?? entry);
+
   refreshDashboard();
+}
+
+// After a clean merge, send the worker a "please proceed" prompt so multi-phase
+// work continues without manual intervention. The worker opts out by writing
+// the .done sentinel (see continue.ts donePath); pause/resume commands toggle
+// the same file. Skips when the worker is already mid-turn or when the same
+// merge event would re-fire within AUTO_CONTINUE_DEBOUNCE_MS.
+function maybeAutoContinue(
+  projectName: string,
+  branchName: string,
+  entry: WorkerEntry,
+): void {
+  const reason = autoContinueSkipReason(projectName, entry);
+  if (reason) {
+    log.debug("poller", "auto-continue skipped", {
+      worker: entry.name,
+      data: { project: projectName, reason },
+    });
+    return;
+  }
+  updateWorkerFields(projectName, entry.name, { lastAutoContinueAt: Date.now() });
+  log.info("poller", "auto-continued worker after merge", {
+    worker: entry.name,
+    data: { project: projectName, branch: branchName },
+  });
+  dispatchDelayedAutoContinue(resolveGardenRunner(), projectName, entry.name);
+}
+
+function autoContinueSkipReason(
+  projectName: string,
+  entry: WorkerEntry,
+): string | null {
+  if (isDoneSet(projectName, entry.name)) return "done-sentinel";
+  if (entry.claudeStatus === "working" || entry.claudeStatus === "asking") {
+    return `claude-${entry.claudeStatus}`;
+  }
+  if (entry.lastAutoContinueAt
+      && Date.now() - entry.lastAutoContinueAt < AUTO_CONTINUE_DEBOUNCE_MS) {
+    return "idempotency-window";
+  }
+  return null;
 }
 
 function runPostMerge(projectName: string, projectPath: string): void {
