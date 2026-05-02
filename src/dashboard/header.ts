@@ -167,11 +167,11 @@ function formatPlotSegment(name: string, isActive: boolean, status: PlotState): 
   }
   const icon = PLOT_ICONS[status];
   if (status === "working") {
-    // Inactive+working renders white-not-bold (vs. gray for idle) so live work
-    // pops on unselected plots without stealing the active plot's bold marker.
+    // Keep active/inactive bold/dim on circle+name; spinner stays bright so
+    // "something's happening" reads at a glance even on unselected plots.
     return isActive
       ? `#[bold]${circle} ${icon} ${name}#[default]`
-      : `${circle} ${icon} ${name}`;
+      : `#[fg=colour244]${circle}#[default] ${icon} #[fg=colour244]${name}#[default]`;
   }
   const color = PLOT_COLORS[status];
   const style = isActive ? `fg=${color},bold` : `fg=${color}`;
