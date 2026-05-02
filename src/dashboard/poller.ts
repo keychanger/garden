@@ -1201,10 +1201,10 @@ function maybeAutoContinue(
 }
 
 function autoContinueSkipReason(
-  projectName: string,
+  _projectName: string,
   entry: WorkerEntry,
 ): string | null {
-  if (isDoneSet(projectName, entry.name)) return "done-sentinel";
+  if (isDoneSet(entry.worktreePath)) return "done-sentinel";
   if (entry.claudeStatus === "working" || entry.claudeStatus === "asking") {
     return `claude-${entry.claudeStatus}`;
   }

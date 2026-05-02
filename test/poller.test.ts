@@ -138,7 +138,7 @@ vi.mock("../src/dashboard/continue.js", () => ({
   continueWorker: vi.fn(),
   continueWorkerAfterMerge: vi.fn(),
   isDoneSet: vi.fn(() => false),
-  donePath: vi.fn((p: string, w: string) => `/tmp/fake-sessions/${p}-${w}.done`),
+  donePath: vi.fn((wt: string) => `${wt}/.garden-done`),
   clearDoneSentinel: vi.fn(),
 }));
 

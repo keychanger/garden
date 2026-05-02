@@ -7,10 +7,12 @@ export async function pause(args: string[]): Promise<void> {
   if (!workerName) throw new Error("Usage: garden pause <worker>");
 
   const registry = readRegistry();
-  const matches: Array<{ project: string }> = [];
+  const matches: Array<{ project: string; worktreePath?: string }> = [];
   for (const [project, entries] of Object.entries(registry.workers)) {
     for (const entry of entries) {
-      if (entry.name === workerName) matches.push({ project });
+      if (entry.name === workerName) {
+        matches.push({ project, worktreePath: entry.worktreePath });
+      }
     }
   }
 
@@ -22,8 +24,15 @@ export async function pause(args: string[]): Promise<void> {
     throw new Error(`Multiple workers match '${workerName}':\n${list}\nKill or rename one first.`);
   }
 
-  const { project } = matches[0];
-  const target = donePath(project, workerName);
+  const { project, worktreePath } = matches[0];
+  if (!worktreePath) {
+    throw new Error(
+      `Worker ${project}/${workerName} has no worktreePath in the registry — `
+      + `cannot pause. (Legacy workers from before the worktree workflow do not `
+      + `support pause/resume; kill and recreate.)`,
+    );
+  }
+  const target = donePath(worktreePath);
   fs.writeFileSync(target, "");
   console.log(`Paused ${project}/${workerName} — auto-continue suppressed (sentinel: ${target}).`);
 }

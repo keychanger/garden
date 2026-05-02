@@ -38,29 +38,37 @@ const CONTINUE_PROMPT =
 const MERGE_CONTINUE_PROMPT =
   "[garden] Your previous changes were reviewed and merged. Continue with the "
   + "next phase of the work. If you have finished everything the operator "
-  + "asked for, write the sentinel file at "
-  + "/tmp/garden-$GARDEN_PROJECT-$GARDEN_WORKER.done before ending your turn "
-  + "so future merges do not auto-continue.";
+  + "asked for, write a sentinel file `.garden-done` at the root of your "
+  + "worktree (just `touch .garden-done` from your CWD) before ending your "
+  + "turn so future merges do not auto-continue. Do not commit this file — "
+  + "leave it untracked.";
 
 // Sentinel file: when present, the post-merge auto-continue is suppressed for
 // this worker. Worker writes it on completion; `garden pause` writes it on
-// demand; `garden resume` and killPane unlink it. Lives in /tmp because that
-// is the only path outside the worktree that the worker sandbox allows
-// writes to (see src/dashboard/sandbox.ts DEFAULT_ALLOW_WRITE) — putting it
-// in ~/.garden/sessions would either require broadening the worker's write
-// scope to the registry/alerts/review-result files (security regression) or
-// an out-of-sandbox shim. /tmp is namespaced via the filename and dies with
-// the machine, which matches the worker lifecycle.
-export function donePath(projectName: string, workerName: string): string {
-  return path.join("/tmp", `garden-${projectName}-${workerName}.done`);
+// demand; `garden resume` deletes it. Lives at the root of the worker's
+// worktree because that is the intersection of "writable by both Claude
+// Code's harness sandbox and the OS-level Seatbelt sandbox" and "knowable
+// to the poller from the registry entry." /tmp falls out: the harness
+// sandbox blocks raw /tmp writes (only $TMPDIR works) and $TMPDIR is
+// per-Claude-session, so the poller can't reconstruct it. ~/.garden/sessions
+// falls out: would require broadening the worker's write scope to the
+// registry and other workers' review-result files. The worktree is the
+// only path that satisfies both constraints.
+//
+// killPane removes the worktree (`git worktree remove --force`), so the
+// sentinel dies with the worker — no explicit cleanup needed there.
+export function donePath(worktreePath: string): string {
+  return path.join(worktreePath, ".garden-done");
 }
 
-export function isDoneSet(projectName: string, workerName: string): boolean {
-  return fs.existsSync(donePath(projectName, workerName));
+export function isDoneSet(worktreePath: string | undefined): boolean {
+  if (!worktreePath) return false;
+  return fs.existsSync(donePath(worktreePath));
 }
 
-export function clearDoneSentinel(projectName: string, workerName: string): void {
-  try { fs.unlinkSync(donePath(projectName, workerName)); } catch { /* not present */ }
+export function clearDoneSentinel(worktreePath: string | undefined): void {
+  if (!worktreePath) return;
+  try { fs.unlinkSync(donePath(worktreePath)); } catch { /* not present */ }
 }
 
 function resolveWorkerPaneId(project: string, worker: string): string | null {

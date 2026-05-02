@@ -238,7 +238,7 @@ describe("continueWorkerAfterMerge", () => {
     const message = sendKeysCall[4] as string;
     expect(message).toContain("[garden]");
     expect(message).toContain("merged");
-    expect(message).toContain(".done");
+    expect(message).toContain(".garden-done");
   });
 
   it("skips when the worker is already working", () => {
@@ -251,28 +251,36 @@ describe("continueWorkerAfterMerge", () => {
 });
 
 describe("done-sentinel helpers", () => {
-  it("donePath builds /tmp/garden-<project>-<worker>.done (the only sandbox-writable path outside the worktree)", () => {
-    expect(donePath("myproject", "bold-ash")).toBe(
-      "/tmp/garden-myproject-bold-ash.done",
-    );
+  const wt = "/Users/x/.garden/worktrees/myproject/bold-ash";
+
+  it("donePath joins the worktree root with .garden-done", () => {
+    expect(donePath(wt)).toBe(`${wt}/.garden-done`);
   });
 
   it("isDoneSet reflects fs.existsSync at the donePath", () => {
     vi.mocked(fs.existsSync).mockReturnValueOnce(true);
-    expect(isDoneSet("myproject", "bold-ash")).toBe(true);
+    expect(isDoneSet(wt)).toBe(true);
     vi.mocked(fs.existsSync).mockReturnValueOnce(false);
-    expect(isDoneSet("myproject", "bold-ash")).toBe(false);
+    expect(isDoneSet(wt)).toBe(false);
+  });
+
+  it("isDoneSet returns false for legacy entries with no worktreePath", () => {
+    expect(isDoneSet(undefined)).toBe(false);
+    expect(fs.existsSync).not.toHaveBeenCalled();
   });
 
   it("clearDoneSentinel unlinks the donePath and tolerates ENOENT", () => {
-    clearDoneSentinel("myproject", "bold-ash");
-    expect(fs.unlinkSync).toHaveBeenCalledWith(
-      "/tmp/garden-myproject-bold-ash.done",
-    );
+    clearDoneSentinel(wt);
+    expect(fs.unlinkSync).toHaveBeenCalledWith(`${wt}/.garden-done`);
 
     vi.mocked(fs.unlinkSync).mockImplementationOnce(() => {
       throw new Error("ENOENT");
     });
-    expect(() => clearDoneSentinel("myproject", "bold-ash")).not.toThrow();
+    expect(() => clearDoneSentinel(wt)).not.toThrow();
+  });
+
+  it("clearDoneSentinel is a no-op for legacy entries with no worktreePath", () => {
+    clearDoneSentinel(undefined);
+    expect(fs.unlinkSync).not.toHaveBeenCalled();
   });
 });
