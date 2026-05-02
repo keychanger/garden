@@ -196,7 +196,12 @@ function collectWorkers(
   cachedRegistry?: WorkerRegistry,
 ): WorkerInfo[] {
   const workers: WorkerInfo[] = [];
-  const registryEntries = cachedRegistry?.workers[projectName] ?? getWorkers(projectName);
+  // When a cache is provided, missing project key means "no workers" — don't
+  // fall back to getWorkers(): that re-reads the registry and defeats the
+  // cache for every plot project without a worker entry.
+  const registryEntries = cachedRegistry
+    ? (cachedRegistry.workers[projectName] ?? [])
+    : getWorkers(projectName);
   const registryByName = new Map(registryEntries.map(e => [e.name, e]));
 
   if (state.activeProject === projectName && state.activePaneType === "worker") {

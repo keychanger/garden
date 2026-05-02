@@ -478,6 +478,61 @@ describe("handleClaudeHook — core events", () => {
   });
 });
 
+// pretooluse/posttooluse fire on every Claude tool call and dominate hook
+// traffic. When they don't flip claudeStatus or prState, refreshDashboard
+// must NOT cascade — the perf optimization in this commit. Detection: every
+// refreshDashboard ends with tmux refresh-client -S via setBarVars; counting
+// those calls is the cleanest signal that the cascade ran (or didn't).
+describe("handleClaudeHook — refresh skip on no-op transitions", () => {
+  it("pretooluse on a non-working/non-idle worker skips the dashboard refresh", () => {
+    seedWorker("garden", "bold-ash", { claudeStatus: "ready" });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("pretooluse");
+
+    const refreshCalls = vi.mocked(tmux).mock.calls.filter(
+      c => c[0] === "refresh-client" && c[1] === "-S",
+    );
+    expect(refreshCalls).toHaveLength(0);
+  });
+
+  it("posttooluse on a working worker skips the dashboard refresh (no claudeStatus flip)", () => {
+    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("posttooluse");
+
+    const refreshCalls = vi.mocked(tmux).mock.calls.filter(
+      c => c[0] === "refresh-client" && c[1] === "-S",
+    );
+    expect(refreshCalls).toHaveLength(0);
+  });
+
+  it("pretooluse that flips working → asking DOES refresh the dashboard", () => {
+    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("pretooluse");
+
+    const refreshCalls = vi.mocked(tmux).mock.calls.filter(
+      c => c[0] === "refresh-client" && c[1] === "-S",
+    );
+    expect(refreshCalls.length).toBeGreaterThan(0);
+  });
+
+  it("stop always refreshes (claudeStatus → idle is a state change)", () => {
+    seedWorker("garden", "bold-ash", { claudeStatus: "idle" });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("stop");
+
+    const refreshCalls = vi.mocked(tmux).mock.calls.filter(
+      c => c[0] === "refresh-client" && c[1] === "-S",
+    );
+    expect(refreshCalls.length).toBeGreaterThan(0);
+  });
+});
+
 describe("writeQuickStatus — status pane resize", () => {
   const stateWithPane = {
     activeProject: "garden",
