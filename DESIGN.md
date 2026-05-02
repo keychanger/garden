@@ -209,6 +209,8 @@ A successful dispatch logs at `info` (`auto-continued worker after merge`) so th
 
 `garden pause <worker>` writes the sentinel; `garden resume <worker>` deletes it. Killing a worker (`opt-x`) removes the worktree entirely, so the sentinel goes with it.
 
+A second, *global* opt-out lives alongside the per-worker sentinel: a gate in `~/.garden/config.yml` under `autoContinue` (`enabled`, `usageThreshold`, `resumeAfterReset`). Defaults are enabled, 95% threshold, no auto-resume. The gate is consulted on every `maybeAutoContinue` after the per-worker checks. The threshold check evaluates the `5h` and `weekly` meters from the latest usage snapshot; sonnet is intentionally excluded since the workhorse is Opus. When any included meter is at or above `usageThreshold`, the gate flips `enabled=false`, persists `pausedUntil` (the latest `resetsAt` among tripped meters, so re-enabling does not immediately re-trip on the slower-resetting meter) and `pausedReason`, and fires a warn-level alert (source `usage`). With `resumeAfterReset: true`, the next call past `pausedUntil` flips `enabled` back on automatically; with it off (the default), the operator must run `garden auto on`. Manage with `garden auto [on|off|status|threshold <N>|resume-on-reset on|off]` (alias `auto-continue`).
+
 ### Sibling Merge Notification
 When code merges, the poller compares the changed files against every other active worker's branch in the same project. If files overlap and the sibling has a live Claude session, it is notified via `tmux send-keys` with the merged worker's commit summary and overlapping file list so it can review and avoid reverting the merged work. Dead workers are skipped — they will hit rebase conflicts naturally on their next review cycle.
 
@@ -248,6 +250,7 @@ The dashboard surfaces important events as alerts — persistent messages that r
 - Repeated failures (3+ consecutive failures on the same worker)
 - Rule suggestion ready (a category crossed the findings threshold)
 - Base-branch drift after worker creation (Stop hook cannot count commits against `origin/<pinned-base>`; deduped to one firing per worker per hour)
+- Auto-continue auto-disabled by usage threshold (source: `usage`, level: `warn`)
 
 Worker "needs operator input" events (AskUserQuestion, ExitPlanMode, auto-mode permission prompts) do **not** fire alerts — they flip the worker to `asking` (yellow row in the status pane), which is the visual signal. The alert channel is reserved for failures and errors.
 
@@ -333,6 +336,9 @@ garden kick <worker>               # Re-arm a stranded 'working' worker for revi
 garden bounce <worker>             # Restart a worker's Claude process (preserves session history)
 garden pause <worker>              # Suppress post-merge auto-continue (writes the .garden-done sentinel)
 garden resume <worker>             # Re-arm post-merge auto-continue (clears the .garden-done sentinel)
+garden auto [on|off|status]        # Toggle the global auto-continue gate
+garden auto threshold <N>          # Set the usage-threshold percent (auto-disable above this)
+garden auto resume-on-reset on|off # Re-enable automatically after the usage window resets
 garden rebuild                     # Rebuild garden and relaunch dashboard
 ```
 

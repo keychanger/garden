@@ -1,10 +1,4 @@
-// `garden auto`: manage the post-merge auto-continue gate.
-//
-//   garden auto                       # status
-//   garden auto on                     # enable (clears any paused metadata)
-//   garden auto off                    # disable manually
-//   garden auto threshold <N>          # set usage threshold percent (1-100)
-//   garden auto resume-on-reset on|off # toggle automatic re-enable after window reset
+// `garden auto`: manage the post-merge auto-continue gate (see CLAUDE.md).
 import {
   getAutoContinueConfig,
   setAutoContinueConfig,
