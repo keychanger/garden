@@ -30,6 +30,16 @@ vi.mock("../src/config.js", () => ({
   tryResolveClaudeProfile: vi.fn(() => null),
   loadConfig: vi.fn(() => ({ projects: { myproject: { path: "/repo/myproject" } } })),
   SESSIONS_DIR: "/tmp/fake-sessions",
+  getAutoContinueConfig: vi.fn(() => ({
+    enabled: true, usageThreshold: 95, resumeAfterReset: false,
+  })),
+  setAutoContinueConfig: vi.fn((patch) => ({
+    enabled: true, usageThreshold: 95, resumeAfterReset: false, ...patch,
+  })),
+}));
+
+vi.mock("../src/dashboard/usage.js", () => ({
+  readUsageSnapshot: vi.fn(() => null),
 }));
 
 vi.mock("../src/dashboard/log.js", () => ({

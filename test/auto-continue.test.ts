@@ -1,0 +1,251 @@
+// Tests for the auto-continue config + gate behavior.
+//
+// Config helpers run against a real on-disk ~/.garden/config.yml in a tmp HOME.
+// The gate (checkUsageThreshold / autoContinueGateReason) is tested by stubbing
+// readUsageSnapshot to control the meter inputs and a mocked alert sink.
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+
+let tmpHome: string;
+let originalHome: string | undefined;
+
+beforeEach(() => {
+  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "garden-auto-test-"));
+  originalHome = process.env.HOME;
+  process.env.HOME = tmpHome;
+  vi.resetModules();
+});
+
+afterEach(() => {
+  process.env.HOME = originalHome;
+  fs.rmSync(tmpHome, { recursive: true, force: true });
+  vi.resetModules();
+});
+
+async function importConfig() {
+  return await import("../src/config.js");
+}
+
+async function initEmptyConfig() {
+  const { saveConfig, GARDEN_DIR } = await importConfig();
+  fs.mkdirSync(GARDEN_DIR, { recursive: true });
+  saveConfig({ projects: {} });
+}
+
+describe("getAutoContinueConfig", () => {
+  it("returns defaults when nothing is persisted", async () => {
+    await initEmptyConfig();
+    const { getAutoContinueConfig, AUTO_CONTINUE_DEFAULTS } = await importConfig();
+    expect(getAutoContinueConfig()).toEqual(AUTO_CONTINUE_DEFAULTS);
+  });
+
+  it("merges persisted values over defaults", async () => {
+    await initEmptyConfig();
+    const { setAutoContinueConfig, getAutoContinueConfig } = await importConfig();
+    setAutoContinueConfig({ usageThreshold: 80 });
+    const cfg = getAutoContinueConfig();
+    expect(cfg.usageThreshold).toBe(80);
+    expect(cfg.enabled).toBe(true);
+    expect(cfg.resumeAfterReset).toBe(false);
+  });
+});
+
+describe("setAutoContinueConfig", () => {
+  it("strips paused metadata when set undefined", async () => {
+    await initEmptyConfig();
+    const { setAutoContinueConfig, CONFIG_PATH } = await importConfig();
+    setAutoContinueConfig({
+      enabled: false,
+      pausedUntil: "2026-05-09T00:00:00.000Z",
+      pausedReason: "5h at 96%",
+    });
+    setAutoContinueConfig({ enabled: true, pausedUntil: undefined, pausedReason: undefined });
+    const raw = fs.readFileSync(CONFIG_PATH, "utf8");
+    expect(raw).not.toMatch(/pausedUntil/);
+    expect(raw).not.toMatch(/pausedReason/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Gate tests — mock readUsageSnapshot + alert sink so we can drive scenarios
+// without touching tmux or real http.
+// ---------------------------------------------------------------------------
+
+const addAlertMock = vi.fn();
+
+function mockGateDeps(snap: unknown) {
+  vi.doMock("../src/dashboard/usage.js", () => ({
+    readUsageSnapshot: () => snap,
+  }));
+  vi.doMock("../src/dashboard/alerts.js", () => ({
+    addAlert: addAlertMock,
+  }));
+  vi.doMock("../src/dashboard/log.js", () => ({
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  }));
+}
+
+async function importGate() {
+  return await import("../src/dashboard/poller.js");
+}
+
+describe("checkUsageThreshold", () => {
+  beforeEach(() => addAlertMock.mockReset());
+
+  it("returns null when no meters are present", async () => {
+    mockGateDeps({ fetchedAt: "2026-05-02T00:00:00Z", data: {} });
+    const { checkUsageThreshold } = await importGate();
+    expect(checkUsageThreshold(95)).toBeNull();
+  });
+
+  it("ignores sonnet entirely", async () => {
+    mockGateDeps({
+      fetchedAt: "2026-05-02T00:00:00Z",
+      data: {
+        fiveHour: { pct: 10, resetsAt: "2026-05-02T05:00:00Z" },
+        weekly: { pct: 20, resetsAt: "2026-05-09T00:00:00Z" },
+        sonnet: { pct: 99, resetsAt: "2026-05-09T00:00:00Z" },
+      },
+    });
+    const { checkUsageThreshold } = await importGate();
+    expect(checkUsageThreshold(95)).toBeNull();
+  });
+
+  it("trips when 5h crosses threshold", async () => {
+    mockGateDeps({
+      fetchedAt: "2026-05-02T00:00:00Z",
+      data: {
+        fiveHour: { pct: 96, resetsAt: "2026-05-02T05:00:00Z" },
+        weekly: { pct: 50, resetsAt: "2026-05-09T00:00:00Z" },
+      },
+    });
+    const { checkUsageThreshold } = await importGate();
+    const tripped = checkUsageThreshold(95);
+    expect(tripped).not.toBeNull();
+    expect(tripped!.pausedUntil).toBe("2026-05-02T05:00:00Z");
+    expect(tripped!.reason).toContain("5h");
+    expect(tripped!.reason).not.toContain("week");
+  });
+
+  it("picks the later resetsAt when multiple meters trip", async () => {
+    mockGateDeps({
+      fetchedAt: "2026-05-02T00:00:00Z",
+      data: {
+        fiveHour: { pct: 99, resetsAt: "2026-05-02T05:00:00Z" },
+        weekly: { pct: 96, resetsAt: "2026-05-09T00:00:00Z" },
+      },
+    });
+    const { checkUsageThreshold } = await importGate();
+    const tripped = checkUsageThreshold(95);
+    expect(tripped!.pausedUntil).toBe("2026-05-09T00:00:00Z");
+    expect(tripped!.reason).toContain("5h");
+    expect(tripped!.reason).toContain("week");
+  });
+});
+
+describe("autoContinueGateReason", () => {
+  beforeEach(() => addAlertMock.mockReset());
+
+  it("returns null when enabled and no meter trips", async () => {
+    await initEmptyConfig();
+    mockGateDeps({
+      fetchedAt: "2026-05-02T00:00:00Z",
+      data: {
+        fiveHour: { pct: 10, resetsAt: "2026-05-02T05:00:00Z" },
+        weekly: { pct: 20, resetsAt: "2026-05-09T00:00:00Z" },
+      },
+    });
+    const { autoContinueGateReason } = await importGate();
+    expect(autoContinueGateReason()).toBeNull();
+  });
+
+  it("returns globally-disabled when manually off", async () => {
+    await initEmptyConfig();
+    const { setAutoContinueConfig } = await importConfig();
+    setAutoContinueConfig({ enabled: false });
+    mockGateDeps(null);
+    const { autoContinueGateReason } = await importGate();
+    expect(autoContinueGateReason()).toBe("globally-disabled");
+  });
+
+  it("returns usage-paused when paused with pausedUntil set", async () => {
+    await initEmptyConfig();
+    const { setAutoContinueConfig } = await importConfig();
+    setAutoContinueConfig({
+      enabled: false,
+      pausedUntil: "2099-01-01T00:00:00Z",
+      pausedReason: "5h at 99%",
+    });
+    mockGateDeps(null);
+    const { autoContinueGateReason } = await importGate();
+    expect(autoContinueGateReason()).toBe("usage-paused");
+  });
+
+  it("auto-resumes after pausedUntil when resumeAfterReset is on", async () => {
+    await initEmptyConfig();
+    const { setAutoContinueConfig, getAutoContinueConfig } = await importConfig();
+    setAutoContinueConfig({
+      enabled: false,
+      resumeAfterReset: true,
+      pausedUntil: "2000-01-01T00:00:00Z",
+      pausedReason: "5h at 99%",
+    });
+    mockGateDeps({
+      fetchedAt: "2026-05-02T00:00:00Z",
+      data: { fiveHour: { pct: 10, resetsAt: "2026-05-02T05:00:00Z" } },
+    });
+    const { autoContinueGateReason } = await importGate();
+    expect(autoContinueGateReason()).toBeNull();
+    const cfg = getAutoContinueConfig();
+    expect(cfg.enabled).toBe(true);
+    expect(cfg.pausedUntil).toBeUndefined();
+  });
+
+  it("does NOT auto-resume when resumeAfterReset is off", async () => {
+    await initEmptyConfig();
+    const { setAutoContinueConfig, getAutoContinueConfig } = await importConfig();
+    setAutoContinueConfig({
+      enabled: false,
+      resumeAfterReset: false,
+      pausedUntil: "2000-01-01T00:00:00Z",
+      pausedReason: "5h at 99%",
+    });
+    mockGateDeps(null);
+    const { autoContinueGateReason } = await importGate();
+    expect(autoContinueGateReason()).toBe("usage-paused");
+    expect(getAutoContinueConfig().enabled).toBe(false);
+  });
+
+  it("auto-disables and fires an alert when threshold trips", async () => {
+    await initEmptyConfig();
+    mockGateDeps({
+      fetchedAt: "2026-05-02T00:00:00Z",
+      data: { weekly: { pct: 99, resetsAt: "2099-01-01T00:00:00Z" } },
+    });
+    const { autoContinueGateReason } = await importGate();
+    expect(autoContinueGateReason()).toBe("usage-threshold");
+    expect(addAlertMock).toHaveBeenCalledOnce();
+    expect(addAlertMock.mock.calls[0][0].source).toBe("usage");
+    const { getAutoContinueConfig } = await importConfig();
+    const cfg = getAutoContinueConfig();
+    expect(cfg.enabled).toBe(false);
+    expect(cfg.pausedUntil).toBe("2099-01-01T00:00:00Z");
+  });
+
+  it("does NOT trip on sonnet alone", async () => {
+    await initEmptyConfig();
+    mockGateDeps({
+      fetchedAt: "2026-05-02T00:00:00Z",
+      data: {
+        fiveHour: { pct: 10, resetsAt: "2026-05-02T05:00:00Z" },
+        weekly: { pct: 50, resetsAt: "2026-05-09T00:00:00Z" },
+        sonnet: { pct: 99, resetsAt: "2026-05-09T00:00:00Z" },
+      },
+    });
+    const { autoContinueGateReason } = await importGate();
+    expect(autoContinueGateReason()).toBeNull();
+    expect(addAlertMock).not.toHaveBeenCalled();
+  });
+});

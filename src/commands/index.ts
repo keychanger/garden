@@ -26,6 +26,7 @@ import { claudeProfile } from "./claude-profile.js";
 import { login } from "./login.js";
 import { auth } from "./auth.js";
 import { usage } from "./usage.js";
+import { auto } from "./auto.js";
 import { whoami } from "./whoami.js";
 
 type Command = (args: string[]) => Promise<void>;
@@ -59,5 +60,7 @@ export const commands: Record<string, Command> = {
   login,
   auth,
   usage,
+  auto,
+  "auto-continue": auto,
   whoami,
 };

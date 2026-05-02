@@ -5,7 +5,11 @@ import { execSync, execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tryGetProject, loadConfig, SESSIONS_DIR } from "../config.js";
+import {
+  tryGetProject, loadConfig, SESSIONS_DIR,
+  getAutoContinueConfig, setAutoContinueConfig,
+} from "../config.js";
+import { readUsageSnapshot } from "./usage.js";
 import {
   tmux, getFirstPaneId,
   windowExists, killWindowSafe,
@@ -1210,11 +1214,19 @@ function maybeAutoContinue(
   branchName: string,
   entry: WorkerEntry,
 ): void {
-  const reason = autoContinueSkipReason(entry);
-  if (reason) {
+  const perWorkerReason = autoContinueSkipReason(entry);
+  if (perWorkerReason) {
     log.debug("poller", "auto-continue skipped", {
       worker: entry.name,
-      data: { project: projectName, reason },
+      data: { project: projectName, reason: perWorkerReason },
+    });
+    return;
+  }
+  const gateReason = autoContinueGateReason();
+  if (gateReason) {
+    log.info("poller", "auto-continue blocked by global gate", {
+      worker: entry.name,
+      data: { project: projectName, reason: gateReason },
     });
     return;
   }
@@ -1236,6 +1248,67 @@ function autoContinueSkipReason(entry: WorkerEntry): string | null {
     return "idempotency-window";
   }
   return null;
+}
+
+// Global auto-continue gate. Mutates config when it auto-resumes after a
+// usage-window reset or auto-disables after a threshold cross. Returns null
+// when auto-continue is allowed to proceed; otherwise a short reason tag.
+export function autoContinueGateReason(): string | null {
+  let cfg = getAutoContinueConfig();
+
+  if (!cfg.enabled && cfg.pausedUntil && cfg.resumeAfterReset) {
+    const resetMs = Date.parse(cfg.pausedUntil);
+    if (Number.isFinite(resetMs) && Date.now() >= resetMs) {
+      cfg = setAutoContinueConfig({
+        enabled: true,
+        pausedUntil: undefined,
+        pausedReason: undefined,
+      });
+      log.info("poller", "auto-continue re-enabled after usage window reset", {});
+    }
+  }
+
+  if (!cfg.enabled) {
+    return cfg.pausedUntil ? "usage-paused" : "globally-disabled";
+  }
+
+  const tripped = checkUsageThreshold(cfg.usageThreshold);
+  if (tripped) {
+    setAutoContinueConfig({
+      enabled: false,
+      pausedUntil: tripped.pausedUntil,
+      pausedReason: tripped.reason,
+    });
+    addAlert({
+      level: "warn",
+      source: "usage",
+      project: "garden",
+      message: `Auto-continue disabled: ${tripped.reason}. Run 'garden auto on' to re-enable.`,
+    });
+    log.warn("poller", "auto-continue auto-disabled by usage threshold", {
+      data: { reason: tripped.reason, pausedUntil: tripped.pausedUntil },
+    });
+    return "usage-threshold";
+  }
+
+  return null;
+}
+
+// Sonnet is intentionally excluded — the operator runs Opus, sonnet quota is
+// unused. When multiple meters trip, pause until the latest reset so we don't
+// re-enable into a still-tripped meter.
+export function checkUsageThreshold(threshold: number): { pausedUntil: string; reason: string } | null {
+  const snap = readUsageSnapshot();
+  if (!snap?.data) return null;
+  const candidates: Array<{ label: string; pct: number; resetsAt: string }> = [];
+  if (snap.data.fiveHour) candidates.push({ label: "5h", ...snap.data.fiveHour });
+  if (snap.data.weekly)   candidates.push({ label: "week", ...snap.data.weekly });
+  const tripped = candidates.filter(c => c.pct >= threshold);
+  if (tripped.length === 0) return null;
+  const latest = tripped.reduce((a, b) =>
+    Date.parse(a.resetsAt) > Date.parse(b.resetsAt) ? a : b);
+  const reason = tripped.map(c => `${c.label} at ${Math.round(c.pct)}%`).join(", ");
+  return { pausedUntil: latest.resetsAt, reason };
 }
 
 function runPostMerge(projectName: string, projectPath: string): void {

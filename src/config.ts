@@ -62,11 +62,49 @@ export interface LogsConfig {
   mode?: LogsMode;
 }
 
+// Post-merge auto-continue gate. `enabled` may be flipped automatically by the
+// poller when a usage meter crosses `usageThreshold`; in that case `pausedUntil`
+// records the latest resetsAt of the meters that tripped, and `pausedReason`
+// is a human-readable summary. If `resumeAfterReset` is true the gate auto-flips
+// `enabled` back on once `pausedUntil` is in the past. Sonnet usage is
+// intentionally excluded from the threshold check (Opus is the workhorse).
+export interface AutoContinueConfig {
+  enabled: boolean;
+  usageThreshold: number;
+  resumeAfterReset: boolean;
+  pausedUntil?: string;
+  pausedReason?: string;
+}
+
+export const AUTO_CONTINUE_DEFAULTS: AutoContinueConfig = {
+  enabled: true,
+  usageThreshold: 95,
+  resumeAfterReset: false,
+};
+
 export interface GardenConfig {
   projects: Record<string, ProjectConfig>;
   plots?: Record<string, PlotConfig>;
   claudeProfiles?: Record<string, ClaudeProfile>;
   logs?: LogsConfig;
+  autoContinue?: Partial<AutoContinueConfig>;
+}
+
+export function getAutoContinueConfig(config?: GardenConfig): AutoContinueConfig {
+  const cfg = config ?? loadConfig();
+  return { ...AUTO_CONTINUE_DEFAULTS, ...(cfg.autoContinue ?? {}) };
+}
+
+export function setAutoContinueConfig(patch: Partial<AutoContinueConfig>): AutoContinueConfig {
+  const cfg = loadConfig();
+  const merged: AutoContinueConfig = { ...getAutoContinueConfig(cfg), ...patch };
+  // Strip pause metadata when not paused so the file stays clean.
+  const persisted: Partial<AutoContinueConfig> = { ...merged };
+  if (persisted.pausedUntil === undefined) delete persisted.pausedUntil;
+  if (persisted.pausedReason === undefined) delete persisted.pausedReason;
+  cfg.autoContinue = persisted;
+  saveConfig(cfg);
+  return merged;
 }
 
 export function getLogsMode(config?: GardenConfig): LogsMode {
