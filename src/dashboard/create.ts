@@ -25,7 +25,11 @@ import { startUsagePoller } from "./usage-poller.js";
 import { installPollTriggerHook, worktreeExists as wtExists, getWorkerBaseBranch, getRemoteHost } from "./git.js";
 import { dispatchDelayedContinue } from "./continue.js";
 import { buildSandboxConfig, type SandboxConfig } from "./sandbox.js";
-import { DONE_SKILL_CONTENT, DONE_SKILL_DIRNAME, DONE_SKILL_FILENAME, installClaudeSkills } from "./skills.js";
+import {
+  DONE_SKILL_CONTENT, DONE_SKILL_DIRNAME, DONE_SKILL_FILENAME,
+  HANDOFF_SKILL_CONTENT, HANDOFF_SKILL_DIRNAME, HANDOFF_SKILL_FILENAME,
+  installClaudeSkills,
+} from "./skills.js";
 import { claudeEnvPrefix } from "./claude-env.js";
 import { gardenWindowName, shellWindowName as shellWin, workerWindowName as workerWin, isGardenWindow } from "./window-names.js";
 
@@ -529,6 +533,9 @@ export function buildWorktreeBootstrapScript(
   const escapedDoneSkill = DONE_SKILL_CONTENT.replace(/'/g, "'\\''");
   const escapedDoneSkillDirname = DONE_SKILL_DIRNAME.replace(/'/g, "'\\''");
   const escapedDoneSkillFilename = DONE_SKILL_FILENAME.replace(/'/g, "'\\''");
+  const escapedHandoffSkill = HANDOFF_SKILL_CONTENT.replace(/'/g, "'\\''");
+  const escapedHandoffSkillDirname = HANDOFF_SKILL_DIRNAME.replace(/'/g, "'\\''");
+  const escapedHandoffSkillFilename = HANDOFF_SKILL_FILENAME.replace(/'/g, "'\\''");
   const envPrefix = claudeEnvPrefix(project);
 
   const base = baseBranch ?? "main";
@@ -598,6 +605,8 @@ printf '%s' '${escapedHooksJson}' > ${escapedWtPath}/.claude/settings.json
 # Install garden-bundled skills (see src/dashboard/skills.ts). Layout: .claude/skills/<name>/SKILL.md.
 mkdir -p ${escapedWtPath}/.claude/skills/'${escapedDoneSkillDirname}'
 printf '%s' '${escapedDoneSkill}' > ${escapedWtPath}/.claude/skills/'${escapedDoneSkillDirname}'/'${escapedDoneSkillFilename}'
+mkdir -p ${escapedWtPath}/.claude/skills/'${escapedHandoffSkillDirname}'
+printf '%s' '${escapedHandoffSkill}' > ${escapedWtPath}/.claude/skills/'${escapedHandoffSkillDirname}'/'${escapedHandoffSkillFilename}'
 
 # Ensure garden-managed dirs are excluded from git status.
 # Writing to the common info/exclude covers all worktrees and never gets committed.

@@ -13,7 +13,7 @@ import { printHeader, handleClaudeHook, handlePaneDied, handleTitleChanged } fro
 import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
 import { newWorker, killPane, bounceActiveWorker } from "./workers.js";
-import { continueWorker, continueWorkerAfterMerge } from "./continue.js";
+import { continueWorker, continueWorkerAfterMerge, seedWorker } from "./continue.js";
 import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, cyclePane, cyclePlot } from "./navigate.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
 import { runUsagePollerLoop, stopUsagePoller } from "./usage-poller.js";
@@ -44,7 +44,7 @@ export async function dashboard(args: string[]): Promise<void> {
 
   // Internal subcommands called by hotkeys
   if (sub === "_switch") return switchProject(args[1]);
-  if (sub === "_new-worker") return newWorker();
+  if (sub === "_new-worker") { newWorker(); return; }
   if (sub === "_focus-worker") return focusWorker();
   if (sub === "_focus-shell") return focusShell();
   if (sub === "_focus-growhouse") return focusGrowhouse();
@@ -60,6 +60,10 @@ export async function dashboard(args: string[]): Promise<void> {
   }
   if (sub === "_continue-worker-after-merge") {
     if (args[1] && args[2]) continueWorkerAfterMerge(args[1], args[2]);
+    return;
+  }
+  if (sub === "_seed-worker") {
+    if (args[1] && args[2] && args[3]) seedWorker(args[1], args[2], args[3]);
     return;
   }
   if (sub === "_poll") {

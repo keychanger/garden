@@ -114,6 +114,7 @@ Dashboard:
   bounce <worker>                Restart a worker's Claude process (preserves session history)
   pause <worker>                 Suppress post-merge auto-continue (writes the .garden-done sentinel)
   resume <worker>                Re-arm post-merge auto-continue (clears the .garden-done sentinel)
+  handoff <project> [-m "<msg>"] Spawn a fresh worker on <project> seeded with a briefing (stdin or -m)
   auto [on|off|status]           Toggle the global auto-continue gate
   auto threshold <N>             Set the usage-threshold percent (auto-disable above this)
   auto resume-on-reset on|off    Re-enable automatically after the usage window resets

@@ -24,23 +24,46 @@ import {
 } from "./create.js";
 import { worktreePath, resolveBaseBranch, branchExistsOnOrigin } from "./git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
-import { dispatchDelayedContinue } from "./continue.js";
+import { dispatchDelayedContinue, dispatchDelayedSeed } from "./continue.js";
 import { workerWindowName as workerWin, parkingWindowName, shellWindowName as shellWin, parseWorkerSuffix } from "./window-names.js";
 
-export function newWorker(): void {
+export interface NewWorkerOptions {
+  // Target project. Defaults to state.activeProject. When supplied (handoff
+  // path), the new worker spawns into a hidden tmux window without parking the
+  // current pane or mutating state.activeProject — the operator stays where
+  // they are and navigates to the new worker manually.
+  projectName?: string;
+  // Path to a file containing the seed prompt for the new worker. If set, a
+  // detached subprocess sends the file's contents to the new worker's pane
+  // after a few seconds (Claude TUI init delay), then deletes the file.
+  seedMessageFile?: string;
+}
+
+export function newWorker(opts: NewWorkerOptions = {}): string | null {
+  let createdName: string | null = null;
   withStateLock(() => {
     const state = readDashState();
-    if (!state.activeProject) {
+    const targetProject = opts.projectName ?? state.activeProject;
+    if (!targetProject) {
       tmuxDisplay("No project selected. Use ⌥1-⌥9 first.");
       return;
     }
 
-    const project = getProject(state.activeProject);
+    const project = tryGetProject(targetProject);
+    if (!project) {
+      tmuxDisplay(`Unknown project '${targetProject}'.`);
+      return;
+    }
+
+    // Handoff path leaves the visible layout alone; hotkey path swaps the new
+    // worker into the active slot.
+    const isHandoff = opts.projectName != null && opts.projectName !== state.activeProject;
+
     const existingNames = getAllWorkerNames();
     const workerName = generateWorkerName(existingNames);
     const sessionId = crypto.randomUUID();
     const branchName = workerName;
-    const wtPath = worktreePath(state.activeProject, workerName);
+    const wtPath = worktreePath(targetProject, workerName);
     const gardenRunner = resolveGardenRunner();
 
     const baseBranch = resolveBaseBranch(project.path);
@@ -54,7 +77,7 @@ export function newWorker(): void {
       tmuxDisplay(msg);
       log.error("workers", "rejected newWorker: base branch not on origin", {
         worker: workerName,
-        data: { project: state.activeProject, baseBranch },
+        data: { project: targetProject, baseBranch },
       });
       return;
     }
@@ -66,24 +89,36 @@ export function newWorker(): void {
       project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
     );
 
-    // Show the new pane immediately — bootstrap runs inside it
-    const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject);
-    parkToHidden(parkName, state);
+    const workerWindowName = workerWin(targetProject, workerName);
+    let workerPaneId: string | null = null;
 
-    const workerWindowName = workerWin(state.activeProject, workerName);
+    if (isHandoff) {
+      // Detached create only — no park/restore, no state mutation. Pre-size to
+      // match the current right-pane size so when the operator navigates over,
+      // the worker pane is already the right shape.
+      workerPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
+        "sh", "-c", `sh ${shellEscape(scriptFile)}`);
+      const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
+      if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
+      if (workerPaneId) setPaneLabel(workerPaneId, workerName);
+    } else {
+      // Show the new pane immediately — bootstrap runs inside it
+      const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject!);
+      parkToHidden(parkName, state);
 
-    const workerPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
-      "sh", "-c", `sh ${shellEscape(scriptFile)}`);
-    // Pre-size so the bootstrap script renders at the right pane size from
-    // the start, avoiding SIGWINCH jitter when restoreFromHidden swaps it in.
-    const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
-    if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
-    if (workerPaneId) setPaneLabel(workerPaneId, workerName);
-    restoreFromHidden(workerWindowName, state);
-    // Re-apply label after swap (swap-pane may not preserve pane options)
-    if (state.activePaneId) setPaneLabel(state.activePaneId, workerName);
+      workerPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
+        "sh", "-c", `sh ${shellEscape(scriptFile)}`);
+      // Pre-size so the bootstrap script renders at the right pane size from
+      // the start, avoiding SIGWINCH jitter when restoreFromHidden swaps it in.
+      const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
+      if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
+      if (workerPaneId) setPaneLabel(workerPaneId, workerName);
+      restoreFromHidden(workerWindowName, state);
+      // Re-apply label after swap (swap-pane may not preserve pane options)
+      if (state.activePaneId) setPaneLabel(state.activePaneId, workerName);
+    }
 
-    addWorker(state.activeProject, {
+    addWorker(targetProject, {
       name: workerName,
       sessionId,
       task: "",
@@ -95,17 +130,26 @@ export function newWorker(): void {
 
     log.info("workers", "created", {
       worker: workerName,
-      data: { project: state.activeProject, branch: branchName },
+      data: { project: targetProject, branch: branchName, handoff: isHandoff },
     });
 
-    ensureProjectPoller(state.activeProject, gardenRunner);
+    ensureProjectPoller(targetProject, gardenRunner);
 
-    state.activePaneType = "worker";
-    state.activeWindowName = workerWindowName;
-    state.lastActiveWorker[state.activeProject] = workerWindowName;
-    writeDashState(state);
+    if (!isHandoff) {
+      state.activePaneType = "worker";
+      state.activeWindowName = workerWindowName;
+      state.lastActiveWorker[state.activeProject!] = workerWindowName;
+      writeDashState(state);
+    }
     refreshDashboard({ state });
+
+    if (opts.seedMessageFile) {
+      dispatchDelayedSeed(gardenRunner, targetProject, workerName, opts.seedMessageFile);
+    }
+
+    createdName = workerName;
   });
+  return createdName;
 }
 
 export function killPane(): void {

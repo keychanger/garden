@@ -207,3 +207,78 @@ export function dispatchDelayedAutoContinue(
     child.unref();
   } catch { /* best effort — operator can re-prompt manually */ }
 }
+
+// Handoff seed variant. Reads the seed prompt from a file (kept off argv to
+// support multi-line briefings) and sends it as the new worker's first user
+// prompt. 6s delay covers worktree bootstrap (git fetch + worktree add +
+// claude TUI init) — same machinery as auto-continue, just longer because the
+// new worker is starting from cold.
+export function dispatchDelayedSeed(
+  gardenRunner: string,
+  projectName: string,
+  workerName: string,
+  messageFile: string,
+): void {
+  const cmd =
+    `sleep 6 && ${gardenRunner} dashboard _seed-worker `
+    + `${shellEscape(projectName)} ${shellEscape(workerName)} ${shellEscape(messageFile)} 2>/dev/null`;
+  try {
+    const child = spawn("sh", ["-c", cmd], { detached: true, stdio: "ignore" });
+    child.unref();
+  } catch { /* best effort — operator can re-prompt manually */ }
+}
+
+// Send a one-shot seed prompt read from a file. The seed dispatch's 6s delay
+// usually covers bootstrap (git fetch, worktree add, npm install, claude TUI
+// init), but a slow network can run longer; poll while the worker is still
+// "loading" and send as soon as it transitions to any other state. Capped at
+// 90s. Always deletes the file at the end.
+export function seedWorker(
+  projectName: string,
+  workerName: string,
+  messageFile: string,
+): void {
+  let message: string;
+  try {
+    message = fs.readFileSync(messageFile, "utf8");
+  } catch (err) {
+    log.warn("workers", "seed failed to read message file", {
+      worker: workerName,
+      data: { project: projectName, file: messageFile, error: String(err) },
+    });
+    return;
+  }
+
+  const cleanup = (): void => {
+    try { fs.unlinkSync(messageFile); } catch { /* already gone */ }
+  };
+
+  const deadline = Date.now() + 90_000;
+  const poll = (): void => {
+    const entry = findWorkerByName(projectName, workerName);
+    if (!entry) {
+      log.warn("workers", "seed skipped, worker missing", {
+        worker: workerName,
+        data: { project: projectName },
+      });
+      cleanup();
+      return;
+    }
+    if (entry.claudeStatus !== "loading") {
+      continueWorker(projectName, workerName, message);
+      cleanup();
+      return;
+    }
+    if (Date.now() >= deadline) {
+      log.warn("workers", "seed timed out, sending anyway", {
+        worker: workerName,
+        data: { project: projectName, claudeStatus: entry.claudeStatus },
+      });
+      continueWorker(projectName, workerName, message);
+      cleanup();
+      return;
+    }
+    setTimeout(poll, 2000);
+  };
+  poll();
+}
