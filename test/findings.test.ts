@@ -212,6 +212,43 @@ describe("recordFindings", () => {
     // Only 1 finding within 30 days — below threshold
     expect(addAlert).not.toHaveBeenCalled();
   });
+
+  // Boundary tests for the 30-day window cutoff. The check is `n - t <= window`,
+  // so findings at exactly 30 days are INCLUDED. A `<` (strict) or off-by-one
+  // bug would silently lose the boundary finding and miss alerts the operator
+  // is depending on.
+  function nowMinusMs(ms: number): string {
+    return new Date(Date.now() - ms).toISOString();
+  }
+  const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+  it("includes findings at exactly 30 days (boundary, <= cutoff)", () => {
+    const priorFindings = [
+      { id: "1", ts: nowMinusMs(THIRTY_DAYS_MS), project: "p", worker: "w1", verdict: "fixed" as const, category: "cat-a", summary: "boundary" },
+      { id: "2", ts: nowMinusMs(THIRTY_DAYS_MS), project: "p", worker: "w2", verdict: "fixed" as const, category: "cat-a", summary: "boundary" },
+    ];
+    mockStore({ findings: priorFindings, suggestions: {} });
+    recordFindings({
+      project: "p", worker: "w3", verdict: "fixed",
+      body: '```findings\n[{"category":"cat-a","summary":"new"}]\n```',
+    });
+    // 3 findings at <= 30 days, 3 distinct workers → threshold crossed
+    expect(addAlert).toHaveBeenCalled();
+  });
+
+  it("excludes findings just past 30 days (1ms outside window)", () => {
+    const priorFindings = [
+      { id: "1", ts: nowMinusMs(THIRTY_DAYS_MS + 1), project: "p", worker: "w1", verdict: "fixed" as const, category: "cat-a", summary: "outside" },
+      { id: "2", ts: nowMinusMs(THIRTY_DAYS_MS + 1), project: "p", worker: "w2", verdict: "fixed" as const, category: "cat-a", summary: "outside" },
+    ];
+    mockStore({ findings: priorFindings, suggestions: {} });
+    recordFindings({
+      project: "p", worker: "w3", verdict: "fixed",
+      body: '```findings\n[{"category":"cat-a","summary":"new"}]\n```',
+    });
+    // Only the new one is within window; below threshold.
+    expect(addAlert).not.toHaveBeenCalled();
+  });
 });
 
 describe("pendingSuggestions", () => {

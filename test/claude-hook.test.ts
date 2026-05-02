@@ -164,248 +164,159 @@ afterAll(() => {
   }
 });
 
-describe("handleClaudeHook — mid-turn asking", () => {
-  it("notification sets asking when worker is working", () => {
+// Reads the worker's actual claudeStatus from the in-memory registry mock —
+// the mock applies updates via Object.assign, so this is a state assertion,
+// not a mock-call assertion.
+function statusAfter(project: string, worker: string): string | undefined {
+  return entries[project]?.find(e => e.name === worker)?.claudeStatus;
+}
+
+describe("handleClaudeHook — mid-turn asking transitions (differential)", () => {
+  // notification and pretooluse share the same rule: working|idle → asking,
+  // every other state is preserved. The parameterized table below is the rule.
+  // If the rule changes, the table changes — there is no implicit re-statement
+  // of the rule in each test body.
+  const askingRule: Array<[string, string]> = [
+    ["working", "asking"],
+    ["idle", "asking"],
+    ["ready", "ready"],
+    ["asking", "asking"],
+    ["loading", "loading"],
+    ["exited", "exited"],
+  ];
+  it.each(askingRule)(
+    "notification: %s → %s",
+    (start, expected) => {
+      seedWorker("garden", "bold-ash", { claudeStatus: start });
+      setCwd("garden", "bold-ash");
+      handleClaudeHook("notification");
+      expect(statusAfter("garden", "bold-ash")).toBe(expected);
+    },
+  );
+  it.each(askingRule)(
+    "pretooluse: %s → %s",
+    (start, expected) => {
+      seedWorker("garden", "bold-ash", { claudeStatus: start });
+      setCwd("garden", "bold-ash");
+      handleClaudeHook("pretooluse");
+      expect(statusAfter("garden", "bold-ash")).toBe(expected);
+    },
+  );
+
+  // posttooluse has the OPPOSITE rule: asking|idle → working. Pairing it with
+  // notification/pretooluse in the same suite is the differential — a bug that
+  // collapsed the two rules into "always set working" would pass the
+  // notification table for "working" but fail every other row.
+  const workingRule: Array<[string, string]> = [
+    ["asking", "working"],
+    ["idle", "working"],
+    ["working", "working"],
+    ["ready", "ready"],
+    ["loading", "loading"],
+    ["exited", "exited"],
+  ];
+  it.each(workingRule)(
+    "posttooluse: %s → %s",
+    (start, expected) => {
+      seedWorker("garden", "bold-ash", { claudeStatus: start });
+      setCwd("garden", "bold-ash");
+      handleClaudeHook("posttooluse");
+      expect(statusAfter("garden", "bold-ash")).toBe(expected);
+    },
+  );
+
+  it("pretooluse and posttooluse have OPPOSITE effects on the same starting state", () => {
     seedWorker("garden", "bold-ash", { claudeStatus: "working" });
     setCwd("garden", "bold-ash");
+    handleClaudeHook("pretooluse");
+    expect(statusAfter("garden", "bold-ash")).toBe("asking");
+    handleClaudeHook("posttooluse");
+    expect(statusAfter("garden", "bold-ash")).toBe("working");
+  });
 
-    // Verify cwd mock is active
-    const home = process.env.HOME ?? "";
-    expect(process.cwd()).toBe(`${home}/.garden/worktrees/garden/bold-ash`);
+  it("notification does not fire an operator alert (status pane is the signal)", () => {
+    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    setCwd("garden", "bold-ash");
+    handleClaudeHook("notification");
+    expect(addAlert).not.toHaveBeenCalled();
+  });
 
-    let threw: unknown;
+  it("pretooluse does not fire an operator alert", () => {
+    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    setCwd("garden", "bold-ash");
+    handleClaudeHook("pretooluse");
+    expect(addAlert).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleClaudeHook — guards", () => {
+  it("ignores hook when cwd is outside any worktree (workerFromCwd returns null)", () => {
+    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    process.cwd = () => "/somewhere/else";
+    handleClaudeHook("notification");
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+    expect(statusAfter("garden", "bold-ash")).toBe("working");
+  });
+
+  it("ignores hook when GARDEN_REVIEWER=1 (reviewer's hooks must not write registry)", () => {
+    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    setCwd("garden", "bold-ash");
+    process.env.GARDEN_REVIEWER = "1";
     try {
       handleClaudeHook("notification");
-    } catch (e) {
-      threw = e;
+      expect(updateWorkerFields).not.toHaveBeenCalled();
+      expect(statusAfter("garden", "bold-ash")).toBe("working");
+    } finally {
+      delete process.env.GARDEN_REVIEWER;
     }
-    expect(threw).toBeUndefined();
-
-    expect(updateWorkerFields).toHaveBeenCalledWith(
-      "garden", "bold-ash",
-      expect.objectContaining({ claudeStatus: "asking" }),
-    );
-  });
-
-  it("pretooluse sets asking when worker is working", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
-    setCwd("garden", "bold-ash");
-
-    handleClaudeHook("pretooluse");
-
-    expect(updateWorkerFields).toHaveBeenCalledWith(
-      "garden", "bold-ash",
-      expect.objectContaining({ claudeStatus: "asking" }),
-    );
-  });
-
-  it("notification self-heals idle to asking", () => {
-    // A user-input tool firing is definitive proof of active turn, so an
-    // idle worker at this point has stale status — transition to asking.
-    seedWorker("garden", "bold-ash", { claudeStatus: "idle" });
-    setCwd("garden", "bold-ash");
-
-    handleClaudeHook("notification");
-
-    expect(updateWorkerFields).toHaveBeenCalledWith(
-      "garden", "bold-ash",
-      expect.objectContaining({ claudeStatus: "asking" }),
-    );
-  });
-
-  it("pretooluse does not fire an operator alert (status pane is the signal)", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
-    setCwd("garden", "bold-ash");
-
-    handleClaudeHook("pretooluse");
-
-    // The `asking` status + yellow row is the visual signal; the bottom-bar
-    // alert badge is reserved for things that warrant attention beyond
-    // "a worker is waiting on you."
-    expect(addAlert).not.toHaveBeenCalled();
-  });
-
-  it("notification does not fire alert", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
-    setCwd("garden", "bold-ash");
-
-    handleClaudeHook("notification");
-
-    expect(addAlert).not.toHaveBeenCalled();
-  });
-
-  it("pretooluse skips when worker is ready", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "ready" });
-    setCwd("garden", "bold-ash");
-
-    handleClaudeHook("pretooluse");
-
-    expect(updateWorkerFields).toHaveBeenCalledWith(
-      "garden", "bold-ash",
-      expect.not.objectContaining({ claudeStatus: expect.anything() }),
-    );
-  });
-
-  it("posttooluse sets working when worker is asking", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "asking" });
-    setCwd("garden", "bold-ash");
-
-    handleClaudeHook("posttooluse");
-
-    expect(updateWorkerFields).toHaveBeenCalledWith(
-      "garden", "bold-ash",
-      expect.objectContaining({ claudeStatus: "working" }),
-    );
-  });
-
-  it("posttooluse self-heals idle to working", () => {
-    // A tool-use event arriving while idle means the turn is actually
-    // active and the status is stale — trust the event and flip to working.
-    seedWorker("garden", "bold-ash", { claudeStatus: "idle" });
-    setCwd("garden", "bold-ash");
-
-    handleClaudeHook("posttooluse");
-
-    expect(updateWorkerFields).toHaveBeenCalledWith(
-      "garden", "bold-ash",
-      expect.objectContaining({ claudeStatus: "working" }),
-    );
-  });
-
-  it("posttooluse skips when worker is working", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
-    setCwd("garden", "bold-ash");
-
-    handleClaudeHook("posttooluse");
-
-    // Should not overwrite working with working — the guard only fires on asking
-    expect(updateWorkerFields).toHaveBeenCalledWith(
-      "garden", "bold-ash",
-      expect.not.objectContaining({ claudeStatus: expect.anything() }),
-    );
   });
 });
 
 describe("handleClaudeHook — core events", () => {
-  it("sessionstart sets ready", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "loading" });
-    setCwd("garden", "bold-ash");
-
+  // sessionstart's source-variant rules — table is the rule. The integration
+  // tier covers the no-source path (real fs); these unit tests cover the
+  // stdin-driven source paths because integration can't easily provide stdin.
+  async function sessionstartWithSource(source: string | null) {
+    if (source !== null) {
+      const fs = (await import("node:fs")).default;
+      vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({ source }));
+    }
     handleClaudeHook("sessionstart");
+  }
 
-    expect(updateWorkerFields).toHaveBeenCalledWith(
-      "garden", "bold-ash",
-      expect.objectContaining({ claudeStatus: "ready" }),
-    );
-  });
+  // resume/compact: preserve working/asking, otherwise set ready.
+  // Any other source (or no source): always ready.
+  const sessionstartTable: Array<[string | null, string, string]> = [
+    [null,        "loading", "ready"],
+    ["startup",   "loading", "ready"],
+    ["resume",    "working", "working"],   // preserved
+    ["resume",    "asking",  "asking"],    // preserved
+    ["resume",    "idle",    "ready"],     // not in preserve set
+    ["compact",   "working", "working"],   // preserved
+    ["future-thing", "working", "ready"],  // unknown source falls through
+  ];
+  it.each(sessionstartTable)(
+    "sessionstart source=%s starting=%s → %s",
+    async (source, start, expected) => {
+      seedWorker("garden", "bold-ash", { claudeStatus: start });
+      setCwd("garden", "bold-ash");
+      await sessionstartWithSource(source);
+      expect(statusAfter("garden", "bold-ash")).toBe(expected);
+    },
+  );
 
-  it("sessionstart with source=startup sets ready", async () => {
-    const fs = (await import("node:fs")).default;
-    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({ source: "startup" }));
-    seedWorker("garden", "bold-ash", { claudeStatus: "loading" });
-    setCwd("garden", "bold-ash");
-
-    handleClaudeHook("sessionstart");
-
-    expect(updateWorkerFields).toHaveBeenCalledWith(
-      "garden", "bold-ash",
-      expect.objectContaining({ claudeStatus: "ready" }),
-    );
-  });
-
-  it("sessionstart with source=resume preserves working (auto-compact mid-turn)", async () => {
-    const fs = (await import("node:fs")).default;
-    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({ source: "resume" }));
-    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
-    setCwd("garden", "bold-ash");
-
-    handleClaudeHook("sessionstart");
-
-    // Must not include claudeStatus — the existing "working" must be preserved.
-    expect(updateWorkerFields).toHaveBeenCalledWith(
-      "garden", "bold-ash",
-      expect.not.objectContaining({ claudeStatus: expect.anything() }),
-    );
-  });
-
-  it("sessionstart with source=compact preserves working", async () => {
-    const fs = (await import("node:fs")).default;
-    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({ source: "compact" }));
-    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
-    setCwd("garden", "bold-ash");
-
-    handleClaudeHook("sessionstart");
-
-    expect(updateWorkerFields).toHaveBeenCalledWith(
-      "garden", "bold-ash",
-      expect.not.objectContaining({ claudeStatus: expect.anything() }),
-    );
-  });
-
-  it("sessionstart with source=resume preserves asking", async () => {
-    const fs = (await import("node:fs")).default;
-    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({ source: "resume" }));
-    seedWorker("garden", "bold-ash", { claudeStatus: "asking" });
-    setCwd("garden", "bold-ash");
-
-    handleClaudeHook("sessionstart");
-
-    expect(updateWorkerFields).toHaveBeenCalledWith(
-      "garden", "bold-ash",
-      expect.not.objectContaining({ claudeStatus: expect.anything() }),
-    );
-  });
-
-  it("sessionstart with source=resume sets ready when worker was idle", async () => {
-    const fs = (await import("node:fs")).default;
-    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({ source: "resume" }));
+  it("prompt sets working from any prior state", () => {
     seedWorker("garden", "bold-ash", { claudeStatus: "idle" });
     setCwd("garden", "bold-ash");
-
-    handleClaudeHook("sessionstart");
-
-    expect(updateWorkerFields).toHaveBeenCalledWith(
-      "garden", "bold-ash",
-      expect.objectContaining({ claudeStatus: "ready" }),
-    );
-  });
-
-  it("sessionstart with unknown source falls through to ready (back-compat)", async () => {
-    const fs = (await import("node:fs")).default;
-    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({ source: "future-thing" }));
-    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
-    setCwd("garden", "bold-ash");
-
-    handleClaudeHook("sessionstart");
-
-    expect(updateWorkerFields).toHaveBeenCalledWith(
-      "garden", "bold-ash",
-      expect.objectContaining({ claudeStatus: "ready" }),
-    );
-  });
-
-  it("prompt sets working", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "idle" });
-    setCwd("garden", "bold-ash");
-
     handleClaudeHook("prompt");
-
-    expect(updateWorkerFields).toHaveBeenCalledWith(
-      "garden", "bold-ash",
-      expect.objectContaining({ claudeStatus: "working" }),
-    );
+    expect(statusAfter("garden", "bold-ash")).toBe("working");
   });
 
-  it("stop sets idle", () => {
+  it("stop sets idle from any prior state", () => {
     seedWorker("garden", "bold-ash", { claudeStatus: "working" });
     setCwd("garden", "bold-ash");
-
     handleClaudeHook("stop");
-
-    expect(updateWorkerFields).toHaveBeenCalledWith(
-      "garden", "bold-ash",
-      expect.objectContaining({ claudeStatus: "idle" }),
-    );
+    expect(statusAfter("garden", "bold-ash")).toBe("idle");
   });
 
   it("stop sets prState=done when .garden-done is present and no commits ahead", async () => {
@@ -428,19 +339,10 @@ describe("handleClaudeHook — core events", () => {
 
     handleClaudeHook("stop");
 
-    // First call: claudeStatus = idle (existing behavior).
-    expect(updateWorkerFields).toHaveBeenCalledWith(
-      "garden", "bold-ash",
-      expect.objectContaining({ claudeStatus: "idle" }),
-    );
-    // Second call: prState = done + mergedAt timestamp (terminal cleanup signal).
-    expect(updateWorkerFields).toHaveBeenCalledWith(
-      "garden", "bold-ash",
-      expect.objectContaining({
-        prState: "done",
-        mergedAt: expect.any(String),
-      }),
-    );
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(entry.claudeStatus).toBe("idle");
+    expect(entry.prState).toBe("done");
+    expect(typeof entry.mergedAt).toBe("string");
   });
 
   it("stop does NOT set done when .garden-done is absent", async () => {
@@ -450,9 +352,8 @@ describe("handleClaudeHook — core events", () => {
     });
     setCwd("garden", "bold-ash");
 
-    // Explicit reset — clearAllMocks clears call history but preserves
-    // mockImplementation set by earlier tests, so we must reassert the
-    // default to make .garden-done genuinely absent here.
+    // clearAllMocks resets call history but preserves mockImplementation;
+    // re-assert the default so .garden-done is genuinely absent here.
     const fs = (await import("node:fs")).default;
     vi.mocked(fs.existsSync).mockReturnValue(false);
     const { execFileSync } = await import("node:child_process");
@@ -464,10 +365,9 @@ describe("handleClaudeHook — core events", () => {
 
     handleClaudeHook("stop");
 
-    const doneCall = vi.mocked(updateWorkerFields).mock.calls.find(
-      c => (c[2] as Record<string, unknown>).prState === "done",
-    );
-    expect(doneCall).toBeUndefined();
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(entry.claudeStatus).toBe("idle");
+    expect(entry.prState).toBeUndefined();
   });
 
   it("stop with commits ahead AND .garden-done queues review (does NOT set done)", async () => {
@@ -488,20 +388,14 @@ describe("handleClaudeHook — core events", () => {
 
     handleClaudeHook("stop");
 
-    // Review path takes priority — finalizeMerge will pick the terminal
-    // state (merged or done) itself after the merge cycle completes,
-    // based on whether .garden-done is present at merge time.
-    expect(updateWorkerFields).toHaveBeenCalledWith(
-      "garden", "bold-ash",
-      expect.objectContaining({ pendingReviewAt: expect.any(Number) }),
-    );
-    const terminalCall = vi.mocked(updateWorkerFields).mock.calls.find(
-      c => {
-        const f = c[2] as Record<string, unknown>;
-        return f.prState === "merged" || f.prState === "done";
-      },
-    );
-    expect(terminalCall).toBeUndefined();
+    // Review path takes priority — finalizeMerge picks the terminal state
+    // (merged or done) itself after the merge cycle completes, based on
+    // whether .garden-done is present at merge time. The stop hook MUST NOT
+    // pre-set either terminal state here.
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(entry.claudeStatus).toBe("idle");
+    expect(typeof entry.pendingReviewAt).toBe("number");
+    expect(entry.prState).toBeUndefined();
   });
 
   it("stop fires base-drift alert when rev-list against origin/<base> throws", async () => {

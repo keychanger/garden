@@ -1,3 +1,8 @@
+// Argv-shape tests for src/dashboard/git.ts: verifies the git CLI is invoked
+// with the right arguments. Behavior (real git round-trips, conflict
+// detection) is covered in test/integration/git-real.test.ts. Keep both —
+// argv tests run in milliseconds and catch flag/order regressions cheaply;
+// integration tests catch behavioral drift but cost more to run.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import path from "node:path";
 import { execFileSync } from "node:child_process";

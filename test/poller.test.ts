@@ -208,7 +208,13 @@ describe("poll — working state", () => {
 
     poll("myproject");
 
-    expect(fs.writeFileSync).toHaveBeenCalled();
+    // The prompt file path matches the convention in poller.ts:87
+    // (`${project}-${worker}-review-prompt.txt`). Bare toHaveBeenCalled would
+    // pass even if writeFileSync wrote garbage to a wrong path.
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining("myproject-bold-ash-review-prompt.txt"),
+      expect.any(String),
+    );
     expect(tmux).toHaveBeenCalledWith(
       "new-window", "-d", "-t", expect.any(String), "-n", "_myproject-review-bold-ash",
       "-c", "/tmp/wt/myproject/bold-ash", "bash", "-c", expect.any(String),
@@ -327,6 +333,10 @@ describe("poll — working state", () => {
 
 describe("poll — review/resolve timeout", () => {
   const THIRTY_ONE_MIN_AGO = Date.now() - 31 * 60 * 1000;
+  // The cap is `Date.now() - reviewStartedAt > REVIEW_TIMEOUT_MS` (strict >).
+  // At exactly 30 minutes the reviewer is NOT yet timed out; at 30 minutes +
+  // 1ms it IS. These two boundary tests pin the > vs >= semantics.
+  const REVIEW_TIMEOUT_MS = 30 * 60 * 1000;
 
   it("reviewing → failing when the reviewer exceeds the 30-minute cap", () => {
     registryMock._setEntries("myproject", [
@@ -441,6 +451,47 @@ describe("poll — review/resolve timeout", () => {
     expect(addAlert).not.toHaveBeenCalled();
     // Normal "still in-flight" path — no transition.
     expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
+
+  it("does NOT time out at exactly 30 minutes (boundary, > cap)", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        reviewStartedAt: Date.now() - REVIEW_TIMEOUT_MS,
+        lastSeenSha: "abc123",
+      }),
+    ]);
+    vi.mocked(windowExists).mockReturnValue(true);
+
+    poll("myproject");
+
+    expect(killWindowSafe).not.toHaveBeenCalled();
+    const timeoutAlert = vi.mocked(addAlert).mock.calls.find(
+      c => String((c[0] as { message: string }).message).includes("30-minute timeout"),
+    );
+    expect(timeoutAlert).toBeUndefined();
+  });
+
+  it("times out at 30 minutes + 1ms (boundary, just past cap)", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        reviewStartedAt: Date.now() - REVIEW_TIMEOUT_MS - 1,
+        lastSeenSha: "abc123",
+      }),
+    ]);
+    vi.mocked(windowExists).mockReturnValue(true);
+
+    poll("myproject");
+
+    expect(killWindowSafe).toHaveBeenCalledWith("_myproject-review-bold-ash");
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("30-minute timeout"),
+      }),
+    );
   });
 });
 
