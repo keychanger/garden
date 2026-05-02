@@ -1,10 +1,7 @@
-// Palette of log colors used to colorize project names in `garden logs`.
-// Colors are assigned per-project and persisted in config.yml so they're
-// stable across rehashing as the project list grows.
-//
-// `green` is reserved for the garden project itself (the most-frequent
-// context) and is never handed out by `pickLogColor`. Reds are absent so
-// project color never collides with error coloring in the same output.
+// Persisted per-project log colors for `garden logs`. Colors are assigned at
+// project registration so they stay stable as the project list grows. `green`
+// is reserved for garden itself; reds are omitted so project color never
+// collides with error coloring.
 
 export const RESERVED_LOG_COLOR_PROJECT = "garden";
 export const RESERVED_LOG_COLOR_KEY = "green";
@@ -36,11 +33,7 @@ export function logColorAnsi(key: string): string | null {
   return PALETTE[key] ?? null;
 }
 
-// Pick the next assignable color for a new project. Walks the palette in
-// declared order and returns the first key not already in `taken`. If every
-// assignable key is in use, falls back to the least-used one (palette order
-// breaks ties), keeping assignments balanced as the project count grows past
-// the palette size.
+// Falls back to least-used (not first-unused) so colors stay balanced when projects exceed palette size.
 export function pickLogColor(taken: readonly string[]): string {
   const useCount = new Map<string, number>();
   for (const key of ASSIGNABLE_LOG_COLOR_KEYS) useCount.set(key, 0);

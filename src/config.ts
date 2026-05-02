@@ -133,10 +133,8 @@ export function loadConfig(): GardenConfig {
   return parsed;
 }
 
-// One-shot migration: walk projects in iteration order and assign a logColor
-// to any project missing one (or holding an unknown key). Garden is excluded —
-// the renderer always paints it green via the reserved palette slot. Idempotent:
-// re-running on a fully-assigned config is a no-op.
+// One-shot migration: assign a logColor to any project missing or holding an
+// unknown key. Garden is excluded (always painted via the reserved slot).
 function migrateLogColors(config: GardenConfig): boolean {
   let changed = false;
   const taken: string[] = [];
@@ -166,9 +164,7 @@ function migrateLogColors(config: GardenConfig): boolean {
   return changed;
 }
 
-// Pick a logColor for a newly-added project and write it onto the config in
-// place. Caller is responsible for `saveConfig`. No-op for the garden project
-// itself (reserved). No-op if a valid color is already assigned.
+// Mutates config in place; caller is responsible for `saveConfig`.
 export function assignLogColor(config: GardenConfig, projectName: string): void {
   if (projectName === RESERVED_LOG_COLOR_PROJECT) return;
   const project = config.projects[projectName];

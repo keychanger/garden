@@ -61,10 +61,8 @@ const PRETTY_LEVEL_GLYPHS: Record<string, string> = {
   error: "✗",
 };
 
-// Each project's log color is assigned at registration time and persisted to
-// config.yml (see `assignLogColor`). The renderer reads the key, looks up its
-// ANSI escape, and falls back to a name-hash over the assignable palette only
-// for projects missing from config (transient registry entries, stale logs).
+// Hash fallback only triggers for projects missing from config (transient
+// registry entries, stale logs); registered projects always get their assigned key.
 let cachedConfig: GardenConfig | null = null;
 let configLoadFailed = false;
 
