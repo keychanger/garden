@@ -183,8 +183,6 @@ export function killPane(): void {
         const entry = findWorkerByName(state.activeProject, killedWorkerName);
 
         killReviewWindow(state.activeProject, killedWorkerName);
-        // .garden-done sentinel is inside the worktree and dies with it via
-        // backgroundGitCleanup's `git worktree remove --force`.
         removeWorker(state.activeProject, killedWorkerName);
         log.info("workers", "killed", {
           worker: killedWorkerName,

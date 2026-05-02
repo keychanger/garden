@@ -43,20 +43,9 @@ const MERGE_CONTINUE_PROMPT =
   + "turn so future merges do not auto-continue. Do not commit this file — "
   + "leave it untracked.";
 
-// Sentinel file: when present, the post-merge auto-continue is suppressed for
-// this worker. Worker writes it on completion; `garden pause` writes it on
-// demand; `garden resume` deletes it. Lives at the root of the worker's
-// worktree because that is the intersection of "writable by both Claude
-// Code's harness sandbox and the OS-level Seatbelt sandbox" and "knowable
-// to the poller from the registry entry." /tmp falls out: the harness
-// sandbox blocks raw /tmp writes (only $TMPDIR works) and $TMPDIR is
-// per-Claude-session, so the poller can't reconstruct it. ~/.garden/sessions
-// falls out: would require broadening the worker's write scope to the
-// registry and other workers' review-result files. The worktree is the
-// only path that satisfies both constraints.
-//
-// killPane removes the worktree (`git worktree remove --force`), so the
-// sentinel dies with the worker — no explicit cleanup needed there.
+// Sentinel suppressing post-merge auto-continue. Lives at the worktree root —
+// the only path writable by both sandbox layers and reconstructible from the
+// registry. See DESIGN.md "Auto-Continue Across the Merge Boundary" for why.
 export function donePath(worktreePath: string): string {
   return path.join(worktreePath, ".garden-done");
 }
