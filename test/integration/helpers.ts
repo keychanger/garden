@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
-import { beforeEach, afterEach } from "vitest";
+import { beforeEach, afterEach, vi } from "vitest";
 
 let tmpHome: string;
 let originalHome: string | undefined;
@@ -11,7 +11,14 @@ let originalHome: string | undefined;
 // inherit the caller's user.email/user.name.
 export function useGitTmpHome() {
   beforeEach(() => {
-    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "garden-int-"));
+    // Reset before HOME mutates so dynamic imports re-run config.ts/git.ts with
+    // the new tmp HOME. Module bodies that capture HOME at load time would
+    // otherwise see the caller's real HOME.
+    vi.resetModules();
+    // realpath: macOS /tmp -> /private/tmp; without canonicalizing HOME the
+    // prefix check in workerFromCwd fails after process.chdir resolves
+    // symlinks.
+    tmpHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "garden-int-")));
     originalHome = process.env.HOME;
     process.env.HOME = tmpHome;
     fs.mkdirSync(path.join(tmpHome, ".garden", "sessions"), { recursive: true });
