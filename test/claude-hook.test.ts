@@ -299,6 +299,91 @@ describe("handleClaudeHook — core events", () => {
     );
   });
 
+  it("sessionstart with source=startup sets ready", async () => {
+    const fs = (await import("node:fs")).default;
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({ source: "startup" }));
+    seedWorker("garden", "bold-ash", { claudeStatus: "loading" });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("sessionstart");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith(
+      "garden", "bold-ash",
+      expect.objectContaining({ claudeStatus: "ready" }),
+    );
+  });
+
+  it("sessionstart with source=resume preserves working (auto-compact mid-turn)", async () => {
+    const fs = (await import("node:fs")).default;
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({ source: "resume" }));
+    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("sessionstart");
+
+    // Must not include claudeStatus — the existing "working" must be preserved.
+    expect(updateWorkerFields).toHaveBeenCalledWith(
+      "garden", "bold-ash",
+      expect.not.objectContaining({ claudeStatus: expect.anything() }),
+    );
+  });
+
+  it("sessionstart with source=compact preserves working", async () => {
+    const fs = (await import("node:fs")).default;
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({ source: "compact" }));
+    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("sessionstart");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith(
+      "garden", "bold-ash",
+      expect.not.objectContaining({ claudeStatus: expect.anything() }),
+    );
+  });
+
+  it("sessionstart with source=resume preserves asking", async () => {
+    const fs = (await import("node:fs")).default;
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({ source: "resume" }));
+    seedWorker("garden", "bold-ash", { claudeStatus: "asking" });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("sessionstart");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith(
+      "garden", "bold-ash",
+      expect.not.objectContaining({ claudeStatus: expect.anything() }),
+    );
+  });
+
+  it("sessionstart with source=resume sets ready when worker was idle", async () => {
+    const fs = (await import("node:fs")).default;
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({ source: "resume" }));
+    seedWorker("garden", "bold-ash", { claudeStatus: "idle" });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("sessionstart");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith(
+      "garden", "bold-ash",
+      expect.objectContaining({ claudeStatus: "ready" }),
+    );
+  });
+
+  it("sessionstart with unknown source falls through to ready (back-compat)", async () => {
+    const fs = (await import("node:fs")).default;
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({ source: "future-thing" }));
+    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("sessionstart");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith(
+      "garden", "bold-ash",
+      expect.objectContaining({ claudeStatus: "ready" }),
+    );
+  });
+
   it("prompt sets working", () => {
     seedWorker("garden", "bold-ash", { claudeStatus: "idle" });
     setCwd("garden", "bold-ash");
