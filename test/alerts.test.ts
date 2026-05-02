@@ -94,15 +94,15 @@ describe("addAlert", () => {
 
     addAlert({
       level: "warn",
-      source: "rules",
-      project: "myproject",
-      message: `Rule suggestion ready: "overly-verbose-comments" (3 findings across 2 workers). Run \`garden rules suggest\`.`,
+      source: "usage",
+      project: "garden",
+      message: "Auto-continue disabled: 5h meter at 96% (>=95%). Run 'garden auto on' to re-enable.",
     });
 
     expect(log.warn).toHaveBeenCalledWith(
       "alert",
-      expect.stringContaining("Rule suggestion ready"),
-      expect.objectContaining({ data: expect.objectContaining({ source: "rules" }) }),
+      expect.stringContaining("Auto-continue disabled"),
+      expect.objectContaining({ data: expect.objectContaining({ source: "usage" }) }),
     );
     expect(log.error).not.toHaveBeenCalled();
   });
