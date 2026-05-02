@@ -217,6 +217,22 @@ describe("installClaudeHooks", () => {
     expect(catchAll.hooks[0].command).toContain("_claude-hook posttooluse");
   });
 
+  it("also writes the bundled `done` skill under .claude/skills/", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
+    const writes = vi.mocked(fs.writeFileSync).mock.calls;
+    const skillCall = writes.find(c => String(c[0]).endsWith(".claude/skills/done.md"));
+    expect(skillCall).toBeDefined();
+    const content = String(skillCall![1]);
+    expect(content).toMatch(/^---\nname: done\n/);
+    expect(content).toContain(".garden-done");
+    expect(content).toContain("description:");
+    expect(fs.mkdirSync).toHaveBeenCalledWith(
+      expect.stringContaining(".claude/skills"),
+      { recursive: true },
+    );
+  });
+
   it("sets permissions.defaultMode to auto and pre-allows tmux plus read-only tail utilities so compound tmux chains don't escalate", () => {
     process.argv[1] = "/usr/local/bin/garden";
     installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
@@ -407,6 +423,24 @@ describe("buildWorktreeBootstrapScript", () => {
     const script = call![1] as string;
     expect(script).toContain("/.claude/settings.json");
     expect(script).not.toContain("/.claude/settings.local.json");
+  });
+
+  it("inlines the bundled `done` skill at .claude/skills/done.md so new workers can invoke it without a refresh round-trip", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "main",
+    );
+    const call = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    );
+    expect(call).toBeDefined();
+    const script = call![1] as string;
+    expect(script).toContain("mkdir -p /wt/myproject/bold-ash/.claude/skills");
+    expect(script).toContain("/.claude/skills/'done.md'");
+    // The skill body itself must be inlined — not just the directory creation
+    // — otherwise the file would be empty after bootstrap.
+    expect(script).toContain("name: done");
   });
 
   it("uses origin/<base> for the worktree branch when baseBranch has a slash in the name", () => {

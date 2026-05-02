@@ -25,6 +25,7 @@ import { startUsagePoller } from "./usage-poller.js";
 import { installPollTriggerHook, worktreeExists as wtExists, getWorkerBaseBranch, getRemoteHost } from "./git.js";
 import { dispatchDelayedContinue } from "./continue.js";
 import { buildSandboxConfig, type SandboxConfig } from "./sandbox.js";
+import { DONE_SKILL_CONTENT, DONE_SKILL_FILENAME, installClaudeSkills } from "./skills.js";
 import { claudeEnvPrefix } from "./claude-env.js";
 import { gardenWindowName, shellWindowName as shellWin, workerWindowName as workerWin, isGardenWindow } from "./window-names.js";
 
@@ -98,12 +99,16 @@ function sandboxForTarget(targetDir: string, project: ProjectConfig): SandboxCon
 }
 
 // Write to settings.json, not settings.local.json — Claude Code auto-edits the latter (permission approvals) and clobbers our hooks.
+// Also installs garden-bundled skills under .claude/skills/ so the worker can
+// invoke them by description-based tool selection (e.g. the `done` skill that
+// writes the .garden-done sentinel). See src/dashboard/skills.ts.
 export function installClaudeHooks(targetDir: string, project: ProjectConfig): void {
   const sandbox = sandboxForTarget(targetDir, project);
   const json = buildSettingsJson(resolveGardenRunner(), sandbox);
   const claudeDir = path.join(targetDir, ".claude");
   fs.mkdirSync(claudeDir, { recursive: true });
   fs.writeFileSync(path.join(claudeDir, "settings.json"), json);
+  installClaudeSkills(targetDir);
 }
 
 export function resizeTerminal(): void {
@@ -524,6 +529,8 @@ export function buildWorktreeBootstrapScript(
   const sandbox = sandboxForTarget(wtPath, project);
   const settingsJson = buildSettingsJson(gardenRunner, sandbox);
   const escapedHooksJson = settingsJson.replace(/'/g, "'\\''");
+  const escapedDoneSkill = DONE_SKILL_CONTENT.replace(/'/g, "'\\''");
+  const escapedDoneSkillFilename = DONE_SKILL_FILENAME.replace(/'/g, "'\\''");
   const envPrefix = claudeEnvPrefix(project);
 
   const base = baseBranch ?? "main";
@@ -589,6 +596,10 @@ git -C ${escapedWtPath} config --local core.hooksPath ${escapedHooksDir}
 # Install Claude Code hooks — settings.json (not .local.json, which Claude Code auto-edits and would clobber).
 mkdir -p ${escapedWtPath}/.claude
 printf '%s' '${escapedHooksJson}' > ${escapedWtPath}/.claude/settings.json
+
+# Install garden-bundled skills (see src/dashboard/skills.ts).
+mkdir -p ${escapedWtPath}/.claude/skills
+printf '%s' '${escapedDoneSkill}' > ${escapedWtPath}/.claude/skills/'${escapedDoneSkillFilename}'
 
 # Ensure garden-managed dirs are excluded from git status.
 # Writing to the common info/exclude covers all worktrees and never gets committed.
