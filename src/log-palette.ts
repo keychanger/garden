@@ -1,7 +1,8 @@
 // Persisted per-project log colors for `garden logs`. Colors are assigned at
-// project registration so they stay stable as the project list grows. `green`
-// is reserved for garden itself; reds are omitted so project color never
-// collides with error coloring.
+// project registration so they stay stable as the project list grows. Green
+// shades are reserved for garden itself (only `green` is in the palette; other
+// greens like lime/mint are excluded entirely); reds are omitted so project
+// color never collides with error coloring.
 
 export const RESERVED_LOG_COLOR_PROJECT = "garden";
 export const RESERVED_LOG_COLOR_KEY = "green";
@@ -14,12 +15,12 @@ const PALETTE: Record<string, string> = {
   pink: "\x1b[38;5;213m",
   orange: "\x1b[38;5;208m",
   gold: "\x1b[38;5;220m",
-  lime: "\x1b[38;5;156m",
+  peach: "\x1b[38;5;216m",
   turquoise: "\x1b[38;5;50m",
   violet: "\x1b[38;5;99m",
   magenta: "\x1b[38;5;177m",
   yellow: "\x1b[38;5;184m",
-  mint: "\x1b[38;5;121m",
+  periwinkle: "\x1b[38;5;105m",
 };
 
 export const ASSIGNABLE_LOG_COLOR_KEYS: readonly string[] =
