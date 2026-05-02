@@ -7,10 +7,8 @@ import { beforeEach, afterEach } from "vitest";
 let tmpHome: string;
 let originalHome: string | undefined;
 
-// Real-fs + real-git tmp HOME. Extends test/helpers.ts:useTmpHome by also
-// initializing a git repo at <home>/repo with an initial commit, configured
-// with hermetic local user.email/user.name so tests don't depend on the
-// caller's git config.
+// Extends useTmpHome with a hermetic git repo at <home>/repo so tests don't
+// inherit the caller's user.email/user.name.
 export function useGitTmpHome() {
   beforeEach(() => {
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "garden-int-"));
@@ -54,9 +52,6 @@ export interface RunCliOptions {
   home?: string;
 }
 
-// Spawns the built CLI as a real subprocess. Requires `npm run build` to have
-// produced dist/cli.js (CI runs build before test:integration). HOME defaults
-// to the active useGitTmpHome's tmp dir if process.env.HOME points there.
 export function runCli(args: string[], opts: RunCliOptions = {}): RunCliResult {
   const cliPath = path.resolve(process.cwd(), "dist/cli.js");
   if (!fs.existsSync(cliPath)) {
