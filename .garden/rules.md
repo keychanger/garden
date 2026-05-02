@@ -1,6 +1,6 @@
 # Garden Project Rules
 
-These extend the global rules in ~/.garden/rules.md.
+These extend the global rules in `<garden-repo>/rules.md`.
 
 ## Language and tooling
 
