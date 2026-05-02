@@ -1,26 +1,11 @@
-// Per-worker Claude Code skills installed under <worktree>/.claude/skills/.
-//
-// Skills are user/agent-invocable instructions that Claude evaluates against
-// their description when deciding which tool to use. They give us a structured
-// place to put behaviors that shouldn't pollute the main system prompt — the
-// description acts as a trigger condition, the body is loaded only on
-// invocation. See https://docs.anthropic.com/claude-code/skills.
-//
-// Currently bundled: `done` — invoked by the worker when it has completed
-// every part of the operator's original request, before ending its turn.
-// Writes the .garden-done sentinel so the post-merge auto-continue check
-// sees it and skips the continuation prompt, leaving the worker in `merged`
-// (the operator's "this work is finished, you can clean it up" signal).
+// Garden-bundled Claude Code skills installed under <worktree>/.claude/skills/.
+// Skill descriptions act as Claude's trigger condition during planning, more reliable than instructions buried in the system prompt.
 import fs from "node:fs";
 import path from "node:path";
 
 export const DONE_SKILL_FILENAME = "done.md";
 
-// The skill markdown — frontmatter declares the trigger; body is loaded on
-// invocation. Kept here as a single source of truth so installClaudeHooks
-// (used for existing workers on refresh/bounce) and the worktree bootstrap
-// script (which writes settings.json inline at worker-creation time, before
-// the worktree exists) emit byte-identical content.
+// Single source of truth: the bootstrap script inlines this string before the worktree exists, and installClaudeHooks rewrites it on refresh/bounce.
 export const DONE_SKILL_CONTENT = `---
 name: done
 description: Use when you have completed everything the operator asked for and are about to end your turn. Writes the .garden-done sentinel so garden marks the work as merged-and-complete on the next merge instead of auto-continuing into a new phase.

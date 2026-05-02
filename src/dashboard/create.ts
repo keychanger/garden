@@ -99,9 +99,6 @@ function sandboxForTarget(targetDir: string, project: ProjectConfig): SandboxCon
 }
 
 // Write to settings.json, not settings.local.json — Claude Code auto-edits the latter (permission approvals) and clobbers our hooks.
-// Also installs garden-bundled skills under .claude/skills/ so the worker can
-// invoke them by description-based tool selection (e.g. the `done` skill that
-// writes the .garden-done sentinel). See src/dashboard/skills.ts.
 export function installClaudeHooks(targetDir: string, project: ProjectConfig): void {
   const sandbox = sandboxForTarget(targetDir, project);
   const json = buildSettingsJson(resolveGardenRunner(), sandbox);
