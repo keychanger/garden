@@ -20,7 +20,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
-import { SESSIONS_DIR } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { readDashState } from "./state.js";
 import { findWorkerByName, updateWorkerFields } from "./registry.js";
@@ -40,14 +39,20 @@ const MERGE_CONTINUE_PROMPT =
   "[garden] Your previous changes were reviewed and merged. Continue with the "
   + "next phase of the work. If you have finished everything the operator "
   + "asked for, write the sentinel file at "
-  + "~/.garden/sessions/$GARDEN_PROJECT-$GARDEN_WORKER.done before ending your "
-  + "turn so future merges do not auto-continue.";
+  + "/tmp/garden-$GARDEN_PROJECT-$GARDEN_WORKER.done before ending your turn "
+  + "so future merges do not auto-continue.";
 
 // Sentinel file: when present, the post-merge auto-continue is suppressed for
 // this worker. Worker writes it on completion; `garden pause` writes it on
-// demand; `garden resume` and killPane unlink it.
+// demand; `garden resume` and killPane unlink it. Lives in /tmp because that
+// is the only path outside the worktree that the worker sandbox allows
+// writes to (see src/dashboard/sandbox.ts DEFAULT_ALLOW_WRITE) — putting it
+// in ~/.garden/sessions would either require broadening the worker's write
+// scope to the registry/alerts/review-result files (security regression) or
+// an out-of-sandbox shim. /tmp is namespaced via the filename and dies with
+// the machine, which matches the worker lifecycle.
 export function donePath(projectName: string, workerName: string): string {
-  return path.join(SESSIONS_DIR, `${projectName}-${workerName}.done`);
+  return path.join("/tmp", `garden-${projectName}-${workerName}.done`);
 }
 
 export function isDoneSet(projectName: string, workerName: string): boolean {

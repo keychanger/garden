@@ -11,10 +11,6 @@ vi.mock("node:fs", () => ({
   },
 }));
 
-vi.mock("../src/config.js", () => ({
-  SESSIONS_DIR: "/tmp/fake-sessions",
-}));
-
 vi.mock("../src/session.js", () => ({
   DASHBOARD_SESSION: "garden-dashboard",
 }));
@@ -255,9 +251,9 @@ describe("continueWorkerAfterMerge", () => {
 });
 
 describe("done-sentinel helpers", () => {
-  it("donePath joins SESSIONS_DIR with project-worker.done", () => {
+  it("donePath builds /tmp/garden-<project>-<worker>.done (the only sandbox-writable path outside the worktree)", () => {
     expect(donePath("myproject", "bold-ash")).toBe(
-      "/tmp/fake-sessions/myproject-bold-ash.done",
+      "/tmp/garden-myproject-bold-ash.done",
     );
   });
 
@@ -271,7 +267,7 @@ describe("done-sentinel helpers", () => {
   it("clearDoneSentinel unlinks the donePath and tolerates ENOENT", () => {
     clearDoneSentinel("myproject", "bold-ash");
     expect(fs.unlinkSync).toHaveBeenCalledWith(
-      "/tmp/fake-sessions/myproject-bold-ash.done",
+      "/tmp/garden-myproject-bold-ash.done",
     );
 
     vi.mocked(fs.unlinkSync).mockImplementationOnce(() => {
