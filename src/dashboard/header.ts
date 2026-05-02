@@ -113,9 +113,12 @@ export function updateHeaderVar(opts?: RefreshOptions): void {
   // Pane-border vars must be set before setBarVars's refresh-client -S, or the border waits for the next status-interval tick.
   if (state.statusPaneId) {
     const { display, template } = buildPlotStrip(config, state.activePlot);
+    // Write template BEFORE setPaneVar so a racing bash animation tick reads
+    // the new template (not the old one) and does not clobber the strip back
+    // to the previous plot — see the per-frame reload in buildStatusCommand.
+    writePlotStripTemplate(template);
     setPaneVar(state.statusPaneId, "garden_name", display);
     setPaneVar(state.statusPaneId, "garden_plot", "");
-    writePlotStripTemplate(template);
   }
 
   const left = formatLeft(state.activeProject, state.activePlot, config);
@@ -602,6 +605,18 @@ export function buildStatusCommand(gardenRunner: string): string {
     // to the wedge that motivated the trap-narrowing above.
     `      if [ $has_cs -eq 1 ]; then`,
     `        printf '%s\\n' "$cur" | awk -v b='${brailleClass}' -v f="$sf_char" '$0 ~ b { gsub(b, f); printf "\\033[%d;1H%s", NR, $0 }';`,
+    `      fi;`,
+    // Re-read pt_tpl per frame so a plot change picked up via writePlotStripTemplate
+    // takes effect within ~120ms — without this, the cached template clobbers
+    // the JS-set @garden_name back to the previous plot until the next USR1.
+    // $(<file) is a bash builtin (no fork, no SIGCHLD), so this stays clear of
+    // the trap-wedge that motivated the trap-narrowing above.
+    `      if [ -r "$pst" ]; then`,
+    `        _ptn=$(<"$pst");`,
+    `        if [ "$_ptn" != "$pt_tpl" ]; then`,
+    `          pt_tpl="$_ptn";`,
+    `          case "$pt_tpl" in *"${sent}"*) has_ps=1 ;; *) has_ps=0 ;; esac;`,
+    `        fi;`,
     `      fi;`,
     // Must be pane-level: setPaneVar's pane scope shadows session-level writes.
     `      if [ $has_ps -eq 1 ]; then`,
