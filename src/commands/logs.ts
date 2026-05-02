@@ -270,6 +270,7 @@ const SUMMARIZERS: Record<string, Summarizer> = {
     const base = e.data?.baseBranch;
     return typeof base === "string" ? `✓ merged into ${base}` : "✓ merged";
   },
+  "poller:auto-continued worker after merge": () => "↻ auto-continued (next phase)",
   "hook:claude hook": (e) => {
     const event = String(e.data?.event ?? "?");
     const status = e.data?.claudeStatus;
