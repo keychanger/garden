@@ -377,11 +377,7 @@ export function handleClaudeHook(event: string): void {
     },
   });
 
-  // On stop, route the worker into one of three end-of-turn dispositions
-  // based on the worktree state: queue for review (commits ahead), restore
-  // "merged" (worker declared done via .garden-done), or do nothing (no
-  // commits, no done sentinel — the normal idle case). See STATUS.md
-  // invariant 2 (review-cycle entry) and invariant 4 (merged stickiness).
+  // See STATUS.md invariant 2 (review entry) and invariant 4 (merged stickiness).
   if (event === "stop") {
     routeStopHookEnd(workerInfo.project, workerInfo.worker);
     maybeRefreshUsage(resolveGardenRunner());
@@ -415,12 +411,9 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
       });
       return;
     }
-    // No commits ahead — if the worker wrote .garden-done, restore prState
-    // = "merged" so the operator's dashboard signals "this work is complete
-    // and the worker can be cleaned up." UserPromptSubmit cleared prState
-    // when the auto-continue prompt landed; the Stop hook reinstates it
-    // now that the worker has explicitly declared done. See STATUS.md
-    // invariant 4 for the updated stickiness contract.
+    // UserPromptSubmit cleared "merged" when auto-continue landed; if the
+    // worker subsequently wrote .garden-done, reinstate it so the cleanup
+    // signal survives. STATUS.md invariant 4.
     if (isDoneSet(entry.worktreePath)) {
       updateWorkerFields(projectName, workerName, {
         prState: "merged",
