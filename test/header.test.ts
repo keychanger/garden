@@ -251,6 +251,17 @@ describe("buildStatusCommand", () => {
     expect(cmd).toContain("done");
   });
 
+  it("reloads the plot-strip template per frame using the fork-free $(<file) builtin", () => {
+    const cmd = buildStatusCommand("garden");
+    // Per-frame reload is required so a plot change picked up via writePlotStripTemplate
+    // takes effect within ~120ms — without this, the cached template clobbers the
+    // JS-set @garden_name back to the previous plot until the next USR1 tick.
+    expect(cmd).toContain(`_ptn=$(<"$pst")`);
+    // Must NOT use $(cat ...) here — that fork stacks SIGCHLDs on the inner loop's
+    // wait, the same wedge that motivated narrowing the SIGUSR1 trap above.
+    expect(cmd).not.toMatch(/_ptn=\$\(cat "\$pst"/);
+  });
+
   it("animates the plot strip at pane level so the pane-scoped @garden_name set by setPaneVar isn't shadowed", () => {
     const cmd = buildStatusCommand("garden");
     // Session-level set would be shadowed by the pane-level @garden_name set
@@ -524,6 +535,31 @@ describe("updateHeaderVar", () => {
     expect(nameCallIdx).toBeDefined();
     expect(refreshIdx).toBeDefined();
     expect(nameCallIdx).toBeLessThan(refreshIdx);
+  });
+
+  it("writes the plot-strip template before setting @garden_name so a racing animation tick reads the new template", () => {
+    const writeFileSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {});
+    const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation(() => {});
+
+    updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "imp" }) });
+
+    const renameIdx = renameSpy.mock.invocationCallOrder[
+      renameSpy.mock.calls.findIndex(c => String(c[1]).endsWith("plot-strip.template"))
+    ];
+    const setPaneVarMock = vi.mocked(setPaneVar);
+    const nameCallIdx = setPaneVarMock.mock.invocationCallOrder[
+      setPaneVarMock.mock.calls.findIndex(c => c[1] === "garden_name")
+    ];
+    expect(renameIdx).toBeDefined();
+    expect(nameCallIdx).toBeDefined();
+    // Template rename (atomic publish of the new strip) must complete before
+    // setPaneVar publishes the JS-side @garden_name. Otherwise a bash frame
+    // racing between the two writes reads the old template and clobbers the
+    // new strip back to the previous plot.
+    expect(renameIdx).toBeLessThan(nameCallIdx);
+
+    writeFileSpy.mockRestore();
+    renameSpy.mockRestore();
   });
 });
 
