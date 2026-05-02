@@ -33,7 +33,6 @@ import { resolveGardenRunner } from "./create.js";
 import { healStatusPane } from "./validate.js";
 import { log } from "./log.js";
 import { addAlert } from "./alerts.js";
-import { recordFindings } from "./findings.js";
 import { pollerWindowName, reviewWindowName, workerWindowName } from "./window-names.js";
 import { buildReviewPrompt, buildResolvePrompt } from "./prompts.js";
 import { claudeEnvPrefix } from "./claude-env.js";
@@ -312,22 +311,6 @@ function handleReviewing(
     worker: entry.name,
     data: { verdict: review.verdict },
   });
-
-  if (review.verdict === "fixed" || review.verdict === "failed") {
-    try {
-      recordFindings({
-        project: projectName,
-        worker: entry.name,
-        verdict: review.verdict,
-        body: review.body,
-      });
-    } catch (err) {
-      log.warn("poller", "failed to record review findings", {
-        worker: entry.name,
-        data: { error: String(err) },
-      });
-    }
-  }
 
   if (review.verdict === "clean" || review.verdict === "fixed") {
     const wtPath = entry.worktreePath ?? projectPath;

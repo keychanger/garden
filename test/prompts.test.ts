@@ -106,13 +106,6 @@ describe("buildReviewPrompt — initial review", () => {
     expect(result).toBeNull();
   });
 
-  it("instructs the reviewer to emit a findings block on FIXED/FAILED", () => {
-    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry());
-    expect(result).toContain("```findings");
-    expect(result).toContain("FIXED or FAILED");
-    expect(result).toContain("kebab-case");
-    expect(result).toContain("do NOT emit a findings block");
-  });
 });
 
 describe("buildResolvePrompt", () => {

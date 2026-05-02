@@ -95,11 +95,6 @@ Dashboard:
   whoami [worker]                Show the current worker's registry entry (uses $GARDEN_WORKER)
   alerts                         View dashboard alerts
   alerts clear                   Dismiss all alerts
-  rules                          Interactive accept/dismiss for pending rule suggestions
-  rules list                     Print pending suggestions without prompting
-  rules accept <category>        Append a suggested rule to rules.md (use --confirm)
-  rules dismiss <category>       Dismiss a rule suggestion
-  rules findings                 Raw reviewer-findings log
   logs [options]                 View dashboard logs (pretty by default)
   logs -f                        Follow logs in real time
   logs -l warn                   Filter by minimum level

@@ -216,22 +216,6 @@ A second, *global* opt-out lives alongside the per-worker sentinel: a gate in `~
 ### Sibling Merge Notification
 When code merges, the poller compares the changed files against every other active worker's branch in the same project. If files overlap and the sibling has a live Claude session, it is notified via `tmux send-keys` with the merged worker's commit summary and overlapping file list so it can review and avoid reverting the merged work. Dead workers are skipped — they will hit rebase conflicts naturally on their next review cycle.
 
-### Rules Evolution
-Every reviewer catches the same class of issue eventually — stale tests after a refactor, missing error handling, overly broad scope — and today that signal is thrown away once the merge lands. The rules evolution loop closes that gap.
-
-When the reviewer emits a FIXED or FAILED verdict, its prompt now requires a fenced `findings` JSON block listing each distinct issue it intervened on, tagged with a short kebab-case category (the *class* of issue) and a one-sentence summary. The poller parses that block in `handleReviewing` and appends each finding to `~/.garden/sessions/rules-findings.json` (atomic write, capped at 1000 entries, same conventions as `dashboard.alerts.json`).
-
-A category becomes a *pending suggestion* once it has accumulated ≥3 findings across ≥2 distinct workers within the last 30 days. On the first crossing, a single alert is emitted via the normal `addAlert` path (source: `rules`, level: `warn`) — the nudge piggybacks on the existing alerts surface, so there's no new UI. Subsequent findings accumulate silently.
-
-**Commands:**
-- `garden rules` / `garden rules suggest` — interactive walk-through of pending suggestions with an `[a]ccept / [d]ismiss / [s]kip` prompt per category; accept optionally takes a one-line rule (Enter for evidence-only) and auto-resolves scope (project if one project is affected, global if multiple). Falls back to a plain list when stdin is not a TTY.
-- `garden rules list` — print pending suggestions without prompting
-- `garden rules accept <category> [--rule "..."] [--global | --project <name>] [--confirm]` — non-interactive accept for scripting: synthesize a markdown rule block, append it to the inferred `rules.md`, then commit the change in the containing repo and push (so the dirty file doesn't block subsequent post-merge fast-forwards). Push failures keep the local commit and print a warning.
-- `garden rules dismiss <category>` — mark so the suggestion won't re-surface
-- `garden rules findings [--project <name>]` — raw findings log
-
-Every accepted suggestion permanently raises the review bar for every future worker across every project.
-
 ### Claude Usage Meter
 Three quota bars render in the top-left "garden" title pane sitting above the status pane: the 5-hour rolling window, the weekly total, and the Sonnet-specific weekly meter (shown as `—` on plans that don't track it separately). Bars are colored by utilization — green <60%, yellow <85%, red at or above — with a bright `│` marker overlaid at the current time position in the window (so you can see whether usage is ahead of or behind the clock) and the reset countdown next to each. The third bar is Sonnet rather than Opus because on Max plans the API returns `seven_day_opus: null` (Opus usage is rolled into the weekly total) while `seven_day_sonnet` is the populated model-specific bucket.
 
@@ -250,7 +234,6 @@ The dashboard surfaces important events as alerts — persistent messages that r
 - Merge failure
 - Local checkout did not fast-forward after merge (regardless of postMerge config)
 - Repeated failures (3+ consecutive failures on the same worker)
-- Rule suggestion ready (a category crossed the findings threshold)
 - Base-branch drift after worker creation (Stop hook cannot count commits against `origin/<pinned-base>`; deduped to one firing per worker per hour)
 - Auto-continue auto-disabled by usage threshold (source: `usage`, level: `warn`)
 
@@ -258,7 +241,7 @@ Worker "needs operator input" events (AskUserQuestion, ExitPlanMode, auto-mode p
 
 **Visibility:**
 - Bottom bar shows a red `⚠ N alerts — ⌥l to clear` badge on the right when unread alerts exist. The badge appears instantly on `addAlert()` via `tmux set-option @garden_right` + `refresh-client -S`.
-- Every alert is also streamed to `dashboard.log` at its declared level (`warn` or `error`), so it appears live in the `garden logs --follow` pane (the `_garden-logs` window) with the `[!]` prefix. Rule-suggestion alerts land at `warn`; review/merge failures land at `error`.
+- Every alert is also streamed to `dashboard.log` at its declared level (`warn` or `error`), so it appears live in the `garden logs --follow` pane (the `_garden-logs` window) with the `[!]` prefix.
 - Pressing `⌥l` focuses the logs view **and** acknowledges all current alerts, clearing the badge. Acknowledgement is explicit — an alert that fires while the logs pane is already focused still lights the badge, so autonomous failures aren't silently missed when the user is away.
 - `garden alerts` lists full history (read and unread); `garden alerts clear` wipes the store.
 
@@ -328,11 +311,6 @@ garden status                      # Show all projects and their workers
 garden whoami [worker]             # Show the current worker's registry entry (uses $GARDEN_WORKER)
 garden alerts                      # View dashboard alerts
 garden alerts clear                # Dismiss all alerts
-garden rules                       # Interactive accept/dismiss for pending rule suggestions
-garden rules list                  # Print pending suggestions without prompting
-garden rules accept <category>     # Append a synthesized rule to rules.md (use --confirm)
-garden rules dismiss <category>    # Dismiss a rule suggestion
-garden rules findings              # Raw reviewer-findings log
 garden logs [options]              # View dashboard logs (pretty-printed)
 garden kick <worker>               # Re-arm a stranded 'working' worker for review
 garden bounce <worker>             # Restart a worker's Claude process (preserves session history)
@@ -362,7 +340,6 @@ All read commands detect whether stdout is a TTY:
     dashboard.state.json  # Dashboard pane state
     dashboard.registry.json  # Worker registry (persists across restarts)
     dashboard.alerts.json # Operator alerts (review failures, merge errors)
-    rules-findings.json   # Reviewer findings tally + suggestion status
     dashboard-<project>.context  # System prompt for project's Claude sessions
     dashboard-<project>-<branch>.context  # Worktree worker context
     dashboard.log           # Structured JSON log

@@ -21,7 +21,6 @@ import { kick } from "./kick.js";
 import { bounce } from "./bounce.js";
 import { pause } from "./pause.js";
 import { resume } from "./resume.js";
-import { rules } from "./rules.js";
 import { claudeProfile } from "./claude-profile.js";
 import { login } from "./login.js";
 import { auth } from "./auth.js";
@@ -56,7 +55,6 @@ export const commands: Record<string, Command> = {
   bounce,
   pause,
   resume,
-  rules,
   "claude-profile": claudeProfile,
   login,
   auth,
