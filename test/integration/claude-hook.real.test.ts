@@ -89,6 +89,10 @@ function seedConfig() {
 
 beforeEach(() => {
   originalCwd = process.cwd();
+  // Reviewer env var leaks in when these tests run inside `garden review`.
+  // Clear it so handleClaudeHook treats the test process as a worker, not a
+  // reviewer. Tests that exercise the reviewer-skip path set it explicitly.
+  delete process.env.GARDEN_REVIEWER;
 
   // Origin remote and project checkout so routeStopHookEnd's rev-list works.
   originPath = path.join(env.home, "origin.git");
