@@ -803,11 +803,9 @@ function handleMerged(
   const wtPath = entry.worktreePath;
   if (!wtPath) return false;
 
-  // Only transition out of merged when new commits appear, indicating a new
-  // work cycle. Claude being active alone (e.g. answering questions) should
-  // not clear the merged indicator — "merged" is sticky until new work starts.
+  // Recovery path: if commits appear before UserPromptSubmit clears the
+  // transient `merged`, treat that as a new work cycle and resume.
   const commitSummary = getCommitSummary(wtPath, baseBranch);
-
   if (!commitSummary) return false;
 
   log.info("poller", "new commits after merge, resuming", {
