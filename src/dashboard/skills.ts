@@ -10,7 +10,7 @@ export const DONE_SKILL_FILENAME = "SKILL.md";
 // Single source of truth: the bootstrap script inlines this string before the worktree exists, and installClaudeHooks rewrites it on refresh/bounce.
 export const DONE_SKILL_CONTENT = `---
 name: done
-description: Use when you have completed everything the operator asked for and are about to end your turn. Writes the .garden-done sentinel so garden marks the work as merged-and-complete on the next merge instead of auto-continuing into a new phase.
+description: Use when you have completed everything the operator asked for and are about to end your turn. Writes the .garden-done sentinel so garden marks the work as done on the next merge (status pane shows green "done") instead of auto-continuing into a new phase.
 ---
 
 # Done
@@ -21,7 +21,7 @@ Invoke this skill at the end of any turn where you believe you have finished eve
 
 Runs \`touch .garden-done\` at the root of your worktree (your CWD). On the next merge of your branch, garden's poller checks for this file:
 
-- **File present**: the auto-continue prompt is suppressed. Your worker stays in the \`merged\` state on the dashboard — the operator's "this work is complete, the worker can be cleaned up" signal.
+- **File present**: the auto-continue prompt is suppressed. Your worker enters the \`done\` state on the dashboard (bold green check) — the operator's "this work is complete, the worker can be cleaned up" signal.
 - **File absent**: garden assumes there's another phase coming and sends a "please proceed" prompt to your pane.
 
 ## When to use

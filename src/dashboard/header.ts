@@ -130,13 +130,13 @@ export function updateHeaderVar(opts?: RefreshOptions): void {
 const PLOT_ICONS: Record<Exclude<PlotState, "idle">, string> = {
   failing: "✖",  // heavy x
   asking:  "⚑",  // flag
-  merged:  "✓",  // check
+  done:    "✓",  // check — terminal cleanup signal
   working: PLOT_SPINNER_SENTINEL,
 };
 const PLOT_COLORS: Record<Exclude<PlotState, "idle" | "working">, string> = {
   failing: "red",
   asking:  "yellow",
-  merged:  "green",
+  done:    "green",
 };
 
 // Circles mirror the worker focus marker rendered directly below this pane.
@@ -297,10 +297,11 @@ export function handleClaudeHook(event: string): void {
     }
   } else if (event === "prompt") {
     fields.claudeStatus = "working";
-    // Clear merged prState on the next prompt — invariant 4 ("merged" is sticky
-    // until new input). The hook handler is the only place this clear happens.
+    // Clear merged/done prState on the next prompt — invariant 4 (terminal
+    // states are sticky until new input). The hook handler is the only place
+    // this clear happens.
     const existing = findWorkerByName(workerInfo.project, workerInfo.worker);
-    if (existing?.prState === "merged") {
+    if (existing?.prState === "merged" || existing?.prState === "done") {
       fields.prState = undefined;
     }
   } else if (event === "stop") {
@@ -411,15 +412,15 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
       });
       return;
     }
-    // UserPromptSubmit cleared "merged" when auto-continue landed; if the
-    // worker subsequently wrote .garden-done, reinstate it so the cleanup
-    // signal survives. STATUS.md invariant 4.
+    // No commits ahead + sentinel present → terminal "done" state, the
+    // operator-actionable cleanup signal. STATUS.md invariant 4 path 2:
+    // sentinel was set after auto-continue cleared the transient merged.
     if (isDoneSet(entry.worktreePath)) {
       updateWorkerFields(projectName, workerName, {
-        prState: "merged",
+        prState: "done",
         mergedAt: new Date().toISOString(),
       });
-      log.info("hook", "stop hook restored merged prState (worker declared done)", {
+      log.info("hook", "stop hook set done prState (worker declared done)", {
         worker: workerName,
         data: { project: projectName },
       });

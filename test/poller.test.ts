@@ -905,7 +905,7 @@ describe("poll — merge-pending state", () => {
     expect(workingCall).toBeDefined();
     expect((workingCall![2] as Record<string, unknown>).mergedAt).toBeUndefined();
     expect(log.info).toHaveBeenCalledWith(
-      "poller", "worker already active after merge, clearing merged state",
+      "poller", "worker already active after merge, clearing terminal state",
       expect.objectContaining({ worker: "bold-ash" }),
     );
   });
@@ -933,7 +933,7 @@ describe("poll — merge-pending state", () => {
     );
   });
 
-  it("skips auto-continue when the .garden-done sentinel is set", () => {
+  it("sets prState=done (not merged) and skips auto-continue when .garden-done is set at merge time", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
@@ -946,6 +946,12 @@ describe("poll — merge-pending state", () => {
     vi.mocked(isDoneSet).mockReturnValue(true);
 
     poll("myproject");
+
+    const calls = vi.mocked(updateWorkerFields).mock.calls.filter(c => c[1] === "bold-ash");
+    const doneCall = calls.find(c => (c[2] as Record<string, unknown>).prState === "done");
+    const mergedCall = calls.find(c => (c[2] as Record<string, unknown>).prState === "merged");
+    expect(doneCall).toBeDefined();
+    expect(mergedCall).toBeUndefined();
 
     expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
     expect(log.debug).toHaveBeenCalledWith(

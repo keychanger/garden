@@ -408,7 +408,7 @@ describe("handleClaudeHook — core events", () => {
     );
   });
 
-  it("stop restores prState=merged when .garden-done is present and no commits ahead", async () => {
+  it("stop sets prState=done when .garden-done is present and no commits ahead", async () => {
     seedWorker("garden", "bold-ash", {
       claudeStatus: "working",
       worktreePath: "/tmp/wt/garden/bold-ash",
@@ -433,17 +433,17 @@ describe("handleClaudeHook — core events", () => {
       "garden", "bold-ash",
       expect.objectContaining({ claudeStatus: "idle" }),
     );
-    // Second call: prState = merged + mergedAt timestamp (the new behavior).
+    // Second call: prState = done + mergedAt timestamp (terminal cleanup signal).
     expect(updateWorkerFields).toHaveBeenCalledWith(
       "garden", "bold-ash",
       expect.objectContaining({
-        prState: "merged",
+        prState: "done",
         mergedAt: expect.any(String),
       }),
     );
   });
 
-  it("stop does NOT restore merged when .garden-done is absent", async () => {
+  it("stop does NOT set done when .garden-done is absent", async () => {
     seedWorker("garden", "bold-ash", {
       claudeStatus: "working",
       worktreePath: "/tmp/wt/garden/bold-ash",
@@ -464,13 +464,13 @@ describe("handleClaudeHook — core events", () => {
 
     handleClaudeHook("stop");
 
-    const mergedCall = vi.mocked(updateWorkerFields).mock.calls.find(
-      c => (c[2] as Record<string, unknown>).prState === "merged",
+    const doneCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "done",
     );
-    expect(mergedCall).toBeUndefined();
+    expect(doneCall).toBeUndefined();
   });
 
-  it("stop with commits ahead AND .garden-done queues review (does NOT restore merged)", async () => {
+  it("stop with commits ahead AND .garden-done queues review (does NOT set done)", async () => {
     seedWorker("garden", "bold-ash", {
       claudeStatus: "working",
       worktreePath: "/tmp/wt/garden/bold-ash",
@@ -488,17 +488,20 @@ describe("handleClaudeHook — core events", () => {
 
     handleClaudeHook("stop");
 
-    // Review path takes priority — finalizeMerge will set merged itself
-    // after the merge cycle completes. The .done sentinel is checked
-    // there via maybeAutoContinue.
+    // Review path takes priority — finalizeMerge will pick the terminal
+    // state (merged or done) itself after the merge cycle completes,
+    // based on whether .garden-done is present at merge time.
     expect(updateWorkerFields).toHaveBeenCalledWith(
       "garden", "bold-ash",
       expect.objectContaining({ pendingReviewAt: expect.any(Number) }),
     );
-    const mergedCall = vi.mocked(updateWorkerFields).mock.calls.find(
-      c => (c[2] as Record<string, unknown>).prState === "merged",
+    const terminalCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => {
+        const f = c[2] as Record<string, unknown>;
+        return f.prState === "merged" || f.prState === "done";
+      },
     );
-    expect(mergedCall).toBeUndefined();
+    expect(terminalCall).toBeUndefined();
   });
 
   it("stop fires base-drift alert when rev-list against origin/<base> throws", async () => {

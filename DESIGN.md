@@ -83,7 +83,7 @@ Plots scale past the nine-project hotkey ceiling: you can register as many proje
 
 **Header rendering**: `formatLeft` prefixes the active-project string with the plot name (e.g., `imp › garden • main`). The status pane's border renders a plot strip — one segment per focused plot, showing a filled circle on the active one and an empty circle on the others (mirroring the worker focus marker below it) — by writing the formatted string into `@garden_name` on the status pane (`buildPlotStrip` in `src/dashboard/header.ts`). Unfocused plots are omitted. `@garden_plot` is unused on that pane.
 
-**Plot status indicators**: Each plot segment also carries a status icon derived from the aggregated state of all workers across the plot's projects (`resolvePlotStatus` in `src/dashboard/plot-status.ts`). Priority order: `failing` (red ✖) > `asking` (yellow ⚑) > `merged` (green ✓) > `working` (braille spinner) > `idle` (no icon). Only `merged` is green — `reviewing`, `merge-pending`, and `resolving` fall through to `working`, since the outcome of an in-flight review isn't yet known. Colors override the active/inactive styling for non-working states; working plots keep the bold/dim active/inactive distinction and add a bright spinner. The spinner animates at the same 120ms cadence as worker rows by piggybacking on the status pane's existing SIGUSR1-driven tick: `buildPlotStrip` writes a template file (`~/.garden/sessions/plot-strip.template`) with a `__GSP__` sentinel where the spinner frame goes, and the status pane's bash loop substitutes the current frame and rewrites `@garden_name` each tick. The loop enters animation mode if either `$cur` has a braille char or the template file contains the sentinel.
+**Plot status indicators**: Each plot segment also carries a status icon derived from the aggregated state of all workers across the plot's projects (`resolvePlotStatus` in `src/dashboard/plot-status.ts`). Priority order: `failing` (red ✖) > `asking` (yellow ⚑) > `done` (green ✓) > `working` (braille spinner) > `idle` (no icon). Only `done` is green — `merged` (transient post-merge beat), `reviewing`, `merge-pending`, and `resolving` fall through to `working`, since none of those are operator-actionable. Colors override the active/inactive styling for non-working states; working plots keep the bold/dim active/inactive distinction and add a bright spinner. The spinner animates at the same 120ms cadence as worker rows by piggybacking on the status pane's existing SIGUSR1-driven tick: `buildPlotStrip` writes a template file (`~/.garden/sessions/plot-strip.template`) with a `__GSP__` sentinel where the spinner frame goes, and the status pane's bash loop substitutes the current frame and rewrites `@garden_name` each tick. The loop enters animation mode if either `$cur` has a braille char or the template file contains the sentinel.
 
 **Project removal** (`garden remove <project>`) also calls `purgeProjectFromPlots` to strip the project from every plot's project list. Empty plots are kept — delete explicitly with `garden plot delete`.
 
@@ -134,9 +134,9 @@ Each project gets its own background poller (`_<project>-poller`) running in a h
 
 **State machine per worker:**
 ```
-working -> reviewing -> merge-pending -> merged
-               |              |
-               v              v
+working -> reviewing -> merge-pending -> merged --(UserPromptSubmit)--> working
+               |              |              \
+               v              v               +-(.garden-done set)-> done
            failing        resolving (auto-resolver on rebase conflict)
                               |
                               +-> merge-pending (verified) or failing (budget exhausted)
@@ -147,7 +147,8 @@ working -> reviewing -> merge-pending -> merged
 4. **merge-pending**: Review passed, waiting to merge. A serial merge queue processes one merge at a time per project (ordered by timestamp). The merge sequence: rebase onto current base branch, force-push, then ff-merge. If the rebase has conflicts (because the base branch advanced while waiting), the poller launches a dedicated resolver and transitions to `resolving`. If the rebase is clean, the merge proceeds.
 5. **resolving**: A dedicated resolver Claude session is running in a hidden tmux window with a single narrow job: complete `git rebase origin/<base>` and commit any conflict resolutions. The resolver does not push and does not re-review code — the code was already approved. On Stop, the poller verifies the rebase actually landed (no `.git/rebase-merge` or `.git/rebase-apply` present; `origin/<base>` is an ancestor of HEAD; HEAD differs from `preResolveSha`). On pass, force-pushes and returns to `merge-pending`. On fail, retries up to `resolveAttempts = 2`; on budget exhaustion, transitions to `failing` with an operator alert that names the unmerged files. Any worker push during `resolving` aborts and resets budget — the worker's new state is the new ground truth.
 6. **failing**: Unfixable review issues, failed review process, or exhausted resolver budget. Poller watches for new commits via SHA tracking. After 30s debounce with no new pushes, state transitions back to working for retry. Each failure increments a `failCount` on the worker entry; after 3 consecutive failures, an alert is surfaced. The count resets on successful merge.
-7. **merged**: Code merged to the base branch. This is a sticky state — it persists even if Claude is actively responding to questions, since conversational activity alone doesn't indicate a new work cycle. Only transitions back to working when new commits appear on the branch, starting a new review cycle.
+7. **merged**: Transient post-merge beat — code just landed on the base branch. Renders neutral (not green) in the status pane; not an operator-actionable signal. Cleared the moment the auto-continue prompt's `UserPromptSubmit` fires, returning the worker to `working` for the next phase. If `claudeStatus` is `working` at the moment `finalizeMerge` runs (a prompt landed mid-merge race), the poller clears `merged` immediately to `working`.
+8. **done**: Worker self-declared finished via the `.garden-done` sentinel and the merge cycle has settled. Renders bold green ✓ in the status pane — the operator's "this work is complete, the worker can be cleaned up" signal. Two paths in: `finalizeMerge` sets `done` directly when the sentinel was set before the final push (skipping the transient `merged` beat); the Stop hook sets `done` when the worker writes the sentinel after auto-continue and ends with no commits ahead. Cleared on `UserPromptSubmit` (operator nudges the worker back to work).
 
 ### Project Configuration
 Projects can define settings in `~/.garden/config.yml`, either by editing the file directly or via `garden config <project> <key> <value>`:
@@ -184,7 +185,7 @@ After a review passes, workers enter the `merge-pending` state. The merge queue 
 5. If rebase is clean: force-push the rebased branch, fast-forward the remote base branch via direct refspec push (no local checkout needed)
 6. Notify live sibling workers with overlapping files (see below)
 7. Fast-forward the local base branch checkout; run postMerge command (if configured) only when the checkout actually advanced. If the fast-forward fails (dirty working tree, divergent branch), postMerge is skipped and an alert is raised — always, regardless of whether postMerge was configured, because a stuck main checkout silently drifts out of sync with the remote
-8. Mark the worker as merged in the registry
+8. Mark the worker as `merged` (or `done` if `.garden-done` is present at the worktree) in the registry
 
 The worker and its worktree are not automatically cleaned up on merge. Cleanup happens only when the user kills the worker with `opt-x` or runs `garden reset`. This allows inspecting merged work before disposal.
 
@@ -281,7 +282,8 @@ Each worker has two independent status axes:
 - ◷ **merge-pending** — review passed, in the merge queue
 - ◔ **resolving** — automated resolver is fixing a merge-queue rebase conflict
 - ✖ **failing** — review failed, waiting for worker to fix; row is highlighted bold-red in the status pane
-- ✓ **merged** — code merged to base branch; row is highlighted bold-green in the status pane
+- ✓ **merged** — transient post-merge beat; row is uncolored (not actionable; cleared by the next auto-continue prompt)
+- ✓ **done** — worker self-declared finished via `.garden-done`; row is highlighted bold-green in the status pane (operator cleanup signal)
 
 The display combines both axes: lifecycle state takes priority when present, otherwise the process state is shown. A worker that is "reviewing" shows the reviewing bullseye regardless of what Claude is doing. Only workers in the "working" display state get the animated braille spinner.
 

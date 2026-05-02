@@ -464,7 +464,18 @@ describe("updateHeaderVar", () => {
     expect(strip).toContain("#[fg=yellow,bold]● ⚑ imp#[default]");
   });
 
-  it("renders a green ✓ icon only when a worker has merged (not for merge-pending)", () => {
+  it("renders a green ✓ icon only when a worker is done (not for merged or merge-pending)", () => {
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: { garden: [{ name: "w1", sessionId: "s", task: "", prState: "done" }] },
+    } as never);
+    vi.mocked(resolveWorkerStatus).mockReturnValue("done" as never);
+
+    updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "imp" }) });
+    const strip = vi.mocked(setPaneVar).mock.calls.find(c => c[1] === "garden_name")?.[2] ?? "";
+    expect(strip).toContain("#[fg=green,bold]● ✓ imp#[default]");
+  });
+
+  it("renders the working spinner (not green ✓) when a worker is in transient merged", () => {
     vi.mocked(readRegistry).mockReturnValue({
       workers: { garden: [{ name: "w1", sessionId: "s", task: "", prState: "merged" }] },
     } as never);
@@ -472,7 +483,8 @@ describe("updateHeaderVar", () => {
 
     updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "imp" }) });
     const strip = vi.mocked(setPaneVar).mock.calls.find(c => c[1] === "garden_name")?.[2] ?? "";
-    expect(strip).toContain("#[fg=green,bold]● ✓ imp#[default]");
+    expect(strip).not.toContain("✓");
+    expect(strip).toMatch(/[⠀-⣿]/);
   });
 
   it("renders a spinner frame when a worker is working, and writes the template with a sentinel", () => {

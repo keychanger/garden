@@ -55,10 +55,11 @@ const REVIEW_TIMEOUT_MS = 30 * 60 * 1000;
 const VALID_TRANSITIONS: Record<PrState, PrState[]> = {
   working:         ["reviewing"],
   reviewing:       ["merge-pending", "working", "failing"],
-  "merge-pending": ["merged", "resolving", "working"],
+  "merge-pending": ["merged", "done", "resolving", "working"],
   resolving:       ["merge-pending", "working", "failing"],
   failing:         ["working"],
-  merged:          ["working"],
+  merged:          ["working", "done"],
+  done:            ["working"],
 };
 
 function transitionState(
@@ -149,6 +150,8 @@ function pollWorker(
       return handleFailing(projectName, projectPath, baseBranch, entry);
     case "merged":
       return handleMerged(projectName, baseBranch, entry);
+    case "done":
+      return handleDone(projectName, baseBranch, entry);
     default: {
       const _exhaustive: never = state;
       log.warn("poller", `unknown prState: ${_exhaustive}`, { worker: entry.name });
@@ -818,6 +821,27 @@ function handleMerged(
   return true;
 }
 
+// Mirror of handleMerged for the terminal "done" cleanup signal. Symmetric
+// behavior: if the operator nudges the worker into a new work cycle (commits
+// appear) without going through UserPromptSubmit, recover into `working`.
+function handleDone(
+  projectName: string,
+  baseBranch: string,
+  entry: WorkerEntry,
+): boolean {
+  const wtPath = entry.worktreePath;
+  if (!wtPath) return false;
+  const commitSummary = getCommitSummary(wtPath, baseBranch);
+  if (!commitSummary) return false;
+  log.info("poller", "new commits after done, resuming", { worker: entry.name });
+  transitionState(projectName, entry.name, "working", {
+    mergedAt: undefined,
+    lastSeenSha: undefined,
+  });
+  refreshDashboard();
+  return true;
+}
+
 // --- Review launching and result parsing ---
 
 // Spawn a detached timer that pokes the project's FIFO after REVIEW_TIMEOUT_MS.
@@ -1141,10 +1165,13 @@ function finalizeMerge(
     });
   }
 
-  // Per STATUS.md invariant 4: there is no merged history. mergeCount is gone.
-  // The race that the old double-check guarded against is gone too: the file
-  // lock around updateWorkerFields prevents concurrent clobbering.
-  transitionState(projectName, entry.name, "merged", {
+  // Per STATUS.md invariant 4: pick `done` when the worker wrote `.garden-done`
+  // before its final push (path 1: skip the transient `merged` beat and go
+  // straight to the operator-actionable cleanup signal). Otherwise set `merged`
+  // — auto-continue will clear it on the next prompt.
+  const sentinelPresent = isDoneSet(entry.worktreePath);
+  const terminalState: PrState = sentinelPresent ? "done" : "merged";
+  transitionState(projectName, entry.name, terminalState, {
     mergedAt: new Date().toISOString(),
     failCount: 0,
     mergePendingAt: undefined,
@@ -1157,11 +1184,12 @@ function finalizeMerge(
   });
 
   // STATUS.md invariant 4 race: prompt hook can't clear active pipeline states,
-  // so if the worker is already working, clear the stale "merged" immediately.
+  // so if the worker is already working, clear the stale terminal state immediately.
   const fresh = findWorkerByName(projectName, entry.name);
   if (fresh?.claudeStatus === "working") {
-    log.info("poller", "worker already active after merge, clearing merged state", {
+    log.info("poller", "worker already active after merge, clearing terminal state", {
       worker: entry.name,
+      data: { clearedFrom: terminalState },
     });
     transitionState(projectName, entry.name, "working", {
       mergedAt: undefined,

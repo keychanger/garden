@@ -16,11 +16,12 @@ import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/w
 
 // Display states from STATUS.md. These are the only values the renderer ever
 // emits. `loading`/`ready`/`working`/`idle`/`exited` come from claudeStatus
-// (written by hooks). `reviewing`/`merge-pending`/`failing`/`merged` come
-// from prState (written by the poller). The combine function gives prState
-// priority because it describes where the worker's *code* is.
+// (written by hooks). `reviewing`/`merge-pending`/`failing`/`merged`/`done`
+// come from prState (written by the poller and the Stop hook). The combine
+// function gives prState priority because it describes where the worker's
+// *code* is.
 export type ProcessStatus = "loading" | "ready" | "working" | "asking" | "idle" | "exited";
-type LifecycleStatus = "reviewing" | "merge-pending" | "resolving" | "failing" | "merged";
+type LifecycleStatus = "reviewing" | "merge-pending" | "resolving" | "failing" | "merged" | "done";
 type WorkerStatus = ProcessStatus | LifecycleStatus;
 
 interface WorkerInfo {
@@ -49,7 +50,8 @@ const STATUS_ICONS: Record<WorkerStatus, string> = {
   "merge-pending": "\u25F7",    // circle with right half - queued
   resolving:      "\u25D4",     // circle with upper-right quadrant - resolving
   failing:        "\u2716",     // heavy multiplication x
-  merged:         "\u2713",     // check mark
+  merged:         "\u2713",     // check mark - transient post-merge beat (neutral color)
+  done:           "\u2713",     // check mark - operator-actionable cleanup signal (bold green)
   exited:         "\u25CB",     // open circle
 };
 
@@ -164,20 +166,21 @@ function formatStatus(worker: WorkerInfo): string {
 function colorizeRow(status: WorkerStatus, line: string): string {
   if (status === "asking") return `\x1b[1;33m${line}\x1b[0m`;
   if (status === "failing") return `\x1b[1;31m${line}\x1b[0m`;
-  if (status === "merged") return `\x1b[1;32m${line}\x1b[0m`;
+  if (status === "done") return `\x1b[1;32m${line}\x1b[0m`;
   return line;
 }
 
 // Combine claudeStatus and prState into a single display state.
-// Lifecycle states (reviewing, merge-pending, failing, merged) take priority
-// because they describe where the worker's *code* is, not what Claude is
-// doing right now. The hook handler is the only place that clears `merged`
-// from prState (on UserPromptSubmit) — this function never mutates state.
+// Lifecycle states (reviewing, merge-pending, failing, merged, done) take
+// priority because they describe where the worker's *code* is, not what
+// Claude is doing right now. The hook handler is the only place that clears
+// `merged`/`done` from prState (on UserPromptSubmit) — this function never
+// mutates state.
 export function resolveWorkerStatus(
   entry: { claudeStatus?: string; prState?: string } | undefined,
 ): WorkerStatus {
   const pr = entry?.prState;
-  if (pr === "reviewing" || pr === "merge-pending" || pr === "resolving" || pr === "failing" || pr === "merged") {
+  if (pr === "reviewing" || pr === "merge-pending" || pr === "resolving" || pr === "failing" || pr === "merged" || pr === "done") {
     return pr;
   }
   const cs = entry?.claudeStatus as ProcessStatus | undefined;

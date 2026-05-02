@@ -199,14 +199,25 @@ describe("lifecycle state display (prState takes priority)", () => {
     expect(failingLine).toMatch(/\x1b\[1;31m/);
   });
 
-  it("shows merged from prState and wraps the row in bold-green", async () => {
+  it("shows merged from prState as a neutral row (transient post-merge beat, not green)", async () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "merged" },
     ]);
     const lines = await captureConsoleLog(() => status([]));
     const mergedLine = lines.find(l => l.includes("merged") && l.includes("bold-ash"));
     expect(mergedLine).toBeDefined();
-    expect(mergedLine).toMatch(/\x1b\[1;32m/);
+    // Transient merged is not actionable — must not be wrapped in bold-green.
+    expect(mergedLine).not.toMatch(/\x1b\[1;32m/);
+  });
+
+  it("shows done from prState and wraps the row in bold-green", async () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "done" },
+    ]);
+    const lines = await captureConsoleLog(() => status([]));
+    const doneLine = lines.find(l => l.includes("done") && l.includes("bold-ash"));
+    expect(doneLine).toBeDefined();
+    expect(doneLine).toMatch(/\x1b\[1;32m/);
   });
 });
 
@@ -281,16 +292,25 @@ describe("renderQuickStatus", () => {
     expect(result).not.toMatch(/\x1b\[1;31m[^\n]*bold-ash/);
   });
 
-  it("renders merged rows wrapped in bold-green ANSI", () => {
+  it("renders done rows wrapped in bold-green ANSI", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "done" },
+    ]);
+    const result = renderQuickStatus(state);
+    expect(result).toContain("done");
+    expect(result).toMatch(/\x1b\[1;32m[^\n]*bold-ash[^\n]*\x1b\[0m/);
+  });
+
+  it("does NOT render transient merged rows in bold-green (only done is the green signal)", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "merged" },
     ]);
     const result = renderQuickStatus(state);
     expect(result).toContain("merged");
-    expect(result).toMatch(/\x1b\[1;32m[^\n]*bold-ash[^\n]*\x1b\[0m/);
+    expect(result).not.toMatch(/\x1b\[1;32m[^\n]*bold-ash/);
   });
 
-  it("does not wrap non-merged rows in bold-green", () => {
+  it("does not wrap non-done rows in bold-green", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "idle" },
     ]);

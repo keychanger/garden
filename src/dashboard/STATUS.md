@@ -20,7 +20,8 @@ These are the only states the user sees in the status pane.
 | reviewing     | `%`  | Automated reviewer is checking the worker's code. |
 | merge-pending | `&`  | Review passed. Queued for merge.                 |
 | resolving     | `~`  | Automated resolver is fixing a merge-queue rebase conflict. |
-| merged        | `+`  | Code landed on the base branch.                  |
+| merged        | `+`  | Code just landed on the base branch — transient post-merge beat. Neutral color; not actionable. |
+| done          | `=`  | Worker self-declared finished via the `.garden-done` sentinel. Bold green; the operator's "cleanup me" signal. |
 | failing       | `x`  | Review failed. Waiting for worker to fix.        |
 | exited        | `o`  | Worker process is gone.                          |
 
@@ -85,8 +86,11 @@ stateDiagram-v2
     resolving --> failing : resolver Stop (budget exhausted)
     resolving --> working : worker push (stale resolution)
 
-    merged --> working : UserPromptSubmit (merged cleared, no .garden-done)
-    idle --> merged : Stop hook + .garden-done present
+    merged --> working : UserPromptSubmit (auto-continue, no sentinel)
+    merged --> done : Stop hook + .garden-done present + no commits ahead
+    merge_pending --> done : queue: ff merge with .garden-done present
+    idle --> done : Stop hook + .garden-done present
+    done --> working : UserPromptSubmit (operator nudged)
 
     failing --> working : worker push + 30s debounce
 
@@ -126,13 +130,16 @@ a terminal state — it returns to `working` when the operator responds
 | reviewing     | merge-pending | Reviewer `Stop` with verdict CLEAN or FIXED          |
 | reviewing     | failing       | Reviewer `Stop` with verdict FAILED                  |
 | reviewing     | working       | Worker push event (commits during review, aborted)   |
-| merge-pending | merged        | Merge queue: ff merge succeeds                       |
+| merge-pending | merged        | Merge queue: ff merge succeeds (no sentinel)         |
+| merge-pending | done          | Merge queue: ff merge succeeds AND `.garden-done` present at merge time |
 | merge-pending | resolving     | Merge queue: rebase conflict (resolver launched)     |
 | merge-pending | working       | Merge queue: merge fails (non-conflict)              |
 | resolving     | merge-pending | Resolver `Stop`, programmatic verification passed    |
 | resolving     | failing       | Resolver `Stop`, budget exhausted or verification failed |
 | resolving     | working       | Worker push event (commits during resolution, aborted) |
-| merged        | working       | Worker `UserPromptSubmit` (merged cleared)           |
+| merged        | working       | Worker `UserPromptSubmit` (transient cleared)        |
+| merged        | done          | Worker `Stop` with no commits ahead AND `.garden-done` present |
+| done          | working       | Worker `UserPromptSubmit` (operator nudged)          |
 | failing       | working       | Worker push event + 30s debounce                     |
 | any           | exited        | tmux `pane-died` hook                                |
 
@@ -159,7 +166,7 @@ These bracket the lifecycle of every Claude conversation and fire from
 signals the status pane. They drive:
 
 - `loading → ready` (worker's `SessionStart`)
-- `ready → working`, `idle → working`, `asking → working`, `merged → working` (worker's `UserPromptSubmit`)
+- `ready → working`, `idle → working`, `asking → working`, `merged → working`, `done → working` (worker's `UserPromptSubmit`)
 - `working → idle`, `working → reviewing` (worker's `Stop`)
 - `working → asking` (worker's `PreToolUse` for user-input tools, `PermissionRequest`)
 - `asking → working` (worker's `PostToolUse` for user-input tools)
@@ -236,32 +243,55 @@ recurring re-check, or "fallback poll."
 3. **`ready` is one-time.** Once a worker receives its first input, it
    never returns to `ready`.
 
-4. **Active pipeline states are sticky; `merged` is conditionally sticky.**
+4. **Active pipeline states are sticky; `merged` is transient; `done` is the cleanup signal.**
    While a worker is in `reviewing`, `merge-pending`, `resolving`, or
    `failing`, those states take priority over what Claude is doing —
-   they represent in-progress pipeline work. `merged` is set by
-   `finalizeMerge` after a clean merge and persists until the worker
-   submits a new prompt — at which point `UserPromptSubmit` clears it.
-   There is no "merged history" — each cycle is independent. Race case:
-   if the worker received new input while the merge cycle was in
-   progress, the prompt hook cannot clear `merged` (because prState was
-   still an active pipeline state at prompt time). `finalizeMerge`
-   handles this by checking `claudeStatus` after setting `merged` — if
-   the worker is already working, it transitions immediately to
+   they represent in-progress pipeline work.
+
+   `merged` and `done` are two distinct terminal-cluster states with
+   different meanings, and they MUST NOT be conflated in the renderer:
+
+   - **`merged`** is the transient post-merge beat. `finalizeMerge`
+     sets it after a clean merge when the worker has not declared
+     itself finished. It exists only to give the operator a brief
+     visual confirmation that a phase landed; it is cleared the moment
+     the auto-continue prompt's `UserPromptSubmit` fires, and the
+     worker resumes the next phase. Renderer color: neutral (not
+     green). It is NOT an operator-actionable signal.
+
+   - **`done`** means the worker invoked the `done` skill (wrote
+     `.garden-done`) and the merge cycle has settled with no further
+     work pending. This is the operator's "this worker is finished,
+     you can clean it up" signal. Renderer color: bold green. The
+     auto-continue prompt is suppressed when the sentinel is present,
+     so a worker entering `done` stays there until the operator either
+     cleans it up or submits a new prompt (which clears `done` →
+     `working`).
+
+   There are two paths into `done`:
+
+   1. **Sentinel present at merge time** — the worker wrote
+      `.garden-done` before its final push. `finalizeMerge` checks the
+      sentinel and sets `prState = "done"` directly (skipping the
+      transient `merged` beat). `maybeAutoContinue` independently sees
+      the sentinel and skips the prompt.
+   2. **Sentinel set after auto-continue** — `finalizeMerge` set
+      `merged`, the auto-continue cleared it to `working`, the worker
+      then decided to stop, wrote `.garden-done`, and ended its turn
+      with no new commits. The Stop hook detects this combination
+      (no commits ahead + `.garden-done` present) and sets
+      `prState = "done"`.
+
+   Race case: if a new prompt landed before `finalizeMerge` ran, the
+   prompt hook cannot clear `merged`/`done` (because prState was still
+   an active pipeline state at prompt time). `finalizeMerge` handles
+   this by checking `claudeStatus` after writing the terminal state —
+   if the worker is already working, it transitions immediately to
    `working`.
 
-   The Stop hook restores `merged` when two conditions hold: the worker
-   has no commits ahead of base, and the `.garden-done` sentinel is
-   present at the worker's worktree root. This makes `merged` the
-   operator's "this worker is finished, you can clean it up" signal:
-   after a clean merge → auto-continue → worker writes `.garden-done`
-   and ends turn, the dashboard returns to `merged` rather than going
-   to plain `idle`. Without this, the auto-continue prompt would
-   permanently clear the merged indicator on its first firing — losing
-   the cleanup signal even though the worker had explicitly declared
-   done. The Stop hook only sets `merged` (never clears it); the
-   UserPromptSubmit clear remains the only way out of `merged` toward
-   active work.
+   There is no "merged history" — each cycle is independent. The Stop
+   hook only sets `done` (never `merged`); `UserPromptSubmit` is the
+   only path out of either terminal state toward active work.
 
 5. **There is no `pushed` state.** Earlier versions of this system carried
    an internal `pushed` lifecycle state between "commits exist" and
@@ -325,7 +355,8 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   - Missing/unknown `source` → `claudeStatus = "ready"` (back-compat
     with older Claude Code builds that did not emit `source`).
 - `UserPromptSubmit` → `claudeStatus = "working"`. Also clears `prState`
-  if it equals `merged` (this is the only place `merged` is cleared).
+  if it equals `merged` or `done` (this is the only place either is
+  cleared).
 - `Stop` → `claudeStatus = "idle"`. If commits ahead of base exist, also
   sets `pendingReviewAt = Date.now()` and pokes the project's poller FIFO
   so review begins immediately. `pendingReviewAt` is the per-worker mark
@@ -381,7 +412,9 @@ Claude process and call `garden dashboard _claude-hook <event>`:
 **The poller** writes `prState` in response to the events documented in
 "How transitions are detected." The poller is the only writer of
 in-progress lifecycle states (`reviewing`, `merge-pending`, `failing`,
-`merged`).
+`merged`). It also writes `done` from `finalizeMerge` when the
+`.garden-done` sentinel is present at merge time. The Stop hook is the
+only other writer of `done` (the post-auto-continue path).
 
 **The tmux `pane-died` handler** writes `claudeStatus = "exited"` when
 a worker pane process exits.
@@ -404,14 +437,15 @@ flowchart TD
     A -->|resolving| resolving
     A -->|failing| failing
     A -->|merged| merged
+    A -->|done| done
     A -->|none| B["return claudeStatus"]
 ```
 
 Lifecycle states (`reviewing`, `merge-pending`, `resolving`, `failing`,
-`merged`) take priority because they describe where the worker's *code*
-is, not what Claude is doing right now. `merged` is the only one that
-clears on `UserPromptSubmit` — that clear is performed by the hook
-handler, not by this combine function.
+`merged`, `done`) take priority because they describe where the worker's
+*code* is, not what Claude is doing right now. `merged` and `done` are
+the only ones that clear on `UserPromptSubmit` — that clear is performed
+by the hook handler, not by this combine function.
 
 ### Hook → display pipeline
 
@@ -425,7 +459,7 @@ sequenceDiagram
 
     User->>Claude: sends message
     Claude->>Hook: UserPromptSubmit fires
-    Hook->>Registry: claudeStatus = "working"; clear prState if "merged"
+    Hook->>Registry: claudeStatus = "working"; clear prState if "merged" or "done"
     Hook->>StatusPane: SIGUSR1
     StatusPane->>Registry: read claudeStatus + prState
     StatusPane->>User: shows "working"
