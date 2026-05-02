@@ -57,7 +57,7 @@ export const HANDOFF_SKILL_FILENAME = "SKILL.md";
 
 export const HANDOFF_SKILL_CONTENT = `---
 name: handoff
-description: Use when the operator instructs you to hand the current task off to a fresh worker — typically on a different project (cross-repo work), or on the same project to reset accumulated context. Spawns a new garden worker, seeds it with a detailed briefing you compose, and leaves you free to mark yourself done. Do NOT invoke without an explicit operator instruction.
+description: Use when the operator instructs you to hand the current task off to a fresh worker — typically on a different project (cross-repo work), or on the same project to reset accumulated context. Spawns a new named garden worker that participates in the normal review/merge flow, seeds it with a detailed briefing you compose, swaps its pane into view, and leaves you free to mark yourself done. Do NOT invoke without an explicit operator instruction.
 ---
 
 # Handoff
@@ -68,9 +68,10 @@ Invoke this skill when the operator tells you to pass the current task to a new 
 
 Runs \`garden handoff <target-project>\` from your worktree CWD, reading a multi-line briefing from stdin via heredoc. Garden:
 
-1. Creates a new worker on \`<target-project>\` (its own git worktree, fresh Claude session, own poller). The new worker's pane appears as a hidden tmux window — the dashboard's active project does **not** change, so the operator stays where they are unless they navigate over.
-2. Seeds the new worker's first prompt with your briefing, prefixed \`[handoff from <your-project>/<your-name>]\` so the new worker knows it received a handoff (not a normal user prompt).
-3. Prints the new worker's name to stdout, which you should report back to the operator so they can navigate to it.
+1. Creates a new worker on \`<target-project>\` — a normal named worker with its own git worktree, fresh Claude session, and own poller. It participates in the standard review/merge flow.
+2. Swaps the new worker's pane into view exactly like ⌥n would: your pane gets parked under your project and the operator's right-pane now shows the new worker. For cross-project handoff, the dashboard's active project (and active plot, if needed) follows along to the target.
+3. Seeds the new worker's first prompt with your briefing, prefixed \`[handoff from <your-project>/<your-name>]\` so the new worker knows it received a handoff (not a normal user prompt).
+4. Prints the new worker's name to stdout — report it to the operator before you end your turn.
 
 ## When to use
 

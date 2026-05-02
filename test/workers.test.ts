@@ -29,7 +29,13 @@ vi.mock("../src/session.js", () => ({
 vi.mock("../src/config.js", () => ({
   getProject: vi.fn(() => ({ name: "myproject", path: "/repo/myproject" })),
   tryGetProject: vi.fn(() => ({ name: "myproject", path: "/repo/myproject" })),
+  loadConfig: vi.fn(() => ({ projects: {}, plots: {} })),
+  plotsMap: vi.fn(() => ({})),
   SESSIONS_DIR: "/tmp/fake-sessions",
+}));
+
+vi.mock("../src/dashboard/navigate.js", () => ({
+  swapVisibleToProject: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/state.js", () => ({
@@ -125,7 +131,7 @@ import {
 import { worktreePath, resolveBaseBranch, branchExistsOnOrigin } from "../src/dashboard/git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "../src/dashboard/poller.js";
 import { workerWindowName as workerWin, shellWindowName as shellWin, parseWorkerSuffix } from "../src/dashboard/window-names.js";
-import { getProject } from "../src/config.js";
+import { getProject, tryGetProject } from "../src/config.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import crypto from "node:crypto";
@@ -306,6 +312,83 @@ describe("newWorker", () => {
     const msg = vi.mocked(tmuxDisplay).mock.calls[0][0] as string;
     expect(msg).toContain("no local origin/main ref");
     expect(msg).toContain("main");
+  });
+
+  // ===== Handoff path: opts.projectName + opts.seedMessageFile =====
+  // Cross-project handoff swaps the active project to the target before the
+  // standard park/restore runs, so the new worker comes into view exactly like
+  // ⌥n on that project. The seed dispatch then sends the briefing.
+
+  it("handoff path: targets opts.projectName instead of activeProject", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
+    vi.mocked(tryGetProject).mockReturnValueOnce({ name: "other", path: "/repo/other" });
+    const name = newWorker({ projectName: "other", seedMessageFile: "/tmp/seed.txt" });
+    expect(name).toBe("bold-ash");
+    expect(vi.mocked(addWorker)).toHaveBeenCalledWith("other", expect.any(Object));
+    expect(vi.mocked(ensureProjectPoller)).toHaveBeenCalledWith("other", "garden");
+  });
+
+  it("cross-project handoff calls swapVisibleToProject so the new worker comes into view", async () => {
+    const { swapVisibleToProject } = await import("../src/dashboard/navigate.js");
+    vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
+    vi.mocked(tryGetProject).mockReturnValueOnce({ name: "other", path: "/repo/other" });
+    newWorker({ projectName: "other", seedMessageFile: "/tmp/seed.txt" });
+    expect(vi.mocked(swapVisibleToProject)).toHaveBeenCalledWith(
+      "other", expect.objectContaining({ path: "/repo/other" }), expect.any(Object),
+    );
+  });
+
+  it("same-project handoff (projectName === activeProject) does NOT call swapVisibleToProject", async () => {
+    const { swapVisibleToProject } = await import("../src/dashboard/navigate.js");
+    vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
+    newWorker({ projectName: "myproject", seedMessageFile: "/tmp/seed.txt" });
+    expect(vi.mocked(swapVisibleToProject)).not.toHaveBeenCalled();
+  });
+
+  it("handoff path: dispatches the delayed seed via spawn so the new worker gets the briefing", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
+    vi.mocked(tryGetProject).mockReturnValueOnce({ name: "other", path: "/repo/other" });
+    newWorker({ projectName: "other", seedMessageFile: "/tmp/seed.txt" });
+    const seedCall = vi.mocked(spawn).mock.calls.find(c =>
+      Array.isArray(c[1]) && (c[1] as string[])[1]?.includes("_seed-worker"),
+    );
+    expect(seedCall).toBeDefined();
+    const cmd = (seedCall![1] as string[])[1];
+    expect(cmd).toContain("'other'");
+    expect(cmd).toContain("'bold-ash'");
+    expect(cmd).toContain("'/tmp/seed.txt'");
+  });
+
+  it("handoff path: bails (returns null) when target project is unknown, without touching state", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(tryGetProject).mockReturnValueOnce(undefined);
+    const name = newWorker({ projectName: "ghost", seedMessageFile: "/tmp/seed.txt" });
+    expect(name).toBeNull();
+    expect(vi.mocked(addWorker)).not.toHaveBeenCalled();
+    // No seed dispatch on bailout — handoff command will unlink the seed file.
+    const seedCall = vi.mocked(spawn).mock.calls.find(c =>
+      Array.isArray(c[1]) && (c[1] as string[])[1]?.includes("_seed-worker"),
+    );
+    expect(seedCall).toBeUndefined();
+  });
+
+  it("hotkey path (no opts): does NOT dispatch a seed", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker();
+    const seedCall = vi.mocked(spawn).mock.calls.find(c =>
+      Array.isArray(c[1]) && (c[1] as string[])[1]?.includes("_seed-worker"),
+    );
+    expect(seedCall).toBeUndefined();
+  });
+
+  it("returns the generated worker name on success", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    expect(newWorker()).toBe("bold-ash");
+  });
+
+  it("returns null when no project is selected", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: null }));
+    expect(newWorker()).toBeNull();
   });
 });
 

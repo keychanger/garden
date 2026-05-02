@@ -38,7 +38,7 @@ function restoreWorkerPaneVars(paneId: string, project: string, windowName: stri
 // project shell. Mutates `state` (activeProject, activePaneType,
 // activeWindowName, lastActiveWorker) but does NOT writeDashState — the
 // caller is responsible for persisting and refreshing.
-function swapVisibleToProject(
+export function swapVisibleToProject(
   projectName: string,
   project: { path: string },
   state: DashboardState,

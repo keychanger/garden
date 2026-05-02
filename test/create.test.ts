@@ -447,6 +447,22 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(script).toContain("name: done");
   });
 
+  it("also inlines the bundled `handoff` skill so new workers can invoke it without a refresh round-trip", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "main",
+    );
+    const call = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    );
+    expect(call).toBeDefined();
+    const script = call![1] as string;
+    expect(script).toContain("mkdir -p /wt/myproject/bold-ash/.claude/skills/'handoff'");
+    expect(script).toContain("/.claude/skills/'handoff'/'SKILL.md'");
+    expect(script).toContain("name: handoff");
+  });
+
   it("uses origin/<base> for the worktree branch when baseBranch has a slash in the name", () => {
     process.argv[1] = "/usr/local/bin/garden";
     buildWorktreeBootstrapScript(

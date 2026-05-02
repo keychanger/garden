@@ -1,8 +1,5 @@
-// `garden handoff <target-project> [-m "<msg>"]` spawns a fresh worker on the
-// target project and seeds its first prompt with a briefing read from -m or
-// stdin. Invoked from a worker pane via the `handoff` skill, but works from
-// any shell that has the GARDEN_PROJECT/GARDEN_WORKER env vars (or without —
-// the prefix degrades to a generic "[handoff]").
+// `garden handoff <project> [-m]` — spawns a fresh worker on <project>, seeds its first
+// prompt with a briefing (-m or stdin). Prefix degrades to "[handoff]" when env vars are absent.
 import fs from "node:fs";
 import path from "node:path";
 import { tryGetProject, SESSIONS_DIR } from "../config.js";
@@ -36,9 +33,8 @@ export async function handoff(args: string[]): Promise<void> {
 
   const seedsDir = path.join(SESSIONS_DIR, "seeds");
   fs.mkdirSync(seedsDir, { recursive: true });
-  // Filename is unique per call (timestamp + random) — the worker name is not
-  // known until newWorker returns, but the dispatchDelayedSeed call wires the
-  // path through directly so the filename only needs to be unique on disk.
+  // Worker name isn't known until newWorker returns; dispatchDelayedSeed wires the path
+  // through directly, so the filename only needs to be unique on disk.
   const seedFile = path.join(
     seedsDir,
     `seed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`,
@@ -54,11 +50,7 @@ export async function handoff(args: string[]): Promise<void> {
     );
   }
 
-  console.log(
-    `Handed off to ${targetProject}/${newName}. `
-    + "The new worker's pane is in a hidden tmux window — "
-    + "navigate via ⌥p / ⌥1-9 (or 'garden plot') when ready.",
-  );
+  console.log(`Handed off to ${targetProject}/${newName}.`);
 }
 
 async function readBriefing(rest: string[]): Promise<string> {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("node:child_process", () => ({
   spawn: vi.fn(() => ({ unref: vi.fn() })),
@@ -8,6 +8,7 @@ vi.mock("node:fs", () => ({
   default: {
     existsSync: vi.fn(() => false),
     unlinkSync: vi.fn(),
+    readFileSync: vi.fn(() => "seed body"),
   },
 }));
 
@@ -43,6 +44,7 @@ vi.mock("../src/dashboard/log.js", () => ({
 import {
   continueWorker, continueWorkerAfterMerge,
   dispatchDelayedContinue, dispatchDelayedAutoContinue,
+  dispatchDelayedSeed, seedWorker,
   donePath, isDoneSet, clearDoneSentinel,
 } from "../src/dashboard/continue.js";
 import { readDashState } from "../src/dashboard/state.js";
@@ -368,6 +370,120 @@ describe("done-sentinel helpers", () => {
 
   it("clearDoneSentinel is a no-op for legacy entries with no worktreePath", () => {
     clearDoneSentinel(undefined);
+    expect(fs.unlinkSync).not.toHaveBeenCalled();
+  });
+});
+
+describe("dispatchDelayedSeed", () => {
+  it("spawns a detached sh -c that invokes _seed-worker with a longer delay than auto-continue", () => {
+    dispatchDelayedSeed("/usr/local/bin/garden", "myproject", "bold-ash", "/tmp/seed.txt");
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    const [, args] = vi.mocked(spawn).mock.calls[0];
+    const cmd = (args as string[])[1];
+    // Bootstrap (git fetch + worktree add + claude TUI init) takes longer than
+    // a normal end-of-turn — 6s so keys don't land in a still-initializing TUI.
+    expect(cmd).toMatch(/^sleep 6 && /);
+    expect(cmd).toContain("/usr/local/bin/garden dashboard _seed-worker");
+    expect(cmd).toContain("'myproject'");
+    expect(cmd).toContain("'bold-ash'");
+    expect(cmd).toContain("'/tmp/seed.txt'");
+  });
+
+  it("swallows spawn errors so a failed dispatch never crashes the caller", () => {
+    vi.mocked(spawn).mockImplementation(() => { throw new Error("EAGAIN"); });
+    expect(() => dispatchDelayedSeed("garden", "p", "w", "/tmp/x.txt")).not.toThrow();
+  });
+});
+
+describe("seedWorker", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(fs.readFileSync).mockReturnValue("[handoff from src/worker]\n\nbriefing body");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reads the briefing, sends it once the worker leaves loading, and unlinks the file", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "ready",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+
+    seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
+
+    expect(fs.readFileSync).toHaveBeenCalledWith("/tmp/seed.txt", "utf8");
+    const sendCall = vi.mocked(tmux).mock.calls[0];
+    expect(sendCall[0]).toBe("send-keys");
+    expect(sendCall[3]).toBe("-l");
+    const message = sendCall[4] as string;
+    expect(message).toContain("[handoff from src/worker]");
+    expect(message).toContain("briefing body");
+    expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
+  });
+
+  it("polls while the worker is still loading and sends as soon as it transitions", () => {
+    let status: "loading" | "ready" = "loading";
+    vi.mocked(findWorkerByName).mockImplementation(() => ({
+      name: "bold-ash", sessionId: "s", task: "", claudeStatus: status,
+    }));
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+
+    seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
+    // First poll sees "loading" — no send yet.
+    expect(vi.mocked(tmux)).not.toHaveBeenCalled();
+
+    // Worker finishes bootstrap; next 2s tick sends the briefing.
+    status = "ready";
+    vi.advanceTimersByTime(2000);
+    expect(vi.mocked(tmux)).toHaveBeenCalled();
+    expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
+  });
+
+  it("times out after 90s if the worker never leaves loading, sends anyway, and unlinks", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "loading",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+
+    seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
+    expect(vi.mocked(tmux)).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(90_000);
+    // After deadline elapses, the next poll sends regardless of status so the
+    // briefing isn't silently lost on a stuck worker.
+    expect(vi.mocked(tmux)).toHaveBeenCalled();
+    expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
+  });
+
+  it("aborts and unlinks the file when the worker has already been killed", () => {
+    vi.mocked(findWorkerByName).mockReturnValue(undefined);
+
+    seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
+
+    expect(vi.mocked(tmux)).not.toHaveBeenCalled();
+    expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
+  });
+
+  it("aborts silently when the seed file can't be read (already cleaned up)", () => {
+    vi.mocked(fs.readFileSync).mockImplementationOnce(() => { throw new Error("ENOENT"); });
+
+    seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
+
+    expect(vi.mocked(findWorkerByName)).not.toHaveBeenCalled();
+    expect(vi.mocked(tmux)).not.toHaveBeenCalled();
+    // No re-unlink — there's nothing to clean up if the file was already gone.
     expect(fs.unlinkSync).not.toHaveBeenCalled();
   });
 });

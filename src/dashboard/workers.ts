@@ -2,7 +2,7 @@
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { DASHBOARD_SESSION } from "../session.js";
-import { getProject, tryGetProject } from "../config.js";
+import { getProject, tryGetProject, loadConfig, plotsMap } from "../config.js";
 import { readDashState, writeDashState, withStateLock } from "./state.js";
 import { parkToHidden, restoreFromHidden } from "./layout.js";
 import { refreshDashboard } from "./header.js";
@@ -25,13 +25,15 @@ import {
 import { worktreePath, resolveBaseBranch, branchExistsOnOrigin } from "./git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
 import { dispatchDelayedContinue, dispatchDelayedSeed } from "./continue.js";
+import { swapVisibleToProject } from "./navigate.js";
 import { workerWindowName as workerWin, parkingWindowName, shellWindowName as shellWin, parseWorkerSuffix } from "./window-names.js";
 
 export interface NewWorkerOptions {
-  // Target project. Defaults to state.activeProject. When supplied (handoff
-  // path), the new worker spawns into a hidden tmux window without parking the
-  // current pane or mutating state.activeProject — the operator stays where
-  // they are and navigates to the new worker manually.
+  // Target project. Defaults to state.activeProject. When the target differs
+  // from the current active project (handoff path), the dashboard's active
+  // project is switched to the target before the worker is created — the new
+  // worker comes into view exactly like a ⌥n on the target project would, and
+  // the previously-visible pane gets parked under its source project.
   projectName?: string;
   // Path to a file containing the seed prompt for the new worker. If set, a
   // detached subprocess sends the file's contents to the new worker's pane
@@ -55,9 +57,25 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       return;
     }
 
-    // Handoff path leaves the visible layout alone; hotkey path swaps the new
-    // worker into the active slot.
-    const isHandoff = opts.projectName != null && opts.projectName !== state.activeProject;
+    // Cross-project handoff: switch active project to the target first, so the
+    // park/restore + state mutation below behave exactly like ⌥n on that project.
+    // If the target lives outside the current active plot, also switch to a plot
+    // that contains it — otherwise ⌥1-9 navigation desyncs from the visible pane.
+    if (opts.projectName && opts.projectName !== state.activeProject) {
+      const plots = plotsMap(loadConfig());
+      const activePlotProjects = state.activePlot && plots[state.activePlot]
+        ? plots[state.activePlot].projects
+        : [];
+      if (!activePlotProjects.includes(opts.projectName)) {
+        for (const [plotName, plot] of Object.entries(plots)) {
+          if (plot.projects.includes(opts.projectName)) {
+            state.activePlot = plotName;
+            break;
+          }
+        }
+      }
+      swapVisibleToProject(opts.projectName, project, state);
+    }
 
     const existingNames = getAllWorkerNames();
     const workerName = generateWorkerName(existingNames);
@@ -89,34 +107,22 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
     );
 
+    // Show the new pane immediately — bootstrap runs inside it
+    const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject!);
+    parkToHidden(parkName, state);
+
     const workerWindowName = workerWin(targetProject, workerName);
-    let workerPaneId: string | null = null;
 
-    if (isHandoff) {
-      // Detached create only — no park/restore, no state mutation. Pre-size to
-      // match the current right-pane size so when the operator navigates over,
-      // the worker pane is already the right shape.
-      workerPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
-        "sh", "-c", `sh ${shellEscape(scriptFile)}`);
-      const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
-      if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
-      if (workerPaneId) setPaneLabel(workerPaneId, workerName);
-    } else {
-      // Show the new pane immediately — bootstrap runs inside it
-      const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject!);
-      parkToHidden(parkName, state);
-
-      workerPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
-        "sh", "-c", `sh ${shellEscape(scriptFile)}`);
-      // Pre-size so the bootstrap script renders at the right pane size from
-      // the start, avoiding SIGWINCH jitter when restoreFromHidden swaps it in.
-      const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
-      if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
-      if (workerPaneId) setPaneLabel(workerPaneId, workerName);
-      restoreFromHidden(workerWindowName, state);
-      // Re-apply label after swap (swap-pane may not preserve pane options)
-      if (state.activePaneId) setPaneLabel(state.activePaneId, workerName);
-    }
+    const workerPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
+      "sh", "-c", `sh ${shellEscape(scriptFile)}`);
+    // Pre-size so the bootstrap script renders at the right pane size from
+    // the start, avoiding SIGWINCH jitter when restoreFromHidden swaps it in.
+    const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
+    if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
+    if (workerPaneId) setPaneLabel(workerPaneId, workerName);
+    restoreFromHidden(workerWindowName, state);
+    // Re-apply label after swap (swap-pane may not preserve pane options)
+    if (state.activePaneId) setPaneLabel(state.activePaneId, workerName);
 
     addWorker(targetProject, {
       name: workerName,
@@ -130,17 +136,15 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
 
     log.info("workers", "created", {
       worker: workerName,
-      data: { project: targetProject, branch: branchName, handoff: isHandoff },
+      data: { project: targetProject, branch: branchName },
     });
 
     ensureProjectPoller(targetProject, gardenRunner);
 
-    if (!isHandoff) {
-      state.activePaneType = "worker";
-      state.activeWindowName = workerWindowName;
-      state.lastActiveWorker[state.activeProject!] = workerWindowName;
-      writeDashState(state);
-    }
+    state.activePaneType = "worker";
+    state.activeWindowName = workerWindowName;
+    state.lastActiveWorker[targetProject] = workerWindowName;
+    writeDashState(state);
     refreshDashboard({ state });
 
     if (opts.seedMessageFile) {
