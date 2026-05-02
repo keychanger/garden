@@ -5,9 +5,9 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { SESSIONS_DIR, loadConfig, tryGetProject, plotsMap, isPlotFocused } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize } from "./tmux.js";
+import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize, listAllWindowNames } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
-import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields } from "./registry.js";
+import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields, type WorkerRegistry } from "./registry.js";
 import { currentBranch, getWorkerBaseBranch } from "./git.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { triggerProjectPoll } from "./poller.js";
@@ -43,6 +43,8 @@ function workerFromCwd(): { project: string; worker: string } | null {
 interface RefreshOptions {
   state?: DashboardState;
   windowNames?: string[];
+  config?: ReturnType<typeof loadConfig>;
+  registry?: WorkerRegistry;
 }
 
 export function setupStatusBar(_gardenRunner: string): void {
@@ -109,11 +111,11 @@ export function printHeader(): void {
 
 export function updateHeaderVar(opts?: RefreshOptions): void {
   const state = opts?.state ?? readDashState();
-  const config = loadConfig();
+  const config = opts?.config ?? loadConfig();
 
   // Pane-border vars must be set before setBarVars's refresh-client -S, or the border waits for the next status-interval tick.
   if (state.statusPaneId) {
-    const { display, template } = buildPlotStrip(config, state.activePlot);
+    const { display, template } = buildPlotStrip(config, state.activePlot, opts?.registry);
     // Write template BEFORE setPaneVar so a racing bash animation tick reads
     // the new template (not the old one) and does not clobber the strip back
     // to the previous plot — see the per-frame reload in buildStatusCommand.
@@ -146,11 +148,12 @@ const PLOT_COLORS: Record<Exclude<PlotState, "idle" | "working">, string> = {
 function buildPlotStrip(
   config: ReturnType<typeof loadConfig>,
   activePlot: string | null,
+  cachedRegistry?: WorkerRegistry,
 ): { display: string; template: string } {
   const entries = Object.entries(plotsMap(config)).filter(([, plot]) => isPlotFocused(plot));
   if (entries.length === 0) return { display: "", template: "" };
 
-  const registry = readRegistry();
+  const registry = cachedRegistry ?? readRegistry();
   const segments = entries.map(([name, plot]) => {
     const isActive = name === activePlot;
     const status = resolvePlotStatus(plot, registry);
@@ -208,9 +211,11 @@ function setBarVars(left: string, right: string): void {
 }
 
 // Suppresses window-name leakage in the tmux status bar's center strip. ~200ms for ~16 windows — callers schedule after user-visible paints.
-function suppressWindowNames(): void {
+function suppressWindowNames(cachedWindowNames?: string[]): void {
   try {
-    const windows = tmuxOutput("list-windows", "-t", DASHBOARD_SESSION, "-F", "#{window_name}");
+    const windows = cachedWindowNames
+      ? cachedWindowNames.join("\n")
+      : tmuxOutput("list-windows", "-t", DASHBOARD_SESSION, "-F", "#{window_name}");
     for (const win of windows.split("\n").filter(Boolean)) {
       const target = `${DASHBOARD_SESSION}:${win}`;
       try {
@@ -384,7 +389,13 @@ export function handleClaudeHook(event: string): void {
     maybeRefreshUsage(resolveGardenRunner());
   }
 
-  refreshDashboard();
+  // Skip the dashboard cascade when nothing visible changed — pretooluse and
+  // posttooluse fire on every Claude tool call and dominate hook traffic, but
+  // most don't flip claudeStatus (the cs guards above narrow the writes). The
+  // status icon, plot-strip state, and pane border all key off claudeStatus or
+  // prState; if neither moved, no repaint is owed. handleTitleChanged covers
+  // task-title-only repaints via its own pane-title-changed tmux hook.
+  if (stateChanged) refreshDashboard();
 }
 
 function routeStopHookEnd(projectName: string, workerName: string): void {
@@ -683,13 +694,23 @@ export function refreshUsagePane(opts?: RefreshOptions): void {
 }
 
 export function refreshDashboard(opts?: RefreshOptions): void {
+  // Read each shared input once and thread it through the cascade — without
+  // this, a single refresh re-reads loadConfig() ~3x, readRegistry() ~3x, and
+  // tmux list-windows ~(N projects + 1) times. Hot path: hooks fire one full
+  // refreshDashboard per Claude tool call.
+  const shared: RefreshOptions = {
+    state: opts?.state ?? readDashState(),
+    windowNames: opts?.windowNames ?? listAllWindowNames(),
+    config: opts?.config ?? loadConfig(),
+    registry: opts?.registry ?? readRegistry(),
+  };
   // Paint first (writeQuickStatus/writeUsageRendered signal their panes inline);
   // tmux-heavy suppressWindowNames + refreshWorkerTasks run after so latency stays off plot switches.
-  updateHeaderVar(opts);
-  writeQuickStatus(opts);
-  writeUsageRendered(opts);
-  suppressWindowNames();
-  refreshWorkerTasks();
+  updateHeaderVar(shared);
+  writeQuickStatus(shared);
+  writeUsageRendered(shared);
+  suppressWindowNames(shared.windowNames);
+  refreshWorkerTasks(shared.registry);
 }
 
 // Lean refresh for worker cycling: skip header/tasks/usage since only the status marker moves.
@@ -700,8 +721,14 @@ export function refreshDashboardCycle(opts?: RefreshOptions): void {
 // Lean refresh for plot cycling: plot strip + status only. Skips usage (account-wide,
 // not per-plot), suppressWindowNames, and refreshWorkerTasks — the next hook/poller event picks them up.
 export function refreshDashboardPlotCycle(opts?: RefreshOptions): void {
-  updateHeaderVar(opts);
-  writeQuickStatus(opts);
+  const shared: RefreshOptions = {
+    state: opts?.state ?? readDashState(),
+    windowNames: opts?.windowNames,
+    config: opts?.config ?? loadConfig(),
+    registry: opts?.registry ?? readRegistry(),
+  };
+  updateHeaderVar(shared);
+  writeQuickStatus(shared);
 }
 
 // Refresh all workers' task fields from their live tmux pane titles. This
@@ -709,9 +736,9 @@ export function refreshDashboardPlotCycle(opts?: RefreshOptions): void {
 // the title at hook time, but Claude updates the pane title continuously as
 // it works. By refreshing on every dashboard update (which piggybacks on
 // existing hook events), we keep all workers' tasks current without polling.
-function refreshWorkerTasks(): void {
+function refreshWorkerTasks(cachedRegistry?: WorkerRegistry): void {
   try {
-    const registry = readRegistry();
+    const registry = cachedRegistry ?? readRegistry();
     const updates: Array<{ project: string; workerName: string; fields: { task: string } }> = [];
 
     for (const [project, entries] of Object.entries(registry.workers)) {
@@ -736,10 +763,13 @@ function refreshWorkerTasks(): void {
 // worker (or "(no workers)"); adjacent projects are separated by a blank line;
 // the pane has a top/bottom blank. Using rendered height — not just project
 // count — means switching from a bigger-by-workers plot doesn't cause a shrink.
-function statusPaneFloorLines(): number {
+function statusPaneFloorLines(
+  cachedConfig?: ReturnType<typeof loadConfig>,
+  cachedRegistry?: WorkerRegistry,
+): number {
   try {
-    const plots = plotsMap(loadConfig());
-    const reg = readRegistry();
+    const plots = plotsMap(cachedConfig ?? loadConfig());
+    const reg = cachedRegistry ?? readRegistry();
     let max = 0;
     for (const plot of Object.values(plots)) {
       const projects = plot.projects.slice(0, 5);
@@ -760,14 +790,14 @@ function statusPaneFloorLines(): number {
 function writeQuickStatus(opts?: RefreshOptions): void {
   try {
     const state = opts?.state ?? readDashState();
-    const rendered = renderQuickStatus(state, opts?.windowNames);
+    const rendered = renderQuickStatus(state, opts?.windowNames, opts?.config, opts?.registry);
     const tmpFile = `${STATUS_RENDERED_FILE}.${process.pid}.${Date.now()}.tmp`;
     fs.writeFileSync(tmpFile, rendered);
     fs.renameSync(tmpFile, STATUS_RENDERED_FILE);
     if (state.statusPaneId) {
       // +1 for the pane-border-status top row, which is included in pane_height
       // but not in the rendered line count.
-      const h = Math.max(statusPaneFloorLines(), rendered.split("\n").length) + 1;
+      const h = Math.max(statusPaneFloorLines(opts?.config, opts?.registry), rendered.split("\n").length) + 1;
       const cur = getPaneSize(state.statusPaneId);
       resizeAndSignal(state.statusPaneId, h, cur?.height ?? null);
     }

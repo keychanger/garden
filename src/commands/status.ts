@@ -10,7 +10,7 @@ import { loadConfig, getFocusedProjectNames } from "../config.js";
 import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
-import { getWorkers, readRegistry, batchUpdateWorkerFields } from "../dashboard/registry.js";
+import { getWorkers, readRegistry, batchUpdateWorkerFields, type WorkerRegistry } from "../dashboard/registry.js";
 import { listHiddenWorkerWindows, windowExists, getFirstPaneId, getPaneTitle } from "../dashboard/tmux.js";
 import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/window-names.js";
 
@@ -193,9 +193,10 @@ function collectWorkers(
   projectName: string,
   state: DashboardState,
   windowNames?: string[],
+  cachedRegistry?: WorkerRegistry,
 ): WorkerInfo[] {
   const workers: WorkerInfo[] = [];
-  const registryEntries = getWorkers(projectName);
+  const registryEntries = cachedRegistry?.workers[projectName] ?? getWorkers(projectName);
   const registryByName = new Map(registryEntries.map(e => [e.name, e]));
 
   if (state.activeProject === projectName && state.activePaneType === "worker") {
@@ -233,8 +234,13 @@ function collectWorkers(
  * the status pane content to a file before SIGUSR1, and reused by `garden
  * status` directly. There is one render path.
  */
-export function renderQuickStatus(state: DashboardState, windowNames?: string[]): string {
-  const config = loadConfig();
+export function renderQuickStatus(
+  state: DashboardState,
+  windowNames?: string[],
+  cachedConfig?: ReturnType<typeof loadConfig>,
+  cachedRegistry?: WorkerRegistry,
+): string {
+  const config = cachedConfig ?? loadConfig();
   const names = getFocusedProjectNames(config, state.activePlot);
   if (names.length === 0) return "No projects added.";
 
@@ -242,7 +248,7 @@ export function renderQuickStatus(state: DashboardState, windowNames?: string[])
   const allWorkers: WorkerInfo[] = [];
 
   const projectWorkers: WorkerInfo[][] = names.map((name) => {
-    const workers = collectWorkers(name, state, windowNames);
+    const workers = collectWorkers(name, state, windowNames, cachedRegistry);
     allWorkers.push(...workers);
     return workers;
   });
