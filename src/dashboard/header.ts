@@ -247,6 +247,18 @@ function findWorkerPaneId(project: string, worker: string): string | null {
   return null;
 }
 
+// Claude Code passes hook input as JSON on stdin; best-effort, returns {} on any failure.
+function readHookInput(): Record<string, unknown> {
+  try {
+    const raw = fs.readFileSync(0, "utf-8");
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === "object") ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
 export function handleClaudeHook(event: string): void {
   // The reviewer also runs `claude -p` from inside the worktree, so its hooks
   // fire from the same cwd. We disambiguate via env var: launchReview() sets
@@ -259,6 +271,8 @@ export function handleClaudeHook(event: string): void {
     return;
   }
 
+  const input = readHookInput();
+
   // Branch on the Claude Code event: see STATUS.md for the full transition table.
   const fields: Partial<Pick<import("./registry.js").WorkerEntry,
     "claudeStatus" | "lastHookAt" | "prState" | "task">> = {
@@ -266,7 +280,17 @@ export function handleClaudeHook(event: string): void {
   };
 
   if (event === "sessionstart") {
-    fields.claudeStatus = "ready";
+    // resume/compact fire mid-turn (auto-compact in particular) and must not clobber working/asking; see STATUS.md.
+    const source = typeof input.source === "string" ? input.source : "";
+    if (source === "resume" || source === "compact") {
+      const existing = findWorkerByName(workerInfo.project, workerInfo.worker);
+      const cs = existing?.claudeStatus;
+      if (cs !== "working" && cs !== "asking") {
+        fields.claudeStatus = "ready";
+      }
+    } else {
+      fields.claudeStatus = "ready";
+    }
   } else if (event === "prompt") {
     fields.claudeStatus = "working";
     // Clear merged prState on the next prompt — invariant 4 ("merged" is sticky
@@ -343,6 +367,9 @@ export function handleClaudeHook(event: string): void {
       event,
       claudeStatus: fields.claudeStatus,
       prStateCleared: fields.prState === undefined && event === "prompt",
+      ...(event === "sessionstart" && typeof input.source === "string"
+        ? { source: input.source }
+        : {}),
     },
   });
 

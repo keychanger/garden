@@ -297,7 +297,17 @@ spawns the worker pane.
 **Claude Code hooks** write `claudeStatus`. The hooks fire from every
 Claude process and call `garden dashboard _claude-hook <event>`:
 
-- `SessionStart` → `claudeStatus = "ready"`
+- `SessionStart` → branches on the hook input's `source` field:
+  - `startup` or `clear` → `claudeStatus = "ready"` (fresh context).
+  - `resume` or `compact` → preserve `claudeStatus` if it is currently
+    `working` or `asking`; otherwise set `ready`. Auto-compaction in
+    particular fires SessionStart mid-turn (Claude crosses the context
+    threshold and resets context while the operator's prompt is still
+    being answered) — overwriting `working` here would silently strand
+    the worker as "ready" in the dashboard until the next tool call or
+    Stop, which is what bug-stranded workers reported pre-fix.
+  - Missing/unknown `source` → `claudeStatus = "ready"` (back-compat
+    with older Claude Code builds that did not emit `source`).
 - `UserPromptSubmit` → `claudeStatus = "working"`. Also clears `prState`
   if it equals `merged` (this is the only place `merged` is cleared).
 - `Stop` → `claudeStatus = "idle"`. If commits ahead of base exist, also
