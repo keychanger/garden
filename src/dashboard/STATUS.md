@@ -85,7 +85,8 @@ stateDiagram-v2
     resolving --> failing : resolver Stop (budget exhausted)
     resolving --> working : worker push (stale resolution)
 
-    merged --> working : UserPromptSubmit (merged cleared)
+    merged --> working : UserPromptSubmit (merged cleared, no .garden-done)
+    idle --> merged : Stop hook + .garden-done present
 
     failing --> working : worker push + 30s debounce
 
@@ -235,17 +236,32 @@ recurring re-check, or "fallback poll."
 3. **`ready` is one-time.** Once a worker receives its first input, it
    never returns to `ready`.
 
-4. **Active pipeline states are sticky; `merged` is not.** While a worker
-   is in `reviewing`, `merge-pending`, `resolving`, or `failing`, those
-   states take priority over what Claude is doing — they represent
-   in-progress pipeline work. `merged` persists only until the worker
-   receives new input, then clears immediately. There is no "merged
-   history" — each cycle is independent. Race case: if the worker
-   received new input while the merge cycle was in progress, the prompt
-   hook cannot clear "merged" (because prState was still an active
-   pipeline state at prompt time). `finalizeMerge` handles this by
-   checking `claudeStatus` after setting "merged" — if the worker is
-   already working, it transitions immediately to "working".
+4. **Active pipeline states are sticky; `merged` is conditionally sticky.**
+   While a worker is in `reviewing`, `merge-pending`, `resolving`, or
+   `failing`, those states take priority over what Claude is doing —
+   they represent in-progress pipeline work. `merged` is set by
+   `finalizeMerge` after a clean merge and persists until the worker
+   submits a new prompt — at which point `UserPromptSubmit` clears it.
+   There is no "merged history" — each cycle is independent. Race case:
+   if the worker received new input while the merge cycle was in
+   progress, the prompt hook cannot clear `merged` (because prState was
+   still an active pipeline state at prompt time). `finalizeMerge`
+   handles this by checking `claudeStatus` after setting `merged` — if
+   the worker is already working, it transitions immediately to
+   `working`.
+
+   The Stop hook restores `merged` when two conditions hold: the worker
+   has no commits ahead of base, and the `.garden-done` sentinel is
+   present at the worker's worktree root. This makes `merged` the
+   operator's "this worker is finished, you can clean it up" signal:
+   after a clean merge → auto-continue → worker writes `.garden-done`
+   and ends turn, the dashboard returns to `merged` rather than going
+   to plain `idle`. Without this, the auto-continue prompt would
+   permanently clear the merged indicator on its first firing — losing
+   the cleanup signal even though the worker had explicitly declared
+   done. The Stop hook only sets `merged` (never clears it); the
+   UserPromptSubmit clear remains the only way out of `merged` toward
+   active work.
 
 5. **There is no `pushed` state.** Earlier versions of this system carried
    an internal `pushed` lifecycle state between "commits exist" and

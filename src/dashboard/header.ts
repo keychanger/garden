@@ -17,6 +17,7 @@ import { workerWindowName as workerWin, parseWorkerWindow } from "./window-names
 import { maybeRefreshUsage, renderUsagePane } from "./usage.js";
 import { resolveGardenRunner } from "./create.js";
 import { resolvePlotStatus, type PlotState } from "./plot-status.js";
+import { isDoneSet } from "./continue.js";
 
 const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
 const USAGE_RENDERED_FILE = path.join(SESSIONS_DIR, "usage.rendered");
@@ -376,21 +377,20 @@ export function handleClaudeHook(event: string): void {
     },
   });
 
-  // On stop, if the worktree has commits ahead of base, mark the worker as
-  // pending review and poke the poller FIFO. The mark distinguishes "Stop
-  // hook just fired with new commits" (review eligible) from "worker has
-  // been idle for a month with stale commits" (must not review). Without
-  // this, any FIFO poke would launch a review on every idle worker that
-  // happens to have commits — a direct violation of STATUS.md invariant 2.
+  // On stop, route the worker into one of three end-of-turn dispositions
+  // based on the worktree state: queue for review (commits ahead), restore
+  // "merged" (worker declared done via .garden-done), or do nothing (no
+  // commits, no done sentinel — the normal idle case). See STATUS.md
+  // invariant 2 (review-cycle entry) and invariant 4 (merged stickiness).
   if (event === "stop") {
-    markPendingReviewIfCommitsAhead(workerInfo.project, workerInfo.worker);
+    routeStopHookEnd(workerInfo.project, workerInfo.worker);
     maybeRefreshUsage(resolveGardenRunner());
   }
 
   refreshDashboard();
 }
 
-function markPendingReviewIfCommitsAhead(projectName: string, workerName: string): void {
+function routeStopHookEnd(projectName: string, workerName: string): void {
   const project = tryGetProject(projectName);
   if (!project) return;
   const entry = findWorkerByName(projectName, workerName);
@@ -412,6 +412,23 @@ function markPendingReviewIfCommitsAhead(projectName: string, workerName: string
       log.info("hook", "stop hook marked pending review (commits ahead of base)", {
         worker: workerName,
         data: { project: projectName, baseBranch, commitsAhead: ahead },
+      });
+      return;
+    }
+    // No commits ahead — if the worker wrote .garden-done, restore prState
+    // = "merged" so the operator's dashboard signals "this work is complete
+    // and the worker can be cleaned up." UserPromptSubmit cleared prState
+    // when the auto-continue prompt landed; the Stop hook reinstates it
+    // now that the worker has explicitly declared done. See STATUS.md
+    // invariant 4 for the updated stickiness contract.
+    if (isDoneSet(entry.worktreePath)) {
+      updateWorkerFields(projectName, workerName, {
+        prState: "merged",
+        mergedAt: new Date().toISOString(),
+      });
+      log.info("hook", "stop hook restored merged prState (worker declared done)", {
+        worker: workerName,
+        data: { project: projectName },
       });
     }
   } catch (err) {

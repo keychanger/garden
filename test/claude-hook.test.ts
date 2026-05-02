@@ -408,6 +408,99 @@ describe("handleClaudeHook — core events", () => {
     );
   });
 
+  it("stop restores prState=merged when .garden-done is present and no commits ahead", async () => {
+    seedWorker("garden", "bold-ash", {
+      claudeStatus: "working",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+    });
+    setCwd("garden", "bold-ash");
+
+    const fs = (await import("node:fs")).default;
+    vi.mocked(fs.existsSync).mockImplementation((p: fs.PathLike) => {
+      return String(p) === "/tmp/wt/garden/bold-ash/.garden-done";
+    });
+    const { execFileSync } = await import("node:child_process");
+    vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[] | undefined;
+      if (argv && argv[0] === "rev-list") return "0" as unknown as Buffer;
+      return "" as unknown as Buffer;
+    });
+
+    handleClaudeHook("stop");
+
+    // First call: claudeStatus = idle (existing behavior).
+    expect(updateWorkerFields).toHaveBeenCalledWith(
+      "garden", "bold-ash",
+      expect.objectContaining({ claudeStatus: "idle" }),
+    );
+    // Second call: prState = merged + mergedAt timestamp (the new behavior).
+    expect(updateWorkerFields).toHaveBeenCalledWith(
+      "garden", "bold-ash",
+      expect.objectContaining({
+        prState: "merged",
+        mergedAt: expect.any(String),
+      }),
+    );
+  });
+
+  it("stop does NOT restore merged when .garden-done is absent", async () => {
+    seedWorker("garden", "bold-ash", {
+      claudeStatus: "working",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+    });
+    setCwd("garden", "bold-ash");
+
+    // Explicit reset — clearAllMocks clears call history but preserves
+    // mockImplementation set by earlier tests, so we must reassert the
+    // default to make .garden-done genuinely absent here.
+    const fs = (await import("node:fs")).default;
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    const { execFileSync } = await import("node:child_process");
+    vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[] | undefined;
+      if (argv && argv[0] === "rev-list") return "0" as unknown as Buffer;
+      return "" as unknown as Buffer;
+    });
+
+    handleClaudeHook("stop");
+
+    const mergedCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "merged",
+    );
+    expect(mergedCall).toBeUndefined();
+  });
+
+  it("stop with commits ahead AND .garden-done queues review (does NOT restore merged)", async () => {
+    seedWorker("garden", "bold-ash", {
+      claudeStatus: "working",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+    });
+    setCwd("garden", "bold-ash");
+
+    const fs = (await import("node:fs")).default;
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    const { execFileSync } = await import("node:child_process");
+    vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[] | undefined;
+      if (argv && argv[0] === "rev-list") return "1" as unknown as Buffer;
+      return "" as unknown as Buffer;
+    });
+
+    handleClaudeHook("stop");
+
+    // Review path takes priority — finalizeMerge will set merged itself
+    // after the merge cycle completes. The .done sentinel is checked
+    // there via maybeAutoContinue.
+    expect(updateWorkerFields).toHaveBeenCalledWith(
+      "garden", "bold-ash",
+      expect.objectContaining({ pendingReviewAt: expect.any(Number) }),
+    );
+    const mergedCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "merged",
+    );
+    expect(mergedCall).toBeUndefined();
+  });
+
   it("stop fires base-drift alert when rev-list against origin/<base> throws", async () => {
     seedWorker("garden", "bold-ash", {
       claudeStatus: "working",
