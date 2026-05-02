@@ -10,6 +10,11 @@ vi.mock("node:fs", () => ({
   },
 }));
 
+const execMock = vi.fn();
+vi.mock("node:child_process", () => ({
+  execFileSync: (...args: unknown[]) => execMock(...args),
+}));
+
 const rlAnswers: string[] = [];
 vi.mock("node:readline", () => ({
   default: {
@@ -55,7 +60,7 @@ import {
   type SuggestionSummary,
 } from "../src/dashboard/findings.js";
 import {
-  rules, parseAcceptFlags, buildRuleBlock, humanize,
+  rules, parseAcceptFlags, buildRuleBlock, humanize, commitRulesChange,
 } from "../src/commands/rules.js";
 
 function captureLog(): { lines: string[]; restore: () => void } {
@@ -87,6 +92,11 @@ beforeEach(() => {
   rlAnswers.length = 0;
   Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
   process.env.GARDEN_RULES_PATH = "/tmp/garden/rules.md";
+  execMock.mockReset();
+  execMock.mockImplementation((_cmd: string, args: string[]) => {
+    if (args[2] === "rev-parse") return "/repo/p1\n";
+    return "";
+  });
 });
 
 afterEach(() => {
@@ -354,6 +364,31 @@ describe("rules accept", () => {
     const appendedTo = vi.mocked(markSuggestion).mock.calls[0][2]?.appendedTo;
     expect(appendedTo).toBe("/repo/other/.garden/rules.md");
   });
+
+  it("commits and pushes the rules file after appending", async () => {
+    vi.mocked(getSuggestion).mockReturnValue(makeSummary());
+    await rules(["accept", "cat-a", "--rule", "x", "--confirm"]);
+    const subcmds = execMock.mock.calls.map(c => {
+      const args = c[1] as string[];
+      return args.find(a => ["rev-parse", "add", "commit", "push"].includes(a));
+    });
+    expect(subcmds).toEqual(["rev-parse", "add", "commit", "push"]);
+    const commitArgs = execMock.mock.calls.find(c => (c[1] as string[]).includes("commit"))![1] as string[];
+    expect(commitArgs).toContain("rules: accept cat-a");
+  });
+
+  it("warns when push fails but keeps the local commit", async () => {
+    vi.mocked(getSuggestion).mockReturnValue(makeSummary());
+    execMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes("rev-parse")) return "/repo/p1\n";
+      if (args.includes("push")) throw new Error("rejected");
+      return "";
+    });
+    const cap = captureLog();
+    await rules(["accept", "cat-a", "--rule", "x", "--confirm"]);
+    cap.restore();
+    expect(cap.lines.some(l => l.includes("push failed"))).toBe(true);
+  });
 });
 
 // --- dismiss ---
@@ -377,6 +412,34 @@ describe("rules dismiss", () => {
     vi.mocked(getSuggestion).mockReturnValue(makeSummary());
     await rules(["dismiss", "cat-a"]);
     expect(markSuggestion).toHaveBeenCalledWith("cat-a", "dismissed");
+  });
+});
+
+// --- commitRulesChange ---
+
+describe("commitRulesChange", () => {
+  it("returns committed=true and pushed=true on success", () => {
+    const r = commitRulesChange("/repo/p1/.garden/rules.md", "cat-a");
+    expect(r).toEqual({ committed: true, pushed: true });
+  });
+
+  it("reports not-a-git-repo when rev-parse fails", () => {
+    execMock.mockImplementation(() => { throw new Error("not a git dir"); });
+    const r = commitRulesChange("/nope/.garden/rules.md", "cat-a");
+    expect(r.committed).toBe(false);
+    expect(r.pushed).toBe(false);
+    expect(r.error).toContain("not a git repo");
+  });
+
+  it("reports commit failure (e.g. nothing to commit)", () => {
+    execMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes("rev-parse")) return "/repo/p1\n";
+      if (args.includes("commit")) throw new Error("nothing to commit");
+      return "";
+    });
+    const r = commitRulesChange("/repo/p1/.garden/rules.md", "cat-a");
+    expect(r.committed).toBe(false);
+    expect(r.error).toContain("commit failed");
   });
 });
 

@@ -224,7 +224,7 @@ A category becomes a *pending suggestion* once it has accumulated ≥3 findings 
 **Commands:**
 - `garden rules` / `garden rules suggest` — interactive walk-through of pending suggestions with an `[a]ccept / [d]ismiss / [s]kip` prompt per category; accept optionally takes a one-line rule (Enter for evidence-only) and auto-resolves scope (project if one project is affected, global if multiple). Falls back to a plain list when stdin is not a TTY.
 - `garden rules list` — print pending suggestions without prompting
-- `garden rules accept <category> [--rule "..."] [--global | --project <name>] [--confirm]` — non-interactive accept for scripting: synthesize a markdown rule block and, after confirmation, append it to the inferred `rules.md`
+- `garden rules accept <category> [--rule "..."] [--global | --project <name>] [--confirm]` — non-interactive accept for scripting: synthesize a markdown rule block, append it to the inferred `rules.md`, then commit the change in the containing repo and push (so the dirty file doesn't block subsequent post-merge fast-forwards). Push failures keep the local commit and print a warning.
 - `garden rules dismiss <category>` — mark so the suggestion won't re-surface
 - `garden rules findings [--project <name>]` — raw findings log
 

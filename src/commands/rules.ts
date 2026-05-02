@@ -1,6 +1,7 @@
 // Command: garden rules — view pending rule suggestions, accept them into
 // rules.md, or dismiss them. See src/dashboard/findings.ts for the tally
 // logic and src/dashboard/prompts.ts for where findings are emitted.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
@@ -103,6 +104,7 @@ async function runInteractive(suggestions: SuggestionSummary[]): Promise<void> {
         appendToRules(target.filePath, block);
         markSuggestion(s.category, "accepted", { appendedTo: target.filePath });
         console.log(`  appended to ${target.filePath}`);
+        reportCommit(commitRulesChange(target.filePath, s.category), "  ");
       } else if (choice === "d" || choice === "dismiss") {
         markSuggestion(s.category, "dismissed");
         console.log(`  dismissed.`);
@@ -184,6 +186,17 @@ function handleAccept(args: string[]): void {
   appendToRules(target.filePath, block);
   markSuggestion(flags.category, "accepted", { appendedTo: target.filePath });
   console.log(`Appended rule suggestion "${flags.category}" to ${target.filePath}`);
+  reportCommit(commitRulesChange(target.filePath, flags.category), "");
+}
+
+function reportCommit(result: { committed: boolean; pushed: boolean; error?: string }, indent: string): void {
+  if (result.committed && result.pushed) {
+    console.log(`${indent}committed and pushed.`);
+  } else if (result.committed) {
+    console.log(`${indent}committed locally; push failed (${result.error}). Push manually to share the rule.`);
+  } else {
+    console.log(`${indent}WARNING: rules file written but not committed (${result.error}). The dirty file will block post-merge fast-forwards on this project until committed.`);
+  }
 }
 
 interface AcceptTarget {
@@ -241,6 +254,36 @@ function appendToRules(filePath: string, block: string): void {
   const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(tmp, existing + separator + block);
   fs.renameSync(tmp, filePath);
+}
+
+// Commits the rules-file change and pushes it. Without this step, the dirty
+// file blocks post-merge fast-forwards on the project's main checkout and
+// every subsequent worker merge alerts.
+export function commitRulesChange(filePath: string, category: string): { committed: boolean; pushed: boolean; error?: string } {
+  const dir = path.dirname(filePath);
+  let repoRoot: string;
+  try {
+    repoRoot = execFileSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf-8" }).trim();
+  } catch (err) {
+    return { committed: false, pushed: false, error: `not a git repo: ${dir}` };
+  }
+  const relPath = path.relative(repoRoot, filePath);
+  try {
+    execFileSync("git", ["-C", repoRoot, "add", "--", relPath], { stdio: "pipe" });
+    execFileSync(
+      "git",
+      ["-C", repoRoot, "-c", "commit.gpgsign=false", "commit", "-m", `rules: accept ${category}`, "--", relPath],
+      { stdio: "pipe" },
+    );
+  } catch (err) {
+    return { committed: false, pushed: false, error: `commit failed: ${(err as Error).message}` };
+  }
+  try {
+    execFileSync("git", ["-C", repoRoot, "push"], { stdio: "pipe" });
+    return { committed: true, pushed: true };
+  } catch (err) {
+    return { committed: true, pushed: false, error: `push failed: ${(err as Error).message}` };
+  }
 }
 
 export function humanize(category: string): string {
