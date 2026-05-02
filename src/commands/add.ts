@@ -1,7 +1,7 @@
 // Adds a project directory to the garden config. Name is derived from the directory basename.
 import path from "node:path";
 import fs from "node:fs";
-import { loadConfig, saveConfig } from "../config.js";
+import { loadConfig, saveConfig, assignLogColor } from "../config.js";
 import { dashboardExists } from "../session.js";
 import { refreshDashboard } from "../dashboard/header.js";
 
@@ -55,6 +55,7 @@ export async function add(args: string[]): Promise<void> {
   }
 
   config.projects[name] = { path: resolved };
+  assignLogColor(config, name);
   saveConfig(config);
   console.log(`Added project '${name}' (${resolved})`);
 

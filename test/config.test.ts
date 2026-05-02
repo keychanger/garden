@@ -170,7 +170,7 @@ describe("plots migration", () => {
     const { loadConfig, saveConfig, GARDEN_DIR, CONFIG_PATH } = await importConfig();
     fs.mkdirSync(GARDEN_DIR, { recursive: true });
     saveConfig({
-      projects: { a: { path: "/a" } },
+      projects: { a: { path: "/a", logColor: "cyan" } },
       plots: { custom: { projects: ["a"] } },
     });
     const before = fs.readFileSync(CONFIG_PATH, "utf-8");
@@ -184,6 +184,123 @@ describe("isValidConfigKey", () => {
   it("accepts sandboxDomains as a valid key", async () => {
     const { isValidConfigKey } = await importConfig();
     expect(isValidConfigKey("sandboxDomains")).toBe(true);
+  });
+
+  it("accepts logColor as a valid key", async () => {
+    const { isValidConfigKey } = await importConfig();
+    expect(isValidConfigKey("logColor")).toBe(true);
+  });
+});
+
+describe("logColor migration", () => {
+  it("assigns a unique color to every project on first load", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({
+      projects: {
+        garden: { path: "/g" },
+        sharona: { path: "/s" },
+        imp: { path: "/i" },
+      },
+      plots: { all: { projects: ["garden", "sharona", "imp"] } },
+    });
+    const cfg = loadConfig();
+    expect(cfg.projects.garden.logColor).toBeUndefined();
+    expect(cfg.projects.sharona.logColor).toBeDefined();
+    expect(cfg.projects.imp.logColor).toBeDefined();
+    expect(cfg.projects.sharona.logColor).not.toBe(cfg.projects.imp.logColor);
+    expect(cfg.projects.sharona.logColor).not.toBe("green");
+    expect(cfg.projects.imp.logColor).not.toBe("green");
+  });
+
+  it("strips a stray logColor from garden", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({
+      projects: { garden: { path: "/g", logColor: "cyan" } },
+      plots: { all: { projects: ["garden"] } },
+    });
+    const cfg = loadConfig();
+    expect(cfg.projects.garden.logColor).toBeUndefined();
+  });
+
+  it("preserves valid existing assignments", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({
+      projects: {
+        a: { path: "/a", logColor: "pink" },
+        b: { path: "/b" },
+      },
+      plots: { all: { projects: ["a", "b"] } },
+    });
+    const cfg = loadConfig();
+    expect(cfg.projects.a.logColor).toBe("pink");
+    expect(cfg.projects.b.logColor).toBeDefined();
+    expect(cfg.projects.b.logColor).not.toBe("pink");
+    expect(cfg.projects.b.logColor).not.toBe("green");
+  });
+
+  it("reassigns when an existing color is unknown", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({
+      projects: { a: { path: "/a", logColor: "fuchsia-the-cat" } },
+      plots: { all: { projects: ["a"] } },
+    });
+    const cfg = loadConfig();
+    expect(cfg.projects.a.logColor).not.toBe("fuchsia-the-cat");
+    expect(cfg.projects.a.logColor).not.toBe("green");
+  });
+});
+
+describe("assignLogColor", () => {
+  it("picks an unused color when adding a new project", async () => {
+    const { assignLogColor } = await importConfig();
+    const config = {
+      projects: {
+        a: { path: "/a", logColor: "cyan" },
+        b: { path: "/b", logColor: "skyblue" },
+        c: { path: "/c" },
+      },
+    };
+    assignLogColor(config, "c");
+    expect(config.projects.c.logColor).toBeDefined();
+    expect(config.projects.c.logColor).not.toBe("cyan");
+    expect(config.projects.c.logColor).not.toBe("skyblue");
+    expect(config.projects.c.logColor).not.toBe("green");
+  });
+
+  it("never assigns a color to garden", async () => {
+    const { assignLogColor } = await importConfig();
+    const config = {
+      projects: { garden: { path: "/g" } },
+    };
+    assignLogColor(config, "garden");
+    expect(config.projects.garden.logColor).toBeUndefined();
+  });
+
+  it("leaves a valid existing color in place", async () => {
+    const { assignLogColor } = await importConfig();
+    const config = {
+      projects: { a: { path: "/a", logColor: "pink" } },
+    };
+    assignLogColor(config, "a");
+    expect(config.projects.a.logColor).toBe("pink");
+  });
+
+  it("falls back to least-used when palette is exhausted", async () => {
+    const { assignLogColor } = await importConfig();
+    const { ASSIGNABLE_LOG_COLOR_KEYS } = await import("../src/log-palette.js");
+    const projects: Record<string, { path: string; logColor?: string }> = {};
+    for (let i = 0; i < ASSIGNABLE_LOG_COLOR_KEYS.length; i++) {
+      projects[`p${i}`] = { path: `/p${i}`, logColor: ASSIGNABLE_LOG_COLOR_KEYS[i] };
+    }
+    projects.extra = { path: "/extra" };
+    const config = { projects };
+    assignLogColor(config, "extra");
+    expect(projects.extra.logColor).toBeDefined();
+    expect(projects.extra.logColor).not.toBe("green");
   });
 });
 

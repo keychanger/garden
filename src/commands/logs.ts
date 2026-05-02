@@ -11,7 +11,8 @@
 // `garden logs pretty`, `garden logs mode`.
 import fs from "node:fs";
 import path from "node:path";
-import { SESSIONS_DIR, getLogsMode, setLogsMode, type LogsMode } from "../config.js";
+import { SESSIONS_DIR, getLogsMode, setLogsMode, loadConfig, logColorKeyForProject, type LogsMode, type GardenConfig } from "../config.js";
+import { logColorAnsi, ASSIGNABLE_LOG_COLOR_KEYS, RESERVED_LOG_COLOR_KEY } from "../log-palette.js";
 import { isTTY } from "../output.js";
 
 const LOG_FILE = path.join(SESSIONS_DIR, "dashboard.log");
@@ -60,32 +61,33 @@ const PRETTY_LEVEL_GLYPHS: Record<string, string> = {
   error: "✗",
 };
 
-// 9-slot 256-color palette; reds are skipped so project color never collides with error coloring.
-const PROJECT_PALETTE = isTTY
-  ? [
-      "\x1b[38;5;39m",  // cyan
-      "\x1b[38;5;75m",  // sky blue
-      "\x1b[38;5;141m", // lavender
-      "\x1b[38;5;213m", // pink
-      "\x1b[38;5;208m", // orange
-      "\x1b[38;5;220m", // gold
-      "\x1b[38;5;156m", // lime
-      "\x1b[38;5;84m",  // green
-      "\x1b[38;5;50m",  // turquoise
-    ]
-  : [""];
+// Each project's log color is assigned at registration time and persisted to
+// config.yml (see `assignLogColor`). The renderer reads the key, looks up its
+// ANSI escape, and falls back to a name-hash over the assignable palette only
+// for projects missing from config (transient registry entries, stale logs).
+let cachedConfig: GardenConfig | null = null;
+let configLoadFailed = false;
 
-// Garden pins to green so its color never drifts on rehash — it's the most-frequent context.
-const PINNED_PROJECT_COLORS: Record<string, string> = isTTY
-  ? { garden: "\x1b[38;5;84m" }
-  : {};
+function getCachedConfig(): GardenConfig | null {
+  if (cachedConfig || configLoadFailed) return cachedConfig;
+  try {
+    cachedConfig = loadConfig();
+  } catch {
+    configLoadFailed = true;
+  }
+  return cachedConfig;
+}
 
 function colorForProject(name: string): string {
-  const pinned = PINNED_PROJECT_COLORS[name];
-  if (pinned !== undefined) return pinned;
+  if (!isTTY) return "";
+  const cfg = getCachedConfig();
+  const key = cfg ? logColorKeyForProject(name, cfg) : null;
+  if (key) return logColorAnsi(key) ?? "";
+  if (name === "garden") return logColorAnsi(RESERVED_LOG_COLOR_KEY) ?? "";
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
-  return PROJECT_PALETTE[Math.abs(h) % PROJECT_PALETTE.length];
+  const fallbackKey = ASSIGNABLE_LOG_COLOR_KEYS[Math.abs(h) % ASSIGNABLE_LOG_COLOR_KEYS.length];
+  return logColorAnsi(fallbackKey) ?? "";
 }
 
 function pad2(n: number): string {

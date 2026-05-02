@@ -3,7 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import readline from "node:readline";
 import { execFileSync, spawnSync } from "node:child_process";
-import { loadConfig, saveConfig, addProjectToPlot, tryGetPlot, PLOT_MAX_PROJECTS } from "../config.js";
+import { loadConfig, saveConfig, addProjectToPlot, tryGetPlot, PLOT_MAX_PROJECTS, assignLogColor } from "../config.js";
 import { readDashState } from "../dashboard/state.js";
 import { dashboardExists } from "../session.js";
 import { refreshDashboard } from "../dashboard/header.js";
@@ -71,6 +71,7 @@ export async function create(args: string[]): Promise<void> {
   git(["push", "-u", "origin", "main"]);
 
   config.projects[name] = { path: resolved };
+  assignLogColor(config, name);
   if (activePlot) {
     addProjectToPlot(config, activePlot, name);
   }

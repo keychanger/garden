@@ -2,6 +2,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
+import {
+  ASSIGNABLE_LOG_COLOR_KEYS,
+  RESERVED_LOG_COLOR_KEY,
+  RESERVED_LOG_COLOR_PROJECT,
+  isValidLogColorKey,
+  pickLogColor,
+} from "./log-palette.js";
 
 function requireHome(): string {
   const h = process.env.HOME ?? process.env.USERPROFILE;
@@ -22,10 +29,11 @@ export interface ProjectConfig {
   postMerge?: string;
   sandboxDomains?: string[];
   claudeProfile?: string;
+  logColor?: string;
 }
 
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
-  "path", "checks", "postMerge", "sandboxDomains", "claudeProfile",
+  "path", "checks", "postMerge", "sandboxDomains", "claudeProfile", "logColor",
 ]);
 
 export function isValidConfigKey(key: string): boolean {
@@ -118,11 +126,80 @@ export function loadConfig(): GardenConfig {
   const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
   const parsed = (yaml.load(raw) as GardenConfig | null) ?? { projects: {} };
   if (!parsed.projects) parsed.projects = {};
-  if (migratePlots(parsed)) {
-    saveConfig(parsed);
-  }
+  let dirty = false;
+  if (migratePlots(parsed)) dirty = true;
+  if (migrateLogColors(parsed)) dirty = true;
+  if (dirty) saveConfig(parsed);
   return parsed;
 }
+
+// One-shot migration: walk projects in iteration order and assign a logColor
+// to any project missing one (or holding an unknown key). Garden is excluded —
+// the renderer always paints it green via the reserved palette slot. Idempotent:
+// re-running on a fully-assigned config is a no-op.
+function migrateLogColors(config: GardenConfig): boolean {
+  let changed = false;
+  const taken: string[] = [];
+  for (const [name, project] of Object.entries(config.projects)) {
+    if (name === RESERVED_LOG_COLOR_PROJECT) continue;
+    if (project.logColor && isValidLogColorKey(project.logColor)
+      && project.logColor !== RESERVED_LOG_COLOR_KEY) {
+      taken.push(project.logColor);
+    }
+  }
+  for (const [name, project] of Object.entries(config.projects)) {
+    if (name === RESERVED_LOG_COLOR_PROJECT) {
+      if (project.logColor) {
+        delete project.logColor;
+        changed = true;
+      }
+      continue;
+    }
+    if (!project.logColor || !isValidLogColorKey(project.logColor)
+      || project.logColor === RESERVED_LOG_COLOR_KEY) {
+      const next = pickLogColor(taken);
+      project.logColor = next;
+      taken.push(next);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+// Pick a logColor for a newly-added project and write it onto the config in
+// place. Caller is responsible for `saveConfig`. No-op for the garden project
+// itself (reserved). No-op if a valid color is already assigned.
+export function assignLogColor(config: GardenConfig, projectName: string): void {
+  if (projectName === RESERVED_LOG_COLOR_PROJECT) return;
+  const project = config.projects[projectName];
+  if (!project) return;
+  if (project.logColor && isValidLogColorKey(project.logColor)
+    && project.logColor !== RESERVED_LOG_COLOR_KEY) return;
+  const taken: string[] = [];
+  for (const [name, p] of Object.entries(config.projects)) {
+    if (name === projectName) continue;
+    if (p.logColor && isValidLogColorKey(p.logColor)
+      && p.logColor !== RESERVED_LOG_COLOR_KEY) {
+      taken.push(p.logColor);
+    }
+  }
+  project.logColor = pickLogColor(taken);
+}
+
+export function logColorKeyForProject(
+  projectName: string,
+  config?: GardenConfig,
+): string | null {
+  if (projectName === RESERVED_LOG_COLOR_PROJECT) return RESERVED_LOG_COLOR_KEY;
+  const cfg = config ?? loadConfig();
+  const project = cfg.projects[projectName];
+  if (!project) return null;
+  const key = project.logColor;
+  if (!key || !isValidLogColorKey(key) || key === RESERVED_LOG_COLOR_KEY) return null;
+  return key;
+}
+
+export { ASSIGNABLE_LOG_COLOR_KEYS };
 
 // One-shot migration: when a config predates plots, synthesize `all` from
 // currently focused projects and strip the now-unused `focused` project flag.

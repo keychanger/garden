@@ -1,8 +1,14 @@
 // View or set project configuration values.
 import { loadConfig, saveConfig, resolveProject, isValidConfigKey, type ProjectConfig } from "../config.js";
+import {
+  ASSIGNABLE_LOG_COLOR_KEYS,
+  RESERVED_LOG_COLOR_KEY,
+  RESERVED_LOG_COLOR_PROJECT,
+  isValidLogColorKey,
+} from "../log-palette.js";
 import { output } from "../output.js";
 
-const SETTABLE_KEYS = ["checks", "postMerge", "sandboxDomains", "claudeProfile"] as const;
+const SETTABLE_KEYS = ["checks", "postMerge", "sandboxDomains", "claudeProfile", "logColor"] as const;
 type SettableKey = typeof SETTABLE_KEYS[number];
 
 export async function config(args: string[]): Promise<void> {
@@ -50,6 +56,8 @@ function showProjectConfig(project: ProjectConfig & { name: string }): void {
       }
     } else if (key === "claudeProfile") {
       if (project.claudeProfile) data.claudeProfile = project.claudeProfile;
+    } else if (key === "logColor") {
+      if (project.logColor) data.logColor = project.logColor;
     } else if (project[key]) {
       data[key] = project[key]!;
     }
@@ -77,6 +85,12 @@ function showConfigKey(project: ProjectConfig & { name: string }, key: SettableK
     else output({ [key]: null }, () => `(not set)`);
     return;
   }
+  if (key === "logColor") {
+    const v = project.logColor;
+    if (v) output({ [key]: v }, () => v);
+    else output({ [key]: null }, () => `(not set)`);
+    return;
+  }
   const value = project[key];
   if (value) {
     output({ [key]: value }, () => value);
@@ -98,6 +112,23 @@ function setConfigKey(projectName: string, key: SettableKey, value: string): voi
       const domains = value.split(",").map((d) => d.trim()).filter(Boolean);
       project.sandboxDomains = domains;
       console.log(`Set ${key} = ${domains.join(", ")} for ${projectName}`);
+    }
+  } else if (key === "logColor") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.logColor;
+      console.log(`Cleared ${key} for ${projectName} (will be reassigned on next 'garden logs')`);
+    } else if (projectName === RESERVED_LOG_COLOR_PROJECT) {
+      throw new Error(
+        `'${RESERVED_LOG_COLOR_PROJECT}' is pinned to ${RESERVED_LOG_COLOR_KEY}; logColor cannot be set explicitly.`,
+      );
+    } else if (!isValidLogColorKey(value) || value === RESERVED_LOG_COLOR_KEY) {
+      throw new Error(
+        `Unknown logColor '${value}'. Valid keys: ${ASSIGNABLE_LOG_COLOR_KEYS.join(", ")} ` +
+        `('${RESERVED_LOG_COLOR_KEY}' is reserved for ${RESERVED_LOG_COLOR_PROJECT}).`,
+      );
+    } else {
+      project.logColor = value;
+      console.log(`Set ${key} = ${value} for ${projectName}`);
     }
   } else if (key === "claudeProfile") {
     if (value === "" || value === "unset" || value === "null") {
