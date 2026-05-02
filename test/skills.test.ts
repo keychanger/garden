@@ -4,11 +4,13 @@ vi.mock("node:fs", () => ({
   default: {
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
+    rmSync: vi.fn(),
   },
 }));
 
 import fs from "node:fs";
 import {
+  DONE_SKILL_DIRNAME,
   DONE_SKILL_FILENAME,
   DONE_SKILL_CONTENT,
   installClaudeSkills,
@@ -19,20 +21,29 @@ beforeEach(() => {
 });
 
 describe("installClaudeSkills", () => {
-  it("writes done.md under <targetDir>/.claude/skills/", () => {
+  it("writes SKILL.md under <targetDir>/.claude/skills/done/ (Claude Code's required dir+SKILL.md layout)", () => {
     installClaudeSkills("/Users/x/.garden/worktrees/myproject/bold-ash");
     expect(fs.mkdirSync).toHaveBeenCalledWith(
-      "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills",
+      "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/done",
       { recursive: true },
     );
     expect(fs.writeFileSync).toHaveBeenCalledWith(
-      "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/done.md",
+      "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/done/SKILL.md",
       DONE_SKILL_CONTENT,
     );
   });
 
-  it("filename constant matches what installClaudeSkills writes", () => {
-    expect(DONE_SKILL_FILENAME).toBe("done.md");
+  it("removes the legacy flat-file done.md so refreshes/bounces of pre-fix worktrees heal", () => {
+    installClaudeSkills("/Users/x/.garden/worktrees/myproject/bold-ash");
+    expect(fs.rmSync).toHaveBeenCalledWith(
+      "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/done.md",
+      { force: true },
+    );
+  });
+
+  it("constants match what installClaudeSkills writes", () => {
+    expect(DONE_SKILL_DIRNAME).toBe("done");
+    expect(DONE_SKILL_FILENAME).toBe("SKILL.md");
   });
 });
 

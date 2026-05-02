@@ -25,7 +25,7 @@ import { startUsagePoller } from "./usage-poller.js";
 import { installPollTriggerHook, worktreeExists as wtExists, getWorkerBaseBranch, getRemoteHost } from "./git.js";
 import { dispatchDelayedContinue } from "./continue.js";
 import { buildSandboxConfig, type SandboxConfig } from "./sandbox.js";
-import { DONE_SKILL_CONTENT, DONE_SKILL_FILENAME, installClaudeSkills } from "./skills.js";
+import { DONE_SKILL_CONTENT, DONE_SKILL_DIRNAME, DONE_SKILL_FILENAME, installClaudeSkills } from "./skills.js";
 import { claudeEnvPrefix } from "./claude-env.js";
 import { gardenWindowName, shellWindowName as shellWin, workerWindowName as workerWin, isGardenWindow } from "./window-names.js";
 
@@ -527,6 +527,7 @@ export function buildWorktreeBootstrapScript(
   const settingsJson = buildSettingsJson(gardenRunner, sandbox);
   const escapedHooksJson = settingsJson.replace(/'/g, "'\\''");
   const escapedDoneSkill = DONE_SKILL_CONTENT.replace(/'/g, "'\\''");
+  const escapedDoneSkillDirname = DONE_SKILL_DIRNAME.replace(/'/g, "'\\''");
   const escapedDoneSkillFilename = DONE_SKILL_FILENAME.replace(/'/g, "'\\''");
   const envPrefix = claudeEnvPrefix(project);
 
@@ -594,9 +595,9 @@ git -C ${escapedWtPath} config --local core.hooksPath ${escapedHooksDir}
 mkdir -p ${escapedWtPath}/.claude
 printf '%s' '${escapedHooksJson}' > ${escapedWtPath}/.claude/settings.json
 
-# Install garden-bundled skills (see src/dashboard/skills.ts).
-mkdir -p ${escapedWtPath}/.claude/skills
-printf '%s' '${escapedDoneSkill}' > ${escapedWtPath}/.claude/skills/'${escapedDoneSkillFilename}'
+# Install garden-bundled skills (see src/dashboard/skills.ts). Layout: .claude/skills/<name>/SKILL.md.
+mkdir -p ${escapedWtPath}/.claude/skills/'${escapedDoneSkillDirname}'
+printf '%s' '${escapedDoneSkill}' > ${escapedWtPath}/.claude/skills/'${escapedDoneSkillDirname}'/'${escapedDoneSkillFilename}'
 
 # Ensure garden-managed dirs are excluded from git status.
 # Writing to the common info/exclude covers all worktrees and never gets committed.

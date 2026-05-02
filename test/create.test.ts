@@ -10,6 +10,7 @@ vi.mock("node:fs", () => ({
     readdirSync: vi.fn(() => []),
     statSync: vi.fn(() => ({ size: 0 })),
     unlinkSync: vi.fn(),
+    rmSync: vi.fn(),
     constants: { O_CREAT: 0, O_EXCL: 0, O_WRONLY: 0 },
   },
 }));
@@ -217,19 +218,24 @@ describe("installClaudeHooks", () => {
     expect(catchAll.hooks[0].command).toContain("_claude-hook posttooluse");
   });
 
-  it("also writes the bundled `done` skill under .claude/skills/", () => {
+  it("also writes the bundled `done` skill at .claude/skills/done/SKILL.md (Claude Code's required dir+SKILL.md layout)", () => {
     process.argv[1] = "/usr/local/bin/garden";
     installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
     const writes = vi.mocked(fs.writeFileSync).mock.calls;
-    const skillCall = writes.find(c => String(c[0]).endsWith(".claude/skills/done.md"));
+    const skillCall = writes.find(c => String(c[0]).endsWith(".claude/skills/done/SKILL.md"));
     expect(skillCall).toBeDefined();
     const content = String(skillCall![1]);
     expect(content).toMatch(/^---\nname: done\n/);
     expect(content).toContain(".garden-done");
     expect(content).toContain("description:");
     expect(fs.mkdirSync).toHaveBeenCalledWith(
-      expect.stringContaining(".claude/skills"),
+      expect.stringContaining(".claude/skills/done"),
       { recursive: true },
+    );
+    // The legacy flat-file path must be removed so refreshes/bounces of pre-fix worktrees heal.
+    expect(fs.rmSync).toHaveBeenCalledWith(
+      "/repo/myproject/.claude/skills/done.md",
+      { force: true },
     );
   });
 
@@ -425,7 +431,7 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(script).not.toContain("/.claude/settings.local.json");
   });
 
-  it("inlines the bundled `done` skill at .claude/skills/done.md so new workers can invoke it without a refresh round-trip", () => {
+  it("inlines the bundled `done` skill at .claude/skills/done/SKILL.md so new workers can invoke it without a refresh round-trip", () => {
     process.argv[1] = "/usr/local/bin/garden";
     buildWorktreeBootstrapScript(
       "myproject", "/repo/myproject", "bold-ash", "bold-ash",
@@ -436,10 +442,8 @@ describe("buildWorktreeBootstrapScript", () => {
     );
     expect(call).toBeDefined();
     const script = call![1] as string;
-    expect(script).toContain("mkdir -p /wt/myproject/bold-ash/.claude/skills");
-    expect(script).toContain("/.claude/skills/'done.md'");
-    // The skill body itself must be inlined — not just the directory creation
-    // — otherwise the file would be empty after bootstrap.
+    expect(script).toContain("mkdir -p /wt/myproject/bold-ash/.claude/skills/'done'");
+    expect(script).toContain("/.claude/skills/'done'/'SKILL.md'");
     expect(script).toContain("name: done");
   });
 

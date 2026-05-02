@@ -3,7 +3,9 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export const DONE_SKILL_FILENAME = "done.md";
+// Claude Code discovers a project skill at .claude/skills/<name>/SKILL.md (directory + SKILL.md), not .claude/skills/<name>.md.
+export const DONE_SKILL_DIRNAME = "done";
+export const DONE_SKILL_FILENAME = "SKILL.md";
 
 // Single source of truth: the bootstrap script inlines this string before the worktree exists, and installClaudeHooks rewrites it on refresh/bounce.
 export const DONE_SKILL_CONTENT = `---
@@ -51,7 +53,10 @@ If you wrote \`.garden-done\` and the operator gives you more work afterward, th
 `;
 
 export function installClaudeSkills(targetDir: string): void {
-  const skillsDir = path.join(targetDir, ".claude", "skills");
-  fs.mkdirSync(skillsDir, { recursive: true });
-  fs.writeFileSync(path.join(skillsDir, DONE_SKILL_FILENAME), DONE_SKILL_CONTENT);
+  const skillsRoot = path.join(targetDir, ".claude", "skills");
+  // Heal the legacy flat-file layout so refreshes/bounces of pre-fix workers stop shadowing the new directory layout.
+  fs.rmSync(path.join(skillsRoot, "done.md"), { force: true });
+  const skillDir = path.join(skillsRoot, DONE_SKILL_DIRNAME);
+  fs.mkdirSync(skillDir, { recursive: true });
+  fs.writeFileSync(path.join(skillDir, DONE_SKILL_FILENAME), DONE_SKILL_CONTENT);
 }
