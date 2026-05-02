@@ -11,7 +11,7 @@
 // 2) Post-merge auto-continue — when the poller successfully merges a
 //    worker's branch into its base, finalizeMerge dispatches a continue
 //    prompt so the worker keeps building on the merged base without manual
-//    intervention. The worker opts out by writing the .done sentinel file
+//    intervention. The worker opts out by writing the .garden-done sentinel file
 //    (see `donePath` below).
 //
 // Living in its own file (rather than workers.ts) so create.ts and poller.ts

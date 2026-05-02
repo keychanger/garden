@@ -1176,7 +1176,7 @@ function finalizeMerge(
 
 // After a clean merge, send the worker a "please proceed" prompt so multi-phase
 // work continues without manual intervention. The worker opts out by writing
-// the .done sentinel (see continue.ts donePath); pause/resume commands toggle
+// the .garden-done sentinel (see continue.ts donePath); pause/resume commands toggle
 // the same file. Skips when the worker is already mid-turn or when the same
 // merge event would re-fire within AUTO_CONTINUE_DEBOUNCE_MS.
 function maybeAutoContinue(
