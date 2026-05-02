@@ -248,6 +248,89 @@ describe("continueWorkerAfterMerge", () => {
     continueWorkerAfterMerge("myproject", "bold-ash");
     expect(tmux).not.toHaveBeenCalled();
   });
+
+  it("prepends a stale-files preamble when the reviewer modified files", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+      branchName: "bold-ash",
+      pendingContinueChangedFiles: ["src/foo.ts", "src/bar.ts"],
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+
+    continueWorkerAfterMerge("myproject", "bold-ash");
+
+    const message = vi.mocked(tmux).mock.calls[0][4] as string;
+    expect(message).toContain("During review");
+    expect(message).toContain("src/foo.ts");
+    expect(message).toContain("src/bar.ts");
+    expect(message).toContain("re-read");
+    expect(message).toContain("merged");
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
+      pendingContinueChangedFiles: undefined,
+      pendingContinueSyncFailed: undefined,
+    });
+  });
+
+  it("truncates the file list past 20 entries", () => {
+    const files = Array.from({ length: 25 }, (_, i) => `src/file${i}.ts`);
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+      branchName: "bold-ash",
+      pendingContinueChangedFiles: files,
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+
+    continueWorkerAfterMerge("myproject", "bold-ash");
+
+    const message = vi.mocked(tmux).mock.calls[0][4] as string;
+    expect(message).toContain("src/file0.ts");
+    expect(message).toContain("src/file19.ts");
+    expect(message).not.toContain("src/file20.ts");
+    expect(message).toContain("(and 5 more)");
+  });
+
+  it("appends a manual-sync nudge when the post-merge sync failed", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+      branchName: "bold-ash",
+      pendingContinueSyncFailed: true,
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+
+    continueWorkerAfterMerge("myproject", "bold-ash");
+
+    const message = vi.mocked(tmux).mock.calls[0][4] as string;
+    expect(message).toContain("could not auto-sync");
+    expect(message).toContain("git fetch && git reset --hard origin/bold-ash");
+  });
+
+  it("uses the bare base prompt when no transient fields are set", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+
+    continueWorkerAfterMerge("myproject", "bold-ash");
+
+    const message = vi.mocked(tmux).mock.calls[0][4] as string;
+    expect(message).not.toContain("During review");
+    expect(message).not.toContain("could not auto-sync");
+    expect(message).toContain("merged");
+    expect(message).toContain(".garden-done");
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
 });
 
 describe("done-sentinel helpers", () => {

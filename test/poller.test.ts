@@ -128,10 +128,12 @@ vi.mock("../src/dashboard/git.js", () => ({
   deleteRemoteBranch: vi.fn(),
   fastForwardBase: vi.fn(),
   getChangedFiles: vi.fn(() => []),
+  getChangedFilesBetween: vi.fn(() => []),
   getCommitSummary: vi.fn(() => "abc123 fix something"),
   getNewCommitSummary: vi.fn(() => "def456 address review feedback"),
   resolveBaseBranch: vi.fn(() => "main"),
   getWorkerBaseBranch: vi.fn((entry: { baseBranch?: string }) => entry.baseBranch ?? "main"),
+  syncWorktreeToRemote: vi.fn(() => ({ ok: true })),
   ensureNoRebaseInProgress: vi.fn(),
   hasRebaseInProgress: vi.fn(() => false),
   isAncestor: vi.fn(() => true),
@@ -160,7 +162,9 @@ import {
   getBranchHeadSha, getRemoteTrackingSha, deleteRemoteBranch,
   forcePushBranch, mergeToBase, rebaseBranch, abortRebase,
   fastForwardBase,
-  getChangedFiles, getCommitSummary, getNewCommitSummary, getDiffAgainstBase,
+  getChangedFiles, getChangedFilesBetween,
+  getCommitSummary, getNewCommitSummary, getDiffAgainstBase,
+  syncWorktreeToRemote,
   ensureNoRebaseInProgress, hasRebaseInProgress, isAncestor, getUnmergedFiles,
 } from "../src/dashboard/git.js";
 import { tmux, windowExists, getFirstPaneId, killWindowSafe } from "../src/dashboard/tmux.js";
@@ -1090,6 +1094,97 @@ describe("poll — merge-pending state", () => {
     expect(workingCall).toBeUndefined();
     // Auto-continue fires on idle worker with no .garden-done sentinel.
     expect(autoContinueCall).toBeDefined();
+  });
+
+  it("syncs worktree to merged tip and persists reviewer-changed files", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        claudeStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        preReviewSha: "pre-review-sha",
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(syncWorktreeToRemote).mockReturnValue({ ok: true });
+    // Post-sync HEAD differs from preReviewSha so the diff path runs.
+    vi.mocked(getBranchHeadSha).mockImplementation((p: string) =>
+      p === "/tmp/wt/myproject/bold-ash" ? "post-sync-sha" : "abc123",
+    );
+    vi.mocked(getChangedFilesBetween).mockReturnValue(["src/foo.ts", "src/bar.ts"]);
+
+    poll("myproject");
+
+    expect(syncWorktreeToRemote).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
+    expect(getChangedFilesBetween).toHaveBeenCalledWith(
+      "/tmp/wt/myproject/bold-ash", "pre-review-sha", "post-sync-sha",
+    );
+    const mergedCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "merged",
+    );
+    expect(mergedCall).toBeDefined();
+    expect(mergedCall![2]).toMatchObject({
+      pendingContinueChangedFiles: ["src/foo.ts", "src/bar.ts"],
+      preReviewSha: undefined,
+    });
+    expect((mergedCall![2] as Record<string, unknown>).pendingContinueSyncFailed).toBeUndefined();
+  });
+
+  it("skips diff payload when reviewer made no changes (HEAD unchanged)", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        claudeStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        preReviewSha: "same-sha",
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(syncWorktreeToRemote).mockReturnValue({ ok: true });
+    vi.mocked(getBranchHeadSha).mockReturnValue("same-sha");
+
+    poll("myproject");
+
+    expect(getChangedFilesBetween).not.toHaveBeenCalled();
+    const mergedCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "merged",
+    );
+    expect((mergedCall![2] as Record<string, unknown>).pendingContinueChangedFiles).toBeUndefined();
+  });
+
+  it("alerts and flags syncFailed when worktree is dirty", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        claudeStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        preReviewSha: "pre-review-sha",
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(syncWorktreeToRemote).mockReturnValue({ ok: false, reason: "dirty" });
+
+    poll("myproject");
+
+    expect(getChangedFilesBetween).not.toHaveBeenCalled();
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "poller",
+        worker: "bold-ash",
+        message: expect.stringMatching(/uncommitted changes/),
+      }),
+    );
+    const mergedCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "merged",
+    );
+    expect(mergedCall![2]).toMatchObject({
+      pendingContinueSyncFailed: true,
+      preReviewSha: undefined,
+    });
   });
 
   it("runs postMerge and logs checkout HEAD when fastForwardBase advances", () => {

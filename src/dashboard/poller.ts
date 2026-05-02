@@ -22,8 +22,8 @@ import {
   getBranchHeadSha, getRemoteTrackingSha,
   rebaseBranch, abortRebase, cleanWorktree,
   forcePushBranch, mergeToBase, fastForwardBase, deleteRemoteBranch,
-  getChangedFiles, getCommitSummary, getNewCommitSummary,
-  getWorkerBaseBranch,
+  getChangedFiles, getChangedFilesBetween, getCommitSummary, getNewCommitSummary,
+  getWorkerBaseBranch, syncWorktreeToRemote,
   ensureNoRebaseInProgress, hasRebaseInProgress, isAncestor, getUnmergedFiles,
 } from "./git.js";
 import { refreshDashboard, setupStatusBar } from "./header.js";
@@ -349,13 +349,15 @@ function handleReviewing(
       return true;
     }
 
-    // Transition to merge-pending instead of merging directly
+    // Transition to merge-pending instead of merging directly. preReviewSha
+    // intentionally survives this transition: finalizeMerge needs it to diff
+    // the worker's pre-review HEAD against the merged tip and tell the worker
+    // which files the reviewer touched. finalizeMerge clears it.
     transitionState(projectName, entry.name, "merge-pending", {
       mergePendingAt: new Date().toISOString(),
       lastReviewBody: review.body,
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
-      preReviewSha: undefined,
       unparseableReviewAt: undefined,
     });
     refreshDashboard();
@@ -1167,10 +1169,46 @@ function finalizeMerge(
     });
   }
 
+  // Sync the worker's worktree to the merged tip. The reviewer rebased and
+  // possibly edited files before force-pushing; without this the worker would
+  // resume from its pre-review HEAD and re-do/diverge from work that's now on
+  // base. Done before the terminal-state transition so the prompt (when
+  // auto-continue runs) lands on a correct tree. Diff pre-review HEAD against
+  // the new tip so the prompt can tell the worker which files changed.
+  let changedDuringReview: string[] = [];
+  let syncFailed = false;
+  if (entry.worktreePath) {
+    const fromSha = entry.preReviewSha;
+    const sync = syncWorktreeToRemote(entry.worktreePath, branchName);
+    if (sync.ok) {
+      log.info("poller", "synced worktree to merged tip", {
+        worker: entry.name,
+        data: { branch: branchName },
+      });
+      const toSha = getBranchHeadSha(entry.worktreePath);
+      if (fromSha && toSha && fromSha !== toSha) {
+        changedDuringReview = getChangedFilesBetween(entry.worktreePath, fromSha, toSha);
+      }
+    } else {
+      syncFailed = true;
+      const logData = { branch: branchName, reason: sync.reason, error: sync.error };
+      const alertMessage = sync.reason === "dirty"
+        ? `Could not sync worker ${entry.name} after merge: worktree has uncommitted changes. Worker resumes on stale HEAD until cleaned up.`
+        : `Post-merge sync failed for worker ${entry.name} (${sync.reason}): ${(sync.error ?? "").slice(0, 200)}`;
+      if (sync.reason === "dirty") {
+        log.warn("poller", "post-merge worktree sync failed", { worker: entry.name, data: logData });
+        addAlert({ level: "warn", source: "poller", project: projectName, worker: entry.name, message: alertMessage });
+      } else {
+        log.error("poller", "post-merge worktree sync failed", { worker: entry.name, data: logData });
+        addAlert({ level: "error", source: "poller", project: projectName, worker: entry.name, message: alertMessage });
+      }
+    }
+  }
+
   // Per STATUS.md invariant 4: pick `done` when the worker wrote `.garden-done`
-  // before its final push (path 1: skip the transient `merged` beat and go
-  // straight to the operator-actionable cleanup signal). Otherwise set `merged`
-  // — auto-continue will clear it on the next prompt.
+  // before its final push (skip the transient `merged` beat and go straight to
+  // the operator-actionable cleanup signal). Otherwise set `merged` — auto-
+  // continue will clear it on the next prompt.
   const sentinelPresent = isDoneSet(entry.worktreePath);
   const terminalState: PrState = sentinelPresent ? "done" : "merged";
   transitionState(projectName, entry.name, terminalState, {
@@ -1183,6 +1221,9 @@ function finalizeMerge(
     resolveAttempts: 0,
     preResolveSha: undefined,
     lastResolveBody: undefined,
+    preReviewSha: undefined,
+    pendingContinueChangedFiles: changedDuringReview.length ? changedDuringReview : undefined,
+    pendingContinueSyncFailed: syncFailed ? true : undefined,
   });
 
   // STATUS.md invariant 4 race: prompt hook can't clear active pipeline states,

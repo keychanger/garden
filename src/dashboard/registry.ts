@@ -82,6 +82,15 @@ export interface WorkerEntry {
   // Idempotency guard: if a merge event somehow replays within a short window,
   // we don't double-fire the continue. See dashboard/continue.ts and STATUS.md.
   lastAutoContinueAt?: number;
+  // Transient payload for the post-merge auto-continue prompt. finalizeMerge
+  // diffs preReviewSha against the merged tip and stores the changed-file list
+  // here; continueWorkerAfterMerge reads it to enrich the prompt and clears it
+  // after sending. pendingContinueSyncFailed signals that the post-merge
+  // worktree sync was skipped (dirty or git failure) so the prompt can tell
+  // the worker to sync manually. Both fields live only across the brief
+  // finalizeMerge → detached-subprocess → send-keys window.
+  pendingContinueChangedFiles?: string[];
+  pendingContinueSyncFailed?: boolean;
   role?: string;
   parentWorker?: string;
 }

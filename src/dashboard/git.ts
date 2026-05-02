@@ -301,6 +301,54 @@ export function getChangedFiles(wtPath: string, baseBranch: string): string[] {
   }
 }
 
+export function getChangedFilesBetween(
+  wtPath: string,
+  fromSha: string,
+  toSha: string,
+): string[] {
+  try {
+    const result = git(wtPath, "diff", "--name-only", `${fromSha}..${toSha}`);
+    return result.split("\n").filter(Boolean);
+  } catch (err) {
+    log.warn("git", "getChangedFilesBetween failed", {
+      data: { fromSha, toSha, error: String(err) },
+    });
+    return [];
+  }
+}
+
+export type SyncWorktreeResult =
+  | { ok: true }
+  | { ok: false; reason: "dirty" | "fetch-failed" | "reset-failed"; error?: string };
+
+// Sync a worker's worktree to the latest remote tip of its branch. Used after
+// a merge to discard the worker's pre-review HEAD and adopt the reviewer's
+// force-pushed (and now-merged) version. Refuses to clobber uncommitted local
+// changes — those are rare (the worker just finished its turn) but we don't
+// want to silently nuke operator-typed edits.
+export function syncWorktreeToRemote(
+  wtPath: string,
+  branchName: string,
+): SyncWorktreeResult {
+  try {
+    const dirty = git(wtPath, "status", "--porcelain");
+    if (dirty) return { ok: false, reason: "dirty" };
+  } catch (err) {
+    return { ok: false, reason: "fetch-failed", error: String(err) };
+  }
+  try {
+    git(wtPath, "fetch", "origin", branchName);
+  } catch (err) {
+    return { ok: false, reason: "fetch-failed", error: String(err) };
+  }
+  try {
+    git(wtPath, "reset", "--hard", `origin/${branchName}`);
+  } catch (err) {
+    return { ok: false, reason: "reset-failed", error: String(err) };
+  }
+  return { ok: true };
+}
+
 export function getCommitSummary(wtPath: string, baseBranch: string): string {
   try {
     return execFileSync("git", [

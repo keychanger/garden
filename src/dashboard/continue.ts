@@ -35,13 +35,44 @@ const CONTINUE_PROMPT =
   "[garden] You were interrupted by a restart. Continue from where you left "
   + "off, or say so if your task was already finished.";
 
-const MERGE_CONTINUE_PROMPT =
+const MERGE_CONTINUE_BASE =
   "[garden] Your previous changes were reviewed and merged. Continue with the "
   + "next phase of the work. If you have finished everything the operator "
   + "asked for, write a sentinel file `.garden-done` at the root of your "
   + "worktree (just `touch .garden-done` from your CWD) before ending your "
   + "turn so future merges do not auto-continue. Do not commit this file — "
   + "leave it untracked.";
+
+const MAX_LISTED_FILES = 20;
+
+function buildMergeContinuePrompt(
+  changedFiles: string[] | undefined,
+  syncFailed: boolean | undefined,
+  branchName: string | undefined,
+): string {
+  const parts: string[] = [];
+  if (changedFiles && changedFiles.length > 0) {
+    const list = changedFiles.length <= MAX_LISTED_FILES
+      ? changedFiles.join(", ")
+      : `${changedFiles.slice(0, MAX_LISTED_FILES).join(", ")} (and ${changedFiles.length - MAX_LISTED_FILES} more)`;
+    parts.push(
+      "[garden] During review, the following files were modified before your "
+      + `branch was merged: ${list}. Your in-memory understanding of those `
+      + "files is now stale — re-read any you plan to touch before editing.",
+    );
+  }
+  if (syncFailed) {
+    const branchHint = branchName ? `origin/${branchName}` : "origin/<your-branch>";
+    parts.push(
+      "[garden] I could not auto-sync your worktree to the merged tip "
+      + "(uncommitted changes or git error). Run "
+      + `\`git fetch && git reset --hard ${branchHint}\` after committing or `
+      + "stashing local changes before resuming work.",
+    );
+  }
+  parts.push(MERGE_CONTINUE_BASE);
+  return parts.join("\n\n");
+}
 
 // Sentinel suppressing post-merge auto-continue. Lives at the worktree root —
 // the only path writable by both sandbox layers and reconstructible from the
@@ -118,10 +149,24 @@ export function continueWorker(
 }
 
 // Send the post-merge continuation prompt. Same machinery as continueWorker
-// but with the merge-flavored message. Kept as a separate exported function
-// so the wiring in dashboard/index.ts is explicit.
+// but with a merge-flavored message that lists files modified during review
+// (so Claude re-reads them) and warns when the post-merge worktree sync was
+// skipped. Reads the transient pendingContinue* fields written by
+// finalizeMerge and clears them after sending.
 export function continueWorkerAfterMerge(projectName: string, workerName: string): void {
-  continueWorker(projectName, workerName, MERGE_CONTINUE_PROMPT);
+  const entry = findWorkerByName(projectName, workerName);
+  const message = buildMergeContinuePrompt(
+    entry?.pendingContinueChangedFiles,
+    entry?.pendingContinueSyncFailed,
+    entry?.branchName,
+  );
+  continueWorker(projectName, workerName, message);
+  if (entry?.pendingContinueChangedFiles || entry?.pendingContinueSyncFailed) {
+    updateWorkerFields(projectName, workerName, {
+      pendingContinueChangedFiles: undefined,
+      pendingContinueSyncFailed: undefined,
+    });
+  }
 }
 
 // Fire-and-forget detached subprocess that delays a few seconds, then invokes
