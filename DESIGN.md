@@ -198,13 +198,13 @@ The worker opts out by writing the sentinel file `<worktree>/.garden-done` befor
 The sentinel lives at the worktree root because that is the only path satisfying all three constraints: (1) writable by Claude Code's harness sandbox, which blocks raw `/tmp` writes — only `$TMPDIR` works there; (2) writable by the OS-level Seatbelt sandbox (`src/dashboard/sandbox.ts` `DEFAULT_ALLOW_WRITE`), which permits the worktree, `~/.npm`, `~/.cache`, and `/tmp`; (3) reconstructible by the poller from the registry entry's `worktreePath`. `$TMPDIR` falls out on (3) because it is per-Claude-session. `~/.garden/sessions` falls out on (2). The worktree is the intersection. As a side effect, `killPane` no longer needs explicit sentinel cleanup — `git worktree remove --force` in `backgroundGitCleanup` removes the file along with the worktree. Workers are instructed not to commit the file (it is per-worker state, not project state).
 
 Skip conditions (logged at `debug`):
-- The `.done` sentinel exists for this worker.
+- The `.garden-done` sentinel exists for this worker.
 - `claudeStatus` is `working` or `asking` — the operator is already typing, same guard the interrupt-recovery path uses.
 - `lastAutoContinueAt` is within the last 10 seconds (idempotency guard against any merge-event replay).
 
 A successful dispatch logs at `info` (`auto-continued worker after merge`) so the operator sees the lifecycle transition in `⌥l` logs alongside the `merged` line. The 5s subprocess delay (longer than the 3s interrupt-recovery delay) lets postMerge and the reviewer's force-push settle before keys land in the pane.
 
-`garden pause <worker>` writes the sentinel; `garden resume <worker>` deletes it. Killing a worker (`opt-x`) also unlinks the sentinel so a future worker that happens to reuse the name doesn't inherit a stale "I'm done" state.
+`garden pause <worker>` writes the sentinel; `garden resume <worker>` deletes it. Killing a worker (`opt-x`) removes the worktree entirely, so the sentinel goes with it.
 
 ### Sibling Merge Notification
 When code merges, the poller compares the changed files against every other active worker's branch in the same project. If files overlap and the sibling has a live Claude session, it is notified via `tmux send-keys` with the merged worker's commit summary and overlapping file list so it can review and avoid reverting the merged work. Dead workers are skipped — they will hit rebase conflicts naturally on their next review cycle.
@@ -327,8 +327,8 @@ garden rules findings              # Raw reviewer-findings log
 garden logs [options]              # View dashboard logs (pretty-printed)
 garden kick <worker>               # Re-arm a stranded 'working' worker for review
 garden bounce <worker>             # Restart a worker's Claude process (preserves session history)
-garden pause <worker>              # Suppress post-merge auto-continue (writes the .done sentinel)
-garden resume <worker>             # Re-arm post-merge auto-continue (clears the .done sentinel)
+garden pause <worker>              # Suppress post-merge auto-continue (writes the .garden-done sentinel)
+garden resume <worker>             # Re-arm post-merge auto-continue (clears the .garden-done sentinel)
 garden rebuild                     # Rebuild garden and relaunch dashboard
 ```
 
