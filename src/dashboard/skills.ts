@@ -57,32 +57,40 @@ export const HANDOFF_SKILL_FILENAME = "SKILL.md";
 
 export const HANDOFF_SKILL_CONTENT = `---
 name: handoff
-description: Use when the operator instructs you to hand the current task off to a fresh worker — typically on a different project (cross-repo work), or on the same project to reset accumulated context. Spawns a new named garden worker that participates in the normal review/merge flow, seeds it with a detailed briefing you compose, swaps its pane into view, and leaves you free to mark yourself done. Do NOT invoke without an explicit operator instruction.
+description: Use when the operator instructs you to hand off work to one or more fresh workers — a single pass-the-baton handoff, or a fan-out where you delegate several deferred items in parallel. Targets can be the same project (context reset) or a different project (cross-repo). Spawns named garden workers that participate in the normal review/merge flow, seeds each with a briefing you compose, and leaves you to mark yourself done. Do NOT invoke without an explicit operator instruction.
 ---
 
 # Handoff
 
-Invoke this skill when the operator tells you to pass the current task to a new worker. The skill spawns a fresh worker on the target project and seeds its first turn with a briefing you write. After the handoff succeeds you write the \`.garden-done\` sentinel and end your turn — the new worker takes over from there.
+Invoke this skill when the operator tells you to pass work to fresh workers. The skill spawns one or more new workers and seeds each one's first turn with a briefing you write. After all handoffs succeed you write the \`.garden-done\` sentinel and end your turn.
+
+This covers two shapes:
+
+- **Pass-the-baton (1:1):** the operator wants the current task continued in a fresh worker (different project for cross-repo work, or same project to reset accumulated context).
+- **Fan-out (1:N):** at the close of a phased plan you have several independent deferred items the operator wants delegated. You call \`garden handoff\` once per item, then mark yourself done. Each new worker reviews and merges independently in parallel.
 
 ## What it does
 
 Runs \`garden handoff <target-project>\` from your worktree CWD, reading a multi-line briefing from stdin via heredoc. Garden:
 
 1. Creates a new worker on \`<target-project>\` — a normal named worker with its own git worktree, fresh Claude session, and own poller. It participates in the standard review/merge flow.
-2. Swaps the new worker's pane into view exactly like ⌥n would: your pane gets parked under your project and the operator's right-pane now shows the new worker. For cross-project handoff, the dashboard's active project (and active plot, if needed) follows along to the target.
+2. Swaps the new worker's pane into view exactly like ⌥n would: your pane gets parked under your project and the operator's right-pane now shows the new worker. For cross-project handoff, the dashboard's active project (and active plot, if needed) follows along to the target. (On fan-out, only the last spawned worker ends up visible — that's fine; the operator can ⌥n through the rest.)
 3. Seeds the new worker's first prompt with your briefing, prefixed \`[handoff from <your-project>/<your-name>]\` so the new worker knows it received a handoff (not a normal user prompt).
-4. Prints the new worker's name to stdout — report it to the operator before you end your turn.
+4. Prints the new worker's name to stdout — report it (or the full list, on fan-out) to the operator before you end your turn.
 
 ## When to use
 
-- The operator told you to hand off (e.g., "hand this to a fresh worker on garden-app", "spin up a new worker on this repo to take over", "pass this off"). The instruction is explicit.
-- The new worker genuinely benefits from a fresh start: cross-project work you can't do in your current worktree, or context-reset on the same project after a long session.
+- The operator told you to hand off (e.g., "hand this to a fresh worker on garden-app", "spin up a new worker to take over", "delegate the deferred items"). The instruction is explicit.
+- **Pass-the-baton:** the new worker genuinely benefits from a fresh start — cross-project work you can't do in your current worktree, or context-reset on the same project after a long session.
+- **Fan-out:** the deferred items are *independent* (no ordering dependency between them) and each is *substantial enough* that briefing-cost is small relative to task size. A 10-line follow-up where your in-flight context is the actual value should be a final commit, not a handoff.
 
 ## When NOT to use
 
 - The operator did not ask. Self-handing-off is not the intended pattern. If you think a fresh worker would help, **ask the operator** — do not invoke unilaterally.
-- The work is already finished. Use the \`done\` skill instead.
+- The work is already finished and there is nothing to delegate. Use the \`done\` skill instead.
 - You are mid-phase in your own task. Finish what you're doing (or commit a clean stopping point) first.
+- The deferred items have ordering dependencies on each other (do them yourself in sequence, or hand off only the first and let it fan out further if needed).
+- An item is small enough that the briefing would be longer than the work. Just do it before marking done.
 - The target project does not exist or is not registered with garden. Confirm it with \`garden plot show <plot>\` or by asking the operator.
 
 ## How to invoke
@@ -113,16 +121,28 @@ For a one-line briefing you can use \`-m\`:
 garden handoff <target-project> -m "Take over the failing-tests investigation on branch foo. See commit abc123 for context."
 \`\`\`
 
-The briefing is the new worker's only initial signal — invest in it. Include file paths, commit hashes, decisions made, and what specifically remains. The new worker has no memory of your conversation.
+For fan-out, run the command once per item, each with its own briefing scoped to that item alone:
+
+\`\`\`bash
+garden handoff myproject <<'EOF'
+[item 1 briefing — self-contained, no references to other handoffs]
+EOF
+
+garden handoff myproject <<'EOF'
+[item 2 briefing — self-contained]
+EOF
+\`\`\`
+
+The briefing is the new worker's only initial signal — invest in it. Include file paths, commit hashes, decisions made, and what specifically remains. The new worker has no memory of your conversation. Each fan-out briefing must stand alone — a sibling worker won't be visible to the others.
 
 ## After handoff
 
-1. Confirm the command succeeded (it prints the new worker's name).
-2. Tell the operator which worker you handed off to.
-3. Run \`touch .garden-done\` to mark yourself done — the handoff is your terminal action.
+1. Confirm every \`garden handoff\` invocation succeeded (each prints the new worker's name).
+2. Tell the operator which worker(s) you handed off to.
+3. Run \`touch .garden-done\` to mark yourself done — handoff is your terminal action, even after a fan-out. \`done\` here means *this worker has nothing more to do*, not that the project is done; the spawned workers continue independently.
 4. End your turn.
 
-If \`garden handoff\` fails (unknown project, etc.), report the error to the operator and do not write \`.garden-done\`.
+If any \`garden handoff\` fails (unknown project, etc.), report the error to the operator and do not write \`.garden-done\` — the operator will decide whether to retry, drop that item, or take a different route.
 `;
 
 export function installClaudeSkills(targetDir: string): void {

@@ -124,4 +124,18 @@ describe("HANDOFF_SKILL_CONTENT", () => {
     expect(HANDOFF_SKILL_CONTENT.toLowerCase()).toContain("when not to use");
     expect(HANDOFF_SKILL_CONTENT.toLowerCase()).toMatch(/did not ask|self-handing/);
   });
+
+  it("teaches the fan-out shape — multiple handoffs from one worker before marking done", () => {
+    // Workers reach for handoff at the close of a phased plan when they have
+    // several deferred items. The skill must explicitly surface that pattern;
+    // a 1:1 pass-the-baton framing alone won't trigger fan-out delegation.
+    expect(HANDOFF_SKILL_CONTENT.toLowerCase()).toMatch(/fan-out|fan out/);
+    expect(HANDOFF_SKILL_CONTENT.toLowerCase()).toMatch(/independent|parallel/);
+  });
+
+  it("warns that an item too small to justify a briefing should not be handed off", () => {
+    // Without this the worker will hand off trivial follow-ups where its
+    // in-flight context is the actual value, paying briefing cost for nothing.
+    expect(HANDOFF_SKILL_CONTENT.toLowerCase()).toMatch(/briefing.*(?:longer|cost|small)|small.*briefing/);
+  });
 });
