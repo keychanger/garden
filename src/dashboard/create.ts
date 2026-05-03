@@ -574,6 +574,17 @@ FETCH_OUT=$(git -C ${escapedProjectPath} fetch origin '${escapedBase}' 2>&1) || 
 [ -n "$FETCH_OUT" ] && printf '%s\\n' "$FETCH_OUT"
 if [ "$FETCH_RC" -ne 0 ]; then
   BOOTSTRAP_FAIL="fetch failed: $FETCH_OUT"
+  # If the fetch failed AND the base branch is genuinely missing from origin,
+  # bail before "git worktree add" silently branches off the stale local ref.
+  # When ls-remote also fails, the operator must intervene; transient network
+  # errors are tolerated (ls-remote succeeds, we proceed with the local ref).
+  LS_OUT=$(git -C ${escapedProjectPath} ls-remote --exit-code --heads origin '${escapedBase}' 2>&1) || LS_RC=$?
+  if [ "\${LS_RC:-0}" -ne 0 ]; then
+    printf '  ERROR: origin has no branch %s — refusing to branch off stale local ref.\\n' '${escapedBase}' >&2
+    printf '%s\\n' "$LS_OUT" >&2
+    ${escapedGardenRunner} dashboard _bootstrap-alert '${escapedProjectName}' '${escapedBase}' ${escapedProjectPath} "base missing on origin: $LS_OUT" 2>/dev/null || true
+    exit 1
+  fi
 fi
 
 printf '  Fast-forwarding main checkout...\\n'

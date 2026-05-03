@@ -259,7 +259,9 @@ function handleReviewing(
         });
         transitionState(projectName, entry.name, "failing", {
           failCount: (entry.failCount ?? 0) + 1,
-          failingSha: undefined,
+          // Pin the failing SHA so handleFailing's debounce gate (line 759)
+          // refuses to retry until a new commit actually arrives.
+          failingSha: headSha ?? undefined,
           lastSeenSha: headSha ?? undefined,
           lastShaChangeAt: new Date().toISOString(),
           reviewWindowName: undefined,
@@ -297,7 +299,9 @@ function handleReviewing(
     });
     transitionState(projectName, entry.name, "failing", {
       failCount: (entry.failCount ?? 0) + 1,
-      failingSha: undefined,
+      // Pin the failing SHA so handleFailing's debounce gate (line 759)
+      // refuses to retry until a new commit actually arrives.
+      failingSha: headSha ?? undefined,
       lastSeenSha: headSha ?? undefined,
       lastShaChangeAt: new Date().toISOString(),
       reviewWindowName: undefined,

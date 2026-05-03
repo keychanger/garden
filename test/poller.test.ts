@@ -786,6 +786,10 @@ describe("poll — reviewing state (async)", () => {
       expect.objectContaining({
         prState: "failing",
         failCount: 1,
+        // Pin failingSha so handleFailing's debounce gate refuses to retry the
+        // same broken commit. Without this, the worker loops failing→working
+        // every DEBOUNCE_MS forever when no new commits arrive.
+        failingSha: "post789",
       }),
     );
   });
@@ -819,6 +823,8 @@ describe("poll — reviewing state (async)", () => {
       expect.objectContaining({
         prState: "failing",
         failCount: 1,
+        // Pin failingSha so handleFailing's debounce gate refuses to retry.
+        failingSha: "pre456",
       }),
     );
   });

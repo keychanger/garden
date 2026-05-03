@@ -407,10 +407,13 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
   try {
     // git rev-list --count <base>..HEAD — counts commits ahead of base.
     // Returns "0" if no commits ahead, a positive number otherwise.
+    // 5s timeout: a hung git here stalls the Stop hook AND the entire review
+    // pipeline (no pendingReviewAt → no poller poke → worker never advances).
     const out = execFileSync("git", ["rev-list", "--count", `origin/${baseBranch}..HEAD`], {
       cwd,
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000,
     }).trim();
     const ahead = parseInt(out, 10);
     if (Number.isFinite(ahead) && ahead > 0) {
