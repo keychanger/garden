@@ -8,6 +8,7 @@ import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize, listAllWindowNames } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
 import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields, type WorkerRegistry } from "./registry.js";
+import { atomicWriteFile } from "./atomic-write.js";
 import { currentBranch, getWorkerBaseBranch } from "./git.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { triggerProjectPoll } from "./poller.js";
@@ -187,9 +188,7 @@ function formatPlotSegment(name: string, isActive: boolean, status: PlotState): 
 
 function writePlotStripTemplate(template: string): void {
   try {
-    const tmp = `${PLOT_STRIP_TEMPLATE_FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, template);
-    fs.renameSync(tmp, PLOT_STRIP_TEMPLATE_FILE);
+    atomicWriteFile(PLOT_STRIP_TEMPLATE_FILE, template);
   } catch { /* sessions dir not yet created; best effort */ }
 }
 
@@ -791,9 +790,7 @@ function writeQuickStatus(opts?: RefreshOptions): void {
   try {
     const state = opts?.state ?? readDashState();
     const rendered = renderQuickStatus(state, opts?.windowNames, opts?.config, opts?.registry);
-    const tmpFile = `${STATUS_RENDERED_FILE}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(tmpFile, rendered);
-    fs.renameSync(tmpFile, STATUS_RENDERED_FILE);
+    atomicWriteFile(STATUS_RENDERED_FILE, rendered);
     if (state.statusPaneId) {
       // +1 for the pane-border-status top row, which is included in pane_height
       // but not in the rendered line count.
@@ -809,9 +806,7 @@ function writeUsageRendered(opts?: RefreshOptions): void {
     const state = opts?.state ?? readDashState();
     const cur = state.usagePaneId ? getPaneSize(state.usagePaneId) : null;
     const rendered = renderUsagePane(Date.now(), cur?.width);
-    const tmpFile = `${USAGE_RENDERED_FILE}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(tmpFile, rendered);
-    fs.renameSync(tmpFile, USAGE_RENDERED_FILE);
+    atomicWriteFile(USAGE_RENDERED_FILE, rendered);
     if (state.usagePaneId) {
       // +1 for the pane-border-status top row.
       const h = rendered.split("\n").length + 1;

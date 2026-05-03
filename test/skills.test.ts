@@ -4,6 +4,8 @@ vi.mock("node:fs", () => ({
   default: {
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
+    renameSync: vi.fn(),
+    unlinkSync: vi.fn(),
     rmSync: vi.fn(),
   },
 }));
@@ -26,12 +28,17 @@ beforeEach(() => {
 describe("installClaudeSkills", () => {
   it("writes SKILL.md under <targetDir>/.claude/skills/done/ (Claude Code's required dir+SKILL.md layout)", () => {
     installClaudeSkills("/Users/x/.garden/worktrees/myproject/bold-ash");
+    // atomicWriteFile creates the parent dir, writes to a tmp path, then renames.
     expect(fs.mkdirSync).toHaveBeenCalledWith(
       "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/done",
       { recursive: true },
     );
-    expect(fs.writeFileSync).toHaveBeenCalledWith(
+    expect(fs.renameSync).toHaveBeenCalledWith(
+      expect.stringContaining("/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/done/SKILL.md."),
       "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/done/SKILL.md",
+    );
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining("/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/done/SKILL.md."),
       DONE_SKILL_CONTENT,
     );
   });
@@ -57,8 +64,12 @@ describe("installClaudeSkills", () => {
       "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/handoff",
       { recursive: true },
     );
-    expect(fs.writeFileSync).toHaveBeenCalledWith(
+    expect(fs.renameSync).toHaveBeenCalledWith(
+      expect.stringContaining("/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/handoff/SKILL.md."),
       "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/handoff/SKILL.md",
+    );
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining("/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/handoff/SKILL.md."),
       HANDOFF_SKILL_CONTENT,
     );
   });

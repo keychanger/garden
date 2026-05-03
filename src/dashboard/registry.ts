@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR } from "../config.js";
+import { atomicWriteFile } from "./atomic-write.js";
 import { log } from "./log.js";
 
 // claudeStatus is written by Claude Code hooks and the tmux pane-died handler.
@@ -166,10 +167,7 @@ export function readRegistry(): WorkerRegistry {
 }
 
 export function writeRegistry(registry: WorkerRegistry): void {
-  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  const tmpFile = `${REGISTRY_FILE}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmpFile, JSON.stringify(registry, null, 2));
-  fs.renameSync(tmpFile, REGISTRY_FILE);
+  atomicWriteFile(REGISTRY_FILE, JSON.stringify(registry, null, 2));
 }
 
 export function addWorker(project: string, entry: WorkerEntry): void {

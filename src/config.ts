@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
+import { atomicWriteFile } from "./dashboard/atomic-write.js";
 import {
   ASSIGNABLE_LOG_COLOR_KEYS,
   RESERVED_LOG_COLOR_KEY,
@@ -251,10 +252,7 @@ function migratePlots(config: GardenConfig): boolean {
 }
 
 export function saveConfig(config: GardenConfig): void {
-  fs.mkdirSync(GARDEN_DIR, { recursive: true });
-  const tmpFile = `${CONFIG_PATH}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmpFile, yaml.dump(config, { lineWidth: -1 }));
-  fs.renameSync(tmpFile, CONFIG_PATH);
+  atomicWriteFile(CONFIG_PATH, yaml.dump(config, { lineWidth: -1 }));
 }
 
 export function getProject(name: string): ProjectConfig & { name: string } {

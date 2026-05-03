@@ -2,6 +2,7 @@ import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { atomicWriteFile } from "./atomic-write.js";
 
 export interface ClaudeOAuth {
   accessToken: string;
@@ -71,10 +72,7 @@ export function captureKeychainTo(credFile: string): boolean {
       { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
     ).trim();
     if (!raw) return false;
-    fs.mkdirSync(path.dirname(credFile), { recursive: true });
-    const tmp = `${credFile}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(tmp, raw, { mode: 0o600 });
-    fs.renameSync(tmp, credFile);
+    atomicWriteFile(credFile, raw, { mode: 0o600 });
     return true;
   } catch {
     return false;

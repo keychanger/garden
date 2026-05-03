@@ -2,6 +2,7 @@
 // Skill descriptions act as Claude's trigger condition during planning, more reliable than instructions buried in the system prompt.
 import fs from "node:fs";
 import path from "node:path";
+import { atomicWriteFile } from "./atomic-write.js";
 
 // Claude Code discovers a project skill at .claude/skills/<name>/SKILL.md (directory + SKILL.md), not .claude/skills/<name>.md.
 export const DONE_SKILL_DIRNAME = "done";
@@ -154,7 +155,5 @@ export function installClaudeSkills(targetDir: string): void {
 }
 
 function writeSkill(skillsRoot: string, dirname: string, filename: string, content: string): void {
-  const skillDir = path.join(skillsRoot, dirname);
-  fs.mkdirSync(skillDir, { recursive: true });
-  fs.writeFileSync(path.join(skillDir, filename), content);
+  atomicWriteFile(path.join(skillsRoot, dirname, filename), content);
 }

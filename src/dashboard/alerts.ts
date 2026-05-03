@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import { SESSIONS_DIR } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux } from "./tmux.js";
+import { atomicWriteFile } from "./atomic-write.js";
 import { log } from "./log.js";
 import { GARDEN_VERSION } from "../version.js";
 
@@ -39,10 +40,7 @@ export function readAlerts(): AlertStore {
 }
 
 function writeAlerts(store: AlertStore): void {
-  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  const tmpFile = `${ALERTS_FILE}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmpFile, JSON.stringify(store, null, 2));
-  fs.renameSync(tmpFile, ALERTS_FILE);
+  atomicWriteFile(ALERTS_FILE, JSON.stringify(store, null, 2));
 }
 
 export function addAlert(

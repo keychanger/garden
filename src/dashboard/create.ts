@@ -5,6 +5,7 @@ import {
   dashboardExists,
   DASHBOARD_SESSION,
 } from "../session.js";
+import { atomicWriteFile } from "./atomic-write.js";
 import { loadConfig, tryGetProject, getFocusedProjectNames, firstFocusedPlotName, plotNames, SESSIONS_DIR, type ProjectConfig } from "../config.js";
 import { buildRulesContext, buildWorktreeRules } from "../rules.js";
 import { type DashboardState, readDashState, writeDashState, STATE_FILE } from "./state.js";
@@ -103,12 +104,11 @@ function sandboxForTarget(targetDir: string, project: ProjectConfig): SandboxCon
 }
 
 // Write to settings.json, not settings.local.json — Claude Code auto-edits the latter (permission approvals) and clobbers our hooks.
+// Atomic write: Claude reads settings.json on SessionStart and on every --resume, so a partial file would break hook config silently.
 export function installClaudeHooks(targetDir: string, project: ProjectConfig): void {
   const sandbox = sandboxForTarget(targetDir, project);
   const json = buildSettingsJson(resolveGardenRunner(), sandbox);
-  const claudeDir = path.join(targetDir, ".claude");
-  fs.mkdirSync(claudeDir, { recursive: true });
-  fs.writeFileSync(path.join(claudeDir, "settings.json"), json);
+  atomicWriteFile(path.join(targetDir, ".claude", "settings.json"), json);
   installClaudeSkills(targetDir);
 }
 
@@ -552,6 +552,15 @@ export GARDEN_WORKER='${escapedWorker}'
 export GARDEN_BRANCH='${escapedBranch}'
 export GARDEN_BASE_BRANCH='${escapedBase}'
 
+# Atomically write stdin to a destination via tmp+rename so concurrent readers
+# (Claude on SessionStart / --resume reading .claude/settings.json) never see
+# a partial file.
+atomic_write() {
+  _aw_dest="$1"
+  _aw_tmp="\${_aw_dest}.tmp.$$"
+  cat > "$_aw_tmp" && mv "$_aw_tmp" "$_aw_dest"
+}
+
 printf 'Setting up worktree %s...\\n' '${escapedBranch}'
 
 # Fetch latest base ref. Worker always branches off origin/${base}
@@ -594,19 +603,19 @@ fi
 
 # Install poll trigger hook
 mkdir -p ${escapedHooksDir}
-printf '${hookContent}\\n' > ${escapedHookPath}
+printf '${hookContent}\\n' | atomic_write ${escapedHookPath}
 chmod 755 ${escapedHookPath}
 git -C ${escapedWtPath} config --local core.hooksPath ${escapedHooksDir}
 
 # Install Claude Code hooks — settings.json (not .local.json, which Claude Code auto-edits and would clobber).
 mkdir -p ${escapedWtPath}/.claude
-printf '%s' '${escapedHooksJson}' > ${escapedWtPath}/.claude/settings.json
+printf '%s' '${escapedHooksJson}' | atomic_write ${escapedWtPath}/.claude/settings.json
 
 # Install garden-bundled skills (see src/dashboard/skills.ts). Layout: .claude/skills/<name>/SKILL.md.
 mkdir -p ${escapedWtPath}/.claude/skills/'${escapedDoneSkillDirname}'
-printf '%s' '${escapedDoneSkill}' > ${escapedWtPath}/.claude/skills/'${escapedDoneSkillDirname}'/'${escapedDoneSkillFilename}'
+printf '%s' '${escapedDoneSkill}' | atomic_write ${escapedWtPath}/.claude/skills/'${escapedDoneSkillDirname}'/'${escapedDoneSkillFilename}'
 mkdir -p ${escapedWtPath}/.claude/skills/'${escapedHandoffSkillDirname}'
-printf '%s' '${escapedHandoffSkill}' > ${escapedWtPath}/.claude/skills/'${escapedHandoffSkillDirname}'/'${escapedHandoffSkillFilename}'
+printf '%s' '${escapedHandoffSkill}' | atomic_write ${escapedWtPath}/.claude/skills/'${escapedHandoffSkillDirname}'/'${escapedHandoffSkillFilename}'
 
 # Ensure garden-managed dirs are excluded from git status.
 # Writing to the common info/exclude covers all worktrees and never gets committed.

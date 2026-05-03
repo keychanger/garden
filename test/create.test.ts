@@ -172,24 +172,33 @@ describe("installClaudeHooks", () => {
       expect.stringContaining(".claude"),
       { recursive: true },
     );
-    expect(fs.writeFileSync).toHaveBeenCalledWith(
+    // atomicWriteFile renames the tmp file onto the final settings.json path.
+    expect(fs.renameSync).toHaveBeenCalledWith(
+      expect.stringMatching(/\.claude\/settings\.json\.\d+\.\d+\.tmp$/),
       expect.stringMatching(/\.claude\/settings\.json$/),
-      expect.any(String),
     );
   });
 
   it("does not write to settings.local.json (Claude Code auto-edits it)", () => {
     process.argv[1] = "/usr/local/bin/garden";
     installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
-    const paths = vi.mocked(fs.writeFileSync).mock.calls.map(c => String(c[0]));
-    expect(paths.every(p => !p.endsWith("settings.local.json"))).toBe(true);
+    // Settings.local.json must not appear as a rename target either.
+    const renameTargets = vi.mocked(fs.renameSync).mock.calls.map(c => String(c[1]));
+    expect(renameTargets.every(p => !p.endsWith("settings.local.json"))).toBe(true);
   });
+
+  // Find the writeFileSync call whose tmp path corresponds to settings.json.
+  function settingsJsonContent(): string {
+    const writes = vi.mocked(fs.writeFileSync).mock.calls;
+    const call = writes.find(c => /\.claude\/settings\.json\.\d+\.\d+\.tmp$/.test(String(c[0])));
+    if (!call) throw new Error("settings.json write not found");
+    return String(call[1]);
+  }
 
   it("includes all required hook events", () => {
     process.argv[1] = "/usr/local/bin/garden";
     installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
-    const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-    const parsed = JSON.parse(written);
+    const parsed = JSON.parse(settingsJsonContent());
     expect(parsed.hooks.SessionStart).toBeDefined();
     expect(parsed.hooks.UserPromptSubmit).toBeDefined();
     expect(parsed.hooks.Stop).toBeDefined();
@@ -201,8 +210,7 @@ describe("installClaudeHooks", () => {
   it("registers a PermissionRequest hook that flips the worker to idle on approval prompts", () => {
     process.argv[1] = "/usr/local/bin/garden";
     installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
-    const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-    const parsed = JSON.parse(written);
+    const parsed = JSON.parse(settingsJsonContent());
     const permReq = parsed.hooks.PermissionRequest[0];
     expect(permReq.matcher).toBe("");
     expect(permReq.hooks[0].command).toContain("_claude-hook pretooluse");
@@ -211,8 +219,7 @@ describe("installClaudeHooks", () => {
   it("registers a catch-all PostToolUse hook so asking flips back to working after any tool completes", () => {
     process.argv[1] = "/usr/local/bin/garden";
     installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
-    const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-    const parsed = JSON.parse(written);
+    const parsed = JSON.parse(settingsJsonContent());
     const catchAll = parsed.hooks.PostToolUse.find((h: { matcher: string }) => h.matcher === "");
     expect(catchAll).toBeDefined();
     expect(catchAll.hooks[0].command).toContain("_claude-hook posttooluse");
@@ -222,7 +229,8 @@ describe("installClaudeHooks", () => {
     process.argv[1] = "/usr/local/bin/garden";
     installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
     const writes = vi.mocked(fs.writeFileSync).mock.calls;
-    const skillCall = writes.find(c => String(c[0]).endsWith(".claude/skills/done/SKILL.md"));
+    // atomic-write goes through a tmp path; match the prefix.
+    const skillCall = writes.find(c => /\.claude\/skills\/done\/SKILL\.md\.\d+\.\d+\.tmp$/.test(String(c[0])));
     expect(skillCall).toBeDefined();
     const content = String(skillCall![1]);
     expect(content).toMatch(/^---\nname: done\n/);

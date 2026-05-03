@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { SESSIONS_DIR } from "../config.js";
+import { atomicWriteFile } from "./atomic-write.js";
 import { log } from "./log.js";
 
 export const USAGE_FILE = path.join(SESSIONS_DIR, "claude-usage.json");
@@ -175,10 +176,7 @@ export function readUsageSnapshot(): UsageSnapshot | null {
 }
 
 export function writeUsageSnapshot(snap: UsageSnapshot): void {
-  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  const tmp = `${USAGE_FILE}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(snap, null, 2));
-  fs.renameSync(tmp, USAGE_FILE);
+  atomicWriteFile(USAGE_FILE, JSON.stringify(snap, null, 2));
 }
 
 // -----------------------------------------------------------------------------

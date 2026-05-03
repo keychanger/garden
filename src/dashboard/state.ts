@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR } from "../config.js";
+import { atomicWriteFile } from "./atomic-write.js";
 import { log } from "./log.js";
 
 const STATE_LOCK_FILE = path.join(SESSIONS_DIR, "dashboard.state.json.lock");
@@ -117,8 +118,5 @@ export function readDashState(): DashboardState {
 }
 
 export function writeDashState(state: DashboardState): void {
-  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  const tmpFile = `${STATE_FILE}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmpFile, JSON.stringify(state, null, 2));
-  fs.renameSync(tmpFile, STATE_FILE);
+  atomicWriteFile(STATE_FILE, JSON.stringify(state, null, 2));
 }
