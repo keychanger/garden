@@ -1,0 +1,300 @@
+// Resolver lifecycle: launchResolver, handleResolving, escalateResolveBudget.
+// The resolver is launched when handleMergePending hits a rebase conflict
+// (the base branch advanced while the worker was reviewing). Verdict from
+// the resolver is advisory; the worktree state is the ground truth (see
+// STATUS.md invariant 7).
+import fs from "node:fs";
+import { tryGetProject, SESSIONS_DIR } from "../config.js";
+import { DASHBOARD_SESSION } from "../session.js";
+import { addAlert } from "./alerts.js";
+import { claudeEnvPrefix } from "./claude-env.js";
+import {
+  abortRebase, forcePushBranch, getBranchHeadSha, getRemoteTrackingSha,
+  getUnmergedFiles, hasRebaseInProgress, isAncestor,
+} from "./git.js";
+import { refreshDashboard } from "./header.js";
+import { log } from "./log.js";
+import { buildResolvePrompt } from "./prompts.js";
+import {
+  updateWorkerFields,
+  type WorkerEntry,
+} from "./registry.js";
+import { tmux, windowExists, killWindowSafe } from "./tmux.js";
+import { reviewWindowName } from "./window-names.js";
+import {
+  signalFifoPath, scheduleDelayedPoke, isWorkerClaudeWorking,
+} from "./poller-fifo.js";
+import { transitionState } from "./poller-state.js";
+import {
+  cleanReviewFiles, handleReviewTimeout, isReviewTimedOut,
+  resetToWorkingOnWorkerPush, reviewPromptPath, reviewResultPath,
+  scheduleReviewTimeoutPoke,
+} from "./poller-review.js";
+
+export const RESOLVE_BUDGET = 2;
+
+interface ResolveResult {
+  verdict: "done" | "failed";
+  body: string;
+}
+
+// Launch a resolver to fix a merge-queue rebase conflict. Budget is 2 attempts
+// per merge; if exhausted, escalate to `failing` with an operator alert. If
+// the worker's Claude is currently working we cannot share the worktree, so
+// defer — the next event will re-poll.
+export function launchResolver(
+  projectName: string,
+  projectPath: string,
+  baseBranch: string,
+  entry: WorkerEntry,
+): boolean {
+  const wtPath = entry.worktreePath ?? projectPath;
+  const attempts = entry.resolveAttempts ?? 0;
+
+  if (attempts >= RESOLVE_BUDGET) {
+    escalateResolveBudget(projectName, wtPath, entry);
+    return true;
+  }
+
+  if (isWorkerClaudeWorking(projectName, entry.name)) return false;
+
+  const prompt = buildResolvePrompt(projectName, projectPath, baseBranch, entry);
+  if (prompt === null) {
+    log.warn("poller", "failed to build resolve prompt", { worker: entry.name });
+    return false;
+  }
+
+  const promptFile = reviewPromptPath(projectName, entry.name);
+  const resultFile = reviewResultPath(projectName, entry.name);
+  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+  fs.writeFileSync(promptFile, prompt);
+  try { fs.unlinkSync(resultFile); } catch { /* ignore */ }
+
+  const revWindow = reviewWindowName(projectName, entry.name);
+  const escapedPrompt = promptFile.replace(/'/g, "'\\''");
+  const escapedResult = resultFile.replace(/'/g, "'\\''");
+  const escapedFifo = signalFifoPath(projectName).replace(/'/g, "'\\''");
+  const envPrefix = claudeEnvPrefix(tryGetProject(projectName) ?? {});
+  const cmd = `GARDEN_REVIEWER=1 ${envPrefix}claude -p < '${escapedPrompt}' > '${escapedResult}' 2>&1; [ -p '${escapedFifo}' ] && (echo > '${escapedFifo}') 2>/dev/null`;
+
+  if (windowExists(revWindow)) {
+    killWindowSafe(revWindow);
+  }
+
+  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", revWindow,
+    "-c", wtPath, "bash", "-c", cmd);
+  scheduleReviewTimeoutPoke(projectName);
+
+  const preResolveSha = getBranchHeadSha(wtPath);
+  const launchSha = getRemoteTrackingSha(wtPath, entry.branchName ?? entry.name)
+    ?? preResolveSha ?? entry.lastSeenSha;
+
+  transitionState(projectName, entry.name, "resolving", {
+    reviewWindowName: revWindow,
+    reviewStartedAt: Date.now(),
+    preResolveSha: preResolveSha ?? undefined,
+    resolveAttempts: attempts + 1,
+    lastSeenSha: launchSha,
+    lastShaChangeAt: new Date().toISOString(),
+    mergePendingAt: undefined,
+  });
+  refreshDashboard();
+
+  log.info("poller", "launched resolver", {
+    worker: entry.name,
+    data: { attempt: attempts + 1, budget: RESOLVE_BUDGET },
+  });
+  return true;
+}
+
+function escalateResolveBudget(
+  projectName: string,
+  wtPath: string,
+  entry: WorkerEntry,
+): void {
+  const conflictFiles = getUnmergedFiles(wtPath);
+  const fileList = conflictFiles.length > 0
+    ? conflictFiles.join(", ")
+    : "(no unmerged paths reported; rebase was aborted between runs)";
+  const bodyTail = entry.lastResolveBody
+    ? `\n\nLast resolver output:\n${entry.lastResolveBody.slice(0, 500)}`
+    : "";
+  log.error("poller", "resolver budget exhausted", {
+    worker: entry.name,
+    data: { budget: RESOLVE_BUDGET, conflictFiles },
+  });
+  addAlert({
+    level: "error",
+    source: "poller",
+    project: projectName,
+    worker: entry.name,
+    message: `Worker ${entry.name}: resolver could not fix the merge-queue rebase conflict after ${RESOLVE_BUDGET} attempts. Conflict files: ${fileList}. A new worker push will reset the retry budget.${bodyTail}`,
+  });
+  const headSha = getBranchHeadSha(wtPath);
+  transitionState(projectName, entry.name, "failing", {
+    failCount: (entry.failCount ?? 0) + 1,
+    failingSha: headSha ?? undefined,
+    lastSeenSha: headSha ?? undefined,
+    lastShaChangeAt: new Date().toISOString(),
+    reviewWindowName: undefined,
+    reviewStartedAt: undefined,
+    mergePendingAt: undefined,
+  });
+  refreshDashboard();
+}
+
+// Resolver handler: waits for the resolver window to exit, then verifies the
+// rebase actually landed (STATUS.md invariant 7). On pass → force-push and
+// merge-pending. On fail → count the attempt, retry or escalate per budget.
+export function handleResolving(
+  projectName: string,
+  projectPath: string,
+  baseBranch: string,
+  entry: WorkerEntry,
+): boolean {
+  if (isReviewTimedOut(entry)) {
+    return handleReviewTimeout(projectName, projectPath, entry, "resolve");
+  }
+
+  const revWindow = entry.reviewWindowName;
+  if (revWindow && windowExists(revWindow)) {
+    return false; // still in-flight
+  }
+
+  const wtPath = entry.worktreePath ?? projectPath;
+  const branchName = entry.branchName ?? entry.name;
+
+  // Worker-authored push during resolution: abort, reset budget, let the
+  // normal working→reviewing flow re-enter from the new SHA.
+  const remoteSha = getRemoteTrackingSha(wtPath, branchName);
+  if (remoteSha && entry.lastSeenSha && remoteSha !== entry.lastSeenSha) {
+    resetToWorkingOnWorkerPush(projectName, wtPath, baseBranch, entry, "resolve");
+    return true;
+  }
+
+  const resolveResult = readResolveResult(projectName, entry);
+  cleanReviewFiles(projectName, entry.name);
+
+  if (resolveResult) {
+    updateWorkerFields(projectName, entry.name, {
+      lastResolveBody: resolveResult.body,
+    });
+  }
+
+  const verdictFailed = resolveResult === null || resolveResult.verdict === "failed";
+
+  // Programmatic verification — STATUS.md invariant 7. The verdict text is
+  // advisory; the worktree state is the ground truth.
+  const rebaseStuck = hasRebaseInProgress(wtPath);
+  const headSha = getBranchHeadSha(wtPath);
+  const rebased = headSha !== null &&
+    isAncestor(wtPath, `origin/${baseBranch}`, headSha);
+  const madeProgress = headSha !== null && entry.preResolveSha !== undefined &&
+    headSha !== entry.preResolveSha;
+
+  const verificationPassed = !verdictFailed && !rebaseStuck && rebased && madeProgress;
+
+  if (!verificationPassed) {
+    log.warn("poller", "resolver verification failed", {
+      worker: entry.name,
+      data: {
+        verdict: resolveResult?.verdict ?? "missing",
+        rebaseStuck,
+        rebased,
+        madeProgress,
+      },
+    });
+    // Abort any lingering rebase so the next attempt starts clean.
+    if (rebaseStuck) abortRebase(wtPath);
+
+    // Try again if budget allows. Budget is checked inside launchResolver —
+    // it escalates itself when exhausted. But we need to re-enter from
+    // merge-pending so the rebase attempt is fresh.
+    const attempts = entry.resolveAttempts ?? 0;
+    if (attempts >= RESOLVE_BUDGET) {
+      escalateResolveBudget(projectName, wtPath, entry);
+      return true;
+    }
+
+    // Re-enter merge-pending with the same mergePendingAt so queue order is
+    // preserved. The next poll cycle will re-attempt the rebase and, on
+    // conflict, launch another resolver (counting toward the budget).
+    transitionState(projectName, entry.name, "merge-pending", {
+      mergePendingAt: entry.mergePendingAt ?? new Date().toISOString(),
+      reviewWindowName: undefined,
+      reviewStartedAt: undefined,
+    });
+    refreshDashboard();
+    scheduleDelayedPoke(projectName, 0);
+    return true;
+  }
+
+  // Verification passed. Force-push and transition to merge-pending so the
+  // serial merge queue picks it up.
+  log.info("poller", "resolver verified", {
+    worker: entry.name,
+    data: { attempts: entry.resolveAttempts ?? 0 },
+  });
+
+  try {
+    forcePushBranch(wtPath, branchName);
+  } catch (err) {
+    log.error("poller", "force-push after resolve failed", {
+      worker: entry.name,
+      data: { error: String(err) },
+    });
+    transitionState(projectName, entry.name, "working", {
+      reviewWindowName: undefined,
+      reviewStartedAt: undefined,
+      mergePendingAt: undefined,
+    });
+    refreshDashboard();
+    return true;
+  }
+
+  transitionState(projectName, entry.name, "merge-pending", {
+    mergePendingAt: entry.mergePendingAt ?? new Date().toISOString(),
+    reviewWindowName: undefined,
+    reviewStartedAt: undefined,
+  });
+  refreshDashboard();
+  scheduleDelayedPoke(projectName, 0);
+  return true;
+}
+
+function readResolveResult(
+  projectName: string,
+  entry: WorkerEntry,
+): ResolveResult | null {
+  const resultFile = reviewResultPath(projectName, entry.name);
+  try {
+    if (!fs.existsSync(resultFile)) {
+      log.warn("poller", "resolve result file missing", { worker: entry.name });
+      return null;
+    }
+    const output = fs.readFileSync(resultFile, "utf-8").trim();
+    if (!output) {
+      log.warn("poller", "resolve result file empty", { worker: entry.name });
+      return null;
+    }
+    const lines = output.split("\n");
+    let lastLineIdx = lines.length - 1;
+    while (lastLineIdx >= 0 && !lines[lastLineIdx].trim()) lastLineIdx--;
+    if (lastLineIdx < 0) return null;
+    const lastLine = lines[lastLineIdx].trim().toUpperCase().replace(/[.\s!]+$/, "");
+    const body = lines.slice(0, lastLineIdx).join("\n").trim() || "No additional comments.";
+    if (lastLine === "DONE") return { verdict: "done", body };
+    if (lastLine === "FAILED") return { verdict: "failed", body };
+    log.warn("poller", "could not parse resolve verdict", {
+      worker: entry.name,
+      data: { lastLine },
+    });
+    return null;
+  } catch (err) {
+    log.warn("poller", "failed to read resolve result", {
+      worker: entry.name,
+      data: { error: String(err) },
+    });
+    return null;
+  }
+}

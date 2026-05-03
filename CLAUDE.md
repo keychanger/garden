@@ -34,7 +34,12 @@ npm run dev -- help    # run via tsx during development
   - `tmux.ts` — low-level tmux helpers (shared by dashboard and status command)
   - `validate.ts` — state/tmux consistency validation and self-healing
   - `git.ts` — git CLI wrappers for worktree and merge operations
-  - `poller.ts` — poller: event-driven state machine driving review/merge lifecycle
+  - `poller.ts` — poller coordinator: per-project event-driven dispatcher (poll, pollWorker, startProjectPoller, restartLongLivedPollers). State-machine logic lives in the four sibling modules — re-exports the public surface so external imports stay stable.
+  - `poller-state.ts` — state machine: VALID_TRANSITIONS, transitionState, simple terminal-state handlers (handleFailing, handleMerged, handleDone)
+  - `poller-review.ts` — review lifecycle: launchReview, handleWorking, handleReviewing, verdict parsing, timeout handling, killReviewWindow
+  - `poller-merge.ts` — merge queue + finalization: handleMergePending, finalizeMerge, autoContinueGateReason, runPostMerge, sibling notification
+  - `poller-resolve.ts` — resolver lifecycle: launchResolver, handleResolving, escalateResolveBudget, programmatic verification (STATUS.md invariant 7)
+  - `poller-fifo.ts` — FIFO-poke primitives shared across the four lifecycle modules without forming a cycle through the coordinator
   - `prompts.ts` — review prompt building for the reviewer Claude session
   - `window-names.ts` — centralized tmux window naming conventions (construction, parsing, classification)
   - `alerts.ts` — persistent operator alerts (review failures, merge errors, repeated failures)

@@ -1,0 +1,515 @@
+// Review lifecycle: launching reviewers, parsing verdicts, handling the
+// reviewing-state events, retries on unparseable output, timeouts.
+//
+// The reviewer is a separate Claude process running `claude -p` inside the
+// worker's worktree, in a hidden tmux window. GARDEN_REVIEWER=1 marks its
+// hooks so they don't get treated as worker hooks.
+import { execFileSync, spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { tryGetProject, SESSIONS_DIR } from "../config.js";
+import { DASHBOARD_SESSION } from "../session.js";
+import { addAlert } from "./alerts.js";
+import { claudeEnvPrefix } from "./claude-env.js";
+import {
+  forcePushBranch, getBranchHeadSha, getCommitSummary, getRemoteTrackingSha,
+} from "./git.js";
+import { refreshDashboard } from "./header.js";
+import { log } from "./log.js";
+import { buildReviewPrompt } from "./prompts.js";
+import {
+  findWorkerByName, updateWorkerFields,
+  type WorkerEntry,
+} from "./registry.js";
+import { tmux, windowExists, killWindowSafe } from "./tmux.js";
+import { reviewWindowName } from "./window-names.js";
+import { signalFifoPath, scheduleDelayedPoke } from "./poller-fifo.js";
+import { transitionState } from "./poller-state.js";
+
+// Wall-clock ceiling on a single reviewer or resolver run. If the tmux window
+// is still alive past this, the poller kills it and escalates to `failing`.
+// Catches hung subprocesses the reviewer can't escape from (e.g. a `npm test`
+// that blocks forever because tests have no timeout and the sandbox silently
+// denies their network calls).
+export const REVIEW_TIMEOUT_MS = 30 * 60 * 1000;
+
+// Scan the last N non-empty lines for a line that is a standalone verdict
+// token (optionally with trailing punctuation). Reviewers sometimes emit the
+// verdict and then add trailing summary output; they also sometimes forget
+// the fenced verdict entirely. Looking at the last N lines handles the first
+// case. The second case is handled in handleReviewing by detecting HEAD
+// advancement and re-queueing the review.
+const VERDICT_SCAN_LINES = 20;
+const VERDICT_LINE = /^(CLEAN|FIXED|FAILED)[.\s!]*$/i;
+
+export interface ReviewResult {
+  verdict: "clean" | "fixed" | "failed";
+  body: string;
+}
+
+export function reviewResultPath(project: string, worker: string): string {
+  return path.join(SESSIONS_DIR, `${project}-${worker}-review-result.txt`);
+}
+
+export function reviewPromptPath(project: string, worker: string): string {
+  return path.join(SESSIONS_DIR, `${project}-${worker}-review-prompt.txt`);
+}
+
+// `working` worker: the Stop-hook FIFO poke gets us here. The Stop hook
+// sets pendingReviewAt only when it observed commits ahead of base, so this
+// handler only launches a review for workers whose Stop hook *just* fired
+// with new commits. Idle workers with stale commits do not get reviewed —
+// per STATUS.md invariant 2, you cannot enter the review cycle from idle.
+export function handleWorking(
+  projectName: string,
+  projectPath: string,
+  baseBranch: string,
+  entry: WorkerEntry,
+): boolean {
+  if (!entry.pendingReviewAt) return false;
+
+  // Already reviewing? (defensive — handleReviewing should be the dispatch)
+  if (entry.reviewWindowName && windowExists(entry.reviewWindowName)) return false;
+
+  // Don't launch a review while Claude is mid-response. The Stop hook is
+  // what sets pendingReviewAt, so claudeStatus should already be "idle" by
+  // the time we get here — this guard catches the race where a fresh
+  // UserPromptSubmit landed between the Stop and the poller wake.
+  if (entry.claudeStatus === "working") return false;
+
+  const wtPath = entry.worktreePath ?? projectPath;
+  const commitSummary = getCommitSummary(wtPath, baseBranch);
+  if (!commitSummary) {
+    // Stop hook said commits existed; they no longer do (force-pushed away,
+    // base advanced past us, etc.). Clear the flag — nothing to review.
+    updateWorkerFields(projectName, entry.name, { pendingReviewAt: undefined });
+    return false;
+  }
+
+  return launchReview(projectName, projectPath, baseBranch, entry);
+}
+
+export function handleReviewing(
+  projectName: string,
+  projectPath: string,
+  baseBranch: string,
+  entry: WorkerEntry,
+): boolean {
+  if (isReviewTimedOut(entry)) {
+    return handleReviewTimeout(projectName, projectPath, entry, "review");
+  }
+
+  // If the reviewer window is alive, the reviewer is still working — any SHA
+  // change we might observe is the reviewer's own push, not a worker push.
+  // Check window existence FIRST so we do not falsely reset to working because
+  // the reviewer pushed mid-session (see the stuck-loop bug fixed in 2026-04).
+  const revWindow = entry.reviewWindowName;
+  if (revWindow && windowExists(revWindow)) {
+    return false; // still in-flight
+  }
+
+  // Reviewer has exited. A SHA change against the baseline captured at launch
+  // now unambiguously means the worker pushed during review — the reviewer is
+  // gone. Abort and let the normal working-state path pick up the new commits.
+  const wtPath = entry.worktreePath ?? projectPath;
+  const branchName = entry.branchName ?? entry.name;
+  const remoteSha = getRemoteTrackingSha(wtPath, branchName);
+  if (remoteSha && entry.lastSeenSha && remoteSha !== entry.lastSeenSha) {
+    resetToWorkingOnWorkerPush(projectName, wtPath, baseBranch, entry, "review");
+    return true;
+  }
+
+  // Review window is gone — read result
+  const review = readReviewResult(projectName, entry);
+
+  // Clean up files
+  cleanReviewFiles(projectName, entry.name);
+
+  if (review === null) {
+    const wtPath = entry.worktreePath ?? projectPath;
+    const headSha = getBranchHeadSha(wtPath);
+    const headAdvanced = headSha !== null && entry.preReviewSha !== undefined &&
+      headSha !== entry.preReviewSha;
+    const alreadyRetried = entry.unparseableReviewAt !== undefined;
+
+    // Non-destructive recovery: if the reviewer's output didn't emit a
+    // recognizable verdict but the reviewer did commit something (rebase or
+    // fixes), push those commits and re-queue one more review. The second
+    // reviewer sees a clean state and typically emits CLEAN. Capped at one
+    // retry so a reviewer that repeatedly fails to verbalize doesn't loop.
+    if (headAdvanced && !alreadyRetried) {
+      const branchName = entry.branchName ?? entry.name;
+      try {
+        forcePushBranch(wtPath, branchName);
+      } catch (err) {
+        log.error("poller", "force-push on unparseable-verdict retry failed", {
+          worker: entry.name,
+          data: { error: String(err) },
+        });
+        transitionState(projectName, entry.name, "failing", {
+          failCount: (entry.failCount ?? 0) + 1,
+          // Pin the failing SHA so handleFailing's debounce gate refuses
+          // to retry until a new commit actually arrives.
+          failingSha: headSha ?? undefined,
+          lastSeenSha: headSha ?? undefined,
+          lastShaChangeAt: new Date().toISOString(),
+          reviewWindowName: undefined,
+          reviewStartedAt: undefined,
+        });
+        refreshDashboard();
+        return true;
+      }
+      log.info("poller", "unparseable verdict with reviewer commits; re-queueing review", {
+        worker: entry.name,
+      });
+      transitionState(projectName, entry.name, "working", {
+        pendingReviewAt: Date.now(),
+        unparseableReviewAt: Date.now(),
+        lastSeenSha: headSha ?? undefined,
+        lastShaChangeAt: new Date().toISOString(),
+        reviewWindowName: undefined,
+        reviewStartedAt: undefined,
+        preReviewSha: undefined,
+      });
+      refreshDashboard();
+      scheduleDelayedPoke(projectName, 0);
+      return true;
+    }
+
+    log.warn("poller", "review process failed, transitioning to failing", {
+      worker: entry.name,
+    });
+    addAlert({
+      level: "error",
+      source: "review",
+      project: projectName,
+      worker: entry.name,
+      message: `Review failed for worker ${entry.name}: Claude unavailable or unparseable output`,
+    });
+    transitionState(projectName, entry.name, "failing", {
+      failCount: (entry.failCount ?? 0) + 1,
+      // Pin the failing SHA so handleFailing's debounce gate refuses to
+      // retry until a new commit actually arrives.
+      failingSha: headSha ?? undefined,
+      lastSeenSha: headSha ?? undefined,
+      lastShaChangeAt: new Date().toISOString(),
+      reviewWindowName: undefined,
+      reviewStartedAt: undefined,
+    });
+    refreshDashboard();
+    return true;
+  }
+
+  log.info("poller", "review complete", {
+    worker: entry.name,
+    data: { verdict: review.verdict },
+  });
+
+  if (review.verdict === "clean" || review.verdict === "fixed") {
+    const wtPath = entry.worktreePath ?? projectPath;
+
+    // Force-push: reviewer rebases, so local state diverges from remote
+    const branchName = entry.branchName ?? entry.name;
+    try {
+      forcePushBranch(wtPath, branchName);
+    } catch (err) {
+      log.error("poller", "force-push after review failed", {
+        worker: entry.name,
+        data: { error: String(err) },
+      });
+      transitionState(projectName, entry.name, "working", {
+        reviewWindowName: undefined,
+        reviewStartedAt: undefined,
+      });
+      refreshDashboard();
+      return true;
+    }
+
+    // Transition to merge-pending instead of merging directly. preReviewSha
+    // intentionally survives this transition: finalizeMerge needs it to diff
+    // the worker's pre-review HEAD against the merged tip and tell the worker
+    // which files the reviewer touched. finalizeMerge clears it.
+    transitionState(projectName, entry.name, "merge-pending", {
+      mergePendingAt: new Date().toISOString(),
+      lastReviewBody: review.body,
+      reviewWindowName: undefined,
+      reviewStartedAt: undefined,
+      unparseableReviewAt: undefined,
+    });
+    refreshDashboard();
+    // The poller is event-driven and will block on the FIFO after this tick.
+    // Poke it so the next tick processes handleMergePending.
+    scheduleDelayedPoke(projectName, 0);
+  } else {
+    // "failed" — reviewer couldn't fix the issues. addAlert also logs.
+    addAlert({
+      level: "error",
+      source: "review",
+      project: projectName,
+      worker: entry.name,
+      message: `Reviewer could not fix issues for worker ${entry.name}: ${review.body.slice(0, 300)}`,
+    });
+
+    const wtPath = entry.worktreePath ?? projectPath;
+    const headSha = getBranchHeadSha(wtPath);
+    transitionState(projectName, entry.name, "failing", {
+      failCount: (entry.failCount ?? 0) + 1,
+      failingSha: headSha ?? undefined,
+      lastSeenSha: headSha ?? undefined,
+      lastShaChangeAt: new Date().toISOString(),
+      reviewWindowName: undefined,
+      reviewStartedAt: undefined,
+      preReviewSha: undefined,
+      unparseableReviewAt: undefined,
+    });
+    refreshDashboard();
+  }
+  return true;
+}
+
+// Reset a worker to `working` after a worker-authored push during review or
+// resolution. Resets the resolver budget (this is a fresh cycle) and sets
+// pendingReviewAt if commits are ahead of base so handleWorking picks it up —
+// without this, the worker would stall in `working` with no trigger to
+// advance (see the 2026-04 stuck-loop fix).
+export function resetToWorkingOnWorkerPush(
+  projectName: string,
+  wtPath: string,
+  baseBranch: string,
+  entry: WorkerEntry,
+  context: "review" | "resolve",
+): void {
+  log.info(
+    "poller",
+    context === "review"
+      ? "new commits during review, resetting to working"
+      : "new commits during resolve, resetting to working",
+    { worker: entry.name },
+  );
+  killReviewWindow(projectName, entry.name);
+
+  const commitSummary = getCommitSummary(wtPath, baseBranch);
+  const hasCommitsAhead = commitSummary.length > 0;
+
+  transitionState(projectName, entry.name, "working", {
+    lastShaChangeAt: new Date().toISOString(),
+    reviewWindowName: undefined,
+    reviewStartedAt: undefined,
+    resolveAttempts: 0,
+    preResolveSha: undefined,
+    lastResolveBody: undefined,
+    mergePendingAt: undefined,
+    pendingReviewAt: hasCommitsAhead ? Date.now() : entry.pendingReviewAt,
+  });
+  refreshDashboard();
+  // The FIFO poke that woke us dispatched to the prior state's handler, not
+  // handleWorking. Schedule an immediate re-poke so the next tick picks up
+  // pendingReviewAt via handleWorking.
+  scheduleDelayedPoke(projectName, 0);
+}
+
+// Spawn a detached timer that pokes the project's FIFO after REVIEW_TIMEOUT_MS.
+// The poller is event-driven and only wakes on pokes — a hung reviewer produces
+// no events on its own, so without this the timeout check below would never
+// run. Spurious pokes after normal completion are harmless (the handlers no-op).
+export function scheduleReviewTimeoutPoke(projectName: string): void {
+  const fifo = signalFifoPath(projectName);
+  const escapedFifo = fifo.replace(/'/g, "'\\''");
+  const seconds = Math.ceil(REVIEW_TIMEOUT_MS / 1000);
+  const cmd = `sleep ${seconds} && [ -p '${escapedFifo}' ] && (echo > '${escapedFifo}') 2>/dev/null`;
+  const child = spawn("bash", ["-c", cmd], { detached: true, stdio: "ignore" });
+  child.unref();
+}
+
+export function isReviewTimedOut(entry: WorkerEntry): boolean {
+  if (!entry.reviewStartedAt || !entry.reviewWindowName) return false;
+  if (!windowExists(entry.reviewWindowName)) return false;
+  return Date.now() - entry.reviewStartedAt > REVIEW_TIMEOUT_MS;
+}
+
+export function handleReviewTimeout(
+  projectName: string,
+  projectPath: string,
+  entry: WorkerEntry,
+  kind: "review" | "resolve",
+): boolean {
+  const elapsedMs = Date.now() - (entry.reviewStartedAt ?? 0);
+  log.warn("poller", "review timed out, killing window", {
+    worker: entry.name,
+    data: { kind, elapsedMs, timeoutMs: REVIEW_TIMEOUT_MS },
+  });
+  if (entry.reviewWindowName) killWindowSafe(entry.reviewWindowName);
+  cleanReviewFiles(projectName, entry.name);
+  addAlert({
+    level: "error",
+    source: "review",
+    project: projectName,
+    worker: entry.name,
+    message: `${kind === "review" ? "Reviewer" : "Resolver"} for ${entry.name} exceeded ${Math.floor(REVIEW_TIMEOUT_MS / 60000)}-minute timeout and was killed. Check the worktree for hung subprocesses (commonly tests with no timeout blocked by the sandbox).`,
+  });
+  const wtPath = entry.worktreePath ?? projectPath;
+  const headSha = getBranchHeadSha(wtPath);
+  transitionState(projectName, entry.name, "failing", {
+    failCount: (entry.failCount ?? 0) + 1,
+    failingSha: headSha ?? undefined,
+    lastSeenSha: headSha ?? undefined,
+    lastShaChangeAt: new Date().toISOString(),
+    reviewWindowName: undefined,
+    reviewStartedAt: undefined,
+    mergePendingAt: kind === "resolve" ? undefined : entry.mergePendingAt,
+  });
+  refreshDashboard();
+  return true;
+}
+
+function launchReview(
+  projectName: string,
+  projectPath: string,
+  baseBranch: string,
+  entry: WorkerEntry,
+): boolean {
+  // The caller (handleWorking) is responsible for the "claude must be idle"
+  // check. We don't repeat it here.
+  const wtPath = entry.worktreePath ?? projectPath;
+
+  // Fetch latest base branch so the reviewer can rebase onto it
+  try {
+    execFileSync("git", ["fetch", "origin", baseBranch], {
+      cwd: wtPath,
+      stdio: "ignore",
+    });
+  } catch (err) {
+    log.debug("poller", "fetch before review failed", { worker: entry.name, data: { error: String(err) } });
+  }
+
+  // Build the review prompt
+  const prompt = buildReviewPrompt(projectName, projectPath, baseBranch, entry);
+
+  if (prompt === null) {
+    log.warn("poller", "failed to build review prompt", { worker: entry.name });
+    return false;
+  }
+
+  // Write prompt to file
+  const promptFile = reviewPromptPath(projectName, entry.name);
+  const resultFile = reviewResultPath(projectName, entry.name);
+  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+  fs.writeFileSync(promptFile, prompt);
+
+  // Clean any stale result file
+  try { fs.unlinkSync(resultFile); } catch { /* ignore */ }
+
+  // Launch review in a hidden tmux window
+  const revWindow = reviewWindowName(projectName, entry.name);
+  const escapedPrompt = promptFile.replace(/'/g, "'\\''");
+  const escapedResult = resultFile.replace(/'/g, "'\\''");
+  const escapedFifo = signalFifoPath(projectName).replace(/'/g, "'\\''");
+  // GARDEN_REVIEWER=1 marks this Claude as the reviewer so its hooks
+  // (sessionstart/prompt/stop fired from the same worktree as the worker)
+  // can be distinguished from worker hooks and short-circuited by the
+  // hook handler. Without this, the reviewer's Stop hook would be treated
+  // as the worker's Stop hook and would (a) write claudeStatus="idle" for
+  // the worker, and (b) poke the poller to start another review.
+  const envPrefix = claudeEnvPrefix(tryGetProject(projectName) ?? {});
+  const cmd = `GARDEN_REVIEWER=1 ${envPrefix}claude -p < '${escapedPrompt}' > '${escapedResult}' 2>&1; [ -p '${escapedFifo}' ] && (echo > '${escapedFifo}') 2>/dev/null`;
+
+  // Kill any leftover review window
+  if (windowExists(revWindow)) {
+    killWindowSafe(revWindow);
+  }
+
+  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", revWindow,
+    "-c", wtPath, "bash", "-c", cmd);
+  scheduleReviewTimeoutPoke(projectName);
+
+  // Capture the remote tracking SHA at launch time. handleReviewing compares
+  // origin/<branch> against this baseline to detect mid-review pushes. We use
+  // the remote ref (not local HEAD) because the reviewer rebases locally,
+  // which changes HEAD but not origin/<branch>.
+  const branchName = entry.branchName ?? entry.name;
+  const launchSha = getRemoteTrackingSha(wtPath, branchName) ?? getBranchHeadSha(wtPath) ?? entry.lastSeenSha;
+  const preReviewSha = getBranchHeadSha(wtPath) ?? undefined;
+  transitionState(projectName, entry.name, "reviewing", {
+    reviewWindowName: revWindow,
+    reviewStartedAt: Date.now(),
+    lastSeenSha: launchSha,
+    lastShaChangeAt: new Date().toISOString(),
+    pendingReviewAt: undefined,
+    mergePendingAt: entry.mergePendingAt,
+    preReviewSha,
+  });
+  refreshDashboard();
+
+  log.info("poller", "launched review", {
+    worker: entry.name,
+  });
+  return true;
+}
+
+function readReviewResult(
+  projectName: string,
+  entry: WorkerEntry,
+): ReviewResult | null {
+  const resultFile = reviewResultPath(projectName, entry.name);
+
+  try {
+    if (!fs.existsSync(resultFile)) {
+      log.warn("poller", "review result file missing", { worker: entry.name });
+      return null;
+    }
+
+    const output = fs.readFileSync(resultFile, "utf-8").trim();
+    if (!output) {
+      log.warn("poller", "review result file empty", { worker: entry.name });
+      return null;
+    }
+
+    return parseReviewResult(output, entry.name);
+  } catch (err) {
+    log.warn("poller", "failed to read review result", {
+      worker: entry.name,
+      data: { error: String(err) },
+    });
+    return null;
+  }
+}
+
+function parseReviewResult(output: string, workerName: string): ReviewResult | null {
+  const lines = output.split("\n");
+  let lastLineIdx = lines.length - 1;
+  while (lastLineIdx >= 0 && !lines[lastLineIdx].trim()) lastLineIdx--;
+  if (lastLineIdx < 0) {
+    log.warn("poller", "review output is empty", { worker: workerName });
+    return null;
+  }
+
+  const scanStart = Math.max(0, lastLineIdx - VERDICT_SCAN_LINES + 1);
+  for (let i = lastLineIdx; i >= scanStart; i--) {
+    const match = lines[i].trim().match(VERDICT_LINE);
+    if (!match) continue;
+    const verdict = match[1].toUpperCase();
+    const body = lines.slice(0, i).join("\n").trim() || "No additional comments.";
+    if (verdict === "CLEAN") return { verdict: "clean", body };
+    if (verdict === "FIXED") return { verdict: "fixed", body };
+    if (verdict === "FAILED") return { verdict: "failed", body };
+  }
+
+  log.warn("poller", "could not parse review verdict", {
+    worker: workerName,
+    data: { lastLine: lines[lastLineIdx].trim() },
+  });
+  return null;
+}
+
+export function killReviewWindow(projectName: string, workerName: string): void {
+  const revWindow = reviewWindowName(projectName, workerName);
+  if (windowExists(revWindow)) {
+    killWindowSafe(revWindow);
+  }
+  cleanReviewFiles(projectName, workerName);
+}
+
+export function cleanReviewFiles(projectName: string, workerName: string): void {
+  try { fs.unlinkSync(reviewResultPath(projectName, workerName)); } catch { /* ignore */ }
+  try { fs.unlinkSync(reviewPromptPath(projectName, workerName)); } catch { /* ignore */ }
+}
