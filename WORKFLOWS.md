@@ -185,7 +185,10 @@ export interface VerdictResult<V extends string> {
 }
 
 export interface ParseVerdictOptions {
-  /** How many trailing lines to scan for the verdict. Defaults to 5. */
+  /** How many trailing lines to scan for the verdict. Defaults to 20
+   *  (matches the current reviewer's `VERDICT_SCAN_LINES`). The resolver
+   *  caller passes 1 to preserve its current "last non-empty line only"
+   *  behavior. */
   scanLines?: number;
 }
 
@@ -200,10 +203,12 @@ export function parseLastLineVerdict<V extends string>(
 
 1. Splits `output` by newlines.
 2. Walks backwards from the last non-empty line up to `scanLines` lines.
-3. For each line, strips leading whitespace and matches against
-   `^([A-Z_]+)\b`. If the captured token (uppercased) is in `vocabulary`,
-   that line is the verdict line; everything before it (joined, trimmed)
-   is the body.
+3. For each line, trims surrounding whitespace and matches against
+   `/^([A-Za-z_]+)[.\s!]*$/` (the line must be only the verdict token,
+   optionally followed by trailing punctuation/whitespace — same shape
+   as the current reviewer's `VERDICT_LINE` regex). If the captured token
+   uppercased is in `vocabulary`, that line is the verdict line; everything
+   before it (joined, trimmed) is the body.
 4. Returns `{ verdict, body }` or `null` if no match in the scan window.
 
 The function is pure, type-parameterized so callers get type-safe verdict
@@ -212,9 +217,15 @@ level so workflows can declare it `as const`.
 
 **Migrations**:
 - `parseReviewResult` in `poller-review.ts:477` becomes
-  `parseLastLineVerdict(output, ["CLEAN", "FIXED", "FAILED"] as const)`.
+  `parseLastLineVerdict(output, ["CLEAN", "FIXED", "FAILED"] as const)`
+  (defaults to a 20-line scan window, matching today).
 - The resolver parser becomes
-  `parseLastLineVerdict(output, ["DONE", "FAILED"] as const)`.
+  `parseLastLineVerdict(output, ["DONE", "FAILED"] as const, { scanLines: 1 })`
+  — the resolver currently parses only the last non-empty line, so the
+  caller pins the window to 1 to preserve that.
+- Both call sites keep the `body || "No additional comments."` fallback;
+  the primitive returns the trimmed body verbatim, leaving the empty-body
+  substitution to callers.
 
 **Tests** (`test/verdict.test.ts`):
 - Returns the verdict and the body when the verdict is on the last line.
