@@ -278,6 +278,11 @@ describe("buildWorkerCommand", () => {
     expect(cmd).toContain("--append-system-prompt-file");
   });
 
+  it("includes --rc so worker surfaces in Claude app remote sessions", () => {
+    const cmd = buildWorkerCommand("myproject", "/repo/myproject", "session-123");
+    expect(cmd).toContain("--rc");
+  });
+
   it("includes exit hook and shell fallback", () => {
     const cmd = buildWorkerCommand("myproject", "/repo/myproject", "session-123");
     expect(cmd).toContain("_claude-hook stop");
@@ -292,6 +297,11 @@ describe("buildResumeCommand", () => {
     expect(cmd).not.toContain("--session-id");
   });
 
+  it("includes --rc so resumed worker surfaces in Claude app remote sessions", () => {
+    const cmd = buildResumeCommand("myproject", "/repo/myproject", "session-123");
+    expect(cmd).toContain("--rc");
+  });
+
   it("includes exit hook and shell fallback", () => {
     const cmd = buildResumeCommand("myproject", "/repo/myproject", "session-123");
     expect(cmd).toContain("_claude-hook stop");
@@ -304,6 +314,11 @@ describe("buildWorktreeWorkerCommand", () => {
     const cmd = buildWorktreeWorkerCommand("myproject", "/repo/myproject", "bold-ash", "bold-ash", "session-123");
     expect(cmd).toContain("--session-id session-123");
     expect(cmd).toContain("--append-system-prompt-file");
+  });
+
+  it("includes --rc so worker surfaces in Claude app remote sessions", () => {
+    const cmd = buildWorktreeWorkerCommand("myproject", "/repo/myproject", "bold-ash", "bold-ash", "session-123");
+    expect(cmd).toContain("--rc");
   });
 });
 
@@ -471,6 +486,19 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(script).toContain("name: handoff");
   });
 
+  it("launches claude with --rc so worker surfaces in Claude app remote sessions", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "main",
+    );
+    const call = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    );
+    expect(call).toBeDefined();
+    expect(call![1] as string).toContain("claude --rc --session-id session-123");
+  });
+
   it("uses origin/<base> for the worktree branch when baseBranch has a slash in the name", () => {
     process.argv[1] = "/usr/local/bin/garden";
     buildWorktreeBootstrapScript(
@@ -514,6 +542,15 @@ describe("buildWorktreeResumeCommand", () => {
     expect(cmd).toContain("GARDEN_BRANCH=bold-ash");
     expect(cmd).toContain("GARDEN_BASE_BRANCH=develop");
     expect(cmd).toContain("--resume session-123");
+  });
+
+  it("includes --rc so resumed worker surfaces in Claude app remote sessions", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    const cmd = buildWorktreeResumeCommand(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "main",
+    );
+    expect(cmd).toContain("--rc");
   });
 
   it("defaults GARDEN_BASE_BRANCH to main when baseBranch is omitted", () => {
