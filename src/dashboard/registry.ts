@@ -11,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
+import { withFileLock } from "./file-lock.js";
 import { log } from "./log.js";
 
 // claudeStatus is written by Claude Code hooks and the tmux pane-died handler.
@@ -103,54 +104,12 @@ export interface WorkerRegistry {
 export const REGISTRY_FILE = path.join(SESSIONS_DIR, "dashboard.registry.json");
 const LOCK_FILE = REGISTRY_FILE + ".lock";
 
-// Acquire an exclusive lock by creating a file with O_CREAT|O_EXCL. If the
-// lockfile already exists and the holder PID is dead, reclaim it. Retries
-// briefly under contention. Throws if it can't acquire within the deadline —
+// Serialize read-modify-write cycles via withFileLock. Throws on timeout —
 // callers treat that as best-effort and proceed without the lock (a missed
-// hook write is preferable to hanging the dashboard).
+// hook write is preferable to hanging the dashboard, but the helper logs
+// at warn so the operator sees real contention).
 function withRegistryLock<T>(fn: () => T): T {
-  const deadline = Date.now() + 500; // 500ms total
-  const myPid = process.pid;
-  let acquired = false;
-
-  while (!acquired && Date.now() < deadline) {
-    try {
-      fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-      const fd = fs.openSync(LOCK_FILE, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o644);
-      fs.writeSync(fd, String(myPid));
-      fs.closeSync(fd);
-      acquired = true;
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-        // Check if holder is alive; if not, reclaim
-        let holderPid = -1;
-        try { holderPid = parseInt(fs.readFileSync(LOCK_FILE, "utf-8"), 10); } catch { /* ignore */ }
-        let holderAlive = false;
-        if (Number.isFinite(holderPid) && holderPid > 0) {
-          try { process.kill(holderPid, 0); holderAlive = true; } catch { /* dead */ }
-        }
-        if (!holderAlive) {
-          try { fs.unlinkSync(LOCK_FILE); } catch { /* ignore */ }
-          continue; // retry immediately
-        }
-        // Spin briefly
-        const wait = new Int32Array(new SharedArrayBuffer(4));
-        Atomics.wait(wait, 0, 0, 5);
-        continue;
-      }
-      throw err;
-    }
-  }
-
-  if (!acquired) {
-    throw new Error("Could not acquire registry lock after 500ms");
-  }
-
-  try {
-    return fn();
-  } finally {
-    try { fs.unlinkSync(LOCK_FILE); } catch { /* ignore */ }
-  }
+  return withFileLock(LOCK_FILE, fn, { name: "registry" });
 }
 
 export function readRegistry(): WorkerRegistry {

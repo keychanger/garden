@@ -168,10 +168,10 @@ describe("withStateLock", () => {
     fs.writeFileSync(lockFile, String(process.pid));
     try {
       expect(() => withStateLock(() => {})).toThrow(
-        "Could not acquire state lock after 500ms"
+        /Could not acquire state lock after \d+ms/
       );
     } finally {
       try { fs.unlinkSync(lockFile); } catch { /* ignore */ }
     }
-  }, 2000);
+  }, 5000);
 });

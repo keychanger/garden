@@ -229,12 +229,12 @@ describe("withRegistryLock", () => {
     fs.writeFileSync(lockFile, String(process.pid));
     try {
       expect(() => addWorker("proj", { name: "x", sessionId: "s", task: "" })).toThrow(
-        "Could not acquire registry lock after 500ms"
+        /Could not acquire registry lock after \d+ms/
       );
     } finally {
       try { fs.unlinkSync(lockFile); } catch { /* ignore */ }
     }
-  }, 2000);
+  }, 5000);
 });
 
 describe("getAllWorkerNames", () => {

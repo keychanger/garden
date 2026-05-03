@@ -9,6 +9,7 @@ import {
 } from "../dashboard/tmux.js";
 import { loadConfig } from "../config.js";
 import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/window-names.js";
+import { log } from "../dashboard/log.js";
 
 // A worker in `working` state with no hook fire in this long is considered
 // stuck. The Stop hook should fire whenever Claude finishes — if 15 minutes
@@ -120,7 +121,12 @@ export async function health(args: string[]): Promise<void> {
               if (fix) {
                 try {
                   updateWorkerFields(projectName, entry.name, { claudeStatus: "exited" });
-                } catch { /* best effort */ }
+                } catch (err) {
+                  log.warn("health", "fix-up update failed", {
+                    worker: entry.name,
+                    data: { project: projectName, error: String(err) },
+                  });
+                }
               }
             }
           }

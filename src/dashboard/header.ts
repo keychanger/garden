@@ -503,7 +503,15 @@ export function handlePaneDied(windowName: string | undefined): void {
       claudeStatus: "exited",
       ...(wasWorking ? { interruptedWhileWorking: true } : {}),
     });
-  } catch { /* best effort */ }
+  } catch (err) {
+    // Lock contention. Logging here surfaces real registry contention so the
+    // operator can correlate "stuck claudeStatus" with lock pressure instead
+    // of guessing the cause.
+    log.warn("hook", "pane-died update failed", {
+      worker,
+      data: { project, error: String(err) },
+    });
+  }
   log.info("hook", "pane-died → exited", {
     worker,
     data: { project, windowName, interrupted: wasWorking },
@@ -551,7 +559,13 @@ export function handleTitleChanged(windowName: string | undefined, paneId: strin
 
   try {
     updateWorkerFields(project, worker, { task: title });
-  } catch { return; }
+  } catch (err) {
+    log.warn("hook", "pane-title update failed", {
+      worker,
+      data: { project, error: String(err) },
+    });
+    return;
+  }
 
   // Update pane border if this worker is in the visible right slot
   const state = readDashState();

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
 import { atomicWriteFile } from "./dashboard/atomic-write.js";
+import { withFileLock } from "./dashboard/file-lock.js";
 import {
   ASSIGNABLE_LOG_COLOR_KEYS,
   RESERVED_LOG_COLOR_KEY,
@@ -97,15 +98,20 @@ export function getAutoContinueConfig(config?: GardenConfig): AutoContinueConfig
 }
 
 export function setAutoContinueConfig(patch: Partial<AutoContinueConfig>): AutoContinueConfig {
-  const cfg = loadConfig();
-  const merged: AutoContinueConfig = { ...getAutoContinueConfig(cfg), ...patch };
-  // Strip pause metadata when not paused so the file stays clean.
-  const persisted: Partial<AutoContinueConfig> = { ...merged };
-  if (persisted.pausedUntil === undefined) delete persisted.pausedUntil;
-  if (persisted.pausedReason === undefined) delete persisted.pausedReason;
-  cfg.autoContinue = persisted;
-  saveConfig(cfg);
-  return merged;
+  // Lock-protected R/M/W: the poller's threshold-tripping write
+  // (autoContinueGateReason) races with operator commands like
+  // `garden auto on` if both load the file before either saves.
+  return withConfigLock(() => {
+    const cfg = loadConfig();
+    const merged: AutoContinueConfig = { ...getAutoContinueConfig(cfg), ...patch };
+    // Strip pause metadata when not paused so the file stays clean.
+    const persisted: Partial<AutoContinueConfig> = { ...merged };
+    if (persisted.pausedUntil === undefined) delete persisted.pausedUntil;
+    if (persisted.pausedReason === undefined) delete persisted.pausedReason;
+    cfg.autoContinue = persisted;
+    saveConfig(cfg);
+    return merged;
+  });
 }
 
 export function getLogsMode(config?: GardenConfig): LogsMode {
@@ -114,9 +120,11 @@ export function getLogsMode(config?: GardenConfig): LogsMode {
 }
 
 export function setLogsMode(mode: LogsMode): void {
-  const cfg = loadConfig();
-  cfg.logs = { ...(cfg.logs ?? {}), mode };
-  saveConfig(cfg);
+  withConfigLock(() => {
+    const cfg = loadConfig();
+    cfg.logs = { ...(cfg.logs ?? {}), mode };
+    saveConfig(cfg);
+  });
 }
 
 export function expandHome(p: string): string {
@@ -253,6 +261,17 @@ function migratePlots(config: GardenConfig): boolean {
 
 export function saveConfig(config: GardenConfig): void {
   atomicWriteFile(CONFIG_PATH, yaml.dump(config, { lineWidth: -1 }));
+}
+
+const CONFIG_LOCK_FILE = `${CONFIG_PATH}.lock`;
+
+// Serialize read-modify-write cycles on the config file. Used by writers
+// that cannot tolerate a lost-update race against another writer (notably
+// the poller's auto-continue threshold-trip vs. operator `garden auto on`).
+// Most operator commands don't need this — they're invoked sequentially by
+// a human, and an interleaved write is implausible.
+export function withConfigLock<T>(fn: () => T): T {
+  return withFileLock(CONFIG_LOCK_FILE, fn, { name: "config" });
 }
 
 export function getProject(name: string): ProjectConfig & { name: string } {
