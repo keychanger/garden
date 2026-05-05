@@ -35,6 +35,38 @@ describe("readDashState", () => {
     const state = readDashState();
     expect(state.activeProject).toBeNull();
   });
+
+  it("returns default state when a top-level field has the wrong primitive type", async () => {
+    const { readDashState, STATE_FILE } = await importState();
+    // statusPaneId must be string|null. A numeric value indicates corruption
+    // (or a forward-incompatible dashboard build sharing the file). Falling
+    // back to defaults is safer than feeding a number into setPaneVar.
+    fs.writeFileSync(STATE_FILE, JSON.stringify({
+      activeProject: null, activePlot: null,
+      statusPaneId: 42, usagePaneId: null,
+      gardenShellPaneId: null, gardenPaneType: "growhouse",
+      gardenWindowName: null, activePaneId: null,
+      activePaneType: null, activeWindowName: null,
+      lastActiveWorker: {}, lastActiveProjectByPlot: {},
+    }));
+    expect(readDashState().statusPaneId).toBeNull();
+  });
+
+  it("returns default state when a Record-typed field is an array", async () => {
+    const { readDashState, STATE_FILE } = await importState();
+    // lastActiveWorker must be Record<string, string>; an array would
+    // pass `typeof === "object"` but break the project-name lookup.
+    fs.writeFileSync(STATE_FILE, JSON.stringify({
+      activeProject: null, activePlot: null,
+      statusPaneId: null, usagePaneId: null,
+      gardenShellPaneId: null, gardenPaneType: "growhouse",
+      gardenWindowName: null, activePaneId: null,
+      activePaneType: null, activeWindowName: null,
+      lastActiveWorker: ["bogus"],
+      lastActiveProjectByPlot: {},
+    }));
+    expect(readDashState().lastActiveWorker).toEqual({});
+  });
 });
 
 describe("writeDashState / readDashState", () => {

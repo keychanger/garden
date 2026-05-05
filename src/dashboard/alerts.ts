@@ -50,10 +50,38 @@ const DEDUP_MESSAGE_PREFIX_LEN = 200;
 
 export const ALERTS_FILE = path.join(SESSIONS_DIR, "dashboard.alerts.json");
 
+// Shape guard for parsed alerts. Top-level needs `alerts` as an array;
+// each entry must carry the load-bearing string fields (level, source,
+// project, message). worker/dedupKey are optional. The unread-count and
+// dedup paths read these fields on every addAlert/refresh — silently
+// returning an empty store on shape drift is safer than letting an
+// undefined field crash the badge code.
+function isAlertStore(x: unknown): x is AlertStore {
+  if (!x || typeof x !== "object") return false;
+  const r = x as Record<string, unknown>;
+  if (!Array.isArray(r.alerts)) return false;
+  for (const a of r.alerts) {
+    if (!a || typeof a !== "object") return false;
+    const entry = a as Record<string, unknown>;
+    if (typeof entry.level !== "string") return false;
+    if (typeof entry.source !== "string") return false;
+    if (typeof entry.project !== "string") return false;
+    if (typeof entry.message !== "string") return false;
+  }
+  return true;
+}
+
 export function readAlerts(): AlertStore {
   try {
     if (fs.existsSync(ALERTS_FILE)) {
-      return JSON.parse(fs.readFileSync(ALERTS_FILE, "utf-8"));
+      const raw = JSON.parse(fs.readFileSync(ALERTS_FILE, "utf-8"));
+      if (!isAlertStore(raw)) {
+        log.warn("alerts", "alerts file failed shape check, using empty", {
+          data: { topLevelKeys: Object.keys(raw ?? {}) },
+        });
+        return { alerts: [] };
+      }
+      return raw;
     }
   } catch {
     // corrupt or missing — start fresh

@@ -118,10 +118,39 @@ function withRegistryLock<T>(fn: () => T): T {
   return withFileLock(LOCK_FILE, fn, { name: "registry" });
 }
 
+// Shape guard for parsed registry. Top-level must be an object with a
+// `workers` field that maps project names to arrays. Per-entry validation
+// only checks `name` is a string — every other WorkerEntry field is
+// optional and tolerates absence (legacy entries from earlier garden
+// versions don't carry baseBranch, workflow, etc.). A failed check signals
+// hand-edit corruption or a half-write that escaped atomic-rename; fall
+// back to empty rather than feed junk into the poller.
+function isWorkerRegistry(x: unknown): x is WorkerRegistry {
+  if (!x || typeof x !== "object") return false;
+  const r = x as Record<string, unknown>;
+  if (!r.workers || typeof r.workers !== "object" || Array.isArray(r.workers)) return false;
+  for (const entries of Object.values(r.workers as Record<string, unknown>)) {
+    if (!Array.isArray(entries)) return false;
+    for (const e of entries) {
+      if (!e || typeof e !== "object") return false;
+      const entry = e as Record<string, unknown>;
+      if (typeof entry.name !== "string") return false;
+    }
+  }
+  return true;
+}
+
 export function readRegistry(): WorkerRegistry {
   try {
     if (fs.existsSync(REGISTRY_FILE)) {
-      return JSON.parse(fs.readFileSync(REGISTRY_FILE, "utf-8"));
+      const raw = JSON.parse(fs.readFileSync(REGISTRY_FILE, "utf-8"));
+      if (!isWorkerRegistry(raw)) {
+        log.warn("registry", "registry file failed shape check, using empty", {
+          data: { topLevelKeys: Object.keys(raw ?? {}) },
+        });
+        return { workers: {} };
+      }
+      return raw;
     }
   } catch (err) {
     log.warn("registry", "failed to read registry, using empty", {

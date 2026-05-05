@@ -68,6 +68,30 @@ describe("readAlerts", () => {
     const store = readAlerts();
     expect(store).toEqual({ alerts: [] });
   });
+
+  it("returns empty store when alerts is missing", () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ unrelated: 1 }));
+    expect(readAlerts()).toEqual({ alerts: [] });
+  });
+
+  it("returns empty store when an alert is missing a required string field", () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    // `level` is required; missing it would crash log[level](...) on the
+    // next addAlert. Falling back to empty is safer than letting that fire.
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      alerts: [{ id: "1", ts: "t", source: "s", project: "p", message: "m" }],
+    }));
+    expect(readAlerts()).toEqual({ alerts: [] });
+  });
+
+  it("returns empty store when an alert's level is the wrong type", () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      alerts: [{ id: "1", ts: "t", level: 42, source: "s", project: "p", message: "m" }],
+    }));
+    expect(readAlerts()).toEqual({ alerts: [] });
+  });
 });
 
 describe("addAlert", () => {

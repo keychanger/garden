@@ -19,6 +19,39 @@ describe("readRegistry", () => {
     fs.writeFileSync(REGISTRY_FILE, "bad json!!!");
     expect(readRegistry()).toEqual({ workers: {} });
   });
+
+  it("returns empty when top-level is missing the workers field", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    fs.writeFileSync(REGISTRY_FILE, JSON.stringify({ unrelated: 1 }));
+    expect(readRegistry()).toEqual({ workers: {} });
+  });
+
+  it("returns empty when workers is the wrong type (array)", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    // workers must be Record<string, WorkerEntry[]>. An array at this
+    // position would pass typeof===object but break getWorkers' lookup.
+    fs.writeFileSync(REGISTRY_FILE, JSON.stringify({ workers: [] }));
+    expect(readRegistry()).toEqual({ workers: {} });
+  });
+
+  it("returns empty when an entry is missing its `name` field", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    fs.writeFileSync(REGISTRY_FILE, JSON.stringify({
+      workers: { proj: [{ sessionId: "a", task: "" }] },
+    }));
+    expect(readRegistry()).toEqual({ workers: {} });
+  });
+
+  it("preserves legacy entries that lack optional fields (baseBranch, workflow, etc.)", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    // Validation tolerates missing optional fields — only `name` is required.
+    fs.writeFileSync(REGISTRY_FILE, JSON.stringify({
+      workers: { proj: [{ name: "legacy-worker", sessionId: "a", task: "old" }] },
+    }));
+    const reg = readRegistry();
+    expect(reg.workers.proj).toHaveLength(1);
+    expect(reg.workers.proj[0].name).toBe("legacy-worker");
+  });
 });
 
 describe("addWorker / getWorkers", () => {

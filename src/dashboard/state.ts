@@ -53,6 +53,35 @@ const DEFAULT_STATE: DashboardState = {
   lastActiveProjectByPlot: {},
 };
 
+// Shape guard for parsed state. Runs AFTER the migration patches so legacy
+// values that get healed (e.g. `gardenPaneType: "garden" → "growhouse"`)
+// pass validation. Strict on shape; permissive on optional `Record<string,
+// string>` fields where an empty/missing value is filled in by the
+// migrations above. A failed check signals real corruption (hand-edit
+// gone wrong, half-write that survived rename, or a forward-incompatible
+// dashboard version on the same state file) — fall back to defaults.
+function isDashboardState(x: unknown): x is DashboardState {
+  if (!x || typeof x !== "object") return false;
+  const r = x as Record<string, unknown>;
+  const isStrOrNull = (v: unknown): boolean => v === null || typeof v === "string";
+  const isRecord = (v: unknown): boolean =>
+    v !== null && typeof v === "object" && !Array.isArray(v);
+  return (
+    isStrOrNull(r.activeProject) &&
+    isStrOrNull(r.activePlot) &&
+    isStrOrNull(r.statusPaneId) &&
+    isStrOrNull(r.usagePaneId) &&
+    isStrOrNull(r.gardenShellPaneId) &&
+    isStrOrNull(r.gardenPaneType) &&
+    isStrOrNull(r.gardenWindowName) &&
+    isStrOrNull(r.activePaneId) &&
+    isStrOrNull(r.activePaneType) &&
+    isStrOrNull(r.activeWindowName) &&
+    isRecord(r.lastActiveWorker) &&
+    isRecord(r.lastActiveProjectByPlot)
+  );
+}
+
 export function readDashState(): DashboardState {
   try {
     const raw = JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
@@ -67,6 +96,12 @@ export function readDashState(): DashboardState {
     if (raw.activePlot === undefined) raw.activePlot = null;
     if (!raw.lastActiveWorker) raw.lastActiveWorker = {};
     if (!raw.lastActiveProjectByPlot) raw.lastActiveProjectByPlot = {};
+    if (!isDashboardState(raw)) {
+      log.warn("state", "state file failed shape check, using defaults", {
+        data: { keys: Object.keys(raw ?? {}) },
+      });
+      return { ...DEFAULT_STATE };
+    }
     return raw;
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
