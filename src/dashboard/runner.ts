@@ -5,8 +5,9 @@
 // hooks/default.ts — without dragging the rest of dashboard/create.ts into
 // the import graph. Importing from create.ts here would close a module-init
 // cycle (workflows/default.ts -> hooks/default.ts -> create.ts -> poller.ts
-// -> workflows/index.ts -> workflows/default.ts) that previously had to be
-// papered over with a getter on defaultWorkflow.hookHandlers.
+// -> workflows/index.ts -> workflows/default.ts). Note: severing that cycle
+// did not eliminate the getter on defaultWorkflow.hookHandlers — a separate
+// cycle through header.ts still requires it (see workflows/default.ts).
 import fs from "node:fs";
 import path from "node:path";
 
