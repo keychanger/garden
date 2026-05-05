@@ -1,0 +1,112 @@
+import { describe, it, expect } from "vitest";
+import { parseLastLineVerdict } from "../src/dashboard/verdict.js";
+
+const REVIEW_VOCAB = ["CLEAN", "FIXED", "FAILED"] as const;
+const RESOLVE_VOCAB = ["DONE", "FAILED"] as const;
+
+describe("parseLastLineVerdict", () => {
+  it("returns the verdict and body when the verdict is on the last line", () => {
+    const output = "Looks good.\nAll tests passed.\nCLEAN";
+    const result = parseLastLineVerdict(output, REVIEW_VOCAB);
+    expect(result).toEqual({
+      verdict: "CLEAN",
+      body: "Looks good.\nAll tests passed.",
+    });
+  });
+
+  it("ignores trailing blank lines when finding the last non-empty line", () => {
+    const output = "All good.\nCLEAN\n\n  \n";
+    const result = parseLastLineVerdict(output, REVIEW_VOCAB);
+    expect(result?.verdict).toBe("CLEAN");
+    expect(result?.body).toBe("All good.");
+  });
+
+  it("matches verdicts with trailing punctuation", () => {
+    const output = "Done.\nCLEAN.";
+    expect(parseLastLineVerdict(output, REVIEW_VOCAB)?.verdict).toBe("CLEAN");
+  });
+
+  it("matches verdicts with trailing exclamation", () => {
+    const output = "FIXED!";
+    expect(parseLastLineVerdict(output, REVIEW_VOCAB)?.verdict).toBe("FIXED");
+  });
+
+  it("uppercases lowercase tokens before vocab match", () => {
+    const output = "summary\nclean";
+    expect(parseLastLineVerdict(output, REVIEW_VOCAB)?.verdict).toBe("CLEAN");
+  });
+
+  it("returns null for empty output", () => {
+    expect(parseLastLineVerdict("", REVIEW_VOCAB)).toBeNull();
+  });
+
+  it("returns null for whitespace-only output", () => {
+    expect(parseLastLineVerdict("   \n  \n\t\n", REVIEW_VOCAB)).toBeNull();
+  });
+
+  it("returns null when no token in the scan window matches the vocabulary", () => {
+    const output = "INVALID\nUNKNOWN_VERDICT\nrandom text";
+    expect(parseLastLineVerdict(output, REVIEW_VOCAB)).toBeNull();
+  });
+
+  it("walks back through the scan window to find a verdict", () => {
+    const output = "Step 1 done.\nFIXED\nAdded a trailing summary that should be ignored.\nThe fix was small.";
+    const result = parseLastLineVerdict(output, REVIEW_VOCAB);
+    expect(result?.verdict).toBe("FIXED");
+    expect(result?.body).toBe("Step 1 done.");
+  });
+
+  it("honors custom scanLines: a verdict outside the window is not found", () => {
+    const output = ["Reasoning", "CLEAN", "more text", "trailing", "lines"].join("\n");
+    // With scanLines=1, only the last non-empty line ("lines") is checked.
+    expect(parseLastLineVerdict(output, REVIEW_VOCAB, { scanLines: 1 })).toBeNull();
+  });
+
+  it("honors scanLines: 1 for the resolver-style last-line-only contract", () => {
+    const output = "Conflict resolved.\nDONE";
+    const result = parseLastLineVerdict(output, RESOLVE_VOCAB, { scanLines: 1 });
+    expect(result?.verdict).toBe("DONE");
+    expect(result?.body).toBe("Conflict resolved.");
+  });
+
+  it("scanLines: 1 still skips trailing blank lines", () => {
+    const output = "summary\nDONE\n\n\n";
+    const result = parseLastLineVerdict(output, RESOLVE_VOCAB, { scanLines: 1 });
+    expect(result?.verdict).toBe("DONE");
+  });
+
+  it("works with a single-element vocabulary", () => {
+    const output = "PASS";
+    expect(parseLastLineVerdict(output, ["PASS"] as const)?.verdict).toBe("PASS");
+  });
+
+  it("ignores tokens that aren't standalone (with extra content on the line)", () => {
+    const output = "Result is CLEAN with caveats.";
+    expect(parseLastLineVerdict(output, REVIEW_VOCAB)).toBeNull();
+  });
+
+  it("returns empty body when verdict is the only content", () => {
+    expect(parseLastLineVerdict("CLEAN", REVIEW_VOCAB)).toEqual({
+      verdict: "CLEAN",
+      body: "",
+    });
+  });
+
+  it("preserves multi-line body content above the verdict", () => {
+    const output = "Line 1\n\nLine 3 with blank above.\nFIXED";
+    const result = parseLastLineVerdict(output, REVIEW_VOCAB);
+    expect(result?.body).toBe("Line 1\n\nLine 3 with blank above.");
+  });
+
+  it("disambiguates between vocabularies (resolver vocab does not match CLEAN)", () => {
+    const output = "Some text\nCLEAN";
+    expect(parseLastLineVerdict(output, RESOLVE_VOCAB)).toBeNull();
+  });
+
+  it("does not match across the scan window when an earlier line matches", () => {
+    // The scan walks BACK from the last non-empty line — the last verdict
+    // wins, not the first.
+    const output = "CLEAN\nintermediate text\nFAILED";
+    expect(parseLastLineVerdict(output, REVIEW_VOCAB)?.verdict).toBe("FAILED");
+  });
+});
