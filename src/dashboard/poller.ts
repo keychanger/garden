@@ -81,15 +81,11 @@ function pollWorker(
   // schedules a re-check.
   const state = entry.prState ?? "working";
   const workflow = getWorkflow(entry.workflow ?? "default");
-  const handler = workflow.stateHandlers[state];
-  if (!handler) {
-    log.warn("poller", "no handler for state in workflow", {
-      worker: entry.name,
-      data: { state, workflow: workflow.name },
-    });
-    return false;
-  }
-  return handler(projectName, projectPath, baseBranch, entry);
+  // WorkflowDefinition.stateHandlers is Record<PrState, StateHandler> — the
+  // type contract guarantees a handler for every state, so no runtime guard
+  // is needed. A new PrState in registry.ts would be a TypeScript error here
+  // until every workflow declares a handler for it.
+  return workflow.stateHandlers[state](projectName, projectPath, baseBranch, entry);
 }
 
 // --- Per-project poller lifecycle ---

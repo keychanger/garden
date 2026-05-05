@@ -399,8 +399,11 @@ export interface WorkflowDefinition {
   name: string;
   /** Per-state valid transitions for transitionState() validation. */
   validTransitions: Record<PrState, PrState[]>;
-  /** Dispatched by pollWorker. A state with no handler is a config bug. */
-  stateHandlers: Partial<Record<PrState, StateHandler>>;
+  /** Dispatched by pollWorker on the worker's current prState. Required —
+   *  every PrState must have a handler. Workflows that don't use a state
+   *  register a no-op (`() => false`); the type contract leaves the
+   *  dispatcher in poller.ts free of defensive runtime guards. */
+  stateHandlers: Record<PrState, StateHandler>;
   /** Dispatched by handleClaudeHook. Default workflow's handlers are
    *  the current code, extracted unchanged. */
   hookHandlers: WorkflowHookHandlers;
@@ -505,22 +508,17 @@ function pollWorker(
   baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
-  const workflow = getWorkflow(entry.workflow ?? "default");
   const state = entry.prState ?? "working";
-  const handler = workflow.stateHandlers[state];
-  if (!handler) {
-    log.warn("poller", "no handler for state in workflow", {
-      worker: entry.name,
-      data: { state, workflow: workflow.name },
-    });
-    return false;
-  }
-  return handler(projectName, projectPath, baseBranch, entry);
+  const workflow = getWorkflow(entry.workflow ?? "default");
+  // Record<PrState, StateHandler> guarantees coverage; no runtime guard.
+  return workflow.stateHandlers[state](projectName, projectPath, baseBranch, entry);
 }
 ```
 
-The exhaustive switch is gone. Exhaustiveness is now enforced by the
-test `each state in PrState has a registered handler in default`.
+The exhaustive switch is gone. Exhaustiveness is enforced by TypeScript
+via the `Record<PrState, StateHandler>` type — adding a new PrState in
+`registry.ts` is a build error until every workflow declares a handler
+for it.
 
 ### 5b — `transitionState` (`src/dashboard/poller-state.ts:33-45`)
 
@@ -772,9 +770,12 @@ These do not block the design but should be answered during implementation.
    that somehow ended up with a stale workflow name in the registry.
 
 4. **Should `defaultWorkflow.stateHandlers` be `Required<>` or
-   `Partial<>`?** The default workflow has a handler for every state.
-   Future workflows may not. Type the registry field as
-   `Partial<Record<PrState, StateHandler>>` and let the test
-   `each state in PrState has a registered handler` enforce
-   exhaustiveness *for the default workflow only*. This gives
-   alternate workflows the freedom to omit states they don't use.
+   `Partial<>`?** **Resolved: `Record<PrState, StateHandler>` (required).**
+   The early phase used `Partial` on the assumption that alternate
+   workflows might want to omit states. In practice the dispatcher in
+   poller.ts treated a missing handler as a config bug (warn + no-op),
+   making the permissive type misleading. Tightened to required during
+   the foundation hardening pass: alternate workflows declare a no-op
+   (`() => false`) for states they don't use, the dispatcher needs no
+   defensive runtime check, and incomplete workflows surface as
+   TypeScript errors instead of runtime warnings.

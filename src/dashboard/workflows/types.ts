@@ -44,11 +44,13 @@ export interface WorkflowDefinition {
    *  illegal transitions. The default workflow's table is the literal copy
    *  of the pre-refactor VALID_TRANSITIONS constant. */
   validTransitions: Record<PrState, PrState[]>;
-  /** Dispatched by pollWorker. A state with no handler is a config bug —
-   *  pollWorker logs a warning and no-ops. The default workflow has a
-   *  handler for every PrState; alternate workflows may omit states they
-   *  don't use. */
-  stateHandlers: Partial<Record<PrState, StateHandler>>;
+  /** Dispatched by pollWorker on the worker's current prState. Required
+   *  to cover every PrState — the type forbids omissions, so an incomplete
+   *  workflow is a TypeScript error rather than a runtime warning. A
+   *  workflow that does not use a particular state should still register
+   *  a handler that returns `false` (no-op) so the contract stays
+   *  exhaustive and the dispatcher needs no defensive runtime check. */
+  stateHandlers: Record<PrState, StateHandler>;
   /** Dispatched by handleClaudeHook in header.ts. The default workflow's
    *  handlers live in hooks/default.ts. */
   hookHandlers: WorkflowHookHandlers;

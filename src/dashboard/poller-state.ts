@@ -32,7 +32,11 @@ export function transitionState(
   if (!workflow.validTransitions[fromState]?.includes(toState)) {
     log.warn("poller", `invalid state transition: ${fromState} -> ${toState}`, {
       worker: workerName,
-      data: { workflow: workflow.name },
+      // `requested` is the raw value on the registry entry (may be undefined
+      // for legacy entries or a name unknown to the registry, in which case
+      // getWorkflow has already silently fallen back to default — preserving
+      // the original value here makes that fallback visible in logs).
+      data: { workflow: workflow.name, requested: entry?.workflow },
     });
   }
   updateWorkerFields(projectName, workerName, { ...extraFields, prState: toState });

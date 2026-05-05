@@ -10,9 +10,27 @@ import {
   registerWorkflow,
   _resetUnknownWarnDedup,
   type WorkflowDefinition,
+  type StateHandler,
 } from "../src/dashboard/workflows/index.js";
 import { log } from "../src/dashboard/log.js";
 import type { PrState } from "../src/dashboard/registry.js";
+
+// Test fixture: every workflow must register a handler for every PrState
+// (the type is Record<PrState, StateHandler>, not Partial). Tests that don't
+// care about handler behavior can use these no-op stubs and override the
+// specific states they exercise.
+function stubStateHandlers(): Record<PrState, StateHandler> {
+  const noop: StateHandler = () => false;
+  return {
+    working: noop,
+    reviewing: noop,
+    "merge-pending": noop,
+    resolving: noop,
+    failing: noop,
+    merged: noop,
+    done: noop,
+  };
+}
 
 // Literal copy of the pre-refactor VALID_TRANSITIONS table, checked into
 // this test so the deep-equal assertion can't pass via self-comparison.
@@ -72,7 +90,7 @@ describe("getWorkflow", () => {
     const custom: WorkflowDefinition = {
       name: "test-workflow",
       validTransitions: { ...PRE_REFACTOR_VALID_TRANSITIONS },
-      stateHandlers: {},
+      stateHandlers: stubStateHandlers(),
       hookHandlers: defaultWorkflow.hookHandlers,
     };
     registerWorkflow(custom);
@@ -168,10 +186,29 @@ describe("registerWorkflow", () => {
     const replacement: WorkflowDefinition = {
       name: "override-test",
       validTransitions: { ...PRE_REFACTOR_VALID_TRANSITIONS },
-      stateHandlers: {},
+      stateHandlers: stubStateHandlers(),
       hookHandlers: defaultWorkflow.hookHandlers,
     };
     registerWorkflow(replacement);
     expect(getWorkflow("override-test")).toBe(replacement);
+  });
+
+  it("warns when a name is already registered", () => {
+    const first: WorkflowDefinition = {
+      name: "duplicate-test",
+      validTransitions: { ...PRE_REFACTOR_VALID_TRANSITIONS },
+      stateHandlers: stubStateHandlers(),
+      hookHandlers: defaultWorkflow.hookHandlers,
+    };
+    registerWorkflow(first);
+    vi.mocked(log.warn).mockClear();
+
+    const second: WorkflowDefinition = { ...first };
+    registerWorkflow(second);
+    expect(log.warn).toHaveBeenCalledWith(
+      "workflows",
+      "workflow already registered, overwriting",
+      expect.objectContaining({ data: { name: "duplicate-test" } }),
+    );
   });
 });

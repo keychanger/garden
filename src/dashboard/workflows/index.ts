@@ -29,6 +29,15 @@ export function getWorkflow(name: string): WorkflowDefinition {
 }
 
 export function registerWorkflow(def: WorkflowDefinition): void {
+  // Duplicate-name registration is almost always a bug — a plug-in shadowing
+  // an existing workflow (including "default") with no log line makes the
+  // override invisible. Warn but allow, since tests legitimately re-register
+  // names within a single process.
+  if (registry.has(def.name)) {
+    log.warn("workflows", "workflow already registered, overwriting", {
+      data: { name: def.name },
+    });
+  }
   registry.set(def.name, def);
 }
 
