@@ -55,8 +55,8 @@ strict on a small machine-readable spine.
 
 1. **Title** (`# <Feature name>`) on the first line.
 2. **Spec sentinel** somewhere in the first paragraph: the literal string
-   `the code is wrong` (same convention as `STATUS.md`, `TRACKS.md`,
-   `TRELLIS.md`). The reviewer's `findSpecFiles()` already detects this.
+   `the code is wrong` (same convention as `STATUS.md` and `TRACKS.md`).
+   The reviewer's `findSpecFiles()` already detects this.
    Without the sentinel, the reviewer treats the file as documentation,
    not authority.
 3. **Trellis tag** (`<!-- trellis: v1 -->`) on the second or third line.
@@ -434,8 +434,8 @@ export const trellisReviewSections: readonly PromptSection[] = [
   reviewCommitsSection,
   reviewRulesSection,
   reviewDiffSection,
-  reviewDocsSection,
-  reviewTestsSection,
+  reviewDocumentationSection,
+  reviewTestFilesSection,
   trellisDocumentSection,         // NEW: inlines the trellis at HEAD
   trellisOverridesSection,        // NEW: inlines trellis-overrides.md if present
   trellisVerdictFormatSection,    // overrides: ALIGNED|DRIFT|FAILED|FLAGGED
