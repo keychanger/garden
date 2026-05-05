@@ -127,6 +127,50 @@ Skills are more reliable triggers than instructions buried in a system
 prompt because Claude Code uses skill descriptions as planning-time
 selectors (see CLAUDE.md "skills.ts").
 
+### Retirement
+
+A trellis whose feature has landed is still a valuable artifact — it
+documents what the feature was supposed to do, and its git history
+records the conversation between intent and reality. **Trellises are
+never auto-deleted, never auto-archived, and never auto-anything on
+vine equilibrium.** A vine reaching `ALIGNED` does not change the
+trellis's status. The trellis can outlive one vine: the operator might
+re-run it for verification, plant a competing vine on a different
+approach, or reference it while building a related feature. The
+"this is done, hide it" decision is the operator's, not the workflow's.
+
+Retirement is manual via `garden trellis retire <project> <name>`. The
+command appends a separate comment beneath the existing trellis tag:
+
+```markdown
+<!-- trellis: v1 -->
+<!-- retired: 2026-05-05 — implementation in commits abc1234..def5678 -->
+```
+
+The retirement comment is a separate tag from the trellis tag (each
+comment has one purpose — easier to grep, easier to diff). The commit
+range is auto-filled from the most-recently-aligned vine's commit
+history when `retire` is invoked; the operator can hand-edit the line
+afterward to add prose context.
+
+Retired trellises are filtered out of the **picker** (`⌥⇧n`) and the
+CLI **refuses** to spawn a vine bound to a retired trellis — the
+attempt errors with "trellis is retired; revive with
+`garden trellis revive <name>` first." The trellis remains visible to
+`garden trellis list` (in an "Archived" section beneath active ones)
+and `garden trellis show` works unchanged. `garden trellis amend`
+auto-revives on save (principle of least surprise: you don't edit a
+tombstone; if you're touching it, it's alive again).
+
+Reviving is symmetric: `garden trellis revive <project> <name>`
+removes the retirement comment, returning the trellis to the picker.
+
+A future archival sugar — `garden trellis archive` to *move* the file
+to `.garden/trellises/archive/<name>.md` — is deferred. It only
+matters if the file listing in `.garden/trellises/` itself becomes
+cluttered enough to warrant directory separation. Sentinel-based
+filtering covers the picker UX without the file move.
+
 ## The trellis workflow
 
 A new `WorkflowDefinition` named `"trellis"`, registered in
@@ -831,14 +875,17 @@ worker to a trellis.
 ### `garden trellis`
 
 ```
-garden trellis list <project>            List trellises in the project's trellisDir.
-garden trellis show <project> <name>     Print a trellis's content (paged in TTY).
-garden trellis new <project> <name>      Scaffold a new trellis with the recommended sections.
-garden trellis status <worker>           Show iteration count, last verdict, drift list, lessons file.
-garden trellis amend <worker>            Open the bound trellis in $EDITOR. Commits with a default message on save.
+garden trellis list <project> [--active]
+                                          List trellises in the project's trellisDir. Active first, retired in an "Archived" section beneath. --active filters to non-retired only.
+garden trellis show <project> <name>      Print a trellis's content (paged in TTY). Works on active or retired trellises.
+garden trellis new <project> <name>       Scaffold a new trellis with the recommended sections.
+garden trellis status <worker>            Show iteration count, last verdict, drift list, lessons file.
+garden trellis amend <worker>             Open the bound trellis in $EDITOR. Commits with a default message on save. Auto-revives a retired trellis on save (you don't edit a tombstone — if you're touching it, it's alive again).
 garden trellis resume <worker> [--override "<rationale>"]
                                           Resume a flagged vine. With --override, records an override entry.
-garden trellis budget <worker> <N>       Update maxIterations on the worker entry.
+garden trellis budget <worker> <N>        Update maxIterations on the worker entry.
+garden trellis retire <project> <name>    Mark a trellis as retired (adds the retirement comment, fills in the vine's commit range). Filters it out of the picker; CLI vine spawns refuse to bind to it.
+garden trellis revive <project> <name>    Remove the retirement comment. Trellis returns to the picker.
 ```
 
 `garden trellis status` is the operator's "where is this vine?"
@@ -867,19 +914,21 @@ CLI invocation (for scripts and automation).
 
 **Hotkey: `⌥⇧n`** (sibling of `⌥n` for default workers). Opens an
 fzf-style picker overlaying the active pane, populated from the
-project's `trellisDir`. Each row shows the trellis name and a
-one-line summary pulled from the trellis's first paragraph (the
-Intent line, if recommended sections were used) so similar names
-disambiguate at a glance. Arrow keys to select, enter to plant.
-`maxIterations` defaults from project config or 30.
+project's `trellisDir` and **filtered to non-retired trellises** (see
+"Retirement"). Each row shows the trellis name and a one-line summary
+pulled from the trellis's first paragraph (the Intent line, if
+recommended sections were used) so similar names disambiguate at a
+glance. Arrow keys to select, enter to plant. `maxIterations`
+defaults from project config or 30.
 
-The picker handles three population states:
+The picker handles three population states (active trellises only —
+retired ones are not counted):
 
-| Trellises in project | Behavior                                                                                                           |
-|----------------------|--------------------------------------------------------------------------------------------------------------------|
-| Zero                 | Empty-state with two actions: `[a] author one` (spawns a default worker pre-prompted to invoke the trellis-author skill) and `[n] scaffold blank` (runs `garden trellis new` with a name prompt). No dead-end. |
-| One                  | Skip the picker entirely; plant immediately. The picker exists for choice — there is no choice here.              |
-| Two or more          | Standard picker. Arrow-key navigation, type-to-filter, enter to plant.                                             |
+| Active trellises | Behavior                                                                                                           |
+|------------------|--------------------------------------------------------------------------------------------------------------------|
+| Zero             | Empty-state with two actions: `[a] author one` (spawns a default worker pre-prompted to invoke the trellis-author skill) and `[n] scaffold blank` (runs `garden trellis new` with a name prompt). No dead-end. If retired trellises exist in the project, the empty state also shows `[r] revive a retired trellis` as a third action. |
+| One              | Skip the picker entirely; plant immediately. The picker exists for choice — there is no choice here.              |
+| Two or more      | Standard picker. Arrow-key navigation, type-to-filter, enter to plant.                                             |
 
 The picker doubles as discovery: an operator who forgets what
 trellises exist in a project can hit `⌥⇧n` and browse without leaving
@@ -1016,6 +1065,15 @@ the only safety net that fails closed.
   document missing or unreadable." Operator decides: restore, or kill
   the vine.
 
+- **Trellis retired mid-loop.** Allowed. The retirement comment is
+  metadata on the document; it does not prevent an already-bound vine
+  from continuing. The reviewer reads the trellis content as before,
+  the workflow runs as before. Retirement only affects future
+  bindings (the picker filters retired trellises; CLI vine spawn
+  refuses them). The operator's intent in retiring mid-loop is
+  typically "the in-flight vine is the last one I'll plant on this
+  trellis"; nothing more.
+
 - **Two vines on the same trellis.** Permitted but discouraged. Each
   worker has its own worktree so they don't collide on disk; their
   branches are independent. They will converge on similar code (same
@@ -1091,7 +1149,9 @@ defer.
 - `FLAGGED` verdict and `garden trellis resume` command.
 - `garden workers new --workflow trellis --trellis <name>`.
 - `garden trellis list` / `show` / `new` / `status` / `amend` /
-  `resume` commands.
+  `resume` / `retire` / `revive` commands.
+- Picker (`⌥⇧n`) filters out retired trellises; CLI vine spawn refuses
+  to bind to a retired trellis.
 - `trellis-author` skill bundled and installed alongside `done` and
   `handoff`.
 - Worker-row decoration in status pane (iteration counter, drift count).
