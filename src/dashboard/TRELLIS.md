@@ -390,10 +390,11 @@ the merge transition altogether. Only `DRIFT` re-enters `working`.
    *before* dispatching the review. After the increment, the counter
    reflects the iteration about to be reviewed (1 during the first
    review, 2 during the second, etc.). The continue prompt's "Iteration
-   N of M" line reads the post-increment value at dispatch time, so
-   the seed for iteration K is labeled "Iteration K." The poller
-   transition logs at info with `iteration: N` in the data field, so
-   `⌥l` makes the cadence visible.
+   N of M" line is dispatched post-merge, *before* the next iteration's
+   increment fires, so the prompt builder reads `entry.trellisIteration
+   + 1` to label the upcoming iteration: the seed for iteration K is
+   labeled "Iteration K." The poller transition logs at info with
+   `iteration: N` in the data field, so `⌥l` makes the cadence visible.
 
 ### No up-front phased plan
 
