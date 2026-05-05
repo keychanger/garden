@@ -59,16 +59,19 @@ strict on a small machine-readable spine.
    The reviewer's `findSpecFiles()` already detects this.
    Without the sentinel, the reviewer treats the file as documentation,
    not authority.
-3. **Trellis tag** (`<!-- trellis: v1 -->`) on the second or third line.
-   Marks the document as a trellis (distinct from a system spec). The
-   CLI's `garden trellis list` filters by this tag, and the reviewer
-   selects the trellis prompt branch on its presence.
+3. **Trellis tag** (`<!-- trellis: v1 -->`) within the first 200 bytes
+   of the file. Marks the document as a trellis (distinct from a
+   system spec like STATUS.md or TRACKS.md). The matcher is the regex
+   `<!--\s*trellis:\s*v\d+\s*-->`; future versions of the format will
+   bump the version number, and tooling can branch on it. The CLI's
+   `garden trellis list` filters by this tag, and the reviewer selects
+   the trellis prompt branch on its presence.
 
 ### Recommended sections
 
 The reviewer reads the document as prose. Sections are not enforced —
-the operator structures the trellis however the feature wants. The
-following pattern is recommended because it makes the reviewer's
+the operator structures the trellis however the feature requires.
+The following pattern is recommended because it makes the reviewer's
 three-way diff (trellis ↔ code, ↔ tests, ↔ docs) tractable:
 
 - **Intent** — one-paragraph summary of what the feature does and why.
@@ -148,10 +151,12 @@ command appends a separate comment beneath the existing trellis tag:
 ```
 
 The retirement comment is a separate tag from the trellis tag (each
-comment has one purpose — easier to grep, easier to diff). The commit
-range is auto-filled from the most-recently-aligned vine's commit
-history when `retire` is invoked; the operator can hand-edit the line
-afterward to add prose context.
+comment has one purpose — easier to grep, easier to diff). The matcher
+is the regex `<!--\s*retired:\s*\d{4}-\d{2}-\d{2}\b.*?-->`; the date
+is the only required field, the rest of the comment is operator-
+freeform. The commit range is auto-filled from the most-recently-
+aligned vine's commit history when `retire` is invoked; the operator
+can hand-edit the line afterward to add prose context.
 
 Retired trellises are filtered out of the **picker** (`⌥⇧n`) and the
 CLI **refuses** to spawn a vine bound to a retired trellis — the
@@ -175,6 +180,34 @@ filtering covers the picker UX without the file move.
 
 A new `WorkflowDefinition` named `"trellis"`, registered in
 `src/dashboard/workflows/index.ts` alongside `defaultWorkflow`.
+
+### Implementation entry points
+
+For an implementer reading this spec to plan the work, the
+load-bearing files are:
+
+| File                                              | Purpose                                                                                                       |
+|---------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
+| `src/dashboard/workflows/trellis.ts`              | New file. The `WorkflowDefinition` itself: validTransitions, stateHandlers, hookHandlers, `workerModel: "sonnet"`, `reviewerModel: "opus"`. |
+| `src/dashboard/workflows/types.ts`                | Extend `WorkflowDefinition` with `workerModel?: "opus" \| "sonnet"` and `reviewerModel?: "opus" \| "sonnet"`. |
+| `src/dashboard/workflows/index.ts`                | Register `trellisWorkflow` in the registry.                                                                  |
+| `src/dashboard/registry.ts`                       | Extend `WorkerEntry` with the trellis fields and `failingReason` (see "Worker entry additions").             |
+| `src/dashboard/poller-review.ts`                  | Branch on workflow in `handleReviewing`: trellis verdicts route to trellis-specific verdict parsing and disposition. |
+| `src/dashboard/poller-merge.ts`                   | Branch on workflow in `finalizeMerge`: trellis ALIGNED writes `.garden-done`; trellis DRIFT calls `trellisAutoContinueAfterMerge`. |
+| `src/dashboard/continue.ts`                       | New `trellisAutoContinueAfterMerge` (sibling of `continueWorkerAfterMerge`). Kills Claude, dispatches fresh seed.|
+| `src/dashboard/prompts.ts` (or sibling)           | `trellisReviewSections` plus the new section primitives.                                                      |
+| `src/rules.ts`                                    | Extend `buildWorktreeRules` with the three trellis paragraphs when `entry.workflow === "trellis"`.            |
+| `src/dashboard/skills.ts`                         | Bundle `trellis-author` skill (description + body).                                                            |
+| `src/commands/trellis.ts`                         | New file. `garden trellis` subcommand dispatch (list/show/new/status/amend/resume/budget/retire/revive).      |
+| `src/commands/workers.ts`                         | Extend `garden workers new` with `--workflow`, `--trellis`, `--model`, `--max-iterations`. Pre-flight via `validateTrellisPlant`. |
+| `src/dashboard/hotkeys.ts`                        | Bind `⌥⇧n` to the picker; the picker itself is a tmux popup invoking a new `dashboard _trellis-picker` internal subcommand. |
+| `src/dashboard/usage.ts`                          | No changes — the Sonnet meter is already in the snapshot. The fallback logic reads the existing fields.       |
+| `src/config.ts`                                   | Add `trellisDir`, `maxTrellisIterations`, `trellisOpusFallback` config keys.                                  |
+
+Tests follow the patterns in `test/workflows.test.ts` (registry +
+validTransitions equivalence) and `test/integration/workflow-default.real.test.ts`
+(drive a vine through a real merge cycle). See "Phasing" for what
+must be tested in v1 vs. later.
 
 ### Reused state machine, no new `PrState` values
 
@@ -272,8 +305,8 @@ is reset, so tmux layout, environment variables, and the worktree's
 `.claude/settings.json` are unchanged. The interrupt-recovery
 auto-continue (default workflow's "continue from where you left off"
 after a session crash) does not apply to trellis: an interrupted
-trellis worker restarts via the same fresh-context mechanism on the
-next push event, seeded with the last drift list.
+vine restarts via the same fresh-context mechanism on the next push
+event, seeded with the last drift list.
 
 ## The loop
 
@@ -305,6 +338,13 @@ next push event, seeded with the last drift list.
        │                                       trellis or overrides
        └────────────────────────────────────────────┘
 ```
+
+Reading the diagram: the `merged → auto-continue → working` shared
+arrow above is *only* taken on `DRIFT`. On `ALIGNED`, the workflow
+writes `.garden-done` before `merge-pending`, which causes
+`finalizeMerge` to set `prState = "done"` and skip the auto-continue
+dispatch entirely — the loop terminates. `FAILED` and `FLAGGED` skip
+the merge transition altogether. Only `DRIFT` re-enters `working`.
 
 ### One iteration, in detail
 
@@ -345,11 +385,15 @@ next push event, seeded with the last drift list.
      does NOT auto-resume on push; the operator must run
      `garden trellis resume <worker>` after editing the trellis or
      accepting an override (see "Flagging the trellis").
-5. **Iteration counter.** On every transition into `reviewing` from
-   `working` (the start of each iteration), increment
-   `entry.trellisIteration`. The poller transition logs at info, with
-   `iteration: N` in the data field, so `⌥l` logs make the cadence
-   visible.
+5. **Iteration counter.** On the `working → reviewing` transition,
+   increment `entry.trellisIteration` *before* the budget check and
+   *before* dispatching the review. After the increment, the counter
+   reflects the iteration about to be reviewed (1 during the first
+   review, 2 during the second, etc.). The continue prompt's "Iteration
+   N of M" line reads the post-increment value at dispatch time, so
+   the seed for iteration K is labeled "Iteration K." The poller
+   transition logs at info with `iteration: N` in the data field, so
+   `⌥l` makes the cadence visible.
 
 ### No up-front phased plan
 
@@ -398,7 +442,7 @@ dispositions, and each has a distinct semantic and visual treatment:
 
 | Disposition         | How reached                                                               | `prState` | Decoration                            | Operator action                        |
 |---------------------|---------------------------------------------------------------------------|-----------|---------------------------------------|----------------------------------------|
-| **Aligned**         | Reviewer outputs `ALIGNED`                                                | `done`    | `aligned: true` field; bold green icon decorated with `✓` | Inspect, clean up, retire trellis      |
+| **Aligned**         | Reviewer outputs `ALIGNED`                                                | `done`    | `trellisAligned: true` field on the entry; status row uses the standard `done` icon and adds `✓ aligned, N iters` in the trellis bracket so reviewer-declared alignment reads distinctly from operator sentinel-set | Inspect, clean up, retire trellis      |
 | **Sentinel-set**    | Operator (or worker) writes `.garden-done` mid-loop                       | `done`    | Default `done` rendering              | Inspect, clean up                      |
 | **Budget-exhausted**| `trellisIteration` exceeds `maxIterations`                                | `failing` | `failingReason: "iteration-budget"`   | Inspect, decide: amend trellis & retry, raise budget, or kill |
 | **Stagnated**       | Three consecutive iterations with no diff progress                        | `failing` | `failingReason: "stagnation"`         | Inspect, decide: amend trellis, hand-write next move, or kill |
@@ -410,7 +454,7 @@ converges, runs out of resources, or stops on a contradiction.
 
 ### The iteration budget
 
-Every trellis worker has a `maxIterations` cap. Default: **30**.
+Every vine has a `maxIterations` cap. Default: **30**.
 Configurable per worker at plant time (`--max-iterations`) and per
 project (`maxTrellisIterations` config key).
 
@@ -497,10 +541,27 @@ diverge from the trellis."
 
 ## The drift loop in detail
 
-The post-merge auto-continue prompt is the body of the loop. Default
-workflow's continue prompt is generic ("your changes were merged,
-continue with the next phase"). Trellis workflow's continue prompt is
-specific: it carries the drift list as the work to do.
+A trellis vine sees two distinct prompt shapes during its lifetime:
+
+- **Iteration 1 (seed).** Sent at vine-plant time via the worker
+  bootstrap, not via auto-continue. There is no prior drift list
+  (no review has run yet) and no lessons file. Structure: trellis
+  content + a "you are implementing this trellis" instruction +
+  the path to `trellis-lessons.md` with a note that the worker
+  creates it. Defined alongside `buildWorktreeRules` extensions
+  (see "Worker system prompt").
+
+- **Iteration N ≥ 2 (continue).** Sent post-merge by
+  `trellisAutoContinueAfterMerge` after the per-iteration context
+  reset. Carries the priority-ordered drift list from the previous
+  reviewer pass plus the inlined lessons file. Structure below.
+
+The two prompts use the same Claude process surface (a fresh
+cold-started `claude` reading from stdin) but diverge in content
+because their preconditions differ. The default workflow has only
+the iteration-1 shape (its "continue with the next phase" prompt is
+sent into a still-live session, not a fresh cold-start, so it is a
+different mechanism from this one).
 
 ### Continue prompt structure
 
@@ -663,9 +724,13 @@ const result = parseLastLineVerdict<TrellisVerdict>(output, TRELLIS_VERDICTS);
 ```
 
 Vocabulary is declared `as const` so the result is narrowly typed. The
-parser primitive is unchanged. Unparseable verdicts re-queue once
-(matching default behavior); after one re-queue the worker transitions
-to `failing` with `failingReason = "unparseable-verdict"`.
+parser primitive is unchanged. Unparseable verdicts re-queue once:
+`handleReviewing` flips back to `working` and immediately pokes the
+poller to re-launch the reviewer with the same diff. The retry budget
+is one — after a second consecutive unparseable verdict, the worker
+transitions to `failing` with `failingReason = "unparseable-verdict"`
+and the operator must intervene. This matches the default workflow's
+behavior on unparseable output.
 
 ## Model selection and budget
 
@@ -763,14 +828,14 @@ the status pane, the plot strip aggregation, and the bottom bar's
 project line. The renderer reads `entry.workflow` and the trellis-specific
 fields without changing how default-workflow workers render.
 
-Trellis workers are interactive (tmux pane, attachable, `⌥`-cyclable),
-not headless — only the *Claude process inside* gets killed and
-respawned between iterations. They live in the same status pane as
-default workers, sorted **below** default-workflow workers within a
-project, so the operator's eye lands on actively-steered work first
-and on autonomous loops second. There is no separate "type" field on
-worker entries; `entry.workflow` carries the distinction and drives
-conditional decoration.
+Trellis vines are interactive workers (tmux pane, attachable,
+`⌥`-cyclable), not headless agents — only the *Claude process inside*
+gets killed and respawned between iterations. They live in the same
+status pane as default workers, sorted **below** default-workflow
+workers within a project so the operator's eye lands on actively-
+steered work first and on autonomous loops second. There is no
+separate "type" field on worker entries; `entry.workflow` carries the
+distinction and drives conditional decoration.
 
 The long-term primitive — once a third workflow joins — is per-workflow
 row rendering: a `WorkflowDefinition.renderRow(entry, ctx)` method that
@@ -880,7 +945,7 @@ garden trellis list <project> [--active]
 garden trellis show <project> <name>      Print a trellis's content (paged in TTY). Works on active or retired trellises.
 garden trellis new <project> <name>       Scaffold a new trellis with the recommended sections.
 garden trellis status <worker>            Show iteration count, last verdict, drift list, lessons file.
-garden trellis amend <worker>             Open the bound trellis in $EDITOR. Commits with a default message on save. Auto-revives a retired trellis on save (you don't edit a tombstone — if you're touching it, it's alive again).
+garden trellis amend <worker>             Open the worker's bound trellis in $EDITOR (resolved via entry.trellisPath). Commits to the project's main checkout, not the worker's branch — the trellis lives on main. Auto-revives a retired trellis on save (you don't edit a tombstone — if you're touching it, it's alive again).
 garden trellis resume <worker> [--override "<rationale>"]
                                           Resume a flagged vine. With --override, records an override entry.
 garden trellis budget <worker> <N>        Update maxIterations on the worker entry.
@@ -895,7 +960,7 @@ command. Sample output:
 $ garden trellis status swift-oak
 worker:        swift-oak
 project:       garden
-trellis:       trellises/auth-rewrite.md
+trellis:       .garden/trellises/auth-rewrite.md
 iterations:    4 / 30
 last verdict:  DRIFT (2026-05-03T14:22:11Z)
 drift items:
@@ -903,7 +968,7 @@ drift items:
   2. [tests]   no test for token-refresh race
   3. [docs]    CLAUDE.md auth section unchanged
 aligned items: 7
-stagnation:    0/3 (no concerning pattern)
+stagnation:    0/3 (no concerning pattern)         # post-v1.5: stagnation tracking
 lessons:       <last 3 lines from trellis-lessons.md>
 ```
 
@@ -916,10 +981,17 @@ CLI invocation (for scripts and automation).
 fzf-style picker overlaying the active pane, populated from the
 project's `trellisDir` and **filtered to non-retired trellises** (see
 "Retirement"). Each row shows the trellis name and a one-line summary
-pulled from the trellis's first paragraph (the Intent line, if
-recommended sections were used) so similar names disambiguate at a
-glance. Arrow keys to select, enter to plant. `maxIterations`
-defaults from project config or 30.
+so similar names disambiguate at a glance. Summary resolution order:
+
+1. The first non-blank line under an `## Intent` heading, if present.
+2. Otherwise, the first non-blank prose paragraph after the title and
+   trellis tag — the trellis's de facto opening sentence.
+3. Otherwise, an em dash placeholder. (Empty trellises shouldn't
+   exist past `trellis new`, but the picker degrades gracefully.)
+
+Summaries are truncated to the picker's row width with `…`. Arrow
+keys to select, enter to plant. `maxIterations` defaults from project
+config or 30.
 
 The picker handles three population states (active trellises only —
 retired ones are not counted):
@@ -947,6 +1019,34 @@ trellis-specific fields are populated. The worker's *first* prompt
 (seed) is the trellis content + a one-line "implement this" instruction
 + the path to `trellis-lessons.md` (which doesn't exist yet on
 iteration 1; the worker creates it).
+
+#### Plant-time pre-flight
+
+Both the picker and the CLI run the same pre-flight checks before
+spawning. The list, in order:
+
+1. **Trellis exists.** The named trellis resolves to a file under
+   `trellisDir`. Missing → error with the available list (CLI) or
+   empty-state (picker; should not happen since the picker is built
+   from the directory).
+2. **Trellis is not retired.** Retirement comment absent. Retired →
+   error with "trellis is retired; revive with `garden trellis revive
+   <name>` first." (CLI only — the picker pre-filters retired
+   trellises.)
+3. **Spec sentinel present.** The literal `the code is wrong` appears
+   in the first 2KB. Missing → warn but proceed; the reviewer's
+   authority instructions degrade without it. The warning text
+   suggests `garden trellis amend` to add the sentinel.
+4. **`checks` configured.** The project's `checks` config key is set.
+   Missing → tip (not error) suggesting `garden config <project>
+   checks "<command>"`. Verdicts are stronger when the reviewer can
+   run a test suite, but the loop functions without one.
+5. **Base branch is fetchable.** Same as default workflow — fail-fast
+   if `origin/<base>` is not present. Reused, not new.
+
+The pre-flight is a single function (`validateTrellisPlant(project,
+name)`) so the picker, CLI, and any future automation share the
+behavior.
 
 ### Pause and resume
 
@@ -988,7 +1088,7 @@ New optional fields on `WorkerEntry` (registry.ts), populated only when
 | `workflow`                     | `string`    | Workflow name. `"default"` or `"trellis"`. Absent → `"default"`.     |
 | `trellisName`                  | `string`    | Filename (without extension) of the bound trellis.                   |
 | `trellisPath`                  | `string`    | Resolved absolute path to the trellis at plant time (for stable lookup if `trellisDir` later changes). |
-| `trellisIteration`             | `number`    | Count of iterations completed (incremented on each `working → reviewing` transition). Starts at 0. |
+| `trellisIteration`             | `number`    | Iteration counter. Incremented on each `working → reviewing` transition *before* dispatch. Starts at 0; reads as 1 during the first review, 2 during the second, etc. The number reflects the iteration in progress, not the count of completed iterations. |
 | `trellisMaxIterations`         | `number`    | Cap. Defaults from project config or 30.                             |
 | `trellisLastVerdict`           | `TrellisVerdict` | Last reviewer verdict. Cleared on push that triggers a new iteration. |
 | `trellisLastDrift`             | `string[]`  | Drift items from the last review. Used to seed the next continue prompt. |
@@ -996,8 +1096,9 @@ New optional fields on `WorkerEntry` (registry.ts), populated only when
 | `trellisDriftHistory`          | `string[][]`| Bounded (length 5) history of drift lists for stagnation detection.  |
 | `trellisShaHistory`            | `string[]`  | Bounded (length 5) history of HEAD SHAs at iteration boundaries.     |
 | `trellisStagnationConfirmedAt` | `number`    | Epoch ms when stagnation was detected (clears on next push).         |
-| `failingReason`                | `string`    | New field, multi-workflow: `"code"`, `"trellis-flagged"`, `"trellis-stagnation"`, `"trellis-budget"`, `"unparseable-verdict"`. Default workflow uses only `"code"`. |
+| `failingReason`                | `string`    | New field, multi-workflow. Allowed values: `"code"` (default-workflow failure; trellis FAILED), `"trellis-flagged"`, `"iteration-budget"`, `"stagnation"`, `"unparseable-verdict"`. Default workflow uses only `"code"`. |
 | `trellisFlaggedClauses`        | `string[]`  | When flagged: cited clauses for the alert and resume command.        |
+| `trellisAligned`               | `boolean`   | True when the terminal `done` was reached via reviewer `ALIGNED` (vs. operator-set `.garden-done`). Drives the `✓ aligned, N iters` row decoration. Set by `finalizeMerge` on the ALIGNED path; absent → operator-sentinel done. |
 | `workerModel`                  | `"opus" \| "sonnet"` | Per-worker model override (set via `--model` at plant time). Read by each iteration's spawn. Falls back to workflow definition's `workerModel`, then to project default. |
 | `trellisModelFallbackAt`       | `number`    | Epoch ms of the most recent Sonnet → Opus fallback. Used to dedupe alerts within a single Sonnet 5h reset window. |
 
@@ -1040,7 +1141,7 @@ mechanism that mitigates it in the trellis design.
 | Multiple tasks per loop bleeds context window          | The continue prompt's drift list is priority-ordered; the worker is told to attack from the top. Not strict one-task — but the priority encoding gives the same effect when the worker respects it. |
 | Stagnation: same fail 3× / file thrashing             | Three signatures (no-diff, oscillation, top-item-stuck) all map to one disposition. Detection lives in workflow-handler-side code, not in Claude prompts (mechanical, not vibe-checked). |
 | Declared-victory wrongly (model says aligned when not) | The reviewer's verdict format requires it to enumerate present/partial/absent claims. An `ALIGNED` with no enumeration is treated as unparseable. (Future hardening: a separate verifier agent — see "Phasing.") |
-| `AGENTS.md` becomes a changelog, polluting context     | The trellis is a fixed design document; it is not appended to mid-loop. The lessons file is bounded to 4KB. Both are visible to the operator at any moment via `garden trellis status`. |
+| Loop document accreting changelog cruft (e.g. ralph practitioners reporting `AGENTS.md` swelling into a journal) | The trellis is a fixed design document; it is not appended to mid-loop. The lessons file is bounded to 4KB with eviction (v1.5). Both are visible to the operator at any moment via `garden trellis status`. |
 
 The single most important guardrail is **the iteration cap**. Every
 other mitigation can fail without catastrophe; the cap cannot. It is
@@ -1084,9 +1185,10 @@ the only safety net that fails closed.
 - **Trellis on a project with no `checks` configured.** The reviewer
   skips the checks step (existing behavior). Trellis alignment falls
   back to grep + file-read evidence only. The verdict is less reliable
-  but the loop still works. A warning at plant time:
-  `garden plant ... --workflow trellis` without `checks` configured
-  prints a tip to add tests.
+  but the loop still works. `garden workers new --workflow trellis`
+  prints a tip to configure `checks` (via `garden config <project>
+  checks ...`) when the project has none — verdicts are stronger when
+  the reviewer can run a test suite.
 
 - **Worker crashes mid-iteration.** `pane-died` hook fires,
   `claudeStatus = "exited"`. The trellis fields are preserved on the
@@ -1122,8 +1224,8 @@ the only safety net that fails closed.
   ordinary documentation, not authority. The trellisAuthoritySection's
   bias-against-flagging instruction is not applied with full force.
   This is a foot-gun. `garden trellis new` always inserts the
-  sentinel, and `garden plant --workflow trellis` warns at plant time
-  if the target trellis lacks it.
+  sentinel, and `garden workers new --workflow trellis` warns at plant
+  time if the target trellis lacks it.
 
 ## Phasing
 
@@ -1156,7 +1258,7 @@ defer.
   `handoff`.
 - Worker-row decoration in status pane (iteration counter, drift count).
 - Logging of iteration events at info.
-- **Model selection:** trellis workers default to Sonnet; reviewers
+- **Model selection:** vines default to Sonnet; reviewers
   always run on Opus. `--model` flag at plant time overrides the
   worker model (not the reviewer).
 - **Sonnet exhaustion fallback:** before each iteration's spawn,
