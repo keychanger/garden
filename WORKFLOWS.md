@@ -712,6 +712,63 @@ behavior is byte-equal to pre-refactor.
 After Phase 4, the foundation is complete. Adding a second workflow is
 new work that does not touch any of the four phases above.
 
+## Limitations and future extension points
+
+The current foundation has one structural assumption that does not yet
+generalize: **every workflow has a resolver.** This is recorded here so a
+future workflow author understands the design choice and the right place to
+extend it.
+
+The merge handler in `src/dashboard/poller-merge.ts` calls `launchResolver`
+(in `poller-resolve.ts`) directly when `handleMergePending` detects a
+rebase conflict. It does NOT dispatch through `workflow.stateHandlers
+["resolving"]`. This is intentional, not a layering oversight:
+
+- `handleResolving` is the "in-flight resolver" handler. It checks
+  `entry.reviewWindowName` and assumes the resolver subprocess is already
+  running in a tmux window that the entry tracks.
+- Only `launchResolver` populates those fields (`reviewWindowName`,
+  `reviewStartedAt`, `preResolveSha`). It also enforces the resolver budget
+  and defers when the worker's Claude is mid-turn.
+- Routing through `workflow.stateHandlers["resolving"]` would either need
+  `handleResolving` to grow a "fresh entry" branch (more state machine), or
+  `handleMergePending` to pre-populate the resolver-launch fields itself
+  (more cross-handler coupling). Neither is cleaner than the direct call
+  for the only workflow that exists today.
+
+The right shape, when a second workflow needs different conflict behavior,
+is a new optional field on `WorkflowDefinition`:
+
+```ts
+export interface WorkflowDefinition {
+  // ...existing fields...
+  /** Called by handleMergePending when rebase onto base produces a
+   *  conflict. Default workflow's value calls launchResolver.
+   *  Workflows that should fail-fast on conflict can supply a handler
+   *  that transitions to `failing` instead. */
+  onMergeConflict?: (
+    projectName: string, projectPath: string, baseBranch: string,
+    entry: WorkerEntry,
+  ) => boolean;
+}
+```
+
+`handleMergePending` then becomes:
+
+```ts
+if (rebaseResult.kind === "conflict") {
+  abortRebase(wtPath);
+  const handler = workflow.onMergeConflict ?? launchResolver;
+  return handler(projectName, projectPath, baseBranch, entry);
+}
+```
+
+Adding it now (with the only consumer being a wrapper around
+`launchResolver`) is a one-consumer extension point that risks locking in
+the wrong shape. Better to defer until the second workflow's needs are
+concrete; the changes when it lands will be five lines of code plus the
+new workflow's own field value.
+
 ## Out of scope / explicit deferrals
 
 The following are deliberately deferred. Each represents a future PR that

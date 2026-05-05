@@ -76,6 +76,15 @@ export function handleMergePending(
   const rebaseResult = rebaseBranch(wtPath, baseBranch);
   if (rebaseResult.kind === "conflict") {
     abortRebase(wtPath);
+    // Direct call into poller-resolve, intentionally — not a workflow
+    // dispatch. handleResolving's contract assumes the resolver is already
+    // in-flight (reviewWindowName + reviewStartedAt set on the entry); only
+    // launchResolver populates those. Routing through workflow.stateHandlers
+    // ["resolving"] would either need a fresh-entry branch in handleResolving
+    // (more state machine) or a pre-populate step here (more coupling). The
+    // right extension point when a second workflow needs different conflict
+    // behavior is `WorkflowDefinition.onMergeConflict?: (ctx) => boolean` —
+    // see WORKFLOWS.md "Limitations and future extension points".
     return launchResolver(projectName, projectPath, baseBranch, entry);
   }
   if (rebaseResult.kind === "error") {
