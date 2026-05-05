@@ -38,7 +38,7 @@ it does not invent new primitives where existing ones suffice.
 | Term            | Definition                                                                                       |
 |-----------------|--------------------------------------------------------------------------------------------------|
 | **Trellis**     | A markdown design document that describes a feature's intent, surface, behavior, tests, and docs. Lives in the project repo. Versioned in git. The reviewer treats it as the source of truth (same convention as `STATUS.md` / `TRACKS.md`). |
-| **Vine**      | A worker bound to one trellis, looping until equilibrium. A project may have multiple vines active at once on different trellises. One worker per vine; one trellis per worker. |
+| **Vine**        | A worker bound to one trellis, looping until equilibrium. A project may have multiple vines active at once on different trellises. One worker per vine; one trellis per worker. |
 | **Iteration**   | One full cycle of `working → reviewing → (merge or fail) → auto-continue`. Counted on the worker entry. |
 | **Drift**       | A specific, named gap between the trellis and one of {code, tests, docs}. Produced by the reviewer as a list. |
 | **Alignment**   | The state in which the reviewer reports zero drift items. The terminal happy path. |
