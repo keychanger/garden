@@ -623,12 +623,116 @@ parser primitive is unchanged. Unparseable verdicts re-queue once
 (matching default behavior); after one re-queue the worker transitions
 to `failing` with `failingReason = "unparseable-verdict"`.
 
+## Model selection and budget
+
+Trellis differs from the default workflow in defaulting workers to a
+cheaper model. Reviewers stay at full quality. Both decisions are
+encoded in the workflow definition; the worker model is overridable
+per worker, the reviewer model is not.
+
+### Defaults
+
+| Role     | Model       | Rationale                                                                                                            |
+|----------|-------------|----------------------------------------------------------------------------------------------------------------------|
+| Worker   | Sonnet 4.6  | Per-iteration tasks are mechanically narrow ("close the top drift item"). Sonnet handles them reliably; Opus's edge does not justify ~5x cost across 30 iterations. |
+| Reviewer | Opus 4.x    | Single-shot, high-stakes verdict. The three-way diff is exactly the kind of judgment Opus does best. Cost is bounded — one call per iteration. |
+| Resolver | Opus 4.x    | Reuses the default-workflow resolver. Conflict resolution is judgment-heavy. Inherits, not configured per-workflow. |
+
+The defaults live on the workflow definition (`workerModel: "sonnet"`,
+`reviewerModel: "opus"`). The default workflow leaves `workerModel`
+unset, falling through to the project's existing model selection
+(today: Opus). No behavior change for default-workflow workers.
+
+### Per-worker override
+
+`--model` flag at plant time, persisted to `WorkerEntry.workerModel`:
+
+```
+garden workers new <project> --workflow trellis --trellis <name> --model opus
+garden workers new <project> --workflow trellis --trellis <name> --model sonnet
+```
+
+Each iteration's spawn reads `entry.workerModel` first, falls back to
+the workflow definition's `workerModel`, then to the project default.
+Use `--model opus` for trellises whose per-iteration work is genuinely
+hard (architectural changes, subtle invariants); leave the default for
+mechanical convergence work.
+
+### Sonnet exhaustion fallback
+
+The Sonnet meter is tracked separately in the usage snapshot
+(`fiveHour.sonnet`, `weekly.sonnet`). The global auto-continue gate
+(`autoContinueGateReason` in `poller.ts`) deliberately excludes Sonnet
+today because Sonnet is unused. Trellis makes Sonnet load-bearing, so
+exhaustion needs explicit handling — but **not** by extending the
+global gate. The fallback is local to trellis spawn logic.
+
+**Rule:** before spawning a Claude process for a trellis iteration,
+check the Sonnet 5h and weekly meters against the project's
+`usageThreshold` (default 95%). If either is at or above threshold,
+fall back to **Opus** for that iteration. Fire one alert per Sonnet
+reset window (source `trellis-budget`, deduped via
+`WorkerEntry.trellisModelFallbackAt`), so the operator knows the
+quota stance has flipped.
+
+The fallback is **per-iteration, not per-session**. Each iteration
+starts cold (Invariant 8); the spawn picks the model fresh. Sonnet
+recovers → next iteration switches back to Sonnet. No mid-session
+model swapping (brittle, and Claude Code does not support it cleanly).
+
+The global usage gate continues to ignore Sonnet — its job is "Opus
+is exhausted, stop everything," and it gates only on Opus 5h/weekly.
+If Sonnet is exhausted *and* Opus is also at threshold, the global
+gate trips on Opus and auto-continue pauses (existing behavior). The
+operator's `garden auto on` clears it.
+
+### Disabling the fallback
+
+Some operators prefer "pause the loop rather than spend Opus tokens."
+Configurable per project:
+
+```yaml
+projects:
+  garden:
+    trellisOpusFallback: false       # default: true
+```
+
+With `false`, Sonnet exhaustion routes through the existing usage-pause
+mechanism (alert source `usage`, gate flipped, `pausedReason` set,
+`pausedUntil` = Sonnet meter's `resetsAt`). The loop resumes when
+Sonnet resets or the operator runs `garden auto on`.
+
+### The reviewer model is not negotiable
+
+The reviewer always runs at the workflow's `reviewerModel`, regardless
+of worker model or quota state. A reviewer on a degraded model produces
+unreliable verdicts, which silently corrupts the convergence signal —
+and a corrupted convergence signal is the worst possible failure for
+this loop. If the reviewer's model is exhausted, the loop pauses via
+the global gate. There is no reviewer fallback. Cost is bounded (one
+call per iteration), so this is rarely binding.
+
 ## Status display
 
 Trellis threads are visually distinct in three places: the worker row in
 the status pane, the plot strip aggregation, and the bottom bar's
 project line. The renderer reads `entry.workflow` and the trellis-specific
 fields without changing how default-workflow workers render.
+
+Trellis workers are interactive (tmux pane, attachable, `⌥`-cyclable),
+not headless — only the *Claude process inside* gets killed and
+respawned between iterations. They live in the same status pane as
+default workers, sorted **below** default-workflow workers within a
+project, so the operator's eye lands on actively-steered work first
+and on autonomous loops second. There is no separate "type" field on
+worker entries; `entry.workflow` carries the distinction and drives
+conditional decoration.
+
+The long-term primitive — once a third workflow joins — is per-workflow
+row rendering: a `WorkflowDefinition.renderRow(entry, ctx)` method that
+each workflow owns. v1 inlines the trellis decoration in the existing
+renderer; v2 graduates to per-workflow renderers. Out of scope for
+this spec.
 
 ### Worker row
 
@@ -798,6 +902,7 @@ projects:
     # ... existing keys
     trellisDir: .garden/trellises  # default: .garden/trellises (relative to project root)
     maxTrellisIterations: 30       # default: 30
+    trellisOpusFallback: true      # default: true; when false, Sonnet exhaustion pauses the loop
 ```
 
 Both keys are optional. `trellisDir` is created on first
@@ -823,6 +928,8 @@ New optional fields on `WorkerEntry` (registry.ts), populated only when
 | `trellisStagnationConfirmedAt` | `number`    | Epoch ms when stagnation was detected (clears on next push).         |
 | `failingReason`                | `string`    | New field, multi-workflow: `"code"`, `"trellis-flagged"`, `"trellis-stagnation"`, `"trellis-budget"`, `"unparseable-verdict"`. Default workflow uses only `"code"`. |
 | `trellisFlaggedClauses`        | `string[]`  | When flagged: cited clauses for the alert and resume command.        |
+| `workerModel`                  | `"opus" \| "sonnet"` | Per-worker model override (set via `--model` at plant time). Read by each iteration's spawn. Falls back to workflow definition's `workerModel`, then to project default. |
+| `trellisModelFallbackAt`       | `number`    | Epoch ms of the most recent Sonnet → Opus fallback. Used to dedupe alerts within a single Sonnet 5h reset window. |
 
 The fields are additive and optional. Existing default-workflow workers
 write none of them; the renderer reads conditionally on
@@ -968,6 +1075,15 @@ defer.
   `handoff`.
 - Worker-row decoration in status pane (iteration counter, drift count).
 - Logging of iteration events at info.
+- **Model selection:** trellis workers default to Sonnet; reviewers
+  always run on Opus. `--model` flag at plant time overrides the
+  worker model (not the reviewer).
+- **Sonnet exhaustion fallback:** before each iteration's spawn,
+  check the Sonnet 5h and weekly meters; if either ≥ `usageThreshold`,
+  fall back to Opus and fire one alert per Sonnet reset window
+  (deduped via `trellisModelFallbackAt`). Reviewer never falls back.
+- `trellisOpusFallback` project config (default `true`); when `false`,
+  Sonnet exhaustion routes through the existing usage-pause mechanism.
 
 ### v1.5 (hardening)
 
@@ -1097,3 +1213,12 @@ as decisions, not assumptions.
    the list," not "plan the next phase." There is no up-front phased
    plan; the trellis itself is the plan. This is the structural
    difference between trellis and the default multi-phase workflow.
+
+10. **Reviewer quality is non-negotiable.** The reviewer always runs
+    at the workflow's `reviewerModel` (Opus) regardless of worker
+    model, quota state, or operator overrides. A reviewer on a
+    degraded model produces unreliable verdicts, which silently
+    corrupts the convergence signal. The worker model can fall back
+    to a smaller model on quota pressure; the reviewer cannot. If the
+    reviewer's model is exhausted, the loop pauses via the global
+    usage gate.
