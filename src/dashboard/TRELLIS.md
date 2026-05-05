@@ -902,11 +902,15 @@ the only safety net that fails closed.
   `garden plant ... --workflow trellis` without `checks` configured
   prints a tip to add tests.
 
-- **Worker crashes mid-iteration.** Same as default workflow:
-  `pane-died` hook fires, `claudeStatus = "exited"`. The trellis fields
-  are preserved on the registry entry. `garden bounce <worker>` resumes
-  with `--resume`; the auto-continue interrupt-recovery prompt fires
-  and the iteration proceeds from where it left off.
+- **Worker crashes mid-iteration.** `pane-died` hook fires,
+  `claudeStatus = "exited"`. The trellis fields are preserved on the
+  registry entry. Unlike default workflow, the interrupt-recovery
+  prompt does not fire — see "Per-iteration context reset." When the
+  pane is restored (`garden bounce`, dashboard reattach), Claude
+  cold-starts via the fresh-context mechanism and is seeded with the
+  last drift list. In-flight uncommitted edits are lost; this is the
+  intentional tradeoff for never compounding a poisoned context across
+  iteration boundaries.
 
 - **Operator amends `trellis-overrides.md` directly.** Allowed.
   Reviewers always re-read the file at the start of their prompt
