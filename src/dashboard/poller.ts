@@ -1,11 +1,12 @@
 // Poller coordinator: per-project event-driven dispatcher. Each project's
 // poller runs in a hidden tmux window, blocks on a FIFO read, and on every
-// poke runs one cycle of pollProject. State machine logic lives in:
-//   - poller-state.ts (transitionState, handleFailing/Merged/Done)
-//   - poller-review.ts (handleWorking, handleReviewing, launchReview, ...)
-//   - poller-merge.ts (handleMergePending, finalizeMerge, autoContinueGate)
-//   - poller-resolve.ts (launchResolver, handleResolving)
-// Shared FIFO/poke primitives live in poller-fifo.ts.
+// poke runs one cycle of pollProject.
+//
+// State machine logic is no longer routed by a switch in this file —
+// pollWorker reads the worker's workflow from the registry and dispatches
+// through workflow.stateHandlers. The default workflow points at the
+// existing handlers in poller-state/review/merge/resolve. See WORKFLOWS.md
+// Component 5a and src/dashboard/workflows/.
 import fs from "node:fs";
 import { tmux, windowExists, killWindowSafe } from "./tmux.js";
 import {
@@ -21,10 +22,7 @@ import { stopUsagePoller, startUsagePoller } from "./usage-poller.js";
 import {
   signalFifoPath, ensureSignalFifo, triggerProjectPoll,
 } from "./poller-fifo.js";
-import { handleFailing, handleMerged, handleDone } from "./poller-state.js";
-import { handleWorking, handleReviewing } from "./poller-review.js";
-import { handleMergePending } from "./poller-merge.js";
-import { handleResolving } from "./poller-resolve.js";
+import { getWorkflow } from "./workflows/index.js";
 
 // Re-exports of the public API consumed elsewhere in the codebase.
 // External callers continue to import from "./poller" — the split is
@@ -78,31 +76,20 @@ function pollWorker(
   entry: WorkerEntry,
 ): boolean {
   // pollWorker is called when the FIFO is poked. It dispatches on prState
-  // and runs one unit of work. Per STATUS.md invariant 6, every transition
-  // is event-triggered — pollWorker never schedules a re-check.
+  // through the worker's workflow and runs one unit of work. Per STATUS.md
+  // invariant 6, every transition is event-triggered — pollWorker never
+  // schedules a re-check.
   const state = entry.prState ?? "working";
-
-  switch (state) {
-    case "working":
-      return handleWorking(projectName, projectPath, baseBranch, entry);
-    case "reviewing":
-      return handleReviewing(projectName, projectPath, baseBranch, entry);
-    case "merge-pending":
-      return handleMergePending(projectName, projectPath, baseBranch, entry);
-    case "resolving":
-      return handleResolving(projectName, projectPath, baseBranch, entry);
-    case "failing":
-      return handleFailing(projectName, projectPath, baseBranch, entry);
-    case "merged":
-      return handleMerged(projectName, baseBranch, entry);
-    case "done":
-      return handleDone(projectName, baseBranch, entry);
-    default: {
-      const _exhaustive: never = state;
-      log.warn("poller", `unknown prState: ${_exhaustive}`, { worker: entry.name });
-      return false;
-    }
+  const workflow = getWorkflow(entry.workflow ?? "default");
+  const handler = workflow.stateHandlers[state];
+  if (!handler) {
+    log.warn("poller", "no handler for state in workflow", {
+      worker: entry.name,
+      data: { state, workflow: workflow.name },
+    });
+    return false;
   }
+  return handler(projectName, projectPath, baseBranch, entry);
 }
 
 // --- Per-project poller lifecycle ---

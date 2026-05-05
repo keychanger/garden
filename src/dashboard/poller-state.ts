@@ -1,8 +1,10 @@
-// State machine: VALID_TRANSITIONS, transitionState, and the simple state
+// State machine: transitionState (registry-routed) and the simple state
 // handlers that don't launch subprocesses (handleFailing, handleMerged,
 // handleDone). The lifecycle handlers that DO launch subprocesses live in
 // poller-review / poller-merge / poller-resolve and import transitionState
-// from this module.
+// from this module. Valid transitions are now defined per-workflow on
+// WorkflowDefinition.validTransitions; the default workflow's table is the
+// literal copy of the pre-refactor VALID_TRANSITIONS constant.
 import { addAlert } from "./alerts.js";
 import {
   getBranchHeadSha, getCommitSummary, getNewCommitSummary,
@@ -14,21 +16,9 @@ import {
   type WorkerEntry, type PrState,
 } from "./registry.js";
 import { scheduleDelayedPoke } from "./poller-fifo.js";
+import { getWorkflow } from "./workflows/index.js";
 
 export const DEBOUNCE_MS = 30_000;
-
-// Valid state transitions per STATUS.md. transitionState warns (but does not
-// block) if a transition is not in this table, surfacing bugs in the log
-// without breaking production.
-export const VALID_TRANSITIONS: Record<PrState, PrState[]> = {
-  working:         ["reviewing"],
-  reviewing:       ["merge-pending", "working", "failing"],
-  "merge-pending": ["merged", "done", "resolving", "working"],
-  resolving:       ["merge-pending", "working", "failing"],
-  failing:         ["working"],
-  merged:          ["working", "done"],
-  done:            ["working"],
-};
 
 export function transitionState(
   projectName: string,
@@ -38,8 +28,12 @@ export function transitionState(
 ): void {
   const entry = findWorkerByName(projectName, workerName);
   const fromState: PrState = entry?.prState ?? "working";
-  if (!VALID_TRANSITIONS[fromState]?.includes(toState)) {
-    log.warn("poller", `invalid state transition: ${fromState} -> ${toState}`, { worker: workerName });
+  const workflow = getWorkflow(entry?.workflow ?? "default");
+  if (!workflow.validTransitions[fromState]?.includes(toState)) {
+    log.warn("poller", `invalid state transition: ${fromState} -> ${toState}`, {
+      worker: workerName,
+      data: { workflow: workflow.name },
+    });
   }
   updateWorkerFields(projectName, workerName, { ...extraFields, prState: toState });
 }
@@ -104,8 +98,11 @@ export function handleFailing(
   return false;
 }
 
+// projectPath parameter is unused — handlers take a uniform signature so the
+// workflow registry can dispatch them through one interface (see workflows/types.ts).
 export function handleMerged(
   projectName: string,
+  _projectPath: string,
   baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
@@ -133,6 +130,7 @@ export function handleMerged(
 // appear) without going through UserPromptSubmit, recover into `working`.
 export function handleDone(
   projectName: string,
+  _projectPath: string,
   baseBranch: string,
   entry: WorkerEntry,
 ): boolean {

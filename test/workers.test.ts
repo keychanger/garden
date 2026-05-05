@@ -277,6 +277,7 @@ describe("newWorker", () => {
       branchName: "bold-ash",
       baseBranch: "main",
       claudeStatus: "loading",
+      workflow: "default",
     });
   });
 

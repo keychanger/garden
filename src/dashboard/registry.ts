@@ -95,6 +95,12 @@ export interface WorkerEntry {
   pendingContinueSyncFailed?: boolean;
   role?: string;
   parentWorker?: string;
+  // Workflow definition that drives this worker's lifecycle (state machine,
+  // state handlers, hook routing). Set to "default" by newWorker. Absent on
+  // legacy entries from before the workflow registry shipped — consumers
+  // (poller, transitionState, hook dispatcher) read with `entry.workflow ?? "default"`.
+  // See WORKFLOWS.md and src/dashboard/workflows/.
+  workflow?: string;
 }
 
 export interface WorkerRegistry {

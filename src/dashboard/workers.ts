@@ -132,6 +132,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       branchName,
       baseBranch,
       claudeStatus: "loading",
+      workflow: "default",
     });
 
     log.info("workers", "created", {
