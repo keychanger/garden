@@ -860,15 +860,36 @@ stagnation:    0/3 (no concerning pattern)
 lessons:       <last 3 lines from trellis-lessons.md>
 ```
 
-### Spawning a trellis worker
+### Spawning a trellis vine
 
-Two paths:
+Two paths: a hotkey-driven picker (the daily driver) and a flag-driven
+CLI invocation (for scripts and automation).
 
-1. **CLI:** `garden workers new <project> --workflow trellis --trellis <name> [--max-iterations N]`.
-2. **Hotkey:** `⌥⇧n` opens a tmux command prompt asking for a trellis
-   name (autocomplete from the project's trellisDir). Default
-   `maxIterations` from project config or 30. (`⌥n` continues to spawn
-   a default-workflow worker.)
+**Hotkey: `⌥⇧n`** (sibling of `⌥n` for default workers). Opens an
+fzf-style picker overlaying the active pane, populated from the
+project's `trellisDir`. Each row shows the trellis name and a
+one-line summary pulled from the trellis's first paragraph (the
+Intent line, if recommended sections were used) so similar names
+disambiguate at a glance. Arrow keys to select, enter to plant.
+`maxIterations` defaults from project config or 30.
+
+The picker handles three population states:
+
+| Trellises in project | Behavior                                                                                                           |
+|----------------------|--------------------------------------------------------------------------------------------------------------------|
+| Zero                 | Empty-state with two actions: `[a] author one` (spawns a default worker pre-prompted to invoke the trellis-author skill) and `[n] scaffold blank` (runs `garden trellis new` with a name prompt). No dead-end. |
+| One                  | Skip the picker entirely; plant immediately. The picker exists for choice — there is no choice here.              |
+| Two or more          | Standard picker. Arrow-key navigation, type-to-filter, enter to plant.                                             |
+
+The picker doubles as discovery: an operator who forgets what
+trellises exist in a project can hit `⌥⇧n` and browse without leaving
+the dashboard. There is no need to first run `garden trellis list`.
+
+**CLI: `garden workers new <project> --workflow trellis --trellis <name> [--model opus] [--max-iterations N]`.**
+Same machinery as the hotkey, just explicit. Required for scripts,
+automation, and any path where typing the name is more convenient than
+picking. The CLI does not invoke the picker — `--trellis <name>` is
+the contract.
 
 The worker is bootstrapped identically to a default worker — git
 worktree, branch named after the worker, sandbox config, hooks
@@ -1092,7 +1113,8 @@ defer.
 - Lessons file size cap with eviction.
 - `garden trellis budget` to raise/lower the cap mid-loop.
 - Bottom-bar trellis summary.
-- `⌥⇧n` hotkey for trellis spawn.
+- `⌥⇧n` picker for trellis spawn (fzf-style, with empty-state and
+  one-trellis shortcuts).
 
 ### v2 (separate verifier)
 
