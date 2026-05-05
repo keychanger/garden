@@ -135,10 +135,6 @@ describe("addAlert dedup", () => {
     return JSON.parse(last).alerts as Array<Record<string, unknown>>;
   }
 
-  function loadStoreFromWrite(): { alerts: Array<Record<string, unknown>> } {
-    return { alerts: alertsFromLastWrite() };
-  }
-
   // Stage existing alerts into the readAlerts() mock by stuffing them into
   // the JSON.parse-able readFileSync mock. Subsequent writes will use the
   // capture above.
