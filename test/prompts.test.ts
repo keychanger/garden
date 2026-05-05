@@ -222,3 +222,57 @@ describe("readTestSections", () => {
     expect(result).toEqual([]);
   });
 });
+
+// Snapshot lock for the workflow-architecture refactor (WORKFLOWS.md). The
+// prompt-composition refactor (Phase 2) decomposes buildReviewPrompt and
+// buildResolvePrompt into PromptSection instances. These snapshots fix the
+// pre-refactor output as the byte-equal acceptance criterion: any drift at
+// any point in the four-phase refactor surfaces here.
+describe("prompt output snapshots (workflow-refactor regression net)", () => {
+  it("buildReviewPrompt — default fixture, no checks", () => {
+    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry());
+    expect(result).toMatchSnapshot();
+  });
+
+  it("buildReviewPrompt — with checks command configured", () => {
+    vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject", checks: "npm test" } as ReturnType<typeof tryGetProject>);
+    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry());
+    expect(result).toMatchSnapshot();
+  });
+
+  it("buildReviewPrompt — with worker task set", () => {
+    const result = buildReviewPrompt(
+      "myproject", "/repo/myproject", "main",
+      makeEntry({ task: "refactor dashboard layout" }),
+    );
+    expect(result).toMatchSnapshot();
+  });
+
+  it("buildReviewPrompt — with spec file in changed set", () => {
+    vi.mocked(getChangedFiles).mockReturnValue(["src/dashboard/STATUS.md"]);
+    vi.mocked(fs.readFileSync).mockImplementation(((p: string) => {
+      const path = String(p);
+      if (path.endsWith("STATUS.md")) return "# Spec\n\nIf the code disagrees, the code is wrong.";
+      return "file content";
+    }) as typeof fs.readFileSync);
+    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry());
+    expect(result).toMatchSnapshot();
+  });
+
+  it("buildResolvePrompt — default fixture", () => {
+    const result = buildResolvePrompt("myproject", "/repo/myproject", "main", makeEntry());
+    expect(result).toMatchSnapshot();
+  });
+
+  it("buildResolvePrompt — with task and previous review body", () => {
+    const result = buildResolvePrompt(
+      "myproject", "/repo/myproject", "main",
+      makeEntry({
+        task: "add retry logic to the merge queue",
+        lastReviewBody: "Looks good. Approved with minor nits.",
+        resolveAttempts: 1,
+      }),
+    );
+    expect(result).toMatchSnapshot();
+  });
+});

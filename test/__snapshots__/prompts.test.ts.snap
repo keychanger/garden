@@ -1,0 +1,475 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`prompt output snapshots (workflow-refactor regression net) > buildResolvePrompt — default fixture 1`] = `
+"You are resolving a rebase conflict on branch \`bold-ash\` in project myproject.
+
+The branch was reviewed and approved, but when the merge queue tried to rebase it onto
+\`origin/main\` the rebase conflicted. Your job is to complete that rebase.
+
+**This is not a code review.** The code itself has already been approved. Do not refactor,
+add tests, update docs, or make any change not required to resolve the conflict.
+
+This is resolve attempt 1 of 2.
+
+## Commits on this branch
+
+\`\`\`
+abc1234 fix: something
+\`\`\`
+
+## Steps
+
+1. Run \`git status\`. If a rebase is already in progress (output mentions
+   \`rebase in progress\` or \`You are currently rebasing\`), run \`git rebase --abort\`.
+
+2. Run \`git rebase origin/main\`.
+
+3. If conflicts appear:
+   - Read each conflict carefully and resolve it preserving the intent of both sides.
+   - Read commit messages (\`git log\`) and diffs as needed to understand intent.
+   - \`git add\` each resolved file.
+   - \`git rebase --continue\` and repeat for further conflicts.
+   - If a conflict is genuinely unresolvable (e.g. the two sides implement
+     contradictory designs), run \`git rebase --abort\` and output \`FAILED\`.
+
+4. When the rebase is complete, confirm with \`git status\` (should say clean) and
+   \`git log --oneline origin/main..HEAD\` (should list your branch's commits).
+
+5. Do **not** push. The poller handles the push after verifying your work.
+
+## Output format
+
+Your LAST line of output must be exactly one of:
+
+- \`DONE\` — the rebase completed cleanly and HEAD is ready for merge.
+- \`FAILED\` — the conflict is unresolvable or you could not complete the rebase.
+
+Write a brief summary of what you did above the verdict line."
+`;
+
+exports[`prompt output snapshots (workflow-refactor regression net) > buildResolvePrompt — with task and previous review body 1`] = `
+"You are resolving a rebase conflict on branch \`bold-ash\` in project myproject.
+
+The branch was reviewed and approved, but when the merge queue tried to rebase it onto
+\`origin/main\` the rebase conflicted. Your job is to complete that rebase.
+
+**This is not a code review.** The code itself has already been approved. Do not refactor,
+add tests, update docs, or make any change not required to resolve the conflict.
+
+This is resolve attempt 2 of 2.
+
+## Worker task
+
+add retry logic to the merge queue
+
+## Previous review (approved)
+
+Looks good. Approved with minor nits.
+
+## Commits on this branch
+
+\`\`\`
+abc1234 fix: something
+\`\`\`
+
+## Steps
+
+1. Run \`git status\`. If a rebase is already in progress (output mentions
+   \`rebase in progress\` or \`You are currently rebasing\`), run \`git rebase --abort\`.
+
+2. Run \`git rebase origin/main\`.
+
+3. If conflicts appear:
+   - Read each conflict carefully and resolve it preserving the intent of both sides.
+   - Read commit messages (\`git log\`) and diffs as needed to understand intent.
+   - \`git add\` each resolved file.
+   - \`git rebase --continue\` and repeat for further conflicts.
+   - If a conflict is genuinely unresolvable (e.g. the two sides implement
+     contradictory designs), run \`git rebase --abort\` and output \`FAILED\`.
+
+4. When the rebase is complete, confirm with \`git status\` (should say clean) and
+   \`git log --oneline origin/main..HEAD\` (should list your branch's commits).
+
+5. Do **not** push. The poller handles the push after verifying your work.
+
+## Output format
+
+Your LAST line of output must be exactly one of:
+
+- \`DONE\` — the rebase completed cleanly and HEAD is ready for merge.
+- \`FAILED\` — the conflict is unresolvable or you could not complete the rebase.
+
+Write a brief summary of what you did above the verdict line."
+`;
+
+exports[`prompt output snapshots (workflow-refactor regression net) > buildReviewPrompt — default fixture, no checks 1`] = `
+"You are reviewing a branch before merge. Complete these steps in order:
+
+## Step 1: Rebase onto origin/main
+
+Run \`git rebase origin/main\` in the worktree. If there are conflicts:
+- Resolve them sensibly (preserve the intent of both sides)
+- \`git add\` resolved files and \`git rebase --continue\`
+- If a conflict is truly unresolvable, abort the rebase and report FAILED
+
+## Step 2: Code review
+
+Review the branch diff against the project rules below.
+
+Check for:
+- Adherence to project rules (commit style, code patterns, scope discipline)
+- Code quality issues, security concerns, or unnecessary complexity
+- Documentation accuracy: read DESIGN.md and CLAUDE.md below. After applying this
+  diff, are they still accurate and complete? Flag any claims that are now wrong,
+  missing sections for new behavior, or stale descriptions. Not every change needs a
+  doc change — only flag docs that are actually inaccurate after this diff. This
+  bullet applies *only* to descriptive documents (DESIGN.md, CLAUDE.md) — not to
+  specification files (those marked as a source of truth, see the warning above if
+  any are in this diff). Specs drive the code; do not edit them to match code.
+- Test quality: read the test files below. Check three things:
+  1. Accuracy — do existing tests still assert correct behavior after this diff?
+     Flag tests that now assert stale or wrong behavior.
+  2. Coverage — are the new/changed code paths exercised by tests? Flag significant
+     new logic (branching, error handling, state transitions) that has no test.
+  3. Completeness — do the tests cover edge cases and failure modes, not just the
+     happy path? Flag obvious gaps. Not every change needs a test change — only flag
+     tests that are actually wrong or insufficient for the behavior this diff changes.
+
+If you find issues, fix them directly in the worktree. Edit files, update tests,
+update docs as needed. Make focused, minimal fixes — do not refactor or improve code
+beyond what the review requires. Commit your fixes with a clear message prefixed with
+"review: " (e.g., "review: add missing tests for error handling").
+
+## Branch: bold-ash
+
+### Commits
+
+\`\`\`
+abc1234 fix: something
+\`\`\`
+
+## Project Rules
+
+project rules here
+
+## Diff
+
+\`\`\`diff
+diff content
+\`\`\`
+
+## Documentation (current state in the worktree)
+
+Verify these are still accurate after the diff above.
+
+### DESIGN.md
+
+file content
+### CLAUDE.md
+
+file content
+
+## Test Files (corresponding to changed source files)
+
+Verify these still correctly cover the changed behavior.
+
+### test/foo.test.ts
+
+file content
+
+## Output Format
+
+Your LAST line of output must be exactly one of:
+CLEAN — no issues found, code is ready to merge as-is
+FIXED — issues were found and fixed in the worktree
+FAILED — issues were found but could not be fixed (explain above)"
+`;
+
+exports[`prompt output snapshots (workflow-refactor regression net) > buildReviewPrompt — with checks command configured 1`] = `
+"You are reviewing a branch before merge. Complete these steps in order:
+
+## Step 1: Rebase onto origin/main
+
+Run \`git rebase origin/main\` in the worktree. If there are conflicts:
+- Resolve them sensibly (preserve the intent of both sides)
+- \`git add\` resolved files and \`git rebase --continue\`
+- If a conflict is truly unresolvable, abort the rebase and report FAILED
+
+## Step 2: Run checks
+
+Run: \`npm test\`
+
+If checks fail, fix the issues and re-run until they pass.
+If you cannot fix them, report FAILED.
+
+## Step 3: Code review
+
+Review the branch diff against the project rules below.
+
+Check for:
+- Adherence to project rules (commit style, code patterns, scope discipline)
+- Code quality issues, security concerns, or unnecessary complexity
+- Documentation accuracy: read DESIGN.md and CLAUDE.md below. After applying this
+  diff, are they still accurate and complete? Flag any claims that are now wrong,
+  missing sections for new behavior, or stale descriptions. Not every change needs a
+  doc change — only flag docs that are actually inaccurate after this diff. This
+  bullet applies *only* to descriptive documents (DESIGN.md, CLAUDE.md) — not to
+  specification files (those marked as a source of truth, see the warning above if
+  any are in this diff). Specs drive the code; do not edit them to match code.
+- Test quality: read the test files below. Check three things:
+  1. Accuracy — do existing tests still assert correct behavior after this diff?
+     Flag tests that now assert stale or wrong behavior.
+  2. Coverage — are the new/changed code paths exercised by tests? Flag significant
+     new logic (branching, error handling, state transitions) that has no test.
+  3. Completeness — do the tests cover edge cases and failure modes, not just the
+     happy path? Flag obvious gaps. Not every change needs a test change — only flag
+     tests that are actually wrong or insufficient for the behavior this diff changes.
+
+If you find issues, fix them directly in the worktree. Edit files, update tests,
+update docs as needed. Make focused, minimal fixes — do not refactor or improve code
+beyond what the review requires. Commit your fixes with a clear message prefixed with
+"review: " (e.g., "review: add missing tests for error handling").
+
+## Branch: bold-ash
+
+### Commits
+
+\`\`\`
+abc1234 fix: something
+\`\`\`
+
+## Project Rules
+
+project rules here
+
+## Diff
+
+\`\`\`diff
+diff content
+\`\`\`
+
+## Documentation (current state in the worktree)
+
+Verify these are still accurate after the diff above.
+
+### DESIGN.md
+
+file content
+### CLAUDE.md
+
+file content
+
+## Test Files (corresponding to changed source files)
+
+Verify these still correctly cover the changed behavior.
+
+### test/foo.test.ts
+
+file content
+
+## Output Format
+
+Your LAST line of output must be exactly one of:
+CLEAN — no issues found, code is ready to merge as-is
+FIXED — issues were found and fixed in the worktree
+FAILED — issues were found but could not be fixed (explain above)"
+`;
+
+exports[`prompt output snapshots (workflow-refactor regression net) > buildReviewPrompt — with spec file in changed set 1`] = `
+"You are reviewing a branch before merge. Complete these steps in order:
+
+## WARNING: Specification files in this diff
+
+This diff modifies one or more **specification** files — documents that
+are the *source of truth* for their respective systems:
+
+- \`src/dashboard/STATUS.md\`
+
+When reviewing changes to a specification:
+
+- **Do not revert spec changes to match the current implementation.**
+  The spec drives the code, not the other way around. The spec opens
+  with the statement that if the code disagrees, the code is wrong —
+  that is the contract, and your job is to honor it.
+- **Do flag implementation code in this diff that contradicts the spec.**
+  Code-vs-spec mismatches must be fixed by changing the code, never the
+  spec.
+- **If the spec contradicts code OUTSIDE this diff,** that is a known
+  gap the user is intentionally documenting. Do not "fix" the spec to
+  match the legacy code. The user is using the spec to guide future work.
+- **Treat spec changes the way you would treat user instructions.**
+  Verify clarity, internal consistency, and grammar. Never rewrite design
+  intent. Never "correct" the spec by editing prose to describe what
+  the code currently does.
+
+If you genuinely believe a spec change is wrong (e.g., logically
+self-contradictory, or impossible to implement), flag it in your review
+output rather than silently editing it. Editing a spec to match code is
+the exact mistake this section exists to prevent.
+
+## Step 1: Rebase onto origin/main
+
+Run \`git rebase origin/main\` in the worktree. If there are conflicts:
+- Resolve them sensibly (preserve the intent of both sides)
+- \`git add\` resolved files and \`git rebase --continue\`
+- If a conflict is truly unresolvable, abort the rebase and report FAILED
+
+## Step 2: Code review
+
+Review the branch diff against the project rules below.
+
+Check for:
+- Adherence to project rules (commit style, code patterns, scope discipline)
+- Code quality issues, security concerns, or unnecessary complexity
+- Documentation accuracy: read DESIGN.md and CLAUDE.md below. After applying this
+  diff, are they still accurate and complete? Flag any claims that are now wrong,
+  missing sections for new behavior, or stale descriptions. Not every change needs a
+  doc change — only flag docs that are actually inaccurate after this diff. This
+  bullet applies *only* to descriptive documents (DESIGN.md, CLAUDE.md) — not to
+  specification files (those marked as a source of truth, see the warning above if
+  any are in this diff). Specs drive the code; do not edit them to match code.
+- Test quality: read the test files below. Check three things:
+  1. Accuracy — do existing tests still assert correct behavior after this diff?
+     Flag tests that now assert stale or wrong behavior.
+  2. Coverage — are the new/changed code paths exercised by tests? Flag significant
+     new logic (branching, error handling, state transitions) that has no test.
+  3. Completeness — do the tests cover edge cases and failure modes, not just the
+     happy path? Flag obvious gaps. Not every change needs a test change — only flag
+     tests that are actually wrong or insufficient for the behavior this diff changes.
+
+If you find issues, fix them directly in the worktree. Edit files, update tests,
+update docs as needed. Make focused, minimal fixes — do not refactor or improve code
+beyond what the review requires. Commit your fixes with a clear message prefixed with
+"review: " (e.g., "review: add missing tests for error handling").
+
+## Branch: bold-ash
+
+### Commits
+
+\`\`\`
+abc1234 fix: something
+\`\`\`
+
+## Project Rules
+
+project rules here
+
+## Diff
+
+\`\`\`diff
+diff content
+\`\`\`
+
+## Documentation (current state in the worktree)
+
+Verify these are still accurate after the diff above.
+
+### DESIGN.md
+
+file content
+### CLAUDE.md
+
+file content
+
+## Test Files (corresponding to changed source files)
+
+Verify these still correctly cover the changed behavior.
+
+### test/STATUS.test.ts
+
+file content
+
+## Output Format
+
+Your LAST line of output must be exactly one of:
+CLEAN — no issues found, code is ready to merge as-is
+FIXED — issues were found and fixed in the worktree
+FAILED — issues were found but could not be fixed (explain above)"
+`;
+
+exports[`prompt output snapshots (workflow-refactor regression net) > buildReviewPrompt — with worker task set 1`] = `
+"You are reviewing a branch before merge. Complete these steps in order:
+
+## Step 1: Rebase onto origin/main
+
+Run \`git rebase origin/main\` in the worktree. If there are conflicts:
+- Resolve them sensibly (preserve the intent of both sides)
+- \`git add\` resolved files and \`git rebase --continue\`
+- If a conflict is truly unresolvable, abort the rebase and report FAILED
+
+## Step 2: Code review
+
+Review the branch diff against the project rules below.
+
+Check for:
+- Adherence to project rules (commit style, code patterns, scope discipline)
+- Code quality issues, security concerns, or unnecessary complexity
+- Documentation accuracy: read DESIGN.md and CLAUDE.md below. After applying this
+  diff, are they still accurate and complete? Flag any claims that are now wrong,
+  missing sections for new behavior, or stale descriptions. Not every change needs a
+  doc change — only flag docs that are actually inaccurate after this diff. This
+  bullet applies *only* to descriptive documents (DESIGN.md, CLAUDE.md) — not to
+  specification files (those marked as a source of truth, see the warning above if
+  any are in this diff). Specs drive the code; do not edit them to match code.
+- Test quality: read the test files below. Check three things:
+  1. Accuracy — do existing tests still assert correct behavior after this diff?
+     Flag tests that now assert stale or wrong behavior.
+  2. Coverage — are the new/changed code paths exercised by tests? Flag significant
+     new logic (branching, error handling, state transitions) that has no test.
+  3. Completeness — do the tests cover edge cases and failure modes, not just the
+     happy path? Flag obvious gaps. Not every change needs a test change — only flag
+     tests that are actually wrong or insufficient for the behavior this diff changes.
+
+If you find issues, fix them directly in the worktree. Edit files, update tests,
+update docs as needed. Make focused, minimal fixes — do not refactor or improve code
+beyond what the review requires. Commit your fixes with a clear message prefixed with
+"review: " (e.g., "review: add missing tests for error handling").
+
+## Branch: bold-ash
+
+### Worker task
+
+refactor dashboard layout
+
+### Commits
+
+\`\`\`
+abc1234 fix: something
+\`\`\`
+
+## Project Rules
+
+project rules here
+
+## Diff
+
+\`\`\`diff
+diff content
+\`\`\`
+
+## Documentation (current state in the worktree)
+
+Verify these are still accurate after the diff above.
+
+### DESIGN.md
+
+file content
+### CLAUDE.md
+
+file content
+
+## Test Files (corresponding to changed source files)
+
+Verify these still correctly cover the changed behavior.
+
+### test/foo.test.ts
+
+file content
+
+## Output Format
+
+Your LAST line of output must be exactly one of:
+CLEAN — no issues found, code is ready to merge as-is
+FIXED — issues were found and fixed in the worktree
+FAILED — issues were found but could not be fixed (explain above)"
+`;
