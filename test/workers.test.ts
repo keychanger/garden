@@ -91,8 +91,11 @@ vi.mock("../src/dashboard/create.js", () => ({
   buildWorktreeResumeCommand: vi.fn(() => "claude --resume FAKE-ID"),
   buildResumeCommand: vi.fn(() => "claude --resume FAKE-ID-NW"),
   createShellWindow: vi.fn(),
-  resolveGardenRunner: vi.fn(() => "garden"),
   installClaudeHooks: vi.fn(),
+}));
+
+vi.mock("../src/dashboard/runner.js", () => ({
+  resolveGardenRunner: vi.fn(() => "garden"),
 }));
 
 vi.mock("../src/dashboard/git.js", () => ({
@@ -126,8 +129,9 @@ import {
 } from "../src/dashboard/registry.js";
 import {
   buildWorktreeBootstrapScript, buildWorktreeResumeCommand, buildResumeCommand,
-  createShellWindow, resolveGardenRunner, installClaudeHooks,
+  createShellWindow, installClaudeHooks,
 } from "../src/dashboard/create.js";
+import { resolveGardenRunner } from "../src/dashboard/runner.js";
 import { worktreePath, resolveBaseBranch, branchExistsOnOrigin } from "../src/dashboard/git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "../src/dashboard/poller.js";
 import { workerWindowName as workerWin, shellWindowName as shellWin, parseWorkerSuffix } from "../src/dashboard/window-names.js";

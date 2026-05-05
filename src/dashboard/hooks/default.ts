@@ -27,7 +27,7 @@ import {
 } from "../registry.js";
 import { getPaneTitle } from "../tmux.js";
 import { maybeRefreshUsage } from "../usage.js";
-import { resolveGardenRunner } from "../create.js";
+import { resolveGardenRunner } from "../runner.js";
 import type { HookContext, HookMethod, WorkflowHookHandlers } from "../workflows/types.js";
 
 // ---------------------------------------------------------------------------

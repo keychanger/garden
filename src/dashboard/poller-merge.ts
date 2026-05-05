@@ -12,7 +12,7 @@ import {
 import { DASHBOARD_SESSION } from "../session.js";
 import { addAlert } from "./alerts.js";
 import { dispatchDelayedAutoContinue, isDoneSet } from "./continue.js";
-import { resolveGardenRunner } from "./create.js";
+import { resolveGardenRunner } from "./runner.js";
 import {
   abortRebase, cleanWorktree, deleteRemoteBranch, ensureNoRebaseInProgress,
   fastForwardBase, forcePushBranch, getBranchHeadSha, getChangedFiles,

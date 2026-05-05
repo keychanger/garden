@@ -30,7 +30,7 @@ vi.mock("../../src/dashboard/poller.js", () => ({
   triggerProjectPoll: vi.fn(),
   signalFifoPath: vi.fn(() => "/tmp/fake-fifo"),
 }));
-vi.mock("../../src/dashboard/create.js", () => ({
+vi.mock("../../src/dashboard/runner.js", () => ({
   resolveGardenRunner: vi.fn(() => "garden"),
 }));
 vi.mock("../../src/commands/status.js", () => ({

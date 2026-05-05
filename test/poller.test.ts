@@ -55,7 +55,7 @@ vi.mock("../src/dashboard/hotkeys.js", () => ({
   setupKeybindings: vi.fn(),
 }));
 
-vi.mock("../src/dashboard/create.js", () => ({
+vi.mock("../src/dashboard/runner.js", () => ({
   resolveGardenRunner: vi.fn(() => "node /usr/local/bin/garden"),
 }));
 

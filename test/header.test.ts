@@ -107,7 +107,7 @@ vi.mock("../src/dashboard/usage.js", () => ({
   renderUsagePane: vi.fn(() => "u1\nu2\nu3"),
 }));
 
-vi.mock("../src/dashboard/create.js", () => ({
+vi.mock("../src/dashboard/runner.js", () => ({
   resolveGardenRunner: vi.fn(() => "/usr/local/bin/garden"),
 }));
 

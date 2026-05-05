@@ -25,6 +25,7 @@ import { startProjectPoller, signalFifoPath } from "./poller.js";
 import { startUsagePoller } from "./usage-poller.js";
 import { installPollTriggerHook, worktreeExists as wtExists, getWorkerBaseBranch, getRemoteHost } from "./git.js";
 import { dispatchDelayedContinue } from "./continue.js";
+import { resolveGardenRunner } from "./runner.js";
 import { buildSandboxConfig, type SandboxConfig } from "./sandbox.js";
 import {
   DONE_SKILL_CONTENT, DONE_SKILL_DIRNAME, DONE_SKILL_FILENAME,
@@ -755,17 +756,6 @@ export function respawnLogsPane(state: DashboardState): void {
   } catch { /* pane gone */ }
   // Re-apply in case respawn-pane resets the flag.
   disablePaneInput(target);
-}
-
-export function resolveGardenRunner(): string {
-  const gardenBin = path.resolve(process.argv[1]);
-  if (gardenBin.endsWith(".ts")) {
-    const gardenRoot = path.dirname(path.dirname(gardenBin));
-    const tsxBin = path.join(gardenRoot, "node_modules", ".bin", "tsx");
-    return fs.existsSync(tsxBin) ? `${tsxBin} ${gardenBin}` : `npx tsx ${gardenBin}`;
-  }
-  // Use absolute path for node so hooks work in minimal shell environments
-  return `${process.execPath} ${gardenBin}`;
 }
 
 /**

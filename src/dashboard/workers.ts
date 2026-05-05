@@ -20,8 +20,9 @@ import {
 import { log } from "./log.js";
 import {
   buildWorktreeBootstrapScript, buildWorktreeResumeCommand, buildResumeCommand,
-  createShellWindow, resolveGardenRunner, installClaudeHooks,
+  createShellWindow, installClaudeHooks,
 } from "./create.js";
+import { resolveGardenRunner } from "./runner.js";
 import { worktreePath, resolveBaseBranch, branchExistsOnOrigin } from "./git.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
 import { dispatchDelayedContinue, dispatchDelayedSeed } from "./continue.js";

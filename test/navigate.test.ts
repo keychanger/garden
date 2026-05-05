@@ -74,6 +74,9 @@ vi.mock("../src/dashboard/create.js", () => ({
   createLogsWindow: vi.fn(),
   createGardenRootWindow: vi.fn(),
   createGardenGrowhouseWindow: vi.fn(),
+}));
+
+vi.mock("../src/dashboard/runner.js", () => ({
   resolveGardenRunner: vi.fn(() => "/usr/bin/garden"),
 }));
 

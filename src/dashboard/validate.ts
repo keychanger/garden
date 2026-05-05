@@ -7,7 +7,8 @@ import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, kill
 import { log } from "./log.js";
 import { worktreeExists, removeWorktree, pruneWorktrees } from "./git.js";
 import { startProjectPoller, projectPollerRunning } from "./poller.js";
-import { resolveGardenRunner, createGardenGrowhouseWindow, USAGE_PANE_HEIGHT } from "./create.js";
+import { createGardenGrowhouseWindow, USAGE_PANE_HEIGHT } from "./create.js";
+import { resolveGardenRunner } from "./runner.js";
 import { gardenWindowName, workerWindowName } from "./window-names.js";
 import { buildStatusCommand, buildUsageCommand } from "./header.js";
 import { gardenRestoreFromHidden } from "./layout.js";

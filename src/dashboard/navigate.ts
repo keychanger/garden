@@ -15,7 +15,8 @@ import {
 import { findWorkerByName } from "./registry.js";
 import { acknowledgeAlerts } from "./alerts.js";
 import { log } from "./log.js";
-import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow, resolveGardenRunner } from "./create.js";
+import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow } from "./create.js";
+import { resolveGardenRunner } from "./runner.js";
 import { parkingWindowName, shellWindowName as shellWin, gardenWindowName, parseWorkerSuffix, isWorkerWindow, type GardenView } from "./window-names.js";
 
 /**

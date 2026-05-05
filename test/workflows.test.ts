@@ -146,6 +146,18 @@ describe("defaultWorkflow", () => {
     expect(typeof defaultWorkflow.hookHandlers.onPreToolUse).toBe("function");
     expect(typeof defaultWorkflow.hookHandlers.onPostToolUse).toBe("function");
   });
+
+  it("hookHandlers are bound at module-init time (no cycle re-introduction)", () => {
+    // Regression net for the module-init cycle that previously forced
+    // hookHandlers to be a getter (workflows/default.ts:42). If a future
+    // import widens the cycle through hooks/default.ts, defaultHookHandlers
+    // would be undefined at object-literal time and these direct-property
+    // checks would fail. Compare with `not.toBeUndefined` to make the
+    // failure mode explicit if it regresses.
+    expect(defaultWorkflow.hookHandlers).not.toBeUndefined();
+    expect(defaultWorkflow.hookHandlers.onStop).not.toBeUndefined();
+    expect(typeof defaultWorkflow.hookHandlers.onStop).toBe("function");
+  });
 });
 
 describe("registerWorkflow", () => {
