@@ -90,17 +90,42 @@ contradictions and gaps named in the trellis are.
 
 ### File location
 
-Default: `<project-root>/trellises/<name>.md`. The directory is
+Default: `<project-root>/.garden/trellises/<name>.md`. The directory is
 configurable per project via the `trellisDir` config key (e.g.
-`garden config <project> trellisDir docs/specs`). The CLI's
-`garden trellis list <project>` enumerates `*.md` files in that
-directory matching the trellis tag.
+`garden config <project> trellisDir docs/trellises` to surface them at
+the top of the repo). The CLI's `garden trellis list <project>`
+enumerates `*.md` files in that directory matching the trellis tag.
 
-The trellis is **checked into git**. It is part of the project's design
-history. A trellis that converged is a recorded design milestone; a
-trellis amended mid-loop is a recorded conversation between intent and
-reality. Both are valuable artifacts independent of the code they
-produced.
+`.garden/` is the existing convention for garden-aware,
+version-controlled project files (see `<project>/.garden/rules.md`).
+Trellises are checked into git like the rules — they are not hidden
+state. Operators are expected to read and edit them as ordinary design
+documents.
+
+A trellis that converged is a recorded design milestone; a trellis
+amended mid-loop is a recorded conversation between intent and reality.
+Both are valuable artifacts independent of the code they produced.
+
+### Authoring skill
+
+Garden ships a `trellis-author` skill, bundled alongside `done` and
+`handoff` and installed at
+`<worktree>/.claude/skills/trellis-author/SKILL.md` for every worker
+(not just trellis-workflow ones — an operator may want to formalize a
+feature as a trellis from inside a default-workflow worker pane). The
+skill triggers when the operator says they want to formalize a feature
+as a trellis and walks the worker through:
+
+1. Sizing scope (one feature, not a project; explicit "Out of scope").
+2. Writing the spine (title, sentinel, trellis tag).
+3. Filling the recommended sections (Intent, Surface, Behavior, Tests,
+   Docs).
+4. A self-review pass for ambiguity and contradiction before the
+   trellis is committed.
+
+Skills are more reliable triggers than instructions buried in a system
+prompt because Claude Code uses skill descriptions as planning-time
+selectors (see CLAUDE.md "skills.ts").
 
 ## The trellis workflow
 
@@ -150,6 +175,61 @@ Identical to default for `onSessionStart`, `onUserPromptSubmit`,
   `failingReason = "stagnation"`. (See "Stagnation detection.")
 - **Stop with no new commits ahead and `.garden-done` present** — same
   as default: `prState = "done"`.
+
+### Worker system prompt
+
+The trellis-workflow worker's system prompt extends the default worker
+rules with three trellis-specific paragraphs, injected by
+`buildWorktreeRules` in `src/rules.ts` when `entry.workflow === "trellis"`:
+
+1. **Concept.** A trellis is a frozen design document describing what
+   the feature does. The path is `<resolved trellisPath>`. Read it
+   before editing anything; it is your source of truth.
+
+2. **Authority asymmetry.** You may edit code, tests, and
+   documentation. You may **not** edit the trellis. If the trellis is
+   wrong or impossible, do not silently rewrite it — push commits that
+   reflect what the trellis says, and the reviewer will surface the
+   contradiction as `FLAGGED`. The operator decides whether to amend.
+
+3. **Iteration discipline.** You are operating inside a bounded loop.
+   The reviewer's `DRIFT` report names priority-ordered gaps between
+   the trellis and the artifact. Close the highest-priority gap first.
+   Do not chase adjacent improvements. Do not redesign. The trellis's
+   "Out of scope" section is the bound of your work.
+
+Default-workflow workers are unaffected — the branch keys on the
+workflow field.
+
+### Per-iteration context reset
+
+The default workflow's post-merge auto-continue dispatches a prompt to
+the worker's *existing* Claude session — conversation history compounds
+across phases. **The trellis workflow does not.** Each iteration starts
+with a fresh Claude process: after the merge transition, the workflow
+handler kills the worker's Claude (same primitive `garden bounce` uses,
+without `--resume`), and `claude` cold-starts in the same pane with the
+trellis-shaped continue prompt as the first user message.
+
+Why: ralph-loop literature is unanimous that compounding conversation
+context across iterations produces drift, defensive patterns, and
+rationalization of past dead-ends. Disk is the state. The lessons file
+is the only intentional carry-over besides the trellis (read fresh from
+git every iteration) and the code itself. Without this reset, a
+30-iteration loop accumulates many phases of conversation that the
+worker spends its tokens summarizing instead of closing drift.
+
+Implementation: `trellisAutoContinueAfterMerge` in
+`src/dashboard/continue.ts` (sibling of the default
+`continueWorkerAfterMerge`). It stops the Claude process and dispatches
+a fresh seed prompt via the same delayed-subprocess mechanism the
+default uses. The pane stays alive throughout — only the Claude session
+is reset, so tmux layout, environment variables, and the worktree's
+`.claude/settings.json` are unchanged. The interrupt-recovery
+auto-continue (default workflow's "continue from where you left off"
+after a session crash) does not apply to trellis: an interrupted
+trellis worker restarts via the same fresh-context mechanism on the
+next push event, seeded with the last drift list.
 
 ## The loop
 
@@ -210,8 +290,10 @@ Identical to default for `onSessionStart`, `onUserPromptSubmit`,
      `merge-pending`. `finalizeMerge` later sets `done` and dispatches
      no auto-continue (sentinel present).
    - `DRIFT` — force-push, transition to `merge-pending`. `finalizeMerge`
-     sets `merged`, then auto-continues with the drift list as the
-     prompt body.
+     sets `merged`, then **resets the worker's Claude session to a
+     fresh context** (see "Per-iteration context reset") and dispatches
+     the trellis-shaped continue prompt with the drift list as the
+     first user message.
    - `FAILED` — `prState = "failing"`, `failingReason = "code"`, alert.
      Worker resumes on push event + 30s debounce. Identical to default.
    - `FLAGGED` — `prState = "failing"`, `failingReason = "trellis-flagged"`.
@@ -224,6 +306,27 @@ Identical to default for `onSessionStart`, `onUserPromptSubmit`,
    `entry.trellisIteration`. The poller transition logs at info, with
    `iteration: N` in the data field, so `⌥l` logs make the cadence
    visible.
+
+### No up-front phased plan
+
+Garden's default workflow encourages multi-phase plans for complex
+tasks: the worker proposes phases, the operator confirms, then phases
+land in sequence. **Trellis explicitly does not.** The trellis itself
+is the plan. The reviewer's `DRIFT` verdict is the per-iteration plan:
+a priority-ordered list of gaps between trellis and reality. The worker
+does not decide what to build next; the reviewer's drift list does.
+
+A pre-baked phase list calcifies around early assumptions — assumptions
+that the trellis itself may invalidate as implementation pressure
+surfaces unstated constraints. Worse, a phase list is itself a
+mini-spec the worker would then be tempted to "stay aligned with,"
+splitting authority between trellis and plan. The trellis must be the
+single source of truth.
+
+Operator visibility is provided through `garden trellis status`
+(iteration count, last verdict, drift list, lessons), not through a
+frozen phase document. This is the structural difference between
+trellis and the default multi-phase workflow.
 
 ### Why merge on DRIFT
 
@@ -693,7 +796,7 @@ projects:
   garden:
     path: ~/code/keychange/garden
     # ... existing keys
-    trellisDir: trellises          # default: trellises (relative to project root)
+    trellisDir: .garden/trellises  # default: .garden/trellises (relative to project root)
     maxTrellisIterations: 30       # default: 30
 ```
 
@@ -751,7 +854,7 @@ mechanism that mitigates it in the trellis design.
 
 | Failure mode                                          | Mitigation                                                                                                                                                    |
 |-------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Context poisoning across iterations                   | Garden's existing per-worker session model: `--resume` is not used between iterations. Each iteration starts a fresh prompt via the existing auto-continue dispatch. The lessons file is the only intentional carry-over. |
+| Context poisoning across iterations                   | Per-iteration context reset (see workflow section): the Claude process is killed and respawned cold between iterations. Conversation history does not compound. The lessons file is the only intentional cross-iteration carry-over besides the trellis (read fresh from git) and the code itself. |
 | Hallucination amplification (false fact gets locked in)| The reviewer's three-way diff is grounded in the actual filesystem (grep, file reads), not the worker's memory. False facts in the worker's context die at the next review. |
 | Metric gaming (deletes failing tests; "Done!" without doing) | The reviewer enforces the "the code is wrong" rule against the trellis: deleted tests are themselves drift if the trellis named them. Existing rules + checks gate already catches deleted-tests-to-pass. |
 | Cost explosion                                         | `maxIterations` cap (primary). Global usage gate (`autoContinueGateReason` / `usageThreshold`) inherited from default workflow (secondary). Stagnation detection (tertiary). |
@@ -844,13 +947,21 @@ defer.
 - `WorkerEntry.failingReason` field added; default workflow sets `"code"`.
 - Trellis workflow registered (`src/dashboard/workflows/trellis.ts`).
 - Trellis verdict vocabulary, parser usage, and prompt sections.
+- Trellis-specific worker system prompt branch in `buildWorktreeRules`
+  (concept, authority asymmetry, iteration discipline).
+- **Per-iteration context reset** (`trellisAutoContinueAfterMerge`):
+  Claude process killed and respawned cold between iterations. This
+  is load-bearing, not a polish item.
 - Iteration counter, max-iterations cap, budget-exhaustion → `failing`.
-- Trellis-aware continue prompt with drift list.
+- Trellis-aware continue prompt with drift list (used as the seed
+  message of the freshly respawned Claude).
 - Trellis-aware reviewer prompt with three-way diff instruction.
 - `FLAGGED` verdict and `garden trellis resume` command.
 - `garden workers new --workflow trellis --trellis <name>`.
 - `garden trellis list` / `show` / `new` / `status` / `amend` /
   `resume` commands.
+- `trellis-author` skill bundled and installed alongside `done` and
+  `handoff`.
 - Worker-row decoration in status pane (iteration counter, drift count).
 - Logging of iteration events at info.
 
@@ -967,3 +1078,18 @@ as decisions, not assumptions.
    invariant 6: no recurring tick. The loop advances on Stop hooks,
    push events, and merge-queue completions, exactly as the default
    workflow does. Trellis adds no timers.
+
+8. **Each iteration starts cold.** The Claude session is killed and
+   respawned between iterations; conversation history does not compound.
+   Disk (the trellis read at git HEAD, the code, the lessons file) is
+   the only state that crosses iteration boundaries. Compounding
+   conversation context is the most common ralph-loop failure mode and
+   is structurally prevented here. This is the deliberate divergence
+   from the default workflow's continue mechanism.
+
+9. **DRIFT drives the next task.** The worker does not decide what to
+   build next — the reviewer's priority-ordered drift list does. Per
+   iteration, the worker's job is "close the highest-priority gap from
+   the list," not "plan the next phase." There is no up-front phased
+   plan; the trellis itself is the plan. This is the structural
+   difference between trellis and the default multi-phase workflow.
