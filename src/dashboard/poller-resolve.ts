@@ -4,8 +4,7 @@
 // the resolver is advisory; the worktree state is the ground truth (see
 // STATUS.md invariant 7).
 import fs from "node:fs";
-import { tryGetProject, SESSIONS_DIR } from "../config.js";
-import { DASHBOARD_SESSION } from "../session.js";
+import { tryGetProject } from "../config.js";
 import { addAlert } from "./alerts.js";
 import { claudeEnvPrefix } from "./claude-env.js";
 import {
@@ -13,13 +12,15 @@ import {
   getUnmergedFiles, hasRebaseInProgress, isAncestor,
 } from "./git.js";
 import { refreshDashboard } from "./header.js";
+import { launchHeadlessAgent } from "./headless-agent.js";
 import { log } from "./log.js";
 import { buildResolvePrompt } from "./prompts.js";
 import {
   updateWorkerFields,
   type WorkerEntry,
 } from "./registry.js";
-import { tmux, windowExists, killWindowSafe } from "./tmux.js";
+import { windowExists } from "./tmux.js";
+import { parseLastLineVerdict } from "./verdict.js";
 import { reviewWindowName } from "./window-names.js";
 import {
   signalFifoPath, scheduleDelayedPoke, isWorkerClaudeWorking,
@@ -32,6 +33,8 @@ import {
 } from "./poller-review.js";
 
 export const RESOLVE_BUDGET = 2;
+
+const RESOLVE_VERDICT_VOCAB = ["DONE", "FAILED"] as const;
 
 interface ResolveResult {
   verdict: "done" | "failed";
@@ -64,26 +67,18 @@ export function launchResolver(
     return false;
   }
 
-  const promptFile = reviewPromptPath(projectName, entry.name);
-  const resultFile = reviewResultPath(projectName, entry.name);
-  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  fs.writeFileSync(promptFile, prompt);
-  try { fs.unlinkSync(resultFile); } catch { /* ignore */ }
-
   const revWindow = reviewWindowName(projectName, entry.name);
-  const escapedPrompt = promptFile.replace(/'/g, "'\\''");
-  const escapedResult = resultFile.replace(/'/g, "'\\''");
-  const escapedFifo = signalFifoPath(projectName).replace(/'/g, "'\\''");
-  const envPrefix = claudeEnvPrefix(tryGetProject(projectName) ?? {});
-  const cmd = `GARDEN_REVIEWER=1 ${envPrefix}claude -p < '${escapedPrompt}' > '${escapedResult}' 2>&1; [ -p '${escapedFifo}' ] && (echo > '${escapedFifo}') 2>/dev/null`;
-
-  if (windowExists(revWindow)) {
-    killWindowSafe(revWindow);
-  }
-
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", revWindow,
-    "-c", wtPath, "bash", "-c", cmd);
-  scheduleReviewTimeoutPoke(projectName);
+  launchHeadlessAgent({
+    cwd: wtPath,
+    windowName: revWindow,
+    prompt,
+    promptFile: reviewPromptPath(projectName, entry.name),
+    resultFile: reviewResultPath(projectName, entry.name),
+    envPrefix: claudeEnvPrefix(tryGetProject(projectName) ?? {}),
+    envVars: { GARDEN_REVIEWER: "1" },
+    signalFifo: signalFifoPath(projectName),
+    onLaunched: () => scheduleReviewTimeoutPoke(projectName),
+  });
 
   const preResolveSha = getBranchHeadSha(wtPath);
   const launchSha = getRemoteTrackingSha(wtPath, entry.branchName ?? entry.name)
@@ -277,19 +272,19 @@ function readResolveResult(
       log.warn("poller", "resolve result file empty", { worker: entry.name });
       return null;
     }
-    const lines = output.split("\n");
-    let lastLineIdx = lines.length - 1;
-    while (lastLineIdx >= 0 && !lines[lastLineIdx].trim()) lastLineIdx--;
-    if (lastLineIdx < 0) return null;
-    const lastLine = lines[lastLineIdx].trim().toUpperCase().replace(/[.\s!]+$/, "");
-    const body = lines.slice(0, lastLineIdx).join("\n").trim() || "No additional comments.";
-    if (lastLine === "DONE") return { verdict: "done", body };
-    if (lastLine === "FAILED") return { verdict: "failed", body };
-    log.warn("poller", "could not parse resolve verdict", {
-      worker: entry.name,
-      data: { lastLine },
-    });
-    return null;
+    const parsed = parseLastLineVerdict(output, RESOLVE_VERDICT_VOCAB, { scanLines: 1 });
+    if (!parsed) {
+      const lastLine = output.split("\n").reverse().find(l => l.trim())?.trim() ?? "";
+      log.warn("poller", "could not parse resolve verdict", {
+        worker: entry.name,
+        data: { lastLine },
+      });
+      return null;
+    }
+    return {
+      verdict: parsed.verdict.toLowerCase() as ResolveResult["verdict"],
+      body: parsed.body || "No additional comments.",
+    };
   } catch (err) {
     log.warn("poller", "failed to read resolve result", {
       worker: entry.name,
