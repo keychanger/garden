@@ -418,6 +418,11 @@ function runPostMerge(projectName: string, projectPath: string): void {
       source: "poller",
       project: projectName,
       message,
+      // Stable key — message embeds the commit SHA, which would defeat the
+      // default truncation if every retry landed on a new commit. With this
+      // key, repeating postMerge failures collapse to one alert per project
+      // per dedup window.
+      dedupKey: `postMerge-failed:${projectName}`,
     });
   }
 }

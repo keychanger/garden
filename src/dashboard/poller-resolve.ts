@@ -124,6 +124,9 @@ function escalateResolveBudget(
     project: projectName,
     worker: entry.name,
     message: `Worker ${entry.name}: resolver could not fix the merge-queue rebase conflict after ${RESOLVE_BUDGET} attempts. Conflict files: ${fileList}. A new worker push will reset the retry budget.${bodyTail}`,
+    // fileList and bodyTail vary across runs; without a stable key, every
+    // resolve-budget exhaustion would persist a fresh alert.
+    dedupKey: `resolve-budget:${projectName}:${entry.name}`,
   });
   const headSha = getBranchHeadSha(wtPath);
   transitionState(projectName, entry.name, "failing", {

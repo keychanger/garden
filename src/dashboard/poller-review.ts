@@ -242,6 +242,9 @@ export function handleReviewing(
       project: projectName,
       worker: entry.name,
       message: `Reviewer could not fix issues for worker ${entry.name}: ${review.body.slice(0, 300)}`,
+      // The review body changes between runs, so the default key would
+      // never collapse identical failure modes. Key on worker only.
+      dedupKey: `review-failed:${projectName}:${entry.name}`,
     });
 
     const wtPath = entry.worktreePath ?? projectPath;

@@ -136,6 +136,9 @@ export async function dashboard(args: string[]): Promise<void> {
       source: "bootstrap",
       project: projectName ?? "unknown",
       message: `Worker bootstrap could not update ${baseBranch ?? "base"} at ${projectPath ?? "?"}: ${errText}. Worker will still branch off origin/${baseBranch ?? "base"}; clean the main checkout so future workers stay fresh.`,
+      // errText carries variable git output; key on the project so a single
+      // long-running fetch issue collapses to one alert per window.
+      dedupKey: `bootstrap:${projectName ?? "unknown"}`,
     });
     return;
   }

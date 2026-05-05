@@ -127,6 +127,118 @@ describe("addAlert", () => {
   });
 });
 
+describe("addAlert dedup", () => {
+  function alertsFromLastWrite(): Array<Record<string, unknown>> {
+    const calls = vi.mocked(fs.writeFileSync).mock.calls;
+    if (calls.length === 0) return [];
+    const last = calls[calls.length - 1][1] as string;
+    return JSON.parse(last).alerts as Array<Record<string, unknown>>;
+  }
+
+  function loadStoreFromWrite(): { alerts: Array<Record<string, unknown>> } {
+    return { alerts: alertsFromLastWrite() };
+  }
+
+  // Stage existing alerts into the readAlerts() mock by stuffing them into
+  // the JSON.parse-able readFileSync mock. Subsequent writes will use the
+  // capture above.
+  function stage(alerts: Array<Record<string, unknown>>): void {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ alerts }));
+  }
+
+  it("suppresses identical-default-key alerts within the dedup window", () => {
+    stage([]);
+    addAlert({
+      level: "error", source: "poller", project: "p", worker: "w", message: "Same body",
+    });
+    const after1 = alertsFromLastWrite();
+    expect(after1).toHaveLength(1);
+
+    // Stage that first alert as the now-current store, then fire an
+    // identical alert and verify it does not persist.
+    stage(after1);
+    vi.mocked(log.error).mockClear();
+    vi.mocked(fs.writeFileSync).mockClear();
+    addAlert({
+      level: "error", source: "poller", project: "p", worker: "w", message: "Same body",
+    });
+    // No new write to the alerts file: the writes we observe should only be
+    // from refreshAlertBadge, which does not call atomicWriteFile (it sets
+    // a tmux option). So writeFileSync should have zero calls.
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+    // And the duplicate log emission is suppressed too.
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it("persists alerts past the dedup window", () => {
+    const oldTs = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(); // 2h ago
+    stage([{
+      id: "old", ts: oldTs, level: "error", source: "poller",
+      project: "p", worker: "w", message: "Same body",
+      dedupKey: ["error", "poller", "p", "w", "Same body"].join("\x00"),
+    }]);
+    vi.mocked(fs.writeFileSync).mockClear();
+    addAlert({
+      level: "error", source: "poller", project: "p", worker: "w", message: "Same body",
+    });
+    // The window is 1h; the existing alert is 2h old, so the new alert persists.
+    const after = alertsFromLastWrite();
+    expect(after.length).toBeGreaterThan(0);
+    const newest = after[after.length - 1] as { message?: string };
+    expect(newest.message).toBe("Same body");
+  });
+
+  it("explicit dedupKey suppresses across volatile message text", () => {
+    const sharedKey = "review-failed:proj:bold-ash";
+    stage([{
+      id: "old", ts: new Date().toISOString(),
+      level: "error", source: "review", project: "proj", worker: "bold-ash",
+      message: "Reviewer could not fix issues for worker bold-ash: typo in line 42",
+      dedupKey: sharedKey,
+    }]);
+    vi.mocked(fs.writeFileSync).mockClear();
+    addAlert({
+      level: "error", source: "review", project: "proj", worker: "bold-ash",
+      message: "Reviewer could not fix issues for worker bold-ash: undefined ref at line 99",
+      dedupKey: sharedKey,
+    });
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it("different explicit dedupKeys produce distinct alerts even with same message", () => {
+    stage([{
+      id: "old", ts: new Date().toISOString(),
+      level: "error", source: "poller", project: "p", worker: "w1",
+      message: "Same body", dedupKey: "tagA",
+    }]);
+    vi.mocked(fs.writeFileSync).mockClear();
+    addAlert({
+      level: "error", source: "poller", project: "p", worker: "w1",
+      message: "Same body", dedupKey: "tagB",
+    });
+    const after = alertsFromLastWrite();
+    expect(after).toHaveLength(2);
+  });
+
+  it("interoperates with pre-dedup alerts that have no stored dedupKey", () => {
+    // Backward compat: alerts persisted before the dedup field landed have
+    // no `dedupKey`. They should still suppress new alerts whose computed
+    // default key matches the stored alert's effective default key.
+    stage([{
+      id: "legacy", ts: new Date().toISOString(),
+      level: "error", source: "poller", project: "p", worker: "w",
+      message: "Legacy body",
+      // dedupKey omitted (legacy).
+    }]);
+    vi.mocked(fs.writeFileSync).mockClear();
+    addAlert({
+      level: "error", source: "poller", project: "p", worker: "w", message: "Legacy body",
+    });
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+});
+
 describe("clearAlerts", () => {
   it("writes empty alerts array and stamps lastSeenAt", () => {
     clearAlerts();
