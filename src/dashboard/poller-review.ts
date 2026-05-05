@@ -8,20 +8,21 @@ import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { tryGetProject, SESSIONS_DIR } from "../config.js";
-import { DASHBOARD_SESSION } from "../session.js";
 import { addAlert } from "./alerts.js";
 import { claudeEnvPrefix } from "./claude-env.js";
 import {
   forcePushBranch, getBranchHeadSha, getCommitSummary, getRemoteTrackingSha,
 } from "./git.js";
 import { refreshDashboard } from "./header.js";
+import { launchHeadlessAgent } from "./headless-agent.js";
 import { log } from "./log.js";
 import { buildReviewPrompt } from "./prompts.js";
 import {
   findWorkerByName, updateWorkerFields,
   type WorkerEntry,
 } from "./registry.js";
-import { tmux, windowExists, killWindowSafe } from "./tmux.js";
+import { windowExists, killWindowSafe } from "./tmux.js";
+import { parseLastLineVerdict } from "./verdict.js";
 import { reviewWindowName } from "./window-names.js";
 import { signalFifoPath, scheduleDelayedPoke } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
@@ -33,14 +34,7 @@ import { transitionState } from "./poller-state.js";
 // denies their network calls).
 export const REVIEW_TIMEOUT_MS = 30 * 60 * 1000;
 
-// Scan the last N non-empty lines for a line that is a standalone verdict
-// token (optionally with trailing punctuation). Reviewers sometimes emit the
-// verdict and then add trailing summary output; they also sometimes forget
-// the fenced verdict entirely. Looking at the last N lines handles the first
-// case. The second case is handled in handleReviewing by detecting HEAD
-// advancement and re-queueing the review.
-const VERDICT_SCAN_LINES = 20;
-const VERDICT_LINE = /^(CLEAN|FIXED|FAILED)[.\s!]*$/i;
+const REVIEW_VERDICT_VOCAB = ["CLEAN", "FIXED", "FAILED"] as const;
 
 export interface ReviewResult {
   verdict: "clean" | "fixed" | "failed";
@@ -390,37 +384,24 @@ function launchReview(
     return false;
   }
 
-  // Write prompt to file
-  const promptFile = reviewPromptPath(projectName, entry.name);
-  const resultFile = reviewResultPath(projectName, entry.name);
-  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  fs.writeFileSync(promptFile, prompt);
-
-  // Clean any stale result file
-  try { fs.unlinkSync(resultFile); } catch { /* ignore */ }
-
-  // Launch review in a hidden tmux window
-  const revWindow = reviewWindowName(projectName, entry.name);
-  const escapedPrompt = promptFile.replace(/'/g, "'\\''");
-  const escapedResult = resultFile.replace(/'/g, "'\\''");
-  const escapedFifo = signalFifoPath(projectName).replace(/'/g, "'\\''");
   // GARDEN_REVIEWER=1 marks this Claude as the reviewer so its hooks
   // (sessionstart/prompt/stop fired from the same worktree as the worker)
   // can be distinguished from worker hooks and short-circuited by the
   // hook handler. Without this, the reviewer's Stop hook would be treated
   // as the worker's Stop hook and would (a) write claudeStatus="idle" for
   // the worker, and (b) poke the poller to start another review.
-  const envPrefix = claudeEnvPrefix(tryGetProject(projectName) ?? {});
-  const cmd = `GARDEN_REVIEWER=1 ${envPrefix}claude -p < '${escapedPrompt}' > '${escapedResult}' 2>&1; [ -p '${escapedFifo}' ] && (echo > '${escapedFifo}') 2>/dev/null`;
-
-  // Kill any leftover review window
-  if (windowExists(revWindow)) {
-    killWindowSafe(revWindow);
-  }
-
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", revWindow,
-    "-c", wtPath, "bash", "-c", cmd);
-  scheduleReviewTimeoutPoke(projectName);
+  const revWindow = reviewWindowName(projectName, entry.name);
+  launchHeadlessAgent({
+    cwd: wtPath,
+    windowName: revWindow,
+    prompt,
+    promptFile: reviewPromptPath(projectName, entry.name),
+    resultFile: reviewResultPath(projectName, entry.name),
+    envPrefix: claudeEnvPrefix(tryGetProject(projectName) ?? {}),
+    envVars: { GARDEN_REVIEWER: "1" },
+    signalFifo: signalFifoPath(projectName),
+    onLaunched: () => scheduleReviewTimeoutPoke(projectName),
+  });
 
   // Capture the remote tracking SHA at launch time. handleReviewing compares
   // origin/<branch> against this baseline to detect mid-review pushes. We use
@@ -475,30 +456,17 @@ function readReviewResult(
 }
 
 function parseReviewResult(output: string, workerName: string): ReviewResult | null {
-  const lines = output.split("\n");
-  let lastLineIdx = lines.length - 1;
-  while (lastLineIdx >= 0 && !lines[lastLineIdx].trim()) lastLineIdx--;
-  if (lastLineIdx < 0) {
-    log.warn("poller", "review output is empty", { worker: workerName });
+  const parsed = parseLastLineVerdict(output, REVIEW_VERDICT_VOCAB);
+  if (!parsed) {
+    const lastLine = output.split("\n").reverse().find(l => l.trim()) ?? "";
+    log.warn("poller", "could not parse review verdict", {
+      worker: workerName,
+      data: { lastLine: lastLine.trim() },
+    });
     return null;
   }
-
-  const scanStart = Math.max(0, lastLineIdx - VERDICT_SCAN_LINES + 1);
-  for (let i = lastLineIdx; i >= scanStart; i--) {
-    const match = lines[i].trim().match(VERDICT_LINE);
-    if (!match) continue;
-    const verdict = match[1].toUpperCase();
-    const body = lines.slice(0, i).join("\n").trim() || "No additional comments.";
-    if (verdict === "CLEAN") return { verdict: "clean", body };
-    if (verdict === "FIXED") return { verdict: "fixed", body };
-    if (verdict === "FAILED") return { verdict: "failed", body };
-  }
-
-  log.warn("poller", "could not parse review verdict", {
-    worker: workerName,
-    data: { lastLine: lines[lastLineIdx].trim() },
-  });
-  return null;
+  const body = parsed.body || "No additional comments.";
+  return { verdict: parsed.verdict.toLowerCase() as ReviewResult["verdict"], body };
 }
 
 export function killReviewWindow(projectName: string, workerName: string): void {
