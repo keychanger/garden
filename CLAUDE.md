@@ -236,6 +236,7 @@ Current specs in this project:
 
 - `src/dashboard/STATUS.md` — worker status tracking and display system
 - `src/TRACKS.md` — multi-track projects and the promotion pipeline (design target; no code yet)
+- `src/dashboard/TRELLIS.md` — feature-scoped, spec-driven loop workflow ("trellis"); ralph-loop pattern adapted to garden's review/merge cycle (design target; no code yet)
 
 ## Conventions
 
