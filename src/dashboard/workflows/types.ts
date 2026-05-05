@@ -51,7 +51,7 @@ export interface WorkflowDefinition {
    *  a handler that returns `false` (no-op) so the contract stays
    *  exhaustive and the dispatcher needs no defensive runtime check. */
   stateHandlers: Record<PrState, StateHandler>;
-  /** Dispatched by handleClaudeHook in header.ts. The default workflow's
-   *  handlers live in hooks/default.ts. */
+  /** Dispatched by handleClaudeHook in hook-dispatcher.ts. The default
+   *  workflow's handlers live in hooks/default.ts. */
   hookHandlers: WorkflowHookHandlers;
 }

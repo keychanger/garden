@@ -154,7 +154,7 @@ describe("defaultWorkflow", () => {
   });
 
   it("hookHandlers exposes one method per Claude Code event", () => {
-    // The dispatcher in header.ts switches on event name and selects a
+    // The dispatcher in hook-dispatcher.ts switches on event name and selects a
     // method; each event must have a corresponding handler. Catches
     // typos in the WorkflowHookHandlers type.
     expect(typeof defaultWorkflow.hookHandlers.onSessionStart).toBe("function");
