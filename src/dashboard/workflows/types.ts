@@ -15,10 +15,9 @@ export type StateHandler = (
   entry: WorkerEntry,
 ) => boolean;
 
-// Thin context passed to hook handlers. The current default handler builds
-// a richer accumulator pattern privately — that stays out of this type and
-// is an implementation detail of defaultHookHandlers (added in Phase 4).
-// Phase 3 leaves hookHandlers stubbed; Phase 4 fills it in.
+// Thin context passed to hook handlers. The default handler builds a richer
+// accumulator pattern privately — that stays out of this type and is an
+// implementation detail of defaultHookHandlers in hooks/default.ts.
 export interface HookContext {
   event: string;
   /** Raw JSON parsed from stdin. Currently the only field consumed is
@@ -50,8 +49,7 @@ export interface WorkflowDefinition {
    *  handler for every PrState; alternate workflows may omit states they
    *  don't use. */
   stateHandlers: Partial<Record<PrState, StateHandler>>;
-  /** Dispatched by handleClaudeHook. Phase 3 ships this stubbed (the
-   *  current handleClaudeHook does not yet route through the registry);
-   *  Phase 4 fills in defaultHookHandlers and rewires the dispatcher. */
+  /** Dispatched by handleClaudeHook in header.ts. The default workflow's
+   *  handlers live in hooks/default.ts. */
   hookHandlers: WorkflowHookHandlers;
 }
