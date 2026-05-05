@@ -38,7 +38,7 @@ it does not invent new primitives where existing ones suffice.
 | Term            | Definition                                                                                       |
 |-----------------|--------------------------------------------------------------------------------------------------|
 | **Trellis**     | A markdown design document that describes a feature's intent, surface, behavior, tests, and docs. Lives in the project repo. Versioned in git. The reviewer treats it as the source of truth (same convention as `STATUS.md` / `TRACKS.md`). |
-| **Thread**      | A worker bound to one trellis, looping until equilibrium. A project may have multiple threads active at once on different trellises. One worker per thread; one trellis per worker. |
+| **Vine**      | A worker bound to one trellis, looping until equilibrium. A project may have multiple vines active at once on different trellises. One worker per vine; one trellis per worker. |
 | **Iteration**   | One full cycle of `working → reviewing → (merge or fail) → auto-continue`. Counted on the worker entry. |
 | **Drift**       | A specific, named gap between the trellis and one of {code, tests, docs}. Produced by the reviewer as a list. |
 | **Alignment**   | The state in which the reviewer reports zero drift items. The terminal happy path. |
@@ -430,7 +430,7 @@ When `FLAGGED` fires:
    the trellis path, the cited clauses (with line numbers), and the
    reviewer's contradiction prose.
 3. Worker is paused: the `failing → working` push debounce does NOT
-   apply to flagged threads. New commits the worker pushes do not
+   apply to flagged vines. New commits the worker pushes do not
    trigger a re-review until the operator runs `garden trellis resume`.
 4. Operator's choices:
    - **Amend trellis.** Edit the trellis file, commit it, then
@@ -444,7 +444,7 @@ When `FLAGGED` fires:
      overrides file as part of their prompt and are instructed not to
      re-flag the same clause for the same reason.
    - **Kill.** `⌥x` or `garden workers kill`. The trellis lives on; a
-     new thread can be planted later.
+     new vine can be planted later.
 
 Override is meaningful but rare. The expected default is amend. An
 override accumulates technical debt visible in the file —
@@ -714,7 +714,7 @@ call per iteration), so this is rarely binding.
 
 ## Status display
 
-Trellis threads are visually distinct in three places: the worker row in
+Trellis vines are visually distinct in three places: the worker row in
 the status pane, the plot strip aggregation, and the bottom bar's
 project line. The renderer reads `entry.workflow` and the trellis-specific
 fields without changing how default-workflow workers render.
@@ -776,7 +776,7 @@ declared success from operator sentinel-set:
 
 The plot-state aggregator (`src/dashboard/plot-status.ts`) computes a
 single icon per plot from the worst-priority worker state. Trellis
-threads slot into the existing priority order with one addition:
+vines slot into the existing priority order with one addition:
 
 ```
 failing > asking > done > working > idle
@@ -793,14 +793,14 @@ beyond reading `failingReason` to construct the badge text.
 
 ### Bottom bar
 
-When the active project has any trellis thread running, the bottom-bar
+When the active project has any trellis vine running, the bottom-bar
 left segment appends a compact summary:
 
 ```
 garden | main | trellises: auth-rewrite (4/30, drifting), session-cleanup (✓)
 ```
 
-Threads listed in plant order. Aligned threads marked `✓`; drifting
+Vines listed in plant order. Aligned vines marked `✓`; drifting
 shows iteration/budget; flagged shows `⚑`; budget-exhausted shows `!`.
 Truncated with `…` if too wide.
 
@@ -837,11 +837,11 @@ garden trellis new <project> <name>      Scaffold a new trellis with the recomme
 garden trellis status <worker>           Show iteration count, last verdict, drift list, lessons file.
 garden trellis amend <worker>            Open the bound trellis in $EDITOR. Commits with a default message on save.
 garden trellis resume <worker> [--override "<rationale>"]
-                                          Resume a flagged thread. With --override, records an override entry.
+                                          Resume a flagged vine. With --override, records an override entry.
 garden trellis budget <worker> <N>       Update maxIterations on the worker entry.
 ```
 
-`garden trellis status` is the operator's "where is this thread?"
+`garden trellis status` is the operator's "where is this vine?"
 command. Sample output:
 
 ```
@@ -881,7 +881,7 @@ iteration 1; the worker creates it).
 ### Pause and resume
 
 The existing `garden pause <worker>` / `garden resume <worker>` (which
-toggle `.garden-done`) work unchanged. Pausing a trellis thread
+toggle `.garden-done`) work unchanged. Pausing a trellis vine
 suppresses auto-continue; resume re-arms it. This is a different
 mechanism than `garden trellis resume`:
 
@@ -889,7 +889,7 @@ mechanism than `garden trellis resume`:
 |---------------------------------------|-------------------------------------------------------------------------------------|
 | `garden pause <worker>`               | Stop the loop without escalating. Worker stays at last state. Operator sets aside. |
 | `garden resume <worker>`              | Inverse of pause. Clears `.garden-done`.                                            |
-| `garden trellis resume <worker>`      | Specifically resumes a flagged thread (clears the flagged state, dispatches a fresh review). |
+| `garden trellis resume <worker>`      | Specifically resumes a flagged vine (clears the flagged state, dispatches a fresh review). |
 
 ## Storage and registry fields
 
@@ -993,9 +993,9 @@ the only safety net that fails closed.
   `trellisDocumentSection` returns `null` (file missing). The verdict
   format section instructs it to emit `FLAGGED` with reason "trellis
   document missing or unreadable." Operator decides: restore, or kill
-  the thread.
+  the vine.
 
-- **Two threads on the same trellis.** Permitted but discouraged. Each
+- **Two vines on the same trellis.** Permitted but discouraged. Each
   worker has its own worktree so they don't collide on disk; their
   branches are independent. They will converge on similar code (same
   trellis), and the second to merge will likely produce a no-op
