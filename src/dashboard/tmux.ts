@@ -180,6 +180,12 @@ export function listHiddenWorkerWindows(project: string, windowNames?: string[])
   return names.filter(w => w.startsWith(prefix));
 }
 
+// Returns a fully single-quoted bash literal of the input. Safe for all
+// shell metacharacters. Strings that match the safe-token character class
+// are passed through unquoted as a tiny readability optimization. Use the
+// result WITHOUT additional surrounding `'...'` in templates — the helper
+// already supplies the outer quotes when needed. Prefer this over inline
+// `.replace(/'/g, "'\\''")` so all bash escaping flows through one helper.
 export function shellEscape(s: string): string {
   if (/^[a-zA-Z0-9_./:=-]+$/.test(s)) return s;
   return `'${s.replace(/'/g, "'\\''")}'`;

@@ -14,6 +14,11 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
   windowExists: vi.fn(() => false),
   killWindowSafe: vi.fn(),
+  // Mirror the real shellEscape: pass safe-token strings through unquoted,
+  // wrap others in single quotes with the inner-quote escape.
+  shellEscape: vi.fn((s: string) =>
+    /^[a-zA-Z0-9_./:=-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`,
+  ),
 }));
 
 vi.mock("../src/session.js", () => ({
@@ -96,7 +101,9 @@ describe("launchHeadlessAgent", () => {
       envVars: { GARDEN_REVIEWER: "1", FOO: "bar" },
     }));
     const cmd = vi.mocked(tmux).mock.calls[0][10] as string;
-    expect(cmd).toMatch(/^GARDEN_REVIEWER='1' FOO='bar' claude -p /);
+    // Safe-token values (1, bar) pass through shellEscape unquoted; bash
+    // assignment semantics are identical with or without the surrounding quotes.
+    expect(cmd).toMatch(/^GARDEN_REVIEWER=1 FOO=bar claude -p /);
   });
 
   it("prepends envPrefix when provided", () => {
@@ -108,15 +115,15 @@ describe("launchHeadlessAgent", () => {
   it("redirects stdin from promptFile and stdout/stderr to resultFile", () => {
     launchHeadlessAgent(baseOpts());
     const cmd = vi.mocked(tmux).mock.calls[0][10] as string;
-    expect(cmd).toContain("< '/tmp/sessions/myproject-bold-ash-review-prompt.txt'");
-    expect(cmd).toContain("> '/tmp/sessions/myproject-bold-ash-review-result.txt' 2>&1");
+    expect(cmd).toContain("< /tmp/sessions/myproject-bold-ash-review-prompt.txt");
+    expect(cmd).toContain("> /tmp/sessions/myproject-bold-ash-review-result.txt 2>&1");
   });
 
   it("pokes the signal FIFO with a [-p] guard so a missing FIFO is a no-op", () => {
     launchHeadlessAgent(baseOpts());
     const cmd = vi.mocked(tmux).mock.calls[0][10] as string;
-    expect(cmd).toContain("[ -p '/tmp/sessions/myproject-poll-signal' ]");
-    expect(cmd).toContain("(echo > '/tmp/sessions/myproject-poll-signal') 2>/dev/null");
+    expect(cmd).toContain("[ -p /tmp/sessions/myproject-poll-signal ]");
+    expect(cmd).toContain("(echo > /tmp/sessions/myproject-poll-signal) 2>/dev/null");
   });
 
   it("calls onLaunched exactly once after launch", () => {

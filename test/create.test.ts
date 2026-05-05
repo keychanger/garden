@@ -76,7 +76,12 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   setPaneLabel: vi.fn(),
   setPaneVar: vi.fn(),
   getFirstPaneId: vi.fn(() => "%5"),
-  shellEscape: vi.fn((s: string) => s),
+  // Mirror the real shellEscape: pass safe-token strings through unquoted,
+  // wrap others in single quotes with the inner-quote escape. Tests assert
+  // the actual generated bash, so the mock has to match production semantics.
+  shellEscape: vi.fn((s: string) =>
+    /^[a-zA-Z0-9_./:=-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`,
+  ),
   getPaneSize: vi.fn(() => ({ width: 200, height: 50 })),
   resizeWindow: vi.fn(),
   listAllWindowNames: vi.fn(() => []),
@@ -379,7 +384,7 @@ describe("buildWorktreeBootstrapScript", () => {
     // Must branch off the remote ref so stale main checkout never infects
     // workers. The literal "origin/main" at the end of the worktree-add
     // command is the load-bearing piece.
-    expect(script).toMatch(/worktree add \/wt\/myproject\/bold-ash -b 'bold-ash' 'origin\/main'/);
+    expect(script).toMatch(/worktree add \/wt\/myproject\/bold-ash -b bold-ash origin\/main/);
   });
 
   it("defaults to branching off origin/main when baseBranch is omitted", () => {
@@ -392,7 +397,7 @@ describe("buildWorktreeBootstrapScript", () => {
       c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
     );
     expect(call).toBeDefined();
-    expect(call![1] as string).toMatch(/worktree add .* 'origin\/main'/);
+    expect(call![1] as string).toMatch(/worktree add .* origin\/main/);
   });
 
   it("calls _bootstrap-alert and does not swallow fetch/merge errors", () => {
@@ -410,7 +415,7 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(script).not.toMatch(/git -C .* fetch .* 2>\/dev\/null \|\| true/);
     expect(script).not.toMatch(/git -C .* merge --ff-only .* 2>\/dev\/null \|\| true/);
     // On failure, the bootstrap shells out to the internal alert command.
-    expect(script).toContain("dashboard _bootstrap-alert 'myproject' 'develop'");
+    expect(script).toContain("dashboard _bootstrap-alert myproject develop");
   });
 
   it("writes Claude hooks to .claude/settings.json, not settings.local.json", () => {
@@ -439,8 +444,8 @@ describe("buildWorktreeBootstrapScript", () => {
     );
     expect(call).toBeDefined();
     const script = call![1] as string;
-    expect(script).toContain("mkdir -p /wt/myproject/bold-ash/.claude/skills/'done'");
-    expect(script).toContain("/.claude/skills/'done'/'SKILL.md'");
+    expect(script).toContain("mkdir -p /wt/myproject/bold-ash/.claude/skills/done");
+    expect(script).toContain("/.claude/skills/done/SKILL.md");
     expect(script).toContain("name: done");
   });
 
@@ -455,8 +460,8 @@ describe("buildWorktreeBootstrapScript", () => {
     );
     expect(call).toBeDefined();
     const script = call![1] as string;
-    expect(script).toContain("mkdir -p /wt/myproject/bold-ash/.claude/skills/'handoff'");
-    expect(script).toContain("/.claude/skills/'handoff'/'SKILL.md'");
+    expect(script).toContain("mkdir -p /wt/myproject/bold-ash/.claude/skills/handoff");
+    expect(script).toContain("/.claude/skills/handoff/SKILL.md");
     expect(script).toContain("name: handoff");
   });
 
@@ -483,7 +488,7 @@ describe("buildWorktreeBootstrapScript", () => {
       c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
     );
     expect(call).toBeDefined();
-    expect(call![1] as string).toMatch(/worktree add .* 'origin\/release\/2026-04'/);
+    expect(call![1] as string).toMatch(/worktree add .* origin\/release\/2026-04/);
   });
 
   it("exports worker identity env vars so `garden whoami` and `garden logs -w $GARDEN_WORKER` work inside the worker shell", () => {
@@ -497,10 +502,10 @@ describe("buildWorktreeBootstrapScript", () => {
     );
     expect(call).toBeDefined();
     const script = call![1] as string;
-    expect(script).toContain("export GARDEN_PROJECT='myproject'");
-    expect(script).toContain("export GARDEN_WORKER='bold-ash'");
-    expect(script).toContain("export GARDEN_BRANCH='bold-ash'");
-    expect(script).toContain("export GARDEN_BASE_BRANCH='develop'");
+    expect(script).toContain("export GARDEN_PROJECT=myproject");
+    expect(script).toContain("export GARDEN_WORKER=bold-ash");
+    expect(script).toContain("export GARDEN_BRANCH=bold-ash");
+    expect(script).toContain("export GARDEN_BASE_BRANCH=develop");
   });
 });
 

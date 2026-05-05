@@ -8,7 +8,7 @@
 // existing handlers in poller-state/review/merge/resolve. See WORKFLOWS.md
 // Component 5a and src/dashboard/workflows/.
 import fs from "node:fs";
-import { tmux, windowExists, killWindowSafe } from "./tmux.js";
+import { tmux, windowExists, killWindowSafe, shellEscape } from "./tmux.js";
 import {
   readRegistry, getWorkers, type WorkerEntry,
 } from "./registry.js";
@@ -111,8 +111,6 @@ export function startProjectPoller(projectName: string, gardenRunner: string): v
 
   const fifo = signalFifoPath(projectName);
   ensureSignalFifo(fifo);
-  const escapedFifo = fifo.replace(/'/g, "'\\''");
-  const escapedProject = projectName.replace(/'/g, "'\\''");
   // Event-driven poller loop: poll once, then block on the FIFO until an
   // event arrives. Per STATUS.md invariant 6, there is no fallback poll.
   // Every transition is delivered by an event from one of four sources:
@@ -121,8 +119,8 @@ export function startProjectPoller(projectName: string, gardenRunner: string): v
   // per wake.
   const cmd = [
     `while true; do`,
-    `  ${gardenRunner} dashboard _poll '${escapedProject}' 2>/dev/null;`,
-    `  read <>'${escapedFifo}' 2>/dev/null || true;`,
+    `  ${gardenRunner} dashboard _poll ${shellEscape(projectName)} 2>/dev/null;`,
+    `  read <>${shellEscape(fifo)} 2>/dev/null || true;`,
     `done`,
   ].join(" ");
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", window,

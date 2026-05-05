@@ -505,20 +505,22 @@ export function buildWorktreeBootstrapScript(
   // Write the context file eagerly (fast, just file I/O)
   const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName, baseBranch);
 
-  const fifo = signalFifoPath(projectName).replace(/'/g, "'\\''");
-  const pollSignal = `[ -p '${fifo}' ] && (echo > '${fifo}') 2>/dev/null;`;
+  const fifoLit = shellEscape(signalFifoPath(projectName));
+  const pollSignal = `[ -p ${fifoLit} ] && (echo > ${fifoLit}) 2>/dev/null;`;
 
-  const escapedProjectPath = shellEscape(projectPath);
-  const escapedWtPath = shellEscape(wtPath);
-  const escapedContextFile = shellEscape(contextFile);
-  const escapedHooksDir = shellEscape(path.join(wtPath, ".garden-hooks"));
-  const escapedHookPath = shellEscape(path.join(wtPath, ".garden-hooks", "pre-push"));
+  const projectPathLit = shellEscape(projectPath);
+  const wtPathLit = shellEscape(wtPath);
+  const contextFileLit = shellEscape(contextFile);
+  const hooksDirLit = shellEscape(path.join(wtPath, ".garden-hooks"));
+  const hookPathLit = shellEscape(path.join(wtPath, ".garden-hooks", "pre-push"));
   const signalFifoPath_ = path.join(SESSIONS_DIR, `${projectName}-poll-signal`);
 
-  // Build the hook script content with the actual fifo path baked in
+  // Build the hook script content with the actual fifo path baked in. Joined
+  // with literal "\n" (two characters) — the outer printf at install time
+  // interprets them as newlines.
   const hookContent = [
     "#!/bin/sh",
-    `FIFO='${signalFifoPath_.replace(/'/g, "'\\''")}'`,
+    `FIFO=${shellEscape(signalFifoPath_)}`,
     'if [ -p "$FIFO" ]; then',
     '  (echo > "$FIFO") </dev/null >/dev/null 2>&1 &',
     'fi',
@@ -526,32 +528,32 @@ export function buildWorktreeBootstrapScript(
   ].join("\\n");
 
   const gardenRunner = resolveGardenRunner();
-  const escapedGardenRunner = shellEscape(gardenRunner);
+  const gardenRunnerLit = shellEscape(gardenRunner);
   const project = resolveProjectForHooks(projectName, projectPath);
   const sandbox = sandboxForTarget(wtPath, project);
   const settingsJson = buildSettingsJson(gardenRunner, sandbox);
-  const escapedHooksJson = settingsJson.replace(/'/g, "'\\''");
-  const escapedDoneSkill = DONE_SKILL_CONTENT.replace(/'/g, "'\\''");
-  const escapedDoneSkillDirname = DONE_SKILL_DIRNAME.replace(/'/g, "'\\''");
-  const escapedDoneSkillFilename = DONE_SKILL_FILENAME.replace(/'/g, "'\\''");
-  const escapedHandoffSkill = HANDOFF_SKILL_CONTENT.replace(/'/g, "'\\''");
-  const escapedHandoffSkillDirname = HANDOFF_SKILL_DIRNAME.replace(/'/g, "'\\''");
-  const escapedHandoffSkillFilename = HANDOFF_SKILL_FILENAME.replace(/'/g, "'\\''");
+  const settingsJsonLit = shellEscape(settingsJson);
+  const doneSkillLit = shellEscape(DONE_SKILL_CONTENT);
+  const doneSkillDirnameLit = shellEscape(DONE_SKILL_DIRNAME);
+  const doneSkillFilenameLit = shellEscape(DONE_SKILL_FILENAME);
+  const handoffSkillLit = shellEscape(HANDOFF_SKILL_CONTENT);
+  const handoffSkillDirnameLit = shellEscape(HANDOFF_SKILL_DIRNAME);
+  const handoffSkillFilenameLit = shellEscape(HANDOFF_SKILL_FILENAME);
   const envPrefix = claudeEnvPrefix(project);
 
   const base = baseBranch ?? "main";
-  const escapedBase = base.replace(/'/g, "'\\''");
-  const escapedProjectName = projectName.replace(/'/g, "'\\''");
-  const escapedBranch = branchName.replace(/'/g, "'\\''");
-  const escapedWorker = workerName.replace(/'/g, "'\\''");
+  const baseLit = shellEscape(base);
+  const projectNameLit = shellEscape(projectName);
+  const branchLit = shellEscape(branchName);
+  const workerLit = shellEscape(workerName);
 
   const script = `#!/bin/sh
 set -e
 
-export GARDEN_PROJECT='${escapedProjectName}'
-export GARDEN_WORKER='${escapedWorker}'
-export GARDEN_BRANCH='${escapedBranch}'
-export GARDEN_BASE_BRANCH='${escapedBase}'
+export GARDEN_PROJECT=${projectNameLit}
+export GARDEN_WORKER=${workerLit}
+export GARDEN_BRANCH=${branchLit}
+export GARDEN_BASE_BRANCH=${baseLit}
 
 # Atomically write stdin to a destination via tmp+rename so concurrent readers
 # (Claude on SessionStart / --resume reading .claude/settings.json) never see
@@ -562,16 +564,16 @@ atomic_write() {
   cat > "$_aw_tmp" && mv "$_aw_tmp" "$_aw_dest"
 }
 
-printf 'Setting up worktree %s...\\n' '${escapedBranch}'
+printf 'Setting up worktree %s...\\n' ${branchLit}
 
 # Fetch latest base ref. Worker always branches off origin/${base}
 # directly (see "git worktree add" below), so main-checkout freshness is
 # informational only — but a stale main checkout signals operator rot and
 # deserves an alert.
-printf '  Fetching origin/%s...\\n' '${escapedBase}'
+printf '  Fetching origin/%s...\\n' ${baseLit}
 BOOTSTRAP_FAIL=""
 FETCH_RC=0
-FETCH_OUT=$(git -C ${escapedProjectPath} fetch origin '${escapedBase}' 2>&1) || FETCH_RC=$?
+FETCH_OUT=$(git -C ${projectPathLit} fetch origin ${baseLit} 2>&1) || FETCH_RC=$?
 [ -n "$FETCH_OUT" ] && printf '%s\\n' "$FETCH_OUT"
 if [ "$FETCH_RC" -ne 0 ]; then
   BOOTSTRAP_FAIL="fetch failed: $FETCH_OUT"
@@ -579,18 +581,18 @@ if [ "$FETCH_RC" -ne 0 ]; then
   # bail before "git worktree add" silently branches off the stale local ref.
   # When ls-remote also fails, the operator must intervene; transient network
   # errors are tolerated (ls-remote succeeds, we proceed with the local ref).
-  LS_OUT=$(git -C ${escapedProjectPath} ls-remote --exit-code --heads origin '${escapedBase}' 2>&1) || LS_RC=$?
+  LS_OUT=$(git -C ${projectPathLit} ls-remote --exit-code --heads origin ${baseLit} 2>&1) || LS_RC=$?
   if [ "\${LS_RC:-0}" -ne 0 ]; then
-    printf '  ERROR: origin has no branch %s — refusing to branch off stale local ref.\\n' '${escapedBase}' >&2
+    printf '  ERROR: origin has no branch %s — refusing to branch off stale local ref.\\n' ${baseLit} >&2
     printf '%s\\n' "$LS_OUT" >&2
-    ${escapedGardenRunner} dashboard _bootstrap-alert '${escapedProjectName}' '${escapedBase}' ${escapedProjectPath} "base missing on origin: $LS_OUT" 2>/dev/null || true
+    ${gardenRunnerLit} dashboard _bootstrap-alert ${projectNameLit} ${baseLit} ${projectPathLit} "base missing on origin: $LS_OUT" 2>/dev/null || true
     exit 1
   fi
 fi
 
 printf '  Fast-forwarding main checkout...\\n'
 MERGE_RC=0
-MERGE_OUT=$(git -C ${escapedProjectPath} merge --ff-only 'origin/${escapedBase}' 2>&1) || MERGE_RC=$?
+MERGE_OUT=$(git -C ${projectPathLit} merge --ff-only origin/${baseLit} 2>&1) || MERGE_RC=$?
 [ -n "$MERGE_OUT" ] && printf '%s\\n' "$MERGE_OUT"
 if [ "$MERGE_RC" -ne 0 ]; then
   BOOTSTRAP_FAIL="\${BOOTSTRAP_FAIL:+$BOOTSTRAP_FAIL; }ff-merge failed: $MERGE_OUT"
@@ -598,51 +600,51 @@ fi
 
 if [ -n "$BOOTSTRAP_FAIL" ]; then
   printf '  WARNING: main checkout did not update cleanly — raising alert.\\n' >&2
-  ${escapedGardenRunner} dashboard _bootstrap-alert '${escapedProjectName}' '${escapedBase}' ${escapedProjectPath} "$BOOTSTRAP_FAIL" 2>/dev/null || true
+  ${gardenRunnerLit} dashboard _bootstrap-alert ${projectNameLit} ${baseLit} ${projectPathLit} "$BOOTSTRAP_FAIL" 2>/dev/null || true
 fi
 
 # Create worktree. Branch explicitly off origin/${base} so worker freshness
 # does not depend on the main checkout being clean or up to date.
 printf '  Creating worktree...\\n'
-mkdir -p "$(dirname ${escapedWtPath})"
-git -C ${escapedProjectPath} worktree add ${escapedWtPath} -b '${escapedBranch}' 'origin/${escapedBase}'
+mkdir -p "$(dirname ${wtPathLit})"
+git -C ${projectPathLit} worktree add ${wtPathLit} -b ${branchLit} origin/${baseLit}
 
 # Install dependencies if needed
-if [ -f ${escapedWtPath}/package.json ]; then
+if [ -f ${wtPathLit}/package.json ]; then
   printf '  Installing dependencies...\\n'
-  (cd ${escapedWtPath} && npm install --prefer-offline) 2>/dev/null || true
+  (cd ${wtPathLit} && npm install --prefer-offline) 2>/dev/null || true
 fi
 
 # Install poll trigger hook
-mkdir -p ${escapedHooksDir}
-printf '${hookContent}\\n' | atomic_write ${escapedHookPath}
-chmod 755 ${escapedHookPath}
-git -C ${escapedWtPath} config --local core.hooksPath ${escapedHooksDir}
+mkdir -p ${hooksDirLit}
+printf '${hookContent}\\n' | atomic_write ${hookPathLit}
+chmod 755 ${hookPathLit}
+git -C ${wtPathLit} config --local core.hooksPath ${hooksDirLit}
 
 # Install Claude Code hooks — settings.json (not .local.json, which Claude Code auto-edits and would clobber).
-mkdir -p ${escapedWtPath}/.claude
-printf '%s' '${escapedHooksJson}' | atomic_write ${escapedWtPath}/.claude/settings.json
+mkdir -p ${wtPathLit}/.claude
+printf '%s' ${settingsJsonLit} | atomic_write ${wtPathLit}/.claude/settings.json
 
 # Install garden-bundled skills (see src/dashboard/skills.ts). Layout: .claude/skills/<name>/SKILL.md.
-mkdir -p ${escapedWtPath}/.claude/skills/'${escapedDoneSkillDirname}'
-printf '%s' '${escapedDoneSkill}' | atomic_write ${escapedWtPath}/.claude/skills/'${escapedDoneSkillDirname}'/'${escapedDoneSkillFilename}'
-mkdir -p ${escapedWtPath}/.claude/skills/'${escapedHandoffSkillDirname}'
-printf '%s' '${escapedHandoffSkill}' | atomic_write ${escapedWtPath}/.claude/skills/'${escapedHandoffSkillDirname}'/'${escapedHandoffSkillFilename}'
+mkdir -p ${wtPathLit}/.claude/skills/${doneSkillDirnameLit}
+printf '%s' ${doneSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${doneSkillDirnameLit}/${doneSkillFilenameLit}
+mkdir -p ${wtPathLit}/.claude/skills/${handoffSkillDirnameLit}
+printf '%s' ${handoffSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${handoffSkillDirnameLit}/${handoffSkillFilenameLit}
 
 # Ensure garden-managed dirs are excluded from git status.
 # Writing to the common info/exclude covers all worktrees and never gets committed.
-EXCLUDE_FILE="$(git -C ${escapedWtPath} rev-parse --git-common-dir)/info/exclude"
+EXCLUDE_FILE="$(git -C ${wtPathLit} rev-parse --git-common-dir)/info/exclude"
 for pattern in .claude/ .garden-hooks/; do
   grep -qxF "$pattern" "$EXCLUDE_FILE" 2>/dev/null || printf '%s\\n' "$pattern" >> "$EXCLUDE_FILE"
 done
 
 # Switch to the worktree directory
-cd ${escapedWtPath}
+cd ${wtPathLit}
 printf '  Ready.\\n\\n'
 
 # Launch claude
-${envPrefix}claude --rc --session-id ${sessionId} --append-system-prompt-file ${escapedContextFile}
-${escapedGardenRunner} dashboard _claude-hook stop 2>/dev/null || true
+${envPrefix}claude --rc --session-id ${sessionId} --append-system-prompt-file ${contextFileLit}
+${gardenRunnerLit} dashboard _claude-hook stop 2>/dev/null || true
 ${pollSignal}
 exec $SHELL
 `;
@@ -688,8 +690,8 @@ function workerEnvExports(
 }
 
 function pollSignalSnippet(projectName: string): string {
-  const fifo = signalFifoPath(projectName).replace(/'/g, "'\\''");
-  return `[ -p '${fifo}' ] && (echo > '${fifo}') 2>/dev/null;`;
+  const fifoLit = shellEscape(signalFifoPath(projectName));
+  return `[ -p ${fifoLit} ] && (echo > ${fifoLit}) 2>/dev/null;`;
 }
 
 function writeContextFile(projectName: string, projectPath: string): string {

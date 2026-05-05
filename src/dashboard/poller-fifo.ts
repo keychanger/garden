@@ -8,6 +8,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { SESSIONS_DIR } from "../config.js";
 import { findWorkerByName } from "./registry.js";
 import { log } from "./log.js";
+import { shellEscape } from "./tmux.js";
 
 export function signalFifoPath(project: string): string {
   return path.join(SESSIONS_DIR, `${project}-poll-signal`);
@@ -33,8 +34,7 @@ export function triggerProjectPoll(projectName: string): void {
 export function scheduleDelayedPoke(projectName: string, delayMs: number): void {
   const fifo = signalFifoPath(projectName);
   const delaySec = Math.ceil(delayMs / 1000);
-  const escapedFifo = fifo.replace(/'/g, "'\\''");
-  spawn("bash", ["-c", `sleep ${delaySec} && echo > '${escapedFifo}' 2>/dev/null`], {
+  spawn("bash", ["-c", `sleep ${delaySec} && echo > ${shellEscape(fifo)} 2>/dev/null`], {
     detached: true,
     stdio: "ignore",
   }).unref();

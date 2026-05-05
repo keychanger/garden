@@ -10,7 +10,7 @@
 // `onLaunched`, and pass the result file's contents to `parseLastLineVerdict`.
 import fs from "node:fs";
 import { atomicWriteFile } from "./atomic-write.js";
-import { tmux, windowExists, killWindowSafe } from "./tmux.js";
+import { tmux, windowExists, killWindowSafe, shellEscape } from "./tmux.js";
 import { DASHBOARD_SESSION } from "../session.js";
 
 export interface HeadlessAgentLaunchOptions {
@@ -57,11 +57,11 @@ export function launchHeadlessAgent(
     killWindowSafe(opts.windowName);
   }
 
-  const escapedPrompt = shellSingleQuote(opts.promptFile);
-  const escapedResult = shellSingleQuote(opts.resultFile);
-  const escapedFifo = shellSingleQuote(opts.signalFifo);
+  const escapedPrompt = shellEscape(opts.promptFile);
+  const escapedResult = shellEscape(opts.resultFile);
+  const escapedFifo = shellEscape(opts.signalFifo);
   const inlineEnv = opts.envVars
-    ? Object.entries(opts.envVars).map(([k, v]) => `${k}=${shellSingleQuote(v)} `).join("")
+    ? Object.entries(opts.envVars).map(([k, v]) => `${k}=${shellEscape(v)} `).join("")
     : "";
   const cmd = `${inlineEnv}${opts.envPrefix}claude -p < ${escapedPrompt} > ${escapedResult} 2>&1; [ -p ${escapedFifo} ] && (echo > ${escapedFifo}) 2>/dev/null`;
 
@@ -74,6 +74,3 @@ export function launchHeadlessAgent(
   return { windowName: opts.windowName, launchedAt };
 }
 
-function shellSingleQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}

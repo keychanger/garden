@@ -21,7 +21,7 @@ import {
   findWorkerByName, updateWorkerFields,
   type WorkerEntry,
 } from "./registry.js";
-import { windowExists, killWindowSafe } from "./tmux.js";
+import { windowExists, killWindowSafe, shellEscape } from "./tmux.js";
 import { parseLastLineVerdict } from "./verdict.js";
 import { reviewWindowName } from "./window-names.js";
 import { signalFifoPath, scheduleDelayedPoke } from "./poller-fifo.js";
@@ -311,9 +311,9 @@ export function resetToWorkingOnWorkerPush(
 // run. Spurious pokes after normal completion are harmless (the handlers no-op).
 export function scheduleReviewTimeoutPoke(projectName: string): void {
   const fifo = signalFifoPath(projectName);
-  const escapedFifo = fifo.replace(/'/g, "'\\''");
+  const fifoLit = shellEscape(fifo);
   const seconds = Math.ceil(REVIEW_TIMEOUT_MS / 1000);
-  const cmd = `sleep ${seconds} && [ -p '${escapedFifo}' ] && (echo > '${escapedFifo}') 2>/dev/null`;
+  const cmd = `sleep ${seconds} && [ -p ${fifoLit} ] && (echo > ${fifoLit}) 2>/dev/null`;
   const child = spawn("bash", ["-c", cmd], { detached: true, stdio: "ignore" });
   child.unref();
 }

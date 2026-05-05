@@ -64,6 +64,12 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   getFirstPaneId: vi.fn(() => "%5"),
   windowExists: vi.fn(() => true),
   killWindowSafe: vi.fn(),
+  // Mirror the real shellEscape: pass safe-token strings through unquoted,
+  // wrap others in single quotes with the inner-quote escape. headless-agent
+  // and poller-* import it for bash command construction.
+  shellEscape: vi.fn((s: string) =>
+    /^[a-zA-Z0-9_./:=-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`,
+  ),
 }));
 
 vi.mock("../src/dashboard/registry.js", () => {
