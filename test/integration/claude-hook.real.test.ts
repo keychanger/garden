@@ -125,7 +125,7 @@ describe("handleClaudeHook (real fs + real git)", () => {
   it("notification with claudeStatus=working flips to asking", async () => {
     seedRegistry("working");
     process.chdir(worktreePath);
-    const { handleClaudeHook } = await import("../../src/dashboard/header.js");
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
     handleClaudeHook("notification");
     const reg = readRegistryFile();
     const w = reg.workers[PROJECT][0] as { claudeStatus: string };
@@ -135,7 +135,7 @@ describe("handleClaudeHook (real fs + real git)", () => {
   it("notification with claudeStatus=idle self-heals to asking", async () => {
     seedRegistry("idle");
     process.chdir(worktreePath);
-    const { handleClaudeHook } = await import("../../src/dashboard/header.js");
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
     handleClaudeHook("notification");
     const w = readRegistryFile().workers[PROJECT][0] as { claudeStatus: string };
     expect(w.claudeStatus).toBe("asking");
@@ -144,7 +144,7 @@ describe("handleClaudeHook (real fs + real git)", () => {
   it("notification with claudeStatus=ready does NOT flip (not in working/idle set)", async () => {
     seedRegistry("ready");
     process.chdir(worktreePath);
-    const { handleClaudeHook } = await import("../../src/dashboard/header.js");
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
     handleClaudeHook("notification");
     const w = readRegistryFile().workers[PROJECT][0] as { claudeStatus: string };
     expect(w.claudeStatus).toBe("ready");
@@ -153,7 +153,7 @@ describe("handleClaudeHook (real fs + real git)", () => {
   it("notification with claudeStatus=asking stays asking (not in working/idle set)", async () => {
     seedRegistry("asking");
     process.chdir(worktreePath);
-    const { handleClaudeHook } = await import("../../src/dashboard/header.js");
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
     handleClaudeHook("notification");
     const w = readRegistryFile().workers[PROJECT][0] as { claudeStatus: string };
     expect(w.claudeStatus).toBe("asking");
@@ -162,7 +162,7 @@ describe("handleClaudeHook (real fs + real git)", () => {
   it("pretooluse and posttooluse have OPPOSITE effects on the same starting state", async () => {
     seedRegistry("working");
     process.chdir(worktreePath);
-    const { handleClaudeHook } = await import("../../src/dashboard/header.js");
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
 
     handleClaudeHook("pretooluse");
     expect((readRegistryFile().workers[PROJECT][0] as { claudeStatus: string }).claudeStatus).toBe("asking");
@@ -174,7 +174,7 @@ describe("handleClaudeHook (real fs + real git)", () => {
   it("posttooluse with idle self-heals to working", async () => {
     seedRegistry("idle");
     process.chdir(worktreePath);
-    const { handleClaudeHook } = await import("../../src/dashboard/header.js");
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
     handleClaudeHook("posttooluse");
     const w = readRegistryFile().workers[PROJECT][0] as { claudeStatus: string };
     expect(w.claudeStatus).toBe("working");
@@ -183,7 +183,7 @@ describe("handleClaudeHook (real fs + real git)", () => {
   it("posttooluse with ready does NOT flip", async () => {
     seedRegistry("ready");
     process.chdir(worktreePath);
-    const { handleClaudeHook } = await import("../../src/dashboard/header.js");
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
     handleClaudeHook("posttooluse");
     const w = readRegistryFile().workers[PROJECT][0] as { claudeStatus: string };
     expect(w.claudeStatus).toBe("ready");
@@ -192,7 +192,7 @@ describe("handleClaudeHook (real fs + real git)", () => {
   it("prompt sets working and clears merged prState", async () => {
     seedRegistry("idle", { prState: "merged" });
     process.chdir(worktreePath);
-    const { handleClaudeHook } = await import("../../src/dashboard/header.js");
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
     handleClaudeHook("prompt");
     const w = readRegistryFile().workers[PROJECT][0] as { claudeStatus: string; prState?: string };
     expect(w.claudeStatus).toBe("working");
@@ -202,7 +202,7 @@ describe("handleClaudeHook (real fs + real git)", () => {
   it("prompt does not clear non-merged prState", async () => {
     seedRegistry("idle", { prState: "failing" });
     process.chdir(worktreePath);
-    const { handleClaudeHook } = await import("../../src/dashboard/header.js");
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
     handleClaudeHook("prompt");
     const w = readRegistryFile().workers[PROJECT][0] as { prState?: string };
     expect(w.prState).toBe("failing");
@@ -211,7 +211,7 @@ describe("handleClaudeHook (real fs + real git)", () => {
   it("stop sets claudeStatus to idle when no commits are ahead", async () => {
     seedRegistry("working");
     process.chdir(worktreePath);
-    const { handleClaudeHook } = await import("../../src/dashboard/header.js");
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
     handleClaudeHook("stop");
     const w = readRegistryFile().workers[PROJECT][0] as { claudeStatus: string; pendingReviewAt?: number };
     expect(w.claudeStatus).toBe("idle");
@@ -224,7 +224,7 @@ describe("handleClaudeHook (real fs + real git)", () => {
     git(worktreePath, "add", "ahead.txt");
     git(worktreePath, "commit", "-m", "ahead");
     process.chdir(worktreePath);
-    const { handleClaudeHook } = await import("../../src/dashboard/header.js");
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
     handleClaudeHook("stop");
     const w = readRegistryFile().workers[PROJECT][0] as { claudeStatus: string; pendingReviewAt?: number };
     expect(w.claudeStatus).toBe("idle");
@@ -234,7 +234,7 @@ describe("handleClaudeHook (real fs + real git)", () => {
   it("sessionstart sets ready when no source", async () => {
     seedRegistry("idle");
     process.chdir(worktreePath);
-    const { handleClaudeHook } = await import("../../src/dashboard/header.js");
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
     handleClaudeHook("sessionstart");
     const w = readRegistryFile().workers[PROJECT][0] as { claudeStatus: string };
     expect(w.claudeStatus).toBe("ready");
@@ -243,7 +243,7 @@ describe("handleClaudeHook (real fs + real git)", () => {
   it("ignores hook when cwd is outside any worktree", async () => {
     seedRegistry("working");
     process.chdir(env.home);
-    const { handleClaudeHook } = await import("../../src/dashboard/header.js");
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
     handleClaudeHook("notification");
     const w = readRegistryFile().workers[PROJECT][0] as { claudeStatus: string };
     expect(w.claudeStatus).toBe("working");
@@ -254,7 +254,7 @@ describe("handleClaudeHook (real fs + real git)", () => {
     process.chdir(worktreePath);
     process.env.GARDEN_REVIEWER = "1";
     try {
-      const { handleClaudeHook } = await import("../../src/dashboard/header.js");
+      const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
       handleClaudeHook("notification");
       const w = readRegistryFile().workers[PROJECT][0] as { claudeStatus: string };
       expect(w.claudeStatus).toBe("working");
@@ -266,7 +266,7 @@ describe("handleClaudeHook (real fs + real git)", () => {
   it("unknown event is a no-op", async () => {
     seedRegistry("working");
     process.chdir(worktreePath);
-    const { handleClaudeHook } = await import("../../src/dashboard/header.js");
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
     handleClaudeHook("totally-not-an-event");
     const w = readRegistryFile().workers[PROJECT][0] as { claudeStatus: string };
     expect(w.claudeStatus).toBe("working");

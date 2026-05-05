@@ -5,20 +5,19 @@
 // existing handler functions — none of those handlers need to change for
 // the foundation refactor.
 //
-// hookHandlers must be a getter, not a captured value. workflows/default.ts
-// participates in a module-init cycle (workflows/default.ts -> hooks/default.ts
-// -> header.ts -> workflows/index.ts -> workflows/default.ts). Under esbuild's
-// bundling order, evaluating `hookHandlers: defaultHookHandlers` at object-
-// literal time reads `undefined`, and every Claude Code hook then crashes with
-// "Cannot read properties of undefined (reading 'onStop')". The getter defers
-// resolution to call-time, after all module init has completed. See the
-// regression covered by test/integration/claude-hook-bundled.real.test.ts.
-import * as hooksDefault from "../hooks/default.js";
+// hookHandlers is a captured value (no getter). The init cycle that used to
+// force the getter (workflows/default.ts -> hooks/default.ts -> header.ts ->
+// workflows/index.ts -> workflows/default.ts) was eliminated by extracting
+// handleClaudeHook out of header.ts into hook-dispatcher.ts, so header.ts
+// no longer imports from workflows/. The bundled regression test
+// (test/integration/claude-hook-bundled.real.test.ts) now runs as part of
+// the default `npm test` and gates this on every reviewer pass.
+import { defaultHookHandlers } from "../hooks/default.js";
 import { handleMergePending } from "../poller-merge.js";
 import { handleResolving } from "../poller-resolve.js";
 import { handleWorking, handleReviewing } from "../poller-review.js";
 import { handleFailing, handleMerged, handleDone } from "../poller-state.js";
-import type { WorkflowDefinition, WorkflowHookHandlers } from "./types.js";
+import type { WorkflowDefinition } from "./types.js";
 
 export const defaultWorkflow: WorkflowDefinition = {
   name: "default",
@@ -40,7 +39,5 @@ export const defaultWorkflow: WorkflowDefinition = {
     merged: handleMerged,
     done: handleDone,
   },
-  get hookHandlers(): WorkflowHookHandlers {
-    return hooksDefault.defaultHookHandlers;
-  },
+  hookHandlers: defaultHookHandlers,
 };

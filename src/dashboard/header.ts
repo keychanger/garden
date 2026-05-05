@@ -1,10 +1,12 @@
 // Dashboard header and status bar: renders active project context (left)
-// and garden build version (right) in the tmux status line.
-//
-// Claude Code hook handling: handleClaudeHook is a thin dispatcher that
-// looks up the worker's workflow and routes to the workflow's hook
-// methods. The default workflow's handlers (and their helpers) live in
-// hooks/default.ts. See WORKFLOWS.md Component 5c.
+// and garden build version (right) in the tmux status line. Also owns the
+// pane-died and pane-title-changed handlers and the dashboard-refresh
+// orchestration. The Claude Code hook dispatcher (handleClaudeHook) lives
+// in hook-dispatcher.ts — it must NOT live here, because hooks/default.ts
+// statically imports header.ts for findWorkerPaneId/refreshDashboard, and
+// header.ts importing workflows/index.ts (which the dispatcher needs)
+// would close the init cycle that previously crashed every Claude Code
+// hook. Keep this file workflows-free.
 import path from "node:path";
 import { SESSIONS_DIR, loadConfig, tryGetProject, plotsMap, isPlotFocused } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
@@ -19,9 +21,6 @@ import { unreadAlertCount, formatRightBar } from "./alerts.js";
 import { workerWindowName as workerWin, parseWorkerWindow } from "./window-names.js";
 import { renderUsagePane } from "./usage.js";
 import { resolvePlotStatus, type PlotState } from "./plot-status.js";
-import { workerFromCwd, readHookInput } from "./hooks/default.js";
-import { getWorkflow } from "./workflows/index.js";
-import type { HookContext, HookMethod, WorkflowHookHandlers } from "./workflows/types.js";
 
 const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
 const USAGE_RENDERED_FILE = path.join(SESSIONS_DIR, "usage.rendered");
@@ -239,65 +238,6 @@ export function findWorkerPaneId(project: string, worker: string): string | null
     return getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   }
   return null;
-}
-
-// ---------------------------------------------------------------------------
-// Claude hook dispatcher
-// ---------------------------------------------------------------------------
-//
-// Thin dispatcher: builds a HookContext, looks up the worker's workflow,
-// routes to the appropriate hook method. Per-event behavior lives in the
-// workflow's hookHandlers (default workflow's are in hooks/default.ts).
-// Reviewer/resolver hooks short-circuit here (GARDEN_REVIEWER=1) — they
-// fire from the same worktree as the worker and would otherwise be
-// indistinguishable from worker hooks.
-
-export function handleClaudeHook(event: string): void {
-  if (process.env.GARDEN_REVIEWER === "1") return;
-
-  const cwdInfo = workerFromCwd();
-  if (!cwdInfo) {
-    // Hook fired from outside any worktree (operator ad-hoc invocation).
-    // Nothing to update; refresh the dashboard so any stale state (e.g.,
-    // unread alerts) gets repainted.
-    refreshDashboard();
-    return;
-  }
-
-  const entry = findWorkerByName(cwdInfo.project, cwdInfo.worker);
-  if (!entry) {
-    refreshDashboard();
-    return;
-  }
-
-  const ctx: HookContext = {
-    event,
-    input: readHookInput(),
-    workerInfo: { name: cwdInfo.worker, project: cwdInfo.project, entry },
-  };
-
-  const workflow = getWorkflow(entry.workflow ?? "default");
-  const method = pickHookMethod(workflow.hookHandlers, event);
-  if (!method) {
-    log.warn("hook", "unknown claude hook event", {
-      worker: cwdInfo.worker,
-      data: { project: cwdInfo.project, event, workflow: workflow.name },
-    });
-    return;
-  }
-  method(ctx);
-}
-
-function pickHookMethod(handlers: WorkflowHookHandlers, event: string): HookMethod | null {
-  switch (event) {
-    case "sessionstart": return handlers.onSessionStart;
-    case "prompt":       return handlers.onUserPromptSubmit;
-    case "stop":         return handlers.onStop;
-    case "notification": return handlers.onNotification;
-    case "pretooluse":   return handlers.onPreToolUse;
-    case "posttooluse":  return handlers.onPostToolUse;
-    default:             return null;
-  }
 }
 
 // ---------------------------------------------------------------------------

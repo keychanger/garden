@@ -21,7 +21,11 @@ import { isDoneSet } from "../continue.js";
 import { getWorkerBaseBranch } from "../git.js";
 import { findWorkerPaneId, refreshDashboard } from "../header.js";
 import { log } from "../log.js";
-import { triggerProjectPoll } from "../poller.js";
+// Import directly from poller-fifo (leaf module) rather than through
+// poller.ts. poller.ts imports getWorkflow from workflows/index.ts; routing
+// through it would re-close the workflows/default.ts -> hooks/default.ts ->
+// poller.ts -> workflows/index.ts -> workflows/default.ts init cycle.
+import { triggerProjectPoll } from "../poller-fifo.js";
 import {
   findWorkerByName, updateWorkerFields, type WorkerEntry,
 } from "../registry.js";

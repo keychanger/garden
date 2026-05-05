@@ -116,7 +116,7 @@ vi.mock("../src/commands/status.js", () => ({
   resolveWorkerStatus: vi.fn(() => "idle"),
 }));
 
-import { handleClaudeHook } from "../src/dashboard/header.js";
+import { handleClaudeHook } from "../src/dashboard/hook-dispatcher.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { updateWorkerFields } from "../src/dashboard/registry.js";
 import { log } from "../src/dashboard/log.js";

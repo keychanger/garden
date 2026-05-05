@@ -9,7 +9,8 @@ import {
 import { STATE_FILE } from "./state.js";
 import { REGISTRY_FILE } from "./registry.js";
 import { ALERTS_FILE } from "./alerts.js";
-import { printHeader, handleClaudeHook, handlePaneDied, handleTitleChanged } from "./header.js";
+import { printHeader, handlePaneDied, handleTitleChanged } from "./header.js";
+import { handleClaudeHook } from "./hook-dispatcher.js";
 import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
 import { newWorker, killPane, bounceActiveWorker } from "./workers.js";

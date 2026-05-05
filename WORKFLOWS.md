@@ -700,7 +700,7 @@ passes. No behavior change observable from outside the dashboard.
 **Deliverables**:
 - `src/dashboard/hooks/default.ts` with the existing hook handler bodies
   relocated.
-- `handleClaudeHook` in `header.ts` becomes a registry-aware dispatcher.
+- `handleClaudeHook` (now in `hook-dispatcher.ts`, originally in `header.ts`) becomes a registry-aware dispatcher.
 - The default workflow points to `defaultHookHandlers`.
 - Tests for the hook dispatcher (`handleClaudeHook` reads
   `entry.workflow`, looks up the workflow, calls the right method).

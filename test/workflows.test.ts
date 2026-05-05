@@ -165,13 +165,14 @@ describe("defaultWorkflow", () => {
     expect(typeof defaultWorkflow.hookHandlers.onPostToolUse).toBe("function");
   });
 
-  it("hookHandlers are bound at module-init time (no cycle re-introduction)", () => {
-    // Regression net for the module-init cycle that previously forced
-    // hookHandlers to be a getter (workflows/default.ts:42). If a future
-    // import widens the cycle through hooks/default.ts, defaultHookHandlers
-    // would be undefined at object-literal time and these direct-property
-    // checks would fail. Compare with `not.toBeUndefined` to make the
-    // failure mode explicit if it regresses.
+  it("hookHandlers are bound at module-init time (vitest sanity check)", () => {
+    // Vitest sanity check only — it does NOT reproduce esbuild's bundling
+    // order, so it cannot catch the module-init cycle on its own. The
+    // load-bearing regression net is test/integration/claude-hook-bundled.real.test.ts,
+    // which spawns the built bundle and triggers each hook event. That
+    // bundled test is part of the default `npm test` (see vitest.config.ts).
+    // Keep this assertion as cheap insurance against the source-level form
+    // of the bug, but trust the bundled test for cycle regressions.
     expect(defaultWorkflow.hookHandlers).not.toBeUndefined();
     expect(defaultWorkflow.hookHandlers.onStop).not.toBeUndefined();
     expect(typeof defaultWorkflow.hookHandlers.onStop).toBe("function");
