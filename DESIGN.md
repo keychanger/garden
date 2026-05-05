@@ -15,6 +15,9 @@ A tmux session (`garden-dashboard`) that serves as the primary interface. The da
 ### Workers
 Interactive Claude Code sessions running inside the dashboard. Each project can have multiple workers (e.g., one for a feature, one for a review). Workers persist when you switch between projects — they're parked in hidden tmux windows and swapped back in when you return.
 
+### Workflows
+A **workflow** is a `WorkflowDefinition` (state machine + state handlers + hook handlers) that drives a worker's lifecycle. Each worker has a `workflow` field on its registry entry; the poller dispatcher and the Claude Code hook dispatcher route through `getWorkflow(name)` rather than hard-coded switches. The `default` workflow reproduces the standard "review and merge" pipeline. Alternate workflows are introduced as data, not as forks of the dispatcher. Architectural rationale: `WORKFLOWS.md`. Author guide: `CLAUDE.md` § "Adding a new workflow".
+
 ### Rules System
 Claude sessions are configured with layered rules files injected via `--append-system-prompt-file`:
 

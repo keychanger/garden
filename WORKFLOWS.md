@@ -1,13 +1,17 @@
 # Workflow Architecture — Foundation Refactor
 
-Design document for the architectural lift that prepares garden's worker
-lifecycle to host multiple workflows. The deliverable is a refactor: existing
+Design document for the architectural lift that prepared garden's worker
+lifecycle to host multiple workflows. The deliverable was a refactor: existing
 behavior is preserved bit-for-bit, but four extension points (headless-agent
-launch, verdict parsing, prompt composition, workflow definitions) are extracted
-into reusable primitives. No new workflows ship as part of this work.
+launch, verdict parsing, prompt composition, workflow definitions) have been
+extracted into reusable primitives. No new workflows shipped as part of this
+work.
 
-This document describes target behavior. Until the phases below land, the code
-does not yet match it; it will when the work is complete.
+**Status**: foundation complete. The code matches this document. Adding a new
+workflow is now a data-only change plus optional new prompt sections; the
+dispatcher in `poller.ts` and the hook handler in `header.ts` do not need
+edits. For the operator-facing how-to, see `CLAUDE.md` § "Adding a new
+workflow". This document remains the architectural reference.
 
 ## Goal
 

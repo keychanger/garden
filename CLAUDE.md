@@ -156,6 +156,22 @@ The macOS Keychain footgun: Claude Code on macOS persists every login to one sha
 4. Use `output()` / `outputLines()` from `src/output.ts` for data output
 5. Use `resolveProject()` or `resolveProjectFromArgs()` for project resolution
 
+## Adding a new workflow
+
+A **workflow** is a `WorkflowDefinition` (state machine + state handlers + hook handlers) that drives a worker's lifecycle. The default workflow reproduces the standard "review and merge" pipeline; alternate workflows are introduced as data, not as forks of the dispatcher. Background and design rationale: `WORKFLOWS.md`.
+
+1. Create `src/dashboard/workflows/<name>.ts` exporting a `WorkflowDefinition` (see `src/dashboard/workflows/types.ts` for the shape). Reuse the default's pieces wherever possible:
+   - **State machine**: declare `validTransitions` (per-workflow). The default's table is in `workflows/default.ts` and is the literal copy of the pre-refactor `VALID_TRANSITIONS`.
+   - **State handlers**: import from `poller-state/review/merge/resolve` and slot into `stateHandlers`. Workflows that diverge define their own. `stateHandlers` is `Partial<Record<PrState, StateHandler>>` — alternate workflows may omit states they don't use; an unhandled state at dispatch time logs a warning and no-ops.
+   - **Hook handlers**: reuse `defaultHookHandlers` from `src/dashboard/hooks/default.ts`, or write a new `WorkflowHookHandlers` object (one method per Claude Code event). Helpers in `hooks/default.ts` (`workerFromCwd`, `readHookInput`, `routeStopHookEnd`) are reusable.
+2. Register it in `src/dashboard/workflows/index.ts` by adding a `registry.set(name, def)` call alongside the default. `getWorkflow(name)` resolves it; unknown names warn once and fall back to default.
+3. **Workflow-specific prompts (if any)**: declare new `PromptSection` instances in `src/dashboard/prompts.ts` (or a sibling file) and a section list. Build via `composePrompt(sections, ctx)` from `src/dashboard/prompt-compose.ts`. Reuse `gatherPromptContext` for review-shaped I/O, or `makeContext` for workflows that don't need the full diff/rules/docs/tests gather.
+4. **Headless agent launches (if any)**: use `launchHeadlessAgent` from `src/dashboard/headless-agent.ts` — same primitive the reviewer and resolver call. Verdict parsing via `parseLastLineVerdict` from `src/dashboard/verdict.ts` with a typed-const vocabulary tuple.
+5. **Assigning the workflow to a worker**: set `WorkerEntry.workflow` (string field on the registry entry). For now the only writer is `newWorker()` in `src/dashboard/workers.ts:127`, which stamps `"default"`. CLI surface for picking workflow at creation time (`garden newWorker --workflow X`) is deferred — see `WORKFLOWS.md` "Out of scope".
+6. **Tests**: follow the patterns in `test/workflows.test.ts` (registry behavior + deep-equal `validTransitions` + exhaustiveness) and `test/integration/workflow-default.real.test.ts` (drive a real worker through the workflow's state machine on real fs/git).
+
+The `default` workflow stays the source of bit-for-bit equivalence with pre-refactor behavior. Alternate workflows that change behavior must own their own snapshot/integration tests; do not loosen the default's invariants to accommodate them.
+
 ## Internal commands
 
 Some commands are not user-facing — they're dispatched by the dashboard via tmux hotkeys or status bar. These are handled in `cli.ts` before normal command lookup:
