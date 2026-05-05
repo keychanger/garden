@@ -49,6 +49,34 @@ describe("atomicWriteFile", () => {
     expect(siblings.filter(f => f.startsWith("tmp-cleanup.txt") && f.endsWith(".tmp"))).toHaveLength(0);
   });
 
+  it("uses a UUID in the temp filename so two writers in the same ms cannot collide", async () => {
+    const { atomicWriteFile } = await importHelper();
+    // Drive two writes back-to-back and snapshot the directory between them
+    // for any leftover .tmp siblings. With pid+Date.now() naming, two writes
+    // within the same millisecond produced identical tmp names; here we
+    // assert no collision by checking each write succeeds with no leftover.
+    const dest = path.join(env.sessionsDir, "collision.txt");
+    atomicWriteFile(dest, "first");
+    atomicWriteFile(dest, "second");
+    expect(fs.readFileSync(dest, "utf-8")).toBe("second");
+    const siblings = fs.readdirSync(env.sessionsDir);
+    expect(siblings.filter(f => f.startsWith("collision.txt") && f.endsWith(".tmp"))).toHaveLength(0);
+    // Spot-check the tmp filename shape: <dest>.<uuid>.tmp where uuid uses
+    // hex+hyphens. Test by intercepting one write through fs.writeFileSync
+    // directly rather than reproducing the rename race.
+    const dest2 = path.join(env.sessionsDir, "shape.txt");
+    let observedTmpPath = "";
+    const realWrite = fs.writeFileSync;
+    (fs.writeFileSync as unknown as (p: string, c: string) => void) =
+      ((p: string, c: string) => { observedTmpPath = p; return realWrite(p, c); });
+    try {
+      atomicWriteFile(dest2, "x");
+    } finally {
+      (fs.writeFileSync as unknown) = realWrite;
+    }
+    expect(observedTmpPath).toMatch(/\.[0-9a-f-]{36}\.tmp$/);
+  });
+
   it("removes the temp file when the rename fails", async () => {
     const { atomicWriteFile } = await importHelper();
     // Force renameSync to fail by making the destination an unwritable directory of the same name.

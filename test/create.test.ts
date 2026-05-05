@@ -148,7 +148,7 @@ describe("installClaudeHooks", () => {
     );
     // atomicWriteFile renames the tmp file onto the final settings.json path.
     expect(fs.renameSync).toHaveBeenCalledWith(
-      expect.stringMatching(/\.claude\/settings\.json\.\d+\.\d+\.tmp$/),
+      expect.stringMatching(/\.claude\/settings\.json\.[0-9a-f-]+\.tmp$/),
       expect.stringMatching(/\.claude\/settings\.json$/),
     );
   });
@@ -164,7 +164,7 @@ describe("installClaudeHooks", () => {
   // Find the writeFileSync call whose tmp path corresponds to settings.json.
   function settingsJsonContent(): string {
     const writes = vi.mocked(fs.writeFileSync).mock.calls;
-    const call = writes.find(c => /\.claude\/settings\.json\.\d+\.\d+\.tmp$/.test(String(c[0])));
+    const call = writes.find(c => /\.claude\/settings\.json\.[0-9a-f-]+\.tmp$/.test(String(c[0])));
     if (!call) throw new Error("settings.json write not found");
     return String(call[1]);
   }
@@ -204,7 +204,7 @@ describe("installClaudeHooks", () => {
     installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
     const writes = vi.mocked(fs.writeFileSync).mock.calls;
     // atomic-write goes through a tmp path; match the prefix.
-    const skillCall = writes.find(c => /\.claude\/skills\/done\/SKILL\.md\.\d+\.\d+\.tmp$/.test(String(c[0])));
+    const skillCall = writes.find(c => /\.claude\/skills\/done\/SKILL\.md\.[0-9a-f-]+\.tmp$/.test(String(c[0])));
     expect(skillCall).toBeDefined();
     const content = String(skillCall![1]);
     expect(content).toMatch(/^---\nname: done\n/);

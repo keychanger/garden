@@ -5,6 +5,7 @@
 // Used for every file that another process might read concurrently with a
 // write — registry, state, config, rendered status caches, and per-worker
 // .claude/settings.json that Claude itself reads on SessionStart and resume.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -18,7 +19,12 @@ export function atomicWriteFile(
   opts?: AtomicWriteOpts,
 ): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmpFile = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  // randomUUID is collision-free across process+time, so two writers
+  // racing within the same millisecond on the same pid never share a
+  // tmp filename. The previous `${pid}.${Date.now()}` form was safe in
+  // single-thread Node but collided trivially under fakeTimers and
+  // could collide in adversarial scenarios.
+  const tmpFile = `${filePath}.${crypto.randomUUID()}.tmp`;
   try {
     if (opts?.mode != null) {
       fs.writeFileSync(tmpFile, content, { mode: opts.mode });
