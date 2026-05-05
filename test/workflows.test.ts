@@ -126,14 +126,25 @@ describe("defaultWorkflow", () => {
     }
   });
 
-  it("hookHandlers stub throws when invoked (Phase 3 sentinel)", () => {
-    // Phase 3 ships hookHandlers stubbed — handleClaudeHook in header.ts
-    // does not yet route through the registry. The stub throws to surface
-    // any premature dispatch as a loud error rather than a silent no-op.
-    // Phase 4 replaces this with the real defaultHookHandlers.
+  it("hookHandlers are wired to defaultHookHandlers (Phase 4)", () => {
+    // Phase 4 wires the real handlers. A null workerInfo context is the
+    // "hook fired outside any worktree" case — the handler must early-return
+    // without throwing or mutating any registry state.
     expect(() =>
       defaultWorkflow.hookHandlers.onStop({ event: "stop", input: {}, workerInfo: null })
-    ).toThrow(/Phase 4/);
+    ).not.toThrow();
+  });
+
+  it("hookHandlers exposes one method per Claude Code event", () => {
+    // The dispatcher in header.ts switches on event name and selects a
+    // method; each event must have a corresponding handler. Catches
+    // typos in the WorkflowHookHandlers type.
+    expect(typeof defaultWorkflow.hookHandlers.onSessionStart).toBe("function");
+    expect(typeof defaultWorkflow.hookHandlers.onUserPromptSubmit).toBe("function");
+    expect(typeof defaultWorkflow.hookHandlers.onStop).toBe("function");
+    expect(typeof defaultWorkflow.hookHandlers.onNotification).toBe("function");
+    expect(typeof defaultWorkflow.hookHandlers.onPreToolUse).toBe("function");
+    expect(typeof defaultWorkflow.hookHandlers.onPostToolUse).toBe("function");
   });
 });
 

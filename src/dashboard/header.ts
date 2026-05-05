@@ -1,24 +1,27 @@
 // Dashboard header and status bar: renders active project context (left)
 // and garden build version (right) in the tmux status line.
-import fs from "node:fs";
+//
+// Claude Code hook handling: handleClaudeHook is a thin dispatcher that
+// looks up the worker's workflow and routes to the workflow's hook
+// methods. The default workflow's handlers (and their helpers) live in
+// hooks/default.ts. See WORKFLOWS.md Component 5c.
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { SESSIONS_DIR, loadConfig, tryGetProject, plotsMap, isPlotFocused } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize, listAllWindowNames } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
 import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields, type WorkerRegistry } from "./registry.js";
 import { atomicWriteFile } from "./atomic-write.js";
-import { currentBranch, getWorkerBaseBranch } from "./git.js";
+import { currentBranch } from "./git.js";
 import { renderQuickStatus } from "../commands/status.js";
-import { triggerProjectPoll } from "./poller.js";
 import { log } from "./log.js";
-import { unreadAlertCount, formatRightBar, addAlert, readAlerts } from "./alerts.js";
+import { unreadAlertCount, formatRightBar } from "./alerts.js";
 import { workerWindowName as workerWin, parseWorkerWindow } from "./window-names.js";
-import { maybeRefreshUsage, renderUsagePane } from "./usage.js";
-import { resolveGardenRunner } from "./create.js";
+import { renderUsagePane } from "./usage.js";
 import { resolvePlotStatus, type PlotState } from "./plot-status.js";
-import { isDoneSet } from "./continue.js";
+import { workerFromCwd, readHookInput } from "./hooks/default.js";
+import { getWorkflow } from "./workflows/index.js";
+import type { HookContext, HookMethod, WorkflowHookHandlers } from "./workflows/types.js";
 
 const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
 const USAGE_RENDERED_FILE = path.join(SESSIONS_DIR, "usage.rendered");
@@ -26,20 +29,6 @@ const PLOT_STRIP_TEMPLATE_FILE = path.join(SESSIONS_DIR, "plot-strip.template");
 // Sentinel in the plot-strip template file; the status pane's animation loop
 // substitutes it with the current spinner frame each tick.
 const PLOT_SPINNER_SENTINEL = "__GSP__";
-
-// ---------------------------------------------------------------------------
-// Worker identity from cwd
-// ---------------------------------------------------------------------------
-
-function workerFromCwd(): { project: string; worker: string } | null {
-  const cwd = process.cwd();
-  const home = process.env.HOME ?? "";
-  const prefix = path.join(home, ".garden", "worktrees") + path.sep;
-  if (!cwd.startsWith(prefix)) return null;
-  const parts = cwd.slice(prefix.length).split(path.sep);
-  if (parts.length < 2) return null;
-  return { project: parts[0], worker: parts[1] };
-}
 
 interface RefreshOptions {
   state?: DashboardState;
@@ -235,15 +224,12 @@ export function installInputGuard(state: DashboardState): void {
   } catch { /* hooks may not be supported on very old tmux */ }
 }
 
-// ---------------------------------------------------------------------------
-// Claude hook handler
-// ---------------------------------------------------------------------------
-
 // Locate a worker's pane regardless of whether it's currently visible in the
-// right slot or parked in a hidden window. Used by the hook handler to read
-// the live tmux pane title (which Claude sets via terminal escape sequences
-// and which doubles as a "what is this worker doing" summary).
-function findWorkerPaneId(project: string, worker: string): string | null {
+// right slot or parked in a hidden window. Used by the default hook handler
+// to read the live tmux pane title (which Claude sets via terminal escape
+// sequences and which doubles as a "what is this worker doing" summary), and
+// by the dashboard's task-refresh paths (handleTitleChanged, refreshWorkerTasks).
+export function findWorkerPaneId(project: string, worker: string): string | null {
   const windowName = workerWin(project, worker);
   const state = readDashState();
   if (state.activeWindowName === windowName && state.activePaneId) {
@@ -255,230 +241,62 @@ function findWorkerPaneId(project: string, worker: string): string | null {
   return null;
 }
 
-// Claude Code passes hook input as JSON on stdin; best-effort, returns {} on any failure.
-function readHookInput(): Record<string, unknown> {
-  try {
-    const raw = fs.readFileSync(0, "utf-8");
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return (parsed && typeof parsed === "object") ? parsed as Record<string, unknown> : {};
-  } catch {
-    return {};
-  }
-}
+// ---------------------------------------------------------------------------
+// Claude hook dispatcher
+// ---------------------------------------------------------------------------
+//
+// Thin dispatcher: builds a HookContext, looks up the worker's workflow,
+// routes to the appropriate hook method. Per-event behavior lives in the
+// workflow's hookHandlers (default workflow's are in hooks/default.ts).
+// Reviewer/resolver hooks short-circuit here (GARDEN_REVIEWER=1) — they
+// fire from the same worktree as the worker and would otherwise be
+// indistinguishable from worker hooks.
 
 export function handleClaudeHook(event: string): void {
-  // The reviewer also runs `claude -p` from inside the worktree, so its hooks
-  // fire from the same cwd. We disambiguate via env var: launchReview() sets
-  // GARDEN_REVIEWER=1, and reviewer hook fires never reach the registry path.
   if (process.env.GARDEN_REVIEWER === "1") return;
 
-  const workerInfo = workerFromCwd();
-  if (!workerInfo) {
+  const cwdInfo = workerFromCwd();
+  if (!cwdInfo) {
+    // Hook fired from outside any worktree (operator ad-hoc invocation).
+    // Nothing to update; refresh the dashboard so any stale state (e.g.,
+    // unread alerts) gets repainted.
     refreshDashboard();
     return;
   }
 
-  const input = readHookInput();
-
-  // Branch on the Claude Code event: see STATUS.md for the full transition table.
-  const fields: Partial<Pick<import("./registry.js").WorkerEntry,
-    "claudeStatus" | "lastHookAt" | "prState" | "task">> = {
-    lastHookAt: Date.now(),
-  };
-
-  if (event === "sessionstart") {
-    // resume/compact fire mid-turn (auto-compact in particular) and must not clobber working/asking; see STATUS.md.
-    const source = typeof input.source === "string" ? input.source : "";
-    if (source === "resume" || source === "compact") {
-      const existing = findWorkerByName(workerInfo.project, workerInfo.worker);
-      const cs = existing?.claudeStatus;
-      if (cs !== "working" && cs !== "asking") {
-        fields.claudeStatus = "ready";
-      }
-    } else {
-      fields.claudeStatus = "ready";
-    }
-  } else if (event === "prompt") {
-    fields.claudeStatus = "working";
-    // Clear merged/done prState on the next prompt — invariant 4 (terminal
-    // states are sticky until new input). The hook handler is the only place
-    // this clear happens.
-    const existing = findWorkerByName(workerInfo.project, workerInfo.worker);
-    if (existing?.prState === "merged" || existing?.prState === "done") {
-      fields.prState = undefined;
-    }
-  } else if (event === "stop") {
-    fields.claudeStatus = "idle";
-  } else if (event === "notification" || event === "pretooluse") {
-    // Accept "working" (normal path) or "idle" (self-heal: a user-input
-    // tool firing is proof of active turn, so idle status is stale).
-    const existing = findWorkerByName(workerInfo.project, workerInfo.worker);
-    const cs = existing?.claudeStatus;
-    if (cs === "working" || cs === "idle") {
-      fields.claudeStatus = "asking";
-    } else {
-      log.info("hook", "mid-turn asking hook skipped (non-working, non-idle)", {
-        worker: workerInfo.worker,
-        data: { project: workerInfo.project, event, claudeStatus: cs },
-      });
-    }
-  } else if (event === "posttooluse") {
-    // asking → working is the primary path (user answered, Claude resumes).
-    // idle → working is a self-heal: a PostToolUse arriving while idle means
-    // the turn is still active and our state is stale; trust the event.
-    const existing = findWorkerByName(workerInfo.project, workerInfo.worker);
-    const cs = existing?.claudeStatus;
-    if (cs === "asking" || cs === "idle") {
-      fields.claudeStatus = "working";
-    }
-  } else {
-    // Unknown event — log and bail.
-    log.warn("hook", "unknown claude hook event", {
-      worker: workerInfo.worker,
-      data: { project: workerInfo.project, event },
-    });
+  const entry = findWorkerByName(cwdInfo.project, cwdInfo.worker);
+  if (!entry) {
+    refreshDashboard();
     return;
   }
 
-  // Capture the live pane title as the worker's task summary, when available.
-  // Claude sets the title via terminal escape sequences as it works; reading
-  // it here gives the registry an updated "what is this worker doing" string.
-  // Title may be missing right at session start (no activity yet) or during
-  // the brief window before Claude has set it after UserPromptSubmit — in
-  // both cases we leave the previous task field intact.
-  const paneId = findWorkerPaneId(workerInfo.project, workerInfo.worker);
-  if (paneId) {
-    const title = getPaneTitle(paneId);
-    if (title) fields.task = title;
-  }
+  const ctx: HookContext = {
+    event,
+    input: readHookInput(),
+    workerInfo: { name: cwdInfo.worker, project: cwdInfo.project, entry },
+  };
 
-  try {
-    updateWorkerFields(workerInfo.project, workerInfo.worker, fields);
-  } catch (err) {
-    log.warn("hook", "failed to update worker for hook event", {
-      worker: workerInfo.worker,
-      data: { project: workerInfo.project, event, error: String(err) },
+  const workflow = getWorkflow(entry.workflow ?? "default");
+  const method = pickHookMethod(workflow.hookHandlers, event);
+  if (!method) {
+    log.warn("hook", "unknown claude hook event", {
+      worker: cwdInfo.worker,
+      data: { project: cwdInfo.project, event, workflow: workflow.name },
     });
+    return;
   }
-
-  // Info only when something actually moved: a lifecycle event (sessionstart /
-  // prompt / stop) or a claudeStatus flip. Raw posttooluse/pretooluse that
-  // don't change state are heartbeats — demoted to debug so the default log
-  // level shows signal, not the per-tool-call stream.
-  const isLifecycle = event === "sessionstart" || event === "prompt" || event === "stop";
-  const stateChanged = fields.claudeStatus !== undefined || fields.prState !== undefined;
-  const level = isLifecycle || stateChanged ? "info" : "debug";
-  log[level]("hook", "claude hook", {
-    worker: workerInfo.worker,
-    data: {
-      project: workerInfo.project,
-      event,
-      claudeStatus: fields.claudeStatus,
-      prStateCleared: fields.prState === undefined && event === "prompt",
-      ...(event === "sessionstart" && typeof input.source === "string"
-        ? { source: input.source }
-        : {}),
-    },
-  });
-
-  // See STATUS.md invariant 2 (review entry) and invariant 4 (merged stickiness).
-  if (event === "stop") {
-    routeStopHookEnd(workerInfo.project, workerInfo.worker);
-    maybeRefreshUsage(resolveGardenRunner());
-  }
-
-  // Skip the dashboard cascade when nothing visible changed — pretooluse and
-  // posttooluse fire on every Claude tool call and dominate hook traffic, but
-  // most don't flip claudeStatus (the cs guards above narrow the writes). The
-  // status icon, plot-strip state, and pane border all key off claudeStatus or
-  // prState; if neither moved, no repaint is owed. handleTitleChanged covers
-  // task-title-only repaints via its own pane-title-changed tmux hook.
-  if (stateChanged) refreshDashboard();
+  method(ctx);
 }
 
-function routeStopHookEnd(projectName: string, workerName: string): void {
-  const project = tryGetProject(projectName);
-  if (!project) return;
-  const entry = findWorkerByName(projectName, workerName);
-  if (!entry) return;
-  const baseBranch = getWorkerBaseBranch(entry, project.path);
-  const cwd = process.cwd();
-  try {
-    // git rev-list --count <base>..HEAD — counts commits ahead of base.
-    // Returns "0" if no commits ahead, a positive number otherwise.
-    // 5s timeout: a hung git here stalls the Stop hook AND the entire review
-    // pipeline (no pendingReviewAt → no poller poke → worker never advances).
-    const out = execFileSync("git", ["rev-list", "--count", `origin/${baseBranch}..HEAD`], {
-      cwd,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 5000,
-    }).trim();
-    const ahead = parseInt(out, 10);
-    if (Number.isFinite(ahead) && ahead > 0) {
-      updateWorkerFields(projectName, workerName, { pendingReviewAt: Date.now() });
-      triggerProjectPoll(projectName);
-      log.info("hook", "stop hook marked pending review (commits ahead of base)", {
-        worker: workerName,
-        data: { project: projectName, baseBranch, commitsAhead: ahead },
-      });
-      return;
-    }
-    // No commits ahead + sentinel present → terminal "done" state, the
-    // operator-actionable cleanup signal. STATUS.md invariant 4 path 2:
-    // sentinel was set after auto-continue cleared the transient merged.
-    if (isDoneSet(entry.worktreePath)) {
-      updateWorkerFields(projectName, workerName, {
-        prState: "done",
-        mergedAt: new Date().toISOString(),
-      });
-      log.info("hook", "stop hook set done prState (worker declared done)", {
-        worker: workerName,
-        data: { project: projectName },
-      });
-    }
-  } catch (err) {
-    const errStr = String(err).slice(0, 200);
-    log.warn("hook", "skipped poller poke (git check failed)", {
-      worker: workerName,
-      data: { project: projectName, baseBranch, error: errStr },
-    });
-    // Surface silent breakage: base branch drift is the primary way this
-    // catch fires in practice — without an alert, the worker looks idle
-    // forever and nobody notices the review cycle isn't running.
-    if (!hasRecentWorkerAlert(projectName, workerName, "base-drift")) {
-      addAlert({
-        level: "warn",
-        source: "worker",
-        project: projectName,
-        worker: workerName,
-        message: `Worker ${workerName}: cannot check commits against origin/${baseBranch} — base branch may be missing on origin or the worktree may be broken. Review cycle is stalled. [base-drift]`,
-      });
-    }
-  }
-}
-
-// Dedup: only fire a given "base-drift" alert once per worker per hour. The
-// Stop hook fires on every end-of-turn, so a persistently broken base would
-// otherwise spam the alert queue. The tag in the message is the dedup key.
-function hasRecentWorkerAlert(
-  projectName: string,
-  workerName: string,
-  tag: string,
-  withinMs = 60 * 60 * 1000,
-): boolean {
-  try {
-    const cutoff = Date.now() - withinMs;
-    return readAlerts().alerts.some(a =>
-      a.source === "worker" &&
-      a.project === projectName &&
-      a.worker === workerName &&
-      a.message.includes(`[${tag}]`) &&
-      new Date(a.ts).getTime() > cutoff,
-    );
-  } catch {
-    return false;
+function pickHookMethod(handlers: WorkflowHookHandlers, event: string): HookMethod | null {
+  switch (event) {
+    case "sessionstart": return handlers.onSessionStart;
+    case "prompt":       return handlers.onUserPromptSubmit;
+    case "stop":         return handlers.onStop;
+    case "notification": return handlers.onNotification;
+    case "pretooluse":   return handlers.onPreToolUse;
+    case "posttooluse":  return handlers.onPostToolUse;
+    default:             return null;
   }
 }
 
