@@ -38,6 +38,16 @@ Runs \`touch .garden-done\` at the root of your worktree (your CWD). On the next
 - A review came back \`failing\` and you have not addressed the feedback yet.
 - The operator's request includes future-tense work ("once the previous phase merges, do X") — finish X first.
 
+## Before invoking — doc walk-through
+
+Before \`touch .garden-done\`, walk the project's documentation:
+
+- If your work introduced a new "add one of these" extension point — a kind of thing where someone might add another later (a command, a workflow, an agent type, a plugin, a hook) — does \`CLAUDE.md\` have an "Adding a new X" how-to to anchor it? \`CLAUDE.md\` is the canonical place. If the project doesn't have one, suggest creating one rather than silently skipping.
+- If your work introduced a new core concept (a thing on par with the project's existing nouns), is it described in the project's architecture or overview document, where one exists? Don't create such a doc just for this — only update if it already exists.
+- If your work referenced or completed a design / spec document written in future tense, is the tense correct now?
+
+Fix gaps before touching the sentinel. Skip questions whose target doc doesn't exist; don't manufacture docs unless the operator has asked.
+
 ## How to invoke
 
 From your worktree CWD:

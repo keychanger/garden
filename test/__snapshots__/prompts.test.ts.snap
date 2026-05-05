@@ -119,13 +119,23 @@ Review the branch diff against the project rules below.
 Check for:
 - Adherence to project rules (commit style, code patterns, scope discipline)
 - Code quality issues, security concerns, or unnecessary complexity
-- Documentation accuracy: read DESIGN.md and CLAUDE.md below. After applying this
-  diff, are they still accurate and complete? Flag any claims that are now wrong,
-  missing sections for new behavior, or stale descriptions. Not every change needs a
-  doc change — only flag docs that are actually inaccurate after this diff. This
-  bullet applies *only* to descriptive documents (DESIGN.md, CLAUDE.md) — not to
-  specification files (those marked as a source of truth, see the warning above if
-  any are in this diff). Specs drive the code; do not edit them to match code.
+- Documentation accuracy and completeness. For \`CLAUDE.md\` (Claude Code's quick-start
+  for workers in this project) and any other architecture / overview documentation
+  included below, are all claims still correct after this diff? Flag stale descriptions,
+  broken cross-references, out-of-date file lists. Then check for additive gaps: if this
+  diff introduces a kind of thing where someone might add another later (a command, a
+  workflow, an agent type, a plugin, a hook), does \`CLAUDE.md\` have an "Adding a new X"
+  how-to to anchor that? Adding such a section is the most common form of "missing
+  section for new behavior" and is the easiest to miss. Skip the question for doc kinds
+  the project doesn't keep — don't request creation of docs the project doesn't already
+  maintain. This bullet applies *only* to descriptive documents — not to specification
+  files (those marked as a source of truth, see the warning above if any are in this
+  diff). Specs drive the code; do not edit them to match code.
+- Documentation tense. Design or specification documents often open with future-tense
+  framing like "describes target behavior" or "the code does not yet match it" — if
+  this diff completes the work such a doc described, the doc's tense and any "Status:
+  planned / in-progress" framing must flip to past-tense / "complete." Look for these
+  in the diff itself and in any markdown the diff references.
 - Test quality: read the test files below. Check three things:
   1. Accuracy — do existing tests still assert correct behavior after this diff?
      Flag tests that now assert stale or wrong behavior.
@@ -209,13 +219,23 @@ Review the branch diff against the project rules below.
 Check for:
 - Adherence to project rules (commit style, code patterns, scope discipline)
 - Code quality issues, security concerns, or unnecessary complexity
-- Documentation accuracy: read DESIGN.md and CLAUDE.md below. After applying this
-  diff, are they still accurate and complete? Flag any claims that are now wrong,
-  missing sections for new behavior, or stale descriptions. Not every change needs a
-  doc change — only flag docs that are actually inaccurate after this diff. This
-  bullet applies *only* to descriptive documents (DESIGN.md, CLAUDE.md) — not to
-  specification files (those marked as a source of truth, see the warning above if
-  any are in this diff). Specs drive the code; do not edit them to match code.
+- Documentation accuracy and completeness. For \`CLAUDE.md\` (Claude Code's quick-start
+  for workers in this project) and any other architecture / overview documentation
+  included below, are all claims still correct after this diff? Flag stale descriptions,
+  broken cross-references, out-of-date file lists. Then check for additive gaps: if this
+  diff introduces a kind of thing where someone might add another later (a command, a
+  workflow, an agent type, a plugin, a hook), does \`CLAUDE.md\` have an "Adding a new X"
+  how-to to anchor that? Adding such a section is the most common form of "missing
+  section for new behavior" and is the easiest to miss. Skip the question for doc kinds
+  the project doesn't keep — don't request creation of docs the project doesn't already
+  maintain. This bullet applies *only* to descriptive documents — not to specification
+  files (those marked as a source of truth, see the warning above if any are in this
+  diff). Specs drive the code; do not edit them to match code.
+- Documentation tense. Design or specification documents often open with future-tense
+  framing like "describes target behavior" or "the code does not yet match it" — if
+  this diff completes the work such a doc described, the doc's tense and any "Status:
+  planned / in-progress" framing must flip to past-tense / "complete." Look for these
+  in the diff itself and in any markdown the diff references.
 - Test quality: read the test files below. Check three things:
   1. Accuracy — do existing tests still assert correct behavior after this diff?
      Flag tests that now assert stale or wrong behavior.
@@ -321,13 +341,23 @@ Review the branch diff against the project rules below.
 Check for:
 - Adherence to project rules (commit style, code patterns, scope discipline)
 - Code quality issues, security concerns, or unnecessary complexity
-- Documentation accuracy: read DESIGN.md and CLAUDE.md below. After applying this
-  diff, are they still accurate and complete? Flag any claims that are now wrong,
-  missing sections for new behavior, or stale descriptions. Not every change needs a
-  doc change — only flag docs that are actually inaccurate after this diff. This
-  bullet applies *only* to descriptive documents (DESIGN.md, CLAUDE.md) — not to
-  specification files (those marked as a source of truth, see the warning above if
-  any are in this diff). Specs drive the code; do not edit them to match code.
+- Documentation accuracy and completeness. For \`CLAUDE.md\` (Claude Code's quick-start
+  for workers in this project) and any other architecture / overview documentation
+  included below, are all claims still correct after this diff? Flag stale descriptions,
+  broken cross-references, out-of-date file lists. Then check for additive gaps: if this
+  diff introduces a kind of thing where someone might add another later (a command, a
+  workflow, an agent type, a plugin, a hook), does \`CLAUDE.md\` have an "Adding a new X"
+  how-to to anchor that? Adding such a section is the most common form of "missing
+  section for new behavior" and is the easiest to miss. Skip the question for doc kinds
+  the project doesn't keep — don't request creation of docs the project doesn't already
+  maintain. This bullet applies *only* to descriptive documents — not to specification
+  files (those marked as a source of truth, see the warning above if any are in this
+  diff). Specs drive the code; do not edit them to match code.
+- Documentation tense. Design or specification documents often open with future-tense
+  framing like "describes target behavior" or "the code does not yet match it" — if
+  this diff completes the work such a doc described, the doc's tense and any "Status:
+  planned / in-progress" framing must flip to past-tense / "complete." Look for these
+  in the diff itself and in any markdown the diff references.
 - Test quality: read the test files below. Check three things:
   1. Accuracy — do existing tests still assert correct behavior after this diff?
      Flag tests that now assert stale or wrong behavior.
@@ -404,13 +434,23 @@ Review the branch diff against the project rules below.
 Check for:
 - Adherence to project rules (commit style, code patterns, scope discipline)
 - Code quality issues, security concerns, or unnecessary complexity
-- Documentation accuracy: read DESIGN.md and CLAUDE.md below. After applying this
-  diff, are they still accurate and complete? Flag any claims that are now wrong,
-  missing sections for new behavior, or stale descriptions. Not every change needs a
-  doc change — only flag docs that are actually inaccurate after this diff. This
-  bullet applies *only* to descriptive documents (DESIGN.md, CLAUDE.md) — not to
-  specification files (those marked as a source of truth, see the warning above if
-  any are in this diff). Specs drive the code; do not edit them to match code.
+- Documentation accuracy and completeness. For \`CLAUDE.md\` (Claude Code's quick-start
+  for workers in this project) and any other architecture / overview documentation
+  included below, are all claims still correct after this diff? Flag stale descriptions,
+  broken cross-references, out-of-date file lists. Then check for additive gaps: if this
+  diff introduces a kind of thing where someone might add another later (a command, a
+  workflow, an agent type, a plugin, a hook), does \`CLAUDE.md\` have an "Adding a new X"
+  how-to to anchor that? Adding such a section is the most common form of "missing
+  section for new behavior" and is the easiest to miss. Skip the question for doc kinds
+  the project doesn't keep — don't request creation of docs the project doesn't already
+  maintain. This bullet applies *only* to descriptive documents — not to specification
+  files (those marked as a source of truth, see the warning above if any are in this
+  diff). Specs drive the code; do not edit them to match code.
+- Documentation tense. Design or specification documents often open with future-tense
+  framing like "describes target behavior" or "the code does not yet match it" — if
+  this diff completes the work such a doc described, the doc's tense and any "Status:
+  planned / in-progress" framing must flip to past-tense / "complete." Look for these
+  in the diff itself and in any markdown the diff references.
 - Test quality: read the test files below. Check three things:
   1. Accuracy — do existing tests still assert correct behavior after this diff?
      Flag tests that now assert stale or wrong behavior.
