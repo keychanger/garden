@@ -36,7 +36,7 @@ npm run dev -- help    # run via tsx during development
   - `git.ts` — git CLI wrappers for worktree and merge operations
   - `poller.ts` — poller coordinator: per-project event-driven dispatcher. `pollWorker` dispatches on `prState` through `workflow.stateHandlers` from the `workflows/` registry — no hard-coded switch.
   - `poller-state.ts` — state machine: `transitionState` (validates against the worker's `WorkflowDefinition.validTransitions`) plus terminal-state handlers (failing, merged, done).
-  - `workflows/` — workflow registry. `types.ts` defines `WorkflowDefinition`; `default.ts` is the standard review/merge pipeline; `index.ts` is the lookup. Design target: `WORKFLOWS.md`.
+  - `workflows/` — workflow registry. `types.ts` defines `WorkflowDefinition`; `default.ts` is the standard review/merge pipeline; `trellis.ts` is the trellis workflow definition (skeletal in phase 1 — bit-for-bit equivalent to default); `index.ts` is the lookup. Design target: `WORKFLOWS.md`; trellis spec: `TRELLIS.md`.
   - `hooks/default.ts` — default workflow's Claude Code hook handlers, dispatched from `hook-dispatcher.ts`'s `handleClaudeHook`.
   - `poller-review.ts` — review lifecycle: launchReview, handleWorking, handleReviewing, verdict parsing, timeout handling, killReviewWindow
   - `poller-merge.ts` — merge queue + finalization: handleMergePending, finalizeMerge, autoContinueGateReason, runPostMerge, sibling notification
