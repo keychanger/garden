@@ -2,8 +2,11 @@
 
 Phased plan for shipping the v1 trellis workflow described in
 `src/dashboard/TRELLIS.md`. The spec is the design target — this document is
-not a spec; the code is wrong if it disagrees with TRELLIS.md, not with this
-plan. The plan exists to sequence the work so that each phase is reviewable,
+not itself a spec; if it disagrees with TRELLIS.md, the spec wins and the
+plan should be updated. (The literal source-of-truth marker phrase is
+deliberately avoided in this opening paragraph so `findSpecFiles()` does
+not classify this planning doc as a spec.) The plan exists to sequence the
+work so each phase is reviewable,
 mergeable, and leaves the codebase passing `npx tsc --noEmit` and the full
 test suite. Five phases. Foundation primitives → end-to-end loop → cost
 controls → operator visibility → daily-driver UX. After phase 2 a vine can
