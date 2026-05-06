@@ -560,105 +560,44 @@ project pane and pick a trellis to plant. v1 ships when this lands.
 
 ---
 
-## Open questions surfaced during planning
+## Decisions baked in
 
-These are gaps or self-contradictions in the spec discovered while reading
-end-to-end. I am not editing the spec to resolve them — TRELLIS.md is a
-spec ("the code is wrong" sentinel applies). These need operator
-disposition before the corresponding phase ships.
+The eight ambiguities surfaced during planning have been resolved by
+the operator. The decisions are integrated above; this section records
+them in one place for cross-reference.
 
-1. **Sonnet meter shape mismatch (phase 3).** TRELLIS.md ("Sonnet
-   exhaustion fallback") references `fiveHour.sonnet` and `weekly.sonnet`
-   on the usage snapshot. The current `UsageData` shape in
-   `src/dashboard/usage.ts` has `fiveHour`, `weekly`, and `sonnet` as
-   peer fields — there is no nested `fiveHour.sonnet` or
-   `weekly.sonnet`. The single `data.sonnet` is the seven-day Sonnet
-   bucket. Two readings:
-   - The spec is loose with notation and means "the snapshot's existing
-     Sonnet meter(s) — whichever ones are tracked." In which case
-     phase 3 reads `data.sonnet` only.
-   - The spec genuinely intends a 5h Sonnet meter that doesn't exist
-     today. In which case phase 3 must extend `usage.ts`'s fetch and
-     the snapshot shape, and the alert text the spec gives ("`5h` or
-     `weekly` Sonnet at N%") needs to be re-anchored.
+1. **Sonnet meter source (phase 3).** Read `data.sonnet` (the seven-day
+   Sonnet bucket already in `UsageData`). The spec's `fiveHour.sonnet` /
+   `weekly.sonnet` notation is loose; the real meter is `data.sonnet`.
+   The spec-side notation fix is owned outside this plan.
 
-   Operator decision needed before phase 3.
+2. **Worker's first-iteration prompt phrasing (phase 2).** Ship a
+   best-effort first cut and iterate during real-vine usage. Not a
+   blocker.
 
-2. **First-prompt phrasing (phase 2).** TRELLIS.md "Open questions" #2
-   already flags this: "What does the worker's first prompt look like?"
-   The spec says trellis content + "implement this" + lessons path. Phase
-   2 needs an explicit string to ship. Plan: ship a minimal first cut in
-   phase 2, expect to iterate during the first few real vines, and treat
-   it as not-yet-stable. Flagging here so the iteration is intentional.
+3. **Picker in v1 (phase 5).** Full picker — empty-state actions,
+   one-trellis shortcut, retired filter — ships in v1. The spec's
+   residual v1-vs-v1.5 inconsistency is owned outside this plan.
 
-3. **Picker in v1 vs v1.5 conflict.** TRELLIS.md's "Phasing" section lists
-   the picker in two places: v1 ("Picker (`⌥⇧n`) filters out retired
-   trellises") and v1.5 ("`⌥⇧n` picker for trellis spawn (fzf-style, with
-   empty-state and one-trellis shortcuts)"). The operator's brief for
-   this plan says picker hotkey is in v1. I am putting the full picker
-   (including empty-state and one-trellis shortcut) in phase 5 — v1.
-   Confirm this is intended; if v1.5 is the truth, phase 5 collapses to
-   the basic picker only, with empty-state and one-trellis shortcut
-   deferred.
+4. **`garden trellis amend` on a dirty main checkout (phase 4).**
+   Refuse with a remediation message ("commit/stash and retry"). No
+   interactive prompt.
 
-4. **`garden trellis amend` on a dirty main checkout (phase 4).** Spec
-   says `amend` commits to the project's *main checkout* (not the worker
-   branch). It does not say what happens when the main checkout is
-   dirty. The bootstrap path warns + raises an alert when main can't
-   fast-forward; `amend` writing to a dirty main is an operator footgun.
-   Plan refuses to commit when dirty and prints a remediation message;
-   confirm this is the intended behavior, or whether it should fall
-   through to a prompt asking the operator to stash.
+5. **`trellis-overrides.md` scoping.** File mechanism in v1: the
+   reviewer's `trellisOverridesSection` reads the file when present,
+   no-op when absent. `--override` CLI flag deferred to v1.5.
+   `garden trellis resume` ships in v1 *without* `--override`.
 
-5. **`trellis-overrides.md` mechanism vs. `--override` flag (phase 4).**
-   TRELLIS.md "v1.5 (hardening)" lists "`trellis-overrides.md` mechanism
-   + `--override` flag" — but the same file is referenced in v1 paths:
-   the reviewer prompt's `trellisOverridesSection` (TRELLIS.md "Section
-   composition") inlines it; the storage table lists it as a v1
-   worktree file. Two readings:
-   - **File mechanism in v1, CLI flag in v1.5.** Plan ships the file
-     read in phase 2 (reviewer reads if present, otherwise no-op); the
-     `--override` CLI flag and write path waits for v1.5. Phase 4's
-     `garden trellis resume` ships *without* `--override` initially.
-   - **Both file and flag are v1.5.** The reviewer's
-     `trellisOverridesSection` returns null in v1 (file path doesn't
-     exist), full mechanism lands in v1.5.
+6. **Per-iteration sessionId (phase 2).** Regenerate UUID per iteration
+   and persist to `entry.sessionId`. Subsequent `garden bounce`
+   `--resume`s the latest iteration's session.
 
-   Plan currently follows the first reading. Confirm.
+7. *(removed — spec edge-case clarification, not a question.)*
 
-6. **Per-iteration sessionId regeneration (phase 2).** Spec says the
-   per-iteration context reset kills Claude and respawns cold "without
-   `--resume`." Implementation can either reuse the worker's existing
-   sessionId (which would still produce a fresh session because no
-   `--resume` is passed, but the sessionId on the registry would now
-   point to a session Claude thinks has never existed) or regenerate a
-   new UUID per iteration. Plan picks regenerate-and-persist so
-   subsequent `garden bounce`s `--resume` the latest iteration's session.
-   Confirm — the alternative (reuse) means bounce attempts to resume a
-   session that was never `--resume`d, which works in Claude Code today
-   but is fragile.
+8. **Default workflow `failingReason: "code"` retrofit (phase 1).**
+   Land in phase 1. Additive write, no observable behavior change
+   today.
 
-7. **Trellis amended mid-loop interaction with the in-flight iteration's
-   continue prompt (phase 2).** Spec's edge case "Trellis amended
-   mid-loop" says "the worker's continue prompt for *this* iteration is
-   still based on the old drift list; the next iteration after that
-   reflects the new trellis. This is intentional." Phase 2 honors this
-   by having `trellisAutoContinueAfterMerge` use the drift list captured
-   *before* the post-merge git fetch, while the next iteration's
-   reviewer reads the trellis at HEAD post-fetch. No code question, just
-   documenting the read for clarity.
-
-8. **`failingReason` on default-workflow workers (phase 1).** Spec says
-   default workflow uses `failingReason: "code"`. Plan retrofits this:
-   default's `handleReviewing` and merge-failure paths currently set
-   `failCount` and `failingSha` but no reason. Adding `failingReason:
-   "code"` to those transitions is a small bit-for-bit-equivalent
-   addition (no observable behavior change today; gives the renderer a
-   uniform field to read from). Phase 1 ships this — confirm.
-
-9. **The `unparseable-verdict` `failingReason` (phase 2).** Spec
-   enumerates `"unparseable-verdict"` in the allowed `failingReason`
-   values. Default workflow today doesn't set this — its second-
-   unparseable path goes to `failing` with no reason. Plan retrofits
-   default's path to set `failingReason: "unparseable-verdict"`
-   alongside the trellis path's same retrofit. Confirm.
+9. **Default workflow `failingReason: "unparseable-verdict"` retrofit
+   (phase 2).** Land in phase 2 alongside the trellis path's same
+   write. Additive, no observable behavior change today.
