@@ -286,3 +286,65 @@ describe("getAllWorkerNames", () => {
     expect(getAllWorkerNames()).toEqual([]);
   });
 });
+
+// Trellis workflow adds optional fields to WorkerEntry. Round-trip them
+// through addWorker → readRegistry to confirm shape changes don't break
+// the registry's persistence contract. See TRELLIS.md "Worker entry additions".
+describe("trellis WorkerEntry fields", () => {
+  it("round-trips every trellis field plus failingReason and workerModel", async () => {
+    const { addWorker, getWorkers } = await importRegistry();
+    addWorker("proj", {
+      name: "swift-oak",
+      sessionId: "s1",
+      task: "",
+      workflow: "trellis",
+      workerModel: "sonnet",
+      failingReason: "trellis-flagged",
+      trellisName: "auth-rewrite",
+      trellisPath: "/tmp/auth-rewrite.md",
+      trellisIteration: 3,
+      trellisMaxIterations: 30,
+      trellisLastVerdict: "DRIFT",
+      trellisLastDrift: ["[surface] foo() missing", "[tests] no test"],
+      trellisAlignedCount: 7,
+      trellisDriftHistory: [["a"], ["b"]],
+      trellisShaHistory: ["sha1", "sha2"],
+      trellisStagnationConfirmedAt: 1234567890,
+      trellisFlaggedClauses: ["line 47 contradicts line 91"],
+      trellisAligned: true,
+      trellisModelFallbackAt: 1234567899,
+    });
+    const w = getWorkers("proj")[0];
+    expect(w.workflow).toBe("trellis");
+    expect(w.workerModel).toBe("sonnet");
+    expect(w.failingReason).toBe("trellis-flagged");
+    expect(w.trellisName).toBe("auth-rewrite");
+    expect(w.trellisPath).toBe("/tmp/auth-rewrite.md");
+    expect(w.trellisIteration).toBe(3);
+    expect(w.trellisMaxIterations).toBe(30);
+    expect(w.trellisLastVerdict).toBe("DRIFT");
+    expect(w.trellisLastDrift).toEqual(["[surface] foo() missing", "[tests] no test"]);
+    expect(w.trellisAlignedCount).toBe(7);
+    expect(w.trellisDriftHistory).toEqual([["a"], ["b"]]);
+    expect(w.trellisShaHistory).toEqual(["sha1", "sha2"]);
+    expect(w.trellisStagnationConfirmedAt).toBe(1234567890);
+    expect(w.trellisFlaggedClauses).toEqual(["line 47 contradicts line 91"]);
+    expect(w.trellisAligned).toBe(true);
+    expect(w.trellisModelFallbackAt).toBe(1234567899);
+  });
+
+  it("default workers omit trellis fields and round-trip cleanly", async () => {
+    const { addWorker, getWorkers } = await importRegistry();
+    addWorker("proj", {
+      name: "bold-ash",
+      sessionId: "s2",
+      task: "",
+      workflow: "default",
+    });
+    const w = getWorkers("proj")[0];
+    expect(w.workflow).toBe("default");
+    expect(w.trellisName).toBeUndefined();
+    expect(w.trellisIteration).toBeUndefined();
+    expect(w.failingReason).toBeUndefined();
+  });
+});

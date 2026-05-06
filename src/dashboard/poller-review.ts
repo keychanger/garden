@@ -142,6 +142,7 @@ export function handleReviewing(
         });
         transitionState(projectName, entry.name, "failing", {
           failCount: (entry.failCount ?? 0) + 1,
+          failingReason: "code",
           // Pin the failing SHA so handleFailing's debounce gate refuses
           // to retry until a new commit actually arrives.
           failingSha: headSha ?? undefined,
@@ -182,6 +183,7 @@ export function handleReviewing(
     });
     transitionState(projectName, entry.name, "failing", {
       failCount: (entry.failCount ?? 0) + 1,
+      failingReason: "code",
       // Pin the failing SHA so handleFailing's debounce gate refuses to
       // retry until a new commit actually arrives.
       failingSha: headSha ?? undefined,
@@ -251,6 +253,7 @@ export function handleReviewing(
     const headSha = getBranchHeadSha(wtPath);
     transitionState(projectName, entry.name, "failing", {
       failCount: (entry.failCount ?? 0) + 1,
+      failingReason: "code",
       failingSha: headSha ?? undefined,
       lastSeenSha: headSha ?? undefined,
       lastShaChangeAt: new Date().toISOString(),
@@ -348,6 +351,7 @@ export function handleReviewTimeout(
   const headSha = getBranchHeadSha(wtPath);
   transitionState(projectName, entry.name, "failing", {
     failCount: (entry.failCount ?? 0) + 1,
+    failingReason: "code",
     failingSha: headSha ?? undefined,
     lastSeenSha: headSha ?? undefined,
     lastShaChangeAt: new Date().toISOString(),

@@ -32,10 +32,22 @@ export interface ProjectConfig {
   sandboxDomains?: string[];
   claudeProfile?: string;
   logColor?: string;
+  // Trellis workflow keys. See TRELLIS.md "Project config".
+  // Directory containing trellis files. Resolved relative to the project
+  // root. Default: ".garden/trellises".
+  trellisDir?: string;
+  // Iteration cap on a vine. Per-worker `--max-iterations` overrides this.
+  // Default: 30.
+  maxTrellisIterations?: number;
+  // When true (default), Sonnet exhaustion routes the next iteration through
+  // Opus and fires one alert per Sonnet reset window. When false, Sonnet
+  // exhaustion pauses the loop via the existing usage-pause mechanism.
+  trellisOpusFallback?: boolean;
 }
 
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "path", "checks", "postMerge", "sandboxDomains", "claudeProfile", "logColor",
+  "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
 ]);
 
 export function isValidConfigKey(key: string): boolean {

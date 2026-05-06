@@ -8,7 +8,10 @@ import {
 } from "../log-palette.js";
 import { output } from "../output.js";
 
-const SETTABLE_KEYS = ["checks", "postMerge", "sandboxDomains", "claudeProfile", "logColor"] as const;
+const SETTABLE_KEYS = [
+  "checks", "postMerge", "sandboxDomains", "claudeProfile", "logColor",
+  "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
+] as const;
 type SettableKey = typeof SETTABLE_KEYS[number];
 
 export async function config(args: string[]): Promise<void> {
@@ -58,6 +61,14 @@ function showProjectConfig(project: ProjectConfig & { name: string }): void {
       if (project.claudeProfile) data.claudeProfile = project.claudeProfile;
     } else if (key === "logColor") {
       if (project.logColor) data.logColor = project.logColor;
+    } else if (key === "maxTrellisIterations") {
+      if (project.maxTrellisIterations !== undefined) {
+        data.maxTrellisIterations = String(project.maxTrellisIterations);
+      }
+    } else if (key === "trellisOpusFallback") {
+      if (project.trellisOpusFallback !== undefined) {
+        data.trellisOpusFallback = String(project.trellisOpusFallback);
+      }
     } else if (project[key]) {
       data[key] = project[key]!;
     }
@@ -91,9 +102,21 @@ function showConfigKey(project: ProjectConfig & { name: string }, key: SettableK
     else output({ [key]: null }, () => `(not set)`);
     return;
   }
+  if (key === "maxTrellisIterations") {
+    const v = project.maxTrellisIterations;
+    if (v !== undefined) output({ [key]: v }, () => String(v));
+    else output({ [key]: null }, () => `(not set)`);
+    return;
+  }
+  if (key === "trellisOpusFallback") {
+    const v = project.trellisOpusFallback;
+    if (v !== undefined) output({ [key]: v }, () => String(v));
+    else output({ [key]: null }, () => `(not set)`);
+    return;
+  }
   const value = project[key];
   if (value) {
-    output({ [key]: value }, () => value);
+    output({ [key]: value }, () => String(value));
   } else {
     output({ [key]: null }, () => `(not set)`);
   }
@@ -142,6 +165,28 @@ function setConfigKey(projectName: string, key: SettableKey, value: string): voi
       }
       project.claudeProfile = value;
       console.log(`Set ${key} = ${value} for ${projectName}`);
+    }
+  } else if (key === "maxTrellisIterations") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.maxTrellisIterations;
+      console.log(`Cleared ${key} for ${projectName} (default: 30)`);
+    } else {
+      const n = Number.parseInt(value, 10);
+      if (!Number.isFinite(n) || n < 1) {
+        throw new Error(`maxTrellisIterations must be a positive integer, got '${value}'`);
+      }
+      project.maxTrellisIterations = n;
+      console.log(`Set ${key} = ${n} for ${projectName}`);
+    }
+  } else if (key === "trellisOpusFallback") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.trellisOpusFallback;
+      console.log(`Cleared ${key} for ${projectName} (default: true)`);
+    } else if (value === "true" || value === "false") {
+      project.trellisOpusFallback = value === "true";
+      console.log(`Set ${key} = ${value} for ${projectName}`);
+    } else {
+      throw new Error(`trellisOpusFallback must be 'true' or 'false', got '${value}'`);
     }
   } else if (value === "" || value === "unset" || value === "null") {
     delete project[key];

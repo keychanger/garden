@@ -95,6 +95,7 @@ export function handleFailing(
 
     transitionState(projectName, entry.name, "working", {
       failingSha: undefined,
+      failingReason: undefined,
       lastSeenSha: undefined,
     });
     return true;

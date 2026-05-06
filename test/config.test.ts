@@ -465,3 +465,50 @@ describe("logs mode", () => {
     expect(getLogsMode()).toBe("pretty");
   });
 });
+
+// Trellis workflow adds three optional ProjectConfig keys. Round-trip them
+// through saveConfig → loadConfig and confirm isValidConfigKey accepts them.
+// See TRELLIS.md "Project config".
+describe("trellis project config keys", () => {
+  it("isValidConfigKey accepts the three trellis keys", async () => {
+    const { isValidConfigKey } = await importConfig();
+    expect(isValidConfigKey("trellisDir")).toBe(true);
+    expect(isValidConfigKey("maxTrellisIterations")).toBe(true);
+    expect(isValidConfigKey("trellisOpusFallback")).toBe(true);
+  });
+
+  it("rejects unknown keys", async () => {
+    const { isValidConfigKey } = await importConfig();
+    expect(isValidConfigKey("notARealKey")).toBe(false);
+  });
+
+  it("round-trips trellisDir, maxTrellisIterations, and trellisOpusFallback", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({
+      projects: {
+        garden: {
+          path: "/tmp/garden",
+          trellisDir: "docs/trellises",
+          maxTrellisIterations: 15,
+          trellisOpusFallback: false,
+        },
+      },
+    });
+    const cfg = loadConfig();
+    expect(cfg.projects.garden.trellisDir).toBe("docs/trellises");
+    expect(cfg.projects.garden.maxTrellisIterations).toBe(15);
+    expect(cfg.projects.garden.trellisOpusFallback).toBe(false);
+  });
+
+  it("treats trellis keys as optional (project config without them still loads)", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
+    const cfg = loadConfig();
+    expect(cfg.projects.garden.path).toBe("/tmp/garden");
+    expect(cfg.projects.garden.trellisDir).toBeUndefined();
+    expect(cfg.projects.garden.maxTrellisIterations).toBeUndefined();
+    expect(cfg.projects.garden.trellisOpusFallback).toBeUndefined();
+  });
+});

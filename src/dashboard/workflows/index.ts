@@ -4,13 +4,16 @@
 // logs without breaking production).
 import { log } from "../log.js";
 import { defaultWorkflow } from "./default.js";
+import { trellisWorkflow } from "./trellis.js";
 import type { WorkflowDefinition } from "./types.js";
 
 export type { WorkflowDefinition, StateHandler, HookContext, WorkflowHookHandlers, HookMethod } from "./types.js";
 export { defaultWorkflow } from "./default.js";
+export { trellisWorkflow } from "./trellis.js";
 
 const registry = new Map<string, WorkflowDefinition>();
 registry.set(defaultWorkflow.name, defaultWorkflow);
+registry.set(trellisWorkflow.name, trellisWorkflow);
 
 // Tracks names we've already warned about, so the operator's logs aren't
 // spammed by every poll cycle on the same stale registry entry.

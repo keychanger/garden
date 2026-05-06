@@ -131,6 +131,7 @@ function escalateResolveBudget(
   const headSha = getBranchHeadSha(wtPath);
   transitionState(projectName, entry.name, "failing", {
     failCount: (entry.failCount ?? 0) + 1,
+    failingReason: "code",
     failingSha: headSha ?? undefined,
     lastSeenSha: headSha ?? undefined,
     lastShaChangeAt: new Date().toISOString(),

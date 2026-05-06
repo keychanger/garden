@@ -19,6 +19,22 @@ import { log } from "./log.js";
 export type ClaudeStatus = "loading" | "ready" | "working" | "asking" | "idle" | "exited";
 export type PrState = "working" | "reviewing" | "merge-pending" | "resolving" | "merged" | "done" | "failing";
 
+// Trellis reviewer verdict vocabulary. See TRELLIS.md "Reviewer prompt and
+// verdict". Persisted on WorkerEntry.trellisLastVerdict for trellis vines.
+export type TrellisVerdict = "ALIGNED" | "DRIFT" | "FAILED" | "FLAGGED";
+
+// Reason a worker is in `failing`. Allowed values per TRELLIS.md
+// "Worker entry additions" + "Equilibrium and termination". Default
+// workflow uses "code" and "unparseable-verdict"; trellis adds the rest.
+// Optional: legacy entries lack this field; consumers default to "code"
+// when absent on a `failing` worker.
+export type FailingReason =
+  | "code"
+  | "trellis-flagged"
+  | "iteration-budget"
+  | "stagnation"
+  | "unparseable-verdict";
+
 export interface WorkerEntry {
   name: string;       // adjective-noun name, e.g. "swift-oak"
   sessionId: string;  // claude session UUID for direct resume
@@ -101,6 +117,44 @@ export interface WorkerEntry {
   // (poller, transitionState, hook dispatcher) read with `entry.workflow ?? "default"`.
   // See WORKFLOWS.md and src/dashboard/workflows/.
   workflow?: string;
+  // Reason the worker is in `failing`. See FailingReason above and
+  // TRELLIS.md "Equilibrium and termination". Default workflow sets "code"
+  // (Q8 retrofit) or "unparseable-verdict" (Q9 retrofit, phase 2).
+  failingReason?: FailingReason;
+  // Per-worker model override, set via `--model` at plant time. Read each
+  // iteration; falls back to WorkflowDefinition.workerModel, then project
+  // default. Trellis-only in v1; default workers leave this unset.
+  workerModel?: "opus" | "sonnet";
+  // --- Trellis-vine-only fields. Populated only when workflow === "trellis".
+  // See TRELLIS.md "Worker entry additions" for the contract on each.
+  trellisName?: string;
+  // Resolved absolute path to the trellis at plant time. Stable lookup
+  // even if the project's trellisDir changes later.
+  trellisPath?: string;
+  // Iteration counter. Incremented on each working → reviewing transition
+  // *before* the budget check and dispatch. Reads as 1 during the first
+  // review, 2 during the second, etc. Starts at 0.
+  trellisIteration?: number;
+  trellisMaxIterations?: number;
+  trellisLastVerdict?: TrellisVerdict;
+  trellisLastDrift?: string[];
+  trellisAlignedCount?: number;
+  // Bounded (length 5) history of drift lists for stagnation detection (v1.5).
+  trellisDriftHistory?: string[][];
+  // Bounded (length 5) history of HEAD SHAs at iteration boundaries (v1.5).
+  trellisShaHistory?: string[];
+  // Epoch ms when stagnation was detected; cleared on next push (v1.5).
+  trellisStagnationConfirmedAt?: number;
+  // Cited clauses from a FLAGGED verdict — used in the alert and the
+  // resume command's diagnostic output.
+  trellisFlaggedClauses?: string[];
+  // True when the terminal `done` was reached via reviewer ALIGNED rather
+  // than operator-set `.garden-done`. Drives the `✓ aligned, N iters`
+  // status row decoration. Set by finalizeMerge on the ALIGNED path.
+  trellisAligned?: boolean;
+  // Epoch ms of the most recent Sonnet → Opus fallback. Used to dedupe
+  // alerts within a single Sonnet 5h reset window (phase 3).
+  trellisModelFallbackAt?: number;
 }
 
 export interface WorkerRegistry {
