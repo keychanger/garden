@@ -73,14 +73,28 @@ function bindMeta(key: string, command: string): void {
   // copy-mode's numeric-prefix handler and renders in the tmux status line
   // instead of firing the dashboard hotkey. Cancel copy-mode first so the
   // active pane is back on its live screen before the command runs.
+  //
+  // The chained body MUST be a single argv. Passing ";" as its own argv to
+  // bind-key makes tmux treat it as a top-level command separator: bind-key
+  // gets only `send-keys -X cancel` and the `run-shell <guarded>` fires
+  // immediately at setup time — once per key per table, dispatching every
+  // dashboard hotkey command (including _trellis-picker) every time
+  // setupKeybindings runs (e.g., after each garden post-merge rebuild).
+  const body = `send-keys -X cancel ; run-shell ${tmuxDoubleQuote(guarded)}`;
   for (const table of ["copy-mode", "copy-mode-vi"]) {
     try {
       execFileSync("tmux", [
-        "bind-key", "-T", table, `M-${key}`,
-        "send-keys", "-X", "cancel",
-        ";",
-        "run-shell", guarded
+        "bind-key", "-T", table, `M-${key}`, body
       ], { stdio: "ignore" });
     } catch { /* ignore */ }
   }
+}
+
+// Tmux's own command parser supports double-quoted strings: $variable
+// expansion and command substitution are interpreted inside them, and
+// backslash escapes the next character. We need the inner shell script to
+// reach run-shell verbatim, so escape \, $, " and ` so tmux passes the
+// guarded string through unchanged.
+function tmuxDoubleQuote(s: string): string {
+  return `"${s.replace(/[\\$"`]/g, "\\$&")}"`;
 }
