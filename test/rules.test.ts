@@ -146,6 +146,31 @@ describe("buildWorktreeRules", () => {
     expect(result).toContain("Stop hook");
     expect(result).toContain("end your turn");
   });
+
+  it("omits the checks paragraph when no checksCommand is configured", async () => {
+    // Projects without a configured `checks` command should not get the
+    // checks-before-push paragraph — there is nothing concrete to point at.
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("test-branch");
+    expect(result).not.toContain("Run checks before you push");
+  });
+
+  it("names the configured checks command and ties it to CI", async () => {
+    // Workers were pushing without running the project's checks, so the
+    // reviewer (which DOES run them) had to fix what the worker should
+    // have caught — and CI failed every commit. Embedding the exact
+    // command in the prompt closes the gap. The wording must mention
+    // both the reviewer and CI so the worker understands that "the
+    // command is configured for a reason."
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("test-branch", "main", {
+      checksCommand: "npm run lint && npm run test:coverage",
+    });
+    expect(result).toContain("Run checks before you push");
+    expect(result).toContain("`npm run lint && npm run test:coverage`");
+    expect(result).toContain("reviewer");
+    expect(result).toContain("CI");
+  });
 });
 
 // Trellis workflow extends the worktree rules with three additional

@@ -771,12 +771,16 @@ function writeWorktreeContextFile(
   opts?: { trellisRelativePath?: string },
 ): string {
   const base = buildRulesContext(projectName, projectPath);
+  const checksCommand = tryGetProject(projectName)?.checks;
   const worktreeRules = buildWorktreeRules(
     branchName,
     baseBranch,
-    opts?.trellisRelativePath
-      ? { trellis: { relativePath: opts.trellisRelativePath } }
-      : undefined,
+    {
+      ...(opts?.trellisRelativePath
+        ? { trellis: { relativePath: opts.trellisRelativePath } }
+        : {}),
+      ...(checksCommand ? { checksCommand } : {}),
+    },
   );
   const context = `${base}\n\n${worktreeRules}`;
   const contextFile = path.join(SESSIONS_DIR, `dashboard-${projectName}-${branchName}.context`);

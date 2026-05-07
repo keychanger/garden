@@ -59,7 +59,7 @@ Use `garden <cmd> --help` for flag-level detail. High-level groupings:
 
 Every worker runs in its own git worktree at `~/.garden/worktrees/<project>/<worker>/`, on a branch named after the worker, branched from `origin/<base>` (fetched first). Each project has a dedicated **poller** in a hidden tmux window that drives review/merge using local git — no GitHub PRs. Reviewers and resolvers run headless in hidden `_<project>-review-<worker>` / `_<project>-resolve-<worker>` windows. Multiple reviews run in parallel within a project; the merge queue is serial. Full state machine: `STATUS.md`.
 
-Worker prompt is `rules.md` (global) + `<project>/.garden/rules.md` (project) + per-worker preamble. Worker panes start in `permissions.defaultMode: "auto"` inside an OS sandbox (Seatbelt/bubblewrap) configured by `sandbox.ts`. Workers commit and push autonomously — no operator confirmation; the poller handles review and merge.
+Worker prompt is `rules.md` (global) + `<project>/.garden/rules.md` (project) + per-worker preamble built by `buildWorktreeRules` in `src/rules.ts`. The preamble names the project's configured `checks` command (from `garden config <project> checks`) so the worker, the reviewer, and CI all gate on the same string — keep that command aligned with `.github/workflows/test.yml` or you reintroduce the asymmetry that caused workers to push broken state and CI to email "Run failed" on every commit. Worker panes start in `permissions.defaultMode: "auto"` inside an OS sandbox (Seatbelt/bubblewrap) configured by `sandbox.ts`. Workers commit and push autonomously — no operator confirmation; the poller handles review and merge.
 
 ## Dashboard internals
 

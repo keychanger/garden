@@ -52,6 +52,13 @@ export interface WorktreeRulesOptions {
      *  paragraph so the worker can grep / read it directly. */
     relativePath: string;
   };
+  /** The project's configured `checks` command (from `garden config <project>
+   *  checks`). When set, the prompt names the exact command and instructs
+   *  the worker to run it green before pushing. The reviewer runs the same
+   *  command (see `reviewChecksStepSection`); if the worker pushes broken
+   *  state, the reviewer must spend tokens fixing what the worker should
+   *  have caught — and CI fails downstream. Keep this aligned with CI. */
+  checksCommand?: string;
 }
 
 export function buildWorktreeRules(
@@ -75,7 +82,13 @@ You are working in an isolated git worktree on branch \`${branchName}\`. Your wo
 
 **Auto-continue across phases.** After your branch is reviewed and merged, garden automatically sends a "please proceed" prompt to your pane so multi-phase work keeps building on the merged base without operator intervention. When you have completed *everything* the operator asked for, **invoke the \`done\` skill** before ending your turn — see \`.claude/skills/done/SKILL.md\` in your worktree for the full mechanics. Do not invoke \`done\` mid-phase; it is the explicit "I'm finished with the operator's full request" declaration, not a per-turn thing.`;
 
-  if (!options?.trellis) return base;
+  const checksParagraph = options?.checksCommand
+    ? `\n\n**Run checks before you push.** This project's checks command is \`${options.checksCommand}\`. Run it and make it pass before \`git push\`. The reviewer runs the same command and CI runs the same suite; if you push broken state, the reviewer spends tokens fixing what you should have caught, and CI emails a "Run failed" notification on every commit. If checks fail, fix the failures, run again, and only push when the run is green.`
+    : "";
+
+  const baseWithChecks = base + checksParagraph;
+
+  if (!options?.trellis) return baseWithChecks;
 
   // Trellis-specific extension. Three paragraphs per TRELLIS.md "Worker
   // system prompt": concept, authority asymmetry, iteration discipline.
@@ -91,5 +104,5 @@ You are working in an isolated git worktree on branch \`${branchName}\`. Your wo
 
 **Iteration discipline.** You are operating inside a bounded loop. The reviewer's \`DRIFT\` report names priority-ordered gaps between the trellis and the artifact. Close the highest-priority gap first. Do not chase adjacent improvements. Do not redesign. The trellis's "Out of scope" section is the bound of your work. Each iteration starts with a fresh Claude session — disk (the trellis at git HEAD, the code, and \`.garden/trellis-lessons.md\`) is the only state that crosses iteration boundaries. Append a one-line entry to the lessons file each iteration describing what you tried and what you learned.`;
 
-  return `${base}\n\n${trellisExtras}`;
+  return `${baseWithChecks}\n\n${trellisExtras}`;
 }
