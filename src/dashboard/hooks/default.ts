@@ -17,7 +17,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { tryGetProject } from "../../config.js";
 import { addAlert, readAlerts } from "../alerts.js";
-import { isDoneSet } from "../continue.js";
+import { clearDoneSentinel, isDoneSet } from "../continue.js";
 import { getWorkerBaseBranch } from "../git.js";
 import { findWorkerPaneId, refreshDashboard } from "../header.js";
 import { log } from "../log.js";
@@ -235,10 +235,14 @@ const onUserPromptSubmit: HookMethod = (ctx) => {
   const fields: FieldsDelta = { claudeStatus: "working" };
   // Clear merged/done prState on the next prompt — invariant 4 (terminal
   // states are sticky until new input). The hook handler is the only place
-  // this clear happens.
+  // this clear happens. Also clear the on-disk `.garden-done` sentinel so a
+  // subsequent no-commits Stop doesn't immediately re-trip `done` from a
+  // prior phase's declaration. If the worker is still done after this turn,
+  // the `done` skill re-writes the sentinel.
   const ps = ctx.workerInfo.entry.prState;
   if (ps === "merged" || ps === "done") {
     fields.prState = undefined;
+    clearDoneSentinel(ctx.workerInfo.entry.worktreePath);
   }
   applyAndLog(ctx, fields);
 };

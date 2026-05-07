@@ -312,6 +312,38 @@ describe("handleClaudeHook — core events", () => {
     expect(statusAfter("garden", "bold-ash")).toBe("working");
   });
 
+  it("prompt clears prState=done AND deletes the .garden-done sentinel", async () => {
+    seedWorker("garden", "bold-ash", {
+      claudeStatus: "idle",
+      prState: "done",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+    });
+    setCwd("garden", "bold-ash");
+
+    const fs = (await import("node:fs")).default;
+    handleClaudeHook("prompt");
+
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(entry.claudeStatus).toBe("working");
+    expect(entry.prState).toBeUndefined();
+    expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/wt/garden/bold-ash/.garden-done");
+  });
+
+  it("prompt does NOT touch the sentinel when prState was not merged/done", async () => {
+    seedWorker("garden", "bold-ash", {
+      claudeStatus: "idle",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+    });
+    setCwd("garden", "bold-ash");
+
+    const fs = (await import("node:fs")).default;
+    handleClaudeHook("prompt");
+
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(entry.claudeStatus).toBe("working");
+    expect(fs.unlinkSync).not.toHaveBeenCalled();
+  });
+
   it("stop sets idle from any prior state", () => {
     seedWorker("garden", "bold-ash", { claudeStatus: "working" });
     setCwd("garden", "bold-ash");

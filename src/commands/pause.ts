@@ -34,5 +34,9 @@ export async function pause(args: string[]): Promise<void> {
   }
   const target = donePath(worktreePath);
   fs.writeFileSync(target, "");
-  console.log(`Paused ${project}/${workerName} — auto-continue suppressed (sentinel: ${target}).`);
+  console.log(
+    `Paused ${project}/${workerName} — auto-continue suppressed (sentinel: ${target}).\n`
+    + `Note: a worker UserPromptSubmit will clear the sentinel, so prompting this worker `
+    + `is itself an unpause signal.`,
+  );
 }

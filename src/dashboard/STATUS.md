@@ -266,7 +266,10 @@ recurring re-check, or "fallback poll."
      auto-continue prompt is suppressed when the sentinel is present,
      so a worker entering `done` stays there until the operator either
      cleans it up or submits a new prompt (which clears `done` →
-     `working`).
+     `working` *and* deletes `.garden-done` — so a subsequent
+     no-commits Stop in the new turn does not re-trip `done` from the
+     prior phase's declaration; the worker re-invokes the `done` skill
+     if it is still finished).
 
    There are two paths into `done`:
 

@@ -60,7 +60,7 @@ That is the entire invocation. Verify with \`ls -la .garden-done\`. Then end you
 
 ## Recovery
 
-If you wrote \`.garden-done\` and the operator gives you more work afterward, they can run \`garden resume <worker>\` to clear the sentinel and re-arm the auto-continue chain. They can also simply prompt you again — if your reply turn produces new commits, the normal review/merge cycle takes over and the sentinel is re-evaluated on the next merge.
+If you wrote \`.garden-done\` and the operator gives you more work afterward, just keep working — their \`UserPromptSubmit\` automatically clears both the \`done\` state and the on-disk sentinel, so a no-commits Stop in the new turn will not re-trip \`done\`. If, after working through their new prompt, you decide you are *still* finished, re-run \`touch .garden-done\` and end your turn — the skill is cheap to re-invoke. \`garden resume <worker>\` is the manual escape hatch for clearing the sentinel without prompting the worker.
 `;
 
 export const TRELLIS_AUTHOR_SKILL_DIRNAME = "trellis-author";
