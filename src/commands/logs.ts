@@ -314,8 +314,12 @@ function formatPrettyEntry(entry: LogEntry, useRelativeTime: boolean): string {
   const projectLabel = rawLabel.length > PROJECT_COL_WIDTH ? rawLabel.slice(0, PROJECT_COL_WIDTH) : rawLabel.padEnd(PROJECT_COL_WIDTH);
   const projectColor = project ? colorForProject(project) : color.dim;
   const projectStr = `${projectColor}${projectLabel}${color.reset}`;
-  const workerStr = entry.worker
-    ? `${color.dim}${entry.worker.padEnd(WORKER_COL_WIDTH)}${color.reset}`
+  // Project-level poller entries (started/stopped, postMerge, etc.) carry no
+  // worker. Label the actor as "poller" so the column isn't blank for
+  // entries that clearly originated from the project's poller.
+  const workerLabel = entry.worker ?? (entry.src === "poller" ? "poller" : null);
+  const workerStr = workerLabel
+    ? `${color.dim}${workerLabel.padEnd(WORKER_COL_WIDTH)}${color.reset}`
     : " ".repeat(WORKER_COL_WIDTH);
   const glyph = PRETTY_LEVEL_GLYPHS[entry.level] ?? " ";
   const glyphColor = LEVEL_COLORS[entry.level] ?? "";
