@@ -481,8 +481,6 @@ async function follow(filters: Filters, opts: RenderOptions): Promise<void> {
   const entries = lines.map(parseLine).filter((e): e is LogEntry => e !== null);
   printEntries(entries, filters, opts, false);
 
-  process.stdout.write(`\n${color.dim}--- following (ctrl-c to stop) ---${color.reset}\n\n`);
-
   let prevKey = "";
   let repeatCount = 0;
 
