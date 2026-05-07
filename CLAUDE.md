@@ -191,7 +191,7 @@ The **trellis** workflow runs a feature-scoped, spec-driven loop where a worker 
 Day-to-day operator surface (v1, partial):
 
 - `garden trellis new <project> <name>` — scaffold a trellis at `<project>/.garden/trellises/<name>.md` with the required spine (title, spec sentinel, trellis tag) and recommended sections (Intent, Surface, Behavior, Tests, Docs, Out of scope). Edit the scaffold to fill in feature-specific content, then commit to main.
-- `garden workers new <project> --workflow trellis --trellis <name> [--max-iterations N]` — plant a vine bound to the named trellis. Pre-flight via `validateTrellisPlant` (refuses unknown/retired trellises; warns on missing spec sentinel or `checks` config).
+- `garden workers new <project> --workflow trellis --trellis <name> [--model opus|sonnet] [--max-iterations N]` — plant a vine bound to the named trellis. Pre-flight via `validateTrellisPlant` (refuses unknown/retired trellises; warns on missing spec sentinel or `checks` config). `--model` overrides the trellis default (Sonnet).
 
 The `trellis-author` skill (bundled into every worker's `.claude/skills/trellis-author/SKILL.md`) walks an operator-prompted worker through scope sizing, the required spine, recommended sections, and a self-review pass before saving. Triggers on operator intent ("formalize this as a trellis", "let's spec this as a trellis").
 
