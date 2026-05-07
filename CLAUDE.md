@@ -194,7 +194,7 @@ Day-to-day operator surface (v1):
 - `garden trellis show <project> <name>` — print a trellis's content.
 - `garden trellis new <project> <name>` — scaffold a trellis at `<project>/.garden/trellises/<name>.md` with the required spine (title, spec sentinel, trellis tag) and recommended sections.
 - `garden trellis status <worker>` — show iteration count, last verdict, drift list, lessons-file tail.
-- `garden trellis amend <project> <name>` — open the trellis in `$EDITOR`, commit on success. Refuses on a dirty main checkout (Q4); auto-revives a retired trellis on save.
+- `garden trellis amend <worker>` — open the worker's bound trellis (resolved via `entry.trellisPath`) in `$EDITOR`, commit on success. Refuses on a dirty main checkout (Q4); auto-revives a retired trellis on save.
 - `garden trellis resume <worker>` — clear a `failingReason="trellis-flagged"` worker and arm a fresh review on the next poller wake. (`--override` deferred to v1.5.)
 - `garden trellis retire <project> <name>` / `garden trellis revive <project> <name>` — mark / unmark retirement. Retired trellises are filtered from the picker and refused by CLI vine spawn.
 - `garden workers new <project> --workflow trellis --trellis <name> [--model opus|sonnet] [--max-iterations N]` — plant a vine bound to the named trellis. Pre-flight via `validateTrellisPlant` (refuses unknown/retired trellises; warns on missing spec sentinel or `checks` config). `--model` overrides the trellis default (Sonnet).

@@ -37,7 +37,7 @@ const USAGE = [
   "  garden trellis show <project> <name>",
   "  garden trellis new <project> <name>",
   "  garden trellis status <worker>",
-  "  garden trellis amend <project> <name>",
+  "  garden trellis amend <worker>",
   "  garden trellis resume <worker>",
   "  garden trellis retire <project> <name>",
   "  garden trellis revive <project> <name>",
@@ -202,36 +202,52 @@ async function statusCommand(args: string[]): Promise<void> {
 // --- amend ---------------------------------------------------------------
 
 async function amendCommand(args: string[]): Promise<void> {
-  const projectName = args[0];
-  const name = args[1];
-  if (!projectName || !name) throw new Error("Usage: garden trellis amend <project> <name>");
+  const workerName = args[0];
+  if (!workerName) throw new Error("Usage: garden trellis amend <worker>");
+
+  const found = findWorkerAcrossProjects(workerName);
+  if (!found) {
+    throw new Error(`Worker '${workerName}' not found in any project.`);
+  }
+  const { project: projectName, entry } = found;
+  if (entry.workflow !== "trellis") {
+    throw new Error(
+      `Worker '${workerName}' is on workflow '${entry.workflow ?? "default"}', not trellis. ` +
+      `'garden trellis amend' edits the worker's bound trellis.`,
+    );
+  }
+  if (!entry.trellisPath || !entry.trellisName) {
+    throw new Error(
+      `Worker '${workerName}' has no bound trellis (missing trellisPath/trellisName on the registry entry).`,
+    );
+  }
   const project = tryGetProject(projectName);
   if (!project) {
     throw new Error(`Unknown project '${projectName}'. Run 'garden list' to see registered projects.`);
   }
-  const info = findTrellisByName(projectName, name);
-  if (!info) {
-    throw new Error(`Trellis '${name}' not found in project '${projectName}'.`);
+  const trellisPath = entry.trellisPath;
+  const trellisName = entry.trellisName;
+  if (!fs.existsSync(trellisPath)) {
+    throw new Error(`Trellis file at ${trellisPath} no longer exists.`);
   }
 
   // Refuse on a dirty main checkout (Q4). The trellis lives on main, and
   // committing on a dirty tree mixes operator's pending edits with the
   // amend — same footgun the bootstrap already alerts on.
-  const dirty = isMainCheckoutDirty(project.path);
-  if (dirty) {
+  if (isMainCheckoutDirty(project.path)) {
     throw new Error(
       `Project '${projectName}' main checkout has uncommitted changes — refusing to amend trellis. ` +
-      `Commit or stash those changes first, then re-run 'garden trellis amend ${projectName} ${name}'.`,
+      `Commit or stash those changes first, then re-run 'garden trellis amend ${workerName}'.`,
     );
   }
 
   const editor = process.env.EDITOR || process.env.VISUAL || "vi";
-  const before = fs.readFileSync(info.path, "utf-8");
-  const result = spawnSync(editor, [info.path], { stdio: "inherit" });
+  const before = fs.readFileSync(trellisPath, "utf-8");
+  const result = spawnSync(editor, [trellisPath], { stdio: "inherit" });
   if (result.status !== 0) {
     throw new Error(`Editor exited with status ${result.status}; not committing changes.`);
   }
-  const after = fs.readFileSync(info.path, "utf-8");
+  const after = fs.readFileSync(trellisPath, "utf-8");
   if (before === after) {
     console.log("No changes; nothing to commit.");
     return;
@@ -244,15 +260,15 @@ async function amendCommand(args: string[]): Promise<void> {
   if (wasRetired) {
     finalContent = after.replace(TRELLIS_RETIREMENT_REGEX, "").replace(/\n{3,}/g, "\n\n");
     if (finalContent !== after) {
-      fs.writeFileSync(info.path, finalContent);
+      fs.writeFileSync(trellisPath, finalContent);
     }
   }
 
   // Commit to main. The trellis lives on the project's main branch.
-  const relPath = path.relative(project.path, info.path);
+  const relPath = path.relative(project.path, trellisPath);
   const summary = wasRetired
-    ? `trellis: amend ${name} (revives retirement)`
-    : `trellis: amend ${name}`;
+    ? `trellis: amend ${trellisName} (revives retirement)`
+    : `trellis: amend ${trellisName}`;
   try {
     execFileSync("git", ["add", relPath], { cwd: project.path, stdio: "ignore" });
     execFileSync("git", ["commit", "-m", summary], { cwd: project.path, stdio: "ignore" });
@@ -338,13 +354,13 @@ async function retireCommand(args: string[]): Promise<void> {
     );
   }
 
-  // Auto-fill the commit range from the most-recently-aligned vine's
-  // history, when one exists. Fall back to today's date with no range
-  // (operator can hand-edit afterward).
-  const range = findAlignedRangeForTrellis(projectName, name) ?? "";
+  // The retirement comment lands with just the date. The plan calls for
+  // auto-filling a commit range from the most-recently-aligned vine, but
+  // garden does not currently persist the merge-commit SHA (the worker's
+  // branch is deleted on merge), so any computed range would be a guess.
+  // Operator can hand-edit the comment to add a range when relevant.
   const today = new Date().toISOString().slice(0, 10);
-  const tail = range ? ` — implementation in commits ${range}` : "";
-  const comment = `<!-- retired: ${today}${tail} -->`;
+  const comment = `<!-- retired: ${today} -->`;
   const tagMatch = info.path; // file path
   const content = fs.readFileSync(tagMatch, "utf-8");
   // Append the comment immediately after the existing trellis tag.
@@ -368,7 +384,7 @@ async function retireCommand(args: string[]): Promise<void> {
   } catch (err) {
     throw new Error(`git commit failed: ${err instanceof Error ? err.message : String(err)}`);
   }
-  console.log(`Retired trellis '${name}'. ${range ? `Commit range: ${range}.` : ""}`);
+  console.log(`Retired trellis '${name}'.`);
   console.log(
     `It's filtered from the picker; CLI vine spawn refuses to bind to it. ` +
     `Revive with 'garden trellis revive ${projectName} ${name}'.`,
@@ -448,41 +464,6 @@ function readLessonsTail(entry: WorkerEntry, lines = 3): string | null {
     if (!content) return null;
     const all = content.split("\n").filter(l => l.trim());
     return all.slice(-lines).join("\n");
-  } catch {
-    return null;
-  }
-}
-
-// Best-effort commit-range lookup for retirement. Walks the registry for
-// the most-recently-aligned vine bound to this trellis and builds a
-// "<short-sha>..<short-sha>" range. Returns null when no aligned vine
-// exists yet — the retirement comment lands without a range and the
-// operator can hand-edit later.
-function findAlignedRangeForTrellis(
-  projectName: string,
-  trellisName: string,
-): string | null {
-  const project = tryGetProject(projectName);
-  if (!project) return null;
-  const entries = readRegistry().workers[projectName] ?? [];
-  const aligned = entries
-    .filter(e => e.workflow === "trellis"
-      && e.trellisName === trellisName
-      && e.trellisAligned === true
-      && e.mergedAt)
-    .sort((a, b) => (b.mergedAt ?? "").localeCompare(a.mergedAt ?? ""));
-  if (aligned.length === 0) return null;
-  const last = aligned[0];
-  const branchName = last.branchName ?? last.name;
-  // git log --format=%H base..branch would be ideal, but the worker's
-  // branch is deleted after merge (deleteRemoteBranch). Fall back to a
-  // simple "merged at SHA" by reading reflog of main, or just skip.
-  // For v1, return a placeholder using the merge-commit SHA when we can.
-  try {
-    const sha = execFileSync("git", ["log", "-1", "--format=%h", "--", "."], {
-      cwd: project.path, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return sha ? `${sha} (vine ${branchName})` : null;
   } catch {
     return null;
   }

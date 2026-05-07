@@ -228,19 +228,48 @@ describe("garden trellis status", () => {
 });
 
 describe("garden trellis amend", () => {
+  async function plantVine(projectDir: string, workerName: string, trellisName: string): Promise<string> {
+    const trellisFile = path.join(projectDir, ".garden", "trellises", `${trellisName}.md`);
+    const { addWorker } = await importRegistry();
+    addWorker("proj", {
+      name: workerName,
+      sessionId: "s1",
+      task: "",
+      workflow: "trellis",
+      trellisName,
+      trellisPath: trellisFile,
+    });
+    return trellisFile;
+  }
+
   it("refuses on a dirty main checkout (Q4)", async () => {
     const projectDir = await setupProject("proj");
     makeTrellis(projectDir, "auth");
+    await plantVine(projectDir, "swift-vine", "auth");
     // Dirty the working tree.
     fs.writeFileSync(path.join(projectDir, "uncommitted.txt"), "dirty\n");
 
     const { trellis } = await importTrellisCmd();
-    await expect(trellis(["amend", "proj", "auth"])).rejects.toThrow(/uncommitted changes/);
+    await expect(trellis(["amend", "swift-vine"])).rejects.toThrow(/uncommitted changes/);
+  });
+
+  it("refuses non-trellis workers", async () => {
+    await setupProject("proj");
+    const { addWorker } = await importRegistry();
+    addWorker("proj", { name: "default-worker", sessionId: "s1", task: "", workflow: "default" });
+    const { trellis } = await importTrellisCmd();
+    await expect(trellis(["amend", "default-worker"])).rejects.toThrow(/not trellis/);
+  });
+
+  it("refuses unknown worker", async () => {
+    const { trellis } = await importTrellisCmd();
+    await expect(trellis(["amend", "ghost-worker"])).rejects.toThrow(/not found/);
   });
 
   it("opens $EDITOR, commits when content changed, no-ops when unchanged", async () => {
     const projectDir = await setupProject("proj");
     const trellisFile = makeTrellis(projectDir, "auth");
+    await plantVine(projectDir, "swift-vine", "auth");
     git(projectDir, "add", ".");
     git(projectDir, "commit", "-m", "add trellis");
 
@@ -251,7 +280,7 @@ describe("garden trellis amend", () => {
 
     try {
       const { trellis } = await importTrellisCmd();
-      await captureConsoleLog(() => trellis(["amend", "proj", "auth"]));
+      await captureConsoleLog(() => trellis(["amend", "swift-vine"]));
 
       // The file changed.
       expect(fs.readFileSync(trellisFile, "utf-8")).toContain("amended");
@@ -268,6 +297,7 @@ describe("garden trellis amend", () => {
     const trellisFile = makeTrellis(projectDir, "auth", {
       retired: "<!-- retired: 2026-04-01 -->",
     });
+    await plantVine(projectDir, "swift-vine", "auth");
     git(projectDir, "add", ".");
     git(projectDir, "commit", "-m", "add retired trellis");
 
@@ -277,7 +307,7 @@ describe("garden trellis amend", () => {
 
     try {
       const { trellis } = await importTrellisCmd();
-      const out = await captureConsoleLog(() => trellis(["amend", "proj", "auth"]));
+      const out = await captureConsoleLog(() => trellis(["amend", "swift-vine"]));
       const content = fs.readFileSync(trellisFile, "utf-8");
       expect(content).not.toMatch(/<!--\s*retired:/);
       expect(out.join("\n")).toMatch(/auto-revived|revives/);

@@ -128,7 +128,7 @@ Trellis (spec-driven loop workflow — see src/dashboard/TRELLIS.md):
   trellis show <project> <name>       Print a trellis's content
   trellis new <project> <name>        Scaffold a trellis at <project>/.garden/trellises/<name>.md
   trellis status <worker>             Show iteration count, last verdict, drift list, lessons tail
-  trellis amend <project> <name>      Open the trellis in $EDITOR; commit on success (refuses on dirty main)
+  trellis amend <worker>              Open the worker's bound trellis in $EDITOR; commit on success (refuses on dirty main)
   trellis resume <worker>             Clear a trellis-flagged failure and arm a fresh review
   trellis retire <project> <name>     Mark a trellis retired (filters from picker, refuses new vines)
   trellis revive <project> <name>     Remove the retirement comment
