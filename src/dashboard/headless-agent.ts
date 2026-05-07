@@ -37,6 +37,14 @@ export interface HeadlessAgentLaunchOptions {
    *  is created — typically schedules a delayed wake-up so the workflow's
    *  state handler can detect timeout on the next poll cycle. */
   onLaunched?: () => void;
+  /** Model to pass to claude via `--model`. When set, the inline command
+   *  becomes `claude -p --model <model> < prompt > result`. When unset
+   *  (default reviewer, default resolver), no `--model` flag is passed
+   *  and claude uses the account's default model. The trellis reviewer
+   *  always sets this to "opus" per TRELLIS.md Invariant 10 — reviewer
+   *  quality is non-negotiable, so the model is pinned regardless of
+   *  the worker's model or quota state. */
+  model?: "opus" | "sonnet";
 }
 
 export interface HeadlessAgentLaunchResult {
@@ -63,7 +71,8 @@ export function launchHeadlessAgent(
   const inlineEnv = opts.envVars
     ? Object.entries(opts.envVars).map(([k, v]) => `${k}=${shellEscape(v)} `).join("")
     : "";
-  const cmd = `${inlineEnv}${opts.envPrefix}claude -p < ${escapedPrompt} > ${escapedResult} 2>&1; [ -p ${escapedFifo} ] && (echo > ${escapedFifo}) 2>/dev/null`;
+  const modelFlag = opts.model ? ` --model ${shellEscape(opts.model)}` : "";
+  const cmd = `${inlineEnv}${opts.envPrefix}claude -p${modelFlag} < ${escapedPrompt} > ${escapedResult} 2>&1; [ -p ${escapedFifo} ] && (echo > ${escapedFifo}) 2>/dev/null`;
 
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", opts.windowName,
     "-c", opts.cwd, "bash", "-c", cmd);

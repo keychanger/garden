@@ -474,6 +474,14 @@ export interface WorktreeCommandOptions {
    *  worker's system prompt. Default workers omit this and get the
    *  baseline rules. */
   trellisRelativePath?: string;
+  /** Model to pass to claude via `--model` in the bootstrap/respawn/resume
+   *  invocation. When set, the launched claude process is pinned to that
+   *  model. When unset (default workers), claude uses the account default
+   *  and no `--model` flag is passed. Trellis vines pass "sonnet" by
+   *  default; the per-worker `--model` override (persisted to
+   *  `entry.workerModel`) and the Sonnet exhaustion fallback (resolved
+   *  via `resolveVineModel`) override per iteration. */
+  model?: "opus" | "sonnet";
 }
 
 export function buildWorktreeWorkerCommand(
@@ -491,7 +499,8 @@ export function buildWorktreeWorkerCommand(
   );
   const project = resolveProjectForHooks(projectName, projectPath);
   const envPrefix = claudeEnvPrefix(project);
-  const claudeCmd = `${envPrefix}claude --rc --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const modelFlag = opts?.model ? ` --model ${shellEscape(opts.model)}` : "";
+  const claudeCmd = `${envPrefix}claude --rc${modelFlag} --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   return `${claudeCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }
 
@@ -584,6 +593,7 @@ export function buildWorktreeBootstrapScript(
   const trellisAuthorSkillDirnameLit = shellEscape(TRELLIS_AUTHOR_SKILL_DIRNAME);
   const trellisAuthorSkillFilenameLit = shellEscape(TRELLIS_AUTHOR_SKILL_FILENAME);
   const envPrefix = claudeEnvPrefix(project);
+  const modelFlag = opts?.model ? ` --model ${shellEscape(opts.model)}` : "";
 
   const base = baseBranch ?? "main";
   const baseLit = shellEscape(base);
@@ -689,7 +699,7 @@ cd ${wtPathLit}
 printf '  Ready.\\n\\n'
 
 # Launch claude
-${envPrefix}claude --rc --session-id ${sessionId} --append-system-prompt-file ${contextFileLit}
+${envPrefix}claude --rc${modelFlag} --session-id ${sessionId} --append-system-prompt-file ${contextFileLit}
 ${gardenRunnerLit} dashboard _claude-hook stop 2>/dev/null || true
 ${pollSignal}
 exec $SHELL
@@ -718,7 +728,8 @@ export function buildWorktreeResumeCommand(
   const project = resolveProjectForHooks(projectName, projectPath);
   const envPrefix = claudeEnvPrefix(project);
   const identityExports = workerEnvExports(projectName, workerName, branchName, baseBranch);
-  const claudeCmd = `${envPrefix}claude --rc --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const modelFlag = opts?.model ? ` --model ${shellEscape(opts.model)}` : "";
+  const claudeCmd = `${envPrefix}claude --rc${modelFlag} --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${identityExports} ${claudeCmd}; ${exitHook}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }

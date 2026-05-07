@@ -41,6 +41,7 @@ npm run dev -- help    # run via tsx during development
   - `trellis-verdict.ts` — trellis verdict vocabulary (`ALIGNED`/`DRIFT`/`FAILED`/`FLAGGED`), `parseTrellisVerdict`, structured drift-list parser, FLAGGED clause extractor.
   - `trellis-prompts.ts` — trellis-flavored review prompt sections (authority, alignment step, document inline, overrides, verdict format) and `buildTrellisReviewPrompt`. Reuses default sections for intro/rebase/checks/diff/docs/tests; replaces the verdict format and adds three trellis-specific sections.
   - `trellis-continue.ts` — per-iteration context reset for trellis vines (Invariant 8). `trellisAutoContinueAfterMerge` regenerates sessionId, respawns the worker pane with `claude --session-id <fresh-uuid>` (no `--resume`), and seeds the trellis continue prompt via the existing `seedWorker` polling primitive.
+  - `trellis-model.ts` — model selection for trellis vines. `resolveVineModel` (pure) returns "opus" | "sonnet" | null based on entry override → workflow default → Sonnet exhaustion fallback (per `usageThreshold`). `resolveAndApplyVineModel` (side-effecting) reads the live snapshot + autoContinue config, fires the dedup'd `trellis-budget` alert on Sonnet → Opus fallback (or the `usage`-source alert + global pause when `trellisOpusFallback === false`).
   - `hooks/default.ts` — default workflow's Claude Code hook handlers, dispatched from `hook-dispatcher.ts`'s `handleClaudeHook`.
   - `poller-review.ts` — review lifecycle: launchReview, handleWorking, handleReviewing, verdict parsing, timeout handling, killReviewWindow
   - `poller-merge.ts` — merge queue + finalization: handleMergePending, finalizeMerge, autoContinueGateReason, runPostMerge, sibling notification
@@ -204,7 +205,14 @@ Worker prompt: `buildWorktreeRules(branch, base, { trellis: { relativePath } })`
 
 Reviewer prompt: `buildTrellisReviewPrompt` in `src/dashboard/trellis-prompts.ts`. Composes `trellisReviewSections` — reuses default sections for intro/rebase/checks/diff/docs/tests, adds three trellis-specific sections (authority, alignment step, document inline), replaces the verdict format. Verdict parsing via `parseTrellisVerdict` in `src/dashboard/trellis-verdict.ts`.
 
-Out of scope for phase 2 (in `TRELLIS-PLAN.md`): model selection (vines run on operator default = Opus until phase 3 wires Sonnet), full `garden trellis ...` CLI surface (only `new` ships in phase 2; list/show/status/amend/resume/retire/revive land in phase 4), status pane decoration, picker hotkey.
+Model selection (phase 3): vines default to Sonnet (set on `trellisWorkflow.workerModel`); reviewer pins to Opus via `workflow.reviewerModel` (Invariant 10 — never falls back). Each iteration's spawn — initial plant *and* per-iteration respawn — calls `resolveAndApplyVineModel`, which reads the Sonnet meter against the project's `usageThreshold`. When Sonnet ≥ threshold:
+
+- `trellisOpusFallback !== false` (default): fall back to Opus for that iteration; fire one `trellis-budget` alert per fallback occurrence (deduped via `entry.trellisModelFallbackAt`).
+- `trellisOpusFallback === false`: refuse the spawn. Initial plant rolls back the registry entry; per-iteration respawn flips the global auto-continue gate (`pausedUntil` = Sonnet `resetsAt`) and fires a `usage`-source alert. Loop resumes when Sonnet resets or operator runs `garden auto on`.
+
+Per-worker override via `garden workers new ... --model opus|sonnet`; persists to `entry.workerModel` and beats the workflow default. Bounce preserves the in-flight session's model (no `--model` flag passed; `claude --resume` inherits the session's stored model).
+
+Out of scope for v1: full `garden trellis ...` CLI surface (only `new` ships through phase 3; list/show/status/amend/resume/retire/revive land in phase 4), status pane decoration, picker hotkey, stagnation detection, lessons file size cap, `--override` flag.
 
 ## Internal commands
 

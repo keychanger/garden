@@ -15,7 +15,7 @@ export async function workers(args: string[]): Promise<void> {
     return;
   }
   throw new Error(
-    `Usage: garden workers new <project> [--workflow trellis --trellis <name>] [--max-iterations N]`,
+    `Usage: garden workers new <project> [--workflow trellis --trellis <name>] [--model opus|sonnet] [--max-iterations N]`,
   );
 }
 
@@ -62,6 +62,12 @@ async function newCommand(args: string[]): Promise<void> {
     if (flags.has("max-iterations")) {
       throw new Error("--max-iterations can only be used with --workflow trellis");
     }
+    if (flags.has("model")) {
+      throw new Error(
+        "--model is currently only supported with --workflow trellis. " +
+        "Default workflow workers run on the account default model.",
+      );
+    }
     const newName = newWorker({ projectName, workflow });
     if (!newName) {
       throw new Error(
@@ -76,6 +82,15 @@ async function newCommand(args: string[]): Promise<void> {
   const trellisName = flags.get("trellis");
   if (!trellisName) {
     throw new Error("--workflow trellis requires --trellis <name>");
+  }
+
+  let workerModel: "opus" | "sonnet" | undefined;
+  if (flags.has("model")) {
+    const raw = flags.get("model")!;
+    if (raw !== "opus" && raw !== "sonnet") {
+      throw new Error(`--model must be 'opus' or 'sonnet', got '${raw}'`);
+    }
+    workerModel = raw;
   }
 
   // Pre-flight: validates the trellis exists, isn't retired, has the
@@ -121,6 +136,7 @@ async function newCommand(args: string[]): Promise<void> {
       name: trellisName,
       path: result.info.path,
       maxIterations: maxIter,
+      workerModel,
     },
     seedMessageFile: seedFile,
   });
@@ -130,8 +146,9 @@ async function newCommand(args: string[]): Promise<void> {
       `Failed to spawn vine on '${projectName}'. Is the dashboard running? Check 'garden health'.`,
     );
   }
+  const modelTag = workerModel ? ` model=${workerModel}` : "";
   console.log(
-    `Planted vine ${projectName}/${newName} on trellis '${trellisName}' (${maxIter} iterations max).`,
+    `Planted vine ${projectName}/${newName} on trellis '${trellisName}' (${maxIter} iterations max${modelTag}).`,
   );
 }
 

@@ -117,9 +117,11 @@ Dashboard:
   rebuild                        Rebuild garden and relaunch dashboard
 
 Workers:
-  workers new <project> [--workflow trellis --trellis <name>] [--max-iterations N]
+  workers new <project> [--workflow trellis --trellis <name>]
+                        [--model opus|sonnet] [--max-iterations N]
                                  Spawn a new worker. Default workflow plants an interactive worker;
-                                 trellis plants a vine bound to the named trellis.
+                                 trellis plants a vine bound to the named trellis. --model overrides
+                                 the trellis default (Sonnet).
 
 Trellis (spec-driven loop workflow — see src/dashboard/TRELLIS.md):
   trellis new <project> <name>   Scaffold a trellis at <project>/.garden/trellises/<name>.md

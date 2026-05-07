@@ -32,6 +32,7 @@ import { parseLastLineVerdict } from "./verdict.js";
 import { reviewWindowName } from "./window-names.js";
 import { signalFifoPath, scheduleDelayedPoke } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
+import { getWorkflow } from "./workflows/index.js";
 
 // Wall-clock ceiling on a single reviewer or resolver run. If the tmux window
 // is still alive past this, the poller kills it and escalates to `failing`.
@@ -628,6 +629,12 @@ function launchReview(
   // hook handler. Without this, the reviewer's Stop hook would be treated
   // as the worker's Stop hook and would (a) write claudeStatus="idle" for
   // the worker, and (b) poke the poller to start another review.
+  //
+  // Reviewer model: trellis pins to workflow.reviewerModel ("opus") per
+  // Invariant 10 — reviewer quality is non-negotiable, never falls back.
+  // Default workflow leaves reviewerModel unset and the account default
+  // applies (today: Opus). No model flag is added in that case.
+  const reviewerModel = getWorkflow(entry.workflow ?? "default").reviewerModel;
   const revWindow = reviewWindowName(projectName, entry.name);
   launchHeadlessAgent({
     cwd: wtPath,
@@ -639,6 +646,7 @@ function launchReview(
     envVars: { GARDEN_REVIEWER: "1" },
     signalFifo: signalFifoPath(projectName),
     onLaunched: () => scheduleReviewTimeoutPoke(projectName),
+    model: reviewerModel,
   });
 
   // Capture the remote tracking SHA at launch time. handleReviewing compares

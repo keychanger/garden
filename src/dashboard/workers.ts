@@ -19,6 +19,8 @@ import {
   updateWorkerFields, getWorkers,
 } from "./registry.js";
 import { log } from "./log.js";
+import { resolveAndApplyVineModel } from "./trellis-model.js";
+import { getWorkflow } from "./workflows/index.js";
 import {
   buildWorktreeBootstrapScript, buildWorktreeResumeCommand, buildResumeCommand,
   createShellWindow, installClaudeHooks, trellisRelativePathForEntry,
@@ -50,6 +52,10 @@ export interface NewWorkerOptions {
     name: string;
     path: string;
     maxIterations: number;
+    /** Per-worker model override from `--model` at plant time. Persisted
+     *  to entry.workerModel and read by each iteration's resolveVineModel
+     *  call. Absent → workflow.workerModel default ("sonnet"). */
+    workerModel?: "opus" | "sonnet";
   };
 }
 
@@ -66,6 +72,16 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     const project = tryGetProject(targetProject);
     if (!project) {
       tmuxDisplay(`Unknown project '${targetProject}'.`);
+      return;
+    }
+
+    // --workflow trellis without opts.trellis is a bug — the CLI must
+    // surface this with a clear error before we add the worker.
+    if (opts.workflow === "trellis" && !opts.trellis) {
+      tmuxDisplay("--workflow trellis requires the trellis options to be set (caller bug).");
+      log.error("workers", "rejected newWorker: workflow=trellis but no trellis opts", {
+        data: { project: targetProject },
+      });
       return;
     }
 
@@ -120,15 +136,69 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         ? path.relative(project.path, opts.trellis.path)
         : undefined;
 
+    // Stamp the registry entry FIRST so model resolution (below) can read
+    // it. If model resolution refuses (Sonnet exhausted + fallback
+    // disabled), we roll back via removeWorker before any tmux/disk work.
+    const workflowName = opts.workflow ?? "default";
+    addWorker(targetProject, {
+      name: workerName,
+      sessionId,
+      task: "",
+      worktreePath: wtPath,
+      branchName,
+      baseBranch,
+      claudeStatus: "loading",
+      workflow: workflowName,
+      // Trellis vine fields — populated only when workflow === "trellis".
+      // trellisIteration starts at 0; launchReview increments to 1 before
+      // the first review fires. See TRELLIS.md "Worker entry additions".
+      ...(workflowName === "trellis" && opts.trellis
+        ? {
+            trellisName: opts.trellis.name,
+            trellisPath: opts.trellis.path,
+            trellisIteration: 0,
+            trellisMaxIterations: opts.trellis.maxIterations,
+            workerModel: opts.trellis.workerModel,
+          }
+        : {}),
+    });
+
+    // For trellis vines, resolve the iteration's model now (before the
+    // bootstrap is built). Resolution may fall back Sonnet → Opus, or
+    // refuse outright when Sonnet is exhausted and trellisOpusFallback
+    // is false. A refusal rolls back the entry and bails — no pane
+    // spawned, no worktree created.
+    let resolvedModel: "opus" | "sonnet" | undefined;
+    if (workflowName === "trellis") {
+      const stamped = findWorkerByName(targetProject, workerName);
+      if (stamped) {
+        const m = resolveAndApplyVineModel(targetProject, stamped, getWorkflow("trellis"));
+        if (m === null) {
+          // Sonnet exhausted + trellisOpusFallback=false. Roll back.
+          removeWorker(targetProject, workerName);
+          tmuxDisplay(
+            `Cannot plant vine: Sonnet exhausted and trellisOpusFallback=false. ` +
+            `Wait for the Sonnet meter to reset, run 'garden auto on', or ` +
+            `set 'garden config ${targetProject} trellisOpusFallback true'.`,
+          );
+          return;
+        }
+        resolvedModel = m;
+      }
+    }
+
     // Write the bootstrap script that handles slow setup (git fetch, worktree
     // creation, npm install) inside the tmux pane so the window appears instantly
     // with progress output instead of blocking the hotkey handler. Default
     // workers omit the options argument entirely (preserves arity for existing
     // callers and tests).
-    const scriptFile = trellisRelativePath
+    const bootstrapOpts: { trellisRelativePath?: string; model?: "opus" | "sonnet" } = {};
+    if (trellisRelativePath) bootstrapOpts.trellisRelativePath = trellisRelativePath;
+    if (resolvedModel) bootstrapOpts.model = resolvedModel;
+    const scriptFile = (bootstrapOpts.trellisRelativePath || bootstrapOpts.model)
       ? buildWorktreeBootstrapScript(
           project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
-          { trellisRelativePath },
+          bootstrapOpts,
         )
       : buildWorktreeBootstrapScript(
           project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
@@ -151,32 +221,9 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // Re-apply label after swap (swap-pane may not preserve pane options)
     if (state.activePaneId) setPaneLabel(state.activePaneId, workerName);
 
-    const workflowName = opts.workflow ?? "default";
-    addWorker(targetProject, {
-      name: workerName,
-      sessionId,
-      task: "",
-      worktreePath: wtPath,
-      branchName,
-      baseBranch,
-      claudeStatus: "loading",
-      workflow: workflowName,
-      // Trellis vine fields — populated only when workflow === "trellis".
-      // trellisIteration starts at 0; launchReview increments to 1 before
-      // the first review fires. See TRELLIS.md "Worker entry additions".
-      ...(workflowName === "trellis" && opts.trellis
-        ? {
-            trellisName: opts.trellis.name,
-            trellisPath: opts.trellis.path,
-            trellisIteration: 0,
-            trellisMaxIterations: opts.trellis.maxIterations,
-          }
-        : {}),
-    });
-
     log.info("workers", "created", {
       worker: workerName,
-      data: { project: targetProject, branch: branchName },
+      data: { project: targetProject, branch: branchName, model: resolvedModel },
     });
 
     ensureProjectPoller(targetProject, gardenRunner);

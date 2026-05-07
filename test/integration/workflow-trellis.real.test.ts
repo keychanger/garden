@@ -312,4 +312,123 @@ DRIFT
     expect(entry?.prState).toBe("failing");
     expect(entry?.failingReason).toBe("trellis-flagged");
   });
+
+  it("reviewer always launches with --model opus regardless of worker model", async () => {
+    await setupWorktreeAndCommit();
+    // Plant a vine on Sonnet to verify the reviewer is independent.
+    await plantVine({
+      prState: "working",
+      claudeStatus: "idle",
+      pendingReviewAt: Date.now(),
+      workerModel: "sonnet",
+    });
+
+    const { poll } = await import("../../src/dashboard/poller.js");
+    const { tmux } = await import("../../src/dashboard/tmux.js");
+    poll(PROJECT);
+
+    // The reviewer was launched via launchHeadlessAgent → tmux new-window.
+    // Inspect the recorded tmux calls for the bash -c command and confirm
+    // it contains '--model opus' (Invariant 10).
+    const launchCalls = vi.mocked(tmux).mock.calls.filter(
+      args => args[0] === "new-window" && args.includes("bash"),
+    );
+    expect(launchCalls.length).toBeGreaterThan(0);
+    const reviewLaunch = launchCalls.find(args =>
+      args.some(a => typeof a === "string" && a.includes("claude -p")),
+    );
+    expect(reviewLaunch).toBeDefined();
+    const cmd = reviewLaunch!.find(a => typeof a === "string" && a.includes("claude -p"))!;
+    expect(cmd).toContain("--model opus");
+  });
+
+  it("Sonnet exhaustion + trellisOpusFallback=true falls back to Opus on respawn", async () => {
+    await setupWorktreeAndCommit();
+    await plantVine({
+      prState: "merged",
+      claudeStatus: "idle",
+      trellisLastVerdict: "DRIFT",
+      trellisLastDrift: ["1. [tests] missing"],
+    });
+
+    // Write a fake usage snapshot with Sonnet at 99%.
+    const { USAGE_FILE } = await import("../../src/dashboard/usage.js");
+    fs.mkdirSync(path.dirname(USAGE_FILE), { recursive: true });
+    fs.writeFileSync(USAGE_FILE, JSON.stringify({
+      fetchedAt: new Date().toISOString(),
+      data: { sonnet: { pct: 99, resetsAt: "2026-05-13T00:00:00Z" } },
+    }));
+
+    // Mock paneExists / windowExists so resolveWorkerPaneId returns a pane.
+    const tmuxMod = await import("../../src/dashboard/tmux.js");
+    vi.mocked(tmuxMod.windowExists).mockReturnValue(true);
+    vi.mocked(tmuxMod.getFirstPaneId).mockReturnValue("%fake-pane");
+
+    // Drive trellisAutoContinueAfterMerge directly (bypass the detached
+    // subprocess dispatch — we want to inspect the tmux respawn args).
+    const { trellisAutoContinueAfterMerge } = await import("../../src/dashboard/trellis-continue.js");
+    trellisAutoContinueAfterMerge(PROJECT, WORKER);
+
+    // Inspect the respawn-pane call's command string.
+    const respawnCalls = vi.mocked(tmuxMod.tmux).mock.calls.filter(
+      args => args[0] === "respawn-pane",
+    );
+    expect(respawnCalls.length).toBeGreaterThan(0);
+    const cmd = respawnCalls[0].find(a => typeof a === "string" && a.includes("claude --rc"))!;
+    expect(cmd).toContain("--model opus");
+    expect(cmd).not.toContain("--model sonnet");
+
+    // The fallback alert was fired and the entry stamped.
+    const { readAlerts } = await import("../../src/dashboard/alerts.js");
+    const { findWorkerByName } = await import("../../src/dashboard/registry.js");
+    expect(readAlerts().alerts.some(a => a.source === "trellis-budget")).toBe(true);
+    expect(findWorkerByName(PROJECT, WORKER)?.trellisModelFallbackAt).toBeDefined();
+  });
+
+  it("Sonnet exhaustion + trellisOpusFallback=false pauses the loop instead of respawning", async () => {
+    await setupWorktreeAndCommit();
+    // Re-write project config to disable the fallback.
+    const { saveConfig, loadConfig } = await import("../../src/config.js");
+    const cfg = loadConfig();
+    cfg.projects[PROJECT] = { ...cfg.projects[PROJECT], trellisOpusFallback: false };
+    saveConfig(cfg);
+
+    await plantVine({
+      prState: "merged",
+      claudeStatus: "idle",
+      trellisLastVerdict: "DRIFT",
+      trellisLastDrift: ["1. [tests] missing"],
+    });
+
+    const { USAGE_FILE } = await import("../../src/dashboard/usage.js");
+    fs.mkdirSync(path.dirname(USAGE_FILE), { recursive: true });
+    fs.writeFileSync(USAGE_FILE, JSON.stringify({
+      fetchedAt: new Date().toISOString(),
+      data: { sonnet: { pct: 99, resetsAt: "2026-05-13T00:00:00Z" } },
+    }));
+
+    const tmuxMod = await import("../../src/dashboard/tmux.js");
+    vi.mocked(tmuxMod.windowExists).mockReturnValue(true);
+    vi.mocked(tmuxMod.getFirstPaneId).mockReturnValue("%fake-pane");
+
+    const { trellisAutoContinueAfterMerge } = await import("../../src/dashboard/trellis-continue.js");
+    trellisAutoContinueAfterMerge(PROJECT, WORKER);
+
+    // No respawn-pane call should have happened — the loop is paused.
+    const respawnCalls = vi.mocked(tmuxMod.tmux).mock.calls.filter(
+      args => args[0] === "respawn-pane",
+    );
+    expect(respawnCalls).toHaveLength(0);
+
+    // The global usage gate is paused.
+    const { getAutoContinueConfig } = await import("../../src/config.js");
+    const ac = getAutoContinueConfig();
+    expect(ac.enabled).toBe(false);
+    expect(ac.pausedUntil).toBe("2026-05-13T00:00:00Z");
+
+    // A usage-source alert was raised (not trellis-budget).
+    const { readAlerts } = await import("../../src/dashboard/alerts.js");
+    const alerts = readAlerts().alerts;
+    expect(alerts.some(a => a.source === "usage")).toBe(true);
+  });
 });

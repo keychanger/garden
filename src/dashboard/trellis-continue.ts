@@ -38,7 +38,9 @@ import { readDashState } from "./state.js";
 import {
   tmux, shellEscape, getFirstPaneId, paneExists, windowExists,
 } from "./tmux.js";
+import { resolveAndApplyVineModel } from "./trellis-model.js";
 import { workerWindowName as workerWin } from "./window-names.js";
+import { getWorkflow } from "./workflows/index.js";
 
 const LESSONS_FILE_REL = path.join(".garden", "trellis-lessons.md");
 
@@ -111,6 +113,19 @@ export function trellisAutoContinueAfterMerge(
   // Regenerate sessionId per iteration (Q6) — Claude cold-starts in the
   // pane with no prior conversation history. Persist BEFORE the respawn
   // so concurrent reads see the new value.
+  // Resolve this iteration's model. May fall back Sonnet → Opus, or
+  // refuse outright (Sonnet exhausted + trellisOpusFallback=false). On
+  // refusal, the global pause was flipped — skip the respawn entirely.
+  // The next iteration fires when Sonnet resets or operator runs
+  // `garden auto on`.
+  const resolvedModel = resolveAndApplyVineModel(projectName, entry, getWorkflow("trellis"));
+  if (resolvedModel === null) {
+    log.warn("workers", "trellis continue skipped, vine paused on Sonnet exhaustion", {
+      worker: workerName, data: { project: projectName },
+    });
+    return;
+  }
+
   const newSessionId = crypto.randomUUID();
   const trellisRelativePath = trellisRelativePathForEntry(entry, project.path);
   const respawnCmd = buildWorktreeWorkerCommand(
@@ -120,7 +135,7 @@ export function trellisAutoContinueAfterMerge(
     branchName,
     newSessionId,
     entry.baseBranch,
-    { trellisRelativePath },
+    { trellisRelativePath, model: resolvedModel },
   );
   updateWorkerFields(projectName, workerName, {
     sessionId: newSessionId,
