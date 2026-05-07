@@ -30,6 +30,17 @@ interface WorkerInfo {
   activity: string | null;
   active: boolean;
   failCount: number;
+  // Trellis-specific decoration fields. Populated only when
+  // entry.workflow === "trellis"; default workers leave them undefined
+  // and the renderer omits the bracket.
+  trellis?: {
+    name: string;
+    iteration: number;
+    maxIterations: number;
+    driftCount: number;
+    aligned: boolean;
+    failingReason?: string;
+  };
 }
 
 interface ProjectStatusInfo {
@@ -142,8 +153,9 @@ export async function status(_args: string[]): Promise<void> {
         const icon = iconFor(worker);
         const wname = worker.name.padEnd(nameWidth);
         const wstatus = formatStatus(worker).padEnd(statusWidth);
+        const trellis = formatTrellisBracket(worker.trellis);
         const activity = worker.activity ? `  ${truncateActivity(worker.activity, activityMax)}` : "";
-        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${activity}`;
+        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${trellis}${activity}`;
         console.log(colorizeRow(worker.status, line));
       }
     }
@@ -189,6 +201,64 @@ export function resolveWorkerStatus(
   return cs ?? "ready";
 }
 
+// Distill the trellis fields off a registry entry into the WorkerInfo
+// shape used by the renderer. Returns undefined for default-workflow
+// workers — the bracket is omitted.
+function trellisInfoFor(entry?: { workflow?: string; trellisName?: string; trellisIteration?: number; trellisMaxIterations?: number; trellisLastDrift?: string[]; trellisLastVerdict?: string; trellisAligned?: boolean; failingReason?: string; }): WorkerInfo["trellis"] {
+  if (!entry || entry.workflow !== "trellis") return undefined;
+  return {
+    name: entry.trellisName ?? "?",
+    iteration: entry.trellisIteration ?? 0,
+    maxIterations: entry.trellisMaxIterations ?? 30,
+    driftCount: entry.trellisLastVerdict === "DRIFT"
+      ? (entry.trellisLastDrift?.length ?? 0)
+      : 0,
+    aligned: entry.trellisAligned === true,
+    failingReason: entry.failingReason,
+  };
+}
+
+// Format the trellis bracket for a vine row. Layout per TRELLIS.md
+// "Worker row":
+//   Active vine, drifting:   [trellis: auth-rewrite | 4/30 | 3 drift]
+//   Aligned terminal:        [trellis: auth-rewrite | ✓ aligned, 7 iters]
+//   Flagged:                 [trellis: auth-rewrite | flagged]
+//   Budget exhausted:        [trellis: auth-rewrite | budget exhausted]
+//   Stagnated (v1.5):        [trellis: auth-rewrite | stagnated]
+// Iteration counter color: white normally, yellow at ≥80% of cap,
+// red at ≥95%.
+export function formatTrellisBracket(t: WorkerInfo["trellis"]): string {
+  if (!t) return "";
+  // Failed states: prefer the failure reason over the iteration counter.
+  if (t.failingReason === "trellis-flagged") {
+    return ` [trellis: ${t.name} | flagged]`;
+  }
+  if (t.failingReason === "iteration-budget") {
+    return ` [trellis: ${t.name} | budget exhausted]`;
+  }
+  if (t.failingReason === "stagnation") {
+    return ` [trellis: ${t.name} | stagnated]`;
+  }
+  // Aligned terminal: distinguish reviewer-declared success from operator
+  // sentinel-set with a check decoration + iteration count.
+  if (t.aligned) {
+    const noun = t.iteration === 1 ? "iter" : "iters";
+    return ` [trellis: ${t.name} | ✓ aligned, ${t.iteration} ${noun}]`;
+  }
+  // Active loop. Iteration counter with color thresholds.
+  const iterStr = colorizeIteration(t.iteration, t.maxIterations);
+  const driftSeg = t.driftCount > 0 ? ` | ${t.driftCount} drift` : "";
+  return ` [trellis: ${t.name} | ${iterStr}${driftSeg}]`;
+}
+
+function colorizeIteration(iter: number, max: number): string {
+  const ratio = max > 0 ? iter / max : 0;
+  const text = `${iter}/${max}`;
+  if (ratio >= 0.95) return `\x1b[31m${text}\x1b[0m`;   // red
+  if (ratio >= 0.80) return `\x1b[33m${text}\x1b[0m`;   // yellow
+  return text;                                          // default
+}
+
 function collectWorkers(
   projectName: string,
   state: DashboardState,
@@ -213,6 +283,7 @@ function collectWorkers(
       activity: entry?.task || null,
       active: true,
       failCount: entry?.failCount ?? 0,
+      trellis: trellisInfoFor(entry),
     });
   }
 
@@ -227,6 +298,7 @@ function collectWorkers(
       activity: entry?.task || null,
       active: false,
       failCount: entry?.failCount ?? 0,
+      trellis: trellisInfoFor(entry),
     });
   }
 
@@ -279,8 +351,9 @@ export function renderQuickStatus(
         const icon = iconFor(worker);
         const wname = worker.name.padEnd(nameWidth);
         const wstatus = formatStatus(worker).padEnd(statusWidth);
+        const trellis = formatTrellisBracket(worker.trellis);
         const activity = worker.activity ? `  ${worker.activity}` : "";
-        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${activity}`;
+        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${trellis}${activity}`;
         lines.push(colorizeRow(worker.status, line));
       }
     }

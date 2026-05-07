@@ -318,6 +318,24 @@ function dispatchTrellisVerdict(
   const wtPath = entry.worktreePath ?? projectPath;
   const branchName = entry.branchName ?? entry.name;
 
+  // Log a single structured info line per iteration. driftCount and
+  // alignedCount are only meaningful on DRIFT verdicts (the body parses
+  // a structured drift block); the other verdicts log the same shape with
+  // 0 / undefined so the operator can grep iteration history uniformly.
+  // See TRELLIS.md "Logs".
+  const driftPreview = review.verdict === "DRIFT" ? parseDriftList(review.body) : undefined;
+  log.info("poller", "trellis iteration", {
+    worker: entry.name,
+    data: {
+      project: projectName,
+      trellis: entry.trellisName,
+      iteration: entry.trellisIteration,
+      verdict: review.verdict,
+      driftCount: driftPreview?.items.length ?? 0,
+      alignedCount: driftPreview?.alignedCount ?? entry.trellisAlignedCount,
+    },
+  });
+
   if (review.verdict === "ALIGNED") {
     try {
       forcePushBranch(wtPath, branchName);

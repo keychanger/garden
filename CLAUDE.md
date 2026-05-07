@@ -188,9 +188,15 @@ The `default` workflow stays the source of bit-for-bit equivalence with pre-refa
 
 The **trellis** workflow runs a feature-scoped, spec-driven loop where a worker (a "vine") iterates against a frozen design document until code, tests, and documentation align. Spec: `src/dashboard/TRELLIS.md`. Implementation plan: `src/dashboard/TRELLIS-PLAN.md`.
 
-Day-to-day operator surface (v1, partial):
+Day-to-day operator surface (v1):
 
-- `garden trellis new <project> <name>` — scaffold a trellis at `<project>/.garden/trellises/<name>.md` with the required spine (title, spec sentinel, trellis tag) and recommended sections (Intent, Surface, Behavior, Tests, Docs, Out of scope). Edit the scaffold to fill in feature-specific content, then commit to main.
+- `garden trellis list <project> [--active]` — enumerate trellises (active first, archived under a header).
+- `garden trellis show <project> <name>` — print a trellis's content.
+- `garden trellis new <project> <name>` — scaffold a trellis at `<project>/.garden/trellises/<name>.md` with the required spine (title, spec sentinel, trellis tag) and recommended sections.
+- `garden trellis status <worker>` — show iteration count, last verdict, drift list, lessons-file tail.
+- `garden trellis amend <project> <name>` — open the trellis in `$EDITOR`, commit on success. Refuses on a dirty main checkout (Q4); auto-revives a retired trellis on save.
+- `garden trellis resume <worker>` — clear a `failingReason="trellis-flagged"` worker and arm a fresh review on the next poller wake. (`--override` deferred to v1.5.)
+- `garden trellis retire <project> <name>` / `garden trellis revive <project> <name>` — mark / unmark retirement. Retired trellises are filtered from the picker and refused by CLI vine spawn.
 - `garden workers new <project> --workflow trellis --trellis <name> [--model opus|sonnet] [--max-iterations N]` — plant a vine bound to the named trellis. Pre-flight via `validateTrellisPlant` (refuses unknown/retired trellises; warns on missing spec sentinel or `checks` config). `--model` overrides the trellis default (Sonnet).
 
 The `trellis-author` skill (bundled into every worker's `.claude/skills/trellis-author/SKILL.md`) walks an operator-prompted worker through scope sizing, the required spine, recommended sections, and a self-review pass before saving. Triggers on operator intent ("formalize this as a trellis", "let's spec this as a trellis").
@@ -212,7 +218,9 @@ Model selection (phase 3): vines default to Sonnet (set on `trellisWorkflow.work
 
 Per-worker override via `garden workers new ... --model opus|sonnet`; persists to `entry.workerModel` and beats the workflow default. Bounce preserves the in-flight session's model (no `--model` flag passed; `claude --resume` inherits the session's stored model).
 
-Out of scope for v1: full `garden trellis ...` CLI surface (only `new` ships through phase 3; list/show/status/amend/resume/retire/revive land in phase 4), status pane decoration, picker hotkey, stagnation detection, lessons file size cap, `--override` flag.
+Status display (phase 4): the status pane and the bottom bar surface trellis state without changing how default-workflow workers render. `formatTrellisBracket` (in `src/commands/status.ts`) appends a `[trellis: <name> | <iter>/<max> | <drift> drift]` segment to vine rows; iteration counter colors at ≥80% (yellow) and ≥95% (red); aligned terminal renders `✓ aligned, N iters`; failed states render `flagged` / `budget exhausted` / `stagnated` per `entry.failingReason`. The bottom-bar's left segment (in `src/dashboard/header.ts`) appends `| trellises: <name> (<state>), …` whenever the active project has any trellis vine, truncated to 60 chars. The reviewer-side iteration log line (`{msg: "trellis iteration", data: {trellis, iteration, verdict, driftCount, alignedCount}}`) lands inside `dispatchTrellisVerdict` so `garden logs` exposes the convergence trajectory.
+
+Out of scope for v1 (deferred to v1.5+): picker hotkey (phase 5), `--override` flag for `garden trellis resume`, stagnation detection, lessons file size cap, `garden trellis budget` mid-loop cap adjustment.
 
 ## Internal commands
 

@@ -79,7 +79,37 @@ function formatLeft(
   const repoPath = projectConfig?.path ?? "";
   const branch = repoPath ? (currentBranch(repoPath) ?? "main") : "main";
   const plotPrefix = activePlot ? `${activePlot} #[fg=colour244]\u203a#[default] ` : "";
-  return ` ${plotPrefix}#[bold]${activeProject}#[default]  ${branch} `;
+  const trellisSummary = formatTrellisSummary(activeProject);
+  return ` ${plotPrefix}#[bold]${activeProject}#[default]  ${branch}${trellisSummary} `;
+}
+
+// Append a compact trellis summary to the left status segment when the
+// active project has any trellis vine. Per TRELLIS.md "Bottom bar":
+//   garden | main | trellises: auth-rewrite (4/30, drifting), session-cleanup (\u2713)
+// Vines listed in plant order. Aligned vines marked \u2713; drifting shows
+// iteration/budget; flagged shows \u2691; budget-exhausted shows !. Truncates
+// with \u2026 when too wide.
+const TRELLIS_SUMMARY_MAX = 60;
+function formatTrellisSummary(projectName: string): string {
+  const entries = readRegistry().workers[projectName] ?? [];
+  const vines = entries.filter(e => e.workflow === "trellis");
+  if (vines.length === 0) return "";
+
+  const segments = vines.map(v => {
+    const name = v.trellisName ?? "?";
+    if (v.failingReason === "trellis-flagged") return `${name} (\u2691)`;
+    if (v.failingReason === "iteration-budget") return `${name} (!)`;
+    if (v.failingReason === "stagnation") return `${name} (~)`;
+    if (v.trellisAligned) return `${name} (\u2713)`;
+    const iter = v.trellisIteration ?? 0;
+    const max = v.trellisMaxIterations ?? 30;
+    return `${name} (${iter}/${max}, drifting)`;
+  });
+  let body = segments.join(", ");
+  if (body.length > TRELLIS_SUMMARY_MAX) {
+    body = body.slice(0, TRELLIS_SUMMARY_MAX - 1) + "\u2026";
+  }
+  return `  #[fg=colour244]|#[default] trellises: ${body}`;
 }
 
 // ---------------------------------------------------------------------------
