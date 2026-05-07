@@ -65,4 +65,21 @@ function bindMeta(key: string, command: string): void {
       "bind-key", "-n", `M-${key}`, "run-shell", guarded
     ], { stdio: "ignore" });
   } catch { /* ignore */ }
+
+  // Root-table bindings (-n) are bypassed when a pane is in copy-mode (e.g.
+  // a worker pane scrolled up via WheelUpPane). Without an explicit binding
+  // in the copy-mode tables, M-<digit> in a scrolled-up pane is consumed by
+  // copy-mode's numeric-prefix handler and renders in the tmux status line
+  // instead of firing the dashboard hotkey. Cancel copy-mode first so the
+  // active pane is back on its live screen before the command runs.
+  for (const table of ["copy-mode", "copy-mode-vi"]) {
+    try {
+      execFileSync("tmux", [
+        "bind-key", "-T", table, `M-${key}`,
+        "send-keys", "-X", "cancel",
+        ";",
+        "run-shell", guarded
+      ], { stdio: "ignore" });
+    } catch { /* ignore */ }
+  }
 }
