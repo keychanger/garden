@@ -18,6 +18,9 @@ import {
   HANDOFF_SKILL_DIRNAME,
   HANDOFF_SKILL_FILENAME,
   HANDOFF_SKILL_CONTENT,
+  TRELLIS_AUTHOR_SKILL_DIRNAME,
+  TRELLIS_AUTHOR_SKILL_FILENAME,
+  TRELLIS_AUTHOR_SKILL_CONTENT,
   installClaudeSkills,
 } from "../src/dashboard/skills.js";
 
@@ -148,5 +151,60 @@ describe("HANDOFF_SKILL_CONTENT", () => {
     // Without this the worker will hand off trivial follow-ups where its
     // in-flight context is the actual value, paying briefing cost for nothing.
     expect(HANDOFF_SKILL_CONTENT.toLowerCase()).toMatch(/briefing.*(?:longer|cost|small)|small.*briefing/);
+  });
+});
+
+describe("TRELLIS_AUTHOR_SKILL_CONTENT", () => {
+  it("starts with valid frontmatter declaring the skill name", () => {
+    expect(TRELLIS_AUTHOR_SKILL_CONTENT).toMatch(/^---\nname: trellis-author\n/);
+  });
+
+  it("description triggers on operator intent to formalize a feature as a trellis", () => {
+    const match = TRELLIS_AUTHOR_SKILL_CONTENT.match(/description: ([^\n]+)/);
+    expect(match).not.toBeNull();
+    const desc = match![1].toLowerCase();
+    expect(desc).toContain("trellis");
+    // The trigger must be operator-driven; the skill should not self-fire.
+    expect(desc).toMatch(/operator|formaliz/);
+  });
+
+  it("walks through scope sizing, spine, sections, and self-review", () => {
+    const body = TRELLIS_AUTHOR_SKILL_CONTENT.toLowerCase();
+    expect(body).toContain("scope sizing");
+    expect(body).toContain("spine");
+    expect(body).toMatch(/recommended sections|recommended/i);
+    expect(body).toContain("self-review");
+  });
+
+  it("names the spec sentinel and the trellis tag explicitly", () => {
+    expect(TRELLIS_AUTHOR_SKILL_CONTENT).toContain("the code is wrong");
+    expect(TRELLIS_AUTHOR_SKILL_CONTENT).toContain("<!-- trellis: v1 -->");
+  });
+
+  it("calls out 'Out of scope' as load-bearing", () => {
+    expect(TRELLIS_AUTHOR_SKILL_CONTENT).toContain("Out of scope");
+  });
+});
+
+describe("installClaudeSkills — trellis-author", () => {
+  it("writes SKILL.md under .claude/skills/trellis-author alongside done and handoff", () => {
+    installClaudeSkills("/Users/x/.garden/worktrees/myproject/bold-ash");
+    expect(fs.mkdirSync).toHaveBeenCalledWith(
+      "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/trellis-author",
+      { recursive: true },
+    );
+    expect(fs.renameSync).toHaveBeenCalledWith(
+      expect.stringContaining("/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/trellis-author/SKILL.md."),
+      "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/trellis-author/SKILL.md",
+    );
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining("/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/trellis-author/SKILL.md."),
+      TRELLIS_AUTHOR_SKILL_CONTENT,
+    );
+  });
+
+  it("constants match what installClaudeSkills writes", () => {
+    expect(TRELLIS_AUTHOR_SKILL_DIRNAME).toBe("trellis-author");
+    expect(TRELLIS_AUTHOR_SKILL_FILENAME).toBe("SKILL.md");
   });
 });

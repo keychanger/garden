@@ -12,6 +12,7 @@ import {
 import { DASHBOARD_SESSION } from "../session.js";
 import { addAlert } from "./alerts.js";
 import { dispatchDelayedAutoContinue, isDoneSet } from "./continue.js";
+import { dispatchDelayedTrellisContinue } from "./trellis-continue.js";
 import { resolveGardenRunner } from "./runner.js";
 import {
   abortRebase, cleanWorktree, deleteRemoteBranch, ensureNoRebaseInProgress,
@@ -309,9 +310,19 @@ function maybeAutoContinue(
   updateWorkerFields(projectName, entry.name, { lastAutoContinueAt: Date.now() });
   log.info("poller", "auto-continued worker after merge", {
     worker: entry.name,
-    data: { project: projectName, branch: branchName },
+    data: {
+      project: projectName,
+      branch: branchName,
+      workflow: entry.workflow ?? "default",
+    },
   });
-  dispatchDelayedAutoContinue(resolveGardenRunner(), projectName, entry.name);
+  // Trellis vines reset to a fresh Claude session every iteration
+  // (Invariant 8). Default workers send into the live session.
+  if (entry.workflow === "trellis") {
+    dispatchDelayedTrellisContinue(resolveGardenRunner(), projectName, entry.name);
+  } else {
+    dispatchDelayedAutoContinue(resolveGardenRunner(), projectName, entry.name);
+  }
 }
 
 function autoContinueSkipReason(entry: WorkerEntry): string | null {

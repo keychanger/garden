@@ -147,3 +147,43 @@ describe("buildWorktreeRules", () => {
     expect(result).toContain("end your turn");
   });
 });
+
+// Trellis workflow extends the worktree rules with three additional
+// paragraphs (concept, authority asymmetry, iteration discipline). See
+// TRELLIS.md "Worker system prompt".
+describe("buildWorktreeRules — trellis workflow", () => {
+  it("default workers do NOT include trellis paragraphs", async () => {
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("swift-oak");
+    expect(result).not.toContain("Trellis workflow");
+    expect(result).not.toContain("Authority asymmetry");
+    expect(result).not.toContain("Iteration discipline");
+  });
+
+  it("trellis option appends concept/authority/iteration paragraphs", async () => {
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("swift-oak", "main", {
+      trellis: { relativePath: ".garden/trellises/auth-rewrite.md" },
+    });
+    expect(result).toContain("Trellis workflow");
+    expect(result).toContain(".garden/trellises/auth-rewrite.md");
+    expect(result).toContain("source of truth");
+    expect(result).toContain("Authority asymmetry");
+    // Bold markdown intervenes between "may" and "edit", so check the
+    // tail substring directly.
+    expect(result).toContain("edit the trellis");
+    expect(result).toContain("Iteration discipline");
+    expect(result).toContain("trellis-lessons.md");
+  });
+
+  it("trellis paragraphs append AFTER the worktree workflow baseline", async () => {
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("swift-oak", "main", {
+      trellis: { relativePath: ".garden/trellises/foo.md" },
+    });
+    const workflowIdx = result.indexOf("## Worktree workflow");
+    const trellisIdx = result.indexOf("## Trellis workflow");
+    expect(workflowIdx).toBeGreaterThanOrEqual(0);
+    expect(trellisIdx).toBeGreaterThan(workflowIdx);
+  });
+});

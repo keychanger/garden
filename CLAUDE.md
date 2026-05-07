@@ -36,7 +36,11 @@ npm run dev -- help    # run via tsx during development
   - `git.ts` — git CLI wrappers for worktree and merge operations
   - `poller.ts` — poller coordinator: per-project event-driven dispatcher. `pollWorker` dispatches on `prState` through `workflow.stateHandlers` from the `workflows/` registry — no hard-coded switch.
   - `poller-state.ts` — state machine: `transitionState` (validates against the worker's `WorkflowDefinition.validTransitions`) plus terminal-state handlers (failing, merged, done).
-  - `workflows/` — workflow registry. `types.ts` defines `WorkflowDefinition`; `default.ts` is the standard review/merge pipeline; `trellis.ts` is the trellis workflow definition (skeletal in phase 1 — bit-for-bit equivalent to default); `index.ts` is the lookup. Design target: `WORKFLOWS.md`; trellis spec: `TRELLIS.md`.
+  - `workflows/` — workflow registry. `types.ts` defines `WorkflowDefinition`; `default.ts` is the standard review/merge pipeline; `trellis.ts` is the trellis workflow definition (reuses default's state handlers — trellis behavior diverges only in `handleReviewing` / `finalizeMerge` branches that key on `entry.workflow === "trellis"`); `index.ts` is the lookup. Design target: `WORKFLOWS.md`; trellis spec: `TRELLIS.md`.
+  - `trellis-tag.ts` — trellis file discovery: tag/retirement regexes, `findTrellisFiles`, `findTrellisByName`, `validateTrellisPlant` (plant-time pre-flight shared by the CLI and the picker).
+  - `trellis-verdict.ts` — trellis verdict vocabulary (`ALIGNED`/`DRIFT`/`FAILED`/`FLAGGED`), `parseTrellisVerdict`, structured drift-list parser, FLAGGED clause extractor.
+  - `trellis-prompts.ts` — trellis-flavored review prompt sections (authority, alignment step, document inline, overrides, verdict format) and `buildTrellisReviewPrompt`. Reuses default sections for intro/rebase/checks/diff/docs/tests; replaces the verdict format and adds three trellis-specific sections.
+  - `trellis-continue.ts` — per-iteration context reset for trellis vines (Invariant 8). `trellisAutoContinueAfterMerge` regenerates sessionId, respawns the worker pane with `claude --session-id <fresh-uuid>` (no `--resume`), and seeds the trellis continue prompt via the existing `seedWorker` polling primitive.
   - `hooks/default.ts` — default workflow's Claude Code hook handlers, dispatched from `hook-dispatcher.ts`'s `handleClaudeHook`.
   - `poller-review.ts` — review lifecycle: launchReview, handleWorking, handleReviewing, verdict parsing, timeout handling, killReviewWindow
   - `poller-merge.ts` — merge queue + finalization: handleMergePending, finalizeMerge, autoContinueGateReason, runPostMerge, sibling notification
@@ -174,10 +178,33 @@ A **workflow** is a `WorkflowDefinition` (state machine + state handlers + hook 
 2. Register it in `src/dashboard/workflows/index.ts` by calling `registerWorkflow(def)` alongside the default. `getWorkflow(name)` resolves it; unknown names warn once and fall back to default. `registerWorkflow` warns if the name is already registered (catches plug-ins shadowing the default by mistake).
 3. **Workflow-specific prompts (if any)**: declare new `PromptSection` instances in `src/dashboard/prompts.ts` (or a sibling file) and a section list. Build via `composePrompt(sections, ctx)` from `src/dashboard/prompt-compose.ts`. Reuse `gatherPromptContext` for review-shaped I/O, or `makeContext` for workflows that don't need the full diff/rules/docs/tests gather.
 4. **Headless agent launches (if any)**: use `launchHeadlessAgent` from `src/dashboard/headless-agent.ts` — same primitive the reviewer and resolver call. Verdict parsing via `parseLastLineVerdict` from `src/dashboard/verdict.ts` with a typed-const vocabulary tuple.
-5. **Assigning the workflow to a worker**: set `WorkerEntry.workflow` (string field on the registry entry). For now the only writer is `newWorker()` in `src/dashboard/workers.ts:127`, which stamps `"default"`. CLI surface for picking workflow at creation time (`garden newWorker --workflow X`) is deferred — see `WORKFLOWS.md` "Out of scope".
+5. **Assigning the workflow to a worker**: set `WorkerEntry.workflow` (string field on the registry entry). `newWorker()` in `src/dashboard/workers.ts` accepts an `opts.workflow` field; when set to `"trellis"` it also stamps the trellis-specific entry fields from `opts.trellis`. CLI surface: `garden workers new <project> --workflow <name>`.
 6. **Tests**: follow the patterns in `test/workflows.test.ts` (registry behavior + deep-equal `validTransitions` + exhaustiveness) and `test/integration/workflow-default.real.test.ts` (drive a real worker through the workflow's state machine on real fs/git).
 
 The `default` workflow stays the source of bit-for-bit equivalence with pre-refactor behavior. Alternate workflows that change behavior must own their own snapshot/integration tests; do not loosen the default's invariants to accommodate them.
+
+## Trellis workflow
+
+The **trellis** workflow runs a feature-scoped, spec-driven loop where a worker (a "vine") iterates against a frozen design document until code, tests, and documentation align. Spec: `src/dashboard/TRELLIS.md`. Implementation plan: `src/dashboard/TRELLIS-PLAN.md`.
+
+Day-to-day operator surface (v1, partial):
+
+- `garden trellis new <project> <name>` — scaffold a trellis at `<project>/.garden/trellises/<name>.md` with the required spine (title, spec sentinel, trellis tag) and recommended sections (Intent, Surface, Behavior, Tests, Docs, Out of scope). Edit the scaffold to fill in feature-specific content, then commit to main.
+- `garden workers new <project> --workflow trellis --trellis <name> [--max-iterations N]` — plant a vine bound to the named trellis. Pre-flight via `validateTrellisPlant` (refuses unknown/retired trellises; warns on missing spec sentinel or `checks` config).
+
+The `trellis-author` skill (bundled into every worker's `.claude/skills/trellis-author/SKILL.md`) walks an operator-prompted worker through scope sizing, the required spine, recommended sections, and a self-review pass before saving. Triggers on operator intent ("formalize this as a trellis", "let's spec this as a trellis").
+
+Lifecycle (v1, in `src/dashboard/poller-review.ts` / `poller-merge.ts`):
+
+- `handleReviewing` parses the trellis verdict vocabulary (`ALIGNED`/`DRIFT`/`FAILED`/`FLAGGED`). ALIGNED writes `.garden-done` (workflow handler does it on the worker's behalf) and goes to merge-pending — `finalizeMerge`'s sentinel-aware path then picks `done`. DRIFT goes to merge-pending and `finalizeMerge` dispatches `trellisAutoContinueAfterMerge` (see below). FLAGGED goes to `failing` with `failingReason: "trellis-flagged"` — `handleFailing` refuses the push debounce, so only `garden trellis resume` (phase 4) clears it. FAILED uses the same path as default's FAILED with `failingReason: "code"`.
+- `launchReview` increments `trellisIteration` *before* the budget check and *before* dispatch. Exceeding `trellisMaxIterations` short-circuits to `failing` with `failingReason: "iteration-budget"` and an alert (source `trellis`).
+- `trellisAutoContinueAfterMerge` (in `src/dashboard/trellis-continue.ts`) is the per-iteration context reset (Invariant 8). It regenerates the worker's sessionId, respawns the pane via `tmux respawn-pane -k` with `claude --session-id <fresh-uuid>` (no `--resume`), and seeds the trellis continue prompt (drift list + lessons file inline) via the existing `seedWorker` polling primitive. Each iteration starts cold; conversation history does not compound.
+
+Worker prompt: `buildWorktreeRules(branch, base, { trellis: { relativePath } })` appends three trellis-specific paragraphs (concept, authority asymmetry, iteration discipline) to the baseline rules. Default workers leave `options` undefined and get the baseline only.
+
+Reviewer prompt: `buildTrellisReviewPrompt` in `src/dashboard/trellis-prompts.ts`. Composes `trellisReviewSections` — reuses default sections for intro/rebase/checks/diff/docs/tests, adds three trellis-specific sections (authority, alignment step, document inline), replaces the verdict format. Verdict parsing via `parseTrellisVerdict` in `src/dashboard/trellis-verdict.ts`.
+
+Out of scope for phase 2 (in `TRELLIS-PLAN.md`): model selection (vines run on operator default = Opus until phase 3 wires Sonnet), full `garden trellis ...` CLI surface (only `new` ships in phase 2; list/show/status/amend/resume/retire/revive land in phase 4), status pane decoration, picker hotkey.
 
 ## Internal commands
 

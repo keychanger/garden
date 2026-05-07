@@ -30,6 +30,7 @@ import { buildSandboxConfig, type SandboxConfig } from "./sandbox.js";
 import {
   DONE_SKILL_CONTENT, DONE_SKILL_DIRNAME, DONE_SKILL_FILENAME,
   HANDOFF_SKILL_CONTENT, HANDOFF_SKILL_DIRNAME, HANDOFF_SKILL_FILENAME,
+  TRELLIS_AUTHOR_SKILL_CONTENT, TRELLIS_AUTHOR_SKILL_DIRNAME, TRELLIS_AUTHOR_SKILL_FILENAME,
   installClaudeSkills,
 } from "./skills.js";
 import { claudeEnvPrefix } from "./claude-env.js";
@@ -316,8 +317,11 @@ export function ensureDashboard(): void {
       // prState is preserved as-is from the previous session.
       updateWorkerFields(projectName, entry.name, { claudeStatus: "idle" });
       const workerCwd = entry.worktreePath ?? projectConfig.path;
+      const trellisRelativePath = trellisRelativePathForEntry(entry, projectConfig.path);
       const resumeCmd = entry.worktreePath && entry.branchName
-        ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch)
+        ? (trellisRelativePath
+            ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch, { trellisRelativePath })
+            : buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch))
         : buildResumeCommand(projectName, projectConfig.path, entry.sessionId);
       const workerWindowName = workerWin(projectName, entry.name);
 
@@ -464,6 +468,14 @@ export function buildResumeCommand(projectName: string, projectPath: string, ses
   return `${claudeCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
 }
 
+export interface WorktreeCommandOptions {
+  /** Worktree-relative path to the trellis file. When set,
+   *  buildWorktreeRules appends the three trellis paragraphs to the
+   *  worker's system prompt. Default workers omit this and get the
+   *  baseline rules. */
+  trellisRelativePath?: string;
+}
+
 export function buildWorktreeWorkerCommand(
   projectName: string,
   projectPath: string,
@@ -471,8 +483,12 @@ export function buildWorktreeWorkerCommand(
   branchName: string,
   sessionId: string,
   baseBranch?: string,
+  opts?: WorktreeCommandOptions,
 ): string {
-  const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName, baseBranch);
+  const contextFile = writeWorktreeContextFile(
+    projectName, projectPath, branchName, baseBranch,
+    { trellisRelativePath: opts?.trellisRelativePath },
+  );
   const project = resolveProjectForHooks(projectName, projectPath);
   const envPrefix = claudeEnvPrefix(project);
   const claudeCmd = `${envPrefix}claude --rc --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
@@ -488,6 +504,27 @@ function resolveProjectForHooks(projectName: string, projectPath: string): Proje
   return registered ?? { path: projectPath };
 }
 
+// Compute the worktree-relative trellis path for a worker entry, suitable
+// for buildWorktreeRules's trellis option. Returns undefined for default
+// workers and trellis workers without a stored trellisPath. The trellis
+// file lives at the same project-relative path inside the worktree
+// (worktrees share the project's working tree layout post-rebase), so
+// this is a path-prefix swap from project-rooted to worktree-rooted.
+export function trellisRelativePathForEntry(
+  entry: { workflow?: string; trellisPath?: string; worktreePath?: string },
+  projectPath: string,
+): string | undefined {
+  if (entry.workflow !== "trellis") return undefined;
+  const tPath = entry.trellisPath;
+  if (!tPath) return undefined;
+  const projectPrefix = projectPath.endsWith(path.sep) ? projectPath : projectPath + path.sep;
+  if (tPath.startsWith(projectPrefix)) {
+    return tPath.slice(projectPrefix.length);
+  }
+  // Trellis lives outside the project tree (unusual). Fall back to absolute.
+  return tPath;
+}
+
 /**
  * Write a shell script that sets up the worktree and launches claude.
  * The slow work (git fetch, worktree add, npm install) runs inside the
@@ -501,9 +538,13 @@ export function buildWorktreeBootstrapScript(
   sessionId: string,
   wtPath: string,
   baseBranch?: string,
+  opts?: WorktreeCommandOptions,
 ): string {
   // Write the context file eagerly (fast, just file I/O)
-  const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName, baseBranch);
+  const contextFile = writeWorktreeContextFile(
+    projectName, projectPath, branchName, baseBranch,
+    { trellisRelativePath: opts?.trellisRelativePath },
+  );
 
   const fifoLit = shellEscape(signalFifoPath(projectName));
   const pollSignal = `[ -p ${fifoLit} ] && (echo > ${fifoLit}) 2>/dev/null;`;
@@ -539,6 +580,9 @@ export function buildWorktreeBootstrapScript(
   const handoffSkillLit = shellEscape(HANDOFF_SKILL_CONTENT);
   const handoffSkillDirnameLit = shellEscape(HANDOFF_SKILL_DIRNAME);
   const handoffSkillFilenameLit = shellEscape(HANDOFF_SKILL_FILENAME);
+  const trellisAuthorSkillLit = shellEscape(TRELLIS_AUTHOR_SKILL_CONTENT);
+  const trellisAuthorSkillDirnameLit = shellEscape(TRELLIS_AUTHOR_SKILL_DIRNAME);
+  const trellisAuthorSkillFilenameLit = shellEscape(TRELLIS_AUTHOR_SKILL_FILENAME);
   const envPrefix = claudeEnvPrefix(project);
 
   const base = baseBranch ?? "main";
@@ -630,6 +674,8 @@ mkdir -p ${wtPathLit}/.claude/skills/${doneSkillDirnameLit}
 printf '%s' ${doneSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${doneSkillDirnameLit}/${doneSkillFilenameLit}
 mkdir -p ${wtPathLit}/.claude/skills/${handoffSkillDirnameLit}
 printf '%s' ${handoffSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${handoffSkillDirnameLit}/${handoffSkillFilenameLit}
+mkdir -p ${wtPathLit}/.claude/skills/${trellisAuthorSkillDirnameLit}
+printf '%s' ${trellisAuthorSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${trellisAuthorSkillDirnameLit}/${trellisAuthorSkillFilenameLit}
 
 # Ensure garden-managed dirs are excluded from git status.
 # Writing to the common info/exclude covers all worktrees and never gets committed.
@@ -662,8 +708,12 @@ export function buildWorktreeResumeCommand(
   branchName: string,
   sessionId: string,
   baseBranch?: string,
+  opts?: WorktreeCommandOptions,
 ): string {
-  const contextFile = writeWorktreeContextFile(projectName, projectPath, branchName, baseBranch);
+  const contextFile = writeWorktreeContextFile(
+    projectName, projectPath, branchName, baseBranch,
+    { trellisRelativePath: opts?.trellisRelativePath },
+  );
   const gardenRunner = shellEscape(resolveGardenRunner());
   const project = resolveProjectForHooks(projectName, projectPath);
   const envPrefix = claudeEnvPrefix(project);
@@ -707,9 +757,16 @@ function writeWorktreeContextFile(
   projectPath: string,
   branchName: string,
   baseBranch?: string,
+  opts?: { trellisRelativePath?: string },
 ): string {
   const base = buildRulesContext(projectName, projectPath);
-  const worktreeRules = buildWorktreeRules(branchName, baseBranch);
+  const worktreeRules = buildWorktreeRules(
+    branchName,
+    baseBranch,
+    opts?.trellisRelativePath
+      ? { trellis: { relativePath: opts.trellisRelativePath } }
+      : undefined,
+  );
   const context = `${base}\n\n${worktreeRules}`;
   const contextFile = path.join(SESSIONS_DIR, `dashboard-${projectName}-${branchName}.context`);
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });

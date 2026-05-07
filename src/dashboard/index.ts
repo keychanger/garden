@@ -15,6 +15,7 @@ import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
 import { newWorker, killPane, bounceActiveWorker } from "./workers.js";
 import { continueWorker, continueWorkerAfterMerge, seedWorker } from "./continue.js";
+import { trellisAutoContinueAfterMerge } from "./trellis-continue.js";
 import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, cyclePane, cyclePlot } from "./navigate.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
 import { runUsagePollerLoop, stopUsagePoller } from "./usage-poller.js";
@@ -61,6 +62,10 @@ export async function dashboard(args: string[]): Promise<void> {
   }
   if (sub === "_continue-worker-after-merge") {
     if (args[1] && args[2]) continueWorkerAfterMerge(args[1], args[2]);
+    return;
+  }
+  if (sub === "_trellis-continue-after-merge") {
+    if (args[1] && args[2]) trellisAutoContinueAfterMerge(args[1], args[2]);
     return;
   }
   if (sub === "_seed-worker") {

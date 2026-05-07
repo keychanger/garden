@@ -63,6 +63,107 @@ That is the entire invocation. Verify with \`ls -la .garden-done\`. Then end you
 If you wrote \`.garden-done\` and the operator gives you more work afterward, they can run \`garden resume <worker>\` to clear the sentinel and re-arm the auto-continue chain. They can also simply prompt you again — if your reply turn produces new commits, the normal review/merge cycle takes over and the sentinel is re-evaluated on the next merge.
 `;
 
+export const TRELLIS_AUTHOR_SKILL_DIRNAME = "trellis-author";
+export const TRELLIS_AUTHOR_SKILL_FILENAME = "SKILL.md";
+
+// Bundled with every worker — including default-workflow workers — so an
+// operator can ask any worker to formalize a feature as a trellis without
+// switching panes. Skill descriptions act as Claude's planning-time
+// trigger condition; this one fires on operator intent.
+export const TRELLIS_AUTHOR_SKILL_CONTENT = `---
+name: trellis-author
+description: Use when the operator asks you to formalize a feature as a trellis — a frozen design document that drives garden's spec-driven loop workflow. The skill walks through scope sizing, the required spine (title, sentinel, trellis tag), recommended sections (Intent, Surface, Behavior, Tests, Docs, Out of scope), and a self-review pass for ambiguity. Use when the operator says things like "let's write a trellis for X", "formalize this as a trellis", or "set up a trellis-driven loop on this feature". Do NOT invoke unprompted.
+---
+
+# Trellis author
+
+Invoke this skill when the operator wants to formalize a feature as a **trellis** — a markdown design document that becomes the source of truth for a feature-scoped, spec-driven loop. The trellis workflow then plants a worker (a "vine") bound to the trellis; the vine iterates on the implementation while the reviewer compares each iteration's diff against the trellis until they align.
+
+A good trellis is small, concrete, and bounded. It describes *what the feature does* — not *how* — and uses an explicit "Out of scope" section to prevent the loop from chasing adjacent improvements.
+
+## What it does
+
+Walks you through authoring a trellis at \`<project>/.garden/trellises/<name>.md\` (or wherever the project's \`trellisDir\` config points). Output is a markdown file that:
+
+1. Carries the spec sentinel \`the code is wrong\` so the reviewer treats it as authoritative.
+2. Carries the trellis tag \`<!-- trellis: v1 -->\` so the picker and CLI recognize it as a trellis (distinct from system specs like STATUS.md or TRELLIS.md itself).
+3. Has the recommended sections (Intent, Surface, Behavior, Tests, Docs, Out of scope) populated with feature-specific content the reviewer can grep against.
+4. Has been self-reviewed for ambiguity, contradiction, and completeness.
+
+After authoring, commit the trellis to the project's main branch. Then the operator can plant a vine via \`garden workers new <project> --workflow trellis --trellis <name>\` (or via the \`⌥⇧n\` picker in the dashboard).
+
+## When to use
+
+- The operator explicitly asks you to write or formalize a trellis (e.g., "let's spec this as a trellis", "write a trellis for the auth-rewrite", "scaffold a trellis-driven loop on X").
+- The feature is genuinely *one feature* — a bounded set of related changes the reviewer can verify against the document. Multi-month projects do not fit; decompose them into a sequence of trellises.
+- The operator wants the agent to iterate against a stable design target rather than a one-shot task. The trellis loop's value comes from the reviewer's three-way diff (trellis ↔ code, ↔ tests, ↔ docs) catching drift across iterations.
+
+## When NOT to use
+
+- The operator asked for a one-shot change. A 50-line bug fix does not need a trellis.
+- The "feature" is actually a project (multiple subsystems, multiple weeks). Decompose first.
+- The work has no clear convergence criterion. The reviewer needs concrete claims to verify; "make the API better" cannot be drift-checked.
+- The operator did not ask. Authoring a trellis unprompted is overkill — say so and offer the option.
+
+## How to invoke
+
+The skill is a guided author. Walk the operator (and yourself) through these phases:
+
+### 1. Scope sizing
+
+Before writing anything, confirm:
+
+- **One feature.** Name it in a sentence. If you can't name it without "and", split it.
+- **Bounded.** What is *not* included? The trellis's "Out of scope" section is load-bearing — without it, the loop chases adjacent improvements.
+- **Convergence criterion.** What does \`ALIGNED\` look like? If you can't sketch a reviewer's checklist of present/partial/absent claims, the trellis isn't ready to write.
+
+If any of these is unclear, ask the operator before drafting.
+
+### 2. Spine
+
+Every trellis has three required pieces in the file's header:
+
+\`\`\`markdown
+# <Feature name>
+
+Intent paragraph including the literal phrase "the code is wrong" so the reviewer treats this document as authoritative.
+
+<!-- trellis: v1 -->
+\`\`\`
+
+The title is on line 1. The sentinel must appear in the first ~2KB. The tag must appear in the first 200 bytes. \`garden trellis new <project> <name>\` scaffolds these correctly — prefer it over hand-crafting the file.
+
+### 3. Recommended sections
+
+The reviewer treats the trellis as prose, but the following sections make the three-way diff tractable:
+
+- **Intent** — one paragraph: what the feature does and why. The reviewer judges this loosely.
+- **Surface** — concrete API/CLI/UI surface that must exist. Function signatures, command flags, file paths. The reviewer verifies via grep + signature checks. Be specific: "exports \`foo(timeout?: number)\` from \`src/foo.ts\`" beats "has a foo function with timeout support".
+- **Behavior** — invariants the feature must satisfy. Mix of objective ("error path returns \`{ok: false, reason}\`") and judgment-graded ("errors should be specific and structured"). Number them so drift items can cite them.
+- **Tests** — concrete test cases that should exist. File paths or test names. The reviewer verifies via grep on test files.
+- **Docs** — concrete documentation that should exist or update. Paths + section titles. Don't request docs the project doesn't already maintain.
+- **Out of scope** — explicit non-goals. Lists every adjacent improvement the reviewer should bounce back as drift, not accept as part of the trellis.
+
+### 4. Self-review pass
+
+Before saving, walk the trellis end-to-end:
+
+- **Ambiguity.** Pick three claims at random. Could two reasonable readers disagree on whether they're satisfied? If yes, rewrite for concreteness.
+- **Contradiction.** Read every Surface claim against every Behavior claim. Any conflict? Either the trellis is wrong (rewrite) or you've discovered a real design tension (resolve before planting).
+- **Completeness.** For each Surface claim, is there a corresponding Tests claim? For each Behavior claim, is the test path clear? Gaps here become drift the loop will keep flagging.
+- **Out of scope.** Is the boundary tight enough that the worker won't keep "fixing" adjacent code? The most common failure mode is a too-loose boundary.
+
+A trellis that survives a self-review pass cleanly produces a small, fast loop. A trellis that doesn't will burn iterations on rework.
+
+### 5. Commit and report
+
+Commit the trellis to the project's main branch (not the worker's branch — the trellis lives on main as authority). Use a clear commit message: \`trellis: <name> — <one-line summary>\`. After committing, tell the operator the trellis path and offer to plant a vine: \`garden workers new <project> --workflow trellis --trellis <name>\`.
+
+## After authoring
+
+The trellis is now a durable artifact. It outlives any vine that consumes it; multiple vines can be planted on the same trellis (competitive bake-off), and a converged trellis remains as a design record for the feature. The operator decides when to retire it via \`garden trellis retire\`.
+`;
+
 export const HANDOFF_SKILL_DIRNAME = "handoff";
 export const HANDOFF_SKILL_FILENAME = "SKILL.md";
 
@@ -162,6 +263,7 @@ export function installClaudeSkills(targetDir: string): void {
   fs.rmSync(path.join(skillsRoot, "done.md"), { force: true });
   writeSkill(skillsRoot, DONE_SKILL_DIRNAME, DONE_SKILL_FILENAME, DONE_SKILL_CONTENT);
   writeSkill(skillsRoot, HANDOFF_SKILL_DIRNAME, HANDOFF_SKILL_FILENAME, HANDOFF_SKILL_CONTENT);
+  writeSkill(skillsRoot, TRELLIS_AUTHOR_SKILL_DIRNAME, TRELLIS_AUTHOR_SKILL_FILENAME, TRELLIS_AUTHOR_SKILL_CONTENT);
 }
 
 function writeSkill(skillsRoot: string, dirname: string, filename: string, content: string): void {

@@ -92,6 +92,7 @@ vi.mock("../src/dashboard/create.js", () => ({
   buildResumeCommand: vi.fn(() => "claude --resume FAKE-ID-NW"),
   createShellWindow: vi.fn(),
   installClaudeHooks: vi.fn(),
+  trellisRelativePathForEntry: vi.fn(() => undefined),
 }));
 
 vi.mock("../src/dashboard/runner.js", () => ({

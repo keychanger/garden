@@ -42,6 +42,23 @@ export function transitionState(
   updateWorkerFields(projectName, workerName, { ...extraFields, prState: toState });
 }
 
+// failingReasons that require operator action — the failing → working push
+// debounce does NOT apply. New commits don't auto-resume; only the
+// corresponding `garden trellis ...` command (phase 4) clears the state.
+// See TRELLIS.md "Equilibrium and termination": trellis-flagged needs
+// `garden trellis resume`; iteration-budget needs `garden trellis budget`
+// or kill; stagnation (v1.5) needs amend or kill.
+function requiresOperatorAction(entry: WorkerEntry): boolean {
+  switch (entry.failingReason) {
+    case "trellis-flagged":
+    case "iteration-budget":
+    case "stagnation":
+      return true;
+    default:
+      return false;
+  }
+}
+
 export function handleFailing(
   projectName: string,
   projectPath: string,
@@ -51,6 +68,14 @@ export function handleFailing(
   const wtPath = entry.worktreePath ?? projectPath;
   const headSha = getBranchHeadSha(wtPath);
   if (!headSha) return false;
+
+  // Trellis dispositions that need operator action stay parked until the
+  // operator runs the appropriate trellis command. Pushing more commits
+  // doesn't auto-resume — the spec keeps trellis-flagged out of the
+  // working-debounce loop deliberately.
+  if (requiresOperatorAction(entry)) {
+    return false;
+  }
 
   if (headSha !== entry.lastSeenSha) {
     // New commits pushed — track the change

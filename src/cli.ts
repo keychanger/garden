@@ -116,6 +116,14 @@ Dashboard:
   reset                          Clear the worker registry
   rebuild                        Rebuild garden and relaunch dashboard
 
+Workers:
+  workers new <project> [--workflow trellis --trellis <name>] [--max-iterations N]
+                                 Spawn a new worker. Default workflow plants an interactive worker;
+                                 trellis plants a vine bound to the named trellis.
+
+Trellis (spec-driven loop workflow — see src/dashboard/TRELLIS.md):
+  trellis new <project> <name>   Scaffold a trellis at <project>/.garden/trellises/<name>.md
+
 Output is JSON when piped, pretty-printed in a terminal.
 `.trim());
 }

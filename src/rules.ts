@@ -41,8 +41,25 @@ export function buildRulesContext(projectName: string, projectPath: string): str
   return sections.join("\n\n");
 }
 
-export function buildWorktreeRules(branchName: string, baseBranch = "main"): string {
-  return `## Worktree workflow
+export interface WorktreeRulesOptions {
+  /** When set, the rules text appends three trellis-specific paragraphs
+   *  describing the trellis workflow's authority asymmetry, iteration
+   *  discipline, and the path to the bound trellis. See TRELLIS.md
+   *  "Worker system prompt". */
+  trellis?: {
+    /** Worktree-relative path to the trellis file (e.g.
+     *  ".garden/trellises/auth-rewrite.md"). Embedded verbatim in the
+     *  paragraph so the worker can grep / read it directly. */
+    relativePath: string;
+  };
+}
+
+export function buildWorktreeRules(
+  branchName: string,
+  baseBranch = "main",
+  options?: WorktreeRulesOptions,
+): string {
+  const base = `## Worktree workflow
 
 You are working in an isolated git worktree on branch \`${branchName}\`. Your worktree is fully isolated — no other agent or human shares it. There is no shared state to protect. You have full authority over your worktree: commit and push without asking for confirmation.
 
@@ -57,4 +74,22 @@ You are working in an isolated git worktree on branch \`${branchName}\`. Your wo
 **Do NOT sleep or loop-poll to watch the poller work.** The poller is driven by Claude Code's Stop hook — it only advances \`working → reviewing\` after your turn ends. Constructs like \`for i in 1..6; do sleep 10; check state; done\`, \`until rg prState=reviewing; do sleep N; done\`, or any other long bash sleep that waits for a state transition keep your turn alive and block the very event you are waiting on. It is a deadlock. If you want the poller to pick up your commits, **end your turn.** It will wake you with a new prompt when there is something for you to act on. Short sleeps (a few seconds) to let a subprocess settle are fine; sleeping to observe the poller is not.
 
 **Auto-continue across phases.** After your branch is reviewed and merged, garden automatically sends a "please proceed" prompt to your pane so multi-phase work keeps building on the merged base without operator intervention. When you have completed *everything* the operator asked for, **invoke the \`done\` skill** before ending your turn — see \`.claude/skills/done/SKILL.md\` in your worktree for the full mechanics. Do not invoke \`done\` mid-phase; it is the explicit "I'm finished with the operator's full request" declaration, not a per-turn thing.`;
+
+  if (!options?.trellis) return base;
+
+  // Trellis-specific extension. Three paragraphs per TRELLIS.md "Worker
+  // system prompt": concept, authority asymmetry, iteration discipline.
+  // Replaces the generic "auto-continue across phases" guidance — trellis
+  // vines reset Claude's context every iteration, so multi-phase
+  // reasoning across iterations is structurally not allowed.
+  const trellisPath = options.trellis.relativePath;
+  const trellisExtras = `## Trellis workflow
+
+**Concept.** A trellis is a frozen design document describing what this feature does. The path is \`${trellisPath}\`. Read it before editing anything; it is your source of truth.
+
+**Authority asymmetry.** You may edit code, tests, and documentation. You may **not** edit the trellis. If the trellis is wrong or impossible, do not silently rewrite it — push commits that reflect what the trellis says, and the reviewer will surface the contradiction as \`FLAGGED\`. The operator decides whether to amend.
+
+**Iteration discipline.** You are operating inside a bounded loop. The reviewer's \`DRIFT\` report names priority-ordered gaps between the trellis and the artifact. Close the highest-priority gap first. Do not chase adjacent improvements. Do not redesign. The trellis's "Out of scope" section is the bound of your work. Each iteration starts with a fresh Claude session — disk (the trellis at git HEAD, the code, and \`.garden/trellis-lessons.md\`) is the only state that crosses iteration boundaries. Append a one-line entry to the lessons file each iteration describing what you tried and what you learned.`;
+
+  return `${base}\n\n${trellisExtras}`;
 }

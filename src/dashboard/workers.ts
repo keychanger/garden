@@ -1,5 +1,6 @@
 // Worker lifecycle: creation and destruction of Claude worker sessions.
 import crypto from "node:crypto";
+import path from "node:path";
 import { spawn } from "node:child_process";
 import { DASHBOARD_SESSION } from "../session.js";
 import { getProject, tryGetProject, loadConfig, plotsMap } from "../config.js";
@@ -20,7 +21,7 @@ import {
 import { log } from "./log.js";
 import {
   buildWorktreeBootstrapScript, buildWorktreeResumeCommand, buildResumeCommand,
-  createShellWindow, installClaudeHooks,
+  createShellWindow, installClaudeHooks, trellisRelativePathForEntry,
 } from "./create.js";
 import { resolveGardenRunner } from "./runner.js";
 import { worktreePath, resolveBaseBranch, branchExistsOnOrigin } from "./git.js";
@@ -40,6 +41,16 @@ export interface NewWorkerOptions {
   // detached subprocess sends the file's contents to the new worker's pane
   // after a few seconds (Claude TUI init delay), then deletes the file.
   seedMessageFile?: string;
+  // Workflow that drives the new worker's lifecycle. Defaults to "default".
+  // Trellis vines pass "trellis" along with the trellisName/trellisPath
+  // pair below; see TRELLIS.md "Spawning a trellis vine".
+  workflow?: string;
+  // Trellis-specific options, ignored unless workflow === "trellis".
+  trellis?: {
+    name: string;
+    path: string;
+    maxIterations: number;
+  };
 }
 
 export function newWorker(opts: NewWorkerOptions = {}): string | null {
@@ -101,12 +112,27 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       return;
     }
 
+    // Compute the worktree-relative trellis path so buildWorktreeRules can
+    // append the trellis-specific paragraphs to the worker's system prompt.
+    // Default workers leave this undefined and get the baseline rules.
+    const trellisRelativePath =
+      opts.workflow === "trellis" && opts.trellis
+        ? path.relative(project.path, opts.trellis.path)
+        : undefined;
+
     // Write the bootstrap script that handles slow setup (git fetch, worktree
     // creation, npm install) inside the tmux pane so the window appears instantly
-    // with progress output instead of blocking the hotkey handler.
-    const scriptFile = buildWorktreeBootstrapScript(
-      project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
-    );
+    // with progress output instead of blocking the hotkey handler. Default
+    // workers omit the options argument entirely (preserves arity for existing
+    // callers and tests).
+    const scriptFile = trellisRelativePath
+      ? buildWorktreeBootstrapScript(
+          project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
+          { trellisRelativePath },
+        )
+      : buildWorktreeBootstrapScript(
+          project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
+        );
 
     // Show the new pane immediately — bootstrap runs inside it
     const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject!);
@@ -125,6 +151,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // Re-apply label after swap (swap-pane may not preserve pane options)
     if (state.activePaneId) setPaneLabel(state.activePaneId, workerName);
 
+    const workflowName = opts.workflow ?? "default";
     addWorker(targetProject, {
       name: workerName,
       sessionId,
@@ -133,7 +160,18 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       branchName,
       baseBranch,
       claudeStatus: "loading",
-      workflow: "default",
+      workflow: workflowName,
+      // Trellis vine fields — populated only when workflow === "trellis".
+      // trellisIteration starts at 0; launchReview increments to 1 before
+      // the first review fires. See TRELLIS.md "Worker entry additions".
+      ...(workflowName === "trellis" && opts.trellis
+        ? {
+            trellisName: opts.trellis.name,
+            trellisPath: opts.trellis.path,
+            trellisIteration: 0,
+            trellisMaxIterations: opts.trellis.maxIterations,
+          }
+        : {}),
     });
 
     log.info("workers", "created", {
@@ -303,11 +341,21 @@ export function bounceWorker(projectName: string, workerName: string): void {
     installClaudeHooks(entry.worktreePath, projectInfo);
   }
 
+  const trellisRelativePath = projectInfo
+    ? trellisRelativePathForEntry(entry, projectInfo.path)
+    : undefined;
+  // Default workers omit the options arg so existing tests (which assert
+  // exact argument arity) still pass.
   const resumeCmd = entry.worktreePath && entry.branchName && projectInfo
-    ? buildWorktreeResumeCommand(
-        projectName, projectInfo.path, entry.name, entry.branchName,
-        entry.sessionId, baseBranch,
-      )
+    ? (trellisRelativePath
+        ? buildWorktreeResumeCommand(
+            projectName, projectInfo.path, entry.name, entry.branchName,
+            entry.sessionId, baseBranch, { trellisRelativePath },
+          )
+        : buildWorktreeResumeCommand(
+            projectName, projectInfo.path, entry.name, entry.branchName,
+            entry.sessionId, baseBranch,
+          ))
     : buildResumeCommand(
         projectName,
         projectInfo?.path ?? entry.worktreePath ?? "",

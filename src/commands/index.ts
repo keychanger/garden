@@ -28,6 +28,8 @@ import { usage } from "./usage.js";
 import { auto } from "./auto.js";
 import { whoami } from "./whoami.js";
 import { handoff } from "./handoff.js";
+import { workers } from "./workers.js";
+import { trellis } from "./trellis.js";
 
 type Command = (args: string[]) => Promise<void>;
 
@@ -63,4 +65,6 @@ export const commands: Record<string, Command> = {
   "auto-continue": auto,
   whoami,
   handoff,
+  workers,
+  trellis,
 };
