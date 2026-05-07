@@ -101,6 +101,7 @@ Requires terminal setup: iTerm2 → Profiles → Keys → Left Option key → "E
 | `⌥1` – `⌥9` | Switch to project by index within the active plot |
 | `⌥p` / `⌥P` | Cycle to next/previous focused plot (`⌥o` also cycles previous) |
 | `⌥n` | New worker (Claude session) |
+| `⌥⇧N` | Pick a trellis to plant a vine (spec-driven loop workflow) |
 | `⌥w` | Jump to first worker |
 | `⌥s` | Jump to project shell |
 | `⌥]` / `⌥[` | Cycle workers and shell |
