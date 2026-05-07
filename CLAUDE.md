@@ -288,7 +288,7 @@ Current specs in this project:
 
 - `src/dashboard/STATUS.md` — worker status tracking and display system
 - `src/TRACKS.md` — multi-track projects and the promotion pipeline (design target; no code yet)
-- `src/dashboard/TRELLIS.md` — feature-scoped, spec-driven loop workflow ("trellis"); ralph-loop pattern adapted to garden's review/merge cycle (phase 2 implements the end-to-end vine loop; full `garden trellis ...` operator surface lands in phase 4)
+- `src/dashboard/TRELLIS.md` — feature-scoped, spec-driven loop workflow ("trellis"); ralph-loop pattern adapted to garden's review/merge cycle. v1 ships the end-to-end vine loop, full `garden trellis ...` operator surface, model selection (Sonnet workers, Opus reviewer), and the `⌥⇧N` picker. Stagnation detection, `--override` flag, lessons file size cap, and `garden trellis budget` deferred to v1.5+.
 
 ## Conventions
 
