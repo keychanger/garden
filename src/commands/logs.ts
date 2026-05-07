@@ -118,8 +118,6 @@ function absoluteTime(isoTs: string): string {
 
 let workerToProjectCache: Map<string, string> | null = null;
 let registryLoadFailed = false;
-let knownProjectNames: string[] = [];
-let knownWorkerNames: string[] = [];
 
 function loadWorkerMap(): Map<string, string> {
   const map = new Map<string, string>();
@@ -133,17 +131,11 @@ function loadWorkerMap(): Map<string, string> {
       workers?: Record<string, Array<{ name?: string }>>;
     };
     const workers = raw.workers ?? {};
-    knownProjectNames = Object.keys(workers);
-    const workerNames: string[] = [];
     for (const [project, entries] of Object.entries(workers)) {
       for (const e of entries) {
-        if (e?.name) {
-          map.set(e.name, project);
-          workerNames.push(e.name);
-        }
+        if (e?.name) map.set(e.name, project);
       }
     }
-    knownWorkerNames = workerNames;
   } catch {
     registryLoadFailed = true;
   }
@@ -166,26 +158,11 @@ function projectForEntry(entry: LogEntry): string | null {
   return null;
 }
 
-// Column widths are computed from the registry so the layout adapts to the
-// names actually present. We cap to keep one runaway slug from blowing out
-// the layout, but the cap is generous — truncation should be the exception.
-const PROJECT_COL_MAX = 24;
-const WORKER_COL_MAX = 24;
-const WORKER_COL_MIN = 12;
-
-function projectColumnWidth(): number {
-  if (!workerToProjectCache) workerToProjectCache = loadWorkerMap();
-  const names = knownProjectNames.length ? knownProjectNames : ["system"];
-  const widest = names.reduce((m, n) => Math.max(m, n.length), "system".length);
-  return Math.min(widest, PROJECT_COL_MAX);
-}
-
-function workerColumnWidth(): number {
-  if (!workerToProjectCache) workerToProjectCache = loadWorkerMap();
-  if (!knownWorkerNames.length) return WORKER_COL_MIN;
-  const widest = knownWorkerNames.reduce((m, n) => Math.max(m, n.length), 0);
-  return Math.min(Math.max(widest, WORKER_COL_MIN), WORKER_COL_MAX);
-}
+// Fixed column widths sized for typical garden names: project slugs run
+// 5–12 chars, worker slugs are 3-word adj-adj-noun and run 12–22. Anything
+// longer is truncated rather than reflowing the column dynamically.
+const PROJECT_COL_WIDTH = 16;
+const WORKER_COL_WIDTH = 22;
 
 // ---- suppression ------------------------------------------------------------
 
@@ -333,15 +310,13 @@ function formatRawEntry(entry: LogEntry, useRelativeTime: boolean): string {
 function formatPrettyEntry(entry: LogEntry, useRelativeTime: boolean): string {
   const ts = useRelativeTime ? relativeTime(entry.ts).padStart(8) : absoluteTime(entry.ts);
   const project = projectForEntry(entry);
-  const projectWidth = projectColumnWidth();
   const rawLabel = project ?? "system";
-  const projectLabel = rawLabel.length > projectWidth ? rawLabel.slice(0, projectWidth) : rawLabel.padEnd(projectWidth);
+  const projectLabel = rawLabel.length > PROJECT_COL_WIDTH ? rawLabel.slice(0, PROJECT_COL_WIDTH) : rawLabel.padEnd(PROJECT_COL_WIDTH);
   const projectColor = project ? colorForProject(project) : color.dim;
   const projectStr = `${projectColor}${projectLabel}${color.reset}`;
-  const workerWidth = workerColumnWidth();
   const workerStr = entry.worker
-    ? `${color.dim}${entry.worker.padEnd(workerWidth)}${color.reset}`
-    : " ".repeat(workerWidth);
+    ? `${color.dim}${entry.worker.padEnd(WORKER_COL_WIDTH)}${color.reset}`
+    : " ".repeat(WORKER_COL_WIDTH);
   const glyph = PRETTY_LEVEL_GLYPHS[entry.level] ?? " ";
   const glyphColor = LEVEL_COLORS[entry.level] ?? "";
   const message = summarize(entry);
