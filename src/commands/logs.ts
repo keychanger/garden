@@ -119,6 +119,7 @@ function absoluteTime(isoTs: string): string {
 let workerToProjectCache: Map<string, string> | null = null;
 let registryLoadFailed = false;
 let knownProjectNames: string[] = [];
+let knownWorkerNames: string[] = [];
 
 function loadWorkerMap(): Map<string, string> {
   const map = new Map<string, string>();
@@ -133,11 +134,16 @@ function loadWorkerMap(): Map<string, string> {
     };
     const workers = raw.workers ?? {};
     knownProjectNames = Object.keys(workers);
+    const workerNames: string[] = [];
     for (const [project, entries] of Object.entries(workers)) {
       for (const e of entries) {
-        if (e?.name) map.set(e.name, project);
+        if (e?.name) {
+          map.set(e.name, project);
+          workerNames.push(e.name);
+        }
       }
     }
+    knownWorkerNames = workerNames;
   } catch {
     registryLoadFailed = true;
   }
@@ -160,11 +166,25 @@ function projectForEntry(entry: LogEntry): string | null {
   return null;
 }
 
+// Column widths are computed from the registry so the layout adapts to the
+// names actually present. We cap to keep one runaway slug from blowing out
+// the layout, but the cap is generous — truncation should be the exception.
+const PROJECT_COL_MAX = 24;
+const WORKER_COL_MAX = 24;
+const WORKER_COL_MIN = 12;
+
 function projectColumnWidth(): number {
   if (!workerToProjectCache) workerToProjectCache = loadWorkerMap();
   const names = knownProjectNames.length ? knownProjectNames : ["system"];
   const widest = names.reduce((m, n) => Math.max(m, n.length), "system".length);
-  return Math.min(widest, 16);
+  return Math.min(widest, PROJECT_COL_MAX);
+}
+
+function workerColumnWidth(): number {
+  if (!workerToProjectCache) workerToProjectCache = loadWorkerMap();
+  if (!knownWorkerNames.length) return WORKER_COL_MIN;
+  const widest = knownWorkerNames.reduce((m, n) => Math.max(m, n.length), 0);
+  return Math.min(Math.max(widest, WORKER_COL_MIN), WORKER_COL_MAX);
 }
 
 // ---- suppression ------------------------------------------------------------
@@ -318,9 +338,10 @@ function formatPrettyEntry(entry: LogEntry, useRelativeTime: boolean): string {
   const projectLabel = rawLabel.length > projectWidth ? rawLabel.slice(0, projectWidth) : rawLabel.padEnd(projectWidth);
   const projectColor = project ? colorForProject(project) : color.dim;
   const projectStr = `${projectColor}${projectLabel}${color.reset}`;
+  const workerWidth = workerColumnWidth();
   const workerStr = entry.worker
-    ? `${color.dim}${entry.worker.padEnd(20)}${color.reset}`
-    : " ".repeat(20);
+    ? `${color.dim}${entry.worker.padEnd(workerWidth)}${color.reset}`
+    : " ".repeat(workerWidth);
   const glyph = PRETTY_LEVEL_GLYPHS[entry.level] ?? " ";
   const glyphColor = LEVEL_COLORS[entry.level] ?? "";
   const message = summarize(entry);
