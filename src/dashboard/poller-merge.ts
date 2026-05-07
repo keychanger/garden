@@ -71,7 +71,7 @@ export function handleMergePending(
 
   // Clean tooling artifacts (Claude settings, hook dirs) left by the reviewer.
   // By this point all meaningful changes are committed — anything left is noise.
-  cleanWorktree(wtPath);
+  cleanWorktree(wtPath, { project: projectName, worker: entry.name });
 
   // Rebase onto current base branch
   const rebaseResult = rebaseBranch(wtPath, baseBranch);
