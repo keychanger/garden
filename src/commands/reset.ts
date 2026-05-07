@@ -34,7 +34,7 @@ export async function reset(_args: string[]): Promise<void> {
     if (!project) continue;
     for (const worker of workers) {
       if (worker.branchName) {
-        deleteRemoteBranch(project.path, worker.branchName);
+        deleteRemoteBranch(project.path, worker.branchName, { project: projectName, worker: worker.name });
       }
     }
   }

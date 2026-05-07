@@ -945,8 +945,8 @@ describe("poll — merge-pending state", () => {
 
     expect(rebaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "main");
     expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
-    expect(mergeToBase).toHaveBeenCalledWith("/repo/myproject", "bold-ash", "main");
-    expect(deleteRemoteBranch).toHaveBeenCalledWith("/repo/myproject", "bold-ash");
+    expect(mergeToBase).toHaveBeenCalledWith("/repo/myproject", "bold-ash", "main", { project: "myproject", worker: "bold-ash" });
+    expect(deleteRemoteBranch).toHaveBeenCalledWith("/repo/myproject", "bold-ash", { project: "myproject", worker: "bold-ash" });
     expect(fastForwardBase).toHaveBeenCalledWith("/repo/myproject", "main", { project: "myproject", worker: "bold-ash" });
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({
@@ -1562,7 +1562,7 @@ describe("poll — merge-pending state", () => {
     poll("myproject");
 
     const mergeCalls = vi.mocked(mergeToBase).mock.calls;
-    expect(mergeCalls[0]).toEqual(["/repo/myproject", "calm-bay", "main"]);
+    expect(mergeCalls[0]).toEqual(["/repo/myproject", "calm-bay", "main", { project: "myproject", worker: "calm-bay" }]);
   });
 
   it("resets to working when force-push fails", () => {

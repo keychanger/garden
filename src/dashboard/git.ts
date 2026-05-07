@@ -230,7 +230,12 @@ export function forcePushBranch(worktreePath: string, branch: string): void {
   git(worktreePath, "push", "--force-with-lease", "origin", `HEAD:${branch}`);
 }
 
-export function mergeToBase(repoPath: string, branchName: string, baseBranch: string): void {
+export function mergeToBase(
+  repoPath: string,
+  branchName: string,
+  baseBranch: string,
+  ctx?: { project?: string; worker?: string },
+): void {
   git(repoPath, "fetch", "origin");
   // Resolve to concrete SHAs so we can verify fast-forward and push without
   // needing a clean working tree or switching branches in the project checkout.
@@ -250,7 +255,10 @@ export function mergeToBase(repoPath: string, branchName: string, baseBranch: st
   }
   // Push directly to remote base branch — no local checkout or merge needed.
   git(repoPath, "push", "origin", `${branchSha}:refs/heads/${baseBranch}`);
-  log.info("git", "merged to base branch", { data: { branchName, baseBranch } });
+  log.info("git", "merged to base branch", {
+    worker: ctx?.worker,
+    data: { branchName, baseBranch, ...(ctx?.project ? { project: ctx.project } : {}) },
+  });
 }
 
 export function fastForwardBase(
@@ -282,15 +290,24 @@ export function fastForwardBase(
   }
 }
 
-export function deleteRemoteBranch(repoPath: string, branchName: string): void {
+export function deleteRemoteBranch(
+  repoPath: string,
+  branchName: string,
+  ctx?: { project?: string; worker?: string },
+): void {
+  const projectData = ctx?.project ? { project: ctx.project } : {};
   try {
     const refs = git(repoPath, "ls-remote", "--heads", "origin", branchName);
     if (!refs.trim()) return;
     git(repoPath, "push", "origin", "--delete", branchName);
-    log.info("git", "deleted remote branch", { data: { branchName } });
+    log.info("git", "deleted remote branch", {
+      worker: ctx?.worker,
+      data: { branchName, ...projectData },
+    });
   } catch (err) {
     log.warn("git", "failed to delete remote branch", {
-      data: { branchName, error: String(err) },
+      worker: ctx?.worker,
+      data: { branchName, error: String(err), ...projectData },
     });
   }
 }

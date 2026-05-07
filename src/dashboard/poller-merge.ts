@@ -147,7 +147,7 @@ function finalizeMerge(
     : [];
 
   try {
-    mergeToBase(projectPath, branchName, baseBranch);
+    mergeToBase(projectPath, branchName, baseBranch, { project: projectName, worker: entry.name });
   } catch (err) {
     log.error("poller", "merge failed", {
       worker: entry.name,
@@ -212,7 +212,7 @@ function finalizeMerge(
     }
   }
 
-  deleteRemoteBranch(projectPath, branchName);
+  deleteRemoteBranch(projectPath, branchName, { project: projectName, worker: entry.name });
 
   // Update the main checkout so postMerge (e.g. npm run build) runs
   // against the newly merged code, not stale working-tree files.
