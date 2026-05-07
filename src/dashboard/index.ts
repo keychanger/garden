@@ -16,6 +16,9 @@ import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.j
 import { newWorker, killPane, bounceActiveWorker } from "./workers.js";
 import { continueWorker, continueWorkerAfterMerge, seedWorker } from "./continue.js";
 import { trellisAutoContinueAfterMerge } from "./trellis-continue.js";
+import {
+  runTrellisPicker, plantVineFromPicker, spawnTrellisAuthor, runReviveSubmenu,
+} from "./trellis-picker.js";
 import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, cyclePane, cyclePlot } from "./navigate.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
 import { runUsagePollerLoop, stopUsagePoller } from "./usage-poller.js";
@@ -66,6 +69,22 @@ export async function dashboard(args: string[]): Promise<void> {
   }
   if (sub === "_trellis-continue-after-merge") {
     if (args[1] && args[2]) trellisAutoContinueAfterMerge(args[1], args[2]);
+    return;
+  }
+  if (sub === "_trellis-picker") {
+    runTrellisPicker(args[1]);
+    return;
+  }
+  if (sub === "_trellis-plant") {
+    if (args[1] && args[2]) plantVineFromPicker(args[1], args[2]);
+    return;
+  }
+  if (sub === "_trellis-plant-author") {
+    if (args[1]) spawnTrellisAuthor(args[1]);
+    return;
+  }
+  if (sub === "_trellis-revive-submenu") {
+    if (args[1]) runReviveSubmenu(args[1]);
     return;
   }
   if (sub === "_seed-worker") {

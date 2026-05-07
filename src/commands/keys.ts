@@ -17,6 +17,7 @@ Garden Dashboard Keybindings (⌥ = Option/Alt)
 
   Workers
     ⌥n           New worker (Claude session)
+    ⌥⇧N          Pick a trellis to plant a vine on (spec-driven loop workflow)
     ⌥x           Kill current worker (shell protected)
     ⌥b           Bounce current worker (restart Claude, preserve history)
 
