@@ -23,7 +23,7 @@ npm run dev -- help    # run via tsx during development
   - `hook-dispatcher.ts` — `handleClaudeHook(event)`: thin top-level dispatcher that resolves the worker's workflow and routes Claude Code hook events to its `hookHandlers` methods. Extracted from `header.ts` to keep `header.ts` free of `workflows/index.ts` imports.
   - `workers.ts` — worker lifecycle (create, kill, bounce)
   - `continue.ts` — auto-continue prompts (interrupt-recovery and post-merge) and `.garden-done` sentinel helpers used by the poller and pause/resume commands.
-  - `skills.ts` — installs garden-bundled Claude Code skills under `<worktree>/.claude/skills/<name>/SKILL.md` at worker creation and on every refresh/bounce. Currently ships `done` (worker self-declares completion) and `handoff` (pass task to a fresh worker via `garden handoff`).
+  - `skills.ts` — installs garden-bundled Claude Code skills under `<worktree>/.claude/skills/<name>/SKILL.md` at worker creation and on every refresh/bounce. Currently ships `done` (worker self-declares completion), `handoff` (pass task to a fresh worker via `garden handoff`), and `trellis-author` (operator-prompted authoring of trellis design documents).
   - `navigate.ts` — project switching, pane focus, worker cycling
   - `state.ts` — DashboardState type, atomic read/write to `dashboard.state.json`
   - `registry.ts` — worker registry, atomic read/write to `dashboard.registry.json`
@@ -270,7 +270,7 @@ Current specs in this project:
 
 - `src/dashboard/STATUS.md` — worker status tracking and display system
 - `src/TRACKS.md` — multi-track projects and the promotion pipeline (design target; no code yet)
-- `src/dashboard/TRELLIS.md` — feature-scoped, spec-driven loop workflow ("trellis"); ralph-loop pattern adapted to garden's review/merge cycle (design target; no code yet)
+- `src/dashboard/TRELLIS.md` — feature-scoped, spec-driven loop workflow ("trellis"); ralph-loop pattern adapted to garden's review/merge cycle (phase 2 implements the end-to-end vine loop; full `garden trellis ...` operator surface lands in phase 4)
 
 ## Conventions
 

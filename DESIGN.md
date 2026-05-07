@@ -326,6 +326,16 @@ garden auto resume-on-reset on|off # Re-enable automatically after the usage win
 garden rebuild                     # Rebuild garden and relaunch dashboard
 ```
 
+### Workers and trellises
+```
+garden workers new <project> [--workflow trellis --trellis <name>] [--max-iterations N]
+                                   # Spawn a worker. Default workflow plants an interactive worker;
+                                   # trellis plants a vine bound to the named trellis.
+garden trellis new <project> <name>
+                                   # Scaffold a trellis at <project>/.garden/trellises/<name>.md
+                                   # (see src/dashboard/TRELLIS.md for the workflow spec)
+```
+
 Project name is auto-detected from cwd when inside a project directory. `GARDEN_PROJECT` env var overrides. Worker panes also export `GARDEN_WORKER`, `GARDEN_BRANCH`, and `GARDEN_BASE_BRANCH` so workers can self-identify via `garden whoami` and filter their own log history with `garden logs -w $GARDEN_WORKER`.
 
 ## Output Format

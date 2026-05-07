@@ -318,11 +318,6 @@ function dispatchTrellisVerdict(
   const branchName = entry.branchName ?? entry.name;
 
   if (review.verdict === "ALIGNED") {
-    // Workflow handler writes the sentinel on the worker's behalf so
-    // finalizeMerge picks `done` instead of `merged`. See TRELLIS.md
-    // "Reused state machine" — Aligned maps onto existing `done` via
-    // the sentinel, no new PrState added.
-    setDoneSentinel(entry.worktreePath);
     try {
       forcePushBranch(wtPath, branchName);
     } catch (err) {
@@ -337,6 +332,11 @@ function dispatchTrellisVerdict(
       refreshDashboard();
       return true;
     }
+    // Write the sentinel only after the force-push succeeds. If we wrote it
+    // earlier and the push failed, the sentinel would persist on disk; a
+    // later DRIFT-then-merge cycle would then have finalizeMerge pick `done`
+    // off the stale sentinel even though alignment had been lost.
+    setDoneSentinel(entry.worktreePath);
     transitionState(projectName, entry.name, "merge-pending", {
       mergePendingAt: new Date().toISOString(),
       lastReviewBody: review.body,
