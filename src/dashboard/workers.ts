@@ -67,6 +67,13 @@ export interface NewWorkerOptions {
      *  call. Absent → workflow.workerModel default ("sonnet"). */
     workerModel?: "opus" | "sonnet";
   };
+  // Grow-specific options, ignored unless workflow === "grow". The seed is
+  // the operator's task description, persisted on entry.grow.seed and
+  // inlined into iter ≥ 2 continue prompts. maxIterations bounds the loop.
+  grow?: {
+    seed: string;
+    maxIterations: number;
+  };
 }
 
 export function newWorker(opts: NewWorkerOptions = {}): string | null {
@@ -90,6 +97,14 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     if (opts.workflow === "trellis" && !opts.trellis) {
       tmuxDisplay("--workflow trellis requires the trellis options to be set (caller bug).");
       log.error("workers", "rejected newWorker: workflow=trellis but no trellis opts", {
+        data: { project: targetProject },
+      });
+      return;
+    }
+    // --workflow grow without opts.grow is the same caller bug.
+    if (opts.workflow === "grow" && !opts.grow) {
+      tmuxDisplay("--workflow grow requires the grow options to be set (caller bug).");
+      log.error("workers", "rejected newWorker: workflow=grow but no grow opts", {
         data: { project: targetProject },
       });
       return;
@@ -174,6 +189,19 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
               iteration: 0,
               maxIterations: opts.trellis.maxIterations,
               workerModel: opts.trellis.workerModel,
+            },
+          }
+        : {}),
+      // Grow loop data — populated only when workflow === "grow". Same
+      // iteration counter pattern as trellis (starts at 0, launchReview
+      // increments before dispatch). The seed anchors iter ≥ 2 prompts
+      // across context resets.
+      ...(workflowName === "grow" && opts.grow
+        ? {
+            grow: {
+              seed: opts.grow.seed,
+              iteration: 0,
+              maxIterations: opts.grow.maxIterations,
             },
           }
         : {}),

@@ -12,6 +12,7 @@ import {
 import { DASHBOARD_SESSION } from "../session.js";
 import { addAlert } from "./alerts.js";
 import { dispatchDelayedAutoContinue, isDoneSet } from "./continue.js";
+import { dispatchDelayedGrowContinue } from "./grow-continue.js";
 import { dispatchDelayedTrellisContinue } from "./trellis-continue.js";
 import { resolveGardenRunner } from "./runner.js";
 import {
@@ -366,10 +367,12 @@ function maybeAutoContinue(
       workflow: entry.workflow ?? "default",
     },
   });
-  // Trellis vines reset to a fresh Claude session every iteration
-  // (Invariant 8). Default workers send into the live session.
+  // Trellis and grow loops reset to a fresh Claude session every iteration
+  // (per-iteration context reset). Default workers send into the live session.
   if (entry.workflow === "trellis") {
     dispatchDelayedTrellisContinue(resolveGardenRunner(), projectName, entry.name);
+  } else if (entry.workflow === "grow") {
+    dispatchDelayedGrowContinue(resolveGardenRunner(), projectName, entry.name);
   } else {
     dispatchDelayedAutoContinue(resolveGardenRunner(), projectName, entry.name);
   }

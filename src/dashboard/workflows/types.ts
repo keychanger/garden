@@ -95,7 +95,13 @@ export const defaultValidTransitions: Record<PrState, PrState[]> = {
 // fighting the type system or callers.
 export const trellisValidTransitions: Record<PrState, PrState[]> = defaultValidTransitions;
 
+// Grow uses the same table as default. Same rationale as trellis — kept as
+// its own constant so it can diverge later (e.g. if grow grows a new
+// state) without fighting the type system or callers.
+export const growValidTransitions: Record<PrState, PrState[]> = defaultValidTransitions;
+
 export function getValidTransitions(workflowName: string): Record<PrState, PrState[]> {
   if (workflowName === "trellis") return trellisValidTransitions;
+  if (workflowName === "grow") return growValidTransitions;
   return defaultValidTransitions;
 }

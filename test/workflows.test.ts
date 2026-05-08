@@ -6,6 +6,7 @@ vi.mock("../src/dashboard/log.js", () => ({
 
 import {
   defaultWorkflow,
+  growWorkflow,
   trellisWorkflow,
   getWorkflow,
   registerWorkflow,
@@ -217,6 +218,43 @@ describe("trellisWorkflow (phase 1 skeleton)", () => {
   it("default workflow leaves workerModel/reviewerModel unset (no behavior change)", () => {
     expect(defaultWorkflow.workerModel).toBeUndefined();
     expect(defaultWorkflow.reviewerModel).toBeUndefined();
+  });
+});
+
+describe("growWorkflow (phase 2 skeleton)", () => {
+  // Phase 2 ships a skeletal grow workflow that reuses default's handlers.
+  // Behavior divergence (per-iteration cold respawn, grow-flavored continue
+  // prompt) lands in phase 3. See declarative-singing-graham.md.
+
+  it("is registered under name 'grow'", () => {
+    expect(getWorkflow("grow")).toBe(growWorkflow);
+  });
+
+  it("validTransitions deep-equal default's (grow uses the same state machine)", () => {
+    expect(growWorkflow.validTransitions).toEqual(PRE_REFACTOR_VALID_TRANSITIONS);
+  });
+
+  it("has a registered handler for every PrState (exhaustiveness)", () => {
+    for (const state of ALL_PR_STATES) {
+      expect(
+        growWorkflow.stateHandlers[state],
+        `grow workflow missing handler for state ${state}`,
+      ).toBeDefined();
+    }
+  });
+
+  it("phase 2 reuses default's hookHandlers verbatim", () => {
+    // Phase 3 may override individual hook methods; phase 2 confirms identity
+    // reuse so Stop/UserPromptSubmit/SessionStart wiring is shared.
+    expect(growWorkflow.hookHandlers).toBe(defaultWorkflow.hookHandlers);
+  });
+
+  it("leaves workerModel and reviewerModel unset (account default applies)", () => {
+    // Locked decisions 3 and 4: grow is bounded by N, not by quality concerns
+    // about model selection. Operators tune via --model at plant time when
+    // wired in phase 3 (or not at all for v1 if the flag is forbidden).
+    expect(growWorkflow.workerModel).toBeUndefined();
+    expect(growWorkflow.reviewerModel).toBeUndefined();
   });
 });
 

@@ -43,11 +43,16 @@ export interface ProjectConfig {
   // Opus and fires one alert per Sonnet reset window. When false, Sonnet
   // exhaustion pauses the loop via the existing usage-pause mechanism.
   trellisOpusFallback?: boolean;
+  // Iteration cap on a grow loop. Per-worker `--max-iterations` overrides
+  // this. Default: 5 (grow loops are typically short polish passes;
+  // operators who want longer convergence should use a trellis instead).
+  maxGrowIterations?: number;
 }
 
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "path", "checks", "postMerge", "sandboxDomains", "claudeProfile", "logColor",
   "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
+  "maxGrowIterations",
 ]);
 
 export function isValidConfigKey(key: string): boolean {

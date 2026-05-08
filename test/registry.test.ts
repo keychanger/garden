@@ -205,6 +205,24 @@ describe("updateWorkerFields", () => {
     expect(t.lastVerdict).toBe("DRIFT");
     expect(t.lastDrift).toEqual(["1. [tests] missing"]);
   });
+
+  // Same regression check for the grow sub-object — every iteration's
+  // increment writes only `{ grow: { iteration: N } }`, so the seed and
+  // maxIterations must survive without being clobbered.
+  it("deep-merges the grow sub-object instead of clobbering it", async () => {
+    const { addWorker, updateWorkerFields, getWorkers } = await importRegistry();
+    addWorker("proj", {
+      name: "tall-fern", sessionId: "s1", task: "", workflow: "grow",
+      grow: { seed: "harden auth flow", iteration: 0, maxIterations: 5 },
+    });
+    updateWorkerFields("proj", "tall-fern", {
+      grow: { iteration: 3 },
+    });
+    const g = getWorkers("proj")[0].grow!;
+    expect(g.seed).toBe("harden auth flow");
+    expect(g.maxIterations).toBe(5);
+    expect(g.iteration).toBe(3);
+  });
 });
 
 describe("batchUpdateWorkerFields", () => {
@@ -258,6 +276,24 @@ describe("batchUpdateWorkerFields", () => {
     expect(w.trellis?.name).toBe("auth");
     expect(w.trellis?.iteration).toBe(1);
     expect(w.trellis?.lastVerdict).toBe("DRIFT");
+  });
+
+  it("deep-merges the grow sub-object across batch writes", async () => {
+    const { addWorker, batchUpdateWorkerFields, getWorkers } = await importRegistry();
+    addWorker("proj", {
+      name: "tall-fern", sessionId: "s1", task: "", workflow: "grow",
+      grow: { seed: "polish dashboard", iteration: 0, maxIterations: 5 },
+    });
+    batchUpdateWorkerFields([
+      {
+        project: "proj", workerName: "tall-fern",
+        fields: { grow: { iteration: 1 } },
+      },
+    ]);
+    const w = getWorkers("proj")[0];
+    expect(w.grow?.seed).toBe("polish dashboard");
+    expect(w.grow?.iteration).toBe(1);
+    expect(w.grow?.maxIterations).toBe(5);
   });
 });
 

@@ -425,6 +425,39 @@ describe("newWorker", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: null }));
     expect(newWorker()).toBeNull();
   });
+
+  // ===== Grow workflow plant path =====
+  // Phase 2 lets the workflow be planted via the programmatic newWorker
+  // API (the CLI surface lands in phase 3). The grow opts must be present
+  // when --workflow grow is selected; absence is a caller bug.
+
+  it("grow workflow: rejects when opts.grow is missing", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ workflow: "grow" });
+    expect(vi.mocked(addWorker)).not.toHaveBeenCalled();
+    expect(vi.mocked(tmuxDisplay)).toHaveBeenCalledWith(
+      "--workflow grow requires the grow options to be set (caller bug).",
+    );
+  });
+
+  it("grow workflow: stamps entry.grow with seed, iteration: 0, maxIterations", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({
+      workflow: "grow",
+      grow: { seed: "harden auth flow", maxIterations: 5 },
+    });
+    expect(vi.mocked(addWorker)).toHaveBeenCalledWith(
+      "myproject",
+      expect.objectContaining({
+        workflow: "grow",
+        grow: {
+          seed: "harden auth flow",
+          iteration: 0,
+          maxIterations: 5,
+        },
+      }),
+    );
+  });
 });
 
 // =============================================================================

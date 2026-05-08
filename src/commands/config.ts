@@ -11,6 +11,7 @@ import { output } from "../output.js";
 const SETTABLE_KEYS = [
   "checks", "postMerge", "sandboxDomains", "claudeProfile", "logColor",
   "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
+  "maxGrowIterations",
 ] as const;
 type SettableKey = typeof SETTABLE_KEYS[number];
 
@@ -69,6 +70,10 @@ function showProjectConfig(project: ProjectConfig & { name: string }): void {
       if (project.trellisOpusFallback !== undefined) {
         data.trellisOpusFallback = String(project.trellisOpusFallback);
       }
+    } else if (key === "maxGrowIterations") {
+      if (project.maxGrowIterations !== undefined) {
+        data.maxGrowIterations = String(project.maxGrowIterations);
+      }
     } else if (project[key]) {
       data[key] = project[key]!;
     }
@@ -110,6 +115,12 @@ function showConfigKey(project: ProjectConfig & { name: string }, key: SettableK
   }
   if (key === "trellisOpusFallback") {
     const v = project.trellisOpusFallback;
+    if (v !== undefined) output({ [key]: v }, () => String(v));
+    else output({ [key]: null }, () => `(not set)`);
+    return;
+  }
+  if (key === "maxGrowIterations") {
+    const v = project.maxGrowIterations;
     if (v !== undefined) output({ [key]: v }, () => String(v));
     else output({ [key]: null }, () => `(not set)`);
     return;
@@ -187,6 +198,18 @@ function setConfigKey(projectName: string, key: SettableKey, value: string): voi
       console.log(`Set ${key} = ${value} for ${projectName}`);
     } else {
       throw new Error(`trellisOpusFallback must be 'true' or 'false', got '${value}'`);
+    }
+  } else if (key === "maxGrowIterations") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.maxGrowIterations;
+      console.log(`Cleared ${key} for ${projectName} (default: 5)`);
+    } else {
+      const n = Number.parseInt(value, 10);
+      if (!Number.isFinite(n) || n < 1) {
+        throw new Error(`maxGrowIterations must be a positive integer, got '${value}'`);
+      }
+      project.maxGrowIterations = n;
+      console.log(`Set ${key} = ${n} for ${projectName}`);
     }
   } else if (value === "" || value === "unset" || value === "null") {
     delete project[key];

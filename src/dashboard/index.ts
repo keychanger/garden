@@ -15,6 +15,7 @@ import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
 import { newWorker, killPane, bounceActiveWorker } from "./workers.js";
 import { continueWorker, continueWorkerAfterMerge, seedWorker } from "./continue.js";
+import { growAutoContinueAfterMerge } from "./grow-continue.js";
 import { trellisAutoContinueAfterMerge } from "./trellis-continue.js";
 import {
   runTrellisPicker, plantVineFromPicker, spawnTrellisAuthor, runReviveSubmenu,
@@ -69,6 +70,10 @@ export async function dashboard(args: string[]): Promise<void> {
   }
   if (sub === "_trellis-continue-after-merge") {
     if (args[1] && args[2]) trellisAutoContinueAfterMerge(args[1], args[2]);
+    return;
+  }
+  if (sub === "_grow-continue-after-merge") {
+    if (args[1] && args[2]) growAutoContinueAfterMerge(args[1], args[2]);
     return;
   }
   if (sub === "_trellis-picker") {

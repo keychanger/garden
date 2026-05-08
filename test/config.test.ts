@@ -512,3 +512,35 @@ describe("trellis project config keys", () => {
     expect(cfg.projects.garden.trellisOpusFallback).toBeUndefined();
   });
 });
+
+// Grow workflow project config — same shape and pattern as trellis. Single
+// integer key (`maxGrowIterations`); the seed is per-worker, not per-project.
+describe("grow project config keys", () => {
+  it("isValidConfigKey accepts maxGrowIterations", async () => {
+    const { isValidConfigKey } = await importConfig();
+    expect(isValidConfigKey("maxGrowIterations")).toBe(true);
+  });
+
+  it("round-trips maxGrowIterations through saveConfig + loadConfig", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({
+      projects: {
+        garden: {
+          path: "/tmp/garden",
+          maxGrowIterations: 8,
+        },
+      },
+    });
+    const cfg = loadConfig();
+    expect(cfg.projects.garden.maxGrowIterations).toBe(8);
+  });
+
+  it("treats maxGrowIterations as optional (default workflow projects load fine)", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
+    const cfg = loadConfig();
+    expect(cfg.projects.garden.maxGrowIterations).toBeUndefined();
+  });
+});

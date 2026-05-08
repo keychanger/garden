@@ -128,6 +128,11 @@ export interface WorkerEntry {
   // one key without clobbering the rest). See WORKFLOWS.md "Worker entry
   // additions" for field contracts.
   trellis?: TrellisData;
+  // Grow-loop-only data. Populated only when workflow === "grow"; absent
+  // on default and trellis workers. updateWorkerFields deep-merges this
+  // sub-object (same pattern as `trellis`). See the grow plan in
+  // declarative-singing-graham.md.
+  grow?: GrowData;
 }
 
 /** Trellis-workflow per-worker data. All fields except `name` and `path`
@@ -168,6 +173,25 @@ export interface TrellisData {
    *  then project default. Trellis-only — default workers don't carry
    *  this. */
   workerModel?: "opus" | "sonnet";
+}
+
+/** Grow-workflow per-worker data. The seed prompt is captured at plant
+ *  time and inlined verbatim into every iter ≥ 2 continue prompt — that's
+ *  why it lives on the entry rather than only on disk in a one-shot file.
+ *  iteration is incremented on each working → reviewing transition (same
+ *  pattern as TrellisData.iteration); maxIterations bounds the loop and
+ *  is enforced at the post-merge auto-continue dispatch site (not at
+ *  preflight, unlike trellis). */
+export interface GrowData {
+  /** Operator-supplied task description from `--seed` / `--seed-file` /
+   *  picker prompt. Inlined verbatim into iter ≥ 2 continue prompts so
+   *  the goal anchors across context resets. */
+  seed: string;
+  /** Iteration counter. Incremented on each working → reviewing transition
+   *  before dispatch. Reads as 1 during the first review, 2 during the
+   *  second, etc. Starts at 0. */
+  iteration?: number;
+  maxIterations?: number;
 }
 
 export interface WorkerRegistry {
@@ -311,13 +335,14 @@ export function updateWorkerTask(project: string, workerName: string, task: stri
 }
 
 /** Field-update payload accepted by updateWorkerFields. Top-level fields
- *  are shallow-merged onto the entry. The nested `trellis` field is
- *  deep-merged into the existing `entry.trellis` sub-object — passing
- *  `{ trellis: { lastVerdict: "ALIGNED" } }` updates only that one field
- *  without clobbering the rest of the trellis data. */
+ *  are shallow-merged onto the entry. The nested `trellis` and `grow` fields
+ *  are deep-merged into the existing sub-object — passing
+ *  `{ trellis: { lastVerdict: "ALIGNED" } }` or `{ grow: { iteration: 3 } }`
+ *  updates only that one field without clobbering the rest of the sub-object. */
 export interface WorkerFieldsUpdate
-  extends Partial<Omit<WorkerEntry, "name" | "trellis">> {
+  extends Partial<Omit<WorkerEntry, "name" | "trellis" | "grow">> {
   trellis?: Partial<TrellisData>;
+  grow?: Partial<GrowData>;
 }
 
 export function updateWorkerFields(
@@ -338,13 +363,21 @@ export function updateWorkerFields(
       });
     }
 
-    const { trellis: trellisUpdate, ...rest } = fields;
+    const { trellis: trellisUpdate, grow: growUpdate, ...rest } = fields;
     Object.assign(entry, rest);
     if (trellisUpdate !== undefined) {
       // Merge into existing trellis. If entry.trellis is unset (a default
       // worker received a stray trellis update — caller bug), the spread
       // still produces a TrellisData-shaped object from whatever was passed.
       entry.trellis = { ...(entry.trellis ?? {}), ...trellisUpdate } as TrellisData;
+    }
+    if (growUpdate !== undefined) {
+      // Same deep-merge pattern as trellis. Caller bug if entry.grow is
+      // unset and the update lacks `seed`; the resulting object would have
+      // no anchoring seed for iter ≥ 2 prompts. The cast lets the broken
+      // shape persist (rather than throw) so the loop can surface it
+      // visibly via a missing-seed iteration prompt.
+      entry.grow = { ...(entry.grow ?? {}), ...growUpdate } as GrowData;
     }
     writeRegistry(registry);
   });
@@ -366,10 +399,13 @@ export function batchUpdateWorkerFields(
           worker: workerName,
         });
       }
-      const { trellis: trellisUpdate, ...rest } = fields;
+      const { trellis: trellisUpdate, grow: growUpdate, ...rest } = fields;
       Object.assign(entry, rest);
       if (trellisUpdate !== undefined) {
         entry.trellis = { ...(entry.trellis ?? {}), ...trellisUpdate } as TrellisData;
+      }
+      if (growUpdate !== undefined) {
+        entry.grow = { ...(entry.grow ?? {}), ...growUpdate } as GrowData;
       }
     }
     writeRegistry(registry);
