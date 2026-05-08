@@ -55,8 +55,17 @@ function findGardenRoot(): string | null {
   const realBin = fs.realpathSync(process.argv[1]);
   let dir = path.dirname(realBin);
   for (let i = 0; i < 5; i++) {
-    if (fs.existsSync(path.join(dir, "package.json"))) {
-      const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf-8"));
+    const pkgPath = path.join(dir, "package.json");
+    if (fs.existsSync(pkgPath)) {
+      // A malformed package.json (mid-edit, partial download, etc.) crashed
+      // `garden rebuild` with a generic JSON parse error before the fix.
+      // Surface the path so the operator knows which file to fix.
+      let pkg: { name?: unknown };
+      try {
+        pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+      } catch (err) {
+        throw new Error(`failed to parse ${pkgPath}: ${String(err)}`);
+      }
       if (pkg.name === "garden") return dir;
     }
     dir = path.dirname(dir);

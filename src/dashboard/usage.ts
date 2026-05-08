@@ -199,7 +199,24 @@ export async function refreshUsage(): Promise<UsageSnapshot> {
     const fetchedAt = new Date().toISOString();
 
     if (res.status === 200) {
-      const parsed = JSON.parse(res.body);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(res.body);
+      } catch (err) {
+        // 200 with an unparseable body — proxy interference, partial response,
+        // or a server-side shape change. Distinguish from credential failures
+        // (401/403) and rate-limiting (429) so the operator knows where to
+        // look. Log a short body excerpt at debug level for diagnosis.
+        const snap: UsageSnapshot = {
+          fetchedAt,
+          error: `200 with unparseable body: ${String(err).slice(0, 100)}`,
+        };
+        writeUsageSnapshot(snap);
+        log.warn("usage", "200 with unparseable body", {
+          data: { bodyPrefix: res.body.slice(0, 200) },
+        });
+        return snap;
+      }
       const data = normalizeUsage(parsed);
       const snap: UsageSnapshot = { fetchedAt, data };
       writeUsageSnapshot(snap);

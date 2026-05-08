@@ -207,17 +207,35 @@ Drives:
 
 - `any → exited`
 
-### The only timer
+### Scheduled wake-ups (deliberate, finite, event-tied)
 
-The 30-second `failing → working` debounce is the *only* timer in the
-system. It is a deliberate hold-off — preventing review storms on a
-worker that's actively failing in a tight loop — not a discovery
-mechanism. The timer starts on a push event, not on a tick. When the
-poller detects new commits in a failing worker, it schedules a one-shot
-delayed FIFO poke (via a detached `sleep N && echo > fifo` process) so
-the debounce check fires after 30 seconds. This is not a recurring
-poll — it is a single scheduled event tied to a specific state
-transition.
+Garden does NOT have a recurring tick. What it does have is a small set
+of one-shot scheduled FIFO pokes — each tied to a specific event, each
+serving a purpose that cannot be expressed as "wait for an event":
+
+- **`failing → working` debounce (30 s)** — preventing review storms on
+  a worker that's actively failing in a tight loop. Started on a push
+  event in the failing state. Source: `poller-state.ts` DEBOUNCE_MS.
+- **Reviewer / resolver wall-clock cap (30 min)** — kills a hung
+  subprocess (e.g. `npm test` with no timeout, blocked by the sandbox)
+  so the state machine can escalate to `failing` instead of wedging.
+  Source: `poller-review.ts` REVIEW_TIMEOUT_MS, scheduled by
+  `scheduleReviewTimeoutPoke` at agent launch.
+- **Unparseable-verdict re-poke (0 s)** — re-arms the FIFO so the next
+  poll cycle picks up the just-written `pendingReviewAt`. Logically a
+  hand-off, not a wait. Source: `poller-review.ts` after the retry
+  transition.
+- **Auto-continue prompt delays (3 / 5 / 6 s)** — give Claude's TUI
+  time to take over the pane's stdin before send-keys lands keystrokes.
+  Source: `continue.ts` and `trellis-continue.ts` `dispatchDelayed*`.
+- **Garden post-rebuild refresh** — fired after `npm run build`
+  succeeds so the dashboard picks up the new code. Source:
+  `poller-merge.ts` `runPostMerge`.
+
+What this spec rejects is the OTHER kind of timer: the `setInterval`,
+recurring re-check, or "fallback poll" that drives transitions on a
+clock. Every transition above is event-triggered; the schedules are
+hold-offs and hand-offs, not discovery mechanisms.
 
 ### Why this matters
 
@@ -226,8 +244,11 @@ poller didn't tick fast enough." There is no tick. If a transition
 isn't reached, exactly one event was missed, and there is exactly one
 place to look for it. This is what makes the state machine resistant to
 the kind of timing-based regressions that have hit it in the past, and
-why this spec rejects any code change that introduces a `setInterval`,
-recurring re-check, or "fallback poll."
+why this spec rejects any code change that introduces a recurring poll
+or "let's check just in case." Adding a new scheduled wake-up is
+allowed when (a) it's tied to a specific state transition or
+operator-visible signal and (b) it fires once per event, not on a
+clock. Update the list above when you do.
 
 ## Key invariants
 
@@ -309,8 +330,11 @@ recurring re-check, or "fallback poll."
    by a recurring tick or fallback poll. The poller wakes only when
    poked by an event (a hook firing, a worker pushing, a reviewer
    exiting, a merge queue item completing) and does one unit of work.
-   The 30-second `failing → working` debounce is the only timer in the
-   system, and it is a deliberate hold-off, not a discovery mechanism.
+   The system schedules one-shot wake-ups for hold-offs and hand-offs
+   (failing-debounce, reviewer wall-clock cap, auto-continue delays —
+   see "Scheduled wake-ups" above), but those are tied to specific
+   events, not driven by a clock. No `setInterval`, no recurring
+   re-check, no "let's check just in case."
 
 7. **Resolver verdicts are not trusted — they are verified.** When a
    resolver returns a `DONE` verdict, the poller does not transition to
