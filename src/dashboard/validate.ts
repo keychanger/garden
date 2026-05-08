@@ -225,7 +225,9 @@ export function validateAndHeal(state: DashboardState): DashboardState {
         worker: entry.name,
         message:
           `Worker '${entry.name}' has no tmux pane. The worktree on disk is preserved — ` +
-          `bounce the worker to recreate the pane, or kill it (⌥x) to clean up.`,
+          `restart the dashboard ('garden dashboard exit && garden dashboard') to recreate ` +
+          `the pane from the registry, or kill the worker (⌥x) to clean up. ` +
+          `'garden bounce' won't work without a live pane.`,
         // Stable key so a single missing pane doesn't spam the badge across
         // every reattach within the dedup window.
         dedupKey: `validate-exited:${projectName}:${entry.name}`,

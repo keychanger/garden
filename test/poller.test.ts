@@ -475,23 +475,33 @@ describe("poll — review/resolve timeout", () => {
   });
 
   it("does NOT time out at exactly 30 minutes (boundary, > cap)", () => {
-    registryMock._setEntries("myproject", [
-      makeWorker({
-        prState: "reviewing",
-        reviewWindowName: "_myproject-review-bold-ash",
-        reviewStartedAt: Date.now() - REVIEW_TIMEOUT_MS,
-        lastSeenSha: "abc123",
-      }),
-    ]);
-    vi.mocked(windowExists).mockReturnValue(true);
+    // Freeze Date.now so the elapsed = REVIEW_TIMEOUT_MS exactly. Without
+    // this, coverage instrumentation slows the run enough that real-clock
+    // drift between setup and the poller's `Date.now()` call pushes
+    // elapsed > cap and flips the assertion.
+    const frozen = Date.now();
+    const spy = vi.spyOn(Date, "now").mockReturnValue(frozen);
+    try {
+      registryMock._setEntries("myproject", [
+        makeWorker({
+          prState: "reviewing",
+          reviewWindowName: "_myproject-review-bold-ash",
+          reviewStartedAt: frozen - REVIEW_TIMEOUT_MS,
+          lastSeenSha: "abc123",
+        }),
+      ]);
+      vi.mocked(windowExists).mockReturnValue(true);
 
-    poll("myproject");
+      poll("myproject");
 
-    expect(killWindowSafe).not.toHaveBeenCalled();
-    const timeoutAlert = vi.mocked(addAlert).mock.calls.find(
-      c => String((c[0] as { message: string }).message).includes("30-minute timeout"),
-    );
-    expect(timeoutAlert).toBeUndefined();
+      expect(killWindowSafe).not.toHaveBeenCalled();
+      const timeoutAlert = vi.mocked(addAlert).mock.calls.find(
+        c => String((c[0] as { message: string }).message).includes("30-minute timeout"),
+      );
+      expect(timeoutAlert).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("times out at 30 minutes + 1ms (boundary, just past cap)", () => {

@@ -210,8 +210,10 @@ Drives:
 ### Scheduled wake-ups (deliberate, finite, event-tied)
 
 Garden does NOT have a recurring tick. What it does have is a small set
-of one-shot scheduled FIFO pokes — each tied to a specific event, each
-serving a purpose that cannot be expressed as "wait for an event":
+of one-shot scheduled wake-ups (FIFO pokes for state transitions,
+detached `sleep && garden dashboard …` subprocesses for delayed
+prompts) — each tied to a specific event, each serving a purpose that
+cannot be expressed as "wait for an event":
 
 - **`failing → working` debounce (30 s)** — preventing review storms on
   a worker that's actively failing in a tight loop. Started on a push
