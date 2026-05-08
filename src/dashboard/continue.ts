@@ -24,7 +24,7 @@ import { DASHBOARD_SESSION } from "../session.js";
 import { readDashState } from "./state.js";
 import { findWorkerByName, updateWorkerFields } from "./registry.js";
 import {
-  tmux, shellEscape, getFirstPaneId, paneExists, windowExists,
+  shellEscape, getFirstPaneId, paneExists, windowExists, pasteAndSubmit,
 } from "./tmux.js";
 import { workerWindowName as workerWin } from "./window-names.js";
 import { log } from "./log.js";
@@ -144,8 +144,7 @@ export function continueWorker(
     return;
   }
   try {
-    tmux("send-keys", "-t", paneId, "-l", message);
-    tmux("send-keys", "-t", paneId, "Enter");
+    pasteAndSubmit(paneId, message);
   } catch (err) {
     log.warn("workers", "continue send-keys failed", {
       worker: workerName,

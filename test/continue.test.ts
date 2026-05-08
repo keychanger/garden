@@ -27,6 +27,7 @@ vi.mock("../src/dashboard/registry.js", () => ({
 
 vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
+  pasteAndSubmit: vi.fn(),
   // Match real shellEscape: pass safe-token strings through unquoted, and
   // single-quote anything else. Tests must reflect actual behavior so
   // round-tripping a path with spaces produces the same shell.
@@ -53,7 +54,7 @@ import {
 } from "../src/dashboard/continue.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { findWorkerByName, updateWorkerFields } from "../src/dashboard/registry.js";
-import { tmux, paneExists, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
+import { tmux, pasteAndSubmit, paneExists, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import type { DashboardState } from "../src/dashboard/state.js";
@@ -86,7 +87,7 @@ describe("continueWorker", () => {
   it("is a no-op when the worker entry is missing", () => {
     vi.mocked(findWorkerByName).mockReturnValue(undefined);
     continueWorker("myproject", "ghost");
-    expect(tmux).not.toHaveBeenCalled();
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
     expect(updateWorkerFields).not.toHaveBeenCalled();
   });
 
@@ -101,7 +102,7 @@ describe("continueWorker", () => {
 
     continueWorker("myproject", "bold-ash");
 
-    expect(tmux).not.toHaveBeenCalled();
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
     // Flag must remain so a future resume can retry.
     expect(updateWorkerFields).not.toHaveBeenCalled();
   });
@@ -113,7 +114,7 @@ describe("continueWorker", () => {
     });
     continueWorker("myproject", "bold-ash");
 
-    expect(tmux).not.toHaveBeenCalled();
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
     expect(updateWorkerFields).toHaveBeenCalledWith(
       "myproject", "bold-ash", { interruptedWhileWorking: undefined },
     );
@@ -126,7 +127,7 @@ describe("continueWorker", () => {
     });
     continueWorker("myproject", "bold-ash");
 
-    expect(tmux).not.toHaveBeenCalled();
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
     expect(updateWorkerFields).toHaveBeenCalledWith(
       "myproject", "bold-ash", { interruptedWhileWorking: undefined },
     );
@@ -145,12 +146,9 @@ describe("continueWorker", () => {
 
     continueWorker("myproject", "bold-ash");
 
-    const calls = vi.mocked(tmux).mock.calls;
-    expect(calls[0]).toEqual([
-      "send-keys", "-t", "%9", "-l",
-      expect.stringContaining("[garden]"),
-    ]);
-    expect(calls[1]).toEqual(["send-keys", "-t", "%9", "Enter"]);
+    expect(pasteAndSubmit).toHaveBeenCalledWith(
+      "%9", expect.stringContaining("[garden]"),
+    );
     expect(updateWorkerFields).toHaveBeenCalledWith(
       "myproject", "bold-ash", { interruptedWhileWorking: undefined },
     );
@@ -169,15 +167,14 @@ describe("continueWorker", () => {
 
     continueWorker("myproject", "bold-ash");
 
-    const sendCall = vi.mocked(tmux).mock.calls[0];
-    expect(sendCall).toContain("%41");
+    expect(pasteAndSubmit).toHaveBeenCalledWith("%41", expect.any(String));
   });
 
   it("does not clear the flag when the send-keys call throws", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
     });
-    vi.mocked(tmux).mockImplementation(() => { throw new Error("tmux died"); });
+    vi.mocked(pasteAndSubmit).mockImplementation(() => { throw new Error("tmux died"); });
 
     expect(() => continueWorker("myproject", "bold-ash")).not.toThrow();
     // Flag stays so a later attempt can retry.
@@ -242,10 +239,8 @@ describe("continueWorkerAfterMerge", () => {
 
     continueWorkerAfterMerge("myproject", "bold-ash");
 
-    const sendKeysCall = vi.mocked(tmux).mock.calls[0];
-    expect(sendKeysCall[0]).toBe("send-keys");
-    expect(sendKeysCall[3]).toBe("-l");
-    const message = sendKeysCall[4] as string;
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
+    const message = vi.mocked(pasteAndSubmit).mock.calls[0][1];
     expect(message).toContain("[garden]");
     expect(message).toContain("merged");
     expect(message).toContain(".garden-done");
@@ -256,7 +251,7 @@ describe("continueWorkerAfterMerge", () => {
       name: "bold-ash", sessionId: "s", task: "", claudeStatus: "working",
     });
     continueWorkerAfterMerge("myproject", "bold-ash");
-    expect(tmux).not.toHaveBeenCalled();
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
   });
 
   it("prepends a stale-files preamble when the reviewer modified files", () => {
@@ -272,7 +267,7 @@ describe("continueWorkerAfterMerge", () => {
 
     continueWorkerAfterMerge("myproject", "bold-ash");
 
-    const message = vi.mocked(tmux).mock.calls[0][4] as string;
+    const message = vi.mocked(pasteAndSubmit).mock.calls[0][1];
     expect(message).toContain("During review");
     expect(message).toContain("src/foo.ts");
     expect(message).toContain("src/bar.ts");
@@ -298,7 +293,7 @@ describe("continueWorkerAfterMerge", () => {
 
     continueWorkerAfterMerge("myproject", "bold-ash");
 
-    const message = vi.mocked(tmux).mock.calls[0][4] as string;
+    const message = vi.mocked(pasteAndSubmit).mock.calls[0][1];
     expect(message).toContain("src/file0.ts");
     expect(message).toContain("src/file19.ts");
     expect(message).not.toContain("src/file20.ts");
@@ -319,7 +314,7 @@ describe("continueWorkerAfterMerge", () => {
 
     continueWorkerAfterMerge("myproject", "bold-ash");
 
-    const message = vi.mocked(tmux).mock.calls[0][4] as string;
+    const message = vi.mocked(pasteAndSubmit).mock.calls[0][1];
     expect(message).toContain("could not auto-sync");
     // The worker branch is deleted from origin post-merge, so the hint must
     // target origin/<base>, not origin/<branch>.
@@ -338,7 +333,7 @@ describe("continueWorkerAfterMerge", () => {
 
     continueWorkerAfterMerge("myproject", "bold-ash");
 
-    const message = vi.mocked(tmux).mock.calls[0][4] as string;
+    const message = vi.mocked(pasteAndSubmit).mock.calls[0][1];
     expect(message).not.toContain("During review");
     expect(message).not.toContain("could not auto-sync");
     expect(message).toContain("merged");
@@ -426,10 +421,8 @@ describe("seedWorker", () => {
     seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
 
     expect(fs.readFileSync).toHaveBeenCalledWith("/tmp/seed.txt", "utf8");
-    const sendCall = vi.mocked(tmux).mock.calls[0];
-    expect(sendCall[0]).toBe("send-keys");
-    expect(sendCall[3]).toBe("-l");
-    const message = sendCall[4] as string;
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
+    const message = vi.mocked(pasteAndSubmit).mock.calls[0][1];
     expect(message).toContain("[handoff from src/worker]");
     expect(message).toContain("briefing body");
     expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
@@ -447,12 +440,12 @@ describe("seedWorker", () => {
 
     seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
     // First poll sees "loading" — no send yet.
-    expect(vi.mocked(tmux)).not.toHaveBeenCalled();
+    expect(vi.mocked(pasteAndSubmit)).not.toHaveBeenCalled();
 
     // Worker finishes bootstrap; next 2s tick sends the briefing.
     status = "ready";
     vi.advanceTimersByTime(2000);
-    expect(vi.mocked(tmux)).toHaveBeenCalled();
+    expect(vi.mocked(pasteAndSubmit)).toHaveBeenCalled();
     expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
   });
 
@@ -466,12 +459,12 @@ describe("seedWorker", () => {
     }));
 
     seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
-    expect(vi.mocked(tmux)).not.toHaveBeenCalled();
+    expect(vi.mocked(pasteAndSubmit)).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(90_000);
     // After deadline elapses, the next poll sends regardless of status so the
     // briefing isn't silently lost on a stuck worker.
-    expect(vi.mocked(tmux)).toHaveBeenCalled();
+    expect(vi.mocked(pasteAndSubmit)).toHaveBeenCalled();
     expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
   });
 
@@ -480,7 +473,7 @@ describe("seedWorker", () => {
 
     seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
 
-    expect(vi.mocked(tmux)).not.toHaveBeenCalled();
+    expect(vi.mocked(pasteAndSubmit)).not.toHaveBeenCalled();
     expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
   });
 
@@ -490,7 +483,7 @@ describe("seedWorker", () => {
     seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
 
     expect(vi.mocked(findWorkerByName)).not.toHaveBeenCalled();
-    expect(vi.mocked(tmux)).not.toHaveBeenCalled();
+    expect(vi.mocked(pasteAndSubmit)).not.toHaveBeenCalled();
     // No re-unlink — there's nothing to clean up if the file was already gone.
     expect(fs.unlinkSync).not.toHaveBeenCalled();
   });

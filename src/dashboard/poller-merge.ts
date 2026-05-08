@@ -27,7 +27,7 @@ import {
   findWorkerByName, getWorkers, updateWorkerFields,
   type PrState, type WorkerEntry,
 } from "./registry.js";
-import { tmux, getFirstPaneId, windowExists } from "./tmux.js";
+import { tmux, getFirstPaneId, windowExists, pasteAndSubmit } from "./tmux.js";
 import { readUsageSnapshot } from "./usage.js";
 import { workerWindowName } from "./window-names.js";
 import { scheduleDelayedPoke } from "./poller-fifo.js";
@@ -498,8 +498,7 @@ function notifySiblingWorkers(
       continue;
     }
 
-    tmux("send-keys", "-t", paneId, "-l", message);
-    tmux("send-keys", "-t", paneId, "Enter");
+    pasteAndSubmit(paneId, message);
     log.info("poller", "notified sibling of merge overlap", {
       worker: sibling.name,
       data: { mergedWorker: mergedEntry.name, overlapFiles: overlap },

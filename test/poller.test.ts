@@ -61,6 +61,7 @@ vi.mock("../src/dashboard/runner.js", () => ({
 
 vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
+  pasteAndSubmit: vi.fn(),
   getFirstPaneId: vi.fn(() => "%5"),
   windowExists: vi.fn(() => true),
   killWindowSafe: vi.fn(),
@@ -173,7 +174,7 @@ import {
   syncWorktreeToRemote,
   ensureNoRebaseInProgress, hasRebaseInProgress, isAncestor, getUnmergedFiles,
 } from "../src/dashboard/git.js";
-import { tmux, windowExists, getFirstPaneId, killWindowSafe } from "../src/dashboard/tmux.js";
+import { tmux, pasteAndSubmit, windowExists, getFirstPaneId, killWindowSafe } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { log } from "../src/dashboard/log.js";
 import { dispatchDelayedAutoContinue, isDoneSet } from "../src/dashboard/continue.js";
@@ -2112,8 +2113,8 @@ describe("poll — sibling merge notification", () => {
 
     poll("myproject");
 
-    expect(tmux).toHaveBeenCalledWith(
-      "send-keys", "-t", "%5", "-l",
+    expect(pasteAndSubmit).toHaveBeenCalledWith(
+      "%5",
       expect.stringContaining("src/foo.ts"),
     );
   });

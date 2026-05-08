@@ -9,6 +9,18 @@ export function tmux(...args: string[]): void {
   execFileSync("tmux", args, { stdio: "ignore" });
 }
 
+// Paste a message into a Claude pane and submit it. The 300ms gap between
+// `-l message` and `Enter` matters on cold-start panes (`claude --resume`
+// after a dashboard restart, fresh sessions for handoff/seed): claude's TUI
+// finishes binding its input handler / settles paste-detection during this
+// window, so the Enter actually triggers submit instead of being absorbed
+// into the paste burst.
+export function pasteAndSubmit(paneId: string, message: string): void {
+  execFileSync("tmux", ["send-keys", "-t", paneId, "-l", message], { stdio: "ignore" });
+  execFileSync("sleep", ["0.3"], { stdio: "ignore" });
+  execFileSync("tmux", ["send-keys", "-t", paneId, "Enter"], { stdio: "ignore" });
+}
+
 export function tmuxOutput(...args: string[]): string {
   return execFileSync("tmux", args, {
     encoding: "utf-8",
