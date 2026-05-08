@@ -36,6 +36,7 @@ npm test               # vitest unit + integration; tsc --noEmit
   - `trellis-{tag,verdict,prompts,continue,model,picker}.ts` — trellis workflow internals
   - `prompts.ts` + `prompt-compose.ts` + `headless-agent.ts` + `verdict.ts` — prompt assembly and headless reviewer/resolver primitives
   - `continue.ts` — auto-continue (interrupt-recovery and post-merge) and `.garden-done` sentinel
+  - `loop.ts` — workflow-agnostic loop primitive (cold-respawn + per-iteration counter) shared by trellis (and forthcoming grow) workflows
   - `skills.ts` — bundles `done` / `handoff` / `trellis-author` skills into worker worktrees
   - `usage.ts` + `usage-poller.ts` — Claude quota meter
   - `sandbox.ts`, `credentials.ts`, `claude-env.ts` — Claude profile / Keychain / sandbox config
