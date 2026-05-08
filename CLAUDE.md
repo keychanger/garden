@@ -92,7 +92,7 @@ Permanent tmux layout — content is moved between visible slots and **hidden un
 
 See `WORKFLOWS.md`. Short version: define a `WorkflowDefinition` in `src/dashboard/workflows/<name>.ts`, register in `workflows/index.ts`, reuse `default.ts`'s state handlers and `defaultHookHandlers` wherever possible. Tests: `test/workflows.test.ts` + an integration test on real fs/git.
 
-**Per-workflow runtime data** (the trellis pattern). Anything the workflow accumulates per worker goes under an optional sub-object on `WorkerEntry`, not as flat fields — `entry.trellis?: TrellisData` is the model (`registry.ts`). `updateWorkerFields({ <subObject>: { <field>: ... } })` deep-merges that sub-object so callers don't clobber sibling fields. Add a legacy-shape migration to `readRegistry` so on-disk entries from earlier shapes get rebuilt at next read. Don't add flat per-workflow fields to `WorkerEntry`; that path is what Phase 5 of the registry-cleanup refactor pulled out.
+**Per-workflow runtime data** (the trellis pattern). Anything the workflow accumulates per worker goes under an optional sub-object on `WorkerEntry`, not as flat fields — `entry.trellis?: TrellisData` is the model (`registry.ts`). `updateWorkerFields({ <subObject>: { <field>: ... } })` deep-merges that sub-object so callers don't clobber sibling fields. Add a legacy-shape migration to `readRegistry` so on-disk entries from earlier shapes get rebuilt at next read. Don't add flat per-workflow fields to `WorkerEntry`; the flat-fields path was deliberately removed (the migration in `readRegistry` exists to scrub stragglers from old on-disk entries).
 
 ## Keeping docs current
 
