@@ -2,9 +2,11 @@
 // handlers that don't launch subprocesses (handleFailing, handleMerged,
 // handleDone). The lifecycle handlers that DO launch subprocesses live in
 // poller-review / poller-merge / poller-resolve and import transitionState
-// from this module. Valid transitions are now defined per-workflow on
-// WorkflowDefinition.validTransitions; the default workflow's table is the
-// literal copy of the pre-refactor VALID_TRANSITIONS constant.
+// from this module. Valid transitions are defined per-workflow in
+// workflows/types.ts (a leaf module); transitionState reads them via
+// getValidTransitions() rather than going through workflows/index.ts. That
+// indirection breaks a module-init cycle that closed in earlier shapes
+// of this code (see workflows/types.ts comment).
 import { addAlert } from "./alerts.js";
 import {
   getBranchHeadSha, getCommitSummary, getNewCommitSummary,
@@ -16,7 +18,7 @@ import {
   type WorkerEntry, type PrState,
 } from "./registry.js";
 import { scheduleDelayedPoke } from "./poller-fifo.js";
-import { getWorkflow } from "./workflows/index.js";
+import { getValidTransitions } from "./workflows/types.js";
 
 export const DEBOUNCE_MS = 30_000;
 
@@ -28,15 +30,16 @@ export function transitionState(
 ): void {
   const entry = findWorkerByName(projectName, workerName);
   const fromState: PrState = entry?.prState ?? "working";
-  const workflow = getWorkflow(entry?.workflow ?? "default");
-  if (!workflow.validTransitions[fromState]?.includes(toState)) {
+  const workflowName = entry?.workflow ?? "default";
+  const validTransitions = getValidTransitions(workflowName);
+  if (!validTransitions[fromState]?.includes(toState)) {
     log.warn("poller", `invalid state transition: ${fromState} -> ${toState}`, {
       worker: workerName,
       // `requested` is the raw value on the registry entry (may be undefined
       // for legacy entries or a name unknown to the registry, in which case
-      // getWorkflow has already silently fallen back to default — preserving
-      // the original value here makes that fallback visible in logs).
-      data: { workflow: workflow.name, requested: entry?.workflow },
+      // getValidTransitions has already silently fallen back to default —
+      // preserving the original value here makes that fallback visible).
+      data: { workflow: workflowName, requested: entry?.workflow },
     });
   }
   updateWorkerFields(projectName, workerName, { ...extraFields, prState: toState });

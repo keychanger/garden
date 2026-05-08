@@ -68,3 +68,34 @@ export interface WorkflowDefinition {
    *  passed and claude uses the account default. */
   reviewerModel?: "opus" | "sonnet";
 }
+
+// Per-workflow valid-transitions tables. Lives at this layer (not on the
+// individual WorkflowDefinition objects in default.ts / trellis.ts) so
+// poller-state.ts can read it via getValidTransitions() without pulling
+// in workflows/{default,trellis}.ts. The latter import handler functions
+// from poller-state.ts; routing transitionState through workflows/index.ts
+// would close a module-init cycle (poller-state → workflows/index →
+// workflows/default → poller-state) that — while currently safe at load
+// time because no top-level call reaches getWorkflow — has bitten this
+// codebase before in a structurally identical shape (see the
+// hook-dispatcher.ts extraction in 2026-04). Keeping this constant in a
+// leaf module pre-empts the next regression.
+export const defaultValidTransitions: Record<PrState, PrState[]> = {
+  working:         ["reviewing"],
+  reviewing:       ["merge-pending", "working", "failing"],
+  "merge-pending": ["merged", "done", "resolving", "working"],
+  resolving:       ["merge-pending", "working", "failing"],
+  failing:         ["working"],
+  merged:          ["working", "done"],
+  done:            ["working"],
+};
+
+// Trellis presently uses the same table as default. Kept as a separate
+// constant (rather than aliasing) so the two can diverge later without
+// fighting the type system or callers.
+export const trellisValidTransitions: Record<PrState, PrState[]> = defaultValidTransitions;
+
+export function getValidTransitions(workflowName: string): Record<PrState, PrState[]> {
+  if (workflowName === "trellis") return trellisValidTransitions;
+  return defaultValidTransitions;
+}

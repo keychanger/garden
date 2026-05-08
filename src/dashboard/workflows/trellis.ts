@@ -17,19 +17,11 @@ import { handleMergePending } from "../poller-merge.js";
 import { handleResolving } from "../poller-resolve.js";
 import { handleWorking, handleReviewing } from "../poller-review.js";
 import { handleFailing, handleMerged, handleDone } from "../poller-state.js";
-import type { WorkflowDefinition } from "./types.js";
+import { trellisValidTransitions, type WorkflowDefinition } from "./types.js";
 
 export const trellisWorkflow: WorkflowDefinition = {
   name: "trellis",
-  validTransitions: {
-    working:         ["reviewing"],
-    reviewing:       ["merge-pending", "working", "failing"],
-    "merge-pending": ["merged", "done", "resolving", "working"],
-    resolving:       ["merge-pending", "working", "failing"],
-    failing:         ["working"],
-    merged:          ["working", "done"],
-    done:            ["working"],
-  },
+  validTransitions: trellisValidTransitions,
   stateHandlers: {
     working: handleWorking,
     reviewing: handleReviewing,
