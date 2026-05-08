@@ -1,7 +1,7 @@
 // Trellis vine model selection. See TRELLIS.md "Model selection and budget".
 //
 // Resolution order for the worker model on each iteration spawn:
-//   1. Per-worker override: entry.workerModel (set via --model at plant time).
+//   1. Per-worker override: entry.trellis.workerModel (set via --model at plant time).
 //   2. Workflow default: workflow.workerModel (trellis declares "sonnet").
 //   3. Account default: undefined → no `--model` flag → claude picks.
 //
@@ -10,7 +10,7 @@
 //
 //   - trellisOpusFallback !== false (default): bump this iteration's model
 //     to "opus" so the loop keeps moving. Fire one alert per Sonnet reset
-//     window (deduped via `entry.trellisModelFallbackAt`).
+//     window (deduped via `entry.trellis.modelFallbackAt`).
 //   - trellisOpusFallback === false: signal the caller to pause via the
 //     existing usage-pause mechanism (alert source `usage`, gate flipped).
 //
@@ -19,7 +19,7 @@
 // thread `model: workflow.reviewerModel` directly in poller-review.ts.
 //
 // Pure function: takes the inputs, returns the decision. The caller
-// interprets the result, fires the alert, updates `trellisModelFallbackAt`.
+// interprets the result, fires the alert, updates `trellis.modelFallbackAt`.
 // Keeping it pure makes it easy to unit-test with synthetic snapshots.
 import {
   getAutoContinueConfig, setAutoContinueConfig, tryGetProject,
@@ -40,7 +40,7 @@ export interface ResolveVineModelResult {
   model: ResolvedModel | null;
   /** True when the resolved model differs from the requested one due to
    *  Sonnet exhaustion. Caller fires the fallback alert and updates
-   *  `entry.trellisModelFallbackAt` to dedupe. */
+   *  `entry.trellis.modelFallbackAt` to dedupe. */
   fellBack: boolean;
   /** When `model === null` (Sonnet exhausted, fallback disabled), the
    *  ISO timestamp at which the Sonnet meter resets. The caller sets
@@ -59,7 +59,7 @@ export function resolveVineModel(
 ): ResolveVineModelResult {
   // 1. Resolve the requested model from the chain.
   const requested: ResolvedModel | undefined =
-    entry.workerModel ?? workflow.workerModel;
+    entry.trellis?.workerModel ?? workflow.workerModel;
 
   // No requested model means the worker takes the account default. Trellis
   // workflow always sets workflow.workerModel, so this branch only fires
@@ -131,7 +131,8 @@ export function shouldFireFallbackAlert(
   entry: WorkerEntry,
   snapshot: UsageSnapshot | null,
 ): boolean {
-  if (!entry.trellisModelFallbackAt) return true;
+  const fallbackAt = entry.trellis?.modelFallbackAt;
+  if (!fallbackAt) return true;
   const resetsAt = snapshot?.data?.sonnet?.resetsAt;
   if (!resetsAt) return true; // no anchor — fire conservatively
   const resetMs = Date.parse(resetsAt);
@@ -141,7 +142,7 @@ export function shouldFireFallbackAlert(
   // The simplest approximation: refire if more than ~7 days have passed
   // since the last fallback.
   const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
-  return Date.now() - entry.trellisModelFallbackAt > SEVEN_DAYS_MS;
+  return Date.now() - fallbackAt > SEVEN_DAYS_MS;
 }
 
 // Side-effecting wrapper around resolveVineModel. Reads the usage snapshot
@@ -186,7 +187,7 @@ export function resolveAndApplyVineModel(
         dedupKey: `trellis-fallback:${projectName}:${entry.name}`,
       });
       updateWorkerFields(projectName, entry.name, {
-        trellisModelFallbackAt: Date.now(),
+        trellis: { modelFallbackAt: Date.now() },
       });
     }
     log.info("trellis-model", "fell back to Opus for this iteration", {

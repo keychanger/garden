@@ -149,16 +149,18 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       baseBranch,
       claudeStatus: "loading",
       workflow: workflowName,
-      // Trellis vine fields — populated only when workflow === "trellis".
-      // trellisIteration starts at 0; launchReview increments to 1 before
-      // the first review fires. See TRELLIS.md "Worker entry additions".
+      // Trellis vine data — populated only when workflow === "trellis".
+      // iteration starts at 0; launchReview increments to 1 before the
+      // first review fires. See TRELLIS.md "Worker entry additions".
       ...(workflowName === "trellis" && opts.trellis
         ? {
-            trellisName: opts.trellis.name,
-            trellisPath: opts.trellis.path,
-            trellisIteration: 0,
-            trellisMaxIterations: opts.trellis.maxIterations,
-            workerModel: opts.trellis.workerModel,
+            trellis: {
+              name: opts.trellis.name,
+              path: opts.trellis.path,
+              iteration: 0,
+              maxIterations: opts.trellis.maxIterations,
+              workerModel: opts.trellis.workerModel,
+            },
           }
         : {}),
     });

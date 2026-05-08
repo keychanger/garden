@@ -122,11 +122,14 @@ async function plantVine(fields: Record<string, unknown> = {}): Promise<void> {
     baseBranch: "main",
     worktreePath,
     workflow: "trellis",
-    trellisName: "auth",
-    trellisPath,
-    trellisIteration: 0,
-    trellisMaxIterations: 30,
     ...fields,
+    trellis: {
+      name: "auth",
+      path: trellisPath,
+      iteration: 0,
+      maxIterations: 30,
+      ...(fields.trellis ?? {}),
+    },
   });
 }
 
@@ -141,7 +144,7 @@ async function setupWorktreeAndCommit(): Promise<string> {
 }
 
 describe("trellis workflow — state machine drive on real fs/git", () => {
-  it("ALIGNED verdict terminates the loop with prState=done and trellisAligned=true", async () => {
+  it("ALIGNED verdict terminates the loop with prState=done and trellis.aligned=true", async () => {
     await setupWorktreeAndCommit();
     await plantVine({
       prState: "working",
@@ -157,7 +160,7 @@ describe("trellis workflow — state machine drive on real fs/git", () => {
     let entry = findWorkerByName(PROJECT, WORKER);
     expect(entry?.prState).toBe("reviewing");
     // Iteration counter incremented from 0 to 1 BEFORE dispatch.
-    expect(entry?.trellisIteration).toBe(1);
+    expect(entry?.trellis?.iteration).toBe(1);
 
     // Simulate the trellis reviewer producing ALIGNED.
     const { reviewResultPath } = await import("../../src/dashboard/poller-review.js");
@@ -172,8 +175,8 @@ describe("trellis workflow — state machine drive on real fs/git", () => {
     poll(PROJECT);
     entry = findWorkerByName(PROJECT, WORKER);
     expect(entry?.prState).toBe("merge-pending");
-    expect(entry?.trellisLastVerdict).toBe("ALIGNED");
-    expect(entry?.trellisAligned).toBe(true);
+    expect(entry?.trellis?.lastVerdict).toBe("ALIGNED");
+    expect(entry?.trellis?.aligned).toBe(true);
     // Sentinel written by the workflow handler (writes synchronously).
     expect(fs.existsSync(path.join(worktreePath, ".garden-done"))).toBe(true);
 
@@ -181,7 +184,7 @@ describe("trellis workflow — state machine drive on real fs/git", () => {
     poll(PROJECT);
     entry = findWorkerByName(PROJECT, WORKER);
     expect(entry?.prState).toBe("done");
-    expect(entry?.trellisAligned).toBe(true);
+    expect(entry?.trellis?.aligned).toBe(true);
   });
 
   it("DRIFT verdict transitions through merge-pending → merged, preserving drift list", async () => {
@@ -217,19 +220,19 @@ DRIFT
     const { findWorkerByName } = await import("../../src/dashboard/registry.js");
     let entry = findWorkerByName(PROJECT, WORKER);
     expect(entry?.prState).toBe("merge-pending");
-    expect(entry?.trellisLastVerdict).toBe("DRIFT");
-    expect(entry?.trellisLastDrift).toHaveLength(2);
-    expect(entry?.trellisLastDrift?.[0]).toContain("[tests]");
-    expect(entry?.trellisAlignedCount).toBe(1);
+    expect(entry?.trellis?.lastVerdict).toBe("DRIFT");
+    expect(entry?.trellis?.lastDrift).toHaveLength(2);
+    expect(entry?.trellis?.lastDrift?.[0]).toContain("[tests]");
+    expect(entry?.trellis?.alignedCount).toBe(1);
     // No sentinel — DRIFT doesn't write it.
     expect(fs.existsSync(path.join(worktreePath, ".garden-done"))).toBe(false);
 
     poll(PROJECT);
     entry = findWorkerByName(PROJECT, WORKER);
     expect(entry?.prState).toBe("merged");
-    // trellisLastDrift survives into merged so the auto-continue prompt
+    // trellis.lastDrift survives into merged so the auto-continue prompt
     // can render it.
-    expect(entry?.trellisLastDrift).toHaveLength(2);
+    expect(entry?.trellis?.lastDrift).toHaveLength(2);
   });
 
   it("budget exhaustion short-circuits to failing with iteration-budget reason", async () => {
@@ -240,9 +243,13 @@ DRIFT
       prState: "working",
       claudeStatus: "idle",
       pendingReviewAt: Date.now(),
-      trellisIteration: 1,
-      trellisMaxIterations: 1,
-      trellisLastDrift: ["1. [tests] still missing"],
+      trellis: {
+        name: "auth",
+        path: trellisPath,
+        iteration: 1,
+        maxIterations: 1,
+        lastDrift: ["1. [tests] still missing"],
+      },
     });
 
     const { poll } = await import("../../src/dashboard/poller.js");
@@ -290,8 +297,8 @@ DRIFT
     let entry = findWorkerByName(PROJECT, WORKER);
     expect(entry?.prState).toBe("failing");
     expect(entry?.failingReason).toBe("trellis-flagged");
-    expect(entry?.trellisLastVerdict).toBe("FLAGGED");
-    expect(entry?.trellisFlaggedClauses?.length).toBeGreaterThan(0);
+    expect(entry?.trellis?.lastVerdict).toBe("FLAGGED");
+    expect(entry?.trellis?.flaggedClauses?.length).toBeGreaterThan(0);
 
     // Alert was raised.
     const { readAlerts } = await import("../../src/dashboard/alerts.js");
@@ -320,7 +327,7 @@ DRIFT
       prState: "working",
       claudeStatus: "idle",
       pendingReviewAt: Date.now(),
-      workerModel: "sonnet",
+      trellis: { name: "auth", path: trellisPath, workerModel: "sonnet" },
     });
 
     const { poll } = await import("../../src/dashboard/poller.js");
@@ -347,8 +354,12 @@ DRIFT
     await plantVine({
       prState: "merged",
       claudeStatus: "idle",
-      trellisLastVerdict: "DRIFT",
-      trellisLastDrift: ["1. [tests] missing"],
+      trellis: {
+        name: "auth",
+        path: trellisPath,
+        lastVerdict: "DRIFT",
+        lastDrift: ["1. [tests] missing"],
+      },
     });
 
     // Write a fake usage snapshot with Sonnet at 99%.
@@ -382,7 +393,7 @@ DRIFT
     const { readAlerts } = await import("../../src/dashboard/alerts.js");
     const { findWorkerByName } = await import("../../src/dashboard/registry.js");
     expect(readAlerts().alerts.some(a => a.source === "trellis-budget")).toBe(true);
-    expect(findWorkerByName(PROJECT, WORKER)?.trellisModelFallbackAt).toBeDefined();
+    expect(findWorkerByName(PROJECT, WORKER)?.trellis?.modelFallbackAt).toBeDefined();
   });
 
   it("Sonnet exhaustion + trellisOpusFallback=false pauses the loop instead of respawning", async () => {
@@ -396,8 +407,12 @@ DRIFT
     await plantVine({
       prState: "merged",
       claudeStatus: "idle",
-      trellisLastVerdict: "DRIFT",
-      trellisLastDrift: ["1. [tests] missing"],
+      trellis: {
+        name: "auth",
+        path: trellisPath,
+        lastVerdict: "DRIFT",
+        lastDrift: ["1. [tests] missing"],
+      },
     });
 
     const { USAGE_FILE } = await import("../../src/dashboard/usage.js");

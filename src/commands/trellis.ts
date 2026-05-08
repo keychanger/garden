@@ -164,15 +164,16 @@ async function statusCommand(args: string[]): Promise<void> {
   }
 
   const lessons = readLessonsTail(entry);
+  const t = entry.trellis;
   const data = {
     worker: entry.name,
     project,
-    trellis: entry.trellisName,
-    trellisPath: entry.trellisPath,
-    iterations: `${entry.trellisIteration ?? 0} / ${entry.trellisMaxIterations ?? 30}`,
-    lastVerdict: entry.trellisLastVerdict,
-    drift: entry.trellisLastDrift ?? [],
-    alignedCount: entry.trellisAlignedCount,
+    trellis: t?.name,
+    trellisPath: t?.path,
+    iterations: `${t?.iteration ?? 0} / ${t?.maxIterations ?? 30}`,
+    lastVerdict: t?.lastVerdict,
+    drift: t?.lastDrift ?? [],
+    alignedCount: t?.alignedCount,
     failingReason: entry.failingReason,
     lessons: lessons ?? "(none)",
   };
@@ -182,17 +183,17 @@ async function statusCommand(args: string[]): Promise<void> {
     const pad = (s: string) => s.padEnd(15);
     lines.push(`${pad("worker:")} ${entry.name}`);
     lines.push(`${pad("project:")} ${project}`);
-    lines.push(`${pad("trellis:")} ${entry.trellisName ?? "?"}`);
-    if (entry.trellisPath) lines.push(`${pad("path:")} ${entry.trellisPath}`);
-    lines.push(`${pad("iterations:")} ${entry.trellisIteration ?? 0} / ${entry.trellisMaxIterations ?? 30}`);
-    if (entry.trellisLastVerdict) lines.push(`${pad("last verdict:")} ${entry.trellisLastVerdict}`);
+    lines.push(`${pad("trellis:")} ${t?.name ?? "?"}`);
+    if (t?.path) lines.push(`${pad("path:")} ${t.path}`);
+    lines.push(`${pad("iterations:")} ${t?.iteration ?? 0} / ${t?.maxIterations ?? 30}`);
+    if (t?.lastVerdict) lines.push(`${pad("last verdict:")} ${t.lastVerdict}`);
     if (entry.failingReason) lines.push(`${pad("failingReason:")} ${entry.failingReason}`);
-    if ((entry.trellisLastDrift ?? []).length > 0) {
+    if ((t?.lastDrift ?? []).length > 0) {
       lines.push(`${pad("drift items:")}`);
-      for (const item of entry.trellisLastDrift!) lines.push(`  ${item}`);
+      for (const item of t!.lastDrift!) lines.push(`  ${item}`);
     }
-    if (entry.trellisAlignedCount !== undefined) {
-      lines.push(`${pad("aligned items:")} ${entry.trellisAlignedCount}`);
+    if (t?.alignedCount !== undefined) {
+      lines.push(`${pad("aligned items:")} ${t.alignedCount}`);
     }
     lines.push(`${pad("lessons:")} ${lessons ?? "(none)"}`);
     return lines.join("\n");
@@ -216,17 +217,17 @@ async function amendCommand(args: string[]): Promise<void> {
       `'garden trellis amend' edits the worker's bound trellis.`,
     );
   }
-  if (!entry.trellisPath || !entry.trellisName) {
+  if (!entry.trellis?.path || !entry.trellis?.name) {
     throw new Error(
-      `Worker '${workerName}' has no bound trellis (missing trellisPath/trellisName on the registry entry).`,
+      `Worker '${workerName}' has no bound trellis (missing trellis.path/trellis.name on the registry entry).`,
     );
   }
   const project = tryGetProject(projectName);
   if (!project) {
     throw new Error(`Unknown project '${projectName}'. Run 'garden list' to see registered projects.`);
   }
-  const trellisPath = entry.trellisPath;
-  const trellisName = entry.trellisName;
+  const trellisPath = entry.trellis.path;
+  const trellisName = entry.trellis.name;
   if (!fs.existsSync(trellisPath)) {
     throw new Error(`Trellis file at ${trellisPath} no longer exists.`);
   }
@@ -315,9 +316,9 @@ async function resumeCommand(args: string[]): Promise<void> {
   updateWorkerFields(project, workerName, {
     failingReason: undefined,
     failingSha: undefined,
-    trellisFlaggedClauses: undefined,
     pendingReviewAt: Date.now(),
     prState: "working",
+    trellis: { flaggedClauses: undefined },
   });
   triggerProjectPoll(project);
   console.log(

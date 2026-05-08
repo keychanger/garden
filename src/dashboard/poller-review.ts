@@ -323,16 +323,17 @@ function dispatchTrellisVerdict(
   // a structured drift block); the other verdicts log the same shape with
   // 0 / undefined so the operator can grep iteration history uniformly.
   // See TRELLIS.md "Logs".
+  const trellisData = entry.trellis;
   const driftPreview = review.verdict === "DRIFT" ? parseDriftList(review.body) : undefined;
   log.info("poller", "trellis iteration", {
     worker: entry.name,
     data: {
       project: projectName,
-      trellis: entry.trellisName,
-      iteration: entry.trellisIteration,
+      trellis: trellisData?.name,
+      iteration: trellisData?.iteration,
       verdict: review.verdict,
       driftCount: driftPreview?.items.length ?? 0,
-      alignedCount: driftPreview?.alignedCount ?? entry.trellisAlignedCount,
+      alignedCount: driftPreview?.alignedCount ?? trellisData?.alignedCount,
     },
   });
 
@@ -359,15 +360,17 @@ function dispatchTrellisVerdict(
     transitionState(projectName, entry.name, "merge-pending", {
       mergePendingAt: new Date().toISOString(),
       lastReviewBody: review.body,
-      trellisLastVerdict: "ALIGNED",
-      // trellisAligned distinguishes reviewer-declared success from
-      // operator sentinel-set; finalizeMerge preserves it into `done`.
-      trellisAligned: true,
-      // Clear the drift list — the loop converged.
-      trellisLastDrift: undefined,
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
       unparseableReviewAt: undefined,
+      trellis: {
+        lastVerdict: "ALIGNED",
+        // `aligned` distinguishes reviewer-declared success from operator
+        // sentinel-set; finalizeMerge preserves it into `done`.
+        aligned: true,
+        // Clear the drift list — the loop converged.
+        lastDrift: undefined,
+      },
     });
     refreshDashboard();
     scheduleDelayedPoke(projectName, 0);
@@ -394,12 +397,14 @@ function dispatchTrellisVerdict(
     transitionState(projectName, entry.name, "merge-pending", {
       mergePendingAt: new Date().toISOString(),
       lastReviewBody: review.body,
-      trellisLastVerdict: "DRIFT",
-      trellisLastDrift: driftLines,
-      trellisAlignedCount: drift.alignedCount,
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
       unparseableReviewAt: undefined,
+      trellis: {
+        lastVerdict: "DRIFT",
+        lastDrift: driftLines,
+        alignedCount: drift.alignedCount,
+      },
     });
     refreshDashboard();
     scheduleDelayedPoke(projectName, 0);
@@ -411,14 +416,15 @@ function dispatchTrellisVerdict(
     const detail = clauses.length > 0
       ? clauses.join(", ")
       : review.body.slice(0, 200);
+    const trellisName = trellisData?.name ?? "?";
     addAlert({
       level: "error",
       source: "trellis",
       project: projectName,
       worker: entry.name,
       message:
-        `Trellis '${entry.trellisName ?? "?"}' flagged for worker ${entry.name}: ${detail}. ` +
-        `Run 'garden trellis amend ${projectName} ${entry.trellisName ?? "<name>"}' or ` +
+        `Trellis '${trellisName}' flagged for worker ${entry.name}: ${detail}. ` +
+        `Run 'garden trellis amend ${projectName} ${trellisName === "?" ? "<name>" : trellisName}' or ` +
         `'garden trellis resume ${entry.name}' (override) to continue.`,
       // Stable key — body and clauses vary across runs; one alert per
       // flagged transition is enough.
@@ -431,12 +437,14 @@ function dispatchTrellisVerdict(
       failingSha: headSha ?? undefined,
       lastSeenSha: headSha ?? undefined,
       lastShaChangeAt: new Date().toISOString(),
-      trellisLastVerdict: "FLAGGED",
-      trellisFlaggedClauses: clauses.length > 0 ? clauses : undefined,
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
       preReviewSha: undefined,
       unparseableReviewAt: undefined,
+      trellis: {
+        lastVerdict: "FLAGGED",
+        flaggedClauses: clauses.length > 0 ? clauses : undefined,
+      },
     });
     refreshDashboard();
     return true;
@@ -460,11 +468,11 @@ function dispatchTrellisVerdict(
     failingSha: headSha ?? undefined,
     lastSeenSha: headSha ?? undefined,
     lastShaChangeAt: new Date().toISOString(),
-    trellisLastVerdict: "FAILED",
     reviewWindowName: undefined,
     reviewStartedAt: undefined,
     preReviewSha: undefined,
     unparseableReviewAt: undefined,
+    trellis: { lastVerdict: "FAILED" },
   });
   refreshDashboard();
   return true;
@@ -585,18 +593,19 @@ function launchReview(
   // failingReason="iteration-budget" — the iteration cap is the primary
   // safety net (Invariant 4).
   if (isTrellis) {
-    const nextIter = (entry.trellisIteration ?? 0) + 1;
-    const cap = entry.trellisMaxIterations ?? 30;
+    const trellisData = entry.trellis;
+    const nextIter = (trellisData?.iteration ?? 0) + 1;
+    const cap = trellisData?.maxIterations ?? 30;
     if (nextIter > cap) {
       const headSha = getBranchHeadSha(wtPath);
-      const lastDriftPreview = (entry.trellisLastDrift ?? []).slice(0, 3).join("; ");
+      const lastDriftPreview = (trellisData?.lastDrift ?? []).slice(0, 3).join("; ");
       addAlert({
         level: "error",
         source: "trellis",
         project: projectName,
         worker: entry.name,
         message:
-          `Trellis '${entry.trellisName ?? "?"}' iteration budget exhausted ` +
+          `Trellis '${trellisData?.name ?? "?"}' iteration budget exhausted ` +
           `(${cap} iterations). Last drift: ${lastDriftPreview || "none"}. ` +
           `Inspect, then amend trellis & retry, raise budget, or kill.`,
         dedupKey: `trellis-budget:${projectName}:${entry.name}`,
@@ -617,8 +626,8 @@ function launchReview(
     // Persist the increment before dispatch so handleReviewing's verdict
     // logging and any concurrent `garden trellis status` see the right
     // iteration number.
-    updateWorkerFields(projectName, entry.name, { trellisIteration: nextIter });
-    entry.trellisIteration = nextIter;
+    updateWorkerFields(projectName, entry.name, { trellis: { iteration: nextIter } });
+    if (entry.trellis) entry.trellis.iteration = nextIter;
   }
 
   // Fetch latest base branch so the reviewer can rebase onto it
@@ -687,7 +696,7 @@ function launchReview(
 
   log.info("poller", "launched review", {
     worker: entry.name,
-    data: isTrellis ? { iteration: entry.trellisIteration } : undefined,
+    data: isTrellis ? { iteration: entry.trellis?.iteration } : undefined,
   });
   return true;
 }

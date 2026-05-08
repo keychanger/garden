@@ -526,16 +526,16 @@ function resolveProjectForHooks(projectName: string, projectPath: string): Proje
 
 // Compute the worktree-relative trellis path for a worker entry, suitable
 // for buildWorktreeRules's trellis option. Returns undefined for default
-// workers and trellis workers without a stored trellisPath. The trellis
+// workers and trellis workers without a stored trellis.path. The trellis
 // file lives at the same project-relative path inside the worktree
 // (worktrees share the project's working tree layout post-rebase), so
 // this is a path-prefix swap from project-rooted to worktree-rooted.
 export function trellisRelativePathForEntry(
-  entry: { workflow?: string; trellisPath?: string; worktreePath?: string },
+  entry: { workflow?: string; trellis?: { path?: string }; worktreePath?: string },
   projectPath: string,
 ): string | undefined {
   if (entry.workflow !== "trellis") return undefined;
-  const tPath = entry.trellisPath;
+  const tPath = entry.trellis?.path;
   if (!tPath) return undefined;
   const projectPrefix = projectPath.endsWith(path.sep) ? projectPath : projectPath + path.sep;
   if (tPath.startsWith(projectPrefix)) {

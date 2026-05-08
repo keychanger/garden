@@ -204,16 +204,15 @@ export function resolveWorkerStatus(
 // Distill the trellis fields off a registry entry into the WorkerInfo
 // shape used by the renderer. Returns undefined for default-workflow
 // workers — the bracket is omitted.
-function trellisInfoFor(entry?: { workflow?: string; trellisName?: string; trellisIteration?: number; trellisMaxIterations?: number; trellisLastDrift?: string[]; trellisLastVerdict?: string; trellisAligned?: boolean; failingReason?: string; }): WorkerInfo["trellis"] {
+function trellisInfoFor(entry?: { workflow?: string; trellis?: { name: string; iteration?: number; maxIterations?: number; lastDrift?: string[]; lastVerdict?: string; aligned?: boolean }; failingReason?: string }): WorkerInfo["trellis"] {
   if (!entry || entry.workflow !== "trellis") return undefined;
+  const t = entry.trellis;
   return {
-    name: entry.trellisName ?? "?",
-    iteration: entry.trellisIteration ?? 0,
-    maxIterations: entry.trellisMaxIterations ?? 30,
-    driftCount: entry.trellisLastVerdict === "DRIFT"
-      ? (entry.trellisLastDrift?.length ?? 0)
-      : 0,
-    aligned: entry.trellisAligned === true,
+    name: t?.name ?? "?",
+    iteration: t?.iteration ?? 0,
+    maxIterations: t?.maxIterations ?? 30,
+    driftCount: t?.lastVerdict === "DRIFT" ? (t.lastDrift?.length ?? 0) : 0,
+    aligned: t?.aligned === true,
     failingReason: entry.failingReason,
   };
 }

@@ -73,7 +73,7 @@ describe("trellisAlignmentStepSection", () => {
 });
 
 describe("trellisDocumentSection", () => {
-  it("returns null when entry has no trellisPath", () => {
+  it("returns null when entry has no trellis path", () => {
     expect(trellisDocumentSection.render(ctx({}))).toBeNull();
   });
 
@@ -91,7 +91,7 @@ describe("trellisDocumentSection", () => {
 
     const out = trellisDocumentSection.render(ctx({
       worktreePath: wtPath,
-      trellisPath: trellisProjectPath,
+      trellis: { name: "auth", path: trellisProjectPath },
     }));
     expect(out).toContain("worktree version");
     expect(out).not.toContain("project version");
@@ -100,7 +100,7 @@ describe("trellisDocumentSection", () => {
 
   it("returns null when the file is unreadable", () => {
     const out = trellisDocumentSection.render(ctx({
-      trellisPath: path.join(env.home, "nonexistent.md"),
+      trellis: { name: "ghost", path: path.join(env.home, "nonexistent.md") },
     }));
     expect(out).toBeNull();
   });

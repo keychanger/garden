@@ -87,7 +87,7 @@ export const trellisAlignmentStepSection: PromptSection = {
 export const trellisDocumentSection: PromptSection = {
   name: "trellis-document",
   render(ctx) {
-    const trellisPath = ctx.entry.trellisPath;
+    const trellisPath = ctx.entry.trellis?.path;
     if (!trellisPath) return null;
     const readPath = worktreeRootedTrellisPath(ctx, trellisPath);
     let content: string;

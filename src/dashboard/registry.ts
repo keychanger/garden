@@ -121,40 +121,66 @@ export interface WorkerEntry {
   // TRELLIS.md "Equilibrium and termination". Default workflow sets "code"
   // (Q8 retrofit) or "unparseable-verdict" (Q9 retrofit, phase 2).
   failingReason?: FailingReason;
-  // Per-worker model override, set via `--model` at plant time. Read each
-  // iteration; falls back to WorkflowDefinition.workerModel, then project
-  // default. Trellis-only in v1; default workers leave this unset.
+  // Trellis-vine-only data. Populated only when workflow === "trellis";
+  // absent on default workers. Replaces the flat `trellisName`,
+  // `trellisIteration`, `workerModel`, etc. fields that previously sat
+  // directly on WorkerEntry. Migration of legacy entries happens in
+  // readRegistry. Use getTrellisData(entry) to read; updateTrellisData()
+  // to write a partial update (updateWorkerFields does a shallow merge
+  // and would clobber the whole sub-object).
+  // See TRELLIS.md "Worker entry additions" for field contracts.
+  trellis?: TrellisData;
+}
+
+/** Trellis-workflow per-worker data. All fields except `name` and `path`
+ *  are runtime mutations the poller writes during the review loop. */
+export interface TrellisData {
+  /** Logical trellis identifier — e.g. "auth-rewrite". */
+  name: string;
+  /** Resolved absolute path to the trellis file at plant time. Stable
+   *  lookup even if the project's trellisDir changes later. */
+  path: string;
+  /** Iteration counter. Incremented on each working → reviewing
+   *  transition before the budget check and dispatch. Reads as 1 during
+   *  the first review, 2 during the second, etc. Starts at 0. */
+  iteration?: number;
+  maxIterations?: number;
+  lastVerdict?: TrellisVerdict;
+  lastDrift?: string[];
+  alignedCount?: number;
+  /** Bounded (length 5) history of drift lists for stagnation detection (v1.5). */
+  driftHistory?: string[][];
+  /** Bounded (length 5) history of HEAD SHAs at iteration boundaries (v1.5). */
+  shaHistory?: string[];
+  /** Epoch ms when stagnation was detected; cleared on next push (v1.5). */
+  stagnationConfirmedAt?: number;
+  /** Cited clauses from a FLAGGED verdict — used in the alert and the
+   *  resume command's diagnostic output. */
+  flaggedClauses?: string[];
+  /** True when the terminal `done` was reached via reviewer ALIGNED
+   *  rather than operator-set `.garden-done`. Drives the `✓ aligned,
+   *  N iters` status row decoration. Set by finalizeMerge on the
+   *  ALIGNED path. */
+  aligned?: boolean;
+  /** Epoch ms of the most recent Sonnet → Opus fallback. Used to
+   *  dedupe alerts within a single Sonnet 5h reset window (phase 3). */
+  modelFallbackAt?: number;
+  /** Per-worker model override, set via `--model` at plant time. Read
+   *  each iteration; falls back to WorkflowDefinition.workerModel,
+   *  then project default. Trellis-only — default workers don't carry
+   *  this. */
   workerModel?: "opus" | "sonnet";
-  // --- Trellis-vine-only fields. Populated only when workflow === "trellis".
-  // See TRELLIS.md "Worker entry additions" for the contract on each.
-  trellisName?: string;
-  // Resolved absolute path to the trellis at plant time. Stable lookup
-  // even if the project's trellisDir changes later.
-  trellisPath?: string;
-  // Iteration counter. Incremented on each working → reviewing transition
-  // *before* the budget check and dispatch. Reads as 1 during the first
-  // review, 2 during the second, etc. Starts at 0.
-  trellisIteration?: number;
-  trellisMaxIterations?: number;
-  trellisLastVerdict?: TrellisVerdict;
-  trellisLastDrift?: string[];
-  trellisAlignedCount?: number;
-  // Bounded (length 5) history of drift lists for stagnation detection (v1.5).
-  trellisDriftHistory?: string[][];
-  // Bounded (length 5) history of HEAD SHAs at iteration boundaries (v1.5).
-  trellisShaHistory?: string[];
-  // Epoch ms when stagnation was detected; cleared on next push (v1.5).
-  trellisStagnationConfirmedAt?: number;
-  // Cited clauses from a FLAGGED verdict — used in the alert and the
-  // resume command's diagnostic output.
-  trellisFlaggedClauses?: string[];
-  // True when the terminal `done` was reached via reviewer ALIGNED rather
-  // than operator-set `.garden-done`. Drives the `✓ aligned, N iters`
-  // status row decoration. Set by finalizeMerge on the ALIGNED path.
-  trellisAligned?: boolean;
-  // Epoch ms of the most recent Sonnet → Opus fallback. Used to dedupe
-  // alerts within a single Sonnet 5h reset window (phase 3).
-  trellisModelFallbackAt?: number;
+}
+
+/** Returns the trellis-workflow data for a worker, or null when the
+ *  worker is not on the trellis workflow. Discriminates on
+ *  `entry.workflow === "trellis"` so call sites can read trellis fields
+ *  without re-checking the workflow tag every time. */
+export function getTrellisData(
+  entry: { workflow?: string; trellis?: TrellisData },
+): TrellisData | null {
+  if (entry.workflow !== "trellis") return null;
+  return entry.trellis ?? null;
 }
 
 export interface WorkerRegistry {
@@ -204,6 +230,15 @@ export function readRegistry(): WorkerRegistry {
         });
         return { workers: {} };
       }
+      // Lazily migrate legacy flat trellis* fields to the nested
+      // entry.trellis sub-object. Idempotent: entries already in the new
+      // shape pass through unchanged. The next writeRegistry persists the
+      // new shape; readers below this layer never see the old flat keys.
+      for (const entries of Object.values(raw.workers)) {
+        for (const e of entries as WorkerEntry[]) {
+          migrateLegacyTrellisFields(e);
+        }
+      }
       return raw;
     }
   } catch (err) {
@@ -212,6 +247,44 @@ export function readRegistry(): WorkerRegistry {
     });
   }
   return { workers: {} };
+}
+
+const LEGACY_TRELLIS_KEYS = [
+  "trellisName", "trellisPath", "trellisIteration", "trellisMaxIterations",
+  "trellisLastVerdict", "trellisLastDrift", "trellisAlignedCount",
+  "trellisDriftHistory", "trellisShaHistory", "trellisStagnationConfirmedAt",
+  "trellisFlaggedClauses", "trellisAligned", "trellisModelFallbackAt",
+  "workerModel",
+] as const;
+
+function migrateLegacyTrellisFields(entry: WorkerEntry): void {
+  const e = entry as unknown as Record<string, unknown>;
+  // Only migrate when the entry has at least the load-bearing trellisName
+  // legacy field and no nested `trellis` sub-object yet. workerModel was
+  // shared by trellis-only call sites so it migrates with the rest.
+  if (typeof e.trellisName !== "string") return;
+  if (entry.trellis !== undefined) {
+    // Both shapes present — strip the legacy fields. The nested form wins.
+    for (const k of LEGACY_TRELLIS_KEYS) delete e[k];
+    return;
+  }
+  entry.trellis = {
+    name: e.trellisName as string,
+    path: typeof e.trellisPath === "string" ? e.trellisPath : "",
+    iteration: e.trellisIteration as number | undefined,
+    maxIterations: e.trellisMaxIterations as number | undefined,
+    lastVerdict: e.trellisLastVerdict as TrellisVerdict | undefined,
+    lastDrift: e.trellisLastDrift as string[] | undefined,
+    alignedCount: e.trellisAlignedCount as number | undefined,
+    driftHistory: e.trellisDriftHistory as string[][] | undefined,
+    shaHistory: e.trellisShaHistory as string[] | undefined,
+    stagnationConfirmedAt: e.trellisStagnationConfirmedAt as number | undefined,
+    flaggedClauses: e.trellisFlaggedClauses as string[] | undefined,
+    aligned: e.trellisAligned as boolean | undefined,
+    modelFallbackAt: e.trellisModelFallbackAt as number | undefined,
+    workerModel: e.workerModel as "opus" | "sonnet" | undefined,
+  };
+  for (const k of LEGACY_TRELLIS_KEYS) delete e[k];
 }
 
 export function writeRegistry(registry: WorkerRegistry): void {
@@ -250,10 +323,20 @@ export function updateWorkerTask(project: string, workerName: string, task: stri
   });
 }
 
+/** Field-update payload accepted by updateWorkerFields. Top-level fields
+ *  are shallow-merged onto the entry. The nested `trellis` field is
+ *  deep-merged into the existing `entry.trellis` sub-object — passing
+ *  `{ trellis: { lastVerdict: "ALIGNED" } }` updates only that one field
+ *  without clobbering the rest of the trellis data. */
+export interface WorkerFieldsUpdate
+  extends Partial<Omit<WorkerEntry, "name" | "trellis">> {
+  trellis?: Partial<TrellisData>;
+}
+
 export function updateWorkerFields(
   project: string,
   workerName: string,
-  fields: Partial<Omit<WorkerEntry, "name">>,
+  fields: WorkerFieldsUpdate,
 ): void {
   withRegistryLock(() => {
     const registry = readRegistry();
@@ -262,20 +345,26 @@ export function updateWorkerFields(
     const entry = entries.find(e => e.name === workerName);
     if (!entry) return;
 
-    // Log state transitions when prState changes
     if (fields.prState && fields.prState !== entry.prState) {
       log.info("poller", `${entry.prState ?? "new"} -> ${fields.prState}`, {
         worker: workerName,
       });
     }
 
-    Object.assign(entry, fields);
+    const { trellis: trellisUpdate, ...rest } = fields;
+    Object.assign(entry, rest);
+    if (trellisUpdate !== undefined) {
+      // Merge into existing trellis. If entry.trellis is unset (a default
+      // worker received a stray trellis update — caller bug), the spread
+      // still produces a TrellisData-shaped object from whatever was passed.
+      entry.trellis = { ...(entry.trellis ?? {}), ...trellisUpdate } as TrellisData;
+    }
     writeRegistry(registry);
   });
 }
 
 export function batchUpdateWorkerFields(
-  updates: Array<{ project: string; workerName: string; fields: Partial<Omit<WorkerEntry, "name">> }>,
+  updates: Array<{ project: string; workerName: string; fields: WorkerFieldsUpdate }>,
 ): void {
   if (updates.length === 0) return;
   withRegistryLock(() => {
@@ -290,7 +379,11 @@ export function batchUpdateWorkerFields(
           worker: workerName,
         });
       }
-      Object.assign(entry, fields);
+      const { trellis: trellisUpdate, ...rest } = fields;
+      Object.assign(entry, rest);
+      if (trellisUpdate !== undefined) {
+        entry.trellis = { ...(entry.trellis ?? {}), ...trellisUpdate } as TrellisData;
+      }
     }
     writeRegistry(registry);
   });

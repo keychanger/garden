@@ -287,50 +287,54 @@ describe("getAllWorkerNames", () => {
   });
 });
 
-// Trellis workflow adds optional fields to WorkerEntry. Round-trip them
-// through addWorker → readRegistry to confirm shape changes don't break
-// the registry's persistence contract. See TRELLIS.md "Worker entry additions".
+// Trellis workflow adds an optional `trellis` sub-object to WorkerEntry
+// holding all per-vine state. Round-trip it through addWorker → readRegistry
+// to confirm shape changes don't break the registry's persistence contract.
+// See TRELLIS.md "Worker entry additions".
 describe("trellis WorkerEntry fields", () => {
-  it("round-trips every trellis field plus failingReason and workerModel", async () => {
+  it("round-trips every trellis sub-object field plus failingReason", async () => {
     const { addWorker, getWorkers } = await importRegistry();
     addWorker("proj", {
       name: "swift-oak",
       sessionId: "s1",
       task: "",
       workflow: "trellis",
-      workerModel: "sonnet",
       failingReason: "trellis-flagged",
-      trellisName: "auth-rewrite",
-      trellisPath: "/tmp/auth-rewrite.md",
-      trellisIteration: 3,
-      trellisMaxIterations: 30,
-      trellisLastVerdict: "DRIFT",
-      trellisLastDrift: ["[surface] foo() missing", "[tests] no test"],
-      trellisAlignedCount: 7,
-      trellisDriftHistory: [["a"], ["b"]],
-      trellisShaHistory: ["sha1", "sha2"],
-      trellisStagnationConfirmedAt: 1234567890,
-      trellisFlaggedClauses: ["line 47 contradicts line 91"],
-      trellisAligned: true,
-      trellisModelFallbackAt: 1234567899,
+      trellis: {
+        name: "auth-rewrite",
+        path: "/tmp/auth-rewrite.md",
+        iteration: 3,
+        maxIterations: 30,
+        lastVerdict: "DRIFT",
+        lastDrift: ["[surface] foo() missing", "[tests] no test"],
+        alignedCount: 7,
+        driftHistory: [["a"], ["b"]],
+        shaHistory: ["sha1", "sha2"],
+        stagnationConfirmedAt: 1234567890,
+        flaggedClauses: ["line 47 contradicts line 91"],
+        aligned: true,
+        modelFallbackAt: 1234567899,
+        workerModel: "sonnet",
+      },
     });
     const w = getWorkers("proj")[0];
     expect(w.workflow).toBe("trellis");
-    expect(w.workerModel).toBe("sonnet");
     expect(w.failingReason).toBe("trellis-flagged");
-    expect(w.trellisName).toBe("auth-rewrite");
-    expect(w.trellisPath).toBe("/tmp/auth-rewrite.md");
-    expect(w.trellisIteration).toBe(3);
-    expect(w.trellisMaxIterations).toBe(30);
-    expect(w.trellisLastVerdict).toBe("DRIFT");
-    expect(w.trellisLastDrift).toEqual(["[surface] foo() missing", "[tests] no test"]);
-    expect(w.trellisAlignedCount).toBe(7);
-    expect(w.trellisDriftHistory).toEqual([["a"], ["b"]]);
-    expect(w.trellisShaHistory).toEqual(["sha1", "sha2"]);
-    expect(w.trellisStagnationConfirmedAt).toBe(1234567890);
-    expect(w.trellisFlaggedClauses).toEqual(["line 47 contradicts line 91"]);
-    expect(w.trellisAligned).toBe(true);
-    expect(w.trellisModelFallbackAt).toBe(1234567899);
+    const t = w.trellis!;
+    expect(t.name).toBe("auth-rewrite");
+    expect(t.path).toBe("/tmp/auth-rewrite.md");
+    expect(t.iteration).toBe(3);
+    expect(t.maxIterations).toBe(30);
+    expect(t.lastVerdict).toBe("DRIFT");
+    expect(t.lastDrift).toEqual(["[surface] foo() missing", "[tests] no test"]);
+    expect(t.alignedCount).toBe(7);
+    expect(t.driftHistory).toEqual([["a"], ["b"]]);
+    expect(t.shaHistory).toEqual(["sha1", "sha2"]);
+    expect(t.stagnationConfirmedAt).toBe(1234567890);
+    expect(t.flaggedClauses).toEqual(["line 47 contradicts line 91"]);
+    expect(t.aligned).toBe(true);
+    expect(t.modelFallbackAt).toBe(1234567899);
+    expect(t.workerModel).toBe("sonnet");
   });
 
   it("default workers omit trellis fields and round-trip cleanly", async () => {
@@ -343,8 +347,53 @@ describe("trellis WorkerEntry fields", () => {
     });
     const w = getWorkers("proj")[0];
     expect(w.workflow).toBe("default");
-    expect(w.trellisName).toBeUndefined();
-    expect(w.trellisIteration).toBeUndefined();
+    expect(w.trellis).toBeUndefined();
     expect(w.failingReason).toBeUndefined();
+  });
+
+  it("readRegistry migrates legacy flat trellis* fields into the nested trellis sub-object", async () => {
+    // Hand-write a legacy-shape registry to disk: pre-migration entries
+    // carry trellis* fields directly on the entry rather than nested.
+    // readRegistry should detect and migrate them on read; the legacy
+    // keys disappear and the nested shape appears with the same values.
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const { SESSIONS_DIR } = await import("../src/config.js");
+    const registryFile = path.join(SESSIONS_DIR, "dashboard.registry.json");
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    fs.writeFileSync(registryFile, JSON.stringify({
+      workers: {
+        proj: [{
+          name: "legacy-vine",
+          sessionId: "s1",
+          task: "",
+          workflow: "trellis",
+          // Legacy flat fields:
+          trellisName: "auth",
+          trellisPath: "/tmp/auth.md",
+          trellisIteration: 5,
+          trellisMaxIterations: 30,
+          trellisLastVerdict: "DRIFT",
+          trellisAligned: false,
+          workerModel: "sonnet",
+        }],
+      },
+    }, null, 2));
+
+    const { readRegistry } = await importRegistry();
+    const reg = readRegistry();
+    const w = reg.workers.proj[0];
+    expect(w.trellis).toBeDefined();
+    expect(w.trellis?.name).toBe("auth");
+    expect(w.trellis?.path).toBe("/tmp/auth.md");
+    expect(w.trellis?.iteration).toBe(5);
+    expect(w.trellis?.maxIterations).toBe(30);
+    expect(w.trellis?.lastVerdict).toBe("DRIFT");
+    expect(w.trellis?.aligned).toBe(false);
+    expect(w.trellis?.workerModel).toBe("sonnet");
+    // Legacy fields must be stripped — the entry shape after migration
+    // matches what writers from this build produce.
+    expect((w as Record<string, unknown>).trellisName).toBeUndefined();
+    expect((w as Record<string, unknown>).workerModel).toBeUndefined();
   });
 });

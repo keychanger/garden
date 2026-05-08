@@ -193,13 +193,15 @@ describe("garden trellis status", () => {
       task: "",
       worktreePath: wtPath,
       workflow: "trellis",
-      trellisName: "auth",
-      trellisPath: path.join(projectDir, ".garden", "trellises", "auth.md"),
-      trellisIteration: 4,
-      trellisMaxIterations: 30,
-      trellisLastVerdict: "DRIFT",
-      trellisLastDrift: ["1. [tests] missing timeout test"],
-      trellisAlignedCount: 7,
+      trellis: {
+        name: "auth",
+        path: path.join(projectDir, ".garden", "trellises", "auth.md"),
+        iteration: 4,
+        maxIterations: 30,
+        lastVerdict: "DRIFT",
+        lastDrift: ["1. [tests] missing timeout test"],
+        alignedCount: 7,
+      },
     });
 
     const { trellis } = await importTrellisCmd();
@@ -236,8 +238,7 @@ describe("garden trellis amend", () => {
       sessionId: "s1",
       task: "",
       workflow: "trellis",
-      trellisName,
-      trellisPath: trellisFile,
+      trellis: { name: trellisName, path: trellisFile },
     });
     return trellisFile;
   }
@@ -326,10 +327,13 @@ describe("garden trellis resume", () => {
       sessionId: "s1",
       task: "",
       workflow: "trellis",
-      trellisName: "auth",
       prState: "failing",
       failingReason: "trellis-flagged",
-      trellisFlaggedClauses: ["trellis line 47"],
+      trellis: {
+        name: "auth",
+        path: "/tmp/auth.md",
+        flaggedClauses: ["trellis line 47"],
+      },
     });
 
     const { trellis } = await importTrellisCmd();
@@ -337,7 +341,7 @@ describe("garden trellis resume", () => {
 
     const after = findWorkerByName("proj", "swift-vine");
     expect(after?.failingReason).toBeUndefined();
-    expect(after?.trellisFlaggedClauses).toBeUndefined();
+    expect(after?.trellis?.flaggedClauses).toBeUndefined();
     expect(after?.prState).toBe("working");
     expect(after?.pendingReviewAt).toBeDefined();
 

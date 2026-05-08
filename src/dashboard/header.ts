@@ -96,13 +96,14 @@ function formatTrellisSummary(projectName: string): string {
   if (vines.length === 0) return "";
 
   const segments = vines.map(v => {
-    const name = v.trellisName ?? "?";
+    const t = v.trellis;
+    const name = t?.name ?? "?";
     if (v.failingReason === "trellis-flagged") return `${name} (\u2691)`;
     if (v.failingReason === "iteration-budget") return `${name} (!)`;
     if (v.failingReason === "stagnation") return `${name} (~)`;
-    if (v.trellisAligned) return `${name} (\u2713)`;
-    const iter = v.trellisIteration ?? 0;
-    const max = v.trellisMaxIterations ?? 30;
+    if (t?.aligned) return `${name} (\u2713)`;
+    const iter = t?.iteration ?? 0;
+    const max = t?.maxIterations ?? 30;
     return `${name} (${iter}/${max}, drifting)`;
   });
   let body = segments.join(", ");

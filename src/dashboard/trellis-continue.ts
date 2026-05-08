@@ -186,20 +186,21 @@ export function trellisAutoContinueAfterMerge(
     worker: workerName,
     data: {
       project: projectName,
-      iteration: (entry.trellisIteration ?? 0) + 1,
+      iteration: (entry.trellis?.iteration ?? 0) + 1,
       sessionId: newSessionId,
     },
   });
 }
 
 // Build the trellis continue prompt for iteration N+1. Reads
-// `entry.trellisIteration + 1` per TRELLIS.md (the increment fires inside
+// `entry.trellis.iteration + 1` per TRELLIS.md (the increment fires inside
 // the next launchReview, not here). See "Continue prompt structure".
 export function buildTrellisContinuePrompt(entry: WorkerEntry): string {
-  const upcomingIter = (entry.trellisIteration ?? 0) + 1;
-  const max = entry.trellisMaxIterations ?? 30;
+  const t = entry.trellis;
+  const upcomingIter = (t?.iteration ?? 0) + 1;
+  const max = t?.maxIterations ?? 30;
   const trellisDisplay = trellisDisplayPath(entry);
-  const driftLines = entry.trellisLastDrift ?? [];
+  const driftLines = t?.lastDrift ?? [];
   const changed = entry.pendingContinueChangedFiles ?? [];
   const lessons = readLessonsFile(entry.worktreePath);
 
@@ -263,8 +264,8 @@ function resolveWorkerPaneId(project: string, worker: string): string | null {
 }
 
 function trellisDisplayPath(entry: WorkerEntry): string {
-  const tPath = entry.trellisPath;
-  if (!tPath) return entry.trellisName ?? "<trellis>";
+  const tPath = entry.trellis?.path;
+  if (!tPath) return entry.trellis?.name ?? "<trellis>";
   const wt = entry.worktreePath;
   if (wt && tPath.startsWith(wt + path.sep)) {
     return tPath.slice(wt.length + 1);

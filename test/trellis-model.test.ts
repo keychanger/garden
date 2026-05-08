@@ -62,7 +62,7 @@ describe("resolveVineModel", () => {
 
   it("returns opus when entry override is opus, regardless of Sonnet meter", () => {
     const r = resolveVineModel(
-      { ...baseEntry, workerModel: "opus" }, baseProject,
+      { ...baseEntry, trellis: { name: "t", path: "/tmp/t.md", workerModel: "opus" } }, baseProject,
       trellisWorkflow as WorkflowDefinition,
       snapshot(99), baseAutoContinue,
     );
@@ -72,7 +72,7 @@ describe("resolveVineModel", () => {
   it("entry override takes precedence over workflow default (sonnet override on opus workflow)", () => {
     const opusWorkflow = { workerModel: "opus" } as WorkflowDefinition;
     const r = resolveVineModel(
-      { ...baseEntry, workerModel: "sonnet" }, baseProject,
+      { ...baseEntry, trellis: { name: "t", path: "/tmp/t.md", workerModel: "sonnet" } }, baseProject,
       opusWorkflow,
       snapshot(50), baseAutoContinue,
     );
@@ -156,7 +156,7 @@ describe("shouldFireFallbackAlert", () => {
   it("does not fire when last fallback is recent (within the same Sonnet window)", () => {
     const recentEntry: WorkerEntry = {
       ...baseEntry,
-      trellisModelFallbackAt: Date.now() - 60_000, // 1 min ago
+      trellis: { name: "t", path: "/tmp/t.md", modelFallbackAt: Date.now() - 60_000 }, // 1 min ago
     };
     expect(shouldFireFallbackAlert(recentEntry, snapshot(99))).toBe(false);
   });
@@ -164,7 +164,7 @@ describe("shouldFireFallbackAlert", () => {
   it("fires when last fallback is older than 7 days", () => {
     const oldEntry: WorkerEntry = {
       ...baseEntry,
-      trellisModelFallbackAt: Date.now() - 8 * 24 * 60 * 60 * 1000,
+      trellis: { name: "t", path: "/tmp/t.md", modelFallbackAt: Date.now() - 8 * 24 * 60 * 60 * 1000 },
     };
     expect(shouldFireFallbackAlert(oldEntry, snapshot(99))).toBe(true);
   });
@@ -172,7 +172,7 @@ describe("shouldFireFallbackAlert", () => {
   it("fires conservatively when no Sonnet meter present in snapshot", () => {
     const recentEntry: WorkerEntry = {
       ...baseEntry,
-      trellisModelFallbackAt: Date.now() - 60_000,
+      trellis: { name: "t", path: "/tmp/t.md", modelFallbackAt: Date.now() - 60_000 },
     };
     expect(shouldFireFallbackAlert(recentEntry, snapshot(null))).toBe(true);
   });

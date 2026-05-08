@@ -15,7 +15,7 @@ import { refreshDashboard } from "./header.js";
 import { log } from "./log.js";
 import {
   findWorkerByName, updateWorkerFields,
-  type WorkerEntry, type PrState,
+  type WorkerEntry, type PrState, type WorkerFieldsUpdate,
 } from "./registry.js";
 import { scheduleDelayedPoke } from "./poller-fifo.js";
 import { getValidTransitions } from "./workflows/types.js";
@@ -26,7 +26,7 @@ export function transitionState(
   projectName: string,
   workerName: string,
   toState: PrState,
-  extraFields?: Partial<Omit<WorkerEntry, "name" | "prState">>,
+  extraFields?: Omit<WorkerFieldsUpdate, "prState">,
 ): void {
   const entry = findWorkerByName(projectName, workerName);
   const fromState: PrState = entry?.prState ?? "working";
