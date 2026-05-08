@@ -41,7 +41,13 @@ export async function handoff(args: string[]): Promise<void> {
   );
   fs.writeFileSync(seedFile, seedMessage);
 
-  const newName = newWorker({ projectName: targetProject, seedMessageFile: seedFile });
+  // background:true so the new worker is created hidden — handoff must not
+  // yank the operator out of whatever pane they're focused on.
+  const newName = newWorker({
+    projectName: targetProject,
+    seedMessageFile: seedFile,
+    background: true,
+  });
   if (!newName) {
     try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
     throw new Error(

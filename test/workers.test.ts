@@ -320,41 +320,70 @@ describe("newWorker", () => {
     expect(msg).toContain("main");
   });
 
-  // ===== Handoff path: opts.projectName + opts.seedMessageFile =====
-  // Cross-project handoff swaps the active project to the target before the
-  // standard park/restore runs, so the new worker comes into view exactly like
-  // ⌥n on that project. The seed dispatch then sends the briefing.
+  // ===== Handoff path: opts.projectName + opts.seedMessageFile + background =====
+  // Handoff creates the worker in a hidden window and explicitly does NOT
+  // disturb the operator's visible pane: no cross-project switch, no
+  // park/restore, no mutation of activePaneType/activeWindowName. The seed
+  // dispatch still fires so the new worker receives its briefing.
 
   it("handoff path: targets opts.projectName instead of activeProject", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
     vi.mocked(tryGetProject).mockReturnValueOnce({ name: "other", path: "/repo/other" });
-    const name = newWorker({ projectName: "other", seedMessageFile: "/tmp/seed.txt" });
+    const name = newWorker({ projectName: "other", seedMessageFile: "/tmp/seed.txt", background: true });
     expect(name).toBe("bold-ash");
     expect(vi.mocked(addWorker)).toHaveBeenCalledWith("other", expect.any(Object));
     expect(vi.mocked(ensureProjectPoller)).toHaveBeenCalledWith("other", "garden");
   });
 
-  it("cross-project handoff calls swapVisibleToProject so the new worker comes into view", async () => {
+  it("background handoff does NOT call swapVisibleToProject (cross-project)", async () => {
     const { swapVisibleToProject } = await import("../src/dashboard/navigate.js");
     vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
     vi.mocked(tryGetProject).mockReturnValueOnce({ name: "other", path: "/repo/other" });
-    newWorker({ projectName: "other", seedMessageFile: "/tmp/seed.txt" });
-    expect(vi.mocked(swapVisibleToProject)).toHaveBeenCalledWith(
-      "other", expect.objectContaining({ path: "/repo/other" }), expect.any(Object),
-    );
-  });
-
-  it("same-project handoff (projectName === activeProject) does NOT call swapVisibleToProject", async () => {
-    const { swapVisibleToProject } = await import("../src/dashboard/navigate.js");
-    vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
-    newWorker({ projectName: "myproject", seedMessageFile: "/tmp/seed.txt" });
+    newWorker({ projectName: "other", seedMessageFile: "/tmp/seed.txt", background: true });
     expect(vi.mocked(swapVisibleToProject)).not.toHaveBeenCalled();
   });
 
-  it("handoff path: dispatches the delayed seed via spawn so the new worker gets the briefing", () => {
+  it("background handoff does NOT park or restore the visible pane", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
     vi.mocked(tryGetProject).mockReturnValueOnce({ name: "other", path: "/repo/other" });
-    newWorker({ projectName: "other", seedMessageFile: "/tmp/seed.txt" });
+    newWorker({ projectName: "other", seedMessageFile: "/tmp/seed.txt", background: true });
+    expect(vi.mocked(parkToHidden)).not.toHaveBeenCalled();
+    expect(vi.mocked(restoreFromHidden)).not.toHaveBeenCalled();
+  });
+
+  it("background handoff still creates the hidden worker window with bootstrap script", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
+    vi.mocked(tryGetProject).mockReturnValueOnce({ name: "other", path: "/repo/other" });
+    newWorker({ projectName: "other", seedMessageFile: "/tmp/seed.txt", background: true });
+    expect(vi.mocked(tmuxNewWindow)).toHaveBeenCalledWith(
+      "-d", "-t", "garden-dashboard", "-n", "_other-worker-bold-ash",
+      "-c", "/repo/other",
+      "sh", "-c", expect.stringContaining("/tmp/fake-bootstrap.sh"),
+    );
+  });
+
+  it("background handoff does NOT mutate activePaneType / activeWindowName / lastActiveWorker", () => {
+    const state = makeState({
+      activeProject: "myproject",
+      activePaneType: "worker",
+      activeWindowName: "_myproject-worker-swift-oak",
+      activePaneId: "%2",
+    });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(tryGetProject).mockReturnValueOnce({ name: "other", path: "/repo/other" });
+    newWorker({ projectName: "other", seedMessageFile: "/tmp/seed.txt", background: true });
+    // No state write at all — operator's pane focus is untouched.
+    expect(vi.mocked(writeDashState)).not.toHaveBeenCalled();
+    expect(state.activePaneType).toBe("worker");
+    expect(state.activeWindowName).toBe("_myproject-worker-swift-oak");
+    expect(state.activePaneId).toBe("%2");
+    expect(state.lastActiveWorker["other"]).toBeUndefined();
+  });
+
+  it("background handoff: dispatches the delayed seed via spawn so the new worker gets the briefing", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
+    vi.mocked(tryGetProject).mockReturnValueOnce({ name: "other", path: "/repo/other" });
+    newWorker({ projectName: "other", seedMessageFile: "/tmp/seed.txt", background: true });
     const seedCall = vi.mocked(spawn).mock.calls.find(c =>
       Array.isArray(c[1]) && (c[1] as string[])[1]?.includes("_seed-worker"),
     );
@@ -365,10 +394,10 @@ describe("newWorker", () => {
     expect(cmd).toContain("'/tmp/seed.txt'");
   });
 
-  it("handoff path: bails (returns null) when target project is unknown, without touching state", () => {
+  it("background handoff: bails (returns null) when target project is unknown, without touching state", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     vi.mocked(tryGetProject).mockReturnValueOnce(undefined);
-    const name = newWorker({ projectName: "ghost", seedMessageFile: "/tmp/seed.txt" });
+    const name = newWorker({ projectName: "ghost", seedMessageFile: "/tmp/seed.txt", background: true });
     expect(name).toBeNull();
     expect(vi.mocked(addWorker)).not.toHaveBeenCalled();
     // No seed dispatch on bailout — handoff command will unlink the seed file.

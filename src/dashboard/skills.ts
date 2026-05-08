@@ -186,7 +186,7 @@ This covers two shapes:
 Runs \`garden handoff <target-project>\` from your worktree CWD, reading a multi-line briefing from stdin via heredoc. Garden:
 
 1. Creates a new worker on \`<target-project>\` — a normal named worker with its own git worktree, fresh Claude session, and own poller. It participates in the standard review/merge flow.
-2. Swaps the new worker's pane into view exactly like ⌥n would: your pane gets parked under your project and the operator's right-pane now shows the new worker. For cross-project handoff, the dashboard's active project (and active plot, if needed) follows along to the target. (On fan-out, only the last spawned worker ends up visible — that's fine; the operator can ⌥n through the rest.)
+2. Leaves the operator's view alone. The new worker is created in a hidden window — your pane is *not* parked, the dashboard's active project/plot is *not* switched, and whatever pane the operator is focused on stays put. This applies to single handoffs and fan-outs alike. The operator reaches the new worker(s) via ⌥<n> on the target project + ⌥w to cycle to them.
 3. Seeds the new worker's first prompt with your briefing, prefixed \`[handoff from <your-project>/<your-name>]\` so the new worker knows it received a handoff (not a normal user prompt).
 4. Prints the new worker's name to stdout — report it (or the full list, on fan-out) to the operator before you end your turn.
 

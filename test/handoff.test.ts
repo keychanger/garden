@@ -66,6 +66,7 @@ describe("garden handoff command", () => {
     expect(newWorkerCall).toEqual({
       projectName: "other",
       seedMessageFile: path.join(seedsDir, files[0]),
+      background: true,
     });
   });
 
