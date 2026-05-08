@@ -15,7 +15,7 @@ import { setupStatusBar, buildStatusCommand, buildUsageCommand, updateHeaderVar,
 import { renderQuickStatus } from "../commands/status.js";
 import {
   tmux, tmuxOutput, tmuxSplit, setPaneTitle, setPaneLabel, setPaneVar,
-  getFirstPaneId, shellEscape,
+  getFirstPaneId, shellEscape, tmuxDoubleQuote,
   getPaneSize, resizeWindow, listAllWindowNames, disablePaneInput,
 } from "./tmux.js";
 import { readRegistry, updateWorkerFields } from "./registry.js";
@@ -43,7 +43,10 @@ const DASHBOARD_ROWS = 60;
 export const USAGE_PANE_HEIGHT = 5;
 
 function buildSettingsJson(gardenRunner: string, sandbox: SandboxConfig): string {
-  const hookCmd = `${gardenRunner} dashboard _claude-hook`;
+  // The hook commands are written into JSON and ultimately executed by Claude
+  // Code as shell commands. Single-quote the runner so a path containing spaces
+  // (or other shell metacharacters) survives the shell-out.
+  const hookCmd = `${shellEscape(gardenRunner)} dashboard _claude-hook`;
   return JSON.stringify({
     hooks: {
       SessionStart: [{
@@ -143,8 +146,9 @@ export function ensureDashboard(): void {
     // so it doesn't disturb copy-mode in worker/logs panes the way the old refreshDashboard-based hook did (a10642c).
     try {
       const gardenRunner = resolveGardenRunner();
+      const inner = `${shellEscape(gardenRunner)} dashboard _client-resized 2>/dev/null`;
       tmux("set-hook", "-t", DASHBOARD_SESSION, "client-resized",
-        `run-shell -b "${gardenRunner} dashboard _client-resized 2>/dev/null"`);
+        `run-shell -b ${tmuxDoubleQuote(inner)}`);
     } catch { /* hooks may not be supported on very old tmux */ }
 
     // Pre-size all hidden windows to match their target visible slots so
@@ -243,23 +247,30 @@ export function ensureDashboard(): void {
   // claudeStatus="exited" to the registry. This is the only mechanism in
   // the new status model that observes process liveness — and tmux delivers
   // it as an event, not a poll.
+  // Build the inner shell command first (shellEscape on gardenRunner so a
+  // path with spaces survives), then wrap with tmuxDoubleQuote so $, `, and
+  // \ in the runner path don't get re-interpreted by tmux's command parser.
+  // `#{window_name}` stays unescaped so tmux still expands the format ref.
   try {
+    const inner = `${shellEscape(gardenRunner)} dashboard _pane-died '#{window_name}' 2>/dev/null`;
     tmux("set-hook", "-t", DASHBOARD_SESSION, "pane-died",
-      `run-shell "${gardenRunner} dashboard _pane-died '#{window_name}' 2>/dev/null"`);
+      `run-shell ${tmuxDoubleQuote(inner)}`);
   } catch { /* hooks may not be supported on very old tmux */ }
 
   // tmux pane-title-changed hook: Claude Code sets the pane title via escape
   // sequences as it works. This hook captures those changes live so task
   // summaries in the status pane and pane border stay current without polling.
   try {
+    const inner = `${shellEscape(gardenRunner)} dashboard _title-changed '#{window_name}' '#{pane_id}' 2>/dev/null`;
     tmux("set-hook", "-t", DASHBOARD_SESSION, "pane-title-changed",
-      `run-shell -b "${gardenRunner} dashboard _title-changed '#{window_name}' '#{pane_id}' 2>/dev/null"`);
+      `run-shell -b ${tmuxDoubleQuote(inner)}`);
   } catch { /* hooks may not be supported on very old tmux */ }
 
   // Re-pin usage pane on terminal resize (see reattach path for rationale).
   try {
+    const inner = `${shellEscape(gardenRunner)} dashboard _client-resized 2>/dev/null`;
     tmux("set-hook", "-t", DASHBOARD_SESSION, "client-resized",
-      `run-shell -b "${gardenRunner} dashboard _client-resized 2>/dev/null"`);
+      `run-shell -b ${tmuxDoubleQuote(inner)}`);
   } catch { /* hooks may not be supported on very old tmux */ }
 
   const state: DashboardState = {
@@ -790,11 +801,13 @@ function writeWorktreeContextFile(
 }
 
 function writeGrowhouseInitScript(gardenRunner: string): string {
+  // Single-quote the runner so a path with spaces or other shell
+  // metacharacters survives expansion inside the not-found handler body.
   const script = `# Garden growhouse init — custom prompt with auto-dispatch
 PS1=$'\\033[1;32mgarden>\\033[0m '
 
 command_not_found_handler() {
-  ${gardenRunner} "$@"
+  ${shellEscape(gardenRunner)} "$@"
 }
 `;
   const scriptFile = path.join(SESSIONS_DIR, "growhouse-init.zsh");

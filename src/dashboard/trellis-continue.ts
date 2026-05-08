@@ -58,7 +58,7 @@ export function dispatchDelayedTrellisContinue(
   workerName: string,
 ): void {
   const cmd =
-    `sleep 5 && ${gardenRunner} dashboard _trellis-continue-after-merge `
+    `sleep 5 && ${shellEscape(gardenRunner)} dashboard _trellis-continue-after-merge `
     + `${shellEscape(projectName)} ${shellEscape(workerName)} 2>/dev/null`;
   try {
     const child = spawn("sh", ["-c", cmd], { detached: true, stdio: "ignore" });

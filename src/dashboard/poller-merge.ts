@@ -27,7 +27,7 @@ import {
   findWorkerByName, getWorkers, updateWorkerFields,
   type PrState, type WorkerEntry,
 } from "./registry.js";
-import { tmux, getFirstPaneId, windowExists } from "./tmux.js";
+import { tmux, getFirstPaneId, windowExists, shellEscape } from "./tmux.js";
 import { readUsageSnapshot } from "./usage.js";
 import { workerWindowName } from "./window-names.js";
 import { scheduleDelayedPoke } from "./poller-fifo.js";
@@ -421,7 +421,7 @@ function runPostMerge(projectName: string, projectPath: string): void {
         const gr = resolveGardenRunner();
         setupKeybindings(gr);
         setupStatusBar(gr);
-        spawn("sh", ["-c", `${gr} dashboard _post-rebuild-refresh 2>/dev/null`], {
+        spawn("sh", ["-c", `${shellEscape(gr)} dashboard _post-rebuild-refresh 2>/dev/null`], {
           detached: true,
           stdio: "ignore",
         }).unref();

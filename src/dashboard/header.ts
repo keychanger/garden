@@ -10,7 +10,7 @@
 import path from "node:path";
 import { SESSIONS_DIR, loadConfig, tryGetProject, plotsMap, isPlotFocused } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize, listAllWindowNames } from "./tmux.js";
+import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize, listAllWindowNames, shellEscape } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
 import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields, type WorkerRegistry } from "./registry.js";
 import { atomicWriteFile } from "./atomic-write.js";
@@ -401,7 +401,7 @@ export function buildStatusCommand(gardenRunner: string): string {
     `    cur="$prev";`,
     `    sig=0;`,
     `  else`,
-    `    cur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1 | awk '{printf "%s\\033[K\\n", $0}');`,
+    `    cur=$(GARDEN_PRETTY=1 ${shellEscape(gardenRunner)} status 2>&1 | awk '{printf "%s\\033[K\\n", $0}');`,
     `    if [ "$cur" != "$prev" ]; then`,
     `      printf '\\033[H%s\\033[J' "$cur";`,
     `      prev="$cur";`,

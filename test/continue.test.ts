@@ -27,7 +27,11 @@ vi.mock("../src/dashboard/registry.js", () => ({
 
 vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
-  shellEscape: vi.fn((s: string) => `'${s}'`),
+  // Match real shellEscape: pass safe-token strings through unquoted, and
+  // single-quote anything else. Tests must reflect actual behavior so
+  // round-tripping a path with spaces produces the same shell.
+  shellEscape: vi.fn((s: string) =>
+    /^[a-zA-Z0-9_./:=-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`),
   getFirstPaneId: vi.fn(() => "%20"),
   paneExists: vi.fn(() => true),
   windowExists: vi.fn(() => true),
@@ -191,9 +195,13 @@ describe("dispatchDelayedContinue", () => {
     expect(args).toEqual(["-c", expect.any(String)]);
     const cmd = (args as string[])[1];
     expect(cmd).toMatch(/^sleep 3 && /);
+    // Safe-token strings (alphanumeric + ./_:-) are passed through unquoted
+    // by shellEscape. Project/worker names that contain other characters
+    // would be single-quoted; the assertions below stay alphanumeric so they
+    // verify the unquoted-but-shell-safe path.
     expect(cmd).toContain("/usr/local/bin/garden dashboard _continue-worker");
-    expect(cmd).toContain("'myproject'");
-    expect(cmd).toContain("'bold-ash'");
+    expect(cmd).toContain(" myproject ");
+    expect(cmd).toContain(" bold-ash ");
     expect(opts).toEqual(expect.objectContaining({ detached: true, stdio: "ignore" }));
   });
 
@@ -212,8 +220,8 @@ describe("dispatchDelayedAutoContinue", () => {
     const cmd = (args as string[])[1];
     expect(cmd).toMatch(/^sleep 5 && /);
     expect(cmd).toContain("/usr/local/bin/garden dashboard _continue-worker-after-merge");
-    expect(cmd).toContain("'myproject'");
-    expect(cmd).toContain("'bold-ash'");
+    expect(cmd).toContain(" myproject ");
+    expect(cmd).toContain(" bold-ash ");
   });
 
   it("swallows spawn errors", () => {
@@ -385,9 +393,9 @@ describe("dispatchDelayedSeed", () => {
     // a normal end-of-turn — 6s so keys don't land in a still-initializing TUI.
     expect(cmd).toMatch(/^sleep 6 && /);
     expect(cmd).toContain("/usr/local/bin/garden dashboard _seed-worker");
-    expect(cmd).toContain("'myproject'");
-    expect(cmd).toContain("'bold-ash'");
-    expect(cmd).toContain("'/tmp/seed.txt'");
+    expect(cmd).toContain(" myproject ");
+    expect(cmd).toContain(" bold-ash ");
+    expect(cmd).toContain(" /tmp/seed.txt ");
   });
 
   it("swallows spawn errors so a failed dispatch never crashes the caller", () => {

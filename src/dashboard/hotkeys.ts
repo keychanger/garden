@@ -1,10 +1,13 @@
 // Dashboard keybinding setup: maps Alt/Option keys to dashboard subcommands.
 import { execFileSync } from "node:child_process";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux } from "./tmux.js";
+import { tmux, shellEscape, tmuxDoubleQuote } from "./tmux.js";
 
 export function setupKeybindings(gardenRunner: string): void {
-  const gr = gardenRunner;
+  // Single-quote the runner once so paths containing spaces or shell
+  // metacharacters reach the shell intact. The escaped form is safe to
+  // interpolate into the bindMeta guarded-shell strings below.
+  const gr = shellEscape(gardenRunner);
 
   // Project switching: ⌥1 through ⌥9
   for (let i = 1; i <= 9; i++) {
@@ -88,13 +91,4 @@ function bindMeta(key: string, command: string): void {
       ], { stdio: "ignore" });
     } catch { /* ignore */ }
   }
-}
-
-// Tmux's own command parser supports double-quoted strings: $variable
-// expansion and command substitution are interpreted inside them, and
-// backslash escapes the next character. We need the inner shell script to
-// reach run-shell verbatim, so escape \, $, " and ` so tmux passes the
-// guarded string through unchanged.
-function tmuxDoubleQuote(s: string): string {
-  return `"${s.replace(/[\\$"`]/g, "\\$&")}"`;
 }

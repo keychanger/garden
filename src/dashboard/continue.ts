@@ -191,7 +191,7 @@ export function dispatchDelayedContinue(
   workerName: string,
 ): void {
   const cmd =
-    `sleep 3 && ${gardenRunner} dashboard _continue-worker `
+    `sleep 3 && ${shellEscape(gardenRunner)} dashboard _continue-worker `
     + `${shellEscape(projectName)} ${shellEscape(workerName)} 2>/dev/null`;
   try {
     const child = spawn("sh", ["-c", cmd], { detached: true, stdio: "ignore" });
@@ -209,7 +209,7 @@ export function dispatchDelayedAutoContinue(
   workerName: string,
 ): void {
   const cmd =
-    `sleep 5 && ${gardenRunner} dashboard _continue-worker-after-merge `
+    `sleep 5 && ${shellEscape(gardenRunner)} dashboard _continue-worker-after-merge `
     + `${shellEscape(projectName)} ${shellEscape(workerName)} 2>/dev/null`;
   try {
     const child = spawn("sh", ["-c", cmd], { detached: true, stdio: "ignore" });
@@ -229,7 +229,7 @@ export function dispatchDelayedSeed(
   messageFile: string,
 ): void {
   const cmd =
-    `sleep 6 && ${gardenRunner} dashboard _seed-worker `
+    `sleep 6 && ${shellEscape(gardenRunner)} dashboard _seed-worker `
     + `${shellEscape(projectName)} ${shellEscape(workerName)} ${shellEscape(messageFile)} 2>/dev/null`;
   try {
     const child = spawn("sh", ["-c", cmd], { detached: true, stdio: "ignore" });

@@ -190,3 +190,15 @@ export function shellEscape(s: string): string {
   if (/^[a-zA-Z0-9_./:=-]+$/.test(s)) return s;
   return `'${s.replace(/'/g, "'\\''")}'`;
 }
+
+// Tmux's own command parser supports double-quoted strings: $variable
+// expansion and command substitution are interpreted inside them, and
+// backslash escapes the next character. When passing a shell command
+// through tmux's run-shell or set-hook command-templates, the outer wrapper
+// is a tmux-parsed string — wrap with this helper so $, `, \, " in the
+// shell command don't get re-interpreted by tmux before reaching the shell.
+// `#` is NOT escaped — tmux format references like #{window_name} remain
+// active inside the wrapped string.
+export function tmuxDoubleQuote(s: string): string {
+  return `"${s.replace(/[\\$"`]/g, "\\$&")}"`;
+}

@@ -57,6 +57,8 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   windowExists: vi.fn(() => false),
   setPaneVar: vi.fn(),
   listAllWindowNames: vi.fn(() => []),
+  shellEscape: (s: string) => /^[a-zA-Z0-9_./:=-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`,
+  tmuxDoubleQuote: (s: string) => `"${s.replace(/[\\$"`]/g, "\\$&")}"`,
 }));
 
 vi.mock("../src/dashboard/state.js", () => ({
