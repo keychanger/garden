@@ -173,79 +173,129 @@ function finalizeMerge(
 
   log.info("poller", "merged to base branch", { worker: entry.name, data: { baseBranch } });
 
-  // Sync the worker's worktree to the merged tip BEFORE deleteRemoteBranch:
-  // worktrees share refs with the main repo, so once origin/<branch> is gone
-  // both `git fetch origin <branch>` and `git reset --hard origin/<branch>`
-  // fail. Diff pre-review HEAD against the post-sync tip so the auto-continue
-  // prompt can list the files the reviewer touched. Skip the sync when the
-  // worker self-declared done — auto-continue will not fire, and the
-  // .garden-done sentinel itself shows as untracked which would always trip
-  // the dirty check and fire a misleading alert.
   const sentinelPresent = isDoneSet(entry.worktreePath);
-  let changedDuringReview: string[] = [];
-  let syncFailed = false;
-  if (entry.worktreePath && !sentinelPresent) {
-    const fromSha = entry.preReviewSha;
-    const sync = syncWorktreeToRemote(entry.worktreePath, branchName);
-    if (sync.ok) {
-      log.info("poller", "synced worktree to merged tip", {
-        worker: entry.name,
-        data: { branch: branchName },
-      });
-      const toSha = getBranchHeadSha(entry.worktreePath);
-      if (fromSha && toSha && fromSha !== toSha) {
-        changedDuringReview = getChangedFilesBetween(entry.worktreePath, fromSha, toSha);
-      }
-    } else {
-      syncFailed = true;
-      const logData = { branch: branchName, reason: sync.reason, error: sync.error };
-      const alertMessage = sync.reason === "dirty"
-        ? `Could not sync worker ${entry.name} after merge: worktree has uncommitted changes. Worker resumes on stale HEAD until cleaned up.`
-        : `Post-merge sync failed for worker ${entry.name} (${sync.reason}): ${(sync.error ?? "").slice(0, 200)}`;
-      if (sync.reason === "dirty") {
-        log.warn("poller", "post-merge worktree sync failed", { worker: entry.name, data: logData });
-        addAlert({ level: "warn", source: "poller", project: projectName, worker: entry.name, message: alertMessage });
-      } else {
-        log.error("poller", "post-merge worktree sync failed", { worker: entry.name, data: logData });
-        addAlert({ level: "error", source: "poller", project: projectName, worker: entry.name, message: alertMessage });
-      }
-    }
-  }
+  const sync = syncWorktreeAfterMerge(projectName, branchName, entry, sentinelPresent);
+  notifyPostMerge(projectName, projectPath, baseBranch, entry, preMergeChangedFiles);
+  transitionToTerminal(projectName, branchName, entry, sentinelPresent, sync);
+  refreshDashboard();
+}
 
+// Phase 1 of finalizeMerge: bring the worker's worktree forward to the
+// merged tip so the worker resumes on the post-review code, not its own
+// pre-review HEAD. Runs BEFORE deleteRemoteBranch — worktrees share refs
+// with the main repo, so once origin/<branch> is gone both
+// `git fetch origin <branch>` and `git reset --hard origin/<branch>` fail.
+// When .garden-done is set, the worker self-declared done and auto-continue
+// won't fire; skip the sync entirely (the sentinel itself shows as untracked
+// and would always trip the dirty check).
+//
+// Returns the file list to surface in the auto-continue prompt and a flag
+// indicating whether the sync failed (operator-visible alert was already
+// fired by this helper).
+interface SyncOutcome {
+  changedFiles: string[];
+  syncFailed: boolean;
+}
+function syncWorktreeAfterMerge(
+  projectName: string,
+  branchName: string,
+  entry: WorkerEntry,
+  sentinelPresent: boolean,
+): SyncOutcome {
+  if (!entry.worktreePath || sentinelPresent) {
+    return { changedFiles: [], syncFailed: false };
+  }
+  const fromSha = entry.preReviewSha;
+  const sync = syncWorktreeToRemote(entry.worktreePath, branchName);
+  if (sync.ok) {
+    log.info("poller", "synced worktree to merged tip", {
+      worker: entry.name,
+      data: { branch: branchName },
+    });
+    const toSha = getBranchHeadSha(entry.worktreePath);
+    if (fromSha && toSha && fromSha !== toSha) {
+      return {
+        changedFiles: getChangedFilesBetween(entry.worktreePath, fromSha, toSha),
+        syncFailed: false,
+      };
+    }
+    return { changedFiles: [], syncFailed: false };
+  }
+  // Sync failed — log + alert at the severity matching the cause. "dirty"
+  // is operator-recoverable (commit/stash); other reasons are git-level
+  // failures and warrant the higher level.
+  const logData = { branch: branchName, reason: sync.reason, error: sync.error };
+  const alertMessage = sync.reason === "dirty"
+    ? `Could not sync worker ${entry.name} after merge: worktree has uncommitted changes. Worker resumes on stale HEAD until cleaned up.`
+    : `Post-merge sync failed for worker ${entry.name} (${sync.reason}): ${(sync.error ?? "").slice(0, 200)}`;
+  if (sync.reason === "dirty") {
+    log.warn("poller", "post-merge worktree sync failed", { worker: entry.name, data: logData });
+    addAlert({ level: "warn", source: "poller", project: projectName, worker: entry.name, message: alertMessage });
+  } else {
+    log.error("poller", "post-merge worktree sync failed", { worker: entry.name, data: logData });
+    addAlert({ level: "error", source: "poller", project: projectName, worker: entry.name, message: alertMessage });
+  }
+  return { changedFiles: [], syncFailed: true };
+}
+
+// Phase 2 of finalizeMerge: side-effects against the project as a whole —
+// delete the remote branch, fast-forward the local checkout (so postMerge
+// runs against the merged code), notify any siblings whose branches
+// overlap, run postMerge if configured, alert on stuck checkout.
+function notifyPostMerge(
+  projectName: string,
+  projectPath: string,
+  baseBranch: string,
+  entry: WorkerEntry,
+  preMergeChangedFiles: string[],
+): void {
+  const branchName = entry.branchName ?? entry.name;
   deleteRemoteBranch(projectPath, branchName, { project: projectName, worker: entry.name });
 
-  // Update the main checkout so postMerge (e.g. npm run build) runs
-  // against the newly merged code, not stale working-tree files.
   // mergeToBase only pushes to the remote via refspec — it never touches
-  // the local checkout.
+  // the local checkout. Update the main checkout so postMerge (e.g.
+  // `npm run build`) runs against the newly merged code, not stale files.
   const advanced = fastForwardBase(projectPath, baseBranch, { project: projectName, worker: entry.name });
 
   notifySiblingWorkers(projectName, baseBranch, entry, preMergeChangedFiles);
 
   if (advanced) {
     runPostMerge(projectName, projectPath);
-  } else {
-    // Always alert: checkout drift rots manual workflow regardless of postMerge config.
-    const postMergeNote = tryGetProject(projectName)?.postMerge
-      ? " postMerge was skipped."
-      : "";
-    log.error("poller", "local base checkout did not fast-forward after merge", {
-      worker: entry.name,
-      data: { projectPath, baseBranch },
-    });
-    addAlert({
-      level: "error",
-      source: "poller",
-      project: projectName,
-      worker: entry.name,
-      message: `Local ${baseBranch} checkout at ${projectPath} did not fast-forward after merge (likely a dirty working tree or divergent branch).${postMergeNote} Clean the checkout so it stays current with merged work.`,
-    });
+    return;
   }
+  // Always alert on a stuck checkout: drift rots manual workflow regardless
+  // of whether postMerge was configured.
+  const postMergeNote = tryGetProject(projectName)?.postMerge
+    ? " postMerge was skipped."
+    : "";
+  log.error("poller", "local base checkout did not fast-forward after merge", {
+    worker: entry.name,
+    data: { projectPath, baseBranch },
+  });
+  addAlert({
+    level: "error",
+    source: "poller",
+    project: projectName,
+    worker: entry.name,
+    message: `Local ${baseBranch} checkout at ${projectPath} did not fast-forward after merge (likely a dirty working tree or divergent branch).${postMergeNote} Clean the checkout so it stays current with merged work.`,
+  });
+}
 
-  // Per STATUS.md invariant 4: pick `done` when the worker wrote `.garden-done`
-  // before its final push (skip the transient `merged` beat and go straight to
-  // the operator-actionable cleanup signal). Otherwise set `merged` — auto-
-  // continue will clear it on the next prompt.
+// Phase 3 of finalizeMerge: write the terminal prState (`done` when the
+// worker self-declared finished via .garden-done, else `merged`) plus the
+// per-merge field reset, handle the worker-already-working race, and
+// dispatch the post-merge auto-continue prompt.
+function transitionToTerminal(
+  projectName: string,
+  branchName: string,
+  entry: WorkerEntry,
+  sentinelPresent: boolean,
+  sync: SyncOutcome,
+): void {
+  // Per STATUS.md invariant 4: pick `done` when the worker wrote .garden-done
+  // before its final push (skip the transient `merged` beat and go straight
+  // to the operator-actionable cleanup signal). Otherwise set `merged` —
+  // auto-continue clears it on the next prompt.
   const terminalState: PrState = sentinelPresent ? "done" : "merged";
   transitionState(projectName, entry.name, terminalState, {
     mergedAt: new Date().toISOString(),
@@ -258,12 +308,14 @@ function finalizeMerge(
     preResolveSha: undefined,
     lastResolveBody: undefined,
     preReviewSha: undefined,
-    pendingContinueChangedFiles: changedDuringReview.length ? changedDuringReview : undefined,
-    pendingContinueSyncFailed: syncFailed ? true : undefined,
+    pendingContinueChangedFiles: sync.changedFiles.length ? sync.changedFiles : undefined,
+    pendingContinueSyncFailed: sync.syncFailed ? true : undefined,
   });
 
-  // STATUS.md invariant 4 race: prompt hook can't clear active pipeline states,
-  // so if the worker is already working, clear the stale terminal state immediately.
+  // STATUS.md invariant 4 race: a prompt hook that landed mid-merge can't
+  // clear an active pipeline prState (which `merged`/`done` is at the moment
+  // of write). If the worker is already working again, clear the stale
+  // terminal state immediately so the renderer doesn't show a phantom merge.
   const fresh = findWorkerByName(projectName, entry.name);
   if (fresh?.claudeStatus === "working") {
     log.info("poller", "worker already active after merge, clearing terminal state", {
@@ -277,8 +329,6 @@ function finalizeMerge(
   }
 
   maybeAutoContinue(projectName, branchName, fresh ?? entry);
-
-  refreshDashboard();
 }
 
 // After a clean merge, send the worker a "please proceed" prompt so multi-phase

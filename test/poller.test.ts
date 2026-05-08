@@ -1200,6 +1200,42 @@ describe("poll — merge-pending state", () => {
     });
   });
 
+  it("alerts at error level when sync fails with a non-dirty git error", () => {
+    // The dirty path renders as a recoverable warn — operator can stash/commit.
+    // A fetch-failed or reset-failed sync is a real git problem (network,
+    // disk, ref state) and warrants the higher-severity error alert.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        claudeStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        preReviewSha: "pre-review-sha",
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(syncWorktreeToRemote).mockReturnValue({
+      ok: false, reason: "fetch-failed", error: "fatal: unable to reach origin",
+    });
+
+    poll("myproject");
+
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        source: "poller",
+        worker: "bold-ash",
+        message: expect.stringMatching(/fetch-failed/),
+      }),
+    );
+    const mergedCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "merged",
+    );
+    expect(mergedCall![2]).toMatchObject({
+      pendingContinueSyncFailed: true,
+    });
+  });
+
   it("skips worktree sync entirely when .garden-done sentinel is set", () => {
     // The .garden-done sentinel always shows as untracked in
     // `git status --porcelain`, so syncing a done worker would always trip
