@@ -54,11 +54,20 @@ export function withFileLock<T>(
       if ((err as NodeJS.ErrnoException).code === "EEXIST") {
         let holderPid = -1;
         try { holderPid = parseInt(fs.readFileSync(lockPath, "utf-8"), 10); } catch { /* ignore */ }
+        const haveValidPid = Number.isFinite(holderPid) && holderPid > 0;
         let holderAlive = false;
-        if (Number.isFinite(holderPid) && holderPid > 0) {
+        if (haveValidPid) {
           try { process.kill(holderPid, 0); holderAlive = true; } catch { /* dead */ }
         }
-        if (!holderAlive) {
+        // The acquire sequence is open(O_CREAT|O_EXCL), writeSync(pid),
+        // closeSync(fd). A second acquirer can observe the file in the empty
+        // window between open and writeSync — parseInt("") is NaN, which is
+        // indistinguishable from a stale empty lock at the bit level. Only
+        // unlink on positive evidence the holder is dead (parsable pid +
+        // signal 0 fails). On no-pid-yet content, wait for the holder to
+        // finish writing — otherwise we'd unlink a live holder's lock and
+        // both processes would end up holding it.
+        if (haveValidPid && !holderAlive) {
           try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
           continue;
         }

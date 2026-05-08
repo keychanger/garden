@@ -54,4 +54,35 @@ describe("withFileLock", () => {
     withFileLock(lockPath, () => { ran = true; });
     expect(ran).toBe(true);
   });
+
+  // The acquire sequence is open(O_CREAT|O_EXCL), writeSync(pid), closeSync(fd).
+  // Cross-process, another acquirer can observe the file in the empty window
+  // between open and writeSync. parseInt("", 10) is NaN — the dead-holder
+  // branch must NOT fire on no-pid-yet content, otherwise it unlinks a live
+  // holder's lock and two processes both end up holding it.
+  it("does not reclaim a lock whose content has not been written yet", async () => {
+    const { withFileLock } = await importHelper();
+    const lockPath = path.join(env.sessionsDir, "midwrite.lock");
+    // Empty file = an acquirer that just succeeded openSync(O_CREAT|O_EXCL)
+    // but hasn't yet writeSync'd its pid. From a second acquirer's
+    // perspective, this is indistinguishable from a stale empty lock.
+    fs.writeFileSync(lockPath, "");
+    expect(() => withFileLock(lockPath, () => { /* never runs */ }, { deadlineMs: 100 }))
+      .toThrow(/Could not acquire/);
+    // The synthetic lockfile must NOT have been removed by the recovery
+    // branch — only the real holder removes its own lock.
+    expect(fs.existsSync(lockPath)).toBe(true);
+  });
+
+  it("does not reclaim a lock with garbage (non-numeric) content", async () => {
+    const { withFileLock } = await importHelper();
+    const lockPath = path.join(env.sessionsDir, "garbage.lock");
+    // A partial write or filesystem corruption could leave non-numeric
+    // content. Without a parsable pid we can't prove the holder is dead,
+    // so the safe behavior is to wait, not unlink.
+    fs.writeFileSync(lockPath, "not-a-pid");
+    expect(() => withFileLock(lockPath, () => { /* never runs */ }, { deadlineMs: 100 }))
+      .toThrow(/Could not acquire/);
+    expect(fs.existsSync(lockPath)).toBe(true);
+  });
 });
