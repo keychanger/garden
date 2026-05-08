@@ -1,4 +1,4 @@
-// Per-iteration context reset for trellis vines. See TRELLIS.md "Per-iteration
+// Per-iteration context reset for trellis vines. See WORKFLOWS.md "Per-iteration
 // context reset" — Invariant 8. The deliberate divergence from the default
 // workflow's auto-continue: each iteration starts with a fresh Claude
 // process, so conversation history does not compound across iterations.
@@ -193,7 +193,7 @@ export function trellisAutoContinueAfterMerge(
 }
 
 // Build the trellis continue prompt for iteration N+1. Reads
-// `entry.trellis.iteration + 1` per TRELLIS.md (the increment fires inside
+// `entry.trellis.iteration + 1` per WORKFLOWS.md (the increment fires inside
 // the next launchReview, not here). See "Continue prompt structure".
 export function buildTrellisContinuePrompt(entry: WorkerEntry): string {
   const t = entry.trellis;

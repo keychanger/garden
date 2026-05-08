@@ -86,7 +86,7 @@ A good trellis is small, concrete, and bounded. It describes *what the feature d
 Walks you through authoring a trellis at \`<project>/.garden/trellises/<name>.md\` (or wherever the project's \`trellisDir\` config points). Output is a markdown file that:
 
 1. Carries the spec sentinel \`the code is wrong\` so the reviewer treats it as authoritative.
-2. Carries the trellis tag \`<!-- trellis: v1 -->\` so the picker and CLI recognize it as a trellis (distinct from system specs like STATUS.md or TRELLIS.md itself).
+2. Carries the trellis tag \`<!-- trellis: v1 -->\` so the picker and CLI recognize it as a trellis (distinct from system specs like STATUS.md).
 3. Has the recommended sections (Intent, Surface, Behavior, Tests, Docs, Out of scope) populated with feature-specific content the reviewer can grep against.
 4. Has been self-reviewed for ambiguity, contradiction, and completeness.
 

@@ -123,7 +123,7 @@ Workers:
                                  trellis plants a vine bound to the named trellis. --model overrides
                                  the trellis default (Sonnet).
 
-Trellis (spec-driven loop workflow — see src/dashboard/TRELLIS.md):
+Trellis (spec-driven loop workflow — see WORKFLOWS.md § "Trellis workflow"):
   trellis list <project> [--active]   List trellises (active + archived)
   trellis show <project> <name>       Print a trellis's content
   trellis new <project> <name>        Scaffold a trellis at <project>/.garden/trellises/<name>.md

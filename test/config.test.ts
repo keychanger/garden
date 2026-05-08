@@ -468,7 +468,7 @@ describe("logs mode", () => {
 
 // Trellis workflow adds three optional ProjectConfig keys. Round-trip them
 // through saveConfig → loadConfig and confirm isValidConfigKey accepts them.
-// See TRELLIS.md "Project config".
+// See WORKFLOWS.md "Project config".
 describe("trellis project config keys", () => {
   it("isValidConfigKey accepts the three trellis keys", async () => {
     const { isValidConfigKey } = await importConfig();

@@ -19,11 +19,11 @@ import { log } from "./log.js";
 export type ClaudeStatus = "loading" | "ready" | "working" | "asking" | "idle" | "exited";
 export type PrState = "working" | "reviewing" | "merge-pending" | "resolving" | "merged" | "done" | "failing";
 
-// Trellis reviewer verdict vocabulary. See TRELLIS.md "Reviewer prompt and
+// Trellis reviewer verdict vocabulary. See WORKFLOWS.md "Reviewer prompt and
 // verdict". Persisted on WorkerEntry.trellis.lastVerdict for trellis vines.
 export type TrellisVerdict = "ALIGNED" | "DRIFT" | "FAILED" | "FLAGGED";
 
-// Reason a worker is in `failing`. Allowed values per TRELLIS.md
+// Reason a worker is in `failing`. Allowed values per WORKFLOWS.md
 // "Worker entry additions" + "Equilibrium and termination". Default
 // workflow uses "code" and "unparseable-verdict"; trellis adds the rest.
 // Optional: legacy entries lack this field; consumers default to "code"
@@ -118,14 +118,14 @@ export interface WorkerEntry {
   // See WORKFLOWS.md and src/dashboard/workflows/.
   workflow?: string;
   // Reason the worker is in `failing`. See FailingReason above and
-  // TRELLIS.md "Equilibrium and termination". Default workflow sets "code"
+  // WORKFLOWS.md "Equilibrium and termination". Default workflow sets "code"
   // (Q8 retrofit) or "unparseable-verdict" (Q9 retrofit, phase 2).
   failingReason?: FailingReason;
   // Trellis-vine-only data. Populated only when workflow === "trellis";
   // absent on default workers. Migration of legacy flat trellis* fields
   // happens in readRegistry. updateWorkerFields deep-merges this sub-object
   // (passing `{ trellis: { lastVerdict: "ALIGNED" } }` updates only that
-  // one key without clobbering the rest). See TRELLIS.md "Worker entry
+  // one key without clobbering the rest). See WORKFLOWS.md "Worker entry
   // additions" for field contracts.
   trellis?: TrellisData;
 }

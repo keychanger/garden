@@ -44,7 +44,7 @@ export function buildRulesContext(projectName: string, projectPath: string): str
 export interface WorktreeRulesOptions {
   /** When set, the rules text appends three trellis-specific paragraphs
    *  describing the trellis workflow's authority asymmetry, iteration
-   *  discipline, and the path to the bound trellis. See TRELLIS.md
+   *  discipline, and the path to the bound trellis. See WORKFLOWS.md
    *  "Worker system prompt". */
   trellis?: {
     /** Worktree-relative path to the trellis file (e.g.
@@ -90,7 +90,7 @@ You are working in an isolated git worktree on branch \`${branchName}\`. Your wo
 
   if (!options?.trellis) return baseWithChecks;
 
-  // Trellis-specific extension. Three paragraphs per TRELLIS.md "Worker
+  // Trellis-specific extension. Three paragraphs per WORKFLOWS.md "Worker
   // system prompt": concept, authority asymmetry, iteration discipline.
   // Replaces the generic "auto-continue across phases" guidance — trellis
   // vines reset Claude's context every iteration, so multi-phase

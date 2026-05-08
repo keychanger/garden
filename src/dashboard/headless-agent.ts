@@ -41,7 +41,7 @@ export interface HeadlessAgentLaunchOptions {
    *  becomes `claude -p --model <model> < prompt > result`. When unset
    *  (default reviewer, default resolver), no `--model` flag is passed
    *  and claude uses the account's default model. The trellis reviewer
-   *  always sets this to "opus" per TRELLIS.md Invariant 10 — reviewer
+   *  always sets this to "opus" per WORKFLOWS.md Invariant 10 — reviewer
    *  quality is non-negotiable, so the model is pinned regardless of
    *  the worker's model or quota state. */
   model?: "opus" | "sonnet";

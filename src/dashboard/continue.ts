@@ -96,7 +96,7 @@ export function clearDoneSentinel(worktreePath: string | undefined): void {
 
 // Workflow handlers (trellis ALIGNED path) write the sentinel on the
 // worker's behalf so finalizeMerge picks `done` instead of `merged`. The
-// file is empty — its presence is the signal. See TRELLIS.md "Equilibrium
+// file is empty — its presence is the signal. See WORKFLOWS.md "Equilibrium
 // and termination" / "Aligned" disposition.
 export function setDoneSentinel(worktreePath: string | undefined): void {
   if (!worktreePath) return;

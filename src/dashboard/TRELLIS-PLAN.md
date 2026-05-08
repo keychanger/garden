@@ -1,8 +1,8 @@
 # Trellis implementation plan
 
 Phased plan for shipping the v1 trellis workflow described in
-`src/dashboard/TRELLIS.md`. The spec is the design target — this document is
-not itself a spec; if it disagrees with TRELLIS.md, the spec wins and the
+`WORKFLOWS.md` § "Trellis workflow". The spec is the design target — this document is
+not itself a spec; if it disagrees with the spec, the spec wins and the
 plan should be updated. (The literal source-of-truth marker phrase is
 deliberately avoided in this opening paragraph so `findSpecFiles()` does
 not classify this planning doc as a spec.) The plan exists to sequence the
@@ -15,8 +15,8 @@ selection, status visibility, and the picker hotkey on top of a working loop.
 Each phase builds on the merged base of the previous one — later phases
 assume earlier ones are in main.
 
-The spec's "Implementation entry points" table (TRELLIS.md, "The trellis
-workflow" section) is the authoritative file map; this plan repeats only
+The spec's "Implementation entry points" table (WORKFLOWS.md, "The trellis
+workflow definition" section under "Trellis workflow") is the authoritative file map; this plan repeats only
 what's needed to schedule each piece. When in doubt, re-read the spec.
 
 Vocabulary: a **trellis** is the markdown design document; a **vine** is a

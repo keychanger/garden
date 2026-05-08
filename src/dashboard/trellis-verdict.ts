@@ -1,4 +1,4 @@
-// Trellis verdict vocabulary and parsers. See TRELLIS.md "Reviewer prompt
+// Trellis verdict vocabulary and parsers. See WORKFLOWS.md "Reviewer prompt
 // and verdict".
 //
 // Two parsers live here:
@@ -53,7 +53,7 @@ export interface DriftItem {
 export interface DriftListParseResult {
   items: DriftItem[];
   /** Count of "Aligned" claims the reviewer enumerated above the verdict
-   *  block — see TRELLIS.md "Logs": `alignedCount` is the running count
+   *  block — see WORKFLOWS.md "Logs": `alignedCount` is the running count
    *  of claims marked `present`. The reviewer is asked to enumerate
    *  these in its three-way diff section; the parser scans for lines of
    *  the form "Aligned: N" or "N aligned" preceding the verdict. */

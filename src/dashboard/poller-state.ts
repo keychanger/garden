@@ -48,7 +48,7 @@ export function transitionState(
 // failingReasons that require operator action — the failing → working push
 // debounce does NOT apply. New commits don't auto-resume; only the
 // corresponding `garden trellis ...` command (phase 4) clears the state.
-// See TRELLIS.md "Equilibrium and termination": trellis-flagged needs
+// See WORKFLOWS.md "Equilibrium and termination": trellis-flagged needs
 // `garden trellis resume`; iteration-budget needs `garden trellis budget`
 // or kill; stagnation (v1.5) needs amend or kill.
 function requiresOperatorAction(entry: WorkerEntry): boolean {

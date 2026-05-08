@@ -217,7 +217,7 @@ function trellisInfoFor(entry?: { workflow?: string; trellis?: { name: string; i
   };
 }
 
-// Format the trellis bracket for a vine row. Layout per TRELLIS.md
+// Format the trellis bracket for a vine row. Layout per WORKFLOWS.md
 // "Worker row":
 //   Active vine, drifting:   [trellis: auth-rewrite | 4/30 | 3 drift]
 //   Aligned terminal:        [trellis: auth-rewrite | ✓ aligned, 7 iters]

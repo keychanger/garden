@@ -1,4 +1,4 @@
-// Trellis-flavored review prompt sections + builder. See TRELLIS.md
+// Trellis-flavored review prompt sections + builder. See WORKFLOWS.md
 // "Reviewer prompt and verdict".
 //
 // The trellis reviewer reuses most default review sections (intro, spec
@@ -32,7 +32,7 @@ import {
 } from "./prompts.js";
 import type { WorkerEntry } from "./registry.js";
 
-// Authority asymmetry text. Per TRELLIS.md, this is verbatim — paraphrasing
+// Authority asymmetry text. Per WORKFLOWS.md, this is verbatim — paraphrasing
 // weakens the prompt's load-bearing instruction.
 const TRELLIS_AUTHORITY_TEXT = [
   "The trellis is the source of truth for this feature. Your job is to",
@@ -105,7 +105,7 @@ export const trellisDocumentSection: PromptSection = {
 
 // Inline trellis-overrides.md if it exists. Phase 2 ships the file
 // mechanism only; the `--override` CLI flag lands in v1.5. When the file
-// is absent the section returns null. See TRELLIS.md "Flagging the
+// is absent the section returns null. See WORKFLOWS.md "Flagging the
 // trellis" / "Override".
 export const trellisOverridesSection: PromptSection = {
   name: "trellis-overrides",
@@ -170,7 +170,7 @@ export const trellisVerdictFormatSection: PromptSection = {
 };
 
 // Section list for the trellis review. Order is load-bearing — see
-// TRELLIS.md "Section composition".
+// WORKFLOWS.md "Section composition".
 export const trellisReviewSections: readonly PromptSection[] = [
   reviewIntroSection,
   reviewSpecWarningSection,

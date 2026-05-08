@@ -59,11 +59,11 @@ export interface WorkflowDefinition {
    *  carries a per-worker override (`WorkerEntry.workerModel`). When
    *  unset (default workflow), no `--model` flag is passed and claude
    *  uses the account's default model. Trellis sets this to "sonnet"
-   *  per TRELLIS.md "Model selection and budget". */
+   *  per WORKFLOWS.md "Model selection and budget". */
   workerModel?: "opus" | "sonnet";
   /** Model used by the workflow's reviewer. When set, `launchHeadlessAgent`
    *  passes `--model <reviewerModel>` to the reviewer claude. Not
-   *  overridable per worker — see TRELLIS.md Invariant 10 ("reviewer
+   *  overridable per worker — see WORKFLOWS.md Invariant 10 ("reviewer
    *  quality is non-negotiable"). When unset, no `--model` flag is
    *  passed and claude uses the account default. */
   reviewerModel?: "opus" | "sonnet";

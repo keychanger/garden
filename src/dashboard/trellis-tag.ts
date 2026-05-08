@@ -1,4 +1,4 @@
-// Trellis file discovery + plant pre-flight. See TRELLIS.md "The trellis
+// Trellis file discovery + plant pre-flight. See WORKFLOWS.md "The trellis
 // document" and "Plant-time pre-flight".
 //
 // A trellis file is a markdown document carrying:
@@ -63,7 +63,7 @@ const SUMMARY_PLACEHOLDER = "—";
 
 // Return the configured trellis directory for a project (absolute), or
 // null when the project isn't registered. Defaults to ".garden/trellises"
-// relative to the project root per TRELLIS.md "File location".
+// relative to the project root per WORKFLOWS.md "File location".
 export function trellisDirFor(projectName: string): string | null {
   const project = tryGetProject(projectName);
   if (!project) return null;
@@ -133,7 +133,7 @@ export type ValidateTrellisPlantResult =
   | { ok: true; info: TrellisFileInfo; warnings: string[] }
   | { ok: false; error: string };
 
-// Plant-time pre-flight per TRELLIS.md "Plant-time pre-flight". The picker
+// Plant-time pre-flight per WORKFLOWS.md "Plant-time pre-flight". The picker
 // (phase 5) and the CLI both call this so behavior is shared. Returns
 // either an `ok` result with an info handle and an array of soft warnings
 // (e.g. missing sentinel), or an error string suitable for direct display.

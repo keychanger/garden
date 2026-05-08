@@ -334,7 +334,7 @@ describe("getAllWorkerNames", () => {
 // Trellis workflow adds an optional `trellis` sub-object to WorkerEntry
 // holding all per-vine state. Round-trip it through addWorker → readRegistry
 // to confirm shape changes don't break the registry's persistence contract.
-// See TRELLIS.md "Worker entry additions".
+// See WORKFLOWS.md "Worker entry additions".
 describe("trellis WorkerEntry fields", () => {
   it("round-trips every trellis sub-object field plus failingReason", async () => {
     const { addWorker, getWorkers } = await importRegistry();

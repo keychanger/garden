@@ -334,7 +334,7 @@ function dispatchDefaultVerdict(
   return true;
 }
 
-// Trellis verdict dispatcher. See TRELLIS.md "One iteration, in detail" /
+// Trellis verdict dispatcher. See WORKFLOWS.md "One iteration, in detail" /
 // "Branch on verdict" for the contract on each disposition.
 //
 // ALIGNED → write `.garden-done`, force-push, merge-pending; finalizeMerge
@@ -359,7 +359,7 @@ function dispatchTrellisVerdict(
   // alignedCount are only meaningful on DRIFT verdicts (the body parses
   // a structured drift block); the other verdicts log the same shape with
   // 0 / undefined so the operator can grep iteration history uniformly.
-  // See TRELLIS.md "Logs".
+  // See WORKFLOWS.md "Logs".
   const trellisData = entry.trellis;
   const driftPreview = review.verdict === "DRIFT" ? parseDriftList(review.body) : undefined;
   log.info("poller", "trellis iteration", {
@@ -601,7 +601,7 @@ function launchReview(
   const isTrellis = entry.workflow === "trellis";
 
   // Trellis workflow: increment iteration counter *before* the budget check
-  // and *before* dispatch (TRELLIS.md "One iteration, in detail" / step 5).
+  // and *before* dispatch (WORKFLOWS.md "One iteration, in detail" / step 5).
   // After the increment, the counter reflects the iteration about to be
   // reviewed (1 during the first review, 2 during the second, etc.). When
   // the increment exceeds maxIterations, short-circuit to failing with

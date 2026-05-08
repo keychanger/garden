@@ -1,7 +1,7 @@
 // Trellis vine picker (⌥⇧N hotkey). Uses tmux display-menu for the
 // arrow-key + enter UX — no fzf dependency, works wherever tmux works.
 //
-// Three population states per TRELLIS.md "Hotkey: ⌥⇧n":
+// Three population states per WORKFLOWS.md "Hotkey: ⌥⇧n":
 //   - Zero active trellises: a menu with [a] author / [n] scaffold /
 //     [r] revive (last only when retired ones exist).
 //   - One active trellis: skip the menu, plant immediately.

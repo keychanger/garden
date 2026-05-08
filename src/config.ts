@@ -32,7 +32,7 @@ export interface ProjectConfig {
   sandboxDomains?: string[];
   claudeProfile?: string;
   logColor?: string;
-  // Trellis workflow keys. See TRELLIS.md "Project config".
+  // Trellis workflow keys. See WORKFLOWS.md "Project config".
   // Directory containing trellis files. Resolved relative to the project
   // root. Default: ".garden/trellises".
   trellisDir?: string;

@@ -1,4 +1,4 @@
-// Trellis workflow definition. See src/dashboard/TRELLIS.md for the
+// Trellis workflow definition. See src/dashboard/WORKFLOWS.md for the
 // authoritative spec.
 //
 // Phase 1 ships a skeletal definition that reuses the default workflow's

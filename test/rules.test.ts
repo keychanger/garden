@@ -175,7 +175,7 @@ describe("buildWorktreeRules", () => {
 
 // Trellis workflow extends the worktree rules with three additional
 // paragraphs (concept, authority asymmetry, iteration discipline). See
-// TRELLIS.md "Worker system prompt".
+// WORKFLOWS.md "Worker system prompt".
 describe("buildWorktreeRules — trellis workflow", () => {
   it("default workers do NOT include trellis paragraphs", async () => {
     const { buildWorktreeRules } = await importRules();

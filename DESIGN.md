@@ -336,7 +336,7 @@ garden workers new <project> [--workflow trellis --trellis <name>]
                                    # overrides the trellis default (Sonnet).
 garden trellis new <project> <name>
                                    # Scaffold a trellis at <project>/.garden/trellises/<name>.md
-                                   # (see src/dashboard/TRELLIS.md for the workflow spec)
+                                   # (see WORKFLOWS.md § "Trellis workflow" for the workflow spec)
 ```
 
 Project name is auto-detected from cwd when inside a project directory. `GARDEN_PROJECT` env var overrides. Worker panes also export `GARDEN_WORKER`, `GARDEN_BRANCH`, and `GARDEN_BASE_BRANCH` so workers can self-identify via `garden whoami` and filter their own log history with `garden logs -w $GARDEN_WORKER`.

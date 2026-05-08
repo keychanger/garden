@@ -7,8 +7,7 @@ Garden is a CLI orchestrator for managing interactive Claude Code sessions acros
 - `DESIGN.md` — full architecture
 - `rules.md` — coding rules loaded into every Claude session (commit/test/scope discipline)
 - `src/dashboard/STATUS.md` — worker status state machine (spec)
-- `src/dashboard/TRELLIS.md` — trellis workflow (spec)
-- `WORKFLOWS.md` — workflow registry design and "how to add a new workflow"
+- `WORKFLOWS.md` — workflow registry design, "how to add a new workflow", and trellis workflow spec
 - `src/TRACKS.md` — multi-track / promotion pipeline (design target, no code yet)
 
 ## Build and run
@@ -41,7 +40,7 @@ npm test               # vitest unit + integration; tsc --noEmit
   - `usage.ts` + `usage-poller.ts` — Claude quota meter
   - `sandbox.ts`, `credentials.ts`, `claude-env.ts` — Claude profile / Keychain / sandbox config
   - `alerts.ts`, `log.ts`, `git.ts`, `names.ts`, `runner.ts`, `plot-status.ts` — utilities
-  - `STATUS.md`, `TRELLIS.md`, `TRELLIS-PLAN.md` — specs / plans (see top of file)
+  - `STATUS.md`, `TRELLIS-PLAN.md` — specs / plans (see top of file). The trellis workflow spec lives in `WORKFLOWS.md` § "Trellis workflow".
 
 ## CLI surface
 
@@ -52,7 +51,7 @@ Use `garden <cmd> --help` for flag-level detail. High-level groupings:
 - **Claude profiles**: `claude-profile add|login|list|remove`. Per-project `claudeProfile` config injects `CLAUDE_CONFIG_DIR` for that project's worker / reviewer / resolver. macOS Keychain footgun: every Claude `/login` overwrites one shared entry, so always re-auth via `garden login` (it strips `CLAUDE_CONFIG_DIR` and captures Keychain → file for profiles).
 - **Auth**: `login [profile]`, `auth status` (presence/expiry/Keychain displacement diagnostic).
 - **Workers**: `whoami`, `kick`, `bounce`, `pause`, `resume`, `health [--fix]`, `logs [-w <worker>]`. Workers can self-identify via `$GARDEN_WORKER` / `$GARDEN_BRANCH` / `$GARDEN_BASE_BRANCH` / `$GARDEN_PROJECT`.
-- **Trellis**: `trellis list|show|new|status|amend|resume|retire|revive`; plant via `workers new <project> --workflow trellis --trellis <name> [--model opus|sonnet]` or hotkey `⌥⇧N`. Spec: `TRELLIS.md`.
+- **Trellis**: `trellis list|show|new|status|amend|resume|retire|revive`; plant via `workers new <project> --workflow trellis --trellis <name> [--model opus|sonnet]` or hotkey `⌥⇧N`. Spec: `WORKFLOWS.md` § "Trellis workflow".
 - **Auto-continue gate**: `auto [on|off|status|threshold N|resume-on-reset on|off]` — global gate in `~/.garden/config.yml` under `autoContinue`.
 
 ## Workers (worktrees)
@@ -96,4 +95,4 @@ See `WORKFLOWS.md`. Short version: define a `WorkflowDefinition` in `src/dashboa
 
 ## Keeping docs current
 
-If your task changes commands, architecture, file layout, or conventions, update `DESIGN.md` and this file. Specs (STATUS.md, TRELLIS.md, TRACKS.md) are design targets — fix the code to match, not the spec.
+If your task changes commands, architecture, file layout, or conventions, update `DESIGN.md` and this file. Specs (STATUS.md, WORKFLOWS.md § "Trellis workflow", TRACKS.md) are design targets — fix the code to match, not the spec.

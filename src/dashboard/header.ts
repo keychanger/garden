@@ -84,7 +84,7 @@ function formatLeft(
 }
 
 // Append a compact trellis summary to the left status segment when the
-// active project has any trellis vine. Per TRELLIS.md "Bottom bar":
+// active project has any trellis vine. Per WORKFLOWS.md "Bottom bar":
 //   garden | main | trellises: auth-rewrite (4/30, drifting), session-cleanup (\u2713)
 // Vines listed in plant order. Aligned vines marked \u2713; drifting shows
 // iteration/budget; flagged shows \u2691; budget-exhausted shows !. Truncates

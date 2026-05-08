@@ -55,7 +55,7 @@ export interface NewWorkerOptions {
   background?: boolean;
   // Workflow that drives the new worker's lifecycle. Defaults to "default".
   // Trellis vines pass "trellis" along with the trellis.name/trellis.path
-  // pair below; see TRELLIS.md "Spawning a trellis vine".
+  // pair below; see WORKFLOWS.md "Spawning a trellis vine".
   workflow?: string;
   // Trellis-specific options, ignored unless workflow === "trellis".
   trellis?: {
@@ -165,7 +165,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       workflow: workflowName,
       // Trellis vine data — populated only when workflow === "trellis".
       // iteration starts at 0; launchReview increments to 1 before the
-      // first review fires. See TRELLIS.md "Worker entry additions".
+      // first review fires. See WORKFLOWS.md "Worker entry additions".
       ...(workflowName === "trellis" && opts.trellis
         ? {
             trellis: {

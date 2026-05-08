@@ -1,4 +1,4 @@
-// Trellis vine model selection. See TRELLIS.md "Model selection and budget".
+// Trellis vine model selection. See WORKFLOWS.md "Model selection and budget".
 //
 // Resolution order for the worker model on each iteration spawn:
 //   1. Per-worker override: entry.trellis.workerModel (set via --model at plant time).
@@ -101,7 +101,7 @@ export function resolveVineModel(
 }
 
 interface SonnetExhaustion {
-  label: string;        // "7d" — TRELLIS.md spec's notation is loose; the
+  label: string;        // "7d" — WORKFLOWS.md spec's notation is loose; the
                         // actual snapshot tracks one Sonnet meter, the
                         // seven-day bucket. See TRELLIS-PLAN.md Q1.
   pct: number;          // rounded percentage for the alert text

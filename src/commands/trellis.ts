@@ -470,7 +470,7 @@ function readLessonsTail(entry: WorkerEntry, lines = 3): string | null {
   }
 }
 
-// Scaffold content per TRELLIS.md "The trellis document". Includes the
+// Scaffold content per WORKFLOWS.md "The trellis document". Includes the
 // required spine (title, sentinel within the first paragraph, trellis tag
 // within the first 200 bytes), and the recommended section headings as
 // a starting structure. Operators fill in the prose.
