@@ -132,83 +132,7 @@ export function handleReviewing(
   cleanReviewFiles(projectName, entry.name);
 
   if (review === null) {
-    const wtPath = entry.worktreePath ?? projectPath;
-    const headSha = getBranchHeadSha(wtPath);
-    const headAdvanced = headSha !== null && entry.preReviewSha !== undefined &&
-      headSha !== entry.preReviewSha;
-    const alreadyRetried = entry.unparseableReviewAt !== undefined;
-
-    // Non-destructive recovery: if the reviewer's output didn't emit a
-    // recognizable verdict but the reviewer did commit something (rebase or
-    // fixes), push those commits and re-queue one more review. The second
-    // reviewer sees a clean state and typically emits CLEAN. Capped at one
-    // retry so a reviewer that repeatedly fails to verbalize doesn't loop.
-    if (headAdvanced && !alreadyRetried) {
-      const branchName = entry.branchName ?? entry.name;
-      try {
-        forcePushBranch(wtPath, branchName);
-      } catch (err) {
-        log.error("poller", "force-push on unparseable-verdict retry failed", {
-          worker: entry.name,
-          data: { error: String(err) },
-        });
-        transitionState(projectName, entry.name, "failing", {
-          failCount: (entry.failCount ?? 0) + 1,
-          failingReason: "code",
-          // Pin the failing SHA so handleFailing's debounce gate refuses
-          // to retry until a new commit actually arrives.
-          failingSha: headSha ?? undefined,
-          lastSeenSha: headSha ?? undefined,
-          lastShaChangeAt: new Date().toISOString(),
-          reviewWindowName: undefined,
-          reviewStartedAt: undefined,
-        });
-        refreshDashboard();
-        return true;
-      }
-      log.info("poller", "unparseable verdict with reviewer commits; re-queueing review", {
-        worker: entry.name,
-      });
-      transitionState(projectName, entry.name, "working", {
-        pendingReviewAt: Date.now(),
-        unparseableReviewAt: Date.now(),
-        lastSeenSha: headSha ?? undefined,
-        lastShaChangeAt: new Date().toISOString(),
-        reviewWindowName: undefined,
-        reviewStartedAt: undefined,
-        preReviewSha: undefined,
-      });
-      refreshDashboard();
-      scheduleDelayedPoke(projectName, 0);
-      return true;
-    }
-
-    log.warn("poller", "review process failed, transitioning to failing", {
-      worker: entry.name,
-    });
-    addAlert({
-      level: "error",
-      source: "review",
-      project: projectName,
-      worker: entry.name,
-      message: `Review failed for worker ${entry.name}: Claude unavailable or unparseable output`,
-    });
-    transitionState(projectName, entry.name, "failing", {
-      failCount: (entry.failCount ?? 0) + 1,
-      // Q9 retrofit: unparseable-verdict is its own failingReason, distinct
-      // from "code" failures. Both default and trellis paths funnel through
-      // here; the renderer distinguishes them in phase 4.
-      failingReason: "unparseable-verdict",
-      // Pin the failing SHA so handleFailing's debounce gate refuses to
-      // retry until a new commit actually arrives.
-      failingSha: headSha ?? undefined,
-      lastSeenSha: headSha ?? undefined,
-      lastShaChangeAt: new Date().toISOString(),
-      reviewWindowName: undefined,
-      reviewStartedAt: undefined,
-    });
-    refreshDashboard();
-    return true;
+    return handleUnparseableReview(projectName, projectPath, entry);
   }
 
   log.info("poller", "review complete", {
@@ -226,6 +150,130 @@ export function handleReviewing(
   );
 }
 
+// The reviewer exited but its output didn't emit a recognizable verdict.
+// Two recovery paths, in order:
+//
+//  1. The reviewer DID commit something (rebase, fixes) — head advanced past
+//     entry.preReviewSha — and we haven't already retried. Force-push the
+//     reviewer's work and re-queue one more review. The second reviewer
+//     usually sees a clean state and emits CLEAN.
+//
+//  2. Otherwise (no advance, or already retried once): transition to
+//     `failing` with reason "unparseable-verdict" and an operator alert.
+//     Capped at one retry per cycle so a reviewer that can't verbalize
+//     doesn't loop forever.
+function handleUnparseableReview(
+  projectName: string,
+  projectPath: string,
+  entry: WorkerEntry,
+): boolean {
+  const wtPath = entry.worktreePath ?? projectPath;
+  const headSha = getBranchHeadSha(wtPath);
+  const headAdvanced = headSha !== null && entry.preReviewSha !== undefined &&
+    headSha !== entry.preReviewSha;
+  const alreadyRetried = entry.unparseableReviewAt !== undefined;
+
+  if (headAdvanced && !alreadyRetried) {
+    const branchName = entry.branchName ?? entry.name;
+    try {
+      forcePushBranch(wtPath, branchName);
+    } catch (err) {
+      log.error("poller", "force-push on unparseable-verdict retry failed", {
+        worker: entry.name,
+        data: { error: String(err) },
+      });
+      transitionState(projectName, entry.name, "failing", {
+        failCount: (entry.failCount ?? 0) + 1,
+        failingReason: "code",
+        // Pin the failing SHA so handleFailing's debounce gate refuses
+        // to retry until a new commit actually arrives.
+        failingSha: headSha ?? undefined,
+        lastSeenSha: headSha ?? undefined,
+        lastShaChangeAt: new Date().toISOString(),
+        reviewWindowName: undefined,
+        reviewStartedAt: undefined,
+      });
+      refreshDashboard();
+      return true;
+    }
+    log.info("poller", "unparseable verdict with reviewer commits; re-queueing review", {
+      worker: entry.name,
+    });
+    transitionState(projectName, entry.name, "working", {
+      pendingReviewAt: Date.now(),
+      unparseableReviewAt: Date.now(),
+      lastSeenSha: headSha ?? undefined,
+      lastShaChangeAt: new Date().toISOString(),
+      reviewWindowName: undefined,
+      reviewStartedAt: undefined,
+      preReviewSha: undefined,
+    });
+    refreshDashboard();
+    scheduleDelayedPoke(projectName, 0);
+    return true;
+  }
+
+  log.warn("poller", "review process failed, transitioning to failing", {
+    worker: entry.name,
+  });
+  addAlert({
+    level: "error",
+    source: "review",
+    project: projectName,
+    worker: entry.name,
+    message: `Review failed for worker ${entry.name}: Claude unavailable or unparseable output`,
+  });
+  transitionState(projectName, entry.name, "failing", {
+    failCount: (entry.failCount ?? 0) + 1,
+    // Q9 retrofit: unparseable-verdict is its own failingReason, distinct
+    // from "code" failures. Both default and trellis paths funnel through
+    // here; the renderer distinguishes them in phase 4.
+    failingReason: "unparseable-verdict",
+    // Pin the failing SHA so handleFailing's debounce gate refuses to
+    // retry until a new commit actually arrives.
+    failingSha: headSha ?? undefined,
+    lastSeenSha: headSha ?? undefined,
+    lastShaChangeAt: new Date().toISOString(),
+    reviewWindowName: undefined,
+    reviewStartedAt: undefined,
+  });
+  refreshDashboard();
+  return true;
+}
+
+// Force-push the worker's branch after a passing/aligned/drift verdict.
+// On failure: log, bounce the worker back to `working` (clearing review
+// fields so the next cycle starts cleanly), refresh the dashboard, and
+// return false so the caller can early-return without further state work.
+// Returns true on success.
+//
+// `context` is a short tag for the log line ("review", "trellis review",
+// "trellis DRIFT") so an operator grepping logs can tell which verdict
+// path failed to push.
+function tryForcePushAfterReview(
+  projectName: string,
+  entry: WorkerEntry,
+  wtPath: string,
+  branchName: string,
+  context: string,
+): boolean {
+  try {
+    forcePushBranch(wtPath, branchName);
+    return true;
+  } catch (err) {
+    log.error("poller", `force-push after ${context} failed`, {
+      worker: entry.name,
+      data: { error: String(err) },
+    });
+    transitionState(projectName, entry.name, "working", {
+      reviewWindowName: undefined,
+      reviewStartedAt: undefined,
+    });
+    refreshDashboard();
+    return false;
+  }
+}
+
 // Default workflow verdict dispatcher. Pre-trellis, this logic was inline
 // in handleReviewing; phase 2 extracted it so the trellis dispatcher
 // can sit beside it without growing handleReviewing into a giant branch.
@@ -238,18 +286,7 @@ function dispatchDefaultVerdict(
   if (review.verdict === "clean" || review.verdict === "fixed") {
     const wtPath = entry.worktreePath ?? projectPath;
     const branchName = entry.branchName ?? entry.name;
-    try {
-      forcePushBranch(wtPath, branchName);
-    } catch (err) {
-      log.error("poller", "force-push after review failed", {
-        worker: entry.name,
-        data: { error: String(err) },
-      });
-      transitionState(projectName, entry.name, "working", {
-        reviewWindowName: undefined,
-        reviewStartedAt: undefined,
-      });
-      refreshDashboard();
+    if (!tryForcePushAfterReview(projectName, entry, wtPath, branchName, "review")) {
       return true;
     }
     // Transition to merge-pending instead of merging directly. preReviewSha
@@ -338,18 +375,7 @@ function dispatchTrellisVerdict(
   });
 
   if (review.verdict === "ALIGNED") {
-    try {
-      forcePushBranch(wtPath, branchName);
-    } catch (err) {
-      log.error("poller", "force-push after trellis review failed", {
-        worker: entry.name,
-        data: { error: String(err) },
-      });
-      transitionState(projectName, entry.name, "working", {
-        reviewWindowName: undefined,
-        reviewStartedAt: undefined,
-      });
-      refreshDashboard();
+    if (!tryForcePushAfterReview(projectName, entry, wtPath, branchName, "trellis review")) {
       return true;
     }
     // Write the sentinel only after the force-push succeeds. If we wrote it
@@ -380,18 +406,7 @@ function dispatchTrellisVerdict(
   if (review.verdict === "DRIFT") {
     const drift = parseDriftList(review.body);
     const driftLines = drift.items.map((it, i) => renderDriftItem(it, i));
-    try {
-      forcePushBranch(wtPath, branchName);
-    } catch (err) {
-      log.error("poller", "force-push after trellis DRIFT failed", {
-        worker: entry.name,
-        data: { error: String(err) },
-      });
-      transitionState(projectName, entry.name, "working", {
-        reviewWindowName: undefined,
-        reviewStartedAt: undefined,
-      });
-      refreshDashboard();
+    if (!tryForcePushAfterReview(projectName, entry, wtPath, branchName, "trellis DRIFT")) {
       return true;
     }
     transitionState(projectName, entry.name, "merge-pending", {

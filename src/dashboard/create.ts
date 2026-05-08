@@ -825,10 +825,22 @@ function writeGrowhouseInitScript(gardenRunner: string): string {
   // gardenRunner is pre-escaped per token by resolveGardenRunner(), so it
   // expands inside the not-found handler body as separate words. Wrapping
   // in shellEscape would single-quote the multi-token string and break it.
+  //
+  // zsh and bash use different hook names for the not-found handler:
+  // zsh = `command_not_found_handler`, bash = `command_not_found_handle`.
+  // Define both — only the one matching the operator's shell fires, the
+  // other is dead weight. This keeps auto-dispatch working when the user's
+  // SHELL is bash. (The file extension stays .zsh because the prompt
+  // string above uses zsh-style $'...\\033...' escapes which bash also
+  // understands via ANSI-C quoting.)
   const script = `# Garden growhouse init — custom prompt with auto-dispatch
 PS1=$'\\033[1;32mgarden>\\033[0m '
 
 command_not_found_handler() {
+  ${gardenRunner} "$@"
+}
+
+command_not_found_handle() {
   ${gardenRunner} "$@"
 }
 `;
