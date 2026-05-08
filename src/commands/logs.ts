@@ -164,6 +164,12 @@ function projectForEntry(entry: LogEntry): string | null {
 const PROJECT_COL_WIDTH = 16;
 const WORKER_COL_WIDTH = 22;
 
+// Visible-width prefix before the message column in pretty mode:
+// ts(8) + "  " + project(16) + "  " + worker(22) + " " + glyph(1) + " ".
+// Continuation lines indent to this width so each detail aligns under the
+// headline's first message char.
+const PRETTY_MESSAGE_COL = 8 + 2 + PROJECT_COL_WIDTH + 2 + WORKER_COL_WIDTH + 1 + 1 + 1;
+
 // ---- suppression ------------------------------------------------------------
 
 interface SuppressRule {
@@ -238,7 +244,7 @@ const BORING_DATA_KEYS = new Set([
   "prStateCleared", "windowName", "source", "level",
 ]);
 
-function compactData(data: Record<string, unknown>): string {
+function compactDataLines(data: Record<string, unknown>): string[] {
   const parts: string[] = [];
   for (const [k, v] of Object.entries(data)) {
     if (BORING_DATA_KEYS.has(k)) continue;
@@ -249,7 +255,12 @@ function compactData(data: Record<string, unknown>): string {
       parts.push(`${k}=${s}`);
     }
   }
-  return parts.join(" ");
+  return parts;
+}
+
+interface Summarized {
+  headline: string;
+  details: string[];
 }
 
 type Summarizer = (entry: LogEntry) => string;
@@ -278,17 +289,14 @@ const SUMMARIZERS: Record<string, Summarizer> = {
   "alert:": (e) => e.msg,
 };
 
-function summarize(entry: LogEntry): string {
+function summarize(entry: LogEntry): Summarized {
   // Alert entries: any msg, just print verbatim.
-  if (entry.src === "alert") return entry.msg;
+  if (entry.src === "alert") return { headline: entry.msg, details: [] };
   const key = `${entry.src}:${entry.msg}`;
   const fn = SUMMARIZERS[key];
-  if (fn) return fn(entry);
-  if (entry.data) {
-    const compact = compactData(entry.data);
-    return compact ? `${entry.msg}  ${color.dim}${compact}${color.reset}` : entry.msg;
-  }
-  return entry.msg;
+  if (fn) return { headline: fn(entry), details: [] };
+  const details = entry.data ? compactDataLines(entry.data) : [];
+  return { headline: entry.msg, details };
 }
 
 // ---- rendering --------------------------------------------------------------
@@ -323,10 +331,16 @@ function formatPrettyEntry(entry: LogEntry, useRelativeTime: boolean): string {
     : " ".repeat(WORKER_COL_WIDTH);
   const glyph = PRETTY_LEVEL_GLYPHS[entry.level] ?? " ";
   const glyphColor = LEVEL_COLORS[entry.level] ?? "";
-  const message = summarize(entry);
+  const { headline, details } = summarize(entry);
   const msgColor = entry.level === "error" ? color.red : entry.level === "warn" ? color.yellow : "";
   const msgReset = msgColor ? color.reset : "";
-  return `${color.dim}${ts}${color.reset}  ${projectStr}  ${workerStr} ${glyphColor}${glyph}${color.reset} ${msgColor}${message}${msgReset}`;
+  const headlineLine = `${color.dim}${ts}${color.reset}  ${projectStr}  ${workerStr} ${glyphColor}${glyph}${color.reset} ${msgColor}${headline}${msgReset}`;
+  if (details.length === 0) return headlineLine;
+  const indent = " ".repeat(PRETTY_MESSAGE_COL);
+  const continuationLines = details.map(
+    (d) => `${indent}${color.dim}↳ ${d}${color.reset}`,
+  );
+  return [headlineLine, ...continuationLines].join("\n");
 }
 
 function parseLine(line: string): LogEntry | null {
@@ -430,12 +444,17 @@ function formatEntry(entry: LogEntry, mode: LogsMode, useRelativeTime: boolean):
     : formatPrettyEntry(entry, useRelativeTime);
 }
 
+// (×N) goes on the headline, never on a continuation line.
+function appendDedupSuffix(rendered: string, count: number): string {
+  if (count <= 1) return rendered;
+  const suffix = `  ${color.dim}(×${count})${color.reset}`;
+  const nl = rendered.indexOf("\n");
+  if (nl === -1) return `${rendered}${suffix}`;
+  return `${rendered.slice(0, nl)}${suffix}${rendered.slice(nl)}`;
+}
+
 function formatDedupedEntry(d: DedupedEntry, mode: LogsMode, useRelativeTime: boolean): string {
-  const line = formatEntry(d.entry, mode, useRelativeTime);
-  if (d.count > 1) {
-    return `${line}  ${color.dim}(×${d.count})${color.reset}`;
-  }
-  return line;
+  return appendDedupSuffix(formatEntry(d.entry, mode, useRelativeTime), d.count);
 }
 
 interface RenderOptions {
@@ -483,6 +502,17 @@ async function follow(filters: Filters, opts: RenderOptions): Promise<void> {
 
   let prevKey = "";
   let repeatCount = 0;
+  let prevLineCount = 1;
+
+  // Move cursor back to the start of the previous render and clear each of
+  // its lines so a multi-line entry can be rewritten in place when it repeats.
+  // Cursor is at the end of the last written line (no trailing newline), so
+  // we clear that line first, then walk up.
+  const clearPreviousRender = (lineCount: number): string => {
+    let s = "\r\x1b[K";
+    for (let i = 1; i < lineCount; i++) s += "\x1b[A\x1b[K";
+    return s;
+  };
 
   const poll = setInterval(() => {
     let currentSize: number;
@@ -510,14 +540,20 @@ async function follow(filters: Filters, opts: RenderOptions): Promise<void> {
       if (opts.mode === "pretty" && !opts.showAll && isSuppressed(entry)) continue;
 
       const key = dedupKey(entry);
+      const rendered = formatEntry(entry, opts.mode, false);
+      const renderedLineCount = rendered.split("\n").length;
       if (key === prevKey) {
         repeatCount++;
-        process.stdout.write(`\r\x1b[K${formatEntry(entry, opts.mode, false)}  ${color.dim}(×${repeatCount})${color.reset}`);
+        process.stdout.write(
+          `${clearPreviousRender(prevLineCount)}${appendDedupSuffix(rendered, repeatCount)}`,
+        );
+        prevLineCount = renderedLineCount;
       } else {
         if (prevKey) process.stdout.write("\n");
-        process.stdout.write(formatEntry(entry, opts.mode, false));
+        process.stdout.write(rendered);
         prevKey = key;
         repeatCount = 1;
+        prevLineCount = renderedLineCount;
       }
     }
   }, 1000);
