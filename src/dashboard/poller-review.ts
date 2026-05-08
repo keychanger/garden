@@ -17,12 +17,14 @@ import {
 import { refreshDashboard } from "./header.js";
 import { launchHeadlessAgent } from "./headless-agent.js";
 import { log } from "./log.js";
+import { persistIteration } from "./loop.js";
 import { buildReviewPrompt } from "./prompts.js";
 import {
   findWorkerByName, updateWorkerFields,
   type WorkerEntry,
 } from "./registry.js";
 import { windowExists, killWindowSafe, shellEscape } from "./tmux.js";
+import { trellisLoopHooks } from "./trellis-continue.js";
 import { buildTrellisReviewPrompt } from "./trellis-prompts.js";
 import {
   parseTrellisVerdict, parseDriftList, parseFlaggedClauses, renderDriftItem,
@@ -608,19 +610,19 @@ function launchReview(
   // failingReason="iteration-budget" — the iteration cap is the primary
   // safety net (Invariant 4).
   if (isTrellis) {
-    const trellisData = entry.trellis;
-    const nextIter = (trellisData?.iteration ?? 0) + 1;
-    const cap = trellisData?.maxIterations ?? 30;
+    const state = trellisLoopHooks.readIteration(entry);
+    const nextIter = (state?.iteration ?? 0) + 1;
+    const cap = state?.maxIterations ?? 30;
     if (nextIter > cap) {
       const headSha = getBranchHeadSha(wtPath);
-      const lastDriftPreview = (trellisData?.lastDrift ?? []).slice(0, 3).join("; ");
+      const lastDriftPreview = (entry.trellis?.lastDrift ?? []).slice(0, 3).join("; ");
       addAlert({
         level: "error",
         source: "trellis",
         project: projectName,
         worker: entry.name,
         message:
-          `Trellis '${trellisData?.name ?? "?"}' iteration budget exhausted ` +
+          `Trellis '${entry.trellis?.name ?? "?"}' iteration budget exhausted ` +
           `(${cap} iterations). Last drift: ${lastDriftPreview || "none"}. ` +
           `Inspect, then amend trellis & retry, raise budget, or kill.`,
         dedupKey: `trellis-budget:${projectName}:${entry.name}`,
@@ -638,11 +640,11 @@ function launchReview(
       refreshDashboard();
       return true;
     }
-    // Persist the increment before dispatch so handleReviewing's verdict
-    // logging and any concurrent `garden trellis status` see the right
-    // iteration number.
-    updateWorkerFields(projectName, entry.name, { trellis: { iteration: nextIter } });
-    if (entry.trellis) entry.trellis.iteration = nextIter;
+    // Persist the increment before dispatch via the shared loop primitive
+    // (writes to disk + updates the in-memory entry) so handleReviewing's
+    // verdict logging and any concurrent `garden trellis status` see the
+    // right iteration number.
+    persistIteration(projectName, entry.name, entry, trellisLoopHooks, nextIter);
   }
 
   // Fetch latest base branch so the reviewer can rebase onto it
