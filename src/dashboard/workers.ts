@@ -44,7 +44,7 @@ export interface NewWorkerOptions {
   // after a few seconds (Claude TUI init delay), then deletes the file.
   seedMessageFile?: string;
   // Workflow that drives the new worker's lifecycle. Defaults to "default".
-  // Trellis vines pass "trellis" along with the trellisName/trellisPath
+  // Trellis vines pass "trellis" along with the trellis.name/trellis.path
   // pair below; see TRELLIS.md "Spawning a trellis vine".
   workflow?: string;
   // Trellis-specific options, ignored unless workflow === "trellis".

@@ -184,6 +184,27 @@ describe("updateWorkerFields", () => {
     expect(worker.role).toBe("reviewer");
     expect(worker.parentWorker).toBe("bold-ash");
   });
+
+  // Deep-merge regression: a partial trellis update must preserve the other
+  // trellis fields. A naive shallow Object.assign would have replaced the
+  // whole sub-object and dropped name/path/iteration on every poller write.
+  it("deep-merges the trellis sub-object instead of clobbering it", async () => {
+    const { addWorker, updateWorkerFields, getWorkers } = await importRegistry();
+    addWorker("proj", {
+      name: "swift-vine", sessionId: "s1", task: "", workflow: "trellis",
+      trellis: { name: "auth", path: "/tmp/auth.md", iteration: 2, maxIterations: 30 },
+    });
+    updateWorkerFields("proj", "swift-vine", {
+      trellis: { lastVerdict: "DRIFT", lastDrift: ["1. [tests] missing"] },
+    });
+    const t = getWorkers("proj")[0].trellis!;
+    expect(t.name).toBe("auth");
+    expect(t.path).toBe("/tmp/auth.md");
+    expect(t.iteration).toBe(2);
+    expect(t.maxIterations).toBe(30);
+    expect(t.lastVerdict).toBe("DRIFT");
+    expect(t.lastDrift).toEqual(["1. [tests] missing"]);
+  });
 });
 
 describe("batchUpdateWorkerFields", () => {
@@ -214,6 +235,29 @@ describe("batchUpdateWorkerFields", () => {
   it("is a no-op for empty updates array", async () => {
     const { batchUpdateWorkerFields } = await importRegistry();
     expect(() => batchUpdateWorkerFields([])).not.toThrow();
+  });
+
+  it("deep-merges the trellis sub-object and logs prState transitions", async () => {
+    const { addWorker, batchUpdateWorkerFields, getWorkers } = await importRegistry();
+    addWorker("proj", {
+      name: "swift-vine", sessionId: "s1", task: "",
+      workflow: "trellis", prState: "working",
+      trellis: { name: "auth", path: "/tmp/auth.md", iteration: 1 },
+    });
+    batchUpdateWorkerFields([
+      {
+        project: "proj", workerName: "swift-vine",
+        fields: {
+          prState: "reviewing",
+          trellis: { lastVerdict: "DRIFT" },
+        },
+      },
+    ]);
+    const w = getWorkers("proj")[0];
+    expect(w.prState).toBe("reviewing");
+    expect(w.trellis?.name).toBe("auth");
+    expect(w.trellis?.iteration).toBe(1);
+    expect(w.trellis?.lastVerdict).toBe("DRIFT");
   });
 });
 
@@ -395,5 +439,37 @@ describe("trellis WorkerEntry fields", () => {
     // matches what writers from this build produce.
     expect((w as Record<string, unknown>).trellisName).toBeUndefined();
     expect((w as Record<string, unknown>).workerModel).toBeUndefined();
+  });
+
+  it("strips legacy flat fields when both shapes are present (nested form wins)", async () => {
+    // Edge case: a registry written by a mid-rollout build could end up with
+    // both shapes on the same entry. The nested form is authoritative; the
+    // legacy keys must be stripped so subsequent writes don't preserve them.
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const { SESSIONS_DIR } = await import("../src/config.js");
+    const registryFile = path.join(SESSIONS_DIR, "dashboard.registry.json");
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    fs.writeFileSync(registryFile, JSON.stringify({
+      workers: {
+        proj: [{
+          name: "mixed-vine",
+          sessionId: "s1",
+          task: "",
+          workflow: "trellis",
+          // Both shapes present:
+          trellisName: "stale-name",
+          trellisIteration: 99,
+          trellis: { name: "fresh-name", path: "/tmp/fresh.md", iteration: 7 },
+        }],
+      },
+    }, null, 2));
+
+    const { readRegistry } = await importRegistry();
+    const w = readRegistry().workers.proj[0];
+    expect(w.trellis?.name).toBe("fresh-name");
+    expect(w.trellis?.iteration).toBe(7);
+    expect((w as Record<string, unknown>).trellisName).toBeUndefined();
+    expect((w as Record<string, unknown>).trellisIteration).toBeUndefined();
   });
 });

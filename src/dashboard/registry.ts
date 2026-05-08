@@ -20,7 +20,7 @@ export type ClaudeStatus = "loading" | "ready" | "working" | "asking" | "idle" |
 export type PrState = "working" | "reviewing" | "merge-pending" | "resolving" | "merged" | "done" | "failing";
 
 // Trellis reviewer verdict vocabulary. See TRELLIS.md "Reviewer prompt and
-// verdict". Persisted on WorkerEntry.trellisLastVerdict for trellis vines.
+// verdict". Persisted on WorkerEntry.trellis.lastVerdict for trellis vines.
 export type TrellisVerdict = "ALIGNED" | "DRIFT" | "FAILED" | "FLAGGED";
 
 // Reason a worker is in `failing`. Allowed values per TRELLIS.md
@@ -122,13 +122,11 @@ export interface WorkerEntry {
   // (Q8 retrofit) or "unparseable-verdict" (Q9 retrofit, phase 2).
   failingReason?: FailingReason;
   // Trellis-vine-only data. Populated only when workflow === "trellis";
-  // absent on default workers. Replaces the flat `trellisName`,
-  // `trellisIteration`, `workerModel`, etc. fields that previously sat
-  // directly on WorkerEntry. Migration of legacy entries happens in
-  // readRegistry. Use getTrellisData(entry) to read; updateTrellisData()
-  // to write a partial update (updateWorkerFields does a shallow merge
-  // and would clobber the whole sub-object).
-  // See TRELLIS.md "Worker entry additions" for field contracts.
+  // absent on default workers. Migration of legacy flat trellis* fields
+  // happens in readRegistry. updateWorkerFields deep-merges this sub-object
+  // (passing `{ trellis: { lastVerdict: "ALIGNED" } }` updates only that
+  // one key without clobbering the rest). See TRELLIS.md "Worker entry
+  // additions" for field contracts.
   trellis?: TrellisData;
 }
 
@@ -170,17 +168,6 @@ export interface TrellisData {
    *  then project default. Trellis-only — default workers don't carry
    *  this. */
   workerModel?: "opus" | "sonnet";
-}
-
-/** Returns the trellis-workflow data for a worker, or null when the
- *  worker is not on the trellis workflow. Discriminates on
- *  `entry.workflow === "trellis"` so call sites can read trellis fields
- *  without re-checking the workflow tag every time. */
-export function getTrellisData(
-  entry: { workflow?: string; trellis?: TrellisData },
-): TrellisData | null {
-  if (entry.workflow !== "trellis") return null;
-  return entry.trellis ?? null;
 }
 
 export interface WorkerRegistry {
