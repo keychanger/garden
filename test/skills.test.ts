@@ -61,6 +61,24 @@ describe("installClaudeSkills", () => {
     expect(HANDOFF_SKILL_FILENAME).toBe("SKILL.md");
   });
 
+  it("is idempotent: a second call writes the same files without erroring", () => {
+    // installClaudeHooks is invoked on every refresh and bounce, so this
+    // helper runs many times against the same worktree across a worker's
+    // lifetime. The file-system path must be safe to repeat:
+    // mkdirSync(recursive) tolerates an existing directory, atomicWriteFile
+    // renames over an existing target — the second call should produce the
+    // same write/rename calls without throwing.
+    installClaudeSkills("/Users/x/.garden/worktrees/myproject/bold-ash");
+    const firstWriteCalls = vi.mocked(fs.writeFileSync).mock.calls.length;
+    expect(() => installClaudeSkills("/Users/x/.garden/worktrees/myproject/bold-ash"))
+      .not.toThrow();
+    // Same number of writes on the second call (one per skill, plus
+    // whatever the helper does for legacy-cleanup). Pinning the multiplier
+    // would over-couple to the implementation; just check that the call
+    // count doubled.
+    expect(vi.mocked(fs.writeFileSync).mock.calls.length).toBe(firstWriteCalls * 2);
+  });
+
   it("writes the handoff skill alongside done so workers can invoke it", () => {
     installClaudeSkills("/Users/x/.garden/worktrees/myproject/bold-ash");
     expect(fs.mkdirSync).toHaveBeenCalledWith(

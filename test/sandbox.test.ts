@@ -62,4 +62,48 @@ describe("buildSandboxConfig", () => {
     const occurrences = cfg.network.allowedDomains.filter((d) => d === "github.com").length;
     expect(occurrences).toBe(1);
   });
+
+  it("retains both the bare and wildcard forms for the same host (sandbox runtime matches both)", () => {
+    // The defaults declare both `api.anthropic.com` and `*.anthropic.com`
+    // intentionally — the bare form covers the load-bearing API host even
+    // if the runtime sandbox's wildcard implementation is conservative.
+    // A future cleanup that drops one form should be a deliberate spec
+    // decision, not an accident; this test pins both.
+    const cfg = buildSandboxConfig({
+      worktreePath: "/wt/alpha",
+      project: { path: "/repo" },
+      remoteHost: null,
+    });
+    expect(cfg.network.allowedDomains).toContain("api.anthropic.com");
+    expect(cfg.network.allowedDomains).toContain("*.anthropic.com");
+    expect(cfg.network.allowedDomains).toContain("github.com");
+    expect(cfg.network.allowedDomains).toContain("*.github.com");
+  });
+
+  it("dedupes per-project domains when they overlap with defaults", () => {
+    // Operator types `api.anthropic.com` into sandboxDomains by mistake —
+    // already a default; should not appear twice.
+    const cfg = buildSandboxConfig({
+      worktreePath: "/wt/alpha",
+      project: { path: "/repo", sandboxDomains: ["api.anthropic.com", "private.example.com"] },
+      remoteHost: null,
+    });
+    const occurrences = cfg.network.allowedDomains.filter((d) => d === "api.anthropic.com").length;
+    expect(occurrences).toBe(1);
+    expect(cfg.network.allowedDomains).toContain("private.example.com");
+  });
+
+  it("dedupes overlapping allowWrite paths (worktree path passed twice)", () => {
+    // The worktree path is added unconditionally; if the operator also
+    // passed it explicitly (or a future config layer adds duplicates),
+    // it shouldn't appear twice. Guards against accidental list bloat
+    // that would obscure the actual write surface in audit output.
+    const cfg = buildSandboxConfig({
+      worktreePath: "/tmp",
+      project: { path: "/repo" },
+      remoteHost: null,
+    });
+    const occurrences = cfg.filesystem.allowWrite.filter((p) => p === "/tmp").length;
+    expect(occurrences).toBe(1);
+  });
 });
