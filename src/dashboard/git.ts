@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { SESSIONS_DIR } from "../config.js";
 import type { WorkerEntry } from "./registry.js";
+import { atomicWriteFile } from "./atomic-write.js";
 import { log } from "./log.js";
 
 const WORKTREE_BASE = path.join(
@@ -427,8 +428,12 @@ export function installPollTriggerHook(wtPath: string, _gardenRunner: string, pr
     "",
   ].join("\n");
 
-  fs.mkdirSync(hooksDir, { recursive: true });
-  fs.writeFileSync(hookPath, hookScript, { mode: 0o755 });
+  // Atomic write: git reads pre-push on every push, and a worker mid-push
+  // could otherwise see a half-written script and silently skip the FIFO
+  // signal. Practical risk is near-zero (install runs once at worker
+  // creation, before the worker has anything to push) but the cost is
+  // a single function swap.
+  atomicWriteFile(hookPath, hookScript, { mode: 0o755 });
   git(wtPath, "config", "--local", "core.hooksPath", hooksDir);
   log.info("git", "installed poll trigger hook");
 }

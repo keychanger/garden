@@ -110,10 +110,21 @@ function sandboxForTarget(targetDir: string, project: ProjectConfig): SandboxCon
 
 // Write to settings.json, not settings.local.json — Claude Code auto-edits the latter (permission approvals) and clobbers our hooks.
 // Atomic write: Claude reads settings.json on SessionStart and on every --resume, so a partial file would break hook config silently.
+// Mode 0o444 (read-only): defense-in-depth against an agent self-disabling
+// its own sandbox. The worktree itself is writable by the worker (that's
+// the point of the sandbox's allowWrite root), so a determined process can
+// chmod the file before editing — but auto-mode's classifier escalates a
+// chmod, and `installClaudeHooks` is invoked on every refresh/bounce, so
+// any tampering is rewritten on the next cycle. This makes the path of
+// least resistance "ask the operator" rather than "edit the file."
 export function installClaudeHooks(targetDir: string, project: ProjectConfig): void {
   const sandbox = sandboxForTarget(targetDir, project);
   const json = buildSettingsJson(resolveGardenRunner(), sandbox);
-  atomicWriteFile(path.join(targetDir, ".claude", "settings.json"), json);
+  const settingsPath = path.join(targetDir, ".claude", "settings.json");
+  // atomicWriteFile preserves the mode through tmp→rename. If the file
+  // already exists with a different mode (operator chmod, agent
+  // tampering), the rename replaces it with the read-only version.
+  atomicWriteFile(settingsPath, json, { mode: 0o444 });
   installClaudeSkills(targetDir);
 }
 
@@ -420,8 +431,9 @@ export GARDEN_PRETTY=1
 exec garden logs --follow
 `;
 
-  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  fs.writeFileSync(scriptFile, script, { mode: 0o755 });
+  // Atomic so a tmux respawn-pane reading this file mid-write doesn't see a
+  // truncated script — a partial #!/bin/sh + missing exec line just hangs.
+  atomicWriteFile(scriptFile, script, { mode: 0o755 });
   return scriptFile;
 }
 
@@ -690,8 +702,12 @@ chmod 755 ${hookPathLit}
 git -C ${wtPathLit} config --local core.hooksPath ${hooksDirLit}
 
 # Install Claude Code hooks — settings.json (not .local.json, which Claude Code auto-edits and would clobber).
+# chmod 444: defense-in-depth so an agent can't trivially edit its own
+# sandbox without first chmod'ing — installClaudeHooks rewrites this on
+# every refresh/bounce anyway, so tampering doesn't survive long.
 mkdir -p ${wtPathLit}/.claude
 printf '%s' ${settingsJsonLit} | atomic_write ${wtPathLit}/.claude/settings.json
+chmod 444 ${wtPathLit}/.claude/settings.json
 
 # Install garden-bundled skills (see src/dashboard/skills.ts). Layout: .claude/skills/<name>/SKILL.md.
 mkdir -p ${wtPathLit}/.claude/skills/${doneSkillDirnameLit}
@@ -720,8 +736,9 @@ exec $SHELL
 `;
 
   const scriptFile = path.join(SESSIONS_DIR, `bootstrap-${projectName}-${branchName}.sh`);
-  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  fs.writeFileSync(scriptFile, script, { mode: 0o755 });
+  // Bootstrap script is read by the worker pane's `sh` immediately after
+  // it's written. Atomic write so the read can't catch a half-written file.
+  atomicWriteFile(scriptFile, script, { mode: 0o755 });
   return scriptFile;
 }
 
@@ -772,8 +789,10 @@ function pollSignalSnippet(projectName: string): string {
 function writeContextFile(projectName: string, projectPath: string): string {
   const context = buildRulesContext(projectName, projectPath);
   const contextFile = path.join(SESSIONS_DIR, `dashboard-${projectName}.context`);
-  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  fs.writeFileSync(contextFile, context);
+  // Claude reads this on SessionStart and on every --resume. Atomic so a
+  // concurrent rewrite (from a parallel command) can't show as a truncated
+  // system prompt on the next session start.
+  atomicWriteFile(contextFile, context);
   return contextFile;
 }
 
@@ -798,8 +817,7 @@ function writeWorktreeContextFile(
   );
   const context = `${base}\n\n${worktreeRules}`;
   const contextFile = path.join(SESSIONS_DIR, `dashboard-${projectName}-${branchName}.context`);
-  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  fs.writeFileSync(contextFile, context);
+  atomicWriteFile(contextFile, context);
   return contextFile;
 }
 
@@ -815,8 +833,7 @@ command_not_found_handler() {
 }
 `;
   const scriptFile = path.join(SESSIONS_DIR, "growhouse-init.zsh");
-  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  fs.writeFileSync(scriptFile, script, { mode: 0o644 });
+  atomicWriteFile(scriptFile, script, { mode: 0o644 });
   return scriptFile;
 }
 
