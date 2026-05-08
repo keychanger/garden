@@ -130,8 +130,7 @@ export interface WorkerEntry {
   trellis?: TrellisData;
   // Grow-loop-only data. Populated only when workflow === "grow"; absent
   // on default and trellis workers. updateWorkerFields deep-merges this
-  // sub-object (same pattern as `trellis`). See the grow plan in
-  // declarative-singing-graham.md.
+  // sub-object (same pattern as `trellis`).
   grow?: GrowData;
 }
 

@@ -221,10 +221,10 @@ describe("trellisWorkflow (phase 1 skeleton)", () => {
   });
 });
 
-describe("growWorkflow (phase 2 skeleton)", () => {
-  // Phase 2 ships a skeletal grow workflow that reuses default's handlers.
+describe("growWorkflow", () => {
+  // The grow workflow is currently skeletal: reuses default's handlers.
   // Behavior divergence (per-iteration cold respawn, grow-flavored continue
-  // prompt) lands in phase 3. See declarative-singing-graham.md.
+  // prompt) is not yet wired.
 
   it("is registered under name 'grow'", () => {
     expect(getWorkflow("grow")).toBe(growWorkflow);
@@ -243,16 +243,16 @@ describe("growWorkflow (phase 2 skeleton)", () => {
     }
   });
 
-  it("phase 2 reuses default's hookHandlers verbatim", () => {
-    // Phase 3 may override individual hook methods; phase 2 confirms identity
-    // reuse so Stop/UserPromptSubmit/SessionStart wiring is shared.
+  it("reuses default's hookHandlers verbatim while no per-iteration mechanics are wired", () => {
+    // Identity reuse confirms Stop/UserPromptSubmit/SessionStart wiring is
+    // shared with default. Future work may override individual hook methods.
     expect(growWorkflow.hookHandlers).toBe(defaultWorkflow.hookHandlers);
   });
 
   it("leaves workerModel and reviewerModel unset (account default applies)", () => {
-    // Locked decisions 3 and 4: grow is bounded by N, not by quality concerns
-    // about model selection. Operators tune via --model at plant time when
-    // wired in phase 3 (or not at all for v1 if the flag is forbidden).
+    // Grow is bounded by iteration count, not by quality concerns about
+    // model selection — so neither the worker nor the reviewer model is
+    // pinned at the workflow level.
     expect(growWorkflow.workerModel).toBeUndefined();
     expect(growWorkflow.reviewerModel).toBeUndefined();
   });

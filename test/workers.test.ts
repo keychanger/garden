@@ -427,8 +427,8 @@ describe("newWorker", () => {
   });
 
   // ===== Grow workflow plant path =====
-  // Phase 2 lets the workflow be planted via the programmatic newWorker
-  // API (the CLI surface lands in phase 3). The grow opts must be present
+  // The workflow can currently be planted via the programmatic newWorker
+  // API; the CLI surface is not yet wired. The grow opts must be present
   // when --workflow grow is selected; absence is a caller bug.
 
   it("grow workflow: rejects when opts.grow is missing", () => {
