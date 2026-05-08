@@ -127,22 +127,22 @@ function formatMenuLabel(t: TrellisFileInfo): string {
 // --- Shell commands the menu items invoke ---------------------------------
 
 function shellCmdPlant(runner: string, project: string, trellisName: string): string {
-  return `${shellEscape(runner)} dashboard _trellis-plant ${shellEscape(project)} ${shellEscape(trellisName)}`;
+  return `${runner} dashboard _trellis-plant ${shellEscape(project)} ${shellEscape(trellisName)}`;
 }
 
 function shellCmdAuthor(runner: string, project: string): string {
-  return `${shellEscape(runner)} dashboard _trellis-plant-author ${shellEscape(project)}`;
+  return `${runner} dashboard _trellis-plant-author ${shellEscape(project)}`;
 }
 
 function shellCmdScaffold(runner: string, project: string): string {
   // Use tmux command-prompt for the trellis name input, then dispatch
   // garden trellis new.
-  const inner = `${shellEscape(runner)} trellis new ${shellEscape(project)} %%`;
+  const inner = `${runner} trellis new ${shellEscape(project)} %%`;
   return `command-prompt -p "Trellis name: " "run-shell ${shellEscape(inner)}"`;
 }
 
 function shellCmdReviveSubmenu(runner: string, project: string): string {
-  return `${shellEscape(runner)} dashboard _trellis-revive-submenu ${shellEscape(project)}`;
+  return `${runner} dashboard _trellis-revive-submenu ${shellEscape(project)}`;
 }
 
 // --- Top-level picker entry point ----------------------------------------
@@ -263,7 +263,7 @@ export function runReviveSubmenu(projectName: string): void {
     menuArgs.push(
       `(${i < 9 ? i + 1 : ""}) ${t.name}`,
       i < 9 ? String(i + 1) : "",
-      `${shellEscape(runner)} trellis revive ${shellEscape(projectName)} ${shellEscape(t.name)}`,
+      `${runner} trellis revive ${shellEscape(projectName)} ${shellEscape(t.name)}`,
     );
   }
   try {

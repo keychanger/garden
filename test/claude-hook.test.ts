@@ -53,6 +53,9 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   windowExists: vi.fn(() => false),
   setPaneVar: vi.fn(),
   listAllWindowNames: vi.fn(() => []),
+  // resolveGardenRunner() (transitively imported via hook dispatch) needs the
+  // real safe-token regex so it can pre-escape the runner tokens.
+  shellEscape: (s: string) => /^[a-zA-Z0-9_./:=-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`,
 }));
 
 vi.mock("../src/dashboard/state.js", () => ({

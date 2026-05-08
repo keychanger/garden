@@ -44,9 +44,9 @@ export const USAGE_PANE_HEIGHT = 5;
 
 function buildSettingsJson(gardenRunner: string, sandbox: SandboxConfig): string {
   // The hook commands are written into JSON and ultimately executed by Claude
-  // Code as shell commands. Single-quote the runner so a path containing spaces
-  // (or other shell metacharacters) survives the shell-out.
-  const hookCmd = `${shellEscape(gardenRunner)} dashboard _claude-hook`;
+  // Code as shell commands. The runner is already pre-escaped per token by
+  // resolveGardenRunner(), so it interpolates safely without re-wrapping.
+  const hookCmd = `${gardenRunner} dashboard _claude-hook`;
   return JSON.stringify({
     hooks: {
       SessionStart: [{
@@ -146,7 +146,7 @@ export function ensureDashboard(): void {
     // so it doesn't disturb copy-mode in worker/logs panes the way the old refreshDashboard-based hook did (a10642c).
     try {
       const gardenRunner = resolveGardenRunner();
-      const inner = `${shellEscape(gardenRunner)} dashboard _client-resized 2>/dev/null`;
+      const inner = `${gardenRunner} dashboard _client-resized 2>/dev/null`;
       tmux("set-hook", "-t", DASHBOARD_SESSION, "client-resized",
         `run-shell -b ${tmuxDoubleQuote(inner)}`);
     } catch { /* hooks may not be supported on very old tmux */ }
@@ -247,12 +247,12 @@ export function ensureDashboard(): void {
   // claudeStatus="exited" to the registry. This is the only mechanism in
   // the new status model that observes process liveness — and tmux delivers
   // it as an event, not a poll.
-  // Build the inner shell command first (shellEscape on gardenRunner so a
-  // path with spaces survives), then wrap with tmuxDoubleQuote so $, `, and
-  // \ in the runner path don't get re-interpreted by tmux's command parser.
+  // gardenRunner is already pre-escaped per token by resolveGardenRunner();
+  // wrap the inner shell command with tmuxDoubleQuote so $, `, and \ in the
+  // runner path don't get re-interpreted by tmux's command parser.
   // `#{window_name}` stays unescaped so tmux still expands the format ref.
   try {
-    const inner = `${shellEscape(gardenRunner)} dashboard _pane-died '#{window_name}' 2>/dev/null`;
+    const inner = `${gardenRunner} dashboard _pane-died '#{window_name}' 2>/dev/null`;
     tmux("set-hook", "-t", DASHBOARD_SESSION, "pane-died",
       `run-shell ${tmuxDoubleQuote(inner)}`);
   } catch { /* hooks may not be supported on very old tmux */ }
@@ -261,14 +261,14 @@ export function ensureDashboard(): void {
   // sequences as it works. This hook captures those changes live so task
   // summaries in the status pane and pane border stay current without polling.
   try {
-    const inner = `${shellEscape(gardenRunner)} dashboard _title-changed '#{window_name}' '#{pane_id}' 2>/dev/null`;
+    const inner = `${gardenRunner} dashboard _title-changed '#{window_name}' '#{pane_id}' 2>/dev/null`;
     tmux("set-hook", "-t", DASHBOARD_SESSION, "pane-title-changed",
       `run-shell -b ${tmuxDoubleQuote(inner)}`);
   } catch { /* hooks may not be supported on very old tmux */ }
 
   // Re-pin usage pane on terminal resize (see reattach path for rationale).
   try {
-    const inner = `${shellEscape(gardenRunner)} dashboard _client-resized 2>/dev/null`;
+    const inner = `${gardenRunner} dashboard _client-resized 2>/dev/null`;
     tmux("set-hook", "-t", DASHBOARD_SESSION, "client-resized",
       `run-shell -b ${tmuxDoubleQuote(inner)}`);
   } catch { /* hooks may not be supported on very old tmux */ }
@@ -460,7 +460,7 @@ export function createShellWindow(projectName: string, projectPath: string): voi
 export function buildWorkerCommand(projectName: string, projectPath: string, sessionId: string): string {
   const project = resolveProjectForHooks(projectName, projectPath);
   installClaudeHooks(projectPath, project);
-  const gardenRunner = shellEscape(resolveGardenRunner());
+  const gardenRunner = resolveGardenRunner();
   const contextFile = writeContextFile(projectName, projectPath);
   const envPrefix = claudeEnvPrefix(project);
   const claudeCmd = `${envPrefix}claude --rc --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
@@ -471,7 +471,7 @@ export function buildWorkerCommand(projectName: string, projectPath: string, ses
 export function buildResumeCommand(projectName: string, projectPath: string, sessionId: string): string {
   const project = resolveProjectForHooks(projectName, projectPath);
   installClaudeHooks(projectPath, project);
-  const gardenRunner = shellEscape(resolveGardenRunner());
+  const gardenRunner = resolveGardenRunner();
   const contextFile = writeContextFile(projectName, projectPath);
   const envPrefix = claudeEnvPrefix(project);
   const claudeCmd = `${envPrefix}claude --rc --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
@@ -589,7 +589,10 @@ export function buildWorktreeBootstrapScript(
   ].join("\\n");
 
   const gardenRunner = resolveGardenRunner();
-  const gardenRunnerLit = shellEscape(gardenRunner);
+  // gardenRunner arrives pre-escaped from resolveGardenRunner() — each token
+  // (interpreter + script path) is individually shellEscape'd. Re-wrapping
+  // would single-quote the whole multi-token string.
+  const gardenRunnerLit = gardenRunner;
   const project = resolveProjectForHooks(projectName, projectPath);
   const sandbox = sandboxForTarget(wtPath, project);
   const settingsJson = buildSettingsJson(gardenRunner, sandbox);
@@ -735,7 +738,7 @@ export function buildWorktreeResumeCommand(
     projectName, projectPath, branchName, baseBranch,
     { trellisRelativePath: opts?.trellisRelativePath },
   );
-  const gardenRunner = shellEscape(resolveGardenRunner());
+  const gardenRunner = resolveGardenRunner();
   const project = resolveProjectForHooks(projectName, projectPath);
   const envPrefix = claudeEnvPrefix(project);
   const identityExports = workerEnvExports(projectName, workerName, branchName, baseBranch);
@@ -801,13 +804,14 @@ function writeWorktreeContextFile(
 }
 
 function writeGrowhouseInitScript(gardenRunner: string): string {
-  // Single-quote the runner so a path with spaces or other shell
-  // metacharacters survives expansion inside the not-found handler body.
+  // gardenRunner is pre-escaped per token by resolveGardenRunner(), so it
+  // expands inside the not-found handler body as separate words. Wrapping
+  // in shellEscape would single-quote the multi-token string and break it.
   const script = `# Garden growhouse init — custom prompt with auto-dispatch
 PS1=$'\\033[1;32mgarden>\\033[0m '
 
 command_not_found_handler() {
-  ${shellEscape(gardenRunner)} "$@"
+  ${gardenRunner} "$@"
 }
 `;
   const scriptFile = path.join(SESSIONS_DIR, "growhouse-init.zsh");

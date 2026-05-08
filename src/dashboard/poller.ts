@@ -119,7 +119,7 @@ export function startProjectPoller(projectName: string, gardenRunner: string): v
   // per wake.
   const cmd = [
     `while true; do`,
-    `  ${shellEscape(gardenRunner)} dashboard _poll ${shellEscape(projectName)} 2>/dev/null;`,
+    `  ${gardenRunner} dashboard _poll ${shellEscape(projectName)} 2>/dev/null;`,
     `  read <>${shellEscape(fifo)} 2>/dev/null || true;`,
     `done`,
   ].join(" ");

@@ -2,7 +2,7 @@
 // Runs in a single hidden tmux window (_garden-usage-poller). The /api/oauth/usage
 // endpoint is strictly rate-limited so the poll cadence stays deliberately slow
 // (5 min on success) and honors server Retry-After on 429s.
-import { tmux, windowExists, killWindowSafe, shellEscape } from "./tmux.js";
+import { tmux, windowExists, killWindowSafe } from "./tmux.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { usagePollerWindowName } from "./window-names.js";
 import { refreshUsage } from "./usage.js";
@@ -49,7 +49,7 @@ export function startUsagePoller(gardenRunner: string): void {
   // Single long-running process. The tmux window being killed (reset or exit)
   // is the termination signal — no signal file, no FIFO.
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", window,
-    "bash", "-c", `${shellEscape(gardenRunner)} dashboard _usage-poll-loop 2>/dev/null`);
+    "bash", "-c", `${gardenRunner} dashboard _usage-poll-loop 2>/dev/null`);
   log.info("usage-poller", "spawned window", { data: { window } });
 }
 

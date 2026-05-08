@@ -14,7 +14,6 @@ import { execFileSync, spawn } from "node:child_process";
 import { SESSIONS_DIR } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { log } from "./log.js";
-import { shellEscape } from "./tmux.js";
 
 export const USAGE_FILE = path.join(SESSIONS_DIR, "claude-usage.json");
 
@@ -423,7 +422,7 @@ export function shouldRefreshOnHook(nowMs: number = Date.now()): boolean {
 export function maybeRefreshUsage(gardenRunner: string): void {
   if (!shouldRefreshOnHook()) return;
   try {
-    spawn("sh", ["-c", `${shellEscape(gardenRunner)} dashboard _usage-refresh 2>/dev/null`], {
+    spawn("sh", ["-c", `${gardenRunner} dashboard _usage-refresh 2>/dev/null`], {
       detached: true,
       stdio: "ignore",
     }).unref();

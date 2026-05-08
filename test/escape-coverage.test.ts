@@ -1,18 +1,30 @@
-// Lint-style coverage check: every place that interpolates `gardenRunner`
-// or `gr` into a shell-context template string must pass that value through
-// `shellEscape` (or be a const that was already escaped). This catches
-// future regressions that re-introduce unescaped runner paths — a class
-// of bugs that silently breaks auto-continue and tmux hooks when garden is
-// installed at a path containing spaces or shell metacharacters.
+// Coverage check for the gardenRunner escape contract:
 //
-// The check is heuristic: it walks every TS file under src/, finds template
-// literals that interpolate `${gardenRunner}` or `${gr}`, and asserts the
-// referenced identifier was either pre-escaped (a `const x = shellEscape(...)`
-// is in scope) or the interpolation itself wraps with `shellEscape(...)`.
+// `resolveGardenRunner()` returns a multi-token shell command line — an
+// interpreter path followed by a script path, separated by a space. Each
+// token is individually shell-escaped inside the helper, so the joined
+// string interpolates safely into any shell context. Call sites MUST NOT
+// re-wrap the value in `shellEscape(...)` — that would single-quote the
+// whole multi-token string and turn it into a non-existent filename
+// containing a literal space (the bug from commit 8d334f3 that broke the
+// status pane, Claude Code hooks, auto-continue, and trellis menus
+// silently — the shell printed `No such file or directory` for a path
+// containing the space between `node` and the script).
+//
+// This test enforces the contract two ways:
+//   1) A behavioral check: a synthetic runner with a path containing a
+//      space round-trips through `bash -c` and produces the original
+//      arguments — proving each token survives word-splitting.
+//   2) A lint scan: no source file calls `shellEscape(gardenRunner)`,
+//      `shellEscape(gr)`, or `shellEscape(runner)`. The fix moved escaping
+//      into the helper; call sites interpolate raw.
 import { describe, it, expect } from "vitest";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
+import { shellEscape } from "../src/dashboard/tmux.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,45 +39,43 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-describe("gardenRunner shell-escape coverage", () => {
-  it("every ${gardenRunner} or ${gr} interpolation is shell-escaped or pre-escaped", () => {
+describe("gardenRunner shell-escape contract", () => {
+  it("a per-token-escaped multi-token runner survives bash word-splitting", () => {
+    // Mirror what resolveGardenRunner() does: pre-escape each token
+    // individually, join with a space. Use a path with a space so the
+    // bug (single-quoting the joined string) would visibly fail.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "garden-escape-test-"));
+    try {
+      const subdir = path.join(dir, "with space");
+      fs.mkdirSync(subdir);
+      const script = path.join(subdir, "echo.sh");
+      fs.writeFileSync(script, '#!/bin/sh\necho "$@"\n', { mode: 0o755 });
+
+      const runner = `${shellEscape("/bin/sh")} ${shellEscape(script)}`;
+      const out = execFileSync(
+        "bash",
+        ["-c", `${runner} hello world`],
+        { encoding: "utf-8" },
+      ).trim();
+      expect(out).toBe("hello world");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("no call site re-wraps gardenRunner / gr / runner in shellEscape", () => {
     const files = walk(SRC);
     const offenders: Array<{ file: string; line: number; text: string }> = [];
 
     for (const file of files) {
       const content = fs.readFileSync(file, "utf-8");
       const lines = content.split("\n");
-
-      // Track whether the surrounding scope pre-escapes the identifier.
-      // We look for `const gardenRunner = shellEscape(...)` or
-      // `const gr = shellEscape(...)` anywhere earlier in the file. This is
-      // a coarse approximation (file-level rather than block-scoped), but
-      // false positives are caught by an explicit allowlist below.
-      const escapedIdentifiers = new Set<string>();
-      const reEscapedAssign = /^\s*const\s+(gardenRunner|gr|runner)\s*=\s*shellEscape\(/;
-
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
-
-        const m = reEscapedAssign.exec(line);
-        if (m) escapedIdentifiers.add(m[1]);
-
-        // Find any ${name} interpolation where name is one of the runner identifiers.
-        const interpRegex = /\$\{(gardenRunner|gr|runner)\}/g;
-        let match: RegExpExecArray | null;
-        while ((match = interpRegex.exec(line)) !== null) {
-          const ident = match[1];
-          // Skip if pre-escaped at file scope.
-          if (escapedIdentifiers.has(ident)) continue;
-          // Skip if the interpolation wraps with shellEscape — same line
-          // contains `shellEscape(<ident>)`.
-          if (line.includes(`shellEscape(${ident})`)) continue;
-          // Skip lines that are obviously not shell contexts: comments,
-          // tagged template names, or display strings. The heuristic:
-          // require the line contains a backtick (template literal) AND
-          // is not a single-line comment.
-          if (line.trim().startsWith("//")) continue;
-          if (!line.includes("`")) continue;
+        if (line.trim().startsWith("//")) continue;
+        // The helper itself escapes each runner token before joining them.
+        if (file.endsWith(`${path.sep}runner.ts`)) continue;
+        if (/shellEscape\((gardenRunner|gr|runner)\)/.test(line)) {
           offenders.push({
             file: path.relative(SRC, file),
             line: i + 1,
@@ -75,7 +85,6 @@ describe("gardenRunner shell-escape coverage", () => {
       }
     }
 
-    // Format offenders for a readable assertion failure.
     const formatted = offenders.map(o => `${o.file}:${o.line} ${o.text}`);
     expect(formatted).toEqual([]);
   });

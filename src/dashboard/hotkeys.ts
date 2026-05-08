@@ -1,13 +1,15 @@
 // Dashboard keybinding setup: maps Alt/Option keys to dashboard subcommands.
 import { execFileSync } from "node:child_process";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, shellEscape, tmuxDoubleQuote } from "./tmux.js";
+import { tmux, tmuxDoubleQuote } from "./tmux.js";
 
 export function setupKeybindings(gardenRunner: string): void {
-  // Single-quote the runner once so paths containing spaces or shell
-  // metacharacters reach the shell intact. The escaped form is safe to
-  // interpolate into the bindMeta guarded-shell strings below.
-  const gr = shellEscape(gardenRunner);
+  // gardenRunner arrives pre-escaped from resolveGardenRunner() — each token
+  // (interpreter + script) is individually shellEscape'd and joined by a
+  // space, so the string interpolates safely into the bindMeta guarded-shell
+  // commands below without re-wrapping (which would single-quote the whole
+  // multi-token string and turn it into a non-existent filename).
+  const gr = gardenRunner;
 
   // Project switching: ⌥1 through ⌥9
   for (let i = 1; i <= 9; i++) {
