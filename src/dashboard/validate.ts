@@ -12,6 +12,7 @@ import { resolveGardenRunner } from "./runner.js";
 import { gardenWindowName, workerWindowName } from "./window-names.js";
 import { buildStatusCommand, buildUsageCommand } from "./header.js";
 import { gardenRestoreFromHidden } from "./layout.js";
+import { addAlert } from "./alerts.js";
 
 /**
  * Recreate the status pane if it's missing. Reads and writes state atomically.
@@ -194,33 +195,47 @@ export function validateAndHeal(state: DashboardState): DashboardState {
     }
   }
 
-  // Validate registry against tmux windows
+  // Validate registry against tmux windows. When a registered worker has
+  // no tmux window, the pane process is gone — but the worktree on disk
+  // and the branch on origin both persist. The "never auto-cleanup workers"
+  // rule (per the operator's standing feedback) means we must NOT remove
+  // the registry entry: a transient tmux glitch (server crash + restart)
+  // would otherwise discard the worker permanently. Mark `claudeStatus =
+  // "exited"` (matching the pane-died hook's effect) and surface an alert
+  // so the operator can either resume manually or `⌥x` to clean up.
   const registry = readRegistry();
   let registryChanged = false;
 
   for (const [projectName, entries] of Object.entries(registry.workers)) {
-    const before = entries.length;
-    registry.workers[projectName] = entries.filter(entry => {
+    for (const entry of entries) {
       const windowName = workerWindowName(projectName, entry.name);
       const exists = windowExists(windowName) || windowName === healed.activeWindowName;
-      if (!exists) {
-        log.info("validate", "removing registry entry for missing window", {
-          worker: entry.name,
-          data: { prState: entry.prState },
-        });
-      }
-      return exists;
-    });
-    if (registry.workers[projectName].length === 0) {
-      delete registry.workers[projectName];
-    }
-    if (registry.workers[projectName]?.length !== before) {
+      if (exists) continue;
+      if (entry.claudeStatus === "exited") continue; // already marked
+      log.warn("validate", "worker window missing, marking exited (entry preserved)", {
+        worker: entry.name,
+        data: { project: projectName, prState: entry.prState },
+      });
+      entry.claudeStatus = "exited";
       registryChanged = true;
+      addAlert({
+        level: "warn",
+        source: "validate",
+        project: projectName,
+        worker: entry.name,
+        message:
+          `Worker '${entry.name}' has no tmux pane. The worktree on disk is preserved — ` +
+          `bounce the worker to recreate the pane, or kill it (⌥x) to clean up.`,
+        // Stable key so a single missing pane doesn't spam the badge across
+        // every reattach within the dedup window.
+        dedupKey: `validate-exited:${projectName}:${entry.name}`,
+      });
     }
   }
 
-  // Validate worktrees for remaining registry entries
+  // Validate worktrees for registry entries
   for (const [projectName, entries] of Object.entries(registry.workers)) {
+    void projectName; // worktreePath is repository-absolute; project is for logs only
     for (const entry of entries) {
       if (!entry.worktreePath) continue;
       if (!worktreeExists(entry.worktreePath)) {

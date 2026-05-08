@@ -58,6 +58,10 @@ vi.mock("../src/dashboard/git.js", () => ({
   pruneWorktrees: vi.fn(),
 }));
 
+vi.mock("../src/dashboard/alerts.js", () => ({
+  addAlert: vi.fn(),
+}));
+
 import { validateAndHeal } from "../src/dashboard/validate.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, tmuxSplit } from "../src/dashboard/tmux.js";
 import { readRegistry, writeRegistry } from "../src/dashboard/registry.js";
@@ -156,7 +160,12 @@ describe("validateAndHeal", () => {
     expect(healed.activeWindowName).toBeNull();
   });
 
-  it("removes registry entries for missing windows", () => {
+  it("preserves registry entries for missing windows, marks them exited, and alerts", async () => {
+    // The "never auto-cleanup workers" rule means a missing tmux pane must
+    // not delete the entry — a transient tmux glitch would otherwise discard
+    // the worker permanently along with its on-disk worktree. The pane-died
+    // shape (claudeStatus="exited") is what we expose; an alert tells the
+    // operator to bounce or ⌥x explicitly.
     vi.mocked(readRegistry).mockReturnValue({
       workers: {
         garden: [
@@ -168,32 +177,42 @@ describe("validateAndHeal", () => {
     vi.mocked(windowExists).mockImplementation((name: string) =>
       !name.includes("missing-one")
     );
+    const { addAlert } = await import("../src/dashboard/alerts.js");
     const state = makeState();
     validateAndHeal(state);
     expect(vi.mocked(writeRegistry)).toHaveBeenCalled();
     const written = vi.mocked(writeRegistry).mock.calls[0][0];
-    expect(written.workers.garden).toHaveLength(1);
-    expect(written.workers.garden[0].name).toBe("bold-ash");
+    // Both entries persist.
+    expect(written.workers.garden).toHaveLength(2);
+    const missing = written.workers.garden.find(w => w.name === "missing-one");
+    expect(missing?.claudeStatus).toBe("exited");
+    expect(vi.mocked(addAlert)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "validate",
+        worker: "missing-one",
+      }),
+    );
   });
 
-  it("removes merged registry entries when tmux window is gone", () => {
+  it("does not re-mark or re-alert an already-exited worker on subsequent reattach", async () => {
+    // An alert on every reattach would spam the badge — the registry change
+    // should be one-shot (entry already exited → skip).
     vi.mocked(readRegistry).mockReturnValue({
       workers: {
         garden: [
-          { name: "bold-ash", sessionId: "a", task: "fix" },
-          { name: "merged-one", sessionId: "c", task: "done", prState: "merged" },
+          { name: "merged-one", sessionId: "c", task: "done", prState: "merged", claudeStatus: "exited" },
         ],
       },
     });
     vi.mocked(windowExists).mockImplementation((name: string) =>
       !name.includes("merged-one")
     );
+    const { addAlert } = await import("../src/dashboard/alerts.js");
     const state = makeState();
     validateAndHeal(state);
-    expect(vi.mocked(writeRegistry)).toHaveBeenCalled();
-    const written = vi.mocked(writeRegistry).mock.calls[0][0];
-    expect(written.workers.garden).toHaveLength(1);
-    expect(written.workers.garden[0].name).toBe("bold-ash");
+    // No registry write triggered by the missing-window check, no fresh alert.
+    expect(vi.mocked(addAlert)).not.toHaveBeenCalled();
   });
 
   it("clears stale lastActiveWorker references", () => {
