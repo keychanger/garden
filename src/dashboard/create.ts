@@ -229,6 +229,26 @@ export function ensureDashboard(): void {
     // npm-link'd global), self-healing across worktree churn.
     try { setupKeybindings(resolveGardenRunner()); } catch { /* best effort */ }
 
+    // Re-install per-worker hooks (.claude/settings.json + the pre-push
+    // poll-trigger hook) for the same reason: they bake the gardenRunner path
+    // at worker create time. If that path lived in a worktree that has since
+    // been cleaned up, every Stop / UserPromptSubmit / PreToolUse hook exits
+    // MODULE_NOT_FOUND and the worker stops reporting state to the dashboard.
+    // Rewriting on reattach pins each worker's hooks to the current cli.js so
+    // worktree churn no longer silently breaks live workers.
+    try {
+      const reg = readRegistry();
+      for (const [pname, entries] of Object.entries(reg.workers)) {
+        const proj = tryGetProject(pname);
+        if (!proj) continue;
+        for (const entry of entries) {
+          if (!entry.worktreePath || !wtExists(entry.worktreePath)) continue;
+          installPollTriggerHook(entry.worktreePath, resolveGardenRunner(), pname);
+          installClaudeHooks(entry.worktreePath, proj);
+        }
+      }
+    } catch { /* best effort — initial-create path will catch up next restart */ }
+
     // Heal logs panes from older builds that pre-date the creation-time disable.
     try {
       const logsPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:_garden-logs`);
