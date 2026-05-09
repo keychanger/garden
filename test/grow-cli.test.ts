@@ -17,6 +17,14 @@ vi.mock("../src/dashboard/log.js", () => ({
 vi.mock("../src/dashboard/workers.js", () => ({
   newWorker: vi.fn(() => "tall-fern"),
 }));
+// dispatchDelayedSeed spawns a detached `sh -c "sleep 6 && garden ..."`
+// subprocess; harmless under {detached, stdio:ignore, unref()} but easier
+// to assert against when stubbed. The convert path uses it directly when
+// the branch is fully merged into base. Other exports of continue.js are
+// unused by the workers CLI, so a partial mock is fine.
+vi.mock("../src/dashboard/continue.js", () => ({
+  dispatchDelayedSeed: vi.fn(),
+}));
 
 const env = useTmpHome();
 
@@ -326,6 +334,39 @@ async function addDefaultWorker(
     baseBranch: "main",
     workflow: "default",
   });
+}
+
+// Build a real git worktree branched off projectDir's main, with
+// projectDir registered as `origin`. Mirrors the on-disk shape of a
+// production worker worktree closely enough to exercise the convert
+// path's git operations (rev-list, status, fetch, merge --ff-only).
+function setupRealWorktree(projectDir: string, name: string): string {
+  const wtPath = path.join(projectDir, "..", `wt-${name}`);
+  fs.mkdirSync(wtPath, { recursive: true });
+  spawnSync("git", ["init", "-b", name, wtPath], { stdio: "ignore" });
+  git(wtPath, "config", "user.email", "test@garden.local");
+  git(wtPath, "config", "user.name", "garden-test");
+  git(wtPath, "remote", "add", "origin", projectDir);
+  git(wtPath, "fetch", "origin", "main");
+  git(wtPath, "reset", "--hard", "origin/main");
+  // Production workers have `.garden/` listed in .git/info/exclude (added
+  // by ensureWorktreeExcludes at plant time) so the goal file we write
+  // doesn't show up in `git status` and doesn't trip the dirty check
+  // during the post-flip fast-forward. Mirror that here.
+  fs.appendFileSync(path.join(wtPath, ".git", "info", "exclude"), ".garden/\n");
+  return wtPath;
+}
+
+// Add `count` commits to projectDir's main, simulating sibling merges that
+// landed on the base branch after the worker's branch was merged. The
+// worker's worktree is now `count` commits behind origin/main until it
+// re-fetches.
+function advanceOriginMain(projectDir: string, count: number): void {
+  for (let i = 0; i < count; i++) {
+    fs.writeFileSync(path.join(projectDir, `sibling-${Date.now()}-${i}.txt`), `${i}`);
+    git(projectDir, "add", ".");
+    git(projectDir, "commit", "-m", `sibling commit ${i}`);
+  }
 }
 
 describe("garden workers grow (convert)", () => {
@@ -721,5 +762,124 @@ describe("garden workers grow (convert)", () => {
     const entry = reg.findWorkerByName("proj", "leave-me")!;
     expect(entry.workflow).toBe("default");
     expect(entry.grow).toBeUndefined();
+  });
+
+  // The bug this exercises: when the worker's prior default-workflow work
+  // is already merged before /grow runs, the only path that would have
+  // launched iter-1 (post-merge auto-continue with workflow=grow) never
+  // fires — the merge happened with workflow=default and there's no future
+  // merge coming. The convert command must dispatch iter-1 itself and
+  // first fast-forward the worktree to origin/<base> so iter-1 starts on
+  // current base (siblings may have merged in the meantime).
+  it("dispatches iter-1 directly when the branch is fully merged into base", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = setupRealWorktree(projectDir, "merged");
+    const wtHeadBefore = git(wtPath, "rev-parse", "HEAD");
+    advanceOriginMain(projectDir, 1);
+    await addDefaultWorker("proj", "merged", wtPath);
+
+    const { workers } = await importWorkersCmd();
+    await captureConsoleLog(() =>
+      workers(["grow", "merged", "--seed", "harden auth"]),
+    );
+
+    // Workflow flipped.
+    const reg = await importRegistry();
+    expect(reg.findWorkerByName("proj", "merged")!.workflow).toBe("grow");
+
+    // Worktree fast-forwarded — HEAD should now equal origin/main, not the
+    // pre-fetch tip. Confirms the fast-forward step ran.
+    const wtHeadAfter = git(wtPath, "rev-parse", "HEAD");
+    const originHead = git(wtPath, "rev-parse", "origin/main");
+    expect(wtHeadAfter).toBe(originHead);
+    expect(wtHeadAfter).not.toBe(wtHeadBefore);
+
+    // Seed file written under SESSIONS_DIR/seeds with the iter-1 framing
+    // (Iteration 1 of N). The detached `sleep 6 && garden ...` subprocess
+    // is mocked away, so we assert on file presence + content directly.
+    const seedDir = path.join(env.home, ".garden", "sessions", "seeds");
+    const seeds = fs.readdirSync(seedDir).filter(f => f.startsWith("grow-seed-proj-"));
+    expect(seeds).toHaveLength(1);
+    const seedContent = fs.readFileSync(path.join(seedDir, seeds[0]), "utf-8");
+    // buildGrowIteration1Seed inlines the operator's seed verbatim and
+    // names the iteration budget. Asserting on both pins the contract:
+    // iter-1 dispatch went through buildGrowIteration1Seed (not, e.g.,
+    // the iter-K continue prompt) and used the resolved maxIterations.
+    expect(seedContent).toContain("harden auth");
+    expect(seedContent).toMatch(/up to 5 bounded passes/);
+
+    // dispatchDelayedSeed (mocked) was invoked with the project + worker.
+    const continueMod = await import("../src/dashboard/continue.js");
+    expect(continueMod.dispatchDelayedSeed).toHaveBeenCalledWith(
+      expect.any(String),
+      "proj",
+      "merged",
+      expect.stringMatching(/grow-seed-proj-\d+\.txt$/),
+    );
+  });
+
+  // Pre-flight dirty check runs BEFORE any state mutation when the branch
+  // is fully merged. This avoids a half-converted worker (workflow flipped
+  // but iter-1 not dispatched), which the re-conversion guard at the top
+  // of growCommand would then block on a retry — leaving the operator
+  // unable to recover without manual registry edits.
+  it("rejects the convert when the worktree is dirty (fully-merged branch)", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = setupRealWorktree(projectDir, "dirty");
+    fs.writeFileSync(path.join(wtPath, "uncommitted.txt"), "scratch");
+    await addDefaultWorker("proj", "dirty", wtPath);
+
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["grow", "dirty", "--seed", "harden"]),
+    ).rejects.toThrow(/uncommitted changes/);
+
+    // Worker stays on default — pre-flight aborted before the flip.
+    const reg = await importRegistry();
+    const entry = reg.findWorkerByName("proj", "dirty")!;
+    expect(entry.workflow).toBe("default");
+    expect(entry.grow).toBeUndefined();
+
+    // No goal file, no seed file.
+    expect(fs.existsSync(path.join(wtPath, ".garden", "grow-goal.md"))).toBe(false);
+    const seedDir = path.join(env.home, ".garden", "sessions", "seeds");
+    if (fs.existsSync(seedDir)) {
+      const seeds = fs.readdirSync(seedDir).filter(f => f.startsWith("grow-seed-proj-"));
+      expect(seeds).toHaveLength(0);
+    }
+  });
+
+  // Status quo: if the worker has unmerged commits, the upcoming merge
+  // fires growAutoContinueAfterMerge, which dispatches iter-1. The convert
+  // command must not also dispatch iter-1 (that would race / double-fire).
+  it("does not dispatch iter-1 when the worker has unmerged commits", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = setupRealWorktree(projectDir, "ahead");
+    fs.writeFileSync(path.join(wtPath, "in-flight.txt"), "wip");
+    git(wtPath, "add", ".");
+    git(wtPath, "commit", "-m", "in-flight work");
+    const wtHeadBefore = git(wtPath, "rev-parse", "HEAD");
+    await addDefaultWorker("proj", "ahead", wtPath);
+
+    const { workers } = await importWorkersCmd();
+    await captureConsoleLog(() =>
+      workers(["grow", "ahead", "--seed", "harden"]),
+    );
+
+    // Workflow flipped (status quo).
+    const reg = await importRegistry();
+    expect(reg.findWorkerByName("proj", "ahead")!.workflow).toBe("grow");
+
+    // Worktree HEAD did NOT move — no fast-forward when ahead > 0.
+    expect(git(wtPath, "rev-parse", "HEAD")).toBe(wtHeadBefore);
+
+    // No seed file, no dispatchDelayedSeed call.
+    const seedDir = path.join(env.home, ".garden", "sessions", "seeds");
+    if (fs.existsSync(seedDir)) {
+      const seeds = fs.readdirSync(seedDir).filter(f => f.startsWith("grow-seed-proj-"));
+      expect(seeds).toHaveLength(0);
+    }
+    const continueMod = await import("../src/dashboard/continue.js");
+    expect(continueMod.dispatchDelayedSeed).not.toHaveBeenCalled();
   });
 });

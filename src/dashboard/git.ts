@@ -371,6 +371,69 @@ export function syncWorktreeToRemote(
   return { ok: true };
 }
 
+// Fast-forward a worker's worktree to the latest remote tip of the base
+// branch. Used by `garden workers grow` when the worker's branch was already
+// fully merged before the convert: the local branch tip equals its old
+// merged commit, but `origin/<base>` may have advanced from sibling merges
+// since. `merge --ff-only` enforces "strict ancestor" — if siblings have
+// pushed commits that touched the same files in a way that would require a
+// real merge, we surface that rather than clobbering with `reset --hard`.
+export function syncWorktreeToBase(
+  wtPath: string,
+  baseBranch: string,
+): SyncWorktreeResult {
+  try {
+    const dirty = git(wtPath, "status", "--porcelain");
+    if (dirty) return { ok: false, reason: "dirty" };
+  } catch (err) {
+    return { ok: false, reason: "fetch-failed", error: String(err) };
+  }
+  try {
+    git(wtPath, "fetch", "origin", baseBranch);
+  } catch (err) {
+    return { ok: false, reason: "fetch-failed", error: String(err) };
+  }
+  try {
+    git(wtPath, "merge", "--ff-only", `origin/${baseBranch}`);
+  } catch (err) {
+    return { ok: false, reason: "reset-failed", error: String(err) };
+  }
+  return { ok: true };
+}
+
+// Returns true if the worktree has uncommitted changes (tracked or
+// untracked-not-gitignored). Thin wrapper over `git status --porcelain` —
+// non-empty output means dirty. Returns null if the git invocation fails
+// (path isn't a worktree, git unavailable, etc.) so callers can distinguish
+// "definitely clean" from "couldn't determine".
+export function isWorktreeDirty(wtPath: string): boolean | null {
+  try {
+    return git(wtPath, "status", "--porcelain").length > 0;
+  } catch {
+    return null;
+  }
+}
+
+// Returns the number of commits the worker's HEAD is ahead of
+// `origin/<baseBranch>`. Used by `garden workers grow` to decide whether
+// the worker still has unmerged work to push (in which case the next merge
+// fires the grow auto-continue) or is fully merged (in which case the
+// convert command must dispatch iter-1 itself). Returns null if the count
+// can't be determined — typically because the path isn't a git worktree
+// or `origin/<baseBranch>` doesn't exist locally.
+export function countCommitsAheadOfBase(
+  wtPath: string,
+  baseBranch: string,
+): number | null {
+  try {
+    const out = git(wtPath, "rev-list", "--count", `origin/${baseBranch}..HEAD`);
+    const n = Number.parseInt(out, 10);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 export function getCommitSummary(wtPath: string, baseBranch: string): string {
   try {
     return execFileSync("git", [

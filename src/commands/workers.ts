@@ -9,6 +9,11 @@ import {
   type WorkerEntry,
 } from "../dashboard/registry.js";
 import { validateTrellisPlant } from "../dashboard/trellis-tag.js";
+import { dispatchDelayedSeed } from "../dashboard/continue.js";
+import { resolveGardenRunner } from "../dashboard/runner.js";
+import {
+  countCommitsAheadOfBase, isWorktreeDirty, syncWorktreeToBase,
+} from "../dashboard/git.js";
 
 export async function workers(args: string[]): Promise<void> {
   const sub = args[0];
@@ -423,6 +428,43 @@ async function growCommand(args: string[]): Promise<void> {
     maxIter = n;
   }
 
+  // Decide which dispatch path applies BEFORE any state mutation, so a
+  // precondition failure (dirty tree) leaves the worker on its original
+  // workflow rather than half-converted (which the re-conversion guard
+  // above would then block).
+  //
+  //  - ahead > 0: worker still has commits to push. The upcoming merge
+  //    fires growAutoContinueAfterMerge, which dispatches iter-1. Status
+  //    quo — convert just flips the workflow and exits.
+  //
+  //  - ahead === 0: branch is fully merged into base. No future merge
+  //    means no grow auto-continue. The convert command must dispatch
+  //    iter-1 directly, mirroring the plant-time path in newCommand.
+  //    First fast-forwards the worktree to origin/<base> so iter-1 starts
+  //    on the latest base (siblings may have merged since this branch
+  //    landed).
+  //
+  //  - null (count unavailable, e.g. path isn't a git worktree): treat
+  //    as ahead > 0 / status quo. We can't determine pending work, so
+  //    don't try to dispatch.
+  const baseBranch = entry.baseBranch ?? "main";
+  const ahead = countCommitsAheadOfBase(entry.worktreePath, baseBranch);
+  const dispatchIter1 = ahead === 0;
+
+  if (dispatchIter1) {
+    // Pre-flight the dirty check before any state mutation. syncWorktreeToBase
+    // below also checks dirty, but doing it up front means a dirty tree never
+    // leaves the worker half-converted (which the re-conversion guard at the
+    // top of growCommand would then block on a retry).
+    if (isWorktreeDirty(entry.worktreePath)) {
+      throw new Error(
+        `Worktree at ${entry.worktreePath} has uncommitted changes — clean up `
+        + `(commit, stash, or discard) and re-run \`garden workers grow\`. `
+        + `Aborting before flipping the workflow so re-running picks up cleanly.`,
+      );
+    }
+  }
+
   // Write the goal file. Idempotent — if --goal-file already pointed at
   // .garden/grow-goal.md inside the worktree, this overwrites it with the
   // (re-trimmed) content. Imported lazily to avoid any circular dependency
@@ -441,8 +483,8 @@ async function growCommand(args: string[]): Promise<void> {
     );
   }
 
-  // Flip the workflow. Iteration starts at 0; the next launchReview will
-  // increment to 1 via the existing growLoopHooks path.
+  // Flip the workflow. Iteration starts at 0; the next launchReview (or
+  // the iter-1 dispatch below) will move it to 1 via growLoopHooks.
   updateWorkerFields(projectName, workerName, {
     workflow: "grow",
     grow: {
@@ -452,8 +494,41 @@ async function growCommand(args: string[]): Promise<void> {
     },
   });
 
+  if (!dispatchIter1) {
+    console.log(
+      `Converted worker ${projectName}/${workerName} to grow `
+      + `(up to ${maxIter} iterations). Goal at .garden/grow-goal.md. `
+      + `Iter-1 fires on the next merge.`,
+    );
+    return;
+  }
+
+  // ahead === 0: branch is fully merged. Fast-forward to origin/<base>
+  // (covers sibling merges that landed after this branch did), then
+  // dispatch the iter-1 seed prompt the same way `workers new --workflow
+  // grow` does. Without this, the worker would sit idle on
+  // workflow=grow,iteration=0 indefinitely — there's no future merge to
+  // fire growAutoContinueAfterMerge.
+  const sync = syncWorktreeToBase(entry.worktreePath, baseBranch);
+  if (!sync.ok) {
+    throw new Error(
+      `Could not fast-forward worktree at ${entry.worktreePath} to origin/${baseBranch}: ${sync.reason}${sync.error ? ` (${sync.error})` : ""}. `
+      + `Workflow has been flipped to grow; resolve the git issue and re-run iter-1 manually `
+      + `(or amend ${path.join(entry.worktreePath, ".garden", "grow-goal.md")} and bounce the worker).`,
+    );
+  }
+
+  const seedFile = path.join(
+    SESSIONS_DIR, "seeds",
+    `grow-seed-${projectName}-${Date.now()}.txt`,
+  );
+  fs.mkdirSync(path.dirname(seedFile), { recursive: true });
+  fs.writeFileSync(seedFile, buildGrowIteration1Seed(seed, maxIter));
+  dispatchDelayedSeed(resolveGardenRunner(), projectName, workerName, seedFile);
+
   console.log(
     `Converted worker ${projectName}/${workerName} to grow `
-    + `(up to ${maxIter} iterations). Goal at .garden/grow-goal.md.`,
+    + `(up to ${maxIter} iterations). Goal at .garden/grow-goal.md. `
+    + `Worktree fast-forwarded to origin/${baseBranch}; iter-1 dispatching now.`,
   );
 }

@@ -340,8 +340,8 @@ If the CLI errors with "already on the 'trellis' workflow", the worker is a trel
 
 ### 5. Continue your work
 
-- **If you were mid-implementation:** resume from where you paused. Finish your current work, commit, push. The push triggers iter 1 of the now-grow loop.
-- **If your initial work was already done before the operator typed \`/grow\`:** end your turn. The merge of your earlier push fires the grow auto-continue, which respawns iter 2 with fresh context.
+- **If you were mid-implementation:** resume from where you paused. Finish your current work, commit, push. The push triggers iter 1 of the now-grow loop on its next merge.
+- **If your initial work was already done (and merged) before the operator typed \`/grow\`:** end your turn. The convert command detects the fully-merged branch and dispatches iter 1 directly — the worker pane will receive the iter-1 prompt within a few seconds.
 
 After this skill returns, the worker is on the grow workflow and behaves like any other grow worker for all subsequent iterations.
 
