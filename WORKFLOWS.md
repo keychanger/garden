@@ -2599,6 +2599,29 @@ without any explicit "amend" command. The file falls back to
 missing or empty, so legacy entries from before the goal-file
 mechanism shipped continue to work.
 
+### Grow skill
+
+Garden ships a `grow` skill, bundled alongside `done`, `handoff`, and
+`trellis-author` and installed at
+`<worktree>/.claude/skills/grow/SKILL.md` for every worker (not just
+grow-workflow ones — the skill exists to convert an *active default
+worker* into grow once the operator has the work in mind). The skill
+triggers when the operator types `/grow [N]` or asks the worker to
+"harden this for N passes" / "do an improvement pass on what we just
+did" and walks the worker through:
+
+1. Picking the iteration budget (default 5).
+2. Distilling the conversation into a 1–3 paragraph goal: scope, out
+   of scope, convergence criterion.
+3. Writing the goal to `<worktree>/.garden/grow-goal.md`.
+4. Running `garden workers grow $GARDEN_WORKER --goal-file
+   .garden/grow-goal.md --max-iterations <N>` to flip the workflow.
+
+Mid-loop goal amends are *not* a skill action — operators edit
+`.garden/grow-goal.md` directly between iterations, and the next
+iteration's continue prompt re-reads it. The skill is one-shot for
+the convert step; amend is unbounded.
+
 ### Project config
 
 | Key                  | Default | Behavior                                                                       |
