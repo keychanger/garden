@@ -475,9 +475,13 @@ function writeLogsScript(): string {
 
   // Use garden logs --follow for live-tailing with pretty formatting.
   // GARDEN_PRETTY=1 forces TTY-style color output inside the tmux pane.
+  // --count 5000 overrides the CLI default of 40 — for the dashboard pane we
+  // want the initial dump to fill scrollback (history-limit is 1,000,000
+  // lines), so the operator can scroll back through hours of activity. The
+  // CLI default stays at 40 to keep one-shot `garden logs` terse.
   const script = `#!/bin/sh
 export GARDEN_PRETTY=1
-exec garden logs --follow
+exec garden logs --follow --count 5000
 `;
 
   // Atomic so a tmux respawn-pane reading this file mid-write doesn't see a
