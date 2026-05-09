@@ -258,7 +258,7 @@ function compactDataLines(data: Record<string, unknown>): string[] {
 // `contWidth` (subsequent). Caller adds the "↳ "/"  " prefix and indent;
 // this just splits the text. Caps total lines so a multi-KB value can't
 // dominate the screen — overflow gets a trailing ellipsis on the last line.
-function wrapDetail(text: string, firstWidth: number, contWidth: number, maxLines: number): string[] {
+export function wrapDetail(text: string, firstWidth: number, contWidth: number, maxLines: number): string[] {
   if (firstWidth < 10) return [text]; // terminal too narrow to wrap usefully
   const lines: string[] = [];
   let remaining = text;

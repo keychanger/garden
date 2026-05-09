@@ -26,6 +26,7 @@ import {
   matchesFilters,
   dedup,
   relativeTime,
+  wrapDetail,
   type LogEntry,
   type Filters,
 } from "../src/commands/logs.js";
@@ -227,5 +228,51 @@ describe("relativeTime", () => {
   it("returns 'just now' for future timestamps", () => {
     const ts = new Date(Date.now() + 10_000).toISOString();
     expect(relativeTime(ts)).toBe("just now");
+  });
+});
+
+describe("wrapDetail", () => {
+  it("returns single line when text fits", () => {
+    expect(wrapDetail("hello", 20, 20, 4)).toEqual(["hello"]);
+  });
+
+  it("breaks at whitespace within the last quarter of the window", () => {
+    // width 20, "the quick brown fox jumps over" — lastIndexOf(" ", 20) is the
+    // space at index 19 (after "fox"), past the 75% threshold (= 15). Break
+    // preferred there; leading whitespace on the next line is consumed.
+    const result = wrapDetail("the quick brown fox jumps over", 20, 20, 4);
+    expect(result[0]).toBe("the quick brown fox");
+    expect(result[1]).toBe("jumps over");
+  });
+
+  it("hard-breaks when no whitespace falls in the preferred range", () => {
+    // No spaces at all — single token longer than the window.
+    const result = wrapDetail("aaaaaaaaaabbbbbbbbbbcccc", 10, 10, 4);
+    expect(result[0]).toBe("aaaaaaaaaa");
+    expect(result[1]).toBe("bbbbbbbbbb");
+    expect(result[2]).toBe("cccc");
+  });
+
+  it("caps at maxLines and ends overflowing output with an ellipsis", () => {
+    // Text far longer than 2 lines × 10 chars; force overflow.
+    const result = wrapDetail("aaaaaaaaaabbbbbbbbbbccccccccccdddddddddd", 10, 10, 2);
+    expect(result).toHaveLength(2);
+    expect(result[result.length - 1].endsWith("…")).toBe(true);
+  });
+
+  it("returns the raw text when firstWidth is below the wrap threshold", () => {
+    // Defensive fallback for absurdly narrow terminals.
+    expect(wrapDetail("anything goes here", 5, 5, 4)).toEqual(["anything goes here"]);
+  });
+
+  it("uses contWidth for continuation lines", () => {
+    // First line wraps at 10, subsequent lines wrap at 6.
+    const result = wrapDetail("aaaaaaaaaa bbbbbb cccccc dddddd", 10, 6, 4);
+    expect(result[0].length).toBeLessThanOrEqual(10);
+    for (let i = 1; i < result.length; i++) {
+      // Allow trailing ellipsis on the final overflow line.
+      const trimmed = result[i].endsWith("…") ? result[i].slice(0, -1) : result[i];
+      expect(trimmed.length).toBeLessThanOrEqual(6);
+    }
   });
 });
