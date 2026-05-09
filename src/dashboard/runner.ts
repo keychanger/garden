@@ -20,15 +20,65 @@ import fs from "node:fs";
 import path from "node:path";
 import { shellEscape } from "./tmux.js";
 
+// Worktree paths are ephemeral — once a worker's branch merges and its
+// worktree is cleaned up, every persisted reference (tmux key bindings,
+// .claude/settings.json hook commands, hidden window long-running shells)
+// that baked the path becomes a dead pointer with MODULE_NOT_FOUND on
+// every fire. resolveGardenRunner is called from the dashboard process to
+// build the command string those persistence sites bake. The dashboard is
+// often launched out of a worker worktree during dev (a common agent
+// pattern: `node <worktree>/dist/cli.js dashboard ...` to test changes
+// without rebuilding the npm-linked global). Without this guard, that
+// invocation poisons every persistence site, and the poison reproduces
+// itself: any subprocess spawned via a poisoned tmux binding or hidden
+// window inherits the same argv[1], so the next worker created via
+// `⌥n` writes the worktree path into ITS settings.json too — chaining
+// the failure to fresh workers that never touched the original worktree.
+const WORKTREE_MARKER = "/.garden/worktrees/";
+
 export function resolveGardenRunner(): string {
-  const gardenBin = path.resolve(process.argv[1]);
-  if (gardenBin.endsWith(".ts")) {
-    const gardenRoot = path.dirname(path.dirname(gardenBin));
+  const direct = path.resolve(process.argv[1]);
+
+  // tsx/dev path — argv[1] points at a .ts source file, not a built dist.
+  // Keep using it directly: dev mode is short-lived and the operator
+  // explicitly chose tsx; the worktree-stability concern below doesn't apply.
+  if (direct.endsWith(".ts")) {
+    const gardenRoot = path.dirname(path.dirname(direct));
     const tsxBin = path.join(gardenRoot, "node_modules", ".bin", "tsx");
     return fs.existsSync(tsxBin)
-      ? `${shellEscape(tsxBin)} ${shellEscape(gardenBin)}`
-      : `npx tsx ${shellEscape(gardenBin)}`;
+      ? `${shellEscape(tsxBin)} ${shellEscape(direct)}`
+      : `npx tsx ${shellEscape(direct)}`;
+  }
+
+  // Built dist/cli.js path. If argv[1] sits inside a worker worktree,
+  // prefer the stable global install (npm-linked at /opt/homebrew/bin or
+  // similar) so the path we persist survives the worktree's eventual
+  // cleanup. Falls back to argv[1] when no stable global is on PATH —
+  // operators without `npm link` get the old behavior.
+  if (direct.includes(WORKTREE_MARKER)) {
+    const stable = findStableGardenBin();
+    if (stable) return `${shellEscape(process.execPath)} ${shellEscape(stable)}`;
   }
   // Use absolute path for node so hooks work in minimal shell environments
-  return `${shellEscape(process.execPath)} ${shellEscape(gardenBin)}`;
+  return `${shellEscape(process.execPath)} ${shellEscape(direct)}`;
+}
+
+// Walk PATH looking for a `garden` executable, then resolve through symlinks
+// to the underlying file. The npm-linked global is itself a symlink chain:
+// /opt/homebrew/bin/garden -> ../lib/node_modules/garden/dist/cli.js
+//   -> /Users/joshua/code/keychange/garden/dist/cli.js
+// Returns null when no stable target exists (e.g., no `npm link` set up,
+// or the symlink target was deleted) so the caller can fall back gracefully.
+// Skips paths that themselves live inside a worktree, since chasing a
+// worktree-rooted symlink would defeat the entire stability check.
+export function findStableGardenBin(): string | null {
+  const dirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  for (const dir of dirs) {
+    const candidate = path.join(dir, "garden");
+    try {
+      const real = fs.realpathSync(candidate);
+      if (real.endsWith(".js") && !real.includes(WORKTREE_MARKER)) return real;
+    } catch { /* not in this dir */ }
+  }
+  return null;
 }
