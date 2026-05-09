@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   normalizeUsage,
   formatDuration,
+  formatBriefAge,
   shouldRefreshOnHookWith,
   decideRefresh,
   parseRetryAfter,
@@ -245,7 +246,7 @@ describe("renderUsagePane", () => {
     expect(sonnetLine).not.toMatch(/\x1b\[4[123]m/); // no fill bg anywhere
   });
 
-  it("marks data stale after STALE_AFTER_MS", async () => {
+  it("marks data stale with a compact age once dataAt > STALE_AFTER_MS old", async () => {
     writeSnapshot({
       fetchedAt: new Date(now - 60 * 60_000).toISOString(),
       data: {
@@ -254,7 +255,7 @@ describe("renderUsagePane", () => {
     });
     const render = await importRender();
     const out = render(now);
-    expect(out).toContain("(stale)");
+    expect(out).toContain("(stale 1h)");
   });
 
   it("appends clear-to-end-of-line to every line", async () => {
@@ -356,11 +357,11 @@ describe("renderUsagePane", () => {
     expect(lines[1]).toContain("resets");
   });
 
-  it("renders preserved bars when data and error coexist (transient hiccup)", async () => {
+  it("renders preserved bars + error tag when data is fresh but last attempt failed", async () => {
     // After the 429-floor / data-preservation fix, a snapshot with a recent
-    // `error` but prior `data` should still show bars. dataAt drives the
-    // stale check: if the data was fetched within STALE_AFTER_MS, no
-    // (stale) tag — the meter just keeps showing what it had.
+    // `error` but prior `data` still shows bars. The error appears as an
+    // inline tag on each row so the operator sees both the bars (still
+    // accurate) and *why* refreshes are failing (without digging into logs).
     writeSnapshot({
       fetchedAt: new Date(now).toISOString(),
       error: "rate-limited",
@@ -374,16 +375,16 @@ describe("renderUsagePane", () => {
     });
     const render = await importRender();
     const out = render(now);
-    expect(out).not.toContain("rate-limited");
     expect(out).toContain("42%");
-    expect(out).not.toContain("(stale)");
+    expect(out).toContain("(rate-limited)");
+    expect(out).not.toContain("stale"); // data within STALE_AFTER_MS — no stale prefix
   });
 
-  it("tags preserved bars stale once dataAt ages past STALE_AFTER_MS", async () => {
+  it("combines stale-age and error in a single tag when both apply", async () => {
     writeSnapshot({
       fetchedAt: new Date(now).toISOString(),
       error: "rate-limited",
-      dataAt: new Date(now - 60 * 60_000).toISOString(),
+      dataAt: new Date(now - 2 * 60 * 60_000).toISOString(),
       data: {
         fiveHour: { pct: 42, resetsAt: new Date(now + 60 * 60_000).toISOString() },
       },
@@ -391,7 +392,26 @@ describe("renderUsagePane", () => {
     const render = await importRender();
     const out = render(now);
     expect(out).toContain("42%");
-    expect(out).toContain("(stale)");
+    expect(out).toContain("(stale 2h, rate-limited)");
+  });
+});
+
+describe("formatBriefAge", () => {
+  it("formats sub-hour ages as minutes", () => {
+    expect(formatBriefAge(0)).toBe("0m");
+    expect(formatBriefAge(45 * 60_000)).toBe("45m");
+  });
+  it("formats sub-2-day ages as hours", () => {
+    expect(formatBriefAge(3 * 60 * 60_000)).toBe("3h");
+    expect(formatBriefAge(47 * 60 * 60_000)).toBe("47h");
+  });
+  it("formats multi-day ages as days", () => {
+    expect(formatBriefAge(2 * 24 * 60 * 60_000)).toBe("2d");
+    expect(formatBriefAge(10 * 24 * 60 * 60_000)).toBe("10d");
+  });
+  it("returns ? for nonsensical inputs", () => {
+    expect(formatBriefAge(NaN)).toBe("?");
+    expect(formatBriefAge(-1)).toBe("?");
   });
 });
 

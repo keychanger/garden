@@ -470,9 +470,7 @@ export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number):
   // the last *successful* fetch, not the last attempt. Snapshots written by
   // older versions lack dataAt and fall back to fetchedAt (which equals dataAt
   // on success in those snapshots, so the behavior matches).
-  const dataAt = Date.parse(snap.dataAt ?? snap.fetchedAt);
-  const stale = !Number.isFinite(dataAt) || (nowMs - dataAt) > STALE_AFTER_MS;
-  const staleTag = stale ? dim(" (stale)") : "";
+  const staleTag = formatHealthTag(snap, nowMs);
   const d = snap.data;
   const fit = computeMeterFit(paneWidth);
 
@@ -486,6 +484,36 @@ export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number):
 
 const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
 const SEVEN_DAY_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Trust signal for the operator: when bars are real-time we say nothing
+// (uncluttered). When data is unexpectedly old or the last fetch errored,
+// we annotate every meter row with how-old + why so the source of trouble is
+// obvious without digging through `garden logs`. Examples:
+//   no problems        → ""
+//   data 2h old        → " (stale 2h)"
+//   error after fresh  → " (rate-limited)"
+//   error + data old   → " (stale 2h, rate-limited)"
+function formatHealthTag(snap: UsageSnapshot, nowMs: number): string {
+  const dataAt = Date.parse(snap.dataAt ?? snap.fetchedAt);
+  const ageMs = Number.isFinite(dataAt) ? nowMs - dataAt : Infinity;
+  const stale = ageMs > STALE_AFTER_MS;
+  if (!snap.error && !stale) return "";
+  const parts: string[] = [];
+  if (stale) parts.push(`stale ${formatBriefAge(ageMs)}`);
+  if (snap.error) parts.push(snap.error);
+  return dim(` (${parts.join(", ")})`);
+}
+
+// Compact age form for inline annotations: "5m", "3h", "2d". Differs from
+// formatDuration() which prepends "in" and is sized for resets-text context.
+export function formatBriefAge(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "?";
+  const min = Math.floor(ms / 60_000);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 48) return `${hr}h`;
+  return `${Math.floor(hr / 24)}d`;
+}
 
 function renderMeterLine(
   label: string,
