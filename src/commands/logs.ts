@@ -249,13 +249,42 @@ function compactDataLines(data: Record<string, unknown>): string[] {
   for (const [k, v] of Object.entries(data)) {
     if (BORING_DATA_KEYS.has(k)) continue;
     const s = typeof v === "string" ? v : JSON.stringify(v);
-    if (s.length > 80) {
-      parts.push(`${k}=${s.slice(0, 77)}…`);
-    } else {
-      parts.push(`${k}=${s}`);
-    }
+    parts.push(`${k}=${s}`);
   }
   return parts;
+}
+
+// Wrap a detail string into lines no wider than `firstWidth` (line 0) and
+// `contWidth` (subsequent). Caller adds the "↳ "/"  " prefix and indent;
+// this just splits the text. Caps total lines so a multi-KB value can't
+// dominate the screen — overflow gets a trailing ellipsis on the last line.
+function wrapDetail(text: string, firstWidth: number, contWidth: number, maxLines: number): string[] {
+  if (firstWidth < 10) return [text]; // terminal too narrow to wrap usefully
+  const lines: string[] = [];
+  let remaining = text;
+  while (remaining.length > 0 && lines.length < maxLines) {
+    const w = lines.length === 0 ? firstWidth : contWidth;
+    if (remaining.length <= w) {
+      lines.push(remaining);
+      remaining = "";
+      break;
+    }
+    // Prefer a whitespace break within the last quarter of the window;
+    // otherwise hard-break so we don't leave a giant unbroken token.
+    const minBreak = Math.floor(w * 0.75);
+    const ws = remaining.lastIndexOf(" ", w);
+    const breakAt = ws >= minBreak ? ws : w;
+    lines.push(remaining.slice(0, breakAt).trimEnd());
+    remaining = remaining.slice(breakAt).replace(/^\s+/, "");
+  }
+  if (remaining.length > 0) {
+    const last = lines.pop() ?? "";
+    const w = lines.length === 0 ? firstWidth : contWidth;
+    const combined = remaining ? `${last} ${remaining}` : last;
+    const room = Math.max(w - 1, 1);
+    lines.push(combined.slice(0, room).trimEnd() + "…");
+  }
+  return lines;
 }
 
 interface Summarized {
@@ -341,9 +370,21 @@ function formatPrettyEntry(entry: LogEntry, useRelativeTime: boolean): string {
   const headlineLine = `${color.dim}${ts}${color.reset}  ${projectStr}  ${workerStr} ${glyphColor}${glyph}${color.reset} ${msgColor}${headline}${msgReset}`;
   if (details.length === 0) return headlineLine;
   const indent = " ".repeat(PRETTY_MESSAGE_COL);
-  const continuationLines = details.map(
-    (d) => `${indent}${color.dim}↳ ${d}${color.reset}`,
-  );
+  // Wrap each detail to the terminal so long error/data dumps stay within
+  // the message column instead of natural-wrapping back to column 0.
+  // Continuation prefix "  " aligns wrapped text under the char after "↳ ".
+  const termWidth = process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 120;
+  const usable = Math.max(termWidth - PRETTY_MESSAGE_COL, 20);
+  const firstWidth = Math.max(usable - 2, 10); // "↳ "
+  const contWidth = Math.max(usable - 2, 10);  // "  "
+  const continuationLines: string[] = [];
+  for (const d of details) {
+    const wrapped = wrapDetail(d, firstWidth, contWidth, 4);
+    for (let i = 0; i < wrapped.length; i++) {
+      const prefix = i === 0 ? "↳ " : "  ";
+      continuationLines.push(`${indent}${color.dim}${prefix}${wrapped[i]}${color.reset}`);
+    }
+  }
   return [headlineLine, ...continuationLines].join("\n");
 }
 
