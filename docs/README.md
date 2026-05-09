@@ -4,7 +4,7 @@ Design docs and behavioral specs for garden. Top-level entry-point docs
 (`CLAUDE.md`, `DESIGN.md`, `WORKFLOWS.md`, `rules.md`) stay at the repo
 root; this directory holds the rest.
 
-Two kinds of doc live here:
+Three kinds of doc live here:
 
 - **Specs** — authoritative behavioral contracts. Open with the marker
   phrase *"if the code disagrees with this document, the code is wrong"*
@@ -14,6 +14,9 @@ Two kinds of doc live here:
 - **Design docs / plans** — forward-looking architecture for not-yet-shipped
   or in-progress work. Authoritative for the design intent, not for the
   code (since the code may not exist yet).
+- **Analyses** — surveys or comparisons that surface options without
+  committing to a plan. Not authoritative for anything; useful as a
+  shortlist when future work picks an item up.
 
 Once a design doc's work ships, its content typically folds into the
 relevant authoritative doc (`WORKFLOWS.md`, `DESIGN.md`, or a sibling spec)
