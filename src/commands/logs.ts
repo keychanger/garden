@@ -315,6 +315,10 @@ const SUMMARIZERS: Record<string, Summarizer> = {
   },
   "workers:created": () => "worker created",
   "workers:killed": () => "worker killed",
+  "logs-filter:filter set": (e) => {
+    const expr = typeof e.data?.expr === "string" ? e.data.expr : "";
+    return expr ? `filter set: ${expr}` : "filter set";
+  },
   "alert:": (e) => e.msg,
 };
 

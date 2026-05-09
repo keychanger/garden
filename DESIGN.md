@@ -111,6 +111,7 @@ Requires terminal setup: iTerm2 → Profiles → Keys → Left Option key → "E
 | `⌥r` | Focus root shell (lower-left) |
 | `⌥l` | Focus logs view (lower-left); also acknowledges the alert badge |
 | `⌥/` | Edit the sticky logs filter via `tmux command-prompt` (pre-filled with current value); empty input clears |
+| `⌥?` | Clear the sticky logs filter immediately (no prompt) |
 
 ## Pane Management
 

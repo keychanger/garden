@@ -52,5 +52,9 @@ export function applyLogsFilter(expr: string): void {
     setPaneTitle(target, trimmed ? `logs [${trimmed}]` : "logs");
   }
   try { respawnLogsPane(state); } catch { /* pane gone */ }
-  log.info("logs-filter", trimmed ? "applied" : "cleared", { data: { expr: trimmed } });
+  if (trimmed) {
+    log.info("logs-filter", "filter set", { data: { expr: trimmed } });
+  } else {
+    log.info("logs-filter", "filter cleared");
+  }
 }
