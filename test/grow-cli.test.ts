@@ -378,7 +378,9 @@ describe("garden workers grow (convert)", () => {
 
     const goalPath = path.join(wtPath, ".garden", "grow-goal.md");
     expect(fs.existsSync(goalPath)).toBe(true);
-    expect(fs.readFileSync(goalPath, "utf-8")).toBe("polish things");
+    // Goal file ends in a trailing newline (POSIX text-file convention) so
+    // operators editing with `vim`/`echo >>` don't fight a no-eol marker.
+    expect(fs.readFileSync(goalPath, "utf-8")).toBe("polish things\n");
   });
 
   it("self-resolves the worker via $GARDEN_WORKER when no positional arg is given", async () => {
@@ -521,7 +523,7 @@ describe("garden workers grow (convert)", () => {
     expect(entry.grow!.seed).toBe("polish the auth flow with edge tests");
     // The goal file is written into the worktree (file is durable across iterations).
     expect(fs.readFileSync(path.join(wtPath, ".garden", "grow-goal.md"), "utf-8"))
-      .toBe("polish the auth flow with edge tests");
+      .toBe("polish the auth flow with edge tests\n");
   });
 
   it("rejects an empty seed", async () => {
@@ -576,5 +578,76 @@ describe("garden workers grow (convert)", () => {
     await expect(
       workers(["grow", "w", "--seed", "x", "--max-iterations", "0"]),
     ).rejects.toThrow(/positive integer/);
+  });
+
+  // parseInt('5.7') silently truncates to 5; parseInt('5xyz') silently
+  // returns 5. Both forms are typos the operator wants to know about,
+  // not silently coerce. The CLI must reject them.
+  it("rejects fractional --max-iterations like '5.7'", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = path.join(projectDir, "..", "wt-frac");
+    fs.mkdirSync(wtPath, { recursive: true });
+    await addDefaultWorker("proj", "w", wtPath);
+
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["grow", "w", "--seed", "x", "--max-iterations", "5.7"]),
+    ).rejects.toThrow(/positive integer.*5\.7/);
+  });
+
+  it("rejects --max-iterations with trailing junk like '5xyz'", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = path.join(projectDir, "..", "wt-junk");
+    fs.mkdirSync(wtPath, { recursive: true });
+    await addDefaultWorker("proj", "w", wtPath);
+
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["grow", "w", "--seed", "x", "--max-iterations", "5xyz"]),
+    ).rejects.toThrow(/positive integer.*5xyz/);
+  });
+
+  // The previous boolean-return contract swallowed the underlying fs
+  // error, leaving operators with a generic "Failed to write" they
+  // couldn't act on (read-only mount? full disk? gone worktree?). The
+  // CLI now surfaces the cause from the throw. Forcing a failure: point
+  // the registry at a "worktreePath" that's actually a regular file —
+  // mkdirSync(".garden") under it returns ENOTDIR, which atomicWriteFile
+  // surfaces.
+  it("surfaces the underlying fs error when the goal-file write fails", async () => {
+    const projectDir = await setupProject("proj");
+    // Create a regular file at the path the registry will name as worktreePath.
+    const fakeWorktree = path.join(projectDir, "..", "fake-as-file");
+    fs.writeFileSync(fakeWorktree, "i am a file, not a dir");
+    await addDefaultWorker("proj", "w", fakeWorktree);
+
+    const { workers } = await importWorkersCmd();
+    const err = await workers([
+      "grow", "w", "--seed", "x",
+    ]).catch(e => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toMatch(/Failed to write goal file at/);
+    // The error from mkdirSync surfaces — ENOTDIR or EEXIST depending on platform.
+    expect(err.message).toMatch(/ENOTDIR|EEXIST|EISDIR|file exists|not a directory/i);
+  });
+
+  it("does not flip the workflow when the goal-file write fails", async () => {
+    const projectDir = await setupProject("proj");
+    const fakeWorktree = path.join(projectDir, "..", "fake-as-file-2");
+    fs.writeFileSync(fakeWorktree, "regular file");
+    await addDefaultWorker("proj", "leave-me", fakeWorktree);
+
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["grow", "leave-me", "--seed", "x"]),
+    ).rejects.toThrow();
+
+    // Workflow flip happens AFTER the goal-file write; a failed write must
+    // leave the worker on its original workflow so the operator can retry
+    // (after fixing the cause) without ending up in a half-converted state.
+    const reg = await importRegistry();
+    const entry = reg.findWorkerByName("proj", "leave-me")!;
+    expect(entry.workflow).toBe("default");
+    expect(entry.grow).toBeUndefined();
   });
 });

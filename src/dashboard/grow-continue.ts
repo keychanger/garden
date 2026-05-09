@@ -11,6 +11,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { tryGetProject } from "../config.js";
+import { atomicWriteFile } from "./atomic-write.js";
 import {
   dispatchDelayedLoopContinue, loopAutoContinueAfterMerge,
   type LoopHooks,
@@ -217,16 +218,20 @@ function readGrowGoalFile(worktreePath: string | undefined): string | null {
 // the convert CLI (`garden workers grow`) at flip time to produce the
 // durable goal artifact. The cold-plant CLI produces the same artifact
 // indirectly: its iter-1 seed prompt instructs the worker to write the
-// file. Returns true on success; iter ≥ 2's continue prompt falls back
-// to entry.grow.seed if the file is missing or empty, so a write
-// failure is recoverable, but the convert CLI throws to surface it.
-export function writeGrowGoalFile(worktreePath: string, seed: string): boolean {
-  try {
-    const goalDir = path.join(worktreePath, ".garden");
-    fs.mkdirSync(goalDir, { recursive: true });
-    fs.writeFileSync(path.join(worktreePath, GROW_GOAL_FILE_REL), seed);
-    return true;
-  } catch {
-    return false;
-  }
+// file.
+//
+// Atomic: the file is read by buildGrowContinuePrompt at every
+// post-merge dispatch, which can race with an operator's mid-loop
+// amend (re-running the convert CLI, or a sibling tool overwriting
+// the file). atomicWriteFile keeps readers from seeing a half-written
+// goal — the rename either flips the inode or doesn't.
+//
+// Trailing newline: convenience for `cat`/`vim`/`echo >>` users who
+// edit the file by hand. Skipped if the seed already ends in one.
+//
+// Throws on filesystem errors so the caller can surface the cause
+// (EACCES, ENOSPC, etc.) instead of a generic "failed to write".
+export function writeGrowGoalFile(worktreePath: string, seed: string): void {
+  const body = seed.endsWith("\n") ? seed : seed + "\n";
+  atomicWriteFile(path.join(worktreePath, GROW_GOAL_FILE_REL), body);
 }

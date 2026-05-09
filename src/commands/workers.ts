@@ -393,10 +393,17 @@ async function growCommand(args: string[]): Promise<void> {
   }
 
   // Resolve max iterations: --max-iterations > project.maxGrowIterations > 5.
+  // Strict integer parsing: parseInt would silently accept '5.7' (→ 5) or
+  // '5xyz' (→ 5), corrupting the budget without surfacing the typo. The
+  // /^-?\d+$/ guard rejects fractional, scientific, hex, and trailing-junk
+  // inputs before parseInt sees them.
   let maxIter = 5;
   if (project.maxGrowIterations !== undefined) maxIter = project.maxGrowIterations;
   if (flags.has("max-iterations")) {
     const raw = flags.get("max-iterations")!;
+    if (!/^-?\d+$/.test(raw)) {
+      throw new Error(`--max-iterations must be a positive integer, got '${raw}'`);
+    }
     const n = Number.parseInt(raw, 10);
     if (!Number.isFinite(n) || n < 1) {
       throw new Error(`--max-iterations must be a positive integer, got '${raw}'`);
@@ -407,11 +414,18 @@ async function growCommand(args: string[]): Promise<void> {
   // Write the goal file. Idempotent — if --goal-file already pointed at
   // .garden/grow-goal.md inside the worktree, this overwrites it with the
   // (re-trimmed) content. Imported lazily to avoid any circular dependency
-  // with the grow-continue module's at-import-time exports.
+  // with the grow-continue module's at-import-time exports. Filesystem
+  // errors (EACCES on a read-only worktree, ENOSPC, missing worktree dir)
+  // are caught here so the operator sees the cause rather than a generic
+  // "failed to write" — diagnosing a read-only mount or full disk from a
+  // boolean is impossible.
   const { writeGrowGoalFile } = await import("../dashboard/grow-continue.js");
-  if (!writeGrowGoalFile(entry.worktreePath, seed)) {
+  const goalPath = path.join(entry.worktreePath, ".garden", "grow-goal.md");
+  try {
+    writeGrowGoalFile(entry.worktreePath, seed);
+  } catch (err) {
     throw new Error(
-      `Failed to write goal file at ${path.join(entry.worktreePath, ".garden", "grow-goal.md")}.`,
+      `Failed to write goal file at ${goalPath}: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 
