@@ -30,6 +30,7 @@ import { whoami } from "./whoami.js";
 import { handoff } from "./handoff.js";
 import { workers } from "./workers.js";
 import { trellis } from "./trellis.js";
+import { diag } from "./diag.js";
 
 type Command = (args: string[]) => Promise<void>;
 
@@ -67,4 +68,5 @@ export const commands: Record<string, Command> = {
   handoff,
   workers,
   trellis,
+  diag,
 };

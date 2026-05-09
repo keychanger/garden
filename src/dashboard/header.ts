@@ -22,7 +22,9 @@ import { workerWindowName as workerWin, parseWorkerWindow } from "./window-names
 import { renderUsagePane } from "./usage.js";
 import { resolvePlotStatus, type PlotState } from "./plot-status.js";
 
-const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
+export const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
+// Diagnostic dump path for the status pane's live $cur (see _diag-status).
+export const STATUS_CUR_DUMP_FILE = path.join(SESSIONS_DIR, "status.cur.dump");
 const USAGE_RENDERED_FILE = path.join(SESSIONS_DIR, "usage.rendered");
 const PLOT_STRIP_TEMPLATE_FILE = path.join(SESSIONS_DIR, "plot-strip.template");
 // Sentinel in the plot-strip template file; the status pane's animation loop
@@ -373,6 +375,7 @@ export function buildStatusCommand(gardenRunner: string): string {
   const sf = STATUS_RENDERED_FILE;
   const pst = PLOT_STRIP_TEMPLATE_FILE;
   const sent = PLOT_SPINNER_SENTINEL;
+  const sessionsDir = SESSIONS_DIR;
   const brailleClass = `[${SPINNER_FRAMES.join("")}]`;
   const caseBranches = SPINNER_FRAMES.map((f, i) => `${i}) sf_char='${f}';;`).join(" ");
   // Event-driven status pane loop:
@@ -388,14 +391,24 @@ export function buildStatusCommand(gardenRunner: string): string {
     `printf '\\033[H\\033[2J\\033[3J'`,
     `sf='${sf}'`,
     `pst='${pst}'`,
+    `cd='${STATUS_CUR_DUMP_FILE}'`,
     `sig=0`,
     // Trap stays narrow: one $(cat) only. A heavier trap (e.g. also reloading
     // $pst) stacks SIGCHLD events from extra subshells on top of the inner
     // loop's `wait $_sp`, which can wedge bash so USR1 stops being delivered.
     `trap '_t=$(cat "$sf" 2>/dev/null); printf "\\033[H%s\\033[J" "$_t"; prev="$_t"; sig=1' USR1`,
+    // Diagnostic-only: dump the live $cur (what the spinner overlay repaints
+    // from) on demand. Writes to a stable file so _diag-status can compare it
+    // against the pre-baked file. printf %s avoids appending a trailing newline.
+    `trap 'printf %s "$cur" > "$cd"' USR2`,
     `prev=""`,
     `pt_tpl=""`,
     `fc=0`,
+    // diag: counter for the auto-detector (see below). Capped at 3 captures
+    // per dashboard lifetime so the snapshot dir doesn't fill if the bug is
+    // chronic. Reset on pane respawn.
+    `diag_count=0`,
+    `sd='${sessionsDir}'`,
     `while true; do`,
     `  if [ $sig -eq 1 ]; then`,
     // Signal trap already displayed the pre-rendered content and set prev.
@@ -415,6 +428,38 @@ export function buildStatusCommand(gardenRunner: string): string {
     `  has_cs=0; has_ps=0;`,
     `  if printf '%s' "$cur" | grep -q '${brailleClass}'; then has_cs=1; fi;`,
     `  case "$pt_tpl" in *"${sent}"*) has_ps=1 ;; esac;`,
+    // -------- diag auto-detector (REMOVE WITH ALL OTHER diag- PLUMBING) --------
+    // Detects the spinner-overlay duplicate-row bug: visible pane has two
+    // adjacent identical non-blank lines that $cur does NOT have. Runs once
+    // per outer-loop iteration (≤1/60s during continuous spinner). Capped at
+    // 3 captures per dashboard lifetime via diag_count.
+    //
+    // Cost per check: 1 capture-pane + 2 awks. On detect: 1 date + 1 cat +
+    // 1 list-panes + 1 background fork to dispatch the alert. All forks are
+    // outside the inner spinner loop's `wait $_sp`, so they don't compete
+    // with USR1 delivery — see the trap-narrowing comment above.
+    `  if [ $diag_count -lt 3 ]; then`,
+    `    _vis=$(tmux capture-pane -p -t "$TMUX_PANE" -J 2>/dev/null);`,
+    `    if [ -n "$_vis" ]; then`,
+    `      _vd=0; _cd=0;`,
+    `      if printf '%s\\n' "$_vis" | awk 'NF && $0==prev {f=1; exit} {prev=$0} END {exit !f}'; then _vd=1; fi;`,
+    `      if printf '%s\\n' "$cur" | awk 'NF && $0==prev {f=1; exit} {prev=$0} END {exit !f}'; then _cd=1; fi;`,
+    `      if [ $_vd -eq 1 ] && [ $_cd -eq 0 ]; then`,
+    `        diag_count=$((diag_count + 1));`,
+    `        _ts=$(date +%s);`,
+    `        _snap="$sd/diag-snap-$_ts-$diag_count.txt";`,
+    `        {`,
+    `          printf '## ts\\n%s\\n\\n## diag_count\\n%s\\n\\n## cur\\n%s\\n\\n## file\\n' "$_ts" "$diag_count" "$cur";`,
+    `          cat "$sf" 2>/dev/null;`,
+    `          printf '\\n## visible\\n%s\\n' "$_vis";`,
+    `          printf '\\n## geometry\\n';`,
+    `          tmux list-panes -t "$TMUX_PANE" -F '#{pane_id} w=#{pane_width} h=#{pane_height} top=#{pane_top}' 2>/dev/null;`,
+    `        } > "$_snap";`,
+    `        ${gardenRunner} dashboard _diag-alert "$_snap" 2>/dev/null &`,
+    `      fi;`,
+    `    fi;`,
+    `  fi;`,
+    // -------- end diag auto-detector --------
     `  if [ $has_cs -eq 1 ] || [ $has_ps -eq 1 ]; then`,
     `    sc=0;`,
     `    while [ $sc -lt 500 ]; do`,

@@ -137,6 +137,9 @@ Trellis (spec-driven loop workflow — see WORKFLOWS.md § "Trellis workflow"):
   trellis retire <project> <name>     Mark a trellis retired (filters from picker, refuses new vines)
   trellis revive <project> <name>     Remove the retirement comment
 
+Diagnostics (temporary — see src/commands/diag.ts cleanup checklist):
+  diag handoff                        Spawn a worker pre-loaded with the latest auto-captured status-pane corruption snapshot
+
 Output is JSON when piped, pretty-printed in a terminal.
 `.trim());
 }

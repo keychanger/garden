@@ -136,6 +136,16 @@ export async function dashboard(args: string[]): Promise<void> {
     await runUsagePollerLoop();
     return;
   }
+  if (sub === "_diag-status") {
+    const { runDiagStatus } = await import("./diag-status.js");
+    await runDiagStatus();
+    return;
+  }
+  if (sub === "_diag-alert") {
+    const { runDiagAlert } = await import("./diag-alert.js");
+    await runDiagAlert(args[1]);
+    return;
+  }
   if (sub === "_usage-refresh") {
     const { refreshUsage } = await import("./usage.js");
     const { refreshDashboard } = await import("./header.js");
