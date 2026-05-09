@@ -22,6 +22,14 @@ export function tmux(...args: string[]): void {
 // were silently failing with E2BIG / tmux command-buffer overflow, leaving
 // the new worker parked at status:ready with a never-delivered seed. Buffers
 // are byte streams with no argv exposure, so multi-MB seeds work uniformly.
+//
+// The function returns immediately after the paste — the 300ms gap and the
+// final `Enter` happen via setTimeout. In one-shot CLI contexts (the
+// _continue-worker subcommand handler etc.) Node keeps the process alive
+// until the timer fires, so Enter still lands. In long-lived contexts (the
+// poller's merge handler, the dashboard) the caller's stack no longer
+// blocks 300ms per Submit. Previously this was a synchronous
+// `execFileSync("sleep", "0.3")` that monopolized the caller's tick.
 let pasteBufferCounter = 0;
 export function pasteAndSubmit(paneId: string, message: string): void {
   const bufferName = `garden-paste-${process.pid}-${++pasteBufferCounter}`;
@@ -45,8 +53,15 @@ export function pasteAndSubmit(paneId: string, message: string): void {
     const stderr = (err as { stderr?: Buffer }).stderr?.toString().trim() ?? "";
     throw new Error(`tmux paste-buffer failed${stderr ? `: ${stderr}` : ""}`);
   }
-  execFileSync("sleep", ["0.3"], { stdio: "ignore" });
-  execFileSync("tmux", ["send-keys", "-t", paneId, "Enter"], { stdio: "ignore" });
+  setTimeout(() => {
+    try {
+      execFileSync("tmux", ["send-keys", "-t", paneId, "Enter"], { stdio: "ignore" });
+    } catch {
+      // Pane may have been killed between paste and Enter (worker bounced,
+      // dashboard torn down, race with worktree cleanup). Caller doesn't
+      // wait for confirmation, so swallow.
+    }
+  }, 300);
 }
 
 export function tmuxOutput(...args: string[]): string {

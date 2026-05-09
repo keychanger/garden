@@ -501,6 +501,14 @@ describe("getPaneLabel", () => {
 // ===========================================================================
 
 describe("pasteAndSubmit", () => {
+  // pasteAndSubmit returns synchronously after load-buffer + paste-buffer;
+  // the trailing Enter fires on a setTimeout 300ms later. Use fake timers so
+  // tests can advance to the Enter without real wallclock waits, and so
+  // tests that don't care about Enter aren't tripped by a stray timer.
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
   it("loads message via stdin into a tmux buffer, never via argv", () => {
     const calls: { argv: string[]; opts: Record<string, unknown> }[] = [];
     mockExecFileSync.mockImplementation((_cmd: string, argv: string[], opts: Record<string, unknown>) => {
@@ -529,7 +537,13 @@ describe("pasteAndSubmit", () => {
     const bufferName = loadBufferCall!.argv[2];
     expect(pasteCall!.argv).toEqual(["paste-buffer", "-d", "-b", bufferName, "-t", "%42"]);
 
-    // Enter is sent after the paste so claude submits.
+    // Before the 300ms gap elapses, Enter has NOT been sent. The function
+    // returns immediately after the paste so the caller's stack doesn't
+    // block on a synchronous sleep.
+    expect(calls.find(c => c.argv[0] === "send-keys")).toBeUndefined();
+
+    // After the 300ms paste-detection gap, Enter fires.
+    vi.advanceTimersByTime(300);
     const enterCall = calls.find(c => c.argv[0] === "send-keys" && c.argv.includes("Enter"));
     expect(enterCall).toBeDefined();
     expect(enterCall!.argv).toEqual(["send-keys", "-t", "%42", "Enter"]);
@@ -573,6 +587,23 @@ describe("pasteAndSubmit", () => {
     expect(() => pasteAndSubmit("%5", "hi")).toThrow(/paste-buffer failed/);
     const deleteCall = argvSeen.find(a => a[0] === "delete-buffer");
     expect(deleteCall).toBeDefined();
+  });
+
+  it("swallows send-keys failure when the pane is gone by the time Enter fires", () => {
+    const argvSeen: string[][] = [];
+    mockExecFileSync.mockImplementation((_cmd: string, argv: string[]) => {
+      argvSeen.push(argv);
+      if (argv[0] === "send-keys") throw new Error("pane gone");
+      return undefined;
+    });
+
+    // load-buffer + paste-buffer succeed; pasteAndSubmit returns cleanly.
+    expect(() => pasteAndSubmit("%5", "hi")).not.toThrow();
+    // Advancing past the 300ms gap fires the deferred Enter, which throws
+    // internally — it must be swallowed (the pane may have been killed
+    // between paste and Enter; caller doesn't wait for confirmation).
+    expect(() => vi.advanceTimersByTime(300)).not.toThrow();
+    expect(argvSeen.find(a => a[0] === "send-keys")).toBeDefined();
   });
 });
 
