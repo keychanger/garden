@@ -27,6 +27,8 @@ import {
   dedup,
   relativeTime,
   wrapDetail,
+  parseFilterExpr,
+  applyStickyDefaults,
   type LogEntry,
   type Filters,
 } from "../src/commands/logs.js";
@@ -91,6 +93,130 @@ describe("parseArgs", () => {
 
   it("leaves modeOverride undefined by default", () => {
     expect(parseArgs([]).modeOverride).toBeUndefined();
+  });
+
+  it("parses --no-saved-filter", () => {
+    expect(parseArgs(["--no-saved-filter"]).noSavedFilter).toBe(true);
+    expect(parseArgs([]).noSavedFilter).toBeUndefined();
+  });
+
+  it("parses --project / -p", () => {
+    expect(parseArgs(["--project", "garden"]).project).toBe("garden");
+    expect(parseArgs(["-p", "Garden"]).project).toBe("garden");
+  });
+});
+
+describe("parseFilterExpr", () => {
+  it("returns empty fuzzy list for empty input", () => {
+    expect(parseFilterExpr("")).toEqual({ fuzzy: [] });
+    expect(parseFilterExpr("   ")).toEqual({ fuzzy: [] });
+  });
+
+  it("parses structured key:value tokens", () => {
+    const r = parseFilterExpr("worker:foo src:poller level:warn project:garden");
+    expect(r).toEqual({
+      worker: "foo",
+      src: "poller",
+      level: "warn",
+      project: "garden",
+      fuzzy: [],
+    });
+  });
+
+  it("collects bare tokens as fuzzy", () => {
+    expect(parseFilterExpr("fix")).toEqual({ fuzzy: ["fix"] });
+    expect(parseFilterExpr("fix poller")).toEqual({ fuzzy: ["fix", "poller"] });
+  });
+
+  it("mixes structured and fuzzy", () => {
+    const r = parseFilterExpr("worker:fix poller error");
+    expect(r).toEqual({ worker: "fix", fuzzy: ["poller", "error"] });
+  });
+
+  it("treats unknown key prefixes as fuzzy", () => {
+    expect(parseFilterExpr("wrkr:foo")).toEqual({ fuzzy: ["wrkr:foo"] });
+  });
+
+  it("treats trailing-colon tokens as fuzzy", () => {
+    expect(parseFilterExpr("worker:")).toEqual({ fuzzy: ["worker:"] });
+  });
+
+  it("first occurrence wins for repeated structured keys", () => {
+    const r = parseFilterExpr("worker:first worker:second");
+    expect(r.worker).toBe("first");
+    expect(r.fuzzy).toEqual([]);
+  });
+
+  it("lowercases all values", () => {
+    const r = parseFilterExpr("Worker:FOO Bar");
+    expect(r.worker).toBe("foo");
+    expect(r.fuzzy).toEqual(["bar"]);
+  });
+});
+
+describe("applyStickyDefaults", () => {
+  const base: Filters = { count: 40, follow: false, showAll: false };
+
+  it("returns CLI filters unchanged when sticky is null", () => {
+    const f: Filters = { ...base, worker: "foo" };
+    expect(applyStickyDefaults(f, null)).toEqual(f);
+  });
+
+  it("fills missing fields from sticky", () => {
+    const sticky = { worker: "alice", src: "poller", fuzzy: ["bug"] };
+    const merged = applyStickyDefaults(base, sticky);
+    expect(merged.worker).toBe("alice");
+    expect(merged.src).toBe("poller");
+    expect(merged.fuzzy).toEqual(["bug"]);
+  });
+
+  it("CLI overrides sticky field-by-field", () => {
+    const sticky = { worker: "alice", src: "poller" };
+    const cli: Filters = { ...base, worker: "bob" };
+    const merged = applyStickyDefaults(cli, sticky);
+    expect(merged.worker).toBe("bob");
+    expect(merged.src).toBe("poller");
+  });
+
+  it("preserves sticky fuzzy when CLI has none", () => {
+    const sticky = { fuzzy: ["bug"] };
+    const merged = applyStickyDefaults(base, sticky);
+    expect(merged.fuzzy).toEqual(["bug"]);
+  });
+});
+
+describe("matchesFilters fuzzy", () => {
+  const entry: LogEntry = {
+    ts: "2026-03-31T12:00:00Z",
+    level: "info",
+    src: "poller",
+    msg: "checking workers",
+    worker: "swift-oak",
+  };
+
+  it("matches when fuzzy token appears in worker", () => {
+    expect(matchesFilters(entry, { ...entry, fuzzy: ["swift"], count: 40, follow: false } as Filters)).toBe(true);
+  });
+
+  it("matches when fuzzy token appears in src", () => {
+    expect(matchesFilters(entry, { fuzzy: ["poller"], count: 40, follow: false })).toBe(true);
+  });
+
+  it("matches when fuzzy token appears in msg", () => {
+    expect(matchesFilters(entry, { fuzzy: ["check"], count: 40, follow: false })).toBe(true);
+  });
+
+  it("rejects when fuzzy token appears nowhere", () => {
+    expect(matchesFilters(entry, { fuzzy: ["nope"], count: 40, follow: false })).toBe(false);
+  });
+
+  it("ANDs multiple fuzzy tokens", () => {
+    expect(matchesFilters(entry, { fuzzy: ["swift", "check"], count: 40, follow: false })).toBe(true);
+    expect(matchesFilters(entry, { fuzzy: ["swift", "nope"], count: 40, follow: false })).toBe(false);
+  });
+
+  it("is case-insensitive", () => {
+    expect(matchesFilters(entry, { fuzzy: ["SWIFT"], count: 40, follow: false })).toBe(true);
   });
 });
 

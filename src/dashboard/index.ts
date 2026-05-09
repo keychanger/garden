@@ -22,6 +22,7 @@ import {
   runWorkflowPicker, plantGrowFromPicker,
 } from "./trellis-picker.js";
 import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, cyclePane, cyclePlot } from "./navigate.js";
+import { openLogsFilterPrompt, applyLogsFilter } from "./logs-filter.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
 import { runUsagePollerLoop, stopUsagePoller } from "./usage-poller.js";
 import { loadConfig } from "../config.js";
@@ -57,6 +58,11 @@ export async function dashboard(args: string[]): Promise<void> {
   if (sub === "_focus-growhouse") return focusGrowhouse();
   if (sub === "_focus-root") return focusRoot();
   if (sub === "_focus-logs") return focusLogs();
+  if (sub === "_logs-filter") return openLogsFilterPrompt();
+  if (sub === "_logs-filter-apply") {
+    applyLogsFilter(args.slice(1).join(" "));
+    return;
+  }
   if (sub === "_cycle-pane") return cyclePane(args[1] === "prev" ? -1 : 1);
   if (sub === "_cycle-plot") return cyclePlot(args[1] === "prev" ? -1 : 1);
   if (sub === "_kill-pane") return killPane();
@@ -224,6 +230,7 @@ Hotkeys (⌥ = Option/Alt, no prefix needed):
   ⌥g           Focus growhouse (garden> prompt with auto-dispatch)
   ⌥r           Focus root shell
   ⌥l           Focus logs
+  ⌥/           Edit sticky logs filter (key:value or fuzzy; empty clears)
 
 Setup:
   iTerm2: Profiles → Keys → Left Option key → "Esc+"

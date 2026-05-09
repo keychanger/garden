@@ -14,8 +14,10 @@ import path from "node:path";
 import { SESSIONS_DIR, getLogsMode, setLogsMode, loadConfig, logColorKeyForProject, type LogsMode, type GardenConfig } from "../config.js";
 import { logColorAnsi, ASSIGNABLE_LOG_COLOR_KEYS, RESERVED_LOG_COLOR_KEY } from "../log-palette.js";
 import { isTTY } from "../output.js";
+import { atomicWriteFile } from "../dashboard/atomic-write.js";
 
 const LOG_FILE = path.join(SESSIONS_DIR, "dashboard.log");
+export const LOGS_FILTER_FILE = path.join(SESSIONS_DIR, "logs.filter.json");
 
 export interface LogEntry {
   ts: string;
@@ -410,10 +412,13 @@ export interface Filters {
   level?: string;
   src?: string;
   worker?: string;
+  project?: string;
+  fuzzy?: string[];
   count: number;
   follow: boolean;
   modeOverride?: LogsMode;
   showAll: boolean;
+  noSavedFilter?: boolean;
 }
 
 export function parseArgs(args: string[]): Filters {
@@ -426,6 +431,8 @@ export function parseArgs(args: string[]): Filters {
       filters.src = args[++i].toLowerCase();
     } else if ((arg === "--worker" || arg === "-w") && args[i + 1]) {
       filters.worker = args[++i].toLowerCase();
+    } else if ((arg === "--project" || arg === "-p") && args[i + 1]) {
+      filters.project = args[++i].toLowerCase();
     } else if ((arg === "--count" || arg === "-n") && args[i + 1]) {
       filters.count = parseInt(args[++i], 10) || 40;
     } else if (arg === "--follow" || arg === "-f") {
@@ -436,6 +443,8 @@ export function parseArgs(args: string[]): Filters {
       filters.modeOverride = "raw";
     } else if (arg === "--pretty") {
       filters.modeOverride = "pretty";
+    } else if (arg === "--no-saved-filter") {
+      filters.noSavedFilter = true;
     }
   }
   return filters;
@@ -456,7 +465,109 @@ export function matchesFilters(entry: LogEntry, filters: Filters): boolean {
       return false;
     }
   }
+  if (filters.project) {
+    const proj = projectForEntry(entry);
+    if (!proj || !proj.toLowerCase().includes(filters.project)) return false;
+  }
+  if (filters.fuzzy && filters.fuzzy.length > 0) {
+    const proj = projectForEntry(entry) ?? "";
+    const dataWorker = typeof entry.data?.worker === "string" ? entry.data.worker : "";
+    const haystack = `${entry.worker ?? ""} ${dataWorker} ${entry.src ?? ""} ${entry.msg ?? ""} ${proj}`.toLowerCase();
+    for (const tok of filters.fuzzy) {
+      if (!haystack.includes(tok.toLowerCase())) return false;
+    }
+  }
   return true;
+}
+
+// ---- sticky filter ---------------------------------------------------------
+//
+// Persisted across dashboard restarts at LOGS_FILTER_FILE. Honored by both
+// `garden logs` and `garden logs --follow` unless --no-saved-filter is set.
+// CLI flags override sticky values field-by-field; the parser is forgiving
+// (unknown `key:` prefixes fall through to fuzzy tokens).
+
+const STRUCTURED_KEYS = new Set(["worker", "src", "level", "project"]);
+
+export interface ParsedFilterExpr {
+  worker?: string;
+  src?: string;
+  level?: string;
+  project?: string;
+  fuzzy: string[];
+}
+
+export function parseFilterExpr(expr: string): ParsedFilterExpr {
+  const result: ParsedFilterExpr = { fuzzy: [] };
+  const tokens = expr.trim().split(/\s+/).filter(Boolean);
+  for (const tok of tokens) {
+    const colon = tok.indexOf(":");
+    if (colon > 0 && colon < tok.length - 1) {
+      const key = tok.slice(0, colon).toLowerCase();
+      const val = tok.slice(colon + 1).toLowerCase();
+      if (STRUCTURED_KEYS.has(key)) {
+        if (key === "worker" && result.worker === undefined) result.worker = val;
+        else if (key === "src" && result.src === undefined) result.src = val;
+        else if (key === "level" && result.level === undefined) result.level = val;
+        else if (key === "project" && result.project === undefined) result.project = val;
+        continue;
+      }
+    }
+    result.fuzzy.push(tok.toLowerCase());
+  }
+  return result;
+}
+
+interface LogsFilterFile { expr: string }
+
+function isLogsFilterFile(x: unknown): x is LogsFilterFile {
+  if (!x || typeof x !== "object") return false;
+  return typeof (x as Record<string, unknown>).expr === "string";
+}
+
+export function readStickyFilterExpr(): string | null {
+  try {
+    const raw = JSON.parse(fs.readFileSync(LOGS_FILTER_FILE, "utf-8"));
+    return isLogsFilterFile(raw) ? raw.expr : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeStickyFilterExpr(expr: string): void {
+  const trimmed = expr.trim();
+  if (!trimmed) {
+    try { fs.unlinkSync(LOGS_FILTER_FILE); } catch { /* file may not exist */ }
+    return;
+  }
+  atomicWriteFile(LOGS_FILTER_FILE, JSON.stringify({ expr: trimmed }));
+}
+
+export function loadStickyFilter(): Partial<Filters> | null {
+  const expr = readStickyFilterExpr();
+  if (!expr) return null;
+  const parsed = parseFilterExpr(expr);
+  const out: Partial<Filters> = {};
+  if (parsed.worker !== undefined) out.worker = parsed.worker;
+  if (parsed.src !== undefined) out.src = parsed.src;
+  if (parsed.level !== undefined) out.level = parsed.level;
+  if (parsed.project !== undefined) out.project = parsed.project;
+  if (parsed.fuzzy.length > 0) out.fuzzy = parsed.fuzzy;
+  return out;
+}
+
+// CLI args win field-by-field; sticky fills the gaps. Sticky's fuzzy is
+// preserved when CLI doesn't set fuzzy (CLI has no flag for fuzzy today).
+export function applyStickyDefaults(filters: Filters, sticky: Partial<Filters> | null): Filters {
+  if (!sticky) return filters;
+  return {
+    ...filters,
+    worker: filters.worker ?? sticky.worker,
+    src: filters.src ?? sticky.src,
+    level: filters.level ?? sticky.level,
+    project: filters.project ?? sticky.project,
+    fuzzy: filters.fuzzy ?? sticky.fuzzy,
+  };
 }
 
 function dedupKey(entry: LogEntry): string {
@@ -647,10 +758,48 @@ async function handleModeSubcommand(args: string[]): Promise<boolean> {
   return false;
 }
 
+// `garden logs filter <expr...>` — escape hatch for setting the sticky filter
+// from a regular shell when the dashboard's command-prompt would garble the
+// expression (e.g. embedded single quotes). `garden logs filter` shows the
+// current value; `garden logs filter --clear` removes it.
+async function handleFilterSubcommand(args: string[]): Promise<boolean> {
+  if (args[0] !== "filter") return false;
+  const sub2 = args[1];
+  if (!sub2) {
+    const current = readStickyFilterExpr();
+    if (current) console.log(current);
+    else console.log(`${color.dim}(no sticky filter)${color.reset}`);
+    return true;
+  }
+  if (sub2 === "--clear" || sub2 === "clear") {
+    writeStickyFilterExpr("");
+    console.log("sticky logs filter cleared");
+  } else {
+    const expr = args.slice(1).join(" ");
+    writeStickyFilterExpr(expr);
+    console.log(`sticky logs filter: ${expr.trim()}`);
+  }
+  await respawnLogsPaneIfRunning();
+  return true;
+}
+
+async function respawnLogsPaneIfRunning(): Promise<void> {
+  try {
+    const { dashboardExists } = await import("../session.js");
+    if (!dashboardExists()) return;
+    const { readDashState } = await import("../dashboard/state.js");
+    const { respawnLogsPane } = await import("../dashboard/create.js");
+    respawnLogsPane(readDashState());
+  } catch { /* dashboard not loadable; file write is enough */ }
+}
+
 export async function logs(args: string[]): Promise<void> {
   if (await handleModeSubcommand(args)) return;
+  if (await handleFilterSubcommand(args)) return;
 
-  const filters = parseArgs(args);
+  const cliFilters = parseArgs(args);
+  const sticky = cliFilters.noSavedFilter ? null : loadStickyFilter();
+  const filters = applyStickyDefaults(cliFilters, sticky);
   const mode: LogsMode = filters.modeOverride ?? getLogsMode();
   const opts: RenderOptions = { mode, showAll: filters.showAll };
 

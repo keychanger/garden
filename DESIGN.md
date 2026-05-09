@@ -110,6 +110,7 @@ Requires terminal setup: iTerm2 → Profiles → Keys → Left Option key → "E
 | `⌥g` | Focus growhouse (lower-left) |
 | `⌥r` | Focus root shell (lower-left) |
 | `⌥l` | Focus logs view (lower-left); also acknowledges the alert badge |
+| `⌥/` | Edit the sticky logs filter via `tmux command-prompt` (pre-filled with current value); empty input clears |
 
 ## Pane Management
 
@@ -316,6 +317,8 @@ garden whoami [worker]             # Show the current worker's registry entry (u
 garden alerts                      # View dashboard alerts
 garden alerts clear                # Dismiss all alerts
 garden logs [options]              # View dashboard logs (pretty-printed)
+garden logs filter [<expr>]        # Show / set the sticky filter (also via ⌥/ in dashboard)
+garden logs filter --clear         # Remove the sticky filter
 garden kick <worker>               # Re-arm a stranded 'working' worker for review
 garden bounce <worker>             # Restart a worker's Claude process (preserves session history)
 garden pause <worker>              # Suppress post-merge auto-continue (writes the .garden-done sentinel)

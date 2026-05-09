@@ -100,10 +100,14 @@ Dashboard:
   logs -l warn                   Filter by minimum level
   logs -s poller                 Filter by source module
   logs -w <name>                 Filter by worker name
+  logs -p <name>                 Filter by project name
   logs -a, --all                 Show suppressed housekeeping entries (one-shot)
   logs --raw, --pretty           Override render mode for one invocation
+  logs --no-saved-filter         Ignore the sticky filter for this invocation
   logs raw | pretty              Persist mode (live pane respawns to apply)
   logs mode [raw|pretty]         Read or set the persisted mode
+  logs filter [<expr>]           Show / set sticky filter (also via ⌥/ in dashboard)
+  logs filter --clear            Remove the sticky filter
   health                         Check dashboard state consistency
   kick <worker>                  Re-arm a stranded 'working' worker for review
   bounce <worker>                Restart a worker's Claude process (preserves session history)
