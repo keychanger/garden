@@ -2260,3 +2260,336 @@ as decisions, not assumptions.
     to a smaller model on quota pressure; the reviewer cannot. If the
     reviewer's model is exhausted, the loop pauses via the global
     usage gate.
+
+## Loop primitive
+
+Workflow-agnostic iteration mechanics shared by every workflow that
+respawns the worker with fresh Claude context after each merge. Lives
+in `src/dashboard/loop.ts`. Two consumers today: trellis (long
+spec-driven loop, ~30 iterations, terminal-on-budget = `failing`) and
+grow (short hardening loop, ~5 iterations, terminal-on-budget = `done`).
+
+### Surface
+
+```ts
+export interface LoopHooks {
+  /** Read iteration / max from the workflow's per-worker sub-object. */
+  readIteration(entry: WorkerEntry): { iteration: number; maxIterations: number } | null;
+  /** Persist the next iteration counter (workflow-specific field path). */
+  writeIteration(projectName: string, workerName: string, next: number): void;
+  /** Update the in-memory entry's iteration field. */
+  setInMemoryIteration(entry: WorkerEntry, next: number): void;
+  /** Build the per-iteration continue prompt for K+1. */
+  buildContinuePrompt(entry: WorkerEntry): string;
+  /** Tag for log lines and seed-file naming ("trellis", "grow"). */
+  logTag: string;
+}
+
+export function persistIteration(...): void;
+export function dispatchDelayedLoopContinue(
+  gardenRunner: string, projectName: string, workerName: string,
+  internalSubcommand: string,
+): void;
+export function loopAutoContinueAfterMerge(
+  projectName: string, workerName: string,
+  hooks: LoopHooks, workerCommandOpts: WorktreeCommandOptions,
+): boolean;
+```
+
+### Cold-respawn flow
+
+`loopAutoContinueAfterMerge` runs the workflow-agnostic sequence:
+
+1. Resolve the worker's pane (active-pane fast path → window-name fallback).
+2. Refresh `.claude/settings.json` via `installClaudeHooks`.
+3. Generate a fresh `sessionId` and persist before respawn (concurrent
+   reads see the new value).
+4. Build the worker command via `buildWorktreeWorkerCommand` with the
+   caller-supplied `WorktreeCommandOptions` (trellis passes
+   `trellisRelativePath` + `model`; grow passes `grow: { iteration,
+   maxIterations }` so the rules file embeds the iteration count).
+5. Update worker fields: clear `pendingContinueChangedFiles`,
+   `pendingContinueSyncFailed`, `mergedAt`; set `claudeStatus =
+   "loading"`. The local `entry` snapshot retains
+   `pendingContinueChangedFiles` for the prompt builder — disk is
+   cleared, in-memory carries forward.
+6. `tmux respawn-pane -k` kills the existing Claude process and restarts
+   with the new sessionId.
+7. Build the continue prompt via `hooks.buildContinuePrompt(entry)`,
+   write to a seed file under `${SESSIONS_DIR}/`, dispatch via
+   `dispatchDelayedSeed`. The seed-file name uses `hooks.logTag` so
+   trellis files (`trellis-seed-*.txt`) and grow files
+   (`grow-seed-*.txt`) don't collide.
+
+Workflow-specific bookkeeping (model resolution, trellis-relative-path
+computation, validation guards) stays at the caller; the primitive is
+mechanism, not policy.
+
+### Why the extraction
+
+Trellis was the first iteration-loop consumer and the cold-respawn
+lived in `trellis-continue.ts`. When grow shipped, the cold-respawn
+dance was unchanged — only the prompt content, sub-object field path,
+and budget mechanism differed. Lifting the shared mechanics into
+`loop.ts` made grow a thin caller (~150 lines including the prompt
+builder and the iter-1 seed) instead of a fork of `trellis-continue.ts`.
+
+The two workflows still diverge in two places that `loop.ts`
+deliberately does not unify:
+
+- **Budget enforcement site.** Trellis fires the budget check at
+  preflight (`launchReview`, before the Nth review dispatches) and
+  transitions to `failing/iteration-budget`. Grow fires post-merge in
+  `maybeAutoContinue` and transitions to `done`. The difference
+  reflects intent: trellis "ran out of iterations to converge"
+  (failure) vs grow "did the work we said we'd do" (success).
+- **Continue prompt content.** Trellis inlines the drift list and the
+  lessons file. Grow inlines the seed verbatim, the changed-files
+  list, and the grow-log. Same shape (`LoopHooks.buildContinuePrompt`),
+  different content.
+
+## Grow workflow
+
+Spec for the **grow** workflow: a bounded hardening loop **without** a
+frozen design document. The operator's seed prompt anchors the loop
+across iterations; convergence is worker-declared via `.garden-done` or
+forced by hitting the iteration cap. **If the code disagrees with this
+section, the code is wrong.**
+
+Grow is the second workflow registered against the foundation
+(`workflows/index.ts`). It reuses default's verdict vocabulary
+(CLEAN/FIXED/FAILED), default's `hookHandlers`, and default's
+state handlers — only the post-merge dispatch and the iteration counter
+diverge.
+
+### Why this exists
+
+Garden has two endpoints on the iteration spectrum:
+
+- **Default workflow** — one-shot worker. Implements the operator's
+  request, gets reviewed, merges. No subsequent iterations.
+- **Trellis workflow** — feature-scoped, design-doc-driven loop.
+  ~30 iterations against a frozen artifact, with structured drift
+  verdicts and a FLAGGED escape valve.
+
+Grow fills the gap: "do task X and harden the area around it for
+~5 passes." Use cases:
+
+- Implement a feature, then add edge-case tests, error handling, and
+  doc updates as cascading polish.
+- Fix a bug, then add a regression test, audit nearby code, update
+  CLAUDE.md.
+- Pre-ship pass on a PR — multiple polish iterations before merging
+  to main.
+
+The metaphor: workers grow the codebase. Trellis-bound workers grow
+*along* a structure (the doc); grow workers grow without one.
+
+### Vocabulary
+
+| Term         | Definition                                                                                       |
+|--------------|--------------------------------------------------------------------------------------------------|
+| **Seed**     | Operator-supplied task description set at plant time. Persisted on `entry.grow.seed` and inlined verbatim into iter ≥ 2 continue prompts. The durable goal across context resets. |
+| **Iteration**| One full cycle of `working → reviewing → merge → cold respawn`. Counted on `entry.grow.iteration`. |
+| **Cascade**  | Polishing the previous iteration's diff. Iter 2 hardens what iter 1 did; iter 3 hardens iter 2; etc. Termination is natural — by the Kth pass, "nothing material remains" becomes true and the worker writes `.garden-done`. |
+| **Grow log** | A worker-maintained file (`<worktree>/.garden/grow-log.md`). Append-only, one line per iteration: `iter K: <one-line summary>`. Inlined into the next iteration's continue prompt so the worker doesn't re-do work. Encouraged, not enforced. |
+
+### How it differs from trellis
+
+| Aspect                  | Trellis                                  | Grow                                                          |
+|-------------------------|------------------------------------------|---------------------------------------------------------------|
+| Anchor                  | Frozen markdown doc (versioned in git)   | Seed string captured at plant time (persisted on the entry)   |
+| Reviewer verdict vocab  | ALIGNED / DRIFT / FAILED / FLAGGED       | CLEAN / FIXED / FAILED (default)                              |
+| Convergence criterion   | Reviewer-declared (ALIGNED)              | Worker-declared (`.garden-done`)                              |
+| Budget exhaustion       | `failing/iteration-budget`               | `done`                                                        |
+| Default budget          | 30                                       | 5                                                             |
+| Worker model            | Sonnet (with Opus fallback)              | Account default                                               |
+| Reviewer model          | Opus (pinned)                            | Account default                                               |
+| FLAGGED escape valve    | Yes (trellis is contradictory)           | No                                                            |
+| Stagnation detection    | v1.5                                     | No                                                            |
+| Per-iteration data file | `.garden/trellis-lessons.md` (lessons)   | `.garden/grow-log.md` (changelog)                             |
+
+### The loop
+
+```
+       ┌──────────────────────────────────────────────────┐
+       ▼                                                  │
+   working ──Stop+commits──▶ reviewing ──CLEAN/FIXED──▶ merge
+       ▲                          │                    │
+       │                          │                    ▼
+       │                          ├──FAILED──▶ failing │
+       │                          │              │     │
+       │                          │       worker fix   │
+       │                          │              │     │
+       │                          └──────────────┘     │
+       │                                               │
+       │                                          merge-pending
+       │                                               │
+       │              ┌──.garden-done──▶ done          │
+       │              │                                 │
+       │              ├──iter ≥ max──▶ done             │
+       │              │     (+.garden-done)             │
+       │              │                                 │
+       │              └──auto-continue with seed────────┘
+       │                       (cold respawn)
+       │                                ▲
+       │                                │
+       └────────────────────────────────┘
+```
+
+`done` has two paths: worker-declared (sentinel set during iter K) or
+budget-exhausted (iter K = max, sentinel auto-written by
+`maybeAutoContinue`). Both land on the same terminal state — both are
+"the loop completed cleanly."
+
+### Workflow definition
+
+`src/dashboard/workflows/grow.ts` registers `growWorkflow` alongside
+`defaultWorkflow` and `trellisWorkflow`. State handlers and hook
+handlers are reused from default verbatim. The verdict vocabulary is
+the default reviewer's CLEAN/FIXED/FAILED, so `handleReviewing`'s
+default branch in `poller-review.ts` applies as-is.
+
+The two workflow-aware sites that distinguish grow:
+
+- **`launchReview` (poller-review.ts)** — increments the iteration
+  counter via `persistIteration` with `growLoopHooks`. No budget
+  check at preflight; that fires post-merge.
+- **`maybeAutoContinue` (poller-merge.ts)** — checks
+  `entry.grow.iteration >= maxIterations`. If yes: write
+  `.garden-done`, transition `merged → done`, skip dispatch. Else:
+  call `dispatchDelayedGrowContinue` for the cold respawn.
+
+### Worker entry shape
+
+```ts
+export interface GrowData {
+  /** Operator-supplied task description from --seed / --seed-file /
+   *  picker prompt. Inlined verbatim into iter ≥ 2 continue prompts. */
+  seed: string;
+  /** Iteration counter. Incremented on each working → reviewing
+   *  transition before dispatch. Starts at 0. */
+  iteration?: number;
+  maxIterations?: number;
+}
+```
+
+`updateWorkerFields` deep-merges the `grow` sub-object the same way as
+`trellis` — passing `{ grow: { iteration: 3 } }` updates only that
+field without clobbering `seed` or `maxIterations`.
+
+### Worker system prompt
+
+Three paragraphs appended to the baseline by `buildWorktreeRules` when
+`options.grow` is set (mutually exclusive with `options.trellis`):
+
+1. **Concept.** "You are inside a bounded grow loop. Iteration K of M.
+   Each iteration starts with a fresh Claude session — disk is the
+   only state that crosses iteration boundaries. The seed prompt that
+   anchors this loop is inlined in your iteration's continue message;
+   it does not change between iterations."
+2. **Bias.** "Harden the recent work, do not chase adjacent
+   improvements. The seed is your scope; the diff against the base
+   branch is your focus. Edge cases the seed implies but didn't list,
+   missing tests, doc updates, error-handling gaps — these are the
+   kinds of polish a grow loop is for."
+3. **Termination.** "When nothing material remains, write
+   `.garden-done`. The loop also ends after M iterations regardless.
+   Append a one-line entry to `.garden/grow-log.md` describing what
+   you did this iteration."
+
+### Continue prompt structure
+
+Sent post-merge by `growAutoContinueAfterMerge` after the cold respawn.
+Built by `buildGrowContinuePrompt` in `grow-continue.ts`:
+
+```
+[garden] Your last iteration was merged. Iteration K of M — keep
+growing this codebase.
+
+Original task:
+
+<seed verbatim, from entry.grow.seed>
+
+Files you changed last iteration:
+  - <list from pendingContinueChangedFiles, truncated at 20>
+
+What you've done so far (`.garden/grow-log.md`):
+  <inlined log content if present>
+
+Look for material improvements: edge cases, error handling, missing
+tests, doc updates, security concerns. Bias toward hardening the work
+you've already done — stay in the area of the original task. Do not
+chase adjacent improvements; do not redesign.
+
+If nothing material remains, write `.garden-done` at your worktree
+root and end your turn — the loop terminates instead of running
+another iteration. Otherwise, make your changes, append a one-line
+entry to `.garden/grow-log.md`, commit, and push.
+```
+
+The iter-1 seed (sent at plant time, not via auto-continue) wraps the
+operator's seed text in pacing framing so the worker doesn't cram all
+hardening into iter 1 — built by `buildGrowIteration1Seed`.
+
+### Termination
+
+Three terminal dispositions, two of which land on `prState: "done"`:
+
+| Disposition         | How reached                                                                                  | Decoration                                       |
+|---------------------|----------------------------------------------------------------------------------------------|--------------------------------------------------|
+| **Self-declared**   | Worker writes `.garden-done` mid-iteration                                                    | Default `done` rendering                          |
+| **Budget-exhausted**| `entry.grow.iteration >= maxIterations` post-merge; `maybeAutoContinue` writes the sentinel and transitions | Default `done` rendering                          |
+| **FAILED**          | Reviewer's FAILED verdict (same as default)                                                   | `failing/code` rendering — operator decides recovery |
+
+`done` is "the loop completed cleanly" in both happy-path
+dispositions. There is no `failing/iteration-budget` for grow:
+hitting the cap is success, not failure.
+
+### CLI surface
+
+```
+garden workers new <project> --workflow grow \
+  [--seed <text> | --seed-file <path>] \
+  [--max-iterations N]
+```
+
+Either `--seed` or `--seed-file` is required (mutually exclusive).
+Empty seeds are rejected. `--model` and `--trellis` are not allowed
+on grow workflow. `--max-iterations` overrides
+`project.maxGrowIterations` (default 5).
+
+The `⌥⇧N` workflow picker offers a `(g) grow` row that opens a tmux
+`command-prompt` for a single-line task description. Seeds with quotes
+or shell metacharacters break tmux substitution; for those, operators
+use the CLI plant path with `--seed-file`.
+
+### Project config
+
+| Key                  | Default | Behavior                                                                       |
+|----------------------|---------|--------------------------------------------------------------------------------|
+| `maxGrowIterations`  | 5       | Default budget for new grow workers. `--max-iterations` overrides per plant.   |
+
+### Out of scope (now)
+
+- **Convert active worker → grow.** A `garden workers grow` command
+  invoked from inside a live default worker would summarize the
+  conversation into a goal, write it to disk, and flip the worker's
+  workflow. Useful for the brainstorm-then-grow flow. Deferred until
+  the cold-plant CLI sees real use and the contract for "summarize
+  and convert" is clear.
+- **Operator-editable goal mid-loop.** Trellis amends via
+  `garden trellis amend`; grow's seed is currently captured-once. An
+  "amend the goal" path would let operators refine the seed as the
+  loop reveals friction. Deferred — adds amend command + reviewer
+  prompt awareness.
+- **Per-project grow-prompt template.** A `growPrompt` config key
+  that prepends domain-specific quality guidance to every grow
+  worker's seed (e.g., "always check error messages are structured").
+  Deferred until repeat usage proves the need; the seed string
+  subsumes this manually.
+- **Stagnation detection.** Trellis's drift-list-shrinking heuristic
+  doesn't apply to grow (no drift list). A grow-flavored heuristic
+  (e.g., "iteration K and K-1 changed the same files with identical
+  diffs") could fire a `failing/stagnation` alert. Deferred — the
+  iteration cap is the primary safety net.
