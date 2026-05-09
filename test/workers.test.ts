@@ -866,7 +866,7 @@ describe("bounceWorker", () => {
     );
     expect(continueCall).toBeDefined();
     const cmd = (continueCall![1] as string[])[1];
-    expect(cmd).toMatch(/^sleep 3 && /);
+    expect(cmd).toMatch(/^sleep 6 && /);
     expect(cmd).toContain("'myproject'");
     expect(cmd).toContain("'swift-oak'");
   });

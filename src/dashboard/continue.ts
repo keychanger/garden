@@ -159,6 +159,30 @@ export function continueWorker(
   });
 }
 
+// Retry leg of dispatchDelayedContinue. Only re-pastes when the worker is
+// still parked at the cold-start "ready" state — meaning the first paste
+// never reached Claude's input handler. If Claude has since moved to
+// working/asking (paste landed, response in flight) or idle (paste landed,
+// response already finished), we leave it alone. continueWorker's gate
+// covers working/asking; this wrapper adds the idle exclusion the retry
+// leg needs.
+export function continueWorkerIfStuck(projectName: string, workerName: string): void {
+  const entry = findWorkerByName(projectName, workerName);
+  if (!entry) return;
+  if (entry.claudeStatus !== "ready") {
+    log.info("workers", "continue retry skipped, status moved", {
+      worker: workerName,
+      data: { project: projectName, claudeStatus: entry.claudeStatus },
+    });
+    return;
+  }
+  log.info("workers", "continue retry firing, worker still cold-start ready", {
+    worker: workerName,
+    data: { project: projectName },
+  });
+  continueWorker(projectName, workerName);
+}
+
 // Send the post-merge continuation prompt. Same machinery as continueWorker
 // but with a merge-flavored message that lists files modified during review
 // (so Claude re-reads them) and warns when the post-merge worktree sync was
@@ -180,18 +204,29 @@ export function continueWorkerAfterMerge(projectName: string, workerName: string
   }
 }
 
-// Fire-and-forget detached subprocess that delays a few seconds, then invokes
-// the _continue-worker internal command. The delay lets `claude --resume` take
+// Fire-and-forget detached subprocess that delays, then invokes the
+// _continue-worker internal command. The delay lets `claude --resume` take
 // over the pane's stdin before we send keys; without it, keystrokes go to the
 // transient `sh -c` wrapper or get eaten during Claude's TUI init.
+//
+// 6s primary + 10s retry: on dashboard rebuild, ~10 workers run `claude
+// --resume` concurrently and TUI bootstrap can outlast the SessionStart hook
+// — under that load, a 3s paste landed before Claude's input handler bound,
+// silently dropping the prompt. The chained retry fires
+// _continue-worker-if-stuck, which re-pastes only if the worker is still at
+// "ready" (cold-start state) — meaning the first paste never registered. If
+// status has advanced to working/asking/idle, the prompt got through and the
+// retry no-ops.
 export function dispatchDelayedContinue(
   gardenRunner: string,
   projectName: string,
   workerName: string,
 ): void {
+  const project = shellEscape(projectName);
+  const worker = shellEscape(workerName);
   const cmd =
-    `sleep 3 && ${gardenRunner} dashboard _continue-worker `
-    + `${shellEscape(projectName)} ${shellEscape(workerName)} 2>/dev/null`;
+    `sleep 6 && ${gardenRunner} dashboard _continue-worker ${project} ${worker} 2>/dev/null; `
+    + `sleep 10 && ${gardenRunner} dashboard _continue-worker-if-stuck ${project} ${worker} 2>/dev/null`;
   try {
     const child = spawn("sh", ["-c", cmd], { detached: true, stdio: "ignore" });
     child.unref();

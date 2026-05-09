@@ -14,7 +14,9 @@ import { handleClaudeHook } from "./hook-dispatcher.js";
 import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
 import { newWorker, killPane, bounceActiveWorker } from "./workers.js";
-import { continueWorker, continueWorkerAfterMerge, seedWorker } from "./continue.js";
+import {
+  continueWorker, continueWorkerAfterMerge, continueWorkerIfStuck, seedWorker,
+} from "./continue.js";
 import { growAutoContinueAfterMerge } from "./grow-continue.js";
 import { trellisAutoContinueAfterMerge } from "./trellis-continue.js";
 import {
@@ -69,6 +71,10 @@ export async function dashboard(args: string[]): Promise<void> {
   if (sub === "_bounce") return bounceActiveWorker();
   if (sub === "_continue-worker") {
     if (args[1] && args[2]) continueWorker(args[1], args[2]);
+    return;
+  }
+  if (sub === "_continue-worker-if-stuck") {
+    if (args[1] && args[2]) continueWorkerIfStuck(args[1], args[2]);
     return;
   }
   if (sub === "_continue-worker-after-merge") {

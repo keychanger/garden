@@ -47,7 +47,7 @@ vi.mock("../src/dashboard/log.js", () => ({
 }));
 
 import {
-  continueWorker, continueWorkerAfterMerge,
+  continueWorker, continueWorkerAfterMerge, continueWorkerIfStuck,
   dispatchDelayedContinue, dispatchDelayedAutoContinue,
   dispatchDelayedSeed, seedWorker,
   donePath, isDoneSet, clearDoneSentinel,
@@ -182,8 +182,57 @@ describe("continueWorker", () => {
   });
 });
 
+describe("continueWorkerIfStuck", () => {
+  beforeEach(() => {
+    vi.mocked(readDashState).mockReturnValue({
+      activeProject: "myproject",
+      activePaneType: "worker",
+      activePaneId: "%20",
+      activeWindowName: "_myproject-worker-bold-ash",
+      projects: { myproject: { workerWindows: ["_myproject-worker-bold-ash"] } },
+    } as unknown as DashboardState);
+  });
+
+  it("re-pastes when the worker is still parked at ready (cold-start retry path)", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "ready",
+    });
+
+    continueWorkerIfStuck("myproject", "bold-ash");
+
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips when the worker has moved to working (first paste landed, response in flight)", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "working",
+    });
+
+    continueWorkerIfStuck("myproject", "bold-ash");
+
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
+  });
+
+  it("skips when the worker has moved to idle (first paste landed, response already finished inside the retry window)", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+    });
+
+    continueWorkerIfStuck("myproject", "bold-ash");
+
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
+  });
+
+  it("no-ops when the registry entry is gone", () => {
+    vi.mocked(findWorkerByName).mockReturnValue(undefined);
+
+    expect(() => continueWorkerIfStuck("myproject", "bold-ash")).not.toThrow();
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
+  });
+});
+
 describe("dispatchDelayedContinue", () => {
-  it("spawns a detached sh -c that delays and invokes the _continue-worker subcommand", () => {
+  it("spawns a detached sh -c that delays and invokes the _continue-worker subcommand, then chains a stuck-only retry", () => {
     dispatchDelayedContinue("/usr/local/bin/garden", "myproject", "bold-ash");
 
     expect(spawn).toHaveBeenCalledTimes(1);
@@ -191,7 +240,13 @@ describe("dispatchDelayedContinue", () => {
     expect(shCmd).toBe("sh");
     expect(args).toEqual(["-c", expect.any(String)]);
     const cmd = (args as string[])[1];
-    expect(cmd).toMatch(/^sleep 3 && /);
+    // Primary leg: 6s delay before the first paste so claude --resume has
+    // time to bind its TUI input handler under rebuild load.
+    expect(cmd).toMatch(/^sleep 6 && /);
+    // Retry leg: chained 10s later via `_continue-worker-if-stuck`, which
+    // only re-pastes if the worker is still parked at "ready".
+    expect(cmd).toContain("; sleep 10 && ");
+    expect(cmd).toContain("_continue-worker-if-stuck");
     // Safe-token strings (alphanumeric + ./_:-) are passed through unquoted
     // by shellEscape. Project/worker names that contain other characters
     // would be single-quoted; the assertions below stay alphanumeric so they
