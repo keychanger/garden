@@ -29,7 +29,6 @@ import {
   wrapDetail,
   parseFilterExpr,
   applyStickyDefaults,
-  hasExplicitFilter,
   type LogEntry,
   type Filters,
 } from "../src/commands/logs.js";
@@ -256,28 +255,6 @@ describe("matchesFilters fuzzy", () => {
   });
 });
 
-describe("hasExplicitFilter", () => {
-  const base: Filters = { count: 40, follow: false, showAll: false };
-
-  it("is false when only count/follow/showAll are set", () => {
-    expect(hasExplicitFilter(base)).toBe(false);
-  });
-
-  it("is true for any structured filter", () => {
-    expect(hasExplicitFilter({ ...base, level: "info" })).toBe(true);
-    expect(hasExplicitFilter({ ...base, src: "poller" })).toBe(true);
-    expect(hasExplicitFilter({ ...base, worker: "alice" })).toBe(true);
-    expect(hasExplicitFilter({ ...base, project: "garden" })).toBe(true);
-  });
-
-  it("is true when fuzzy tokens are present", () => {
-    expect(hasExplicitFilter({ ...base, fuzzy: ["bug"] })).toBe(true);
-  });
-
-  it("is false when fuzzy is an empty array", () => {
-    expect(hasExplicitFilter({ ...base, fuzzy: [] })).toBe(false);
-  });
-});
 
 describe("matchesFilters", () => {
   const entry: LogEntry = {

@@ -636,25 +636,14 @@ interface RenderOptions {
   showAll: boolean;
 }
 
-// An explicit filter is the user opting in to a specific slice of the log,
-// so it should override the default-noise suppression list. Without this,
-// `--src navigate` (or a sticky fuzzy filter for a worker that mostly shows up
-// in navigate/posttooluse events) would silently match nothing.
-export function hasExplicitFilter(filters: Filters): boolean {
-  return Boolean(
-    filters.level || filters.src || filters.worker || filters.project ||
-    (filters.fuzzy && filters.fuzzy.length > 0),
-  );
-}
-
-function applyPresentation(entries: LogEntry[], opts: RenderOptions, filters: Filters): LogEntry[] {
-  if (opts.mode === "raw" || opts.showAll || hasExplicitFilter(filters)) return entries;
+function applyPresentation(entries: LogEntry[], opts: RenderOptions): LogEntry[] {
+  if (opts.mode === "raw" || opts.showAll) return entries;
   return entries.filter((e) => !isSuppressed(e));
 }
 
 function printEntries(entries: LogEntry[], filters: Filters, opts: RenderOptions, useRelativeTime: boolean): void {
   const filtered = entries.filter((e) => matchesFilters(e, filters));
-  const presented = applyPresentation(filtered, opts, filters);
+  const presented = applyPresentation(filtered, opts);
   const tail = presented.slice(-filters.count);
   const deduped = dedup(tail);
 
@@ -722,7 +711,7 @@ async function follow(filters: Filters, opts: RenderOptions): Promise<void> {
     for (const line of newLines) {
       const entry = parseLine(line);
       if (!entry || !matchesFilters(entry, filters)) continue;
-      if (opts.mode === "pretty" && !opts.showAll && !hasExplicitFilter(filters) && isSuppressed(entry)) continue;
+      if (opts.mode === "pretty" && !opts.showAll && isSuppressed(entry)) continue;
 
       const key = dedupKey(entry);
       const rendered = formatEntry(entry, opts.mode, false);
