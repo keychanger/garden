@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Mocks — must be declared before importing the module under test
@@ -507,6 +507,9 @@ describe("pasteAndSubmit", () => {
   // tests that don't care about Enter aren't tripped by a stray timer.
   beforeEach(() => {
     vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("loads message via stdin into a tmux buffer, never via argv", () => {
