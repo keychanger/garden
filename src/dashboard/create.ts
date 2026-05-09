@@ -22,7 +22,7 @@ import {
 import { readRegistry, updateWorkerFields } from "./registry.js";
 import { log, truncateLog } from "./log.js";
 import { validateAndHeal } from "./validate.js";
-import { startProjectPoller, signalFifoPath } from "./poller.js";
+import { startProjectPoller, signalFifoPath, restartLongLivedPollers } from "./poller.js";
 import { startUsagePoller } from "./usage-poller.js";
 import { installPollTriggerHook, worktreeExists as wtExists, getWorkerBaseBranch, getRemoteHost } from "./git.js";
 import { dispatchDelayedContinue } from "./continue.js";
@@ -248,6 +248,21 @@ export function ensureDashboard(): void {
         }
       }
     } catch { /* best effort — initial-create path will catch up next restart */ }
+
+    // Respawn the project + usage poller windows so their bash-loop start
+    // commands pick up the current gardenRunner. tmux's pane_start_command is
+    // captured once at window creation and never re-read; if the dashboard
+    // was first launched out of a worker worktree, every poller's loop runs
+    // `node <ephemeral-worktree>/dist/cli.js dashboard _poll <project>`
+    // forever. Once that worktree is cleaned up, every iteration hits
+    // MODULE_NOT_FOUND, stderr is swallowed by `2>/dev/null`, and the FIFO
+    // read still blocks — so the loop looks alive (pane not dead) but does
+    // zero useful work. The whole review/merge pipeline silently stalls
+    // across every project. restartLongLivedPollers does a kill+spawn for
+    // each one with the current resolveGardenRunner() output. The brief
+    // gap drops in-flight FIFO pokes; the hook that triggered them re-pokes
+    // on the next event, so nothing is lost.
+    try { restartLongLivedPollers(resolveGardenRunner()); } catch { /* best effort */ }
 
     // Heal logs panes from older builds that pre-date the creation-time disable.
     try {
