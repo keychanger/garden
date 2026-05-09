@@ -10,13 +10,41 @@ export function tmux(...args: string[]): void {
 }
 
 // Paste a message into a Claude pane and submit it. The 300ms gap between
-// `-l message` and `Enter` matters on cold-start panes (`claude --resume`
-// after a dashboard restart, fresh sessions for handoff/seed): claude's TUI
+// the paste and `Enter` matters on cold-start panes (`claude --resume` after
+// a dashboard restart, fresh sessions for handoff/seed): claude's TUI
 // finishes binding its input handler / settles paste-detection during this
 // window, so the Enter actually triggers submit instead of being absorbed
 // into the paste burst.
+//
+// Delivery routes through a tmux buffer (load-buffer reads from stdin,
+// paste-buffer floods the bytes into the pane) instead of `send-keys -l`.
+// The send-keys path put the entire message in argv; ~14KB handoff briefings
+// were silently failing with E2BIG / tmux command-buffer overflow, leaving
+// the new worker parked at status:ready with a never-delivered seed. Buffers
+// are byte streams with no argv exposure, so multi-MB seeds work uniformly.
+let pasteBufferCounter = 0;
 export function pasteAndSubmit(paneId: string, message: string): void {
-  execFileSync("tmux", ["send-keys", "-t", paneId, "-l", message], { stdio: "ignore" });
+  const bufferName = `garden-paste-${process.pid}-${++pasteBufferCounter}`;
+  try {
+    execFileSync("tmux", ["load-buffer", "-b", bufferName, "-"], {
+      input: message,
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+  } catch (err) {
+    const stderr = (err as { stderr?: Buffer }).stderr?.toString().trim() ?? "";
+    throw new Error(`tmux load-buffer failed${stderr ? `: ${stderr}` : ""}`);
+  }
+  try {
+    execFileSync("tmux", ["paste-buffer", "-d", "-b", bufferName, "-t", paneId], {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+  } catch (err) {
+    try {
+      execFileSync("tmux", ["delete-buffer", "-b", bufferName], { stdio: "ignore" });
+    } catch { /* buffer may already be gone */ }
+    const stderr = (err as { stderr?: Buffer }).stderr?.toString().trim() ?? "";
+    throw new Error(`tmux paste-buffer failed${stderr ? `: ${stderr}` : ""}`);
+  }
   execFileSync("sleep", ["0.3"], { stdio: "ignore" });
   execFileSync("tmux", ["send-keys", "-t", paneId, "Enter"], { stdio: "ignore" });
 }

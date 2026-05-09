@@ -52,6 +52,7 @@ import {
   getPaneTitle,
   listAllWindowNames,
   listHiddenWorkerWindows,
+  pasteAndSubmit,
 } from "../src/dashboard/tmux.js";
 
 import { log } from "../src/dashboard/log.js";
@@ -494,6 +495,86 @@ describe("getPaneLabel", () => {
 // ===========================================================================
 // listAllWindowNames
 // ===========================================================================
+
+// ===========================================================================
+// pasteAndSubmit — buffer-based delivery path
+// ===========================================================================
+
+describe("pasteAndSubmit", () => {
+  it("loads message via stdin into a tmux buffer, never via argv", () => {
+    const calls: { argv: string[]; opts: Record<string, unknown> }[] = [];
+    mockExecFileSync.mockImplementation((_cmd: string, argv: string[], opts: Record<string, unknown>) => {
+      calls.push({ argv, opts });
+      return undefined;
+    });
+
+    // 60KB message — far over the silent-fail threshold from the wild-dull-beech
+    // incident (~14KB). With send-keys -l the message would land in argv;
+    // load-buffer reads from stdin so argv stays bounded.
+    const message = "x".repeat(60_000);
+    pasteAndSubmit("%42", message);
+
+    const loadBufferCall = calls.find(c => c.argv[0] === "load-buffer");
+    expect(loadBufferCall).toBeDefined();
+    expect(loadBufferCall!.argv).toEqual(["load-buffer", "-b", expect.stringMatching(/^garden-paste-/), "-"]);
+    // Critical regression assertion: the message goes through stdin,
+    // not as a positional argv entry.
+    expect(loadBufferCall!.opts.input).toBe(message);
+    expect(loadBufferCall!.argv).not.toContain(message);
+
+    // load-buffer name must match paste-buffer name (and -d flag deletes
+    // the buffer after paste so it doesn't accumulate).
+    const pasteCall = calls.find(c => c.argv[0] === "paste-buffer");
+    expect(pasteCall).toBeDefined();
+    const bufferName = loadBufferCall!.argv[2];
+    expect(pasteCall!.argv).toEqual(["paste-buffer", "-d", "-b", bufferName, "-t", "%42"]);
+
+    // Enter is sent after the paste so claude submits.
+    const enterCall = calls.find(c => c.argv[0] === "send-keys" && c.argv.includes("Enter"));
+    expect(enterCall).toBeDefined();
+    expect(enterCall!.argv).toEqual(["send-keys", "-t", "%42", "Enter"]);
+  });
+
+  it("uses unique buffer names so concurrent sends do not collide", () => {
+    const bufferNames: string[] = [];
+    mockExecFileSync.mockImplementation((_cmd: string, argv: string[]) => {
+      if (argv[0] === "load-buffer") bufferNames.push(argv[2]);
+      return undefined;
+    });
+
+    pasteAndSubmit("%1", "msg-1");
+    pasteAndSubmit("%2", "msg-2");
+
+    expect(bufferNames.length).toBe(2);
+    expect(bufferNames[0]).not.toBe(bufferNames[1]);
+  });
+
+  it("surfaces tmux stderr when load-buffer fails", () => {
+    mockExecFileSync.mockImplementation((_cmd: string, argv: string[]) => {
+      if (argv[0] === "load-buffer") {
+        const err = new Error("Command failed") as Error & { stderr?: Buffer };
+        err.stderr = Buffer.from("no server running");
+        throw err;
+      }
+      return undefined;
+    });
+    expect(() => pasteAndSubmit("%5", "hi")).toThrow(/load-buffer failed: no server running/);
+  });
+
+  it("deletes the buffer when paste-buffer fails so buffers do not leak", () => {
+    const argvSeen: string[][] = [];
+    mockExecFileSync.mockImplementation((_cmd: string, argv: string[]) => {
+      argvSeen.push(argv);
+      if (argv[0] === "paste-buffer") {
+        throw new Error("pane gone");
+      }
+      return undefined;
+    });
+    expect(() => pasteAndSubmit("%5", "hi")).toThrow(/paste-buffer failed/);
+    const deleteCall = argvSeen.find(a => a[0] === "delete-buffer");
+    expect(deleteCall).toBeDefined();
+  });
+});
 
 describe("listAllWindowNames", () => {
   it("returns array of window names", () => {

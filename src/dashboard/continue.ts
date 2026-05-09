@@ -257,6 +257,14 @@ export function seedWorker(
     return;
   }
 
+  // Seeds route through tmux load-buffer (see pasteAndSubmit); record size
+  // so operators tracing a slow / missed seed can correlate with the buffer
+  // path instead of guessing.
+  log.info("workers", "seed dispatching", {
+    worker: workerName,
+    data: { project: projectName, bytes: Buffer.byteLength(message, "utf8") },
+  });
+
   const cleanup = (): void => {
     try { fs.unlinkSync(messageFile); } catch { /* already gone */ }
   };
