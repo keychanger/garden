@@ -219,6 +219,16 @@ export function ensureDashboard(): void {
     // Re-install on reattach so dashboards from older builds pick up the guard.
     installInputGuard(healed);
 
+    // Re-bind hotkeys with the current gardenRunner. tmux key bindings are
+    // server-global and persist for the life of the tmux server — they bake in
+    // the absolute path of whichever cli.js was running when the dashboard was
+    // first created. If that cli.js's worktree later disappears (e.g., a worker
+    // worktree was cleaned up after creating the dashboard), every hotkey
+    // exits 1 with "no such file or directory". Rebinding on reattach pins
+    // the keys to whatever cli.js the operator just ran (typically the
+    // npm-link'd global), self-healing across worktree churn.
+    try { setupKeybindings(resolveGardenRunner()); } catch { /* best effort */ }
+
     // Heal logs panes from older builds that pre-date the creation-time disable.
     try {
       const logsPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:_garden-logs`);
