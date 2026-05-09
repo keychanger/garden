@@ -37,11 +37,11 @@ const CONTINUE_PROMPT =
 
 const MERGE_CONTINUE_BASE =
   "[garden] Your previous changes were reviewed and merged. Continue with the "
-  + "next phase of the work. If you have finished everything the operator "
-  + "asked for, write a sentinel file `.garden-done` at the root of your "
-  + "worktree (just `touch .garden-done` from your CWD) before ending your "
-  + "turn so future merges do not auto-continue. Do not commit this file — "
-  + "leave it untracked.";
+  + "next phase of the work — keep working is the default. Only invoke the "
+  + "`done` skill (`touch .garden-done`) if this merge completes the "
+  + "operator's *full* original request, every phase, not just the current "
+  + "one. If you are uncertain whether you are truly finished, leave the "
+  + "sentinel alone and let the next auto-continue fire.";
 
 const MAX_LISTED_FILES = 20;
 
