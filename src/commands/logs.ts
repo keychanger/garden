@@ -475,13 +475,27 @@ export function matchesFilters(entry: LogEntry, filters: Filters): boolean {
   }
   if (filters.fuzzy && filters.fuzzy.length > 0) {
     const proj = projectForEntry(entry) ?? "";
-    const dataWorker = typeof entry.data?.worker === "string" ? entry.data.worker : "";
-    const haystack = `${entry.worker ?? ""} ${dataWorker} ${entry.src ?? ""} ${entry.msg ?? ""} ${proj}`.toLowerCase();
+    const dataValues = entry.data ? collectStringValues(entry.data).join(" ") : "";
+    const haystack = `${entry.worker ?? ""} ${entry.src ?? ""} ${entry.msg ?? ""} ${proj} ${dataValues}`.toLowerCase();
     for (const tok of filters.fuzzy) {
       if (!haystack.includes(tok.toLowerCase())) return false;
     }
   }
   return true;
+}
+
+// Recursively collect every string value reachable from `value`, ignoring keys.
+// Used to build the fuzzy-match haystack — a worker name like "quick-shy-sheen"
+// often appears only in nested data fields (data.from, data.branch,
+// data.windowName, data.file, …), and missing those silently filtered out
+// every event about that worker except the few with a top-level worker field.
+function collectStringValues(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(collectStringValues);
+  if (typeof value === "object" && value !== null) {
+    return Object.values(value).flatMap(collectStringValues);
+  }
+  return [];
 }
 
 // ---- sticky filter ---------------------------------------------------------
@@ -622,14 +636,25 @@ interface RenderOptions {
   showAll: boolean;
 }
 
-function applyPresentation(entries: LogEntry[], opts: RenderOptions): LogEntry[] {
-  if (opts.mode === "raw" || opts.showAll) return entries;
+// An explicit filter is the user opting in to a specific slice of the log,
+// so it should override the default-noise suppression list. Without this,
+// `--src navigate` (or a sticky fuzzy filter for a worker that mostly shows up
+// in navigate/posttooluse events) would silently match nothing.
+export function hasExplicitFilter(filters: Filters): boolean {
+  return Boolean(
+    filters.level || filters.src || filters.worker || filters.project ||
+    (filters.fuzzy && filters.fuzzy.length > 0),
+  );
+}
+
+function applyPresentation(entries: LogEntry[], opts: RenderOptions, filters: Filters): LogEntry[] {
+  if (opts.mode === "raw" || opts.showAll || hasExplicitFilter(filters)) return entries;
   return entries.filter((e) => !isSuppressed(e));
 }
 
 function printEntries(entries: LogEntry[], filters: Filters, opts: RenderOptions, useRelativeTime: boolean): void {
   const filtered = entries.filter((e) => matchesFilters(e, filters));
-  const presented = applyPresentation(filtered, opts);
+  const presented = applyPresentation(filtered, opts, filters);
   const tail = presented.slice(-filters.count);
   const deduped = dedup(tail);
 
@@ -697,7 +722,7 @@ async function follow(filters: Filters, opts: RenderOptions): Promise<void> {
     for (const line of newLines) {
       const entry = parseLine(line);
       if (!entry || !matchesFilters(entry, filters)) continue;
-      if (opts.mode === "pretty" && !opts.showAll && isSuppressed(entry)) continue;
+      if (opts.mode === "pretty" && !opts.showAll && !hasExplicitFilter(filters) && isSuppressed(entry)) continue;
 
       const key = dedupKey(entry);
       const rendered = formatEntry(entry, opts.mode, false);

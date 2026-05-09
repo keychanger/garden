@@ -29,6 +29,7 @@ import {
   wrapDetail,
   parseFilterExpr,
   applyStickyDefaults,
+  hasExplicitFilter,
   type LogEntry,
   type Filters,
 } from "../src/commands/logs.js";
@@ -217,6 +218,64 @@ describe("matchesFilters fuzzy", () => {
 
   it("is case-insensitive", () => {
     expect(matchesFilters(entry, { fuzzy: ["SWIFT"], count: 40, follow: false })).toBe(true);
+  });
+
+  it("matches when fuzzy token appears in any data field", () => {
+    const navEntry: LogEntry = {
+      ts: "2026-03-31T12:00:00Z",
+      level: "info",
+      src: "navigate",
+      msg: "cyclePane",
+      data: { direction: 1, from: "_board-worker-quick-shy-sheen", to: "_board-worker-rapt-true-quartz" },
+    };
+    expect(matchesFilters(navEntry, { fuzzy: ["sheen"], count: 40, follow: false })).toBe(true);
+    expect(matchesFilters(navEntry, { fuzzy: ["quartz"], count: 40, follow: false })).toBe(true);
+    expect(matchesFilters(navEntry, { fuzzy: ["nope"], count: 40, follow: false })).toBe(false);
+  });
+
+  it("matches against nested data values", () => {
+    const nested: LogEntry = {
+      ts: "2026-03-31T12:00:00Z",
+      level: "info",
+      src: "review",
+      msg: "verdict",
+      data: { result: { verdict: "pass", reviewer: "alice" } },
+    };
+    expect(matchesFilters(nested, { fuzzy: ["alice"], count: 40, follow: false })).toBe(true);
+  });
+
+  it("does not match data keys, only values", () => {
+    const e: LogEntry = {
+      ts: "2026-03-31T12:00:00Z",
+      level: "info",
+      src: "navigate",
+      msg: "cyclePane",
+      data: { from: "a", to: "b" },
+    };
+    expect(matchesFilters(e, { fuzzy: ["from"], count: 40, follow: false })).toBe(false);
+  });
+});
+
+describe("hasExplicitFilter", () => {
+  const base: Filters = { count: 40, follow: false, showAll: false };
+
+  it("is false when only count/follow/showAll are set", () => {
+    expect(hasExplicitFilter(base)).toBe(false);
+  });
+
+  it("is true for any structured filter", () => {
+    expect(hasExplicitFilter({ ...base, level: "info" })).toBe(true);
+    expect(hasExplicitFilter({ ...base, src: "poller" })).toBe(true);
+    expect(hasExplicitFilter({ ...base, worker: "alice" })).toBe(true);
+    expect(hasExplicitFilter({ ...base, project: "garden" })).toBe(true);
+  });
+
+  it("is true when fuzzy tokens are present", () => {
+    expect(hasExplicitFilter({ ...base, fuzzy: ["bug"] })).toBe(true);
+  });
+
+  it("is false when fuzzy is an empty array", () => {
+    expect(hasExplicitFilter({ ...base, fuzzy: [] })).toBe(false);
   });
 });
 
