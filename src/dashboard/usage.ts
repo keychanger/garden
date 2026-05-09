@@ -4,8 +4,11 @@
 // SESSIONS_DIR and renders a 3-bar header for the dashboard status pane.
 //
 // The endpoint (/api/oauth/usage) is undocumented and strictly rate-limited
-// (observed Retry-After of ~50 minutes after 3 rapid probes). Callers must
-// honor retry-after and must never poll faster than every few minutes.
+// (observed Retry-After of ~50 minutes after 3 rapid probes; sometimes the
+// server returns Retry-After: 0 which is meaningless when the request itself
+// was a 429 — we self-floor in that case so we never trust the server to
+// pace us safely). Callers must honor retry-after and never poll faster
+// than every few minutes.
 import fs from "node:fs";
 import https from "node:https";
 import os from "node:os";
@@ -13,9 +16,11 @@ import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { SESSIONS_DIR } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
+import { withFileLock } from "./file-lock.js";
 import { log } from "./log.js";
 
 export const USAGE_FILE = path.join(SESSIONS_DIR, "claude-usage.json");
+const USAGE_LOCK = path.join(SESSIONS_DIR, "claude-usage.lock");
 
 export interface UsageMeter {
   pct: number;
@@ -29,10 +34,11 @@ export interface UsageData {
 }
 
 export interface UsageSnapshot {
-  fetchedAt: string;       // ISO 8601
-  data?: UsageData;        // present on success
-  error?: string;          // present on failure; short human-readable
-  retryAfterMs?: number;   // set when server returned Retry-After
+  fetchedAt: string;       // last fetch attempt (success or failure)
+  data?: UsageData;        // last successfully fetched data; preserved across transient errors
+  dataAt?: string;         // when `data` was actually fetched (defaults to fetchedAt for legacy snapshots)
+  error?: string;          // present iff the last attempt failed
+  retryAfterMs?: number;   // server hint when known (only used as a lower bound for the snapshot's own next-attempt timing)
 }
 
 // -----------------------------------------------------------------------------
@@ -111,11 +117,7 @@ export function fetchUsageRaw(token: string): Promise<FetchResult> {
       res.on("data", (c) => (body += c));
       res.on("end", () => {
         const retryHeader = res.headers["retry-after"];
-        let retryAfterMs: number | undefined;
-        if (typeof retryHeader === "string") {
-          const secs = parseInt(retryHeader, 10);
-          if (Number.isFinite(secs)) retryAfterMs = secs * 1000;
-        }
+        const retryAfterMs = parseRetryAfter(retryHeader);
         resolve({ status: res.statusCode ?? 0, body, retryAfterMs });
       });
     });
@@ -123,6 +125,24 @@ export function fetchUsageRaw(token: string): Promise<FetchResult> {
     req.on("error", reject);
     req.end();
   });
+}
+
+// RFC 9110 allows Retry-After in two forms: a delta-seconds integer or an
+// HTTP-date. We accept both. Returns undefined for missing/unparseable values
+// (which the decision layer treats as "server provided no hint" — falls back
+// to our own backoff floor rather than retrying immediately).
+export function parseRetryAfter(header: unknown, nowMs: number = Date.now()): number | undefined {
+  if (typeof header !== "string") return undefined;
+  const trimmed = header.trim();
+  if (!trimmed) return undefined;
+  if (/^\d+$/.test(trimmed)) {
+    const secs = parseInt(trimmed, 10);
+    if (Number.isFinite(secs) && secs >= 0) return secs * 1000;
+    return undefined;
+  }
+  const dateMs = Date.parse(trimmed);
+  if (Number.isFinite(dateMs)) return Math.max(0, dateMs - nowMs);
+  return undefined;
 }
 
 // -----------------------------------------------------------------------------
@@ -180,18 +200,137 @@ export function writeUsageSnapshot(snap: UsageSnapshot): void {
 }
 
 // -----------------------------------------------------------------------------
-// Fetch-and-store (used by the poller)
+// Refresh decision (single source of truth, used by both poller and hooks)
 // -----------------------------------------------------------------------------
 
+// Conservative floor against the endpoint's burst rate-limit. The poller's
+// "happy path" cadence — also the minimum spacing between any two fetches.
+export const POLL_OK_MS = 5 * 60 * 1000;
+
+// Generic non-429 error backoff (network blip, 5xx, unparseable body).
+export const POLL_ERR_MS = 10 * 60 * 1000;
+
+// Floor for any computed interval — defends against Retry-After: 0 / negative
+// values, and keeps every code path well above the burst rate-limit.
+export const POLL_MIN_MS = 60 * 1000;
+
+// Minimum effective backoff after a 429, regardless of what the server said.
+// `Retry-After: 0` after a 429 is meaningless (the request itself was a 429),
+// so we self-protect by waiting at least POLL_OK_MS. Honors a longer server
+// hint when given.
+export const RATE_LIMIT_FLOOR_MS = POLL_OK_MS;
+
+// Poller backoff applied to 401/403. Not transient — waits for a login.
+export const AUTH_BACKOFF_MS = 30 * 60 * 1000;
+
+// Hook semantics: minimum age before a Stop hook may opportunistically refresh
+// a healthy snapshot. The poller refreshes every POLL_OK_MS; the hook lets
+// the meter update sooner when a turn ends near the cooldown boundary.
+export const HOOK_REFRESH_COOLDOWN_MS = 60 * 1000;
+
+export interface RefreshDecision {
+  // Hook semantics: should this caller fire a refresh now?
+  shouldRefresh: boolean;
+  // Poller semantics: how long to sleep before the next attempt.
+  // Always >= POLL_MIN_MS.
+  nextAttemptInMs: number;
+}
+
+export function decideRefresh(
+  snap: UsageSnapshot | null,
+  nowMs: number,
+  reason: "hook" | "poller",
+): RefreshDecision {
+  // No snapshot or unparseable timestamp — fetch now, sleep one OK interval.
+  if (!snap) return { shouldRefresh: true, nextAttemptInMs: POLL_OK_MS };
+  const fetchedAt = Date.parse(snap.fetchedAt);
+  if (!Number.isFinite(fetchedAt)) {
+    return { shouldRefresh: true, nextAttemptInMs: POLL_OK_MS };
+  }
+
+  const age = nowMs - fetchedAt;
+  // Effective backoff between attempts depends on the most recent outcome.
+  // We unify the rule for both consumers so a `Retry-After: 0` cascade can't
+  // exploit the difference between poller cadence (10 min on err) and hook
+  // cadence (60s) to slam the API.
+  let requiredAge: number;
+  if (snap.error === "rate-limited") {
+    requiredAge = Math.max(snap.retryAfterMs ?? 0, RATE_LIMIT_FLOOR_MS);
+  } else if (snap.error === "login expired") {
+    requiredAge = AUTH_BACKOFF_MS;
+  } else if (snap.error) {
+    requiredAge = POLL_ERR_MS;
+  } else if (reason === "hook") {
+    requiredAge = HOOK_REFRESH_COOLDOWN_MS;
+  } else {
+    requiredAge = POLL_OK_MS;
+  }
+
+  const shouldRefresh = age >= requiredAge;
+  const remaining = Math.max(0, requiredAge - age);
+  // Poller sleeps until the snapshot would be stale, plus a small buffer so it
+  // wakes *after* the threshold rather than just before. Floor protects against
+  // any zero/negative computation.
+  const nextAttemptInMs = Math.max(POLL_MIN_MS, remaining + 1000);
+  return { shouldRefresh, nextAttemptInMs };
+}
+
+// Back-compat thin wrapper. Existing callers / tests use this name.
+export function shouldRefreshOnHookWith(
+  snap: UsageSnapshot | null,
+  nowMs: number,
+): boolean {
+  return decideRefresh(snap, nowMs, "hook").shouldRefresh;
+}
+
+export function shouldRefreshOnHook(nowMs: number = Date.now()): boolean {
+  return decideRefresh(readUsageSnapshot(), nowMs, "hook").shouldRefresh;
+}
+
+// -----------------------------------------------------------------------------
+// Fetch-and-store (used by the poller and by hook-driven opportunistic refresh)
+// -----------------------------------------------------------------------------
+
+// All snapshot mutation goes through here. Two-phase locking pattern:
+//
+//   1. Acquire the file lock, re-read the snapshot, decide whether to fetch.
+//      If a sibling process just refreshed (snapshot is fresh enough), bail
+//      with the existing snapshot — no fetch, no thundering herd. Otherwise
+//      "claim" the slot by bumping `fetchedAt` to now (preserving prior data
+//      and dataAt) so concurrent callers see a fresh-looking snapshot and
+//      skip. Release the lock so other state writers aren't blocked on our
+//      ~15s network call.
+//   2. Fetch (async, no lock held).
+//   3. Re-acquire the lock to write the final snapshot. Brief, sync, atomic.
+//
+// On crash mid-fetch the bumped `fetchedAt` naturally expires after the
+// applicable backoff window (60s for hooks, 5min for poller), so a stuck
+// claim self-heals rather than wedging the meter.
 export async function refreshUsage(): Promise<UsageSnapshot> {
+  const claim = withFileLock(USAGE_LOCK, () => {
+    const prior = readUsageSnapshot();
+    const decision = decideRefresh(prior, Date.now(), "hook");
+    if (!decision.shouldRefresh && prior) {
+      return { fetched: false as const, snap: prior };
+    }
+    const claimSnap: UsageSnapshot = {
+      fetchedAt: new Date().toISOString(),
+      ...(prior?.data ? { data: prior.data } : {}),
+      ...(prior?.dataAt ? { dataAt: prior.dataAt } : (prior?.fetchedAt && prior.data ? { dataAt: prior.fetchedAt } : {})),
+    };
+    writeUsageSnapshot(claimSnap);
+    return { fetched: true as const, prior };
+  }, { name: "claude-usage", deadlineMs: 5000 });
+
+  if (!claim.fetched) return claim.snap;
+
+  const prior = claim.prior;
   const cred = loadCredential();
   if (!cred) {
-    const snap: UsageSnapshot = {
+    return finalizeSnapshot({
       fetchedAt: new Date().toISOString(),
       error: "no Claude Code credentials found",
-    };
-    writeUsageSnapshot(snap);
-    return snap;
+    }, prior);
   }
 
   try {
@@ -204,22 +343,19 @@ export async function refreshUsage(): Promise<UsageSnapshot> {
         parsed = JSON.parse(res.body);
       } catch (err) {
         // 200 with an unparseable body — proxy interference, partial response,
-        // or a server-side shape change. Distinguish from credential failures
-        // (401/403) and rate-limiting (429) so the operator knows where to
-        // look. Log a short body excerpt at debug level for diagnosis.
-        const snap: UsageSnapshot = {
-          fetchedAt,
-          error: `200 with unparseable body: ${String(err).slice(0, 100)}`,
-        };
-        writeUsageSnapshot(snap);
+        // or a server-side shape change. Keep last-good data so the bars don't
+        // vanish; surface the error inline via the (stale) tag.
         log.warn("usage", "200 with unparseable body", {
           data: { bodyPrefix: res.body.slice(0, 200) },
         });
-        return snap;
+        return finalizeSnapshot({
+          fetchedAt,
+          error: `200 with unparseable body: ${String(err).slice(0, 100)}`,
+        }, prior);
       }
       const data = normalizeUsage(parsed);
-      const snap: UsageSnapshot = { fetchedAt, data };
-      writeUsageSnapshot(snap);
+      const snap: UsageSnapshot = { fetchedAt, dataAt: fetchedAt, data };
+      writeUsageSnapshotLocked(snap);
       log.debug("usage", "fetched", {
         data: {
           source: cred.source,
@@ -232,41 +368,57 @@ export async function refreshUsage(): Promise<UsageSnapshot> {
     }
 
     if (res.status === 429) {
-      const snap: UsageSnapshot = {
+      log.warn("usage", "rate-limited", { data: { retryAfterMs: res.retryAfterMs } });
+      return finalizeSnapshot({
         fetchedAt,
         error: "rate-limited",
         retryAfterMs: res.retryAfterMs,
-      };
-      writeUsageSnapshot(snap);
-      log.warn("usage", "rate-limited", { data: { retryAfterMs: res.retryAfterMs } });
-      return snap;
+      }, prior);
     }
 
     if (res.status === 401 || res.status === 403) {
+      log.warn("usage", "auth failed", { data: { status: res.status } });
       // 401/403 isn't transient; back off AUTH_BACKOFF_MS so a dead token doesn't trigger the endpoint's 429 cascade (garden login overwrites the snapshot to heal early).
-      const snap: UsageSnapshot = {
+      return finalizeSnapshot({
         fetchedAt,
         error: "login expired",
         retryAfterMs: AUTH_BACKOFF_MS,
-      };
-      writeUsageSnapshot(snap);
-      log.warn("usage", "auth failed", { data: { status: res.status } });
-      return snap;
+      }, prior);
     }
 
-    const snap: UsageSnapshot = { fetchedAt, error: `http ${res.status}` };
-    writeUsageSnapshot(snap);
     log.warn("usage", "unexpected status", { data: { status: res.status, body: res.body.slice(0, 200) } });
-    return snap;
+    return finalizeSnapshot({ fetchedAt, error: `http ${res.status}` }, prior);
   } catch (err) {
-    const snap: UsageSnapshot = {
+    const error = (err instanceof Error ? err.message : String(err)).slice(0, 120);
+    log.warn("usage", "fetch error", { data: { error } });
+    return finalizeSnapshot({
       fetchedAt: new Date().toISOString(),
-      error: (err instanceof Error ? err.message : String(err)).slice(0, 120),
-    };
-    writeUsageSnapshot(snap);
-    log.warn("usage", "fetch error", { data: { error: snap.error } });
-    return snap;
+      error,
+    }, prior);
   }
+}
+
+// Merges last-good data into the new snapshot and writes under the lock.
+// Centralizes the "preserve data through transient errors" rule so every
+// failure path benefits.
+function finalizeSnapshot(
+  next: UsageSnapshot,
+  prior: UsageSnapshot | null | undefined,
+): UsageSnapshot {
+  const merged: UsageSnapshot = { ...next };
+  if (prior?.data && !merged.data) {
+    merged.data = prior.data;
+    merged.dataAt = prior.dataAt ?? prior.fetchedAt;
+  }
+  writeUsageSnapshotLocked(merged);
+  return merged;
+}
+
+function writeUsageSnapshotLocked(snap: UsageSnapshot): void {
+  withFileLock(USAGE_LOCK, () => writeUsageSnapshot(snap), {
+    name: "claude-usage",
+    deadlineMs: 5000,
+  });
 }
 
 // -----------------------------------------------------------------------------
@@ -303,18 +455,25 @@ export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number):
   const lines: string[] = [""];
 
   if (!snap) {
-    lines.push(`${INDENT}${dim("claude usage  loading\u2026")}`);
+    lines.push(`${INDENT}${dim("claude usage  loading…")}`);
     return lines.map(l => l + "\x1b[K").join("\n");
   }
 
-  if (snap.error) {
-    lines.push(`${INDENT}${dim(`claude usage  ${snap.error}`)}`);
+  // No data ever fetched — show the error (or loading) instead of empty bars.
+  if (!snap.data) {
+    const msg = snap.error ?? "loading…";
+    lines.push(`${INDENT}${dim(`claude usage  ${msg}`)}`);
     return lines.map(l => l + "\x1b[K").join("\n");
   }
 
-  const stale = (nowMs - Date.parse(snap.fetchedAt)) > STALE_AFTER_MS;
+  // Data present (possibly old). Stale check uses dataAt — the timestamp of
+  // the last *successful* fetch, not the last attempt. Snapshots written by
+  // older versions lack dataAt and fall back to fetchedAt (which equals dataAt
+  // on success in those snapshots, so the behavior matches).
+  const dataAt = Date.parse(snap.dataAt ?? snap.fetchedAt);
+  const stale = !Number.isFinite(dataAt) || (nowMs - dataAt) > STALE_AFTER_MS;
   const staleTag = stale ? dim(" (stale)") : "";
-  const d = snap.data ?? {};
+  const d = snap.data;
   const fit = computeMeterFit(paneWidth);
 
   lines.push(renderMeterLine("5h",     d.fiveHour, nowMs, staleTag, FIVE_HOUR_MS, fit));
@@ -339,7 +498,7 @@ function renderMeterLine(
 ): string {
   const paddedLabel = label.padEnd(LABEL_WIDTH);
   const effective = meter ?? (fallbackResetsAt ? { pct: 0, resetsAt: fallbackResetsAt } : undefined);
-  if (!effective) return `${INDENT}${paddedLabel}  ${dim("\u2014")}${suffix}`;
+  if (!effective) return `${INDENT}${paddedLabel}  ${dim("—")}${suffix}`;
   const pct = Math.max(0, Math.min(100, effective.pct));
   const resetsAt = Date.parse(effective.resetsAt);
   let timePct: number | undefined;
@@ -377,13 +536,13 @@ function renderBar(pct: number, barWidth: number, markerPct?: number): string {
     const isMarker = i === markerIdx;
     if (isMarker && isFilled) {
       // Marker overlays green: green bg keeps the cell from looking "eaten".
-      result += `${bg}${brightFg}\u2502${rst}`;
+      result += `${bg}${brightFg}│${rst}`;
     } else if (isMarker) {
-      result += `${brightFg}\u2502${rst}`;
+      result += `${brightFg}│${rst}`;
     } else if (isFilled) {
-      result += `${fg}\u2588${rst}`;
+      result += `${fg}█${rst}`;
     } else {
-      result += dim("\u2591");
+      result += dim("░");
     }
   }
   return result;
@@ -414,28 +573,10 @@ export function formatDuration(ms: number): string {
 // Event-driven refresh (called from Claude Code hooks)
 // -----------------------------------------------------------------------------
 
-// Conservative floor against the endpoint's burst rate-limit.
-export const HOOK_REFRESH_COOLDOWN_MS = 60 * 1000;
-
-// Poller backoff applied to 401/403. Not transient — waits for a login.
-export const AUTH_BACKOFF_MS = 30 * 60 * 1000;
-
-export function shouldRefreshOnHookWith(
-  snap: UsageSnapshot | null,
-  nowMs: number,
-): boolean {
-  if (!snap) return true;
-  const age = nowMs - Date.parse(snap.fetchedAt);
-  if (!Number.isFinite(age)) return true;
-  if (snap.retryAfterMs && age < snap.retryAfterMs) return false;
-  return age >= HOOK_REFRESH_COOLDOWN_MS;
-}
-
-export function shouldRefreshOnHook(nowMs: number = Date.now()): boolean {
-  return shouldRefreshOnHookWith(readUsageSnapshot(), nowMs);
-}
-
-// Detached so the 5s hook budget isn't spent waiting on the fetch.
+// Detached so the 5s hook budget isn't spent waiting on the fetch. The
+// thundering-herd guard lives inside refreshUsage's file lock, not here —
+// the spawn is cheap and the spawned process bails fast if a sibling already
+// won the claim.
 export function maybeRefreshUsage(gardenRunner: string): void {
   if (!shouldRefreshOnHook()) return;
   try {

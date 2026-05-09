@@ -5,7 +5,12 @@ import {
   normalizeUsage,
   formatDuration,
   shouldRefreshOnHookWith,
+  decideRefresh,
+  parseRetryAfter,
   HOOK_REFRESH_COOLDOWN_MS,
+  POLL_OK_MS,
+  POLL_MIN_MS,
+  RATE_LIMIT_FLOOR_MS,
 } from "../src/dashboard/usage.js";
 import { useTmpHome } from "./helpers.js";
 
@@ -349,5 +354,197 @@ describe("renderUsagePane", () => {
     const lines = render(now, 48).split("\n");
     for (const l of lines) expect(visibleLen(l)).toBeLessThanOrEqual(48);
     expect(lines[1]).toContain("resets");
+  });
+
+  it("renders preserved bars when data and error coexist (transient hiccup)", async () => {
+    // After the 429-floor / data-preservation fix, a snapshot with a recent
+    // `error` but prior `data` should still show bars. dataAt drives the
+    // stale check: if the data was fetched within STALE_AFTER_MS, no
+    // (stale) tag — the meter just keeps showing what it had.
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      error: "rate-limited",
+      retryAfterMs: 0,
+      dataAt: new Date(now - 60_000).toISOString(),
+      data: {
+        fiveHour: { pct: 42, resetsAt: new Date(now + 2 * 60 * 60_000).toISOString() },
+        weekly:   { pct: 35, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
+        sonnet:   { pct: 4,  resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
+      },
+    });
+    const render = await importRender();
+    const out = render(now);
+    expect(out).not.toContain("rate-limited");
+    expect(out).toContain("42%");
+    expect(out).not.toContain("(stale)");
+  });
+
+  it("tags preserved bars stale once dataAt ages past STALE_AFTER_MS", async () => {
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      error: "rate-limited",
+      dataAt: new Date(now - 60 * 60_000).toISOString(),
+      data: {
+        fiveHour: { pct: 42, resetsAt: new Date(now + 60 * 60_000).toISOString() },
+      },
+    });
+    const render = await importRender();
+    const out = render(now);
+    expect(out).toContain("42%");
+    expect(out).toContain("(stale)");
+  });
+});
+
+describe("parseRetryAfter", () => {
+  const now = Date.parse("2026-04-15T20:00:00Z");
+
+  it("parses delta-seconds form", () => {
+    expect(parseRetryAfter("120", now)).toBe(120_000);
+    expect(parseRetryAfter("0", now)).toBe(0);
+  });
+
+  it("parses HTTP-date form (RFC 9110)", () => {
+    const future = new Date(now + 5 * 60_000).toUTCString();
+    const ms = parseRetryAfter(future, now);
+    expect(ms).toBeGreaterThanOrEqual(5 * 60_000 - 1000);
+    expect(ms).toBeLessThanOrEqual(5 * 60_000 + 1000);
+  });
+
+  it("returns 0 (not negative) for past HTTP-dates", () => {
+    const past = new Date(now - 10 * 60_000).toUTCString();
+    expect(parseRetryAfter(past, now)).toBe(0);
+  });
+
+  it("returns undefined for missing or unparseable input", () => {
+    expect(parseRetryAfter(undefined, now)).toBeUndefined();
+    expect(parseRetryAfter("", now)).toBeUndefined();
+    expect(parseRetryAfter("not a date", now)).toBeUndefined();
+    expect(parseRetryAfter(123 as unknown as string, now)).toBeUndefined();
+  });
+});
+
+describe("decideRefresh — rate-limit floor", () => {
+  const now = Date.parse("2026-04-15T20:00:00Z");
+
+  // The bug we fixed: a snapshot with `error: "rate-limited", retryAfterMs: 0`
+  // used to fall through both guards (the `&&` against falsy 0). With the
+  // floor in place, both hook and poller honor RATE_LIMIT_FLOOR_MS.
+  it("does not refresh when rate-limited with retryAfterMs:0 inside the floor", () => {
+    const snap = {
+      fetchedAt: new Date(now - 60_000).toISOString(),
+      error: "rate-limited",
+      retryAfterMs: 0,
+    };
+    expect(decideRefresh(snap, now, "hook").shouldRefresh).toBe(false);
+    expect(decideRefresh(snap, now, "poller").shouldRefresh).toBe(false);
+  });
+
+  it("does not refresh when rate-limited with retryAfterMs absent", () => {
+    const snap = {
+      fetchedAt: new Date(now - 60_000).toISOString(),
+      error: "rate-limited",
+    };
+    expect(decideRefresh(snap, now, "hook").shouldRefresh).toBe(false);
+  });
+
+  it("allows refresh once the rate-limit floor has elapsed", () => {
+    const snap = {
+      fetchedAt: new Date(now - RATE_LIMIT_FLOOR_MS - 1000).toISOString(),
+      error: "rate-limited",
+      retryAfterMs: 0,
+    };
+    expect(decideRefresh(snap, now, "hook").shouldRefresh).toBe(true);
+  });
+
+  it("honors a server-provided retryAfterMs when larger than the floor", () => {
+    const longBackoff = 50 * 60_000; // observed ~50min after 3 rapid probes
+    const snap = {
+      fetchedAt: new Date(now - 10 * 60_000).toISOString(),
+      error: "rate-limited",
+      retryAfterMs: longBackoff,
+    };
+    expect(decideRefresh(snap, now, "hook").shouldRefresh).toBe(false);
+    // sleep target is at least the remaining backoff (40 min, plus 1s buffer).
+    expect(decideRefresh(snap, now, "poller").nextAttemptInMs)
+      .toBeGreaterThanOrEqual(40 * 60_000);
+  });
+
+  it("nextAttemptInMs is always >= POLL_MIN_MS", () => {
+    const snap = { fetchedAt: new Date(now - 24 * 60 * 60_000).toISOString() };
+    expect(decideRefresh(snap, now, "poller").nextAttemptInMs)
+      .toBeGreaterThanOrEqual(POLL_MIN_MS);
+  });
+
+  it("uses POLL_OK_MS as the poller cadence on a healthy snapshot", () => {
+    const snap = { fetchedAt: new Date(now).toISOString(), data: {} };
+    const decision = decideRefresh(snap, now, "poller");
+    expect(decision.shouldRefresh).toBe(false);
+    // Just-fetched snapshot: next attempt ~ POLL_OK_MS away (plus small buffer).
+    expect(decision.nextAttemptInMs).toBeGreaterThanOrEqual(POLL_OK_MS);
+    expect(decision.nextAttemptInMs).toBeLessThanOrEqual(POLL_OK_MS + 5000);
+  });
+});
+
+describe("refreshUsage — file-lock claim", () => {
+  const env = useTmpHome();
+
+  beforeEach(() => { vi.resetModules(); });
+
+  async function importRefresh() {
+    const mod = await import("../src/dashboard/usage.js");
+    return { refreshUsage: mod.refreshUsage, USAGE_FILE: mod.USAGE_FILE };
+  }
+
+  it("preserves prior data through a transient error (no-credentials path)", async () => {
+    const now = Date.now();
+    // Seed a stale snapshot with good prior data.
+    const prior = {
+      fetchedAt: new Date(now - 30 * 60_000).toISOString(),
+      dataAt: new Date(now - 30 * 60_000).toISOString(),
+      data: {
+        fiveHour: { pct: 42, resetsAt: new Date(now + 60 * 60_000).toISOString() },
+      },
+    };
+    fs.writeFileSync(path.join(env.sessionsDir, "claude-usage.json"), JSON.stringify(prior));
+
+    // No GARDEN_CLAUDE_SESSION_KEY, no .credentials.json in tmp home — refreshUsage
+    // takes the no-creds error path. The fix preserves prior data.
+    delete process.env.GARDEN_CLAUDE_SESSION_KEY;
+    const { refreshUsage, USAGE_FILE } = await importRefresh();
+    const snap = await refreshUsage();
+
+    expect(snap.error).toBeDefined();
+    expect(snap.data?.fiveHour?.pct).toBe(42);
+    expect(snap.dataAt).toBe(prior.dataAt);
+
+    const onDisk = JSON.parse(fs.readFileSync(USAGE_FILE, "utf8"));
+    expect(onDisk.data?.fiveHour?.pct).toBe(42);
+  });
+
+  it("skips the fetch when a sibling just refreshed (claim already held)", async () => {
+    const now = Date.now();
+    // Snapshot fetchedAt within the hook cooldown — no caller should fetch.
+    const fresh = {
+      fetchedAt: new Date(now - 5_000).toISOString(),
+      dataAt: new Date(now - 5_000).toISOString(),
+      data: {
+        fiveHour: { pct: 7, resetsAt: new Date(now + 60 * 60_000).toISOString() },
+      },
+    };
+    fs.writeFileSync(path.join(env.sessionsDir, "claude-usage.json"), JSON.stringify(fresh));
+
+    // Even with no credentials, refreshUsage should bail before the no-creds
+    // error path because the claim slot was already taken (snapshot is fresh).
+    delete process.env.GARDEN_CLAUDE_SESSION_KEY;
+    const { refreshUsage, USAGE_FILE } = await importRefresh();
+    const snap = await refreshUsage();
+
+    expect(snap.error).toBeUndefined();
+    expect(snap.data?.fiveHour?.pct).toBe(7);
+    expect(snap.fetchedAt).toBe(fresh.fetchedAt);
+
+    const onDisk = JSON.parse(fs.readFileSync(USAGE_FILE, "utf8"));
+    // fetchedAt unchanged proves the claim path bailed without bumping.
+    expect(onDisk.fetchedAt).toBe(fresh.fetchedAt);
   });
 });
