@@ -52,6 +52,14 @@ export interface WorktreeRulesOptions {
      *  paragraph so the worker can grep / read it directly. */
     relativePath: string;
   };
+  /** When set, the rules text appends three grow-specific paragraphs
+   *  describing the bounded-loop discipline. Mutually exclusive with
+   *  `trellis` — a worker is one workflow at a time; the helper throws
+   *  if both are set. Per locked decisions in declarative-singing-graham.md. */
+  grow?: {
+    iteration: number;
+    maxIterations: number;
+  };
   /** The project's configured `checks` command (from `garden config <project>
    *  checks`). When set, the prompt names the exact command and instructs
    *  the worker to run it green before pushing. The reviewer runs the same
@@ -88,15 +96,21 @@ You are working in an isolated git worktree on branch \`${branchName}\`. Your wo
 
   const baseWithChecks = base + checksParagraph;
 
-  if (!options?.trellis) return baseWithChecks;
+  if (options?.trellis && options?.grow) {
+    throw new Error(
+      "buildWorktreeRules: trellis and grow options are mutually exclusive — "
+      + "a worker is one workflow at a time.",
+    );
+  }
 
-  // Trellis-specific extension. Three paragraphs per WORKFLOWS.md "Worker
-  // system prompt": concept, authority asymmetry, iteration discipline.
-  // Replaces the generic "auto-continue across phases" guidance — trellis
-  // vines reset Claude's context every iteration, so multi-phase
-  // reasoning across iterations is structurally not allowed.
-  const trellisPath = options.trellis.relativePath;
-  const trellisExtras = `## Trellis workflow
+  if (options?.trellis) {
+    // Trellis-specific extension. Three paragraphs per WORKFLOWS.md "Worker
+    // system prompt": concept, authority asymmetry, iteration discipline.
+    // Replaces the generic "auto-continue across phases" guidance — trellis
+    // vines reset Claude's context every iteration, so multi-phase
+    // reasoning across iterations is structurally not allowed.
+    const trellisPath = options.trellis.relativePath;
+    const trellisExtras = `## Trellis workflow
 
 **Concept.** A trellis is a frozen design document describing what this feature does. The path is \`${trellisPath}\`. Read it before editing anything; it is your source of truth.
 
@@ -104,5 +118,26 @@ You are working in an isolated git worktree on branch \`${branchName}\`. Your wo
 
 **Iteration discipline.** You are operating inside a bounded loop. The reviewer's \`DRIFT\` report names priority-ordered gaps between the trellis and the artifact. Close the highest-priority gap first. Do not chase adjacent improvements. Do not redesign. The trellis's "Out of scope" section is the bound of your work. Each iteration starts with a fresh Claude session — disk (the trellis at git HEAD, the code, and \`.garden/trellis-lessons.md\`) is the only state that crosses iteration boundaries. Append a one-line entry to the lessons file each iteration describing what you tried and what you learned.`;
 
-  return `${baseWithChecks}\n\n${trellisExtras}`;
+    return `${baseWithChecks}\n\n${trellisExtras}`;
+  }
+
+  if (options?.grow) {
+    // Grow-specific extension. Three paragraphs (Concept / Bias / Termination)
+    // mirroring the trellis shape but tuned for the no-design-doc loop. The
+    // "fresh Claude session each iteration" line is the same load-bearing
+    // discipline as trellis — disk is the only state that crosses iteration
+    // boundaries. Replaces the generic "auto-continue across phases" guidance.
+    const { iteration, maxIterations } = options.grow;
+    const growExtras = `## Grow workflow
+
+**Concept.** You are inside a bounded grow loop. Iteration ${iteration} of ${maxIterations}. Each iteration starts with a fresh Claude session — disk (the code, the tests, the docs, and \`.garden/grow-log.md\`) is the only state that crosses iteration boundaries. The seed prompt that anchors this loop is inlined in your iteration's continue message; it does not change between iterations.
+
+**Bias.** Harden the recent work, do not chase adjacent improvements. The seed is your scope; the diff against the base branch is your focus. Edge cases the seed implies but didn't list, missing tests, doc updates, error-handling gaps — these are the kinds of polish a grow loop is for. Refactors of unrelated code, new features outside the seed's intent, and "while I'm here" cleanups are not.
+
+**Termination.** When nothing material remains, write \`.garden-done\` at your worktree root before ending your turn so the loop terminates instead of consuming another iteration. The loop also ends after ${maxIterations} iterations regardless. Append a one-line entry to \`.garden/grow-log.md\` describing what you did this iteration (one line, ~80 chars). The next iteration sees this file and uses it to avoid repeating work.`;
+
+    return `${baseWithChecks}\n\n${growExtras}`;
+  }
+
+  return baseWithChecks;
 }

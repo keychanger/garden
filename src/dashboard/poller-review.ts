@@ -24,6 +24,7 @@ import {
   type WorkerEntry,
 } from "./registry.js";
 import { windowExists, killWindowSafe, shellEscape } from "./tmux.js";
+import { growLoopHooks } from "./grow-continue.js";
 import { trellisLoopHooks } from "./trellis-continue.js";
 import { buildTrellisReviewPrompt } from "./trellis-prompts.js";
 import {
@@ -601,6 +602,7 @@ function launchReview(
   // check. We don't repeat it here.
   const wtPath = entry.worktreePath ?? projectPath;
   const isTrellis = entry.workflow === "trellis";
+  const isGrow = entry.workflow === "grow";
 
   // Trellis workflow: increment iteration counter *before* the budget check
   // and *before* dispatch (WORKFLOWS.md "One iteration, in detail" / step 5).
@@ -645,6 +647,19 @@ function launchReview(
     // verdict logging and any concurrent `garden trellis status` see the
     // right iteration number.
     persistIteration(projectName, entry.name, entry, trellisLoopHooks, nextIter);
+  }
+
+  // Grow workflow: increment iteration counter before dispatch. No budget
+  // check at preflight — grow's terminal-on-budget is `done`, fired
+  // post-merge in maybeAutoContinue (locked decision 2 in
+  // declarative-singing-graham.md). The increment + persist is shared with
+  // trellis via persistIteration; the grow-specific bookkeeping is the
+  // sub-object field path (entry.grow.iteration vs entry.trellis.iteration),
+  // encapsulated in growLoopHooks.
+  if (isGrow) {
+    const state = growLoopHooks.readIteration(entry);
+    const nextIter = (state?.iteration ?? 0) + 1;
+    persistIteration(projectName, entry.name, entry, growLoopHooks, nextIter);
   }
 
   // Fetch latest base branch so the reviewer can rebase onto it

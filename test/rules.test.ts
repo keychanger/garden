@@ -212,3 +212,55 @@ describe("buildWorktreeRules — trellis workflow", () => {
     expect(trellisIdx).toBeGreaterThan(workflowIdx);
   });
 });
+
+describe("buildWorktreeRules — grow workflow", () => {
+  it("default workers do NOT include grow paragraphs", async () => {
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("swift-oak");
+    expect(result).not.toContain("Grow workflow");
+    expect(result).not.toContain("grow-log.md");
+  });
+
+  it("grow option appends concept/bias/termination paragraphs with iteration count", async () => {
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("tall-fern", "main", {
+      grow: { iteration: 2, maxIterations: 5 },
+    });
+    expect(result).toContain("Grow workflow");
+    expect(result).toContain("Iteration 2 of 5");
+    expect(result).toContain("Bias");
+    expect(result).toContain("Termination");
+    expect(result).toContain("grow-log.md");
+    expect(result).toContain(".garden-done");
+  });
+
+  it("grow paragraphs append AFTER the worktree workflow baseline", async () => {
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("tall-fern", "main", {
+      grow: { iteration: 1, maxIterations: 5 },
+    });
+    const workflowIdx = result.indexOf("## Worktree workflow");
+    const growIdx = result.indexOf("## Grow workflow");
+    expect(workflowIdx).toBeGreaterThanOrEqual(0);
+    expect(growIdx).toBeGreaterThan(workflowIdx);
+  });
+
+  it("trellis and grow are mutually exclusive — passing both throws", async () => {
+    const { buildWorktreeRules } = await importRules();
+    expect(() =>
+      buildWorktreeRules("any", "main", {
+        trellis: { relativePath: ".garden/trellises/foo.md" },
+        grow: { iteration: 1, maxIterations: 5 },
+      }),
+    ).toThrow(/mutually exclusive/);
+  });
+
+  it("grow rules do NOT include trellis paragraphs", async () => {
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("tall-fern", "main", {
+      grow: { iteration: 1, maxIterations: 5 },
+    });
+    expect(result).not.toContain("## Trellis workflow");
+    expect(result).not.toContain("trellis-lessons.md");
+  });
+});

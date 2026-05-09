@@ -1,11 +1,9 @@
-// `garden workers <subcommand>` — worker lifecycle CLI. Phase 2 ships the
-// `new` subcommand with trellis support; other subcommands defer to v1.5
-// or beyond. The picker hotkey (⌥⇧n) in phase 5 will be the daily-driver
-// path; `garden workers new` is the script-friendly equivalent.
+// `garden workers <subcommand>` — worker lifecycle CLI.
 import fs from "node:fs";
 import path from "node:path";
 import { tryGetProject, SESSIONS_DIR } from "../config.js";
 import { newWorker } from "../dashboard/workers.js";
+import { buildGrowIteration1Seed } from "../dashboard/grow-continue.js";
 import { validateTrellisPlant } from "../dashboard/trellis-tag.js";
 
 export async function workers(args: string[]): Promise<void> {
@@ -15,7 +13,9 @@ export async function workers(args: string[]): Promise<void> {
     return;
   }
   throw new Error(
-    `Usage: garden workers new <project> [--workflow trellis --trellis <name>] [--model opus|sonnet] [--max-iterations N]`,
+    `Usage: garden workers new <project> [--workflow trellis|grow] `
+    + `[--trellis <name>] [--seed <text> | --seed-file <path>] `
+    + `[--model opus|sonnet] [--max-iterations N]`,
   );
 }
 
@@ -51,16 +51,19 @@ async function newCommand(args: string[]): Promise<void> {
   }
 
   const workflow = flags.get("workflow") ?? "default";
-  if (workflow !== "default" && workflow !== "trellis") {
-    throw new Error(`--workflow must be 'default' or 'trellis', got '${workflow}'`);
+  if (workflow !== "default" && workflow !== "trellis" && workflow !== "grow") {
+    throw new Error(`--workflow must be 'default', 'trellis', or 'grow', got '${workflow}'`);
   }
 
   if (workflow === "default") {
     if (flags.has("trellis")) {
       throw new Error("--trellis can only be used with --workflow trellis");
     }
+    if (flags.has("seed") || flags.has("seed-file")) {
+      throw new Error("--seed and --seed-file can only be used with --workflow grow");
+    }
     if (flags.has("max-iterations")) {
-      throw new Error("--max-iterations can only be used with --workflow trellis");
+      throw new Error("--max-iterations can only be used with --workflow trellis or grow");
     }
     if (flags.has("model")) {
       throw new Error(
@@ -75,6 +78,82 @@ async function newCommand(args: string[]): Promise<void> {
       );
     }
     console.log(`Created worker ${projectName}/${newName}.`);
+    return;
+  }
+
+  if (workflow === "grow") {
+    if (flags.has("trellis")) {
+      throw new Error("--trellis can only be used with --workflow trellis");
+    }
+    if (flags.has("model")) {
+      throw new Error(
+        "--model is not supported with --workflow grow. "
+        + "Grow loops run on the account default model (locked decisions 3-4).",
+      );
+    }
+    if (flags.has("seed") && flags.has("seed-file")) {
+      throw new Error("--seed and --seed-file are mutually exclusive; pass exactly one.");
+    }
+    let seed: string | undefined;
+    if (flags.has("seed")) {
+      seed = flags.get("seed")!;
+    } else if (flags.has("seed-file")) {
+      const seedFilePath = flags.get("seed-file")!;
+      try {
+        seed = fs.readFileSync(seedFilePath, "utf-8");
+      } catch (err) {
+        throw new Error(`--seed-file '${seedFilePath}' could not be read: ${String(err)}`);
+      }
+    } else {
+      throw new Error(
+        "--workflow grow requires a seed: pass --seed <text> or --seed-file <path>.",
+      );
+    }
+    seed = seed.trim();
+    if (!seed) {
+      throw new Error("--workflow grow requires a non-empty seed prompt.");
+    }
+
+    let maxIter = 5;
+    if (project.maxGrowIterations !== undefined) maxIter = project.maxGrowIterations;
+    if (flags.has("max-iterations")) {
+      const raw = flags.get("max-iterations")!;
+      const n = Number.parseInt(raw, 10);
+      if (!Number.isFinite(n) || n < 1) {
+        throw new Error(`--max-iterations must be a positive integer, got '${raw}'`);
+      }
+      maxIter = n;
+    }
+
+    // Build the iter-1 seed prompt — sent at plant time via seedMessageFile
+    // (not via auto-continue, which fires post-merge for iter ≥ 2). The
+    // operator's seed text becomes the durable goal stored on
+    // entry.grow.seed; iter ≥ 2 prompts inline that text verbatim. The
+    // plant-time prompt wraps it with grow framing so the worker paces
+    // itself across the bounded loop.
+    const seedFile = path.join(
+      SESSIONS_DIR, "seeds",
+      `grow-seed-${projectName}-${Date.now()}.txt`,
+    );
+    fs.mkdirSync(path.dirname(seedFile), { recursive: true });
+    fs.writeFileSync(seedFile, buildGrowIteration1Seed(seed, maxIter));
+
+    const newName = newWorker({
+      projectName,
+      workflow: "grow",
+      grow: { seed, maxIterations: maxIter },
+      seedMessageFile: seedFile,
+    });
+    if (!newName) {
+      try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
+      throw new Error(
+        `Failed to spawn grow worker on '${projectName}'. `
+        + `Is the dashboard running? Check 'garden health'.`,
+      );
+    }
+    console.log(
+      `Started grow loop ${projectName}/${newName} (up to ${maxIter} iterations).`,
+    );
     return;
   }
 

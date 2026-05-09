@@ -159,6 +159,7 @@ vi.mock("../src/dashboard/continue.js", () => ({
   isDoneSet: vi.fn(() => false),
   donePath: vi.fn((wt: string) => `${wt}/.garden-done`),
   clearDoneSentinel: vi.fn(),
+  setDoneSentinel: vi.fn(),
 }));
 
 import fs from "node:fs";
@@ -177,7 +178,7 @@ import {
 import { tmux, pasteAndSubmit, windowExists, getFirstPaneId, killWindowSafe } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { log } from "../src/dashboard/log.js";
-import { dispatchDelayedAutoContinue, isDoneSet } from "../src/dashboard/continue.js";
+import { dispatchDelayedAutoContinue, isDoneSet, setDoneSentinel } from "../src/dashboard/continue.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 const registryMock = await import("../src/dashboard/registry.js") as {
@@ -1661,6 +1662,67 @@ describe("poll — merge-pending state", () => {
       ["-c", expect.stringContaining("sleep")],
       expect.objectContaining({ detached: true, stdio: "ignore" }),
     );
+  });
+
+  // ─── grow workflow: budget exhaustion → done at the auto-continue site ──
+  // Locked decision 2 in declarative-singing-graham.md: grow's
+  // terminal-on-budget is `done` (not `failing` like trellis), and the
+  // check fires post-merge in maybeAutoContinue (not at preflight). Reaching
+  // the cap means "we did the work we said we'd do."
+
+  it("grow: writes .garden-done and transitions merged → done when iter == max", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        claudeStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        workflow: "grow",
+        grow: { seed: "harden auth", iteration: 5, maxIterations: 5 },
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue(true);
+
+    poll("myproject");
+
+    expect(setDoneSentinel).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    const doneCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "done",
+    );
+    expect(doneCall).toBeDefined();
+    // The auto-continue dispatch must NOT fire — the loop is over.
+    expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
+    const lastAcCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).lastAutoContinueAt !== undefined,
+    );
+    expect(lastAcCall).toBeUndefined();
+  });
+
+  it("grow: dispatches the cold respawn when iter < max (budget not yet hit)", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        claudeStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        workflow: "grow",
+        grow: { seed: "harden auth", iteration: 2, maxIterations: 5 },
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue(true);
+
+    poll("myproject");
+
+    // Sentinel must NOT be written for a mid-loop merge.
+    expect(setDoneSentinel).not.toHaveBeenCalled();
+    // The cold-respawn dispatch fires via spawn (the sleep-then-call helper).
+    expect(spawn).toHaveBeenCalledWith(
+      "sh",
+      ["-c", expect.stringContaining("_grow-continue-after-merge")],
+      expect.objectContaining({ detached: true }),
+    );
+    // The default-workflow auto-continue must NOT fire.
+    expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
   });
 });
 

@@ -497,6 +497,14 @@ export interface WorktreeCommandOptions {
    *  worker's system prompt. Default workers omit this and get the
    *  baseline rules. */
   trellisRelativePath?: string;
+  /** When set, buildWorktreeRules appends the three grow paragraphs
+   *  (Concept / Bias / Termination) referencing the iteration count.
+   *  Mutually exclusive with `trellisRelativePath` — a worker is one
+   *  workflow at a time. */
+  grow?: {
+    iteration: number;
+    maxIterations: number;
+  };
   /** Model to pass to claude via `--model` in the bootstrap/respawn/resume
    *  invocation. When set, the launched claude process is pinned to that
    *  model. When unset (default workers), claude uses the account default
@@ -518,7 +526,7 @@ export function buildWorktreeWorkerCommand(
 ): string {
   const contextFile = writeWorktreeContextFile(
     projectName, projectPath, branchName, baseBranch,
-    { trellisRelativePath: opts?.trellisRelativePath },
+    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow },
   );
   const project = resolveProjectForHooks(projectName, projectPath);
   const envPrefix = claudeEnvPrefix(project);
@@ -575,7 +583,7 @@ export function buildWorktreeBootstrapScript(
   // Write the context file eagerly (fast, just file I/O)
   const contextFile = writeWorktreeContextFile(
     projectName, projectPath, branchName, baseBranch,
-    { trellisRelativePath: opts?.trellisRelativePath },
+    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow },
   );
 
   const fifoLit = shellEscape(signalFifoPath(projectName));
@@ -753,7 +761,7 @@ export function buildWorktreeResumeCommand(
 ): string {
   const contextFile = writeWorktreeContextFile(
     projectName, projectPath, branchName, baseBranch,
-    { trellisRelativePath: opts?.trellisRelativePath },
+    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow },
   );
   const gardenRunner = resolveGardenRunner();
   const project = resolveProjectForHooks(projectName, projectPath);
@@ -801,7 +809,10 @@ function writeWorktreeContextFile(
   projectPath: string,
   branchName: string,
   baseBranch?: string,
-  opts?: { trellisRelativePath?: string },
+  opts?: {
+    trellisRelativePath?: string;
+    grow?: { iteration: number; maxIterations: number };
+  },
 ): string {
   const base = buildRulesContext(projectName, projectPath);
   const checksCommand = tryGetProject(projectName)?.checks;
@@ -812,6 +823,7 @@ function writeWorktreeContextFile(
       ...(opts?.trellisRelativePath
         ? { trellis: { relativePath: opts.trellisRelativePath } }
         : {}),
+      ...(opts?.grow ? { grow: opts.grow } : {}),
       ...(checksCommand ? { checksCommand } : {}),
     },
   );

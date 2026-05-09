@@ -11,7 +11,7 @@ import {
 } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { addAlert } from "./alerts.js";
-import { dispatchDelayedAutoContinue, isDoneSet } from "./continue.js";
+import { dispatchDelayedAutoContinue, isDoneSet, setDoneSentinel } from "./continue.js";
 import { dispatchDelayedGrowContinue } from "./grow-continue.js";
 import { dispatchDelayedTrellisContinue } from "./trellis-continue.js";
 import { resolveGardenRunner } from "./runner.js";
@@ -357,6 +357,25 @@ function maybeAutoContinue(
       data: { project: projectName, reason: gateReason },
     });
     return;
+  }
+  // Grow budget check: if iter K just completed and K >= max, the loop is
+  // done (locked decision 2 in declarative-singing-graham.md — budget
+  // exhaustion lands on `done`, not `failing`, because grow has no
+  // convergence target to fail against). Write the sentinel so any replayed
+  // merge event also recognizes done, transition merged → done, skip the
+  // respawn dispatch.
+  if (entry.workflow === "grow") {
+    const iter = entry.grow?.iteration ?? 0;
+    const max = entry.grow?.maxIterations ?? 5;
+    if (iter >= max) {
+      setDoneSentinel(entry.worktreePath);
+      transitionState(projectName, entry.name, "done", {});
+      log.info("poller", "grow loop completed at iteration budget", {
+        worker: entry.name,
+        data: { project: projectName, iterations: iter, max },
+      });
+      return;
+    }
   }
   updateWorkerFields(projectName, entry.name, { lastAutoContinueAt: Date.now() });
   log.info("poller", "auto-continued worker after merge", {
