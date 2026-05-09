@@ -187,11 +187,24 @@ describe("buildStatusCommand", () => {
     expect(cmd.length).toBeGreaterThan(0);
   });
 
-  it("contains the gardenRunner path in the status subprocess call", () => {
+  it("reads the pre-baked status file from $sf instead of forking `garden status`", () => {
     const cmd = buildStatusCommand("/usr/local/bin/garden");
-    expect(cmd).toContain("/usr/local/bin/garden");
-    expect(cmd).toContain("GARDEN_PRETTY=1");
-    expect(cmd).toContain("status");
+    // The per-tick `garden status` shell-out was replaced by a `cat $sf` of
+    // the file written atomically by writeQuickStatus(). Each fork was a
+    // 50-150ms Node cold-start; reading the pre-baked file is constant-time.
+    expect(cmd).not.toContain("GARDEN_PRETTY=1");
+    expect(cmd).not.toMatch(/\bgarden status\b/);
+    expect(cmd).toContain('cur=$(cat "$sf"');
+  });
+
+  it("still threads gardenRunner to the diag auto-detector dispatch", () => {
+    // The diag auto-detector (snapshot capture for the duplicate-row bug)
+    // calls `${gardenRunner} dashboard _diag-alert <snap>` on detection.
+    // Phase 2 dropped the per-tick `garden status` invocation but kept the
+    // parameter — the diag plumbing (transient; remove with all other
+    // diag-* code) still needs it.
+    const cmd = buildStatusCommand("/usr/local/bin/garden");
+    expect(cmd).toContain("/usr/local/bin/garden dashboard _diag-alert");
   });
 
   it("sets up SIGUSR1 trap for event-driven refresh", () => {

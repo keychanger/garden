@@ -380,7 +380,13 @@ export function buildStatusCommand(gardenRunner: string): string {
   const caseBranches = SPINNER_FRAMES.map((f, i) => `${i}) sf_char='${f}';;`).join(" ");
   // Event-driven status pane loop:
   //   - SIGUSR1 from refreshStatusPane() interrupts the wait and re-renders.
-  //   - The render reads the pre-baked file written by writeQuickStatus().
+  //   - The render reads the pre-baked file written by writeQuickStatus()
+  //     — both the SIGUSR1 trap and the else-branch in the outer loop. No
+  //     `garden status` shell-out per tick: that fork was a 50-150ms Node
+  //     cold-start every time the spinner loop's outer cycle landed in the
+  //     non-trap branch (every ~60s of continuous animation, plus on every
+  //     wake when no signal arrived). The pre-baked file is the single
+  //     source of truth.
   //   - When a spinner is on screen, animate it locally; otherwise block.
   //   - There is no recurring re-check, no safety-net sleep, no fallback poll.
   //     Per STATUS.md invariant 6, every transition is event-triggered.
@@ -415,7 +421,10 @@ export function buildStatusCommand(gardenRunner: string): string {
     `    cur="$prev";`,
     `    sig=0;`,
     `  else`,
-    `    cur=$(GARDEN_PRETTY=1 ${gardenRunner} status 2>&1 | awk '{printf "%s\\033[K\\n", $0}');`,
+    // Read the pre-baked file directly (same source the SIGUSR1 trap uses).
+    // The full-pane \033[J cleanup on the printf below handles content shrink;
+    // no per-line \033[K postprocessing needed.
+    `    cur=$(cat "$sf" 2>/dev/null);`,
     `    if [ "$cur" != "$prev" ]; then`,
     `      printf '\\033[H%s\\033[J' "$cur";`,
     `      prev="$cur";`,
