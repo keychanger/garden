@@ -11,12 +11,14 @@ export const DONE_SKILL_FILENAME = "SKILL.md";
 // Single source of truth: the bootstrap script inlines this string before the worktree exists, and installClaudeHooks rewrites it on refresh/bounce.
 export const DONE_SKILL_CONTENT = `---
 name: done
-description: Invoke proactively at the end of any turn where you just pushed what you believe is your final commit and the operator's full original request is now complete. Writes the .garden-done sentinel so the next merge transitions straight to "done" instead of auto-continuing with a "please proceed" prompt — setting it on the same turn as the final push avoids a wasted round-trip.
+description: Use ONLY when the operator's full original request — every phase, not just the current one — is complete. When that gate is met, invoke at the end of the same turn that pushed your final commit; this saves a round-trip versus waiting for the post-merge "please proceed" prompt. Writes the .garden-done sentinel so the next merge transitions straight to "done" instead of auto-continuing. Do NOT invoke mid-phase — multi-phase work is the default, and the auto-continue prompt is the intended way to advance between phases.
 ---
 
 # Done
 
-Invoke this skill at the end of any turn where you believe you have finished every part of the operator's original request — including the same turn you push your final commit. It writes the sentinel file that tells garden's poller "this worker is done; do not auto-continue on the next merge." Setting the sentinel proactively (rather than waiting for the post-merge "please proceed" prompt to remind you) saves a round-trip.
+Invoke this skill ONLY when you have finished every part of the operator's original request — every phase, not just the current one. When that condition is met, you may invoke at the end of the same turn that pushed your final commit (saves a round-trip versus waiting for the post-merge "please proceed" prompt to remind you). It writes the sentinel file that tells garden's poller "this worker is done; do not auto-continue on the next merge."
+
+If you are mid-phase, or there is more work the operator asked for that has not landed yet, do **not** invoke this skill. The post-merge auto-continue prompt is the intended way to advance between phases — let it fire.
 
 ## What it does
 
