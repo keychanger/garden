@@ -323,19 +323,35 @@ async function growCommand(args: string[]): Promise<void> {
     throw new Error(`Worker '${workerName}' not found in registry.`);
   }
 
-  // Re-conversion is rejected — operators amend an in-flight grow loop's
-  // goal by editing the file directly. Trellis is not convertible to grow
-  // (different anchoring semantics).
-  const currentWorkflow = entry.workflow ?? "default";
-  if (currentWorkflow !== "default") {
-    throw new Error(
-      `Worker '${workerName}' is already on the '${currentWorkflow}' workflow. `
-      + `Re-conversion is not supported; edit .garden/grow-goal.md directly to amend the goal mid-loop.`,
-    );
-  }
   if (!entry.worktreePath) {
     throw new Error(
       `Worker '${workerName}' has no worktreePath in the registry. Cannot write the goal file.`,
+    );
+  }
+
+  // Re-conversion is rejected. The right amend path differs by current
+  // workflow: grow workers amend by editing the goal file directly (next
+  // iteration re-reads it); trellis vines amend via `garden trellis amend`
+  // against the trellis doc. Telling a trellis user to edit grow-goal.md
+  // would point them at a file that doesn't exist for their workflow.
+  const currentWorkflow = entry.workflow ?? "default";
+  if (currentWorkflow === "grow") {
+    throw new Error(
+      `Worker '${workerName}' is already on the 'grow' workflow. `
+      + `Re-conversion is not supported; edit ${path.join(entry.worktreePath, ".garden", "grow-goal.md")} directly to amend the goal — the next iteration's continue prompt re-reads it at dispatch time.`,
+    );
+  }
+  if (currentWorkflow === "trellis") {
+    throw new Error(
+      `Worker '${workerName}' is a trellis vine — trellis vines are not convertible to grow. `
+      + `Amend the trellis with \`garden trellis amend\`, or kill the vine and start fresh: `
+      + `\`garden workers kill ${workerName}\` then \`garden workers new ... --workflow grow\`.`,
+    );
+  }
+  if (currentWorkflow !== "default") {
+    throw new Error(
+      `Worker '${workerName}' is on workflow '${currentWorkflow}', not 'default'. `
+      + `Conversion to grow is only supported from the default workflow.`,
     );
   }
 

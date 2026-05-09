@@ -1,4 +1,5 @@
 // Dashboard creation: initial setup, pane layout, worker resumption.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -127,6 +128,53 @@ export function installClaudeHooks(targetDir: string, project: ProjectConfig): v
   // tampering), the rename replaces it with the read-only version.
   atomicWriteFile(settingsPath, json, { mode: 0o444 });
   installClaudeSkills(targetDir);
+  ensureWorktreeExcludes(targetDir);
+}
+
+// Heal `.git/info/exclude` for existing worktrees. The bootstrap script
+// writes these patterns at worker-spawn time (see further down this file),
+// but workers spawned before a new pattern was added need a refresh path.
+// installClaudeHooks runs on every dashboard refresh + bounce + post-merge
+// auto-continue, so worktrees from earlier garden versions heal on their
+// next cycle instead of carrying stale excludes forever.
+//
+// The exclude file lives at the git common dir (shared across worktrees);
+// a missing entry is added once and persists.
+function ensureWorktreeExcludes(targetDir: string): void {
+  // The patterns must stay in sync with the bootstrap script's `for pattern`
+  // loop further down in this file. .claude/ + .garden-hooks/ shipped with
+  // the original worker; .garden/ was added when the grow workflow's goal +
+  // log files needed to be hidden from git status.
+  const patterns = [".claude/", ".garden-hooks/", ".garden/"];
+  let commonDir: string;
+  try {
+    commonDir = execFileSync("git", ["-C", targetDir, "rev-parse", "--git-common-dir"], {
+      encoding: "utf-8",
+    }).trim();
+  } catch {
+    return; // Worktree may not exist yet on first hook installation.
+  }
+  // commonDir may be relative when targetDir is a worktree — resolve it
+  // against targetDir so the join below points at the right info/exclude.
+  const resolvedCommonDir = path.isAbsolute(commonDir)
+    ? commonDir
+    : path.resolve(targetDir, commonDir);
+  const excludeFile = path.join(resolvedCommonDir, "info", "exclude");
+  let current: string;
+  try {
+    current = fs.readFileSync(excludeFile, "utf-8");
+  } catch {
+    return; // No exclude file yet (rare; bootstrap will create one).
+  }
+  const lines = new Set(current.split("\n").map(l => l.trim()));
+  const missing = patterns.filter(p => !lines.has(p));
+  if (missing.length === 0) return;
+  const tail = (current.endsWith("\n") ? "" : "\n") + missing.join("\n") + "\n";
+  try {
+    fs.appendFileSync(excludeFile, tail);
+  } catch {
+    /* best effort — exclude is informational, not load-bearing */
+  }
 }
 
 export function resizeTerminal(): void {

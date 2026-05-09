@@ -23,6 +23,22 @@ describe("buildSandboxConfig", () => {
     expect(cfg.filesystem.allowWrite).toContain("/tmp");
   });
 
+  // The convert path's primary DX is `/grow N` typed inside a worker pane,
+  // which runs `garden workers grow $GARDEN_WORKER ...`. That CLI mutates
+  // the registry at ~/.garden/sessions/dashboard.registry.json via the
+  // withFileLock + atomicWriteFile pattern (lock file + temp staging file
+  // in the same directory). Without the sessions dir in allowWrite, every
+  // convert invocation hits an EPERM and requires a sandbox-bypass
+  // approval — friction the slash skill UX cannot afford.
+  it("allows writes to ~/.garden/sessions so the convert CLI works without bypass", () => {
+    const cfg = buildSandboxConfig({
+      worktreePath: "/wt/alpha",
+      project: { path: "/repo" },
+      remoteHost: null,
+    });
+    expect(cfg.filesystem.allowWrite).toContain("~/.garden/sessions");
+  });
+
   it("includes Anthropic, github, and npm in default domains", () => {
     const cfg = buildSandboxConfig({
       worktreePath: "/wt/alpha",

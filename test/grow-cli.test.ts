@@ -426,12 +426,19 @@ describe("garden workers grow (convert)", () => {
     });
 
     const { workers } = await importWorkersCmd();
+    // Re-conversion of a grow worker points the operator at the goal
+    // file for amends, not at re-running the CLI. The error message must
+    // include the absolute path so the operator can `vim` it directly
+    // without piecing the path together themselves.
     await expect(
       workers(["grow", "already-grown", "--seed", "new"]),
     ).rejects.toThrow(/already on the 'grow' workflow/);
+    await expect(
+      workers(["grow", "already-grown", "--seed", "new"]),
+    ).rejects.toThrow(/grow-goal\.md.*amend/);
   });
 
-  it("rejects conversion of a trellis worker", async () => {
+  it("rejects conversion of a trellis worker with workflow-specific guidance", async () => {
     const projectDir = await setupProject("proj");
     const wtPath = path.join(projectDir, "..", "wt5");
     fs.mkdirSync(wtPath, { recursive: true });
@@ -444,9 +451,19 @@ describe("garden workers grow (convert)", () => {
     });
 
     const { workers } = await importWorkersCmd();
+    // Trellis vines have no grow-goal.md — telling the operator to edit
+    // it would point them at a non-existent file. The trellis-specific
+    // path is `garden trellis amend` against the trellis doc. The error
+    // must say so.
     await expect(
       workers(["grow", "vine", "--seed", "x"]),
-    ).rejects.toThrow(/already on the 'trellis' workflow/);
+    ).rejects.toThrow(/trellis vine/);
+    await expect(
+      workers(["grow", "vine", "--seed", "x"]),
+    ).rejects.toThrow(/garden trellis amend/);
+    // Must NOT mention grow-goal.md — that's the wrong path for trellis.
+    const err = await workers(["grow", "vine", "--seed", "x"]).catch(e => e as Error);
+    expect(err.message).not.toContain("grow-goal.md");
   });
 
   it("rejects when --seed and --seed-file are both passed", async () => {

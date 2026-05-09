@@ -6,6 +6,7 @@ vi.mock("node:fs", () => ({
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
     readFileSync: vi.fn(() => "{}"),
+    appendFileSync: vi.fn(),
     renameSync: vi.fn(),
     readdirSync: vi.fn(() => []),
     statSync: vi.fn(() => ({ size: 0 })),
@@ -13,6 +14,10 @@ vi.mock("node:fs", () => ({
     rmSync: vi.fn(),
     constants: { O_CREAT: 0, O_EXCL: 0, O_WRONLY: 0 },
   },
+}));
+
+vi.mock("node:child_process", () => ({
+  execFileSync: vi.fn(() => "/repo/myproject/.git\n"),
 }));
 
 vi.mock("../src/session.js", () => ({
@@ -243,6 +248,64 @@ describe("installClaudeHooks", () => {
         "Bash(wc:*)",
       ],
     });
+  });
+
+  // Worktrees spawned before a new exclude pattern was added (e.g. .garden/
+  // when the grow workflow shipped) carry stale info/exclude — the bootstrap
+  // script's exclude block runs once at spawn, never again. installClaudeHooks
+  // runs on every refresh + bounce + post-merge auto-continue, so it's the
+  // hook that heals existing workers without requiring a re-bootstrap.
+  it("appends missing exclude patterns to .git/info/exclude on existing worktrees", async () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    const childProcess = await import("node:child_process");
+    vi.mocked(childProcess.execFileSync).mockReturnValueOnce(
+      "/repo/myproject/.git\n" as unknown as Buffer,
+    );
+    // exclude file currently has only the original two patterns; the grow
+    // pattern is missing.
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(".claude/\n.garden-hooks/\n");
+
+    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
+
+    const appendCall = vi.mocked(fs.appendFileSync).mock.calls.find(
+      c => String(c[0]).endsWith("info/exclude"),
+    );
+    expect(appendCall).toBeDefined();
+    expect(String(appendCall![1])).toContain(".garden/");
+    // Patterns already present must NOT be re-appended.
+    expect(String(appendCall![1])).not.toContain(".claude/");
+    expect(String(appendCall![1])).not.toContain(".garden-hooks/");
+  });
+
+  it("does not touch info/exclude when all patterns are already present", async () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    const childProcess = await import("node:child_process");
+    vi.mocked(childProcess.execFileSync).mockReturnValueOnce(
+      "/repo/myproject/.git\n" as unknown as Buffer,
+    );
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(
+      ".claude/\n.garden-hooks/\n.garden/\n",
+    );
+
+    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
+
+    const appendCalls = vi.mocked(fs.appendFileSync).mock.calls.filter(
+      c => String(c[0]).endsWith("info/exclude"),
+    );
+    expect(appendCalls).toHaveLength(0);
+  });
+
+  it("silently skips when the exclude file or git common dir is unreachable (best-effort)", async () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    const childProcess = await import("node:child_process");
+    // git rev-parse fails (worktree may not exist yet on first install).
+    vi.mocked(childProcess.execFileSync).mockImplementationOnce(() => {
+      throw new Error("not a git repo");
+    });
+
+    expect(() =>
+      installClaudeHooks("/repo/myproject", { path: "/repo/myproject" }),
+    ).not.toThrow();
   });
 });
 
