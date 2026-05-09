@@ -29,12 +29,47 @@ import {
   wrapDetail,
   parseFilterExpr,
   applyStickyDefaults,
+  formatLogsPaneLabel,
   type LogEntry,
   type Filters,
 } from "../src/commands/logs.js";
+import fs from "node:fs";
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe("formatLogsPaneLabel", () => {
+  it("returns plain 'logs' when no filter is set on disk (default arg)", () => {
+    vi.mocked(fs.readFileSync).mockImplementationOnce(() => {
+      throw new Error("ENOENT");
+    });
+    expect(formatLogsPaneLabel()).toBe("logs");
+  });
+
+  it("returns plain 'logs' when explicitly passed null or empty string", () => {
+    expect(formatLogsPaneLabel(null)).toBe("logs");
+    expect(formatLogsPaneLabel("")).toBe("logs");
+  });
+
+  it("appends the filter expression after a dim style separator", () => {
+    expect(formatLogsPaneLabel("worker:bold-ash")).toBe(
+      "logs #[fg=colour244]· filter:#[default] worker:bold-ash",
+    );
+  });
+
+  it("doubles literal '#' so tmux does not interpret it as a format directive", () => {
+    // Without doubling, tmux would consume the '#' as the start of a directive
+    // and the label would render mangled.
+    expect(formatLogsPaneLabel("issue#42")).toContain("issue##42");
+  });
+
+  it("reads the on-disk sticky expression when called with no argument", () => {
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(
+      JSON.stringify({ expr: "src:poller" }),
+    );
+    expect(formatLogsPaneLabel()).toContain("src:poller");
+  });
 });
 
 describe("parseArgs", () => {
