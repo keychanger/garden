@@ -303,7 +303,7 @@ exports[`prompt output snapshots (workflow-refactor regression net) > buildRevie
 This diff modifies one or more **specification** files — documents that
 are the *source of truth* for their respective systems:
 
-- \`src/dashboard/STATUS.md\`
+- \`docs/STATUS.md\`
 
 When reviewing changes to a specification:
 

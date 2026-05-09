@@ -651,7 +651,7 @@ New files:
 - `src/dashboard/plan-validate.ts` (~50 lines) — pre-execution
   safeguards (50-bead cap + mandatory-label check)
 - `src/commands/plan-review.ts` (~50 lines) — CLI shim for orchestrator-driven reviewer launch
-- `src/dashboard/PLAN-WORKFLOW.md` (this file)
+- `docs/PLAN-WORKFLOW.md` (this file)
 
 Modified files:
 

@@ -280,7 +280,7 @@ Each worker has two independent status axes:
 
 The display combines both axes: lifecycle state takes priority when present, otherwise the process state is shown. A worker that is "reviewing" shows the reviewing bullseye regardless of what Claude is doing. Only workers in the "working" display state get the animated braille spinner.
 
-The full specification for status tracking and display lives in `src/dashboard/STATUS.md`. The registry is the single source of truth: Claude Code hooks (`SessionStart`, `UserPromptSubmit`, `Stop`) write `claudeStatus`; the poller writes `prState`; the tmux `pane-died` hook writes `claudeStatus="exited"`. There is no pgrep, no marker file, no fallback poll. Every transition is event-triggered.
+The full specification for status tracking and display lives in `docs/STATUS.md`. The registry is the single source of truth: Claude Code hooks (`SessionStart`, `UserPromptSubmit`, `Stop`) write `claudeStatus`; the poller writes `prState`; the tmux `pane-died` hook writes `claudeStatus="exited"`. There is no pgrep, no marker file, no fallback poll. Every transition is event-triggered.
 
 ## Commands
 

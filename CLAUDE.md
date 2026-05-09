@@ -6,9 +6,10 @@ Garden is a CLI orchestrator for managing interactive Claude Code sessions acros
 
 - `DESIGN.md` — full architecture
 - `rules.md` — coding rules loaded into every Claude session (commit/test/scope discipline)
-- `src/dashboard/STATUS.md` — worker status state machine (spec)
-- `WORKFLOWS.md` — workflow registry design, "how to add a new workflow", and trellis workflow spec
-- `src/TRACKS.md` — multi-track / promotion pipeline (design target, no code yet)
+- `WORKFLOWS.md` — workflow registry design, "how to add a new workflow", and trellis/grow workflow specs
+- `docs/STATUS.md` — worker status state machine (spec)
+- `docs/TRACKS.md` — multi-track / promotion pipeline (design target, no code yet)
+- `docs/` — additional design docs and behavioral specs; see `docs/README.md` for the index
 
 ## Build and run
 
@@ -42,7 +43,6 @@ npm test               # vitest unit + integration; tsc --noEmit
   - `usage.ts` + `usage-poller.ts` — Claude quota meter
   - `sandbox.ts`, `credentials.ts`, `claude-env.ts` — Claude profile / Keychain / sandbox config
   - `alerts.ts`, `log.ts`, `git.ts`, `names.ts`, `runner.ts`, `plot-status.ts` — utilities
-  - `STATUS.md`, `TRELLIS-PLAN.md` — specs / plans (see top of file). The trellis workflow spec lives in `WORKFLOWS.md` § "Trellis workflow".
 
 ## CLI surface
 

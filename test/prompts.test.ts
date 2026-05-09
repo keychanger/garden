@@ -165,8 +165,8 @@ describe("findSpecFiles", () => {
     vi.mocked(fs.readFileSync).mockReturnValue(
       "# Spec\n\nIf the code disagrees, the code is wrong.",
     );
-    const result = findSpecFiles("/wt", ["src/dashboard/STATUS.md"]);
-    expect(result).toEqual(["src/dashboard/STATUS.md"]);
+    const result = findSpecFiles("/wt", ["docs/STATUS.md"]);
+    expect(result).toEqual(["docs/STATUS.md"]);
   });
 
   it("skips non-markdown files", () => {
@@ -249,7 +249,7 @@ describe("prompt output snapshots (workflow-refactor regression net)", () => {
   });
 
   it("buildReviewPrompt — with spec file in changed set", () => {
-    vi.mocked(getChangedFiles).mockReturnValue(["src/dashboard/STATUS.md"]);
+    vi.mocked(getChangedFiles).mockReturnValue(["docs/STATUS.md"]);
     vi.mocked(fs.readFileSync).mockImplementation(((p: string) => {
       const path = String(p);
       if (path.endsWith("STATUS.md")) return "# Spec\n\nIf the code disagrees, the code is wrong.";

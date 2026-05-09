@@ -1993,7 +1993,7 @@ describe("poll — reviewer prompt", () => {
 
   it("injects the spec warning when the diff modifies a spec file", () => {
     setupForReview();
-    vi.mocked(getChangedFiles).mockReturnValue(["src/dashboard/STATUS.md"]);
+    vi.mocked(getChangedFiles).mockReturnValue(["docs/STATUS.md"]);
     vi.mocked(fs.readFileSync).mockImplementation(((p: string) => {
       if (String(p).endsWith("STATUS.md")) {
         return "# Spec\n\nIf the code disagrees with this document, the code is wrong.";
@@ -2009,7 +2009,7 @@ describe("poll — reviewer prompt", () => {
     );
     const content = String(promptCall![1]);
     expect(content).toContain("Specification files in this diff");
-    expect(content).toContain("src/dashboard/STATUS.md");
+    expect(content).toContain("docs/STATUS.md");
     expect(content).toContain("Do not revert spec changes to match the current implementation");
   });
 
