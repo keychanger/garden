@@ -25,9 +25,9 @@ describe("setupKeybindings", () => {
     // When that happened in the copy-mode bind-key call, the second command
     // (`run-shell <guarded>`) fired immediately at setup time — once per
     // keybinding per copy-mode table — dispatching every dashboard hotkey
-    // (including _trellis-picker) every time setupKeybindings ran. The
-    // user-visible bug was a trellis picker popup and chaotic pane state
-    // after each garden post-merge rebuild.
+    // (including _workflow-picker) every time setupKeybindings ran. The
+    // user-visible bug was a picker popup and chaotic pane state after
+    // each garden post-merge rebuild.
     setupKeybindings("/path/to/garden");
     for (const call of execFileSyncMock.mock.calls) {
       const argv = call[1] as string[];
@@ -54,11 +54,15 @@ describe("setupKeybindings", () => {
       const body = argv[4];
       expect(body).toContain("send-keys -X cancel");
       expect(body).toContain("run-shell");
-      expect(body).toContain("_trellis-picker");
+      // M-N now opens the workflow picker (default / trellis / grow).
+      // The trellis picker is reachable via the (t) row, not the top-level
+      // hotkey. See trellis-picker.ts buildWorkflowPickerPlan.
+      expect(body).toContain("_workflow-picker");
+      expect(body).not.toContain("_trellis-picker");
     }
   });
 
-  it("registers the trellis picker on the root M-N table (no copy-mode side-firing)", () => {
+  it("registers the workflow picker on the root M-N table (no copy-mode side-firing)", () => {
     setupKeybindings("/path/to/garden");
     const rootBind = execFileSyncMock.mock.calls.find((call) => {
       const argv = call[1] as string[];
@@ -70,6 +74,7 @@ describe("setupKeybindings", () => {
     expect(rootBind).toBeDefined();
     const argv = rootBind![1] as string[];
     expect(argv).toContain("run-shell");
-    expect(argv.join(" ")).toContain("_trellis-picker");
+    expect(argv.join(" ")).toContain("_workflow-picker");
+    expect(argv.join(" ")).not.toContain("_trellis-picker");
   });
 });

@@ -19,6 +19,7 @@ import { growAutoContinueAfterMerge } from "./grow-continue.js";
 import { trellisAutoContinueAfterMerge } from "./trellis-continue.js";
 import {
   runTrellisPicker, plantVineFromPicker, spawnTrellisAuthor, runReviveSubmenu,
+  runWorkflowPicker, plantGrowFromPicker,
 } from "./trellis-picker.js";
 import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, cyclePane, cyclePlot } from "./navigate.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
@@ -78,6 +79,18 @@ export async function dashboard(args: string[]): Promise<void> {
   }
   if (sub === "_trellis-picker") {
     runTrellisPicker(args[1]);
+    return;
+  }
+  if (sub === "_workflow-picker") {
+    runWorkflowPicker(args[1]);
+    return;
+  }
+  if (sub === "_grow-plant") {
+    // The seed (args[2]) may contain spaces if it was substituted from
+    // tmux %% with a multi-word user input. tmux command-prompt %% is a
+    // single-token substitution by default, but operators can pass a
+    // pre-quoted seed via the CLI subcommand directly.
+    if (args[1]) plantGrowFromPicker(args[1], args.slice(2).join(" "));
     return;
   }
   if (sub === "_trellis-plant") {

@@ -15,6 +15,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
 import { tryGetProject, SESSIONS_DIR } from "../config.js";
+import { buildGrowIteration1Seed } from "./grow-continue.js";
 import { log } from "./log.js";
 import { newWorker } from "./workers.js";
 import { resolveGardenRunner } from "./runner.js";
@@ -359,4 +360,157 @@ function buildIteration1Seed(
     "",
     "You may not edit the trellis. If it is wrong or impossible, push commits that reflect what it says — the reviewer will surface the contradiction as `FLAGGED` and the operator will decide whether to amend.",
   ].join("\n");
+}
+
+// ============================================================================
+// Workflow picker (⌥⇧N hotkey)
+// ============================================================================
+//
+// Top-level menu choosing among the registered workflows. Trellis was
+// reachable from ⌥⇧N when it was the only configurable workflow; with grow
+// shipping alongside it, ⌥⇧N now opens this 3-row menu (default / trellis /
+// grow). The trellis row dispatches the existing trellis picker as a
+// submenu; the default row degenerates to ⌥n; the grow row prompts via
+// tmux command-prompt for a single-line task description and dispatches
+// `_grow-plant`.
+//
+// The grow command-prompt input is single-line and shell-substituted via
+// tmux's `%%` placeholder, which means seeds containing single quotes or
+// other shell metacharacters can break the dispatch. Operators with
+// multi-line or special-character seeds use the CLI:
+// `garden workers new --workflow grow --seed-file <path>`.
+
+export interface WorkflowPickerPlan {
+  title: string;
+  items: MenuItem[];
+}
+
+// Build the 3-row workflow picker plan for a project. Pure: no tmux I/O,
+// no fs, no registry. Tests drive this directly.
+export function buildWorkflowPickerPlan(
+  projectName: string,
+  runner: string,
+): WorkflowPickerPlan {
+  return {
+    title: `New worker on ${projectName}`,
+    items: [
+      {
+        label: "(d) default — fast worker (same as ⌥n)",
+        key: "d",
+        command: shellCmdNewWorker(runner),
+      },
+      {
+        label: "(t) trellis — pick a frozen design doc",
+        key: "t",
+        command: shellCmdTrellisPicker(runner, projectName),
+      },
+      {
+        label: "(g) grow — bounded iteration loop",
+        key: "g",
+        command: shellCmdGrowPlant(runner, projectName),
+      },
+    ],
+  };
+}
+
+// Spawned by the ⌥⇧N hotkey. Resolves the active project, builds the
+// 3-row plan, and drives tmux display-menu.
+export function runWorkflowPicker(explicitProject?: string): void {
+  let projectName = explicitProject;
+  if (!projectName) {
+    const state = readDashState();
+    if (!state.activeProject) {
+      tmuxDisplay("No active project. Use ⌥1-⌥9 to select one first.");
+      return;
+    }
+    projectName = state.activeProject;
+  }
+  const project = tryGetProject(projectName);
+  if (!project) {
+    tmuxDisplay(`Unknown project '${projectName}'.`);
+    return;
+  }
+
+  const runner = resolveGardenRunner();
+  const plan = buildWorkflowPickerPlan(projectName, runner);
+
+  const menuArgs: string[] = [
+    "display-menu",
+    "-O",
+    "-T", plan.title,
+    "-x", "C",
+    "-y", "C",
+  ];
+  for (const item of plan.items) {
+    menuArgs.push(item.label, item.key, item.command);
+  }
+  try {
+    execFileSync("tmux", menuArgs, { stdio: "ignore" });
+  } catch (err) {
+    log.warn("workflow-picker", "display-menu failed", {
+      data: { error: String(err), project: projectName },
+    });
+  }
+}
+
+// Invoked by `_grow-plant <project> <seed>` (the grow row of the workflow
+// picker). Validates project + non-empty seed, resolves max iterations from
+// project config (or default 5), writes the iter-1 seed file, and spawns
+// the grow worker via newWorker. Mirrors plantVineFromPicker's shape.
+export function plantGrowFromPicker(projectName: string, seed: string): void {
+  const project = tryGetProject(projectName);
+  if (!project) {
+    tmuxDisplay(`Unknown project '${projectName}'.`);
+    return;
+  }
+  const trimmed = seed.trim();
+  if (!trimmed) {
+    tmuxDisplay("Grow plant aborted: task description must be non-empty.");
+    return;
+  }
+
+  const maxIter = project.maxGrowIterations ?? 5;
+
+  const seedsDir = path.join(SESSIONS_DIR, "seeds");
+  fs.mkdirSync(seedsDir, { recursive: true });
+  const seedFile = path.join(
+    seedsDir,
+    `seed-grow-${projectName}-${Date.now()}.txt`,
+  );
+  fs.writeFileSync(seedFile, buildGrowIteration1Seed(trimmed, maxIter));
+
+  const newName = newWorker({
+    projectName,
+    workflow: "grow",
+    grow: { seed: trimmed, maxIterations: maxIter },
+    seedMessageFile: seedFile,
+  });
+  if (!newName) {
+    try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
+    tmuxDisplay(
+      `Failed to plant grow worker on '${projectName}'. Is the dashboard running?`,
+    );
+    return;
+  }
+  log.info("workflow-picker", "planted grow worker", {
+    worker: newName, data: { project: projectName, maxIter },
+  });
+}
+
+// --- Workflow-picker shell command builders ---------------------------------
+
+function shellCmdNewWorker(runner: string): string {
+  return `${runner} dashboard _new-worker`;
+}
+
+function shellCmdTrellisPicker(runner: string, project: string): string {
+  return `${runner} dashboard _trellis-picker ${shellEscape(project)}`;
+}
+
+function shellCmdGrowPlant(runner: string, project: string): string {
+  // tmux command-prompt with %% substitution. The user's input replaces %%
+  // verbatim — single quotes / shell metacharacters in the seed will break
+  // the dispatch. Operators with complex seeds use the CLI plant path.
+  const inner = `${runner} dashboard _grow-plant ${shellEscape(project)} %%`;
+  return `command-prompt -p "Task description: " "run-shell ${shellEscape(inner)}"`;
 }

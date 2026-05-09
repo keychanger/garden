@@ -18,7 +18,7 @@ export function setupKeybindings(gardenRunner: string): void {
 
   // Worker management
   bindMeta("n", `${gr} dashboard _new-worker`);
-  bindMeta("N", `${gr} dashboard _trellis-picker`);
+  bindMeta("N", `${gr} dashboard _workflow-picker`);
   bindMeta("w", `${gr} dashboard _focus-worker`);
   bindMeta("x", `${gr} dashboard _kill-pane`);
   bindMeta("b", `${gr} dashboard _bounce`);
