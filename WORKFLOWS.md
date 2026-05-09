@@ -2588,6 +2588,22 @@ of a worker already on grow or trellis is rejected — operators amend
 an in-flight grow loop's goal by editing `.garden/grow-goal.md`
 directly.
 
+Iter-1 launch differs by branch state at convert time:
+
+- **Worker has unmerged commits**: status quo. The upcoming merge of
+  the worker's pending push fires `growAutoContinueAfterMerge`, which
+  dispatches iter-1 via the post-merge auto-continue path (cold
+  respawn + iter-K continue prompt with iteration=1).
+- **Branch fully merged into base**: the convert command itself
+  fast-forwards the worktree to `origin/<base>` (covers sibling
+  merges that landed since this branch did) and dispatches iter-1
+  via `dispatchDelayedSeed` with the iter-1 seed prompt — same
+  machinery `workers new --workflow grow` uses at plant time. Without
+  this, the worker would sit idle on `workflow=grow,iteration=0`
+  forever (no future merge means no auto-continue). The convert
+  refuses up front if the worktree is dirty, so a fixable error
+  never leaves the worker half-converted.
+
 ### Mid-loop goal amendment
 
 The goal file (`<worktree>/.garden/grow-goal.md`) is operator-editable.
