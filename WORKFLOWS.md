@@ -1828,10 +1828,13 @@ lessons:       <last 3 lines from trellis-lessons.md>
 Two paths: a hotkey-driven picker (the daily driver) and a flag-driven
 CLI invocation (for scripts and automation).
 
-**Hotkey: `⌥⇧n`** (sibling of `⌥n` for default workers). Opens an
-fzf-style picker overlaying the active pane, populated from the
-project's `trellisDir` and **filtered to non-retired trellises** (see
-"Retirement"). Each row shows the trellis name and a one-line summary
+**Hotkey: `⌥⇧n`** (sibling of `⌥n` for default workers) opens the
+**workflow picker**; selecting the `(t)` row opens the trellis picker
+described here. (When trellis was the only workflow option, `⌥⇧n` was
+bound directly to this picker; the workflow picker was added when grow
+shipped alongside.) The trellis picker overlays the active pane,
+populated from the project's `trellisDir` and **filtered to non-retired
+trellises** (see "Retirement"). Each row shows the trellis name and a one-line summary
 so similar names disambiguate at a glance. Summary resolution order:
 
 1. The first non-blank line under an `## Intent` heading, if present.
@@ -1854,8 +1857,8 @@ retired ones are not counted):
 | Two or more      | Standard picker. Arrow-key navigation, type-to-filter, enter to plant.                                             |
 
 The picker doubles as discovery: an operator who forgets what
-trellises exist in a project can hit `⌥⇧n` and browse without leaving
-the dashboard. There is no need to first run `garden trellis list`.
+trellises exist in a project can hit `⌥⇧n` and pick `(t)` to browse
+without leaving the dashboard. There is no need to first run `garden trellis list`.
 
 **CLI: `garden workers new <project> --workflow trellis --trellis <name> [--model opus] [--max-iterations N]`.**
 Same machinery as the hotkey, just explicit. Required for scripts,

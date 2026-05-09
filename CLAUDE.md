@@ -53,8 +53,8 @@ Use `garden <cmd> --help` for flag-level detail. High-level groupings:
 - **Claude profiles**: `claude-profile add|login|list|remove`. Per-project `claudeProfile` config injects `CLAUDE_CONFIG_DIR` for that project's worker / reviewer / resolver. macOS Keychain footgun: every Claude `/login` overwrites one shared entry, so always re-auth via `garden login` (it strips `CLAUDE_CONFIG_DIR` and captures Keychain → file for profiles).
 - **Auth**: `login [profile]`, `auth status` (presence/expiry/Keychain displacement diagnostic).
 - **Workers**: `whoami`, `kick`, `bounce`, `pause`, `resume`, `health [--fix]`, `logs [-w <worker>]`. Workers can self-identify via `$GARDEN_WORKER` / `$GARDEN_BRANCH` / `$GARDEN_BASE_BRANCH` / `$GARDEN_PROJECT`.
-- **Trellis**: `trellis list|show|new|status|amend|resume|retire|revive`; plant via `workers new <project> --workflow trellis --trellis <name> [--model opus|sonnet]` or hotkey `⌥⇧N`. Spec: `WORKFLOWS.md` § "Trellis workflow".
-- **Grow**: bounded hardening loop with no design doc; plant via `workers new <project> --workflow grow --seed <text>|--seed-file <path> [--max-iterations N]`. Default budget 5 (overridable per-project via `maxGrowIterations` config or per-plant via `--max-iterations`). Runs on the account-default model.
+- **Trellis**: `trellis list|show|new|status|amend|resume|retire|revive`; plant via `workers new <project> --workflow trellis --trellis <name> [--model opus|sonnet]` or the `⌥⇧N` workflow picker (`(t)` row). Spec: `WORKFLOWS.md` § "Trellis workflow".
+- **Grow**: bounded hardening loop with no design doc; plant via `workers new <project> --workflow grow --seed <text>|--seed-file <path> [--max-iterations N]` or the `⌥⇧N` workflow picker (`(g)` row, prompts for a single-line seed; the CLI is required for multi-line / metacharacter-bearing seeds). Default budget 5 (overridable per-project via `maxGrowIterations` config or per-plant via `--max-iterations`). Runs on the account-default model.
 - **Auto-continue gate**: `auto [on|off|status|threshold N|resume-on-reset on|off]` — global gate in `~/.garden/config.yml` under `autoContinue`.
 
 ## Workers (worktrees)
