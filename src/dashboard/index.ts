@@ -231,7 +231,7 @@ Hotkeys (⌥ = Option/Alt, no prefix needed):
   ⌥r           Focus root shell
   ⌥l           Focus logs
   ⌥/           Edit sticky logs filter (key:value or fuzzy; empty clears)
-  ⌥?           Clear sticky logs filter immediately
+  ⌥.           Clear sticky logs filter immediately
 
 Setup:
   iTerm2: Profiles → Keys → Left Option key → "Esc+"
