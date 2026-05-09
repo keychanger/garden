@@ -27,6 +27,7 @@ and the original may be deleted or kept as historical record.
 | [TRACKS.md](TRACKS.md) | spec (design target) | Multi-track projects and the promotion pipeline. No code yet. |
 | [TRELLIS-PLAN.md](TRELLIS-PLAN.md) | design | Phased implementation plan for the trellis workflow. The trellis spec itself lives in `WORKFLOWS.md` § "Trellis workflow"; this doc is the plan that produced it. |
 | [PLAN-WORKFLOW.md](PLAN-WORKFLOW.md) | design | The plan workflow: convert human-described features into a beads graph for autonomous execution. Folds into `WORKFLOWS.md` § "Plan workflow" once Phase 1 ships. |
+| [GASTOWN-LESSONS.md](GASTOWN-LESSONS.md) | analysis | External-codebase analysis of `gastownhall/gastown` with a phased roadmap of borrowed primitives. Not a committed plan. |
 
 ## Adding a new doc
 
