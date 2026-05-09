@@ -59,7 +59,7 @@ Use `garden <cmd> --help` for flag-level detail. High-level groupings:
 
 ## Workers (worktrees)
 
-Every worker runs in its own git worktree at `~/.garden/worktrees/<project>/<worker>/`, on a branch named after the worker, branched from `origin/<base>` (fetched first). Each project has a dedicated **poller** in a hidden tmux window that drives review/merge using local git — no GitHub PRs. Reviewers and resolvers run headless in hidden `_<project>-review-<worker>` / `_<project>-resolve-<worker>` windows. Multiple reviews run in parallel within a project; the merge queue is serial. Full state machine: `STATUS.md`.
+Every worker runs in its own git worktree at `~/.garden/worktrees/<project>/<worker>/`, on a branch named after the worker, branched from `origin/<base>` (fetched first). Each project has a dedicated **poller** in a hidden tmux window that drives review/merge using local git — no GitHub PRs. Reviewers and resolvers run headless in hidden `_<project>-review-<worker>` / `_<project>-resolve-<worker>` windows. Multiple reviews run in parallel within a project; the merge queue is serial. Full state machine: `docs/STATUS.md`.
 
 Worker prompt is `rules.md` (global) + `<project>/.garden/rules.md` (project) + per-worker preamble built by `buildWorktreeRules` in `src/rules.ts`. The preamble names the project's configured `checks` command (from `garden config <project> checks`) so the worker, the reviewer, and CI all gate on the same string — keep that command aligned with `.github/workflows/test.yml` or you reintroduce the asymmetry that caused workers to push broken state and CI to email "Run failed" on every commit. Worker panes start in `permissions.defaultMode: "auto"` inside an OS sandbox (Seatbelt/bubblewrap) configured by `sandbox.ts`. Workers commit and push autonomously — no operator confirmation; the poller handles review and merge.
 
@@ -70,7 +70,7 @@ Permanent tmux layout — content is moved between visible slots and **hidden un
 - **Left column**: `garden` title pane (Claude quota meters), `status` pane (per-project worker list), and `growhouse` pane (cycles `⌥g` growhouse / `⌥r` root / `⌥l` logs). Title and status panes refresh via SIGUSR1, replaying pre-baked files written atomically.
 - **Logs sticky filter**: `⌥/` opens `tmux command-prompt` (pre-filled with the current filter); the typed expression persists in `~/.garden/sessions/logs.filter.json` and is honored by both the dashboard logs pane and bare `garden logs` until cleared. Syntax: `key:value` for `worker`/`src`/`level`/`project` plus bare fuzzy tokens. CLI escape hatch for metacharacter-bearing exprs: `garden logs filter <expr>` / `--clear`.
 - **State of record**: registry (`dashboard.registry.json`) for workers, state file (`dashboard.state.json`) for UI runtime, alerts file for operator-visible issues. Tmux is the source of truth for pane existence; `validate.ts` reconciles on attach.
-- **Status**: hooks write `claudeStatus`, the poller writes `prState`, `pane-died` writes `claudeStatus="exited"`. Event-driven; no fallback poll. Spec: `STATUS.md`.
+- **Status**: hooks write `claudeStatus`, the poller writes `prState`, `pane-died` writes `claudeStatus="exited"`. Event-driven; no fallback poll. Spec: `docs/STATUS.md`.
 - **Auto-continue**: `continue.ts` re-prompts after interrupt (mid-turn dashboard kill / tmux crash / bounce-while-working) and after a clean merge (with the list of files changed during review). Worker opts out by writing `.garden-done` in its worktree root before ending its turn. `garden pause` / `resume` toggle the sentinel; `UserPromptSubmit` clears it.
 - **Post-merge**: fast-forward the local base checkout, run optional `postMerge`, then notify live siblings whose files overlap.
 
@@ -99,4 +99,4 @@ See `WORKFLOWS.md`. Short version: define a `WorkflowDefinition` in `src/dashboa
 
 ## Keeping docs current
 
-If your task changes commands, architecture, file layout, or conventions, update `DESIGN.md` and this file. Specs (STATUS.md, WORKFLOWS.md § "Trellis workflow", WORKFLOWS.md § "Grow workflow", TRACKS.md) are design targets — fix the code to match, not the spec.
+If your task changes commands, architecture, file layout, or conventions, update `DESIGN.md` and this file. Specs (`docs/STATUS.md`, WORKFLOWS.md § "Trellis workflow", WORKFLOWS.md § "Grow workflow", `docs/TRACKS.md`) are design targets — fix the code to match, not the spec.
