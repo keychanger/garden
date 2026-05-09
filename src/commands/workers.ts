@@ -291,6 +291,16 @@ async function growCommand(args: string[]): Promise<void> {
     }
   }
 
+  // Reject extra positional args — `garden workers grow w1 w2 --seed x`
+  // would otherwise silently use w1 and discard w2. The user almost
+  // certainly meant something specific; bail rather than guess.
+  if (positional.length > 1) {
+    throw new Error(
+      `Unexpected extra arguments: ${positional.slice(1).map(a => `'${a}'`).join(", ")}. `
+      + `Usage: garden workers grow [<worker>] [--seed <text> | --seed-file <path> | --goal-file <path>] [--max-iterations N]`,
+    );
+  }
+
   // Resolve worker via explicit arg or $GARDEN_WORKER fallback (mirrors
   // src/commands/whoami.ts:25-56).
   const explicitWorker = positional[0];
@@ -384,7 +394,9 @@ async function growCommand(args: string[]): Promise<void> {
     try {
       seed = fs.readFileSync(filePath, "utf-8");
     } catch (err) {
-      throw new Error(`Could not read '${filePath}': ${String(err)}`);
+      throw new Error(
+        `Could not read '${filePath}': ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
   seed = seed.trim();

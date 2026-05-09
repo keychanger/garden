@@ -538,6 +538,78 @@ describe("garden workers grow (convert)", () => {
     ).rejects.toThrow(/non-empty/);
   });
 
+  // The empty-seed guard runs after trim, so a file containing only
+  // whitespace must trip it the same way --seed "   " does. The skill
+  // tells operators to write goals via heredoc; a stray blank file
+  // (operator typo, mid-edit save) shouldn't silently flip the workflow
+  // with an empty seed that would later inline as "Original task: ".
+  it("rejects an empty --seed-file", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = path.join(projectDir, "..", "wt-empty-seed-file");
+    fs.mkdirSync(wtPath, { recursive: true });
+    await addDefaultWorker("proj", "w", wtPath);
+
+    const emptyFile = path.join(env.home, "empty-seed.md");
+    fs.writeFileSync(emptyFile, "   \n\n\t\n");
+
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["grow", "w", "--seed-file", emptyFile]),
+    ).rejects.toThrow(/non-empty/);
+  });
+
+  it("rejects an empty --goal-file", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = path.join(projectDir, "..", "wt-empty-goal-file");
+    fs.mkdirSync(wtPath, { recursive: true });
+    await addDefaultWorker("proj", "w", wtPath);
+
+    const emptyFile = path.join(env.home, "empty-goal.md");
+    fs.writeFileSync(emptyFile, "");
+
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["grow", "w", "--goal-file", emptyFile]),
+    ).rejects.toThrow(/non-empty/);
+  });
+
+  // `garden workers grow w1 w2 --seed x` would otherwise silently use w1
+  // and discard w2. The CLI must reject the ambiguity rather than guess.
+  it("rejects extra positional arguments", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = path.join(projectDir, "..", "wt-extra-pos");
+    fs.mkdirSync(wtPath, { recursive: true });
+    await addDefaultWorker("proj", "w", wtPath);
+
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["grow", "w", "stray", "--seed", "x"]),
+    ).rejects.toThrow(/Unexpected extra arguments.*'stray'/);
+  });
+
+  // Surface the underlying ENOENT (or whatever fs.readFileSync threw)
+  // via err.message rather than String(err), matching the goal-file
+  // write error format. Operators reading "Could not read 'foo': Error:
+  // ENOENT: ..." (String(err)) is noisier than "Could not read 'foo':
+  // ENOENT: ..." (err.message).
+  it("surfaces the fs error message when --goal-file cannot be read", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = path.join(projectDir, "..", "wt-read-fail");
+    fs.mkdirSync(wtPath, { recursive: true });
+    await addDefaultWorker("proj", "w", wtPath);
+
+    const { workers } = await importWorkersCmd();
+    const err = await workers([
+      "grow", "w", "--goal-file", "/no/such/path.md",
+    ]).catch(e => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toMatch(/Could not read '\/no\/such\/path\.md'/);
+    expect(err.message).toMatch(/ENOENT/);
+    // err.message is the unwrapped node fs error string — should not
+    // contain the redundant "Error: " prefix that String(err) adds.
+    expect(err.message).not.toMatch(/Could not read '[^']+': Error: /);
+  });
+
   it("--max-iterations overrides the default 5", async () => {
     const projectDir = await setupProject("proj");
     const wtPath = path.join(projectDir, "..", "wt11");
