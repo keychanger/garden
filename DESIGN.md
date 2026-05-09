@@ -339,6 +339,13 @@ garden workers new <project> [--workflow trellis|grow]
                                    # hardening loop seeded by --seed/--seed-file (account-default
                                    # model, --max-iterations defaults to project.maxGrowIterations
                                    # or 5).
+garden workers grow [<worker>] [--seed <text> | --seed-file <path> | --goal-file <path>]
+                             [--max-iterations N]
+                                   # Convert an active default worker into grow. Self-resolves the
+                                   # worker via $GARDEN_WORKER when no positional arg is given.
+                                   # Writes the seed to <worktree>/.garden/grow-goal.md (the durable,
+                                   # operator-editable goal anchor) and flips entry.workflow to grow.
+                                   # Re-conversion of an already-grow or trellis worker is rejected.
 garden trellis new <project> <name>
                                    # Scaffold a trellis at <project>/.garden/trellises/<name>.md
                                    # (see WORKFLOWS.md § "Trellis workflow" for the workflow spec)

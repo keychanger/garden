@@ -2389,7 +2389,7 @@ The metaphor: workers grow the codebase. Trellis-bound workers grow
 
 | Term         | Definition                                                                                       |
 |--------------|--------------------------------------------------------------------------------------------------|
-| **Seed**     | Operator-supplied task description set at plant time. Persisted on `entry.grow.seed` and inlined verbatim into iter ≥ 2 continue prompts. The durable goal across context resets. |
+| **Seed**     | Operator-supplied task description set at plant time. Persisted both on `entry.grow.seed` (registry fallback) and on disk at `<worktree>/.garden/grow-goal.md` (durable, operator-editable). Iter ≥ 2 continue prompts read the file first and fall back to the registry value. The durable goal across context resets. |
 | **Iteration**| One full cycle of `working → reviewing → merge → cold respawn`. Counted on `entry.grow.iteration`. |
 | **Cascade**  | Polishing the previous iteration's diff. Iter 2 hardens what iter 1 did; iter 3 hardens iter 2; etc. Termination is natural — by the Kth pass, "nothing material remains" becomes true and the worker writes `.garden-done`. |
 | **Grow log** | A worker-maintained file (`<worktree>/.garden/grow-log.md`). Append-only, one line per iteration: `iter K: <one-line summary>`. Inlined into the next iteration's continue prompt so the worker doesn't re-do work. Encouraged, not enforced. |
@@ -2509,7 +2509,7 @@ growing this codebase.
 
 Original task:
 
-<seed verbatim, from entry.grow.seed>
+<seed verbatim, from .garden/grow-goal.md if present, else entry.grow.seed>
 
 Files you changed last iteration:
   - <list from pendingContinueChangedFiles, truncated at 20>
@@ -2548,6 +2548,8 @@ hitting the cap is success, not failure.
 
 ### CLI surface
 
+Cold plant — spawn a fresh grow worker:
+
 ```
 garden workers new <project> --workflow grow \
   [--seed <text> | --seed-file <path>] \
@@ -2557,12 +2559,45 @@ garden workers new <project> --workflow grow \
 Either `--seed` or `--seed-file` is required (mutually exclusive).
 Empty seeds are rejected. `--model` and `--trellis` are not allowed
 on grow workflow. `--max-iterations` overrides
-`project.maxGrowIterations` (default 5).
+`project.maxGrowIterations` (default 5). The cold-plant path produces
+the goal artifact via the iter-1 seed prompt instructing the worker to
+write `<seed verbatim>` to `.garden/grow-goal.md`.
 
 The `⌥⇧N` workflow picker offers a `(g) grow` row that opens a tmux
 `command-prompt` for a single-line task description. Seeds with quotes
 or shell metacharacters break tmux substitution; for those, operators
 use the CLI plant path with `--seed-file`.
+
+Convert — flip an active default worker to grow:
+
+```
+garden workers grow [<worker>] \
+  [--seed <text> | --seed-file <path> | --goal-file <path>] \
+  [--max-iterations N]
+```
+
+Self-resolves the worker via `$GARDEN_WORKER` when no positional
+argument is given (so a worker can run the command on itself).
+`--seed`, `--seed-file`, and `--goal-file` are mutually exclusive;
+exactly one is required. `--goal-file` is an alias for `--seed-file`,
+named to match the on-disk filename (`.garden/grow-goal.md`) for
+ergonomics from a slash-skill workflow. The CLI writes
+`.garden/grow-goal.md` directly at flip time, then sets
+`workflow: "grow"` and stamps `entry.grow` with iteration 0. Re-conversion
+of a worker already on grow or trellis is rejected — operators amend
+an in-flight grow loop's goal by editing `.garden/grow-goal.md`
+directly.
+
+### Mid-loop goal amendment
+
+The goal file (`<worktree>/.garden/grow-goal.md`) is operator-editable.
+Every iteration's continue prompt (built by `buildGrowContinuePrompt`)
+reads the file at dispatch time, so edits made between iteration K's
+merge and iteration K+1's launch take effect on the next iteration
+without any explicit "amend" command. The file falls back to
+`entry.grow.seed` (the value stamped at plant/convert time) if it is
+missing or empty, so legacy entries from before the goal-file
+mechanism shipped continue to work.
 
 ### Project config
 
@@ -2572,17 +2607,6 @@ use the CLI plant path with `--seed-file`.
 
 ### Out of scope (now)
 
-- **Convert active worker → grow.** A `garden workers grow` command
-  invoked from inside a live default worker would summarize the
-  conversation into a goal, write it to disk, and flip the worker's
-  workflow. Useful for the brainstorm-then-grow flow. Deferred until
-  the cold-plant CLI sees real use and the contract for "summarize
-  and convert" is clear.
-- **Operator-editable goal mid-loop.** Trellis amends via
-  `garden trellis amend`; grow's seed is currently captured-once. An
-  "amend the goal" path would let operators refine the seed as the
-  loop reveals friction. Deferred — adds amend command + reviewer
-  prompt awareness.
 - **Per-project grow-prompt template.** A `growPrompt` config key
   that prepends domain-specific quality guidance to every grow
   worker's seed (e.g., "always check error messages are structured").

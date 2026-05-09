@@ -214,9 +214,12 @@ function readGrowGoalFile(worktreePath: string | undefined): string | null {
 }
 
 // Write the seed text to .garden/grow-goal.md in the worktree. Used by
-// the cold-plant CLI (at plant time) and the convert CLI (at flip
-// time) to produce the durable goal artifact. Returns true on success;
-// callers log + continue on failure (entry.grow.seed is the fallback).
+// the convert CLI (`garden workers grow`) at flip time to produce the
+// durable goal artifact. The cold-plant CLI produces the same artifact
+// indirectly: its iter-1 seed prompt instructs the worker to write the
+// file. Returns true on success; iter ≥ 2's continue prompt falls back
+// to entry.grow.seed if the file is missing or empty, so a write
+// failure is recoverable, but the convert CLI throws to surface it.
 export function writeGrowGoalFile(worktreePath: string, seed: string): boolean {
   try {
     const goalDir = path.join(worktreePath, ".garden");
