@@ -267,8 +267,6 @@ type Summarizer = (entry: LogEntry) => string;
 
 const SUMMARIZERS: Record<string, Summarizer> = {
   "poller:started": () => "poller started",
-  "poller:new -> reviewing": () => "→ reviewing",
-  "poller:reviewing -> merge-pending": () => "→ merge-pending",
   "poller:reviewing -> failing": () => "✗ review failed",
   "poller:resolving -> merge-pending": () => "→ merge-pending (resolved)",
   "poller:resolving -> failing": () => "✗ resolver failed",
@@ -295,6 +293,12 @@ function summarize(entry: LogEntry): Summarized {
   const key = `${entry.src}:${entry.msg}`;
   const fn = SUMMARIZERS[key];
   if (fn) return { headline: fn(entry), details: [] };
+  // Poller emits every state change as "<from> -> <to>". Render any unmatched
+  // transition with the unicode arrow so logs stay visually consistent.
+  if (entry.src === "poller") {
+    const m = entry.msg.match(/^(\S+) -> (\S+)$/);
+    if (m) return { headline: `→ ${m[2]}`, details: [] };
+  }
   const details = entry.data ? compactDataLines(entry.data) : [];
   return { headline: entry.msg, details };
 }
