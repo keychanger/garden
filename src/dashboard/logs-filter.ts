@@ -6,12 +6,12 @@
 // the live tail picks up the new filter.
 import { execFileSync } from "node:child_process";
 import { DASHBOARD_SESSION } from "../session.js";
-import { readStickyFilterExpr, writeStickyFilterExpr } from "../commands/logs.js";
+import { readStickyFilterExpr, writeStickyFilterExpr, formatLogsPaneLabel } from "../commands/logs.js";
 import { focusLogs } from "./navigate.js";
 import { resolveGardenRunner } from "./runner.js";
 import { readDashState } from "./state.js";
 import { respawnLogsPane } from "./create.js";
-import { shellEscape, setPaneTitle, getFirstPaneId } from "./tmux.js";
+import { shellEscape, setPaneLabel, getFirstPaneId } from "./tmux.js";
 import { log } from "./log.js";
 
 // Triggered by ⌥/. Switches to the logs view (so the operator sees the
@@ -49,7 +49,7 @@ export function applyLogsFilter(expr: string): void {
     ? state.gardenShellPaneId
     : getFirstPaneId(`${DASHBOARD_SESSION}:_garden-logs`);
   if (target) {
-    setPaneTitle(target, trimmed ? `logs [${trimmed}]` : "logs");
+    setPaneLabel(target, formatLogsPaneLabel(trimmed));
   }
   try { respawnLogsPane(state); } catch { /* pane gone */ }
   if (trimmed) {

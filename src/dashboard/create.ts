@@ -14,6 +14,7 @@ import { restoreFromHidden } from "./layout.js";
 import { setupKeybindings } from "./hotkeys.js";
 import { setupStatusBar, buildStatusCommand, buildUsageCommand, updateHeaderVar, installInputGuard } from "./header.js";
 import { renderQuickStatus } from "../commands/status.js";
+import { formatLogsPaneLabel } from "../commands/logs.js";
 import {
   tmux, tmuxOutput, tmuxSplit, setPaneTitle, setPaneLabel, setPaneVar,
   getFirstPaneId, shellEscape, tmuxDoubleQuote,
@@ -509,7 +510,7 @@ export function createLogsWindow(): void {
 
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (paneId) {
-    setPaneLabel(paneId, "logs");
+    setPaneLabel(paneId, formatLogsPaneLabel());
     setPaneTitle(paneId, "logs");
     disablePaneInput(paneId);
   }

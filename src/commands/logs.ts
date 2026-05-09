@@ -561,6 +561,19 @@ export function writeStickyFilterExpr(expr: string): void {
   atomicWriteFile(LOGS_FILTER_FILE, JSON.stringify({ expr: trimmed }));
 }
 
+// Pane-border label for the logs pane. When a sticky filter is active, the
+// expression is appended after a dim separator so the operator can see at a
+// glance that the tail is filtered (and what by). Pass `expr` to format a
+// known value; omit it to read the current sticky filter from disk. Tmux
+// format strings interpret `#` as the start of a directive, so any literal
+// `#` in the expression is doubled.
+export function formatLogsPaneLabel(expr?: string | null): string {
+  const e = expr === undefined ? readStickyFilterExpr() : expr;
+  if (!e) return "logs";
+  const safe = e.replace(/#/g, "##");
+  return `logs #[fg=colour244]· filter:#[default] ${safe}`;
+}
+
 export function loadStickyFilter(): Partial<Filters> | null {
   const expr = readStickyFilterExpr();
   if (!expr) return null;

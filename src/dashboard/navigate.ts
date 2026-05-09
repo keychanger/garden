@@ -16,6 +16,7 @@ import { findWorkerByName } from "./registry.js";
 import { acknowledgeAlerts } from "./alerts.js";
 import { log } from "./log.js";
 import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow } from "./create.js";
+import { formatLogsPaneLabel } from "../commands/logs.js";
 import { resolveGardenRunner } from "./runner.js";
 import { parkingWindowName, shellWindowName as shellWin, gardenWindowName, parseWorkerSuffix, isWorkerWindow, type GardenView } from "./window-names.js";
 
@@ -226,7 +227,9 @@ function switchGardenTo(view: GardenView): void {
     gardenSwapToHidden(parkName, gardenWindowName(view), state);
     state.gardenPaneType = view;
     state.gardenWindowName = gardenWindowName(view);
-    if (state.gardenShellPaneId) setPaneLabel(state.gardenShellPaneId, view);
+    if (state.gardenShellPaneId) {
+      setPaneLabel(state.gardenShellPaneId, view === "logs" ? formatLogsPaneLabel() : view);
+    }
     writeDashState(state);
     refreshDashboard({ state });
 
