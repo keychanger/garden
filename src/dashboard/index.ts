@@ -30,8 +30,27 @@ import { runUsagePollerLoop, stopUsagePoller } from "./usage-poller.js";
 import { loadConfig } from "../config.js";
 import { addAlert } from "./alerts.js";
 
-export async function dashboard(args: string[]): Promise<void> {
+// Strip `--delay-ms N` from args (if present) and return the delay in ms plus
+// the cleaned args. Lets internal subcommands defer their work without a shell
+// `sleep` wrapper — `dispatchDelayed*` callers spawn `garden dashboard <sub>
+// --delay-ms N <args>` and the Node child holds the timer. See the leak
+// post-mortem in poller-fifo.ts: `sleep && echo > FIFO` blocked forever on
+// readerless FIFOs and accumulated 200+ orphan bash processes.
+function takeDelayMs(args: string[]): { delayMs: number; rest: string[] } {
+  const idx = args.indexOf("--delay-ms");
+  if (idx === -1) return { delayMs: 0, rest: args };
+  const delayMs = parseInt(args[idx + 1] ?? "0", 10);
+  return { delayMs: Number.isFinite(delayMs) ? Math.max(0, delayMs) : 0,
+           rest: [...args.slice(0, idx), ...args.slice(idx + 2)] };
+}
+
+export async function dashboard(rawArgs: string[]): Promise<void> {
   checkTmux();
+
+  const { delayMs, rest: args } = takeDelayMs(rawArgs);
+  if (delayMs > 0) {
+    await new Promise<void>(resolve => { setTimeout(resolve, delayMs); });
+  }
 
   const sub = args[0];
 

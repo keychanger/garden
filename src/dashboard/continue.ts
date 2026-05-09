@@ -204,33 +204,42 @@ export function continueWorkerAfterMerge(projectName: string, workerName: string
   }
 }
 
-// Fire-and-forget detached subprocess that delays, then invokes the
-// _continue-worker internal command. The delay lets `claude --resume` take
-// over the pane's stdin before we send keys; without it, keystrokes go to the
-// transient `sh -c` wrapper or get eaten during Claude's TUI init.
+// Fire-and-forget detached subprocess that defers a few seconds, then invokes
+// the _continue-worker internal command. The delay lets `claude --resume` take
+// over the pane's stdin before we send keys; without it, keystrokes get eaten
+// during Claude's TUI init.
 //
-// 6s primary + 10s retry: on dashboard rebuild, ~10 workers run `claude
+// 6s primary + 16s retry: on dashboard rebuild, ~10 workers run `claude
 // --resume` concurrently and TUI bootstrap can outlast the SessionStart hook
 // — under that load, a 3s paste landed before Claude's input handler bound,
-// silently dropping the prompt. The chained retry fires
-// _continue-worker-if-stuck, which re-pastes only if the worker is still at
-// "ready" (cold-start state) — meaning the first paste never registered. If
-// status has advanced to working/asking/idle, the prompt got through and the
-// retry no-ops.
+// silently dropping the prompt. The retry fires _continue-worker-if-stuck,
+// which re-pastes only if the worker is still at "ready" (cold-start state) —
+// meaning the first paste never registered. If status has advanced to
+// working/asking/idle, the prompt got through and the retry no-ops.
+//
+// Two independent detached children, each holding its own delay timer in
+// Node via --delay-ms; previously a single `sh -c "sleep N && garden ..."`
+// shell wrapper drove the delay. The shell trampoline stays — it's the
+// canonical way to invoke a multi-token gardenRunner string ("node /path/cli.js")
+// — but the `sleep N &&` prefix is gone, so the shell exec's straight into
+// garden and exits. No standalone `sleep` process; no readerless FIFO write
+// to block on (the leak that motivated the switch).
+function spawnDelayed(gardenRunner: string, delayMs: number, sub: string, ...positional: string[]): void {
+  const escaped = positional.map(shellEscape).join(" ");
+  const cmd = `${gardenRunner} dashboard ${sub} --delay-ms ${delayMs} ${escaped} 2>/dev/null`;
+  try {
+    const child = spawn("sh", ["-c", cmd], { detached: true, stdio: "ignore" });
+    child.unref();
+  } catch { /* best effort — operator can re-prompt manually */ }
+}
+
 export function dispatchDelayedContinue(
   gardenRunner: string,
   projectName: string,
   workerName: string,
 ): void {
-  const project = shellEscape(projectName);
-  const worker = shellEscape(workerName);
-  const cmd =
-    `sleep 6 && ${gardenRunner} dashboard _continue-worker ${project} ${worker} 2>/dev/null; `
-    + `sleep 10 && ${gardenRunner} dashboard _continue-worker-if-stuck ${project} ${worker} 2>/dev/null`;
-  try {
-    const child = spawn("sh", ["-c", cmd], { detached: true, stdio: "ignore" });
-    child.unref();
-  } catch { /* best effort — operator can re-prompt manually */ }
+  spawnDelayed(gardenRunner, 6000, "_continue-worker", projectName, workerName);
+  spawnDelayed(gardenRunner, 16000, "_continue-worker-if-stuck", projectName, workerName);
 }
 
 // Post-merge variant. Slightly longer delay because the merge path force-pushes
@@ -242,13 +251,7 @@ export function dispatchDelayedAutoContinue(
   projectName: string,
   workerName: string,
 ): void {
-  const cmd =
-    `sleep 5 && ${gardenRunner} dashboard _continue-worker-after-merge `
-    + `${shellEscape(projectName)} ${shellEscape(workerName)} 2>/dev/null`;
-  try {
-    const child = spawn("sh", ["-c", cmd], { detached: true, stdio: "ignore" });
-    child.unref();
-  } catch { /* best effort — operator can re-prompt manually */ }
+  spawnDelayed(gardenRunner, 5000, "_continue-worker-after-merge", projectName, workerName);
 }
 
 // Handoff seed variant. Reads the seed prompt from a file (kept off argv to
@@ -262,13 +265,7 @@ export function dispatchDelayedSeed(
   workerName: string,
   messageFile: string,
 ): void {
-  const cmd =
-    `sleep 6 && ${gardenRunner} dashboard _seed-worker `
-    + `${shellEscape(projectName)} ${shellEscape(workerName)} ${shellEscape(messageFile)} 2>/dev/null`;
-  try {
-    const child = spawn("sh", ["-c", cmd], { detached: true, stdio: "ignore" });
-    child.unref();
-  } catch { /* best effort — operator can re-prompt manually */ }
+  spawnDelayed(gardenRunner, 6000, "_seed-worker", projectName, workerName, messageFile);
 }
 
 // Send a one-shot seed prompt read from a file. The seed dispatch's 6s delay

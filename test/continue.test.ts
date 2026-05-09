@@ -232,29 +232,32 @@ describe("continueWorkerIfStuck", () => {
 });
 
 describe("dispatchDelayedContinue", () => {
-  it("spawns a detached sh -c that delays and invokes the _continue-worker subcommand, then chains a stuck-only retry", () => {
+  it("spawns two detached children: _continue-worker at +6s and _continue-worker-if-stuck at +16s", () => {
     dispatchDelayedContinue("/usr/local/bin/garden", "myproject", "bold-ash");
 
-    expect(spawn).toHaveBeenCalledTimes(1);
-    const [shCmd, args, opts] = vi.mocked(spawn).mock.calls[0];
-    expect(shCmd).toBe("sh");
-    expect(args).toEqual(["-c", expect.any(String)]);
-    const cmd = (args as string[])[1];
-    // Primary leg: 6s delay before the first paste so claude --resume has
-    // time to bind its TUI input handler under rebuild load.
-    expect(cmd).toMatch(/^sleep 6 && /);
-    // Retry leg: chained 10s later via `_continue-worker-if-stuck`, which
-    // only re-pastes if the worker is still parked at "ready".
-    expect(cmd).toContain("; sleep 10 && ");
-    expect(cmd).toContain("_continue-worker-if-stuck");
-    // Safe-token strings (alphanumeric + ./_:-) are passed through unquoted
-    // by shellEscape. Project/worker names that contain other characters
-    // would be single-quoted; the assertions below stay alphanumeric so they
-    // verify the unquoted-but-shell-safe path.
-    expect(cmd).toContain("/usr/local/bin/garden dashboard _continue-worker");
-    expect(cmd).toContain(" myproject ");
-    expect(cmd).toContain(" bold-ash ");
-    expect(opts).toEqual(expect.objectContaining({ detached: true, stdio: "ignore" }));
+    // Primary + retry legs are now independent detached children, each with
+    // its own --delay-ms held by the spawned Node process. The `sh -c`
+    // trampoline stays (gardenRunner is a multi-token shell command), but
+    // there is no `sleep N &&` prefix — the shell exec's straight into garden.
+    // Retry's stuck-only re-paste behavior lives in continueWorkerIfStuck.
+    expect(spawn).toHaveBeenCalledTimes(2);
+    const calls = vi.mocked(spawn).mock.calls;
+
+    const [primaryShell, primaryArgs, primaryOpts] = calls[0];
+    expect(primaryShell).toBe("sh");
+    expect(primaryArgs).toEqual(["-c", expect.any(String)]);
+    const primaryCmd = (primaryArgs as string[])[1];
+    expect(primaryCmd).not.toMatch(/\bsleep\b/);
+    expect(primaryCmd).toContain("/usr/local/bin/garden dashboard _continue-worker --delay-ms 6000");
+    expect(primaryCmd).toContain(" myproject ");
+    expect(primaryCmd).toContain(" bold-ash ");
+    expect(primaryOpts).toEqual(expect.objectContaining({ detached: true, stdio: "ignore" }));
+
+    const retryCmd = (calls[1][1] as string[])[1];
+    expect(retryCmd).not.toMatch(/\bsleep\b/);
+    expect(retryCmd).toContain("/usr/local/bin/garden dashboard _continue-worker-if-stuck --delay-ms 16000");
+    expect(retryCmd).toContain(" myproject ");
+    expect(retryCmd).toContain(" bold-ash ");
   });
 
   it("swallows spawn errors so a failed dispatch never crashes the caller", () => {
@@ -264,14 +267,14 @@ describe("dispatchDelayedContinue", () => {
 });
 
 describe("dispatchDelayedAutoContinue", () => {
-  it("spawns a detached sh -c that invokes _continue-worker-after-merge with a longer delay", () => {
+  it("spawns one detached child invoking _continue-worker-after-merge with --delay-ms 5000", () => {
     dispatchDelayedAutoContinue("/usr/local/bin/garden", "myproject", "bold-ash");
 
     expect(spawn).toHaveBeenCalledTimes(1);
     const [, args] = vi.mocked(spawn).mock.calls[0];
     const cmd = (args as string[])[1];
-    expect(cmd).toMatch(/^sleep 5 && /);
-    expect(cmd).toContain("/usr/local/bin/garden dashboard _continue-worker-after-merge");
+    expect(cmd).not.toMatch(/\bsleep\b/);
+    expect(cmd).toContain("/usr/local/bin/garden dashboard _continue-worker-after-merge --delay-ms 5000");
     expect(cmd).toContain(" myproject ");
     expect(cmd).toContain(" bold-ash ");
   });
@@ -433,16 +436,17 @@ describe("done-sentinel helpers", () => {
 });
 
 describe("dispatchDelayedSeed", () => {
-  it("spawns a detached sh -c that invokes _seed-worker with a longer delay than auto-continue", () => {
+  it("spawns one detached child invoking _seed-worker with --delay-ms 6000 and the message-file path", () => {
     dispatchDelayedSeed("/usr/local/bin/garden", "myproject", "bold-ash", "/tmp/seed.txt");
 
     expect(spawn).toHaveBeenCalledTimes(1);
     const [, args] = vi.mocked(spawn).mock.calls[0];
     const cmd = (args as string[])[1];
-    // Bootstrap (git fetch + worktree add + claude TUI init) takes longer than
-    // a normal end-of-turn — 6s so keys don't land in a still-initializing TUI.
-    expect(cmd).toMatch(/^sleep 6 && /);
-    expect(cmd).toContain("/usr/local/bin/garden dashboard _seed-worker");
+    // 6s delay covers bootstrap (git fetch + worktree add + claude TUI init)
+    // — longer than a normal end-of-turn so keys don't land in a still-
+    // initializing TUI. The Node child holds the timer via --delay-ms.
+    expect(cmd).not.toMatch(/\bsleep\b/);
+    expect(cmd).toContain("/usr/local/bin/garden dashboard _seed-worker --delay-ms 6000");
     expect(cmd).toContain(" myproject ");
     expect(cmd).toContain(" bold-ash ");
     expect(cmd).toContain(" /tmp/seed.txt ");

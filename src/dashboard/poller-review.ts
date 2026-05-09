@@ -4,7 +4,7 @@
 // The reviewer is a separate Claude process running `claude -p` inside the
 // worker's worktree, in a hidden tmux window. GARDEN_REVIEWER=1 marks its
 // hooks so they don't get treated as worker hooks.
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { tryGetProject, SESSIONS_DIR } from "../config.js";
@@ -23,7 +23,7 @@ import {
   findWorkerByName, updateWorkerFields,
   type WorkerEntry,
 } from "./registry.js";
-import { windowExists, killWindowSafe, shellEscape } from "./tmux.js";
+import { windowExists, killWindowSafe } from "./tmux.js";
 import { growLoopHooks } from "./grow-continue.js";
 import { trellisLoopHooks } from "./trellis-continue.js";
 import { buildTrellisReviewPrompt } from "./trellis-prompts.js";
@@ -33,7 +33,7 @@ import {
 } from "./trellis-verdict.js";
 import { parseLastLineVerdict } from "./verdict.js";
 import { reviewWindowName } from "./window-names.js";
-import { signalFifoPath, scheduleDelayedPoke } from "./poller-fifo.js";
+import { signalFifoPath, scheduleDelayedPoke, triggerProjectPoll } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
 import { getWorkflow } from "./workflows/index.js";
 
@@ -537,17 +537,17 @@ export function resetToWorkingOnWorkerPush(
   scheduleDelayedPoke(projectName, 0);
 }
 
-// Spawn a detached timer that pokes the project's FIFO after REVIEW_TIMEOUT_MS.
+// In-process timer that pokes the project's FIFO after REVIEW_TIMEOUT_MS.
 // The poller is event-driven and only wakes on pokes — a hung reviewer produces
 // no events on its own, so without this the timeout check below would never
 // run. Spurious pokes after normal completion are harmless (the handlers no-op).
+//
+// Replaces the older `bash -c "sleep N && [ -p FIFO ] && echo > FIFO"` watchdog
+// whose `echo > FIFO` blocked indefinitely on `open(2)` when no reader was
+// attached (poller window died, integration test cleaned up its temp dir).
+// triggerProjectPoll uses O_WRONLY|O_NONBLOCK and fails fast with no reader.
 export function scheduleReviewTimeoutPoke(projectName: string): void {
-  const fifo = signalFifoPath(projectName);
-  const fifoLit = shellEscape(fifo);
-  const seconds = Math.ceil(REVIEW_TIMEOUT_MS / 1000);
-  const cmd = `sleep ${seconds} && [ -p ${fifoLit} ] && (echo > ${fifoLit}) 2>/dev/null`;
-  const child = spawn("bash", ["-c", cmd], { detached: true, stdio: "ignore" });
-  child.unref();
+  setTimeout(() => triggerProjectPoll(projectName), REVIEW_TIMEOUT_MS).unref();
 }
 
 export function isReviewTimedOut(entry: WorkerEntry): boolean {

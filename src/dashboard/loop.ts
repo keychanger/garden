@@ -81,13 +81,18 @@ export function persistIteration(
   hooks.setInMemoryIteration(entry, next);
 }
 
-/** Detached subprocess that delays a few seconds, then dispatches the
- *  fresh-context respawn for a workflow with loop hooks. The subcommand
- *  string is the workflow's internal handler (e.g.,
- *  "_trellis-continue-after-merge"). The 5s delay matches the default
- *  auto-continue path: the new pane needs time to settle before we fire
- *  respawn-pane (the post-merge force-push and postMerge run in the
- *  foreground, but pane stdin is shared with claude — give it a beat). */
+/** Detached subprocess that defers ~5s, then dispatches the fresh-context
+ *  respawn for a workflow with loop hooks. The subcommand string is the
+ *  workflow's internal handler (e.g., "_trellis-continue-after-merge"). The
+ *  delay matches the default auto-continue path: the new pane needs time to
+ *  settle before we fire respawn-pane (the post-merge force-push and
+ *  postMerge run in the foreground, but pane stdin is shared with claude —
+ *  give it a beat).
+ *
+ *  Delay lives inside the spawned Node child via `--delay-ms`, not a `sh -c
+ *  "sleep N && ..."` wrapper. The `sh` trampoline stays only because
+ *  gardenRunner is a multi-token shell command ("node /path/cli.js"); the
+ *  shell exec's straight into garden and exits — no standalone `sleep`. */
 export function dispatchDelayedLoopContinue(
   gardenRunner: string,
   projectName: string,
@@ -95,7 +100,7 @@ export function dispatchDelayedLoopContinue(
   internalSubcommand: string,
 ): void {
   const cmd =
-    `sleep 5 && ${gardenRunner} dashboard ${internalSubcommand} `
+    `${gardenRunner} dashboard ${internalSubcommand} --delay-ms 5000 `
     + `${shellEscape(projectName)} ${shellEscape(workerName)} 2>/dev/null`;
   try {
     const child = spawn("sh", ["-c", cmd], { detached: true, stdio: "ignore" });

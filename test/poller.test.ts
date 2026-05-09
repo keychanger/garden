@@ -162,6 +162,23 @@ vi.mock("../src/dashboard/continue.js", () => ({
   setDoneSentinel: vi.fn(),
 }));
 
+// scheduleDelayedPoke and triggerProjectPoll are now in-process setTimeouts /
+// non-blocking FIFO writes (replaces the leaky `bash -c sleep N && echo > FIFO`
+// watchdogs). Stub them so tests can assert "the poller scheduled a re-poke"
+// without arming real timers in the test process. Other exports are kept real
+// because callers (e.g. isWorkerClaudeWorking in poller-resolve gating) read
+// the registry-mocked entry shape and tests rely on that behavior.
+vi.mock("../src/dashboard/poller-fifo.js", async () => {
+  const actual = await vi.importActual<typeof import("../src/dashboard/poller-fifo.js")>(
+    "../src/dashboard/poller-fifo.js",
+  );
+  return {
+    ...actual,
+    triggerProjectPoll: vi.fn(),
+    scheduleDelayedPoke: vi.fn(),
+  };
+});
+
 import fs from "node:fs";
 import { poll, postPush, restartLongLivedPollers } from "../src/dashboard/poller.js";
 import { tryGetProject } from "../src/config.js";
@@ -179,6 +196,7 @@ import { tmux, pasteAndSubmit, windowExists, getFirstPaneId, killWindowSafe } fr
 import { addAlert } from "../src/dashboard/alerts.js";
 import { log } from "../src/dashboard/log.js";
 import { dispatchDelayedAutoContinue, isDoneSet, setDoneSentinel } from "../src/dashboard/continue.js";
+import { scheduleDelayedPoke } from "../src/dashboard/poller-fifo.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 const registryMock = await import("../src/dashboard/registry.js") as {
@@ -338,18 +356,24 @@ describe("poll — working state", () => {
       makeWorker({ prState: "working", claudeStatus: "idle", pendingReviewAt: Date.now() }),
     ]);
 
-    poll("myproject");
+    // scheduleReviewTimeoutPoke is now an in-process setTimeout (no bash sleep
+    // wrapper) — a 30-minute timer must be armed so a hung reviewer eventually
+    // pokes the FIFO. Spy on setTimeout to confirm the schedule.
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      poll("myproject");
 
-    const launchCall = vi.mocked(updateWorkerFields).mock.calls.find(
-      c => (c[2] as Record<string, unknown>).prState === "reviewing",
-    );
-    expect(launchCall).toBeDefined();
-    expect((launchCall![2] as Record<string, unknown>).reviewStartedAt).toEqual(expect.any(Number));
-    // A 30-minute sleep must be armed so a hung reviewer eventually pokes the FIFO.
-    const timeoutSpawn = vi.mocked(spawn).mock.calls.find(
-      c => String(c[1]?.[1] ?? "").startsWith("sleep 1800"),
-    );
-    expect(timeoutSpawn).toBeDefined();
+      const launchCall = vi.mocked(updateWorkerFields).mock.calls.find(
+        c => (c[2] as Record<string, unknown>).prState === "reviewing",
+      );
+      expect(launchCall).toBeDefined();
+      expect((launchCall![2] as Record<string, unknown>).reviewStartedAt).toEqual(expect.any(Number));
+      const reviewTimeoutMs = 30 * 60 * 1000;
+      const armed = setTimeoutSpy.mock.calls.some(c => c[1] === reviewTimeoutMs);
+      expect(armed).toBe(true);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 });
 
@@ -570,11 +594,7 @@ describe("poll — reviewing state (async)", () => {
       }),
     );
     // Must poke the poller so it processes handleMergePending next tick
-    expect(spawn).toHaveBeenCalledWith(
-      "bash",
-      ["-c", expect.stringContaining("sleep 0")],
-      expect.objectContaining({ detached: true, stdio: "ignore" }),
-    );
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 0);
   });
 
   it("transitions to merge-pending when review returns FIXED", () => {
@@ -599,11 +619,7 @@ describe("poll — reviewing state (async)", () => {
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "merge-pending" }),
     );
-    expect(spawn).toHaveBeenCalledWith(
-      "bash",
-      ["-c", expect.stringContaining("sleep 0")],
-      expect.objectContaining({ detached: true, stdio: "ignore" }),
-    );
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 0);
   });
 
   it("resets to working when force-push fails after review", () => {
@@ -893,11 +909,7 @@ describe("poll — reviewing state (async)", () => {
     expect(fields.pendingReviewAt).toEqual(expect.any(Number));
     expect(fields.resolveAttempts).toBe(0);
     expect(mergeToBase).not.toHaveBeenCalled();
-    expect(spawn).toHaveBeenCalledWith(
-      "bash",
-      ["-c", expect.stringContaining("sleep 0")],
-      expect.objectContaining({ detached: true, stdio: "ignore" }),
-    );
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 0);
   });
 
   it("does NOT reset to working when SHA changes but reviewer window is still alive", () => {
@@ -1657,11 +1669,7 @@ describe("poll — merge-pending state", () => {
       }),
     );
     // Must schedule a delayed poke so the poller picks up the re-review
-    expect(spawn).toHaveBeenCalledWith(
-      "bash",
-      ["-c", expect.stringContaining("sleep")],
-      expect.objectContaining({ detached: true, stdio: "ignore" }),
-    );
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", expect.any(Number));
   });
 
   // ─── grow workflow: budget exhaustion → done at the auto-continue site ──
@@ -1784,11 +1792,7 @@ describe("poll — resolving state", () => {
       }),
     );
     // Queues the next merge-queue attempt
-    expect(spawn).toHaveBeenCalledWith(
-      "bash",
-      ["-c", expect.stringContaining("sleep 0")],
-      expect.objectContaining({ detached: true, stdio: "ignore" }),
-    );
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 0);
   });
 
   it("retries when resolver says DONE but rebase is still in progress", () => {
@@ -2096,11 +2100,7 @@ describe("poll — failing state", () => {
 
     poll("myproject");
 
-    expect(spawn).toHaveBeenCalledWith(
-      "bash",
-      ["-c", expect.stringContaining("sleep 30")],
-      expect.objectContaining({ detached: true, stdio: "ignore" }),
-    );
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 30000);
   });
 
   it("stays in failing after debounce when failingSha matches (requires new commits)", () => {

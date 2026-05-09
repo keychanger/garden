@@ -866,7 +866,8 @@ describe("bounceWorker", () => {
     );
     expect(continueCall).toBeDefined();
     const cmd = (continueCall![1] as string[])[1];
-    expect(cmd).toMatch(/^sleep 6 && /);
+    expect(cmd).not.toMatch(/\bsleep\b/);
+    expect(cmd).toContain("dashboard _continue-worker --delay-ms 6000");
     expect(cmd).toContain("'myproject'");
     expect(cmd).toContain("'swift-oak'");
   });

@@ -4,11 +4,10 @@
 // coordinator), which itself imports from the lifecycle modules.
 import fs from "node:fs";
 import path from "node:path";
-import { spawn, execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { SESSIONS_DIR } from "../config.js";
 import { findWorkerByName } from "./registry.js";
 import { log } from "./log.js";
-import { shellEscape } from "./tmux.js";
 
 export function signalFifoPath(project: string): string {
   return path.join(SESSIONS_DIR, `${project}-poll-signal`);
@@ -28,16 +27,15 @@ export function triggerProjectPoll(projectName: string): void {
   }
 }
 
-// Detached "wake the poller in N ms" subprocess. Used by lifecycle handlers to
-// re-trigger the poller after a debounce or after a transition that handed off
-// to a different state's handler.
+// In-process timer that pokes the poller after delayMs. Replaces the older
+// `bash -c "sleep N && echo > FIFO"` watchdog whose `echo > FIFO` blocked
+// forever on `open(2)` when the FIFO had no reader (poller window dead, test
+// temp dir cleaned up): writes accumulated 200+ orphan bash processes over
+// weeks. setTimeout + non-blocking triggerProjectPoll() side-steps the leak —
+// the timer dies cleanly with the dashboard process, and the FIFO write fails
+// fast when no one is reading.
 export function scheduleDelayedPoke(projectName: string, delayMs: number): void {
-  const fifo = signalFifoPath(projectName);
-  const delaySec = Math.ceil(delayMs / 1000);
-  spawn("bash", ["-c", `sleep ${delaySec} && echo > ${shellEscape(fifo)} 2>/dev/null`], {
-    detached: true,
-    stdio: "ignore",
-  }).unref();
+  setTimeout(() => triggerProjectPoll(projectName), Math.max(0, delayMs)).unref();
 }
 
 // Worker liveness from the registry (set by Claude Code hooks). Used by

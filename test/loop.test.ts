@@ -153,18 +153,21 @@ describe("persistIteration", () => {
 // ─── dispatchDelayedLoopContinue ──────────────────────────────────────────
 
 describe("dispatchDelayedLoopContinue", () => {
-  it("spawns a detached sh -c with sleep 5 and the supplied subcommand", () => {
+  it("spawns a detached sh trampoline that invokes the supplied subcommand with --delay-ms 5000", () => {
     dispatchDelayedLoopContinue(
       "/usr/local/bin/garden", "myproject", "bold-ash",
       "_trellis-continue-after-merge",
     );
 
+    // Delay lives inside the spawned Node child via --delay-ms (no `sleep N
+    // &&` prefix). The `sh -c` trampoline stays — gardenRunner is a
+    // multi-token shell command — but it just exec's into garden.
     expect(spawn).toHaveBeenCalledTimes(1);
     const [shCmd, args, opts] = vi.mocked(spawn).mock.calls[0];
     expect(shCmd).toBe("sh");
     const cmd = (args as string[])[1];
-    expect(cmd).toMatch(/^sleep 5 && /);
-    expect(cmd).toContain("/usr/local/bin/garden dashboard _trellis-continue-after-merge");
+    expect(cmd).not.toMatch(/\bsleep\b/);
+    expect(cmd).toContain("/usr/local/bin/garden dashboard _trellis-continue-after-merge --delay-ms 5000");
     expect(cmd).toContain(" myproject ");
     expect(cmd).toContain(" bold-ash ");
     expect(opts).toEqual(expect.objectContaining({ detached: true, stdio: "ignore" }));
@@ -177,7 +180,7 @@ describe("dispatchDelayedLoopContinue", () => {
 
     const [, args] = vi.mocked(spawn).mock.calls[0];
     const cmd = (args as string[])[1];
-    expect(cmd).toContain("garden dashboard _grow-continue-after-merge");
+    expect(cmd).toContain("garden dashboard _grow-continue-after-merge --delay-ms 5000");
   });
 
   it("swallows spawn errors so a failed dispatch never crashes the caller", () => {

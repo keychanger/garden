@@ -17,11 +17,11 @@ vi.mock("../src/dashboard/log.js", () => ({
 vi.mock("../src/dashboard/workers.js", () => ({
   newWorker: vi.fn(() => "tall-fern"),
 }));
-// dispatchDelayedSeed spawns a detached `sh -c "sleep 6 && garden ..."`
-// subprocess; harmless under {detached, stdio:ignore, unref()} but easier
-// to assert against when stubbed. The convert path uses it directly when
-// the branch is fully merged into base. Other exports of continue.js are
-// unused by the workers CLI, so a partial mock is fine.
+// dispatchDelayedSeed spawns a detached `garden dashboard _seed-worker
+// --delay-ms 6000 ...` Node child; harmless under {detached, stdio:ignore,
+// unref()} but easier to assert against when stubbed. The convert path uses
+// it directly when the branch is fully merged into base. Other exports of
+// continue.js are unused by the workers CLI, so a partial mock is fine.
 vi.mock("../src/dashboard/continue.js", () => ({
   dispatchDelayedSeed: vi.fn(),
 }));
@@ -795,8 +795,9 @@ describe("garden workers grow (convert)", () => {
     expect(wtHeadAfter).not.toBe(wtHeadBefore);
 
     // Seed file written under SESSIONS_DIR/seeds with the iter-1 framing
-    // (Iteration 1 of N). The detached `sleep 6 && garden ...` subprocess
-    // is mocked away, so we assert on file presence + content directly.
+    // (Iteration 1 of N). The detached `_seed-worker --delay-ms 6000`
+    // subprocess is mocked away, so we assert on file presence + content
+    // directly.
     const seedDir = path.join(env.home, ".garden", "sessions", "seeds");
     const seeds = fs.readdirSync(seedDir).filter(f => f.startsWith("grow-seed-proj-"));
     expect(seeds).toHaveLength(1);
