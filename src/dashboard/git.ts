@@ -488,5 +488,6 @@ function git(cwd: string, ...args: string[]): string {
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 60_000,
+    maxBuffer: 256 * 1024 * 1024,
   }).trim();
 }
