@@ -31,12 +31,13 @@ npm test               # vitest unit + integration; tsc --noEmit
   - `state.ts`, `registry.ts`, `validate.ts` — atomic state files + tmux/state reconciliation
   - `tmux.ts`, `window-names.ts`, `atomic-write.ts` — low-level helpers
   - `poller.ts` + `poller-state.ts` + `poller-{review,merge,resolve,fifo}.ts` — per-project review/merge/resolve lifecycle, event-driven via FIFO
-  - `workflows/` — workflow registry (`default.ts`, `trellis.ts`, `types.ts`, `index.ts`); see `WORKFLOWS.md`
+  - `workflows/` — workflow registry (`default.ts`, `trellis.ts`, `grow.ts`, `types.ts`, `index.ts`); see `WORKFLOWS.md`
   - `hooks/default.ts` + `hook-dispatcher.ts` — Claude Code hook routing
   - `trellis-{tag,verdict,prompts,continue,model,picker}.ts` — trellis workflow internals
+  - `grow-continue.ts` — grow workflow's `LoopHooks`, continue-prompt builder, and iter-1 seed prompt
   - `prompts.ts` + `prompt-compose.ts` + `headless-agent.ts` + `verdict.ts` — prompt assembly and headless reviewer/resolver primitives
   - `continue.ts` — auto-continue (interrupt-recovery and post-merge) and `.garden-done` sentinel
-  - `loop.ts` — workflow-agnostic loop primitive (cold-respawn + per-iteration counter) shared by trellis (and forthcoming grow) workflows
+  - `loop.ts` — workflow-agnostic loop primitive (cold-respawn + per-iteration counter) shared by trellis and grow workflows
   - `skills.ts` — bundles `done` / `handoff` / `trellis-author` skills into worker worktrees
   - `usage.ts` + `usage-poller.ts` — Claude quota meter
   - `sandbox.ts`, `credentials.ts`, `claude-env.ts` — Claude profile / Keychain / sandbox config
@@ -53,6 +54,7 @@ Use `garden <cmd> --help` for flag-level detail. High-level groupings:
 - **Auth**: `login [profile]`, `auth status` (presence/expiry/Keychain displacement diagnostic).
 - **Workers**: `whoami`, `kick`, `bounce`, `pause`, `resume`, `health [--fix]`, `logs [-w <worker>]`. Workers can self-identify via `$GARDEN_WORKER` / `$GARDEN_BRANCH` / `$GARDEN_BASE_BRANCH` / `$GARDEN_PROJECT`.
 - **Trellis**: `trellis list|show|new|status|amend|resume|retire|revive`; plant via `workers new <project> --workflow trellis --trellis <name> [--model opus|sonnet]` or hotkey `⌥⇧N`. Spec: `WORKFLOWS.md` § "Trellis workflow".
+- **Grow**: bounded hardening loop with no design doc; plant via `workers new <project> --workflow grow --seed <text>|--seed-file <path> [--max-iterations N]`. Default budget 5 (overridable per-project via `maxGrowIterations` config or per-plant via `--max-iterations`). Runs on the account-default model.
 - **Auto-continue gate**: `auto [on|off|status|threshold N|resume-on-reset on|off]` — global gate in `~/.garden/config.yml` under `autoContinue`.
 
 ## Workers (worktrees)

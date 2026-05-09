@@ -651,11 +651,10 @@ function launchReview(
 
   // Grow workflow: increment iteration counter before dispatch. No budget
   // check at preflight — grow's terminal-on-budget is `done`, fired
-  // post-merge in maybeAutoContinue (locked decision 2 in
-  // declarative-singing-graham.md). The increment + persist is shared with
-  // trellis via persistIteration; the grow-specific bookkeeping is the
-  // sub-object field path (entry.grow.iteration vs entry.trellis.iteration),
-  // encapsulated in growLoopHooks.
+  // post-merge in maybeAutoContinue. The increment + persist is shared
+  // with trellis via persistIteration; the grow-specific bookkeeping is
+  // the sub-object field path (entry.grow.iteration vs
+  // entry.trellis.iteration), encapsulated in growLoopHooks.
   if (isGrow) {
     const state = growLoopHooks.readIteration(entry);
     const nextIter = (state?.iteration ?? 0) + 1;

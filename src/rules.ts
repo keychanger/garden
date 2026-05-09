@@ -55,7 +55,7 @@ export interface WorktreeRulesOptions {
   /** When set, the rules text appends three grow-specific paragraphs
    *  describing the bounded-loop discipline. Mutually exclusive with
    *  `trellis` — a worker is one workflow at a time; the helper throws
-   *  if both are set. Per locked decisions in declarative-singing-graham.md. */
+   *  if both are set. */
   grow?: {
     iteration: number;
     maxIterations: number;

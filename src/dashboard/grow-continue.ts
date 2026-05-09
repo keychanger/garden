@@ -96,10 +96,10 @@ export function growAutoContinueAfterMerge(
 }
 
 // Build the continue prompt for the upcoming iteration. The seed is
-// inlined verbatim so the goal anchors across context resets (locked
-// decision 6); the changed-files list grounds the worker in the just-
-// merged diff; the grow-log content carries cumulative iteration
-// summaries so the worker doesn't repeat work.
+// inlined verbatim so the goal anchors across context resets; the
+// changed-files list grounds the worker in the just-merged diff; the
+// grow-log content carries cumulative iteration summaries so the worker
+// doesn't repeat work.
 export function buildGrowContinuePrompt(entry: WorkerEntry): string {
   const g = entry.grow;
   const upcoming = (g?.iteration ?? 0) + 1;
@@ -146,11 +146,11 @@ export function buildGrowContinuePrompt(entry: WorkerEntry): string {
 }
 
 // Build the iter-1 seed prompt sent at plant time (via seedMessageFile,
-// not via auto-continue). Locked decision 7: seed + grow framing so the
-// worker paces itself across the bounded loop instead of cramming all
-// hardening into iter 1 (where it would be wasted — iter 2 starts with
-// fresh context anyway). Used by the CLI plant path in commands/workers.ts
-// and by the picker plant path in trellis-picker.ts (phase 4).
+// not via auto-continue). The prompt wraps the operator's seed with grow
+// framing so the worker paces itself across the bounded loop instead of
+// cramming all hardening into iter 1 (where it would be wasted — iter 2
+// starts with fresh context anyway). Used by the CLI plant path in
+// commands/workers.ts.
 export function buildGrowIteration1Seed(seed: string, maxIter: number): string {
   return [
     `[garden] Grow loop, iteration 1 of ${maxIter}.`,

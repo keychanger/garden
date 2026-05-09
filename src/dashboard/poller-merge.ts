@@ -359,11 +359,10 @@ function maybeAutoContinue(
     return;
   }
   // Grow budget check: if iter K just completed and K >= max, the loop is
-  // done (locked decision 2 in declarative-singing-graham.md — budget
-  // exhaustion lands on `done`, not `failing`, because grow has no
-  // convergence target to fail against). Write the sentinel so any replayed
-  // merge event also recognizes done, transition merged → done, skip the
-  // respawn dispatch.
+  // done — budget exhaustion lands on `done`, not `failing`, because grow
+  // has no convergence target to fail against. Write the sentinel so any
+  // replayed merge event also recognizes done, transition merged → done,
+  // skip the respawn dispatch.
   if (entry.workflow === "grow") {
     const iter = entry.grow?.iteration ?? 0;
     const max = entry.grow?.maxIterations ?? 5;

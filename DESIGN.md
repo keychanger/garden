@@ -329,11 +329,16 @@ garden rebuild                     # Rebuild garden and relaunch dashboard
 
 ### Workers and trellises
 ```
-garden workers new <project> [--workflow trellis --trellis <name>]
+garden workers new <project> [--workflow trellis|grow]
+                             [--trellis <name>]
+                             [--seed <text> | --seed-file <path>]
                              [--model opus|sonnet] [--max-iterations N]
                                    # Spawn a worker. Default workflow plants an interactive worker;
-                                   # trellis plants a vine bound to the named trellis. --model
-                                   # overrides the trellis default (Sonnet).
+                                   # trellis plants a vine bound to the named trellis (--model
+                                   # overrides the Sonnet default); grow plants a bounded
+                                   # hardening loop seeded by --seed/--seed-file (account-default
+                                   # model, --max-iterations defaults to project.maxGrowIterations
+                                   # or 5).
 garden trellis new <project> <name>
                                    # Scaffold a trellis at <project>/.garden/trellises/<name>.md
                                    # (see WORKFLOWS.md § "Trellis workflow" for the workflow spec)

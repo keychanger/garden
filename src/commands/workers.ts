@@ -88,7 +88,7 @@ async function newCommand(args: string[]): Promise<void> {
     if (flags.has("model")) {
       throw new Error(
         "--model is not supported with --workflow grow. "
-        + "Grow loops run on the account default model (locked decisions 3-4).",
+        + "Grow loops run on the account default model.",
       );
     }
     if (flags.has("seed") && flags.has("seed-file")) {
