@@ -230,31 +230,54 @@ function isWorkerRegistry(x: unknown): x is WorkerRegistry {
   return true;
 }
 
+// In-process cache: registry parses are surprisingly hot. The hook dispatcher
+// reads the registry on every Claude tool-use, the poller's tick reads it
+// once per project, and refreshDashboard threads it through downstream calls
+// — but per-hook the same shape is parsed multiple times because not every
+// callsite participates in the RefreshOptions threading. Caching the parsed
+// value keyed on file stat (mtimeMs+size) lets us skip the read+parse+migrate
+// walk when nothing has changed on disk. Cross-process visibility is
+// preserved: any external write changes mtime, so the next read sees fresh
+// content. Returns a deep clone so callers can mutate freely (the existing
+// read-modify-writeRegistry pattern relies on that).
+let cachedRegistry: { mtimeMs: number; size: number; value: WorkerRegistry } | null = null;
+
+function invalidateRegistryCache(): void {
+  cachedRegistry = null;
+}
+
 export function readRegistry(): WorkerRegistry {
   try {
-    if (fs.existsSync(REGISTRY_FILE)) {
-      const raw = JSON.parse(fs.readFileSync(REGISTRY_FILE, "utf-8"));
-      if (!isWorkerRegistry(raw)) {
-        log.warn("registry", "registry file failed shape check, using empty", {
-          data: { topLevelKeys: Object.keys(raw ?? {}) },
-        });
-        return { workers: {} };
-      }
-      // Lazily migrate legacy flat trellis* fields to the nested
-      // entry.trellis sub-object. Idempotent: entries already in the new
-      // shape pass through unchanged. The next writeRegistry persists the
-      // new shape; readers below this layer never see the old flat keys.
-      for (const entries of Object.values(raw.workers)) {
-        for (const e of entries as WorkerEntry[]) {
-          migrateLegacyTrellisFields(e);
-        }
-      }
-      return raw;
+    const stat = fs.statSync(REGISTRY_FILE);
+    if (cachedRegistry
+        && cachedRegistry.mtimeMs === stat.mtimeMs
+        && cachedRegistry.size === stat.size) {
+      return structuredClone(cachedRegistry.value);
     }
+    const raw = JSON.parse(fs.readFileSync(REGISTRY_FILE, "utf-8"));
+    if (!isWorkerRegistry(raw)) {
+      log.warn("registry", "registry file failed shape check, using empty", {
+        data: { topLevelKeys: Object.keys(raw ?? {}) },
+      });
+      return { workers: {} };
+    }
+    // Lazily migrate legacy flat trellis* fields to the nested
+    // entry.trellis sub-object. Idempotent: entries already in the new
+    // shape pass through unchanged. The next writeRegistry persists the
+    // new shape; readers below this layer never see the old flat keys.
+    for (const entries of Object.values(raw.workers)) {
+      for (const e of entries as WorkerEntry[]) {
+        migrateLegacyTrellisFields(e);
+      }
+    }
+    cachedRegistry = { mtimeMs: stat.mtimeMs, size: stat.size, value: raw };
+    return structuredClone(raw);
   } catch (err) {
-    log.warn("registry", "failed to read registry, using empty", {
-      data: { error: String(err) },
-    });
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      log.warn("registry", "failed to read registry, using empty", {
+        data: { error: String(err) },
+      });
+    }
   }
   return { workers: {} };
 }
@@ -299,6 +322,11 @@ function migrateLegacyTrellisFields(entry: WorkerEntry): void {
 
 export function writeRegistry(registry: WorkerRegistry): void {
   atomicWriteFile(REGISTRY_FILE, JSON.stringify(registry, null, 2));
+  // Invalidate after write so the next readRegistry picks up fresh state.
+  // mtime would change anyway, but explicit invalidation guards against
+  // sub-millisecond mtime resolution on some filesystems clamping the
+  // post-write mtime to the same value as a pre-write read.
+  invalidateRegistryCache();
 }
 
 export function addWorker(project: string, entry: WorkerEntry): void {

@@ -509,3 +509,57 @@ describe("trellis WorkerEntry fields", () => {
     expect((w as Record<string, unknown>).trellisIteration).toBeUndefined();
   });
 });
+
+describe("readRegistry mtime cache", () => {
+  it("returns a fresh clone each call so callers can mutate without polluting the cache", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    fs.writeFileSync(REGISTRY_FILE, JSON.stringify({
+      workers: { proj: [{ name: "alpha", sessionId: "s1", task: "" }] },
+    }));
+
+    const first = readRegistry();
+    first.workers.proj.push({ name: "fake", sessionId: "x", task: "" });
+
+    const second = readRegistry();
+    // The mutation on `first` must not leak into `second`. The read-modify-
+    // writeRegistry pattern (under withRegistryLock) relies on this.
+    expect(second.workers.proj).toHaveLength(1);
+    expect(second.workers.proj[0].name).toBe("alpha");
+  });
+
+  it("invalidates after writeRegistry so callers see freshly-written content", async () => {
+    const { readRegistry, writeRegistry, REGISTRY_FILE } = await importRegistry();
+    fs.writeFileSync(REGISTRY_FILE, JSON.stringify({
+      workers: { proj: [{ name: "alpha", sessionId: "s1", task: "" }] },
+    }));
+
+    // Prime the cache.
+    expect(readRegistry().workers.proj[0].name).toBe("alpha");
+
+    // Write through the cached path (mtime would change anyway, but the
+    // cache is invalidated explicitly to guard against sub-millisecond mtime
+    // resolution clamps that happen on some filesystems).
+    writeRegistry({
+      workers: { proj: [{ name: "beta", sessionId: "s2", task: "" }] },
+    });
+
+    expect(readRegistry().workers.proj[0].name).toBe("beta");
+  });
+
+  it("picks up cross-process writes via mtime change", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    fs.writeFileSync(REGISTRY_FILE, JSON.stringify({
+      workers: { proj: [{ name: "alpha", sessionId: "s1", task: "" }] },
+    }));
+    expect(readRegistry().workers.proj[0].name).toBe("alpha");
+
+    // Simulate an out-of-process write: change content + bump mtime.
+    fs.writeFileSync(REGISTRY_FILE, JSON.stringify({
+      workers: { proj: [{ name: "gamma", sessionId: "s9", task: "" }] },
+    }));
+    const future = new Date(Date.now() + 10_000);
+    fs.utimesSync(REGISTRY_FILE, future, future);
+
+    expect(readRegistry().workers.proj[0].name).toBe("gamma");
+  });
+});

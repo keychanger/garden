@@ -207,3 +207,52 @@ describe("withStateLock", () => {
     }
   }, 5000);
 });
+
+describe("readDashState mtime cache", () => {
+  it("returns a fresh clone each call so callers can mutate without polluting the cache", async () => {
+    const { readDashState, STATE_FILE } = await importState();
+    fs.writeFileSync(STATE_FILE, JSON.stringify({
+      activeProject: "garden", activePlot: null,
+      statusPaneId: null, usagePaneId: null,
+      gardenShellPaneId: null, gardenPaneType: "growhouse",
+      gardenWindowName: "_garden-growhouse",
+      activePaneId: null, activePaneType: null, activeWindowName: null,
+      lastActiveWorker: {}, lastActiveProjectByPlot: {},
+    }));
+
+    const first = readDashState();
+    first.activeProject = "mutated";
+    first.lastActiveWorker.someProj = "fake-worker";
+
+    const second = readDashState();
+    // The mutation on `first` must not leak into `second`. The read-modify-
+    // writeDashState pattern under withStateLock relies on this.
+    expect(second.activeProject).toBe("garden");
+    expect(second.lastActiveWorker).toEqual({});
+  });
+
+  it("invalidates after writeDashState", async () => {
+    const { readDashState, writeDashState, STATE_FILE } = await importState();
+    fs.writeFileSync(STATE_FILE, JSON.stringify({
+      activeProject: "garden", activePlot: null,
+      statusPaneId: null, usagePaneId: null,
+      gardenShellPaneId: null, gardenPaneType: "growhouse",
+      gardenWindowName: "_garden-growhouse",
+      activePaneId: null, activePaneType: null, activeWindowName: null,
+      lastActiveWorker: {}, lastActiveProjectByPlot: {},
+    }));
+
+    expect(readDashState().activeProject).toBe("garden");
+
+    writeDashState({
+      activeProject: "second-project", activePlot: null,
+      statusPaneId: null, usagePaneId: null,
+      gardenShellPaneId: null, gardenPaneType: "growhouse",
+      gardenWindowName: "_garden-growhouse",
+      activePaneId: null, activePaneType: null, activeWindowName: null,
+      lastActiveWorker: {}, lastActiveProjectByPlot: {},
+    });
+
+    expect(readDashState().activeProject).toBe("second-project");
+  });
+});

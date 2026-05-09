@@ -82,8 +82,27 @@ function isDashboardState(x: unknown): x is DashboardState {
   );
 }
 
+// In-process cache: refreshDashboard / hook handlers / hotkey handlers all
+// readDashState on every event. Cache the parsed value keyed on file stat
+// (mtimeMs+size); skip the read+parse+migration walk when nothing changed
+// on disk. Cross-process visibility is preserved — any external write
+// changes mtime so the next read sees fresh content. Returns a fresh clone
+// so callers can mutate freely (the read-modify-writeDashState pattern under
+// withStateLock relies on that).
+let cachedState: { mtimeMs: number; size: number; value: DashboardState } | null = null;
+
+function invalidateStateCache(): void {
+  cachedState = null;
+}
+
 export function readDashState(): DashboardState {
   try {
+    const stat = fs.statSync(STATE_FILE);
+    if (cachedState
+        && cachedState.mtimeMs === stat.mtimeMs
+        && cachedState.size === stat.size) {
+      return structuredClone(cachedState.value);
+    }
     const raw = JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
     if (raw.gardenPaneType === "garden") raw.gardenPaneType = "growhouse";
     if (raw.gardenPaneType === "console") raw.gardenPaneType = "growhouse";
@@ -102,7 +121,8 @@ export function readDashState(): DashboardState {
       });
       return { ...DEFAULT_STATE };
     }
-    return raw;
+    cachedState = { mtimeMs: stat.mtimeMs, size: stat.size, value: raw };
+    return structuredClone(raw);
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
       log.warn("state", "failed to read state file, using defaults", {
@@ -115,4 +135,8 @@ export function readDashState(): DashboardState {
 
 export function writeDashState(state: DashboardState): void {
   atomicWriteFile(STATE_FILE, JSON.stringify(state, null, 2));
+  // Invalidate after write so the next readDashState picks up fresh state.
+  // mtime changes anyway; explicit invalidation guards against sub-millisecond
+  // mtime resolution clamping on some filesystems.
+  invalidateStateCache();
 }

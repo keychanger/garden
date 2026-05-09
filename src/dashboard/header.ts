@@ -10,7 +10,7 @@
 import path from "node:path";
 import { SESSIONS_DIR, loadConfig, tryGetProject, plotsMap, isPlotFocused } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize, listAllWindowNames } from "./tmux.js";
+import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize, listAllWindowNames, listSessionPaneTitles, cleanPaneTitle, type PaneInfo } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
 import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields, type WorkerRegistry } from "./registry.js";
 import { atomicWriteFile } from "./atomic-write.js";
@@ -230,19 +230,32 @@ function setBarVars(left: string, right: string): void {
   } catch { /* no client attached or session gone */ }
 }
 
-// Suppresses window-name leakage in the tmux status bar's center strip. ~200ms for ~16 windows — callers schedule after user-visible paints.
+// Suppresses window-name leakage in the tmux status bar's center strip. ~200ms
+// for ~16 windows because each window costs 2 sync `tmux set-option` shell-outs.
+// Skip when the window-name set hasn't changed since the last call: the
+// suppression is idempotent (tmux remembers the set-option setting per window),
+// so re-applying to the same set is pure overhead. Reset on session restart by
+// virtue of the dashboard process restarting.
+let lastSuppressedWindowSet: string | null = null;
+
 function suppressWindowNames(cachedWindowNames?: string[]): void {
   try {
-    const windows = cachedWindowNames
+    const raw = cachedWindowNames
       ? cachedWindowNames.join("\n")
       : tmuxOutput("list-windows", "-t", DASHBOARD_SESSION, "-F", "#{window_name}");
-    for (const win of windows.split("\n").filter(Boolean)) {
+    const windows = raw.split("\n").filter(Boolean);
+    // Identity-equal set check: sort keeps the cache stable when tmux returns
+    // a different ordering for the same windows.
+    const setKey = [...windows].sort().join("\n");
+    if (setKey === lastSuppressedWindowSet) return;
+    for (const win of windows) {
       const target = `${DASHBOARD_SESSION}:${win}`;
       try {
         tmux("set-option", "-t", target, "window-status-format", "");
         tmux("set-option", "-t", target, "window-status-current-format", "");
       } catch { /* window may have been killed */ }
     }
+    lastSuppressedWindowSet = setKey;
   } catch { /* session gone */ }
 }
 
@@ -569,7 +582,7 @@ export function refreshDashboard(opts?: RefreshOptions): void {
   writeQuickStatus(shared);
   writeUsageRendered(shared);
   suppressWindowNames(shared.windowNames);
-  refreshWorkerTasks(shared.registry);
+  refreshWorkerTasks(shared.registry, shared.state);
 }
 
 // Lean refresh for worker cycling: skip header/tasks/usage since only the status marker moves.
@@ -595,16 +608,41 @@ export function refreshDashboardPlotCycle(opts?: RefreshOptions): void {
 // the title at hook time, but Claude updates the pane title continuously as
 // it works. By refreshing on every dashboard update (which piggybacks on
 // existing hook events), we keep all workers' tasks current without polling.
-function refreshWorkerTasks(cachedRegistry?: WorkerRegistry): void {
+//
+// Batched: one tmux `list-panes -s -F` call yields every pane's
+// (windowName, paneId, title) in a single fork. The previous shape ran
+// findWorkerPaneId + getPaneTitle per worker — 2-3 tmux forks each, scaling
+// linearly with worker count. Now constant: one fork regardless of N.
+function refreshWorkerTasks(cachedRegistry?: WorkerRegistry, cachedState?: DashboardState): void {
   try {
     const registry = cachedRegistry ?? readRegistry();
+    const state = cachedState ?? readDashState();
+    const panes = listSessionPaneTitles();
+    if (panes.length === 0) return;
+
+    // Index by both window name (the parked-pane lookup) and pane id (the
+    // active-window swap-pane lookup). A worker's pane is in its logical
+    // hidden window when parked, but moves to the visible right slot via
+    // swap-pane when focused — pane_id is the stable identifier across both.
+    const byWindow = new Map<string, PaneInfo>();
+    const byPaneId = new Map<string, string>();
+    for (const p of panes) {
+      if (!byWindow.has(p.windowName)) byWindow.set(p.windowName, p);
+      byPaneId.set(p.paneId, p.rawTitle);
+    }
+
     const updates: Array<{ project: string; workerName: string; fields: { task: string } }> = [];
 
     for (const [project, entries] of Object.entries(registry.workers)) {
       for (const entry of entries) {
-        const paneId = findWorkerPaneId(project, entry.name);
-        if (!paneId) continue;
-        const title = getPaneTitle(paneId);
+        const logical = workerWin(project, entry.name);
+        let raw: string | undefined;
+        if (state.activeWindowName === logical && state.activePaneId) {
+          raw = byPaneId.get(state.activePaneId);
+        } else {
+          raw = byWindow.get(logical)?.rawTitle;
+        }
+        const title = cleanPaneTitle(raw);
         if (title && title !== entry.task) {
           updates.push({ project, workerName: entry.name, fields: { task: title } });
         }

@@ -206,16 +206,53 @@ export function getPaneLabel(paneId: string): string | null {
 // (Claude prefixes with characters like "✱ ") and reject the default
 // "Claude Code" placeholder and system hostname (tmux defaults new panes
 // to the hostname, which would overwrite the persisted task on resume).
+export function cleanPaneTitle(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const cleaned = raw.replace(/^[^a-zA-Z0-9]+/, "").trim();
+  if (!cleaned || cleaned === "Claude Code") return null;
+  if (cleaned === os.hostname()) return null;
+  return cleaned;
+}
+
 export function getPaneTitle(paneId: string): string | null {
   try {
-    const raw = tmuxOutput("display-message", "-t", paneId, "-p", "#{pane_title}");
-    if (!raw) return null;
-    const cleaned = raw.replace(/^[^a-zA-Z0-9]+/, "").trim();
-    if (!cleaned || cleaned === "Claude Code") return null;
-    if (cleaned === os.hostname()) return null;
-    return cleaned;
+    return cleanPaneTitle(tmuxOutput("display-message", "-t", paneId, "-p", "#{pane_title}"));
   } catch {
     return null;
+  }
+}
+
+// One-shot enumeration of every pane in the dashboard session, with each
+// pane's window name, id, and raw title. Replaces N per-worker tmux forks
+// (windowExists + getFirstPaneId + display-message) in callers like
+// refreshWorkerTasks. Field separator is tab — unlikely in pane titles, and
+// the parser defensively rejoins any tail tokens past the third one.
+export interface PaneInfo {
+  windowName: string;
+  paneId: string;
+  rawTitle: string;
+}
+
+export function listSessionPaneTitles(): PaneInfo[] {
+  try {
+    const out = tmuxOutput(
+      "list-panes", "-s", "-t", DASHBOARD_SESSION,
+      "-F", "#{window_name}\t#{pane_id}\t#{pane_title}",
+    );
+    const result: PaneInfo[] = [];
+    for (const line of out.split("\n")) {
+      if (!line) continue;
+      const parts = line.split("\t");
+      if (parts.length < 3) continue;
+      result.push({
+        windowName: parts[0],
+        paneId: parts[1],
+        rawTitle: parts.slice(2).join("\t"),
+      });
+    }
+    return result;
+  } catch {
+    return [];
   }
 }
 

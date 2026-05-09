@@ -52,6 +52,8 @@ import {
   getPaneTitle,
   listAllWindowNames,
   listHiddenWorkerWindows,
+  listSessionPaneTitles,
+  cleanPaneTitle,
   pasteAndSubmit,
 } from "../src/dashboard/tmux.js";
 
@@ -625,5 +627,69 @@ describe("listAllWindowNames", () => {
   it("filters empty strings from output", () => {
     mockExecFileSync.mockReturnValue("main\n\n_garden-shell\n\n");
     expect(listAllWindowNames()).toEqual(["main", "_garden-shell"]);
+  });
+});
+
+// ===========================================================================
+// cleanPaneTitle / listSessionPaneTitles — batched pane-title enumeration
+// ===========================================================================
+
+describe("cleanPaneTitle", () => {
+  it("strips Claude's leading non-alphanumeric prefix and trims whitespace", () => {
+    expect(cleanPaneTitle("✱ Refactoring auth module ")).toBe("Refactoring auth module");
+    expect(cleanPaneTitle("⠋ Building tests")).toBe("Building tests");
+  });
+
+  it("returns null for null/undefined/empty input", () => {
+    expect(cleanPaneTitle(null)).toBeNull();
+    expect(cleanPaneTitle(undefined)).toBeNull();
+    expect(cleanPaneTitle("")).toBeNull();
+  });
+
+  it("returns null for the Claude Code placeholder and pure-noise titles", () => {
+    expect(cleanPaneTitle("Claude Code")).toBeNull();
+    expect(cleanPaneTitle("✱ ")).toBeNull();
+  });
+
+  it("returns null when the cleaned title equals the system hostname", () => {
+    expect(cleanPaneTitle("my-macbook.local")).toBeNull();
+  });
+
+  it("returns alphanumeric titles as-is", () => {
+    expect(cleanPaneTitle("Writing unit tests")).toBe("Writing unit tests");
+  });
+});
+
+describe("listSessionPaneTitles", () => {
+  it("parses tab-separated window/pane/title triples", () => {
+    mockExecFileSync.mockReturnValue(
+      "main\t%0\tinitial pane\n"
+      + "_garden-worker-bold-ash\t%5\t✱ Fixing the leak\n"
+      + "_garden-shell\t%9\tzsh\n",
+    );
+    expect(listSessionPaneTitles()).toEqual([
+      { windowName: "main", paneId: "%0", rawTitle: "initial pane" },
+      { windowName: "_garden-worker-bold-ash", paneId: "%5", rawTitle: "✱ Fixing the leak" },
+      { windowName: "_garden-shell", paneId: "%9", rawTitle: "zsh" },
+    ]);
+  });
+
+  it("rejoins tail tokens past the third one (defensive against tabs in titles)", () => {
+    mockExecFileSync.mockReturnValue("main\t%0\ttitle\twith\ttabs\n");
+    const result = listSessionPaneTitles();
+    expect(result).toHaveLength(1);
+    expect(result[0].rawTitle).toBe("title\twith\ttabs");
+  });
+
+  it("skips lines with fewer than three fields", () => {
+    mockExecFileSync.mockReturnValue("main\t%0\nshorty\n_garden-shell\t%9\tok\n");
+    expect(listSessionPaneTitles()).toEqual([
+      { windowName: "_garden-shell", paneId: "%9", rawTitle: "ok" },
+    ]);
+  });
+
+  it("returns empty array when tmux throws (no session)", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("no server"); });
+    expect(listSessionPaneTitles()).toEqual([]);
   });
 });

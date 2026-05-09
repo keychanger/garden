@@ -57,6 +57,18 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   windowExists: vi.fn(() => false),
   setPaneVar: vi.fn(),
   listAllWindowNames: vi.fn(() => []),
+  // refreshWorkerTasks now reads pane titles via one batched list-panes call.
+  // Default: empty list (no panes), so refreshWorkerTasks is a no-op.
+  listSessionPaneTitles: vi.fn(() => []),
+  // cleanPaneTitle is called by refreshWorkerTasks on each rawTitle. Mirror
+  // the real implementation: strip leading non-alnum, reject "Claude Code" /
+  // hostname, return null otherwise.
+  cleanPaneTitle: vi.fn((raw: string | null | undefined) => {
+    if (!raw) return null;
+    const cleaned = raw.replace(/^[^a-zA-Z0-9]+/, "").trim();
+    if (!cleaned || cleaned === "Claude Code") return null;
+    return cleaned;
+  }),
   shellEscape: (s: string) => /^[a-zA-Z0-9_./:=-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`,
   tmuxDoubleQuote: (s: string) => `"${s.replace(/[\\$"`]/g, "\\$&")}"`,
 }));
@@ -137,7 +149,7 @@ import {
   installInputGuard,
 } from "../src/dashboard/header.js";
 
-import { tmux, getPanePid, getPaneSize, getPaneTitle, setPaneVar } from "../src/dashboard/tmux.js";
+import { tmux, getPanePid, getPaneSize, getPaneTitle, setPaneVar, listSessionPaneTitles } from "../src/dashboard/tmux.js";
 import { readDashState, type DashboardState } from "../src/dashboard/state.js";
 import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields } from "../src/dashboard/registry.js";
 import { currentBranch } from "../src/dashboard/git.js";
@@ -693,14 +705,17 @@ describe("refreshWorkerTasks (via refreshDashboard)", () => {
         ],
       },
     });
-    // findWorkerPaneId uses readDashState and windowExists
     vi.mocked(readDashState).mockReturnValue(makeState({
       activeProject: "garden",
       activePaneId: "%5",
       activeWindowName: "_garden-worker-bold-ash",
     }));
-
-    vi.mocked(getPaneTitle).mockReturnValue("new task");
+    // refreshWorkerTasks now reads pane titles via one batched list-panes
+    // call. The active-window match short-circuits to byPaneId lookup, so
+    // include the active pane id with its current title.
+    vi.mocked(listSessionPaneTitles).mockReturnValue([
+      { windowName: "main", paneId: "%5", rawTitle: "new task" },
+    ]);
 
     refreshDashboard();
 
@@ -722,12 +737,39 @@ describe("refreshWorkerTasks (via refreshDashboard)", () => {
       activePaneId: "%5",
       activeWindowName: "_garden-worker-bold-ash",
     }));
-
-    vi.mocked(getPaneTitle).mockReturnValue("same task");
+    vi.mocked(listSessionPaneTitles).mockReturnValue([
+      { windowName: "main", paneId: "%5", rawTitle: "same task" },
+    ]);
 
     refreshDashboard();
 
     expect(batchUpdateWorkerFields).not.toHaveBeenCalled();
+  });
+
+  it("falls back to byWindow lookup when worker pane is parked (not active)", () => {
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: {
+        garden: [
+          { name: "calm-elm", sessionId: "s2", task: "old", claudeStatus: "idle" },
+        ],
+      },
+    });
+    // Worker is NOT in the active right slot; its logical hidden window
+    // holds the parked pane.
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_garden-worker-bold-ash", // a different worker
+      activePaneId: "%9",
+    }));
+    vi.mocked(listSessionPaneTitles).mockReturnValue([
+      { windowName: "_garden-worker-bold-ash", paneId: "%9", rawTitle: "bold's title" },
+      { windowName: "_garden-worker-calm-elm", paneId: "%12", rawTitle: "calm's new title" },
+    ]);
+
+    refreshDashboard();
+
+    expect(batchUpdateWorkerFields).toHaveBeenCalledWith([
+      { project: "garden", workerName: "calm-elm", fields: { task: "calm's new title" } },
+    ]);
   });
 });
 
@@ -1087,5 +1129,31 @@ describe("refreshDashboard", () => {
     expect(getPanePid).toHaveBeenCalledWith("%7");
     expect(killSpy).toHaveBeenCalledWith(55555, "SIGUSR1");
     killSpy.mockRestore();
+  });
+
+  it("skips suppressWindowNames per-window set-option calls when window-name set is unchanged", () => {
+    const windowSet = ["main", "_garden-worker-bold-ash", "_garden-shell"];
+
+    refreshDashboard({ windowNames: windowSet });
+    const firstCallCount = vi.mocked(tmux).mock.calls.filter(
+      c => c[0] === "set-option" && c[2]?.toString().includes("_garden-worker-bold-ash"),
+    ).length;
+    expect(firstCallCount).toBeGreaterThan(0);
+
+    vi.mocked(tmux).mockClear();
+    // Same set, different order — should still hit the cache.
+    refreshDashboard({ windowNames: ["_garden-shell", "_garden-worker-bold-ash", "main"] });
+    const secondCallCount = vi.mocked(tmux).mock.calls.filter(
+      c => c[0] === "set-option" && c[2]?.toString().includes("_garden-worker-bold-ash"),
+    ).length;
+    expect(secondCallCount).toBe(0);
+
+    vi.mocked(tmux).mockClear();
+    // Window added — set differs, suppression must re-apply.
+    refreshDashboard({ windowNames: [...windowSet, "_garden-worker-calm-elm"] });
+    const thirdCallCount = vi.mocked(tmux).mock.calls.filter(
+      c => c[0] === "set-option" && c[2]?.toString().includes("_garden-worker-calm-elm"),
+    ).length;
+    expect(thirdCallCount).toBeGreaterThan(0);
   });
 });
