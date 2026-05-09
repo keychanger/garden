@@ -942,6 +942,10 @@ export function respawnLogsPane(state: DashboardState): void {
   try {
     tmux("respawn-pane", "-k", "-t", target, "sh", "-c", `sh ${shellEscape(scriptFile)}`);
   } catch { /* pane gone */ }
+  // Drop the prior render's scrollback so a filter change doesn't leave the
+  // pre-filter content visible above the new render. Without this, scrolling
+  // up after `⌥/` shows entries the filter is supposed to hide.
+  try { tmux("clear-history", "-t", target); } catch { /* pane gone */ }
   // Re-apply in case respawn-pane resets the flag.
   disablePaneInput(target);
 }

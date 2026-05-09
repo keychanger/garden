@@ -74,14 +74,26 @@ describe("log", () => {
 });
 
 describe("truncateLog", () => {
-  it("clears log when over size limit", async () => {
+  it("trims to a recent tail when over size limit, snapping to a newline", async () => {
     const { truncateLog } = await importLog();
     const logFile = path.join(env.sessionsDir, "dashboard.log");
-    // Write > 512KB
-    fs.writeFileSync(logFile, "x".repeat(600 * 1024));
+    // Build > 10MB of newline-delimited entries. Each line is identifiable so
+    // we can confirm the head was dropped and the tail kept intact.
+    const line = "x".repeat(1023) + "\n"; // 1KB per line
+    const lines = 11 * 1024; // 11MB
+    fs.writeFileSync(logFile, line.repeat(lines));
+    const beforeSize = fs.statSync(logFile).size;
     truncateLog();
-    const stat = fs.statSync(logFile);
-    expect(stat.size).toBe(0);
+    const after = fs.readFileSync(logFile, "utf-8");
+    const afterSize = Buffer.byteLength(after);
+
+    // Smaller than before, but a substantial recent tail kept (not zeroed).
+    expect(afterSize).toBeLessThan(beforeSize);
+    expect(afterSize).toBeGreaterThan(4 * 1024 * 1024);
+    expect(afterSize).toBeLessThanOrEqual(9 * 1024 * 1024);
+    // No partial line at the head — every retained line is a complete entry.
+    expect(after.startsWith("x".repeat(1023) + "\n")).toBe(true);
+    expect(after.endsWith("\n")).toBe(true);
   });
 
   it("does nothing when log is under size limit", async () => {
