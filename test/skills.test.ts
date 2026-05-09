@@ -21,6 +21,9 @@ import {
   TRELLIS_AUTHOR_SKILL_DIRNAME,
   TRELLIS_AUTHOR_SKILL_FILENAME,
   TRELLIS_AUTHOR_SKILL_CONTENT,
+  GROW_SKILL_DIRNAME,
+  GROW_SKILL_FILENAME,
+  GROW_SKILL_CONTENT,
   installClaudeSkills,
 } from "../src/dashboard/skills.js";
 
@@ -224,5 +227,82 @@ describe("installClaudeSkills — trellis-author", () => {
   it("constants match what installClaudeSkills writes", () => {
     expect(TRELLIS_AUTHOR_SKILL_DIRNAME).toBe("trellis-author");
     expect(TRELLIS_AUTHOR_SKILL_FILENAME).toBe("SKILL.md");
+  });
+});
+
+describe("GROW_SKILL_CONTENT", () => {
+  it("starts with valid frontmatter declaring the skill name", () => {
+    expect(GROW_SKILL_CONTENT).toMatch(/^---\nname: grow\n/);
+  });
+
+  it("description triggers on operator intent to convert / harden / improvement-pass", () => {
+    const match = GROW_SKILL_CONTENT.match(/description: ([^\n]+)/);
+    expect(match).not.toBeNull();
+    const desc = match![1].toLowerCase();
+    // The trigger names the operator-driven phrases the skill should fire on.
+    expect(desc).toContain("grow loop");
+    expect(desc).toMatch(/\/grow|harden|improvement pass|convert/);
+    // Self-fire is forbidden: the description must explicitly negate
+    // unprompted invocation, the same way handoff and trellis-author do.
+    expect(desc).toContain("not");
+  });
+
+  it("teaches the convert CLI invocation with the goal-file path", () => {
+    expect(GROW_SKILL_CONTENT).toContain("garden workers grow $GARDEN_WORKER");
+    expect(GROW_SKILL_CONTENT).toContain("--goal-file .garden/grow-goal.md");
+    expect(GROW_SKILL_CONTENT).toContain("--max-iterations");
+  });
+
+  it("instructs the worker to write the goal to .garden/grow-goal.md before running the CLI", () => {
+    expect(GROW_SKILL_CONTENT).toContain(".garden/grow-goal.md");
+    expect(GROW_SKILL_CONTENT.toLowerCase()).toMatch(/mkdir -p \.garden|mkdir.*\.garden/);
+  });
+
+  it("walks through scope sizing (in scope, out of scope, done criterion)", () => {
+    const body = GROW_SKILL_CONTENT.toLowerCase();
+    expect(body).toContain("in scope");
+    expect(body).toContain("out of scope");
+    expect(body).toMatch(/done look|convergence criterion/);
+  });
+
+  it("calls out when NOT to invoke the skill (already grow/trellis, unprompted)", () => {
+    expect(GROW_SKILL_CONTENT.toLowerCase()).toContain("when not to use");
+    // Should warn about both re-conversion (already on grow/trellis) and
+    // unprompted self-invocation, so the worker doesn't fire it on its own.
+    expect(GROW_SKILL_CONTENT.toLowerCase()).toMatch(/already on.*workflow|re-conversion|already.*grow/);
+    expect(GROW_SKILL_CONTENT.toLowerCase()).toMatch(/operator did not ask|self-conversion/);
+  });
+
+  it("documents mid-loop amend via direct file edit", () => {
+    // Operators expect to refine the goal between iterations; the skill must
+    // surface that path so the worker doesn't tell them to re-run the CLI.
+    expect(GROW_SKILL_CONTENT.toLowerCase()).toMatch(/amend|edit.*\.garden\/grow-goal\.md/);
+  });
+
+  it("explicitly warns against committing the goal file", () => {
+    expect(GROW_SKILL_CONTENT.toLowerCase()).toMatch(/do not.*git add|not.*commit|gitignored/);
+  });
+});
+
+describe("installClaudeSkills — grow", () => {
+  it("writes SKILL.md under .claude/skills/grow alongside the other three skills", () => {
+    installClaudeSkills("/Users/x/.garden/worktrees/myproject/bold-ash");
+    expect(fs.mkdirSync).toHaveBeenCalledWith(
+      "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/grow",
+      { recursive: true },
+    );
+    expect(fs.renameSync).toHaveBeenCalledWith(
+      expect.stringContaining("/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/grow/SKILL.md."),
+      "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/grow/SKILL.md",
+    );
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining("/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/grow/SKILL.md."),
+      GROW_SKILL_CONTENT,
+    );
+  });
+
+  it("constants match what installClaudeSkills writes", () => {
+    expect(GROW_SKILL_DIRNAME).toBe("grow");
+    expect(GROW_SKILL_FILENAME).toBe("SKILL.md");
   });
 });

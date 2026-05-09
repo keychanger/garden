@@ -31,6 +31,7 @@ import {
   DONE_SKILL_CONTENT, DONE_SKILL_DIRNAME, DONE_SKILL_FILENAME,
   HANDOFF_SKILL_CONTENT, HANDOFF_SKILL_DIRNAME, HANDOFF_SKILL_FILENAME,
   TRELLIS_AUTHOR_SKILL_CONTENT, TRELLIS_AUTHOR_SKILL_DIRNAME, TRELLIS_AUTHOR_SKILL_FILENAME,
+  GROW_SKILL_CONTENT, GROW_SKILL_DIRNAME, GROW_SKILL_FILENAME,
   installClaudeSkills,
 } from "./skills.js";
 import { claudeEnvPrefix } from "./claude-env.js";
@@ -626,6 +627,9 @@ export function buildWorktreeBootstrapScript(
   const trellisAuthorSkillLit = shellEscape(TRELLIS_AUTHOR_SKILL_CONTENT);
   const trellisAuthorSkillDirnameLit = shellEscape(TRELLIS_AUTHOR_SKILL_DIRNAME);
   const trellisAuthorSkillFilenameLit = shellEscape(TRELLIS_AUTHOR_SKILL_FILENAME);
+  const growSkillLit = shellEscape(GROW_SKILL_CONTENT);
+  const growSkillDirnameLit = shellEscape(GROW_SKILL_DIRNAME);
+  const growSkillFilenameLit = shellEscape(GROW_SKILL_FILENAME);
   const envPrefix = claudeEnvPrefix(project);
   const modelFlag = opts?.model ? ` --model ${shellEscape(opts.model)}` : "";
 
@@ -724,6 +728,8 @@ mkdir -p ${wtPathLit}/.claude/skills/${handoffSkillDirnameLit}
 printf '%s' ${handoffSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${handoffSkillDirnameLit}/${handoffSkillFilenameLit}
 mkdir -p ${wtPathLit}/.claude/skills/${trellisAuthorSkillDirnameLit}
 printf '%s' ${trellisAuthorSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${trellisAuthorSkillDirnameLit}/${trellisAuthorSkillFilenameLit}
+mkdir -p ${wtPathLit}/.claude/skills/${growSkillDirnameLit}
+printf '%s' ${growSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${growSkillDirnameLit}/${growSkillFilenameLit}
 
 # Ensure garden-managed dirs are excluded from git status.
 # Writing to the common info/exclude covers all worktrees and never gets committed.

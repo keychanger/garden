@@ -257,6 +257,99 @@ The briefing is the new worker's only initial signal — invest in it. Include f
 If any \`garden handoff\` fails (unknown project, etc.), report the error to the operator and do not write \`.garden-done\` — the operator will decide whether to retry, drop that item, or take a different route.
 `;
 
+export const GROW_SKILL_DIRNAME = "grow";
+export const GROW_SKILL_FILENAME = "SKILL.md";
+
+// Bundled with every worker — the brainstorm-then-grow flow's primary DX.
+// The operator types `/grow [N]` (or asks the worker to "harden this for N
+// passes") in the worker pane; this skill instructs the worker to summarize
+// the conversation into a goal file and run `garden workers grow` to flip
+// the workflow from default to grow.
+export const GROW_SKILL_CONTENT = `---
+name: grow
+description: Use when the operator wants to convert this active worker into a grow loop after they've finished (or are mid-way through) a real piece of work — N additional polish/hardening passes after the current work merges. Triggers on phrases like "/grow N", "harden this for N passes", "do an improvement pass on what we just did", or "convert this to a grow worker". Do NOT invoke unprompted.
+---
+
+# Convert this worker into a grow loop
+
+The operator wants this worker to keep iterating on the work we've done in this session — N additional polish/hardening passes after the current work merges. Each pass cold-respawns with fresh Claude context; the seed (a distilled goal) is what carries forward.
+
+Convert is irreversible from this skill: you can amend the goal mid-loop by editing \`.garden/grow-goal.md\`, but you cannot un-convert. Confirm intent before running the CLI.
+
+## What it does
+
+Walks you through:
+
+1. Pick the iteration budget N (default 5).
+2. Summarize what we've decided in this session into a 1-3 paragraph goal that anchors every future iteration.
+3. Write the goal to \`.garden/grow-goal.md\` at your worktree root.
+4. Run \`garden workers grow $GARDEN_WORKER --goal-file .garden/grow-goal.md --max-iterations <N>\` to flip the workflow.
+5. Continue — finish your in-flight work (or end your turn if you're already done) and the next push triggers iter 1 of the grow loop.
+
+## When to use
+
+- The operator typed \`/grow [N]\` or asked you to harden / polish / do additional passes on what we just did.
+- The work is real: a planned feature, a bug fix with surrounding tests, a refactor with documentation. Hardening trivial work is wasteful — if the operator just asked for a typo fix, gently push back.
+- The conversation contains a coherent goal you can summarize without ambiguity.
+
+## When NOT to use
+
+- The operator did not ask. Self-conversion is not the intended pattern.
+- This worker is already on a non-default workflow (\`garden whoami\` shows \`workflow: grow\` or \`trellis\`). The CLI rejects re-conversion. Tell the operator to either edit \`.garden/grow-goal.md\` directly (for grow) or amend the trellis (for trellis).
+- The current work is not yet committed and you are mid-debug. Convert *after* you have a clean stopping point — iter 1's review picks up whatever you push, so don't push half-broken state.
+
+## How to invoke
+
+### 1. Decide N
+
+The operator's instruction names it. \`/grow 3\` → use 3. \`/grow\` with no number, or "harden this" without a number → use 5 (the default).
+
+### 2. Summarize the goal
+
+Write a 1-3 paragraph goal capturing what we've decided in this session:
+
+- **What is the work?** A sentence summarizing the feature/fix/refactor.
+- **What is in scope?** Bullet list of the concrete changes we agreed on (files, functions, behaviors).
+- **What is out of scope?** Bullet list of adjacent improvements the loop should NOT chase. This is the equivalent of trellis's "Out of scope" section — without it, future iterations drift toward "while I'm here" cleanups.
+- **What does done look like?** A sentence on the convergence criterion. "All checks pass and the API matches the spec above" is fine; "the auth feels good" is not.
+
+Write as if future-you (with no conversation history, in iter 2's fresh context) needs to understand the goal from this paragraph alone. Names of files, function signatures, command flags, test names — concrete enough that the next iteration can verify against the diff.
+
+### 3. Write to .garden/grow-goal.md
+
+\`\`\`bash
+mkdir -p .garden
+cat > .garden/grow-goal.md <<'EOF'
+<your summary here>
+EOF
+\`\`\`
+
+The directory may not exist — \`mkdir -p\` first. Do NOT \`git add\` this file; it is gitignored via the worktree's \`.git/info/exclude\` and lives outside version control by design.
+
+### 4. Run the convert CLI
+
+\`\`\`bash
+garden workers grow $GARDEN_WORKER --goal-file .garden/grow-goal.md --max-iterations <N>
+\`\`\`
+
+Use the Bash tool. The CLI prints \`Converted worker <project>/<name> to grow (up to <N> iterations).\` Relay it to the operator so they know the flip succeeded.
+
+If the CLI errors with "already on the 'grow' workflow", the worker was already converted — point the operator at \`.garden/grow-goal.md\` for amends and stop.
+
+If the CLI errors with "already on the 'trellis' workflow", the worker is a trellis vine — re-conversion isn't supported. Tell the operator and stop.
+
+### 5. Continue your work
+
+- **If you were mid-implementation:** resume from where you paused. Finish your current work, commit, push. The push triggers iter 1 of the now-grow loop.
+- **If your initial work was already done before the operator typed \`/grow\`:** end your turn. The merge of your earlier push fires the grow auto-continue, which respawns iter 2 with fresh context.
+
+After this skill returns, the worker is on the grow workflow and behaves like any other grow worker for all subsequent iterations.
+
+## Mid-loop amend
+
+If the operator wants to refine the goal between iterations, they edit \`.garden/grow-goal.md\` directly. The next iteration's continue prompt re-reads the file at dispatch time, so the amendment takes effect on iter K+1 without any garden command. Convert is one-shot; amend is unbounded.
+`;
+
 export function installClaudeSkills(targetDir: string): void {
   const skillsRoot = path.join(targetDir, ".claude", "skills");
   // Heal the legacy flat-file layout so refreshes/bounces of pre-fix workers stop shadowing the new directory layout.
@@ -264,6 +357,7 @@ export function installClaudeSkills(targetDir: string): void {
   writeSkill(skillsRoot, DONE_SKILL_DIRNAME, DONE_SKILL_FILENAME, DONE_SKILL_CONTENT);
   writeSkill(skillsRoot, HANDOFF_SKILL_DIRNAME, HANDOFF_SKILL_FILENAME, HANDOFF_SKILL_CONTENT);
   writeSkill(skillsRoot, TRELLIS_AUTHOR_SKILL_DIRNAME, TRELLIS_AUTHOR_SKILL_FILENAME, TRELLIS_AUTHOR_SKILL_CONTENT);
+  writeSkill(skillsRoot, GROW_SKILL_DIRNAME, GROW_SKILL_FILENAME, GROW_SKILL_CONTENT);
 }
 
 function writeSkill(skillsRoot: string, dirname: string, filename: string, content: string): void {
