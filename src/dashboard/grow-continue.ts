@@ -21,6 +21,10 @@ import {
 } from "./registry.js";
 
 const GROW_LOG_FILE_REL = path.join(".garden", "grow-log.md");
+/** Worktree-relative path to the goal file. The CLI plant + convert paths
+ *  both write here; iter ≥ 2 prompts read here first (falling back to
+ *  entry.grow.seed). Operators amend by editing this file directly. */
+export const GROW_GOAL_FILE_REL = path.join(".garden", "grow-goal.md");
 
 // Grow-flavored hooks for the loop primitive. Reads/writes
 // entry.grow.iteration and routes the continue prompt through
@@ -100,11 +104,16 @@ export function growAutoContinueAfterMerge(
 // changed-files list grounds the worker in the just-merged diff; the
 // grow-log content carries cumulative iteration summaries so the worker
 // doesn't repeat work.
+//
+// Seed resolution: prefer `.garden/grow-goal.md` on disk (so mid-loop
+// amends are picked up by the next iteration), fall back to
+// `entry.grow.seed` when the file is missing or empty (legacy entries
+// from before the goal-file mechanism shipped).
 export function buildGrowContinuePrompt(entry: WorkerEntry): string {
   const g = entry.grow;
   const upcoming = (g?.iteration ?? 0) + 1;
   const max = g?.maxIterations ?? 5;
-  const seed = g?.seed ?? "";
+  const seed = readGrowGoalFile(entry.worktreePath) ?? g?.seed ?? "";
   const changed = entry.pendingContinueChangedFiles ?? [];
   const logBody = readGrowLogFile(entry.worktreePath);
 
@@ -151,6 +160,13 @@ export function buildGrowContinuePrompt(entry: WorkerEntry): string {
 // cramming all hardening into iter 1 (where it would be wasted — iter 2
 // starts with fresh context anyway). Used by the CLI plant path in
 // commands/workers.ts.
+//
+// First instruction the worker sees: write the goal text to
+// `.garden/grow-goal.md`. This produces the same on-disk artifact the
+// convert path writes via the CLI directly, keeping the two entry points
+// symmetric. Iter ≥ 2 prompts read this file first (fallback to
+// entry.grow.seed); writing it now makes mid-loop amends work for
+// cold-planted grow workers, not just converted ones.
 export function buildGrowIteration1Seed(seed: string, maxIter: number): string {
   return [
     `[garden] Grow loop, iteration 1 of ${maxIter}.`,
@@ -159,7 +175,9 @@ export function buildGrowIteration1Seed(seed: string, maxIter: number): string {
     "",
     seed,
     "",
-    `Iterate to harden recent work in up to ${maxIter} bounded passes. Each pass starts with fresh Claude context. Disk is the only state that crosses iterations: code, tests, docs, and your own notes in \`${GROW_LOG_FILE_REL}\`.`,
+    `Before you start, write the task above (verbatim) to \`${GROW_GOAL_FILE_REL}\` at your worktree root (\`mkdir -p .garden\` first if needed; do NOT commit the file — it is gitignored). This is the durable goal that anchors every iteration's continue prompt; iter 2+ reads from there. The operator can edit the file mid-loop to amend the goal.`,
+    "",
+    `Iterate to harden recent work in up to ${maxIter} bounded passes. Each pass starts with fresh Claude context. Disk is the only state that crosses iterations: code, tests, docs, the goal file, and your own notes in \`${GROW_LOG_FILE_REL}\`.`,
     "",
     `Append a one-line entry to \`${GROW_LOG_FILE_REL}\` each iteration describing what you did. When nothing material remains, write \`.garden-done\` at your worktree root before ending your turn so the loop terminates instead of consuming another iteration.`,
   ].join("\n");
@@ -175,5 +193,37 @@ function readGrowLogFile(worktreePath: string | undefined): string | null {
     return content || null;
   } catch {
     return null;
+  }
+}
+
+// Read .garden/grow-goal.md from the worktree. The convert CLI writes
+// this file at flip time; the cold-plant CLI also writes it at plant
+// time. Operators can edit the file mid-loop to refine the goal — every
+// iteration's continue prompt re-reads at dispatch time, so amendments
+// take effect on the next iteration without any explicit "amend"
+// command.
+function readGrowGoalFile(worktreePath: string | undefined): string | null {
+  if (!worktreePath) return null;
+  const goalPath = path.join(worktreePath, GROW_GOAL_FILE_REL);
+  try {
+    const content = fs.readFileSync(goalPath, "utf-8").trim();
+    return content || null;
+  } catch {
+    return null;
+  }
+}
+
+// Write the seed text to .garden/grow-goal.md in the worktree. Used by
+// the cold-plant CLI (at plant time) and the convert CLI (at flip
+// time) to produce the durable goal artifact. Returns true on success;
+// callers log + continue on failure (entry.grow.seed is the fallback).
+export function writeGrowGoalFile(worktreePath: string, seed: string): boolean {
+  try {
+    const goalDir = path.join(worktreePath, ".garden");
+    fs.mkdirSync(goalDir, { recursive: true });
+    fs.writeFileSync(path.join(worktreePath, GROW_GOAL_FILE_REL), seed);
+    return true;
+  } catch {
+    return false;
   }
 }

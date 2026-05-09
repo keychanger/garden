@@ -304,3 +304,260 @@ describe("--workflow whitelist", () => {
     ).rejects.toThrow(/--workflow must be 'default', 'trellis', or 'grow'/);
   });
 });
+
+// =============================================================================
+// `garden workers grow` — convert active default worker to grow
+// =============================================================================
+
+async function importRegistry() {
+  return await import("../src/dashboard/registry.js");
+}
+
+async function addDefaultWorker(
+  project: string, name: string, worktreePath: string,
+): Promise<void> {
+  const reg = await importRegistry();
+  reg.addWorker(project, {
+    name,
+    sessionId: "sess-test",
+    task: "",
+    worktreePath,
+    branchName: name,
+    baseBranch: "main",
+    workflow: "default",
+  });
+}
+
+describe("garden workers grow (convert)", () => {
+  let savedWorker: string | undefined;
+  let savedProject: string | undefined;
+  beforeEach(() => {
+    savedWorker = process.env.GARDEN_WORKER;
+    savedProject = process.env.GARDEN_PROJECT;
+    delete process.env.GARDEN_WORKER;
+    delete process.env.GARDEN_PROJECT;
+  });
+  afterEach(() => {
+    if (savedWorker === undefined) delete process.env.GARDEN_WORKER;
+    else process.env.GARDEN_WORKER = savedWorker;
+    if (savedProject === undefined) delete process.env.GARDEN_PROJECT;
+    else process.env.GARDEN_PROJECT = savedProject;
+  });
+
+  it("flips entry.workflow to 'grow' and stamps grow data with --seed", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = path.join(projectDir, "..", "wt");
+    fs.mkdirSync(wtPath, { recursive: true });
+    await addDefaultWorker("proj", "tall-fern", wtPath);
+
+    const { workers } = await importWorkersCmd();
+    await captureConsoleLog(() =>
+      workers(["grow", "tall-fern", "--seed", "harden auth"]),
+    );
+
+    const reg = await importRegistry();
+    const entry = reg.findWorkerByName("proj", "tall-fern")!;
+    expect(entry.workflow).toBe("grow");
+    expect(entry.grow).toEqual({
+      seed: "harden auth",
+      iteration: 0,
+      maxIterations: 5,
+    });
+  });
+
+  it("writes the seed to .garden/grow-goal.md in the worktree", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = path.join(projectDir, "..", "wt2");
+    fs.mkdirSync(wtPath, { recursive: true });
+    await addDefaultWorker("proj", "tall-fern", wtPath);
+
+    const { workers } = await importWorkersCmd();
+    await captureConsoleLog(() =>
+      workers(["grow", "tall-fern", "--seed", "polish things"]),
+    );
+
+    const goalPath = path.join(wtPath, ".garden", "grow-goal.md");
+    expect(fs.existsSync(goalPath)).toBe(true);
+    expect(fs.readFileSync(goalPath, "utf-8")).toBe("polish things");
+  });
+
+  it("self-resolves the worker via $GARDEN_WORKER when no positional arg is given", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = path.join(projectDir, "..", "wt3");
+    fs.mkdirSync(wtPath, { recursive: true });
+    await addDefaultWorker("proj", "tall-fern", wtPath);
+    process.env.GARDEN_WORKER = "tall-fern";
+
+    const { workers } = await importWorkersCmd();
+    await captureConsoleLog(() =>
+      workers(["grow", "--seed", "from-env"]),
+    );
+
+    const reg = await importRegistry();
+    expect(reg.findWorkerByName("proj", "tall-fern")!.workflow).toBe("grow");
+  });
+
+  it("errors with friendly message when neither arg nor env is set", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["grow", "--seed", "x"]),
+    ).rejects.toThrow(/Not in a worker shell.*GARDEN_WORKER/);
+  });
+
+  it("errors when the worker is not found in any project", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["grow", "ghost", "--seed", "x"]),
+    ).rejects.toThrow(/Worker 'ghost' not found in registry/);
+  });
+
+  it("rejects re-conversion of an already-grow worker", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = path.join(projectDir, "..", "wt4");
+    fs.mkdirSync(wtPath, { recursive: true });
+    const reg = await importRegistry();
+    reg.addWorker("proj", {
+      name: "already-grown", sessionId: "s", task: "",
+      worktreePath: wtPath, branchName: "already-grown", baseBranch: "main",
+      workflow: "grow",
+      grow: { seed: "old", iteration: 1, maxIterations: 5 },
+    });
+
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["grow", "already-grown", "--seed", "new"]),
+    ).rejects.toThrow(/already on the 'grow' workflow/);
+  });
+
+  it("rejects conversion of a trellis worker", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = path.join(projectDir, "..", "wt5");
+    fs.mkdirSync(wtPath, { recursive: true });
+    const reg = await importRegistry();
+    reg.addWorker("proj", {
+      name: "vine", sessionId: "s", task: "",
+      worktreePath: wtPath, branchName: "vine", baseBranch: "main",
+      workflow: "trellis",
+      trellis: { name: "auth", path: "/tmp/auth.md", iteration: 1, maxIterations: 30 },
+    });
+
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["grow", "vine", "--seed", "x"]),
+    ).rejects.toThrow(/already on the 'trellis' workflow/);
+  });
+
+  it("rejects when --seed and --seed-file are both passed", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = path.join(projectDir, "..", "wt6");
+    fs.mkdirSync(wtPath, { recursive: true });
+    await addDefaultWorker("proj", "w", wtPath);
+
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["grow", "w", "--seed", "x", "--seed-file", "/tmp/f"]),
+    ).rejects.toThrow(/mutually exclusive/);
+  });
+
+  it("rejects when --goal-file and --seed are both passed", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = path.join(projectDir, "..", "wt7");
+    fs.mkdirSync(wtPath, { recursive: true });
+    await addDefaultWorker("proj", "w", wtPath);
+
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["grow", "w", "--seed", "x", "--goal-file", "/tmp/g"]),
+    ).rejects.toThrow(/mutually exclusive/);
+  });
+
+  it("requires one of --seed / --seed-file / --goal-file", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = path.join(projectDir, "..", "wt8");
+    fs.mkdirSync(wtPath, { recursive: true });
+    await addDefaultWorker("proj", "w", wtPath);
+
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["grow", "w"]),
+    ).rejects.toThrow(/Pass exactly one of --seed/);
+  });
+
+  it("--goal-file reads from disk and uses the file contents as the seed", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = path.join(projectDir, "..", "wt9");
+    fs.mkdirSync(wtPath, { recursive: true });
+    await addDefaultWorker("proj", "w", wtPath);
+
+    const goalSourceFile = path.join(env.home, "external-goal.md");
+    fs.writeFileSync(goalSourceFile, "polish the auth flow with edge tests\n");
+
+    const { workers } = await importWorkersCmd();
+    await captureConsoleLog(() =>
+      workers(["grow", "w", "--goal-file", goalSourceFile]),
+    );
+
+    const reg = await importRegistry();
+    const entry = reg.findWorkerByName("proj", "w")!;
+    expect(entry.grow!.seed).toBe("polish the auth flow with edge tests");
+    // The goal file is written into the worktree (file is durable across iterations).
+    expect(fs.readFileSync(path.join(wtPath, ".garden", "grow-goal.md"), "utf-8"))
+      .toBe("polish the auth flow with edge tests");
+  });
+
+  it("rejects an empty seed", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = path.join(projectDir, "..", "wt10");
+    fs.mkdirSync(wtPath, { recursive: true });
+    await addDefaultWorker("proj", "w", wtPath);
+
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["grow", "w", "--seed", "   "]),
+    ).rejects.toThrow(/non-empty/);
+  });
+
+  it("--max-iterations overrides the default 5", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = path.join(projectDir, "..", "wt11");
+    fs.mkdirSync(wtPath, { recursive: true });
+    await addDefaultWorker("proj", "w", wtPath);
+
+    const { workers } = await importWorkersCmd();
+    await captureConsoleLog(() =>
+      workers(["grow", "w", "--seed", "x", "--max-iterations", "12"]),
+    );
+
+    const reg = await importRegistry();
+    expect(reg.findWorkerByName("proj", "w")!.grow!.maxIterations).toBe(12);
+  });
+
+  it("project.maxGrowIterations applies when --max-iterations is omitted", async () => {
+    const projectDir = await setupProject("proj", { maxGrow: 8 });
+    const wtPath = path.join(projectDir, "..", "wt12");
+    fs.mkdirSync(wtPath, { recursive: true });
+    await addDefaultWorker("proj", "w", wtPath);
+
+    const { workers } = await importWorkersCmd();
+    await captureConsoleLog(() =>
+      workers(["grow", "w", "--seed", "x"]),
+    );
+
+    const reg = await importRegistry();
+    expect(reg.findWorkerByName("proj", "w")!.grow!.maxIterations).toBe(8);
+  });
+
+  it("--max-iterations < 1 is rejected", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = path.join(projectDir, "..", "wt13");
+    fs.mkdirSync(wtPath, { recursive: true });
+    await addDefaultWorker("proj", "w", wtPath);
+
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["grow", "w", "--seed", "x", "--max-iterations", "0"]),
+    ).rejects.toThrow(/positive integer/);
+  });
+});

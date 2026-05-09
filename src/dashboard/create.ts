@@ -727,8 +727,10 @@ printf '%s' ${trellisAuthorSkillLit} | atomic_write ${wtPathLit}/.claude/skills/
 
 # Ensure garden-managed dirs are excluded from git status.
 # Writing to the common info/exclude covers all worktrees and never gets committed.
+# .garden/ covers per-worker artifacts (grow-goal.md, grow-log.md,
+# trellis-lessons.md) — none of these belong in version control.
 EXCLUDE_FILE="$(git -C ${wtPathLit} rev-parse --git-common-dir)/info/exclude"
-for pattern in .claude/ .garden-hooks/; do
+for pattern in .claude/ .garden-hooks/ .garden/; do
   grep -qxF "$pattern" "$EXCLUDE_FILE" 2>/dev/null || printf '%s\\n' "$pattern" >> "$EXCLUDE_FILE"
 done
 

@@ -273,3 +273,83 @@ describe("growAutoContinueAfterMerge", () => {
     );
   });
 });
+
+// ─── Goal-file resolution in buildGrowContinuePrompt ─────────────────────
+//
+// The prompt builder reads `.garden/grow-goal.md` first, falling back to
+// `entry.grow.seed`. This is the substrate for mid-loop amend: edit the
+// file, the next iteration's prompt picks it up automatically.
+
+describe("buildGrowContinuePrompt — goal-file resolution", () => {
+  // Helper: stub fs.readFileSync to return content for the goal file path,
+  // throw ENOENT for the log file path. Lets us test the file-first behavior
+  // in isolation.
+  function stubGoalFile(content: string | null): void {
+    vi.mocked(fs.readFileSync).mockImplementation((path: unknown) => {
+      const p = String(path);
+      if (p.endsWith("grow-goal.md")) {
+        if (content === null) throw new Error("ENOENT");
+        return content;
+      }
+      throw new Error("ENOENT");
+    });
+  }
+
+  it("prefers .garden/grow-goal.md content over entry.grow.seed", () => {
+    stubGoalFile("amended goal: focus on test coverage");
+    const entry = makeGrow({
+      grow: { seed: "original goal: hardening", iteration: 1, maxIterations: 5 },
+    });
+    const prompt = buildGrowContinuePrompt(entry);
+    expect(prompt).toContain("amended goal: focus on test coverage");
+    expect(prompt).not.toContain("original goal: hardening");
+  });
+
+  it("falls back to entry.grow.seed when the goal file is missing", () => {
+    stubGoalFile(null);
+    const entry = makeGrow({
+      grow: { seed: "original goal: hardening", iteration: 1, maxIterations: 5 },
+    });
+    const prompt = buildGrowContinuePrompt(entry);
+    expect(prompt).toContain("original goal: hardening");
+  });
+
+  it("falls back to entry.grow.seed when the goal file is whitespace-only", () => {
+    stubGoalFile("   \n\n   \n");
+    const entry = makeGrow({
+      grow: { seed: "fallback goal", iteration: 1, maxIterations: 5 },
+    });
+    const prompt = buildGrowContinuePrompt(entry);
+    expect(prompt).toContain("fallback goal");
+  });
+
+  it("trims trailing whitespace from the goal-file content", () => {
+    stubGoalFile("trimmed goal\n\n\n");
+    const entry = makeGrow({ grow: { seed: "X", iteration: 1, maxIterations: 5 } });
+    const prompt = buildGrowContinuePrompt(entry);
+    expect(prompt).toContain("trimmed goal");
+    expect(prompt).not.toContain("trimmed goal\n\n\n");
+  });
+
+  it("omits the Original task section when both file and entry are empty", () => {
+    stubGoalFile(null);
+    const entry = makeGrow({ grow: { seed: "", iteration: 1, maxIterations: 5 } });
+    const prompt = buildGrowContinuePrompt(entry);
+    expect(prompt).not.toContain("Original task:");
+  });
+});
+
+// ─── buildGrowIteration1Seed instructs the worker to write the goal file ──
+
+describe("buildGrowIteration1Seed — goal-file write instruction", () => {
+  it("instructs the worker to write the seed to .garden/grow-goal.md", () => {
+    const out = buildGrowIteration1Seed("polish auth", 5);
+    expect(out).toContain(".garden/grow-goal.md");
+    expect(out).toMatch(/write.*to.*grow-goal\.md/i);
+  });
+
+  it("references the file as the durable goal that anchors iter ≥ 2", () => {
+    const out = buildGrowIteration1Seed("X", 5);
+    expect(out).toMatch(/iter 2\+ reads/i);
+  });
+});

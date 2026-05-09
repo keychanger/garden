@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { tryGetProject, SESSIONS_DIR } from "../config.js";
 import { newWorker } from "../dashboard/workers.js";
-import { buildGrowIteration1Seed } from "../dashboard/grow-continue.js";
+import { buildGrowIteration1Seed, GROW_GOAL_FILE_REL } from "../dashboard/grow-continue.js";
+import {
+  readRegistry, findWorkerByName, updateWorkerFields,
+  type WorkerEntry,
+} from "../dashboard/registry.js";
 import { validateTrellisPlant } from "../dashboard/trellis-tag.js";
 
 export async function workers(args: string[]): Promise<void> {
@@ -12,10 +16,16 @@ export async function workers(args: string[]): Promise<void> {
     await newCommand(args.slice(1));
     return;
   }
+  if (sub === "grow") {
+    await growCommand(args.slice(1));
+    return;
+  }
   throw new Error(
-    `Usage: garden workers new <project> [--workflow trellis|grow] `
-    + `[--trellis <name>] [--seed <text> | --seed-file <path>] `
-    + `[--model opus|sonnet] [--max-iterations N]`,
+    `Usage:\n`
+    + `  garden workers new <project> [--workflow trellis|grow] [--trellis <name>] `
+    + `[--seed <text> | --seed-file <path>] [--model opus|sonnet] [--max-iterations N]\n`
+    + `  garden workers grow [<worker>] [--seed <text> | --seed-file <path> | --goal-file <path>] `
+    + `[--max-iterations N]`,
   );
 }
 
@@ -254,4 +264,154 @@ function buildIteration1Seed(
     "",
     "You may not edit the trellis. If it is wrong or impossible, push commits that reflect what it says — the reviewer will surface the contradiction as `FLAGGED` and the operator will decide whether to amend.",
   ].join("\n");
+}
+
+// `garden workers grow [<worker>] ...` — convert an active default worker
+// into a grow worker. Self-resolves the worker via $GARDEN_WORKER when no
+// positional arg is given (mirrors `garden whoami`). The brainstorm-then-
+// grow flow: operator opens a default worker, brainstorms + plans + executes,
+// then types `/grow N` in the pane. The skill body summarizes the
+// conversation into `.garden/grow-goal.md`, then runs this command to flip
+// the workflow.
+async function growCommand(args: string[]): Promise<void> {
+  const positional: string[] = [];
+  const flags = new Map<string, string>();
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a.startsWith("--")) {
+      const key = a.slice(2);
+      const val = args[i + 1];
+      if (val === undefined || val.startsWith("--")) {
+        throw new Error(`--${key} requires a value`);
+      }
+      flags.set(key, val);
+      i++;
+    } else {
+      positional.push(a);
+    }
+  }
+
+  // Resolve worker via explicit arg or $GARDEN_WORKER fallback (mirrors
+  // src/commands/whoami.ts:25-56).
+  const explicitWorker = positional[0];
+  const workerName = explicitWorker ?? process.env.GARDEN_WORKER;
+  if (!workerName) {
+    throw new Error(
+      "Not in a worker shell (GARDEN_WORKER not set). "
+      + "Pass a worker name: garden workers grow <worker> ...",
+    );
+  }
+
+  // Resolve project: $GARDEN_PROJECT fast path → registry scan fallback.
+  let projectName: string | undefined = process.env.GARDEN_PROJECT;
+  let entry: WorkerEntry | undefined;
+  if (projectName) {
+    entry = findWorkerByName(projectName, workerName);
+  }
+  if (!entry) {
+    const registry = readRegistry();
+    for (const [p, entries] of Object.entries(registry.workers)) {
+      const match = entries.find(e => e.name === workerName);
+      if (match) {
+        projectName = p;
+        entry = match;
+        break;
+      }
+    }
+  }
+  if (!entry || !projectName) {
+    throw new Error(`Worker '${workerName}' not found in registry.`);
+  }
+
+  // Re-conversion is rejected — operators amend an in-flight grow loop's
+  // goal by editing the file directly. Trellis is not convertible to grow
+  // (different anchoring semantics).
+  const currentWorkflow = entry.workflow ?? "default";
+  if (currentWorkflow !== "default") {
+    throw new Error(
+      `Worker '${workerName}' is already on the '${currentWorkflow}' workflow. `
+      + `Re-conversion is not supported; edit .garden/grow-goal.md directly to amend the goal mid-loop.`,
+    );
+  }
+  if (!entry.worktreePath) {
+    throw new Error(
+      `Worker '${workerName}' has no worktreePath in the registry. Cannot write the goal file.`,
+    );
+  }
+
+  const project = tryGetProject(projectName);
+  if (!project) {
+    throw new Error(`Unknown project '${projectName}'.`);
+  }
+
+  // Resolve seed: --seed xor --seed-file xor --goal-file (one required).
+  // --seed-file and --goal-file are aliases — both read the same kind of
+  // file. The slash skill uses --goal-file (matches the on-disk filename);
+  // operators scripting the CLI can use whichever spelling they prefer.
+  const seedFlags = ["seed", "seed-file", "goal-file"].filter(k => flags.has(k));
+  if (seedFlags.length > 1) {
+    throw new Error(
+      `--seed, --seed-file, and --goal-file are mutually exclusive; pass exactly one. `
+      + `Got: ${seedFlags.map(f => "--" + f).join(", ")}`,
+    );
+  }
+  if (seedFlags.length === 0) {
+    throw new Error(
+      "Pass exactly one of --seed <text>, --seed-file <path>, or --goal-file <path>.",
+    );
+  }
+  let seed: string;
+  if (flags.has("seed")) {
+    seed = flags.get("seed")!;
+  } else {
+    const filePath = flags.get("seed-file") ?? flags.get("goal-file")!;
+    try {
+      seed = fs.readFileSync(filePath, "utf-8");
+    } catch (err) {
+      throw new Error(`Could not read '${filePath}': ${String(err)}`);
+    }
+  }
+  seed = seed.trim();
+  if (!seed) {
+    throw new Error("Seed must be non-empty.");
+  }
+
+  // Resolve max iterations: --max-iterations > project.maxGrowIterations > 5.
+  let maxIter = 5;
+  if (project.maxGrowIterations !== undefined) maxIter = project.maxGrowIterations;
+  if (flags.has("max-iterations")) {
+    const raw = flags.get("max-iterations")!;
+    const n = Number.parseInt(raw, 10);
+    if (!Number.isFinite(n) || n < 1) {
+      throw new Error(`--max-iterations must be a positive integer, got '${raw}'`);
+    }
+    maxIter = n;
+  }
+
+  // Write the goal file. Idempotent — if --goal-file already pointed at
+  // .garden/grow-goal.md inside the worktree, this overwrites it with the
+  // (re-trimmed) content. Imported lazily to avoid any circular dependency
+  // with the grow-continue module's at-import-time exports.
+  const { writeGrowGoalFile } = await import("../dashboard/grow-continue.js");
+  if (!writeGrowGoalFile(entry.worktreePath, seed)) {
+    throw new Error(
+      `Failed to write goal file at ${path.join(entry.worktreePath, ".garden", "grow-goal.md")}.`,
+    );
+  }
+
+  // Flip the workflow. Iteration starts at 0; the next launchReview will
+  // increment to 1 via the existing growLoopHooks path.
+  updateWorkerFields(projectName, workerName, {
+    workflow: "grow",
+    grow: {
+      seed,
+      iteration: 0,
+      maxIterations: maxIter,
+    },
+  });
+
+  console.log(
+    `Converted worker ${projectName}/${workerName} to grow `
+    + `(up to ${maxIter} iterations). Goal at .garden/grow-goal.md.`,
+  );
 }
