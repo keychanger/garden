@@ -344,8 +344,8 @@ async function growCommand(args: string[]): Promise<void> {
   if (currentWorkflow === "trellis") {
     throw new Error(
       `Worker '${workerName}' is a trellis vine — trellis vines are not convertible to grow. `
-      + `Amend the trellis with \`garden trellis amend\`, or kill the vine and start fresh: `
-      + `\`garden workers kill ${workerName}\` then \`garden workers new ... --workflow grow\`.`,
+      + `Amend the trellis with \`garden trellis amend\`, or kill the vine in the dashboard `
+      + `(focus the pane and press ⌥x) and start fresh with \`garden workers new ... --workflow grow\`.`,
     );
   }
   if (currentWorkflow !== "default") {
