@@ -242,6 +242,7 @@ The dashboard surfaces important events as alerts — persistent messages that r
 - Repeated failures (3+ consecutive failures on the same worker)
 - Base-branch drift after worker creation (Stop hook cannot count commits against `origin/<pinned-base>`; deduped to one firing per worker per hour)
 - Auto-continue auto-disabled by usage threshold (source: `usage`, level: `warn`)
+- `.garden-done` tracked in HEAD of the project main at worker spawn (source: `create`, level: `warn`; deduped per project per hour). Indicates the sentinel was committed accidentally — every new worktree inherits it and the first Stop hook trips terminal `done`, silently suppressing post-merge auto-continue. The bootstrap defangs the file per-worktree; the message names the `git rm` remediation and the optional `.gitignore` belt-and-suspenders.
 
 Worker "needs operator input" events (AskUserQuestion, ExitPlanMode, auto-mode permission prompts) do **not** fire alerts — they flip the worker to `asking` (yellow row in the status pane), which is the visual signal. The alert channel is reserved for failures and errors.
 
