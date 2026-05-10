@@ -37,11 +37,12 @@ const CONTINUE_PROMPT =
 
 const MERGE_CONTINUE_BASE =
   "[garden] Your previous changes were reviewed and merged. Continue with the "
-  + "next phase of the work — keep working is the default. Only invoke the "
-  + "`done` skill (`touch .garden-done`) if this merge completes the "
-  + "operator's *full* original request, every phase, not just the current "
-  + "one. If you are uncertain whether you are truly finished, leave the "
-  + "sentinel alone and let the next auto-continue fire.";
+  + "next phase. If there's nothing left to do, end your turn with a brief "
+  + "acknowledgement — `.garden-done` can't retroactively change the merge "
+  + "that just happened (the poller checked it at merge time, not now), so a "
+  + "`touch` here is a no-op unless you push again. The proactive moment for "
+  + "the sentinel is *before* `git push` on the turn that does your final "
+  + "commit; if you skipped that, this round-trip is the cost.";
 
 const MAX_LISTED_FILES = 20;
 
