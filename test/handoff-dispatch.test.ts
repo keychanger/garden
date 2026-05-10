@@ -7,6 +7,14 @@ vi.mock("../src/config.js", () => ({
   SESSIONS_DIR: "",
 }));
 
+// log.ts captures `LOG_FILE = path.join(SESSIONS_DIR, "dashboard.log")` at
+// module init, so the SESSIONS_DIR="" mock above resolves it to the relative
+// path "dashboard.log" — every log call would then append to CWD. Mock the
+// logger directly so dispatcher writes never touch disk.
+vi.mock("../src/dashboard/log.js", () => ({
+  log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
 vi.mock("../src/dashboard/workers.js", () => ({
   newWorker: vi.fn(),
 }));
