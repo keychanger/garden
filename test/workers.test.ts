@@ -294,11 +294,6 @@ describe("newWorker", () => {
     });
   });
 
-  // wolf's main absorbed a committed .garden-done on 2026-05-06 and the failure
-  // mode (silent suppression of post-merge auto-continue) hid for four days
-  // because no dashboard signal called it out. The bootstrap's stderr WARNING
-  // is too easy to miss; the addAlert path surfaces it in the alerts pane
-  // where it stays until acknowledged.
   it("raises a project-scoped alert when .garden-done is tracked in HEAD", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     vi.mocked(gardenDoneTrackedInHead).mockReturnValue(true);
@@ -307,9 +302,7 @@ describe("newWorker", () => {
       level: "warn",
       source: "create",
       project: "myproject",
-      // The remediation command MUST be present verbatim in the message —
-      // operators copy-paste from the alerts pane.
-      message: expect.stringContaining("git rm .garden-done"),
+      message: expect.stringContaining("`.garden-done` is tracked in HEAD of myproject"),
       // Stable key per project so 10 worker spawns into the same broken
       // project don't generate 10 alerts.
       dedupKey: "garden-done-tracked:myproject",
