@@ -5,8 +5,23 @@ import { DASHBOARD_SESSION } from "../session.js";
 import { log } from "./log.js";
 import { workerWindowPrefix } from "./window-names.js";
 
+// Re-throws with tmux's stderr appended. Without this the caller sees a bare
+// "Command failed: tmux ..." with no reason — and tmux failures from inside a
+// Claude Code sandbox ("Operation not permitted" on the server socket) are
+// otherwise invisible at the call site.
+function rethrowWithStderr(err: unknown, label: string): never {
+  const stderr = (err as { stderr?: Buffer | string }).stderr?.toString().trim() ?? "";
+  const code = (err as { status?: number | null }).status;
+  const detail = stderr || (code != null ? `exit ${code}` : "");
+  throw new Error(`${label}${detail ? `: ${detail}` : ""}`);
+}
+
 export function tmux(...args: string[]): void {
-  execFileSync("tmux", args, { stdio: "ignore" });
+  try {
+    execFileSync("tmux", args, { stdio: ["ignore", "ignore", "pipe"] });
+  } catch (err) {
+    rethrowWithStderr(err, `tmux ${args[0] ?? ""} failed`);
+  }
 }
 
 // Paste a message into a Claude pane and submit it. The 300ms gap between
@@ -65,6 +80,8 @@ export function pasteAndSubmit(paneId: string, message: string): void {
 }
 
 export function tmuxOutput(...args: string[]): string {
+  // stderr ignored: many tmuxOutput callers (paneExists, windowExists, getPaneTitle)
+  // depend on a clean throw-on-miss without noisy stderr.
   return execFileSync("tmux", args, {
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "ignore"],
@@ -72,17 +89,25 @@ export function tmuxOutput(...args: string[]): string {
 }
 
 export function tmuxSplit(...args: string[]): string {
-  return execFileSync("tmux", ["split-window", "-P", "-F", "#{pane_id}", ...args], {
-    encoding: "utf-8",
-    stdio: ["ignore", "pipe", "ignore"],
-  }).trim();
+  try {
+    return execFileSync("tmux", ["split-window", "-P", "-F", "#{pane_id}", ...args], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } catch (err) {
+    rethrowWithStderr(err, "tmux split-window failed");
+  }
 }
 
 export function tmuxNewWindow(...args: string[]): string {
-  return execFileSync("tmux", ["new-window", "-P", "-F", "#{pane_id}", ...args], {
-    encoding: "utf-8",
-    stdio: ["ignore", "pipe", "ignore"],
-  }).trim();
+  try {
+    return execFileSync("tmux", ["new-window", "-P", "-F", "#{pane_id}", ...args], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } catch (err) {
+    rethrowWithStderr(err, "tmux new-window failed");
+  }
 }
 
 export function getActivePaneId(): string | null {

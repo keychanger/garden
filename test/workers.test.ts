@@ -394,6 +394,20 @@ describe("newWorker", () => {
     expect(cmd).toContain("'/tmp/seed.txt'");
   });
 
+  it("rolls back the registry entry when tmuxNewWindow throws so a sandbox-blocked spawn doesn't leave a ghost", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
+    vi.mocked(tryGetProject).mockReturnValueOnce({ name: "other", path: "/repo/other" });
+    vi.mocked(tmuxNewWindow).mockImplementationOnce(() => {
+      throw new Error("tmux new-window failed: Operation not permitted");
+    });
+    expect(() =>
+      newWorker({ projectName: "other", seedMessageFile: "/tmp/seed.txt", background: true }),
+    ).toThrow(/Operation not permitted/);
+    // addWorker ran first, removeWorker undoes it before the throw escapes.
+    expect(vi.mocked(addWorker)).toHaveBeenCalled();
+    expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("other", "bold-ash");
+  });
+
   it("background handoff: bails (returns null) when target project is unknown, without touching state", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     vi.mocked(tryGetProject).mockReturnValueOnce(undefined);

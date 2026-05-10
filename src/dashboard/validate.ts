@@ -206,6 +206,36 @@ export function validateAndHeal(state: DashboardState): DashboardState {
   const registry = readRegistry();
   let registryChanged = false;
 
+  // Drop ghost entries FIRST: never-bootstrapped workers from a failed
+  // handoff or hotkey spawn. Identified by the combination of claudeStatus
+  // === "loading" (never advanced to ready/idle), no tmux window, and no
+  // worktree on disk. A genuine in-flight worker has a tmux window at this
+  // point (tmuxNewWindow creates it before bootstrap runs), so this rule
+  // doesn't race with normal creation. Must run before the "mark exited"
+  // pass — that pass would otherwise rewrite claudeStatus from "loading" to
+  // "exited" and the ghost would slip through as a preserved exited worker.
+  // The "never auto-cleanup" rule is about preserving operator work on real
+  // workers; these never produced any work to preserve.
+  for (const projectName of Object.keys(registry.workers)) {
+    const entries = registry.workers[projectName];
+    const kept = entries.filter(entry => {
+      if (entry.claudeStatus !== "loading") return true;
+      if (entry.worktreePath && worktreeExists(entry.worktreePath)) return true;
+      const windowName = workerWindowName(projectName, entry.name);
+      if (windowExists(windowName)) return true;
+      if (windowName === healed.activeWindowName) return true;
+      log.warn("validate", "removing ghost worker (loading, no worktree, no pane)", {
+        worker: entry.name,
+        data: { project: projectName },
+      });
+      return false;
+    });
+    if (kept.length !== entries.length) {
+      registry.workers[projectName] = kept;
+      registryChanged = true;
+    }
+  }
+
   for (const [projectName, entries] of Object.entries(registry.workers)) {
     for (const entry of entries) {
       const windowName = workerWindowName(projectName, entry.name);

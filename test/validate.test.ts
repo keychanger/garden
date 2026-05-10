@@ -195,6 +195,69 @@ describe("validateAndHeal", () => {
     );
   });
 
+  it("removes a ghost entry: claudeStatus=loading + no worktree + no window (failed sandboxed handoff)", async () => {
+    // A handoff from a sandboxed worker that crashed at tmuxNewWindow used
+    // to leave addWorker's entry stranded in claudeStatus="loading" forever
+    // — no worktree, no pane, just registry rot. The new rollback in
+    // workers.ts catches this at the source, and validate sweeps any
+    // pre-existing ghosts on reattach. "Loading + no worktree + no window"
+    // is the strict ghost signature.
+    const { worktreeExists } = await import("../src/dashboard/git.js");
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: {
+        garden: [
+          { name: "real-one", sessionId: "a", task: "fix" },
+          {
+            name: "ghost-one",
+            sessionId: "b",
+            task: "",
+            worktreePath: "/nope",
+            claudeStatus: "loading",
+          },
+        ],
+      },
+    });
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("ghost-one")
+    );
+    vi.mocked(worktreeExists).mockReturnValue(false);
+    const state = makeState({ activeWindowName: null });
+    validateAndHeal(state);
+    expect(vi.mocked(writeRegistry)).toHaveBeenCalled();
+    const written = vi.mocked(writeRegistry).mock.calls[0][0];
+    // real-one survives the loading-pane sweep (it isn't loading); ghost-one is gone.
+    expect(written.workers.garden.map(w => w.name)).toEqual(["real-one"]);
+  });
+
+  it("keeps a still-bootstrapping worker (loading + window exists) even if the worktree isn't on disk yet", async () => {
+    // Race-protection: between tmuxNewWindow and the bootstrap script creating
+    // the worktree, claudeStatus is "loading" and worktreePath doesn't exist
+    // on disk yet. The window does exist (tmuxNewWindow created it), so the
+    // ghost sweep must NOT remove these in-flight workers.
+    const { worktreeExists } = await import("../src/dashboard/git.js");
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: {
+        garden: [
+          {
+            name: "in-flight",
+            sessionId: "a",
+            task: "",
+            worktreePath: "/not-yet",
+            claudeStatus: "loading",
+          },
+        ],
+      },
+    });
+    vi.mocked(windowExists).mockReturnValue(true);
+    vi.mocked(worktreeExists).mockReturnValue(false);
+    const state = makeState();
+    validateAndHeal(state);
+    const written = vi.mocked(writeRegistry).mock.calls[0]?.[0];
+    // worktreePath got nulled but the entry remains.
+    expect(written?.workers.garden).toHaveLength(1);
+    expect(written?.workers.garden[0].name).toBe("in-flight");
+  });
+
   it("does not re-mark or re-alert an already-exited worker on subsequent reattach", async () => {
     // An alert on every reattach would spam the badge — the registry change
     // should be one-shot (entry already exited → skip).

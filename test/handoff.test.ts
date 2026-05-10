@@ -6,16 +6,25 @@ import os from "node:os";
 
 vi.mock("../src/config.js", () => ({
   tryGetProject: vi.fn(),
+  loadConfig: vi.fn(),
   SESSIONS_DIR: "",
 }));
 
-vi.mock("../src/dashboard/workers.js", () => ({
-  newWorker: vi.fn(),
+vi.mock("../src/dashboard/handoff-dispatch.js", () => ({
+  submitHandoffRequest: vi.fn(),
+  waitForHandoffResponse: vi.fn(),
+}));
+
+vi.mock("../src/dashboard/poller-fifo.js", () => ({
+  triggerProjectPoll: vi.fn(),
 }));
 
 import { handoff } from "../src/commands/handoff.js";
-import { tryGetProject } from "../src/config.js";
-import { newWorker } from "../src/dashboard/workers.js";
+import { tryGetProject, loadConfig } from "../src/config.js";
+import {
+  submitHandoffRequest, waitForHandoffResponse,
+} from "../src/dashboard/handoff-dispatch.js";
+import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
 
 const cfg = await import("../src/config.js") as unknown as { SESSIONS_DIR: string };
 
@@ -26,7 +35,14 @@ beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "garden-handoff-test-"));
   cfg.SESSIONS_DIR = tmpDir;
   vi.mocked(tryGetProject).mockReturnValue({ name: "other", path: "/repo/other" });
-  vi.mocked(newWorker).mockReturnValue("bold-ash");
+  vi.mocked(loadConfig).mockReturnValue({
+    projects: { other: { name: "other", path: "/repo/other" } },
+  } as ReturnType<typeof loadConfig>);
+  vi.mocked(submitHandoffRequest).mockReturnValue("req-id-1");
+  vi.mocked(waitForHandoffResponse).mockResolvedValue({
+    workerName: "bold-ash",
+    completedAt: Date.now(),
+  });
   delete process.env.GARDEN_PROJECT;
   delete process.env.GARDEN_WORKER;
 });
@@ -43,7 +59,7 @@ describe("garden handoff command", () => {
   it("rejects unknown target project with a remediation hint", async () => {
     vi.mocked(tryGetProject).mockReturnValue(undefined);
     await expect(handoff(["ghost", "-m", "x"])).rejects.toThrow(/Unknown project 'ghost'/);
-    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
   });
 
   it("rejects -m without a value", async () => {
@@ -54,7 +70,7 @@ describe("garden handoff command", () => {
     await expect(handoff(["other", "-m", "   "])).rejects.toThrow(/Empty briefing/);
   });
 
-  it("writes the seed file under SESSIONS_DIR/seeds and passes its path to newWorker", async () => {
+  it("writes the seed file under SESSIONS_DIR/seeds and passes its path in the handoff request", async () => {
     await captureConsoleLog(() => handoff(["other", "-m", "Take this over"]));
     const seedsDir = path.join(tmpDir, "seeds");
     expect(fs.existsSync(seedsDir)).toBe(true);
@@ -62,12 +78,31 @@ describe("garden handoff command", () => {
     expect(files.length).toBe(1);
     expect(files[0]).toMatch(/^seed-\d+-[a-z0-9]+\.txt$/);
 
-    const newWorkerCall = vi.mocked(newWorker).mock.calls[0][0];
-    expect(newWorkerCall).toEqual({
-      projectName: "other",
-      seedMessageFile: path.join(seedsDir, files[0]),
-      background: true,
+    const reqCall = vi.mocked(submitHandoffRequest).mock.calls[0][0];
+    expect(reqCall).toEqual({
+      targetProject: "other",
+      seedFile: path.join(seedsDir, files[0]),
     });
+  });
+
+  it("pokes the target project poller so an idle poller picks the request up", async () => {
+    await captureConsoleLog(() => handoff(["other", "-m", "msg"]));
+    expect(vi.mocked(triggerProjectPoll)).toHaveBeenCalledWith("other");
+  });
+
+  it("also pokes the source project poller when the caller is a worker", async () => {
+    process.env.GARDEN_PROJECT = "src";
+    process.env.GARDEN_WORKER = "blue-pine";
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: {
+        other: { name: "other", path: "/repo/other" },
+        src: { name: "src", path: "/repo/src" },
+      },
+    } as ReturnType<typeof loadConfig>);
+    await captureConsoleLog(() => handoff(["other", "-m", "msg"]));
+    const pokes = vi.mocked(triggerProjectPoll).mock.calls.map(c => c[0]);
+    expect(pokes).toContain("src");
+    expect(pokes).toContain("other");
   });
 
   it("prefixes the seed with [handoff from <project>/<worker>] when env vars are set", async () => {
@@ -88,9 +123,20 @@ describe("garden handoff command", () => {
     expect(body).toMatch(/^\[handoff\]/);
   });
 
-  it("unlinks the seed file and reports failure when newWorker bails out", async () => {
-    vi.mocked(newWorker).mockReturnValue(null);
-    await expect(handoff(["other", "-m", "msg"])).rejects.toThrow(/Failed to spawn worker/);
+  it("unlinks the seed file and reports timeout when the dispatcher never answers", async () => {
+    vi.mocked(waitForHandoffResponse).mockResolvedValue(null);
+    await expect(handoff(["other", "-m", "msg"])).rejects.toThrow(/timed out/);
+    const seedsDir = path.join(tmpDir, "seeds");
+    expect(fs.readdirSync(seedsDir)).toEqual([]);
+  });
+
+  it("unlinks the seed file and surfaces the dispatcher's error when newWorker rejects", async () => {
+    vi.mocked(waitForHandoffResponse).mockResolvedValue({
+      error: "Base branch 'main' has no local origin/main ref.",
+      completedAt: Date.now(),
+    });
+    await expect(handoff(["other", "-m", "msg"]))
+      .rejects.toThrow(/Base branch 'main'/);
     const seedsDir = path.join(tmpDir, "seeds");
     expect(fs.readdirSync(seedsDir)).toEqual([]);
   });

@@ -230,7 +230,7 @@ describe("tmux", () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "tmux",
       ["set-option", "-t", "garden-dashboard", "mouse", "on"],
-      { stdio: "ignore" },
+      { stdio: ["ignore", "ignore", "pipe"] },
     );
   });
 });
@@ -295,7 +295,7 @@ describe("tmuxDisplay", () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "tmux",
       ["display-message", "-t", "garden-dashboard", "Hello world"],
-      { stdio: "ignore" },
+      { stdio: ["ignore", "ignore", "pipe"] },
     );
   });
 
@@ -317,7 +317,7 @@ describe("setPaneTitle", () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "tmux",
       ["select-pane", "-t", "%5", "-T", "My Title"],
-      { stdio: "ignore" },
+      { stdio: ["ignore", "ignore", "pipe"] },
     );
   });
 
@@ -339,7 +339,7 @@ describe("setPaneLabel", () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "tmux",
       ["set-option", "-p", "-t", "%5", "@garden_name", "bold-ash"],
-      { stdio: "ignore" },
+      { stdio: ["ignore", "ignore", "pipe"] },
     );
   });
 
@@ -361,7 +361,7 @@ describe("setPaneVar", () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "tmux",
       ["set-option", "-p", "-t", "%5", "@garden_task", "building"],
-      { stdio: "ignore" },
+      { stdio: ["ignore", "ignore", "pipe"] },
     );
   });
 
@@ -404,7 +404,7 @@ describe("renameWindow", () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "tmux",
       ["rename-window", "-t", "garden-dashboard:old-name", "new-name"],
-      { stdio: "ignore" },
+      { stdio: ["ignore", "ignore", "pipe"] },
     );
   });
 
@@ -426,7 +426,7 @@ describe("resizeWindow", () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "tmux",
       ["resize-window", "-t", "garden-dashboard:_garden-worker-bold-ash", "-x", "120", "-y", "40"],
-      { stdio: "ignore" },
+      { stdio: ["ignore", "ignore", "pipe"] },
     );
   });
 
@@ -447,7 +447,7 @@ describe("killWindowSafe", () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "tmux",
       ["kill-window", "-t", "garden-dashboard:_garden-worker-bold-ash"],
-      { stdio: "ignore" },
+      { stdio: ["ignore", "ignore", "pipe"] },
     );
   });
 

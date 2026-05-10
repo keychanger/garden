@@ -250,31 +250,45 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
 
     const workerWindowName = workerWin(targetProject, workerName);
 
-    if (background) {
-      // Hidden creation only — no park, no restore. The window is born detached
-      // and stays detached. The operator's visible pane and dashboard state are
-      // not touched. Pre-size the window to roughly match the visible right
-      // slot so the first ⌥w into this worker doesn't trigger a reflow.
-      const workerPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
-        "sh", "-c", `sh ${shellEscape(scriptFile)}`);
-      const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
-      if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
-      if (workerPaneId) setPaneLabel(workerPaneId, workerName);
-    } else {
-      // Show the new pane immediately — bootstrap runs inside it
-      const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject!);
-      parkToHidden(parkName, state);
+    try {
+      if (background) {
+        // Hidden creation only — no park, no restore. The window is born detached
+        // and stays detached. The operator's visible pane and dashboard state are
+        // not touched. Pre-size the window to roughly match the visible right
+        // slot so the first ⌥w into this worker doesn't trigger a reflow.
+        const workerPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
+          "sh", "-c", `sh ${shellEscape(scriptFile)}`);
+        const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
+        if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
+        if (workerPaneId) setPaneLabel(workerPaneId, workerName);
+      } else {
+        // Show the new pane immediately — bootstrap runs inside it
+        const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject!);
+        parkToHidden(parkName, state);
 
-      const workerPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
-        "sh", "-c", `sh ${shellEscape(scriptFile)}`);
-      // Pre-size so the bootstrap script renders at the right pane size from
-      // the start, avoiding SIGWINCH jitter when restoreFromHidden swaps it in.
-      const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
-      if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
-      if (workerPaneId) setPaneLabel(workerPaneId, workerName);
-      restoreFromHidden(workerWindowName, state);
-      // Re-apply label after swap (swap-pane may not preserve pane options)
-      if (state.activePaneId) setPaneLabel(state.activePaneId, workerName);
+        const workerPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
+          "sh", "-c", `sh ${shellEscape(scriptFile)}`);
+        // Pre-size so the bootstrap script renders at the right pane size from
+        // the start, avoiding SIGWINCH jitter when restoreFromHidden swaps it in.
+        const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
+        if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
+        if (workerPaneId) setPaneLabel(workerPaneId, workerName);
+        restoreFromHidden(workerWindowName, state);
+        // Re-apply label after swap (swap-pane may not preserve pane options)
+        if (state.activePaneId) setPaneLabel(state.activePaneId, workerName);
+      }
+    } catch (err) {
+      // addWorker (and trellis model resolution) already wrote the registry
+      // entry; if pane creation fails it would otherwise sit in claudeStatus=
+      // "loading" forever with no worktree and no pane. Roll back so the next
+      // attempt isn't blocked by name collision and the dashboard isn't lying
+      // about pending workers.
+      removeWorker(targetProject, workerName);
+      log.error("workers", "tmux pane creation failed; rolled back registry entry", {
+        worker: workerName,
+        data: { project: targetProject, error: String(err) },
+      });
+      throw err;
     }
 
     log.info("workers", "created", {

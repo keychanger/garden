@@ -23,6 +23,7 @@ import {
   signalFifoPath, ensureSignalFifo, triggerProjectPoll,
 } from "./poller-fifo.js";
 import { getWorkflow } from "./workflows/index.js";
+import { processPendingHandoffs } from "./handoff-dispatch.js";
 
 // Re-exports of the public API consumed elsewhere in the codebase.
 // External callers continue to import from "./poller" — the split is
@@ -34,6 +35,17 @@ export { killReviewWindow } from "./poller-review.js";
 // Main poll entry point — called by `garden dashboard _poll <project>`
 export function poll(projectName: string): boolean {
   healStatusPane();
+  // Pick up handoff requests submitted by sandboxed workers (see
+  // handoff-dispatch.ts). Cross-project: pollers are global pickers, not
+  // tied to the request's target project — any wake on any project drains
+  // pending handoffs.
+  try {
+    processPendingHandoffs();
+  } catch (err) {
+    log.error("poller", "processPendingHandoffs failed", {
+      data: { error: String(err) },
+    });
+  }
   return pollProject(projectName);
 }
 

@@ -1,9 +1,22 @@
-// `garden handoff <project> [-m]` — spawns a fresh worker on <project>, seeds its first
-// prompt with a briefing (-m or stdin). Prefix degrades to "[handoff]" when env vars are absent.
+// `garden handoff <project> [-m]` — spawns a fresh worker on <project>, seeds
+// its first prompt with a briefing (-m or stdin). Prefix degrades to
+// "[handoff]" when env vars are absent.
+//
+// Implementation: the worker pane that runs this CLI is sandboxed by Claude
+// Code, which blocks the tmux server socket. We can't call tmux directly. So
+// the CLI writes a request to ~/.garden/sessions/handoff-requests/ (sandbox-
+// allowed), pokes one or more project pollers, and waits on a response file
+// the unsandboxed poller writes once newWorker returns. The whole round-trip
+// is typically <500ms.
 import fs from "node:fs";
 import path from "node:path";
-import { tryGetProject, SESSIONS_DIR } from "../config.js";
-import { newWorker } from "../dashboard/workers.js";
+import { tryGetProject, SESSIONS_DIR, loadConfig } from "../config.js";
+import {
+  submitHandoffRequest, waitForHandoffResponse,
+} from "../dashboard/handoff-dispatch.js";
+import { triggerProjectPoll } from "../dashboard/poller-fifo.js";
+
+const HANDOFF_TIMEOUT_MS = 15_000;
 
 export async function handoff(args: string[]): Promise<void> {
   const targetProject = args[0];
@@ -33,30 +46,49 @@ export async function handoff(args: string[]): Promise<void> {
 
   const seedsDir = path.join(SESSIONS_DIR, "seeds");
   fs.mkdirSync(seedsDir, { recursive: true });
-  // Worker name isn't known until newWorker returns; dispatchDelayedSeed wires the path
-  // through directly, so the filename only needs to be unique on disk.
   const seedFile = path.join(
     seedsDir,
     `seed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`,
   );
   fs.writeFileSync(seedFile, seedMessage);
 
-  // background:true so the new worker is created hidden — handoff must not
-  // yank the operator out of whatever pane they're focused on.
-  const newName = newWorker({
-    projectName: targetProject,
-    seedMessageFile: seedFile,
-    background: true,
-  });
-  if (!newName) {
-    try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
-    throw new Error(
-      `Failed to spawn worker on '${targetProject}'. `
-      + "Is the dashboard running? Check 'garden health'.",
-    );
+  const reqId = submitHandoffRequest({ targetProject, seedFile });
+
+  // Poke any poller that might be listening. The target's poller is the
+  // natural pick, but if no worker exists on the target yet it won't be
+  // running; the source project's poller (always running for a live worker)
+  // serves as a fallback. Poking extra pollers is harmless — each pending
+  // handoff is claimed once via atomic rename, so there's no double-spawn.
+  const projectsToPoke = new Set<string>([targetProject]);
+  if (sourceProject) projectsToPoke.add(sourceProject);
+  // As a last resort, poke every configured project. Cheap — silently no-ops
+  // when no FIFO/poller is present.
+  for (const projectName of Object.keys(loadConfig().projects)) {
+    projectsToPoke.add(projectName);
+  }
+  for (const projectName of projectsToPoke) {
+    triggerProjectPoll(projectName);
   }
 
-  console.log(`Handed off to ${targetProject}/${newName}.`);
+  const resp = await waitForHandoffResponse(reqId, HANDOFF_TIMEOUT_MS);
+  if (!resp) {
+    try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
+    throw new Error(
+      `Handoff to '${targetProject}' timed out after ${HANDOFF_TIMEOUT_MS / 1000}s. `
+      + "Is the dashboard running with at least one active project poller? "
+      + "Check 'garden health'.",
+    );
+  }
+  if (resp.error) {
+    try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
+    throw new Error(`Handoff to '${targetProject}' failed: ${resp.error}`);
+  }
+  if (!resp.workerName) {
+    try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
+    throw new Error(`Handoff to '${targetProject}' returned no worker name.`);
+  }
+
+  console.log(`Handed off to ${targetProject}/${resp.workerName}.`);
 }
 
 async function readBriefing(rest: string[]): Promise<string> {
