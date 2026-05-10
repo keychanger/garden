@@ -103,6 +103,11 @@ vi.mock("../src/dashboard/git.js", () => ({
   worktreePath: vi.fn(() => "/home/user/.garden/worktrees/myproject/bold-ash"),
   resolveBaseBranch: vi.fn(() => "main"),
   branchExistsOnOrigin: vi.fn(() => true),
+  gardenDoneTrackedInHead: vi.fn(() => false),
+}));
+
+vi.mock("../src/dashboard/alerts.js", () => ({
+  addAlert: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/poller.js", () => ({
@@ -133,7 +138,10 @@ import {
   createShellWindow, installClaudeHooks,
 } from "../src/dashboard/create.js";
 import { resolveGardenRunner } from "../src/dashboard/runner.js";
-import { worktreePath, resolveBaseBranch, branchExistsOnOrigin } from "../src/dashboard/git.js";
+import {
+  worktreePath, resolveBaseBranch, branchExistsOnOrigin, gardenDoneTrackedInHead,
+} from "../src/dashboard/git.js";
+import { addAlert } from "../src/dashboard/alerts.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "../src/dashboard/poller.js";
 import { workerWindowName as workerWin, shellWindowName as shellWin, parseWorkerSuffix } from "../src/dashboard/window-names.js";
 import { getProject, tryGetProject } from "../src/config.js";
@@ -284,6 +292,38 @@ describe("newWorker", () => {
       claudeStatus: "loading",
       workflow: "default",
     });
+  });
+
+  // wolf's main absorbed a committed .garden-done on 2026-05-06 and the failure
+  // mode (silent suppression of post-merge auto-continue) hid for four days
+  // because no dashboard signal called it out. The bootstrap's stderr WARNING
+  // is too easy to miss; the addAlert path surfaces it in the alerts pane
+  // where it stays until acknowledged.
+  it("raises a project-scoped alert when .garden-done is tracked in HEAD", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(gardenDoneTrackedInHead).mockReturnValue(true);
+    newWorker();
+    expect(vi.mocked(addAlert)).toHaveBeenCalledWith(expect.objectContaining({
+      level: "warn",
+      source: "create",
+      project: "myproject",
+      // The remediation command MUST be present verbatim in the message —
+      // operators copy-paste from the alerts pane.
+      message: expect.stringContaining("git rm .garden-done"),
+      // Stable key per project so 10 worker spawns into the same broken
+      // project don't generate 10 alerts.
+      dedupKey: "garden-done-tracked:myproject",
+    }));
+  });
+
+  it("does NOT raise the .garden-done alert when the sentinel is not tracked", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(gardenDoneTrackedInHead).mockReturnValue(false);
+    newWorker();
+    const sentinelAlerts = vi.mocked(addAlert).mock.calls.filter(
+      c => (c[0] as { dedupKey?: string }).dedupKey?.startsWith("garden-done-tracked:"),
+    );
+    expect(sentinelAlerts).toHaveLength(0);
   });
 
   it("starts the project poller", () => {

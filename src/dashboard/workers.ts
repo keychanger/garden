@@ -26,7 +26,10 @@ import {
   createShellWindow, installClaudeHooks, trellisRelativePathForEntry,
 } from "./create.js";
 import { resolveGardenRunner } from "./runner.js";
-import { worktreePath, resolveBaseBranch, branchExistsOnOrigin } from "./git.js";
+import {
+  worktreePath, resolveBaseBranch, branchExistsOnOrigin, gardenDoneTrackedInHead,
+} from "./git.js";
+import { addAlert } from "./alerts.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
 import { dispatchDelayedContinue, dispatchDelayedSeed } from "./continue.js";
 import { swapVisibleToProject } from "./navigate.js";
@@ -155,6 +158,22 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         data: { project: targetProject, baseBranch },
       });
       return;
+    }
+
+    // Surface tracked .garden-done at worker spawn — the bootstrap defangs it
+    // per-worktree (skip-worktree + rm), but the root fix is `git rm` on the
+    // project main and the operator needs to see that they have it to do.
+    // Project-scoped, deduped to one entry per hour even across rapid worker
+    // spawns. See gardenDoneTrackedInHead in git.ts for the failure mode this
+    // catches (wolf, 2026-05-06 through 2026-05-10).
+    if (gardenDoneTrackedInHead(project.path)) {
+      addAlert({
+        level: "warn",
+        source: "create",
+        project: targetProject,
+        message: `\`.garden-done\` is tracked in HEAD of ${targetProject}. Every new worker inherits it via \`git worktree add\`, and the first Stop hook trips terminal \`done\` from its presence — silently suppressing post-merge auto-continue. The bootstrap neutralizes each new worktree (skip-worktree + rm), but the root fix is on the project main: \`cd ${project.path} && git rm .garden-done && git commit -m "chore: remove accidentally committed .garden-done sentinel" && git push\`.`,
+        dedupKey: `garden-done-tracked:${targetProject}`,
+      });
     }
 
     // Compute the worktree-relative trellis path so buildWorktreeRules can

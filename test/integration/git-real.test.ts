@@ -159,3 +159,32 @@ describe("deleteBranch (real git)", () => {
     expect(() => deleteBranch(env.repoPath, "ghost")).not.toThrow();
   });
 });
+
+// Regression: wolf's main absorbed a committed `.garden-done` on 2026-05-06.
+// newWorker now consults this helper to raise a dashboard alert at spawn
+// time; the bootstrap script template runs the same git ls-tree check in
+// bash to defang each new worktree. Cover both the affirmative and negative
+// cases against a real repo so the detection stays honest across git
+// version differences.
+describe("gardenDoneTrackedInHead (real git)", () => {
+  it("returns true when .garden-done is tracked in HEAD", async () => {
+    const { gardenDoneTrackedInHead } = await import("../../src/dashboard/git.js");
+    fs.writeFileSync(path.join(env.repoPath, ".garden-done"), "");
+    git(env.repoPath, "add", ".garden-done");
+    git(env.repoPath, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "accidental sentinel");
+    expect(gardenDoneTrackedInHead(env.repoPath)).toBe(true);
+  });
+
+  it("returns false when .garden-done is not tracked", async () => {
+    const { gardenDoneTrackedInHead } = await import("../../src/dashboard/git.js");
+    expect(gardenDoneTrackedInHead(env.repoPath)).toBe(false);
+  });
+
+  it("returns false when an untracked .garden-done exists on disk", async () => {
+    const { gardenDoneTrackedInHead } = await import("../../src/dashboard/git.js");
+    // The helper checks HEAD, not the working tree — a worker that wrote
+    // the sentinel via the `done` skill must NOT trip a fresh-project alert.
+    fs.writeFileSync(path.join(env.repoPath, ".garden-done"), "");
+    expect(gardenDoneTrackedInHead(env.repoPath)).toBe(false);
+  });
+});

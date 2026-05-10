@@ -42,6 +42,23 @@ export function branchExistsOnOrigin(repoPath: string, branchName: string): bool
   }
 }
 
+// True when the project's current HEAD has `.garden-done` tracked. A reviewer
+// running `git add -A` while the sentinel sat in its CWD is how this happens
+// (wolf, 2026-05-06). New workers then inherit the file via `git worktree
+// add`, the first Stop hook trips terminal `done` from the file's mere
+// presence, and post-merge auto-continue stays silent across every cycle on
+// that project. The bootstrap defangs each new worktree, but the root fix
+// is `git rm` on main — surface this to the operator via addAlert so the
+// cleanup doesn't sit in a stderr line nobody reads.
+export function gardenDoneTrackedInHead(repoPath: string): boolean {
+  try {
+    const out = git(repoPath, "ls-tree", "HEAD", ".garden-done");
+    return out.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
 // Return the worker's pinned base branch, falling back to current-checkout
 // resolution for legacy workers that predate the pinning. New workers always
 // carry entry.baseBranch; the fallback is only reached for entries written
