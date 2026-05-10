@@ -11,16 +11,19 @@ Three kinds of doc live here:
   in the first paragraph. The reviewer treats them as source of truth and
   refuses to edit them to match the code; if the code disagrees, fix the
   code.
-- **Design docs / plans** — forward-looking architecture for not-yet-shipped
-  or in-progress work. Authoritative for the design intent, not for the
-  code (since the code may not exist yet).
-- **Analyses** — surveys or comparisons that surface options without
-  committing to a plan. Not authoritative for anything; useful as a
-  shortlist when future work picks an item up.
+- **Design docs / plans for in-progress work** — forward-looking
+  architecture for work that has at least one phase shipped or actively
+  in flight. Authoritative for the design intent, not for the code yet.
+- **Speculative designs and analyses** — anything not yet implemented, or
+  external-codebase comparisons. These live under `docs/future/` so the
+  path itself signals "do not act on this." Workers must not treat
+  anything under `docs/future/` as a contract — see `rules.md`
+  § Specifications and documentation.
 
 Once a design doc's work ships, its content typically folds into the
 relevant authoritative doc (`WORKFLOWS.md`, `DESIGN.md`, or a sibling spec)
-and the original may be deleted or kept as historical record.
+and the original may be deleted or kept as historical record. When a
+`docs/future/` doc graduates to in-progress work, move it up to `docs/`.
 
 ## Index
 
@@ -29,8 +32,8 @@ and the original may be deleted or kept as historical record.
 | [STATUS.md](STATUS.md) | spec | Worker status state machine — display states, detection machinery, transition invariants |
 | [TRACKS.md](TRACKS.md) | spec (design target) | Multi-track projects and the promotion pipeline. No code yet. |
 | [TRELLIS-PLAN.md](TRELLIS-PLAN.md) | design | Phased implementation plan for the trellis workflow. The trellis spec itself lives in `WORKFLOWS.md` § "Trellis workflow"; this doc is the plan that produced it. |
-| [PLAN-WORKFLOW.md](PLAN-WORKFLOW.md) | design (not yet implemented) | The plan workflow: convert human-described features into a beads graph for autonomous execution. **Forward-looking — no code today; workers should not file beads or run `bd` commands.** Folds into `WORKFLOWS.md` § "Plan workflow" once Phase 1 ships. |
-| [GASTOWN-LESSONS.md](GASTOWN-LESSONS.md) | analysis | External-codebase analysis of `gastownhall/gastown` with a phased roadmap of borrowed primitives. Not a committed plan. Bead references describe gastown, not garden. |
+| [future/PLAN-WORKFLOW.md](future/PLAN-WORKFLOW.md) | speculative | The plan workflow: convert human-described features into a beads graph for autonomous execution. No code today — workers must not run `bd` commands or file beads. |
+| [future/GASTOWN-LESSONS.md](future/GASTOWN-LESSONS.md) | speculative | External-codebase analysis of `gastownhall/gastown` with a phased roadmap of borrowed primitives. Bead references describe gastown, not garden. |
 
 ## Adding a new doc
 

@@ -6,11 +6,9 @@ reasoning behind each verdict, so future garden work can pull from a clearer
 shortlist instead of re-deriving the comparison every time gastown ships
 something interesting.
 
-**Bead / `bd` / Dolt references in this document describe gastown, not
-garden.** Garden does not use beads today. Workers should not file beads,
-run `bd` commands, or assume any bead-related machinery exists in this
-repo. If a future garden workflow adopts beads, it will ship with its own
-authoritative spec in `WORKFLOWS.md`.
+This file lives under `docs/future/` — bead / `bd` / Dolt references
+describe gastown, not garden. See `rules.md` § Specifications and
+documentation.
 
 Source: `gastownhall/gastown` @ `main`, surveyed 2026-05-09. Gastown is roughly
 422K LOC across 1,139 Go files in 71 internal packages (`cmd/`, `internal/`,

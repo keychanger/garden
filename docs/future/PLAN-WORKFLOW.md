@@ -1,19 +1,8 @@
 # Plan Workflow
 
-> **Not yet implemented. Do not act on this document.**
->
-> This is a forward-looking design for a future garden workflow. Nothing
-> described here exists today: there is no `plan` workflow, no `bd`
-> command, no `~/.beads/` store, no `beads.sh` script, and no bead
-> ingestion path in any current workflow. Workers should **not** file
-> beads, run `bd` commands, or assume any bead-related machinery exists.
-> If you find yourself wanting to "file a bead" while working in garden,
-> the answer is no — write it in the commit message or surface it to the
-> operator instead.
->
-> The phrase "the code is wrong" appears below to mark sections that will
-> become authoritative once the feature ships. Until Phase 1 lands, this
-> doc is a design target, not a contract.
+> This document lives under `docs/future/` — it describes an unshipped
+> design. Workers must not act on it (no `bd` commands, no bead filing,
+> no `~/.beads/`). See `rules.md` § Specifications and documentation.
 
 Design document for `plan`, garden's planned fourth workflow. Plan would
 convert a human-described feature into a graph of beads with dependencies,
@@ -665,7 +654,7 @@ New files:
 - `src/dashboard/plan-validate.ts` (~50 lines) — pre-execution
   safeguards (50-bead cap + mandatory-label check)
 - `src/commands/plan-review.ts` (~50 lines) — CLI shim for orchestrator-driven reviewer launch
-- `docs/PLAN-WORKFLOW.md` (this file)
+- `docs/future/PLAN-WORKFLOW.md` (this file)
 
 Modified files:
 

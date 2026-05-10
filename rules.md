@@ -35,6 +35,13 @@ in `<project>/.garden/rules.md` can extend or override these.
 - Do not reference task IDs, milestone names, or internal tracking terms in code, comments,
   commit messages, or documentation.
 - Do not use emojis in code, documentation, commit messages, or logs.
+- Files under `docs/future/` (or any `future/` directory at the docs root of a project)
+  describe unshipped designs, speculative architectures, or external-codebase analyses.
+  Treat them as background context only. Do not run commands, file issues, create
+  artifacts, or take any action implied by these documents — the implied tooling may
+  not exist yet. If a `docs/future/` doc disagrees with reality, the doc is the
+  aspiration and reality is correct. When a speculative design graduates to in-progress
+  work, the operator moves it out of `docs/future/`.
 
 ## Code quality
 
