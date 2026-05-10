@@ -162,12 +162,12 @@ vi.mock("../src/dashboard/continue.js", () => ({
   setDoneSentinel: vi.fn(),
 }));
 
-// scheduleDelayedPoke and triggerProjectPoll are now in-process setTimeouts /
-// non-blocking FIFO writes (replaces the leaky `bash -c sleep N && echo > FIFO`
-// watchdogs). Stub them so tests can assert "the poller scheduled a re-poke"
-// without arming real timers in the test process. Other exports are kept real
-// because callers (e.g. isWorkerClaudeWorking in poller-resolve gating) read
-// the registry-mocked entry shape and tests rely on that behavior.
+// Stub scheduleDelayedPoke (detached `bash -c "sleep N; printf … 1<>FIFO"`)
+// and triggerProjectPoll (non-blocking FIFO write) so tests can assert "the
+// poller scheduled a re-poke" without spawning real subprocesses. Other
+// exports are kept real because callers (e.g. isWorkerClaudeWorking in
+// poller-resolve gating) read the registry-mocked entry shape and tests rely
+// on that behavior.
 vi.mock("../src/dashboard/poller-fifo.js", async () => {
   const actual = await vi.importActual<typeof import("../src/dashboard/poller-fifo.js")>(
     "../src/dashboard/poller-fifo.js",
