@@ -277,7 +277,13 @@ describe("installClaudeHooks", () => {
     expect(String(appendCall![1])).not.toContain(".garden-hooks/");
   });
 
-  it("does not touch info/exclude when all patterns are already present", async () => {
+  // wolf's main accidentally absorbed a committed .garden-done on 2026-05-06;
+  // every new worker inherited it via git checkout, the Stop hook tripped
+  // terminal `done` from the file's mere presence, and post-merge
+  // auto-continue stayed silent. ensureWorktreeExcludes must add the
+  // sentinel to info/exclude on heal so an accidental `git add -A` in a
+  // future review can't reproduce the same trap.
+  it("heals existing worktrees by adding .garden-done to info/exclude", async () => {
     process.argv[1] = "/usr/local/bin/garden";
     const childProcess = await import("node:child_process");
     vi.mocked(childProcess.execFileSync).mockReturnValueOnce(
@@ -285,6 +291,25 @@ describe("installClaudeHooks", () => {
     );
     vi.mocked(fs.readFileSync).mockReturnValueOnce(
       ".claude/\n.garden-hooks/\n.garden/\n",
+    );
+
+    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
+
+    const appendCall = vi.mocked(fs.appendFileSync).mock.calls.find(
+      c => String(c[0]).endsWith("info/exclude"),
+    );
+    expect(appendCall).toBeDefined();
+    expect(String(appendCall![1])).toContain(".garden-done");
+  });
+
+  it("does not touch info/exclude when all patterns are already present", async () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    const childProcess = await import("node:child_process");
+    vi.mocked(childProcess.execFileSync).mockReturnValueOnce(
+      "/repo/myproject/.git\n" as unknown as Buffer,
+    );
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(
+      ".claude/\n.garden-hooks/\n.garden/\n.garden-done\n",
     );
 
     installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
@@ -569,6 +594,50 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(script).toContain("export GARDEN_WORKER=bold-ash");
     expect(script).toContain("export GARDEN_BRANCH=bold-ash");
     expect(script).toContain("export GARDEN_BASE_BRANCH=develop");
+  });
+
+  // Regression: wolf's main accidentally absorbed a committed .garden-done on
+  // 2026-05-06. Every new wolf worker inherited it via `git worktree add`,
+  // tripped terminal `done` from the file's mere presence in the first Stop
+  // hook, and silently suppressed post-merge auto-continue across multiple
+  // merge cycles. The bootstrap must defuse a tracked sentinel before the
+  // first Stop hook fires, using skip-worktree so `git status` stays clean
+  // and `git checkout HEAD -- .garden-done` cannot resurrect it.
+  it("neutralizes a .garden-done sentinel tracked in HEAD of the base branch", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "main",
+    );
+    const call = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    );
+    expect(call).toBeDefined();
+    const script = call![1] as string;
+    // Detection: list HEAD for the path; grep distinguishes "tracked" from
+    // empty output. The neutralization runs only when the file is tracked.
+    expect(script).toMatch(/git -C \/wt\/myproject\/bold-ash ls-tree HEAD \.garden-done/);
+    // skip-worktree keeps `git status` clean and breaks path-scoped checkout
+    // from HEAD (the specific failure mode swift-trim-knoll hit).
+    expect(script).toContain("update-index --skip-worktree .garden-done");
+    expect(script).toContain("rm -f /wt/myproject/bold-ash/.garden-done");
+  });
+
+  // The done skill description points workers at info/exclude as the
+  // why-shouldn't-I-`git add`-it answer. The bootstrap must wire that
+  // promise into the actual exclude file or the skill text is a lie.
+  it("appends .garden-done to the common info/exclude alongside the dir patterns", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "main",
+    );
+    const call = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    );
+    expect(call).toBeDefined();
+    const script = call![1] as string;
+    expect(script).toMatch(/for pattern in .claude\/ .garden-hooks\/ .garden\/ .garden-done; do/);
   });
 });
 

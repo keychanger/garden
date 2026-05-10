@@ -145,8 +145,10 @@ function ensureWorktreeExcludes(targetDir: string): void {
   // The patterns must stay in sync with the bootstrap script's `for pattern`
   // loop further down in this file. .claude/ + .garden-hooks/ shipped with
   // the original worker; .garden/ was added when the grow workflow's goal +
-  // log files needed to be hidden from git status.
-  const patterns = [".claude/", ".garden-hooks/", ".garden/"];
+  // log files needed to be hidden from git status; .garden-done is the
+  // auto-continue suppression sentinel (so an accidental `git add -A` won't
+  // start tracking it the way it did on wolf's main).
+  const patterns = [".claude/", ".garden-hooks/", ".garden/", ".garden-done"];
   let commonDir: string;
   try {
     commonDir = execFileSync("git", ["-C", targetDir, "rev-parse", "--git-common-dir"], {
@@ -799,6 +801,21 @@ printf '  Creating worktree...\\n'
 mkdir -p "$(dirname ${wtPathLit})"
 git -C ${projectPathLit} worktree add ${wtPathLit} -b ${branchLit} origin/${baseLit}
 
+# Neutralize .garden-done if a past reviewer accidentally committed it to the
+# base branch. Without this, the first Stop hook with no commits ahead sees
+# isDoneSet=true and trips terminal "done"; and even after UserPromptSubmit
+# clears the file, a routine \`git checkout HEAD -- .garden-done\` resurrects
+# it (this is exactly how wolf/swift-trim-knoll wedged on 2026-05-10). The
+# update-index bit keeps \`git status\` clean AND causes path-scoped checkouts
+# from HEAD to error rather than restore. The operator should still
+# \`git rm .garden-done\` on the project's main; this only de-fangs each new
+# worker until that cleanup lands.
+if git -C ${wtPathLit} ls-tree HEAD .garden-done 2>/dev/null | grep -q '\\.garden-done'; then
+  printf '  WARNING: .garden-done is tracked in HEAD of %s — neutralizing in this worktree. Run \`git rm .garden-done\` on the project main to fix at the root.\\n' ${projectNameLit} >&2
+  git -C ${wtPathLit} update-index --skip-worktree .garden-done 2>/dev/null || true
+  rm -f ${wtPathLit}/.garden-done
+fi
+
 # Install dependencies if needed
 if [ -f ${wtPathLit}/package.json ]; then
   printf '  Installing dependencies...\\n'
@@ -832,9 +849,11 @@ printf '%s' ${growSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${growSki
 # Ensure garden-managed dirs are excluded from git status.
 # Writing to the common info/exclude covers all worktrees and never gets committed.
 # .garden/ covers per-worker artifacts (grow-goal.md, grow-log.md,
-# trellis-lessons.md) — none of these belong in version control.
+# trellis-lessons.md) — none of these belong in version control. .garden-done
+# is the auto-continue suppression sentinel; the done skill description
+# advertises this exclusion as the reason workers should not \`git add\` it.
 EXCLUDE_FILE="$(git -C ${wtPathLit} rev-parse --git-common-dir)/info/exclude"
-for pattern in .claude/ .garden-hooks/ .garden/; do
+for pattern in .claude/ .garden-hooks/ .garden/ .garden-done; do
   grep -qxF "$pattern" "$EXCLUDE_FILE" 2>/dev/null || printf '%s\\n' "$pattern" >> "$EXCLUDE_FILE"
 done
 
