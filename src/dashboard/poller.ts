@@ -117,10 +117,19 @@ export function startProjectPoller(projectName: string, gardenRunner: string): v
   // Claude Code hooks, worker push hook, merge queue completion, or tmux
   // pane-died. The poller is a pure dispatcher that does one unit of work
   // per wake.
+  //
+  // `exec 3<>${fifo}` holds the FIFO open in R+W mode for the loop's whole
+  // lifetime (not just the per-iteration `read`). Without this, the FIFO has
+  // no reader during `_poll`'s execution — which is exactly when lifecycle
+  // handlers fire scheduleDelayedPoke. The handler's detached writer would
+  // open R+W, write, close, and the byte would be reclaimed by the kernel
+  // before the loop's next `read` opened the FIFO again. Persistent fd 3
+  // keeps a reader present so buffered bytes survive until consumed.
   const cmd = [
+    `exec 3<>${shellEscape(fifo)};`,
     `while true; do`,
     `  ${gardenRunner} dashboard _poll ${shellEscape(projectName)} 2>/dev/null;`,
-    `  read <>${shellEscape(fifo)} 2>/dev/null || true;`,
+    `  read -u 3 2>/dev/null || true;`,
     `done`,
   ].join(" ");
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", window,

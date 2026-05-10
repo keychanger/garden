@@ -4,10 +4,11 @@
 // coordinator), which itself imports from the lifecycle modules.
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { SESSIONS_DIR } from "../config.js";
 import { findWorkerByName } from "./registry.js";
 import { log } from "./log.js";
+import { shellEscape } from "./tmux.js";
 
 export function signalFifoPath(project: string): string {
   return path.join(SESSIONS_DIR, `${project}-poll-signal`);
@@ -27,15 +28,40 @@ export function triggerProjectPoll(projectName: string): void {
   }
 }
 
-// In-process timer that pokes the poller after delayMs. Replaces the older
-// `bash -c "sleep N && echo > FIFO"` watchdog whose `echo > FIFO` blocked
-// forever on `open(2)` when the FIFO had no reader (poller window dead, test
-// temp dir cleaned up): writes accumulated 200+ orphan bash processes over
-// weeks. setTimeout + non-blocking triggerProjectPoll() side-steps the leak —
-// the timer dies cleanly with the dashboard process, and the FIFO write fails
-// fast when no one is reading.
+// Detached subprocess that sleeps then writes one byte to the project's poll
+// FIFO. The detach is load-bearing: every caller runs inside the short-lived
+// `_poll <project>` Node child the bash poll loop spawns per tick, and that
+// child exits as soon as its synchronous lifecycle work returns. An
+// in-process `setTimeout(...).unref()` is silently terminated at that exit
+// (Node drops unref'd timers when the event loop has no other work), so the
+// poke never reaches the FIFO and the bash loop blocks on `read` forever —
+// workers stranded in `merge-pending`, `failing → working` debounce never
+// fires, etc. Empirically: `node -e "setTimeout(fn, 0).unref()"` exits
+// without running fn.
+//
+// Why `1<>${fifo}` rather than the old `echo > ${fifo}`: `echo > FIFO` opens
+// O_WRONLY which blocks at open(2) when no reader exists — when the poller
+// window died (test cleanup, dashboard crash) the bash sat orphaned forever,
+// accumulating 200+ such orphans over weeks. The `<>` redirect opens R+W,
+// which never blocks on FIFOs (the kernel allows the open even with no other
+// party); the byte is buffered, the bash exits cleanly. If no reader ever
+// arrives, the FIFO is eventually unlinked and the buffer reclaimed — no
+// orphan accumulation.
 export function scheduleDelayedPoke(projectName: string, delayMs: number): void {
-  setTimeout(() => triggerProjectPoll(projectName), Math.max(0, delayMs)).unref();
+  const fifo = signalFifoPath(projectName);
+  const delaySec = Math.max(0, Math.ceil(delayMs / 1000));
+  try {
+    const child = spawn(
+      "bash",
+      ["-c", `sleep ${delaySec}; printf '\\n' 1<>${shellEscape(fifo)}`],
+      { detached: true, stdio: "ignore" },
+    );
+    child.unref();
+  } catch (err) {
+    log.warn("poller", "scheduleDelayedPoke spawn failed", {
+      data: { project: projectName, error: String(err) },
+    });
+  }
 }
 
 // Worker liveness from the registry (set by Claude Code hooks). Used by
