@@ -171,7 +171,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         level: "warn",
         source: "create",
         project: targetProject,
-        message: `\`.garden-done\` is tracked in HEAD of ${targetProject}. Every new worker inherits it via \`git worktree add\`, and the first Stop hook trips terminal \`done\` from its presence — silently suppressing post-merge auto-continue. The bootstrap neutralizes each new worktree (skip-worktree + rm), but the root fix is on the project main: \`cd ${project.path} && git rm .garden-done && git commit -m "chore: remove accidentally committed .garden-done sentinel" && git push\`.`,
+        message: `\`.garden-done\` is tracked in HEAD of ${targetProject}. Every new worker inherits it via \`git worktree add\`, and the first Stop hook trips terminal \`done\` from its presence — silently suppressing post-merge auto-continue. The bootstrap neutralizes each new worktree (skip-worktree + rm), but the root fix is on the project main: \`cd ${project.path} && git rm .garden-done && git commit -m "chore: remove accidentally committed .garden-done sentinel" && git push\`. Consider also adding \`.garden-done\` (alongside \`.claude/\`, \`.garden/\`, \`.garden-hooks/\`) to the project's \`.gitignore\` so a future stray \`git add -A\` outside garden's worktree can't reintroduce the trap — garden's own \`info/exclude\` is per-clone and protects worker worktrees but not other checkouts.`,
         dedupKey: `garden-done-tracked:${targetProject}`,
       });
     }
