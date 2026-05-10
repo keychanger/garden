@@ -29,8 +29,8 @@ and the original may be deleted or kept as historical record.
 | [STATUS.md](STATUS.md) | spec | Worker status state machine — display states, detection machinery, transition invariants |
 | [TRACKS.md](TRACKS.md) | spec (design target) | Multi-track projects and the promotion pipeline. No code yet. |
 | [TRELLIS-PLAN.md](TRELLIS-PLAN.md) | design | Phased implementation plan for the trellis workflow. The trellis spec itself lives in `WORKFLOWS.md` § "Trellis workflow"; this doc is the plan that produced it. |
-| [PLAN-WORKFLOW.md](PLAN-WORKFLOW.md) | design | The plan workflow: convert human-described features into a beads graph for autonomous execution. Folds into `WORKFLOWS.md` § "Plan workflow" once Phase 1 ships. |
-| [GASTOWN-LESSONS.md](GASTOWN-LESSONS.md) | analysis | External-codebase analysis of `gastownhall/gastown` with a phased roadmap of borrowed primitives. Not a committed plan. |
+| [PLAN-WORKFLOW.md](PLAN-WORKFLOW.md) | design (not yet implemented) | The plan workflow: convert human-described features into a beads graph for autonomous execution. **Forward-looking — no code today; workers should not file beads or run `bd` commands.** Folds into `WORKFLOWS.md` § "Plan workflow" once Phase 1 ships. |
+| [GASTOWN-LESSONS.md](GASTOWN-LESSONS.md) | analysis | External-codebase analysis of `gastownhall/gastown` with a phased roadmap of borrowed primitives. Not a committed plan. Bead references describe gastown, not garden. |
 
 ## Adding a new doc
 

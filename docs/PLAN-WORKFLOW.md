@@ -1,20 +1,34 @@
 # Plan Workflow
 
-Design document for `plan`, garden's fourth workflow. Plan converts a
-human-described feature into a graph of beads with dependencies, ready for
-parallel execution by other workflows. **For sections marked authoritative, if
-the code disagrees with this document, the code is wrong.** The phased
-delivery section is forward-looking; current implementation status is called
-out per phase.
+> **Not yet implemented. Do not act on this document.**
+>
+> This is a forward-looking design for a future garden workflow. Nothing
+> described here exists today: there is no `plan` workflow, no `bd`
+> command, no `~/.beads/` store, no `beads.sh` script, and no bead
+> ingestion path in any current workflow. Workers should **not** file
+> beads, run `bd` commands, or assume any bead-related machinery exists.
+> If you find yourself wanting to "file a bead" while working in garden,
+> the answer is no — write it in the commit message or surface it to the
+> operator instead.
+>
+> The phrase "the code is wrong" appears below to mark sections that will
+> become authoritative once the feature ships. Until Phase 1 lands, this
+> doc is a design target, not a contract.
 
-This document is the spec for plan. It will fold into `WORKFLOWS.md` § "Plan
-workflow" once Phase 1 ships, mirroring how `TRELLIS-PLAN.md` lived
+Design document for `plan`, garden's planned fourth workflow. Plan would
+convert a human-described feature into a graph of beads with dependencies,
+ready for parallel execution by other workflows. The phased delivery section
+is forward-looking; current implementation status is called out per phase.
+
+This document is the design for plan. It will fold into `WORKFLOWS.md` §
+"Plan workflow" once Phase 1 ships, mirroring how `TRELLIS-PLAN.md` lived
 separately while trellis was being designed and now coexists with the
 authoritative trellis section in `WORKFLOWS.md`.
 
 ## Status
 
-- **Phase 1** (skeleton + single-reviewer happy path): not started.
+- **Phase 1** (skeleton + single-reviewer happy path): not started. No
+  code, no CLI surface, no worker integration.
 - **Phase 2** (dimensional fan-out): designed below, not started.
 - **Phase 3** (verification + bead ingestion wiring): out of scope for this
   document. Captured under "Out of scope" with pointers.
