@@ -33,7 +33,7 @@ import {
 } from "./trellis-verdict.js";
 import { parseLastLineVerdict } from "./verdict.js";
 import { reviewWindowName } from "./window-names.js";
-import { signalFifoPath, scheduleDelayedPoke, triggerProjectPoll } from "./poller-fifo.js";
+import { signalFifoPath, scheduleDelayedPoke } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
 import { getWorkflow } from "./workflows/index.js";
 
@@ -537,17 +537,22 @@ export function resetToWorkingOnWorkerPush(
   scheduleDelayedPoke(projectName, 0);
 }
 
-// In-process timer that pokes the project's FIFO after REVIEW_TIMEOUT_MS.
-// The poller is event-driven and only wakes on pokes — a hung reviewer produces
-// no events on its own, so without this the timeout check below would never
-// run. Spurious pokes after normal completion are harmless (the handlers no-op).
+// Pokes the project's FIFO after REVIEW_TIMEOUT_MS so the poller wakes to
+// run the `isReviewTimedOut` check below — a hung reviewer produces no events
+// on its own, so without this the timeout would never be detected. Spurious
+// pokes after normal completion are harmless (handlers no-op).
 //
-// Replaces the older `bash -c "sleep N && [ -p FIFO ] && echo > FIFO"` watchdog
-// whose `echo > FIFO` blocked indefinitely on `open(2)` when no reader was
-// attached (poller window died, integration test cleaned up its temp dir).
-// triggerProjectPoll uses O_WRONLY|O_NONBLOCK and fails fast with no reader.
+// Delegates to scheduleDelayedPoke for the same reason b6c4c87 was reverted
+// for that helper in ef12da0: the in-process `setTimeout(...).unref()`
+// shortcut is dropped at the calling _poll Node child's exit, so the FIFO
+// never sees the byte. A detached bash subprocess survives the parent's exit.
+// The reviewer scheduling site has the same lifecycle as scheduleDelayedPoke's
+// — both fire from inside _poll's synchronous lifecycle work — so the fix is
+// the same. Symptom of the unref'd version: a hung reviewer wedges the
+// worker in `reviewing` forever, blocking the merge → post-merge auto-continue
+// path and leaving the worker idle "waiting for continuation that never comes."
 export function scheduleReviewTimeoutPoke(projectName: string): void {
-  setTimeout(() => triggerProjectPoll(projectName), REVIEW_TIMEOUT_MS).unref();
+  scheduleDelayedPoke(projectName, REVIEW_TIMEOUT_MS);
 }
 
 export function isReviewTimedOut(entry: WorkerEntry): boolean {
