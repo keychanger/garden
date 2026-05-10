@@ -38,7 +38,9 @@ and the original may be deleted or kept as historical record. When a
 ## Adding a new doc
 
 New design docs and specs go in this directory directly (flat layout
-until ~10 files; subdivide later). Filename in `UPPER-KEBAB-CASE.md`
+until ~10 files; subdivide later). Speculative designs and external-
+codebase analyses go under `docs/future/` instead — the path itself
+signals "do not act on this." Filename in `UPPER-KEBAB-CASE.md`
 matching the existing convention.
 
 If the doc is a behavioral spec, open with the marker phrase. If it's
