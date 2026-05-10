@@ -356,24 +356,20 @@ describe("poll — working state", () => {
       makeWorker({ prState: "working", claudeStatus: "idle", pendingReviewAt: Date.now() }),
     ]);
 
-    // scheduleReviewTimeoutPoke is now an in-process setTimeout (no bash sleep
-    // wrapper) — a 30-minute timer must be armed so a hung reviewer eventually
-    // pokes the FIFO. Spy on setTimeout to confirm the schedule.
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      poll("myproject");
+    poll("myproject");
 
-      const launchCall = vi.mocked(updateWorkerFields).mock.calls.find(
-        c => (c[2] as Record<string, unknown>).prState === "reviewing",
-      );
-      expect(launchCall).toBeDefined();
-      expect((launchCall![2] as Record<string, unknown>).reviewStartedAt).toEqual(expect.any(Number));
-      const reviewTimeoutMs = 30 * 60 * 1000;
-      const armed = setTimeoutSpy.mock.calls.some(c => c[1] === reviewTimeoutMs);
-      expect(armed).toBe(true);
-    } finally {
-      setTimeoutSpy.mockRestore();
-    }
+    const launchCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "reviewing",
+    );
+    expect(launchCall).toBeDefined();
+    expect((launchCall![2] as Record<string, unknown>).reviewStartedAt).toEqual(expect.any(Number));
+    // scheduleReviewTimeoutPoke now delegates to scheduleDelayedPoke, which
+    // spawns a detached bash subprocess so the timer survives `_poll`'s exit.
+    // The previous in-process `setTimeout(...).unref()` was dropped at exit
+    // (Node terminates unref'd timers when the event loop empties) — a hung
+    // reviewer never got pinged, the worker wedged in `reviewing`, the merge
+    // never happened, and post-merge auto-continue never fired.
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 30 * 60 * 1000);
   });
 });
 
