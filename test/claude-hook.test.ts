@@ -125,6 +125,7 @@ import { updateWorkerFields } from "../src/dashboard/registry.js";
 import { log } from "../src/dashboard/log.js";
 import { tmux } from "../src/dashboard/tmux.js";
 import { readDashState } from "../src/dashboard/state.js";
+import { _resetHeaderCachesForTest } from "../src/dashboard/header.js";
 
 const originalCwd = process.cwd;
 const originalGardenReviewer = process.env.GARDEN_REVIEWER;
@@ -159,6 +160,9 @@ beforeEach(() => {
   process.cwd = originalCwd;
   delete process.env.GARDEN_REVIEWER;
   for (const key of Object.keys(entries)) delete entries[key];
+  // header.ts caches identity-equal writes/refreshes; reset across tests so
+  // each "first hook fires" scenario starts fresh.
+  _resetHeaderCachesForTest();
 });
 
 afterAll(() => {

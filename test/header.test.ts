@@ -147,6 +147,7 @@ import {
   refreshUsagePane,
   refreshDashboard,
   installInputGuard,
+  _resetHeaderCachesForTest,
 } from "../src/dashboard/header.js";
 
 import { tmux, getPanePid, getPaneSize, getPaneTitle, setPaneVar, listSessionPaneTitles } from "../src/dashboard/tmux.js";
@@ -186,6 +187,11 @@ beforeEach(() => {
   vi.mocked(getPaneTitle).mockReturnValue(null);
   vi.mocked(renderQuickStatus).mockReturnValue("line1\nline2\nline3");
   vi.mocked(currentBranch).mockReturnValue("main");
+  // Module-level write caches (writePlotStripTemplate, writeQuickStatus,
+  // writeUsageRendered, setBarVars, suppressWindowNames) persist across
+  // test cases within the same module instance. Each test that asserts
+  // "the write happened" needs a clean slate.
+  _resetHeaderCachesForTest();
 });
 
 // ===========================================================================
@@ -1129,6 +1135,55 @@ describe("refreshDashboard", () => {
     expect(getPanePid).toHaveBeenCalledWith("%7");
     expect(killSpy).toHaveBeenCalledWith(55555, "SIGUSR1");
     killSpy.mockRestore();
+  });
+
+  it("skips writeQuickStatus / writeUsageRendered atomic writes when rendered content is unchanged", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%5", usagePaneId: "%6" }));
+    vi.mocked(renderQuickStatus).mockReturnValue("steady-state status");
+
+    refreshDashboard();
+    const firstWriteCount = vi.mocked(fs.writeFileSync).mock.calls.length;
+    expect(firstWriteCount).toBeGreaterThan(0);
+
+    vi.mocked(fs.writeFileSync).mockClear();
+    // Same content, same state — every write should short-circuit.
+    refreshDashboard();
+    expect(vi.mocked(fs.writeFileSync).mock.calls.length).toBe(0);
+  });
+
+  it("re-writes when rendered content changes", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%5" }));
+    vi.mocked(renderQuickStatus).mockReturnValue("first content");
+    refreshDashboard();
+
+    vi.mocked(fs.writeFileSync).mockClear();
+    vi.mocked(renderQuickStatus).mockReturnValue("second content");
+    refreshDashboard();
+    // Status file is re-written; the cache invalidates on the new value.
+    const statusWrites = vi.mocked(fs.writeFileSync).mock.calls.filter(
+      c => String(c[0]).includes("status.rendered"),
+    );
+    expect(statusWrites.length).toBeGreaterThan(0);
+  });
+
+  it("skips setBarVars tmux subprocesses when left/right both unchanged", () => {
+    refreshDashboard();
+    const firstStatusLeftCalls = vi.mocked(tmux).mock.calls.filter(
+      c => c[0] === "set-option" && c[3] === "@garden_left",
+    ).length;
+    expect(firstStatusLeftCalls).toBeGreaterThan(0);
+
+    vi.mocked(tmux).mockClear();
+    // Same active project / plot → same left+right → entire setBarVars block skipped.
+    refreshDashboard();
+    const secondStatusLeftCalls = vi.mocked(tmux).mock.calls.filter(
+      c => c[0] === "set-option" && c[3] === "@garden_left",
+    ).length;
+    const secondRefreshClient = vi.mocked(tmux).mock.calls.filter(
+      c => c[0] === "refresh-client",
+    ).length;
+    expect(secondStatusLeftCalls).toBe(0);
+    expect(secondRefreshClient).toBe(0);
   });
 
   it("skips suppressWindowNames per-window set-option calls when window-name set is unchanged", () => {

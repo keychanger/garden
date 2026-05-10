@@ -207,9 +207,18 @@ function formatPlotSegment(name: string, isActive: boolean, status: PlotState): 
   return `#[${style}]${circle} ${icon} ${name}#[default]`;
 }
 
+// Short-circuit when the template hasn't changed since the last write. The
+// plot strip mutates only on plot add/remove/focus events; in steady state
+// every refreshDashboard re-computes the same template. Skipping the
+// atomicWriteFile (a write+rename pair of syscalls) when content is
+// identity-equal to the last write keeps the per-hook cascade off disk.
+let lastWrittenPlotStripTemplate: string | null = null;
+
 function writePlotStripTemplate(template: string): void {
+  if (template === lastWrittenPlotStripTemplate) return;
   try {
     atomicWriteFile(PLOT_STRIP_TEMPLATE_FILE, template);
+    lastWrittenPlotStripTemplate = template;
   } catch { /* sessions dir not yet created; best effort */ }
 }
 
@@ -217,7 +226,17 @@ function writePlotStripTemplate(template: string): void {
 // tmux variable helpers
 // ---------------------------------------------------------------------------
 
+// Skip the 5 sync tmux subprocesses (4 set-option + 1 refresh-client) when
+// both bars match the last-applied values. The format strings (status-left /
+// status-right pointing at @garden_left / @garden_right) only need to be set
+// once per dashboard process — they don't drift unless tmux is restarted —
+// so the entire block is safe to skip on identity match. Reset on dashboard
+// process restart.
+let lastBarLeft: string | null = null;
+let lastBarRight: string | null = null;
+
 function setBarVars(left: string, right: string): void {
+  if (left === lastBarLeft && right === lastBarRight) return;
   try {
     const t = DASHBOARD_SESSION;
     // Ensure format strings point to the correct variables. Idempotent and
@@ -227,6 +246,8 @@ function setBarVars(left: string, right: string): void {
     tmux("set-option", "-t", t, "@garden_left", left);
     tmux("set-option", "-t", t, "@garden_right", right);
     tmux("refresh-client", "-S");
+    lastBarLeft = left;
+    lastBarRight = right;
   } catch { /* no client attached or session gone */ }
 }
 
@@ -590,6 +611,19 @@ export function refreshDashboardCycle(opts?: RefreshOptions): void {
   writeQuickStatus(opts);
 }
 
+// Reset module-level write/idempotency caches. Intended for tests that
+// instantiate the module once but exercise multiple "first-write" scenarios;
+// production code shouldn't call this — caches reset naturally when the
+// dashboard process restarts.
+export function _resetHeaderCachesForTest(): void {
+  lastSuppressedWindowSet = null;
+  lastWrittenPlotStripTemplate = null;
+  lastWrittenQuickStatus = null;
+  lastWrittenUsageRendered = null;
+  lastBarLeft = null;
+  lastBarRight = null;
+}
+
 // Lean refresh for plot cycling: plot strip + status only. Skips usage (account-wide,
 // not per-plot), suppressWindowNames, and refreshWorkerTasks — the next hook/poller event picks them up.
 export function refreshDashboardPlotCycle(opts?: RefreshOptions): void {
@@ -684,11 +718,21 @@ function statusPaneFloorLines(
   } catch { return 0; }
 }
 
+// Short-circuit caches for the rendered files. When the renderer produces the
+// same string as the last write, both the atomicWriteFile (write+rename
+// syscalls) and the signalPane SIGUSR1 are wasteful — the pane already shows
+// this content. Steady-state hooks (PostToolUse storms, repeated Stop events)
+// often regenerate identical output; this keeps the per-hook cascade quiet.
+let lastWrittenQuickStatus: string | null = null;
+let lastWrittenUsageRendered: string | null = null;
+
 function writeQuickStatus(opts?: RefreshOptions): void {
   try {
     const state = opts?.state ?? readDashState();
     const rendered = renderQuickStatus(state, opts?.windowNames, opts?.config, opts?.registry);
+    if (rendered === lastWrittenQuickStatus) return;
     atomicWriteFile(STATUS_RENDERED_FILE, rendered);
+    lastWrittenQuickStatus = rendered;
     if (state.statusPaneId) {
       // +1 for the pane-border-status top row, which is included in pane_height
       // but not in the rendered line count.
@@ -704,7 +748,9 @@ function writeUsageRendered(opts?: RefreshOptions): void {
     const state = opts?.state ?? readDashState();
     const cur = state.usagePaneId ? getPaneSize(state.usagePaneId) : null;
     const rendered = renderUsagePane(Date.now(), cur?.width);
+    if (rendered === lastWrittenUsageRendered) return;
     atomicWriteFile(USAGE_RENDERED_FILE, rendered);
+    lastWrittenUsageRendered = rendered;
     if (state.usagePaneId) {
       // +1 for the pane-border-status top row.
       const h = rendered.split("\n").length + 1;
