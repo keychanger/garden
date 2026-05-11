@@ -15,7 +15,8 @@ import {
 import { tryGetProject, loadConfig } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { getWorkerBaseBranch } from "./git.js";
-import { healStatusPane } from "./validate.js";
+import { healStatusPane, sweepGhostEntries } from "./validate.js";
+import { refreshDashboard } from "./header.js";
 import { log } from "./log.js";
 import { pollerWindowName } from "./window-names.js";
 import { stopUsagePoller, startUsagePoller } from "./usage-poller.js";
@@ -35,6 +36,17 @@ export { killReviewWindow } from "./poller-review.js";
 // Main poll entry point — called by `garden dashboard _poll <project>`
 export function poll(projectName: string): boolean {
   healStatusPane();
+  // Sweep ghost registry entries cross-project. validateAndHeal already does
+  // this at attach time, but mid-session ghosts (e.g. a fan-out handoff with
+  // partial bootstrap failures) would otherwise linger and keep the plot
+  // strip's working spinner lit until the next dashboard restart.
+  try {
+    if (sweepGhostEntries()) refreshDashboard();
+  } catch (err) {
+    log.error("poller", "sweepGhostEntries failed", {
+      data: { error: String(err) },
+    });
+  }
   // Pick up handoff requests submitted by sandboxed workers (see
   // handoff-dispatch.ts). Cross-project: pollers are global pickers, not
   // tied to the request's target project — any wake on any project drains

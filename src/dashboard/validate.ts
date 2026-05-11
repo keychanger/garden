@@ -137,6 +137,55 @@ function healStatusPaneInState(state: DashboardState): DashboardState {
   return healed;
 }
 
+// Ghost entries: never-bootstrapped workers from a failed handoff or hotkey
+// spawn. Identified by the combination of claudeStatus === "loading" (never
+// advanced to ready/idle), no tmux window, and no worktree on disk. A genuine
+// in-flight worker has a tmux window at this point (tmuxNewWindow creates it
+// before bootstrap runs), so this rule doesn't race with normal creation.
+// The "never auto-cleanup" rule is about preserving operator work on real
+// workers; these never produced any work to preserve.
+//
+// Mutates `registry` in place; returns true if anything was dropped. Caller
+// is responsible for persisting via writeRegistry.
+function dropGhostEntries(registry: WorkerRegistry, activeWindowName: string | null): boolean {
+  let changed = false;
+  for (const projectName of Object.keys(registry.workers)) {
+    const entries = registry.workers[projectName];
+    const kept = entries.filter(entry => {
+      if (entry.claudeStatus !== "loading") return true;
+      if (entry.worktreePath && worktreeExists(entry.worktreePath)) return true;
+      const windowName = workerWindowName(projectName, entry.name);
+      if (windowExists(windowName)) return true;
+      if (windowName === activeWindowName) return true;
+      log.warn("validate", "removing ghost worker (loading, no worktree, no pane)", {
+        worker: entry.name,
+        data: { project: projectName },
+      });
+      return false;
+    });
+    if (kept.length !== entries.length) {
+      registry.workers[projectName] = kept;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/**
+ * Cross-project ghost sweep, intended for repeated invocation from a poller.
+ * Drops registry entries that the strict ghost rule would have removed at
+ * dashboard attach time — handles ghosts that appear mid-session (e.g. a
+ * fan-out handoff where some bootstraps crashed) without waiting for the
+ * next dashboard restart. Returns true if any entry was dropped.
+ */
+export function sweepGhostEntries(): boolean {
+  const registry = readRegistry();
+  const state = readDashState();
+  if (!dropGhostEntries(registry, state.activeWindowName)) return false;
+  writeRegistry(registry);
+  return true;
+}
+
 /**
  * Validate dashboard state against tmux reality and heal inconsistencies.
  * Returns the healed state (may be identical if everything is consistent).
@@ -206,34 +255,11 @@ export function validateAndHeal(state: DashboardState): DashboardState {
   const registry = readRegistry();
   let registryChanged = false;
 
-  // Drop ghost entries FIRST: never-bootstrapped workers from a failed
-  // handoff or hotkey spawn. Identified by the combination of claudeStatus
-  // === "loading" (never advanced to ready/idle), no tmux window, and no
-  // worktree on disk. A genuine in-flight worker has a tmux window at this
-  // point (tmuxNewWindow creates it before bootstrap runs), so this rule
-  // doesn't race with normal creation. Must run before the "mark exited"
-  // pass — that pass would otherwise rewrite claudeStatus from "loading" to
+  // Drop ghost entries FIRST. Must run before the "mark exited" pass —
+  // that pass would otherwise rewrite claudeStatus from "loading" to
   // "exited" and the ghost would slip through as a preserved exited worker.
-  // The "never auto-cleanup" rule is about preserving operator work on real
-  // workers; these never produced any work to preserve.
-  for (const projectName of Object.keys(registry.workers)) {
-    const entries = registry.workers[projectName];
-    const kept = entries.filter(entry => {
-      if (entry.claudeStatus !== "loading") return true;
-      if (entry.worktreePath && worktreeExists(entry.worktreePath)) return true;
-      const windowName = workerWindowName(projectName, entry.name);
-      if (windowExists(windowName)) return true;
-      if (windowName === healed.activeWindowName) return true;
-      log.warn("validate", "removing ghost worker (loading, no worktree, no pane)", {
-        worker: entry.name,
-        data: { project: projectName },
-      });
-      return false;
-    });
-    if (kept.length !== entries.length) {
-      registry.workers[projectName] = kept;
-      registryChanged = true;
-    }
+  if (dropGhostEntries(registry, healed.activeWindowName)) {
+    registryChanged = true;
   }
 
   for (const [projectName, entries] of Object.entries(registry.workers)) {

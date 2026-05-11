@@ -20,6 +20,19 @@ vi.mock("../src/dashboard/registry.js", () => ({
   updateWorkerFields: vi.fn(),
 }));
 
+vi.mock("../src/dashboard/state.js", () => ({
+  readDashState: vi.fn(() => ({
+    activeProject: "garden",
+    statusPaneId: "%0",
+    usagePaneId: "%3",
+    gardenShellPaneId: "%1",
+    activePaneId: "%2",
+    activePaneType: "worker",
+    activeWindowName: null,
+  })),
+  writeDashState: vi.fn(),
+}));
+
 vi.mock("../src/config.js", () => ({
   loadConfig: vi.fn(() => ({ projects: { garden: { path: "/tmp/garden" } } })),
   SESSIONS_DIR: "/tmp/fake-sessions",
@@ -62,7 +75,8 @@ vi.mock("../src/dashboard/alerts.js", () => ({
   addAlert: vi.fn(),
 }));
 
-import { validateAndHeal } from "../src/dashboard/validate.js";
+import { validateAndHeal, sweepGhostEntries } from "../src/dashboard/validate.js";
+import { readDashState } from "../src/dashboard/state.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, tmuxSplit } from "../src/dashboard/tmux.js";
 import { readRegistry, writeRegistry } from "../src/dashboard/registry.js";
 import type { DashboardState } from "../src/dashboard/state.js";
@@ -348,5 +362,56 @@ describe("validateAndHeal", () => {
     if (written) {
       expect(written.workers.garden).toHaveLength(1);
     }
+  });
+});
+
+describe("sweepGhostEntries", () => {
+  // The mid-session sweep that runs on every poller poke. validateAndHeal does
+  // the same work at attach time; this lighter sweep catches ghosts that show
+  // up after attach (e.g. a fan-out handoff where some bootstraps failed)
+  // without waiting for a dashboard restart.
+  it("removes a mid-session ghost across projects", async () => {
+    const { worktreeExists } = await import("../src/dashboard/git.js");
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: {
+        wolf: [
+          {
+            name: "grave-tall-loon",
+            sessionId: "a",
+            task: "",
+            claudeStatus: "loading",
+          },
+          { name: "hale-rich-mere", sessionId: "b", task: "real" },
+        ],
+        garden: [
+          { name: "meek-shrewd-vow", sessionId: "c", task: "real" },
+        ],
+      },
+    });
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("grave-tall-loon")
+    );
+    vi.mocked(worktreeExists).mockReturnValue(false);
+    vi.mocked(readDashState).mockReturnValue({
+      ...makeState({ activeWindowName: null }),
+    });
+
+    const changed = sweepGhostEntries();
+    expect(changed).toBe(true);
+    const written = vi.mocked(writeRegistry).mock.calls[0][0];
+    expect(written.workers.wolf.map(w => w.name)).toEqual(["hale-rich-mere"]);
+    expect(written.workers.garden.map(w => w.name)).toEqual(["meek-shrewd-vow"]);
+  });
+
+  it("returns false and does not write when no ghosts present", () => {
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: {
+        garden: [{ name: "meek-shrewd-vow", sessionId: "a", task: "real" }],
+      },
+    });
+    vi.mocked(windowExists).mockReturnValue(true);
+    const changed = sweepGhostEntries();
+    expect(changed).toBe(false);
+    expect(vi.mocked(writeRegistry)).not.toHaveBeenCalled();
   });
 });
