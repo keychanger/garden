@@ -34,6 +34,7 @@ and the original may be deleted or kept as historical record. When a
 | [TRELLIS-PLAN.md](TRELLIS-PLAN.md) | design | Phased implementation plan for the trellis workflow. The trellis spec itself lives in `WORKFLOWS.md` § "Trellis workflow"; this doc is the plan that produced it. |
 | [future/PLAN-WORKFLOW.md](future/PLAN-WORKFLOW.md) | speculative | The plan workflow: convert human-described features into a beads graph for autonomous execution. No code today — workers must not run `bd` commands or file beads. |
 | [future/GASTOWN-LESSONS.md](future/GASTOWN-LESSONS.md) | speculative | External-codebase analysis of `gastownhall/gastown` with a phased roadmap of borrowed primitives. Bead references describe gastown, not garden. |
+| [future/PROJECT-CUSTOMIZATION.md](future/PROJECT-CUSTOMIZATION.md) | speculative | Brainstorm for expanding per-project (and possibly per-plot) customization: new config knobs, project-scoped skills and review rules, hardening passes, hygiene evaluator, and setup wizard. No code today. |
 
 ## Adding a new doc
 
