@@ -525,18 +525,38 @@ export function installPollTriggerHook(wtPath: string, _gardenRunner: string, pr
 }
 
 function installDeps(wtPath: string): void {
-  if (!fs.existsSync(path.join(wtPath, "package.json"))) return;
-  try {
-    execFileSync("npm", ["install"], {
-      cwd: wtPath,
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 120_000,
-    });
-    log.info("git", "installed dependencies");
-  } catch (err) {
-    log.warn("git", "failed to install dependencies", {
-      data: { error: String(err) },
-    });
+  if (fs.existsSync(path.join(wtPath, "package.json"))) {
+    try {
+      execFileSync("npm", ["install"], {
+        cwd: wtPath,
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 120_000,
+      });
+      log.info("git", "installed npm dependencies");
+    } catch (err) {
+      log.warn("git", "failed to install npm dependencies", {
+        data: { error: String(err) },
+      });
+    }
+  }
+  if (fs.existsSync(path.join(wtPath, "pyproject.toml"))) {
+    try {
+      const contents = fs.readFileSync(
+        path.join(wtPath, "pyproject.toml"),
+        "utf-8",
+      );
+      if (!contents.includes("[tool.poetry]")) return;
+      execFileSync("poetry", ["install", "--no-interaction"], {
+        cwd: wtPath,
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 300_000,
+      });
+      log.info("git", "installed poetry dependencies");
+    } catch (err) {
+      log.warn("git", "failed to install poetry dependencies", {
+        data: { error: String(err) },
+      });
+    }
   }
 }
 

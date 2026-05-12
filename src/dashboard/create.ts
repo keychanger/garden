@@ -821,6 +821,10 @@ if [ -f ${wtPathLit}/package.json ]; then
   printf '  Installing dependencies...\\n'
   (cd ${wtPathLit} && npm install --prefer-offline) 2>/dev/null || true
 fi
+if [ -f ${wtPathLit}/pyproject.toml ] && grep -q '\\[tool.poetry\\]' ${wtPathLit}/pyproject.toml 2>/dev/null; then
+  printf '  Installing poetry deps...\\n'
+  (cd ${wtPathLit} && poetry install --no-interaction) 2>/dev/null || true
+fi
 
 # Install poll trigger hook
 mkdir -p ${hooksDirLit}
