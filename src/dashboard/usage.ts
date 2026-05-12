@@ -51,21 +51,6 @@ export interface UsageSnapshot {
 // Credential discovery
 // -----------------------------------------------------------------------------
 
-interface Credential {
-  token: string;
-  source: "env" | "keychain" | "file";
-}
-
-export function loadCredential(): Credential | null {
-  const envToken = process.env.GARDEN_CLAUDE_SESSION_KEY;
-  if (envToken && envToken.startsWith("sk-ant-")) {
-    return { token: envToken, source: "env" };
-  }
-  const slot = readPersonalCredential();
-  if (slot) return { token: slot.oauth.accessToken, source: slot.source };
-  return null;
-}
-
 // Returns an access token usable against api.anthropic.com, refreshing the
 // underlying OAuth credential first when it has expired and a refresh token
 // is available. On successful refresh, the new tokens are persisted back to
