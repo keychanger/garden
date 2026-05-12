@@ -2362,6 +2362,43 @@ describe("poll — sibling merge notification", () => {
     expect(sendKeyCalls).toHaveLength(0);
   });
 
+  it("skips sibling whose .garden-done sentinel is set", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        name: "bold-ash",
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        sessionId: "s1",
+        task: "t1",
+        worktreePath: "/tmp/wt/myproject/bold-ash",
+        branchName: "bold-ash",
+      }),
+      makeWorker({
+        name: "calm-bay",
+        prState: "working",
+        claudeStatus: "idle", // alive — only the sentinel should suppress
+        sessionId: "s2",
+        task: "t2",
+        worktreePath: "/tmp/wt/myproject/calm-bay",
+        branchName: "calm-bay",
+      }),
+    ]);
+
+    vi.mocked(getChangedFiles)
+      .mockReturnValueOnce(["src/foo.ts"])
+      .mockReturnValueOnce(["src/foo.ts"]);
+    vi.mocked(isDoneSet).mockImplementation(
+      (wt: string | undefined) => wt === "/tmp/wt/myproject/calm-bay",
+    );
+
+    poll("myproject");
+
+    const sendKeyCalls = vi.mocked(tmux).mock.calls.filter(
+      c => c[0] === "send-keys",
+    );
+    expect(sendKeyCalls).toHaveLength(0);
+  });
+
   it("skips notification for workers in merged state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
