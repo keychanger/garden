@@ -11,11 +11,17 @@
 // than every few minutes.
 import fs from "node:fs";
 import https from "node:https";
-import os from "node:os";
 import path from "node:path";
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { SESSIONS_DIR } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
+import {
+  isAccessTokenExpired,
+  persistCredential,
+  readPersonalCredential,
+  refreshOAuthToken,
+  type RefreshError,
+} from "./credentials.js";
 import { withFileLock } from "./file-lock.js";
 import { log } from "./log.js";
 
@@ -55,37 +61,56 @@ export function loadCredential(): Credential | null {
   if (envToken && envToken.startsWith("sk-ant-")) {
     return { token: envToken, source: "env" };
   }
-
-  if (process.platform === "darwin") {
-    try {
-      const raw = execFileSync(
-        "security",
-        ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
-        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-      ).trim();
-      const token = extractAccessToken(raw);
-      if (token) return { token, source: "keychain" };
-    } catch { /* not present or sandboxed */ }
-  }
-
-  const credFile = path.join(os.homedir(), ".claude", ".credentials.json");
-  if (fs.existsSync(credFile)) {
-    try {
-      const token = extractAccessToken(fs.readFileSync(credFile, "utf8"));
-      if (token) return { token, source: "file" };
-    } catch { /* unreadable or malformed */ }
-  }
-
+  const slot = readPersonalCredential();
+  if (slot) return { token: slot.oauth.accessToken, source: slot.source };
   return null;
 }
 
-function extractAccessToken(raw: string): string | null {
+// Returns an access token usable against api.anthropic.com, refreshing the
+// underlying OAuth credential first when it has expired and a refresh token
+// is available. On successful refresh, the new tokens are persisted back to
+// the credential source (Keychain on macOS, ~/.claude/.credentials.json
+// elsewhere) so claude CLI's next read sees the rotated values — otherwise
+// our refresh would silently revoke claude CLI's cached refresh token and
+// force the operator to re-login.
+//
+// The `expired_login` return tag distinguishes a revoked refresh token
+// (`invalid_grant` from the OAuth server) from a stale-but-fixable cached
+// access token — the caller surfaces them differently.
+export interface ResolvedCredential {
+  token: string;
+  source: "env" | "keychain" | "file";
+  refreshed: boolean;
+}
+
+export async function resolveCredential(): Promise<
+  | { ok: true; cred: ResolvedCredential }
+  | { ok: false; error: "no_credentials" | "login_expired" | "refresh_failed"; detail?: string }
+> {
+  const envToken = process.env.GARDEN_CLAUDE_SESSION_KEY;
+  if (envToken && envToken.startsWith("sk-ant-")) {
+    return { ok: true, cred: { token: envToken, source: "env", refreshed: false } };
+  }
+  const slot = readPersonalCredential();
+  if (!slot) return { ok: false, error: "no_credentials" };
+  if (!isAccessTokenExpired(slot.oauth)) {
+    return { ok: true, cred: { token: slot.oauth.accessToken, source: slot.source, refreshed: false } };
+  }
+  if (!slot.oauth.refreshToken) {
+    // Expired AT with no refresh token — only `garden login` (or claude /login) can heal.
+    return { ok: false, error: "login_expired", detail: "no refresh token on credential" };
+  }
   try {
-    const parsed = JSON.parse(raw);
-    const t = parsed?.claudeAiOauth?.accessToken;
-    return typeof t === "string" && t.length > 0 ? t : null;
-  } catch {
-    return null;
+    const fresh = await refreshOAuthToken(slot.oauth.refreshToken);
+    persistCredential(slot.source, fresh);
+    log.info("usage", "refreshed oauth token", { data: { source: slot.source } });
+    return { ok: true, cred: { token: fresh.accessToken, source: slot.source, refreshed: true } };
+  } catch (err) {
+    const refreshErr = err as RefreshError;
+    if (refreshErr.code === "invalid_grant") {
+      return { ok: false, error: "login_expired", detail: "refresh token revoked" };
+    }
+    return { ok: false, error: "refresh_failed", detail: `${refreshErr.code}: ${refreshErr.message}`.slice(0, 200) };
   }
 }
 
@@ -325,13 +350,30 @@ export async function refreshUsage(): Promise<UsageSnapshot> {
   if (!claim.fetched) return claim.snap;
 
   const prior = claim.prior;
-  const cred = loadCredential();
-  if (!cred) {
+  const resolved = await resolveCredential();
+  if (!resolved.ok) {
+    if (resolved.error === "no_credentials") {
+      return finalizeSnapshot({
+        fetchedAt: new Date().toISOString(),
+        error: "no Claude Code credentials found",
+      }, prior);
+    }
+    if (resolved.error === "login_expired") {
+      log.warn("usage", "login expired", { data: { detail: resolved.detail } });
+      return finalizeSnapshot({
+        fetchedAt: new Date().toISOString(),
+        error: "login expired",
+        retryAfterMs: AUTH_BACKOFF_MS,
+      }, prior);
+    }
+    // refresh_failed: transient (network/5xx during token refresh). Generic backoff, retry sooner.
+    log.warn("usage", "token refresh failed", { data: { detail: resolved.detail } });
     return finalizeSnapshot({
       fetchedAt: new Date().toISOString(),
-      error: "no Claude Code credentials found",
+      error: `refresh failed: ${resolved.detail ?? "unknown"}`.slice(0, 200),
     }, prior);
   }
+  const cred = resolved.cred;
 
   try {
     const res = await fetchUsageRaw(cred.token);
