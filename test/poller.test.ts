@@ -113,6 +113,11 @@ vi.mock("../src/dashboard/state.js", () => ({
 
 vi.mock("../src/dashboard/validate.js", () => ({
   healStatusPane: vi.fn(),
+  // poll() calls this on every cycle; without the mock the call throws
+  // TypeError and gets silently swallowed by poll()'s try/catch, masking
+  // wiring regressions. Default to false (no ghosts swept) so
+  // refreshDashboard isn't invoked unless a test opts in.
+  sweepGhostEntries: vi.fn(() => false),
 }));
 
 vi.mock("../src/dashboard/alerts.js", () => ({
@@ -197,6 +202,8 @@ import { addAlert } from "../src/dashboard/alerts.js";
 import { log } from "../src/dashboard/log.js";
 import { dispatchDelayedAutoContinue, isDoneSet, setDoneSentinel } from "../src/dashboard/continue.js";
 import { scheduleDelayedPoke } from "../src/dashboard/poller-fifo.js";
+import { sweepGhostEntries } from "../src/dashboard/validate.js";
+import { refreshDashboard } from "../src/dashboard/header.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 const registryMock = await import("../src/dashboard/registry.js") as {
@@ -225,6 +232,7 @@ beforeEach(() => {
   vi.mocked(getDiffAgainstBase).mockReturnValue("diff --git a/file.ts b/file.ts");
   vi.mocked(getCommitSummary).mockReturnValue("abc123 fix something");
   vi.mocked(getNewCommitSummary).mockReturnValue("def456 address review feedback");
+  vi.mocked(sweepGhostEntries).mockReturnValue(false);
   vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject", checks: undefined } as ReturnType<typeof tryGetProject>);
   vi.mocked(getBranchHeadSha).mockReturnValue("abc123");
   vi.mocked(getRemoteTrackingSha).mockReturnValue("abc123");
@@ -2185,6 +2193,38 @@ describe("poll — merged state", () => {
 describe("postPush", () => {
   it("is a simple trigger", () => {
     expect(() => postPush()).not.toThrow();
+  });
+});
+
+describe("poll — ghost sweep wiring", () => {
+  // poll() runs sweepGhostEntries on every cycle and refreshes the dashboard
+  // when something was dropped — this is what keeps the plot strip's working
+  // spinner from staying lit after a fan-out handoff with partial bootstrap
+  // failures. Without these assertions a regression that no-ops the call
+  // (or stops calling refreshDashboard) would pass silently.
+  it("calls refreshDashboard when sweepGhostEntries returns true", () => {
+    vi.mocked(sweepGhostEntries).mockReturnValue(true);
+    poll("myproject");
+    expect(refreshDashboard).toHaveBeenCalled();
+  });
+
+  it("does not call refreshDashboard when sweepGhostEntries returns false", () => {
+    vi.mocked(sweepGhostEntries).mockReturnValue(false);
+    poll("myproject");
+    expect(refreshDashboard).not.toHaveBeenCalled();
+  });
+
+  it("logs and continues pollProject when sweepGhostEntries throws", () => {
+    vi.mocked(sweepGhostEntries).mockImplementation(() => {
+      throw new Error("registry read failed");
+    });
+    expect(() => poll("myproject")).not.toThrow();
+    expect(log.error).toHaveBeenCalledWith(
+      "poller", "sweepGhostEntries failed",
+      expect.objectContaining({
+        data: expect.objectContaining({ error: expect.stringContaining("registry read failed") }),
+      }),
+    );
   });
 });
 
