@@ -470,9 +470,11 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(call).toBeDefined();
     const script = call![1] as string;
     // Must branch off the remote ref so stale main checkout never infects
-    // workers. The literal "origin/main" at the end of the worktree-add
-    // command is the load-bearing piece.
-    expect(script).toMatch(/worktree add \/wt\/myproject\/bold-ash -b bold-ash origin\/main/);
+    // workers. The "origin/$BASE" at the end of the worktree-add command is
+    // the load-bearing piece — $BASE is initialized to the requested base
+    // and may be rewritten by the missing-base fallback path.
+    expect(script).toContain("BASE=main");
+    expect(script).toMatch(/worktree add \/wt\/myproject\/bold-ash -b bold-ash "origin\/\$BASE"/);
   });
 
   it("defaults to branching off origin/main when baseBranch is omitted", () => {
@@ -485,7 +487,9 @@ describe("buildWorktreeBootstrapScript", () => {
       c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
     );
     expect(call).toBeDefined();
-    expect(call![1] as string).toMatch(/worktree add .* origin\/main/);
+    const script = call![1] as string;
+    expect(script).toContain("BASE=main");
+    expect(script).toMatch(/worktree add .* "origin\/\$BASE"/);
   });
 
   it("calls _bootstrap-alert and does not swallow fetch/merge errors", () => {
@@ -503,7 +507,10 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(script).not.toMatch(/git -C .* fetch .* 2>\/dev\/null \|\| true/);
     expect(script).not.toMatch(/git -C .* merge --ff-only .* 2>\/dev\/null \|\| true/);
     // On failure, the bootstrap shells out to the internal alert command.
-    expect(script).toContain("dashboard _bootstrap-alert myproject develop");
+    // $BASE is initialized to the requested base; the alert receives its
+    // runtime value (rewritten when the missing-base fallback fires).
+    expect(script).toContain("BASE=develop");
+    expect(script).toContain('dashboard _bootstrap-alert myproject "$BASE"');
   });
 
   it("writes Claude hooks to .claude/settings.json, not settings.local.json", () => {
@@ -576,7 +583,12 @@ describe("buildWorktreeBootstrapScript", () => {
       c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
     );
     expect(call).toBeDefined();
-    expect(call![1] as string).toMatch(/worktree add .* origin\/release\/2026-04/);
+    const script = call![1] as string;
+    // $BASE is initialized as a shell variable so the missing-base fallback
+    // can rewrite it mid-script; the worktree-add uses "origin/$BASE" so a
+    // rewrite (e.g. release/2026-04 → main) is reflected.
+    expect(script).toContain("BASE=release/2026-04");
+    expect(script).toMatch(/worktree add .* "origin\/\$BASE"/);
   });
 
   it("exports worker identity env vars so `garden whoami` and `garden logs -w $GARDEN_WORKER` work inside the worker shell", () => {
@@ -593,7 +605,10 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(script).toContain("export GARDEN_PROJECT=myproject");
     expect(script).toContain("export GARDEN_WORKER=bold-ash");
     expect(script).toContain("export GARDEN_BRANCH=bold-ash");
-    expect(script).toContain("export GARDEN_BASE_BRANCH=develop");
+    // BASE is a shell variable initialized to the requested base; it may
+    // be rewritten by the missing-base fallback before/while Claude runs.
+    expect(script).toContain("BASE=develop");
+    expect(script).toContain('export GARDEN_BASE_BRANCH="$BASE"');
   });
 
   // Regression: wolf's main accidentally absorbed a committed .garden-done on
@@ -638,6 +653,78 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(call).toBeDefined();
     const script = call![1] as string;
     expect(script).toMatch(/for pattern in .claude\/ .garden-hooks\/ .garden\/ .garden-done; do/);
+  });
+
+  // Regression: lex 2026-05-12 — operator merged a PR and deleted the branch
+  // on origin while the main checkout was still parked on that branch. The
+  // existing local refs/remotes/origin/<base> ref let branchExistsOnOrigin
+  // pass at hotkey time; bootstrap then exited 1, the right-slot pane died,
+  // and every subsequent park/swap returned "active pane missing or dead"
+  // until garden was rebuilt. The fix: detect the missing-base case in the
+  // bootstrap script and either fall back to origin's default branch or
+  // keep the pane alive (exec $SHELL) so the dashboard layout never loses
+  // its right-slot pane.
+  it("falls back to origin's default branch when the requested base is missing on origin", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "fix/sophia-errors",
+    );
+    const call = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    );
+    expect(call).toBeDefined();
+    const script = call![1] as string;
+    // The fallback resolves origin's default via ls-remote --symref HEAD,
+    // notifies the dashboard so the registry entry's baseBranch updates,
+    // and prunes the stale local remote ref so future workers don't trip
+    // on the same dead branch.
+    expect(script).toContain("ls-remote --symref origin HEAD");
+    expect(script).toContain('dashboard _bootstrap-rebase myproject bold-ash "$DEFAULT_BRANCH"');
+    expect(script).toContain('update-ref -d "refs/remotes/origin/$ORIG_BASE"');
+    // After the fallback rewrites $BASE, the script must re-fetch under the
+    // new base — otherwise the worktree add would still race against the
+    // pre-fallback ref.
+    expect(script).toMatch(/Falling back to origin default/);
+  });
+
+  it("traps unhandled errors with exec \\$SHELL so a failure outside the missing-base path still keeps the right-slot pane alive", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "main",
+    );
+    const call = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    );
+    expect(call).toBeDefined();
+    const script = call![1] as string;
+    // The ERR trap catches set-e exits anywhere (e.g. `git worktree add`
+    // colliding on directory) and execs $SHELL — without it, those paths
+    // also tmux-close the right slot.
+    expect(script).toContain("trap '_rc=$?;");
+    expect(script).toMatch(/Bootstrap aborted unexpectedly/);
+    expect(script).toContain("exec $SHELL");
+  });
+
+  it("keeps the pane alive (exec \\$SHELL) when bootstrap cannot resolve a usable base", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "fix/sophia-errors",
+    );
+    const call = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    );
+    expect(call).toBeDefined();
+    const script = call![1] as string;
+    // Removing the registry entry (via _bootstrap-fail) prevents the orphan
+    // (claudeStatus="exited" + no worktree) that the ghost sweep can't drop.
+    expect(script).toContain('dashboard _bootstrap-fail myproject bold-ash');
+    // exec $SHELL keeps the right-slot pane alive — exit 1 would let tmux
+    // close it, leaving state.activePaneId stale and wedging park/swap.
+    expect(script).toContain("exec $SHELL");
+    expect(script).not.toMatch(/^\s*exit 1\s*$/m);
   });
 });
 

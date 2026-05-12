@@ -742,10 +742,24 @@ export function buildWorktreeBootstrapScript(
   const script = `#!/bin/sh
 set -e
 
+# Any unhandled non-zero exit keeps the pane alive — exit 1 would let tmux
+# close the right-slot pane and wedge every subsequent park/swap (the
+# dashboard layout invariant requires the right slot to stay alive). The
+# trap fires before set -e exits, so the operator sees the error and can
+# close the pane via ⌥x. exec replaces this script with a shell, so the
+# trap doesn't recurse when that shell eventually exits.
+trap '_rc=$?; printf "\\n  Bootstrap aborted unexpectedly (exit %s). Press ⌥x to close this pane.\\n" "$_rc" >&2; trap - ERR EXIT; exec $SHELL' ERR
+
+# Initial base resolved from the operator's main-checkout HEAD. May be
+# rewritten below when that branch turns out to be missing on origin (the
+# operator merged a PR and deleted the branch). Workers downstream of this
+# script read GARDEN_BASE_BRANCH via env, so re-export after any fallback.
+BASE=${baseLit}
+ORIG_BASE=${baseLit}
 export GARDEN_PROJECT=${projectNameLit}
 export GARDEN_WORKER=${workerLit}
 export GARDEN_BRANCH=${branchLit}
-export GARDEN_BASE_BRANCH=${baseLit}
+export GARDEN_BASE_BRANCH="$BASE"
 
 # Atomically write stdin to a destination via tmp+rename so concurrent readers
 # (Claude on SessionStart / --resume reading .claude/settings.json) never see
@@ -758,33 +772,64 @@ atomic_write() {
 
 printf 'Setting up worktree %s...\\n' ${branchLit}
 
-# Fetch latest base ref. Worker always branches off origin/${base}
-# directly (see "git worktree add" below), so main-checkout freshness is
-# informational only — but a stale main checkout signals operator rot and
-# deserves an alert.
-printf '  Fetching origin/%s...\\n' ${baseLit}
+# Fetch latest base ref. Worker always branches off origin/$BASE directly
+# (see "git worktree add" below), so main-checkout freshness is informational
+# only — but a stale main checkout signals operator rot and deserves an alert.
+printf '  Fetching origin/%s...\\n' "$BASE"
 BOOTSTRAP_FAIL=""
 FETCH_RC=0
-FETCH_OUT=$(git -C ${projectPathLit} fetch origin ${baseLit} 2>&1) || FETCH_RC=$?
+FETCH_OUT=$(git -C ${projectPathLit} fetch origin "$BASE" 2>&1) || FETCH_RC=$?
 [ -n "$FETCH_OUT" ] && printf '%s\\n' "$FETCH_OUT"
 if [ "$FETCH_RC" -ne 0 ]; then
   BOOTSTRAP_FAIL="fetch failed: $FETCH_OUT"
-  # If the fetch failed AND the base branch is genuinely missing from origin,
-  # bail before "git worktree add" silently branches off the stale local ref.
-  # When ls-remote also fails, the operator must intervene; transient network
-  # errors are tolerated (ls-remote succeeds, we proceed with the local ref).
-  LS_OUT=$(git -C ${projectPathLit} ls-remote --exit-code --heads origin ${baseLit} 2>&1) || LS_RC=$?
-  if [ "\${LS_RC:-0}" -ne 0 ]; then
-    printf '  ERROR: origin has no branch %s — refusing to branch off stale local ref.\\n' ${baseLit} >&2
-    printf '%s\\n' "$LS_OUT" >&2
-    ${gardenRunnerLit} dashboard _bootstrap-alert ${projectNameLit} ${baseLit} ${projectPathLit} "base missing on origin: $LS_OUT" 2>/dev/null || true
-    exit 1
+  # Fetch failed. If ls-remote ALSO fails, the branch is genuinely gone from
+  # origin (typical cause: operator merged the PR on GitHub and deleted the
+  # branch, leaving the main checkout parked on a now-dead ref). In that case,
+  # fall back to origin's default branch — discovered via "ls-remote --symref
+  # origin HEAD" — rather than dying mid-bootstrap. Transient network errors
+  # are still tolerated: if ls-remote SUCCEEDS, we proceed with the local ref.
+  LS_RC=0
+  LS_OUT=$(git -C ${projectPathLit} ls-remote --exit-code --heads origin "$BASE" 2>&1) || LS_RC=$?
+  if [ "$LS_RC" -ne 0 ]; then
+    printf '  WARNING: origin has no branch %s — looking up origin default branch...\\n' "$BASE" >&2
+    DEFAULT_BRANCH=$(git -C ${projectPathLit} ls-remote --symref origin HEAD 2>/dev/null \\
+      | sed -n 's|^ref: refs/heads/\\([^	]*\\)	HEAD|\\1|p' \\
+      | head -1)
+    if [ -n "$DEFAULT_BRANCH" ] && [ "$DEFAULT_BRANCH" != "$BASE" ] \\
+        && git -C ${projectPathLit} ls-remote --exit-code --heads origin "$DEFAULT_BRANCH" >/dev/null 2>&1; then
+      printf '  Falling back to origin default: %s.\\n' "$DEFAULT_BRANCH" >&2
+      # Update registry baseBranch so the poller, reviewer, and Stop hook all
+      # see the new base. Do this BEFORE re-fetching so a subsequent crash
+      # leaves a coherent entry.
+      ${gardenRunnerLit} dashboard _bootstrap-rebase ${projectNameLit} ${workerLit} "$DEFAULT_BRANCH" "$ORIG_BASE" 2>/dev/null || true
+      # Prune stale local ref so future workers don't fall into the same trap.
+      git -C ${projectPathLit} update-ref -d "refs/remotes/origin/$ORIG_BASE" 2>/dev/null || true
+      BASE="$DEFAULT_BRANCH"
+      export GARDEN_BASE_BRANCH="$BASE"
+      BOOTSTRAP_FAIL=""
+      FETCH_RC=0
+      FETCH_OUT=$(git -C ${projectPathLit} fetch origin "$BASE" 2>&1) || FETCH_RC=$?
+      [ -n "$FETCH_OUT" ] && printf '%s\\n' "$FETCH_OUT"
+      if [ "$FETCH_RC" -ne 0 ]; then
+        BOOTSTRAP_FAIL="fetch failed after fallback: $FETCH_OUT"
+      fi
+    else
+      printf '  ERROR: origin has no branch %s and cannot resolve origin HEAD.\\n' "$BASE" >&2
+      printf '%s\\n' "$LS_OUT" >&2
+      ${gardenRunnerLit} dashboard _bootstrap-fail ${projectNameLit} ${workerLit} "base $ORIG_BASE missing on origin and origin/HEAD unresolved" 2>/dev/null || true
+      # Keep the pane alive — exit 1 would close it and tmux would destroy the
+      # right-slot pane, leaving state.activePaneId stale and wedging every
+      # subsequent park/swap. exec a shell so the operator sees the error and
+      # closes the pane via ⌥x.
+      printf '\\n  Press ⌥x to close this pane.\\n' >&2
+      exec $SHELL
+    fi
   fi
 fi
 
 printf '  Fast-forwarding main checkout...\\n'
 MERGE_RC=0
-MERGE_OUT=$(git -C ${projectPathLit} merge --ff-only origin/${baseLit} 2>&1) || MERGE_RC=$?
+MERGE_OUT=$(git -C ${projectPathLit} merge --ff-only "origin/$BASE" 2>&1) || MERGE_RC=$?
 [ -n "$MERGE_OUT" ] && printf '%s\\n' "$MERGE_OUT"
 if [ "$MERGE_RC" -ne 0 ]; then
   BOOTSTRAP_FAIL="\${BOOTSTRAP_FAIL:+$BOOTSTRAP_FAIL; }ff-merge failed: $MERGE_OUT"
@@ -792,14 +837,14 @@ fi
 
 if [ -n "$BOOTSTRAP_FAIL" ]; then
   printf '  WARNING: main checkout did not update cleanly — raising alert.\\n' >&2
-  ${gardenRunnerLit} dashboard _bootstrap-alert ${projectNameLit} ${baseLit} ${projectPathLit} "$BOOTSTRAP_FAIL" 2>/dev/null || true
+  ${gardenRunnerLit} dashboard _bootstrap-alert ${projectNameLit} "$BASE" ${projectPathLit} "$BOOTSTRAP_FAIL" 2>/dev/null || true
 fi
 
-# Create worktree. Branch explicitly off origin/${base} so worker freshness
+# Create worktree. Branch explicitly off origin/$BASE so worker freshness
 # does not depend on the main checkout being clean or up to date.
 printf '  Creating worktree...\\n'
 mkdir -p "$(dirname ${wtPathLit})"
-git -C ${projectPathLit} worktree add ${wtPathLit} -b ${branchLit} origin/${baseLit}
+git -C ${projectPathLit} worktree add ${wtPathLit} -b ${branchLit} "origin/$BASE"
 
 # Neutralize .garden-done if a past reviewer accidentally committed it to the
 # base branch. Without this, the first Stop hook with no commits ahead sees

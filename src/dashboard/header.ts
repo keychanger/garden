@@ -12,9 +12,9 @@ import { SESSIONS_DIR, loadConfig, tryGetProject, plotsMap, isPlotFocused } from
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize, listAllWindowNames, listSessionPaneTitles, cleanPaneTitle, type PaneInfo } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
-import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields, type WorkerRegistry } from "./registry.js";
+import { findWorkerByName, updateWorkerFields, removeWorker, readRegistry, batchUpdateWorkerFields, type WorkerRegistry } from "./registry.js";
 import { atomicWriteFile } from "./atomic-write.js";
-import { currentBranch } from "./git.js";
+import { currentBranch, worktreeExists } from "./git.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { log } from "./log.js";
 import { unreadAlertCount, formatRightBar } from "./alerts.js";
@@ -322,6 +322,34 @@ export function handlePaneDied(windowName: string | undefined): void {
   const { project, worker } = parsed;
   const entry = findWorkerByName(project, worker);
   if (!entry) return;
+
+  // Bootstrap-abort detection: the pane died before reaching Claude Code
+  // (claudeStatus still "loading" — the dispatch_loaded path in workers.ts
+  // only flips this once Claude is running) AND no worktree exists on disk.
+  // This is a never-bootstrapped worker — `_bootstrap-fail` should have
+  // already removed the registry entry, but cover the path where bootstrap
+  // crashed for an unrelated reason (segfault, OOM, operator ⌥x while the
+  // script was mid-fetch). Without this, the entry persists as a ghost the
+  // standard sweep can't clean (claudeStatus would become "exited" below,
+  // taking it out of the ghost rule's "loading" filter).
+  if (entry.claudeStatus === "loading"
+      && (!entry.worktreePath || !worktreeExists(entry.worktreePath))) {
+    try {
+      removeWorker(project, worker);
+      log.info("hook", "pane-died → removed (bootstrap aborted, no worktree)", {
+        worker,
+        data: { project, windowName },
+      });
+    } catch (err) {
+      log.warn("hook", "pane-died removal failed", {
+        worker,
+        data: { project, error: String(err) },
+      });
+    }
+    refreshDashboard();
+    return;
+  }
+
   const wasWorking = entry.claudeStatus === "working";
   try {
     updateWorkerFields(project, worker, {

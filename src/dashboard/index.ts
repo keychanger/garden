@@ -215,13 +215,69 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     const [, projectName, baseBranch, projectPath, ...rest] = args;
     const errText = rest.join(" ").slice(0, 400);
     addAlert({
-      level: "error",
+      level: "warn",
       source: "bootstrap",
       project: projectName ?? "unknown",
-      message: `Worker bootstrap could not update ${baseBranch ?? "base"} at ${projectPath ?? "?"}: ${errText}. Worker will still branch off origin/${baseBranch ?? "base"}; clean the main checkout so future workers stay fresh.`,
+      message: `Worker bootstrap could not update main checkout at ${projectPath ?? "?"} to origin/${baseBranch ?? "base"}: ${errText}. Worker still branched off origin/${baseBranch ?? "base"}; clean the main checkout so future workers stay fresh.`,
       // errText carries variable git output; key on the project so a single
       // long-running fetch issue collapses to one alert per window.
       dedupKey: `bootstrap:${projectName ?? "unknown"}`,
+    });
+    return;
+  }
+  if (sub === "_bootstrap-rebase") {
+    // Bootstrap detected the worker's pinned base branch is missing on
+    // origin (operator merged + deleted the branch) and fell back to
+    // origin's default. Update the registry entry so the poller, reviewer,
+    // and Stop hook all rebase against the new base from this point on.
+    const [, projectName, workerName, newBase, oldBase] = args;
+    if (!projectName || !workerName || !newBase) return;
+    try {
+      const { updateWorkerFields } = await import("./registry.js");
+      updateWorkerFields(projectName, workerName, { baseBranch: newBase });
+    } catch (err) {
+      log.warn("bootstrap", "rebase: failed to update registry", {
+        worker: workerName,
+        data: { project: projectName, error: String(err) },
+      });
+    }
+    addAlert({
+      level: "warn",
+      source: "bootstrap",
+      project: projectName,
+      worker: workerName,
+      message: `Base branch '${oldBase ?? "?"}' missing on origin (PR merged + deleted?); worker rebased to origin/${newBase}. Switch the main checkout at this project to ${newBase} so future workers stay fresh.`,
+      dedupKey: `bootstrap-rebase:${projectName}:${oldBase ?? "?"}`,
+    });
+    return;
+  }
+  if (sub === "_bootstrap-fail") {
+    // Bootstrap aborted irrecoverably (base missing on origin AND no
+    // resolvable origin/HEAD). The worker entry was stamped in addWorker
+    // before the bootstrap ran but never reached worktree creation, so
+    // remove it before the pane dies — otherwise it persists as a ghost
+    // (claudeStatus="exited" with no worktree on disk) that the ghost
+    // sweep can't clean.
+    const [, projectName, workerName, ...rest] = args;
+    const errText = rest.join(" ").slice(0, 400);
+    if (projectName && workerName) {
+      try {
+        const { removeWorker } = await import("./registry.js");
+        removeWorker(projectName, workerName);
+      } catch (err) {
+        log.warn("bootstrap", "fail: failed to remove worker entry", {
+          worker: workerName,
+          data: { project: projectName, error: String(err) },
+        });
+      }
+    }
+    addAlert({
+      level: "error",
+      source: "bootstrap",
+      project: projectName ?? "unknown",
+      worker: workerName,
+      message: `Worker bootstrap aborted: ${errText}. Switch the main checkout to a pushed branch (e.g. main) and retry.`,
+      dedupKey: `bootstrap-fail:${projectName ?? "unknown"}`,
     });
     return;
   }

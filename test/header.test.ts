@@ -90,12 +90,14 @@ vi.mock("../src/dashboard/registry.js", () => ({
   findWorkerByName: vi.fn(() => undefined),
   updateWorkerFields: vi.fn(),
   batchUpdateWorkerFields: vi.fn(),
+  removeWorker: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/git.js", () => ({
   resolveBaseBranch: vi.fn(() => "main"),
   getWorkerBaseBranch: vi.fn((entry: { baseBranch?: string }) => entry.baseBranch ?? "main"),
   currentBranch: vi.fn(() => "main"),
+  worktreeExists: vi.fn(() => true),
 }));
 
 vi.mock("../src/dashboard/poller.js", () => ({
@@ -152,8 +154,8 @@ import {
 
 import { tmux, getPanePid, getPaneSize, getPaneTitle, setPaneVar, listSessionPaneTitles } from "../src/dashboard/tmux.js";
 import { readDashState, type DashboardState } from "../src/dashboard/state.js";
-import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields } from "../src/dashboard/registry.js";
-import { currentBranch } from "../src/dashboard/git.js";
+import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields, removeWorker } from "../src/dashboard/registry.js";
+import { currentBranch, worktreeExists } from "../src/dashboard/git.js";
 import { renderQuickStatus, resolveWorkerStatus } from "../src/commands/status.js";
 import { isPlotFocused, loadConfig } from "../src/config.js";
 import { log } from "../src/dashboard/log.js";
@@ -695,6 +697,46 @@ describe("handlePaneDied", () => {
     });
     vi.mocked(updateWorkerFields).mockImplementation(() => { throw new Error("lock fail"); });
     expect(() => handlePaneDied("_garden-worker-bold-ash")).not.toThrow();
+  });
+
+  // Regression: a worker whose bootstrap aborted before reaching Claude
+  // Code (claudeStatus="loading", no worktree on disk) would otherwise be
+  // marked "exited" here and persist forever — the ghost sweep filters on
+  // claudeStatus="loading" so the "exited" relabel takes the entry out of
+  // its reach. We remove the entry outright in this narrow case.
+  it("removes the registry entry when pane dies during bootstrap (loading + no worktree)", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash",
+      sessionId: "test",
+      task: "",
+      claudeStatus: "loading",
+      worktreePath: "/wt/garden/bold-ash",
+    });
+    vi.mocked(worktreeExists).mockReturnValue(false);
+
+    handlePaneDied("_garden-worker-bold-ash");
+
+    expect(removeWorker).toHaveBeenCalledWith("garden", "bold-ash");
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
+
+  it("does NOT remove the entry when worktree exists, even if claudeStatus is loading", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash",
+      sessionId: "test",
+      task: "",
+      claudeStatus: "loading",
+      worktreePath: "/wt/garden/bold-ash",
+    });
+    vi.mocked(worktreeExists).mockReturnValue(true);
+
+    handlePaneDied("_garden-worker-bold-ash");
+
+    expect(removeWorker).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith(
+      "garden", "bold-ash",
+      { claudeStatus: "exited" },
+    );
   });
 });
 
