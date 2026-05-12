@@ -580,6 +580,18 @@ function notifySiblingWorkers(
       continue;
     }
 
+    // Sentinel-set sibling self-declared done. prState may not yet reflect
+    // that (the worker wrote .garden-done but neither finalizeMerge nor the
+    // Stop hook has transitioned them to `done` yet — see STATUS.md
+    // invariant 4 paths into `done`). Notifying here just burns tokens.
+    if (isDoneSet(sibling.worktreePath)) {
+      log.info("poller", "skipping done sibling (sentinel set)", {
+        worker: sibling.name,
+        data: { mergedWorker: mergedEntry.name },
+      });
+      continue;
+    }
+
     pasteAndSubmit(paneId, message);
     log.info("poller", "notified sibling of merge overlap", {
       worker: sibling.name,
