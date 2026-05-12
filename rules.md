@@ -125,3 +125,13 @@ in `<project>/.garden/rules.md` can extend or override these.
   surrounding code, or "improve" things you were not asked to change.
 - Tests, documentation, and type-checking for code you changed are always in scope.
   Passing `tsc --noEmit` and the full test suite is part of completing the task.
+- Stay inside your own worktree. If you are a garden worker for project A and you
+  notice a bug, missing feature, or needed change in project B's repo, **do not
+  edit project B directly** — even if you have read/write access to it on disk.
+  Each project has its own poller, review pipeline, base branch, and checks; a
+  drive-by commit from outside bypasses all of that and lands unreviewed work on
+  the wrong branch. Instead, use the `handoff` skill to spawn a worker in
+  project B with a briefing describing what needs to change, and let that worker
+  do the work through the normal review/merge flow. If you are uncertain whether
+  a path belongs to your project, check `$GARDEN_PROJECT` and your worktree root
+  — anything outside that tree is another project's territory.
