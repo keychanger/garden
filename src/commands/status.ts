@@ -155,8 +155,7 @@ export async function status(_args: string[]): Promise<void> {
     const project = statuses[pi];
     const marker = project.isActive ? " \u25C4" : "";
     const name = project.isActive ? `\x1b[1;32m${project.name}\x1b[0m` : project.name;
-    const branchSuffix = formatProjectBranch(project.projectBranch);
-    console.log(`  ${project.index}. ${name}${branchSuffix}${marker}`);
+    console.log(`  ${project.index}. ${name}${marker}`);
 
     if (project.workers.length === 0) {
       console.log("    (no workers)");
@@ -266,20 +265,15 @@ export function formatTrellisBracket(t: WorkerInfo["trellis"]): string {
 
 // Look up the project's currently checked-out branch. Returns null if the
 // project isn't registered, the path is missing, or git couldn't be reached.
-// Cached per process? No — projects switch branches mid-session and the whole
-// point of surfacing this is to catch that. The render runs at human cadence,
-// so one `rev-parse` per project per render is fine.
+// Used only to compare against each worker's pinned baseBranch so the
+// renderer can flag the divergence — the operator already sees the current
+// branch on the bottom status bar via formatLeft (header.ts), so we don't
+// repeat it on the worker list itself. The render runs at human cadence, so
+// one `rev-parse` per project per render is fine.
 function resolveProjectBranch(projectName: string): string | null {
   const project = tryGetProject(projectName);
   if (!project) return null;
   return currentBranch(project.path);
-}
-
-// Project-name suffix: " (develop)" in dim. Omitted when we couldn't resolve
-// the branch, to avoid showing a misleading empty parens.
-function formatProjectBranch(branch: string | null | undefined): string {
-  if (!branch) return "";
-  return ` \x1b[2m(${branch})\x1b[0m`;
 }
 
 // Per-worker suffix appended when a worker's pinned base diverges from the
@@ -391,8 +385,7 @@ export function renderQuickStatus(
     const marker = isActive ? " \u25C4" : "";
     const displayName = isActive ? `\x1b[1;32m${name}\x1b[0m` : name;
     const projectBranch = projectBranches[pi];
-    const branchSuffix = formatProjectBranch(projectBranch);
-    lines.push(`  ${pi + 1}. ${displayName}${branchSuffix}${marker}`);
+    lines.push(`  ${pi + 1}. ${displayName}${marker}`);
 
     const workers = projectWorkers[pi];
     if (workers.length === 0) {
