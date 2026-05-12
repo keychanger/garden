@@ -282,6 +282,8 @@ Each worker has two independent status axes:
 
 The display combines both axes: lifecycle state takes priority when present, otherwise the process state is shown. A worker that is "reviewing" shows the reviewing bullseye regardless of what Claude is doing. Only workers in the "working" display state get the animated braille spinner.
 
+**Base-branch divergence indicator**: each project name is suffixed in dim with the branch currently checked out in its main directory (e.g. `lex (fix/sophia-errors)`). A worker whose pinned `baseBranch` differs from that current checkout gets a yellow `→ <baseBranch>` appended to its row. This is the leading-indicator surface for the "did not fast-forward after merge" alert pattern: workers pin their base at creation time, so switching the project's checkout afterwards leaves any in-flight workers merging to the old branch. The yellow arrow makes that pin/checkout mismatch visible without requiring a registry inspection. The post-merge alert itself is similarly differentiated — `notifyPostMerge` distinguishes the "off-base" case (operator switched checkouts, local base ref is now stale) from the "stuck" case (dirty tree or divergent local base) and names both the worker's base and the current checkout in the off-base message.
+
 The full specification for status tracking and display lives in `docs/STATUS.md`. The registry is the single source of truth: Claude Code hooks (`SessionStart`, `UserPromptSubmit`, `Stop`) write `claudeStatus`; the poller writes `prState`; the tmux `pane-died` hook writes `claudeStatus="exited"`. There is no pgrep, no marker file, no fallback poll. Every transition is event-triggered.
 
 ## Commands

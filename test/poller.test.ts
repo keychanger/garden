@@ -138,7 +138,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   abortRebase: vi.fn(),
   cleanWorktree: vi.fn(),
   deleteRemoteBranch: vi.fn(),
-  fastForwardBase: vi.fn(),
+  fastForwardBase: vi.fn(() => ({ ok: true })),
   getChangedFiles: vi.fn(() => []),
   getChangedFilesBetween: vi.fn(() => []),
   getCommitSummary: vi.fn(() => "abc123 fix something"),
@@ -967,7 +967,7 @@ describe("poll — merge-pending state", () => {
       }),
     ]);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true });
 
     poll("myproject");
 
@@ -995,7 +995,7 @@ describe("poll — merge-pending state", () => {
       }),
     ]);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true });
 
     poll("myproject");
 
@@ -1024,7 +1024,7 @@ describe("poll — merge-pending state", () => {
       }),
     ]);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true });
     vi.mocked(isDoneSet).mockReturnValue(false);
 
     poll("myproject");
@@ -1047,7 +1047,7 @@ describe("poll — merge-pending state", () => {
       }),
     ]);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true });
     vi.mocked(isDoneSet).mockReturnValue(true);
 
     poll("myproject");
@@ -1077,7 +1077,7 @@ describe("poll — merge-pending state", () => {
       }),
     ]);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true });
 
     poll("myproject");
 
@@ -1094,7 +1094,7 @@ describe("poll — merge-pending state", () => {
       }),
     ]);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true });
     vi.mocked(isDoneSet).mockReturnValue(false);
 
     poll("myproject");
@@ -1117,7 +1117,7 @@ describe("poll — merge-pending state", () => {
       }),
     ]);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true });
 
     poll("myproject");
 
@@ -1146,7 +1146,7 @@ describe("poll — merge-pending state", () => {
       }),
     ]);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true });
     vi.mocked(syncWorktreeToRemote).mockReturnValue({ ok: true });
     // Post-sync HEAD differs from preReviewSha so the diff path runs.
     vi.mocked(getBranchHeadSha).mockImplementation((p: string) =>
@@ -1181,7 +1181,7 @@ describe("poll — merge-pending state", () => {
       }),
     ]);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true });
     vi.mocked(syncWorktreeToRemote).mockReturnValue({ ok: true });
     vi.mocked(getBranchHeadSha).mockReturnValue("same-sha");
 
@@ -1204,7 +1204,7 @@ describe("poll — merge-pending state", () => {
       }),
     ]);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true });
     vi.mocked(syncWorktreeToRemote).mockReturnValue({ ok: false, reason: "dirty" });
 
     poll("myproject");
@@ -1240,7 +1240,7 @@ describe("poll — merge-pending state", () => {
       }),
     ]);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true });
     vi.mocked(syncWorktreeToRemote).mockReturnValue({
       ok: false, reason: "fetch-failed", error: "fatal: unable to reach origin",
     });
@@ -1277,7 +1277,7 @@ describe("poll — merge-pending state", () => {
       }),
     ]);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true });
     vi.mocked(isDoneSet).mockReturnValue(true);
 
     poll("myproject");
@@ -1305,7 +1305,7 @@ describe("poll — merge-pending state", () => {
       }),
     ]);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true });
     vi.mocked(syncWorktreeToRemote).mockReturnValue({ ok: true });
 
     poll("myproject");
@@ -1328,7 +1328,7 @@ describe("poll — merge-pending state", () => {
       path: "/repo/myproject", checks: undefined, postMerge: "npm run build",
     } as ReturnType<typeof tryGetProject>);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true });
     // Simulate the checkout's actual HEAD after fast-forward — not origin/main.
     vi.mocked(getBranchHeadSha).mockImplementation((p: string) =>
       p === "/repo/myproject" ? "deadbeefcafebabe" : "abc123",
@@ -1349,7 +1349,7 @@ describe("poll — merge-pending state", () => {
     expect(addAlert).not.toHaveBeenCalled();
   });
 
-  it("skips postMerge and alerts when fastForwardBase does not advance", () => {
+  it("skips postMerge and alerts when fastForwardBase does not advance (stuck checkout)", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
@@ -1360,7 +1360,7 @@ describe("poll — merge-pending state", () => {
       path: "/repo/myproject", checks: undefined, postMerge: "npm run build",
     } as ReturnType<typeof tryGetProject>);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue(false);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: false, reason: "stuck", error: "dirty" });
 
     poll("myproject");
 
@@ -1398,7 +1398,7 @@ describe("poll — merge-pending state", () => {
       path: "/repo/myproject", checks: undefined,
     } as ReturnType<typeof tryGetProject>);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue(false);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: false, reason: "stuck", error: "dirty" });
 
     poll("myproject");
 
@@ -1409,6 +1409,35 @@ describe("poll — merge-pending state", () => {
         project: "myproject",
         worker: "bold-ash",
         message: expect.stringContaining("did not fast-forward"),
+      }),
+    );
+  });
+
+  it("alerts with off-base remediation when the local checkout is on a different branch", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        baseBranch: "develop",
+      }),
+    ]);
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject", checks: undefined,
+    } as ReturnType<typeof tryGetProject>);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue({
+      ok: false, reason: "off-base", currentBranch: "fix/sophia-errors",
+    });
+
+    poll("myproject");
+
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        source: "poller",
+        project: "myproject",
+        worker: "bold-ash",
+        message: expect.stringMatching(/merged to origin\/develop.*checked out on fix\/sophia-errors/),
       }),
     );
   });
@@ -1425,7 +1454,7 @@ describe("poll — merge-pending state", () => {
       path: "/repo/garden", checks: undefined, postMerge: "npm run build",
     } as ReturnType<typeof tryGetProject>);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true });
 
     poll("garden");
 
@@ -1693,7 +1722,7 @@ describe("poll — merge-pending state", () => {
       }),
     ]);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true });
 
     poll("myproject");
 
@@ -1721,7 +1750,7 @@ describe("poll — merge-pending state", () => {
       }),
     ]);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue(true);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true });
 
     poll("myproject");
 

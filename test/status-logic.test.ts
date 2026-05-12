@@ -44,9 +44,18 @@ vi.mock("../src/config.js", () => {
         (name: string) => cfg.projects[name].focused !== false
       );
     }),
+    tryGetProject: vi.fn((name: string) => {
+      const cfg = loadConfig();
+      const p = cfg.projects[name];
+      return p ? { ...p, name } : null;
+    }),
     SESSIONS_DIR: "/tmp/fake-sessions",
   };
 });
+
+vi.mock("../src/dashboard/git.js", () => ({
+  currentBranch: vi.fn(() => null),
+}));
 
 vi.mock("../src/output.js", () => ({
   output: vi.fn(),

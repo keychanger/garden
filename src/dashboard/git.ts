@@ -279,32 +279,38 @@ export function mergeToBase(
   });
 }
 
+export type FastForwardResult =
+  | { ok: true }
+  | { ok: false; reason: "off-base"; currentBranch: string | null }
+  | { ok: false; reason: "stuck"; error: string };
+
 export function fastForwardBase(
   repoPath: string,
   baseBranch: string,
   ctx?: { project?: string; worker?: string },
-): boolean {
+): FastForwardResult {
   const worker = ctx?.worker;
   const baseData = { baseBranch, ...(ctx?.project ? { project: ctx.project } : {}) };
+  const current = currentBranch(repoPath);
+  if (current !== baseBranch) {
+    log.info("git", "skipping fast-forward: not on base branch", {
+      worker,
+      data: { ...baseData, currentBranch: current },
+    });
+    return { ok: false, reason: "off-base", currentBranch: current };
+  }
   try {
-    const current = currentBranch(repoPath);
-    if (current !== baseBranch) {
-      log.info("git", "skipping fast-forward: not on base branch", {
-        worker,
-        data: { ...baseData, currentBranch: current },
-      });
-      return false;
-    }
     git(repoPath, "fetch", "origin", baseBranch);
     git(repoPath, "merge", "--ff-only", `origin/${baseBranch}`);
     log.info("git", "fast-forwarded local base branch", { worker, data: baseData });
-    return true;
+    return { ok: true };
   } catch (err) {
+    const error = String(err);
     log.info("git", "local base checkout not fast-forwarded (postMerge will be skipped)", {
       worker,
-      data: { ...baseData, error: String(err) },
+      data: { ...baseData, error },
     });
-    return false;
+    return { ok: false, reason: "stuck", error };
   }
 }
 

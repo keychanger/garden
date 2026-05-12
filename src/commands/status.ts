@@ -6,13 +6,14 @@
 // pgrep and does not read marker files. Before rendering, it refreshes
 // worker task summaries from live tmux pane titles so the registry stays
 // current between hook events.
-import { loadConfig, getFocusedProjectNames } from "../config.js";
+import { loadConfig, getFocusedProjectNames, tryGetProject } from "../config.js";
 import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
 import { getWorkers, readRegistry, batchUpdateWorkerFields, type WorkerRegistry } from "../dashboard/registry.js";
 import { listHiddenWorkerWindows, windowExists, getFirstPaneId, getPaneTitle } from "../dashboard/tmux.js";
 import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/window-names.js";
+import { currentBranch } from "../dashboard/git.js";
 
 // Display states from STATUS.md. These are the only values the renderer ever
 // emits. `loading`/`ready`/`working`/`idle`/`exited` come from claudeStatus
@@ -30,6 +31,12 @@ interface WorkerInfo {
   activity: string | null;
   active: boolean;
   failCount: number;
+  // The branch this worker is pinned to merge into. Undefined for legacy
+  // entries written before the field existed. The renderer compares it
+  // against the project's current checkout and appends "→ <base>" when
+  // they diverge — that mismatch is the leading indicator of the
+  // "did not fast-forward after merge" alert pattern.
+  baseBranch?: string;
   // Trellis-specific decoration fields. Populated only when
   // entry.workflow === "trellis"; default workers leave them undefined
   // and the renderer omits the bracket.
@@ -48,6 +55,10 @@ interface ProjectStatusInfo {
   index: number;
   isActive: boolean;
   workers: WorkerInfo[];
+  // Current branch checked out in the project's main directory. Shown next
+  // to the project name in TTY render so off-base workers are visually
+  // distinguishable at a glance.
+  projectBranch?: string | null;
 }
 
 const SPINNER_FRAMES = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u2834", "\u2826", "\u2827", "\u2807", "\u280F"];
@@ -123,6 +134,7 @@ export async function status(_args: string[]): Promise<void> {
       index: i + 1,
       isActive: dashState.activeProject === name,
       workers: hasDashboard ? collectWorkers(name, dashState) : [],
+      projectBranch: resolveProjectBranch(name),
     };
   });
 
@@ -143,7 +155,8 @@ export async function status(_args: string[]): Promise<void> {
     const project = statuses[pi];
     const marker = project.isActive ? " \u25C4" : "";
     const name = project.isActive ? `\x1b[1;32m${project.name}\x1b[0m` : project.name;
-    console.log(`  ${project.index}. ${name}${marker}`);
+    const branchSuffix = formatProjectBranch(project.projectBranch);
+    console.log(`  ${project.index}. ${name}${branchSuffix}${marker}`);
 
     if (project.workers.length === 0) {
       console.log("    (no workers)");
@@ -155,7 +168,8 @@ export async function status(_args: string[]): Promise<void> {
         const wstatus = formatStatus(worker).padEnd(statusWidth);
         const trellis = formatTrellisBracket(worker.trellis);
         const activity = worker.activity ? `  ${truncateActivity(worker.activity, activityMax)}` : "";
-        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${trellis}${activity}`;
+        const baseHint = formatBaseDivergence(worker.baseBranch, project.projectBranch);
+        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${trellis}${activity}${baseHint}`;
         console.log(colorizeRow(worker.status, line));
       }
     }
@@ -250,6 +264,39 @@ export function formatTrellisBracket(t: WorkerInfo["trellis"]): string {
   return ` [trellis: ${t.name} | ${iterStr}${driftSeg}]`;
 }
 
+// Look up the project's currently checked-out branch. Returns null if the
+// project isn't registered, the path is missing, or git couldn't be reached.
+// Cached per process? No — projects switch branches mid-session and the whole
+// point of surfacing this is to catch that. The render runs at human cadence,
+// so one `rev-parse` per project per render is fine.
+function resolveProjectBranch(projectName: string): string | null {
+  const project = tryGetProject(projectName);
+  if (!project) return null;
+  return currentBranch(project.path);
+}
+
+// Project-name suffix: " (develop)" in dim. Omitted when we couldn't resolve
+// the branch, to avoid showing a misleading empty parens.
+function formatProjectBranch(branch: string | null | undefined): string {
+  if (!branch) return "";
+  return ` \x1b[2m(${branch})\x1b[0m`;
+}
+
+// Per-worker suffix appended when a worker's pinned base diverges from the
+// project's current checkout. This is the leading indicator of the "did not
+// fast-forward after merge" alert pattern — the operator switched checkouts
+// after creating the worker, and the worker will still merge to its pinned
+// base. Showing "→ <base>" in yellow makes the divergence obvious without
+// requiring a registry inspection.
+function formatBaseDivergence(
+  workerBase: string | undefined,
+  projectBranch: string | null | undefined,
+): string {
+  if (!workerBase || !projectBranch) return "";
+  if (workerBase === projectBranch) return "";
+  return ` \x1b[33m→ ${workerBase}\x1b[0m`;
+}
+
 function colorizeIteration(iter: number, max: number): string {
   const ratio = max > 0 ? iter / max : 0;
   const text = `${iter}/${max}`;
@@ -282,6 +329,7 @@ function collectWorkers(
       activity: entry?.task || null,
       active: true,
       failCount: entry?.failCount ?? 0,
+      baseBranch: entry?.baseBranch,
       trellis: trellisInfoFor(entry),
     });
   }
@@ -297,6 +345,7 @@ function collectWorkers(
       activity: entry?.task || null,
       active: false,
       failCount: entry?.failCount ?? 0,
+      baseBranch: entry?.baseBranch,
       trellis: trellisInfoFor(entry),
     });
   }
@@ -332,6 +381,8 @@ export function renderQuickStatus(
   const nameWidth = Math.max(10, ...allWorkers.map(w => w.name.length));
   const statusWidth = STATUS_WIDTH;
 
+  const projectBranches = names.map(n => resolveProjectBranch(n));
+
   lines.push("");
   for (let pi = 0; pi < names.length; pi++) {
     if (pi > 0) lines.push("");
@@ -339,7 +390,9 @@ export function renderQuickStatus(
     const isActive = state.activeProject === name;
     const marker = isActive ? " \u25C4" : "";
     const displayName = isActive ? `\x1b[1;32m${name}\x1b[0m` : name;
-    lines.push(`  ${pi + 1}. ${displayName}${marker}`);
+    const projectBranch = projectBranches[pi];
+    const branchSuffix = formatProjectBranch(projectBranch);
+    lines.push(`  ${pi + 1}. ${displayName}${branchSuffix}${marker}`);
 
     const workers = projectWorkers[pi];
     if (workers.length === 0) {
@@ -352,7 +405,8 @@ export function renderQuickStatus(
         const wstatus = formatStatus(worker).padEnd(statusWidth);
         const trellis = formatTrellisBracket(worker.trellis);
         const activity = worker.activity ? `  ${worker.activity}` : "";
-        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${trellis}${activity}`;
+        const baseHint = formatBaseDivergence(worker.baseBranch, projectBranch);
+        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${trellis}${activity}${baseHint}`;
         lines.push(colorizeRow(worker.status, line));
       }
     }

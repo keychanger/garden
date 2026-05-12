@@ -256,29 +256,40 @@ function notifyPostMerge(
   // mergeToBase only pushes to the remote via refspec — it never touches
   // the local checkout. Update the main checkout so postMerge (e.g.
   // `npm run build`) runs against the newly merged code, not stale files.
-  const advanced = fastForwardBase(projectPath, baseBranch, { project: projectName, worker: entry.name });
+  const ffResult = fastForwardBase(projectPath, baseBranch, { project: projectName, worker: entry.name });
 
   notifySiblingWorkers(projectName, baseBranch, entry, preMergeChangedFiles);
 
-  if (advanced) {
+  if (ffResult.ok) {
     runPostMerge(projectName, projectPath);
     return;
   }
   // Always alert on a stuck checkout: drift rots manual workflow regardless
-  // of whether postMerge was configured.
+  // of whether postMerge was configured. Distinguish the two failure modes:
+  // "off-base" (operator switched the project checkout off the worker's
+  // pinned base — common when juggling feature branches) is a benign drift
+  // with a clear remediation; "stuck" (dirty tree or divergent local base)
+  // is a state the operator must clean up by hand.
   const postMergeNote = tryGetProject(projectName)?.postMerge
     ? " postMerge was skipped."
     : "";
   log.error("poller", "local base checkout did not fast-forward after merge", {
     worker: entry.name,
-    data: { projectPath, baseBranch },
+    data: { projectPath, baseBranch, reason: ffResult.reason },
   });
+  const message = ffResult.reason === "off-base"
+    ? `Worker ${entry.name} merged to origin/${baseBranch}, but ${projectPath} is checked out on ${ffResult.currentBranch ?? "an unknown branch"}. Local ${baseBranch} ref is now stale. Switch back to ${baseBranch} (or run \`git fetch origin ${baseBranch} && git update-ref refs/heads/${baseBranch} refs/remotes/origin/${baseBranch}\`) to advance it.${postMergeNote}`
+    : `Local ${baseBranch} checkout at ${projectPath} did not fast-forward after merge (likely a dirty working tree or divergent branch).${postMergeNote} Clean the checkout so it stays current with merged work.`;
   addAlert({
     level: "error",
     source: "poller",
     project: projectName,
     worker: entry.name,
-    message: `Local ${baseBranch} checkout at ${projectPath} did not fast-forward after merge (likely a dirty working tree or divergent branch).${postMergeNote} Clean the checkout so it stays current with merged work.`,
+    message,
+    // Off-base alerts repeat once per worker-merge cycle; the existing 1-hour
+    // dedup window is fine, but include the reason+currentBranch in the key
+    // so a transition between failure modes isn't suppressed.
+    dedupKey: `ff-fail:${ffResult.reason}:${projectName}:${baseBranch}:${ffResult.reason === "off-base" ? ffResult.currentBranch ?? "?" : ""}`,
   });
 }
 

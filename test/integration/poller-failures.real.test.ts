@@ -246,9 +246,13 @@ describe("poller failure modes (real fs/git, mocked tmux/dashboard)", () => {
       expect(originMainSha).toBe(workerSha);
 
       // But the alert fires because the local main checkout is on a different
-      // branch and could not fast-forward.
+      // branch and could not fast-forward. The off-base message names both
+      // the worker's base and the current checkout so the operator knows
+      // exactly what diverged.
       const messages = await readAlertsForWorker();
-      expect(messages.find(m => m.includes("did not fast-forward after merge"))).toBeDefined();
+      expect(messages.find(m =>
+        m.includes("merged to origin/main") && m.includes("operator-manual"),
+      )).toBeDefined();
     });
   });
 });
