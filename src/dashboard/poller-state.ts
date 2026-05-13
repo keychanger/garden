@@ -43,6 +43,57 @@ export function transitionState(
     });
   }
   updateWorkerFields(projectName, workerName, { ...extraFields, prState: toState });
+  maybeFireHandoffCallback(projectName, workerName, toState);
+}
+
+// One-shot callback dispatch for handoff children that requested it via
+// `garden handoff --expect-callback`. Fires when the child reaches its first
+// terminal prState (merged/done/failing). Idempotent: handoffCallbackFiredAt
+// is set before the dispatch so a replayed transition (rare: terminal state
+// re-write within the same merge cycle) doesn't double-fire. Hooked here
+// rather than at each individual call site so every path that lands on a
+// terminal state — finalizeMerge's `merged`/`done`, every poller-review
+// failing transition, the resolver's failing transition — is covered by
+// one chokepoint.
+function maybeFireHandoffCallback(
+  projectName: string,
+  workerName: string,
+  toState: PrState,
+): void {
+  if (toState !== "merged" && toState !== "done" && toState !== "failing") return;
+  const entry = findWorkerByName(projectName, workerName);
+  if (!entry) return;
+  if (!entry.handoffCallbackExpected) return;
+  if (entry.handoffCallbackFiredAt) return;
+  if (!entry.parentProject || !entry.parentWorker) return;
+
+  // Mark fired BEFORE dispatch under the registry lock. notifyHandoffCallback
+  // is best-effort — if the parent pane is gone or busy, it silently no-ops.
+  // Either way, this callback was the one shot we get.
+  updateWorkerFields(projectName, workerName, {
+    handoffCallbackFiredAt: Date.now(),
+  });
+
+  // Lazy import: continue.ts depends on registry, and registry doesn't depend
+  // on continue.ts. Static import here would be fine, but the lazy form keeps
+  // poller-state.ts free of any UI-layer transitive imports for callers that
+  // don't transition to a terminal state.
+  void import("./continue.js").then(({ notifyHandoffCallback }) => {
+    notifyHandoffCallback({
+      childProject: projectName,
+      childWorker: workerName,
+      childBranch: entry.branchName,
+      terminalState: toState,
+      parentProject: entry.parentProject!,
+      parentWorker: entry.parentWorker!,
+      replyNote: entry.handoffReplyNote,
+    });
+  }).catch(err => {
+    log.warn("poller", "handoff callback dispatch failed", {
+      worker: workerName,
+      data: { project: projectName, error: String(err) },
+    });
+  });
 }
 
 // failingReasons that require operator action — the failing → working push

@@ -28,6 +28,7 @@ import { usage } from "./usage.js";
 import { auto } from "./auto.js";
 import { whoami } from "./whoami.js";
 import { handoff } from "./handoff.js";
+import { reply } from "./reply.js";
 import { workers } from "./workers.js";
 import { trellis } from "./trellis.js";
 import { diag } from "./diag.js";
@@ -66,6 +67,7 @@ export const commands: Record<string, Command> = {
   "auto-continue": auto,
   whoami,
   handoff,
+  reply,
   workers,
   trellis,
   diag,

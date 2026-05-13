@@ -110,7 +110,22 @@ export interface WorkerEntry {
   pendingContinueChangedFiles?: string[];
   pendingContinueSyncFailed?: boolean;
   role?: string;
+  // Handoff lineage. `parentWorker` + `parentProject` are set by newWorker on
+  // workers created via `garden handoff` so the child knows where it came
+  // from. When `handoffCallbackExpected` is also true (caller passed
+  // --expect-callback), transitionState fires a one-shot callback prompt at
+  // the parent's pane the first time the child reaches a terminal prState
+  // (merged/done/failing). handoffCallbackFiredAt records when that dispatch
+  // happened — it's the idempotency guard so a replayed terminal transition
+  // doesn't double-fire. handoffReplyNote is an optional freeform string the
+  // child can attach via `garden reply` before terminating; it gets inlined
+  // into the callback prompt. All five fields are absent on non-handoff
+  // workers.
   parentWorker?: string;
+  parentProject?: string;
+  handoffCallbackExpected?: boolean;
+  handoffCallbackFiredAt?: number;
+  handoffReplyNote?: string;
   // Workflow definition that drives this worker's lifecycle (state machine,
   // state handlers, hook routing). Set to "default" by newWorker. Absent on
   // legacy entries from before the workflow registry shipped — consumers

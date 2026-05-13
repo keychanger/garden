@@ -82,6 +82,9 @@ describe("garden handoff command", () => {
     expect(reqCall).toEqual({
       targetProject: "other",
       seedFile: path.join(seedsDir, files[0]),
+      expectCallback: false,
+      parentProject: undefined,
+      parentWorker: undefined,
     });
   });
 
@@ -144,5 +147,35 @@ describe("garden handoff command", () => {
   it("prints the new worker name on success so the operator knows where it landed", async () => {
     const lines = await captureConsoleLog(() => handoff(["other", "-m", "msg"]));
     expect(lines.join("\n")).toContain("other/bold-ash");
+  });
+
+  it("passes expectCallback + parent env to the dispatch when --expect-callback is set", async () => {
+    process.env.GARDEN_PROJECT = "src";
+    process.env.GARDEN_WORKER = "blue-pine";
+    await captureConsoleLog(() => handoff(["other", "--expect-callback", "-m", "see you on the other side"]));
+    const call = vi.mocked(submitHandoffRequest).mock.calls[0][0];
+    expect(call.expectCallback).toBe(true);
+    expect(call.parentProject).toBe("src");
+    expect(call.parentWorker).toBe("blue-pine");
+  });
+
+  it("rejects --expect-callback when invoked outside a worker pane (nothing to call back to)", async () => {
+    await expect(handoff(["other", "--expect-callback", "-m", "hi"]))
+      .rejects.toThrow(/inside a garden worker pane/);
+  });
+
+  it("notes the callback in the success line so the operator knows what to expect", async () => {
+    process.env.GARDEN_PROJECT = "src";
+    process.env.GARDEN_WORKER = "blue-pine";
+    const lines = await captureConsoleLog(() => handoff(["other", "--expect-callback", "-m", "msg"]));
+    expect(lines.join("\n")).toMatch(/callback requested/);
+  });
+
+  it("accepts --expect-callback after -m (flag-order tolerant)", async () => {
+    process.env.GARDEN_PROJECT = "src";
+    process.env.GARDEN_WORKER = "blue-pine";
+    await captureConsoleLog(() => handoff(["other", "-m", "msg", "--expect-callback"]));
+    const call = vi.mocked(submitHandoffRequest).mock.calls[0][0];
+    expect(call.expectCallback).toBe(true);
   });
 });

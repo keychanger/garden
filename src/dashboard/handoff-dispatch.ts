@@ -36,6 +36,16 @@ export interface HandoffRequest {
   targetProject: string;
   seedFile: string;
   createdAt: number;
+  // Set when the source worker invoked `garden handoff` with --expect-callback.
+  // The child's registry entry inherits these so transitionState can fire a
+  // one-shot callback prompt at the parent on the child's first terminal
+  // state. parentProject + parentWorker are captured from the source worker's
+  // $GARDEN_PROJECT / $GARDEN_WORKER env at submit time; both are required for
+  // expectCallback to take effect (an unhealthed handoff invocation outside a
+  // worker pane has no parent to call back to).
+  expectCallback?: boolean;
+  parentProject?: string;
+  parentWorker?: string;
 }
 
 export interface HandoffResponse {
@@ -52,7 +62,13 @@ function responsePath(id: string): string {
   return path.join(requestsDir(), `${id}.resp.json`);
 }
 
-export function submitHandoffRequest(opts: { targetProject: string; seedFile: string }): string {
+export function submitHandoffRequest(opts: {
+  targetProject: string;
+  seedFile: string;
+  expectCallback?: boolean;
+  parentProject?: string;
+  parentWorker?: string;
+}): string {
   fs.mkdirSync(requestsDir(), { recursive: true });
   const id = crypto.randomUUID();
   const req: HandoffRequest = {
@@ -60,6 +76,9 @@ export function submitHandoffRequest(opts: { targetProject: string; seedFile: st
     targetProject: opts.targetProject,
     seedFile: opts.seedFile,
     createdAt: Date.now(),
+    expectCallback: opts.expectCallback,
+    parentProject: opts.parentProject,
+    parentWorker: opts.parentWorker,
   };
   atomicWriteFile(requestPath(id), JSON.stringify(req));
   return id;
@@ -121,10 +140,22 @@ export function processPendingHandoffs(): void {
 
     let response: HandoffResponse;
     try {
+      // Only propagate parent linkage when --expect-callback was set AND
+      // both env-derived fields are present. A handoff submitted from outside
+      // a worker pane has nowhere to call back to; record nothing rather than
+      // half-state.
+      const handoffCallback = req.expectCallback && req.parentProject && req.parentWorker
+        ? {
+            parentProject: req.parentProject,
+            parentWorker: req.parentWorker,
+            expectCallback: true as const,
+          }
+        : undefined;
       const workerName = newWorker({
         projectName: req.targetProject,
         seedMessageFile: req.seedFile,
         background: true,
+        handoffCallback,
       });
       response = workerName
         ? { workerName, completedAt: Date.now() }

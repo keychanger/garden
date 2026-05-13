@@ -116,6 +116,47 @@ function resolveWorkerPaneId(project: string, worker: string): string | null {
   return null;
 }
 
+// Build and dispatch a handoff-callback prompt at the parent pane of a worker
+// that just reached a terminal prState (merged/done/failing). Best-effort:
+// silently no-ops if the parent has been removed, has no live pane, or is
+// currently mid-turn (continueWorker's claudeStatus gate). One-shot per child:
+// the caller is expected to have checked + set handoffCallbackFiredAt under
+// the registry lock to prevent re-fires from replayed terminal transitions.
+//
+// The prompt is informational. We're not asking the parent to do anything
+// specific — just letting it know the worker it spawned has settled. If the
+// parent was waiting on this handoff to proceed, the cue is here. If the
+// parent has already moved on, the inline message tells it so.
+export function notifyHandoffCallback(opts: {
+  childProject: string;
+  childWorker: string;
+  childBranch: string | undefined;
+  terminalState: "merged" | "done" | "failing";
+  parentProject: string;
+  parentWorker: string;
+  replyNote: string | undefined;
+}): void {
+  const stateLabel
+    = opts.terminalState === "merged" ? "merged"
+      : opts.terminalState === "done" ? "done (no further work expected)"
+      : "failing (needs operator attention)";
+  const lines: string[] = [
+    `[garden] Handoff callback: ${opts.childProject}/${opts.childWorker} reached terminal state \`${stateLabel}\`.`,
+  ];
+  if (opts.childBranch) lines.push(`  branch: ${opts.childBranch}`);
+  if (opts.replyNote && opts.replyNote.trim()) {
+    lines.push("", `Reply from ${opts.childWorker}:`, opts.replyNote.trim());
+  }
+  lines.push(
+    "",
+    "This is an informational nudge — the child worker you handed off to has "
+    + "settled. If you were waiting on it to proceed, take the next step. If "
+    + "you have already finished and moved on, you can ignore this and end "
+    + "your turn.",
+  );
+  continueWorker(opts.parentProject, opts.parentWorker, lines.join("\n"));
+}
+
 // Send a continue prompt to a worker pane. Called via the _continue-worker
 // internal command after a short delay so Claude --resume has time to take
 // over the pane's stdin. Skips if the worker has already started working

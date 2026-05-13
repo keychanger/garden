@@ -32,7 +32,7 @@ npm test               # vitest unit + integration; tsc --noEmit
   - `state.ts`, `registry.ts`, `validate.ts` — atomic state files + tmux/state reconciliation
   - `tmux.ts`, `window-names.ts`, `atomic-write.ts` — low-level helpers
   - `poller.ts` + `poller-state.ts` + `poller-{review,merge,resolve,fifo}.ts` — per-project review/merge/resolve lifecycle, event-driven via FIFO
-  - `handoff-dispatch.ts` — request-file IPC the `garden handoff` CLI uses to spawn workers from inside a sandboxed worker pane; pollers process pending requests in their poll cycle
+  - `handoff-dispatch.ts` — request-file IPC the `garden handoff` CLI uses to spawn workers from inside a sandboxed worker pane; pollers process pending requests in their poll cycle. With `--expect-callback`, the dispatcher stamps parent linkage on the child entry so `transitionState`'s terminal-state chokepoint can fire a one-shot prompt back at the parent pane via `notifyHandoffCallback` (`continue.ts`); the child stages an optional reply via `garden reply`
   - `workflows/` — workflow registry (`default.ts`, `trellis.ts`, `grow.ts`, `types.ts`, `index.ts`); see `WORKFLOWS.md`
   - `hooks/default.ts` + `hook-dispatcher.ts` — Claude Code hook routing
   - `trellis-{tag,verdict,prompts,continue,model,picker}.ts` — trellis workflow internals

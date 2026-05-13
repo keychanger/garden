@@ -49,7 +49,7 @@ vi.mock("../src/dashboard/log.js", () => ({
 import {
   continueWorker, continueWorkerAfterMerge, continueWorkerIfStuck,
   dispatchDelayedContinue, dispatchDelayedAutoContinue,
-  dispatchDelayedSeed, seedWorker,
+  dispatchDelayedSeed, seedWorker, notifyHandoffCallback,
   donePath, isDoneSet, clearDoneSentinel,
 } from "../src/dashboard/continue.js";
 import { readDashState } from "../src/dashboard/state.js";
@@ -545,5 +545,92 @@ describe("seedWorker", () => {
     expect(vi.mocked(pasteAndSubmit)).not.toHaveBeenCalled();
     // No re-unlink — there's nothing to clean up if the file was already gone.
     expect(fs.unlinkSync).not.toHaveBeenCalled();
+  });
+});
+
+describe("notifyHandoffCallback", () => {
+  beforeEach(() => {
+    // Default: parent is idle in a known window, pane resolves cleanly.
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "calm-bay", sessionId: "s", task: "",
+      claudeStatus: "idle",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_fox-worker-calm-bay",
+      activePaneId: "%5",
+      activeProject: "fox",
+    }));
+    vi.mocked(paneExists).mockReturnValue(true);
+    vi.mocked(windowExists).mockReturnValue(true);
+  });
+
+  it("pastes a callback prompt naming the child + state into the parent pane", () => {
+    notifyHandoffCallback({
+      childProject: "wolf",
+      childWorker: "bold-ash",
+      childBranch: "bold-ash",
+      terminalState: "merged",
+      parentProject: "fox",
+      parentWorker: "calm-bay",
+      replyNote: undefined,
+    });
+
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
+    const [, message] = vi.mocked(pasteAndSubmit).mock.calls[0];
+    expect(message).toContain("Handoff callback");
+    expect(message).toContain("wolf/bold-ash");
+    expect(message).toContain("merged");
+    expect(message).toContain("branch: bold-ash");
+  });
+
+  it("inlines the reply note when present", () => {
+    notifyHandoffCallback({
+      childProject: "wolf",
+      childWorker: "bold-ash",
+      childBranch: "bold-ash",
+      terminalState: "done",
+      parentProject: "fox",
+      parentWorker: "calm-bay",
+      replyNote: "Investigated the bug — root cause is in src/foo.ts:42.",
+    });
+
+    const [, message] = vi.mocked(pasteAndSubmit).mock.calls[0];
+    expect(message).toContain("Reply from bold-ash:");
+    expect(message).toContain("root cause is in src/foo.ts:42");
+  });
+
+  it("labels failing terminal state distinctly so the parent knows it needs attention", () => {
+    notifyHandoffCallback({
+      childProject: "wolf",
+      childWorker: "bold-ash",
+      childBranch: undefined,
+      terminalState: "failing",
+      parentProject: "fox",
+      parentWorker: "calm-bay",
+      replyNote: undefined,
+    });
+
+    const [, message] = vi.mocked(pasteAndSubmit).mock.calls[0];
+    expect(message).toContain("failing");
+    expect(message).toContain("operator attention");
+  });
+
+  it("silently no-ops when the parent is currently working (continueWorker gate)", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "calm-bay", sessionId: "s", task: "",
+      claudeStatus: "working",
+    });
+
+    notifyHandoffCallback({
+      childProject: "wolf",
+      childWorker: "bold-ash",
+      childBranch: "bold-ash",
+      terminalState: "merged",
+      parentProject: "fox",
+      parentWorker: "calm-bay",
+      replyNote: undefined,
+    });
+
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
   });
 });

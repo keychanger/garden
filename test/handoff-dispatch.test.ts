@@ -128,6 +128,52 @@ describe("processPendingHandoffs", () => {
     expect(fs.existsSync(otherClaim)).toBe(true);
   });
 
+  it("propagates handoffCallback when expectCallback + parent fields set", () => {
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    submitHandoffRequest({
+      targetProject: "wolf",
+      seedFile: "/tmp/seed.txt",
+      expectCallback: true,
+      parentProject: "fox",
+      parentWorker: "calm-bay",
+    });
+    processPendingHandoffs();
+    expect(vi.mocked(newWorker)).toHaveBeenCalledWith(expect.objectContaining({
+      projectName: "wolf",
+      handoffCallback: {
+        parentProject: "fox",
+        parentWorker: "calm-bay",
+        expectCallback: true,
+      },
+    }));
+  });
+
+  it("drops handoffCallback when expectCallback is set but parent env was missing", () => {
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    // expectCallback without parentProject/parentWorker — should not propagate.
+    submitHandoffRequest({
+      targetProject: "wolf",
+      seedFile: "/tmp/seed.txt",
+      expectCallback: true,
+    });
+    processPendingHandoffs();
+    const call = vi.mocked(newWorker).mock.calls[0][0];
+    expect(call?.handoffCallback).toBeUndefined();
+  });
+
+  it("does not propagate handoffCallback when expectCallback is false", () => {
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    submitHandoffRequest({
+      targetProject: "wolf",
+      seedFile: "/tmp/seed.txt",
+      parentProject: "fox",
+      parentWorker: "calm-bay",
+    });
+    processPendingHandoffs();
+    const call = vi.mocked(newWorker).mock.calls[0][0];
+    expect(call?.handoffCallback).toBeUndefined();
+  });
+
   it("processes multiple pending requests in one pass", () => {
     vi.mocked(newWorker)
       .mockReturnValueOnce("a-one")

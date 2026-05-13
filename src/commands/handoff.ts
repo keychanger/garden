@@ -22,9 +22,9 @@ export async function handoff(args: string[]): Promise<void> {
   const targetProject = args[0];
   if (!targetProject || targetProject.startsWith("-")) {
     throw new Error(
-      "Usage: garden handoff <target-project> [-m \"message\"]\n"
-      + "       garden handoff <target-project> < message-file\n"
-      + "       garden handoff <target-project> <<'EOF' ... EOF",
+      "Usage: garden handoff <target-project> [--expect-callback] [-m \"message\"]\n"
+      + "       garden handoff <target-project> [--expect-callback] < message-file\n"
+      + "       garden handoff <target-project> [--expect-callback] <<'EOF' ... EOF",
     );
   }
 
@@ -32,15 +32,28 @@ export async function handoff(args: string[]): Promise<void> {
     throw new Error(`Unknown project '${targetProject}'. Run 'garden list' to see registered projects.`);
   }
 
-  const briefing = await readBriefing(args.slice(1));
+  const rest = args.slice(1);
+  const callbackIdx = rest.indexOf("--expect-callback");
+  const expectCallback = callbackIdx !== -1;
+  if (expectCallback) rest.splice(callbackIdx, 1);
+
+  const briefing = await readBriefing(rest);
   if (!briefing.trim()) {
     throw new Error("Empty briefing. Pass -m \"<text>\" or pipe a message via stdin.");
   }
 
   const sourceProject = process.env.GARDEN_PROJECT;
   const sourceWorker = process.env.GARDEN_WORKER;
+  if (expectCallback && !(sourceProject && sourceWorker)) {
+    throw new Error(
+      "--expect-callback requires running inside a garden worker pane "
+      + "(GARDEN_PROJECT and GARDEN_WORKER must be set). There's no parent "
+      + "to call back to from a bare shell.",
+    );
+  }
+  const callbackTag = expectCallback ? " — callback requested" : "";
   const prefix = sourceProject && sourceWorker
-    ? `[handoff from ${sourceProject}/${sourceWorker}]`
+    ? `[handoff from ${sourceProject}/${sourceWorker}${callbackTag}]`
     : "[handoff]";
   const seedMessage = `${prefix}\n\n${briefing.trimEnd()}`;
 
@@ -52,7 +65,13 @@ export async function handoff(args: string[]): Promise<void> {
   );
   fs.writeFileSync(seedFile, seedMessage);
 
-  const reqId = submitHandoffRequest({ targetProject, seedFile });
+  const reqId = submitHandoffRequest({
+    targetProject,
+    seedFile,
+    expectCallback,
+    parentProject: sourceProject,
+    parentWorker: sourceWorker,
+  });
 
   // Poke any poller that might be listening. The target's poller is the
   // natural pick, but if no worker exists on the target yet it won't be
@@ -88,7 +107,8 @@ export async function handoff(args: string[]): Promise<void> {
     throw new Error(`Handoff to '${targetProject}' returned no worker name.`);
   }
 
-  console.log(`Handed off to ${targetProject}/${resp.workerName}.`);
+  const suffix = expectCallback ? " (callback requested on terminal state)" : "";
+  console.log(`Handed off to ${targetProject}/${resp.workerName}.${suffix}`);
 }
 
 async function readBriefing(rest: string[]): Promise<string> {

@@ -78,6 +78,17 @@ export interface NewWorkerOptions {
     seed: string;
     maxIterations: number;
   };
+  // Handoff lineage and callback opt-in. Set only when this worker is being
+  // created via `garden handoff --expect-callback` (background path).
+  // Writes the parent linkage and the expectCallback flag onto the child's
+  // registry entry; transitionState fires a one-shot prompt at the parent's
+  // pane on the child's first terminal prState. Absent on ⌥n workers, manual
+  // newWorker calls, and plain handoffs.
+  handoffCallback?: {
+    parentProject: string;
+    parentWorker: string;
+    expectCallback: true;
+  };
 }
 
 export function newWorker(opts: NewWorkerOptions = {}): string | null {
@@ -239,6 +250,13 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
               iteration: 0,
               maxIterations: opts.grow.maxIterations,
             },
+          }
+        : {}),
+      ...(opts.handoffCallback
+        ? {
+            parentProject: opts.handoffCallback.parentProject,
+            parentWorker: opts.handoffCallback.parentWorker,
+            handoffCallbackExpected: true,
           }
         : {}),
     });

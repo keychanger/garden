@@ -114,6 +114,8 @@ Dashboard:
   pause <worker>                 Suppress post-merge auto-continue (writes the .garden-done sentinel; a worker UserPromptSubmit also clears it, so prompting an explicitly-paused worker is itself an unpause)
   resume <worker>                Re-arm post-merge auto-continue (clears the .garden-done sentinel)
   handoff <project> [-m "<msg>"] Spawn a fresh worker on <project> seeded with a briefing (stdin or -m)
+                                 Add --expect-callback to receive a one-shot prompt at this pane when the child terminates
+  reply [-m "<msg>"]             Stage a freeform note for the parent that handed off to this worker (delivered with the callback)
   auto [on|off|status]           Toggle the global auto-continue gate
   auto threshold <N>             Set the usage-threshold percent (auto-disable above this)
   auto resume-on-reset on|off    Re-enable automatically after the usage window resets
