@@ -127,6 +127,14 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
         worker: workerName,
         data: { project: projectName },
       });
+      // The onStop applyAndLog upstream already wrote claudeStatus="idle"
+      // and refreshed — but resolveWorkerStatus reads claudeStatus only
+      // when prState is absent. Without this second refresh the dashboard
+      // stays painted as "idle" until the next hook event fires, even
+      // though the registry already says "done". Terminal states are
+      // event-driven only (no poller poll re-fires on a done worker), so
+      // the missed refresh sticks until something unrelated nudges it.
+      refreshDashboard();
     }
   } catch (err) {
     const errStr = String(err).slice(0, 200);

@@ -384,6 +384,7 @@ describe("handleClaudeHook — core events", () => {
     expect(typeof entry.mergedAt).toBe("string");
   });
 
+
   it("stop does NOT set done when .garden-done is absent", async () => {
     seedWorker("garden", "bold-ash", {
       claudeStatus: "working",
