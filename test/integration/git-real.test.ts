@@ -188,3 +188,44 @@ describe("gardenDoneTrackedInHead (real git)", () => {
     expect(gardenDoneTrackedInHead(env.repoPath)).toBe(false);
   });
 });
+
+// Regression: ⌥n on a local-only branch used to refuse the worker with a
+// generic remediation hint. tryPublishBranch is the auto-publish gesture
+// workers.ts now runs first — push the branch to origin so the worker can
+// branch off it like any other base.
+describe("tryPublishBranch (real git)", () => {
+  it("publishes a local-only branch to origin and creates the remotes ref", async () => {
+    const { tryPublishBranch, branchExistsOnOrigin } =
+      await import("../../src/dashboard/git.js");
+    git(env.repoPath, "checkout", "-b", "feature-local");
+    expect(branchExistsOnOrigin(env.repoPath, "feature-local")).toBe(false);
+    const result = tryPublishBranch(env.repoPath, "feature-local");
+    expect(result).toEqual({ ok: true });
+    // The push side-effects refs/remotes/origin/feature-local; downstream
+    // checks (workers.ts, bootstrap, merge) all rely on that ref existing.
+    expect(branchExistsOnOrigin(env.repoPath, "feature-local")).toBe(true);
+  });
+
+  it("returns ok when the branch is already up to date on origin", async () => {
+    const { tryPublishBranch } = await import("../../src/dashboard/git.js");
+    git(env.repoPath, "checkout", "-b", "already-pushed");
+    git(env.repoPath, "push", "-u", "origin", "already-pushed");
+    const result = tryPublishBranch(env.repoPath, "already-pushed");
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("returns error with captured stderr when origin remote is missing", async () => {
+    const { tryPublishBranch } = await import("../../src/dashboard/git.js");
+    git(env.repoPath, "remote", "remove", "origin");
+    git(env.repoPath, "checkout", "-b", "orphan-branch");
+    const result = tryPublishBranch(env.repoPath, "orphan-branch");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // Don't pin the exact message — git wording differs across versions.
+      // The presence of the branch name or "origin" in stderr is enough to
+      // prove we captured something actionable.
+      expect(result.error.length).toBeGreaterThan(0);
+      expect(result.error.toLowerCase()).toMatch(/origin|remote/);
+    }
+  });
+});

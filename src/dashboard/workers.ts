@@ -27,7 +27,8 @@ import {
 } from "./create.js";
 import { resolveGardenRunner } from "./runner.js";
 import {
-  worktreePath, resolveBaseBranch, branchExistsOnOrigin, gardenDoneTrackedInHead,
+  worktreePath, resolveBaseBranch, branchExistsOnOrigin, tryPublishBranch,
+  gardenDoneTrackedInHead,
 } from "./git.js";
 import { addAlert } from "./alerts.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
@@ -148,16 +149,38 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
 
     // A worker whose base branch isn't on origin breaks silently: every
     // `origin/<base>..HEAD` check in the Stop hook and poller fails, so the
-    // review cycle never starts. Reject up front with clear remediation.
+    // review cycle never starts. The natural failure mode is the operator
+    // switching the main checkout to a brand-new local branch and pressing
+    // ⌥n. Treat that as a publish gesture: push <base> to origin so it
+    // gains the ref everything downstream needs, then proceed. If the push
+    // fails (no remote, branch protection, non-fast-forward, network),
+    // surface the real git error so the operator knows what to fix.
     // Check is local-refs only — see branchExistsOnOrigin doc.
     if (!branchExistsOnOrigin(project.path, baseBranch)) {
-      const msg = `Base branch '${baseBranch}' (current branch of ${project.path}) has no local origin/${baseBranch} ref. Push it, fetch it, or switch the main checkout to a pushed branch.`;
-      tmuxDisplay(msg);
-      log.error("workers", "rejected newWorker: base branch not on origin", {
-        worker: workerName,
-        data: { project: targetProject, baseBranch },
-      });
-      return;
+      const result = tryPublishBranch(project.path, baseBranch);
+      if (result.ok) {
+        tmuxDisplay(`Published '${baseBranch}' to origin (worker base ref).`);
+        log.info("workers", "auto-published base branch for new worker", {
+          worker: workerName,
+          data: { project: targetProject, baseBranch },
+        });
+      } else {
+        // The git stderr is often multi-line ("hint:" lines, etc.); the last
+        // non-empty line is usually the actionable reason ("fatal: 'origin'
+        // does not appear to be a git repository", "! [rejected] non-fast-
+        // forward", "remote: error: GH006: Protected branch update failed").
+        const lastLine =
+          result.error.split("\n").map((l) => l.trim()).filter(Boolean).pop()
+          ?? result.error;
+        tmuxDisplay(
+          `Cannot create worker: couldn't publish '${baseBranch}' to origin — ${lastLine}`,
+        );
+        log.error("workers", "rejected newWorker: base branch publish failed", {
+          worker: workerName,
+          data: { project: targetProject, baseBranch, error: result.error },
+        });
+        return;
+      }
     }
 
     if (gardenDoneTrackedInHead(project.path)) {

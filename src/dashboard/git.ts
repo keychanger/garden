@@ -42,6 +42,32 @@ export function branchExistsOnOrigin(repoPath: string, branchName: string): bool
   }
 }
 
+export type PublishResult = { ok: true } | { ok: false; error: string };
+
+// Push <branchName> from the main checkout to origin so it gains an
+// origin/<branchName> ref. Called when the operator triggers ⌥n while the
+// main checkout is parked on a local-only branch — treat that as an explicit
+// "publish this branch as the base for workers" gesture rather than refusing.
+// The push creates the local remotes/origin/<branchName> ref as a side
+// effect, which is exactly what branchExistsOnOrigin and the merge path
+// need. Returns { ok: false, error } with the captured git stderr on
+// failure (no remote, branch protection, non-fast-forward, network) so the
+// caller can surface the real reason instead of a generic remediation hint.
+export function tryPublishBranch(repoPath: string, branchName: string): PublishResult {
+  try {
+    git(repoPath, "push", "-u", "origin", branchName);
+    log.info("git", "published branch to origin", { data: { branchName } });
+    return { ok: true };
+  } catch (err) {
+    const stderr = (err as { stderr?: string | Buffer }).stderr;
+    const errText = (stderr ? String(stderr) : String(err)).trim();
+    log.warn("git", "failed to publish branch", {
+      data: { branchName, error: errText },
+    });
+    return { ok: false, error: errText };
+  }
+}
+
 // True when the project's current HEAD has `.garden-done` tracked. A reviewer
 // running `git add -A` while the sentinel sat in its CWD is how this happens
 // (wolf, 2026-05-06). New workers then inherit the file via `git worktree

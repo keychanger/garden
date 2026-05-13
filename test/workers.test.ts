@@ -103,6 +103,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   worktreePath: vi.fn(() => "/home/user/.garden/worktrees/myproject/bold-ash"),
   resolveBaseBranch: vi.fn(() => "main"),
   branchExistsOnOrigin: vi.fn(() => true),
+  tryPublishBranch: vi.fn(() => ({ ok: true })),
   gardenDoneTrackedInHead: vi.fn(() => false),
 }));
 
@@ -139,7 +140,8 @@ import {
 } from "../src/dashboard/create.js";
 import { resolveGardenRunner } from "../src/dashboard/runner.js";
 import {
-  worktreePath, resolveBaseBranch, branchExistsOnOrigin, gardenDoneTrackedInHead,
+  worktreePath, resolveBaseBranch, branchExistsOnOrigin, tryPublishBranch,
+  gardenDoneTrackedInHead,
 } from "../src/dashboard/git.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "../src/dashboard/poller.js";
@@ -342,15 +344,33 @@ describe("newWorker", () => {
     expect(vi.mocked(refreshDashboard)).toHaveBeenCalledWith({ state: expect.any(Object) });
   });
 
-  it("rejects creation when base branch is not on origin", () => {
+  it("auto-publishes base branch and proceeds when origin ref is missing", () => {
+    // Operator switched the main checkout to a brand-new local branch and
+    // pressed ⌥n. Garden pushes it for them rather than refusing.
     vi.mocked(readDashState).mockReturnValue(makeState());
     vi.mocked(branchExistsOnOrigin).mockReturnValueOnce(false);
+    vi.mocked(tryPublishBranch).mockReturnValueOnce({ ok: true });
+    newWorker();
+    expect(vi.mocked(tryPublishBranch)).toHaveBeenCalledWith("/repo/myproject", "main");
+    expect(vi.mocked(addWorker)).toHaveBeenCalled();
+    const msgs = vi.mocked(tmuxDisplay).mock.calls.map((c) => c[0] as string);
+    expect(msgs.some((m) => m.includes("Published 'main' to origin"))).toBe(true);
+  });
+
+  it("rejects creation when auto-publish fails, surfacing the git error", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(branchExistsOnOrigin).mockReturnValueOnce(false);
+    vi.mocked(tryPublishBranch).mockReturnValueOnce({
+      ok: false,
+      error: "fatal: 'origin' does not appear to be a git repository",
+    });
     newWorker();
     expect(vi.mocked(addWorker)).not.toHaveBeenCalled();
-    expect(vi.mocked(tmuxDisplay)).toHaveBeenCalled();
-    const msg = vi.mocked(tmuxDisplay).mock.calls[0][0] as string;
-    expect(msg).toContain("no local origin/main ref");
-    expect(msg).toContain("main");
+    const msgs = vi.mocked(tmuxDisplay).mock.calls.map((c) => c[0] as string);
+    const errMsg = msgs.find((m) => m.includes("couldn't publish"));
+    expect(errMsg).toBeDefined();
+    expect(errMsg).toContain("main");
+    expect(errMsg).toContain("does not appear to be a git repository");
   });
 
   // ===== Handoff path: opts.projectName + opts.seedMessageFile + background =====
