@@ -49,7 +49,7 @@ npm test               # vitest unit + integration; tsc --noEmit
 
 Use `garden <cmd> --help` for flag-level detail. High-level groupings:
 
-- **Projects**: `add` / `create` / `remove` / `config` (keys: `checks`, `postMerge`, `sandboxDomains`, `claudeProfile`, `logColor`). `register`/`unregister` aliased.
+- **Projects**: `add` / `create` / `remove` / `config` (keys: `checks`, `postMerge`, `sandboxDomains`, `claudeProfile`, `logColor`, `requireCiSuccess`). `register`/`unregister` aliased.
 - **Plots**: `plot` (alias `p`) — named ordered subsets of projects (max 9). `⌥1–⌥9` index into the active plot, `⌥p` cycles focused plots. `focus` / `unfocus` / `reorder` toggle and order ⌥p inclusion. Storage: `~/.garden/config.yml`.
 - **Claude profiles**: `claude-profile add|login|list|remove`. Per-project `claudeProfile` config injects `CLAUDE_CONFIG_DIR` for that project's worker / reviewer / resolver. macOS Keychain footgun: every Claude `/login` overwrites one shared entry, so always re-auth via `garden login` (it strips `CLAUDE_CONFIG_DIR` and captures Keychain → file for profiles).
 - **Auth**: `login [profile]`, `auth status` (presence/expiry/Keychain displacement diagnostic).
@@ -74,6 +74,7 @@ Permanent tmux layout — content is moved between visible slots and **hidden un
 - **Status**: hooks write `claudeStatus`, the poller writes `prState`, `pane-died` writes `claudeStatus="exited"`. Event-driven; no fallback poll. Spec: `docs/STATUS.md`.
 - **Auto-continue**: `continue.ts` re-prompts after interrupt (mid-turn dashboard kill / tmux crash / bounce-while-working) and after a clean merge (with the list of files changed during review). Worker opts out by writing `.garden-done` in its worktree root before ending its turn. `garden pause` / `resume` toggle the sentinel; `UserPromptSubmit` clears it.
 - **Post-merge**: fast-forward the local base checkout, run optional `postMerge`, then notify live siblings whose files overlap.
+- **CI gate**: before each merge, `handleMergePending` queries `gh api repos/<owner>/<repo>/commits/<sha>/check-runs` (see `src/dashboard/poller-ci.ts`). Pending defers the merge (60 s recheck); failure parks the worker in `failing` with `failingReason: "ci"` and alerts the operator. The gate passes through on projects without a GitHub remote, without `gh` installed, with zero check-runs on the commit, or with `requireCiSuccess: false`. This is defense-in-depth against GitHub's branch protection — the poller's force-push path bypasses the merge UI, so branch protection alone can't catch a red CI.
 
 ## Conventions
 

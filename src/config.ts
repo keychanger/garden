@@ -47,12 +47,20 @@ export interface ProjectConfig {
   // this. Default: 5 (grow loops are typically short polish passes;
   // operators who want longer convergence should use a trellis instead).
   maxGrowIterations?: number;
+  // CI gate at the poller's merge step. When true (default) the poller
+  // queries GitHub Actions check-runs on the worker's HEAD before each
+  // merge — pending defers the merge, failure parks the worker in
+  // `failing` with reason "ci", success (or no check-runs at all)
+  // proceeds. Set to false on projects whose CI is irrelevant to merge
+  // safety (no workflow, advisory-only, or being intentionally bypassed).
+  // See `src/dashboard/poller-ci.ts`.
+  requireCiSuccess?: boolean;
 }
 
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "path", "checks", "postMerge", "sandboxDomains", "claudeProfile", "logColor",
   "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
-  "maxGrowIterations",
+  "maxGrowIterations", "requireCiSuccess",
 ]);
 
 export function isValidConfigKey(key: string): boolean {

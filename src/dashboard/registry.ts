@@ -33,7 +33,12 @@ export type FailingReason =
   | "trellis-flagged"
   | "iteration-budget"
   | "stagnation"
-  | "unparseable-verdict";
+  | "unparseable-verdict"
+  // Set by the poller's CI gate (poller-ci.ts) when GitHub Actions reports
+  // any failed/cancelled/timed-out check-run on the worker's branch HEAD.
+  // The merge is held until the operator pushes a new commit that turns
+  // the check green; the poller does not auto-retry.
+  | "ci";
 
 export interface WorkerEntry {
   name: string;       // adjective-noun name, e.g. "swift-oak"

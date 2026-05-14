@@ -11,7 +11,7 @@ import { output } from "../output.js";
 const SETTABLE_KEYS = [
   "checks", "postMerge", "sandboxDomains", "claudeProfile", "logColor",
   "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
-  "maxGrowIterations",
+  "maxGrowIterations", "requireCiSuccess",
 ] as const;
 type SettableKey = typeof SETTABLE_KEYS[number];
 
@@ -74,6 +74,10 @@ function showProjectConfig(project: ProjectConfig & { name: string }): void {
       if (project.maxGrowIterations !== undefined) {
         data.maxGrowIterations = String(project.maxGrowIterations);
       }
+    } else if (key === "requireCiSuccess") {
+      if (project.requireCiSuccess !== undefined) {
+        data.requireCiSuccess = String(project.requireCiSuccess);
+      }
     } else if (project[key]) {
       data[key] = project[key]!;
     }
@@ -121,6 +125,12 @@ function showConfigKey(project: ProjectConfig & { name: string }, key: SettableK
   }
   if (key === "maxGrowIterations") {
     const v = project.maxGrowIterations;
+    if (v !== undefined) output({ [key]: v }, () => String(v));
+    else output({ [key]: null }, () => `(not set)`);
+    return;
+  }
+  if (key === "requireCiSuccess") {
+    const v = project.requireCiSuccess;
     if (v !== undefined) output({ [key]: v }, () => String(v));
     else output({ [key]: null }, () => `(not set)`);
     return;
@@ -210,6 +220,16 @@ function setConfigKey(projectName: string, key: SettableKey, value: string): voi
       }
       project.maxGrowIterations = n;
       console.log(`Set ${key} = ${n} for ${projectName}`);
+    }
+  } else if (key === "requireCiSuccess") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.requireCiSuccess;
+      console.log(`Cleared ${key} for ${projectName} (default: true)`);
+    } else if (value === "true" || value === "false") {
+      project.requireCiSuccess = value === "true";
+      console.log(`Set ${key} = ${value} for ${projectName}`);
+    } else {
+      throw new Error(`requireCiSuccess must be 'true' or 'false', got '${value}'`);
     }
   } else if (value === "" || value === "unset" || value === "null") {
     delete project[key];

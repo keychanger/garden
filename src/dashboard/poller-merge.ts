@@ -35,8 +35,13 @@ import { scheduleDelayedPoke } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
 import { killReviewWindow } from "./poller-review.js";
 import { launchResolver } from "./poller-resolve.js";
+import { checkCiStatus, getGitHubRepoSlug, type CiStatus } from "./poller-ci.js";
 
 const AUTO_CONTINUE_DEBOUNCE_MS = 10_000;
+// Re-check CI on a pending check-run after this long. The check-runs API
+// is cheap and gh's rate limit is generous; a 60s cadence is fast enough
+// that the merge doesn't feel stuck without burning quota on a tight loop.
+const CI_PENDING_RECHECK_MS = 60_000;
 
 export function handleMergePending(
   projectName: string,
@@ -52,6 +57,14 @@ export function handleMergePending(
     (w.mergePendingAt ?? "") < (entry.mergePendingAt ?? ""),
   );
   if (olderPending) return false;
+
+  // CI gate: defense-in-depth against merging a branch with red GitHub
+  // Actions. Runs BEFORE the rebase/force-push so we read CI for the SHA
+  // the worker actually published; the post-merge SHA on base is the same
+  // commits in their rebased form, and the workers we're guarding push
+  // frequently enough during their turn that CI is usually already
+  // settled by the time the reviewer signs off. See poller-ci.ts.
+  if (!gateCiStatus(projectName, projectPath, baseBranch, entry)) return false;
 
   const wtPath = entry.worktreePath ?? projectPath;
 
@@ -131,6 +144,118 @@ export function handleMergePending(
   // Merge to base branch
   finalizeMerge(projectName, projectPath, baseBranch, entry);
   return true;
+}
+
+// CI gate. Returns true when the caller should proceed with the merge,
+// false when the worker should stay parked in merge-pending. On a
+// confirmed CI failure this transitions the worker to `failing` and
+// alerts the operator; the caller still receives false.
+//
+// Behaves as a no-op for projects with requireCiSuccess: false, projects
+// whose origin isn't a github.com remote, environments without `gh`, and
+// projects with zero check-runs on the SHA (nothing to gate against).
+// The handoff explicitly called out the last two: blocking workers from
+// merging just because the operator's box doesn't have `gh` installed
+// would be a worse regression than the bug this fixes.
+function gateCiStatus(
+  projectName: string,
+  projectPath: string,
+  _baseBranch: string,
+  entry: WorkerEntry,
+): boolean {
+  const project = tryGetProject(projectName);
+  // Default-on: requireCiSuccess === false is the explicit opt-out.
+  if (project?.requireCiSuccess === false) return true;
+
+  const wtPath = entry.worktreePath ?? projectPath;
+  const sha = getBranchHeadSha(wtPath);
+  if (!sha) {
+    log.warn("poller", "ci gate: no HEAD sha, skipping", { worker: entry.name });
+    return true;
+  }
+
+  const slug = getGitHubRepoSlug(projectPath);
+  if (!slug) {
+    log.debug("poller", "ci gate: origin is not github, skipping", {
+      worker: entry.name,
+      data: { project: projectName },
+    });
+    return true;
+  }
+
+  const status: CiStatus = checkCiStatus(slug, sha);
+
+  switch (status.kind) {
+    case "success":
+      log.info("poller", "ci gate passed", {
+        worker: entry.name,
+        data: { project: projectName, sha: sha.slice(0, 7) },
+      });
+      return true;
+
+    case "no-ci":
+      log.debug("poller", "ci gate: no check-runs on commit, skipping", {
+        worker: entry.name,
+        data: { project: projectName, sha: sha.slice(0, 7) },
+      });
+      return true;
+
+    case "unavailable":
+      // Don't block on infrastructure problems. One alert per reason to
+      // surface the gap without spamming on every poll cycle.
+      log.warn("poller", "ci gate unavailable, passing through", {
+        worker: entry.name,
+        data: { project: projectName, reason: status.reason },
+      });
+      addAlert({
+        level: "warn",
+        source: "poller",
+        project: projectName,
+        worker: entry.name,
+        message: `CI gate skipped (${status.reason}). Merging without GitHub Actions verification.`,
+        dedupKey: `ci-gate-unavailable:${projectName}:${status.reason}`,
+      });
+      return true;
+
+    case "pending": {
+      log.info("poller", "ci gate: checks pending, deferring merge", {
+        worker: entry.name,
+        data: { project: projectName, sha: sha.slice(0, 7), pending: status.pending },
+      });
+      scheduleDelayedPoke(projectName, CI_PENDING_RECHECK_MS);
+      return false;
+    }
+
+    case "failed": {
+      const detail = status.failed
+        .map(f => `${f.name} (${f.conclusion})`)
+        .join(", ");
+      log.error("poller", "ci gate: checks failed, parking worker", {
+        worker: entry.name,
+        data: { project: projectName, sha: sha.slice(0, 7), failed: status.failed },
+      });
+      addAlert({
+        level: "error",
+        source: "poller",
+        project: projectName,
+        worker: entry.name,
+        message: `Merge blocked: GitHub Actions failed on ${sha.slice(0, 7)} — ${detail}. Push a fix or set 'requireCiSuccess false' to bypass.`,
+        // Dedup per failing SHA so a CI infrastructure outage doesn't
+        // re-alert on every poll, but a new commit (new SHA) does.
+        dedupKey: `ci-gate-failed:${projectName}:${entry.name}:${sha}`,
+      });
+      transitionState(projectName, entry.name, "failing", {
+        failCount: (entry.failCount ?? 0) + 1,
+        failingReason: "ci",
+        failingSha: sha,
+        lastSeenSha: sha,
+        lastShaChangeAt: new Date().toISOString(),
+        mergePendingAt: undefined,
+      });
+      refreshDashboard();
+      return false;
+    }
+  }
 }
 
 function finalizeMerge(

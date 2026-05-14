@@ -184,14 +184,15 @@ If the Stop hook still fails to count commits ahead of `origin/<pinned-base>` (e
 ### Merge Handling
 After a review passes, workers enter the `merge-pending` state. The merge queue processes one worker at a time per project (ordered by `mergePendingAt` timestamp):
 
-1. Fetch latest base branch
-2. Clear any leftover rebase state from a prior crashed resolver (`ensureNoRebaseInProgress`)
-3. Rebase onto current base branch
-4. If rebase conflicts: abort rebase, launch a dedicated resolver in the worktree and transition to `resolving`. The resolver completes the rebase and commits the resolution; the poller verifies and pushes. Budget is 2 attempts per merge; exhaustion transitions to `failing` with an operator alert naming the unmerged files.
-5. If rebase is clean: force-push the rebased branch, fast-forward the remote base branch via direct refspec push (no local checkout needed)
-6. Notify live sibling workers with overlapping files (see below)
-7. Fast-forward the local base branch checkout; run postMerge command (if configured) only when the checkout actually advanced. If the fast-forward fails (dirty working tree, divergent branch), postMerge is skipped and an alert is raised — always, regardless of whether postMerge was configured, because a stuck main checkout silently drifts out of sync with the remote
-8. Mark the worker as `merged` (or `done` if `.garden-done` is present at the worktree) in the registry
+1. **CI gate** (`src/dashboard/poller-ci.ts`): query `gh api repos/<owner>/<repo>/commits/<sha>/check-runs` for the worker's HEAD. **Success** (every completed check-run conclusion is `success`/`skipped`/`neutral`) → proceed. **Pending** (any check-run not yet `completed`) → defer the merge with a 60 s re-poke; worker stays in `merge-pending`. **Failed** (any non-success conclusion) → transition the worker to `failing` with `failingReason: "ci"` and alert. The gate is a no-op for projects with `requireCiSuccess: false`, projects whose `origin` isn't a github.com remote, environments where `gh` isn't installed, and commits with zero check-runs (no CI configured). The gate runs **before** the rebase/force-push so it reads CI for the SHA the worker actually published; the rebased commits that ultimately land on base are the same commits in rebased form, and the workers we guard push frequently enough during their turn that CI is usually already settled by the time the reviewer signs off. This is defense-in-depth against GitHub branch protection — the poller's force-push path bypasses the merge UI entirely, so branch protection alone can't block a red CI.
+2. Fetch latest base branch
+3. Clear any leftover rebase state from a prior crashed resolver (`ensureNoRebaseInProgress`)
+4. Rebase onto current base branch
+5. If rebase conflicts: abort rebase, launch a dedicated resolver in the worktree and transition to `resolving`. The resolver completes the rebase and commits the resolution; the poller verifies and pushes. Budget is 2 attempts per merge; exhaustion transitions to `failing` with an operator alert naming the unmerged files.
+6. If rebase is clean: force-push the rebased branch, fast-forward the remote base branch via direct refspec push (no local checkout needed)
+7. Notify live sibling workers with overlapping files (see below)
+8. Fast-forward the local base branch checkout; run postMerge command (if configured) only when the checkout actually advanced. If the fast-forward fails (dirty working tree, divergent branch), postMerge is skipped and an alert is raised — always, regardless of whether postMerge was configured, because a stuck main checkout silently drifts out of sync with the remote
+9. Mark the worker as `merged` (or `done` if `.garden-done` is present at the worktree) in the registry
 
 The worker and its worktree are not automatically cleaned up on merge. Cleanup happens only when the user kills the worker with `opt-x` or runs `garden reset`. This allows inspecting merged work before disposal.
 

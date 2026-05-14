@@ -156,6 +156,13 @@ vi.mock("../src/rules.js", () => ({
   buildRulesContext: vi.fn(() => "test rules"),
 }));
 
+vi.mock("../src/dashboard/poller-ci.js", () => ({
+  // Default: no github remote → gate is a pass-through. Individual tests
+  // override these to exercise the success/pending/failed/unavailable paths.
+  getGitHubRepoSlug: vi.fn(() => null),
+  checkCiStatus: vi.fn(() => ({ kind: "success" })),
+}));
+
 vi.mock("../src/dashboard/continue.js", () => ({
   dispatchDelayedAutoContinue: vi.fn(),
   dispatchDelayedContinue: vi.fn(),
@@ -202,6 +209,7 @@ import { addAlert } from "../src/dashboard/alerts.js";
 import { log } from "../src/dashboard/log.js";
 import { dispatchDelayedAutoContinue, isDoneSet, setDoneSentinel } from "../src/dashboard/continue.js";
 import { scheduleDelayedPoke } from "../src/dashboard/poller-fifo.js";
+import { getGitHubRepoSlug, checkCiStatus } from "../src/dashboard/poller-ci.js";
 import { sweepGhostEntries } from "../src/dashboard/validate.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
@@ -1764,6 +1772,131 @@ describe("poll — merge-pending state", () => {
     );
     // The default-workflow auto-continue must NOT fire.
     expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
+  });
+});
+
+describe("poll — merge-pending CI gate", () => {
+  beforeEach(() => {
+    // Default project config has requireCiSuccess unset → gate runs.
+    vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject" } as ReturnType<typeof tryGetProject>);
+    vi.mocked(getGitHubRepoSlug).mockReturnValue("owner/repo");
+    vi.mocked(checkCiStatus).mockReturnValue({ kind: "success" });
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true });
+    vi.mocked(getBranchHeadSha).mockReturnValue("deadbeefcafe");
+  });
+
+  function pending(): WorkerEntry {
+    return makeWorker({
+      prState: "merge-pending",
+      mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+    });
+  }
+
+  it("passes through when ci status is success — merges as normal", () => {
+    registryMock._setEntries("myproject", [pending()]);
+
+    poll("myproject");
+
+    expect(checkCiStatus).toHaveBeenCalledWith("owner/repo", "deadbeefcafe");
+    expect(mergeToBase).toHaveBeenCalled();
+  });
+
+  it("defers the merge when ci is pending — schedules a recheck and does NOT merge", () => {
+    vi.mocked(checkCiStatus).mockReturnValue({
+      kind: "pending",
+      pending: ["test"],
+    });
+    registryMock._setEntries("myproject", [pending()]);
+
+    poll("myproject");
+
+    expect(mergeToBase).not.toHaveBeenCalled();
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 60_000);
+    // Worker stays in merge-pending — no state mutation other than (possibly)
+    // the unchanged update from upstream handlers.
+    const fields = vi.mocked(updateWorkerFields).mock.calls.filter(c => c[1] === "bold-ash");
+    expect(fields.find(c => (c[2] as Record<string, unknown>).prState !== undefined)).toBeUndefined();
+  });
+
+  it("transitions to failing with reason 'ci' when ci is red", () => {
+    vi.mocked(checkCiStatus).mockReturnValue({
+      kind: "failed",
+      failed: [
+        { name: "lint-and-test", conclusion: "failure", htmlUrl: "https://gh/runs/1" },
+        { name: "schema-compat", conclusion: "failure" },
+      ],
+    });
+    registryMock._setEntries("myproject", [pending()]);
+
+    poll("myproject");
+
+    expect(mergeToBase).not.toHaveBeenCalled();
+    const failingCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "failing",
+    );
+    expect(failingCall).toBeDefined();
+    const fields = failingCall![2] as Record<string, unknown>;
+    expect(fields.failingReason).toBe("ci");
+    expect(fields.failingSha).toBe("deadbeefcafe");
+    expect(fields.mergePendingAt).toBeUndefined();
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      level: "error",
+      source: "poller",
+      project: "myproject",
+      worker: "bold-ash",
+      message: expect.stringContaining("lint-and-test (failure)"),
+    }));
+  });
+
+  it("passes through when origin is not a github remote", () => {
+    vi.mocked(getGitHubRepoSlug).mockReturnValue(null);
+    registryMock._setEntries("myproject", [pending()]);
+
+    poll("myproject");
+
+    expect(checkCiStatus).not.toHaveBeenCalled();
+    expect(mergeToBase).toHaveBeenCalled();
+  });
+
+  it("passes through (with an alert) when gh is unavailable", () => {
+    vi.mocked(checkCiStatus).mockReturnValue({
+      kind: "unavailable",
+      reason: "gh-not-installed",
+    });
+    registryMock._setEntries("myproject", [pending()]);
+
+    poll("myproject");
+
+    expect(mergeToBase).toHaveBeenCalled();
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      level: "warn",
+      message: expect.stringContaining("gh-not-installed"),
+    }));
+  });
+
+  it("passes through when the commit has no check-runs (no CI configured)", () => {
+    vi.mocked(checkCiStatus).mockReturnValue({ kind: "no-ci" });
+    registryMock._setEntries("myproject", [pending()]);
+
+    poll("myproject");
+
+    expect(mergeToBase).toHaveBeenCalled();
+  });
+
+  it("skips the gate entirely when requireCiSuccess is false", () => {
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject",
+      requireCiSuccess: false,
+    } as ReturnType<typeof tryGetProject>);
+    registryMock._setEntries("myproject", [pending()]);
+
+    poll("myproject");
+
+    expect(checkCiStatus).not.toHaveBeenCalled();
+    expect(getGitHubRepoSlug).not.toHaveBeenCalled();
+    expect(mergeToBase).toHaveBeenCalled();
   });
 });
 
