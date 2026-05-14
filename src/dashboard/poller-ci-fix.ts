@@ -236,30 +236,6 @@ export function handleCiFixing(
   const wtPath = entry.worktreePath ?? projectPath;
   const branchName = entry.branchName ?? entry.name;
 
-  // Worker-authored push during ci-fix: abort, reset budget, let the normal
-  // working→reviewing flow re-enter from the new SHA.
-  const remoteSha = getRemoteTrackingSha(wtPath, branchName);
-  if (remoteSha && entry.lastSeenSha && remoteSha !== entry.lastSeenSha) {
-    log.info("poller", "new commits during ci-fix, resetting to working", {
-      worker: entry.name,
-    });
-    cleanCiFixFiles(projectName, entry.name);
-    transitionState(projectName, entry.name, "working", {
-      lastShaChangeAt: new Date().toISOString(),
-      reviewWindowName: undefined,
-      reviewStartedAt: undefined,
-      ciFixAttempts: 0,
-      preCiFixSha: undefined,
-      lastCiFixBody: undefined,
-      failingCheckSummary: undefined,
-      mergePendingAt: undefined,
-      pendingReviewAt: Date.now(),
-    });
-    refreshDashboard();
-    scheduleDelayedPoke(projectName, 0);
-    return true;
-  }
-
   const result = readCiFixResult(projectName, entry);
   cleanCiFixFiles(projectName, entry.name);
 
@@ -273,7 +249,11 @@ export function handleCiFixing(
 
   // Programmatic verification: the agent's verdict is advisory; only an
   // actual push counts. HEAD must have advanced past preCiFixSha AND the
-  // remote tracking ref must match local HEAD (push went through).
+  // remote tracking ref must match local HEAD (push went through). The
+  // agent and the worker share the worktree, so we cannot distinguish an
+  // agent push from a worker push by looking at the remote ref alone —
+  // verification has to run before any worker-push fallback, otherwise
+  // every successful agent push would be misclassified as a worker push.
   const headSha = getBranchHeadSha(wtPath);
   const remoteHeadSha = getRemoteTrackingSha(wtPath, branchName);
   const madeProgress = headSha !== null && entry.preCiFixSha !== undefined &&
@@ -290,6 +270,30 @@ export function handleCiFixing(
         pushed,
       },
     });
+
+    // Verification failed but the remote ref still advanced — that's a
+    // worker-authored push during ci-fix (operator nudged the worker pane
+    // mid-fix). Abort, reset budget, and let the normal working→reviewing
+    // flow re-enter from the new SHA.
+    if (remoteHeadSha && entry.lastSeenSha && remoteHeadSha !== entry.lastSeenSha) {
+      log.info("poller", "new commits during ci-fix, resetting to working", {
+        worker: entry.name,
+      });
+      transitionState(projectName, entry.name, "working", {
+        lastShaChangeAt: new Date().toISOString(),
+        reviewWindowName: undefined,
+        reviewStartedAt: undefined,
+        ciFixAttempts: 0,
+        preCiFixSha: undefined,
+        lastCiFixBody: undefined,
+        failingCheckSummary: undefined,
+        mergePendingAt: undefined,
+        pendingReviewAt: Date.now(),
+      });
+      refreshDashboard();
+      scheduleDelayedPoke(projectName, 0);
+      return true;
+    }
 
     const attempts = entry.ciFixAttempts ?? 0;
     if (attempts >= CI_FIX_BUDGET) {

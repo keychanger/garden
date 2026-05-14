@@ -2187,20 +2187,12 @@ describe("poll — ci-fixing state", () => {
 
   it("transitions to merge-pending when FIXED and the agent pushed a new SHA", () => {
     setupCiFix();
-    // Agent committed locally and pushed; both refs advanced to the new SHA.
+    // Agent committed locally and pushed; both local HEAD and remote
+    // tracking ref advanced to the new SHA — a single ref read returns
+    // the same value across the handler's reads, so we use a single
+    // mockReturnValue rather than a per-call sequence.
     vi.mocked(getBranchHeadSha).mockReturnValue("post-fix-sha");
-    vi.mocked(getRemoteTrackingSha).mockImplementation((_wt: string, _branch: string) =>
-      // First call inside handleCiFixing checks worker-push baseline:
-      // origin-baseline matches lastSeenSha (no surprise push).
-      // Second call is the push-verification: returns post-fix-sha.
-      "origin-baseline",
-    );
-    // Tighter: use sequence — the implementation reads getRemoteTrackingSha
-    // twice. First for worker-push detection (must match lastSeenSha to avoid
-    // false reset), second for push verification (must match local HEAD).
-    vi.mocked(getRemoteTrackingSha)
-      .mockReturnValueOnce("origin-baseline")
-      .mockReturnValue("post-fix-sha");
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("post-fix-sha");
 
     poll("myproject");
 
