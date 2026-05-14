@@ -418,6 +418,7 @@ export function updateWorkerFields(
     if (fields.prState && fields.prState !== entry.prState) {
       log.info("poller", `${entry.prState ?? "new"} -> ${fields.prState}`, {
         worker: workerName,
+        data: { project },
       });
     }
 
@@ -455,6 +456,7 @@ export function batchUpdateWorkerFields(
       if (fields.prState && fields.prState !== entry.prState) {
         log.info("poller", `${entry.prState ?? "new"} -> ${fields.prState}`, {
           worker: workerName,
+          data: { project },
         });
       }
       const { trellis: trellisUpdate, grow: growUpdate, ...rest } = fields;

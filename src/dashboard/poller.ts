@@ -85,7 +85,7 @@ function pollProject(projectName: string): boolean {
     } catch (err) {
       log.error("poller", "error polling worker", {
         worker: entry.name,
-        data: { error: String(err) },
+        data: { project: projectName, error: String(err) },
       });
     }
   }

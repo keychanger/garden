@@ -30,6 +30,7 @@ import {
   parseFilterExpr,
   applyStickyDefaults,
   formatLogsPaneLabel,
+  resetWorkerMapCaches,
   type LogEntry,
   type Filters,
 } from "../src/commands/logs.js";
@@ -350,6 +351,64 @@ describe("matchesFilters", () => {
   it("rejects when data is undefined and worker filter set", () => {
     const e: LogEntry = { ts: entry.ts, level: "info", src: "poller", msg: "test" };
     expect(matchesFilters(e, { worker: "bold", count: 40, follow: false })).toBe(false);
+  });
+});
+
+// projectForEntry's history fallback: when the registry no longer lists a
+// worker (killed/cleaned), past log entries that carried data.project are
+// scanned to recover the worker→project mapping. Without this, a `wolf`
+// worker's old "merge-pending -> merged" lines would render as "system"
+// the moment the worker exits the registry.
+describe("projectForEntry history fallback (via project filter)", () => {
+  beforeEach(() => {
+    resetWorkerMapCaches();
+  });
+
+  it("resolves project from a past log entry when registry lookup misses", () => {
+    // Registry: empty workers (the worker was killed).
+    // Log file: one entry pins `drawn-rare-weald` to project `wolf` via
+    // data.project, plus the worker-only "→ merged" line we're testing.
+    const registryJson = JSON.stringify({ workers: {} });
+    const logFile =
+      JSON.stringify({
+        ts: "2026-05-14T16:20:42.745Z",
+        level: "info",
+        src: "hook",
+        worker: "drawn-rare-weald",
+        msg: "claude hook",
+        data: { project: "wolf", event: "prompt" },
+      }) + "\n";
+    vi.mocked(fs.existsSync).mockImplementation(() => true);
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      const file = String(p);
+      if (file.endsWith("dashboard.registry.json")) return registryJson;
+      return logFile;
+    });
+    const entry: LogEntry = {
+      ts: "2026-05-14T17:18:35.872Z",
+      level: "info",
+      src: "poller",
+      msg: "merge-pending -> merged",
+      worker: "drawn-rare-weald",
+    };
+    expect(
+      matchesFilters(entry, { project: "wolf", count: 40, follow: false }),
+    ).toBe(true);
+  });
+
+  it("returns null project when no history exists for the worker", () => {
+    vi.mocked(fs.existsSync).mockImplementation(() => false);
+    vi.mocked(fs.readFileSync).mockImplementation(() => "");
+    const entry: LogEntry = {
+      ts: "2026-05-14T17:18:35.872Z",
+      level: "info",
+      src: "poller",
+      msg: "merge-pending -> merged",
+      worker: "ghost-worker",
+    };
+    expect(
+      matchesFilters(entry, { project: "wolf", count: 40, follow: false }),
+    ).toBe(false);
   });
 });
 

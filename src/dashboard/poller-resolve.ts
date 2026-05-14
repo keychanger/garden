@@ -63,7 +63,7 @@ export function launchResolver(
 
   const prompt = buildResolvePrompt(projectName, projectPath, baseBranch, entry);
   if (prompt === null) {
-    log.warn("poller", "failed to build resolve prompt", { worker: entry.name });
+    log.warn("poller", "failed to build resolve prompt", { worker: entry.name, data: { project: projectName } });
     return false;
   }
 
@@ -97,7 +97,7 @@ export function launchResolver(
 
   log.info("poller", "launched resolver", {
     worker: entry.name,
-    data: { attempt: attempts + 1, budget: RESOLVE_BUDGET },
+    data: { project: projectName, attempt: attempts + 1, budget: RESOLVE_BUDGET },
   });
   return true;
 }
@@ -116,7 +116,7 @@ function escalateResolveBudget(
     : "";
   log.error("poller", "resolver budget exhausted", {
     worker: entry.name,
-    data: { budget: RESOLVE_BUDGET, conflictFiles },
+    data: { project: projectName, budget: RESOLVE_BUDGET, conflictFiles },
   });
   addAlert({
     level: "error",
@@ -197,6 +197,7 @@ export function handleResolving(
     log.warn("poller", "resolver verification failed", {
       worker: entry.name,
       data: {
+        project: projectName,
         verdict: resolveResult?.verdict ?? "missing",
         rebaseStuck,
         rebased,
@@ -232,7 +233,7 @@ export function handleResolving(
   // serial merge queue picks it up.
   log.info("poller", "resolver verified", {
     worker: entry.name,
-    data: { attempts: entry.resolveAttempts ?? 0 },
+    data: { project: projectName, attempts: entry.resolveAttempts ?? 0 },
   });
 
   try {
@@ -240,7 +241,7 @@ export function handleResolving(
   } catch (err) {
     log.error("poller", "force-push after resolve failed", {
       worker: entry.name,
-      data: { error: String(err) },
+      data: { project: projectName, error: String(err) },
     });
     transitionState(projectName, entry.name, "working", {
       reviewWindowName: undefined,
@@ -268,12 +269,12 @@ function readResolveResult(
   const resultFile = reviewResultPath(projectName, entry.name);
   try {
     if (!fs.existsSync(resultFile)) {
-      log.warn("poller", "resolve result file missing", { worker: entry.name });
+      log.warn("poller", "resolve result file missing", { worker: entry.name, data: { project: projectName } });
       return null;
     }
     const output = fs.readFileSync(resultFile, "utf-8").trim();
     if (!output) {
-      log.warn("poller", "resolve result file empty", { worker: entry.name });
+      log.warn("poller", "resolve result file empty", { worker: entry.name, data: { project: projectName } });
       return null;
     }
     const parsed = parseLastLineVerdict(output, RESOLVE_VERDICT_VOCAB, { scanLines: 1 });
@@ -281,7 +282,7 @@ function readResolveResult(
       const lastLine = output.split("\n").reverse().find(l => l.trim())?.trim() ?? "";
       log.warn("poller", "could not parse resolve verdict", {
         worker: entry.name,
-        data: { lastLine },
+        data: { project: projectName, lastLine },
       });
       return null;
     }
@@ -292,7 +293,7 @@ function readResolveResult(
   } catch (err) {
     log.warn("poller", "failed to read resolve result", {
       worker: entry.name,
-      data: { error: String(err) },
+      data: { project: projectName, error: String(err) },
     });
     return null;
   }

@@ -140,7 +140,7 @@ export function handleReviewing(
 
   log.info("poller", "review complete", {
     worker: entry.name,
-    data: { verdict: review.verdict },
+    data: { project: projectName, verdict: review.verdict },
   });
 
   if (isTrellis) {
@@ -183,7 +183,7 @@ function handleUnparseableReview(
     } catch (err) {
       log.error("poller", "force-push on unparseable-verdict retry failed", {
         worker: entry.name,
-        data: { error: String(err) },
+        data: { project: projectName, error: String(err) },
       });
       transitionState(projectName, entry.name, "failing", {
         failCount: (entry.failCount ?? 0) + 1,
@@ -201,6 +201,7 @@ function handleUnparseableReview(
     }
     log.info("poller", "unparseable verdict with reviewer commits; re-queueing review", {
       worker: entry.name,
+      data: { project: projectName },
     });
     transitionState(projectName, entry.name, "working", {
       pendingReviewAt: Date.now(),
@@ -218,6 +219,7 @@ function handleUnparseableReview(
 
   log.warn("poller", "review process failed, transitioning to failing", {
     worker: entry.name,
+    data: { project: projectName },
   });
   addAlert({
     level: "error",
@@ -266,7 +268,7 @@ function tryForcePushAfterReview(
   } catch (err) {
     log.error("poller", `force-push after ${context} failed`, {
       worker: entry.name,
-      data: { error: String(err) },
+      data: { project: projectName, error: String(err) },
     });
     transitionState(projectName, entry.name, "working", {
       reviewWindowName: undefined,
@@ -513,7 +515,7 @@ export function resetToWorkingOnWorkerPush(
     context === "review"
       ? "new commits during review, resetting to working"
       : "new commits during resolve, resetting to working",
-    { worker: entry.name },
+    { worker: entry.name, data: { project: projectName } },
   );
   killReviewWindow(projectName, entry.name);
 
@@ -570,7 +572,7 @@ export function handleReviewTimeout(
   const elapsedMs = Date.now() - (entry.reviewStartedAt ?? 0);
   log.warn("poller", "review timed out, killing window", {
     worker: entry.name,
-    data: { kind, elapsedMs, timeoutMs: REVIEW_TIMEOUT_MS },
+    data: { project: projectName, kind, elapsedMs, timeoutMs: REVIEW_TIMEOUT_MS },
   });
   if (entry.reviewWindowName) killWindowSafe(entry.reviewWindowName);
   cleanReviewFiles(projectName, entry.name);
@@ -673,7 +675,7 @@ function launchReview(
       stdio: "ignore",
     });
   } catch (err) {
-    log.debug("poller", "fetch before review failed", { worker: entry.name, data: { error: String(err) } });
+    log.debug("poller", "fetch before review failed", { worker: entry.name, data: { project: projectName, error: String(err) } });
   }
 
   // Build the review prompt with the workflow-appropriate vocabulary.
@@ -682,7 +684,7 @@ function launchReview(
     : buildReviewPrompt(projectName, projectPath, baseBranch, entry);
 
   if (prompt === null) {
-    log.warn("poller", "failed to build review prompt", { worker: entry.name });
+    log.warn("poller", "failed to build review prompt", { worker: entry.name, data: { project: projectName } });
     return false;
   }
 
@@ -732,7 +734,9 @@ function launchReview(
 
   log.info("poller", "launched review", {
     worker: entry.name,
-    data: isTrellis ? { iteration: entry.trellis?.iteration } : undefined,
+    data: isTrellis
+      ? { project: projectName, iteration: entry.trellis?.iteration }
+      : { project: projectName },
   });
   return true;
 }
@@ -745,33 +749,33 @@ function readReviewResult(
 
   try {
     if (!fs.existsSync(resultFile)) {
-      log.warn("poller", "review result file missing", { worker: entry.name });
+      log.warn("poller", "review result file missing", { worker: entry.name, data: { project: projectName } });
       return null;
     }
 
     const output = fs.readFileSync(resultFile, "utf-8").trim();
     if (!output) {
-      log.warn("poller", "review result file empty", { worker: entry.name });
+      log.warn("poller", "review result file empty", { worker: entry.name, data: { project: projectName } });
       return null;
     }
 
-    return parseReviewResult(output, entry.name);
+    return parseReviewResult(output, entry.name, projectName);
   } catch (err) {
     log.warn("poller", "failed to read review result", {
       worker: entry.name,
-      data: { error: String(err) },
+      data: { project: projectName, error: String(err) },
     });
     return null;
   }
 }
 
-function parseReviewResult(output: string, workerName: string): ReviewResult | null {
+function parseReviewResult(output: string, workerName: string, projectName: string): ReviewResult | null {
   const parsed = parseLastLineVerdict(output, REVIEW_VERDICT_VOCAB);
   if (!parsed) {
     const lastLine = output.split("\n").reverse().find(l => l.trim()) ?? "";
     log.warn("poller", "could not parse review verdict", {
       worker: workerName,
-      data: { lastLine: lastLine.trim() },
+      data: { project: projectName, lastLine: lastLine.trim() },
     });
     return null;
   }
@@ -790,12 +794,12 @@ function readTrellisReviewResult(
   const resultFile = reviewResultPath(projectName, entry.name);
   try {
     if (!fs.existsSync(resultFile)) {
-      log.warn("poller", "trellis review result file missing", { worker: entry.name });
+      log.warn("poller", "trellis review result file missing", { worker: entry.name, data: { project: projectName } });
       return null;
     }
     const output = fs.readFileSync(resultFile, "utf-8").trim();
     if (!output) {
-      log.warn("poller", "trellis review result file empty", { worker: entry.name });
+      log.warn("poller", "trellis review result file empty", { worker: entry.name, data: { project: projectName } });
       return null;
     }
     const parsed = parseTrellisVerdict(output);
@@ -803,7 +807,7 @@ function readTrellisReviewResult(
       const lastLine = output.split("\n").reverse().find(l => l.trim()) ?? "";
       log.warn("poller", "could not parse trellis verdict", {
         worker: entry.name,
-        data: { lastLine: lastLine.trim() },
+        data: { project: projectName, lastLine: lastLine.trim() },
       });
       return null;
     }
@@ -811,7 +815,7 @@ function readTrellisReviewResult(
   } catch (err) {
     log.warn("poller", "failed to read trellis review result", {
       worker: entry.name,
-      data: { error: String(err) },
+      data: { project: projectName, error: String(err) },
     });
     return null;
   }

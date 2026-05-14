@@ -113,7 +113,7 @@ export function launchCiFix(
 
   const prompt = buildCiFixPrompt(projectName, projectPath, baseBranch, stampedEntry);
   if (prompt === null) {
-    log.warn("poller", "failed to build ci-fix prompt", { worker: entry.name });
+    log.warn("poller", "failed to build ci-fix prompt", { worker: entry.name, data: { project: projectName } });
     return false;
   }
 
@@ -165,7 +165,7 @@ export function launchCiFix(
 
   log.info("poller", "launched ci-fix", {
     worker: entry.name,
-    data: { attempt: nextAttempts, budget: CI_FIX_BUDGET, sha: sha.slice(0, 7) },
+    data: { project: projectName, attempt: nextAttempts, budget: CI_FIX_BUDGET, sha: sha.slice(0, 7) },
   });
   return true;
 }
@@ -181,7 +181,7 @@ function escalateCiFixBudget(
     : "";
   log.error("poller", "ci-fix budget exhausted", {
     worker: entry.name,
-    data: { budget: CI_FIX_BUDGET, sha: sha.slice(0, 7) },
+    data: { project: projectName, budget: CI_FIX_BUDGET, sha: sha.slice(0, 7) },
   });
   addAlert({
     level: "error",
@@ -265,6 +265,7 @@ export function handleCiFixing(
     log.warn("poller", "ci-fix verification failed", {
       worker: entry.name,
       data: {
+        project: projectName,
         verdict: result?.verdict ?? "missing",
         madeProgress,
         pushed,
@@ -278,6 +279,7 @@ export function handleCiFixing(
     if (remoteHeadSha && entry.lastSeenSha && remoteHeadSha !== entry.lastSeenSha) {
       log.info("poller", "new commits during ci-fix, resetting to working", {
         worker: entry.name,
+        data: { project: projectName },
       });
       transitionState(projectName, entry.name, "working", {
         lastShaChangeAt: new Date().toISOString(),
@@ -321,7 +323,7 @@ export function handleCiFixing(
   // attempt against the new failure detail.
   log.info("poller", "ci-fix pushed", {
     worker: entry.name,
-    data: { attempts: entry.ciFixAttempts ?? 0, newSha: headSha?.slice(0, 7) },
+    data: { project: projectName, attempts: entry.ciFixAttempts ?? 0, newSha: headSha?.slice(0, 7) },
   });
   addAlert({
     level: "warn",
@@ -363,7 +365,7 @@ function handleCiFixTimeout(
   const elapsedMs = Date.now() - (entry.reviewStartedAt ?? 0);
   log.warn("poller", "ci-fix timed out, killing window", {
     worker: entry.name,
-    data: { elapsedMs, timeoutMs: REVIEW_TIMEOUT_MS },
+    data: { project: projectName, elapsedMs, timeoutMs: REVIEW_TIMEOUT_MS },
   });
   if (entry.reviewWindowName) killWindowSafe(entry.reviewWindowName);
   cleanCiFixFiles(projectName, entry.name);
@@ -399,12 +401,12 @@ function readCiFixResult(
   const resultFile = ciFixResultPath(projectName, entry.name);
   try {
     if (!fs.existsSync(resultFile)) {
-      log.warn("poller", "ci-fix result file missing", { worker: entry.name });
+      log.warn("poller", "ci-fix result file missing", { worker: entry.name, data: { project: projectName } });
       return null;
     }
     const output = fs.readFileSync(resultFile, "utf-8").trim();
     if (!output) {
-      log.warn("poller", "ci-fix result file empty", { worker: entry.name });
+      log.warn("poller", "ci-fix result file empty", { worker: entry.name, data: { project: projectName } });
       return null;
     }
     const parsed = parseLastLineVerdict(output, CI_FIX_VERDICT_VOCAB, { scanLines: 1 });
@@ -412,7 +414,7 @@ function readCiFixResult(
       const lastLine = output.split("\n").reverse().find(l => l.trim())?.trim() ?? "";
       log.warn("poller", "could not parse ci-fix verdict", {
         worker: entry.name,
-        data: { lastLine },
+        data: { project: projectName, lastLine },
       });
       return null;
     }
@@ -423,7 +425,7 @@ function readCiFixResult(
   } catch (err) {
     log.warn("poller", "failed to read ci-fix result", {
       worker: entry.name,
-      data: { error: String(err) },
+      data: { project: projectName, error: String(err) },
     });
     return null;
   }

@@ -76,7 +76,7 @@ export function handleMergePending(
       stdio: "ignore",
     });
   } catch (err) {
-    log.debug("poller", "fetch before merge failed", { worker: entry.name, data: { error: String(err) } });
+    log.debug("poller", "fetch before merge failed", { worker: entry.name, data: { project: projectName, error: String(err) } });
   }
 
   // Clear any leftover rebase state (e.g., from a prior resolver that crashed).
@@ -133,7 +133,7 @@ export function handleMergePending(
   } catch (err) {
     log.error("poller", "force-push failed in merge queue", {
       worker: entry.name,
-      data: { error: String(err) },
+      data: { project: projectName, error: String(err) },
     });
     transitionState(projectName, entry.name, "working", {
       mergePendingAt: undefined,
@@ -171,7 +171,7 @@ function gateCiStatus(
   const wtPath = entry.worktreePath ?? projectPath;
   const sha = getBranchHeadSha(wtPath);
   if (!sha) {
-    log.warn("poller", "ci gate: no HEAD sha, skipping", { worker: entry.name });
+    log.warn("poller", "ci gate: no HEAD sha, skipping", { worker: entry.name, data: { project: projectName } });
     return true;
   }
 
@@ -267,7 +267,7 @@ function finalizeMerge(
   } catch (err) {
     log.error("poller", "merge failed", {
       worker: entry.name,
-      data: { error: String(err) },
+      data: { project: projectName, error: String(err) },
     });
     addAlert({
       level: "error",
@@ -287,7 +287,7 @@ function finalizeMerge(
     return;
   }
 
-  log.info("poller", "merged to base branch", { worker: entry.name, data: { baseBranch } });
+  log.info("poller", "merged to base branch", { worker: entry.name, data: { project: projectName, baseBranch } });
 
   const sentinelPresent = isDoneSet(entry.worktreePath);
   const sync = syncWorktreeAfterMerge(projectName, branchName, entry, sentinelPresent);
@@ -326,7 +326,7 @@ function syncWorktreeAfterMerge(
   if (sync.ok) {
     log.info("poller", "synced worktree to merged tip", {
       worker: entry.name,
-      data: { branch: branchName },
+      data: { project: projectName, branch: branchName },
     });
     const toSha = getBranchHeadSha(entry.worktreePath);
     if (fromSha && toSha && fromSha !== toSha) {
@@ -340,7 +340,7 @@ function syncWorktreeAfterMerge(
   // Sync failed — log + alert at the severity matching the cause. "dirty"
   // is operator-recoverable (commit/stash); other reasons are git-level
   // failures and warrant the higher level.
-  const logData = { branch: branchName, reason: sync.reason, error: sync.error };
+  const logData = { project: projectName, branch: branchName, reason: sync.reason, error: sync.error };
   const alertMessage = sync.reason === "dirty"
     ? `Could not sync worker ${entry.name} after merge: worktree has uncommitted changes. Worker resumes on stale HEAD until cleaned up.`
     : `Post-merge sync failed for worker ${entry.name} (${sync.reason}): ${(sync.error ?? "").slice(0, 200)}`;
@@ -390,7 +390,7 @@ function notifyPostMerge(
     : "";
   log.error("poller", "local base checkout did not fast-forward after merge", {
     worker: entry.name,
-    data: { projectPath, baseBranch, reason: ffResult.reason },
+    data: { project: projectName, projectPath, baseBranch, reason: ffResult.reason },
   });
   const message = ffResult.reason === "off-base"
     ? `Worker ${entry.name} merged to origin/${baseBranch}, but ${projectPath} is checked out on ${ffResult.currentBranch ?? "an unknown branch"}. Local ${baseBranch} ref is now stale. Switch back to ${baseBranch} (or run \`git fetch origin ${baseBranch} && git update-ref refs/heads/${baseBranch} refs/remotes/origin/${baseBranch}\`) to advance it.${postMergeNote}`
@@ -447,7 +447,7 @@ function transitionToTerminal(
   if (fresh?.claudeStatus === "working") {
     log.info("poller", "worker already active after merge, clearing terminal state", {
       worker: entry.name,
-      data: { clearedFrom: terminalState },
+      data: { project: projectName, clearedFrom: terminalState },
     });
     transitionState(projectName, entry.name, "working", {
       mergedAt: undefined,
@@ -608,9 +608,9 @@ function runPostMerge(projectName: string, projectPath: string): void {
       timeout: 120_000,
     });
     if (projectName === "garden") {
-      log.info("poller", "garden rebuilt", { data: { commit } });
+      log.info("poller", "garden rebuilt", { data: { project: projectName, commit } });
     } else {
-      log.info("poller", "postMerge completed", { data: { commit } });
+      log.info("poller", "postMerge completed", { data: { project: projectName, commit } });
     }
     // Detached handoff via the rebuilt binary — this process still has pre-rebuild code in memory
     if (projectName === "garden") {
@@ -629,7 +629,7 @@ function runPostMerge(projectName: string, projectPath: string): void {
       ? `Garden rebuild failed at commit ${commit}: ${String(err).slice(0, 200)}`
       : `postMerge failed at commit ${commit}: ${String(err).slice(0, 200)}`;
     log.error("poller", "postMerge failed", {
-      data: { commit, error: String(err) },
+      data: { project: projectName, commit, error: String(err) },
     });
     addAlert({
       level: "error",
@@ -690,7 +690,7 @@ function notifySiblingWorkers(
     if (sibling.claudeStatus === "exited") {
       log.info("poller", "skipping dead sibling", {
         worker: sibling.name,
-        data: { mergedWorker: mergedEntry.name },
+        data: { project: projectName, mergedWorker: mergedEntry.name },
       });
       continue;
     }
@@ -702,7 +702,7 @@ function notifySiblingWorkers(
     if (isDoneSet(sibling.worktreePath)) {
       log.info("poller", "skipping done sibling (sentinel set)", {
         worker: sibling.name,
-        data: { mergedWorker: mergedEntry.name },
+        data: { project: projectName, mergedWorker: mergedEntry.name },
       });
       continue;
     }
@@ -710,7 +710,7 @@ function notifySiblingWorkers(
     pasteAndSubmit(paneId, message);
     log.info("poller", "notified sibling of merge overlap", {
       worker: sibling.name,
-      data: { mergedWorker: mergedEntry.name, overlapFiles: overlap },
+      data: { project: projectName, mergedWorker: mergedEntry.name, overlapFiles: overlap },
     });
   }
 }

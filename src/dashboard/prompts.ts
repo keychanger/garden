@@ -496,7 +496,7 @@ function makeResolveContext(
   try {
     commitSummary = getCommitSummary(wtPath, baseBranch);
   } catch {
-    log.warn("poller", "failed to get commit summary for resolve", { worker: entry.name });
+    log.warn("poller", "failed to get commit summary for resolve", { worker: entry.name, data: { project: projectName } });
   }
   const branchName = entry.branchName ?? entry.name;
   const data: PromptData = {

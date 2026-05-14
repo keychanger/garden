@@ -293,12 +293,12 @@ export function validateAndHeal(state: DashboardState): DashboardState {
 
   // Validate worktrees for registry entries
   for (const [projectName, entries] of Object.entries(registry.workers)) {
-    void projectName; // worktreePath is repository-absolute; project is for logs only
     for (const entry of entries) {
       if (!entry.worktreePath) continue;
       if (!worktreeExists(entry.worktreePath)) {
         log.warn("validate", "worktree missing for worker", {
           worker: entry.name,
+          data: { project: projectName },
         });
         entry.worktreePath = undefined;
         registryChanged = true;
@@ -381,6 +381,7 @@ function cleanOrphanedReviewWindows(registry: WorkerRegistry): void {
         updateWorkerFields(projectName, entry.name, { reviewWindowName: undefined });
         log.info("validate", "cleared stale reviewWindowName", {
           worker: entry.name,
+          data: { project: projectName },
         });
       }
     }

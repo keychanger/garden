@@ -91,7 +91,7 @@ export function gatherPromptContext(
   try {
     diff = getDiffAgainstBase(wtPath, baseBranch);
   } catch {
-    log.warn("poller", "failed to get diff for review", { worker: entry.name });
+    log.warn("poller", "failed to get diff for review", { worker: entry.name, data: { project: projectName } });
     return null;
   }
 

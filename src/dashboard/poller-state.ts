@@ -39,7 +39,7 @@ export function transitionState(
       // for legacy entries or a name unknown to the registry, in which case
       // getValidTransitions has already silently fallen back to default —
       // preserving the original value here makes that fallback visible).
-      data: { workflow: workflowName, requested: entry?.workflow },
+      data: { project: projectName, workflow: workflowName, requested: entry?.workflow },
     });
   }
   updateWorkerFields(projectName, workerName, { ...extraFields, prState: toState });
@@ -137,7 +137,7 @@ export function handleFailing(
     if (commitLog) {
       log.info("poller", "new commits in failing worker", {
         worker: entry.name,
-        data: { commits: commitLog },
+        data: { project: projectName, commits: commitLog },
       });
     }
 
@@ -160,7 +160,10 @@ export function handleFailing(
   // Check debounce timeout
   const changeAt = entry.lastShaChangeAt ? new Date(entry.lastShaChangeAt).getTime() : 0;
   if (Date.now() - changeAt >= DEBOUNCE_MS) {
-    log.info("poller", "debounce complete, retrying", { worker: entry.name });
+    log.info("poller", "debounce complete, retrying", {
+      worker: entry.name,
+      data: { project: projectName },
+    });
 
     if ((entry.failCount ?? 0) >= 3) {
       addAlert({
@@ -200,6 +203,7 @@ export function handleMerged(
 
   log.info("poller", "new commits after merge, resuming", {
     worker: entry.name,
+    data: { project: projectName },
   });
   transitionState(projectName, entry.name, "working", {
     mergedAt: undefined,
@@ -222,7 +226,10 @@ export function handleDone(
   if (!wtPath) return false;
   const commitSummary = getCommitSummary(wtPath, baseBranch);
   if (!commitSummary) return false;
-  log.info("poller", "new commits after done, resuming", { worker: entry.name });
+  log.info("poller", "new commits after done, resuming", {
+    worker: entry.name,
+    data: { project: projectName },
+  });
   transitionState(projectName, entry.name, "working", {
     mergedAt: undefined,
     lastSeenSha: undefined,

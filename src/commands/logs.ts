@@ -122,8 +122,17 @@ const TIMESTAMP_WIDTH = 14;
 // Many entries carry only `worker` (e.g. `poller new -> reviewing`); the project
 // they belong to lives in the registry. Cached at first read; lazy-refreshed
 // on cache miss so workers created mid-tail eventually map.
+//
+// History-derived fallback: once a worker is killed it leaves the registry, so
+// any of its older log lines that didn't include `data.project` would render
+// as the dim "system" placeholder. To recover that, we seed a secondary cache
+// from every entry whose `data.project` IS set (hooks emit project on every
+// transition, so most workers have at least one). The seed populates the
+// first time projectForEntry is called for a worker that's not in the
+// registry — cheap one-pass scan of the on-disk log.
 
 let workerToProjectCache: Map<string, string> | null = null;
+let workerToProjectHistoryCache: Map<string, string> | null = null;
 let registryLoadFailed = false;
 
 function loadWorkerMap(): Map<string, string> {
@@ -149,6 +158,41 @@ function loadWorkerMap(): Map<string, string> {
   return map;
 }
 
+// Build worker→project map by scanning the on-disk log for entries that
+// carry both `worker` and `data.project`. Used as a fallback after the
+// registry lookup misses (worker was killed/cleaned).
+function loadWorkerMapFromLog(): Map<string, string> {
+  const map = new Map<string, string>();
+  try {
+    const content = fs.readFileSync(LOG_FILE, "utf-8");
+    let start = 0;
+    while (start < content.length) {
+      const nl = content.indexOf("\n", start);
+      const end = nl === -1 ? content.length : nl;
+      const line = content.slice(start, end);
+      start = end + 1;
+      if (!line) continue;
+      try {
+        const e = JSON.parse(line) as LogEntry;
+        const w = e.worker;
+        const p = e.data?.project;
+        if (typeof w === "string" && typeof p === "string" && !map.has(w)) {
+          map.set(w, p);
+        }
+      } catch { /* skip malformed line */ }
+    }
+  } catch { /* log file missing or unreadable */ }
+  return map;
+}
+
+// Reset both caches — used by tests and the follow loop to avoid stale
+// cross-test state when the on-disk log changes shape.
+export function resetWorkerMapCaches(): void {
+  workerToProjectCache = null;
+  workerToProjectHistoryCache = null;
+  registryLoadFailed = false;
+}
+
 function projectForEntry(entry: LogEntry): string | null {
   const fromData = entry.data?.project;
   if (typeof fromData === "string") return fromData;
@@ -161,6 +205,11 @@ function projectForEntry(entry: LogEntry): string | null {
       p = workerToProjectCache.get(entry.worker);
     }
     if (p) return p;
+    // Registry miss — worker may have been killed. Try the history cache
+    // built from past log entries that carried `data.project`.
+    if (!workerToProjectHistoryCache) workerToProjectHistoryCache = loadWorkerMapFromLog();
+    const hp = workerToProjectHistoryCache.get(entry.worker);
+    if (hp) return hp;
   }
   return null;
 }
