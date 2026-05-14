@@ -17,7 +17,7 @@ import { log } from "./log.js";
 // claudeStatus is written by Claude Code hooks and the tmux pane-died handler.
 // prState is written by the poller. There are no other writers. See STATUS.md.
 export type ClaudeStatus = "loading" | "ready" | "working" | "asking" | "idle" | "exited";
-export type PrState = "working" | "reviewing" | "merge-pending" | "resolving" | "merged" | "done" | "failing";
+export type PrState = "working" | "reviewing" | "merge-pending" | "resolving" | "ci-fixing" | "merged" | "done" | "failing";
 
 // Trellis reviewer verdict vocabulary. See WORKFLOWS.md "Reviewer prompt and
 // verdict". Persisted on WorkerEntry.trellis.lastVerdict for trellis vines.
@@ -85,6 +85,17 @@ export interface WorkerEntry {
   preResolveSha?: string;
   resolveAttempts?: number;
   lastResolveBody?: string;
+  // CI-fix state (see poller-ci-fix.ts). preCiFixSha is the HEAD SHA captured
+  // before the ci-fix agent launches; the poller verifies the agent actually
+  // pushed by comparing post-agent HEAD against it. ciFixAttempts counts
+  // launches for the current merge; budget is 3, resets on worker push or
+  // successful merge. lastCiFixBody carries the agent's last output body for
+  // alert text. failingCheckSummary is the formatted list of failed
+  // check-runs (name + conclusion) seeded into the agent's prompt.
+  preCiFixSha?: string;
+  ciFixAttempts?: number;
+  lastCiFixBody?: string;
+  failingCheckSummary?: string;
   // Local HEAD SHA captured when a review is launched. Used by handleReviewing
   // to detect whether the reviewer actually committed anything (rebase + fixes)
   // so that an unparseable verdict with real work attached can be recovered

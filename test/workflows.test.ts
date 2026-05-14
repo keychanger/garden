@@ -28,21 +28,23 @@ function stubStateHandlers(): Record<PrState, StateHandler> {
     reviewing: noop,
     "merge-pending": noop,
     resolving: noop,
+    "ci-fixing": noop,
     failing: noop,
     merged: noop,
     done: noop,
   };
 }
 
-// Literal copy of the pre-refactor VALID_TRANSITIONS table, checked into
-// this test so the deep-equal assertion can't pass via self-comparison.
-// If this test fails after a refactor, either the production table changed
+// Literal copy of the current VALID_TRANSITIONS table, checked into this
+// test so the deep-equal assertion can't pass via self-comparison. If this
+// test fails after a refactor, either the production table changed
 // (intentional — update this copy) or the refactor mutated it (bug).
 const PRE_REFACTOR_VALID_TRANSITIONS: Record<PrState, PrState[]> = {
   working:         ["reviewing"],
   reviewing:       ["merge-pending", "working", "failing"],
-  "merge-pending": ["merged", "done", "resolving", "working"],
+  "merge-pending": ["merged", "done", "resolving", "ci-fixing", "working", "failing"],
   resolving:       ["merge-pending", "working", "failing"],
+  "ci-fixing":     ["merge-pending", "working", "failing"],
   failing:         ["working"],
   merged:          ["working", "done"],
   done:            ["working"],
@@ -51,7 +53,7 @@ const PRE_REFACTOR_VALID_TRANSITIONS: Record<PrState, PrState[]> = {
 // Every value in the PrState union. Driven by registry.ts; if a new state
 // is added there, this list and the exhaustiveness test must be updated.
 const ALL_PR_STATES: PrState[] = [
-  "working", "reviewing", "merge-pending", "resolving",
+  "working", "reviewing", "merge-pending", "resolving", "ci-fixing",
   "failing", "merged", "done",
 ];
 

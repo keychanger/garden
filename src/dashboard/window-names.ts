@@ -26,6 +26,10 @@ export function reviewWindowName(project: string, worker: string): string {
   return `_${project}-review-${worker}`;
 }
 
+export function ciFixWindowName(project: string, worker: string): string {
+  return `_${project}-ci-fix-${worker}`;
+}
+
 export function gardenWindowName(view: GardenView): string {
   return `_garden-${view}`;
 }

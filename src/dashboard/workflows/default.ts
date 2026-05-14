@@ -13,6 +13,7 @@
 // (test/integration/claude-hook-bundled.real.test.ts) now runs as part of
 // the default `npm test` and gates this on every reviewer pass.
 import { defaultHookHandlers } from "../hooks/default.js";
+import { handleCiFixing } from "../poller-ci-fix.js";
 import { handleMergePending } from "../poller-merge.js";
 import { handleResolving } from "../poller-resolve.js";
 import { handleWorking, handleReviewing } from "../poller-review.js";
@@ -27,6 +28,7 @@ export const defaultWorkflow: WorkflowDefinition = {
     reviewing: handleReviewing,
     "merge-pending": handleMergePending,
     resolving: handleResolving,
+    "ci-fixing": handleCiFixing,
     failing: handleFailing,
     merged: handleMerged,
     done: handleDone,

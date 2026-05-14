@@ -1820,7 +1820,7 @@ describe("poll — merge-pending CI gate", () => {
     expect(fields.find(c => (c[2] as Record<string, unknown>).prState !== undefined)).toBeUndefined();
   });
 
-  it("transitions to failing with reason 'ci' when ci is red", () => {
+  it("dispatches the ci-fix agent when ci is red — does NOT park in failing on first attempt", () => {
     vi.mocked(checkCiStatus).mockReturnValue({
       kind: "failed",
       failed: [
@@ -1833,20 +1833,75 @@ describe("poll — merge-pending CI gate", () => {
     poll("myproject");
 
     expect(mergeToBase).not.toHaveBeenCalled();
+    // Worker transitions to ci-fixing, not failing.
+    const ciFixingCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "ci-fixing",
+    );
+    expect(ciFixingCall).toBeDefined();
+    const fields = ciFixingCall![2] as Record<string, unknown>;
+    expect(fields.ciFixAttempts).toBe(1);
+    expect(fields.reviewWindowName).toBe("_myproject-ci-fix-bold-ash");
+    expect(fields.mergePendingAt).toBeUndefined();
+
+    // The launch alert is at warn level (lifecycle), not error. Operator
+    // sees CI failed AND the auto-fix is in flight on the same SHA.
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      level: "warn",
+      source: "poller",
+      project: "myproject",
+      worker: "bold-ash",
+      message: expect.stringContaining("CI fix-agent launched"),
+    }));
+
+    // No worker should be parked in failing on this first attempt.
+    const failingCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "failing",
+    );
+    expect(failingCall).toBeUndefined();
+
+    // The ci-fix prompt file was written, and a hidden ci-fix window
+    // was launched.
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining("myproject-bold-ash-ci-fix-prompt.txt"),
+      expect.any(String),
+    );
+    expect(tmux).toHaveBeenCalledWith(
+      "new-window", "-d", "-t", expect.any(String), "-n", "_myproject-ci-fix-bold-ash",
+      "-c", "/tmp/wt/myproject/bold-ash", "bash", "-c", expect.any(String),
+    );
+  });
+
+  it("escalates to failing with reason 'ci' once the ci-fix budget is exhausted", () => {
+    vi.mocked(checkCiStatus).mockReturnValue({
+      kind: "failed",
+      failed: [
+        { name: "lint-and-test", conclusion: "failure", htmlUrl: "https://gh/runs/1" },
+      ],
+    });
+    // Worker arrives in merge-pending with budget already exhausted (3/3
+    // prior attempts on this merge cycle). The next launchCiFix call
+    // short-circuits into escalateCiFixBudget.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        ciFixAttempts: 3,
+      }),
+    ]);
+
+    poll("myproject");
+
+    expect(mergeToBase).not.toHaveBeenCalled();
     const failingCall = vi.mocked(updateWorkerFields).mock.calls.find(
       c => (c[2] as Record<string, unknown>).prState === "failing",
     );
     expect(failingCall).toBeDefined();
     const fields = failingCall![2] as Record<string, unknown>;
     expect(fields.failingReason).toBe("ci");
-    expect(fields.failingSha).toBe("deadbeefcafe");
     expect(fields.mergePendingAt).toBeUndefined();
     expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
       level: "error",
-      source: "poller",
-      project: "myproject",
-      worker: "bold-ash",
-      message: expect.stringContaining("lint-and-test (failure)"),
+      message: expect.stringContaining("exhausted"),
     }));
   });
 
@@ -2088,6 +2143,135 @@ describe("poll — resolving state", () => {
     // Neither reset-to-working nor verify-and-merge should fire.
     expect(updateWorkerFields).not.toHaveBeenCalled();
     expect(forcePushBranch).not.toHaveBeenCalled();
+  });
+});
+
+describe("poll — ci-fixing state", () => {
+  function setupCiFix(
+    overrides: Partial<import("../src/dashboard/registry.js").WorkerEntry> = {},
+  ): void {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "ci-fixing",
+        reviewWindowName: "_myproject-ci-fix-bold-ash",
+        preCiFixSha: "pre-fix-sha",
+        ciFixAttempts: 1,
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        lastSeenSha: "origin-baseline",
+        failingSha: "pre-fix-sha",
+        ...overrides,
+      }),
+    ]);
+    // Default: ci-fix agent has exited (window gone).
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-ci-fix-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("ci-fix-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("ci-fix-result")) return "Patched lint config.\nFIXED";
+      return "{}";
+    });
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("origin-baseline");
+  }
+
+  it("returns false while the ci-fix window is still alive", () => {
+    setupCiFix();
+    vi.mocked(windowExists).mockReturnValue(true);
+
+    poll("myproject");
+
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
+
+  it("transitions to merge-pending when FIXED and the agent pushed a new SHA", () => {
+    setupCiFix();
+    // Agent committed locally and pushed; both refs advanced to the new SHA.
+    vi.mocked(getBranchHeadSha).mockReturnValue("post-fix-sha");
+    vi.mocked(getRemoteTrackingSha).mockImplementation((_wt: string, _branch: string) =>
+      // First call inside handleCiFixing checks worker-push baseline:
+      // origin-baseline matches lastSeenSha (no surprise push).
+      // Second call is the push-verification: returns post-fix-sha.
+      "origin-baseline",
+    );
+    // Tighter: use sequence — the implementation reads getRemoteTrackingSha
+    // twice. First for worker-push detection (must match lastSeenSha to avoid
+    // false reset), second for push verification (must match local HEAD).
+    vi.mocked(getRemoteTrackingSha)
+      .mockReturnValueOnce("origin-baseline")
+      .mockReturnValue("post-fix-sha");
+
+    poll("myproject");
+
+    const mpCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "merge-pending",
+    );
+    expect(mpCall).toBeDefined();
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      level: "warn",
+      message: expect.stringContaining("CI fix-agent pushed fix"),
+    }));
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 0);
+  });
+
+  it("retries when FIXED but no push happened (HEAD did not advance)", () => {
+    setupCiFix();
+    // Verdict says FIXED but the agent didn't push — preCiFixSha unchanged.
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre-fix-sha");
+
+    poll("myproject");
+
+    // Budget has 2 attempts left, so we bounce back to merge-pending
+    // (NOT to failing). The next merge-pending tick re-runs CI gate,
+    // re-spawns the ci-fix agent, counting toward the budget.
+    const mpCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "merge-pending",
+    );
+    expect(mpCall).toBeDefined();
+    const failingCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "failing",
+    );
+    expect(failingCall).toBeUndefined();
+  });
+
+  it("escalates to failing when verdict FAILED and budget is exhausted", () => {
+    setupCiFix({ ciFixAttempts: 3 });
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("ci-fix-result")) return "Logs unreadable.\nFAILED";
+      return "{}";
+    });
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre-fix-sha");
+
+    poll("myproject");
+
+    const failingCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "failing",
+    );
+    expect(failingCall).toBeDefined();
+    const fields = failingCall![2] as Record<string, unknown>;
+    expect(fields.failingReason).toBe("ci");
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      level: "error",
+      message: expect.stringContaining("exhausted"),
+    }));
+  });
+
+  it("resets to working on a worker-authored push during ci-fix", () => {
+    setupCiFix({ lastSeenSha: "origin-baseline" });
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("worker-pushed-sha");
+    vi.mocked(getCommitSummary).mockReturnValue("abc123 worker pushed fix");
+
+    poll("myproject");
+
+    const resetCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "working",
+    );
+    expect(resetCall).toBeDefined();
+    const fields = resetCall![2] as Record<string, unknown>;
+    expect(fields.ciFixAttempts).toBe(0);
+    expect(fields.preCiFixSha).toBeUndefined();
+    expect(fields.pendingReviewAt).toEqual(expect.any(Number));
   });
 });
 

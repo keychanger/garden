@@ -14,6 +14,7 @@
 // same review/merge lifecycle as a default worker. The per-iteration cold
 // respawn that distinguishes grow from default lands later.
 import { defaultHookHandlers } from "../hooks/default.js";
+import { handleCiFixing } from "../poller-ci-fix.js";
 import { handleMergePending } from "../poller-merge.js";
 import { handleResolving } from "../poller-resolve.js";
 import { handleWorking, handleReviewing } from "../poller-review.js";
@@ -28,6 +29,7 @@ export const growWorkflow: WorkflowDefinition = {
     reviewing: handleReviewing,
     "merge-pending": handleMergePending,
     resolving: handleResolving,
+    "ci-fixing": handleCiFixing,
     failing: handleFailing,
     merged: handleMerged,
     done: handleDone,

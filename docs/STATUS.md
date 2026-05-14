@@ -20,6 +20,7 @@ These are the only states the user sees in the status pane.
 | reviewing     | `%`  | Automated reviewer is checking the worker's code. |
 | merge-pending | `&`  | Review passed. Queued for merge.                 |
 | resolving     | `~`  | Automated resolver is fixing a merge-queue rebase conflict. |
+| ci-fixing     | `^`  | Self-healing ci-fix agent is investigating a red GitHub Actions check on the merge candidate. |
 | merged        | `+`  | Code just landed on the base branch — transient post-merge beat. Neutral color; not actionable. |
 | done          | `=`  | Worker self-declared finished via the `.garden-done` sentinel. Bold green; the operator's "cleanup me" signal. |
 | failing       | `x`  | Review failed. Waiting for worker to fix.        |
@@ -80,11 +81,17 @@ stateDiagram-v2
 
     merge_pending --> merged : queue: ff merge
     merge_pending --> resolving : queue: rebase conflict
+    merge_pending --> ci_fixing : queue: CI gate failed
+    merge_pending --> failing : queue: CI gate failed (budget exhausted)
     merge_pending --> working : queue: merge fails
 
     resolving --> merge_pending : resolver Stop (verified)
     resolving --> failing : resolver Stop (budget exhausted)
     resolving --> working : worker push (stale resolution)
+
+    ci_fixing --> merge_pending : ci-fix Stop (FIXED + verified push)
+    ci_fixing --> failing : ci-fix Stop (budget exhausted)
+    ci_fixing --> working : worker push (stale auto-fix)
 
     merged --> working : UserPromptSubmit (auto-continue, no sentinel)
     merged --> done : Stop hook + .garden-done present + no commits ahead
@@ -95,6 +102,7 @@ stateDiagram-v2
     failing --> working : worker push + 30s debounce
 
     state "merge-pending" as merge_pending
+    state "ci-fixing" as ci_fixing
 
     note right of working
         Any state transitions
@@ -133,10 +141,16 @@ a terminal state — it returns to `working` when the operator responds
 | merge-pending | merged        | Merge queue: ff merge succeeds (no sentinel)         |
 | merge-pending | done          | Merge queue: ff merge succeeds AND `.garden-done` present at merge time |
 | merge-pending | resolving     | Merge queue: rebase conflict (resolver launched)     |
+| merge-pending | ci-fixing     | Merge queue: CI gate failed, budget remains (ci-fix launched) |
+| merge-pending | failing       | Merge queue: CI gate failed AND ci-fix budget already exhausted |
 | merge-pending | working       | Merge queue: merge fails (non-conflict)              |
 | resolving     | merge-pending | Resolver `Stop`, programmatic verification passed    |
 | resolving     | failing       | Resolver `Stop`, budget exhausted or verification failed |
 | resolving     | working       | Worker push event (commits during resolution, aborted) |
+| ci-fixing     | merge-pending | ci-fix `Stop`, verdict FIXED and verified push (re-runs CI gate) |
+| ci-fixing     | merge-pending | ci-fix `Stop`, retry (budget remains, no verified push) |
+| ci-fixing     | failing       | ci-fix `Stop`, budget exhausted with `failingReason: "ci"` |
+| ci-fixing     | working       | Worker push event (commits during auto-fix, agent aborted) |
 | merged        | working       | Worker `UserPromptSubmit` (transient cleared)        |
 | merged        | done          | Worker `Stop` with no commits ahead AND `.garden-done` present |
 | done          | working       | Worker `UserPromptSubmit` (operator nudged)          |
@@ -172,6 +186,7 @@ signals the status pane. They drive:
 - `asking → working` (worker's `PostToolUse` for user-input tools)
 - `reviewing → merge-pending`, `reviewing → failing` (reviewer's `Stop`)
 - `resolving → merge-pending`, `resolving → failing` (resolver's `Stop`)
+- `ci-fixing → merge-pending`, `ci-fixing → failing` (ci-fix agent's `Stop`)
 
 The worker's `Stop` hook also pokes the project's poller FIFO if it sees
 new commits ahead of the base branch — so review starts immediately,
@@ -185,6 +200,7 @@ Drives:
 
 - `reviewing → working` (commits arrive during review, review aborted)
 - `resolving → working` (commits arrive during resolution, resolver aborted)
+- `ci-fixing → working` (commits arrive during auto-fix, agent aborted)
 - `failing → working` (after the 30s debounce starts on the push)
 
 **3. Merge queue completion** — an internal in-process event. When one
@@ -195,9 +211,13 @@ Drives:
 
 - `merge-pending → merged`
 - `merge-pending → resolving` (rebase conflict)
+- `merge-pending → ci-fixing` (CI gate failed; budget remains, agent dispatched)
+- `merge-pending → failing` (CI gate failed; ci-fix budget already exhausted)
 - `merge-pending → working` (merge fails for a non-conflict reason)
 - `resolving → merge-pending` (resolver succeeded and verification passed)
 - `resolving → failing` (resolver budget exhausted or verification failed)
+- `ci-fixing → merge-pending` (ci-fix succeeded with verified push, or retrying within budget)
+- `ci-fixing → failing` (ci-fix budget exhausted)
 
 **4. tmux `pane-died` hook** — tmux fires this automatically when a
 pane process exits. The dashboard listens and writes
@@ -255,9 +275,9 @@ clock. Update the list above when you do.
 ## Key invariants
 
 1. **`idle`/`asking` and the review cycle are mutually exclusive.** A
-   worker in `reviewing`, `merge-pending`, `resolving`, or `failing`
-   never shows `idle` or `asking`. If it shows either, it is not in the
-   review cycle.
+   worker in `reviewing`, `merge-pending`, `resolving`, `ci-fixing`, or
+   `failing` never shows `idle` or `asking`. If it shows either, it is
+   not in the review cycle.
 
 2. **`working` is the only entry point to the review cycle.** The poller
    only transitions to `reviewing` when Claude stops working *and* new
@@ -267,9 +287,9 @@ clock. Update the list above when you do.
    never returns to `ready`.
 
 4. **Active pipeline states are sticky; `merged` is transient; `done` is the cleanup signal.**
-   While a worker is in `reviewing`, `merge-pending`, `resolving`, or
-   `failing`, those states take priority over what Claude is doing —
-   they represent in-progress pipeline work.
+   While a worker is in `reviewing`, `merge-pending`, `resolving`,
+   `ci-fixing`, or `failing`, those states take priority over what
+   Claude is doing — they represent in-progress pipeline work.
 
    `merged` and `done` are two distinct terminal-cluster states with
    different meanings, and they MUST NOT be conflated in the renderer:
@@ -464,14 +484,15 @@ flowchart TD
     A -->|reviewing| reviewing
     A -->|merge-pending| merge_pending["merge-pending"]
     A -->|resolving| resolving
+    A -->|ci-fixing| ci_fixing["ci-fixing"]
     A -->|failing| failing
     A -->|merged| merged
     A -->|done| done
     A -->|none| B["return claudeStatus"]
 ```
 
-Lifecycle states (`reviewing`, `merge-pending`, `resolving`, `failing`,
-`merged`, `done`) take priority because they describe where the worker's
+Lifecycle states (`reviewing`, `merge-pending`, `resolving`, `ci-fixing`,
+`failing`, `merged`, `done`) take priority because they describe where the worker's
 *code* is, not what Claude is doing right now. `merged` and `done` are
 the only ones that clear on `UserPromptSubmit` — that clear is performed
 by the hook handler, not by this combine function.

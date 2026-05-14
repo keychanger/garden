@@ -22,7 +22,7 @@ import { currentBranch } from "../dashboard/git.js";
 // function gives prState priority because it describes where the worker's
 // *code* is.
 export type ProcessStatus = "loading" | "ready" | "working" | "asking" | "idle" | "exited";
-type LifecycleStatus = "reviewing" | "merge-pending" | "resolving" | "failing" | "merged" | "done";
+type LifecycleStatus = "reviewing" | "merge-pending" | "resolving" | "ci-fixing" | "failing" | "merged" | "done";
 type WorkerStatus = ProcessStatus | LifecycleStatus;
 
 interface WorkerInfo {
@@ -48,6 +48,17 @@ interface WorkerInfo {
     aligned: boolean;
     failingReason?: string;
   };
+  // CI-fix decoration fields. Populated when the worker is currently in
+  // `ci-fixing` (auto-fix in flight) or `failing` with reason `ci` (auto-fix
+  // ran out of attempts). The renderer surfaces this so the operator sees
+  // CI state inline rather than chasing alert badges.
+  ci?: {
+    fixing: boolean;
+    failing: boolean;
+    attempts?: number;
+    budget?: number;
+    failingSha?: string;
+  };
 }
 
 interface ProjectStatusInfo {
@@ -71,6 +82,7 @@ const STATUS_ICONS: Record<WorkerStatus, string> = {
   reviewing:      "\u25CE",     // bullseye
   "merge-pending": "\u25F7",    // circle with right half - queued
   resolving:      "\u25D4",     // circle with upper-right quadrant - resolving
+  "ci-fixing":    "\u25D5",     // circle with all but upper-left quadrant - ci-fix in flight
   failing:        "\u2716",     // heavy multiplication x
   merged:         "\u2713",     // check mark - transient post-merge beat (neutral color)
   done:           "\u2713",     // check mark - operator-actionable cleanup signal (bold green)
@@ -166,9 +178,10 @@ export async function status(_args: string[]): Promise<void> {
         const wname = worker.name.padEnd(nameWidth);
         const wstatus = formatStatus(worker).padEnd(statusWidth);
         const trellis = formatTrellisBracket(worker.trellis);
+        const ciBracket = formatCiBracket(worker.ci);
         const activity = worker.activity ? `  ${truncateActivity(worker.activity, activityMax)}` : "";
         const baseHint = formatBaseDivergence(worker.baseBranch, project.projectBranch);
-        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${trellis}${activity}${baseHint}`;
+        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${trellis}${ciBracket}${activity}${baseHint}`;
         console.log(colorizeRow(worker.status, line));
       }
     }
@@ -205,7 +218,7 @@ export function resolveWorkerStatus(
   entry: { claudeStatus?: string; prState?: string } | undefined,
 ): WorkerStatus {
   const pr = entry?.prState;
-  if (pr === "reviewing" || pr === "merge-pending" || pr === "resolving" || pr === "failing" || pr === "merged" || pr === "done") {
+  if (pr === "reviewing" || pr === "merge-pending" || pr === "resolving" || pr === "ci-fixing" || pr === "failing" || pr === "merged" || pr === "done") {
     return pr;
   }
   const cs = entry?.claudeStatus as ProcessStatus | undefined;
@@ -217,6 +230,32 @@ export function resolveWorkerStatus(
 // Distill the trellis fields off a registry entry into the WorkerInfo
 // shape used by the renderer. Returns undefined for default-workflow
 // workers — the bracket is omitted.
+function ciInfoFor(entry?: {
+  workflow?: string;
+  prState?: string;
+  failingReason?: string;
+  failingSha?: string;
+  ciFixAttempts?: number;
+}): WorkerInfo["ci"] {
+  if (!entry) return undefined;
+  // Trellis vines already get a full bracket — don't double-decorate.
+  if (entry.workflow === "trellis") return undefined;
+  const inCiFix = entry.prState === "ci-fixing";
+  const ciFailing = entry.prState === "failing" && entry.failingReason === "ci";
+  if (!inCiFix && !ciFailing) return undefined;
+  return {
+    fixing: inCiFix,
+    failing: ciFailing,
+    attempts: entry.ciFixAttempts,
+    budget: CI_FIX_BUDGET_DISPLAY,
+    failingSha: entry.failingSha,
+  };
+}
+
+// Display-only constant. Mirrors src/dashboard/poller-ci-fix.ts's CI_FIX_BUDGET.
+// Kept inline to avoid commands/status.ts pulling in the poller graph.
+const CI_FIX_BUDGET_DISPLAY = 3;
+
 function trellisInfoFor(entry?: { workflow?: string; trellis?: { name: string; iteration?: number; maxIterations?: number; lastDrift?: string[]; lastVerdict?: string; aligned?: boolean }; failingReason?: string }): WorkerInfo["trellis"] {
   if (!entry || entry.workflow !== "trellis") return undefined;
   const t = entry.trellis;
@@ -228,6 +267,25 @@ function trellisInfoFor(entry?: { workflow?: string; trellis?: { name: string; i
     aligned: t?.aligned === true,
     failingReason: entry.failingReason,
   };
+}
+
+// Format the CI bracket for a default-workflow row when the worker is in
+// `ci-fixing` (auto-fix in flight) or `failing` with reason `ci` (auto-fix
+// exhausted). Trellis vines route through formatTrellisBracket above and
+// don't reach here. The bracket sits between the status column and the
+// activity text, matching the trellis bracket's slot.
+export function formatCiBracket(ci: WorkerInfo["ci"]): string {
+  if (!ci) return "";
+  if (ci.fixing) {
+    const attempts = ci.attempts ?? 1;
+    const budget = ci.budget ?? CI_FIX_BUDGET_DISPLAY;
+    return ` [CI fix ${attempts}/${budget}]`;
+  }
+  if (ci.failing) {
+    const sha = ci.failingSha ? ` ${ci.failingSha.slice(0, 7)}` : "";
+    return ` [CI ✗${sha}]`;
+  }
+  return "";
 }
 
 // Format the trellis bracket for a vine row. Layout per WORKFLOWS.md
@@ -325,6 +383,7 @@ function collectWorkers(
       failCount: entry?.failCount ?? 0,
       baseBranch: entry?.baseBranch,
       trellis: trellisInfoFor(entry),
+      ci: ciInfoFor(entry),
     });
   }
 
@@ -341,6 +400,7 @@ function collectWorkers(
       failCount: entry?.failCount ?? 0,
       baseBranch: entry?.baseBranch,
       trellis: trellisInfoFor(entry),
+      ci: ciInfoFor(entry),
     });
   }
 
@@ -397,9 +457,10 @@ export function renderQuickStatus(
         const wname = worker.name.padEnd(nameWidth);
         const wstatus = formatStatus(worker).padEnd(statusWidth);
         const trellis = formatTrellisBracket(worker.trellis);
+        const ciBracket = formatCiBracket(worker.ci);
         const activity = worker.activity ? `  ${worker.activity}` : "";
         const baseHint = formatBaseDivergence(worker.baseBranch, projectBranch);
-        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${trellis}${activity}${baseHint}`;
+        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${trellis}${ciBracket}${activity}${baseHint}`;
         lines.push(colorizeRow(worker.status, line));
       }
     }

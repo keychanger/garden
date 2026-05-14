@@ -297,6 +297,153 @@ export const resolveSections: readonly PromptSection[] = [
   resolveVerdictFormatSection,
 ];
 
+// --- CI-fix sections ---
+//
+// The ci-fix agent runs when the merge-queue's CI gate (poller-ci.ts) reports
+// failed GitHub Actions check-runs on the worker's branch HEAD. The branch was
+// already reviewed and approved, so this is not a code review — the agent
+// reads the failing logs, makes the minimum fix to turn the checks green, and
+// pushes. See poller-ci-fix.ts for the launch/handler lifecycle.
+//
+// The agent reads the structured failure summary off `ctx.entry.failingCheckSummary`,
+// pre-formatted at launch time by poller-ci-fix.ts so the prompt sections
+// don't need to know the CiStatus shape.
+
+export const ciFixIntroSection: PromptSection = {
+  name: "ci-fix-intro",
+  render(ctx) {
+    const branchName = ctx.data.branchName;
+    const attemptNum = (ctx.entry.ciFixAttempts ?? 0) + 1;
+    return [
+      `You are fixing failing GitHub Actions CI checks on branch \`${branchName}\` in project ${ctx.projectName}.`,
+      "",
+      "The branch has already been reviewed and approved for merge. Code review is",
+      "complete — the only thing blocking the merge is red CI. Your job is to make",
+      "the failing checks green with the minimum fix that addresses the actual cause.",
+      "",
+      `This is ci-fix attempt ${attemptNum} of 3.`,
+    ].join("\n");
+  },
+};
+
+export const ciFixFailureDetailSection: PromptSection = {
+  name: "ci-fix-failure-detail",
+  render(ctx) {
+    const summary = ctx.entry.failingCheckSummary;
+    if (!summary) return null;
+    return [
+      "## Failing checks",
+      "",
+      summary,
+      "",
+      "Read the failing logs with `gh run view --log-failed <run-id>`. Extract",
+      "the run ID from the URL path (`/actions/runs/<id>/...`). If a check has",
+      "no URL listed, run `gh run list --branch " + ctx.data.branchName + " --json databaseId,name,conclusion,headSha`",
+      "and match by SHA + check name.",
+    ].join("\n");
+  },
+};
+
+export const ciFixWorkerTaskSection: PromptSection = {
+  name: "ci-fix-worker-task",
+  render(ctx) {
+    if (!ctx.entry.task) return null;
+    return `## Worker task\n\n${ctx.entry.task}`;
+  },
+};
+
+export const ciFixPreviousReviewSection: PromptSection = {
+  name: "ci-fix-previous-review",
+  render(ctx) {
+    if (!ctx.entry.lastReviewBody) return null;
+    return [
+      "## Previous review (approved)",
+      "",
+      "This is what the reviewer signed off on. If the CI failure suggests the",
+      "reviewer missed something, that is useful context — but the review is",
+      "advisory at this point, not a contract to defend.",
+      "",
+      ctx.entry.lastReviewBody,
+    ].join("\n");
+  },
+};
+
+export const ciFixCommitsSection: PromptSection = {
+  name: "ci-fix-commits",
+  render(ctx) {
+    if (!ctx.data.commitSummary) return null;
+    return `## Commits on this branch\n\n\`\`\`\n${ctx.data.commitSummary}\n\`\`\``;
+  },
+};
+
+export const ciFixStepsSection: PromptSection = {
+  name: "ci-fix-steps",
+  render(ctx) {
+    const branchName = ctx.data.branchName;
+    return [
+      "## Steps",
+      "",
+      "1. Read the failing CI logs (see `gh run view --log-failed` instruction above).",
+      "   Identify the precise cause — not the surface symptom. A failing test could",
+      "   be an actual bug in this diff, drift between test fixture and production",
+      "   data, a flake, a CI environment problem, or a stale snapshot.",
+      "",
+      "2. Make the minimum fix that turns the failing checks green. Touch only what",
+      "   is necessary. Do not refactor adjacent code, do not extend scope, do not",
+      "   improve unrelated things.",
+      "",
+      "3. Run the project's local checks if applicable, to verify your fix before",
+      "   pushing. If the failure is reproducible locally, fix and verify; if it is",
+      "   not (e.g. CI-environment-specific), explain that in your commit message.",
+      "",
+      `4. Commit with a clear message prefixed with \"ci-fix: \". Push to \`origin/${branchName}\`.`,
+      "   The poller will re-run the CI gate on the new SHA — if your push lands a",
+      "   green run, the merge proceeds automatically.",
+      "",
+      "5. **Systemic notes.** If the failure points at a systemic gap (fragile test",
+      "   fixture, flaky CI step, missing precondition, environment drift, type-system",
+      "   hole, missing snapshot, etc.) describe it under a `## Systemic notes` heading",
+      "   in your commit body. **Do not expand scope to fix the systemic issue in this",
+      "   pass** unless it is required for CI to pass — flagging is enough. The",
+      "   operator decides whether to file a follow-up.",
+    ].join("\n");
+  },
+};
+
+export const ciFixDiffSection: PromptSection = {
+  name: "ci-fix-diff",
+  render(ctx) {
+    if (!ctx.data.diff) return null;
+    return `## Diff under review\n\n\`\`\`diff\n${ctx.data.diff}\n\`\`\``;
+  },
+};
+
+export const ciFixVerdictFormatSection: PromptSection = {
+  name: "ci-fix-verdict-format",
+  render: () => [
+    "## Output format",
+    "",
+    "Your LAST line of output must be exactly one of:",
+    "",
+    "- `FIXED` — you pushed a fix and the CI failure should now be addressed.",
+    "- `FAILED` — you could not fix it (logs unreadable, infrastructure problem,",
+    "  fix would require out-of-scope changes, etc.). Explain above.",
+    "",
+    "Write a brief summary of what you found and did above the verdict line.",
+  ].join("\n"),
+};
+
+export const ciFixSections: readonly PromptSection[] = [
+  ciFixIntroSection,
+  ciFixFailureDetailSection,
+  ciFixWorkerTaskSection,
+  ciFixPreviousReviewSection,
+  ciFixCommitsSection,
+  ciFixStepsSection,
+  ciFixDiffSection,
+  ciFixVerdictFormatSection,
+];
+
 // --- Builders ---
 
 export function buildReviewPrompt(
@@ -308,6 +455,21 @@ export function buildReviewPrompt(
   const ctx = gatherPromptContext(projectName, projectPath, baseBranch, entry);
   if (!ctx) return null;
   return composePrompt(reviewSections, ctx);
+}
+
+// CI-fix context: full review I/O (diff + commits + rules-equivalent context
+// via gatherPromptContext) so the agent can read the diff that triggered the
+// failure. The failing-check detail is read off the entry via
+// `failingCheckSummary`, which poller-ci-fix.ts stamps at launch time.
+export function buildCiFixPrompt(
+  projectName: string,
+  projectPath: string,
+  baseBranch: string,
+  entry: WorkerEntry,
+): string | null {
+  const ctx = gatherPromptContext(projectName, projectPath, baseBranch, entry);
+  if (!ctx) return null;
+  return composePrompt(ciFixSections, ctx);
 }
 
 // Resolver context: minimal I/O — only the commits the resolver needs to

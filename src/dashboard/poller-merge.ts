@@ -35,6 +35,7 @@ import { scheduleDelayedPoke } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
 import { killReviewWindow } from "./poller-review.js";
 import { launchResolver } from "./poller-resolve.js";
+import { launchCiFix } from "./poller-ci-fix.js";
 import { checkCiStatus, getGitHubRepoSlug, type CiStatus } from "./poller-ci.js";
 
 const AUTO_CONTINUE_DEBOUNCE_MS = 10_000;
@@ -227,32 +228,21 @@ function gateCiStatus(
     }
 
     case "failed": {
-      const detail = status.failed
-        .map(f => `${f.name} (${f.conclusion})`)
-        .join(", ");
-      log.error("poller", "ci gate: checks failed, parking worker", {
+      log.error("poller", "ci gate: checks failed, dispatching ci-fix", {
         worker: entry.name,
         data: { project: projectName, sha: sha.slice(0, 7), failed: status.failed },
       });
-      addAlert({
-        level: "error",
-        source: "poller",
-        project: projectName,
-        worker: entry.name,
-        message: `Merge blocked: GitHub Actions failed on ${sha.slice(0, 7)} — ${detail}. Push a fix or set 'requireCiSuccess false' to bypass.`,
-        // Dedup per failing SHA so a CI infrastructure outage doesn't
-        // re-alert on every poll, but a new commit (new SHA) does.
-        dedupKey: `ci-gate-failed:${projectName}:${entry.name}:${sha}`,
-      });
-      transitionState(projectName, entry.name, "failing", {
-        failCount: (entry.failCount ?? 0) + 1,
-        failingReason: "ci",
-        failingSha: sha,
-        lastSeenSha: sha,
-        lastShaChangeAt: new Date().toISOString(),
-        mergePendingAt: undefined,
-      });
-      refreshDashboard();
+      // Hand off to the ci-fix agent. launchCiFix fires its own per-SHA
+      // lifecycle alert (warn, "CI fix-agent launched...") and transitions
+      // the worker to `ci-fixing`. If the budget is already exhausted
+      // (third failure on the same SHA), it escalates internally to
+      // `failing` with reason "ci" and an error alert — preserving the
+      // pre-self-heal terminal behavior. Returns true in both cases so the
+      // caller defers the merge; only returns false if launch could not
+      // proceed (worker Claude busy, prompt-build failure), in which case
+      // we leave the worker in merge-pending and the next FIFO event will
+      // re-try.
+      launchCiFix(projectName, projectPath, _baseBranch, entry, status.failed, sha);
       return false;
     }
   }

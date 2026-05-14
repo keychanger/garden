@@ -38,6 +38,7 @@ export function resolvePlotStatus(plot: PlotConfig, registry?: WorkerRegistry): 
         case "reviewing":
         case "merge-pending":
         case "resolving":
+        case "ci-fixing":
         case "merged":
           state = "working"; break;
         default:

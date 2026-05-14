@@ -13,6 +13,7 @@
 // phase 1 walks the same review/merge lifecycle as a default worker.
 // Phase 2 swaps in trellis-specific handlers and that equivalence ends.
 import { defaultHookHandlers } from "../hooks/default.js";
+import { handleCiFixing } from "../poller-ci-fix.js";
 import { handleMergePending } from "../poller-merge.js";
 import { handleResolving } from "../poller-resolve.js";
 import { handleWorking, handleReviewing } from "../poller-review.js";
@@ -27,6 +28,7 @@ export const trellisWorkflow: WorkflowDefinition = {
     reviewing: handleReviewing,
     "merge-pending": handleMergePending,
     resolving: handleResolving,
+    "ci-fixing": handleCiFixing,
     failing: handleFailing,
     merged: handleMerged,
     done: handleDone,
