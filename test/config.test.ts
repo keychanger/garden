@@ -544,3 +544,31 @@ describe("grow project config keys", () => {
     expect(cfg.projects.garden.maxGrowIterations).toBeUndefined();
   });
 });
+
+// CI gate project config — boolean opt-out for the poller's GitHub Actions
+// merge gate (see src/dashboard/poller-ci.ts). Default-on; absence means the
+// gate runs.
+describe("requireCiSuccess project config key", () => {
+  it("isValidConfigKey accepts requireCiSuccess", async () => {
+    const { isValidConfigKey } = await importConfig();
+    expect(isValidConfigKey("requireCiSuccess")).toBe(true);
+  });
+
+  it("round-trips requireCiSuccess = false through saveConfig + loadConfig", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({
+      projects: { garden: { path: "/tmp/garden", requireCiSuccess: false } },
+    });
+    const cfg = loadConfig();
+    expect(cfg.projects.garden.requireCiSuccess).toBe(false);
+  });
+
+  it("treats requireCiSuccess as optional (absence means gate runs)", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
+    const cfg = loadConfig();
+    expect(cfg.projects.garden.requireCiSuccess).toBeUndefined();
+  });
+});
