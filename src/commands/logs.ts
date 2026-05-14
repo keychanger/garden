@@ -109,8 +109,13 @@ export function relativeTime(isoTs: string): string {
 
 function absoluteTime(isoTs: string): string {
   const d = new Date(isoTs);
-  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+  return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 }
+
+// Width of the timestamp column. Absolute time is "MM-DD HH:MM:SS" (14 chars);
+// relative time ("5m ago", or the "MM-DD HH:MM" fallback for >24h) is right-padded
+// to match so downstream column math (PRETTY_MESSAGE_COL) holds for both modes.
+const TIMESTAMP_WIDTH = 14;
 
 // ---- worker → project lookup -----------------------------------------------
 //
@@ -167,10 +172,10 @@ const PROJECT_COL_WIDTH = 16;
 const WORKER_COL_WIDTH = 22;
 
 // Visible-width prefix before the message column in pretty mode:
-// ts(8) + "  " + project(16) + "  " + worker(22) + " " + glyph(1) + " ".
+// ts + "  " + project(16) + "  " + worker(22) + " " + glyph(1) + " ".
 // Continuation lines indent to this width so each detail aligns under the
 // headline's first message char.
-const PRETTY_MESSAGE_COL = 8 + 2 + PROJECT_COL_WIDTH + 2 + WORKER_COL_WIDTH + 1 + 1 + 1;
+const PRETTY_MESSAGE_COL = TIMESTAMP_WIDTH + 2 + PROJECT_COL_WIDTH + 2 + WORKER_COL_WIDTH + 1 + 1 + 1;
 
 // ---- suppression ------------------------------------------------------------
 
@@ -341,7 +346,7 @@ function summarize(entry: LogEntry): Summarized {
 // ---- rendering --------------------------------------------------------------
 
 function formatRawEntry(entry: LogEntry, useRelativeTime: boolean): string {
-  const ts = useRelativeTime ? relativeTime(entry.ts).padStart(8) : absoluteTime(entry.ts);
+  const ts = useRelativeTime ? relativeTime(entry.ts).padStart(TIMESTAMP_WIDTH) : absoluteTime(entry.ts);
   const levelColor = LEVEL_COLORS[entry.level] ?? "";
   const symbol = RAW_LEVEL_SYMBOLS[entry.level] ?? " ";
   const level = entry.level.toUpperCase().padEnd(5);
@@ -355,7 +360,7 @@ function formatRawEntry(entry: LogEntry, useRelativeTime: boolean): string {
 }
 
 function formatPrettyEntry(entry: LogEntry, useRelativeTime: boolean): string {
-  const ts = useRelativeTime ? relativeTime(entry.ts).padStart(8) : absoluteTime(entry.ts);
+  const ts = useRelativeTime ? relativeTime(entry.ts).padStart(TIMESTAMP_WIDTH) : absoluteTime(entry.ts);
   const project = projectForEntry(entry);
   const rawLabel = project ?? "system";
   const projectLabel = rawLabel.length > PROJECT_COL_WIDTH ? rawLabel.slice(0, PROJECT_COL_WIDTH) : rawLabel.padEnd(PROJECT_COL_WIDTH);
