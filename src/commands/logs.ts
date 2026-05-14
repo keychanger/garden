@@ -185,8 +185,8 @@ function loadWorkerMapFromLog(): Map<string, string> {
   return map;
 }
 
-// Reset both caches — used by tests and the follow loop to avoid stale
-// cross-test state when the on-disk log changes shape.
+// Reset both caches — used by tests to avoid stale cross-test state when
+// the on-disk log changes shape between cases.
 export function resetWorkerMapCaches(): void {
   workerToProjectCache = null;
   workerToProjectHistoryCache = null;
