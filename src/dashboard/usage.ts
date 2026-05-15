@@ -503,8 +503,9 @@ export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number):
 
   lines.push(renderMeterLine("5h",     d.fiveHour, nowMs, staleTag, FIVE_HOUR_MS, fit));
   lines.push(renderMeterLine("week",   d.weekly,   nowMs, staleTag, SEVEN_DAY_MS, fit));
-  // Sonnet shares the seven-day window, so weekly.resetsAt is the right fallback when seven_day_sonnet is null.
-  lines.push(renderMeterLine("sonnet", d.sonnet,   nowMs, staleTag, SEVEN_DAY_MS, fit, d.weekly?.resetsAt));
+  // A null seven_day_sonnet bucket renders "—" rather than a flat-zero bar — a 0% sliver
+  // next to the weekly bar reads as broken, and "no data" is the truer signal.
+  lines.push(renderMeterLine("sonnet", d.sonnet,   nowMs, staleTag, SEVEN_DAY_MS, fit));
 
   return lines.map(l => l + "\x1b[K").join("\n");
 }
@@ -549,13 +550,11 @@ function renderMeterLine(
   suffix: string,
   windowMs: number | undefined,
   fit: { barWidth: number; showReset: boolean },
-  fallbackResetsAt?: string,
 ): string {
   const paddedLabel = label.padEnd(LABEL_WIDTH);
-  const effective = meter ?? (fallbackResetsAt ? { pct: 0, resetsAt: fallbackResetsAt } : undefined);
-  if (!effective) return `${INDENT}${paddedLabel}  ${dim("—")}${suffix}`;
-  const pct = Math.max(0, Math.min(100, effective.pct));
-  const resetsAt = Date.parse(effective.resetsAt);
+  if (!meter) return `${INDENT}${paddedLabel}  ${dim("—")}${suffix}`;
+  const pct = Math.max(0, Math.min(100, meter.pct));
+  const resetsAt = Date.parse(meter.resetsAt);
   let timePct: number | undefined;
   if (windowMs && Number.isFinite(resetsAt)) {
     const elapsed = windowMs - (resetsAt - nowMs);

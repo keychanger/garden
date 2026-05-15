@@ -223,11 +223,11 @@ describe("renderUsagePane", () => {
     expect(markerPos).toBeGreaterThan(barStart);
   });
 
-  it("renders an empty sonnet bar with marker when sonnet bucket is null but weekly is present", async () => {
+  it("renders sonnet as an em-dash when the seven_day_sonnet bucket is null", async () => {
     // /api/oauth/usage returns seven_day_sonnet: null when no Sonnet usage has
-    // accrued. Sonnet shares weekly's 7-day window so the marker still renders
-    // by borrowing weekly.resetsAt — and at 0% the marker cell must NOT have
-    // a green bg, keeping it visually distinct from a tiny-but-nonzero row.
+    // accrued. A flat-zero bar next to a populated weekly bar reads as broken,
+    // so an em-dash is the truer signal — bar, percentage, and reset-text are
+    // all omitted.
     writeSnapshot({
       fetchedAt: new Date(now).toISOString(),
       data: {
@@ -239,11 +239,11 @@ describe("renderUsagePane", () => {
     const lines = render(now).split("\n");
     const sonnetLine = lines.find(l => l.includes("sonnet"));
     expect(sonnetLine).toBeDefined();
-    expect(sonnetLine).not.toContain("\u2014");
-    expect(sonnetLine).toContain(" 0%");
-    expect(sonnetLine).toContain("\u2502");
-    expect(sonnetLine).toContain("\u2591");
-    expect(sonnetLine).not.toMatch(/\x1b\[4[123]m/); // no fill bg anywhere
+    expect(sonnetLine).toContain("\u2014");
+    expect(sonnetLine).not.toMatch(/\d+%/);
+    expect(sonnetLine).not.toContain("\u2588"); // no filled cells
+    expect(sonnetLine).not.toContain("\u2591"); // no dim cells
+    expect(sonnetLine).not.toContain("\u2502"); // no marker
   });
 
   it("marks data stale with a compact age once dataAt > STALE_AFTER_MS old", async () => {
