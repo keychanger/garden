@@ -1,0 +1,7 @@
+{
+  "quota": {
+    "five_hour":        { "percent": 50, "reset": "2026-04-15T20:00:00+00:00" },
+    "seven_day":        { "percent": 30, "reset": "2026-04-19T04:00:00+00:00" }
+  },
+  "schema_version": 2
+}

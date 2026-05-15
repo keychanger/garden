@@ -180,6 +180,21 @@ export function normalizeUsage(raw: unknown): UsageData {
   if (w) out.weekly = w;
   const s = pickMeter(r["seven_day_sonnet"]);
   if (s) out.sonnet = s;
+  // Shape-shift detector: a non-empty response that yields zero recognized
+  // meters is either an empty-bucket account (all keys present but null —
+  // expected) or a renamed/restructured payload we no longer parse. The
+  // second case used to land as silent em-dashes until someone noticed the
+  // dashboard; warn here so it surfaces in `garden logs` immediately.
+  if (!out.fiveHour && !out.weekly && !out.sonnet) {
+    const keys = Object.keys(r);
+    const expected = ["five_hour", "seven_day", "seven_day_sonnet"];
+    const anyExpectedKey = expected.some((k) => k in r);
+    if (keys.length > 0 && !anyExpectedKey) {
+      log.warn("usage", "no recognized buckets in response — possible schema change", {
+        data: { topLevelKeys: keys.slice(0, 20) },
+      });
+    }
+  }
   return out;
 }
 
