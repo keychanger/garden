@@ -109,7 +109,7 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
     if (Number.isFinite(ahead) && ahead > 0) {
       updateWorkerFields(projectName, workerName, { pendingReviewAt: Date.now() });
       triggerProjectPoll(projectName);
-      log.info("hook", "stop hook marked pending review (commits ahead of base)", {
+      log.info("hook", "stop hook marked pending review", {
         worker: workerName,
         data: { project: projectName, baseBranch, commitsAhead: ahead },
       });
