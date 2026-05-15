@@ -246,6 +246,32 @@ describe("renderUsagePane", () => {
     expect(sonnetLine).not.toContain("\u2502"); // no marker
   });
 
+  it("renders em-dash for a bucket whose resetsAt has already passed", async () => {
+    // Real-world scenario: a chain of failed fetches (e.g. transient DNS) leaves
+    // the 5h bucket's cached resetsAt in the past while the weekly bucket is
+    // still in its current window. Rendering the pre-reset pct would lie about
+    // the bucket's true state. The post-reset bucket goes em-dash; siblings
+    // still in window render normally.
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      dataAt:    new Date(now - 2 * 60 * 60_000).toISOString(),
+      data: {
+        fiveHour: { pct: 16, resetsAt: new Date(now - 60 * 60_000).toISOString() },
+        weekly:   { pct: 42, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
+        sonnet:   { pct:  0, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
+      },
+    });
+    const render = await importRender();
+    const lines = render(now).split("\n");
+    const fiveLine = lines.find(l => l.includes("5h"));
+    const weekLine = lines.find(l => l.includes("week"));
+    expect(fiveLine).toBeDefined();
+    expect(fiveLine).toContain("—");        // em-dash
+    expect(fiveLine).not.toMatch(/16%/);          // pre-reset pct must not leak
+    expect(fiveLine).not.toContain("█");    // no filled cells
+    expect(weekLine).toContain("42%");            // sibling buckets unaffected
+  });
+
   it("marks data stale with a compact age once dataAt > STALE_AFTER_MS old", async () => {
     writeSnapshot({
       fetchedAt: new Date(now - 60 * 60_000).toISOString(),

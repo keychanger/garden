@@ -553,8 +553,15 @@ function renderMeterLine(
 ): string {
   const paddedLabel = label.padEnd(LABEL_WIDTH);
   if (!meter) return `${INDENT}${paddedLabel}  ${dim("—")}${suffix}`;
-  const pct = Math.max(0, Math.min(100, meter.pct));
   const resetsAt = Date.parse(meter.resetsAt);
+  // The server-side window has rolled over since our cached pct was fetched —
+  // the bucket is in a new window and our pct describes the previous one.
+  // Rendering the stale value as if it were current would lie until the next
+  // successful poll; em-dash is the truthful "no current value" signal.
+  if (Number.isFinite(resetsAt) && resetsAt <= nowMs) {
+    return `${INDENT}${paddedLabel}  ${dim("—")}${suffix}`;
+  }
+  const pct = Math.max(0, Math.min(100, meter.pct));
   let timePct: number | undefined;
   if (windowMs && Number.isFinite(resetsAt)) {
     const elapsed = windowMs - (resetsAt - nowMs);
