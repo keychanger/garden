@@ -245,8 +245,9 @@ function didReviewerAdvanceHead(projectPath: string, entry: WorkerEntry): boolea
 // (reviewRetryCount / reviewRetryAt). handleWorking honors reviewRetryAt to
 // avoid relaunching before the backoff elapses even if the FIFO is poked
 // early by a sibling event. Both fields clear on any parseable verdict
-// (dispatchDefaultVerdict / dispatchTrellisVerdict) and on a successful
-// review launch (launchReview).
+// (dispatchDefaultVerdict / dispatchTrellisVerdict), on the non-transient
+// unparseable path (handleUnparseableReview), on review timeout, and on a
+// mid-review worker push (resetToWorkingOnWorkerPush).
 function handleTransientReviewFailure(
   projectName: string,
   projectPath: string,
