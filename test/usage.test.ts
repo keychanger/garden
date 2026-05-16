@@ -420,6 +420,49 @@ describe("renderUsagePane", () => {
     expect(out).toContain("42%");
     expect(out).toContain("(stale 2h, rate-limited)");
   });
+
+  it("renders the health tag once on its own line, not appended to meter rows", async () => {
+    // The pane has a 4-row content budget. Repeating the tag across all three
+    // meter rows overflows a long error (e.g. a network DNS message) and wraps
+    // each row, busting the layout. The tag must occupy line 0 and not appear
+    // in lines 1-3.
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      error: "rate-limited",
+      dataAt: new Date(now - 2 * 60 * 60_000).toISOString(),
+      data: {
+        fiveHour: { pct: 42, resetsAt: new Date(now + 60 * 60_000).toISOString() },
+        weekly:   { pct: 35, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
+        sonnet:   { pct: 4,  resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
+      },
+    });
+    const render = await importRender();
+    const lines = render(now).split("\n");
+    expect(lines).toHaveLength(4);
+    expect(lines[0]).toContain("(stale 2h, rate-limited)");
+    for (const l of lines.slice(1)) {
+      expect(l).not.toContain("stale");
+      expect(l).not.toContain("rate-limited");
+    }
+  });
+
+  it("truncates a long health tag with an ellipsis to fit paneWidth", async () => {
+    // Defense against a wide-but-not-wide-enough pane: if the tag itself would
+    // wrap, truncate so the meter rows still fit the 4-line budget.
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      error: "refresh failed: network: getaddrinfo ENOTFOUND platform.claude.com",
+      dataAt: new Date(now).toISOString(),
+      data: {
+        fiveHour: { pct: 42, resetsAt: new Date(now + 60 * 60_000).toISOString() },
+      },
+    });
+    const render = await importRender();
+    const lines = render(now, 40).split("\n");
+    const visible = lines[0].replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+    expect(visible.length).toBeLessThanOrEqual(40);
+    expect(visible).toContain("…"); // ellipsis
+  });
 });
 
 describe("formatBriefAge", () => {
