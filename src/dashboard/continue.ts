@@ -36,12 +36,15 @@ const CONTINUE_PROMPT =
   + "off, or say so if your task was already finished.";
 
 const MERGE_CONTINUE_BASE =
-  "[garden] Your previous changes were reviewed and merged. Continue with the "
-  + "next phase of the work — keep working is the default. Only invoke the "
-  + "`done` skill (`touch .garden-done`) if this merge completes the "
-  + "operator's *full* original request, every phase, not just the current "
-  + "one. If you are uncertain whether you are truly finished, leave the "
-  + "sentinel alone and let the next auto-continue fire.";
+  "[garden] Your previous changes were reviewed and merged. If the operator's "
+  + "original request has phases that have not yet landed, do the next one. "
+  + "Otherwise — including when you are uncertain whether anything remains — "
+  + "invoke the `done` skill (`touch .garden-done`) and end your turn. Do NOT "
+  + "invent additional work, polish, refactors, cleanup, doc tweaks, or "
+  + "\"while we're here\" improvements the operator did not explicitly ask "
+  + "for: stopping early is strictly preferred over fabricating scope, and "
+  + "the operator will redirect you if more is needed. This prompt is the "
+  + "merge notification, not an instruction to find more to do.";
 
 const MAX_LISTED_FILES = 20;
 
