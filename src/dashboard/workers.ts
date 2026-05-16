@@ -305,15 +305,23 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     const workerWindowName = workerWin(targetProject, workerName);
 
     try {
+      // Spawn the bootstrap shell only after the window is sized to the right
+      // slot. Otherwise the new window comes up at tmux's default (typically
+      // 80×24, sometimes narrower), Claude's TUI does its first paint into
+      // that small grid, and those hard-wrapped lines stay frozen in scrollback
+      // forever. The placeholder/respawn-pane dance closes that race: create
+      // window holding `sleep infinity`, resize, then respawn-pane with the
+      // real script in a correctly-sized grid.
+      const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
+      const bootstrapCmd = `sh ${shellEscape(scriptFile)}`;
       if (background) {
         // Hidden creation only — no park, no restore. The window is born detached
         // and stays detached. The operator's visible pane and dashboard state are
-        // not touched. Pre-size the window to roughly match the visible right
-        // slot so the first ⌥w into this worker doesn't trigger a reflow.
+        // not touched.
         const workerPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
-          "sh", "-c", `sh ${shellEscape(scriptFile)}`);
-        const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
+          "sh", "-c", "exec sleep infinity");
         if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
+        tmux("respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd);
         if (workerPaneId) setPaneLabel(workerPaneId, workerName);
       } else {
         // Show the new pane immediately — bootstrap runs inside it
@@ -321,11 +329,9 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         parkToHidden(parkName, state);
 
         const workerPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
-          "sh", "-c", `sh ${shellEscape(scriptFile)}`);
-        // Pre-size so the bootstrap script renders at the right pane size from
-        // the start, avoiding SIGWINCH jitter when restoreFromHidden swaps it in.
-        const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
+          "sh", "-c", "exec sleep infinity");
         if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
+        tmux("respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd);
         if (workerPaneId) setPaneLabel(workerPaneId, workerName);
         restoreFromHidden(workerWindowName, state);
         // Re-apply label after swap (swap-pane may not preserve pane options)

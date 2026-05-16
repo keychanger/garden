@@ -237,12 +237,16 @@ describe("newWorker", () => {
     );
   });
 
-  it("creates worker window with bootstrap script", () => {
+  it("creates worker window with sleep placeholder then respawns bootstrap script", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     newWorker();
     expect(vi.mocked(tmuxNewWindow)).toHaveBeenCalledWith(
       "-d", "-t", "garden-dashboard", "-n", "_myproject-worker-bold-ash",
       "-c", "/repo/myproject",
+      "sh", "-c", "exec sleep infinity",
+    );
+    expect(vi.mocked(tmux)).toHaveBeenCalledWith(
+      "respawn-pane", "-k", "-c", "/repo/myproject", "-t", "%10",
       "sh", "-c", expect.stringContaining("/tmp/fake-bootstrap.sh"),
     );
   });
@@ -404,13 +408,17 @@ describe("newWorker", () => {
     expect(vi.mocked(restoreFromHidden)).not.toHaveBeenCalled();
   });
 
-  it("background handoff still creates the hidden worker window with bootstrap script", () => {
+  it("background handoff still creates the hidden worker window and respawns bootstrap script", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
     vi.mocked(tryGetProject).mockReturnValueOnce({ name: "other", path: "/repo/other" });
     newWorker({ projectName: "other", seedMessageFile: "/tmp/seed.txt", background: true });
     expect(vi.mocked(tmuxNewWindow)).toHaveBeenCalledWith(
       "-d", "-t", "garden-dashboard", "-n", "_other-worker-bold-ash",
       "-c", "/repo/other",
+      "sh", "-c", "exec sleep infinity",
+    );
+    expect(vi.mocked(tmux)).toHaveBeenCalledWith(
+      "respawn-pane", "-k", "-c", "/repo/other", "-t", "%10",
       "sh", "-c", expect.stringContaining("/tmp/fake-bootstrap.sh"),
     );
   });

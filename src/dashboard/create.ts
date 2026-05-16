@@ -444,14 +444,17 @@ export function ensureDashboard(): void {
         : buildResumeCommand(projectName, projectConfig.path, entry.sessionId);
       const workerWindowName = workerWin(projectName, entry.name);
 
+      // Hold the window open with a no-op placeholder, resize, then respawn
+      // with the real resume command. This ensures Claude's TUI first paint
+      // happens in a correctly-sized grid; otherwise the new window is created
+      // at tmux's default size and the early hard-wrapped lines stay frozen
+      // in scrollback at the narrow width.
       tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", workerCwd,
-        "sh", "-c", resumeCmd);
-      // Pre-size so the resumed worker renders at the right pane size from
-      // the start, avoiding SIGWINCH jitter on first swap.
+        "sh", "-c", "exec sleep infinity");
       if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
-
       const workerPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindowName}`);
       if (workerPaneId) {
+        tmux("respawn-pane", "-k", "-c", workerCwd, "-t", workerPaneId, "sh", "-c", resumeCmd);
         setPaneLabel(workerPaneId, entry.name);
         if (entry.task) {
           setPaneVar(workerPaneId, "garden_task", entry.task);
