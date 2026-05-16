@@ -315,6 +315,75 @@ describe("poll — working state", () => {
     expect(forcePushBranch).not.toHaveBeenCalled();
   });
 
+  it("defers review launch when claudeStatus=working with a fresh lastHookAt", () => {
+    // Normal mid-turn race: Claude is actively working and emitted a hook
+    // recently. Don't launch the review — wait for the next Stop hook.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "working",
+        claudeStatus: "working",
+        pendingReviewAt: Date.now(),
+        lastHookAt: Date.now() - 30_000, // 30s ago: fresh
+      }),
+    ]);
+
+    poll("myproject");
+
+    expect(tmux).not.toHaveBeenCalledWith(
+      "new-window", expect.anything(), expect.anything(), expect.anything(),
+      "-n", expect.stringContaining("review"),
+      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
+    );
+  });
+
+  it("proceeds with review launch when claudeStatus=working is stale (>15min lastHookAt)", () => {
+    // Hung-Claude case: status is pinned to "working" but no hook has fired
+    // in over 15 minutes. Without this escape hatch, `garden kick` on a
+    // failing worker whose Claude hung would never actually start the review.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "working",
+        claudeStatus: "working",
+        pendingReviewAt: Date.now(),
+        lastHookAt: Date.now() - 20 * 60 * 1000, // 20min ago: stale
+      }),
+    ]);
+
+    poll("myproject");
+
+    // Review window is launched even though claudeStatus says "working".
+    expect(tmux).toHaveBeenCalledWith(
+      "new-window", "-d", "-t", expect.any(String), "-n", "_myproject-review-bold-ash",
+      "-c", "/tmp/wt/myproject/bold-ash", "bash", "-c", expect.any(String),
+    );
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "reviewing" }),
+    );
+  });
+
+  it("does not treat claudeStatus=working as stale when lastHookAt is undefined", () => {
+    // Legacy entries without lastHookAt should fall through to today's
+    // behavior (defer). Treating undefined as "infinitely stale" would
+    // launch reviews against genuinely active workers that pre-date the
+    // lastHookAt field.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "working",
+        claudeStatus: "working",
+        pendingReviewAt: Date.now(),
+        // lastHookAt deliberately undefined
+      }),
+    ]);
+
+    poll("myproject");
+
+    expect(tmux).not.toHaveBeenCalledWith(
+      "new-window", expect.anything(), expect.anything(), expect.anything(),
+      "-n", expect.stringContaining("review"),
+      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
+    );
+  });
+
   it("defers review launch when reviewRetryAt is in the future (transient backoff)", () => {
     // handleTransientReviewFailure schedules a delayed poke at reviewRetryAt,
     // but sibling FIFO pokes (another worker's Stop hook, kick, etc.) can

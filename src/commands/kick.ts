@@ -71,7 +71,13 @@ export async function kick(args: string[]): Promise<void> {
     );
   }
   // A reviewer racing a live worker can force-push over unfinished commits.
-  if (claudeStatus === "working" || claudeStatus === "asking") {
+  // For failing-state review-side recovery, this guard is operator-overridden:
+  // the worker is already in `failing` (so no review cycle is in flight), the
+  // operator is explicitly opting in to a retry, and `handleWorking` has its
+  // own stale-status detection so a truly hung Claude won't deadlock the
+  // launch. We still reject in the normal `working`-state kick path because
+  // that's the path where the original race is reachable.
+  if (!isReviewSideFailure && (claudeStatus === "working" || claudeStatus === "asking")) {
     throw new Error(
       `Worker ${project}/${workerName} is currently ${claudeStatus} — Claude is ` +
       `still mid-turn. Kick only re-arms workers whose turn has ended ` +

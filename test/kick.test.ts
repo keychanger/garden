@@ -215,6 +215,46 @@ describe("kick command", () => {
     expect(triggerProjectPoll).not.toHaveBeenCalled();
   });
 
+  it("recovers a failing worker even when claudeStatus is stuck on 'working'", async () => {
+    // Real-world case: reviewer hit a 500, worker transitioned to failing,
+    // operator bounced (which sets idle), then a UserPromptSubmit flipped
+    // claudeStatus back to "working" — but Claude is now hung and no Stop
+    // hook will ever fire. Without this relaxation, kick refuses and the
+    // operator has to edit the registry by hand.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "failing",
+        failingReason: "transient-review",
+        failingSha: "abc123",
+        claudeStatus: "working",
+      }),
+    ]);
+
+    await captureConsoleLog(() => kick(["bold-ash"]));
+
+    expect(updateWorkerFields).toHaveBeenCalledWith(
+      "myproject",
+      "bold-ash",
+      expect.objectContaining({
+        prState: "working",
+        pendingReviewAt: expect.any(Number),
+        failingReason: undefined,
+      }),
+    );
+    expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
+  });
+
+  it("still rejects claudeStatus=working when worker is in normal 'working' state", async () => {
+    // The race protection still applies in the non-failing path: a kick on a
+    // live working worker could land a review while Claude is making commits.
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", claudeStatus: "working" }),
+    ]);
+
+    await expect(kick(["bold-ash"])).rejects.toThrow(/currently working/);
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
+
   it("refuses to recover a failing worker whose reason is trellis-flagged", async () => {
     registryMock._setEntries("myproject", [
       makeWorker({
