@@ -69,6 +69,14 @@ const cases: Case[] = [
       sonnet:   { pct: 12, resetsAt: "2026-04-20T15:00:00+00:00" },
     },
   },
+  {
+    fixture: "wrapped-quota.json",
+    expected: {
+      fiveHour: { pct: 62, resetsAt: "2026-04-15T20:00:00+00:00" },
+      weekly:   { pct: 34, resetsAt: "2026-04-19T04:00:00+00:00" },
+      sonnet:   { pct:  4, resetsAt: "2026-04-20T15:00:00+00:00" },
+    },
+  },
 ];
 
 describe("normalizeUsage against recorded response shapes", () => {

@@ -166,35 +166,75 @@ export function parseRetryAfter(header: unknown, nowMs: number = Date.now()): nu
 //     seven_day_opus:   { utilization, resets_at } | null,
 //     ... other buckets ...
 //     extra_usage:      { is_enabled, monthly_limit, used_credits, utilization } | null }
-// On Max plans seven_day_opus is typically null (Opus usage is rolled into
-// seven_day); seven_day_sonnet is the populated model-specific bucket, so
-// that's what the third bar shows. Fields are parsed defensively so any
-// shape shift or null bucket degrades to "—" rather than throwing.
+// As of 2026-05 some responses arrive wrapped in an envelope:
+//   { schema_version: 2, quota: { five_hour: ..., seven_day: ..., ... } }
+// — same bucket shape inside, just versioned. We unwrap when the flat parse
+// finds nothing so both shapes Just Work without coordinating with the
+// server's rollout. On Max plans seven_day_opus is typically null (Opus
+// usage is rolled into seven_day); seven_day_sonnet is the populated
+// model-specific bucket, so that's what the third bar shows. Fields are
+// parsed defensively so any shape shift or null bucket degrades to "—"
+// rather than throwing.
 export function normalizeUsage(raw: unknown): UsageData {
-  const out: UsageData = {};
-  if (!raw || typeof raw !== "object") return out;
+  if (!raw || typeof raw !== "object") return {};
   const r = raw as Record<string, unknown>;
+  const top = pickBuckets(r);
+  if (top.fiveHour || top.weekly || top.sonnet) return top;
+  // Envelope fallback: unwrap `quota` and re-parse. Same field names inside.
+  const quota = r["quota"];
+  const hasQuotaObject = quota !== null && typeof quota === "object" && !Array.isArray(quota);
+  if (hasQuotaObject) {
+    const inner = pickBuckets(quota as Record<string, unknown>);
+    if (inner.fiveHour || inner.weekly || inner.sonnet) return inner;
+  }
+  // Shape-shift detector: a non-empty response that yields zero recognized
+  // meters is either an empty-bucket account (all keys present but null —
+  // expected) or a renamed/restructured payload we no longer parse. The
+  // second case used to land as silent em-dashes until someone noticed the
+  // dashboard; warn with a one-level shape preview so the next surprise
+  // tells us *what* changed, not just that something did. When the envelope
+  // is recognized but its contents aren't, point the preview at the inner
+  // object so the rename inside `quota` is what gets logged.
+  const expected = ["five_hour", "seven_day", "seven_day_sonnet"];
+  const anyExpectedKey = expected.some((k) => k in r);
+  const isAllNullKnown = anyExpectedKey; // legit empty-bucket account — quiet
+  if (Object.keys(r).length > 0 && !isAllNullKnown) {
+    const previewSource = hasQuotaObject ? quota : r;
+    log.warn("usage", "no recognized buckets in response — possible schema change", {
+      data: { shape: shapePreview(previewSource) },
+    });
+  }
+  return top;
+}
+
+function pickBuckets(r: Record<string, unknown>): UsageData {
+  const out: UsageData = {};
   const m = pickMeter(r["five_hour"]);
   if (m) out.fiveHour = m;
   const w = pickMeter(r["seven_day"]);
   if (w) out.weekly = w;
   const s = pickMeter(r["seven_day_sonnet"]);
   if (s) out.sonnet = s;
-  // Shape-shift detector: a non-empty response that yields zero recognized
-  // meters is either an empty-bucket account (all keys present but null —
-  // expected) or a renamed/restructured payload we no longer parse. The
-  // second case used to land as silent em-dashes until someone noticed the
-  // dashboard; warn here so it surfaces in `garden logs` immediately.
-  if (!out.fiveHour && !out.weekly && !out.sonnet) {
-    const keys = Object.keys(r);
-    const expected = ["five_hour", "seven_day", "seven_day_sonnet"];
-    const anyExpectedKey = expected.some((k) => k in r);
-    if (keys.length > 0 && !anyExpectedKey) {
-      log.warn("usage", "no recognized buckets in response — possible schema change", {
-        data: { topLevelKeys: keys.slice(0, 20) },
-      });
-    }
+  return out;
+}
+
+// One-level structural sketch: for each top-level key, emit either the
+// child's own keys (objects), its length (arrays), the literal "null", or
+// the primitive type. No values — keys and types are enough to diagnose a
+// schema rename without logging account-level numbers.
+export function shapePreview(obj: unknown, maxKeys = 20): Record<string, unknown> | string {
+  if (obj === null) return "null";
+  if (Array.isArray(obj)) return `array[${obj.length}]`;
+  if (typeof obj !== "object") return typeof obj;
+  const out: Record<string, unknown> = {};
+  const entries = Object.entries(obj as Record<string, unknown>);
+  for (const [k, v] of entries.slice(0, maxKeys)) {
+    if (v === null) out[k] = "null";
+    else if (Array.isArray(v)) out[k] = `array[${v.length}]`;
+    else if (typeof v === "object") out[k] = Object.keys(v as object).slice(0, 10);
+    else out[k] = typeof v;
   }
+  if (entries.length > maxKeys) out["…"] = `+${entries.length - maxKeys}`;
   return out;
 }
 
