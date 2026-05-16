@@ -491,20 +491,24 @@ function computeMeterFit(paneWidth: number | undefined): { barWidth: number; sho
   };
 }
 
-// Leading blank for breathing room under the pane-border label, then three meter rows.
+// Leading blank for breathing room under the pane-border label (replaced by a
+// one-line health tag when the snapshot is stale or in error), then three
+// meter rows. The tag is rendered once instead of repeated on every meter row
+// — a long error like "refresh failed: network: getaddrinfo ENOTFOUND
+// platform.claude.com" repeated three times overflows the 112-col pane and
+// wraps each meter row, busting the pane's 4-row content budget.
 export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number): string {
   const snap = readUsageSnapshot();
-  const lines: string[] = [""];
 
   if (!snap) {
-    lines.push(`${INDENT}${dim("claude usage  loading…")}`);
+    const lines = ["", `${INDENT}${dim("claude usage  loading…")}`];
     return lines.map(l => l + "\x1b[K").join("\n");
   }
 
   // No data ever fetched — show the error (or loading) instead of empty bars.
   if (!snap.data) {
     const msg = snap.error ?? "loading…";
-    lines.push(`${INDENT}${dim(`claude usage  ${msg}`)}`);
+    const lines = ["", `${INDENT}${dim(`claude usage  ${msg}`)}`];
     return lines.map(l => l + "\x1b[K").join("\n");
   }
 
@@ -512,30 +516,43 @@ export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number):
   // the last *successful* fetch, not the last attempt. Snapshots written by
   // older versions lack dataAt and fall back to fetchedAt (which equals dataAt
   // on success in those snapshots, so the behavior matches).
-  const staleTag = formatHealthTag(snap, nowMs);
+  const tag = formatHealthTag(snap, nowMs);
   const d = snap.data;
   const fit = computeMeterFit(paneWidth);
 
-  lines.push(renderMeterLine("5h",     d.fiveHour, nowMs, staleTag, FIVE_HOUR_MS, fit));
-  lines.push(renderMeterLine("week",   d.weekly,   nowMs, staleTag, SEVEN_DAY_MS, fit));
+  const lines: string[] = [tag ? formatHealthLine(tag, paneWidth) : ""];
+  lines.push(renderMeterLine("5h",     d.fiveHour, nowMs, FIVE_HOUR_MS, fit));
+  lines.push(renderMeterLine("week",   d.weekly,   nowMs, SEVEN_DAY_MS, fit));
   // A null seven_day_sonnet bucket renders "—" rather than a flat-zero bar — a 0% sliver
   // next to the weekly bar reads as broken, and "no data" is the truer signal.
-  lines.push(renderMeterLine("sonnet", d.sonnet,   nowMs, staleTag, SEVEN_DAY_MS, fit));
+  lines.push(renderMeterLine("sonnet", d.sonnet,   nowMs, SEVEN_DAY_MS, fit));
 
   return lines.map(l => l + "\x1b[K").join("\n");
+}
+
+// Width-aware single-line health row. Truncates with an ellipsis when the
+// `(stale 2h, …)` content would exceed the pane and wrap — wrapping would
+// push the pane past its 4-line budget and break the dashboard layout.
+function formatHealthLine(tag: string, paneWidth: number | undefined): string {
+  const text = `(${tag})`;
+  if (paneWidth === undefined) return `${INDENT}${dim(text)}`;
+  const budget = Math.max(1, paneWidth - INDENT.length);
+  const fitted = text.length <= budget ? text : text.slice(0, Math.max(1, budget - 1)) + "…";
+  return `${INDENT}${dim(fitted)}`;
 }
 
 const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
 const SEVEN_DAY_MS = 7 * 24 * 60 * 60 * 1000;
 
 // Trust signal for the operator: when bars are real-time we say nothing
-// (uncluttered). When data is unexpectedly old or the last fetch errored,
-// we annotate every meter row with how-old + why so the source of trouble is
-// obvious without digging through `garden logs`. Examples:
+// (uncluttered). When data is unexpectedly old or the last fetch errored, the
+// renderer surfaces a one-line tag above the meters so the source of trouble
+// is obvious without digging through `garden logs`. Returns the inner text
+// (no parens, no ANSI) so the renderer can wrap, truncate, and dim. Examples:
 //   no problems        → ""
-//   data 2h old        → " (stale 2h)"
-//   error after fresh  → " (rate-limited)"
-//   error + data old   → " (stale 2h, rate-limited)"
+//   data 2h old        → "stale 2h"
+//   error after fresh  → "rate-limited"
+//   error + data old   → "stale 2h, rate-limited"
 function formatHealthTag(snap: UsageSnapshot, nowMs: number): string {
   const dataAt = Date.parse(snap.dataAt ?? snap.fetchedAt);
   const ageMs = Number.isFinite(dataAt) ? nowMs - dataAt : Infinity;
@@ -544,7 +561,7 @@ function formatHealthTag(snap: UsageSnapshot, nowMs: number): string {
   const parts: string[] = [];
   if (stale) parts.push(`stale ${formatBriefAge(ageMs)}`);
   if (snap.error) parts.push(snap.error);
-  return dim(` (${parts.join(", ")})`);
+  return parts.join(", ");
 }
 
 // Compact age form for inline annotations: "5m", "3h", "2d". Differs from
@@ -562,19 +579,18 @@ function renderMeterLine(
   label: string,
   meter: UsageMeter | undefined,
   nowMs: number,
-  suffix: string,
   windowMs: number | undefined,
   fit: { barWidth: number; showReset: boolean },
 ): string {
   const paddedLabel = label.padEnd(LABEL_WIDTH);
-  if (!meter) return `${INDENT}${paddedLabel}  ${dim("—")}${suffix}`;
+  if (!meter) return `${INDENT}${paddedLabel}  ${dim("—")}`;
   const resetsAt = Date.parse(meter.resetsAt);
   // The server-side window has rolled over since our cached pct was fetched —
   // the bucket is in a new window and our pct describes the previous one.
   // Rendering the stale value as if it were current would lie until the next
   // successful poll; em-dash is the truthful "no current value" signal.
   if (Number.isFinite(resetsAt) && resetsAt <= nowMs) {
-    return `${INDENT}${paddedLabel}  ${dim("—")}${suffix}`;
+    return `${INDENT}${paddedLabel}  ${dim("—")}`;
   }
   const pct = Math.max(0, Math.min(100, meter.pct));
   let timePct: number | undefined;
@@ -588,7 +604,7 @@ function renderMeterLine(
     ? `resets ${formatDuration(resetsAt - nowMs)}`
     : "";
   const resetPart = resetText ? `  ${dim(resetText)}` : "";
-  return `${INDENT}${paddedLabel}  ${bar}  ${pctText}${resetPart}${suffix}`;
+  return `${INDENT}${paddedLabel}  ${bar}  ${pctText}${resetPart}`;
 }
 
 function renderBar(pct: number, barWidth: number, markerPct?: number): string {
