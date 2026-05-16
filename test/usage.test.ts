@@ -59,6 +59,61 @@ describe("normalizeUsage", () => {
   });
 });
 
+describe("normalizeUsage — schema-shift warning", () => {
+  const env = useTmpHome();
+  beforeEach(() => { vi.resetModules(); });
+
+  async function importNormalize() {
+    const mod = await import("../src/dashboard/usage.js");
+    return mod.normalizeUsage;
+  }
+
+  function readUsageWarnings(): { data: { shape: unknown } }[] {
+    const logFile = path.join(env.sessionsDir, "dashboard.log");
+    if (!fs.existsSync(logFile)) return [];
+    return fs.readFileSync(logFile, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l))
+      .filter((e) => e.level === "warn" && e.src === "usage");
+  }
+
+  it("stays quiet on a wrapped envelope whose buckets are all null (legit no-usage account)", async () => {
+    const normalize = await importNormalize();
+    const out = normalize({
+      schema_version: 2,
+      quota: {
+        five_hour: null,
+        seven_day: null,
+        seven_day_sonnet: null,
+      },
+    });
+    expect(out).toEqual({});
+    expect(readUsageWarnings()).toHaveLength(0);
+  });
+
+  it("warns on a wrapped envelope whose bucket keys are renamed (real schema shift)", async () => {
+    const normalize = await importNormalize();
+    const out = normalize({
+      schema_version: 2,
+      quota: {
+        // Top-level keys inside `quota` were renamed — none of our expected
+        // bucket names appear, so this is unambiguously a schema rename
+        // rather than an empty-bucket account.
+        usage_5h:   { utilization: 50, resets_at: "2026-04-15T20:00:00Z" },
+        usage_week: { utilization: 30, resets_at: "2026-04-19T04:00:00Z" },
+      },
+    });
+    expect(out).toEqual({});
+    const warns = readUsageWarnings();
+    expect(warns).toHaveLength(1);
+    // Preview targets the inner object so the rename inside `quota` is logged.
+    const shape = warns[0].data.shape as Record<string, unknown>;
+    expect(shape).toHaveProperty("usage_5h");
+    expect(shape).toHaveProperty("usage_week");
+  });
+});
+
 describe("formatDuration", () => {
   it("formats sub-hour durations as minutes", () => {
     expect(formatDuration(5 * 60_000)).toBe("in 5m");

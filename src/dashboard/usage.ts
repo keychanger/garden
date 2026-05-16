@@ -193,10 +193,13 @@ export function normalizeUsage(raw: unknown): UsageData {
   // second case used to land as silent em-dashes until someone noticed the
   // dashboard; warn with a one-level shape preview so the next surprise
   // tells us *what* changed, not just that something did. When the envelope
-  // is recognized but its contents aren't, point the preview at the inner
-  // object so the rename inside `quota` is what gets logged.
+  // is recognized but its contents aren't, look for expected keys inside
+  // `quota` (so a wrapped all-null account stays quiet) and point the
+  // preview at the inner object so the rename inside `quota` is what gets
+  // logged.
   const expected = ["five_hour", "seven_day", "seven_day_sonnet"];
-  const anyExpectedKey = expected.some((k) => k in r);
+  const expectedSource = hasQuotaObject ? (quota as Record<string, unknown>) : r;
+  const anyExpectedKey = expected.some((k) => k in expectedSource);
   const isAllNullKnown = anyExpectedKey; // legit empty-bucket account — quiet
   if (Object.keys(r).length > 0 && !isAllNullKnown) {
     const previewSource = hasQuotaObject ? quota : r;

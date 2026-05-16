@@ -1,0 +1,10 @@
+{
+  "schema_version": 2,
+  "quota": {
+    "five_hour":        null,
+    "seven_day":        null,
+    "seven_day_sonnet": null,
+    "seven_day_opus":   null,
+    "extra_usage":      null
+  }
+}

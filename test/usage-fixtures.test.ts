@@ -77,6 +77,10 @@ const cases: Case[] = [
       sonnet:   { pct:  4, resetsAt: "2026-04-20T15:00:00+00:00" },
     },
   },
+  {
+    fixture: "wrapped-all-null.json",
+    expected: {},
+  },
 ];
 
 describe("normalizeUsage against recorded response shapes", () => {
