@@ -34,6 +34,13 @@ export type FailingReason =
   | "iteration-budget"
   | "stagnation"
   | "unparseable-verdict"
+  // Set by handleTransientReviewFailure after the auto-retry budget for
+  // transient API errors (5xx, 429, overloaded_error) is exhausted. Distinct
+  // from "unparseable-verdict" because the code is not at fault — the
+  // reviewer's Claude process couldn't even reach the API. `garden kick`
+  // accepts this reason and re-queues the review without requiring new
+  // commits (see commands/kick.ts).
+  | "transient-review"
   // Set by the poller's CI gate (poller-ci.ts) when GitHub Actions reports
   // any failed/cancelled/timed-out check-run on the worker's branch HEAD.
   // The merge is held until the operator pushes a new commit that turns
@@ -106,6 +113,16 @@ export interface WorkerEntry {
   // second unparseable verdict falls through to the normal failing path.
   // Cleared on any parseable verdict (clean/fixed/failed).
   unparseableReviewAt?: number;
+  // Transient-review retry state. Set by handleTransientReviewFailure when the
+  // reviewer output ends in an API error (5xx, 429, overloaded_error) and the
+  // reviewer didn't commit anything. reviewRetryCount tracks attempts in the
+  // current review cycle; the budget (MAX_TRANSIENT_REVIEW_RETRIES) is 3.
+  // reviewRetryAt is the earliest epoch ms at which handleWorking is permitted
+  // to relaunch the review — backoff is 30s / 2m / 5m. Both fields clear on
+  // any parseable verdict and on a successful review launch. See
+  // poller-review.ts handleTransientReviewFailure / handleWorking.
+  reviewRetryCount?: number;
+  reviewRetryAt?: number;
   // Set by handlePaneDied when claudeStatus was "working" at the moment the
   // pane died (dashboard kill, tmux server gone). Read by ensureDashboard's
   // resume loop to decide whether to auto-send a "continue" prompt after the

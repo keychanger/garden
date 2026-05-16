@@ -1,7 +1,18 @@
-import { readRegistry, updateWorkerFields } from "../dashboard/registry.js";
+import { readRegistry, updateWorkerFields, type FailingReason } from "../dashboard/registry.js";
 import { triggerProjectPoll } from "../dashboard/poller.js";
 import { getCommitSummary, getWorkerBaseBranch } from "../dashboard/git.js";
 import { tryGetProject } from "../config.js";
+
+// Failing reasons where the worker's *code* is fine and the failure is on the
+// reviewer side — Anthropic API blip, reviewer crashed mid-stream, reviewer
+// went off-rails without emitting a verdict. For these, `kick` re-queues the
+// review without requiring new commits. For everything else (code failure,
+// trellis-flagged, iteration-budget, ci), new commits or the specific
+// workflow command are the right recovery — kick should refuse.
+const REVIEW_SIDE_FAILING_REASONS: ReadonlySet<FailingReason> = new Set<FailingReason>([
+  "unparseable-verdict",
+  "transient-review",
+]);
 
 export async function kick(args: string[]): Promise<void> {
   const workerName = args[0];
@@ -13,6 +24,7 @@ export async function kick(args: string[]): Promise<void> {
     worker: string;
     state?: string;
     claudeStatus?: string;
+    failingReason?: FailingReason;
   }> = [];
   for (const [project, entries] of Object.entries(registry.workers)) {
     for (const entry of entries) {
@@ -22,6 +34,7 @@ export async function kick(args: string[]): Promise<void> {
           worker: entry.name,
           state: entry.prState,
           claudeStatus: entry.claudeStatus,
+          failingReason: entry.failingReason,
         });
       }
     }
@@ -35,12 +48,26 @@ export async function kick(args: string[]): Promise<void> {
     throw new Error(`Multiple workers match '${workerName}':\n${list}\nKill or rename one first.`);
   }
 
-  const { project, state, claudeStatus } = matches[0];
-  if (state && state !== "working") {
+  const { project, state, claudeStatus, failingReason } = matches[0];
+
+  // failing → working recovery for review-side failures. The worker's code is
+  // fine; the reviewer itself was unavailable or garbled. Clear the failing
+  // pin and re-queue review without needing a new commit.
+  const isReviewSideFailure = state === "failing"
+    && failingReason !== undefined
+    && REVIEW_SIDE_FAILING_REASONS.has(failingReason);
+
+  if (state && state !== "working" && !isReviewSideFailure) {
+    const hint = state === "failing"
+      ? ` (failingReason='${failingReason ?? "code"}'). Kick only auto-recovers ` +
+        `review-side failures (${[...REVIEW_SIDE_FAILING_REASONS].join(", ")}); ` +
+        `for code failures push a new commit, for trellis-flagged run ` +
+        `'garden trellis resume', for iteration-budget run ` +
+        `'garden trellis budget'.`
+      : `. Kick only re-arms workers stranded in working or review-side failing — ` +
+        `for other states, investigate the poller log or the alerts panel.`;
     throw new Error(
-      `Worker ${project}/${workerName} is in state '${state}', not 'working'. ` +
-      `Kick only re-arms workers stranded in working — for other states, investigate the ` +
-      `poller log or the alerts panel.`,
+      `Worker ${project}/${workerName} is in state '${state}'${hint}`,
     );
   }
   // A reviewer racing a live worker can force-push over unfinished commits.
@@ -64,6 +91,24 @@ export async function kick(args: string[]): Promise<void> {
         `Worker ${project}/${workerName} has no commits ahead of ${baseBranch} — nothing to review.`,
       );
     }
+  }
+
+  if (isReviewSideFailure) {
+    // Clear the failing pin and the retry state so handleWorking launches a
+    // fresh review on the next poll. prState moves failing → working via the
+    // workflow's valid-transitions map.
+    updateWorkerFields(project, workerName, {
+      prState: "working",
+      pendingReviewAt: Date.now(),
+      failingReason: undefined,
+      failingSha: undefined,
+      unparseableReviewAt: undefined,
+      reviewRetryCount: undefined,
+      reviewRetryAt: undefined,
+    });
+    triggerProjectPoll(project);
+    console.log(`Kicked ${project}/${workerName} — recovered from failing (${failingReason}), review re-queued.`);
+    return;
   }
 
   updateWorkerFields(project, workerName, { pendingReviewAt: Date.now() });

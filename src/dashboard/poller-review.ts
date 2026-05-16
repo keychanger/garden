@@ -44,6 +44,21 @@ import { getWorkflow } from "./workflows/index.js";
 // denies their network calls).
 export const REVIEW_TIMEOUT_MS = 30 * 60 * 1000;
 
+// Transient-review auto-retry budget. When the reviewer's output ends in an
+// Anthropic API error (5xx / 429 / 529 / overloaded_error / rate_limit_error)
+// and the reviewer didn't commit anything, handleTransientReviewFailure
+// re-queues the review on this schedule instead of escalating immediately.
+// The backoffs array is indexed by attempt number (1-based), so we read
+// TRANSIENT_REVIEW_BACKOFFS_MS[reviewRetryCount] *after* incrementing the
+// counter. Past the budget, we fall through to `failing` with
+// failingReason="transient-review" — operator can `garden kick` to retry.
+export const MAX_TRANSIENT_REVIEW_RETRIES = 3;
+export const TRANSIENT_REVIEW_BACKOFFS_MS: readonly number[] = [
+  30_000,    // 30s
+  120_000,   // 2m
+  300_000,   // 5m
+];
+
 const REVIEW_VERDICT_VOCAB = ["CLEAN", "FIXED", "FAILED"] as const;
 
 export interface ReviewResult {
@@ -80,6 +95,17 @@ export function handleWorking(
   // the time we get here — this guard catches the race where a fresh
   // UserPromptSubmit landed between the Stop and the poller wake.
   if (entry.claudeStatus === "working") return false;
+
+  // Transient-review backoff gate. handleTransientReviewFailure schedules a
+  // delayed poke at reviewRetryAt, but the FIFO can also be poked by sibling
+  // events (another worker's Stop hook, an operator kick) before the backoff
+  // elapses. Without this check, an early poke would launch the review
+  // immediately and burn the budget on the same transient outage.
+  if (entry.reviewRetryAt && entry.reviewRetryAt > Date.now()) {
+    const remaining = entry.reviewRetryAt - Date.now();
+    scheduleDelayedPoke(projectName, remaining);
+    return false;
+  }
 
   const wtPath = entry.worktreePath ?? projectPath;
   const commitSummary = getCommitSummary(wtPath, baseBranch);
@@ -126,31 +152,173 @@ export function handleReviewing(
   // Review window is gone — read result. The trellis workflow has its own
   // verdict vocabulary (ALIGNED/DRIFT/FAILED/FLAGGED); default keeps
   // CLEAN/FIXED/FAILED. Unparseable handling below is workflow-agnostic.
+  // We read the raw output once up front so transient-failure detection
+  // (handleTransientReviewFailure) and the unparseable-verdict path can both
+  // introspect it without re-reading after cleanReviewFiles deletes the file.
   const isTrellis = entry.workflow === "trellis";
-  const review = isTrellis
-    ? readTrellisReviewResult(projectName, entry)
-    : readReviewResult(projectName, entry);
+  const rawOutput = readReviewOutputRaw(projectName, entry);
+  const review = rawOutput === null
+    ? null
+    : isTrellis
+      ? parseTrellisReviewResult(rawOutput, entry.name, projectName)
+      : parseReviewResult(rawOutput, entry.name, projectName);
 
   // Clean up files
   cleanReviewFiles(projectName, entry.name);
 
-  if (review === null) {
-    return handleUnparseableReview(projectName, projectPath, entry);
-  }
+  if (review !== null) {
+    log.info("poller", "review complete", {
+      worker: entry.name,
+      data: { project: projectName, verdict: review.verdict },
+    });
 
-  log.info("poller", "review complete", {
-    worker: entry.name,
-    data: { project: projectName, verdict: review.verdict },
-  });
-
-  if (isTrellis) {
-    return dispatchTrellisVerdict(
-      projectName, projectPath, entry, review as TrellisVerdictResult,
+    if (isTrellis) {
+      return dispatchTrellisVerdict(
+        projectName, projectPath, entry, review as TrellisVerdictResult,
+      );
+    }
+    return dispatchDefaultVerdict(
+      projectName, projectPath, entry, review as ReviewResult,
     );
   }
-  return dispatchDefaultVerdict(
-    projectName, projectPath, entry, review as ReviewResult,
-  );
+
+  // Reviewer output is unparseable. If the tail matches an Anthropic API
+  // error (5xx / 429 / overloaded_error / rate_limit_error) AND the reviewer
+  // didn't commit anything (head not advanced past preReviewSha), treat it as
+  // a transient failure: re-queue the review on a backoff. Anything else —
+  // missing file, empty file, reviewer went off-rails, reviewer committed
+  // work but skipped the verdict line — flows through the existing
+  // unparseable-verdict path.
+  if (
+    rawOutput !== null
+    && isTransientReviewFailureTail(rawOutput)
+    && !didReviewerAdvanceHead(projectPath, entry)
+  ) {
+    return handleTransientReviewFailure(projectName, projectPath, entry, rawOutput);
+  }
+  return handleUnparseableReview(projectName, projectPath, entry);
+}
+
+// True if the reviewer's tail output indicates an Anthropic API error rather
+// than a reviewer-emitted verdict. Scans the last 5 non-empty lines for the
+// `claude -p` error prefix (`API Error: <5xx|429|529> ...`) or the JSON error
+// types Anthropic emits (`overloaded_error`, `rate_limit_error`). The match
+// is anchored to line-start and a fixed error-code set so a reviewer who
+// merely discusses "API errors" in body text can't trip the detection — that
+// reviewer's verdict line would also have parsed if it followed the format,
+// and only unparsed verdicts reach this function.
+//
+// Exported for unit tests.
+export function isTransientReviewFailureTail(output: string): boolean {
+  const lines = output.split("\n");
+  const tail: string[] = [];
+  for (let i = lines.length - 1; i >= 0 && tail.length < 5; i--) {
+    const t = lines[i].trim();
+    if (t) tail.push(t);
+  }
+  for (const line of tail) {
+    if (/^API Error:\s*(5\d{2}|429|529)\b/.test(line)) return true;
+    if (/"type"\s*:\s*"(overloaded_error|rate_limit_error|api_error)"/.test(line)) return true;
+  }
+  return false;
+}
+
+// Did the reviewer's run move HEAD past the SHA captured at launch? The
+// transient path only fires when the reviewer accomplished nothing — if HEAD
+// advanced, the reviewer-committed-work recovery path in handleUnparseableReview
+// is the right home (it force-pushes and re-queues, capturing whatever fix
+// the reviewer did manage before the API blip).
+function didReviewerAdvanceHead(projectPath: string, entry: WorkerEntry): boolean {
+  const wtPath = entry.worktreePath ?? projectPath;
+  const headSha = getBranchHeadSha(wtPath);
+  return headSha !== null && entry.preReviewSha !== undefined
+    && headSha !== entry.preReviewSha;
+}
+
+// Re-queue a review after a transient Anthropic API error in the reviewer's
+// output. Up to MAX_TRANSIENT_REVIEW_RETRIES attempts on a backoff schedule;
+// past that, the worker transitions to `failing` with
+// failingReason="transient-review" — `garden kick` accepts that reason and
+// re-queues without requiring new commits.
+//
+// The retry counter and next-attempt timestamp live on the WorkerEntry
+// (reviewRetryCount / reviewRetryAt). handleWorking honors reviewRetryAt to
+// avoid relaunching before the backoff elapses even if the FIFO is poked
+// early by a sibling event. Both fields clear on any parseable verdict
+// (dispatchDefaultVerdict / dispatchTrellisVerdict) and on a successful
+// review launch (launchReview).
+function handleTransientReviewFailure(
+  projectName: string,
+  projectPath: string,
+  entry: WorkerEntry,
+  rawOutput: string,
+): boolean {
+  const wtPath = entry.worktreePath ?? projectPath;
+  const headSha = getBranchHeadSha(wtPath);
+  const prior = entry.reviewRetryCount ?? 0;
+  const next = prior + 1;
+  const tail = rawOutput.split("\n").reverse().find(l => l.trim())?.trim() ?? "";
+
+  if (next > MAX_TRANSIENT_REVIEW_RETRIES) {
+    log.warn("poller", "transient review retries exhausted, transitioning to failing", {
+      worker: entry.name,
+      data: { project: projectName, attempts: prior, lastLine: tail },
+    });
+    addAlert({
+      level: "error",
+      source: "review",
+      project: projectName,
+      worker: entry.name,
+      message:
+        `Review for worker ${entry.name} failed ${prior} times due to ` +
+        `Anthropic API errors. Run \`garden kick ${entry.name}\` once the ` +
+        `Anthropic API recovers, or investigate via the reviewer log.`,
+      // Tail content varies per attempt; pin the dedup key to the worker so
+      // repeated exhaustions don't spam.
+      dedupKey: `transient-review-exhausted:${projectName}:${entry.name}`,
+    });
+    transitionState(projectName, entry.name, "failing", {
+      failCount: (entry.failCount ?? 0) + 1,
+      failingReason: "transient-review",
+      failingSha: headSha ?? undefined,
+      lastSeenSha: headSha ?? undefined,
+      lastShaChangeAt: new Date().toISOString(),
+      reviewWindowName: undefined,
+      reviewStartedAt: undefined,
+      reviewRetryCount: undefined,
+      reviewRetryAt: undefined,
+    });
+    refreshDashboard();
+    return true;
+  }
+
+  // Schedule the next attempt. The backoffs array is 0-indexed by prior count
+  // (first retry uses [0], second uses [1], ...). The poke wakes the poller
+  // at +backoffMs; handleWorking sees pendingReviewAt set, checks reviewRetryAt
+  // for backoff readiness, and launches the review.
+  const backoffMs = TRANSIENT_REVIEW_BACKOFFS_MS[prior] ?? TRANSIENT_REVIEW_BACKOFFS_MS[TRANSIENT_REVIEW_BACKOFFS_MS.length - 1];
+  const nextAt = Date.now() + backoffMs;
+  log.info("poller", "transient review failure; scheduling retry", {
+    worker: entry.name,
+    data: {
+      project: projectName,
+      attempt: next,
+      maxAttempts: MAX_TRANSIENT_REVIEW_RETRIES,
+      backoffMs,
+      lastLine: tail,
+    },
+  });
+  transitionState(projectName, entry.name, "working", {
+    pendingReviewAt: Date.now(),
+    reviewRetryCount: next,
+    reviewRetryAt: nextAt,
+    reviewWindowName: undefined,
+    reviewStartedAt: undefined,
+    preReviewSha: undefined,
+  });
+  refreshDashboard();
+  scheduleDelayedPoke(projectName, backoffMs);
+  return true;
 }
 
 // The reviewer exited but its output didn't emit a recognizable verdict.
@@ -195,6 +363,8 @@ function handleUnparseableReview(
         lastShaChangeAt: new Date().toISOString(),
         reviewWindowName: undefined,
         reviewStartedAt: undefined,
+        reviewRetryCount: undefined,
+        reviewRetryAt: undefined,
       });
       refreshDashboard();
       return true;
@@ -211,6 +381,8 @@ function handleUnparseableReview(
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
       preReviewSha: undefined,
+      reviewRetryCount: undefined,
+      reviewRetryAt: undefined,
     });
     refreshDashboard();
     scheduleDelayedPoke(projectName, 0);
@@ -241,6 +413,8 @@ function handleUnparseableReview(
     lastShaChangeAt: new Date().toISOString(),
     reviewWindowName: undefined,
     reviewStartedAt: undefined,
+    reviewRetryCount: undefined,
+    reviewRetryAt: undefined,
   });
   refreshDashboard();
   return true;
@@ -304,6 +478,8 @@ function dispatchDefaultVerdict(
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
       unparseableReviewAt: undefined,
+      reviewRetryCount: undefined,
+      reviewRetryAt: undefined,
     });
     refreshDashboard();
     // The poller is event-driven and will block on the FIFO after this tick.
@@ -334,6 +510,8 @@ function dispatchDefaultVerdict(
     reviewStartedAt: undefined,
     preReviewSha: undefined,
     unparseableReviewAt: undefined,
+    reviewRetryCount: undefined,
+    reviewRetryAt: undefined,
   });
   refreshDashboard();
   return true;
@@ -394,6 +572,8 @@ function dispatchTrellisVerdict(
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
       unparseableReviewAt: undefined,
+      reviewRetryCount: undefined,
+      reviewRetryAt: undefined,
       trellis: {
         lastVerdict: "ALIGNED",
         // `aligned` distinguishes reviewer-declared success from operator
@@ -420,6 +600,8 @@ function dispatchTrellisVerdict(
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
       unparseableReviewAt: undefined,
+      reviewRetryCount: undefined,
+      reviewRetryAt: undefined,
       trellis: {
         lastVerdict: "DRIFT",
         lastDrift: driftLines,
@@ -461,6 +643,8 @@ function dispatchTrellisVerdict(
       reviewStartedAt: undefined,
       preReviewSha: undefined,
       unparseableReviewAt: undefined,
+      reviewRetryCount: undefined,
+      reviewRetryAt: undefined,
       trellis: {
         lastVerdict: "FLAGGED",
         flaggedClauses: clauses.length > 0 ? clauses : undefined,
@@ -492,6 +676,8 @@ function dispatchTrellisVerdict(
     reviewStartedAt: undefined,
     preReviewSha: undefined,
     unparseableReviewAt: undefined,
+    reviewRetryCount: undefined,
+    reviewRetryAt: undefined,
     trellis: { lastVerdict: "FAILED" },
   });
   refreshDashboard();
@@ -530,6 +716,10 @@ export function resetToWorkingOnWorkerPush(
     preResolveSha: undefined,
     lastResolveBody: undefined,
     mergePendingAt: undefined,
+    // Worker pushed mid-review: this is a fresh cycle, reset transient retry
+    // state so any prior in-flight backoff doesn't bleed into the new review.
+    reviewRetryCount: undefined,
+    reviewRetryAt: undefined,
     pendingReviewAt: hasCommitsAhead ? Date.now() : entry.pendingReviewAt,
   });
   refreshDashboard();
@@ -594,6 +784,8 @@ export function handleReviewTimeout(
     reviewWindowName: undefined,
     reviewStartedAt: undefined,
     mergePendingAt: kind === "resolve" ? undefined : entry.mergePendingAt,
+    reviewRetryCount: undefined,
+    reviewRetryAt: undefined,
   });
   refreshDashboard();
   return true;
@@ -741,10 +933,14 @@ function launchReview(
   return true;
 }
 
-function readReviewResult(
+// Read the reviewer's result file and return its trimmed contents, or null on
+// missing/empty/unreadable. Split out from parse so handleReviewing can pass
+// the raw string to both the verdict parser and the transient-failure
+// detector without re-reading after cleanReviewFiles deletes the file.
+function readReviewOutputRaw(
   projectName: string,
   entry: WorkerEntry,
-): ReviewResult | null {
+): string | null {
   const resultFile = reviewResultPath(projectName, entry.name);
 
   try {
@@ -758,8 +954,7 @@ function readReviewResult(
       log.warn("poller", "review result file empty", { worker: entry.name, data: { project: projectName } });
       return null;
     }
-
-    return parseReviewResult(output, entry.name, projectName);
+    return output;
   } catch (err) {
     log.warn("poller", "failed to read review result", {
       worker: entry.name,
@@ -783,42 +978,24 @@ function parseReviewResult(output: string, workerName: string, projectName: stri
   return { verdict: parsed.verdict.toLowerCase() as ReviewResult["verdict"], body };
 }
 
-// Trellis variant of readReviewResult — same file I/O contract, parses with
-// the trellis vocabulary (ALIGNED/DRIFT/FAILED/FLAGGED). Returns null on
-// missing file, empty file, or unparseable output; the caller's existing
-// unparseable-verdict retry path handles all three identically.
-function readTrellisReviewResult(
+// Trellis variant of parseReviewResult — parses with the trellis vocabulary
+// (ALIGNED/DRIFT/FAILED/FLAGGED). Returns null on unparseable output; the
+// caller's existing unparseable-verdict retry path handles it.
+function parseTrellisReviewResult(
+  output: string,
+  workerName: string,
   projectName: string,
-  entry: WorkerEntry,
 ): TrellisVerdictResult | null {
-  const resultFile = reviewResultPath(projectName, entry.name);
-  try {
-    if (!fs.existsSync(resultFile)) {
-      log.warn("poller", "trellis review result file missing", { worker: entry.name, data: { project: projectName } });
-      return null;
-    }
-    const output = fs.readFileSync(resultFile, "utf-8").trim();
-    if (!output) {
-      log.warn("poller", "trellis review result file empty", { worker: entry.name, data: { project: projectName } });
-      return null;
-    }
-    const parsed = parseTrellisVerdict(output);
-    if (!parsed) {
-      const lastLine = output.split("\n").reverse().find(l => l.trim()) ?? "";
-      log.warn("poller", "could not parse trellis verdict", {
-        worker: entry.name,
-        data: { project: projectName, lastLine: lastLine.trim() },
-      });
-      return null;
-    }
-    return { verdict: parsed.verdict, body: parsed.body || "No additional comments." };
-  } catch (err) {
-    log.warn("poller", "failed to read trellis review result", {
-      worker: entry.name,
-      data: { project: projectName, error: String(err) },
+  const parsed = parseTrellisVerdict(output);
+  if (!parsed) {
+    const lastLine = output.split("\n").reverse().find(l => l.trim()) ?? "";
+    log.warn("poller", "could not parse trellis verdict", {
+      worker: workerName,
+      data: { project: projectName, lastLine: lastLine.trim() },
     });
     return null;
   }
+  return { verdict: parsed.verdict, body: parsed.body || "No additional comments." };
 }
 
 export function killReviewWindow(projectName: string, workerName: string): void {

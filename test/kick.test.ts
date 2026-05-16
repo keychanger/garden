@@ -136,4 +136,94 @@ describe("kick command", () => {
     expect(updateWorkerFields).toHaveBeenCalled();
     expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
   });
+
+  it("recovers a failing worker whose reason is unparseable-verdict", async () => {
+    // The reviewer exited with garbled output — the worker's code is fine.
+    // kick should clear the failing pin, transition to working, and re-queue
+    // the review without requiring a new commit.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "failing",
+        failingReason: "unparseable-verdict",
+        failingSha: "abc123",
+        unparseableReviewAt: Date.now() - 1000,
+      }),
+    ]);
+
+    const lines = await captureConsoleLog(() => kick(["bold-ash"]));
+
+    expect(updateWorkerFields).toHaveBeenCalledWith(
+      "myproject",
+      "bold-ash",
+      expect.objectContaining({
+        prState: "working",
+        pendingReviewAt: expect.any(Number),
+        failingReason: undefined,
+        failingSha: undefined,
+        unparseableReviewAt: undefined,
+        reviewRetryCount: undefined,
+        reviewRetryAt: undefined,
+      }),
+    );
+    expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
+    expect(lines.join("\n")).toContain("recovered from failing (unparseable-verdict)");
+  });
+
+  it("recovers a failing worker whose reason is transient-review", async () => {
+    // The reviewer's Claude process couldn't reach the API (5xx / overloaded
+    // / rate-limit) for the entire backoff budget. Same recovery shape as
+    // unparseable-verdict — code is fine, just retry the reviewer.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "failing",
+        failingReason: "transient-review",
+        failingSha: "abc123",
+      }),
+    ]);
+
+    const lines = await captureConsoleLog(() => kick(["bold-ash"]));
+
+    expect(updateWorkerFields).toHaveBeenCalledWith(
+      "myproject",
+      "bold-ash",
+      expect.objectContaining({
+        prState: "working",
+        pendingReviewAt: expect.any(Number),
+        failingReason: undefined,
+        failingSha: undefined,
+        reviewRetryCount: undefined,
+        reviewRetryAt: undefined,
+      }),
+    );
+    expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
+    expect(lines.join("\n")).toContain("recovered from failing (transient-review)");
+  });
+
+  it("refuses to recover a failing worker whose reason is 'code'", async () => {
+    // Code-side failures require a new commit to retry — kick should refuse
+    // and point the operator at the right recovery path.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "failing",
+        failingReason: "code",
+        failingSha: "abc123",
+      }),
+    ]);
+
+    await expect(kick(["bold-ash"])).rejects.toThrow(/is in state 'failing'.*failingReason='code'/s);
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+    expect(triggerProjectPoll).not.toHaveBeenCalled();
+  });
+
+  it("refuses to recover a failing worker whose reason is trellis-flagged", async () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "failing",
+        failingReason: "trellis-flagged",
+      }),
+    ]);
+
+    await expect(kick(["bold-ash"])).rejects.toThrow(/trellis resume/);
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
 });

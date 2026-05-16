@@ -315,6 +315,33 @@ describe("poll — working state", () => {
     expect(forcePushBranch).not.toHaveBeenCalled();
   });
 
+  it("defers review launch when reviewRetryAt is in the future (transient backoff)", () => {
+    // handleTransientReviewFailure schedules a delayed poke at reviewRetryAt,
+    // but sibling FIFO pokes (another worker's Stop hook, kick, etc.) can
+    // wake the poller earlier. handleWorking must honor the backoff and
+    // re-schedule, not launch the review immediately.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "working",
+        claudeStatus: "idle",
+        pendingReviewAt: Date.now(),
+        reviewRetryCount: 1,
+        reviewRetryAt: Date.now() + 60_000, // 60s in the future
+      }),
+    ]);
+
+    poll("myproject");
+
+    // No review window launched.
+    expect(tmux).not.toHaveBeenCalledWith(
+      "new-window", expect.anything(), expect.anything(), expect.anything(),
+      "-n", expect.stringContaining("review"),
+      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
+    );
+    // Re-schedules a delayed poke for the remaining time.
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", expect.any(Number));
+  });
+
   it("clears pendingReviewAt when commits no longer exist", () => {
     // Stop hook said commits existed; by the time the poller wakes, they're
     // gone (force-pushed away, base advanced past them, etc.). Clear the
@@ -836,6 +863,171 @@ describe("poll — reviewing state (async)", () => {
         // same broken commit. Without this, the worker loops failing→working
         // every DEBOUNCE_MS forever when no new commits arrive.
         failingSha: "post789",
+      }),
+    );
+  });
+
+  it("retries with backoff when reviewer output ends in API Error: 500", () => {
+    // Transient Anthropic API failure — reviewer never produced a verdict
+    // because Claude itself was unavailable. Head is unchanged. The poller
+    // should NOT transition to failing on the first attempt; it should
+    // increment reviewRetryCount, set a backoff timestamp, and schedule a
+    // delayed poke.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123",
+        preReviewSha: "pre456",
+      }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) {
+        return "API Error: 500 Internal server error. This is a server-side issue, usually temporary — try again in a moment. If it persists, check status.claude.com.";
+      }
+      return "{}";
+    });
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre456");
+
+    poll("myproject");
+
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "working",
+        pendingReviewAt: expect.any(Number),
+        reviewRetryCount: 1,
+        reviewRetryAt: expect.any(Number),
+        reviewWindowName: undefined,
+      }),
+    );
+    // Backoff scheduled, not immediate.
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 30_000);
+    // Worker is not in failing.
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "failing" }),
+    );
+  });
+
+  it("transitions to failing with reason transient-review after the budget is exhausted", () => {
+    // Three prior attempts already burned; this is attempt #4 and it should
+    // escalate to failing with failingReason="transient-review" instead of
+    // continuing to retry forever.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123",
+        preReviewSha: "pre456",
+        reviewRetryCount: 3,
+      }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) {
+        return `API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`;
+      }
+      return "{}";
+    });
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre456");
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "failing",
+        failingReason: "transient-review",
+        failingSha: "pre456",
+        reviewRetryCount: undefined,
+        reviewRetryAt: undefined,
+      }),
+    );
+  });
+
+  it("falls through to unparseable-verdict when output isn't transient", () => {
+    // Garbled reviewer output that doesn't match transient patterns must
+    // still go through the existing unparseable-verdict path (one retry if
+    // reviewer advanced head, else immediate failing). Here head didn't
+    // advance, so we expect immediate failing with reason unparseable-verdict.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123",
+        preReviewSha: "pre456",
+      }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) {
+        return "reviewer wrote a long body but forgot the verdict line";
+      }
+      return "{}";
+    });
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre456");
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "failing",
+        failingReason: "unparseable-verdict",
+      }),
+    );
+  });
+
+  it("falls through to unparseable-verdict retry when reviewer committed work even if tail looks transient", () => {
+    // Defensive: the unparseable-verdict retry path handles the case where
+    // the reviewer rebased + committed fixes before crashing. Even if the
+    // tail matches a transient pattern, we must not re-launch the same
+    // review on top of unpushed reviewer work — handleUnparseableReview
+    // force-pushes and re-queues exactly one review.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123",
+        preReviewSha: "pre456",
+      }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) {
+        return "API Error: 500 server-side issue";
+      }
+      return "{}";
+    });
+    // Head HAS advanced — reviewer committed fixes before the API blew up.
+    vi.mocked(getBranchHeadSha).mockReturnValue("post789");
+
+    poll("myproject");
+
+    expect(forcePushBranch).toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "working",
+        unparseableReviewAt: expect.any(Number),
       }),
     );
   });
@@ -2882,5 +3074,64 @@ describe("restartLongLivedPollers", () => {
 
     expect(() => restartLongLivedPollers("node /usr/local/bin/garden")).not.toThrow();
     expect(killWindowSafe).toHaveBeenCalledWith("_beta-poller");
+  });
+});
+
+describe("isTransientReviewFailureTail", () => {
+  // Pure detector — no fs/tmux/registry interaction. Tests live here rather
+  // than a dedicated file so the module's existing mocks don't need to be
+  // duplicated. See poller-review.ts handleTransientReviewFailure.
+  it("matches a 500 Internal server error tail", async () => {
+    const { isTransientReviewFailureTail } = await import("../src/dashboard/poller-review.js");
+    const output = [
+      "Looking at the diff...",
+      "Everything looks reasonable here.",
+      "API Error: 500 Internal server error. This is a server-side issue, usually temporary — try again in a moment.",
+    ].join("\n");
+    expect(isTransientReviewFailureTail(output)).toBe(true);
+  });
+
+  it("matches a 529 overloaded_error JSON tail", async () => {
+    const { isTransientReviewFailureTail } = await import("../src/dashboard/poller-review.js");
+    const output = `Some reviewer body text.\nAPI Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`;
+    expect(isTransientReviewFailureTail(output)).toBe(true);
+  });
+
+  it("matches a 429 rate_limit_error tail", async () => {
+    const { isTransientReviewFailureTail } = await import("../src/dashboard/poller-review.js");
+    const output = `API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"..."}}`;
+    expect(isTransientReviewFailureTail(output)).toBe(true);
+  });
+
+  it("does not match a reviewer that merely mentions API errors in body text", async () => {
+    const { isTransientReviewFailureTail } = await import("../src/dashboard/poller-review.js");
+    // The line is in the middle, not the tail. The verdict line at the bottom
+    // would have been parsed in the normal path; only unparsed output reaches
+    // this detector, and we don't want body-text false positives.
+    const output = [
+      "The error handling for API Error: 500 looks fine to me.",
+      "Tests pass.",
+      "Body continues for many lines after this.",
+      "Line 4",
+      "Line 5",
+      "Line 6",
+      "Some closing thought without a verdict token.",
+    ].join("\n");
+    expect(isTransientReviewFailureTail(output)).toBe(false);
+  });
+
+  it("does not match a 4xx that isn't rate-limit (e.g. 400 bad request)", async () => {
+    const { isTransientReviewFailureTail } = await import("../src/dashboard/poller-review.js");
+    // 400/401/403/404 indicate operator-action failures (auth, malformed
+    // request) — auto-retry would just burn the budget. The detector is
+    // scoped to 5xx and 429.
+    const output = `API Error: 400 Bad Request`;
+    expect(isTransientReviewFailureTail(output)).toBe(false);
+  });
+
+  it("does not match empty or whitespace-only output", async () => {
+    const { isTransientReviewFailureTail } = await import("../src/dashboard/poller-review.js");
+    expect(isTransientReviewFailureTail("")).toBe(false);
+    expect(isTransientReviewFailureTail("   \n  \n")).toBe(false);
   });
 });
