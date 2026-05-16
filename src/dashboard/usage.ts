@@ -109,6 +109,67 @@ export interface FetchResult {
   retryAfterMs?: number;
 }
 
+// Pulls the diagnostically useful fields off a thrown fetch error and builds
+// a concise human summary. Node's network errors carry `code`/`syscall`/
+// `hostname` (often more informative than `.message`, which is sometimes
+// empty — e.g. on a bare `req.destroy()` or some TLS aborts), so we surface
+// those structured fields to the log and prefer "<syscall> <code>" over a
+// blank message in the snapshot's error string.
+export interface FetchErrorDetail {
+  summary: string;
+  data: Record<string, string | number>;
+}
+
+export function describeFetchError(err: unknown): FetchErrorDetail {
+  const data: Record<string, string | number> = {};
+  let messageField: string | undefined;
+  let nameField: string | undefined;
+
+  if (err && typeof err === "object") {
+    const e = err as Record<string, unknown>;
+    const stringFields = ["name", "code", "syscall", "hostname", "address"] as const;
+    for (const k of stringFields) {
+      const v = e[k];
+      if (typeof v === "string" && v.length > 0) data[k] = v;
+    }
+    const numberFields = ["errno", "port"] as const;
+    for (const k of numberFields) {
+      const v = e[k];
+      if (typeof v === "number" && Number.isFinite(v)) data[k] = v;
+    }
+    if (typeof e.message === "string" && e.message.length > 0) {
+      messageField = e.message.slice(0, 200);
+      data.message = messageField;
+    }
+    if (typeof e.name === "string" && e.name.length > 0) nameField = e.name;
+    if (e.cause && typeof e.cause === "object") {
+      const cause = e.cause as Record<string, unknown>;
+      if (typeof cause.code === "string" && cause.code.length > 0) data.causeCode = cause.code;
+      if (typeof cause.message === "string" && cause.message.length > 0) {
+        data.causeMessage = cause.message.slice(0, 120);
+      }
+    }
+  }
+
+  const code = typeof data.code === "string" ? data.code : undefined;
+  const syscall = typeof data.syscall === "string" ? data.syscall : undefined;
+  let summary: string;
+  if (code && syscall) summary = `${syscall} ${code}`;
+  else if (code) summary = code;
+  else if (messageField) summary = messageField;
+  else if (nameField && nameField !== "Error") summary = nameField;
+  else {
+    const ctor = err && typeof err === "object" ? (err as { constructor?: { name?: string } }).constructor?.name : undefined;
+    if (ctor && ctor !== "Error" && ctor !== "Object") summary = ctor;
+    else {
+      const s = typeof err === "string" ? err : err == null ? "" : String(err);
+      summary = s && s !== "[object Object]" && s !== "Error" ? s : "unknown error (no message or code)";
+    }
+  }
+
+  return { summary: summary.slice(0, 120), data };
+}
+
 export function fetchUsageRaw(token: string): Promise<FetchResult> {
   return new Promise((resolve, reject) => {
     const req = https.request({
@@ -474,11 +535,11 @@ export async function refreshUsage(): Promise<UsageSnapshot> {
     log.warn("usage", "unexpected status", { data: { status: res.status, body: res.body.slice(0, 200) } });
     return finalizeSnapshot({ fetchedAt, error: `http ${res.status}` }, prior);
   } catch (err) {
-    const error = (err instanceof Error ? err.message : String(err)).slice(0, 120);
-    log.warn("usage", "fetch error", { data: { error } });
+    const { summary, data } = describeFetchError(err);
+    log.warn("usage", "usage fetch failed", { data: { error: summary, ...data } });
     return finalizeSnapshot({
       fetchedAt: new Date().toISOString(),
-      error,
+      error: summary,
     }, prior);
   }
 }

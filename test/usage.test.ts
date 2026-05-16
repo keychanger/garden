@@ -8,6 +8,7 @@ import {
   shouldRefreshOnHookWith,
   decideRefresh,
   parseRetryAfter,
+  describeFetchError,
   HOOK_REFRESH_COOLDOWN_MS,
   POLL_OK_MS,
   POLL_MIN_MS,
@@ -56,6 +57,76 @@ describe("normalizeUsage", () => {
     expect(normalizeUsage(null)).toEqual({});
     expect(normalizeUsage("nope")).toEqual({});
     expect(normalizeUsage({})).toEqual({});
+  });
+});
+
+describe("describeFetchError", () => {
+  it("summarizes a DNS lookup failure using syscall + code", () => {
+    const err = Object.assign(new Error("getaddrinfo ENOTFOUND api.anthropic.com"), {
+      code: "ENOTFOUND",
+      errno: -3008,
+      syscall: "getaddrinfo",
+      hostname: "api.anthropic.com",
+    });
+    const { summary, data } = describeFetchError(err);
+    expect(summary).toBe("getaddrinfo ENOTFOUND");
+    expect(data.code).toBe("ENOTFOUND");
+    expect(data.syscall).toBe("getaddrinfo");
+    expect(data.hostname).toBe("api.anthropic.com");
+    expect(data.errno).toBe(-3008);
+    expect(data.message).toBe("getaddrinfo ENOTFOUND api.anthropic.com");
+  });
+
+  it("falls back to code alone when syscall is absent", () => {
+    const err = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    const { summary, data } = describeFetchError(err);
+    expect(summary).toBe("ECONNRESET");
+    expect(data.code).toBe("ECONNRESET");
+    expect(data.message).toBe("socket hang up");
+  });
+
+  it("uses the message when no code/syscall is set", () => {
+    const err = new Error("timeout");
+    const { summary } = describeFetchError(err);
+    expect(summary).toBe("timeout");
+  });
+
+  it("returns a concrete fallback rather than empty when the error has no message or code", () => {
+    const err = new Error("");
+    const { summary } = describeFetchError(err);
+    expect(summary).toBe("unknown error (no message or code)");
+  });
+
+  it("prefers the error's name over generic 'Error' when message is empty", () => {
+    class AbortError extends Error {
+      override name = "AbortError";
+    }
+    const err = new AbortError();
+    const { summary } = describeFetchError(err);
+    expect(summary).toBe("AbortError");
+  });
+
+  it("handles non-Error throws (strings, undefined) without crashing", () => {
+    expect(describeFetchError("boom").summary).toBe("boom");
+    expect(describeFetchError(undefined).summary).toBe("unknown error (no message or code)");
+    expect(describeFetchError(null).summary).toBe("unknown error (no message or code)");
+  });
+
+  it("extracts cause fields when present (Node fetch wraps the underlying socket error)", () => {
+    const cause = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:443"), {
+      code: "ECONNREFUSED",
+    });
+    const err = Object.assign(new Error("fetch failed"), { cause });
+    const { data, summary } = describeFetchError(err);
+    expect(summary).toBe("fetch failed");
+    expect(data.causeCode).toBe("ECONNREFUSED");
+    expect(data.causeMessage).toBe("connect ECONNREFUSED 127.0.0.1:443");
+  });
+
+  it("caps summary length so a runaway message can't blow out a log line", () => {
+    const huge = "x".repeat(500);
+    const { summary } = describeFetchError(new Error(huge));
+    expect(summary.length).toBe(120);
   });
 });
 
