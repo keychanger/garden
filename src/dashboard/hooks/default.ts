@@ -123,7 +123,7 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
         prState: "done",
         mergedAt: new Date().toISOString(),
       });
-      log.info("hook", "stop hook set done prState (worker declared done)", {
+      log.info("hook", "stop hook set done prState", {
         worker: workerName,
         data: { project: projectName },
       });
