@@ -8,8 +8,25 @@ in `<project>/.garden/rules.md` can extend or override these.
 - Prefer the simplest solution that accomplishes the goal.
 - Do not add abstractions, configuration, or flexibility for hypothetical future use.
 - Do not overengineer. Three similar lines of code is better than a premature abstraction.
-- Follow established patterns in the codebase. Match the style of surrounding code.
+- Follow established patterns in the codebase. Match the style of surrounding code,
+  even if you'd write it differently in a greenfield project.
 - When in doubt, do less.
+- Senior-engineer check: before submitting, re-read your change as if a senior reviewer
+  is reading it. If the honest answer to "is this overcomplicated?" is yes, rewrite it.
+
+## Thinking before acting
+
+- State ambiguity explicitly. When a request has multiple plausible interpretations
+  and choosing wrong would waste work, surface them — either ask, or pick one and
+  name the assumption out loud. Don't silently guess. This sits upstream of "make
+  your best judgment and proceed" in the Agent behavior section: judge silently on
+  small local calls; surface ambiguity that could produce the wrong feature.
+- Push back when a simpler path exists. If the request can be satisfied with less
+  than what was asked, say so before implementing the longer path.
+- Frame the task as success criteria, then work the loop. "Fix the bug" becomes
+  "write a test that reproduces it, then make it pass." "Add validation" becomes
+  "write tests for invalid inputs, then make them pass." If a task can't be reduced
+  to observable criteria, flag that before starting rather than guessing at "done."
 
 ## Planning
 
