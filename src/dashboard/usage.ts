@@ -639,7 +639,8 @@ export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number):
 
 // Width-aware single-line health row. Truncates with an ellipsis when the
 // `(stale 2h, …)` content would exceed the pane and wrap — wrapping would
-// push the pane past its 4-line budget and break the dashboard layout.
+// add extra rows to the pane height the auto-resize in writeUsageRendered
+// doesn't budget for.
 function formatHealthLine(tag: string, paneWidth: number | undefined): string {
   const text = `(${tag})`;
   if (paneWidth === undefined) return `${INDENT}${dim(text)}`;
@@ -653,7 +654,7 @@ const SEVEN_DAY_MS = 7 * 24 * 60 * 60 * 1000;
 
 // Trust signal for the operator: when bars are real-time we say nothing
 // (uncluttered). When data is unexpectedly old or the last fetch errored, the
-// renderer surfaces a one-line tag above the meters so the source of trouble
+// renderer surfaces a one-line tag below the meters so the source of trouble
 // is obvious without digging through `garden logs`. Returns the inner text
 // (no parens, no ANSI) so the renderer can wrap, truncate, and dim. Examples:
 //   no problems        → ""
