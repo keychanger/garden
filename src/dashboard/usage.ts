@@ -595,12 +595,14 @@ function computeMeterFit(paneWidth: number | undefined): { barWidth: number; sho
   };
 }
 
-// Leading blank for breathing room under the pane-border label (replaced by a
-// one-line health tag when the snapshot is stale or in error), then three
-// meter rows. The tag is rendered once instead of repeated on every meter row
-// — a long error like "refresh failed: network: getaddrinfo ENOTFOUND
-// platform.claude.com" repeated three times overflows the 112-col pane and
-// wraps each meter row, busting the pane's 4-row content budget.
+// Leading blank for breathing room under the pane-border label, then three
+// meter rows, then an optional one-line health tag *underneath* the meters
+// when the snapshot is stale or in error. The tag is rendered once instead
+// of repeated on every meter row — a long error like "refresh failed: network:
+// getaddrinfo ENOTFOUND platform.claude.com" repeated three times overflows
+// the 112-col pane and wraps each meter row. Placing the tag below (and the
+// pane auto-resizes by one row when it appears) keeps transient errors from
+// dominating the visual top of the pane.
 export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number): string {
   const snap = readUsageSnapshot();
 
@@ -624,12 +626,13 @@ export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number):
   const d = snap.data;
   const fit = computeMeterFit(paneWidth);
 
-  const lines: string[] = [tag ? formatHealthLine(tag, paneWidth) : ""];
+  const lines: string[] = [""];
   lines.push(renderMeterLine("5h",     d.fiveHour, nowMs, FIVE_HOUR_MS, fit));
   lines.push(renderMeterLine("week",   d.weekly,   nowMs, SEVEN_DAY_MS, fit));
   // A null seven_day_sonnet bucket renders "—" rather than a flat-zero bar — a 0% sliver
   // next to the weekly bar reads as broken, and "no data" is the truer signal.
   lines.push(renderMeterLine("sonnet", d.sonnet,   nowMs, SEVEN_DAY_MS, fit));
+  if (tag) lines.push(formatHealthLine(tag, paneWidth));
 
   return lines.map(l => l + "\x1b[K").join("\n");
 }

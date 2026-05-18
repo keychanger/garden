@@ -547,11 +547,11 @@ describe("renderUsagePane", () => {
     expect(out).toContain("(stale 2h, rate-limited)");
   });
 
-  it("renders the health tag once on its own line, not appended to meter rows", async () => {
-    // The pane has a 4-row content budget. Repeating the tag across all three
-    // meter rows overflows a long error (e.g. a network DNS message) and wraps
-    // each row, busting the layout. The tag must occupy line 0 and not appear
-    // in lines 1-3.
+  it("renders the health tag once on its own line below the meters, not appended to meter rows", async () => {
+    // Repeating the tag across all three meter rows overflows a long error
+    // (e.g. a network DNS message) and wraps each row. The tag must occupy a
+    // single line *below* the sonnet meter, where transient errors don't
+    // dominate the visual top of the pane.
     writeSnapshot({
       fetchedAt: new Date(now).toISOString(),
       error: "rate-limited",
@@ -564,17 +564,34 @@ describe("renderUsagePane", () => {
     });
     const render = await importRender();
     const lines = render(now).split("\n");
-    expect(lines).toHaveLength(4);
-    expect(lines[0]).toContain("(stale 2h, rate-limited)");
-    for (const l of lines.slice(1)) {
+    // Leading blank + 3 meters + 1 tag = 5 lines when an error is present.
+    expect(lines).toHaveLength(5);
+    expect(lines[4]).toContain("(stale 2h, rate-limited)");
+    for (const l of lines.slice(0, 4)) {
       expect(l).not.toContain("stale");
       expect(l).not.toContain("rate-limited");
     }
   });
 
+  it("omits the trailing tag line when the snapshot is healthy", async () => {
+    // When there's nothing wrong, the pane stays at its natural 4-line height
+    // (leading blank + 3 meters) — no empty trailing row.
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        fiveHour: { pct: 26, resetsAt: new Date(now + 2 * 60 * 60_000).toISOString() },
+        weekly:   { pct: 35, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
+        sonnet:   { pct: 4,  resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
+      },
+    });
+    const render = await importRender();
+    const lines = render(now).split("\n");
+    expect(lines).toHaveLength(4);
+  });
+
   it("truncates a long health tag with an ellipsis to fit paneWidth", async () => {
     // Defense against a wide-but-not-wide-enough pane: if the tag itself would
-    // wrap, truncate so the meter rows still fit the 4-line budget.
+    // wrap, truncate so it stays on a single line below the meters.
     writeSnapshot({
       fetchedAt: new Date(now).toISOString(),
       error: "refresh failed: network: getaddrinfo ENOTFOUND platform.claude.com",
@@ -585,7 +602,8 @@ describe("renderUsagePane", () => {
     });
     const render = await importRender();
     const lines = render(now, 40).split("\n");
-    const visible = lines[0].replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+    const tagLine = lines[lines.length - 1];
+    const visible = tagLine.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
     expect(visible.length).toBeLessThanOrEqual(40);
     expect(visible).toContain("…"); // ellipsis
   });
