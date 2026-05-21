@@ -1739,7 +1739,7 @@ single icon per plot from the worst-priority worker state. Trellis
 vines slot into the existing priority order with one addition:
 
 ```
-failing > asking > done > working > idle
+failing > asking > working > done > idle
        │
        └─ within failing, trellis-flagged is the highest-priority
           alert source because it requires authoring decisions, not
