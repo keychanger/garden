@@ -1163,10 +1163,12 @@ describe("poll — reviewing state (async)", () => {
         lastSeenSha: "old-sha" }),
     ]);
     vi.mocked(getRemoteTrackingSha).mockReturnValue("newer-sha");
-    // Reviewer window has exited; SHA change is therefore a genuine worker push.
+    // Reviewer window has exited; SHA change with NO result file is therefore
+    // a genuine worker push (the reviewer left no trace of completion).
     vi.mocked(windowExists).mockImplementation((name: string) =>
       !name.includes("-review-"),
     );
+    vi.mocked(fs.existsSync).mockReturnValue(false); // no review-result file
     vi.mocked(getCommitSummary).mockReturnValue("abc123 new work");
 
     poll("myproject");
@@ -1198,6 +1200,45 @@ describe("poll — reviewing state (async)", () => {
 
     poll("myproject");
 
+    const resetCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "working",
+    );
+    expect(resetCall).toBeUndefined();
+  });
+
+  it("dispatches FIXED verdict when reviewer pushed its fix and exited (no false worker-pushed reset)", () => {
+    // Regression for the stuck-loop seen on west-old-reef (2026-05-20):
+    // reviewer pushed a FIXED commit, exited; handleReviewing saw window-gone
+    // + remoteSha != lastSeenSha and reset to "working", silently dropping the
+    // FIXED verdict and looping the review until the reviewer happened to
+    // converge on no-op. The verdict file must be consulted FIRST so the
+    // reviewer's own push is dispatched, not misattributed.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "pre-fix-sha",
+      }),
+    ]);
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("reviewer-fix-sha"); // reviewer's own push
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) return "Fixed SSR hydration.\nFIXED";
+      return "{}";
+    });
+
+    poll("myproject");
+
+    // FIXED → force-push + merge-pending. NOT the worker-pushed reset path.
+    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merge-pending" }),
+    );
     const resetCall = vi.mocked(updateWorkerFields).mock.calls.find(
       c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "working",
     );

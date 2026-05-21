@@ -167,23 +167,21 @@ export function handleReviewing(
     return false; // still in-flight
   }
 
-  // Reviewer has exited. A SHA change against the baseline captured at launch
-  // now unambiguously means the worker pushed during review — the reviewer is
-  // gone. Abort and let the normal working-state path pick up the new commits.
-  const wtPath = entry.worktreePath ?? projectPath;
-  const branchName = entry.branchName ?? entry.name;
-  const remoteSha = getRemoteTrackingSha(wtPath, branchName);
-  if (remoteSha && entry.lastSeenSha && remoteSha !== entry.lastSeenSha) {
-    resetToWorkingOnWorkerPush(projectName, wtPath, baseBranch, entry, "review");
-    return true;
-  }
-
-  // Review window is gone — read result. The trellis workflow has its own
-  // verdict vocabulary (ALIGNED/DRIFT/FAILED/FLAGGED); default keeps
-  // CLEAN/FIXED/FAILED. Unparseable handling below is workflow-agnostic.
-  // We read the raw output once up front so transient-failure detection
+  // Reviewer window is gone — read result. Read BEFORE the worker-pushed-SHA
+  // check below: a FIXED verdict where the reviewer pushed its fix and then
+  // exited produces the same "window gone + SHA changed" predicate as a
+  // worker push, so checking SHA first would silently drop the reviewer's
+  // verdict and loop the review. The result file is the unambiguous signal
+  // that the reviewer completed its turn.
+  //
+  // The trellis workflow has its own verdict vocabulary
+  // (ALIGNED/DRIFT/FAILED/FLAGGED); default keeps CLEAN/FIXED/FAILED.
+  // Unparseable handling below is workflow-agnostic. We read the raw output
+  // once up front so transient-failure detection
   // (handleTransientReviewFailure) and the unparseable-verdict path can both
   // introspect it without re-reading after cleanReviewFiles deletes the file.
+  const wtPath = entry.worktreePath ?? projectPath;
+  const branchName = entry.branchName ?? entry.name;
   const isTrellis = entry.workflow === "trellis";
   const rawOutput = readReviewOutputRaw(projectName, entry);
   const review = rawOutput === null
@@ -209,6 +207,22 @@ export function handleReviewing(
     return dispatchDefaultVerdict(
       projectName, projectPath, entry, review as ReviewResult,
     );
+  }
+
+  // No parseable verdict. If the result file was genuinely absent AND the
+  // remote SHA moved past the launch baseline, attribute the push to the
+  // worker (the reviewer never wrote anything, so the SHA change can't be
+  // its work) and reset to working. This is the original 2026-04 stuck-loop
+  // repair, narrowed to the case where the reviewer left no trace.
+  const remoteSha = getRemoteTrackingSha(wtPath, branchName);
+  if (
+    rawOutput === null
+    && remoteSha
+    && entry.lastSeenSha
+    && remoteSha !== entry.lastSeenSha
+  ) {
+    resetToWorkingOnWorkerPush(projectName, wtPath, baseBranch, entry, "review");
+    return true;
   }
 
   // Reviewer output is unparseable. If the tail matches an Anthropic API
