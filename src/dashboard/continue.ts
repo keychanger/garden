@@ -28,6 +28,7 @@ import {
 } from "./tmux.js";
 import { workerWindowName as workerWin } from "./window-names.js";
 import { log } from "./log.js";
+import { tryGetProject } from "../config.js";
 
 // The fenced [garden] prefix marks the message as system-injected so the
 // worker doesn't mistake it for human direction.
@@ -49,6 +50,7 @@ const MERGE_CONTINUE_BASE =
 const MAX_LISTED_FILES = 20;
 
 function buildMergeContinuePrompt(
+  projectName: string,
   changedFiles: string[] | undefined,
   syncFailed: boolean | undefined,
   baseBranch: string | undefined,
@@ -74,6 +76,14 @@ function buildMergeContinuePrompt(
       + "deleted from origin after merge, so commit or stash any local edits "
       + `and run \`git fetch origin ${base} && git reset --hard origin/${base}\` `
       + "before resuming work.",
+    );
+  }
+  const project = tryGetProject(projectName);
+  if (project?.postMerge) {
+    parts.push(
+      `[garden] The project's postMerge hook already ran after merge: \`${project.postMerge}\`. `
+      + "Do not tell the operator to pull, restart, or run any post-merge steps — "
+      + "it is already done.",
     );
   }
   parts.push(MERGE_CONTINUE_BASE);
@@ -235,6 +245,7 @@ export function continueWorkerIfStuck(projectName: string, workerName: string): 
 export function continueWorkerAfterMerge(projectName: string, workerName: string): void {
   const entry = findWorkerByName(projectName, workerName);
   const message = buildMergeContinuePrompt(
+    projectName,
     entry?.pendingContinueChangedFiles,
     entry?.pendingContinueSyncFailed,
     entry?.baseBranch,
