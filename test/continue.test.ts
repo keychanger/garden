@@ -20,6 +20,10 @@ vi.mock("../src/dashboard/state.js", () => ({
   readDashState: vi.fn(),
 }));
 
+vi.mock("../src/config.js", () => ({
+  tryGetProject: vi.fn(() => null),
+}));
+
 vi.mock("../src/dashboard/registry.js", () => ({
   findWorkerByName: vi.fn(),
   updateWorkerFields: vi.fn(),
@@ -57,6 +61,7 @@ import { findWorkerByName, updateWorkerFields } from "../src/dashboard/registry.
 import { tmux, pasteAndSubmit, paneExists, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import { tryGetProject } from "../src/config.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 
 function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
@@ -380,6 +385,26 @@ describe("continueWorkerAfterMerge", () => {
     expect(message).not.toContain("origin/bold-ash");
   });
 
+  it("includes postMerge context when the project has a postMerge hook configured", () => {
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/tmp/myproject", postMerge: "npm install && npm run build",
+    });
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+
+    continueWorkerAfterMerge("myproject", "bold-ash");
+
+    const message = vi.mocked(pasteAndSubmit).mock.calls[0][1];
+    expect(message).toContain("postMerge hook already ran");
+    expect(message).toContain("npm install && npm run build");
+    expect(message).toContain("Do not tell the operator to pull");
+  });
+
   it("uses the bare base prompt when no transient fields are set", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
@@ -394,6 +419,7 @@ describe("continueWorkerAfterMerge", () => {
     const message = vi.mocked(pasteAndSubmit).mock.calls[0][1];
     expect(message).not.toContain("During review");
     expect(message).not.toContain("could not auto-sync");
+    expect(message).not.toContain("postMerge");
     expect(message).toContain("merged");
     expect(message).toContain(".garden-done");
     expect(updateWorkerFields).not.toHaveBeenCalled();

@@ -216,6 +216,8 @@ Skip conditions (logged at `debug`):
 - `claudeStatus` is `working` or `asking` — the operator is already typing, same guard the interrupt-recovery path uses.
 - `lastAutoContinueAt` is within the last 10 seconds (idempotency guard against any merge-event replay).
 
+The merge-continue prompt includes contextual preambles when applicable: a stale-files list when the reviewer modified files, a manual-sync nudge when the worktree could not auto-sync, and a postMerge acknowledgement when the project has a `postMerge` hook configured (so the worker does not redundantly suggest the operator run build/install steps that already ran).
+
 A successful dispatch logs at `info` (`auto-continued worker after merge`) so the operator sees the lifecycle transition in `⌥l` logs alongside the `merged` line. The 5s subprocess delay lets postMerge and the reviewer's force-push settle before keys land in the pane. The interrupt-recovery dispatch uses a 6s primary + 10s retry to absorb the slower TUI bind under dashboard-rebuild load.
 
 `garden pause <worker>` writes the sentinel; `garden resume <worker>` deletes it. Killing a worker (`opt-x`) removes the worktree entirely, so the sentinel goes with it.
