@@ -504,9 +504,11 @@ describe("getPaneLabel", () => {
 
 describe("pasteAndSubmit", () => {
   // pasteAndSubmit returns synchronously after load-buffer + paste-buffer;
-  // the trailing Enter fires on a setTimeout 300ms later. Use fake timers so
-  // tests can advance to the Enter without real wallclock waits, and so
-  // tests that don't care about Enter aren't tripped by a stray timer.
+  // two Enter keystrokes fire on setTimeouts at 300ms and 1500ms (the second
+  // is the cold-respawn safety net for an Enter absorbed into the paste burst).
+  // Use fake timers so tests can advance to the Enters without real wallclock
+  // waits, and so tests that don't care about Enter aren't tripped by a stray
+  // timer.
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -547,11 +549,19 @@ describe("pasteAndSubmit", () => {
     // block on a synchronous sleep.
     expect(calls.find(c => c.argv[0] === "send-keys")).toBeUndefined();
 
-    // After the 300ms paste-detection gap, Enter fires.
+    // After the 300ms paste-detection gap, the first Enter fires.
     vi.advanceTimersByTime(300);
-    const enterCall = calls.find(c => c.argv[0] === "send-keys" && c.argv.includes("Enter"));
-    expect(enterCall).toBeDefined();
-    expect(enterCall!.argv).toEqual(["send-keys", "-t", "%42", "Enter"]);
+    const enterCalls = () => calls.filter(c => c.argv[0] === "send-keys" && c.argv.includes("Enter"));
+    expect(enterCalls()).toHaveLength(1);
+    expect(enterCalls()[0].argv).toEqual(["send-keys", "-t", "%42", "Enter"]);
+
+    // A confirming Enter fires at 1500ms — the cold-respawn safety net. If the
+    // first Enter was absorbed into the paste burst (status hook reported the
+    // pane ready before its TUI bound paste-detection), this one submits the
+    // buffered prompt once the TUI has settled.
+    vi.advanceTimersByTime(1200);
+    expect(enterCalls()).toHaveLength(2);
+    expect(enterCalls()[1].argv).toEqual(["send-keys", "-t", "%42", "Enter"]);
   });
 
   it("uses unique buffer names so concurrent sends do not collide", () => {
