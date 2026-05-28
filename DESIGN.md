@@ -241,7 +241,7 @@ The dashboard surfaces important events as alerts — persistent messages that r
 **Events that generate alerts:**
 - Worker bootstrap could not fast-forward main checkout (stale main, dirty worktree)
 - Review process failure (Claude unavailable, timeout, unparseable output)
-- Reviewer or resolver exceeded the 30-minute wall-clock cap and was killed (typically a hung subprocess — e.g. tests with no timeout blocked by the sandbox — wedging the state machine)
+- Reviewer or resolver exceeded the 60-minute wall-clock cap and was killed (typically a hung subprocess — e.g. tests with no timeout blocked by the sandbox — wedging the state machine)
 - Reviewer could not fix issues (FAILED verdict)
 - Merge failure
 - Local checkout did not fast-forward after merge (regardless of postMerge config)

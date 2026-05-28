@@ -488,23 +488,24 @@ describe("poll — working state", () => {
     // (Node terminates unref'd timers when the event loop empties) — a hung
     // reviewer never got pinged, the worker wedged in `reviewing`, the merge
     // never happened, and post-merge auto-continue never fired.
-    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 30 * 60 * 1000);
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 60 * 60 * 1000);
   });
 });
 
 describe("poll — review/resolve timeout", () => {
-  const THIRTY_ONE_MIN_AGO = Date.now() - 31 * 60 * 1000;
   // The cap is `Date.now() - reviewStartedAt > REVIEW_TIMEOUT_MS` (strict >).
-  // At exactly 30 minutes the reviewer is NOT yet timed out; at 30 minutes +
-  // 1ms it IS. These two boundary tests pin the > vs >= semantics.
-  const REVIEW_TIMEOUT_MS = 30 * 60 * 1000;
+  // At exactly 60 minutes the reviewer is NOT yet timed out; at 60 minutes +
+  // 1ms it IS. These two boundary tests pin the > vs >= semantics. Keep this
+  // in lockstep with REVIEW_TIMEOUT_MS in src/dashboard/poller-review.ts.
+  const REVIEW_TIMEOUT_MS = 60 * 60 * 1000;
+  const PAST_CAP_AGO = Date.now() - REVIEW_TIMEOUT_MS - 60 * 1000;
 
-  it("reviewing → failing when the reviewer exceeds the 30-minute cap", () => {
+  it("reviewing → failing when the reviewer exceeds the 60-minute cap", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "reviewing",
         reviewWindowName: "_myproject-review-bold-ash",
-        reviewStartedAt: THIRTY_ONE_MIN_AGO,
+        reviewStartedAt: PAST_CAP_AGO,
         lastSeenSha: "abc123",
       }),
     ]);
@@ -520,7 +521,7 @@ describe("poll — review/resolve timeout", () => {
         level: "error",
         source: "review",
         worker: "bold-ash",
-        message: expect.stringContaining("30-minute timeout"),
+        message: expect.stringContaining("60-minute timeout"),
       }),
     );
     const call = vi.mocked(updateWorkerFields).mock.calls.find(
@@ -538,7 +539,7 @@ describe("poll — review/resolve timeout", () => {
       makeWorker({
         prState: "resolving",
         reviewWindowName: "_myproject-review-bold-ash",
-        reviewStartedAt: THIRTY_ONE_MIN_AGO,
+        reviewStartedAt: PAST_CAP_AGO,
         mergePendingAt: new Date(Date.now() - 2000).toISOString(),
         preResolveSha: "pre-sha",
         resolveAttempts: 1,
@@ -574,7 +575,7 @@ describe("poll — review/resolve timeout", () => {
       makeWorker({
         prState: "reviewing",
         reviewWindowName: "_myproject-review-bold-ash",
-        reviewStartedAt: THIRTY_ONE_MIN_AGO,
+        reviewStartedAt: PAST_CAP_AGO,
         lastSeenSha: "abc123",
       }),
     ]);
@@ -590,7 +591,7 @@ describe("poll — review/resolve timeout", () => {
 
     expect(killWindowSafe).not.toHaveBeenCalled();
     const timeoutAlert = vi.mocked(addAlert).mock.calls.find(
-      c => String((c[0] as { message: string }).message).includes("30-minute timeout"),
+      c => String((c[0] as { message: string }).message).includes("60-minute timeout"),
     );
     expect(timeoutAlert).toBeUndefined();
   });
@@ -614,7 +615,7 @@ describe("poll — review/resolve timeout", () => {
     expect(updateWorkerFields).not.toHaveBeenCalled();
   });
 
-  it("does NOT time out at exactly 30 minutes (boundary, > cap)", () => {
+  it("does NOT time out at exactly 60 minutes (boundary, > cap)", () => {
     // Freeze Date.now so the elapsed = REVIEW_TIMEOUT_MS exactly. Without
     // this, coverage instrumentation slows the run enough that real-clock
     // drift between setup and the poller's `Date.now()` call pushes
@@ -636,7 +637,7 @@ describe("poll — review/resolve timeout", () => {
 
       expect(killWindowSafe).not.toHaveBeenCalled();
       const timeoutAlert = vi.mocked(addAlert).mock.calls.find(
-        c => String((c[0] as { message: string }).message).includes("30-minute timeout"),
+        c => String((c[0] as { message: string }).message).includes("60-minute timeout"),
       );
       expect(timeoutAlert).toBeUndefined();
     } finally {
@@ -644,7 +645,7 @@ describe("poll — review/resolve timeout", () => {
     }
   });
 
-  it("times out at 30 minutes + 1ms (boundary, just past cap)", () => {
+  it("times out at 60 minutes + 1ms (boundary, just past cap)", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "reviewing",
@@ -660,7 +661,7 @@ describe("poll — review/resolve timeout", () => {
     expect(killWindowSafe).toHaveBeenCalledWith("_myproject-review-bold-ash");
     expect(addAlert).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: expect.stringContaining("30-minute timeout"),
+        message: expect.stringContaining("60-minute timeout"),
       }),
     );
   });

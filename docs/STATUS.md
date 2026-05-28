@@ -238,7 +238,7 @@ cannot be expressed as "wait for an event":
 - **`failing → working` debounce (30 s)** — preventing review storms on
   a worker that's actively failing in a tight loop. Started on a push
   event in the failing state. Source: `poller-state.ts` DEBOUNCE_MS.
-- **Reviewer / resolver wall-clock cap (30 min)** — kills a hung
+- **Reviewer / resolver wall-clock cap (60 min)** — kills a hung
   subprocess (e.g. `npm test` with no timeout, blocked by the sandbox)
   so the state machine can escalate to `failing` instead of wedging.
   Source: `poller-review.ts` REVIEW_TIMEOUT_MS, scheduled by

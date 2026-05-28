@@ -42,7 +42,7 @@ import { getWorkflow } from "./workflows/index.js";
 // Catches hung subprocesses the reviewer can't escape from (e.g. a `npm test`
 // that blocks forever because tests have no timeout and the sandbox silently
 // denies their network calls).
-export const REVIEW_TIMEOUT_MS = 30 * 60 * 1000;
+export const REVIEW_TIMEOUT_MS = 60 * 60 * 1000;
 
 // Transient-review auto-retry budget. When the reviewer's output ends in an
 // Anthropic API error (5xx / 429 / 529 / overloaded_error / rate_limit_error)
