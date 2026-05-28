@@ -148,7 +148,13 @@ vi.mock("../src/dashboard/git.js", () => ({
   syncWorktreeToRemote: vi.fn(() => ({ ok: true })),
   ensureNoRebaseInProgress: vi.fn(),
   hasRebaseInProgress: vi.fn(() => false),
-  isAncestor: vi.fn(() => true),
+  // Two callers, opposite argument orders. The resolver checks "is base an
+  // ancestor of HEAD" (rebased onto base → true). handleMergePending's resume
+  // check asks "is HEAD an ancestor of origin/<base>" (merge already landed).
+  // Default the resume check to false (a worker about to merge has unmerged
+  // commits) by keying off the remote ref appearing as the descendant.
+  isAncestor: vi.fn((_wt: string, _ancestor: string, descendant: string) =>
+    !String(descendant).startsWith("origin/")),
   getUnmergedFiles: vi.fn(() => []),
 }));
 
@@ -246,7 +252,8 @@ beforeEach(() => {
   vi.mocked(getRemoteTrackingSha).mockReturnValue("abc123");
   vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
   vi.mocked(hasRebaseInProgress).mockReturnValue(false);
-  vi.mocked(isAncestor).mockReturnValue(true);
+  vi.mocked(isAncestor).mockImplementation((_wt, _ancestor, descendant) =>
+    !String(descendant).startsWith("origin/"));
   vi.mocked(getUnmergedFiles).mockReturnValue([]);
   vi.mocked(fs.existsSync).mockReturnValue(false);
 });

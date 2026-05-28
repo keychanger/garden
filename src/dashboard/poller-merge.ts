@@ -18,7 +18,7 @@ import { resolveGardenRunner } from "./runner.js";
 import {
   abortRebase, cleanWorktree, deleteRemoteBranch, ensureNoRebaseInProgress,
   fastForwardBase, forcePushBranch, getBranchHeadSha, getChangedFiles,
-  getChangedFilesBetween, getCommitSummary, mergeToBase, rebaseBranch,
+  getChangedFilesBetween, getCommitSummary, isAncestor, mergeToBase, rebaseBranch,
   syncWorktreeToRemote,
 } from "./git.js";
 import { refreshDashboard, setupStatusBar } from "./header.js";
@@ -59,17 +59,10 @@ export function handleMergePending(
   );
   if (olderPending) return false;
 
-  // CI gate: defense-in-depth against merging a branch with red GitHub
-  // Actions. Runs BEFORE the rebase/force-push so we read CI for the SHA
-  // the worker actually published; the post-merge SHA on base is the same
-  // commits in their rebased form, and the workers we're guarding push
-  // frequently enough during their turn that CI is usually already
-  // settled by the time the reviewer signs off. See poller-ci.ts.
-  if (!gateCiStatus(projectName, projectPath, baseBranch, entry)) return false;
-
   const wtPath = entry.worktreePath ?? projectPath;
 
-  // Fetch latest base branch
+  // Fetch latest base branch (before the CI gate and the resume check, both
+  // of which read origin/<base>).
   try {
     execFileSync("git", ["fetch", "origin", baseBranch], {
       cwd: wtPath,
@@ -78,6 +71,31 @@ export function handleMergePending(
   } catch (err) {
     log.debug("poller", "fetch before merge failed", { worker: entry.name, data: { project: projectName, error: String(err) } });
   }
+
+  // Resume an interrupted merge. mergeToBase fast-forward-pushes the worker's
+  // HEAD onto origin/<base>, so once the base push has happened the worktree
+  // HEAD is contained in origin/<base>. If we observe that on entry, a prior
+  // finalization pushed the merge but was interrupted before the terminal-state
+  // transition — the poller can be torn down mid-finalize when a garden binary
+  // rebuild restarts every project's poller (see _post-rebuild-refresh). Naively
+  // re-running rebase + force-push here hits a force-with-lease "stale info"
+  // rejection against the now-deleted/diverged remote branch and bails the
+  // worker to `working` with nothing to re-trigger it — stranding an
+  // already-merged worker (and masking a trellis ALIGNED convergence). Detect
+  // it and resume finalization idempotently instead.
+  const headSha = getBranchHeadSha(wtPath);
+  if (headSha && isAncestor(wtPath, headSha, `origin/${baseBranch}`)) {
+    resumeInterruptedMerge(projectName, projectPath, baseBranch, entry);
+    return true;
+  }
+
+  // CI gate: defense-in-depth against merging a branch with red GitHub
+  // Actions. Runs BEFORE the rebase/force-push so we read CI for the SHA
+  // the worker actually published; the post-merge SHA on base is the same
+  // commits in their rebased form, and the workers we're guarding push
+  // frequently enough during their turn that CI is usually already
+  // settled by the time the reviewer signs off. See poller-ci.ts.
+  if (!gateCiStatus(projectName, projectPath, baseBranch, entry)) return false;
 
   // Clear any leftover rebase state (e.g., from a prior resolver that crashed).
   // Without this, the next `git rebase` can surface confusing errors that the
@@ -289,8 +307,45 @@ function finalizeMerge(
 
   log.info("poller", "merged to base branch", { worker: entry.name, data: { project: projectName, baseBranch } });
 
+  completeFinalization(projectName, projectPath, baseBranch, entry, preMergeChangedFiles, false);
+}
+
+// Resume a merge whose base push already landed but whose finalization was
+// interrupted before the terminal-state transition (see the resume check in
+// handleMergePending). The remote branch may already be deleted and the
+// worktree is already at the merged tip, so we skip the re-merge and the
+// remote worktree sync and run only the idempotent post-merge tail.
+function resumeInterruptedMerge(
+  projectName: string,
+  projectPath: string,
+  baseBranch: string,
+  entry: WorkerEntry,
+): void {
+  log.info("poller", "merge already on base, resuming interrupted finalization", {
+    worker: entry.name,
+    data: { project: projectName, baseBranch },
+  });
+  completeFinalization(projectName, projectPath, baseBranch, entry, [], true);
+}
+
+// The post-merge tail shared by a fresh merge and a resumed one: sync the
+// worktree to the merged tip (skipped on resume — the worktree is already
+// there and the remote branch may be gone), then run the project-wide
+// side-effects and write the terminal state. `alreadyMerged` distinguishes
+// the two callers.
+function completeFinalization(
+  projectName: string,
+  projectPath: string,
+  baseBranch: string,
+  entry: WorkerEntry,
+  preMergeChangedFiles: string[],
+  alreadyMerged: boolean,
+): void {
+  const branchName = entry.branchName ?? entry.name;
   const sentinelPresent = isDoneSet(entry.worktreePath);
-  const sync = syncWorktreeAfterMerge(projectName, branchName, entry, sentinelPresent);
+  const sync: SyncOutcome = alreadyMerged
+    ? { changedFiles: [], syncFailed: false }
+    : syncWorktreeAfterMerge(projectName, branchName, entry, sentinelPresent);
   notifyPostMerge(projectName, projectPath, baseBranch, entry, preMergeChangedFiles);
   transitionToTerminal(projectName, branchName, entry, sentinelPresent, sync);
   refreshDashboard();

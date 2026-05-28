@@ -255,4 +255,69 @@ describe("poller failure modes (real fs/git, mocked tmux/dashboard)", () => {
       )).toBeDefined();
     });
   });
+
+  describe("merge already landed but finalization was interrupted", () => {
+    // Models a finalizeMerge torn down between the base push and the terminal
+    // transition (the poller is restarted mid-finalize when a garden binary
+    // rebuild restarts every project's poller). The merge is on origin/<base>
+    // and the remote branch has been deleted; on the next poll the naive path
+    // would rebase + force-push HEAD:<branch>, hit --force-with-lease "stale
+    // info" against the deleted branch, and bail the worker to `working`.
+    async function setUpInterruptedMerge(): Promise<void> {
+      const { createWorktree } = await import("../../src/dashboard/git.js");
+      createWorktree(projectPath, worktreePath, WORKER);
+
+      fs.writeFileSync(path.join(worktreePath, "feature.txt"), "feature\n");
+      git(worktreePath, "add", "feature.txt");
+      git(worktreePath, "commit", "-m", "feature");
+      git(worktreePath, "push", "origin", WORKER);
+
+      // The base push already happened: origin/main carries the worker's HEAD.
+      git(worktreePath, "push", "origin", "HEAD:main");
+      // And deleteRemoteBranch already ran — the remote branch is gone, which
+      // is exactly what makes the naive force-with-lease retry fail.
+      git(originPath, "branch", "-D", WORKER);
+    }
+
+    it("resumes to merged instead of stranding the worker in working", async () => {
+      await setUpInterruptedMerge();
+      await makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date().toISOString(),
+      });
+
+      const { poll } = await import("../../src/dashboard/poller.js");
+      poll(PROJECT);
+
+      const { findWorkerByName } = await import("../../src/dashboard/registry.js");
+      const entry = findWorkerByName(PROJECT, WORKER);
+      // The regression: the old path reverted to "working" (force-push stale
+      // info) and left nothing to re-trigger it. The resume path completes
+      // finalization.
+      expect(entry?.prState).toBe("merged");
+
+      // origin/main still carries the worker's commit — no second merge.
+      expect(git(originPath, "rev-parse", "main"))
+        .toBe(git(worktreePath, "rev-parse", "HEAD"));
+    });
+
+    it("resumes to done when the .garden-done sentinel is set (trellis ALIGNED)", async () => {
+      await setUpInterruptedMerge();
+      // ALIGNED writes the sentinel before going merge-pending; finalizeMerge
+      // picks the terminal `done` state off it. The interrupted finalize must
+      // preserve that on resume rather than landing on transient `merged`.
+      fs.writeFileSync(path.join(worktreePath, ".garden-done"), "");
+      await makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date().toISOString(),
+      });
+
+      const { poll } = await import("../../src/dashboard/poller.js");
+      poll(PROJECT);
+
+      const { findWorkerByName } = await import("../../src/dashboard/registry.js");
+      const entry = findWorkerByName(PROJECT, WORKER);
+      expect(entry?.prState).toBe("done");
+    });
+  });
 });
