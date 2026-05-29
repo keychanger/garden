@@ -632,6 +632,8 @@ describe("killPane", () => {
 
     expect(vi.mocked(setPaneLabel)).toHaveBeenCalledWith("%30", "next-one");
     expect(vi.mocked(setPaneVar)).toHaveBeenCalledWith("%30", "garden_task", "do stuff");
+    // The surfaced worker pane keeps its wall clock (re-applied after swap-pane).
+    expect(vi.mocked(setPaneVar)).toHaveBeenCalledWith("%30", "garden_clock", "1");
   });
 
   it("falls back to shell when no hidden workers", () => {

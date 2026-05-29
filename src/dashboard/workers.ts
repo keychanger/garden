@@ -429,6 +429,7 @@ export function killPane(): void {
         const nextLabel = parseWorkerSuffix(targetWindow);
         if (nextLabel) {
           setPaneLabel(targetPaneId, nextLabel);
+          setPaneVar(targetPaneId, "garden_clock", "1");
           const nextEntry = findWorkerByName(state.activeProject, nextLabel);
           if (nextEntry?.task) setPaneVar(targetPaneId, "garden_task", nextEntry.task);
         }
