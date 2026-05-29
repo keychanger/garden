@@ -573,6 +573,8 @@ export function createShellWindow(projectName: string, projectPath: string): voi
   if (paneId) {
     setPaneLabel(paneId, `shell-${projectName}`);
     setPaneTitle(paneId, projectName);
+    // The right-pane shell shows the same wall clock as worker panes.
+    setPaneVar(paneId, "garden_clock", "1");
   }
 }
 

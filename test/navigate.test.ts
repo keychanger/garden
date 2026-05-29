@@ -458,6 +458,8 @@ describe("focusShell", () => {
 
     expect(state.activePaneType).toBe("shell");
     expect(state.activeWindowName).toBe("_garden-shell");
+    // The right-pane shell gets the wall clock too (gated on @garden_clock).
+    expect(setPaneVar).toHaveBeenCalledWith("%2", "garden_clock", "1");
     expect(writeDashState).toHaveBeenCalledWith(state);
     expect(refreshDashboard).toHaveBeenCalledWith({ state });
   });

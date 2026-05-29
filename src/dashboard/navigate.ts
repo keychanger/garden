@@ -197,6 +197,10 @@ export function focusShell(): void {
     const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject);
     swapToHidden(parkName, shellTarget, state);
 
+    // The right-pane shell shows the same wall clock as worker panes
+    // (gated on @garden_clock; see setupStatusBar).
+    if (state.activePaneId) setPaneVar(state.activePaneId, "garden_clock", "1");
+
     state.activePaneType = "shell";
     state.activeWindowName = shellTarget;
     writeDashState(state);

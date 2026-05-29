@@ -138,7 +138,7 @@ import {
   buildWorktreeBootstrapScript,
   buildWorktreeResumeCommand,
 } from "../src/dashboard/create.js";
-import { tmux, tmuxSplit, getFirstPaneId, setPaneLabel, setPaneTitle, shellEscape, disablePaneInput } from "../src/dashboard/tmux.js";
+import { tmux, tmuxSplit, getFirstPaneId, setPaneLabel, setPaneTitle, setPaneVar, shellEscape, disablePaneInput } from "../src/dashboard/tmux.js";
 
 const savedArgv1 = process.argv[1];
 afterAll(() => { process.argv[1] = savedArgv1; });
@@ -402,6 +402,11 @@ describe("createShellWindow", () => {
     createShellWindow("myproject", "/repo/myproject");
     expect(setPaneLabel).toHaveBeenCalledWith("%5", "shell-myproject");
     expect(setPaneTitle).toHaveBeenCalledWith("%5", "myproject");
+  });
+
+  it("sets the wall-clock pane var so the right-pane shell shows the clock", () => {
+    createShellWindow("myproject", "/repo/myproject");
+    expect(setPaneVar).toHaveBeenCalledWith("%5", "garden_clock", "1");
   });
 });
 
