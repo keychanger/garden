@@ -331,7 +331,7 @@ export function ensureDashboard(): void {
   try { tmux("clear-history", "-t", statusId); } catch { /* ignore */ }
 
   setPaneTitle(usageId, "garden");
-  setPaneLabel(usageId, "🌱 #[fg=green,bold]garden#[default]");
+  setPaneLabel(usageId, "#[fg=green,bold]garden#[default] 🌱");
   setPaneTitle(statusId, "status");
   // @garden_name is overwritten by updateHeaderVar() with the plot strip; leave it unset here.
   setPaneTitle(gardenShellId, "growhouse");

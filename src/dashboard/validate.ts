@@ -89,7 +89,7 @@ function healUsagePaneInState(state: DashboardState): DashboardState {
       // Splitting shrinks status pane — flush the ghost rows pushed into scrollback by the resize.
       try { tmux("clear-history", "-t", healed.statusPaneId); } catch { /* ignore */ }
       setPaneTitle(usageId, "garden");
-      setPaneLabel(usageId, "🌱 #[fg=green,bold]garden#[default]");
+      setPaneLabel(usageId, "#[fg=green,bold]garden#[default] 🌱");
       disablePaneInput(usageId);
 
       healed = { ...healed, usagePaneId: usageId };
