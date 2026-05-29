@@ -393,6 +393,27 @@ describe("continueWorkerAfterMerge", () => {
     expect(pasteAndSubmit).not.toHaveBeenCalled();
   });
 
+  it("preserves the stale-files context when delivery is skipped, so the +16s retry can re-emit it", () => {
+    // The central mechanism of the post-merge retry leg: when the first
+    // attempt is skipped because the worker is mid-turn (delivered=false),
+    // the transient pendingContinue* fields must NOT be cleared — otherwise
+    // continueWorkerAfterMergeIfStuck would re-fire a bare prompt that drops
+    // the reviewer's changed-files list. continueWorker still clears
+    // interruptedWhileWorking on the working-gate (one updateWorkerFields
+    // call); the pendingContinue*-clearing call must NOT happen. Asserting on
+    // call count rather than args: vitest deep-equality treats every
+    // all-undefined object as equal, so not.toHaveBeenCalledWith can't
+    // distinguish the interrupted-clear from the pending-clear.
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "working",
+      branchName: "bold-ash",
+      pendingContinueChangedFiles: ["src/foo.ts"],
+    });
+    continueWorkerAfterMerge("myproject", "bold-ash");
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledTimes(1);
+  });
+
   it("prepends a stale-files preamble when the reviewer modified files", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
