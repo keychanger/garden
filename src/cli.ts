@@ -91,7 +91,7 @@ Dashboard:
   dashboard                      Open the dashboard (creates if needed)
   dashboard exit, exit           Close the dashboard
   keys                           Show dashboard keybindings
-  status                         Show project and worker status
+  status [--all]                 Show project and worker status (--all: every plot, not just the active one)
   whoami [worker]                Show the current worker's registry entry (uses $GARDEN_WORKER)
   alerts                         View dashboard alerts
   alerts clear                   Dismiss all alerts

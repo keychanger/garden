@@ -142,6 +142,41 @@ describe("getFocusedProjectNames", () => {
   });
 });
 
+describe("allPlotProjectNames", () => {
+  it("returns the deduplicated union of every plot's projects in first-seen order", async () => {
+    const { allPlotProjectNames, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    const config = {
+      projects: { a: { path: "/a" }, b: { path: "/b" }, c: { path: "/c" } },
+      plots: {
+        first: { projects: ["a", "b"] },
+        second: { projects: ["b", "c"] },
+      },
+    };
+    expect(allPlotProjectNames(config)).toEqual(["a", "b", "c"]);
+  });
+
+  it("filters projects that no longer exist in config", async () => {
+    const { allPlotProjectNames, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    const config = {
+      projects: { a: { path: "/a" } },
+      plots: {
+        one: { projects: ["a", "ghost"] },
+        two: { projects: ["phantom"] },
+      },
+    };
+    expect(allPlotProjectNames(config)).toEqual(["a"]);
+  });
+
+  it("returns an empty array when there are no plots", async () => {
+    const { allPlotProjectNames, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    const config = { projects: { a: { path: "/a" } } };
+    expect(allPlotProjectNames(config)).toEqual([]);
+  });
+});
+
 describe("plots migration", () => {
   it("synthesizes an 'all' plot from currently focused projects", async () => {
     const { loadConfig, GARDEN_DIR, CONFIG_PATH } = await importConfig();

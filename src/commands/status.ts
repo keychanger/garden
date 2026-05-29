@@ -6,7 +6,7 @@
 // pgrep and does not read marker files. Before rendering, it refreshes
 // worker task summaries from live tmux pane titles so the registry stays
 // current between hook events.
-import { loadConfig, getFocusedProjectNames, tryGetProject } from "../config.js";
+import { loadConfig, getFocusedProjectNames, allPlotProjectNames, tryGetProject } from "../config.js";
 import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
@@ -127,10 +127,15 @@ function refreshWorkerTasks(state: DashboardState): void {
   } catch { /* best effort */ }
 }
 
-export async function status(_args: string[]): Promise<void> {
+export async function status(args: string[]): Promise<void> {
+  const allPlots = args.includes("--all");
   const config = loadConfig();
   const dashState = readDashState();
-  const names = getFocusedProjectNames(config, dashState.activePlot);
+  // `--all` reports the deduplicated union of every plot's projects; without
+  // it, only the active plot. The JSON output shape is identical either way.
+  const names = allPlots
+    ? allPlotProjectNames(config)
+    : getFocusedProjectNames(config, dashState.activePlot);
 
   if (names.length === 0) {
     console.log("No projects added.");

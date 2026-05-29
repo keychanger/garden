@@ -380,6 +380,27 @@ export function getFocusedProjectNames(
   return plot.projects.filter(n => n in cfg.projects);
 }
 
+/**
+ * Deduplicated union of every plot's projects, in first-seen order across
+ * plots. Stale project names are defensively filtered, matching
+ * getFocusedProjectNames. Used by `garden status --all` to report workers
+ * across all plots in one invocation rather than only the active plot.
+ */
+export function allPlotProjectNames(config?: GardenConfig): string[] {
+  const cfg = config ?? loadConfig();
+  const plots = cfg.plots ?? {};
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const plot of Object.values(plots)) {
+    for (const name of plot.projects) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      if (name in cfg.projects) names.push(name);
+    }
+  }
+  return names;
+}
+
 export function detectProjectFromPath(dir?: string): string | undefined {
   try {
     const config = loadConfig();
