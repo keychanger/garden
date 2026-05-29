@@ -11,16 +11,16 @@ export const DONE_SKILL_FILENAME = "SKILL.md";
 // Single source of truth: the bootstrap script inlines this string before the worktree exists, and installClaudeHooks rewrites it on refresh/bounce.
 export const DONE_SKILL_CONTENT = `---
 name: done
-description: Use when the operator's original request is complete OR when you reach a merge boundary and cannot name a specific unfinished phase from that original request. Invoke at the end of the same turn that pushed your final commit; this saves a round-trip versus waiting for the post-merge prompt. Writes the .garden-done sentinel so the next merge transitions straight to "done" instead of auto-continuing. When uncertain whether anything remains, invoke this skill — stopping early is strictly preferred over inventing additional work, polish, or cleanup the operator did not ask for. Do NOT invoke if you have a concrete unfinished phase from the original request still to do.
+description: Use when you have re-read the operator's original request and confirmed every deliverable they asked for has landed in a merged commit and is verified working. Invoke at the end of the same turn that pushed your final commit; this saves a round-trip versus waiting for the post-merge prompt. Writes the .garden-done sentinel so the next merge transitions straight to "done" instead of auto-continuing. The bias is still toward stopping over inventing busywork — but "done" means every requested deliverable is accounted for, not "I feel finished." Do NOT invoke while any operator-requested deliverable is unlanded or unverified.
 ---
 
 # Done
 
-Invoke this skill when you have finished the operator's original request, OR when you reach a merge boundary (or are about to push your final commit on this turn) and cannot point to a specific unfinished phase from that original request. Invoking at the end of the same turn that pushed your final commit saves a round-trip versus waiting for the post-merge prompt to remind you. It writes the sentinel file that tells garden's poller "this worker is done; do not auto-continue on the next merge."
+Invoke this skill when you have finished the operator's original request, OR when you reach a merge boundary (or are about to push your final commit on this turn) and — having re-read what the operator actually asked for — every deliverable they named has landed in a merged commit and is verified. Invoking at the end of the same turn that pushed your final commit saves a round-trip versus waiting for the post-merge prompt to remind you. It writes the sentinel file that tells garden's poller "this worker is done; do not auto-continue on the next merge."
 
 **Bias toward invoking.** Stopping early is strictly preferred over fabricating scope — do not invent additional polish, refactors, doc tweaks, cleanup, or "while we're here" improvements just to have something to do when the merge prompt arrives. If the operator wants more, they will redirect; you cannot accidentally hide unfinished work by invoking \`done\` early, because the next \`UserPromptSubmit\` clears the sentinel automatically.
 
-The narrow case where you should **not** invoke: you are mid-phase, or there is a specific unfinished phase from the operator's original request that has not landed yet. In that case, let the post-merge auto-continue advance you into the next phase.
+**Account for the request before you stop — this is a gate, not a vibe.** Before invoking, re-read the operator's original message(s) and list each distinct deliverable they asked for. The internal stages of any analysis or workflow you ran (research, design, implementation, a review or verification pass) are NOT operator deliverables — finishing all of yours does not mean the request is finished. For each deliverable, confirm it landed in a merged commit AND actually does what was asked: if it is observable (a fix, an optimization, a feature), confirm you verified it works, not just that you pushed code. "I feel finished" is not evidence; a deliverable accounted for in a merged, verified commit is. If any deliverable is unlanded or unverified, do that next instead and let the post-merge auto-continue advance you — that is the intended flow for known multi-phase work.
 
 ## What it does
 
@@ -31,15 +31,14 @@ Runs \`touch .garden-done\` at the root of your worktree (your CWD). On the next
 
 ## When to use
 
-- You have completed every part of the operator's original request.
-- You reached a merge boundary and cannot name a specific remaining phase from the original request.
-- You are uncertain whether anything is left — prefer this skill over guessing at extra work.
+- Re-reading the operator's original request, every deliverable they named has landed in a merged commit and is verified working.
+- You are uncertain only about whether to do MORE than was asked — prefer this skill over guessing at extra work.
 - You have committed and pushed all your changes (\`git status\` clean, \`git log @{u}..HEAD\` empty).
 - No review failure is pending. (If your branch is in \`failing\` state, fix the feedback instead.)
 
 ## When NOT to use
 
-- You can name a specific unfinished phase from the operator's original request — garden will auto-continue you, and that is the intended flow for known multi-phase work.
+- Re-reading the request surfaces a deliverable the operator named that has not landed, or that you pushed but never verified works — do that next. Garden will auto-continue you, and that is the intended flow for known multi-phase work.
 - You hit a problem you cannot solve. Tell the operator instead; silently declaring "done" hides incomplete work.
 - A review came back \`failing\` and you have not addressed the feedback yet.
 - The operator's request includes future-tense work ("once the previous phase merges, do X") — finish X first.

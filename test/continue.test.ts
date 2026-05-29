@@ -51,7 +51,8 @@ vi.mock("../src/dashboard/log.js", () => ({
 }));
 
 import {
-  continueWorker, continueWorkerAfterMerge, continueWorkerIfStuck,
+  continueWorker, continueWorkerAfterMerge, continueWorkerAfterMergeIfStuck,
+  continueWorkerIfStuck,
   dispatchDelayedContinue, dispatchDelayedAutoContinue,
   dispatchDelayedSeed, seedWorker, notifyHandoffCallback,
   donePath, isDoneSet, clearDoneSentinel,
@@ -179,7 +180,11 @@ describe("continueWorker", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
     });
-    vi.mocked(pasteAndSubmit).mockImplementation(() => { throw new Error("tmux died"); });
+    // mockImplementationOnce, not mockImplementation: clearAllMocks (in
+    // beforeEach) clears call records but NOT implementations, so a persistent
+    // throwing impl would leak into every later test in this file. One-shot
+    // keeps the throw scoped to this single continueWorker call.
+    vi.mocked(pasteAndSubmit).mockImplementationOnce(() => { throw new Error("tmux died"); });
 
     expect(() => continueWorker("myproject", "bold-ash")).not.toThrow();
     // Flag stays so a later attempt can retry.
@@ -272,21 +277,92 @@ describe("dispatchDelayedContinue", () => {
 });
 
 describe("dispatchDelayedAutoContinue", () => {
-  it("spawns one detached child invoking _continue-worker-after-merge with --delay-ms 5000", () => {
+  it("spawns two detached children: _continue-worker-after-merge at +5s and _continue-worker-after-merge-if-stuck at +16s", () => {
     dispatchDelayedAutoContinue("/usr/local/bin/garden", "myproject", "bold-ash");
 
-    expect(spawn).toHaveBeenCalledTimes(1);
-    const [, args] = vi.mocked(spawn).mock.calls[0];
-    const cmd = (args as string[])[1];
-    expect(cmd).not.toMatch(/\bsleep\b/);
-    expect(cmd).toContain("/usr/local/bin/garden dashboard _continue-worker-after-merge --delay-ms 5000");
-    expect(cmd).toContain(" myproject ");
-    expect(cmd).toContain(" bold-ash ");
+    // Primary 5s + retry 16s, mirroring dispatchDelayedContinue. The retry
+    // recovers a worker that read as working/asking at the 5s mark (the
+    // single-shot prompt would otherwise be lost); continueWorkerAfterMergeIfStuck
+    // gates re-fire on prState still === "merged".
+    expect(spawn).toHaveBeenCalledTimes(2);
+    const calls = vi.mocked(spawn).mock.calls;
+
+    const primaryCmd = (calls[0][1] as string[])[1];
+    expect(primaryCmd).not.toMatch(/\bsleep\b/);
+    expect(primaryCmd).toContain("/usr/local/bin/garden dashboard _continue-worker-after-merge --delay-ms 5000");
+    expect(primaryCmd).toContain(" myproject ");
+    expect(primaryCmd).toContain(" bold-ash ");
+
+    const retryCmd = (calls[1][1] as string[])[1];
+    expect(retryCmd).not.toMatch(/\bsleep\b/);
+    expect(retryCmd).toContain("/usr/local/bin/garden dashboard _continue-worker-after-merge-if-stuck --delay-ms 16000");
+    expect(retryCmd).toContain(" myproject ");
+    expect(retryCmd).toContain(" bold-ash ");
   });
 
   it("swallows spawn errors", () => {
     vi.mocked(spawn).mockImplementation(() => { throw new Error("EAGAIN"); });
     expect(() => dispatchDelayedAutoContinue("garden", "p", "w")).not.toThrow();
+  });
+});
+
+describe("continueWorkerAfterMergeIfStuck", () => {
+  it("re-fires the merge prompt when prState is still `merged` (prompt never landed)", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+      prState: "merged",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+
+    continueWorkerAfterMergeIfStuck("myproject", "bold-ash");
+
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
+    const message = vi.mocked(pasteAndSubmit).mock.calls[0][1];
+    expect(message).toContain("[garden]");
+    expect(message).toContain("merged");
+  });
+
+  it("no-ops when prState has moved off `merged` (delivered prompt cleared it via UserPromptSubmit)", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+      prState: "working",
+    });
+
+    continueWorkerAfterMergeIfStuck("myproject", "bold-ash");
+
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
+  });
+
+  it("no-ops when prState is `done` (worker self-declared; never re-prompt)", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+      prState: "done",
+    });
+
+    continueWorkerAfterMergeIfStuck("myproject", "bold-ash");
+
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
+  });
+
+  it("does not double-prompt: when prState is `merged` but the worker is working again, the inner claudeStatus gate skips the paste", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "working",
+      prState: "merged",
+    });
+
+    continueWorkerAfterMergeIfStuck("myproject", "bold-ash");
+
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
+  });
+
+  it("no-ops when the registry entry is gone", () => {
+    vi.mocked(findWorkerByName).mockReturnValue(undefined);
+
+    expect(() => continueWorkerAfterMergeIfStuck("myproject", "bold-ash")).not.toThrow();
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
   });
 });
 
@@ -422,7 +498,18 @@ describe("continueWorkerAfterMerge", () => {
     expect(message).not.toContain("postMerge");
     expect(message).toContain("merged");
     expect(message).toContain(".garden-done");
-    expect(updateWorkerFields).not.toHaveBeenCalled();
+    // The re-gated done contract: enumerate the operator's deliverables,
+    // distinguish them from internal workflow stages, and verify before done.
+    expect(message).toContain("deliverable");
+    expect(message).toContain("NOT operator deliverables");
+    expect(message).toContain("verified it works");
+    // continueWorker makes exactly one updateWorkerFields call on a successful
+    // send (clearing interruptedWhileWorking). The bare-base path must NOT make
+    // the second, pendingContinue*-clearing call — there was nothing to clear.
+    // (Asserting on call count rather than args: vitest deep-equality treats
+    // every all-undefined object as equal, so not.toHaveBeenCalledWith can't
+    // distinguish the interrupted-clear from the pending-clear.)
+    expect(updateWorkerFields).toHaveBeenCalledTimes(1);
   });
 });
 

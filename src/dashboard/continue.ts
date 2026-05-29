@@ -37,10 +37,19 @@ const CONTINUE_PROMPT =
   + "off, or say so if your task was already finished.";
 
 const MERGE_CONTINUE_BASE =
-  "[garden] Your previous changes were reviewed and merged. If the operator's "
-  + "original request has phases that have not yet landed, do the next one. "
-  + "Otherwise — including when you are uncertain whether anything remains — "
-  + "invoke the `done` skill (`touch .garden-done`) and end your turn. Do NOT "
+  "[garden] Your previous changes were reviewed and merged. Before you decide "
+  + "you are finished, re-read the operator's ORIGINAL request (scroll back to "
+  + "what they actually typed) and list each distinct deliverable they asked "
+  + "for. The internal stages of any analysis or workflow you ran to produce "
+  + "the work — research, design, implementation, a review or verification "
+  + "pass — are NOT operator deliverables; finishing all of yours does not mean "
+  + "the request is finished. For each deliverable, confirm it has LANDED in a "
+  + "merged commit and actually does what was asked: if the change is "
+  + "observable (a fix, an optimization, a feature), confirm you verified it "
+  + "works, not just that you pushed code. If any deliverable has not landed or "
+  + "is unverified, do that next. Only once every deliverable is accounted for "
+  + "— or your only remaining uncertainty is whether to do MORE than was asked "
+  + "— invoke the `done` skill (`touch .garden-done`) and end your turn. Do NOT "
   + "invent additional work, polish, refactors, cleanup, doc tweaks, or "
   + "\"while we're here\" improvements the operator did not explicitly ask "
   + "for: stopping early is strictly preferred over fabricating scope, and "
@@ -174,20 +183,24 @@ export function notifyHandoffCallback(opts: {
 // internal command after a short delay so Claude --resume has time to take
 // over the pane's stdin. Skips if the worker has already started working
 // (operator typed something first) to avoid stomping on a real prompt.
+// Returns true when the prompt was actually pasted, false when it was skipped
+// (entry/pane missing, worker mid-turn, or send-keys threw). Callers that need
+// to know whether delivery happened — the post-merge retry leg, and the
+// changed-files preamble cleanup — branch on this; the interrupt path ignores it.
 export function continueWorker(
   projectName: string,
   workerName: string,
   message: string = CONTINUE_PROMPT,
-): void {
+): boolean {
   const entry = findWorkerByName(projectName, workerName);
-  if (!entry) return;
+  if (!entry) return false;
   const paneId = resolveWorkerPaneId(projectName, workerName);
   if (!paneId) {
     log.warn("workers", "continue skipped, no pane", {
       worker: workerName,
       data: { project: projectName },
     });
-    return;
+    return false;
   }
   if (entry.claudeStatus === "working" || entry.claudeStatus === "asking") {
     log.info("workers", "continue skipped, worker already active", {
@@ -195,7 +208,7 @@ export function continueWorker(
       data: { project: projectName, claudeStatus: entry.claudeStatus },
     });
     updateWorkerFields(projectName, workerName, { interruptedWhileWorking: undefined });
-    return;
+    return false;
   }
   try {
     pasteAndSubmit(paneId, message);
@@ -204,13 +217,14 @@ export function continueWorker(
       worker: workerName,
       data: { project: projectName, error: String(err) },
     });
-    return;
+    return false;
   }
   updateWorkerFields(projectName, workerName, { interruptedWhileWorking: undefined });
   log.info("workers", "continue sent", {
     worker: workerName,
     data: { project: projectName },
   });
+  return true;
 }
 
 // Retry leg of dispatchDelayedContinue. Only re-pastes when the worker is
@@ -250,13 +264,42 @@ export function continueWorkerAfterMerge(projectName: string, workerName: string
     entry?.pendingContinueSyncFailed,
     entry?.baseBranch,
   );
-  continueWorker(projectName, workerName, message);
-  if (entry?.pendingContinueChangedFiles || entry?.pendingContinueSyncFailed) {
+  const delivered = continueWorker(projectName, workerName, message);
+  // Clear the transient stale-files / sync-failed context only once the prompt
+  // actually landed. If the first attempt was skipped (worker still mid-turn),
+  // leave them set so the retry leg re-emits the same enriched prompt.
+  if (delivered && (entry?.pendingContinueChangedFiles || entry?.pendingContinueSyncFailed)) {
     updateWorkerFields(projectName, workerName, {
       pendingContinueChangedFiles: undefined,
       pendingContinueSyncFailed: undefined,
     });
   }
+}
+
+// Retry leg of dispatchDelayedAutoContinue, mirroring continueWorkerIfStuck for
+// the interrupt path. The post-merge prompt is delivered once at +5s; if the
+// worker read as `working`/`asking` at that instant (still settling, or
+// babysitting a long-running turn), continueWorker skipped the paste and the
+// prompt was lost with no recovery. We re-fire only when it demonstrably never
+// landed: prState is still `merged`. A delivered prompt fires UserPromptSubmit,
+// which clears `merged` (hooks/default.ts) — so any other prState means it got
+// through and we no-op rather than double-prompt. continueWorkerAfterMerge's
+// own claudeStatus gate covers the case where the worker is mid-turn again.
+export function continueWorkerAfterMergeIfStuck(projectName: string, workerName: string): void {
+  const entry = findWorkerByName(projectName, workerName);
+  if (!entry) return;
+  if (entry.prState !== "merged") {
+    log.info("workers", "merge-continue retry skipped, prState moved", {
+      worker: workerName,
+      data: { project: projectName, prState: entry.prState },
+    });
+    return;
+  }
+  log.info("workers", "merge-continue retry firing, prompt never landed", {
+    worker: workerName,
+    data: { project: projectName },
+  });
+  continueWorkerAfterMerge(projectName, workerName);
 }
 
 // Fire-and-forget detached subprocess that defers a few seconds, then invokes
@@ -300,13 +343,18 @@ export function dispatchDelayedContinue(
 // Post-merge variant. Slightly longer delay because the merge path force-pushes
 // the worker's branch and runs postMerge before this fires; we want the worker
 // pane to be unambiguously idle (Stop hook returned, no Claude UI redraw in
-// progress) before sending keys.
+// progress) before sending keys. 5s primary + 16s retry mirrors the interrupt
+// path: a worker still mid-turn at the 5s mark (e.g. babysitting a long
+// response) would otherwise drop the merge prompt permanently. The retry
+// (_continue-worker-after-merge-if-stuck) only re-fires when prState is still
+// `merged` — proof the prompt never landed — so it never double-prompts.
 export function dispatchDelayedAutoContinue(
   gardenRunner: string,
   projectName: string,
   workerName: string,
 ): void {
   spawnDelayed(gardenRunner, 5000, "_continue-worker-after-merge", projectName, workerName);
+  spawnDelayed(gardenRunner, 16000, "_continue-worker-after-merge-if-stuck", projectName, workerName);
 }
 
 // Handoff seed variant. Reads the seed prompt from a file (kept off argv to

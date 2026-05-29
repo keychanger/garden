@@ -109,10 +109,22 @@ describe("DONE_SKILL_CONTENT", () => {
     expect(match).not.toBeNull();
     const desc = match![1];
     // The description is the trigger condition Claude evaluates — it must
-    // mention both the precondition (work is complete) and the action
-    // (writes the sentinel) so the skill fires at the right moment.
-    expect(desc.toLowerCase()).toContain("complet");
+    // mention both the precondition (every requested deliverable has landed +
+    // is verified) and the action (writes the sentinel) so the skill fires at
+    // the right moment, not on a vague feeling of being finished.
+    expect(desc).toContain("deliverable");
     expect(desc).toContain(".garden-done");
+  });
+
+  it("gates invocation on enumerate-and-verify, distinguishing operator deliverables from internal workflow stages", () => {
+    // The re-gated done semantics: re-read the request, account for each
+    // deliverable (landed + verified), and explicitly exclude the worker's own
+    // internal workflow stages so a deep/long worker can't read "all my
+    // analysis phases done" as "the request is done". Anti-busywork bias stays.
+    expect(DONE_SKILL_CONTENT).toContain("re-read");
+    expect(DONE_SKILL_CONTENT).toContain("NOT operator deliverables");
+    expect(DONE_SKILL_CONTENT).toContain("verified");
+    expect(DONE_SKILL_CONTENT).toContain("Bias toward invoking");
   });
 
   it("includes the touch command and the sentinel filename in the body", () => {
