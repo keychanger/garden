@@ -165,13 +165,36 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
 type FieldsDelta = Partial<Pick<WorkerEntry,
   "claudeStatus" | "lastHookAt" | "prState" | "task">>;
 
+// pretooluse/posttooluse fire on every Claude tool call and dominate hook
+// traffic — a busy agent completes many tools per second, and with N agents in
+// flight that is N × tool-rate cold-started hook processes. A heartbeat hook
+// (one that carries no state change) does a registry read-modify-write under
+// the global lock plus the findWorkerPaneId + getPaneTitle tmux forks; doing
+// that on every tool call churns the very resources the operator's keystrokes
+// and pane swaps share (CPU, the registry lock, the tmux server). So a pure
+// heartbeat refreshes liveness at most once per this interval per worker.
+const HOOK_HEARTBEAT_MS = 10_000;
+
 function applyAndLog(
   ctx: HookContext,
   fields: FieldsDelta,
   extraLogData?: Record<string, unknown>,
 ): void {
   if (!ctx.workerInfo) return;
-  fields.lastHookAt = Date.now();
+
+  // Throttle heartbeat-only hooks. Safe because the only consumers of
+  // lastHookAt are 15-minute staleness checks (STALE_CLAUDE_STATUS_MS in
+  // poller-review, STALE_HOOK_MS in health) and the task title is
+  // independently refreshed by the status render path (refreshWorkerTasks).
+  // Every real transition sets claudeStatus or prState, so it counts as a
+  // state change and always takes the full path below — the STATUS.md state
+  // machine is untouched.
+  const stateChanged = fields.claudeStatus !== undefined || fields.prState !== undefined;
+  const now = Date.now();
+  if (!stateChanged && now - (ctx.workerInfo.entry.lastHookAt ?? 0) < HOOK_HEARTBEAT_MS) {
+    return;
+  }
+  fields.lastHookAt = now;
 
   // Capture the live pane title as the worker's task summary. Claude sets
   // the title via terminal escape sequences; reading it gives the registry
@@ -198,7 +221,6 @@ function applyAndLog(
   // don't change state are heartbeats — demoted to debug so the default log
   // level shows signal, not the per-tool-call stream.
   const isLifecycle = ctx.event === "sessionstart" || ctx.event === "prompt" || ctx.event === "stop";
-  const stateChanged = fields.claudeStatus !== undefined || fields.prState !== undefined;
   const level = isLifecycle || stateChanged ? "info" : "debug";
   log[level]("hook", "claude hook", {
     worker: ctx.workerInfo.name,

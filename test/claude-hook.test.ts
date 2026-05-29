@@ -123,7 +123,7 @@ import { handleClaudeHook } from "../src/dashboard/hook-dispatcher.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { updateWorkerFields } from "../src/dashboard/registry.js";
 import { log } from "../src/dashboard/log.js";
-import { tmux } from "../src/dashboard/tmux.js";
+import { tmux, getPaneTitle } from "../src/dashboard/tmux.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { _resetHeaderCachesForTest } from "../src/dashboard/header.js";
 
@@ -570,6 +570,64 @@ describe("handleClaudeHook — refresh skip on no-op transitions", () => {
       c => c[0] === "refresh-client" && c[1] === "-S",
     );
     expect(refreshCalls.length).toBeGreaterThan(0);
+  });
+});
+
+// pretooluse/posttooluse fire on every Claude tool call. A heartbeat hook
+// (no claudeStatus/prState change) refreshes lastHookAt at most once per
+// HOOK_HEARTBEAT_MS (10s) per worker, so N busy agents don't churn the
+// registry lock + tmux server on every tool. A real transition is never
+// throttled. lastHookAt is consumed only by 15-minute staleness checks, so
+// coarse heartbeat resolution is safe.
+describe("handleClaudeHook — heartbeat throttle (perf)", () => {
+  it("posttooluse with a recent lastHookAt and no state change skips the registry write", () => {
+    seedWorker("garden", "bold-ash", { claudeStatus: "working", lastHookAt: Date.now() });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("posttooluse");
+
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
+
+  it("the skipped heartbeat does not fork tmux to read the pane title", () => {
+    seedWorker("garden", "bold-ash", { claudeStatus: "working", lastHookAt: Date.now() });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("posttooluse");
+
+    expect(getPaneTitle).not.toHaveBeenCalled();
+  });
+
+  it("posttooluse with a stale lastHookAt refreshes the heartbeat", () => {
+    seedWorker("garden", "bold-ash", { claudeStatus: "working", lastHookAt: Date.now() - 30_000 });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("posttooluse");
+
+    expect(updateWorkerFields).toHaveBeenCalled();
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(Date.now() - (entry.lastHookAt ?? 0)).toBeLessThan(5_000);
+  });
+
+  it("a heartbeat with no prior lastHookAt is not throttled (undefined reads as stale)", () => {
+    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("posttooluse");
+
+    expect(updateWorkerFields).toHaveBeenCalled();
+  });
+
+  it("a state-changing hook is NEVER throttled, even with a fresh lastHookAt", () => {
+    // asking → working is a real transition; it must write regardless of how
+    // recently the heartbeat fired, or the worker would appear stuck in asking.
+    seedWorker("garden", "bold-ash", { claudeStatus: "asking", lastHookAt: Date.now() });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("posttooluse");
+
+    expect(updateWorkerFields).toHaveBeenCalled();
+    expect(statusAfter("garden", "bold-ash")).toBe("working");
   });
 });
 
