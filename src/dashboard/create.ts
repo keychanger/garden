@@ -449,8 +449,10 @@ export function ensureDashboard(): void {
       // happens in a correctly-sized grid; otherwise the new window is created
       // at tmux's default size and the early hard-wrapped lines stay frozen
       // in scrollback at the narrow width.
+      // `sleep infinity` is GNU-only; macOS BSD sleep exits 1 and the
+      // placeholder pane dies before respawn-pane lands. Use a finite value.
       tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", workerCwd,
-        "sh", "-c", "exec sleep infinity");
+        "sh", "-c", "exec sleep 86400");
       if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
       const workerPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindowName}`);
       if (workerPaneId) {

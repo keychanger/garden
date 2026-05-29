@@ -310,8 +310,11 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       // 80×24, sometimes narrower), Claude's TUI does its first paint into
       // that small grid, and those hard-wrapped lines stay frozen in scrollback
       // forever. The placeholder/respawn-pane dance closes that race: create
-      // window holding `sleep infinity`, resize, then respawn-pane with the
-      // real script in a correctly-sized grid.
+      // window holding a long sleep, resize, then respawn-pane with the
+      // real script in a correctly-sized grid. NOTE: `sleep infinity` is a
+      // GNU coreutils-ism and exits 1 on macOS BSD sleep ("usage: sleep
+      // seconds"), which destroyed the placeholder pane before respawn-pane
+      // could land. Use a finite large value — respawn replaces it in ms.
       const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
       const bootstrapCmd = `sh ${shellEscape(scriptFile)}`;
       if (background) {
@@ -319,7 +322,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         // and stays detached. The operator's visible pane and dashboard state are
         // not touched.
         const workerPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
-          "sh", "-c", "exec sleep infinity");
+          "sh", "-c", "exec sleep 86400");
         if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
         tmux("respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd);
         if (workerPaneId) setPaneLabel(workerPaneId, workerName);
@@ -329,7 +332,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         parkToHidden(parkName, state);
 
         const workerPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
-          "sh", "-c", "exec sleep infinity");
+          "sh", "-c", "exec sleep 86400");
         if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
         tmux("respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd);
         if (workerPaneId) setPaneLabel(workerPaneId, workerName);

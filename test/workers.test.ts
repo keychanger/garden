@@ -243,7 +243,7 @@ describe("newWorker", () => {
     expect(vi.mocked(tmuxNewWindow)).toHaveBeenCalledWith(
       "-d", "-t", "garden-dashboard", "-n", "_myproject-worker-bold-ash",
       "-c", "/repo/myproject",
-      "sh", "-c", "exec sleep infinity",
+      "sh", "-c", "exec sleep 86400",
     );
     expect(vi.mocked(tmux)).toHaveBeenCalledWith(
       "respawn-pane", "-k", "-c", "/repo/myproject", "-t", "%10",
@@ -415,7 +415,7 @@ describe("newWorker", () => {
     expect(vi.mocked(tmuxNewWindow)).toHaveBeenCalledWith(
       "-d", "-t", "garden-dashboard", "-n", "_other-worker-bold-ash",
       "-c", "/repo/other",
-      "sh", "-c", "exec sleep infinity",
+      "sh", "-c", "exec sleep 86400",
     );
     expect(vi.mocked(tmux)).toHaveBeenCalledWith(
       "respawn-pane", "-k", "-c", "/repo/other", "-t", "%10",
