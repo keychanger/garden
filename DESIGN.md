@@ -324,7 +324,7 @@ garden usage [refresh]             # Show or force-refresh the Claude usage mete
 garden dashboard                   # Open the dashboard (creates if needed)
 garden dashboard exit              # Close the dashboard
 garden keys                        # Show dashboard keybindings
-garden status                      # Show all projects and their workers
+garden status [--all]              # Show worker status for the active plot (--all: every plot)
 garden whoami [worker]             # Show the current worker's registry entry (uses $GARDEN_WORKER)
 garden alerts                      # View dashboard alerts
 garden alerts clear                # Dismiss all alerts
