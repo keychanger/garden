@@ -53,8 +53,13 @@ export function setupStatusBar(_gardenRunner: string): void {
     [["-t", mainWindow, "window-status-current-format", ""], "window-status-current-format"],
     [["-t", mainWindow, "window-status-format", ""], "window-status-format"],
     [["-t", mainWindow, "pane-border-status", "top"], "pane-border-status"],
+    // Left segment renders the plot strip on the status pane (gated on
+    // @garden_name). The trailing segment renders a right-aligned wall clock
+    // on worker panes only (gated on @garden_clock, set in restoreWorkerPaneVars
+    // and at worker-pane creation). %H:%M is strftime-expanded by tmux on each
+    // status-interval tick, so it advances on tmux's own timer with no process.
     [["-t", mainWindow, "pane-border-format",
-      "#{?@garden_name, #{@garden_name}#{?@garden_plot, #[fg=colour244]\u2500\u2500 #{@garden_plot}#[default],}#{?@garden_task, - #{@garden_task},} ,}"], "pane-border-format"],
+      "#{?@garden_name, #{@garden_name}#{?@garden_plot, #[fg=colour244]\u2500\u2500 #{@garden_plot}#[default],}#{?@garden_task, - #{@garden_task},} ,}#{?@garden_clock,#[align=right]#[fg=colour244] %H:%M #[default],}"], "pane-border-format"],
   ];
   for (const [args] of opts) {
     try { tmux("set-option", ...args); } catch { /* ignore */ }

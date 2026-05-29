@@ -325,7 +325,10 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
           "sh", "-c", "exec sleep 86400");
         if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
         tmux("respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd);
-        if (workerPaneId) setPaneLabel(workerPaneId, workerName);
+        if (workerPaneId) {
+          setPaneLabel(workerPaneId, workerName);
+          setPaneVar(workerPaneId, "garden_clock", "1");
+        }
       } else {
         // Show the new pane immediately — bootstrap runs inside it
         const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject!);
@@ -338,7 +341,10 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         if (workerPaneId) setPaneLabel(workerPaneId, workerName);
         restoreFromHidden(workerWindowName, state);
         // Re-apply label after swap (swap-pane may not preserve pane options)
-        if (state.activePaneId) setPaneLabel(state.activePaneId, workerName);
+        if (state.activePaneId) {
+          setPaneLabel(state.activePaneId, workerName);
+          setPaneVar(state.activePaneId, "garden_clock", "1");
+        }
       }
     } catch (err) {
       // addWorker (and trellis model resolution) already wrote the registry

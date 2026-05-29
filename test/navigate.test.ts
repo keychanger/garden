@@ -391,6 +391,8 @@ describe("focusWorker", () => {
 
     expect(setPaneLabel).toHaveBeenCalledWith("%2", "bold-ash");
     expect(setPaneVar).toHaveBeenCalledWith("%2", "garden_task", "do stuff");
+    // Worker panes get a wall clock in their border (gated on @garden_clock).
+    expect(setPaneVar).toHaveBeenCalledWith("%2", "garden_clock", "1");
   });
 });
 

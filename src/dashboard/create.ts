@@ -458,6 +458,7 @@ export function ensureDashboard(): void {
       if (workerPaneId) {
         tmux("respawn-pane", "-k", "-c", workerCwd, "-t", workerPaneId, "sh", "-c", resumeCmd);
         setPaneLabel(workerPaneId, entry.name);
+        setPaneVar(workerPaneId, "garden_clock", "1");
         if (entry.task) {
           setPaneVar(workerPaneId, "garden_task", entry.task);
           setPaneTitle(workerPaneId, entry.task);

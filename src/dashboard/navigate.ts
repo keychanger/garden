@@ -29,6 +29,9 @@ function restoreWorkerPaneVars(paneId: string, project: string, windowName: stri
   const workerLabel = parseWorkerSuffix(windowName);
   if (!workerLabel) return;
   setPaneLabel(paneId, workerLabel);
+  // Worker panes show a wall clock in their top border's right corner; the
+  // pane-border-format gates it on @garden_clock (see setupStatusBar).
+  setPaneVar(paneId, "garden_clock", "1");
   const entry = findWorkerByName(project, workerLabel);
   if (entry?.task) {
     setPaneVar(paneId, "garden_task", entry.task);

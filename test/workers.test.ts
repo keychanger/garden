@@ -283,6 +283,8 @@ describe("newWorker", () => {
     const calls = vi.mocked(setPaneLabel).mock.calls;
     expect(calls.length).toBe(2);
     expect(calls[1]).toEqual(["%2", "bold-ash"]);
+    // The now-visible worker pane gets a wall clock in its border.
+    expect(vi.mocked(setPaneVar)).toHaveBeenCalledWith("%2", "garden_clock", "1");
   });
 
   it("adds worker to registry with correct fields", () => {

@@ -331,6 +331,19 @@ describe("setupStatusBar", () => {
     expect(calls).toContainEqual(["set-option", "-t", "garden-dashboard", "status-interval", "30"]);
   });
 
+  it("renders a right-aligned wall clock gated on @garden_clock in the pane-border-format", () => {
+    setupStatusBar("garden");
+    const fmt = vi.mocked(tmux).mock.calls.find(
+      c => c[0] === "set-option" && c[3] === "pane-border-format",
+    )?.[4];
+    expect(fmt).toBeDefined();
+    // Clock segment: only on panes with @garden_clock set, pushed to the right
+    // edge, time supplied by tmux strftime.
+    expect(fmt).toContain("#{?@garden_clock,");
+    expect(fmt).toContain("#[align=right]");
+    expect(fmt).toContain("%H:%M");
+  });
+
   it("swallows errors from individual set-option calls", () => {
     vi.mocked(tmux).mockImplementation(() => { throw new Error("fail"); });
     expect(() => setupStatusBar("garden")).not.toThrow();
