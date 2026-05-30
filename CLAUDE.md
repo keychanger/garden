@@ -15,16 +15,17 @@ Garden is a CLI orchestrator for managing interactive Claude Code sessions acros
 
 ```bash
 npm install
-npm run build          # esbuild → dist/cli.js
+npm run build          # esbuild → dist/cli.js + dist/hook.js
 npm run dev -- help    # tsx during development
 npm test               # vitest unit + integration; tsc --noEmit
 ```
 
-`npm link` makes `garden` global. `dist/cli.js` is the symlink target — `npm run build` is all you need after edits.
+`npm link` makes `garden` global. `dist/cli.js` is the symlink target — `npm run build` is all you need after edits. The build emits a second minimal bundle, `dist/hook.js` (from `src/hook-entry.ts`), that serves the per-tool-call Claude hook: it bundles only the hook dispatcher's import closure (~60% smaller than `cli.js`) so each fire's node cold-start is cheaper. Worker `settings.json` hook commands invoke it via `resolveHookRunner()` (`dashboard/runner.ts`); `cli.js` keeps its own `_claude-hook` route for workers whose settings predate it.
 
 ## Source layout
 
 - `src/cli.ts` — entry point, command dispatch, help text
+- `src/hook-entry.ts` — minimal second entry point for the per-tool-call Claude hook, built to `dist/hook.js` (calls `handleClaudeHook` directly, skipping the full command/dashboard graph)
 - `src/commands/<name>.ts` — one async function per CLI command, registered in `commands/index.ts`
 - `src/config.ts` / `src/session.ts` / `src/rules.ts` / `src/output.ts` / `src/version.ts` — config (`~/.garden/config.yml`), tmux sessions, system-prompt assembly, TTY-aware output, build version
 - `src/dashboard/` — the dashboard. Notable modules:

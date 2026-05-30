@@ -411,7 +411,7 @@ All read commands detect whether stdout is a TTY:
 
 ## Technology
 
-- TypeScript, compiled via esbuild to a single `dist/cli.js`
+- TypeScript, compiled via esbuild to `dist/cli.js` (plus `dist/hook.js`, a minimal entrypoint for the per-tool-call Claude hook so its node cold-start parses only the hook dispatcher's closure)
 - tmux for session persistence and pane management
 - `js-yaml` for config parsing
 - No CLI framework — lightweight `process.argv` dispatch with aliases
