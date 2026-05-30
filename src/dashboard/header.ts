@@ -58,11 +58,15 @@ export function setupStatusBar(_gardenRunner: string): void {
     // on the right pane \u2014 worker or shell \u2014 (gated on @garden_clock, set in
     // restoreWorkerPaneVars, focusShell, and at worker/shell pane creation).
     // %H:%M is strftime-expanded by tmux on each status-interval tick, so it
-    // advances on tmux's own timer with no process. The two trailing spaces
-    // inset the clock from the right border corner so it mirrors the left
-    // inset of the `garden` title.
+    // advances on tmux's own timer with no process. Styled bold green to
+    // mirror the `garden` title, wrapped in spaces and capped with two border
+    // dashes so the border runs to the right corner exactly like the left
+    // edge frames `garden`. The clock's style MUST stay comma-free
+    // (#[fg=green]#[bold], not #[fg=green,bold]) \u2014 a comma inside the
+    // #{?@garden_clock,...} conditional is parsed as the true/false separator
+    // and silently blanks the clock.
     [["-t", mainWindow, "pane-border-format",
-      "#{?@garden_name, #{@garden_name}#{?@garden_plot, #[fg=colour244]\u2500\u2500 #{@garden_plot}#[default],}#{?@garden_task, - #{@garden_task},} ,}#{?@garden_clock,#[align=right]#[fg=colour244]%H:%M  #[default],}"], "pane-border-format"],
+      "#{?@garden_name, #{@garden_name}#{?@garden_plot, #[fg=colour244]\u2500\u2500 #{@garden_plot}#[default],}#{?@garden_task, - #{@garden_task},} ,}#{?@garden_clock,#[align=right]#[fg=green]#[bold] %H:%M #[default]\u2500\u2500,}"], "pane-border-format"],
   ];
   for (const [args] of opts) {
     try { tmux("set-option", ...args); } catch { /* ignore */ }

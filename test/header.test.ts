@@ -342,6 +342,14 @@ describe("setupStatusBar", () => {
     expect(fmt).toContain("#{?@garden_clock,");
     expect(fmt).toContain("#[align=right]");
     expect(fmt).toContain("%H:%M");
+    // Bold green to mirror the `garden` title.
+    expect(fmt).toContain("#[fg=green]");
+    expect(fmt).toContain("#[bold]");
+    // Regression guard: the style MUST be comma-free. A comma inside the
+    // #{?@garden_clock,...} conditional is read as the true/false separator
+    // and silently blanks the clock — so #[fg=green,bold] must never appear.
+    const clockSeg = fmt!.slice(fmt!.indexOf("#{?@garden_clock,"));
+    expect(clockSeg).not.toContain("#[fg=green,bold]");
   });
 
   it("swallows errors from individual set-option calls", () => {
