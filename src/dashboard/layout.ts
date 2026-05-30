@@ -1,7 +1,7 @@
 // Pane parking and restoring: swaps content between the visible right slot
 // and hidden tmux windows so the layout tree is never modified.
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, tmuxNewWindow, getFirstPaneId, killWindowSafe, renameWindow, paneExists, getPaneSize, resizeWindow } from "./tmux.js";
+import { tmux, tmuxNewWindow, getFirstPaneId, killWindowSafe, renameWindow, paneExists, getPaneSize, resizeWindow, listSessionPanes } from "./tmux.js";
 import type { DashboardState } from "./state.js";
 import { log } from "./log.js";
 
@@ -80,22 +80,33 @@ export function swapToHidden(parkWindowName: string, restoreWindowName: string, 
  * Returns true on success, false on failure (caller should fall back to swapToHidden).
  */
 export function swapDirect(parkWindowName: string, restoreWindowName: string, state: DashboardState): boolean {
-  if (!state.activePaneId || !paneExists(state.activePaneId)) {
+  if (!state.activePaneId) {
     log.warn("layout", "swapDirect: active pane missing or dead");
     return false;
   }
 
-  const targetPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${restoreWindowName}`);
-  if (!targetPaneId) {
-    log.warn("layout", "swapDirect: target window missing");
+  // One tmux fork answers all the swap's questions — does the active pane
+  // exist, the target window's first pane id, and both pane sizes — instead of
+  // four separate forks (paneExists + getFirstPaneId + two getPaneSize) on the
+  // operator's pane-switch hot path. Sizes come from the same atomic snapshot,
+  // so the resize decision below is exact.
+  const panes = listSessionPanes();
+  const active = panes.find(p => p.paneId === state.activePaneId);
+  if (!active) {
+    log.warn("layout", "swapDirect: active pane missing or dead");
     return false;
   }
 
+  const target = panes.find(p => p.windowName === restoreWindowName);
+  if (!target) {
+    log.warn("layout", "swapDirect: target window missing");
+    return false;
+  }
+  const targetPaneId = target.paneId;
+
   // Resize only when size drifted — unconditional resize fires SIGWINCH and forces a Claude redraw per tab.
-  const visibleSize = getPaneSize(state.activePaneId);
-  const targetSize = getPaneSize(targetPaneId);
-  if (visibleSize && (!targetSize || targetSize.width !== visibleSize.width || targetSize.height !== visibleSize.height)) {
-    resizeWindow(restoreWindowName, visibleSize.width, visibleSize.height);
+  if (active.width !== target.width || active.height !== target.height) {
+    resizeWindow(restoreWindowName, active.width, active.height);
   }
 
   // Direct swap: visible content goes to hidden window, hidden content comes to visible slot

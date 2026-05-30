@@ -14,6 +14,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   paneExists: vi.fn(() => true),
   getPaneSize: vi.fn(() => ({ width: 129, height: 58 })),
   resizeWindow: vi.fn(),
+  listSessionPanes: vi.fn(() => []),
 }));
 
 vi.mock("../src/dashboard/log.js", () => ({
@@ -26,7 +27,7 @@ vi.mock("../src/dashboard/log.js", () => ({
 }));
 
 import { parkToHidden, restoreFromHidden, swapToHidden, swapDirect } from "../src/dashboard/layout.js";
-import { tmux, tmuxNewWindow, getFirstPaneId, windowExists, killWindowSafe, renameWindow, paneExists, getPaneSize, resizeWindow } from "../src/dashboard/tmux.js";
+import { tmux, tmuxNewWindow, getFirstPaneId, windowExists, killWindowSafe, renameWindow, paneExists, getPaneSize, resizeWindow, listSessionPanes } from "../src/dashboard/tmux.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 
 function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
@@ -152,8 +153,18 @@ describe("swapToHidden", () => {
 });
 
 describe("swapDirect", () => {
+  // Snapshot returned by the single listSessionPanes() fork: the active pane
+  // (%2) lives in the visible main window; the restore target (%20) lives in
+  // its hidden window.
+  function snapshot(targetSize = { width: 129, height: 58 }) {
+    return [
+      { windowName: "main", paneId: "%2", width: 129, height: 58 },
+      { windowName: "_garden-worker-calm-bay", paneId: "%20", ...targetSize },
+    ];
+  }
+
   it("swaps panes and renames window in one step", () => {
-    vi.mocked(getFirstPaneId).mockReturnValue("%20");
+    vi.mocked(listSessionPanes).mockReturnValue(snapshot());
     const state = makeState();
     const result = swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
 
@@ -167,26 +178,33 @@ describe("swapDirect", () => {
     expect(state.activePaneId).toBe("%20");
   });
 
+  it("resolves the whole swap from a single tmux fork (no per-question forks)", () => {
+    vi.mocked(listSessionPanes).mockReturnValue(snapshot());
+    const state = makeState();
+    swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
+
+    expect(vi.mocked(listSessionPanes)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(paneExists)).not.toHaveBeenCalled();
+    expect(vi.mocked(getFirstPaneId)).not.toHaveBeenCalled();
+    expect(vi.mocked(getPaneSize)).not.toHaveBeenCalled();
+  });
+
   it("skips resize when hidden pane already matches visible slot size", () => {
-    vi.mocked(getFirstPaneId).mockReturnValue("%20");
-    // Both getPaneSize calls return the same size (visible + target match)
+    vi.mocked(listSessionPanes).mockReturnValue(snapshot());
     const state = makeState();
     swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
     expect(vi.mocked(resizeWindow)).not.toHaveBeenCalled();
   });
 
   it("resizes when hidden pane differs from visible slot size", () => {
-    vi.mocked(getFirstPaneId).mockReturnValue("%20");
-    vi.mocked(getPaneSize)
-      .mockReturnValueOnce({ width: 129, height: 58 })
-      .mockReturnValueOnce({ width: 100, height: 40 });
+    vi.mocked(listSessionPanes).mockReturnValue(snapshot({ width: 100, height: 40 }));
     const state = makeState();
     swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
     expect(vi.mocked(resizeWindow)).toHaveBeenCalledWith("_garden-worker-calm-bay", 129, 58);
   });
 
   it("does not create or kill any windows", () => {
-    vi.mocked(getFirstPaneId).mockReturnValue("%20");
+    vi.mocked(listSessionPanes).mockReturnValue(snapshot());
     const state = makeState();
     swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
 
@@ -201,8 +219,22 @@ describe("swapDirect", () => {
     expect(vi.mocked(tmux)).not.toHaveBeenCalled();
   });
 
+  it("returns false when the active pane is dead (absent from the snapshot)", () => {
+    // %2 not present — the visible pane died between events.
+    vi.mocked(listSessionPanes).mockReturnValue([
+      { windowName: "_garden-worker-calm-bay", paneId: "%20", width: 129, height: 58 },
+    ]);
+    const state = makeState();
+    const result = swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
+    expect(result).toBe(false);
+    expect(vi.mocked(tmux)).not.toHaveBeenCalled();
+  });
+
   it("returns false when target window is missing", () => {
-    vi.mocked(getFirstPaneId).mockReturnValue(null);
+    // Only the active pane is present; the restore window has no pane.
+    vi.mocked(listSessionPanes).mockReturnValue([
+      { windowName: "main", paneId: "%2", width: 129, height: 58 },
+    ]);
     const state = makeState();
     const result = swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
     expect(result).toBe(false);

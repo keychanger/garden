@@ -198,6 +198,41 @@ export function getPaneSize(paneId: string): { width: number; height: number } |
   }
 }
 
+export interface SessionPane {
+  windowName: string;
+  paneId: string;
+  width: number;
+  height: number;
+}
+
+// One-shot snapshot of every pane in the dashboard session with its id and
+// size. Lets a caller answer "does pane X exist", "first pane of window W",
+// and "size of pane X" from a single tmux fork. The swapDirect hot path
+// (operator ⌥-key pane switch) asked four of those questions separately —
+// paneExists + getFirstPaneId + two getPaneSize — i.e. four synchronous tmux
+// forks per keystroke; this collapses them to one.
+export function listSessionPanes(): SessionPane[] {
+  try {
+    const out = tmuxOutput(
+      "list-panes", "-s", "-t", DASHBOARD_SESSION,
+      "-F", "#{window_name}\t#{pane_id}\t#{pane_width}\t#{pane_height}",
+    );
+    const result: SessionPane[] = [];
+    for (const line of out.split("\n")) {
+      if (!line) continue;
+      const parts = line.split("\t");
+      if (parts.length < 4) continue;
+      const width = parseInt(parts[2], 10);
+      const height = parseInt(parts[3], 10);
+      if (!Number.isFinite(width) || !Number.isFinite(height)) continue;
+      result.push({ windowName: parts[0], paneId: parts[1], width, height });
+    }
+    return result;
+  } catch {
+    return [];
+  }
+}
+
 export function resizeWindow(windowName: string, width: number, height: number): void {
   try {
     tmux("resize-window", "-t", `${DASHBOARD_SESSION}:${windowName}`, "-x", String(width), "-y", String(height));
