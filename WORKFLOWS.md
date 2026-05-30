@@ -222,11 +222,15 @@ export function parseLastLineVerdict<V extends string>(
 1. Splits `output` by newlines.
 2. Walks backwards from the last non-empty line up to `scanLines` lines.
 3. For each line, trims surrounding whitespace and matches against
-   `/^([A-Za-z_]+)[.\s!]*$/` (the line must be only the verdict token,
-   optionally followed by trailing punctuation/whitespace — same shape
-   as the current reviewer's `VERDICT_LINE` regex). If the captured token
-   uppercased is in `vocabulary`, that line is the verdict line; everything
-   before it (joined, trimmed) is the body.
+   `/^([A-Za-z_]+)(?:[.\s!]*$|\s*[-—–:,])/` (the line must START with the
+   verdict token, followed by either end-of-line — optionally after
+   trailing punctuation/whitespace — or a separator: em-dash, en-dash,
+   hyphen, colon, or comma. This accepts both the bare token and the
+   decorated form reviewers actually emit, e.g. `CLEAN — ready to merge`;
+   the separator requirement keeps prose that merely opens with a vocab
+   word, like `CLEAN code is important.`, from matching). If the captured
+   token uppercased is in `vocabulary`, that line is the verdict line;
+   everything before it (joined, trimmed) is the body.
 4. Returns `{ verdict, body }` or `null` if no match in the scan window.
 
 The function is pure, type-parameterized so callers get type-safe verdict
