@@ -13,7 +13,16 @@
 // the first case. The resolver caller passes scanLines: 1 to preserve its
 // stricter "last non-empty line only" behavior.
 
-const VERDICT_LINE = /^([A-Za-z_]+)[.\s!]*$/;
+// A trailing line counts as a verdict when it STARTS with a token from the
+// vocabulary, followed by a boundary: end-of-line (optionally after `.`/`!`/
+// whitespace) or a separator punctuation (em-dash, en-dash, hyphen, colon,
+// comma). This accepts both the bare token ("CLEAN") and the decorated form
+// reviewers actually emit ("CLEAN — no issues found, ready to merge"). The
+// separator requirement guards against prose that merely begins with a vocab
+// word ("CLEAN code is important.") being misread as a verdict — a word
+// boundary with no separator does not match. Anything after the token on the
+// line is commentary and is discarded.
+const VERDICT_LINE = /^([A-Za-z_]+)(?:[.\s!]*$|\s*[-—–:,])/;
 
 export interface VerdictResult<V extends string> {
   verdict: V;

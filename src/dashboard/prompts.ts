@@ -179,10 +179,15 @@ export const reviewVerdictFormatSection: PromptSection = {
   render: () => [
     "## Output Format",
     "",
-    "Your LAST line of output must be exactly one of:",
-    "CLEAN — no issues found, code is ready to merge as-is",
-    "FIXED — issues were found and fixed in the worktree",
-    "FAILED — issues were found but could not be fixed (explain above)",
+    "Write your reasoning above, then end with the verdict on its own final line.",
+    "The verdict is one of:",
+    "",
+    "- `CLEAN` — no issues found, code is ready to merge as-is",
+    "- `FIXED` — issues were found and fixed in the worktree",
+    "- `FAILED` — issues were found but could not be fixed (explain above)",
+    "",
+    "Your LAST line must START with the bare token (CLEAN, FIXED, or FAILED).",
+    "Trailing commentary on that line is fine, e.g. `CLEAN — ready to merge`.",
   ].join("\n"),
 };
 

@@ -85,6 +85,52 @@ describe("parseLastLineVerdict", () => {
     expect(parseLastLineVerdict(output, REVIEW_VOCAB)).toBeNull();
   });
 
+  it("accepts a verdict decorated with an em-dash and trailing prose", () => {
+    const output = "Reviewed the diff.\nCLEAN — no issues found, code is ready to merge as-is";
+    const result = parseLastLineVerdict(output, REVIEW_VOCAB);
+    expect(result?.verdict).toBe("CLEAN");
+    expect(result?.body).toBe("Reviewed the diff.");
+  });
+
+  it("accepts a verdict decorated with a colon", () => {
+    const output = "Summary above.\nFIXED: corrected the off-by-one in the loop";
+    expect(parseLastLineVerdict(output, REVIEW_VOCAB)?.verdict).toBe("FIXED");
+  });
+
+  it("accepts a verdict decorated with a hyphen", () => {
+    const output = "FAILED - the conflict could not be resolved";
+    expect(parseLastLineVerdict(output, REVIEW_VOCAB)?.verdict).toBe("FAILED");
+  });
+
+  it("accepts a verdict decorated with a comma", () => {
+    const output = "CLEAN, ready to merge";
+    expect(parseLastLineVerdict(output, REVIEW_VOCAB)?.verdict).toBe("CLEAN");
+  });
+
+  it("accepts a decorated verdict with no space before the separator", () => {
+    const output = "CLEAN—no issues";
+    expect(parseLastLineVerdict(output, REVIEW_VOCAB)?.verdict).toBe("CLEAN");
+  });
+
+  it("decorated verdicts win on the resolver's scanLines: 1 contract", () => {
+    const output = "Rebased onto main.\nDONE — HEAD is ready for merge";
+    const result = parseLastLineVerdict(output, RESOLVE_VOCAB, { scanLines: 1 });
+    expect(result?.verdict).toBe("DONE");
+    expect(result?.body).toBe("Rebased onto main.");
+  });
+
+  it("does not misread prose that begins with a vocab word and a space", () => {
+    // A separator/punctuation must follow the token — a plain word boundary
+    // is not enough, so a sentence opening with a vocab word stays prose.
+    const output = "Some reasoning.\nFIXED the bug by adding a guard clause.";
+    expect(parseLastLineVerdict(output, REVIEW_VOCAB)).toBeNull();
+  });
+
+  it("does not misread a prose line beginning with a capitalized vocab word", () => {
+    const output = "CLEAN code is the goal here and we are close.";
+    expect(parseLastLineVerdict(output, REVIEW_VOCAB)).toBeNull();
+  });
+
   it("returns empty body when verdict is the only content", () => {
     expect(parseLastLineVerdict("CLEAN", REVIEW_VOCAB)).toEqual({
       verdict: "CLEAN",
