@@ -8,7 +8,7 @@ vi.mock("node:fs", () => ({
 }));
 
 import fs from "node:fs";
-import { resolveGardenRunner, findStableGardenBin } from "../src/dashboard/runner.js";
+import { resolveGardenRunner, resolveHookRunner, findStableGardenBin } from "../src/dashboard/runner.js";
 
 const savedArgv1 = process.argv[1];
 const savedPath = process.env.PATH;
@@ -78,6 +78,51 @@ describe("resolveGardenRunner", () => {
     const result = resolveGardenRunner();
     expect(result).toContain("/opt/homebrew/bin/garden");
     expect(fs.realpathSync).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveHookRunner", () => {
+  it("targets dist/hook.js next to the real cli.js, resolving a bin symlink", () => {
+    process.argv[1] = "/opt/homebrew/bin/garden";
+    vi.mocked(fs.realpathSync).mockImplementation((p) => {
+      if (String(p) === "/opt/homebrew/bin/garden") return "/Users/joshua/code/keychange/garden/dist/cli.js";
+      throw new Error("ENOENT");
+    });
+    const result = resolveHookRunner();
+    expect(result).toContain(process.execPath);
+    expect(result).toContain("/Users/joshua/code/keychange/garden/dist/hook.js");
+  });
+
+  it("falls back to argv[1]'s own dir when the symlink can't be resolved", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    // realpathSync throws by default → use argv[1] as-is.
+    const result = resolveHookRunner();
+    expect(result).toContain("/usr/local/bin/hook.js");
+  });
+
+  it("uses tsx with the sibling hook-entry.ts in dev", () => {
+    process.argv[1] = "/code/garden/src/cli.ts";
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    const result = resolveHookRunner();
+    expect(result).toContain("tsx");
+    expect(result).toContain("/code/garden/src/hook-entry.ts");
+  });
+
+  it("redirects to the stable global's dist/hook.js when argv[1] is in a worktree", () => {
+    process.argv[1] = "/Users/joshua/.garden/worktrees/garden/blue-fern/dist/cli.js";
+    vi.mocked(fs.realpathSync).mockImplementation((p) => {
+      if (String(p) === "/usr/local/bin/garden") return "/Users/joshua/code/keychange/garden/dist/cli.js";
+      throw new Error("ENOENT");
+    });
+    const result = resolveHookRunner();
+    expect(result).toContain("/Users/joshua/code/keychange/garden/dist/hook.js");
+    expect(result).not.toContain("blue-fern");
+  });
+
+  it("falls back to the worktree's own dist/hook.js when no stable global exists", () => {
+    process.argv[1] = "/Users/joshua/.garden/worktrees/garden/blue-fern/dist/cli.js";
+    const result = resolveHookRunner();
+    expect(result).toContain("/Users/joshua/.garden/worktrees/garden/blue-fern/dist/hook.js");
   });
 });
 

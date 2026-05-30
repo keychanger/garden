@@ -27,7 +27,7 @@ import { startProjectPoller, signalFifoPath, restartLongLivedPollers } from "./p
 import { startUsagePoller } from "./usage-poller.js";
 import { installPollTriggerHook, worktreeExists as wtExists, getWorkerBaseBranch, getRemoteHost } from "./git.js";
 import { dispatchDelayedContinue } from "./continue.js";
-import { resolveGardenRunner } from "./runner.js";
+import { resolveGardenRunner, resolveHookRunner } from "./runner.js";
 import { buildSandboxConfig, type SandboxConfig } from "./sandbox.js";
 import {
   DONE_SKILL_CONTENT, DONE_SKILL_DIRNAME, DONE_SKILL_FILENAME,
@@ -45,11 +45,14 @@ const DASHBOARD_ROWS = 60;
 // Usage pane height: 3 meter lines + 1 leading blank + 1 pane-border-status top row.
 export const USAGE_PANE_HEIGHT = 5;
 
-function buildSettingsJson(gardenRunner: string, sandbox: SandboxConfig): string {
+function buildSettingsJson(hookRunner: string, sandbox: SandboxConfig): string {
   // The hook commands are written into JSON and ultimately executed by Claude
-  // Code as shell commands. The runner is already pre-escaped per token by
-  // resolveGardenRunner(), so it interpolates safely without re-wrapping.
-  const hookCmd = `${gardenRunner} dashboard _claude-hook`;
+  // Code as shell commands. The hook runner targets the minimal dist/hook.js
+  // bundle (resolveHookRunner) so each per-tool-call fire parses only the
+  // dispatcher's closure, not the whole CLI. Already pre-escaped per token, so
+  // it interpolates safely without re-wrapping. The event name is appended by
+  // each hook entry below; hook-entry.ts reads it from process.argv[2].
+  const hookCmd = hookRunner;
   return JSON.stringify({
     hooks: {
       SessionStart: [{
@@ -122,7 +125,7 @@ function sandboxForTarget(targetDir: string, project: ProjectConfig): SandboxCon
 // least resistance "ask the operator" rather than "edit the file."
 export function installClaudeHooks(targetDir: string, project: ProjectConfig): void {
   const sandbox = sandboxForTarget(targetDir, project);
-  const json = buildSettingsJson(resolveGardenRunner(), sandbox);
+  const json = buildSettingsJson(resolveHookRunner(), sandbox);
   const settingsPath = path.join(targetDir, ".claude", "settings.json");
   // atomicWriteFile preserves the mode through tmp→rename. If the file
   // already exists with a different mode (operator chmod, agent
@@ -724,7 +727,7 @@ export function buildWorktreeBootstrapScript(
   const gardenRunnerLit = gardenRunner;
   const project = resolveProjectForHooks(projectName, projectPath);
   const sandbox = sandboxForTarget(wtPath, project);
-  const settingsJson = buildSettingsJson(gardenRunner, sandbox);
+  const settingsJson = buildSettingsJson(resolveHookRunner(), sandbox);
   const settingsJsonLit = shellEscape(settingsJson);
   const doneSkillLit = shellEscape(DONE_SKILL_CONTENT);
   const doneSkillDirnameLit = shellEscape(DONE_SKILL_DIRNAME);

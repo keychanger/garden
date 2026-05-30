@@ -1,7 +1,24 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { runCli, useGitTmpHome } from "./helpers.js";
+
+// Run the minimal hook entrypoint bundle (dist/hook.js) directly, the way a
+// worker's settings.json hook command does via resolveHookRunner.
+function runHookBundle(event: string, opts: { home: string; cwd: string }) {
+  const hookPath = path.resolve(process.cwd(), "dist/hook.js");
+  if (!fs.existsSync(hookPath)) {
+    throw new Error(`runHookBundle: ${hookPath} does not exist — run \`npm run build\` before integration tests`);
+  }
+  return spawnSync("node", [hookPath, event], {
+    cwd: opts.cwd,
+    env: { ...process.env, HOME: opts.home },
+    input: "{}",
+    encoding: "utf8",
+    timeout: 15000,
+  });
+}
 
 // Regression: when hooks/default.ts and workflows/default.ts participated in
 // a module-init cycle, esbuild captured workflow.hookHandlers as undefined
@@ -71,5 +88,16 @@ describe("dashboard _claude-hook (bundled)", () => {
     });
     expect(result.stderr).not.toContain("Cannot read properties of undefined");
     expect(result.status).toBe(0);
+  });
+
+  // The dedicated minimal bundle (dist/hook.js) has its own import closure, so
+  // it needs the same module-init-cycle guard the full cli.js path gets above:
+  // a cycle that left workflow.hookHandlers undefined would crash here too.
+  it("the minimal hook bundle exits cleanly for every event", () => {
+    for (const event of ["sessionstart", "prompt", "notification", "pretooluse", "posttooluse", "stop"]) {
+      const result = runHookBundle(event, { home: env.home, cwd: worktreePath });
+      expect(result.stderr ?? "", `event=${event}`).not.toContain("Cannot read properties of undefined");
+      expect(result.status, `event=${event}`).toBe(0);
+    }
   });
 });

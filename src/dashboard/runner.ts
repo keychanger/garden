@@ -63,6 +63,49 @@ export function resolveGardenRunner(): string {
   return `${shellEscape(process.execPath)} ${shellEscape(direct)}`;
 }
 
+// Companion runner for the per-tool-call Claude hook. The hook fires on every
+// tool completion by every agent, so routing it through cli.js would parse the
+// entire command+dashboard bundle on each fire. dist/hook.js (built from
+// src/hook-entry.ts) bundles only the hook dispatcher's import closure — ~60%
+// smaller — so the node cold-start is cheaper. Worker settings.json hook
+// commands invoke this; cli.js keeps its own `_claude-hook` route so workers
+// whose settings predate this still work until their next refresh. Pre-escaped
+// per token like resolveGardenRunner, so callers must NOT re-wrap it.
+//
+// hook.js lives next to the real cli.js, so we locate that and swap the
+// basename. In dev it is the sibling hook-entry.ts. In dist, argv[1] may be
+// the npm bin symlink (e.g. /opt/homebrew/bin/garden, basename "garden", not
+// "cli.js"), so we resolve through symlinks to find the real dist/ — except in
+// a worktree, where we prefer the stable global for the same ephemerality
+// reason as resolveGardenRunner.
+export function resolveHookRunner(): string {
+  const direct = path.resolve(process.argv[1]);
+
+  if (direct.endsWith(".ts")) {
+    const dir = path.dirname(direct);
+    const gardenRoot = path.dirname(dir);
+    const tsxBin = path.join(gardenRoot, "node_modules", ".bin", "tsx");
+    const script = path.join(dir, "hook-entry.ts");
+    return fs.existsSync(tsxBin)
+      ? `${shellEscape(tsxBin)} ${shellEscape(script)}`
+      : `npx tsx ${shellEscape(script)}`;
+  }
+
+  if (direct.includes(WORKTREE_MARKER)) {
+    const stable = findStableGardenBin();
+    // findStableGardenBin already returns a realpath'd dist/cli.js; fall back
+    // to the worktree's own dist when no stable global exists.
+    const cliJs = stable ?? direct;
+    return `${shellEscape(process.execPath)} ${shellEscape(path.join(path.dirname(cliJs), "hook.js"))}`;
+  }
+
+  // Outside a worktree, argv[1] may be a bin symlink; resolve to the real
+  // cli.js so hook.js maps to its actual dist sibling.
+  let cliJs = direct;
+  try { cliJs = fs.realpathSync(direct); } catch { /* use argv[1] as-is */ }
+  return `${shellEscape(process.execPath)} ${shellEscape(path.join(path.dirname(cliJs), "hook.js"))}`;
+}
+
 // Walk PATH looking for a `garden` executable, then resolve through symlinks
 // to the underlying file. The npm-linked global is itself a symlink chain:
 // /opt/homebrew/bin/garden -> ../lib/node_modules/garden/dist/cli.js

@@ -197,7 +197,7 @@ describe("installClaudeHooks", () => {
     const parsed = JSON.parse(settingsJsonContent());
     const permReq = parsed.hooks.PermissionRequest[0];
     expect(permReq.matcher).toBe("");
-    expect(permReq.hooks[0].command).toContain("_claude-hook pretooluse");
+    expect(permReq.hooks[0].command).toContain("hook.js pretooluse");
   });
 
   it("registers a catch-all PostToolUse hook so asking flips back to working after any tool completes", () => {
@@ -206,7 +206,7 @@ describe("installClaudeHooks", () => {
     const parsed = JSON.parse(settingsJsonContent());
     const catchAll = parsed.hooks.PostToolUse.find((h: { matcher: string }) => h.matcher === "");
     expect(catchAll).toBeDefined();
-    expect(catchAll.hooks[0].command).toContain("_claude-hook posttooluse");
+    expect(catchAll.hooks[0].command).toContain("hook.js posttooluse");
   });
 
   it("also writes the bundled `done` skill at .claude/skills/done/SKILL.md (Claude Code's required dir+SKILL.md layout)", () => {
