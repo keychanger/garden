@@ -62,7 +62,8 @@ vi.mock("../src/output.js", () => ({
   isTTY: true,
 }));
 
-import { status, renderQuickStatus, resolveWorkerStatus } from "../src/commands/status.js";
+import { status, renderQuickStatus, resolveWorkerStatus, _resetStatusBranchCacheForTest } from "../src/commands/status.js";
+import { currentBranch } from "../src/dashboard/git.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { getWorkers } from "../src/dashboard/registry.js";
 import { dashboardExists } from "../src/session.js";
@@ -71,6 +72,7 @@ import { listHiddenWorkerWindows } from "../src/dashboard/tmux.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  _resetStatusBranchCacheForTest();
   vi.mocked(loadConfig).mockReturnValue({
     projects: { garden: { path: "/tmp/garden" } },
   });
@@ -247,6 +249,18 @@ describe("renderQuickStatus", () => {
     const result = renderQuickStatus(state);
     expect(result).toContain("bold-ash");
     expect(result).toContain("working");
+  });
+
+  it("caches the project branch across re-bakes within the TTL (one rev-parse per project)", () => {
+    vi.mocked(currentBranch).mockReturnValue("main");
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "working" },
+    ]);
+    renderQuickStatus(state);
+    renderQuickStatus(state);
+    // Two bakes, one focused project: currentBranch is forked once; the second
+    // bake hits the TTL cache instead of re-running git rev-parse.
+    expect(vi.mocked(currentBranch)).toHaveBeenCalledTimes(1);
   });
 
   it("renders loading from registry", () => {

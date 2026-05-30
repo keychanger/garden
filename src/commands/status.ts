@@ -331,12 +331,34 @@ export function formatTrellisBracket(t: WorkerInfo["trellis"]): string {
 // Used only to compare against each worker's pinned baseBranch so the
 // renderer can flag the divergence — the operator already sees the current
 // branch on the bottom status bar via formatLeft (header.ts), so we don't
-// repeat it on the worker list itself. The render runs at human cadence, so
-// one `rev-parse` per project per render is fine.
+// repeat it on the worker list itself.
+//
+// Per-process TTL cache for this DISPLAY-only value. refreshDashboard re-bakes
+// the status on every state transition, and in the long-lived poller and
+// dashboard processes a burst of transitions (many agents flipping state under
+// load) would otherwise fork `git rev-parse` once per project per bake. The
+// checkout's branch *name* changes only on an operator `git checkout` — a
+// post-merge fast-forward advances the ref, not the name — so a few seconds of
+// staleness on this string is invisible. Merge/base decisions must NOT use
+// this; they call currentBranch directly (git.ts resolveBaseBranch and the
+// off-base fast-forward guard) so they always see ground truth.
+const PROJECT_BRANCH_TTL_MS = 5_000;
+const projectBranchCache = new Map<string, { branch: string | null; at: number }>();
+
+/** Test-only: clear the project-branch TTL cache between cases. */
+export function _resetStatusBranchCacheForTest(): void {
+  projectBranchCache.clear();
+}
+
 function resolveProjectBranch(projectName: string): string | null {
+  const cached = projectBranchCache.get(projectName);
+  const now = Date.now();
+  if (cached && now - cached.at < PROJECT_BRANCH_TTL_MS) return cached.branch;
   const project = tryGetProject(projectName);
   if (!project) return null;
-  return currentBranch(project.path);
+  const branch = currentBranch(project.path);
+  projectBranchCache.set(projectName, { branch, at: now });
+  return branch;
 }
 
 // Per-worker suffix appended when a worker's pinned base diverges from the
