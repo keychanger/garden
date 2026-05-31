@@ -28,11 +28,15 @@ export interface Turn {
 // ExitPlanMode, Task) with no edit → "planned". No tools at all → "answered".
 const EDIT_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
 
-// Tail window: transcripts run 300KB–3MB. A few turns live comfortably in the
-// last chunk; reading the whole file on every render would be wasteful. A
-// single turn with hundreds of tool calls can exceed this — we then show only
-// what fits in the tail, which is acceptable for a glance-back view.
-const TAIL_BYTES = 256 * 1024;
+// Read the whole transcript so we capture the operator's prompts even when
+// they cluster at the start of a long single-worker session (the prompts are
+// exactly what this view is for, and they're often followed by megabytes of
+// tool activity). The mode-gate in writeConversationRendered already keeps this
+// parse off the hook firehose — it only runs while the operator is looking at
+// the conversation pane — so a full read at human-interaction cadence is cheap.
+// The cap is a backstop against a pathologically huge transcript stalling the
+// render; beyond it we tail the last chunk and accept a possibly-clipped head.
+const MAX_BYTES = 16 * 1024 * 1024;
 const DEFAULT_MAX_TURNS = 12;
 
 // Resolve the transcript file for a worker: prefer the hook-captured path, fall
@@ -74,7 +78,7 @@ export function readConversation(
     const fd = fs.openSync(transcriptPath, "r");
     try {
       const size = fs.fstatSync(fd).size;
-      const start = Math.max(0, size - TAIL_BYTES);
+      const start = Math.max(0, size - MAX_BYTES);
       partialHead = start > 0;
       const len = size - start;
       const buf = Buffer.allocUnsafe(len);
