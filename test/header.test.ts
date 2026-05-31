@@ -145,6 +145,7 @@ import {
   handlePaneDied,
   buildStatusCommand,
   buildUsageCommand,
+  buildConversationCommand,
   refreshStatusPane,
   refreshUsagePane,
   refreshDashboard,
@@ -1045,6 +1046,37 @@ describe("buildUsageCommand", () => {
     // Trailing `wait $_sp` reaps the killed sleep synchronously; without it
     // bash emits an async "sh: line N: PID Terminated: 15 ..." job notice.
     expect(cmd).toMatch(/sleep 86400 & _sp=\$!; wait \$_sp 2>\/dev\/null; kill \$_sp 2>\/dev\/null; wait \$_sp 2>\/dev\/null;/);
+  });
+});
+
+describe("buildConversationCommand", () => {
+  it("returns a shell script string", () => {
+    const cmd = buildConversationCommand("garden");
+    expect(typeof cmd).toBe("string");
+    expect(cmd.length).toBeGreaterThan(0);
+  });
+
+  it("sets up a SIGUSR1 trap for event-driven refresh", () => {
+    const cmd = buildConversationCommand("garden");
+    expect(cmd).toContain("trap");
+    expect(cmd).toContain("USR1");
+  });
+
+  it("references the pre-baked conversation file path", () => {
+    const cmd = buildConversationCommand("garden");
+    expect(cmd).toContain("conversation.rendered");
+  });
+
+  it("fully clears screen and scrollback on every repaint", () => {
+    // Unlike the usage pane, each render clears scrollback (\\033[2J\\033[3J)
+    // so a shorter new line never leaves a longer prior line's tail on screen.
+    const cmd = buildConversationCommand("garden");
+    expect(cmd).toContain(String.raw`render() { _t=$(cat "$cf" 2>/dev/null); printf '\033[H\033[2J\033[3J%s' "$_t"; }`);
+  });
+
+  it("sleeps long on idle (pure event-driven wake)", () => {
+    const cmd = buildConversationCommand("garden");
+    expect(cmd).toContain("sleep 86400");
   });
 });
 
