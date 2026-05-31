@@ -8,4 +8,16 @@
 // keeps its own `_claude-hook` route for workers whose settings predate it.
 import { handleClaudeHook } from "./dashboard/hook-dispatcher.js";
 
-handleClaudeHook(process.argv[2] ?? "");
+// Normally the event is argv[2] (`node hook.js posttooluse`). But a worker
+// Claude session caches its hook command at SessionStart and never reloads it,
+// so a session that started mid-migration can still fire the old cli-style
+// command shape against this new entrypoint: `node hook.js dashboard
+// _claude-hook posttooluse`. There argv[2] is the literal "dashboard" and the
+// real event sits after the "_claude-hook" token. Recover it so stale sessions
+// dispatch correctly for the rest of their life instead of warning on every
+// fire — symmetric with cli.js keeping its `_claude-hook` route for the inverse.
+const argv = process.argv.slice(2);
+const hookIdx = argv.indexOf("_claude-hook");
+const event = hookIdx >= 0 ? argv[hookIdx + 1] : argv[0];
+
+handleClaudeHook(event ?? "");

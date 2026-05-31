@@ -5,15 +5,16 @@ import path from "node:path";
 import { runCli, useGitTmpHome } from "./helpers.js";
 
 // Run the minimal hook entrypoint bundle (dist/hook.js) directly, the way a
-// worker's settings.json hook command does via resolveHookRunner.
-function runHookBundle(event: string, opts: { home: string; cwd: string }) {
+// worker's settings.json hook command does via resolveHookRunner. Extra args
+// after the event let a test reproduce a stale session's cached command shape.
+function runHookBundle(args: string[], opts: { home: string; cwd: string; logLevel?: string }) {
   const hookPath = path.resolve(process.cwd(), "dist/hook.js");
   if (!fs.existsSync(hookPath)) {
     throw new Error(`runHookBundle: ${hookPath} does not exist — run \`npm run build\` before integration tests`);
   }
-  return spawnSync("node", [hookPath, event], {
+  return spawnSync("node", [hookPath, ...args], {
     cwd: opts.cwd,
-    env: { ...process.env, HOME: opts.home },
+    env: { ...process.env, HOME: opts.home, ...(opts.logLevel ? { GARDEN_LOG_LEVEL: opts.logLevel } : {}) },
     input: "{}",
     encoding: "utf8",
     timeout: 15000,
@@ -95,9 +96,46 @@ describe("dashboard _claude-hook (bundled)", () => {
   // a cycle that left workflow.hookHandlers undefined would crash here too.
   it("the minimal hook bundle exits cleanly for every event", () => {
     for (const event of ["sessionstart", "prompt", "notification", "pretooluse", "posttooluse", "stop"]) {
-      const result = runHookBundle(event, { home: env.home, cwd: worktreePath });
+      const result = runHookBundle([event], { home: env.home, cwd: worktreePath });
       expect(result.stderr ?? "", `event=${event}`).not.toContain("Cannot read properties of undefined");
       expect(result.status, `event=${event}`).toBe(0);
     }
+  });
+
+  // Regression: a worker Claude session caches its hook command at SessionStart
+  // and never reloads it, so a session that started mid-migration still fires
+  // the old cli-style shape (`hook.js dashboard _claude-hook posttooluse`)
+  // against this entrypoint. argv[2] is then the literal "dashboard" — the bug
+  // that logged "unknown claude hook event" with event="dashboard". hook-entry
+  // recovers the real event from after the "_claude-hook" token.
+  const logFile = () => path.join(env.sessionsDir, "dashboard.log");
+  const readLog = () => (fs.existsSync(logFile()) ? fs.readFileSync(logFile(), "utf8") : "");
+
+  it("recovers the real event from a stale session's cli-style arg shape", () => {
+    if (fs.existsSync(logFile())) fs.rmSync(logFile());
+    const result = runHookBundle(["dashboard", "_claude-hook", "posttooluse"], {
+      home: env.home,
+      cwd: worktreePath,
+      logLevel: "debug",
+    });
+    expect(result.status).toBe(0);
+    // Recovered to "posttooluse" and dispatched — never fell through to the
+    // unhandled branch, and never saw the literal "dashboard" as the event.
+    expect(readLog()).not.toContain("unhandled claude hook event");
+    expect(readLog()).not.toContain('"event":"dashboard"');
+  });
+
+  it("logs an unhandled event at debug for a genuinely unknown event", () => {
+    if (fs.existsSync(logFile())) fs.rmSync(logFile());
+    const result = runHookBundle(["bogus-event"], {
+      home: env.home,
+      cwd: worktreePath,
+      logLevel: "debug",
+    });
+    expect(result.status).toBe(0);
+    const log = readLog();
+    expect(log).toContain("unhandled claude hook event");
+    expect(log).toContain('"event":"bogus-event"');
+    expect(log).toContain('"level":"debug"');
   });
 });

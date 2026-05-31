@@ -504,16 +504,19 @@ describe("handleClaudeHook — core events", () => {
     expect(addAlert).not.toHaveBeenCalled();
   });
 
-  it("unknown event logs warning and does not update", () => {
+  it("unknown event logs at debug and does not update", () => {
     seedWorker("garden", "bold-ash", { claudeStatus: "working" });
     setCwd("garden", "bold-ash");
 
     handleClaudeHook("bogus");
 
-    expect(log.warn).toHaveBeenCalledWith(
-      "hook", "unknown claude hook event",
+    // debug, not warn: this fires once per hook invocation, so a misconfigured
+    // or stale session must not firehose warn-level logs. See hook-dispatcher.ts.
+    expect(log.debug).toHaveBeenCalledWith(
+      "hook", "unhandled claude hook event",
       expect.anything(),
     );
+    expect(log.warn).not.toHaveBeenCalled();
     expect(updateWorkerFields).not.toHaveBeenCalled();
   });
 });

@@ -48,7 +48,13 @@ export function handleClaudeHook(event: string): void {
   const workflow = getWorkflow(entry.workflow ?? "default");
   const method = pickHookMethod(workflow.hookHandlers, event);
   if (!method) {
-    log.warn("hook", "unknown claude hook event", {
+    // debug, not warn: this fires once per hook invocation (a separate
+    // short-lived process each time, so no in-process dedup can throttle it).
+    // The known cause — a stale session firing the old `dashboard _claude-hook`
+    // arg shape — is now recovered in hook-entry.ts, so a value reaching here is
+    // either a genuinely new Claude hook type or a malformed manual call;
+    // neither warrants a warn-level firehose. GARDEN_LOG_LEVEL=debug to surface.
+    log.debug("hook", "unhandled claude hook event", {
       worker: cwdInfo.worker,
       data: { project: cwdInfo.project, event, workflow: workflow.name },
     });
