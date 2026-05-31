@@ -199,7 +199,7 @@ function applyAndLog(
   // Capture the transcript path Claude Code reports on the hook input. It
   // rarely changes (once per session), so only write it when it differs —
   // piggybacks on this already-writing path, no extra registry churn. The
-  // conversation view (⌥c) reads it via resolveTranscriptPath.
+  // history view (⌥h) reads it via resolveTranscriptPath.
   const tp = ctx.input.transcript_path;
   if (typeof tp === "string" && tp && tp !== ctx.workerInfo.entry.transcriptPath) {
     fields.transcriptPath = tp;

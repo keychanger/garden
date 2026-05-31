@@ -127,6 +127,24 @@ describe("writeDashState / readDashState", () => {
     expect(loaded.gardenWindowName).toBe("_garden-growhouse");
   });
 
+  it("migrates conversation view to history", async () => {
+    const { readDashState, STATE_FILE } = await importState();
+    const oldState = {
+      activeProject: "myproject",
+      statusPaneId: "%1",
+      gardenShellPaneId: "%2",
+      gardenPaneType: "conversation",
+      gardenWindowName: "_garden-conversation",
+      activePaneId: "%3",
+      activePaneType: "worker",
+      activeWindowName: "_myproject-worker-bold-ash",
+    };
+    fs.writeFileSync(STATE_FILE, JSON.stringify(oldState));
+    const loaded = readDashState();
+    expect(loaded.gardenPaneType).toBe("history");
+    expect(loaded.gardenWindowName).toBe("_garden-history");
+  });
+
   it("backfills lastActiveWorker for old state files", async () => {
     const { readDashState, STATE_FILE } = await importState();
     const oldState = {

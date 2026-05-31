@@ -23,7 +23,7 @@ export interface DashboardState {
   statusPaneId: string | null;
   usagePaneId: string | null;
   gardenShellPaneId: string | null; // current pane ID in the growhouse slot (lower-left)
-  gardenPaneType: "growhouse" | "root" | "logs" | "conversation" | null;
+  gardenPaneType: "growhouse" | "root" | "logs" | "history" | null;
   gardenWindowName: string | null; // logical name for parking, e.g. "_garden-growhouse" or "_garden-logs"
   // Right side — activePaneId is the pane currently in the right slot
   activePaneId: string | null;
@@ -110,6 +110,9 @@ export function readDashState(): DashboardState {
     if (raw.gardenPaneType === "root" && raw.gardenWindowName === null) raw.gardenPaneType = "growhouse";
     if (raw.gardenWindowName === "_garden-garden") raw.gardenWindowName = "_garden-growhouse";
     if (raw.gardenWindowName === "_garden-console") raw.gardenWindowName = "_garden-growhouse";
+    // The "conversation" view was renamed to "history" (⌥c → ⌥h).
+    if (raw.gardenPaneType === "conversation") raw.gardenPaneType = "history";
+    if (raw.gardenWindowName === "_garden-conversation") raw.gardenWindowName = "_garden-history";
     if (raw.gardenWindowName === undefined) raw.gardenWindowName = null;
     if (raw.usagePaneId === undefined) raw.usagePaneId = null;
     if (raw.activePlot === undefined) raw.activePlot = null;

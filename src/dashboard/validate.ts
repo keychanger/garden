@@ -195,6 +195,10 @@ export function validateAndHeal(state: DashboardState): DashboardState {
     renameWindow("_garden-console", "_garden-growhouse");
     log.info("validate", "renamed _garden-console to _garden-growhouse");
   }
+  if (windowExists("_garden-conversation") && !windowExists("_garden-history")) {
+    renameWindow("_garden-conversation", "_garden-history");
+    log.info("validate", "renamed _garden-conversation to _garden-history");
+  }
   if (state.gardenShellPaneId && state.gardenPaneType === "growhouse" && paneExists(state.gardenShellPaneId)) {
     setPaneTitle(state.gardenShellPaneId, "growhouse");
     setPaneLabel(state.gardenShellPaneId, "growhouse");

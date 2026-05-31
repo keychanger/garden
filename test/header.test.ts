@@ -145,7 +145,7 @@ import {
   handlePaneDied,
   buildStatusCommand,
   buildUsageCommand,
-  buildConversationCommand,
+  buildHistoryCommand,
   refreshStatusPane,
   refreshUsagePane,
   refreshDashboard,
@@ -1049,33 +1049,33 @@ describe("buildUsageCommand", () => {
   });
 });
 
-describe("buildConversationCommand", () => {
+describe("buildHistoryCommand", () => {
   it("returns a shell script string", () => {
-    const cmd = buildConversationCommand("garden");
+    const cmd = buildHistoryCommand("garden");
     expect(typeof cmd).toBe("string");
     expect(cmd.length).toBeGreaterThan(0);
   });
 
   it("sets up a SIGUSR1 trap for event-driven refresh", () => {
-    const cmd = buildConversationCommand("garden");
+    const cmd = buildHistoryCommand("garden");
     expect(cmd).toContain("trap");
     expect(cmd).toContain("USR1");
   });
 
-  it("references the pre-baked conversation file path", () => {
-    const cmd = buildConversationCommand("garden");
-    expect(cmd).toContain("conversation.rendered");
+  it("references the pre-baked history file path", () => {
+    const cmd = buildHistoryCommand("garden");
+    expect(cmd).toContain("history.rendered");
   });
 
   it("fully clears screen and scrollback on every repaint", () => {
     // Unlike the usage pane, each render clears scrollback (\\033[2J\\033[3J)
     // so a shorter new line never leaves a longer prior line's tail on screen.
-    const cmd = buildConversationCommand("garden");
+    const cmd = buildHistoryCommand("garden");
     expect(cmd).toContain(String.raw`render() { _t=$(cat "$cf" 2>/dev/null); printf '\033[H\033[2J\033[3J%s' "$_t"; }`);
   });
 
   it("sleeps long on idle (pure event-driven wake)", () => {
-    const cmd = buildConversationCommand("garden");
+    const cmd = buildHistoryCommand("garden");
     expect(cmd).toContain("sleep 86400");
   });
 });

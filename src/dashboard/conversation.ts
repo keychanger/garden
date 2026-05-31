@@ -1,7 +1,8 @@
 // Per-worker conversation history, read straight from Claude Code's session
 // transcript JSONL — the single source of truth, so history is retroactive for
-// workers that predate this feature. Used by the bottom-left "conversation"
-// dashboard view (⌥c) to remind the operator what they last asked a worker.
+// workers that predate this feature. Feeds the bottom-left "history" dashboard
+// view (⌥h) to remind the operator what they last asked a worker. (The view is
+// "history"; this module parses the underlying conversation transcript.)
 //
 // The transcript path is captured from the hook input (`transcript_path`) and
 // stored on the worker entry; when absent we derive it from the worktree cwd +

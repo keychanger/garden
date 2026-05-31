@@ -10,7 +10,7 @@ Garden is a personal tool — opinionated toward a single developer managing man
 A named reference to a directory on disk where Claude Code can operate. Projects are added with `garden add [path]` (name is derived from the directory basename).
 
 ### Dashboard
-A tmux session (`garden-dashboard`) that serves as the primary interface. The dashboard is a left/right split: garden title and usage meters (top), project status (middle), and a growhouse pane (bottom) on the left; an active pane (worker or shell) on the right with a header bar. The growhouse pane cycles between four views: the growhouse (`⌥g`) with a bold green `garden>` prompt and auto-dispatch for garden commands, the root shell (`⌥r`) for general-purpose terminal use, a logs view (`⌥l`), and a conversation view (`⌥c`) showing the focused worker's prompt history. The same swap-pane mechanism as the right pane is used. You never interact with tmux directly — garden sets up the layout, keybindings, and pane management.
+A tmux session (`garden-dashboard`) that serves as the primary interface. The dashboard is a left/right split: garden title and usage meters (top), project status (middle), and a growhouse pane (bottom) on the left; an active pane (worker or shell) on the right with a header bar. The growhouse pane cycles between four views: the growhouse (`⌥g`) with a bold green `garden>` prompt and auto-dispatch for garden commands, the root shell (`⌥r`) for general-purpose terminal use, a logs view (`⌥l`), and a history view (`⌥h`) showing the focused worker's prompt history. The same swap-pane mechanism as the right pane is used. You never interact with tmux directly — garden sets up the layout, keybindings, and pane management.
 
 ### Workers
 Interactive Claude Code sessions running inside the dashboard. Each project can have multiple workers (e.g., one for a feature, one for a review). Workers persist when you switch between projects — they're parked in hidden tmux windows and swapped back in when you return.
@@ -56,7 +56,7 @@ Rules are plain markdown. Edit them directly.
 
 - **Garden title + Usage Meters** (top-left) — Dedicated pane with a bold green `garden` title label on the pane border and three Claude quota bars inside (5-hour rolling window, weekly total, Sonnet-specific weekly meter). Height auto-sizes to the rendered content — 5 rows at rest, 6 when a one-line health tag is shown below the meters (stale snapshot or last-fetch error). Refreshed via SIGUSR1 from a pre-baked `usage.rendered` file.
 - **Project Status** (mid-left) — Live-updating display of all projects and their workers. Shows which project is active (`◄`), each worker's lifecycle state via status icons (braille spinner for working, Unicode symbols for other states), a focus indicator (filled/empty circle) showing which worker is active, and aligned columns for name/status/activity. Auto-sizes to the number of projects.
-- **Growhouse Pane** (lower-left) — Cycles between four views: growhouse (bold green `garden>` prompt with auto-dispatch for garden commands), root (general-purpose shell), logs, and conversation. `⌥g` jumps to growhouse, `⌥r` jumps to root, `⌥l` jumps to logs, `⌥c` jumps to conversation (the focused worker's operator prompts + verb-tagged assistant summaries, read from the worker's Claude transcript JSONL by `conversation.ts`). The conversation pane renders via the same pre-baked-file + SIGUSR1 path as the usage meter; `writeConversationRendered` parses the transcript only while conversation is the active mode.
+- **Growhouse Pane** (lower-left) — Cycles between four views: growhouse (bold green `garden>` prompt with auto-dispatch for garden commands), root (general-purpose shell), logs, and history. `⌥g` jumps to growhouse, `⌥r` jumps to root, `⌥l` jumps to logs, `⌥h` jumps to history (the focused worker's operator prompts + verb-tagged assistant summaries, read from the worker's Claude transcript JSONL by `conversation.ts`). The history pane renders via the same pre-baked-file + SIGUSR1 path as the usage meter; `writeHistoryRendered` parses the transcript only while history is the active mode.
 - **Bottom bar** (tmux status line) — Two-sided display. Left side shows the active project name (bold) and its current git branch. Right side shows the garden build version (git short SHA, or "dev" when running via tsx); when unread alerts exist it is prefixed with a red `⚠ N alerts — ⌥l to clear` badge.
 - **Active Pane** (right) — The currently visible pane for the active project. Either a worker (Claude session) or the project shell. Only one is visible at a time; others are parked in hidden tmux windows.
 
@@ -112,7 +112,7 @@ Requires terminal setup: iTerm2 → Profiles → Keys → Left Option key → "E
 | `⌥g` | Focus growhouse (lower-left) |
 | `⌥r` | Focus root shell (lower-left) |
 | `⌥l` | Focus logs view (lower-left); also acknowledges the alert badge |
-| `⌥c` | Focus conversation view (lower-left): the focused worker's prompt history + brief assistant summaries |
+| `⌥h` | Focus history view (lower-left): the focused worker's prompt history + brief assistant summaries |
 | `⌥/` | Edit the sticky logs filter via `tmux command-prompt` (pre-filled with current value); empty input clears |
 | `⌥.` | Clear the sticky logs filter immediately (no prompt) |
 
@@ -128,7 +128,7 @@ Each project's workers and shell live in hidden tmux windows when not active. Wh
 This preserves both the layout tree (the right pane slot is never destroyed) and all worker state across switches.
 
 ### Hidden Window Naming
-Hidden windows follow the convention: `_<project>-worker-<N>`, `_<project>-shell`, `_<project>-poller`, `_<project>-review-<worker>`, `_garden-growhouse`, `_garden-root`, `_garden-logs`, `_garden-conversation`, and `_garden-usage-poller`. When switching projects, the visible pane is parked as `_<project>-active`. The underscore prefix marks them as managed by garden — not user-facing.
+Hidden windows follow the convention: `_<project>-worker-<N>`, `_<project>-shell`, `_<project>-poller`, `_<project>-review-<worker>`, `_garden-growhouse`, `_garden-root`, `_garden-logs`, `_garden-history`, and `_garden-usage-poller`. When switching projects, the visible pane is parked as `_<project>-active`. The underscore prefix marks them as managed by garden — not user-facing.
 
 ### Worker Lifecycle
 1. `⌥n` creates a git worktree at `~/.garden/worktrees/<project>/<worker-name>/`, with a branch named after the worker that points at `origin/<base>` directly. Worker freshness does not depend on the main checkout being clean or fast-forwarded — a stale main checkout raises an alert but does not infect the worker
@@ -397,7 +397,7 @@ All read commands detect whether stdout is a TTY:
     <project>-<worker>-review-result.txt  # Transient review output
     status.rendered           # Pre-rendered status snapshot for instant display
     usage.rendered            # Pre-rendered usage meter snapshot for the usage pane
-    conversation.rendered     # Pre-rendered conversation snapshot for the ⌥c conversation pane
+    history.rendered          # Pre-rendered conversation snapshot for the ⌥h history pane
     claude-usage.json         # Claude quota snapshot (5h / weekly / sonnet)
   worktrees/
     <project>/

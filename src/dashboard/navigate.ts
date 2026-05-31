@@ -15,7 +15,7 @@ import {
 import { findWorkerByName } from "./registry.js";
 import { acknowledgeAlerts } from "./alerts.js";
 import { log } from "./log.js";
-import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow, createGardenConversationWindow } from "./create.js";
+import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow, createGardenHistoryWindow } from "./create.js";
 import { formatLogsPaneLabel } from "../commands/logs.js";
 import { resolveGardenRunner } from "./runner.js";
 import { parkingWindowName, shellWindowName as shellWin, gardenWindowName, parseWorkerSuffix, isWorkerWindow, type GardenView } from "./window-names.js";
@@ -214,7 +214,7 @@ function ensureGardenView(view: GardenView): void {
   if (view === "growhouse") createGardenGrowhouseWindow(resolveGardenRunner());
   else if (view === "root") createGardenRootWindow();
   else if (view === "logs") createLogsWindow();
-  else if (view === "conversation") createGardenConversationWindow(resolveGardenRunner());
+  else if (view === "history") createGardenHistoryWindow(resolveGardenRunner());
 }
 
 function switchGardenTo(view: GardenView): void {
@@ -260,8 +260,8 @@ export function focusLogs(): void {
   acknowledgeAlerts();
 }
 
-export function focusConversation(): void {
-  switchGardenTo("conversation");
+export function focusHistory(): void {
+  switchGardenTo("history");
 }
 
 export function cyclePlot(direction: 1 | -1): void {

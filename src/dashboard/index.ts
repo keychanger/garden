@@ -24,7 +24,7 @@ import {
   runTrellisPicker, plantVineFromPicker, spawnTrellisAuthor, runReviveSubmenu,
   runWorkflowPicker, plantGrowFromPicker,
 } from "./trellis-picker.js";
-import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, focusConversation, cyclePane, cyclePlot } from "./navigate.js";
+import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, focusHistory, cyclePane, cyclePlot } from "./navigate.js";
 import { openLogsFilterPrompt, applyLogsFilter } from "./logs-filter.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
 import { runUsagePollerLoop, stopUsagePoller } from "./usage-poller.js";
@@ -80,7 +80,7 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   if (sub === "_focus-growhouse") return focusGrowhouse();
   if (sub === "_focus-root") return focusRoot();
   if (sub === "_focus-logs") return focusLogs();
-  if (sub === "_focus-conversation") return focusConversation();
+  if (sub === "_focus-history") return focusHistory();
   if (sub === "_logs-filter") return openLogsFilterPrompt();
   if (sub === "_logs-filter-apply") {
     applyLogsFilter(args.slice(1).join(" "));

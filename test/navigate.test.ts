@@ -74,7 +74,7 @@ vi.mock("../src/dashboard/create.js", () => ({
   createLogsWindow: vi.fn(),
   createGardenRootWindow: vi.fn(),
   createGardenGrowhouseWindow: vi.fn(),
-  createGardenConversationWindow: vi.fn(),
+  createGardenHistoryWindow: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/runner.js", () => ({
@@ -99,7 +99,7 @@ import {
   focusGrowhouse,
   focusRoot,
   focusLogs,
-  focusConversation,
+  focusHistory,
   cyclePane,
   cyclePlot,
 } from "../src/dashboard/navigate.js";
@@ -115,7 +115,7 @@ import {
 import { findWorkerByName } from "../src/dashboard/registry.js";
 import { plotsMap, getFocusedProjectNames } from "../src/config.js";
 import { acknowledgeAlerts } from "../src/dashboard/alerts.js";
-import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow, createGardenConversationWindow } from "../src/dashboard/create.js";
+import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow, createGardenHistoryWindow } from "../src/dashboard/create.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 
 // --- Helpers ---
@@ -559,7 +559,7 @@ describe("focusGrowhouse / focusRoot / focusLogs (switchGardenTo)", () => {
     expect(state.gardenWindowName).toBe("_garden-logs");
   });
 
-  it("creates conversation window if missing when switching to conversation", () => {
+  it("creates history window if missing when switching to history", () => {
     const state = makeState({
       gardenPaneType: "growhouse",
       gardenWindowName: "_garden-growhouse",
@@ -567,11 +567,11 @@ describe("focusGrowhouse / focusRoot / focusLogs (switchGardenTo)", () => {
     vi.mocked(readDashState).mockReturnValue(state);
     vi.mocked(windowExists).mockReturnValue(false);
 
-    focusConversation();
+    focusHistory();
 
-    expect(createGardenConversationWindow).toHaveBeenCalled();
-    expect(state.gardenPaneType).toBe("conversation");
-    expect(state.gardenWindowName).toBe("_garden-conversation");
+    expect(createGardenHistoryWindow).toHaveBeenCalled();
+    expect(state.gardenPaneType).toBe("history");
+    expect(state.gardenWindowName).toBe("_garden-history");
   });
 
   it("swaps growhouse pane and sets label", () => {

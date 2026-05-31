@@ -27,7 +27,7 @@ export const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
 // Diagnostic dump path for the status pane's live $cur (see _diag-status).
 export const STATUS_CUR_DUMP_FILE = path.join(SESSIONS_DIR, "status.cur.dump");
 const USAGE_RENDERED_FILE = path.join(SESSIONS_DIR, "usage.rendered");
-const CONVERSATION_RENDERED_FILE = path.join(SESSIONS_DIR, "conversation.rendered");
+const HISTORY_RENDERED_FILE = path.join(SESSIONS_DIR, "history.rendered");
 const PLOT_STRIP_TEMPLATE_FILE = path.join(SESSIONS_DIR, "plot-strip.template");
 // Sentinel in the plot-strip template file; the status pane's animation loop
 // substitutes it with the current spinner frame each tick.
@@ -604,16 +604,15 @@ export function buildUsageCommand(_gardenRunner: string): string {
   ].join("\n");
 }
 
-// Conversation pane: SIGUSR1 repaint loop reading the pre-baked
-// conversation.rendered. Unlike the usage pane, each repaint fully clears the
-// screen AND scrollback (\033[2J\033[3J) before printing the whole
-// conversation: the full clear prevents a shorter new line from leaving a
-// longer previous line's tail on screen (the bleed-through other panes would
-// otherwise show), and printing the whole conversation lets content taller than
-// the pane scroll into tmux scrollback so the operator can scroll up through
-// the full history.
-export function buildConversationCommand(_gardenRunner: string): string {
-  const cf = CONVERSATION_RENDERED_FILE;
+// History pane: SIGUSR1 repaint loop reading the pre-baked history.rendered.
+// Unlike the usage pane, each repaint fully clears the screen AND scrollback
+// (\033[2J\033[3J) before printing the whole conversation: the full clear
+// prevents a shorter new line from leaving a longer previous line's tail on
+// screen (the bleed-through other panes would otherwise show), and printing the
+// whole conversation lets content taller than the pane scroll into tmux
+// scrollback so the operator can scroll up through the full history.
+export function buildHistoryCommand(_gardenRunner: string): string {
+  const cf = HISTORY_RENDERED_FILE;
   return [
     `printf '\\033[H\\033[2J\\033[3J'`,
     `cf='${cf}'`,
@@ -664,7 +663,7 @@ export function refreshDashboard(opts?: RefreshOptions): void {
   updateHeaderVar(shared);
   writeQuickStatus(shared);
   writeUsageRendered(shared);
-  writeConversationRendered(shared);
+  writeHistoryRendered(shared);
   suppressWindowNames(shared.windowNames);
   refreshWorkerTasks(shared.registry, shared.state);
 }
@@ -672,7 +671,7 @@ export function refreshDashboard(opts?: RefreshOptions): void {
 // Lean refresh for worker cycling: skip header/tasks/usage since only the status marker moves.
 export function refreshDashboardCycle(opts?: RefreshOptions): void {
   writeQuickStatus(opts);
-  writeConversationRendered(opts); // follow focus when cycling workers in ⌥c mode
+  writeHistoryRendered(opts); // follow focus when cycling workers in ⌥h mode
 }
 
 // Reset module-level write/idempotency caches. Intended for tests that
@@ -684,7 +683,7 @@ export function _resetHeaderCachesForTest(): void {
   lastWrittenPlotStripTemplate = null;
   lastWrittenQuickStatus = null;
   lastWrittenUsageRendered = null;
-  lastWrittenConversation = null;
+  lastWrittenHistory = null;
   lastBarLeft = null;
   lastBarRight = null;
 }
@@ -700,7 +699,7 @@ export function refreshDashboardPlotCycle(opts?: RefreshOptions): void {
   };
   updateHeaderVar(shared);
   writeQuickStatus(shared);
-  writeConversationRendered(shared); // follow focus when cycling plots in ⌥c mode
+  writeHistoryRendered(shared); // follow focus when cycling plots in ⌥h mode
 }
 
 // Refresh all workers' task fields from their live tmux pane titles. This
@@ -809,23 +808,23 @@ function writeQuickStatus(opts?: RefreshOptions): void {
   } catch { /* best effort */ }
 }
 
-let lastWrittenConversation: string | null = null;
+let lastWrittenHistory: string | null = null;
 
-// Repaint the conversation pane (bottom-left ⌥c mode) for the worker currently
-// focused in the right slot. A cheap no-op unless conversation is the active
-// garden mode — so the transcript parse stays off every unrelated refresh and
-// never touches the per-tool-call hook firehose. Wired into every refresh entry
-// point so the view follows focus across project/worker/plot navigation.
-export function writeConversationRendered(opts?: RefreshOptions): void {
+// Repaint the history pane (bottom-left ⌥h mode) for the worker currently
+// focused in the right slot. A cheap no-op unless history is the active garden
+// mode — so the transcript parse stays off every unrelated refresh and never
+// touches the per-tool-call hook firehose. Wired into every refresh entry point
+// so the view follows focus across project/worker/plot navigation.
+export function writeHistoryRendered(opts?: RefreshOptions): void {
   try {
     const state = opts?.state ?? readDashState();
-    if (state.gardenPaneType !== "conversation" || !state.gardenShellPaneId) return;
+    if (state.gardenPaneType !== "history" || !state.gardenShellPaneId) return;
     const size = getPaneSize(state.gardenShellPaneId);
     const width = size?.width ?? 60;
-    const rendered = renderConversationContent(state, width, opts?.registry);
-    if (rendered === lastWrittenConversation) return;
-    atomicWriteFile(CONVERSATION_RENDERED_FILE, rendered);
-    lastWrittenConversation = rendered;
+    const rendered = renderHistoryContent(state, width, opts?.registry);
+    if (rendered === lastWrittenHistory) return;
+    atomicWriteFile(HISTORY_RENDERED_FILE, rendered);
+    lastWrittenHistory = rendered;
     signalPane(state.gardenShellPaneId);
   } catch { /* best effort */ }
 }
@@ -833,13 +832,13 @@ export function writeConversationRendered(opts?: RefreshOptions): void {
 // Keep enough exchanges that the full conversation is in scrollback; the pane
 // renders all of them and lets tmux hold the overflow (the operator scrolls up
 // for older turns — the render does not truncate to the visible height).
-const CONVERSATION_MAX_TURNS = 40;
+const HISTORY_MAX_TURNS = 40;
 
 function dimLine(msg: string): string {
   return ` \x1b[2m${msg}\x1b[0m`;
 }
 
-function renderConversationContent(
+function renderHistoryContent(
   state: DashboardState,
   width: number,
   cachedRegistry?: WorkerRegistry,
@@ -856,7 +855,7 @@ function renderConversationContent(
     if (!entry) {
       lines = [dimLine("no active worker")];
     } else {
-      const turns = readConversation(resolveTranscriptPath(entry), CONVERSATION_MAX_TURNS);
+      const turns = readConversation(resolveTranscriptPath(entry), HISTORY_MAX_TURNS);
       if (turns.length === 0) {
         lines = [dimLine("no conversation yet")];
       } else {
