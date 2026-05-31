@@ -52,7 +52,7 @@ export interface WorkerEntry {
   sessionId: string;  // claude session UUID for direct resume
   task: string;       // last known task summary from pane title
   // Path to this session's Claude Code transcript JSONL, captured from the
-  // hook input (`transcript_path`). Read by the conversation view (⌥c) to
+  // hook input (`transcript_path`). Read by the history view (⌥h) to
   // render the operator's prompt history. Optional: derivable from
   // worktreePath + sessionId when unset (see resolveTranscriptPath).
   transcriptPath?: string;

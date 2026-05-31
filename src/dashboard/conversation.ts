@@ -32,9 +32,9 @@ const EDIT_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
 // Read the whole transcript so we capture the operator's prompts even when
 // they cluster at the start of a long single-worker session (the prompts are
 // exactly what this view is for, and they're often followed by megabytes of
-// tool activity). The mode-gate in writeConversationRendered already keeps this
+// tool activity). The mode-gate in writeHistoryRendered already keeps this
 // parse off the hook firehose — it only runs while the operator is looking at
-// the conversation pane — so a full read at human-interaction cadence is cheap.
+// the history pane — so a full read at human-interaction cadence is cheap.
 // The cap is a backstop against a pathologically huge transcript stalling the
 // render; beyond it we tail the last chunk and accept a possibly-clipped head.
 const MAX_BYTES = 16 * 1024 * 1024;
@@ -190,7 +190,7 @@ function collapse(s: string): string {
 
 // ---------------------------------------------------------------------------
 // Rendering — pure: turns + width → ANSI lines (oldest at top, newest at
-// bottom). The caller (writeConversationRendered) fits these to the pane
+// bottom). The caller (writeHistoryRendered) fits these to the pane
 // height and paints them. Kept here so it stays unit-testable without tmux.
 // ---------------------------------------------------------------------------
 
