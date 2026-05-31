@@ -74,6 +74,7 @@ vi.mock("../src/dashboard/create.js", () => ({
   createLogsWindow: vi.fn(),
   createGardenRootWindow: vi.fn(),
   createGardenGrowhouseWindow: vi.fn(),
+  createGardenConversationWindow: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/runner.js", () => ({
@@ -98,6 +99,7 @@ import {
   focusGrowhouse,
   focusRoot,
   focusLogs,
+  focusConversation,
   cyclePane,
   cyclePlot,
 } from "../src/dashboard/navigate.js";
@@ -113,7 +115,7 @@ import {
 import { findWorkerByName } from "../src/dashboard/registry.js";
 import { plotsMap, getFocusedProjectNames } from "../src/config.js";
 import { acknowledgeAlerts } from "../src/dashboard/alerts.js";
-import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow } from "../src/dashboard/create.js";
+import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow, createGardenConversationWindow } from "../src/dashboard/create.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 
 // --- Helpers ---
@@ -555,6 +557,21 @@ describe("focusGrowhouse / focusRoot / focusLogs (switchGardenTo)", () => {
     expect(createLogsWindow).toHaveBeenCalled();
     expect(state.gardenPaneType).toBe("logs");
     expect(state.gardenWindowName).toBe("_garden-logs");
+  });
+
+  it("creates conversation window if missing when switching to conversation", () => {
+    const state = makeState({
+      gardenPaneType: "growhouse",
+      gardenWindowName: "_garden-growhouse",
+    });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(windowExists).mockReturnValue(false);
+
+    focusConversation();
+
+    expect(createGardenConversationWindow).toHaveBeenCalled();
+    expect(state.gardenPaneType).toBe("conversation");
+    expect(state.gardenWindowName).toBe("_garden-conversation");
   });
 
   it("swaps growhouse pane and sets label", () => {

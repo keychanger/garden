@@ -18,14 +18,16 @@ import { currentBranch, worktreeExists } from "./git.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { log } from "./log.js";
 import { unreadAlertCount, formatRightBar } from "./alerts.js";
-import { workerWindowName as workerWin, parseWorkerWindow } from "./window-names.js";
+import { workerWindowName as workerWin, parseWorkerWindow, parseWorkerSuffix } from "./window-names.js";
 import { renderUsagePane } from "./usage.js";
+import { readConversation, resolveTranscriptPath, formatConversationPane } from "./conversation.js";
 import { resolvePlotStatus, type PlotState } from "./plot-status.js";
 
 export const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
 // Diagnostic dump path for the status pane's live $cur (see _diag-status).
 export const STATUS_CUR_DUMP_FILE = path.join(SESSIONS_DIR, "status.cur.dump");
 const USAGE_RENDERED_FILE = path.join(SESSIONS_DIR, "usage.rendered");
+const CONVERSATION_RENDERED_FILE = path.join(SESSIONS_DIR, "conversation.rendered");
 const PLOT_STRIP_TEMPLATE_FILE = path.join(SESSIONS_DIR, "plot-strip.template");
 // Sentinel in the plot-strip template file; the status pane's animation loop
 // substitutes it with the current spinner frame each tick.
@@ -602,6 +604,22 @@ export function buildUsageCommand(_gardenRunner: string): string {
   ].join("\n");
 }
 
+// Conversation pane: identical SIGUSR1 repaint loop to buildUsageCommand,
+// reading the pre-baked conversation.rendered. writeConversationRendered fits
+// the content to the pane height (top-padded so the newest turn sits at the
+// bottom), so painting from home and clearing below is correct.
+export function buildConversationCommand(_gardenRunner: string): string {
+  const cf = CONVERSATION_RENDERED_FILE;
+  return [
+    `printf '\\033[H\\033[2J\\033[3J'`,
+    `cf='${cf}'`,
+    `render() { _t=$(cat "$cf" 2>/dev/null); printf '\\033[H%s\\033[J' "$_t"; }`,
+    `trap 'render' USR1`,
+    `render`,
+    `while true; do sleep 86400 & _sp=$!; wait $_sp 2>/dev/null; kill $_sp 2>/dev/null; wait $_sp 2>/dev/null; done`,
+  ].join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Refresh helpers
 // ---------------------------------------------------------------------------
@@ -642,6 +660,7 @@ export function refreshDashboard(opts?: RefreshOptions): void {
   updateHeaderVar(shared);
   writeQuickStatus(shared);
   writeUsageRendered(shared);
+  writeConversationRendered(shared);
   suppressWindowNames(shared.windowNames);
   refreshWorkerTasks(shared.registry, shared.state);
 }
@@ -649,6 +668,7 @@ export function refreshDashboard(opts?: RefreshOptions): void {
 // Lean refresh for worker cycling: skip header/tasks/usage since only the status marker moves.
 export function refreshDashboardCycle(opts?: RefreshOptions): void {
   writeQuickStatus(opts);
+  writeConversationRendered(opts); // follow focus when cycling workers in ⌥c mode
 }
 
 // Reset module-level write/idempotency caches. Intended for tests that
@@ -660,6 +680,7 @@ export function _resetHeaderCachesForTest(): void {
   lastWrittenPlotStripTemplate = null;
   lastWrittenQuickStatus = null;
   lastWrittenUsageRendered = null;
+  lastWrittenConversation = null;
   lastBarLeft = null;
   lastBarRight = null;
 }
@@ -675,6 +696,7 @@ export function refreshDashboardPlotCycle(opts?: RefreshOptions): void {
   };
   updateHeaderVar(shared);
   writeQuickStatus(shared);
+  writeConversationRendered(shared); // follow focus when cycling plots in ⌥c mode
 }
 
 // Refresh all workers' task fields from their live tmux pane titles. This
@@ -781,6 +803,72 @@ function writeQuickStatus(opts?: RefreshOptions): void {
       resizeAndSignal(state.statusPaneId, h, cur?.height ?? null);
     }
   } catch { /* best effort */ }
+}
+
+let lastWrittenConversation: string | null = null;
+
+// Repaint the conversation pane (bottom-left ⌥c mode) for the worker currently
+// focused in the right slot. A cheap no-op unless conversation is the active
+// garden mode — so the transcript parse stays off every unrelated refresh and
+// never touches the per-tool-call hook firehose. Wired into every refresh entry
+// point so the view follows focus across project/worker/plot navigation.
+export function writeConversationRendered(opts?: RefreshOptions): void {
+  try {
+    const state = opts?.state ?? readDashState();
+    if (state.gardenPaneType !== "conversation" || !state.gardenShellPaneId) return;
+    const size = getPaneSize(state.gardenShellPaneId);
+    const width = size?.width ?? 60;
+    const availH = Math.max(1, (size?.height ?? 20) - 1); // -1 for pane-border-status top row
+    const rendered = renderConversationContent(state, width, availH, opts?.registry);
+    if (rendered === lastWrittenConversation) return;
+    atomicWriteFile(CONVERSATION_RENDERED_FILE, rendered);
+    lastWrittenConversation = rendered;
+    signalPane(state.gardenShellPaneId);
+  } catch { /* best effort */ }
+}
+
+function dimLine(msg: string): string {
+  return ` \x1b[2m${msg}\x1b[0m`;
+}
+
+// Bottom-align content to exactly `h` lines: keep the last h, top-pad with
+// blanks when shorter. Painting from home then clearing below shows the newest
+// turn at the bottom of the pane.
+function fitBottom(lines: string[], h: number): string[] {
+  const tail = lines.slice(-h);
+  const pad = h - tail.length;
+  return pad > 0 ? [...Array<string>(pad).fill(""), ...tail] : tail;
+}
+
+function renderConversationContent(
+  state: DashboardState,
+  width: number,
+  availH: number,
+  cachedRegistry?: WorkerRegistry,
+): string {
+  let lines: string[];
+  if (state.activePaneType !== "worker" || !state.activeWindowName || !state.activeProject) {
+    lines = [dimLine("no active worker — focus one with ⌥w")];
+  } else {
+    const worker = parseWorkerSuffix(state.activeWindowName);
+    const registry = cachedRegistry ?? readRegistry();
+    const entry = worker
+      ? registry.workers[state.activeProject]?.find(e => e.name === worker)
+      : undefined;
+    if (!entry) {
+      lines = [dimLine("no active worker")];
+    } else {
+      const turns = readConversation(resolveTranscriptPath(entry));
+      if (turns.length === 0) {
+        lines = [dimLine("no conversation yet")];
+      } else {
+        const status = entry.claudeStatus === "working" ? "working"
+          : entry.claudeStatus === "asking" ? "asking" : undefined;
+        lines = formatConversationPane(turns, { width, status });
+      }
+    }
+  }
+  return fitBottom(lines, availH).join("\n");
 }
 
 function writeUsageRendered(opts?: RefreshOptions): void {

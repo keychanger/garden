@@ -170,3 +170,70 @@ function lastParagraph(s: string): string {
 function collapse(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
+
+// ---------------------------------------------------------------------------
+// Rendering — pure: turns + width → ANSI lines (oldest at top, newest at
+// bottom). The caller (writeConversationRendered) fits these to the pane
+// height and paints them. Kept here so it stays unit-testable without tmux.
+// ---------------------------------------------------------------------------
+
+const RESET = "\x1b[0m";
+const LABEL_W = 8; // widest label: "answered"
+const VERB_COLOR: Record<Verb, string> = {
+  worked: "32",  // green
+  planned: "36", // cyan
+  answered: "2", // dim
+};
+
+function paint(code: string, s: string): string {
+  return `\x1b[${code}m${s}${RESET}`;
+}
+
+export interface FormatOpts {
+  width: number;
+  // Live worker status overlay for the in-progress turn, if any.
+  status?: "working" | "asking";
+}
+
+export function formatConversationPane(turns: Turn[], opts: FormatOpts): string[] {
+  const textWidth = Math.max(10, opts.width - (LABEL_W + 1));
+  const lines: string[] = [];
+
+  turns.forEach((turn, i) => {
+    if (turn.role === "user" && i > 0) lines.push(""); // blank line between exchanges
+    const label = turn.role === "user"
+      ? paint("1", "you".padEnd(LABEL_W))
+      : paint(VERB_COLOR[turn.verb ?? "answered"], (turn.verb ?? "answered").padEnd(LABEL_W));
+    const wrapped = wrapText(turn.text, textWidth);
+    wrapped.forEach((w, j) => {
+      const gutter = j === 0 ? label : " ".repeat(LABEL_W);
+      const styled = turn.role === "user" ? paint("1", w) : w;
+      lines.push(` ${gutter} ${styled}`);
+    });
+  });
+
+  if (opts.status === "working") lines.push(` ${paint("33", "working…".padEnd(LABEL_W))}`);
+  else if (opts.status === "asking") lines.push(` ${paint("33", "asking…".padEnd(LABEL_W))}`);
+
+  return lines;
+}
+
+// Greedy word-wrap on a plain (un-styled) string.
+function wrapText(text: string, width: number): string[] {
+  const words = text.split(" ");
+  const out: string[] = [];
+  let line = "";
+  for (let word of words) {
+    while (word.length > width) {
+      // A single token wider than the column — hard-split it.
+      if (line) { out.push(line); line = ""; }
+      out.push(word.slice(0, width));
+      word = word.slice(width);
+    }
+    if (!line) line = word;
+    else if (line.length + 1 + word.length <= width) line += " " + word;
+    else { out.push(line); line = word; }
+  }
+  if (line) out.push(line);
+  return out.length > 0 ? out : [""];
+}

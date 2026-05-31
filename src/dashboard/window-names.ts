@@ -2,7 +2,7 @@
 // All tmux window name construction, parsing, and classification lives here.
 // Consumer files import from this module instead of hardcoding patterns.
 
-export type GardenView = "growhouse" | "root" | "logs";
+export type GardenView = "growhouse" | "root" | "logs" | "conversation";
 
 // --- Construction ---
 
@@ -60,10 +60,11 @@ export function parseWorkerSuffix(name: string): string | null {
 
 // --- Classification ---
 
-const GARDEN_VIEWS = new Set<string>(["growhouse", "root", "logs"]);
+const GARDEN_VIEWS = new Set<string>(["growhouse", "root", "logs", "conversation"]);
 
 export function isGardenWindow(name: string): boolean {
-  return name === "_garden-growhouse" || name === "_garden-root" || name === "_garden-logs";
+  return name === "_garden-growhouse" || name === "_garden-root"
+    || name === "_garden-logs" || name === "_garden-conversation";
 }
 
 export function isWorkerWindow(name: string): boolean {

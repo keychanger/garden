@@ -5,6 +5,8 @@ import {
   readConversation,
   classifyVerb,
   resolveTranscriptPath,
+  formatConversationPane,
+  type Turn,
 } from "../src/dashboard/conversation.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 import { useTmpHome } from "./helpers.js";
@@ -126,6 +128,48 @@ describe("readConversation", () => {
     expect(readConversation(p)).toEqual([
       { role: "user", text: "hi", ts: "2026-05-30T17:00:00Z" },
     ]);
+  });
+});
+
+describe("formatConversationPane", () => {
+  // Strip ANSI so assertions read the plain layout.
+  const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+
+  const turns: Turn[] = [
+    { role: "user", text: "fix the login bug", ts: "" },
+    { role: "assistant", text: "Patched the token check.", verb: "worked", ts: "" },
+  ];
+
+  it("renders a you-label and verb-label gutter, oldest at top", () => {
+    const out = formatConversationPane(turns, { width: 60 }).map(plain);
+    expect(out[0]).toMatch(/^ you\s+fix the login bug$/);
+    expect(out[1]).toMatch(/^ worked\s+Patched the token check\.$/);
+  });
+
+  it("wraps long bodies into the gutter-aligned continuation", () => {
+    const long: Turn[] = [{ role: "user", text: "a b c d e f g h i j k l", ts: "" }];
+    const out = formatConversationPane(long, { width: 24 }).map(plain);
+    expect(out.length).toBeGreaterThan(1);
+    // Continuation lines are indented to the gutter (no "you" label).
+    expect(out[1]).toMatch(/^ {10}/);
+  });
+
+  it("appends a live status indicator when the worker is busy", () => {
+    expect(formatConversationPane(turns, { width: 60, status: "working" }).map(plain).at(-1))
+      .toMatch(/working…/);
+    expect(formatConversationPane(turns, { width: 60, status: "asking" }).map(plain).at(-1))
+      .toMatch(/asking…/);
+  });
+
+  it("inserts a blank separator before each exchange after the first", () => {
+    const two: Turn[] = [
+      { role: "user", text: "one", ts: "" },
+      { role: "assistant", text: "first", verb: "answered", ts: "" },
+      { role: "user", text: "two", ts: "" },
+      { role: "assistant", text: "second", verb: "answered", ts: "" },
+    ];
+    const out = formatConversationPane(two, { width: 60 }).map(plain);
+    expect(out).toContain(""); // blank line between the two exchanges
   });
 });
 

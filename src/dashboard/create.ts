@@ -12,7 +12,7 @@ import { buildRulesContext, buildWorktreeRules } from "../rules.js";
 import { type DashboardState, readDashState, writeDashState, STATE_FILE } from "./state.js";
 import { restoreFromHidden } from "./layout.js";
 import { setupKeybindings } from "./hotkeys.js";
-import { setupStatusBar, buildStatusCommand, buildUsageCommand, updateHeaderVar, installInputGuard } from "./header.js";
+import { setupStatusBar, buildStatusCommand, buildUsageCommand, buildConversationCommand, updateHeaderVar, installInputGuard } from "./header.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { formatLogsPaneLabel } from "../commands/logs.js";
 import {
@@ -566,6 +566,21 @@ export function createGardenRootWindow(): void {
   if (paneId) {
     setPaneLabel(paneId, "root");
     setPaneTitle(paneId, "root");
+  }
+}
+
+// Conversation view (⌥c): a passive SIGUSR1 repaint pane, same shape as the
+// usage pane. writeConversationRendered fills conversation.rendered with the
+// focused worker's prompt history.
+export function createGardenConversationWindow(gardenRunner: string): void {
+  const windowName = gardenWindowName("conversation");
+  const cmd = buildConversationCommand(gardenRunner);
+  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName, "sh", "-c", cmd);
+  const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
+  if (paneId) {
+    setPaneLabel(paneId, "conversation");
+    setPaneTitle(paneId, "conversation");
+    disablePaneInput(paneId);
   }
 }
 
