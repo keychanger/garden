@@ -88,7 +88,7 @@ export async function resolveCredential(): Promise<
   try {
     const fresh = await refreshOAuthToken(slot.oauth.refreshToken);
     persistCredential(slot.source, fresh);
-    log.info("usage", "refreshed oauth token", { data: { source: slot.source } });
+    log.info("usage", "refreshed usage-meter oauth token", { data: { source: slot.source } });
     return { ok: true, cred: { token: fresh.accessToken, source: slot.source, refreshed: true } };
   } catch (err) {
     const refreshErr = err as RefreshError;
