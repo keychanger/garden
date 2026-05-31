@@ -102,6 +102,13 @@ describe("parseLastLineVerdict", () => {
     expect(parseLastLineVerdict(output, REVIEW_VOCAB)?.verdict).toBe("FAILED");
   });
 
+  it("accepts a verdict decorated with an en-dash", () => {
+    // The separator class carries both em-dash (—) and en-dash (–); this
+    // pins the en-dash branch so it can't be dropped without a test failing.
+    const output = "FAILED – the conflict could not be resolved";
+    expect(parseLastLineVerdict(output, REVIEW_VOCAB)?.verdict).toBe("FAILED");
+  });
+
   it("accepts a verdict decorated with a comma", () => {
     const output = "CLEAN, ready to merge";
     expect(parseLastLineVerdict(output, REVIEW_VOCAB)?.verdict).toBe("CLEAN");
