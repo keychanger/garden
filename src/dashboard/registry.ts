@@ -51,6 +51,11 @@ export interface WorkerEntry {
   name: string;       // adjective-noun name, e.g. "swift-oak"
   sessionId: string;  // claude session UUID for direct resume
   task: string;       // last known task summary from pane title
+  // Path to this session's Claude Code transcript JSONL, captured from the
+  // hook input (`transcript_path`). Read by the conversation view (⌥c) to
+  // render the operator's prompt history. Optional: derivable from
+  // worktreePath + sessionId when unset (see resolveTranscriptPath).
+  transcriptPath?: string;
   worktreePath?: string;
   branchName?: string;
   // Base branch pinned at worker creation. Set by newWorker() after verifying

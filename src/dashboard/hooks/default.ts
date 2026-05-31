@@ -163,7 +163,7 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
 // ---------------------------------------------------------------------------
 
 type FieldsDelta = Partial<Pick<WorkerEntry,
-  "claudeStatus" | "lastHookAt" | "prState" | "task">>;
+  "claudeStatus" | "lastHookAt" | "prState" | "task" | "transcriptPath">>;
 
 // pretooluse/posttooluse fire on every Claude tool call and dominate hook
 // traffic — a busy agent completes many tools per second, and with N agents in
@@ -195,6 +195,15 @@ function applyAndLog(
     return;
   }
   fields.lastHookAt = now;
+
+  // Capture the transcript path Claude Code reports on the hook input. It
+  // rarely changes (once per session), so only write it when it differs —
+  // piggybacks on this already-writing path, no extra registry churn. The
+  // conversation view (⌥c) reads it via resolveTranscriptPath.
+  const tp = ctx.input.transcript_path;
+  if (typeof tp === "string" && tp && tp !== ctx.workerInfo.entry.transcriptPath) {
+    fields.transcriptPath = tp;
+  }
 
   // Capture the live pane title as the worker's task summary. Claude sets
   // the title via terminal escape sequences; reading it gives the registry
