@@ -397,6 +397,7 @@ All read commands detect whether stdout is a TTY:
     <project>-<worker>-review-result.txt  # Transient review output
     status.rendered           # Pre-rendered status snapshot for instant display
     usage.rendered            # Pre-rendered usage meter snapshot for the usage pane
+    conversation.rendered     # Pre-rendered conversation snapshot for the ⌥c conversation pane
     claude-usage.json         # Claude quota snapshot (5h / weekly / sonnet)
   worktrees/
     <project>/
