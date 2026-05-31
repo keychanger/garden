@@ -604,16 +604,20 @@ export function buildUsageCommand(_gardenRunner: string): string {
   ].join("\n");
 }
 
-// Conversation pane: identical SIGUSR1 repaint loop to buildUsageCommand,
-// reading the pre-baked conversation.rendered. writeConversationRendered fits
-// the content to the pane height (top-padded so the newest turn sits at the
-// bottom), so painting from home and clearing below is correct.
+// Conversation pane: SIGUSR1 repaint loop reading the pre-baked
+// conversation.rendered. Unlike the usage pane, each repaint fully clears the
+// screen AND scrollback (\033[2J\033[3J) before printing the whole
+// conversation: the full clear prevents a shorter new line from leaving a
+// longer previous line's tail on screen (the bleed-through other panes would
+// otherwise show), and printing the whole conversation lets content taller than
+// the pane scroll into tmux scrollback so the operator can scroll up through
+// the full history.
 export function buildConversationCommand(_gardenRunner: string): string {
   const cf = CONVERSATION_RENDERED_FILE;
   return [
     `printf '\\033[H\\033[2J\\033[3J'`,
     `cf='${cf}'`,
-    `render() { _t=$(cat "$cf" 2>/dev/null); printf '\\033[H%s\\033[J' "$_t"; }`,
+    `render() { _t=$(cat "$cf" 2>/dev/null); printf '\\033[H\\033[2J\\033[3J%s' "$_t"; }`,
     `trap 'render' USR1`,
     `render`,
     `while true; do sleep 86400 & _sp=$!; wait $_sp 2>/dev/null; kill $_sp 2>/dev/null; wait $_sp 2>/dev/null; done`,
@@ -818,8 +822,7 @@ export function writeConversationRendered(opts?: RefreshOptions): void {
     if (state.gardenPaneType !== "conversation" || !state.gardenShellPaneId) return;
     const size = getPaneSize(state.gardenShellPaneId);
     const width = size?.width ?? 60;
-    const availH = Math.max(1, (size?.height ?? 20) - 1); // -1 for pane-border-status top row
-    const rendered = renderConversationContent(state, width, availH, opts?.registry);
+    const rendered = renderConversationContent(state, width, opts?.registry);
     if (rendered === lastWrittenConversation) return;
     atomicWriteFile(CONVERSATION_RENDERED_FILE, rendered);
     lastWrittenConversation = rendered;
@@ -827,23 +830,18 @@ export function writeConversationRendered(opts?: RefreshOptions): void {
   } catch { /* best effort */ }
 }
 
+// Keep enough exchanges that the full conversation is in scrollback; the pane
+// renders all of them and lets tmux hold the overflow (the operator scrolls up
+// for older turns — the render does not truncate to the visible height).
+const CONVERSATION_MAX_TURNS = 40;
+
 function dimLine(msg: string): string {
   return ` \x1b[2m${msg}\x1b[0m`;
-}
-
-// Bottom-align content to exactly `h` lines: keep the last h, top-pad with
-// blanks when shorter. Painting from home then clearing below shows the newest
-// turn at the bottom of the pane.
-function fitBottom(lines: string[], h: number): string[] {
-  const tail = lines.slice(-h);
-  const pad = h - tail.length;
-  return pad > 0 ? [...Array<string>(pad).fill(""), ...tail] : tail;
 }
 
 function renderConversationContent(
   state: DashboardState,
   width: number,
-  availH: number,
   cachedRegistry?: WorkerRegistry,
 ): string {
   let lines: string[];
@@ -858,7 +856,7 @@ function renderConversationContent(
     if (!entry) {
       lines = [dimLine("no active worker")];
     } else {
-      const turns = readConversation(resolveTranscriptPath(entry));
+      const turns = readConversation(resolveTranscriptPath(entry), CONVERSATION_MAX_TURNS);
       if (turns.length === 0) {
         lines = [dimLine("no conversation yet")];
       } else {
@@ -868,7 +866,7 @@ function renderConversationContent(
       }
     }
   }
-  return fitBottom(lines, availH).join("\n");
+  return lines.join("\n");
 }
 
 function writeUsageRendered(opts?: RefreshOptions): void {

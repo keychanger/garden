@@ -98,6 +98,7 @@ export function readConversation(
   const turns: Turn[] = [];
   let pending: { summary: string; tools: string[]; ts: string } | null = null;
   let seenUser = false;
+  let suppress = false; // dropping a [garden]-injected exchange
 
   const flush = (): void => {
     if (pending && (pending.summary || pending.tools.length > 0)) {
@@ -132,6 +133,16 @@ export function readConversation(
         const text = collapse(message.content);
         if (!text) continue;
         flush();
+        // garden-injected system prompts (interrupt/merge continuation,
+        // handoff callbacks, postMerge notices) are all tagged "[garden] ".
+        // They aren't something the operator typed — drop the prompt and its
+        // response so the view shows only the real conversation.
+        if (text.startsWith("[garden]")) {
+          pending = null;
+          suppress = true;
+          continue;
+        }
+        suppress = false;
         turns.push({ role: "user", text, ts });
         pending = { summary: "", tools: [], ts };
         seenUser = true;
@@ -140,6 +151,7 @@ export function readConversation(
     }
 
     if (type === "assistant" && message?.role === "assistant" && Array.isArray(message.content)) {
+      if (suppress) continue; // response to a [garden]-injected prompt
       if (!seenUser) continue; // drop a dangling assistant turn from a truncated head
       if (!pending) pending = { summary: "", tools: [], ts };
       for (const block of message.content as Array<Record<string, unknown>>) {

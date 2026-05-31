@@ -92,6 +92,25 @@ describe("readConversation", () => {
     ]);
   });
 
+  it("drops garden-injected [garden] prompts and their responses", () => {
+    const p = writeTranscript([
+      user("real prompt one"),
+      assistant([{ type: "text", text: "real answer one" }]),
+      // merge auto-continue: injected as a user prompt, tagged [garden]
+      user("[garden] Your previous changes were reviewed and merged. Continue…", "2026-05-30T17:05:00Z"),
+      assistant([{ type: "tool_use", name: "Edit" }], "2026-05-30T17:05:01Z"),
+      assistant([{ type: "text", text: "auto-continue housekeeping" }], "2026-05-30T17:05:02Z"),
+      user("real prompt two", "2026-05-30T17:06:00Z"),
+      assistant([{ type: "text", text: "real answer two" }], "2026-05-30T17:06:01Z"),
+    ]);
+    expect(readConversation(p)).toEqual([
+      { role: "user", text: "real prompt one", ts: "2026-05-30T17:00:00Z" },
+      { role: "assistant", text: "real answer one", verb: "answered", ts: "2026-05-30T17:00:01Z" },
+      { role: "user", text: "real prompt two", ts: "2026-05-30T17:06:00Z" },
+      { role: "assistant", text: "real answer two", verb: "answered", ts: "2026-05-30T17:06:01Z" },
+    ]);
+  });
+
   it("collapses whitespace in prompts and the last paragraph", () => {
     const p = writeTranscript([
       user("multi\n  line\nprompt"),
