@@ -3,6 +3,14 @@ import { execFileSync } from "node:child_process";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, tmuxDoubleQuote } from "./tmux.js";
 
+// Alt keys garden used to bind and no longer does. tmux key bindings are
+// server-global and survive a key being repurposed, so a plain reattach won't
+// drop them — the stale binding lingers and fires a now-removed command (exit
+// 1). Actively unbinding them on every setup self-heals without a
+// `tmux kill-server`. ⌥c was the old conversation/history binding (renamed to
+// ⌥h); unbinding lets it pass through to the operator, who reclaimed it.
+const RETIRED_META_KEYS = ["c"];
+
 export function setupKeybindings(gardenRunner: string): void {
   // gardenRunner arrives pre-escaped from resolveGardenRunner() — each token
   // (interpreter + script) is individually shellEscape'd and joined by a
@@ -10,6 +18,9 @@ export function setupKeybindings(gardenRunner: string): void {
   // commands below without re-wrapping (which would single-quote the whole
   // multi-token string and turn it into a non-existent filename).
   const gr = gardenRunner;
+
+  // Drop retired bindings before (re)installing the current set.
+  for (const key of RETIRED_META_KEYS) unbindMeta(key);
 
   // Project switching: ⌥1 through ⌥9
   for (let i = 1; i <= 9; i++) {
@@ -65,6 +76,20 @@ export function setupKeybindings(gardenRunner: string): void {
       tmux("bind-key", "-T", "prefix", String(i), "select-window", "-t", mainTarget);
     }
   } catch { /* ignore */ }
+}
+
+// Remove a M-<key> binding from the root table and both copy-mode tables (the
+// three tables bindMeta installs into). Each unbind is best-effort: tmux errors
+// when the key isn't bound, which is fine.
+function unbindMeta(key: string): void {
+  const argv: string[][] = [
+    ["unbind-key", "-n", `M-${key}`],
+    ["unbind-key", "-T", "copy-mode", `M-${key}`],
+    ["unbind-key", "-T", "copy-mode-vi", `M-${key}`],
+  ];
+  for (const args of argv) {
+    try { execFileSync("tmux", args, { stdio: "ignore" }); } catch { /* not bound */ }
+  }
 }
 
 function bindMeta(key: string, command: string): void {

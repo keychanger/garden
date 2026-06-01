@@ -36,6 +36,28 @@ describe("setupKeybindings", () => {
     }
   });
 
+  it("unbinds the retired M-c key from the root and copy-mode tables", () => {
+    // ⌥c was the old conversation/history binding (now ⌥h). tmux bindings are
+    // server-global, so without an explicit unbind the stale M-c lingers and
+    // fires the removed `_focus-conversation` command (exit 1).
+    setupKeybindings("/path/to/garden");
+    const unbinds = execFileSyncMock.mock.calls
+      .map(call => call[1] as string[])
+      .filter(argv => Array.isArray(argv) && argv[0] === "unbind-key" && argv.at(-1) === "M-c");
+    const tables = unbinds.map(argv => (argv[1] === "-n" ? "root" : argv[2]));
+    expect(tables).toContain("root");
+    expect(tables).toContain("copy-mode");
+    expect(tables).toContain("copy-mode-vi");
+  });
+
+  it("no longer binds M-c to anything", () => {
+    setupKeybindings("/path/to/garden");
+    const mcBinds = execFileSyncMock.mock.calls
+      .map(call => call[1] as string[])
+      .filter(argv => Array.isArray(argv) && argv[0] === "bind-key" && argv.includes("M-c"));
+    expect(mcBinds.length).toBe(0);
+  });
+
   it("binds copy-mode M-N as a single command body so the picker only fires on keypress", () => {
     setupKeybindings("/path/to/garden");
     const copyModeBinds = execFileSyncMock.mock.calls.filter((call) => {
