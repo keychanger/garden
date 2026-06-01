@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   readConversation,
   classifyVerb,
+  summarizeTurn,
   resolveTranscriptPath,
   formatConversationPane,
   type Turn,
@@ -38,6 +39,49 @@ describe("classifyVerb", () => {
   });
 });
 
+describe("summarizeTurn", () => {
+  const tool = (name: string, input: Record<string, unknown> = {}) => ({ name, input });
+
+  it("lists edited file basenames with an overflow count", () => {
+    const r = summarizeTurn(
+      [tool("Edit", { file_path: "src/a.ts" }), tool("Write", { file_path: "deep/b.ts" })], "");
+    expect(r.text).toBe("edited a.ts, b.ts");
+    expect(r.verb).toBe("worked");
+  });
+
+  it("appends build/test/commit/push flags detected from bash", () => {
+    const r = summarizeTurn([
+      tool("Edit", { file_path: "x.ts" }),
+      tool("Bash", { command: "npm run build && npm test" }),
+      tool("Bash", { command: "git commit -m wip && git push" }),
+    ], "");
+    expect(r.text).toBe("edited x.ts · built · ran tests · committed · pushed");
+  });
+
+  it("summarizes plans, questions, subagents, research, and exploration", () => {
+    expect(summarizeTurn([tool("ExitPlanMode")], "").text).toBe("presented a plan");
+    expect(summarizeTurn([tool("AskUserQuestion")], "").text).toBe("asked a question");
+    expect(summarizeTurn([tool("Agent"), tool("Agent")], "").text).toBe("ran 2 subagents");
+    expect(summarizeTurn([tool("WebSearch")], "").text).toBe("researched");
+    expect(summarizeTurn(
+      [tool("Read", { file_path: "a.ts" }), tool("Read", { file_path: "b.ts" })], "").text)
+      .toBe("explored 2 files");
+    expect(summarizeTurn([tool("Grep", { pattern: "x" })], "").text).toBe("searched the codebase");
+  });
+
+  it("upgrades the verb to worked when a turn commits without editing", () => {
+    const r = summarizeTurn([tool("Bash", { command: "git commit -m x" })], "");
+    expect(r.text).toBe("committed");
+    expect(r.verb).toBe("worked");
+  });
+
+  it("falls back to the first sentence when no tools ran", () => {
+    expect(summarizeTurn([], "I dug into the parser. Then more details.").text)
+      .toBe("I dug into the parser.");
+    expect(summarizeTurn([], "").text).toBe("answered");
+  });
+});
+
 describe("readConversation", () => {
   const tmp = useTmpHome();
 
@@ -47,7 +91,7 @@ describe("readConversation", () => {
     return p;
   }
 
-  it("assembles turns, classifies verbs, and excludes noise", () => {
+  it("assembles turns with action summaries and excludes noise", () => {
     const p = writeTranscript([
       // command/attachment noise types are ignored
       { type: "queue-operation" },
@@ -55,13 +99,13 @@ describe("readConversation", () => {
       user("first question", "2026-05-30T17:00:00Z"),
       assistant([{ type: "thinking", thinking: "hmm" }]),
       assistant([{ type: "text", text: "Let me look." }]),
-      assistant([{ type: "tool_use", name: "Edit" }]),
+      assistant([{ type: "tool_use", name: "Edit", input: { file_path: "src/foo.ts" } }]),
       // tool_result comes back as type:user with array content — must be skipped
       user([{ type: "tool_result", content: "ok" }]),
-      assistant([{ type: "text", text: "Done.\n\nFixed the bug in foo.ts." }], "2026-05-30T17:00:05Z"),
+      assistant([{ type: "tool_use", name: "Bash", input: { command: "git commit -m fix" } }]),
 
       user("second question", "2026-05-30T17:01:00Z"),
-      assistant([{ type: "tool_use", name: "Read" }]),
+      assistant([{ type: "tool_use", name: "Read", input: { file_path: "src/bar.ts" } }]),
       assistant([{ type: "text", text: "Here is the answer." }]),
 
       user("third", "2026-05-30T17:02:00Z"),
@@ -70,11 +114,22 @@ describe("readConversation", () => {
 
     expect(readConversation(p)).toEqual([
       { role: "user", text: "first question", ts: "2026-05-30T17:00:00Z" },
-      { role: "assistant", text: "Fixed the bug in foo.ts.", verb: "worked", ts: "2026-05-30T17:00:05Z" },
+      { role: "assistant", text: "edited foo.ts · committed", verb: "worked", ts: "2026-05-30T17:00:01Z" },
       { role: "user", text: "second question", ts: "2026-05-30T17:01:00Z" },
-      { role: "assistant", text: "Here is the answer.", verb: "planned", ts: "2026-05-30T17:00:01Z" },
+      { role: "assistant", text: "explored 1 file", verb: "planned", ts: "2026-05-30T17:00:01Z" },
       { role: "user", text: "third", ts: "2026-05-30T17:02:00Z" },
       { role: "assistant", text: "Just a reply.", verb: "answered", ts: "2026-05-30T17:00:01Z" },
+    ]);
+  });
+
+  it("captures a prompt with an image attachment (array content)", () => {
+    const p = writeTranscript([
+      user([{ type: "text", text: "look at this screenshot" }, { type: "image", source: {} }]),
+      assistant([{ type: "text", text: "I see it." }]),
+    ]);
+    expect(readConversation(p)).toEqual([
+      { role: "user", text: "look at this screenshot", ts: "2026-05-30T17:00:00Z" },
+      { role: "assistant", text: "I see it.", verb: "answered", ts: "2026-05-30T17:00:01Z" },
     ]);
   });
 
@@ -111,14 +166,15 @@ describe("readConversation", () => {
     ]);
   });
 
-  it("collapses whitespace in prompts and the last paragraph", () => {
+  it("collapses whitespace in prompts and the no-tool fallback summary", () => {
     const p = writeTranscript([
       user("multi\n  line\nprompt"),
-      assistant([{ type: "text", text: "intro para\n\nfinal\nline   here" }]),
+      assistant([{ type: "text", text: "Intro line.\n\nmore   detail here" }]),
     ]);
     expect(readConversation(p)).toEqual([
       { role: "user", text: "multi line prompt", ts: "2026-05-30T17:00:00Z" },
-      { role: "assistant", text: "final line here", verb: "answered", ts: "2026-05-30T17:00:01Z" },
+      // no tools → first sentence of the response
+      { role: "assistant", text: "Intro line.", verb: "answered", ts: "2026-05-30T17:00:01Z" },
     ]);
   });
 

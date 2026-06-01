@@ -97,18 +97,14 @@ export function readConversation(
   if (partialHead) lines.shift();
 
   const turns: Turn[] = [];
-  let pending: { summary: string; tools: string[]; ts: string } | null = null;
+  let pending: { tools: ToolUse[]; firstText: string; ts: string } | null = null;
   let seenUser = false;
   let suppress = false; // dropping a [garden]-injected exchange
 
   const flush = (): void => {
-    if (pending && (pending.summary || pending.tools.length > 0)) {
-      turns.push({
-        role: "assistant",
-        text: lastParagraph(pending.summary),
-        verb: classifyVerb(pending.tools),
-        ts: pending.ts,
-      });
+    if (pending && (pending.tools.length > 0 || pending.firstText)) {
+      const { text, verb } = summarizeTurn(pending.tools, pending.firstText);
+      turns.push({ role: "assistant", text, verb, ts: pending.ts });
     }
     pending = null;
   };
@@ -128,10 +124,11 @@ export function readConversation(
     const ts = typeof obj.timestamp === "string" ? obj.timestamp : "";
 
     if (type === "user" && message?.role === "user") {
-      // Genuine operator prompts have string content; tool results are
-      // `type:"user"` too but carry a tool_result[] array — skip those.
-      if (typeof message.content === "string") {
-        const text = collapse(message.content);
+      // Genuine operator prompts are string content, or a text+attachment array
+      // (a prompt with an image). Tool results are `type:"user"` too but carry a
+      // tool_result[] array — userPromptText returns "" for those.
+      {
+        const text = userPromptText(message.content);
         if (!text) continue;
         flush();
         // garden-injected system prompts (interrupt/merge continuation,
@@ -145,7 +142,7 @@ export function readConversation(
         }
         suppress = false;
         turns.push({ role: "user", text, ts });
-        pending = { summary: "", tools: [], ts };
+        pending = { tools: [], firstText: "", ts };
         seenUser = true;
       }
       continue;
@@ -154,13 +151,15 @@ export function readConversation(
     if (type === "assistant" && message?.role === "assistant" && Array.isArray(message.content)) {
       if (suppress) continue; // response to a [garden]-injected prompt
       if (!seenUser) continue; // drop a dangling assistant turn from a truncated head
-      if (!pending) pending = { summary: "", tools: [], ts };
+      if (!pending) pending = { tools: [], firstText: "", ts };
       for (const block of message.content as Array<Record<string, unknown>>) {
         if (block.type === "text" && typeof block.text === "string" && block.text.trim()) {
-          pending.summary = block.text; // last text block in the turn wins
+          if (!pending.firstText) pending.firstText = block.text; // opening line, for the no-action fallback
           if (ts) pending.ts = ts;
         } else if (block.type === "tool_use" && typeof block.name === "string") {
-          pending.tools.push(block.name);
+          const input = (block.input && typeof block.input === "object")
+            ? block.input as Record<string, unknown> : {};
+          pending.tools.push({ name: block.name, input });
           if (ts && !pending.ts) pending.ts = ts;
         }
       }
@@ -171,17 +170,118 @@ export function readConversation(
   return turns.slice(-maxTurns);
 }
 
+interface ToolUse {
+  name: string;
+  input: Record<string, unknown>;
+}
+
 export function classifyVerb(tools: string[]): Verb {
   if (tools.some(t => EDIT_TOOLS.has(t))) return "worked";
   if (tools.length > 0) return "planned";
   return "answered";
 }
 
-// The trailing paragraph of an assistant message, whitespace-collapsed to a
-// single line for the compact pane.
-function lastParagraph(s: string): string {
-  const parts = s.trim().split(/\n\s*\n/);
-  return collapse(parts[parts.length - 1] ?? "");
+// Summarize an assistant turn by what it DID, not what it said last. The closing
+// line of a response is almost always a question or sign-off — a poor summary —
+// so we synthesize a terse action phrase from the turn's tool calls (files
+// edited, committed/pushed, tests, exploration, a plan, a question). Only when a
+// turn used no tools at all do we fall back to its opening sentence.
+export function summarizeTurn(tools: ToolUse[], firstText: string): { text: string; verb: Verb } {
+  const edited = new Set<string>();
+  const readFiles = new Set<string>();
+  const bash: string[] = [];
+  let searched = false, exitPlan = false, asked = false, agents = 0, web = false;
+
+  for (const t of tools) {
+    if (EDIT_TOOLS.has(t.name)) {
+      const fp = t.input.file_path ?? t.input.notebook_path;
+      edited.add(typeof fp === "string" ? basename(fp) : "");
+    } else if (t.name === "Read") {
+      const fp = t.input.file_path;
+      if (typeof fp === "string") readFiles.add(basename(fp));
+    } else if (t.name === "Grep" || t.name === "Glob" || t.name === "LS") {
+      searched = true;
+    } else if (t.name === "Bash") {
+      if (typeof t.input.command === "string") bash.push(t.input.command);
+    } else if (t.name === "Task" || t.name === "Agent") {
+      agents++;
+    } else if (t.name === "ExitPlanMode") {
+      exitPlan = true;
+    } else if (t.name === "AskUserQuestion") {
+      asked = true;
+    } else if (t.name === "WebFetch" || t.name === "WebSearch") {
+      web = true;
+    }
+  }
+
+  const allBash = bash.join("\n");
+  const committed = /\bgit\s+commit\b/.test(allBash);
+  const pushed = /\bgit\s+push\b/.test(allBash);
+  const tested = /\bvitest\b|\bjest\b|\bpytest\b|\bgo test\b|\bcargo test\b|\b(?:npm|pnpm|yarn)\s+(?:run\s+)?test/.test(allBash);
+  const built = /\b(?:npm|pnpm|yarn)\s+run\s+build\b|\bmake\b|\bcargo build\b|\bgo build\b/.test(allBash);
+
+  const parts: string[] = [];
+  const editedNames = [...edited].filter(Boolean);
+  if (edited.size > 0) {
+    parts.push(editedNames.length > 0
+      ? "edited " + editedNames.slice(0, 3).join(", ") + (editedNames.length > 3 ? ` +${editedNames.length - 3}` : "")
+      : "edited files");
+  } else if (exitPlan) {
+    parts.push("presented a plan");
+  } else if (asked) {
+    parts.push("asked a question");
+  } else if (agents > 0) {
+    parts.push(agents === 1 ? "ran a subagent" : `ran ${agents} subagents`);
+  } else if (web) {
+    parts.push("researched");
+  } else if (readFiles.size > 0) {
+    parts.push(`explored ${readFiles.size} file${readFiles.size === 1 ? "" : "s"}`);
+  } else if (searched) {
+    parts.push("searched the codebase");
+  } else if (bash.length > 0 && !(built || tested || committed || pushed)) {
+    parts.push("ran commands");
+  }
+  if (built) parts.push("built");
+  if (tested) parts.push("ran tests");
+  if (committed) parts.push("committed");
+  if (pushed) parts.push("pushed");
+
+  let verb = classifyVerb(tools.map(t => t.name));
+  if (verb !== "worked" && (committed || pushed || built || tested)) verb = "worked";
+
+  const text = parts.length > 0 ? parts.join(" · ") : (firstSentence(firstText) || "answered");
+  return { text, verb };
+}
+
+// Extract operator prompt text from a user message's content. Returns "" for a
+// non-prompt (a tool_result array). Handles a plain string, or a content array
+// carrying text blocks alongside attachments (an image-bearing prompt).
+function userPromptText(content: unknown): string {
+  if (typeof content === "string") return collapse(content);
+  if (Array.isArray(content)) {
+    const blocks = content as Array<Record<string, unknown>>;
+    if (blocks.some(b => b?.type === "tool_result")) return "";
+    const texts = blocks
+      .filter(b => b?.type === "text" && typeof b.text === "string")
+      .map(b => b.text as string);
+    return collapse(texts.join(" "));
+  }
+  return "";
+}
+
+function basename(p: string): string {
+  const i = p.lastIndexOf("/");
+  return i >= 0 ? p.slice(i + 1) : p;
+}
+
+// First sentence of a block of prose, whitespace-collapsed and length-capped.
+function firstSentence(s: string): string {
+  const t = collapse(s);
+  if (!t) return "";
+  const m = t.match(/^.*?[.!?](?:\s|$)/);
+  let out = (m ? m[0] : t).trim();
+  if (out.length > 100) out = out.slice(0, 99).trimEnd() + "…";
+  return out;
 }
 
 function collapse(s: string): string {
