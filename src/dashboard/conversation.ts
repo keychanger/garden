@@ -23,6 +23,7 @@ export interface Turn {
   text: string;
   verb?: Verb; // assistant turns only
   ts: string; // ISO timestamp from the transcript, "" if absent
+  image?: boolean; // user turns only — prompt carried a screenshot
 }
 
 // Tools that mutate the worktree → "worked". Anything else (reads, Bash,
@@ -118,6 +119,7 @@ export function readConversation(
       continue;
     }
     if (obj.isSidechain === true) continue; // subagent internals, not the conversation
+    if (obj.isMeta === true) continue; // attachment surfacing ("[Image: source: …]"), system notes — not a real turn
 
     const type = obj.type;
     const message = obj.message as { role?: string; content?: unknown } | undefined;
@@ -128,7 +130,13 @@ export function readConversation(
       // (a prompt with an image). Tool results are `type:"user"` too but carry a
       // tool_result[] array — userPromptText returns "" for those.
       {
-        const text = userPromptText(message.content);
+        const raw = userPromptText(message.content);
+        if (!raw) continue;
+        // The typed prompt carries an inline "[Image #N]" reference when a
+        // screenshot is attached. Strip it and flag the turn so the view shows
+        // a clean "[screenshot]" marker instead of the placeholder.
+        const image = /\[Image #\d+\]/.test(raw);
+        const text = collapse(raw.replace(/\[Image #\d+\]/g, " "));
         if (!text) continue;
         flush();
         // garden-injected system prompts (interrupt/merge continuation,
@@ -141,7 +149,7 @@ export function readConversation(
           continue;
         }
         suppress = false;
-        turns.push({ role: "user", text, ts });
+        turns.push({ role: "user", text, ts, ...(image ? { image: true } : {}) });
         pending = { tools: [], firstText: "", ts };
         seenUser = true;
       }
@@ -317,14 +325,23 @@ export function formatConversationPane(turns: Turn[], opts: FormatOpts): string[
   const lines: string[] = [];
 
   turns.forEach((turn, i) => {
-    if (turn.role === "user" && i > 0) lines.push(""); // blank line between exchanges
+    // Each exchange opens with a dim, timestamped divider rule — strong visual
+    // separation between threads, and a "when did I ask this" cue.
+    if (turn.role === "user") {
+      if (i > 0) lines.push("");
+      lines.push(dividerLine(turn.ts, opts.width));
+    }
     const label = turn.role === "user"
       ? paint("1", "you".padEnd(LABEL_W))
       : paint(VERB_COLOR[turn.verb ?? "answered"], (turn.verb ?? "answered").padEnd(LABEL_W));
     const wrapped = wrapText(turn.text, textWidth);
     wrapped.forEach((w, j) => {
       const gutter = j === 0 ? label : " ".repeat(LABEL_W);
-      const styled = turn.role === "user" ? paint("1", w) : w;
+      let styled = turn.role === "user" ? paint("1", w) : w;
+      // A dim "[screenshot]" marker on the last line of a prompt that had one.
+      if (turn.role === "user" && turn.image && j === wrapped.length - 1) {
+        styled += " " + paint("2", "[screenshot]");
+      }
       lines.push(` ${gutter} ${styled}`);
     });
   });
@@ -333,6 +350,29 @@ export function formatConversationPane(turns: Turn[], opts: FormatOpts): string[
   else if (opts.status === "asking") lines.push(` ${paint("33", "asking…".padEnd(LABEL_W))}`);
 
   return lines;
+}
+
+// A dim full-width rule labelled with the local time of the exchange, e.g.
+// "─ 3:20pm ─────────────────────". Falls back to a plain rule without a time.
+function dividerLine(ts: string, width: number): string {
+  const t = formatClockTime(ts);
+  const label = t ? `─ ${t} ` : "─ ";
+  const fill = Math.max(0, width - label.length);
+  return paint("2", label + "─".repeat(fill));
+}
+
+// ISO timestamp → local "3:20pm" (transcript timestamps are UTC; the operator
+// sees their own timezone). Empty string when the timestamp is missing/invalid.
+function formatClockTime(ts: string): string {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "";
+  let h = d.getHours();
+  const m = d.getMinutes();
+  const ampm = h < 12 ? "am" : "pm";
+  h = h % 12;
+  if (h === 0) h = 12;
+  return `${h}:${String(m).padStart(2, "0")}${ampm}`;
 }
 
 // Greedy word-wrap on a plain (un-styled) string.

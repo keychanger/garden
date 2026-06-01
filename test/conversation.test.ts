@@ -141,6 +141,19 @@ describe("readConversation", () => {
     ]);
   });
 
+  it("excludes isMeta lines and flags an inline [Image #N] prompt", () => {
+    const p = writeTranscript([
+      user("Better, see this [Image #5]"),
+      // the attachment surfaces as a separate isMeta user message — must be dropped
+      user("[Image: source: /tmp/NSIRD/Screenshot.png]", "2026-05-30T17:00:30Z", { isMeta: true }),
+      assistant([{ type: "text", text: "Got it." }]),
+    ]);
+    expect(readConversation(p)).toEqual([
+      { role: "user", text: "Better, see this", ts: "2026-05-30T17:00:00Z", image: true },
+      { role: "assistant", text: "Got it.", verb: "answered", ts: "2026-05-30T17:00:01Z" },
+    ]);
+  });
+
   it("excludes sidechain (subagent) lines", () => {
     const p = writeTranscript([
       user("real prompt"),
@@ -223,18 +236,32 @@ describe("formatConversationPane", () => {
     { role: "assistant", text: "Patched the token check.", verb: "worked", ts: "" },
   ];
 
-  it("renders a you-label and verb-label gutter, oldest at top", () => {
+  it("opens each exchange with a divider, then the you/verb gutter lines", () => {
     const out = formatConversationPane(turns, { width: 60 }).map(plain);
-    expect(out[0]).toMatch(/^ you\s+fix the login bug$/);
-    expect(out[1]).toMatch(/^ worked\s+Patched the token check\.$/);
+    expect(out[0]).toMatch(/^─ ─+$/); // divider (no timestamp for ts:"")
+    expect(out[1]).toMatch(/^ you\s+fix the login bug$/);
+    expect(out[2]).toMatch(/^ worked\s+Patched the token check\.$/);
+  });
+
+  it("labels the divider with the local time when a timestamp is present", () => {
+    const out = formatConversationPane(
+      [{ role: "user", text: "hi", ts: "2026-05-30T17:00:00Z" }], { width: 60 }).map(plain);
+    // Time is local, so don't assert the exact value — just the shape.
+    expect(out[0]).toMatch(/^─ \d{1,2}:\d{2}(am|pm) ─+$/);
+  });
+
+  it("appends a dim [screenshot] marker to a prompt that carried an image", () => {
+    const out = formatConversationPane(
+      [{ role: "user", text: "look at this", ts: "", image: true }], { width: 60 }).map(plain);
+    expect(out.some(l => l.includes("[screenshot]"))).toBe(true);
   });
 
   it("wraps long bodies into the gutter-aligned continuation", () => {
     const long: Turn[] = [{ role: "user", text: "a b c d e f g h i j k l", ts: "" }];
     const out = formatConversationPane(long, { width: 24 }).map(plain);
-    expect(out.length).toBeGreaterThan(1);
+    expect(out.length).toBeGreaterThan(2); // divider + at least two wrapped lines
     // Continuation lines are indented to the gutter (no "you" label).
-    expect(out[1]).toMatch(/^ {10}/);
+    expect(out[2]).toMatch(/^ {10}/);
   });
 
   it("appends a live status indicator when the worker is busy", () => {
