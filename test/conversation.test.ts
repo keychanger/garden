@@ -42,11 +42,19 @@ describe("classifyVerb", () => {
 describe("summarizeTurn", () => {
   const tool = (name: string, input: Record<string, unknown> = {}) => ({ name, input });
 
-  it("lists edited file basenames with an overflow count", () => {
+  it("lists edited file basenames", () => {
     const r = summarizeTurn(
       [tool("Edit", { file_path: "src/a.ts" }), tool("Write", { file_path: "deep/b.ts" })], "");
     expect(r.text).toBe("edited a.ts, b.ts");
     expect(r.verb).toBe("worked");
+  });
+
+  it("caps the edited list at three names with an overflow count", () => {
+    const r = summarizeTurn([
+      tool("Edit", { file_path: "a.ts" }), tool("Edit", { file_path: "b.ts" }),
+      tool("Write", { file_path: "c.ts" }), tool("Write", { file_path: "d.ts" }),
+    ], "");
+    expect(r.text).toBe("edited a.ts, b.ts, c.ts +1");
   });
 
   it("appends build/test/commit/push flags detected from bash", () => {
