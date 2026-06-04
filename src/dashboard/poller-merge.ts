@@ -639,7 +639,7 @@ function autoContinueSkipReason(
   }
   // Sweep-only: a dead pane has no Claude to paste into — reviving an
   // exited worker is bounce territory, not the sweep's.
-  if (trigger === "sweep" && entry.claudeStatus === "exited") {
+  if (trigger === "sweep" && entry.agentStatus === "exited") {
     return "claude-exited";
   }
   const window = trigger === "sweep" ? SWEEP_STRANDED_MS : AUTO_CONTINUE_DEBOUNCE_MS;

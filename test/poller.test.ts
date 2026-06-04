@@ -2868,7 +2868,7 @@ describe("poll — merged state", () => {
   function strandedWorker(overrides: Partial<WorkerEntry> = {}) {
     return makeWorker({
       prState: "merged",
-      claudeStatus: "idle",
+      agentStatus: "idle",
       mergedAt: new Date().toISOString(),
       ...overrides,
     });
@@ -2951,7 +2951,7 @@ describe("poll — merged state", () => {
 
   it("sweep skips exited workers", () => {
     registryMock._setEntries("myproject", [
-      strandedWorker({ claudeStatus: "exited" }),
+      strandedWorker({ agentStatus: "exited" }),
     ]);
 
     poll("myproject");
@@ -2961,7 +2961,7 @@ describe("poll — merged state", () => {
 
   it("sweep skips mid-turn workers", () => {
     registryMock._setEntries("myproject", [
-      strandedWorker({ claudeStatus: "working" }),
+      strandedWorker({ agentStatus: "working" }),
     ]);
 
     poll("myproject");
