@@ -20,6 +20,7 @@ import { refreshDashboard } from "./header.js";
 import { log } from "./log.js";
 import { pollerWindowName } from "./window-names.js";
 import { stopUsagePoller, startUsagePoller } from "./usage-poller.js";
+import { stopWatchdog, startWatchdog } from "./watchdog.js";
 import {
   signalFifoPath, ensureSignalFifo, triggerProjectPoll,
 } from "./poller-fifo.js";
@@ -194,6 +195,13 @@ export function restartLongLivedPollers(gardenRunner: string): void {
     startUsagePoller(gardenRunner);
   } catch (err) {
     log.warn("poller", "failed to restart usage poller", { data: { error: String(err) } });
+  }
+
+  try {
+    stopWatchdog();
+    startWatchdog(gardenRunner);
+  } catch (err) {
+    log.warn("poller", "failed to restart watchdog", { data: { error: String(err) } });
   }
 
   const registry = readRegistry();

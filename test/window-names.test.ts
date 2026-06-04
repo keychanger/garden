@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   usagePollerWindowName,
+  watchdogWindowName,
   workerWindowName,
   shellWindowName,
   parkingWindowName,
@@ -44,6 +45,10 @@ describe("window name construction", () => {
 
   it("usagePollerWindowName", () => {
     expect(usagePollerWindowName()).toBe("_garden-usage-poller");
+  });
+
+  it("watchdogWindowName", () => {
+    expect(watchdogWindowName()).toBe("_garden-watchdog");
   });
 
   it("workerWindowPrefix", () => {

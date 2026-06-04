@@ -38,6 +38,10 @@ export function usagePollerWindowName(): string {
   return "_garden-usage-poller";
 }
 
+export function watchdogWindowName(): string {
+  return "_garden-watchdog";
+}
+
 export function workerWindowPrefix(project: string): string {
   return `_${project}-worker-`;
 }

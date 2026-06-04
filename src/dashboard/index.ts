@@ -28,6 +28,7 @@ import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focu
 import { openLogsFilterPrompt, applyLogsFilter } from "./logs-filter.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
 import { runUsagePollerLoop, stopUsagePoller } from "./usage-poller.js";
+import { runWatchdogLoop, stopWatchdog } from "./watchdog.js";
 import { loadConfig } from "../config.js";
 import { addAlert } from "./alerts.js";
 
@@ -63,6 +64,7 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     log.info("dashboard", "closing dashboard");
     stopAllPollers();
     stopUsagePoller();
+    stopWatchdog();
     killDashboardSession();
     try { fs.unlinkSync(STATE_FILE); } catch { /* ignore */ }
     try { fs.unlinkSync(REGISTRY_FILE); } catch { /* ignore */ }
@@ -159,6 +161,10 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   if (sub === "_post-push") return postPush(args[1]);
   if (sub === "_usage-poll-loop") {
     await runUsagePollerLoop();
+    return;
+  }
+  if (sub === "_watchdog-loop") {
+    await runWatchdogLoop();
     return;
   }
   if (sub === "_diag-status") {

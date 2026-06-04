@@ -4,7 +4,10 @@ Spec for the worker status tracking and display system. This document is
 the source of truth for how status works. **If the code disagrees with
 this document, the code is wrong.** Past regressions came from racing
 pgrep, marker files, and fallback polls; the model below is purely
-event-driven and the implementation must stay that way.
+event-driven and the implementation must stay that way. The sole
+sanctioned recurring tick is the poke-only liveness watchdog (see
+"Scheduled wake-ups" and invariant 6) — it re-delivers lost pokes and
+never detects status or drives transitions.
 
 ## Display states
 
@@ -229,7 +232,8 @@ Drives:
 
 ### Scheduled wake-ups (deliberate, finite, event-tied)
 
-Garden does NOT have a recurring tick. What it does have is a small set
+Garden has exactly one recurring tick — the poke-only liveness watchdog
+described at the end of this section. Everything else is a small set
 of one-shot scheduled wake-ups (FIFO pokes for state transitions,
 detached `sleep && garden dashboard …` subprocesses for delayed
 prompts) — each tied to a specific event, each serving a purpose that
@@ -262,22 +266,44 @@ cannot be expressed as "wait for an event":
   `pausedUntil`. `garden auto on` / `garden auto resume-on-reset on`
   fire the same poke directly. Source: `usage-poller.ts`
   `pokeOnGateReset`, `commands/auto.ts` `wakePollers`.
+- **Liveness watchdog (staleness backstop)** — a dedicated long-lived
+  window (`_garden-watchdog`) ticks every 60 s and re-pokes any project
+  holding a worker in an active state (`reviewing`, `resolving`,
+  `ci-fixing`, `merge-pending`, `merged`, or `working` with
+  `pendingReviewAt` set) whose latest activity timestamp has aged past
+  a 5 min threshold. This is the one recurring tick in the system, and
+  it is deliberately a *poke only*: it recovers dropped one-shot events
+  (a poke lost in the poller kill→spawn gap, a reboot-killed detached
+  delayed poke, a dropped review-launch poke) by re-delivering the same
+  FIFO poke the lost event would have sent. It performs no transitions
+  and is damped to at most one poke per project per threshold.
+  Quiescent states (idle `working`, `failing`, `done`) are never
+  watched, so a settled garden produces zero pokes. Source:
+  `watchdog.ts`.
 
 What this spec rejects is the OTHER kind of timer: the `setInterval`,
 recurring re-check, or "fallback poll" that drives transitions on a
 clock. Every transition above is event-triggered; the schedules are
-hold-offs and hand-offs, not discovery mechanisms.
+hold-offs and hand-offs, not discovery mechanisms. The watchdog
+respects the same line — it discovers nothing and transitions nothing;
+it only re-delivers a poke, and the event-driven handlers decide what,
+if anything, that poke means.
 
 ### Why this matters
 
 A bug in this system is always a bug in event plumbing — never "the
-poller didn't tick fast enough." There is no tick. If a transition
-isn't reached, exactly one event was missed, and there is exactly one
-place to look for it. This is what makes the state machine resistant to
-the kind of timing-based regressions that have hit it in the past, and
-why this spec rejects any code change that introduces a recurring poll
-or "let's check just in case." Adding a new scheduled wake-up is
-allowed when (a) it's tied to a specific state transition or
+poller didn't tick fast enough." If a transition isn't reached, exactly
+one event was missed, and there is exactly one place to look for it.
+The liveness watchdog does not change that diagnosis — it bounds the
+blast radius: a missed event now costs minutes of delay instead of an
+indefinitely stranded worker, but the missed event is still the bug and
+still worth finding (the watchdog's "poked stale project" log line is
+the breadcrumb). This is what makes the state machine resistant to the
+kind of timing-based regressions that have hit it in the past, and why
+this spec rejects any code change that introduces a recurring poll that
+drives transitions on a clock or any "let's check just in case" beyond
+the single sanctioned poke-only watchdog. Adding a new scheduled
+wake-up is allowed when (a) it's tied to a specific state transition or
 operator-visible signal and (b) it fires once per event, not on a
 clock. Update the list above when you do.
 
@@ -373,8 +399,15 @@ clock. Update the list above when you do.
    The system schedules one-shot wake-ups for hold-offs and hand-offs
    (failing-debounce, reviewer wall-clock cap, auto-continue delays —
    see "Scheduled wake-ups" above), but those are tied to specific
-   events, not driven by a clock. No `setInterval`, no recurring
-   re-check, no "let's check just in case."
+   events, not driven by a clock. One bounded exception exists: the
+   liveness watchdog (`watchdog.ts`, see "Scheduled wake-ups")
+   re-pokes projects whose workers are stranded in active states past
+   a staleness threshold. It is a backstop, not a scheduler — it
+   delivers only the ordinary FIFO poke a lost event would have sent
+   and never transitions state itself; the event-driven handlers do
+   all the work, idempotently. Events remain the only fast path, and
+   no transition is *discovered* by a clock — a watchdog poke that
+   finds nothing wrong is a no-op poll cycle.
 
 7. **Resolver verdicts are not trusted — they are verified.** When a
    resolver returns a `DONE` verdict, the poller does not transition to

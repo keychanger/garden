@@ -25,6 +25,7 @@ import { log, truncateLog } from "./log.js";
 import { validateAndHeal } from "./validate.js";
 import { startProjectPoller, signalFifoPath, restartLongLivedPollers } from "./poller.js";
 import { startUsagePoller } from "./usage-poller.js";
+import { startWatchdog } from "./watchdog.js";
 import { installPollTriggerHook, worktreeExists as wtExists, getWorkerBaseBranch, getRemoteHost } from "./git.js";
 import { dispatchDelayedContinue } from "./continue.js";
 import { resolveGardenRunner, resolveHookRunner } from "./runner.js";
@@ -383,6 +384,7 @@ export function ensureDashboard(): void {
   }
 
   startUsagePoller(gardenRunner);
+  startWatchdog(gardenRunner);
 
   if (firstResumedWindow && state.activePaneId) {
     tmux("select-pane", "-t", state.activePaneId);
