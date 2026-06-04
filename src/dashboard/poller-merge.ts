@@ -39,6 +39,10 @@ import { launchCiFix } from "./poller-ci-fix.js";
 import { checkCiStatus, getGitHubRepoSlug, type CiStatus } from "./poller-ci.js";
 
 const AUTO_CONTINUE_DEBOUNCE_MS = 10_000;
+// Stranded threshold for the merged-state sweep. Must outlast the +6s/+16s
+// delivery legs of a merge-time dispatch so the sweep never races an
+// in-flight prompt with a duplicate paste.
+const SWEEP_STRANDED_MS = 60_000;
 // Re-check CI on a pending check-run after this long. The check-runs API
 // is cheap and gh's rate limit is generous; a 60s cadence is fast enough
 // that the merge doesn't feel stuck without burning quota on a tight loop.
@@ -513,31 +517,76 @@ function transitionToTerminal(
   maybeAutoContinue(projectName, branchName, fresh ?? entry);
 }
 
+// Merged-state handler (shared by every workflow). Two legs:
+//
+// 1. Recovery: if commits appear before UserPromptSubmit clears the
+//    transient `merged`, treat that as a new work cycle and resume.
+// 2. Gate-reopen sweep: maybeAutoContinue is one-shot at merge time, so a
+//    worker whose continue prompt was blocked by the global gate (or whose
+//    paste never landed) parks in `merged` with no replay. Re-running the
+//    same decision on every poke delivers the stranded prompt on the first
+//    poke after the gate reopens. The sweep trigger widens the idempotency
+//    window to SWEEP_STRANDED_MS so it never double-dispatches against a
+//    merge-time delivery still in flight, and skips exited workers (no
+//    live Claude pane to paste into).
+export function handleMerged(
+  projectName: string,
+  _projectPath: string,
+  baseBranch: string,
+  entry: WorkerEntry,
+): boolean {
+  const wtPath = entry.worktreePath;
+  if (!wtPath) return false;
+
+  const commitSummary = getCommitSummary(wtPath, baseBranch);
+  if (commitSummary) {
+    log.info("poller", "new commits after merge, resuming", {
+      worker: entry.name,
+      data: { project: projectName },
+    });
+    transitionState(projectName, entry.name, "working", {
+      mergedAt: undefined,
+      lastSeenSha: undefined,
+    });
+    refreshDashboard();
+    return true;
+  }
+
+  return maybeAutoContinue(projectName, entry.branchName ?? entry.name, entry, "sweep");
+}
+
 // After a clean merge, send the worker a "please proceed" prompt so multi-phase
 // work continues without manual intervention. The worker opts out by writing
 // the .garden-done sentinel (see continue.ts donePath); pause/resume commands toggle
 // the same file. Skips when the worker is already mid-turn or when the same
-// merge event would re-fire within AUTO_CONTINUE_DEBOUNCE_MS.
+// merge event would re-fire within the trigger's idempotency window.
+//
+// trigger "merge" is the one-shot call from finalizeMerge; trigger "sweep"
+// is handleMerged replaying the decision on every poke for a worker still
+// parked in `merged`. The sweep logs gate blocks at debug — a closed gate
+// would otherwise emit one info line per stranded worker per poke.
 function maybeAutoContinue(
   projectName: string,
   branchName: string,
   entry: WorkerEntry,
-): void {
-  const perWorkerReason = autoContinueSkipReason(entry);
+  trigger: "merge" | "sweep" = "merge",
+): boolean {
+  const perWorkerReason = autoContinueSkipReason(entry, trigger);
   if (perWorkerReason) {
     log.debug("poller", "auto-continue skipped", {
       worker: entry.name,
-      data: { project: projectName, reason: perWorkerReason },
+      data: { project: projectName, reason: perWorkerReason, trigger },
     });
-    return;
+    return false;
   }
   const gateReason = autoContinueGateReason();
   if (gateReason) {
-    log.info("poller", "auto-continue blocked by global gate", {
+    const logGateBlock = trigger === "sweep" ? log.debug : log.info;
+    logGateBlock("poller", "auto-continue blocked by global gate", {
       worker: entry.name,
-      data: { project: projectName, reason: gateReason },
+      data: { project: projectName, reason: gateReason, trigger },
     });
-    return;
+    return false;
   }
   // Grow budget check: if iter K just completed and K >= max, the loop is
   // done — budget exhaustion lands on `done`, not `failing`, because grow
@@ -554,7 +603,7 @@ function maybeAutoContinue(
         worker: entry.name,
         data: { project: projectName, iterations: iter, max },
       });
-      return;
+      return true;
     }
   }
   updateWorkerFields(projectName, entry.name, { lastAutoContinueAt: Date.now() });
@@ -564,6 +613,7 @@ function maybeAutoContinue(
       project: projectName,
       branch: branchName,
       workflow: entry.workflow ?? "default",
+      trigger,
     },
   });
   // Trellis and grow loops reset to a fresh Claude session every iteration
@@ -575,15 +625,25 @@ function maybeAutoContinue(
   } else {
     dispatchDelayedAutoContinue(resolveGardenRunner(), projectName, entry.name);
   }
+  return true;
 }
 
-function autoContinueSkipReason(entry: WorkerEntry): string | null {
+function autoContinueSkipReason(
+  entry: WorkerEntry,
+  trigger: "merge" | "sweep",
+): string | null {
   if (isDoneSet(entry.worktreePath)) return "done-sentinel";
   if (entry.claudeStatus === "working" || entry.claudeStatus === "asking") {
     return `claude-${entry.claudeStatus}`;
   }
+  // Sweep-only: a dead pane has no Claude to paste into — reviving an
+  // exited worker is bounce territory, not the sweep's.
+  if (trigger === "sweep" && entry.claudeStatus === "exited") {
+    return "claude-exited";
+  }
+  const window = trigger === "sweep" ? SWEEP_STRANDED_MS : AUTO_CONTINUE_DEBOUNCE_MS;
   if (entry.lastAutoContinueAt
-      && Date.now() - entry.lastAutoContinueAt < AUTO_CONTINUE_DEBOUNCE_MS) {
+      && Date.now() - entry.lastAutoContinueAt < window) {
     return "idempotency-window";
   }
   return null;

@@ -9,7 +9,8 @@ import { DASHBOARD_SESSION } from "../session.js";
 import { usagePollerWindowName } from "./window-names.js";
 import { decideRefresh, readUsageSnapshot, refreshUsage } from "./usage.js";
 import { refreshDashboard } from "./header.js";
-import { anyAnthropicMeteredProject } from "../config.js";
+import { anyAnthropicMeteredProject, getAutoContinueConfig, loadConfig } from "../config.js";
+import { triggerProjectPoll } from "./poller-fifo.js";
 import { log } from "./log.js";
 
 export async function runUsagePollerLoop(): Promise<void> {
@@ -20,6 +21,7 @@ export async function runUsagePollerLoop(): Promise<void> {
     // trap path picks up new usage bars) and then signals the pane. A plain
     // refreshStatusPane() would only re-display the stale pre-baked content.
     try { refreshDashboard(); } catch { /* status pane gone or tmux unavailable */ }
+    try { pokeOnGateReset(); } catch { /* config unreadable; retry next cycle */ }
     // Re-read so the sleep is computed against the snapshot we (or a sibling)
     // actually wrote, not the pre-fetch state. decideRefresh's nextAttemptInMs
     // already floors at POLL_MIN_MS.
@@ -31,6 +33,28 @@ export async function runUsagePollerLoop(): Promise<void> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+// The auto-continue gate's resumeAfterReset flip happens inside
+// autoContinueGateReason, which only runs when a poller poke reaches a fresh
+// merge or a merged-state sweep. After a token wall the garden is typically
+// idle — no hooks, no pushes, no pokes — so a passed reset would otherwise
+// sit unobserved until the operator touches something. This is the wake-up:
+// when auto-resume is armed and the paused window has passed, poke every
+// project poller. The sweep performs the actual config flip and replays
+// stranded continue prompts; once it does, pausedUntil is cleared and this
+// check goes back to a no-op.
+export function pokeOnGateReset(): void {
+  const cfg = getAutoContinueConfig();
+  if (cfg.enabled || !cfg.resumeAfterReset || !cfg.pausedUntil) return;
+  const resetMs = Date.parse(cfg.pausedUntil);
+  if (!Number.isFinite(resetMs) || Date.now() < resetMs) return;
+  log.info("usage-poller", "usage window reset, poking pollers to resume auto-continue", {
+    data: { pausedUntil: cfg.pausedUntil },
+  });
+  for (const projectName of Object.keys(loadConfig().projects)) {
+    triggerProjectPoll(projectName);
+  }
 }
 
 // -----------------------------------------------------------------------------

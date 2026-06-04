@@ -1,6 +1,6 @@
 // State machine: transitionState (registry-routed) and the simple state
-// handlers that don't launch subprocesses (handleFailing, handleMerged,
-// handleDone). The lifecycle handlers that DO launch subprocesses live in
+// handlers that don't launch subprocesses (handleFailing, handleDone).
+// The lifecycle handlers that DO launch subprocesses live in
 // poller-review / poller-merge / poller-resolve and import transitionState
 // from this module. Valid transitions are defined per-workflow in
 // workflows/types.ts (a leaf module); transitionState reads them via
@@ -185,37 +185,13 @@ export function handleFailing(
   return false;
 }
 
+// Mirror of handleMerged's recovery leg (poller-merge.ts) for the terminal
+// "done" cleanup signal. Symmetric behavior: if the operator nudges the
+// worker into a new work cycle (commits appear) without going through
+// UserPromptSubmit, recover into `working`.
+//
 // projectPath parameter is unused — handlers take a uniform signature so the
 // workflow registry can dispatch them through one interface (see workflows/types.ts).
-export function handleMerged(
-  projectName: string,
-  _projectPath: string,
-  baseBranch: string,
-  entry: WorkerEntry,
-): boolean {
-  const wtPath = entry.worktreePath;
-  if (!wtPath) return false;
-
-  // Recovery path: if commits appear before UserPromptSubmit clears the
-  // transient `merged`, treat that as a new work cycle and resume.
-  const commitSummary = getCommitSummary(wtPath, baseBranch);
-  if (!commitSummary) return false;
-
-  log.info("poller", "new commits after merge, resuming", {
-    worker: entry.name,
-    data: { project: projectName },
-  });
-  transitionState(projectName, entry.name, "working", {
-    mergedAt: undefined,
-    lastSeenSha: undefined,
-  });
-  refreshDashboard();
-  return true;
-}
-
-// Mirror of handleMerged for the terminal "done" cleanup signal. Symmetric
-// behavior: if the operator nudges the worker into a new work cycle (commits
-// appear) without going through UserPromptSubmit, recover into `working`.
 export function handleDone(
   projectName: string,
   _projectPath: string,

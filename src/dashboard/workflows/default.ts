@@ -14,10 +14,10 @@
 // the default `npm test` and gates this on every reviewer pass.
 import { defaultHookHandlers } from "../hooks/default.js";
 import { handleCiFixing } from "../poller-ci-fix.js";
-import { handleMergePending } from "../poller-merge.js";
+import { handleMergePending, handleMerged } from "../poller-merge.js";
 import { handleResolving } from "../poller-resolve.js";
 import { handleWorking, handleReviewing } from "../poller-review.js";
-import { handleFailing, handleMerged, handleDone } from "../poller-state.js";
+import { handleFailing, handleDone } from "../poller-state.js";
 import { defaultValidTransitions, type WorkflowDefinition } from "./types.js";
 
 export const defaultWorkflow: WorkflowDefinition = {

@@ -253,6 +253,15 @@ cannot be expressed as "wait for an event":
 - **Garden post-rebuild refresh** — fired after `npm run build`
   succeeds so the dashboard picks up the new code. Source:
   `poller-merge.ts` `runPostMerge`.
+- **Auto-continue gate-reset wake** — when the gate is paused with
+  `resumeAfterReset` armed and `pausedUntil` has passed, the usage
+  poller (already awake on its own cadence to refresh the quota
+  snapshot) pokes every project poller so merged-state sweeps perform
+  the auto-resume and replay stranded continue prompts. Tied to the
+  usage-window reset event; goes quiescent once the flip clears
+  `pausedUntil`. `garden auto on` / `garden auto resume-on-reset on`
+  fire the same poke directly. Source: `usage-poller.ts`
+  `pokeOnGateReset`, `commands/auto.ts` `wakePollers`.
 
 What this spec rejects is the OTHER kind of timer: the `setInterval`,
 recurring re-check, or "fallback poll" that drives transitions on a
@@ -301,6 +310,15 @@ clock. Update the list above when you do.
      the auto-continue prompt's `UserPromptSubmit` fires, and the
      worker resumes the next phase. Renderer color: neutral (not
      green). It is NOT an operator-actionable signal.
+
+     A worker can park in `merged` when the auto-continue prompt never
+     lands — the global gate was closed at merge time, or the paste was
+     lost. The merged-state handler replays the auto-continue decision
+     on every poke (the gate-reopen sweep), so the first poke after the
+     gate reopens delivers the stranded prompt. The sweep uses a wider
+     idempotency window than the merge-time dispatch (so it never
+     double-prompts against a delivery still in flight) and skips
+     workers whose Claude process has exited.
 
    - **`done`** means the worker invoked the `done` skill (wrote
      `.garden-done`) and the merge cycle has settled with no further

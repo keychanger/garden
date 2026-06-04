@@ -1,11 +1,20 @@
 // `garden auto`: manage the post-merge auto-continue gate (see CLAUDE.md).
 import {
   getAutoContinueConfig,
+  loadConfig,
   setAutoContinueConfig,
   type AutoContinueConfig,
 } from "../config.js";
+import { triggerProjectPoll } from "../dashboard/poller-fifo.js";
 import { readUsageSnapshot } from "../dashboard/usage.js";
 import { output } from "../output.js";
+
+// Wake every project poller so merged-state sweeps replay any continue
+// prompts stranded while the gate was closed (see handleMerged in
+// poller-merge.ts). No-op when the dashboard isn't running.
+function wakePollers(): void {
+  for (const name of Object.keys(loadConfig().projects)) triggerProjectPoll(name);
+}
 
 export async function auto(args: string[]): Promise<void> {
   const sub = args[0];
@@ -19,6 +28,7 @@ export async function auto(args: string[]): Promise<void> {
       pausedReason: undefined,
     });
     console.log(formatBriefStatus(cfg, "enabled"));
+    wakePollers();
     return;
   }
 
@@ -51,6 +61,10 @@ export async function auto(args: string[]): Promise<void> {
     }
     const cfg = setAutoContinueConfig({ resumeAfterReset: flag === "on" });
     console.log(`Resume-after-reset is ${cfg.resumeAfterReset ? "on" : "off"}.`);
+    // If the paused window already passed, the next poke's gate check
+    // performs the auto-resume — deliver that poke now instead of waiting
+    // for organic activity.
+    if (cfg.resumeAfterReset) wakePollers();
     return;
   }
 

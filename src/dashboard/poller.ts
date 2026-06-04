@@ -137,10 +137,11 @@ export function startProjectPoller(projectName: string, gardenRunner: string): v
   ensureSignalFifo(fifo);
   // Event-driven poller loop: poll once, then block on the FIFO until an
   // event arrives. Per STATUS.md invariant 6, there is no fallback poll.
-  // Every transition is delivered by an event from one of four sources:
-  // Claude Code hooks, worker push hook, merge queue completion, or tmux
-  // pane-died. The poller is a pure dispatcher that does one unit of work
-  // per wake.
+  // Every transition is delivered by an event from one of these sources:
+  // Claude Code hooks, worker push hook, merge queue completion, tmux
+  // pane-died, or the auto-continue gate-reset wake (usage poller /
+  // `garden auto on`). The poller is a pure dispatcher that does one unit
+  // of work per wake.
   //
   // `exec 3<>${fifo}` holds the FIFO open in R+W mode for the loop's whole
   // lifetime (not just the per-iteration `read`). Without this, the FIFO has

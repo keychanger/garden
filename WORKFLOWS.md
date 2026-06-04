@@ -450,9 +450,9 @@ export function registerWorkflow(def: WorkflowDefinition): void;
 
 ```ts
 import { handleWorking, handleReviewing } from "../poller-review.js";
-import { handleMergePending } from "../poller-merge.js";
+import { handleMergePending, handleMerged } from "../poller-merge.js";
 import { handleResolving } from "../poller-resolve.js";
-import { handleFailing, handleMerged, handleDone } from "../poller-state.js";
+import { handleFailing, handleDone } from "../poller-state.js";
 import { defaultHookHandlers } from "../hooks/default.js"; // see Phase 4
 import type { WorkflowDefinition } from "./types.js";
 

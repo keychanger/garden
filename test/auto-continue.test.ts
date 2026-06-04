@@ -249,3 +249,89 @@ describe("autoContinueGateReason", () => {
     expect(addAlertMock).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Gate-reset wake — the usage poller's poke that lets an idle garden
+// auto-resume after a token wall (no hooks or pushes to deliver the poke
+// that would run the merged-state sweep).
+// ---------------------------------------------------------------------------
+
+describe("pokeOnGateReset", () => {
+  const triggerProjectPollMock = vi.fn();
+
+  beforeEach(() => triggerProjectPollMock.mockReset());
+
+  async function importUsagePoller() {
+    vi.doMock("../src/dashboard/poller-fifo.js", () => ({
+      triggerProjectPoll: triggerProjectPollMock,
+    }));
+    vi.doMock("../src/dashboard/log.js", () => ({
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    }));
+    vi.doMock("../src/dashboard/header.js", () => ({ refreshDashboard: vi.fn() }));
+    vi.doMock("../src/dashboard/usage.js", () => ({
+      decideRefresh: vi.fn(), readUsageSnapshot: vi.fn(), refreshUsage: vi.fn(),
+    }));
+    vi.doMock("../src/dashboard/tmux.js", () => ({
+      tmux: vi.fn(), windowExists: vi.fn(), killWindowSafe: vi.fn(),
+    }));
+    return await import("../src/dashboard/usage-poller.js");
+  }
+
+  async function initProjects() {
+    const { saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { alpha: { path: "/tmp/a" }, beta: { path: "/tmp/b" } } });
+  }
+
+  it("pokes every project once the paused window passes with auto-resume armed", async () => {
+    await initProjects();
+    const { setAutoContinueConfig } = await importConfig();
+    setAutoContinueConfig({
+      enabled: false,
+      resumeAfterReset: true,
+      pausedUntil: "2000-01-01T00:00:00Z",
+      pausedReason: "5h at 100%",
+    });
+    const { pokeOnGateReset } = await importUsagePoller();
+    pokeOnGateReset();
+    expect(triggerProjectPollMock).toHaveBeenCalledTimes(2);
+    expect(triggerProjectPollMock).toHaveBeenCalledWith("alpha");
+    expect(triggerProjectPollMock).toHaveBeenCalledWith("beta");
+  });
+
+  it("no-ops while still inside the paused window", async () => {
+    await initProjects();
+    const { setAutoContinueConfig } = await importConfig();
+    setAutoContinueConfig({
+      enabled: false,
+      resumeAfterReset: true,
+      pausedUntil: "2099-01-01T00:00:00Z",
+      pausedReason: "5h at 100%",
+    });
+    const { pokeOnGateReset } = await importUsagePoller();
+    pokeOnGateReset();
+    expect(triggerProjectPollMock).not.toHaveBeenCalled();
+  });
+
+  it("no-ops when resumeAfterReset is off", async () => {
+    await initProjects();
+    const { setAutoContinueConfig } = await importConfig();
+    setAutoContinueConfig({
+      enabled: false,
+      resumeAfterReset: false,
+      pausedUntil: "2000-01-01T00:00:00Z",
+      pausedReason: "5h at 100%",
+    });
+    const { pokeOnGateReset } = await importUsagePoller();
+    pokeOnGateReset();
+    expect(triggerProjectPollMock).not.toHaveBeenCalled();
+  });
+
+  it("no-ops when the gate is open", async () => {
+    await initProjects();
+    const { pokeOnGateReset } = await importUsagePoller();
+    pokeOnGateReset();
+    expect(triggerProjectPollMock).not.toHaveBeenCalled();
+  });
+});

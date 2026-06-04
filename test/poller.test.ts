@@ -202,7 +202,7 @@ vi.mock("../src/dashboard/poller-fifo.js", async () => {
 
 import fs from "node:fs";
 import { poll, postPush, restartLongLivedPollers } from "../src/dashboard/poller.js";
-import { tryGetProject } from "../src/config.js";
+import { tryGetProject, getAutoContinueConfig } from "../src/config.js";
 import { updateWorkerFields, findWorkerByName } from "../src/dashboard/registry.js";
 import {
   getBranchHeadSha, getRemoteTrackingSha, deleteRemoteBranch,
@@ -2853,27 +2853,27 @@ describe("poll — failing state", () => {
 });
 
 describe("poll — merged state", () => {
-  it("stays merged when no new commits", () => {
-    registryMock._setEntries("myproject", [
-      makeWorker({
-        prState: "merged",
-        mergedAt: new Date().toISOString(),
-      }),
-    ]);
+  // The merged handler is two-legged: resume-on-new-commits recovery, then
+  // the gate-reopen sweep (replay of the post-merge auto-continue decision
+  // for workers stranded in `merged`).
+  beforeEach(() => {
     vi.mocked(getCommitSummary).mockReturnValue("");
-
-    poll("myproject");
-
-    expect(updateWorkerFields).not.toHaveBeenCalled();
+    vi.mocked(getAutoContinueConfig).mockReturnValue({
+      enabled: true, usageThreshold: 95, resumeAfterReset: false,
+    });
   });
 
+  function strandedWorker(overrides: Partial<WorkerEntry> = {}) {
+    return makeWorker({
+      prState: "merged",
+      claudeStatus: "idle",
+      mergedAt: new Date().toISOString(),
+      ...overrides,
+    });
+  }
+
   it("transitions to working when new commits appear after merge", () => {
-    registryMock._setEntries("myproject", [
-      makeWorker({
-        prState: "merged",
-        mergedAt: new Date().toISOString(),
-      }),
-    ]);
+    registryMock._setEntries("myproject", [strandedWorker()]);
     vi.mocked(getCommitSummary).mockReturnValue("def456 add new feature");
 
     poll("myproject");
@@ -2881,6 +2881,123 @@ describe("poll — merged state", () => {
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "working" }),
     );
+    expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
+  });
+
+  it("sweep re-dispatches the continue prompt for a stranded worker when the gate is open", () => {
+    registryMock._setEntries("myproject", [strandedWorker()]);
+
+    poll("myproject");
+
+    expect(dispatchDelayedAutoContinue).toHaveBeenCalledWith(
+      "node /usr/local/bin/garden", "myproject", "bold-ash",
+    );
+    const lastAcCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).lastAutoContinueAt !== undefined,
+    );
+    expect(lastAcCall).toBeDefined();
+  });
+
+  it("sweep stays quiet while the gate is closed (debug, not info)", () => {
+    vi.mocked(getAutoContinueConfig).mockReturnValue({
+      enabled: false, usageThreshold: 95, resumeAfterReset: false,
+      pausedUntil: "2099-01-01T00:00:00Z", pausedReason: "5h at 100%",
+    });
+    registryMock._setEntries("myproject", [strandedWorker()]);
+
+    poll("myproject");
+
+    expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
+    const infoBlock = vi.mocked(log.info).mock.calls.find(
+      c => c[1] === "auto-continue blocked by global gate",
+    );
+    expect(infoBlock).toBeUndefined();
+    const debugBlock = vi.mocked(log.debug).mock.calls.find(
+      c => c[1] === "auto-continue blocked by global gate",
+    );
+    expect(debugBlock).toBeDefined();
+  });
+
+  it("sweep does not double-dispatch inside the stranded window of a prior dispatch", () => {
+    registryMock._setEntries("myproject", [
+      strandedWorker({ lastAutoContinueAt: Date.now() - 30_000 }),
+    ]);
+
+    poll("myproject");
+
+    expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
+  });
+
+  it("sweep re-dispatches once the stranded window has passed", () => {
+    registryMock._setEntries("myproject", [
+      strandedWorker({ lastAutoContinueAt: Date.now() - 61_000 }),
+    ]);
+
+    poll("myproject");
+
+    expect(dispatchDelayedAutoContinue).toHaveBeenCalled();
+  });
+
+  it("sweep skips done-sentinel workers", () => {
+    vi.mocked(isDoneSet).mockReturnValue(true);
+    registryMock._setEntries("myproject", [strandedWorker()]);
+
+    poll("myproject");
+
+    expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
+  });
+
+  it("sweep skips exited workers", () => {
+    registryMock._setEntries("myproject", [
+      strandedWorker({ claudeStatus: "exited" }),
+    ]);
+
+    poll("myproject");
+
+    expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
+  });
+
+  it("sweep skips mid-turn workers", () => {
+    registryMock._setEntries("myproject", [
+      strandedWorker({ claudeStatus: "working" }),
+    ]);
+
+    poll("myproject");
+
+    expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
+  });
+
+  it("sweep routes a stranded trellis worker through the trellis dispatch", () => {
+    registryMock._setEntries("myproject", [
+      strandedWorker({ workflow: "trellis" }),
+    ]);
+
+    poll("myproject");
+
+    expect(spawn).toHaveBeenCalledWith(
+      "sh",
+      ["-c", expect.stringContaining("_trellis-continue-after-merge")],
+      expect.objectContaining({ detached: true }),
+    );
+    expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
+  });
+
+  it("sweep finishes a stranded grow worker at budget instead of continuing", () => {
+    registryMock._setEntries("myproject", [
+      strandedWorker({
+        workflow: "grow",
+        grow: { seed: "harden auth", iteration: 5, maxIterations: 5 },
+      }),
+    ]);
+
+    poll("myproject");
+
+    expect(setDoneSentinel).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    const doneCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "done",
+    );
+    expect(doneCall).toBeDefined();
+    expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
   });
 });
 
