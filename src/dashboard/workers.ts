@@ -6,7 +6,7 @@ import { DASHBOARD_SESSION } from "../session.js";
 import { getProject, tryGetProject, loadConfig, plotsMap } from "../config.js";
 import { readDashState, writeDashState, withStateLock } from "./state.js";
 import { parkToHidden, restoreFromHidden } from "./layout.js";
-import { refreshDashboard } from "./header.js";
+import { refreshDashboard, setPaneProjectColor } from "./header.js";
 import {
   tmux, tmuxDisplay, tmuxNewWindow, setPaneLabel, setPaneVar, shellEscape,
   getFirstPaneId, paneExists, windowExists,
@@ -328,6 +328,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         if (workerPaneId) {
           setPaneLabel(workerPaneId, workerName);
           setPaneVar(workerPaneId, "garden_clock", "1");
+          setPaneProjectColor(workerPaneId, targetProject);
         }
       } else {
         // Show the new pane immediately — bootstrap runs inside it
@@ -344,6 +345,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         if (state.activePaneId) {
           setPaneLabel(state.activePaneId, workerName);
           setPaneVar(state.activePaneId, "garden_clock", "1");
+          setPaneProjectColor(state.activePaneId, targetProject);
         }
       }
     } catch (err) {
@@ -430,6 +432,7 @@ export function killPane(): void {
         if (nextLabel) {
           setPaneLabel(targetPaneId, nextLabel);
           setPaneVar(targetPaneId, "garden_clock", "1");
+          setPaneProjectColor(targetPaneId, state.activeProject);
           const nextEntry = findWorkerByName(state.activeProject, nextLabel);
           if (nextEntry?.task) setPaneVar(targetPaneId, "garden_task", nextEntry.task);
         }

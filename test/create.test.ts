@@ -26,6 +26,7 @@ vi.mock("../src/session.js", () => ({
 }));
 
 vi.mock("../src/config.js", () => ({
+  logColorKeyForProject: vi.fn(() => null),
   loadConfig: vi.fn(() => ({ projects: { myproject: { path: "/repo/myproject" } } })),
   tryGetProject: vi.fn(() => ({ path: "/repo/myproject" })),
   tryResolveClaudeProfile: vi.fn(() => null),
@@ -67,6 +68,7 @@ vi.mock("../src/dashboard/header.js", () => ({
   setupStatusBar: vi.fn(),
   buildStatusCommand: vi.fn(() => "status-command"),
   updateHeaderVar: vi.fn(),
+  setPaneProjectColor: vi.fn(),
 }));
 
 vi.mock("../src/commands/status.js", () => ({

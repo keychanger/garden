@@ -27,6 +27,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 vi.mock("../src/config.js", () => ({
+  logColorKeyForProject: vi.fn(() => null),
   tryGetProject: vi.fn(() => ({ path: "/repo/garden" })),
   loadConfig: vi.fn(() => ({
     projects: { garden: { path: "/repo/garden" }, other: { path: "/repo/other" } },
@@ -150,6 +151,7 @@ import {
   refreshUsagePane,
   refreshDashboard,
   installInputGuard,
+  setPaneProjectColor,
   _resetHeaderCachesForTest,
 } from "../src/dashboard/header.js";
 
@@ -158,7 +160,7 @@ import { readDashState, type DashboardState } from "../src/dashboard/state.js";
 import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields, removeWorker } from "../src/dashboard/registry.js";
 import { currentBranch, worktreeExists } from "../src/dashboard/git.js";
 import { renderQuickStatus, resolveWorkerStatus } from "../src/commands/status.js";
-import { isPlotFocused, loadConfig } from "../src/config.js";
+import { isPlotFocused, loadConfig, logColorKeyForProject } from "../src/config.js";
 import { log } from "../src/dashboard/log.js";
 import fs from "node:fs";
 
@@ -353,6 +355,33 @@ describe("setupStatusBar", () => {
     expect(clockSeg).not.toContain("#[fg=green,bold]");
   });
 
+  it("renders a project-color dot gated on @garden_color in the pane-border-format", () => {
+    setupStatusBar("garden");
+    const fmt = vi.mocked(tmux).mock.calls.find(
+      c => c[0] === "set-option" && c[3] === "pane-border-format",
+    )?.[4];
+    expect(fmt).toBeDefined();
+    // Dot segment: only on panes with @garden_color set (worker/shell panes,
+    // via setPaneProjectColor); the nested var supplies the tmux color and the
+    // style resets before the pane label so the label stays default-colored.
+    expect(fmt).toContain("#{?@garden_color,#[fg=#{@garden_color}]●#[default] ,}");
+  });
+
+  describe("setPaneProjectColor", () => {
+    it("sets @garden_color to the project's tmux color", () => {
+      vi.mocked(logColorKeyForProject).mockReturnValueOnce("cyan");
+      setPaneProjectColor("%5", "myproject");
+      // cyan = 256-color index 39
+      expect(setPaneVar).toHaveBeenCalledWith("%5", "garden_color", "colour39");
+    });
+
+    it("leaves @garden_color unset when the project has no log color", () => {
+      vi.mocked(logColorKeyForProject).mockReturnValueOnce(null);
+      setPaneProjectColor("%5", "myproject");
+      expect(setPaneVar).not.toHaveBeenCalledWith("%5", "garden_color", expect.anything());
+    });
+  });
+
   it("swallows errors from individual set-option calls", () => {
     vi.mocked(tmux).mockImplementation(() => { throw new Error("fail"); });
     expect(() => setupStatusBar("garden")).not.toThrow();
@@ -406,6 +435,25 @@ describe("updateHeaderVar", () => {
     expect(leftCall![4]).toContain("garden");
     expect(leftCall![4]).toContain("feature-x");
     expect(leftCall![4]).toContain("#[bold]");
+  });
+
+  it("prefixes the active project with its log-color dot in @garden_left", () => {
+    vi.mocked(logColorKeyForProject).mockReturnValue("orange");
+    updateHeaderVar();
+
+    const calls = vi.mocked(tmux).mock.calls;
+    const leftCall = calls.find(c => c[0] === "set-option" && c[3] === "@garden_left");
+    // orange = 256-color index 208; reset before the bold project name.
+    expect(leftCall![4]).toContain("#[fg=colour208]●#[default] #[bold]garden");
+  });
+
+  it("omits the dot from @garden_left when the project has no log color", () => {
+    vi.mocked(logColorKeyForProject).mockReturnValue(null);
+    updateHeaderVar();
+
+    const calls = vi.mocked(tmux).mock.calls;
+    const leftCall = calls.find(c => c[0] === "set-option" && c[3] === "@garden_left");
+    expect(leftCall![4]).not.toContain("●");
   });
 
   it("sets @garden_right with version string", () => {

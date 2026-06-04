@@ -289,6 +289,16 @@ describe("logColor migration", () => {
   });
 });
 
+describe("log palette renderers", () => {
+  it("derives ANSI and tmux colors from the same palette index", async () => {
+    const { logColorAnsi, logColorTmux } = await import("../src/log-palette.js");
+    expect(logColorAnsi("cyan")).toBe("\x1b[38;5;39m");
+    expect(logColorTmux("cyan")).toBe("colour39");
+    expect(logColorAnsi("not-a-color")).toBeNull();
+    expect(logColorTmux("not-a-color")).toBeNull();
+  });
+});
+
 describe("assignLogColor", () => {
   it("picks an unused color when adding a new project", async () => {
     const { assignLogColor } = await importConfig();

@@ -8,7 +8,8 @@
 // would close the init cycle that previously crashed every Claude Code
 // hook. Keep this file workflows-free.
 import path from "node:path";
-import { SESSIONS_DIR, loadConfig, tryGetProject, plotsMap, isPlotFocused } from "../config.js";
+import { SESSIONS_DIR, loadConfig, tryGetProject, plotsMap, isPlotFocused, logColorKeyForProject } from "../config.js";
+import { logColorTmux } from "../log-palette.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize, listAllWindowNames, listSessionPaneTitles, cleanPaneTitle, type PaneInfo } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
@@ -56,23 +57,42 @@ export function setupStatusBar(_gardenRunner: string): void {
     [["-t", mainWindow, "window-status-format", ""], "window-status-format"],
     [["-t", mainWindow, "pane-border-status", "top"], "pane-border-status"],
     // Left segment renders the plot strip on the status pane (gated on
-    // @garden_name). The trailing segment renders a right-aligned wall clock
-    // on the right pane \u2014 worker or shell \u2014 (gated on @garden_clock, set in
+    // @garden_name). Worker/shell panes prefix the label with a \u25cf in the
+    // project's log color (gated on @garden_color, set alongside
+    // @garden_clock via setPaneProjectColor) so the border echoes the
+    // project's color in the logs and status panes; tmux expands the nested
+    // #{@garden_color} inside #[fg=...] before parsing the style. The
+    // trailing segment renders a right-aligned wall clock on the right pane
+    // \u2014 worker or shell \u2014 (gated on @garden_clock, set in
     // restoreWorkerPaneVars, focusShell, and at worker/shell pane creation).
     // %H:%M is strftime-expanded by tmux on each status-interval tick, so it
     // advances on tmux's own timer with no process. Styled bold green to
     // mirror the `garden` title, wrapped in spaces and capped with two border
     // dashes so the border runs to the right corner exactly like the left
-    // edge frames `garden`. The clock's style MUST stay comma-free
-    // (#[fg=green]#[bold], not #[fg=green,bold]) \u2014 a comma inside the
-    // #{?@garden_clock,...} conditional is parsed as the true/false separator
-    // and silently blanks the clock.
+    // edge frames `garden`. Every style in this format MUST stay comma-free
+    // (#[fg=green]#[bold], not #[fg=green,bold]) \u2014 a comma inside a
+    // #{?...} conditional is parsed as the true/false separator and silently
+    // blanks the segment.
     [["-t", mainWindow, "pane-border-format",
-      "#{?@garden_name, #{@garden_name}#{?@garden_plot, #[fg=colour244]\u2500\u2500 #{@garden_plot}#[default],}#{?@garden_task, - #{@garden_task},} ,}#{?@garden_clock,#[align=right]#[fg=green]#[bold] %H:%M #[default]\u2500\u2500,}"], "pane-border-format"],
+      "#{?@garden_name, #{?@garden_color,#[fg=#{@garden_color}]\u25cf#[default] ,}#{@garden_name}#{?@garden_plot, #[fg=colour244]\u2500\u2500 #{@garden_plot}#[default],}#{?@garden_task, - #{@garden_task},} ,}#{?@garden_clock,#[align=right]#[fg=green]#[bold] %H:%M #[default]\u2500\u2500,}"], "pane-border-format"],
   ];
   for (const [args] of opts) {
     try { tmux("set-option", ...args); } catch { /* ignore */ }
   }
+}
+
+// Paint the project's log color into a pane border: sets @garden_color so the
+// pane-border-format above renders a ● in that color before the pane label.
+// swap-pane does not carry pane-level user options, so call this everywhere
+// @garden_clock is (re)applied to a worker or project-shell pane.
+export function setPaneProjectColor(
+  paneId: string,
+  project: string,
+  config?: ReturnType<typeof loadConfig>,
+): void {
+  const key = logColorKeyForProject(project, config);
+  const color = key ? logColorTmux(key) : null;
+  if (color) setPaneVar(paneId, "garden_color", color);
 }
 
 // ---------------------------------------------------------------------------
@@ -95,8 +115,11 @@ function formatLeft(
   const repoPath = projectConfig?.path ?? "";
   const branch = repoPath ? (currentBranch(repoPath) ?? "main") : "main";
   const plotPrefix = activePlot ? `${activePlot} #[fg=colour244]\u203a#[default] ` : "";
+  const colorKey = logColorKeyForProject(activeProject, config);
+  const tmuxColor = colorKey ? logColorTmux(colorKey) : null;
+  const dot = tmuxColor ? `#[fg=${tmuxColor}]\u25cf#[default] ` : "";
   const trellisSummary = formatTrellisSummary(activeProject);
-  return ` ${plotPrefix}#[bold]${activeProject}#[default]  ${branch}${trellisSummary} `;
+  return ` ${plotPrefix}${dot}#[bold]${activeProject}#[default]  ${branch}${trellisSummary} `;
 }
 
 // Append a compact trellis summary to the left status segment when the

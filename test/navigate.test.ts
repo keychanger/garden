@@ -12,6 +12,7 @@ vi.mock("node:fs", () => ({
 }));
 
 vi.mock("../src/config.js", () => ({
+  logColorKeyForProject: vi.fn(() => null),
   loadConfig: vi.fn(() => ({
     projects: {
       garden: { path: "/repo/garden" },
@@ -44,6 +45,7 @@ vi.mock("../src/dashboard/header.js", () => ({
   refreshDashboard: vi.fn(),
   refreshDashboardCycle: vi.fn(),
   refreshDashboardPlotCycle: vi.fn(),
+  setPaneProjectColor: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/tmux.js", () => ({
@@ -106,7 +108,7 @@ import {
 
 import { readDashState, writeDashState } from "../src/dashboard/state.js";
 import { parkToHidden, restoreFromHidden, swapToHidden, swapDirect, gardenSwapToHidden } from "../src/dashboard/layout.js";
-import { refreshDashboard } from "../src/dashboard/header.js";
+import { refreshDashboard, setPaneProjectColor } from "../src/dashboard/header.js";
 import {
   tmux, tmuxDisplay, paneExists, windowExists,
   listAllWindowNames, listHiddenWorkerWindows,
@@ -395,6 +397,8 @@ describe("focusWorker", () => {
     expect(setPaneVar).toHaveBeenCalledWith("%2", "garden_task", "do stuff");
     // Worker panes get a wall clock in their border (gated on @garden_clock).
     expect(setPaneVar).toHaveBeenCalledWith("%2", "garden_clock", "1");
+    // ...and the project's log color (gated on @garden_color).
+    expect(setPaneProjectColor).toHaveBeenCalledWith("%2", "garden");
   });
 });
 
@@ -460,8 +464,10 @@ describe("focusShell", () => {
 
     expect(state.activePaneType).toBe("shell");
     expect(state.activeWindowName).toBe("_garden-shell");
-    // The right-pane shell gets the wall clock too (gated on @garden_clock).
+    // The right-pane shell gets the wall clock too (gated on @garden_clock)
+    // and the project's log color dot (gated on @garden_color).
     expect(setPaneVar).toHaveBeenCalledWith("%2", "garden_clock", "1");
+    expect(setPaneProjectColor).toHaveBeenCalledWith("%2", "garden");
     expect(writeDashState).toHaveBeenCalledWith(state);
     expect(refreshDashboard).toHaveBeenCalledWith({ state });
   });

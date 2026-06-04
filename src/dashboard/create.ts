@@ -12,7 +12,7 @@ import { buildRulesContext, buildWorktreeRules } from "../rules.js";
 import { type DashboardState, readDashState, writeDashState, STATE_FILE } from "./state.js";
 import { restoreFromHidden } from "./layout.js";
 import { setupKeybindings } from "./hotkeys.js";
-import { setupStatusBar, buildStatusCommand, buildUsageCommand, buildHistoryCommand, updateHeaderVar, installInputGuard } from "./header.js";
+import { setupStatusBar, buildStatusCommand, buildUsageCommand, buildHistoryCommand, updateHeaderVar, installInputGuard, setPaneProjectColor } from "./header.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { formatLogsPaneLabel } from "../commands/logs.js";
 import {
@@ -462,6 +462,7 @@ export function ensureDashboard(): void {
         tmux("respawn-pane", "-k", "-c", workerCwd, "-t", workerPaneId, "sh", "-c", resumeCmd);
         setPaneLabel(workerPaneId, entry.name);
         setPaneVar(workerPaneId, "garden_clock", "1");
+        setPaneProjectColor(workerPaneId, projectName);
         if (entry.task) {
           setPaneVar(workerPaneId, "garden_task", entry.task);
           setPaneTitle(workerPaneId, entry.task);
@@ -593,6 +594,7 @@ export function createShellWindow(projectName: string, projectPath: string): voi
     setPaneTitle(paneId, projectName);
     // The right-pane shell shows the same wall clock as worker panes.
     setPaneVar(paneId, "garden_clock", "1");
+    setPaneProjectColor(paneId, projectName);
   }
 }
 

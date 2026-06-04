@@ -3,7 +3,7 @@ import { loadConfig, getProject, getFocusedProjectNames, plotsMap, isPlotFocused
 import { readDashState, writeDashState, withStateLock, type DashboardState } from "./state.js";
 import { swapToHidden, swapDirect } from "./layout.js";
 import { gardenSwapToHidden } from "./layout.js";
-import { refreshDashboard, refreshDashboardCycle, refreshDashboardPlotCycle } from "./header.js";
+import { refreshDashboard, refreshDashboardCycle, refreshDashboardPlotCycle, setPaneProjectColor } from "./header.js";
 import {
   tmux, tmuxDisplay,
   paneExists, windowExists,
@@ -32,6 +32,7 @@ function restoreWorkerPaneVars(paneId: string, project: string, windowName: stri
   // Worker panes show a wall clock in their top border's right corner; the
   // pane-border-format gates it on @garden_clock (see setupStatusBar).
   setPaneVar(paneId, "garden_clock", "1");
+  setPaneProjectColor(paneId, project);
   const entry = findWorkerByName(project, workerLabel);
   if (entry?.task) {
     setPaneVar(paneId, "garden_task", entry.task);
@@ -199,7 +200,10 @@ export function focusShell(): void {
 
     // The right-pane shell shows the same wall clock as worker panes
     // (gated on @garden_clock; see setupStatusBar).
-    if (state.activePaneId) setPaneVar(state.activePaneId, "garden_clock", "1");
+    if (state.activePaneId) {
+      setPaneVar(state.activePaneId, "garden_clock", "1");
+      setPaneProjectColor(state.activePaneId, state.activeProject);
+    }
 
     state.activePaneType = "shell";
     state.activeWindowName = shellTarget;

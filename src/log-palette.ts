@@ -7,20 +7,22 @@
 export const RESERVED_LOG_COLOR_PROJECT = "garden";
 export const RESERVED_LOG_COLOR_KEY = "green";
 
-const PALETTE: Record<string, string> = {
-  green: "\x1b[38;5;84m",
-  cyan: "\x1b[38;5;39m",
-  skyblue: "\x1b[38;5;75m",
-  lavender: "\x1b[38;5;141m",
-  pink: "\x1b[38;5;213m",
-  orange: "\x1b[38;5;208m",
-  gold: "\x1b[38;5;220m",
-  peach: "\x1b[38;5;216m",
-  turquoise: "\x1b[38;5;50m",
-  violet: "\x1b[38;5;99m",
-  magenta: "\x1b[38;5;177m",
-  yellow: "\x1b[38;5;184m",
-  periwinkle: "\x1b[38;5;105m",
+// 256-color indices. Rendered as ANSI (`\x1b[38;5;Nm`) in pane content and
+// as tmux styles (`colour<N>`) in border/status-bar formats.
+const PALETTE: Record<string, number> = {
+  green: 84,
+  cyan: 39,
+  skyblue: 75,
+  lavender: 141,
+  pink: 213,
+  orange: 208,
+  gold: 220,
+  peach: 216,
+  turquoise: 50,
+  violet: 99,
+  magenta: 177,
+  yellow: 184,
+  periwinkle: 105,
 };
 
 export const ASSIGNABLE_LOG_COLOR_KEYS: readonly string[] =
@@ -31,7 +33,14 @@ export function isValidLogColorKey(key: string): boolean {
 }
 
 export function logColorAnsi(key: string): string | null {
-  return PALETTE[key] ?? null;
+  const index = PALETTE[key];
+  return index === undefined ? null : `\x1b[38;5;${index}m`;
+}
+
+// tmux style color name (`colour<N>`) for border/status-bar formats.
+export function logColorTmux(key: string): string | null {
+  const index = PALETTE[key];
+  return index === undefined ? null : `colour${index}`;
 }
 
 // Falls back to least-used (not first-unused) so colors stay balanced when projects exceed palette size.

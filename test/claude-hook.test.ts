@@ -26,6 +26,7 @@ vi.mock("node:fs", () => ({
 }));
 
 vi.mock("../src/config.js", () => ({
+  logColorKeyForProject: vi.fn(() => null),
   tryGetProject: vi.fn(() => ({ path: "/repo/garden" })),
   loadConfig: vi.fn(() => ({
     projects: { garden: { path: "/repo/garden" } },

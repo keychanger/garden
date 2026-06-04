@@ -27,6 +27,7 @@ vi.mock("../src/session.js", () => ({
 }));
 
 vi.mock("../src/config.js", () => ({
+  logColorKeyForProject: vi.fn(() => null),
   getProject: vi.fn(() => ({ name: "myproject", path: "/repo/myproject" })),
   tryGetProject: vi.fn(() => ({ name: "myproject", path: "/repo/myproject" })),
   loadConfig: vi.fn(() => ({ projects: {}, plots: {} })),
@@ -51,6 +52,7 @@ vi.mock("../src/dashboard/layout.js", () => ({
 
 vi.mock("../src/dashboard/header.js", () => ({
   refreshDashboard: vi.fn(),
+  setPaneProjectColor: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/tmux.js", () => ({

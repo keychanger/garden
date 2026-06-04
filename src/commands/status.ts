@@ -6,7 +6,8 @@
 // pgrep and does not read marker files. Before rendering, it refreshes
 // worker task summaries from live tmux pane titles so the registry stays
 // current between hook events.
-import { loadConfig, getFocusedProjectNames, allPlotProjectNames, tryGetProject } from "../config.js";
+import { loadConfig, getFocusedProjectNames, allPlotProjectNames, tryGetProject, logColorKeyForProject } from "../config.js";
+import { logColorAnsi } from "../log-palette.js";
 import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
@@ -471,8 +472,13 @@ export function renderQuickStatus(
     const isActive = state.activeProject === name;
     const marker = isActive ? " \u25C4" : "";
     const displayName = isActive ? `\x1b[1;32m${name}\x1b[0m` : name;
+    // Project color dot \u2014 same color the project carries in `garden logs`,
+    // echoed here and in the right-pane border so the three views agree.
+    const colorKey = logColorKeyForProject(name, config);
+    const colorAnsi = colorKey ? logColorAnsi(colorKey) : null;
+    const dot = colorAnsi ? ` ${colorAnsi}\u25CF\x1b[0m` : "";
     const projectBranch = projectBranches[pi];
-    lines.push(`  ${pi + 1}. ${displayName}${marker}`);
+    lines.push(`  ${pi + 1}. ${displayName}${dot}${marker}`);
 
     const workers = projectWorkers[pi];
     if (workers.length === 0) {
