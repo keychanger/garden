@@ -4,6 +4,7 @@ import {
   readKeychainCredential, readPersonalCredential, readFileCredential,
   type CredentialSlot, type ClaudeOAuth,
 } from "../dashboard/credentials.js";
+import { providerTokenPresence, syncProviderTokenToSession } from "../dashboard/claude-env.js";
 import { isTTY } from "../output.js";
 
 export async function auth(args: string[]): Promise<void> {
@@ -36,12 +37,32 @@ function handleStatus(): void {
 
   const displacedBy = detectDisplacement(personalKeychain, profiles);
 
+  // Providers are API-key-backed: no expiry, no Keychain, no displacement
+  // semantics. Presence is reported for both the env that launches workers
+  // (the dashboard's tmux session) and this shell — they diverge when the
+  // key was exported after the dashboard started, which is exactly the
+  // failure an operator would be here to debug.
+  const providers = Object.entries(cfg.providers ?? {}).map(([name, p]) => {
+    const resolved = { ...p, name, label: p.label ?? name };
+    // Heal-on-read: this command runs in the operator's shell, which is
+    // exactly where a freshly exported key lives — push it into the
+    // session env before reporting, so "run auth status" is both the fix
+    // and the verification.
+    syncProviderTokenToSession(resolved);
+    const presence = providerTokenPresence(resolved);
+    return { name, authTokenEnv: p.authTokenEnv, ...presence };
+  });
+
   if (!isTTY) {
     console.log(JSON.stringify({
       personal: serializeSlot(personal),
       profiles: Object.fromEntries(profiles.map(p => [
         p.name,
         { configDir: p.configDir, ...serializeSlot(p.slot) },
+      ])),
+      providers: Object.fromEntries(providers.map(p => [
+        p.name,
+        { authTokenEnv: p.authTokenEnv, shell: p.shell, session: p.session },
       ])),
       displacedBy,
     }));
@@ -52,6 +73,20 @@ function handleStatus(): void {
   for (const p of profiles) {
     console.log("");
     printProfile(p);
+  }
+  for (const p of providers) {
+    console.log("");
+    console.log(`${p.name} (provider)`);
+    const sessionText = p.session === null
+      ? "no dashboard running"
+      : p.session
+        ? "✓ in dashboard session (workers get it)"
+        : "⚠ NOT in dashboard session — workers launch without it";
+    const shellText = p.shell ? "✓ in this shell" : "⚠ not in this shell";
+    console.log(`  ${pad(p.authTokenEnv)}  ${sessionText}; ${shellText}`);
+    if (!p.shell && p.session !== true) {
+      console.log(`  ${pad("")}  export ${p.authTokenEnv}, then re-run 'garden auth status' to sync and verify`);
+    }
   }
 
   console.log("");

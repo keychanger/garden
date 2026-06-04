@@ -3,7 +3,8 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { DASHBOARD_SESSION } from "../session.js";
-import { getProject, tryGetProject, loadConfig, plotsMap } from "../config.js";
+import { getProject, tryGetProject, tryResolveProvider, loadConfig, plotsMap } from "../config.js";
+import { syncProviderTokenToSession, providerTokenPresence } from "./claude-env.js";
 import { readDashState, writeDashState, withStateLock } from "./state.js";
 import { parkToHidden, restoreFromHidden } from "./layout.js";
 import { refreshDashboard, setPaneProjectColor } from "./header.js";
@@ -105,6 +106,29 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     if (!project) {
       tmuxDisplay(`Unknown project '${targetProject}'.`);
       return;
+    }
+
+    // Provider preflight: the worker's launch command references the API
+    // key as "$<authTokenEnv>", expanded from the tmux session env. Sync
+    // the key from this process (best-effort — covers the operator-shell
+    // invocation path) and refuse to spawn a worker that would launch with
+    // an empty token; an unauthenticated worker fails opaquely at first
+    // inference, far from the cause.
+    const workerProvider = tryResolveProvider(project);
+    if (workerProvider) {
+      syncProviderTokenToSession(workerProvider);
+      const presence = providerTokenPresence(workerProvider);
+      if (!presence.shell && presence.session !== true) {
+        tmuxDisplay(`Provider '${workerProvider.name}' requires $${workerProvider.authTokenEnv} — not set in this shell or the dashboard session.`);
+        log.error("workers", "rejected newWorker: provider token env var unset", {
+          data: {
+            project: targetProject,
+            provider: workerProvider.name,
+            envVar: workerProvider.authTokenEnv,
+          },
+        });
+        return;
+      }
     }
 
     // --workflow trellis without opts.trellis is a bug — the CLI must

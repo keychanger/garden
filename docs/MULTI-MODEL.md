@@ -1,12 +1,5 @@
 # Multi-Model and Multi-Harness Architecture
 
-> This document lives under `docs/future/` — it describes an unshipped
-> design. Workers must not act on it (no provider or harness config keys
-> exist, no adapter registry exists, no `garden provider` command). See
-> `rules.md` § Specifications and documentation. When the operator
-> green-lights Phase 1, this doc moves up to `docs/` per the
-> `docs/README.md` graduation flow.
-
 Design target for extending garden beyond Claude Code + Anthropic:
 workers that run on arbitrary model providers (DeepSeek, Ollama-hosted
 open-source models, OpenAI) and, where justified, arbitrary agent
@@ -17,15 +10,34 @@ requires touching the dispatcher, pollers, or state machine.
 
 ## Status
 
-Forward-looking design, no code yet. Commissioned 2026-06-03 from a full
-coupling audit of the codebase (~150 coupling points across 8 subsystems)
-plus a landscape survey of harnesses, providers, and agent protocols,
-with load-bearing external claims independently re-verified against
-primary sources. External-landscape facts are a snapshot **as of June
-2026** and will go stale; re-verify before implementing a phase that
-depends on them. The phased plan at the bottom is the implementation
-route; each phase is independently mergeable and leaves garden fully
-working for the existing Claude-only fleet.
+Forward-looking design for Phases 2-5; **Phase 1 (the provider layer) is
+implemented** — `garden provider`, the `provider` project-config key,
+worker env injection, sandbox egress union, reviewer Opus pinning, and
+usage-meter gating are live. Commissioned 2026-06-03 from a full coupling
+audit of the codebase (~150 coupling points across 8 subsystems) plus a
+landscape survey of harnesses, providers, and agent protocols, with
+load-bearing external claims independently re-verified against primary
+sources. External-landscape facts are a snapshot **as of June 2026** and
+will go stale; re-verify before implementing a phase that depends on
+them. Each remaining phase is independently mergeable and leaves garden
+fully working for the existing Claude-only fleet.
+
+Where Phase 1's implementation deliberately settled or trimmed the
+original sketch:
+
+- `ProviderProfile` carries no `kind` enum — providers are
+  API-key-backed by construction, which *is* the structural
+  subscription-OAuth exclusion (the type has no field that could
+  reference an OAuth credential). A Bedrock/Vertex `cloud-iam` kind
+  remains future work.
+- The `meter` field is omitted until a second meter source exists; with
+  it, the neutral `Meter[]` render seam moved from Phase 1 to Phase 2
+  (a render abstraction with one producer is premature). Phase 1 ships
+  the gating only: the usage poller and hook-path refresh skip, and the
+  pane says why, when every project runs on a provider.
+- Reviewer pinning is unconditional, not opt-out: provider-backed
+  projects always get an Anthropic reviewer pinned to Opus. The
+  per-project relax knob waits for a concrete need.
 
 ## The two axes
 
@@ -226,54 +238,63 @@ pattern so the codebase stays one idiom.
 A **provider** describes a backend reachable through the Anthropic
 Messages protocol. Providers are a sibling of the existing
 `claudeProfiles` concept, not a mutation of it — `claude-profile` remains
-the OAuth-only special case:
+the OAuth-only special case. As implemented (`config.ts`):
 
 ```ts
 interface ProviderProfile {
-  label: string;
-  // Credential shape. "cloud-iam" reserves the Bedrock/Vertex path
-  // (CLAUDE_CODE_USE_BEDROCK / CLAUDE_CODE_USE_VERTEX); expressible
-  // here but deliberately out of scope through Phase 5.
-  kind: "anthropic-oauth" | "api-key" | "cloud-iam" | "none";
-  configDir?: string;        // CLAUDE_CONFIG_DIR (anthropic-oauth only)
-  baseUrl?: string;          // ANTHROPIC_BASE_URL; absent = api.anthropic.com
-  authTokenEnv?: string;     // env var name holding the key; never the key itself
-  // What the model aliases resolve to on this backend.
+  baseUrl: string;           // ANTHROPIC_BASE_URL for sessions on this provider
+  authTokenEnv: string;      // env var NAME holding the key; never the key itself
+  label?: string;
+  // What the model aliases resolve to on this backend (ANTHROPIC_DEFAULT_*_MODEL).
   modelMap?: { opus?: string; sonnet?: string; haiku?: string };
-  // Inference/telemetry hosts this provider needs through the sandbox.
+  // Extra sandbox egress hosts beyond the baseUrl host (allowed automatically).
   egressHosts?: string[];
-  // Name of a registered meter source (open registry, so a new provider
-  // with a quota/balance endpoint registers a source rather than
-  // editing a union). Absent = no meter; the pane omits it.
-  meter?: string;
 }
 ```
 
-Validation enforces the legal invariant by credential provenance:
-`kind: "anthropic-oauth"` (a subscription OAuth blob) is rejected when
-`baseUrl` is set; `api-key` profiles may point anywhere, including a
-gateway in front of Anthropic. API keys are referenced by env var name
-(consistent with the no-secrets-in-config rule).
+The legal invariant is structural: a provider is API-key-backed by
+construction — the type has no field that could reference a subscription
+OAuth credential, so OAuth can never be combined with a custom base URL.
+API keys are referenced by env var name (no-secrets-in-config), validated
+against a strict env-var-name regex because the name is interpolated into
+launch commands as an unexpanded `"$NAME"` shell reference — expanded at
+spawn time, so the key value never appears in config.yml, tmux command
+lines, or ps output. A Bedrock/Vertex `cloud-iam` shape
+(`CLAUDE_CODE_USE_BEDROCK` / `CLAUDE_CODE_USE_VERTEX`) is expressible
+later as a sibling field set; out of scope through Phase 5.
 
-Operator surface (strawman, to be settled in Phase 1 review):
+**Key delivery.** The `"$NAME"` reference expands in the environment the
+tmux server gives the pane — frozen at server start, not the operator's
+later shells. Garden bridges this explicitly: the operator-shell entry
+points (`provider add`, `config set provider`, dashboard create/attach,
+`workers new`, `auth status`) push the key from the CLI process into the
+dashboard's tmux **session environment** (`tmux set-environment`), where
+it persists for the server's lifetime and reaches every later
+respawn/bounce/loop launch. `workers new` preflights: a provider-backed
+worker whose key is in neither this shell nor the session env is refused
+with a concrete message rather than launched unauthenticated. `garden
+auth status` reports both locations and heals on read (it syncs from the
+shell it runs in), so it is both the diagnostic and the fix.
+
+Operator surface (implemented; the `workers new --provider` per-worker
+override is Phase 2):
 
 ```
-garden provider add deepseek --kind api-key \
+garden provider add deepseek \
   --base-url https://api.deepseek.com/anthropic \
   --token-env DEEPSEEK_API_KEY \
   --map opus=deepseek-v4-pro,sonnet=deepseek-v4-flash \
-  --egress api.deepseek.com --meter deepseek-balance
+  [--egress host1,host2] [--label <label>]
 garden provider list | remove <name>
-garden config <project> provider <name>          # project default
-garden workers new <project> --provider <name>   # per-worker override
+garden config <project> provider <name>          # project default; unset to clear
 ```
 
-`garden login` for `api-key` providers is a no-op with guidance ("set
-$DEEPSEEK_API_KEY; garden references it by name") — the Keychain
-capture, refresh, and displacement machinery in
-`login.ts`/`credentials.ts`/`auth.ts` applies only to `anthropic-oauth`.
-`garden auth status` gains a row per provider kind: api-key rows report
-presence/absence of the named env var, no expiry or Keychain semantics.
+`garden login <provider>` prints guidance instead of a login flow
+("export DEEPSEEK_API_KEY in the shell that starts garden") — the
+Keychain capture, refresh, and displacement machinery in
+`login.ts`/`credentials.ts`/`auth.ts` applies only to OAuth profiles.
+`garden auth status` reports a row per provider: presence/absence of the
+named env var in the current shell, no expiry or Keychain semantics.
 
 What changes to consume this:
 
@@ -282,30 +303,34 @@ What changes to consume this:
   `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_DEFAULT_*_MODEL` from `modelMap`,
   or `CLAUDE_CONFIG_DIR` for first-party).
 - **The worker's provider is not the reviewer's provider.** Reviewer,
-  resolver, and ci-fix default to the project's Anthropic profile on a
-  strong model *regardless of the worker's provider*, and relaxing that
-  requires an explicit per-project opt-in. Today only the trellis
-  workflow pins its reviewer (WORKFLOWS.md Invariant 10 is
-  trellis-scoped; the default workflow's reviewer inherits the account
-  default) — so this is **new work in Phase 1, not an existing
-  guarantee**. It is the safety net that makes cheap or experimental
-  worker models safe to try: a DeepSeek worker reviewed by an Opus
-  reviewer fails safe. Without it, Phase 1 would silently route the
-  reviewer through the same cheap backend as the worker.
-- `sandbox.ts` splits `DEFAULT_DOMAINS`: github/npm stay shared;
-  `*.anthropic.com`/statsig/sentry move into the Anthropic provider's
-  `egressHosts`; DeepSeek contributes `api.deepseek.com`; Ollama
-  contributes nothing (localhost) or `ollama.com` for cloud. A worktree
-  whose worker and reviewer use different providers gets the union.
-- `usage.ts` returns a neutral `Meter[]` (`{label, pct, resetsAt?}`)
-  instead of the fixed 5h/week/sonnet triple; the title pane renders
-  whatever meters exist. The dedicated usage-poller window is gated on
-  at least one `anthropic-oauth` provider being configured (a
-  pure-DeepSeek/Ollama fleet must not run a poller that 401s every five
-  minutes). In Phase 1 the auto-continue threshold gate and the trellis
-  Sonnet-fallback keep reading the legacy Anthropic snapshot shape —
-  their meter-neutralization lands in Phase 2 together with the model
-  vocabulary they are entangled with (both live in `trellis-model.ts`).
+  resolver, and ci-fix stay on the project's first-party Anthropic path
+  *regardless of the worker's provider*, and for provider-backed
+  projects the reviewer is pinned to Opus (`poller-review.ts`) rather
+  than inheriting the account default. This is enforced actively, not by
+  absence: `reviewerEnvPrefix` (`claude-env.ts`) prepends empty-string
+  `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_DEFAULT_*_MODEL`
+  assignments for provider-backed projects, so provider env inherited
+  from the tmux server (an operator following DeepSeek/Ollama setup
+  guides may export those globally) cannot silently route the reviewer
+  through the worker's cheap backend. Only the trellis workflow pinned
+  its reviewer before (WORKFLOWS.md Invariant 10 is trellis-scoped), so
+  this was new work in Phase 1, not an existing guarantee. It is the
+  safety net that makes cheap or experimental worker models safe to try:
+  a DeepSeek worker reviewed by an Opus reviewer fails safe.
+- `sandbox.ts` keeps the Anthropic domains unconditionally — the
+  reviewer shares the worktree's settings.json — and unions in the
+  provider's `baseUrl` host plus declared `egressHosts` for
+  provider-backed projects (DeepSeek adds `api.deepseek.com`; a local
+  Ollama adds `localhost`).
+- The usage meter is gated, not generalized, in Phase 1: when every
+  project runs on a provider, the usage poller and the Stop-hook
+  opportunistic refresh skip (no poller 401-ing api.anthropic.com every
+  backoff window), and the title pane says why instead of "loading…".
+  The neutral `Meter[]` render seam, the auto-continue threshold gate,
+  and the trellis Sonnet-fallback all land in Phase 2 together with the
+  model vocabulary they are entangled with (the latter two live in
+  `trellis-model.ts`/`poller-merge.ts` against the legacy snapshot
+  shape).
 
 Everything else — hooks, status, transcripts, skills, review pipeline —
 is provably untouched by Axis 1, because it is all client-side harness
@@ -518,23 +543,26 @@ harness they enable; the adapter interface earns its existence the way
 the workflow registry did — with a second real consumer, not
 speculatively.
 
-**Phase 1 — provider layer (Axis 1).** `ProviderProfile` + `garden
-provider` command surface; env injection in `claude-env.ts`; reviewer/
-resolver/ci-fix provider pinning (default Anthropic + strong model,
-explicit opt-out); sandbox egress split; title-pane `Meter[]` rendering
-with the usage-poller gated on an OAuth provider existing; structural
-OAuth/base-URL exclusion; `garden config` keys; `garden login`/`auth
-status` behavior for api-key providers. The auto-continue gate and
-trellis fallback keep reading the legacy snapshot shape this phase.
-Deliverable: a project configured with a DeepSeek or Ollama provider
-runs workers through the full review/merge cycle with a Claude reviewer,
-and the meter pane is honest about what it can't see. Smallest phase,
-immediate operator value, zero behavior change for unconfigured projects.
+**Phase 1 — provider layer (Axis 1). SHIPPED.** `ProviderProfile` +
+`garden provider` command surface; worker env injection in
+`claude-env.ts` (`workerEnvPrefix`); reviewer/resolver/ci-fix stay on the
+Anthropic path with the reviewer pinned to Opus for provider-backed
+projects; sandbox egress union; usage poller + hook refresh + pane gated
+for provider-only fleets; structural OAuth exclusion (providers are
+API-key-only by type); `provider` config key; `garden login`/`auth
+status` behavior for providers. The auto-continue gate and trellis
+fallback keep reading the legacy snapshot shape this phase. Delivered: a
+project configured with a DeepSeek or Ollama provider runs workers
+through the full review/merge cycle with a Claude reviewer, and the
+meter pane is honest about what it can't see. Zero behavior change for
+unconfigured projects.
 
 **Phase 2 — neutral core.** `claudeStatus` → `agentStatus` rename with
 registry migration and live-worker tolerance; normalized lifecycle event
 vocabulary between dispatcher and workflows; opaque model strings +
-intent tiers replacing the `"opus" | "sonnet"` unions; `--model`
+intent tiers replacing the `"opus" | "sonnet"` unions; neutral `Meter[]`
+render seam plus meter-neutral auto-continue gate and trellis fallback;
+`--model`
 restriction lift + `--provider` flag in `workers new`; trellis
 fallback/auto-continue gate re-read against neutral `Meter[]`; `Turn[]`
 seam formalized. Pure refactor otherwise, bit-for-bit behavior.

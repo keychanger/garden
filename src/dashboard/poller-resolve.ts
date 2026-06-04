@@ -6,7 +6,7 @@
 import fs from "node:fs";
 import { tryGetProject } from "../config.js";
 import { addAlert } from "./alerts.js";
-import { claudeEnvPrefix } from "./claude-env.js";
+import { reviewerEnvPrefix } from "./claude-env.js";
 import {
   abortRebase, forcePushBranch, getBranchHeadSha, getRemoteTrackingSha,
   getUnmergedFiles, hasRebaseInProgress, isAncestor,
@@ -74,7 +74,7 @@ export function launchResolver(
     prompt,
     promptFile: reviewPromptPath(projectName, entry.name),
     resultFile: reviewResultPath(projectName, entry.name),
-    envPrefix: claudeEnvPrefix(tryGetProject(projectName) ?? {}),
+    envPrefix: reviewerEnvPrefix(tryGetProject(projectName) ?? {}),
     envVars: { GARDEN_REVIEWER: "1" },
     signalFifo: signalFifoPath(projectName),
     onLaunched: () => scheduleReviewTimeoutPoke(projectName),

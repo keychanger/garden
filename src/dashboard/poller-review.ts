@@ -7,9 +7,9 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { tryGetProject, SESSIONS_DIR } from "../config.js";
+import { tryGetProject, tryResolveProvider, SESSIONS_DIR } from "../config.js";
 import { addAlert } from "./alerts.js";
-import { claudeEnvPrefix } from "./claude-env.js";
+import { reviewerEnvPrefix } from "./claude-env.js";
 import { setDoneSentinel } from "./continue.js";
 import {
   forcePushBranch, getBranchHeadSha, getCommitSummary, getRemoteTrackingSha,
@@ -934,8 +934,18 @@ function launchReview(
   // Reviewer model: trellis pins to workflow.reviewerModel ("opus") per
   // Invariant 10 — reviewer quality is non-negotiable, never falls back.
   // Default workflow leaves reviewerModel unset and the account default
-  // applies (today: Opus). No model flag is added in that case.
-  const reviewerModel = getWorkflow(entry.workflow ?? "default").reviewerModel;
+  // applies (today: Opus). No model flag is added in that case — unless the
+  // project's workers run on a provider: then the reviewer is the safety
+  // net that makes a cheap/experimental worker model safe to try, so it is
+  // pinned to Opus on the first-party Anthropic path rather than inheriting
+  // whatever the account default happens to be. (reviewerEnvPrefix below
+  // exists for the same reason — it actively neutralizes any provider env
+  // inherited from the tmux server so the reviewer never runs against the
+  // worker's backend. See docs/MULTI-MODEL.md "Mixed fleets".)
+  const projectForEnv = tryGetProject(projectName);
+  const workerOnProvider = tryResolveProvider(projectForEnv ?? {}) !== null;
+  const reviewerModel = getWorkflow(entry.workflow ?? "default").reviewerModel
+    ?? (workerOnProvider ? "opus" : undefined);
   const revWindow = reviewWindowName(projectName, entry.name);
   launchHeadlessAgent({
     cwd: wtPath,
@@ -943,7 +953,7 @@ function launchReview(
     prompt,
     promptFile: reviewPromptPath(projectName, entry.name),
     resultFile: reviewResultPath(projectName, entry.name),
-    envPrefix: claudeEnvPrefix(tryGetProject(projectName) ?? {}),
+    envPrefix: reviewerEnvPrefix(projectForEnv ?? {}),
     envVars: { GARDEN_REVIEWER: "1" },
     signalFifo: signalFifoPath(projectName),
     onLaunched: () => scheduleReviewTimeoutPoke(projectName),

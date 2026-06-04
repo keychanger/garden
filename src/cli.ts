@@ -64,6 +64,8 @@ Projects:
   config <project> [key] [value] View or set project config
   claude-profile [list|add|remove|login]
                                  Manage alternate Claude config dirs (per-project plan)
+  provider [list|add|remove]     Manage model providers (Anthropic-compatible backends
+                                 workers reach by env swap; reviewers stay on Anthropic)
 
 Plots (named, ordered subsets of projects — drive the dashboard view):
   plot, p                        List plots (marks active with *)

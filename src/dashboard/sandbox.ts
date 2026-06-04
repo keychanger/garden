@@ -1,4 +1,4 @@
-import type { ProjectConfig } from "../config.js";
+import { tryResolveProvider, type ProjectConfig } from "../config.js";
 
 export interface SandboxConfig {
   enabled: true;
@@ -11,9 +11,13 @@ export interface SandboxConfig {
   };
 }
 
-// Domains every garden-spawned Claude session needs. Workers and reviewers
-// must reach Anthropic (inference, telemetry) and npm (installs during
-// review checks). The git remote host is added separately at runtime.
+// Domains every garden-spawned Claude session needs. The Anthropic block
+// stays unconditional even when the project's workers run on a provider:
+// the reviewer/resolver/ci-fix agents share the worktree's settings.json
+// and always run on the first-party Anthropic path (see workerEnvPrefix /
+// claudeEnvPrefix in claude-env.ts). github/npm cover git pushes and
+// installs during review checks. The git remote host and the provider's
+// hosts are added separately at runtime.
 const DEFAULT_DOMAINS: readonly string[] = [
   "api.anthropic.com",
   "*.anthropic.com",
@@ -53,6 +57,19 @@ export function buildSandboxConfig(opts: {
   const domains = new Set<string>(DEFAULT_DOMAINS);
   if (opts.remoteHost) domains.add(opts.remoteHost);
   for (const d of opts.project.sandboxDomains ?? []) domains.add(d);
+
+  // Workers on a provider need its inference endpoint through the sandbox:
+  // the baseUrl host automatically, plus any declared extras (e.g. Ollama
+  // Cloud's routing host).
+  const provider = tryResolveProvider(opts.project);
+  if (provider) {
+    try {
+      // URL.hostname brackets IPv6 literals ("[::1]"); the allowlist uses
+      // bare hostnames, so strip them.
+      domains.add(new URL(provider.baseUrl).hostname.replace(/^\[|\]$/g, ""));
+    } catch { /* validated at resolve; defensive */ }
+    for (const d of provider.egressHosts ?? []) domains.add(d);
+  }
 
   const allowWrite = new Set<string>(DEFAULT_ALLOW_WRITE);
   allowWrite.add(opts.worktreePath);

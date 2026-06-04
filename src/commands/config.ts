@@ -1,5 +1,6 @@
 // View or set project configuration values.
 import { loadConfig, saveConfig, resolveProject, isValidConfigKey, type ProjectConfig } from "../config.js";
+import { syncProviderTokenToSession } from "../dashboard/claude-env.js";
 import {
   ASSIGNABLE_LOG_COLOR_KEYS,
   RESERVED_LOG_COLOR_KEY,
@@ -9,8 +10,8 @@ import {
 import { output } from "../output.js";
 
 const SETTABLE_KEYS = [
-  "checks", "postMerge", "sandboxDomains", "claudeProfile", "logColor",
-  "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
+  "checks", "postMerge", "sandboxDomains", "claudeProfile", "provider",
+  "logColor", "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
   "maxGrowIterations", "requireCiSuccess",
 ] as const;
 type SettableKey = typeof SETTABLE_KEYS[number];
@@ -60,6 +61,8 @@ function showProjectConfig(project: ProjectConfig & { name: string }): void {
       }
     } else if (key === "claudeProfile") {
       if (project.claudeProfile) data.claudeProfile = project.claudeProfile;
+    } else if (key === "provider") {
+      if (project.provider) data.provider = project.provider;
     } else if (key === "logColor") {
       if (project.logColor) data.logColor = project.logColor;
     } else if (key === "maxTrellisIterations") {
@@ -101,6 +104,12 @@ function showConfigKey(project: ProjectConfig & { name: string }, key: SettableK
   }
   if (key === "claudeProfile") {
     const v = project.claudeProfile;
+    if (v) output({ [key]: v }, () => v);
+    else output({ [key]: null }, () => `(not set)`);
+    return;
+  }
+  if (key === "provider") {
+    const v = project.provider;
     if (v) output({ [key]: v }, () => v);
     else output({ [key]: null }, () => `(not set)`);
     return;
@@ -186,6 +195,24 @@ function setConfigKey(projectName: string, key: SettableKey, value: string): voi
       }
       project.claudeProfile = value;
       console.log(`Set ${key} = ${value} for ${projectName}`);
+    }
+  } else if (key === "provider") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.provider;
+      console.log(`Cleared ${key} for ${projectName} (workers back on the first-party Anthropic path)`);
+    } else {
+      const providerEntry = cfg.providers?.[value];
+      if (!providerEntry) {
+        throw new Error(
+          `Unknown provider '${value}'. Register it first with 'garden provider add ${value}'.`,
+        );
+      }
+      project.provider = value;
+      syncProviderTokenToSession({ ...providerEntry, name: value, label: providerEntry.label ?? value });
+      console.log(`Set ${key} = ${value} for ${projectName} (applies to newly created or bounced workers; reviewers stay on Anthropic)`);
+      if (!process.env[providerEntry.authTokenEnv]) {
+        console.log(`  note: ${providerEntry.authTokenEnv} is not set in this shell — export it, then run 'garden auth status' to sync and verify.`);
+      }
     }
   } else if (key === "maxTrellisIterations") {
     if (value === "" || value === "unset" || value === "null") {

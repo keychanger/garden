@@ -6,6 +6,7 @@ import {
   type UsageSnapshot,
 } from "../dashboard/usage.js";
 import { refreshDashboard } from "../dashboard/header.js";
+import { anyAnthropicMeteredProject } from "../config.js";
 import { output } from "../output.js";
 
 export async function usage(args: string[]): Promise<void> {
@@ -15,12 +16,26 @@ export async function usage(args: string[]): Promise<void> {
   throw new Error(`Unknown subcommand: ${sub}. Usage: garden usage [refresh]`);
 }
 
+// Same gate as the dashboard pane and the background poller: a
+// provider-only fleet has no Anthropic meter, so showing a stale snapshot
+// or fetching with the personal OAuth credential would mislead.
+function meteredOrExplain(): boolean {
+  let metered = true;
+  try { metered = anyAnthropicMeteredProject(); } catch { /* config unavailable: keep meter */ }
+  if (!metered) {
+    output({ metered: false }, () => "usage meter off — every project uses a provider");
+  }
+  return metered;
+}
+
 function showUsage(): void {
+  if (!meteredOrExplain()) return;
   const snap = readUsageSnapshot();
   output(snap, renderPretty);
 }
 
 async function refreshAndShow(): Promise<void> {
+  if (!meteredOrExplain()) return;
   const snap = await refreshUsage();
   try { refreshDashboard(); } catch { /* no dashboard running or pane gone */ }
   output(snap, renderPretty);

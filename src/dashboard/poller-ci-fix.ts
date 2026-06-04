@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR, tryGetProject } from "../config.js";
 import { addAlert } from "./alerts.js";
-import { claudeEnvPrefix } from "./claude-env.js";
+import { reviewerEnvPrefix } from "./claude-env.js";
 import { getBranchHeadSha, getRemoteTrackingSha } from "./git.js";
 import { refreshDashboard } from "./header.js";
 import { launchHeadlessAgent } from "./headless-agent.js";
@@ -124,7 +124,7 @@ export function launchCiFix(
     prompt,
     promptFile: ciFixPromptPath(projectName, entry.name),
     resultFile: ciFixResultPath(projectName, entry.name),
-    envPrefix: claudeEnvPrefix(tryGetProject(projectName) ?? {}),
+    envPrefix: reviewerEnvPrefix(tryGetProject(projectName) ?? {}),
     envVars: { GARDEN_REVIEWER: "1" },
     signalFifo: signalFifoPath(projectName),
     onLaunched: () => scheduleReviewTimeoutPoke(projectName),

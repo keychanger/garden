@@ -31,6 +31,12 @@ export interface ProjectConfig {
   postMerge?: string;
   sandboxDomains?: string[];
   claudeProfile?: string;
+  // Model provider for this project's WORKERS (see docs/MULTI-MODEL.md
+  // "Layer 1"). Names an entry in GardenConfig.providers. Reviewer,
+  // resolver, and ci-fix agents deliberately ignore this key — they stay
+  // on the first-party Anthropic path (claudeProfile or personal) so a
+  // cheap/experimental worker model is always reviewed by a strong one.
+  provider?: string;
   logColor?: string;
   // Trellis workflow keys. See WORKFLOWS.md "Project config".
   // Directory containing trellis files. Resolved relative to the project
@@ -58,8 +64,8 @@ export interface ProjectConfig {
 }
 
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
-  "path", "checks", "postMerge", "sandboxDomains", "claudeProfile", "logColor",
-  "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
+  "path", "checks", "postMerge", "sandboxDomains", "claudeProfile", "provider",
+  "logColor", "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
   "maxGrowIterations", "requireCiSuccess",
 ]);
 
@@ -81,6 +87,82 @@ export interface ResolvedClaudeProfile {
   name: string;
   configDir: string;
   label: string;
+}
+
+// A model provider: an Anthropic-Messages-compatible backend that the
+// unchanged Claude Code harness reaches by swapping the ANTHROPIC_* env
+// surface (DeepSeek's /anthropic endpoint, a local Ollama, a gateway).
+// See docs/MULTI-MODEL.md "Layer 1: provider descriptors".
+//
+// Providers are API-key-backed by construction: the credential is named by
+// env var, never a Claude OAuth blob. This is the structural form of the
+// subscription-credential rule — a Claude subscription OAuth credential
+// (claudeProfile / personal) can only ever target the default Anthropic
+// endpoint, because providers have no field that could reference one.
+export interface ProviderProfile {
+  // ANTHROPIC_BASE_URL for sessions on this provider. http(s) URL.
+  baseUrl: string;
+  // NAME of the env var holding the API key (e.g. "DEEPSEEK_API_KEY").
+  // The key value itself never enters config.yml or a tmux command line:
+  // launch commands interpolate `ANTHROPIC_AUTH_TOKEN="$<name>"` and the
+  // pane shell expands it at spawn time. Must match ENV_VAR_NAME_RE —
+  // that regex is the injection guard for the unquoted interpolation.
+  authTokenEnv: string;
+  label?: string;
+  // What the opus/sonnet/haiku model aliases resolve to on this backend
+  // (ANTHROPIC_DEFAULT_*_MODEL). Unset aliases fall through to the
+  // provider's own server-side default mapping.
+  modelMap?: { opus?: string; sonnet?: string; haiku?: string };
+  // Extra sandbox egress hosts beyond the baseUrl host (which is allowed
+  // automatically). For Ollama Cloud e.g. ["ollama.com"].
+  egressHosts?: string[];
+}
+
+export interface ResolvedProvider extends ProviderProfile {
+  name: string;
+  label: string;
+}
+
+export const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+const PROVIDER_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
+const MODEL_MAP_KEYS = ["opus", "sonnet", "haiku"] as const;
+
+// Shared by `garden provider add` (CLI input) and resolveProvider (defense
+// against hand-edited config.yml — authTokenEnv is interpolated into shell
+// commands, so an invalid name must fail loudly at resolve time, not spawn
+// a worker with a malformed env assignment).
+export function assertValidProvider(name: string, p: ProviderProfile): void {
+  if (!PROVIDER_NAME_RE.test(name)) {
+    throw new Error(`Provider name must be alphanumeric/dash/underscore: ${name}`);
+  }
+  let url: URL;
+  try {
+    url = new URL(p.baseUrl);
+  } catch {
+    throw new Error(`Provider '${name}': baseUrl is not a valid URL: ${p.baseUrl}`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`Provider '${name}': baseUrl must be http(s), got ${url.protocol}//`);
+  }
+  if (!ENV_VAR_NAME_RE.test(p.authTokenEnv)) {
+    throw new Error(
+      `Provider '${name}': authTokenEnv must be an env var name (A-Z, 0-9, _), got '${p.authTokenEnv}'`,
+    );
+  }
+  for (const key of Object.keys(p.modelMap ?? {})) {
+    if (!MODEL_MAP_KEYS.includes(key as typeof MODEL_MAP_KEYS[number])) {
+      throw new Error(
+        `Provider '${name}': unknown modelMap alias '${key}'. Valid: ${MODEL_MAP_KEYS.join(", ")}`,
+      );
+    }
+  }
+  for (const host of p.egressHosts ?? []) {
+    if (!host || /\s|\//.test(host)) {
+      throw new Error(
+        `Provider '${name}': egressHosts entries must be bare hostnames, got '${host}'`,
+      );
+    }
+  }
 }
 
 export type LogsMode = "pretty" | "raw";
@@ -113,6 +195,7 @@ export interface GardenConfig {
   projects: Record<string, ProjectConfig>;
   plots?: Record<string, PlotConfig>;
   claudeProfiles?: Record<string, ClaudeProfile>;
+  providers?: Record<string, ProviderProfile>;
   logs?: LogsConfig;
   autoContinue?: Partial<AutoContinueConfig>;
 }
@@ -187,6 +270,55 @@ export function tryResolveClaudeProfile(
   } catch {
     return null;
   }
+}
+
+export function resolveProvider(
+  project: Pick<ProjectConfig, "provider">,
+  config?: GardenConfig,
+): ResolvedProvider | null {
+  const name = project.provider;
+  if (!name) return null;
+  const cfg = config ?? loadConfig();
+  const provider = cfg.providers?.[name];
+  if (!provider) {
+    throw new Error(
+      `Project references unknown provider '${name}'. Run 'garden provider add ${name}' or change the project config.`,
+    );
+  }
+  assertValidProvider(name, provider);
+  return {
+    ...provider,
+    name,
+    label: provider.label ?? name,
+  };
+}
+
+// Mirrors tryResolveClaudeProfile: launch paths (dashboard attach, resume,
+// bounce) must not abort wholesale on a hand-broken config entry, so they
+// fall back to the first-party Anthropic path. `garden config <project>
+// provider` validates at set time, which makes this fallback unreachable
+// through the CLI.
+export function tryResolveProvider(
+  project: Pick<ProjectConfig, "provider">,
+  config?: GardenConfig,
+): ResolvedProvider | null {
+  try {
+    return resolveProvider(project, config);
+  } catch {
+    return null;
+  }
+}
+
+// True when at least one registered project runs on the first-party
+// Anthropic path (no `provider` key) — i.e. the Claude OAuth usage meter
+// has something to meter. A provider-only fleet must not poll the OAuth
+// usage endpoint or render quota bars that describe nothing.
+// Zero projects counts as metered: a fresh install defaults to Anthropic.
+export function anyAnthropicMeteredProject(config?: GardenConfig): boolean {
+  const cfg = config ?? loadConfig();
+  const projects = Object.values(cfg.projects);
+  if (projects.length === 0) return true;
+  return projects.some((p) => !p.provider);
 }
 
 export function loadConfig(): GardenConfig {

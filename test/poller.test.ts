@@ -28,6 +28,9 @@ vi.mock("node:fs", () => ({
 vi.mock("../src/config.js", () => ({
   tryGetProject: vi.fn(() => ({ path: "/repo/myproject", checks: null })),
   tryResolveClaudeProfile: vi.fn(() => null),
+  tryResolveProvider: vi.fn(() => null),
+  anyAnthropicMeteredProject: vi.fn(() => true),
+  ENV_VAR_NAME_RE: /^[A-Z_][A-Z0-9_]*$/,
   loadConfig: vi.fn(() => ({ projects: { myproject: { path: "/repo/myproject" } } })),
   SESSIONS_DIR: "/tmp/fake-sessions",
   getAutoContinueConfig: vi.fn(() => ({
@@ -489,6 +492,49 @@ describe("poll — working state", () => {
     // reviewer never got pinged, the worker wedged in `reviewing`, the merge
     // never happened, and post-merge auto-continue never fired.
     expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 60 * 60 * 1000);
+  });
+
+  // Provider-backed projects pin the reviewer to Opus on the Anthropic path:
+  // the reviewer is the safety net that makes a cheap worker model safe to
+  // try, so it must not inherit the account default. First-party projects
+  // keep the no-model-flag behavior (account default).
+  it("pins the reviewer model to opus when the project's workers run on a provider", async () => {
+    const { tryResolveProvider } = await import("../src/config.js");
+    vi.mocked(tryResolveProvider).mockReturnValueOnce({
+      name: "deepseek", label: "deepseek",
+      baseUrl: "https://api.deepseek.com/anthropic", authTokenEnv: "DEEPSEEK_API_KEY",
+    });
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", claudeStatus: "idle", pendingReviewAt: Date.now() }),
+    ]);
+
+    poll("myproject");
+
+    const reviewLaunch = vi.mocked(tmux).mock.calls.find(
+      c => c[0] === "new-window" && String(c[5]).includes("review"),
+    );
+    expect(reviewLaunch).toBeDefined();
+    expect(String(reviewLaunch![10])).toContain("--model opus");
+    // Pins the assumption mockReturnValueOnce relies on: launchReview
+    // resolves the provider exactly twice — first for the model pin (the
+    // call the Once stub feeds), then inside reviewerEnvPrefix (which gets
+    // the default null here). If this count changes, the Once stub is
+    // feeding the wrong consumer and the test needs restructuring.
+    expect(vi.mocked(tryResolveProvider).mock.calls.length).toBe(2);
+  });
+
+  it("adds no reviewer model flag for first-party projects (account default)", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", claudeStatus: "idle", pendingReviewAt: Date.now() }),
+    ]);
+
+    poll("myproject");
+
+    const reviewLaunch = vi.mocked(tmux).mock.calls.find(
+      c => c[0] === "new-window" && String(c[5]).includes("review"),
+    );
+    expect(reviewLaunch).toBeDefined();
+    expect(String(reviewLaunch![10])).not.toContain("--model");
   });
 });
 

@@ -13,7 +13,7 @@ import fs from "node:fs";
 import https from "node:https";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { SESSIONS_DIR } from "../config.js";
+import { SESSIONS_DIR, anyAnthropicMeteredProject } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import {
   isAccessTokenExpired,
@@ -604,6 +604,16 @@ function computeMeterFit(paneWidth: number | undefined): { barWidth: number; sho
 // pane auto-resizes by one row when it appears) keeps transient errors from
 // dominating the visual top of the pane.
 export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number): string {
+  // Provider-only fleet: the poller is gated off (startUsagePoller), so the
+  // snapshot would sit stale forever. Say why the meter is off instead of
+  // showing "loading…" indefinitely or bars describing nothing.
+  let metered = true;
+  try { metered = anyAnthropicMeteredProject(); } catch { /* config unavailable: keep meter */ }
+  if (!metered) {
+    const lines = ["", `${INDENT}${dim("claude usage  off — every project uses a provider")}`];
+    return lines.map(l => l + "\x1b[K").join("\n");
+  }
+
   const snap = readUsageSnapshot();
 
   if (!snap) {
@@ -779,6 +789,10 @@ export function formatDuration(ms: number): string {
 // won the claim.
 export function maybeRefreshUsage(gardenRunner: string): void {
   if (!shouldRefreshOnHook()) return;
+  // After the cooldown check (cheap snapshot read) so the hook path only
+  // pays a config read when a refresh would actually fire. Provider-only
+  // fleets never refresh — same gate as startUsagePoller.
+  try { if (!anyAnthropicMeteredProject()) return; } catch { /* config unavailable: refresh anyway */ }
   try {
     spawn("sh", ["-c", `${gardenRunner} dashboard _usage-refresh 2>/dev/null`], {
       detached: true,

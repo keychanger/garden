@@ -186,6 +186,8 @@ If the Stop hook still fails to count commits ahead of `origin/<pinned-base>` (e
 
 **claudeProfile**: Name of an alternate Claude Code config dir to use for this project's workers and reviewers. Profiles are registered globally under `claudeProfiles:` in `~/.garden/config.yml` (each entry has a `configDir` and optional display `label`). When set, every `claude` invocation for the project — workers, reviewers, resolvers, the prefix-`C` ad-hoc launcher — runs with `CLAUDE_CONFIG_DIR=<configDir>`, so Claude reads its credentials, settings, and history from that dir instead of `~/.claude`. Projects without `claudeProfile` use the personal default. Manage profiles with `garden claude-profile {list,add,remove,login}`. The usage meter is not split per profile: `/api/oauth/usage` aggregates by user identity, so two workspace tokens tied to one email return identical data. Per-workspace quota for the alternate plan, if any, is only visible from the org owner's admin dashboard.
 
+**provider**: Name of a model provider this project's WORKERS run on — an Anthropic-Messages-compatible backend (DeepSeek's `/anthropic` endpoint, a local Ollama, a gateway) the unchanged Claude Code harness reaches by env swap. Providers are registered globally under `providers:` in `~/.garden/config.yml` via `garden provider add <name> --base-url <url> --token-env <ENV_VAR> [--map opus=m1,sonnet=m2,haiku=m3] [--egress h1,h2]`. Worker launch commands get `ANTHROPIC_BASE_URL`, an `ANTHROPIC_AUTH_TOKEN="$<ENV_VAR>"` reference expanded at spawn time (the key never enters config or command lines), and `ANTHROPIC_DEFAULT_*_MODEL` from the model map; the sandbox allowlist gains the base-URL host plus any `--egress` extras. The key reaches panes through the tmux **session environment**: the server's own env is frozen at server start, so garden's operator-shell entry points (`provider add`, `config set provider`, dashboard create/attach, `workers new`, `auth status`) sync the key from the invoking shell via `tmux set-environment`, `workers new` refuses to spawn a provider worker whose key is in neither place, and `garden auth status` reports both locations (and syncs as it reads). Reviewer, resolver, and ci-fix agents deliberately ignore this key: `reviewerEnvPrefix` actively empties any inherited `ANTHROPIC_*` provider env so they stay on the first-party Anthropic path, and for provider-backed projects the reviewer is pinned to Opus — the strong reviewer is the safety net that makes cheap or experimental worker models safe to try. When *every* project has a provider, the Claude usage poller, the Stop-hook usage refresh, `garden usage`, and the meter pane switch off with an explanatory line. Applies to newly created or bounced workers; live panes keep their pinned env. See `docs/MULTI-MODEL.md`.
+
 ### Merge Handling
 After a review passes, workers enter the `merge-pending` state. The merge queue processes one worker at a time per project (ordered by `mergePendingAt` timestamp):
 
@@ -317,8 +319,10 @@ garden unfocus <plot>              # Exclude plot from the ⌥p cycle
 garden reorder <plot> <position>   # Move plot within the ⌥p cycle
 garden claude-profile [list|add|remove|login]
                                    # Manage alternate Claude config dirs (per-project plan)
+garden provider [list|add|remove]  # Manage model providers (Anthropic-compatible backends
+                                   # for workers; reviewers stay on Anthropic)
 garden login [profile]             # Re-authenticate Claude (personal, or a profile)
-garden auth status                 # Show credential presence, expiry, and displacement
+garden auth status                 # Show credential presence, expiry, and displacement (and provider env vars)
 garden usage [refresh]             # Show or force-refresh the Claude usage meter
 ```
 

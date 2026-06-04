@@ -24,12 +24,17 @@ vi.mock("node:child_process", () => ({
 
 vi.mock("../src/session.js", () => ({
   DASHBOARD_SESSION: "garden-dashboard",
+  dashboardExists: vi.fn(() => false),
 }));
 
 vi.mock("../src/config.js", () => ({
   logColorKeyForProject: vi.fn(() => null),
   getProject: vi.fn(() => ({ name: "myproject", path: "/repo/myproject" })),
   tryGetProject: vi.fn(() => ({ name: "myproject", path: "/repo/myproject" })),
+  tryResolveClaudeProfile: vi.fn(() => null),
+  tryResolveProvider: vi.fn(() => null),
+  anyAnthropicMeteredProject: vi.fn(() => true),
+  ENV_VAR_NAME_RE: /^[A-Z_][A-Z0-9_]*$/,
   loadConfig: vi.fn(() => ({ projects: {}, plots: {} })),
   plotsMap: vi.fn(() => ({})),
   SESSIONS_DIR: "/tmp/fake-sessions",

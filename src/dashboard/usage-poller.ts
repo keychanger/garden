@@ -9,6 +9,7 @@ import { DASHBOARD_SESSION } from "../session.js";
 import { usagePollerWindowName } from "./window-names.js";
 import { decideRefresh, readUsageSnapshot, refreshUsage } from "./usage.js";
 import { refreshDashboard } from "./header.js";
+import { anyAnthropicMeteredProject } from "../config.js";
 import { log } from "./log.js";
 
 export async function runUsagePollerLoop(): Promise<void> {
@@ -37,6 +38,18 @@ function sleep(ms: number): Promise<void> {
 // -----------------------------------------------------------------------------
 
 export function startUsagePoller(gardenRunner: string): void {
+  // A provider-only fleet has nothing for the OAuth usage meter to measure;
+  // spawning the poller would just 401 against api.anthropic.com every
+  // backoff window. The pane renders an explicit "off" line instead
+  // (renderUsagePane), so the absence is visible rather than mysterious.
+  // Same defensive try/catch as the render/hook gate sites: a config read
+  // failure keeps the meter on rather than killing the caller.
+  try {
+    if (!anyAnthropicMeteredProject()) {
+      log.info("usage-poller", "skipped: every project uses a provider; no Anthropic meter to poll");
+      return;
+    }
+  } catch { /* config unavailable: keep the poller */ }
   const window = usagePollerWindowName();
   if (windowExists(window)) return;
   // Single long-running process. The tmux window being killed (reset or exit)

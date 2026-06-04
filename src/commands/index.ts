@@ -22,6 +22,7 @@ import { bounce } from "./bounce.js";
 import { pause } from "./pause.js";
 import { resume } from "./resume.js";
 import { claudeProfile } from "./claude-profile.js";
+import { provider } from "./provider.js";
 import { login } from "./login.js";
 import { auth } from "./auth.js";
 import { usage } from "./usage.js";
@@ -60,6 +61,7 @@ export const commands: Record<string, Command> = {
   pause,
   resume,
   "claude-profile": claudeProfile,
+  provider,
   login,
   auth,
   usage,

@@ -8,6 +8,7 @@ Garden is a CLI orchestrator for managing interactive Claude Code sessions acros
 - `rules.md` — coding rules loaded into every Claude session (commit/test/scope discipline)
 - `WORKFLOWS.md` — workflow registry design, "how to add a new workflow", and trellis/grow workflow specs
 - `docs/STATUS.md` — worker status state machine (spec)
+- `docs/MULTI-MODEL.md` — multi-model / multi-harness architecture (Phase 1 provider layer shipped; later phases design targets)
 - `docs/TRACKS.md` — multi-track / promotion pipeline (design target, no code yet)
 - `docs/` — additional design docs and behavioral specs; see `docs/README.md` for the index
 
@@ -51,9 +52,10 @@ npm test               # vitest unit + integration; tsc --noEmit
 
 Use `garden <cmd> --help` for flag-level detail. High-level groupings:
 
-- **Projects**: `add` / `create` / `remove` / `config` (keys: `checks`, `postMerge`, `sandboxDomains`, `claudeProfile`, `logColor`, `requireCiSuccess`). `register`/`unregister` aliased.
+- **Projects**: `add` / `create` / `remove` / `config` (keys: `checks`, `postMerge`, `sandboxDomains`, `claudeProfile`, `provider`, `logColor`, `requireCiSuccess`). `register`/`unregister` aliased.
 - **Plots**: `plot` (alias `p`) — named ordered subsets of projects (max 9). `⌥1–⌥9` index into the active plot, `⌥p` cycles focused plots. `focus` / `unfocus` / `reorder` toggle and order ⌥p inclusion. Storage: `~/.garden/config.yml`.
 - **Claude profiles**: `claude-profile add|login|list|remove`. Per-project `claudeProfile` config injects `CLAUDE_CONFIG_DIR` for that project's worker / reviewer / resolver. macOS Keychain footgun: every Claude `/login` overwrites one shared entry, so always re-auth via `garden login` (it strips `CLAUDE_CONFIG_DIR` and captures Keychain → file for profiles).
+- **Providers**: `provider add|list|remove` — Anthropic-Messages-compatible backends (DeepSeek `/anthropic`, local Ollama, gateways) that a project's WORKERS reach via env swap (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN="$<tokenEnv>"`, model aliases via `ANTHROPIC_DEFAULT_*_MODEL`). Set per project with `garden config <project> provider <name>`; applies to new/bounced workers. The key travels via the tmux *session env* (the server env is frozen at start): operator-shell commands sync it with `set-environment`, `workers new` refuses to spawn without it, and `garden auth status` reports shell + session presence (syncing as it reads). Reviewer/resolver/ci-fix never use the provider — `reviewerEnvPrefix` empties inherited `ANTHROPIC_*` env and the reviewer is pinned to Opus for provider-backed projects. Provider-only fleets switch the usage meter/poller/`garden usage` off with an explanatory line. API keys are env-var references — no login flow. Spec: `docs/MULTI-MODEL.md`.
 - **Auth**: `login [profile]`, `auth status` (presence/expiry/Keychain displacement diagnostic).
 - **Workers**: `whoami`, `kick`, `bounce`, `pause`, `resume`, `health [--fix]`, `logs [-w <worker>]`. Workers can self-identify via `$GARDEN_WORKER` / `$GARDEN_BRANCH` / `$GARDEN_BASE_BRANCH` / `$GARDEN_PROJECT`.
 - **Trellis**: `trellis list|show|new|status|amend|resume|retire|revive`; plant via `workers new <project> --workflow trellis --trellis <name> [--model opus|sonnet]` or the `⌥⇧N` workflow picker (`(t)` row). Spec: `WORKFLOWS.md` § "Trellis workflow".

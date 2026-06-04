@@ -24,6 +24,17 @@ async function loginPersonal(): Promise<void> {
 
 async function loginProfile(name: string): Promise<void> {
   const cfg = loadConfig();
+
+  // Providers are API-key-backed: there is no login flow to run. Point the
+  // operator at the env var instead of failing with "unknown profile".
+  const providerEntry = cfg.providers?.[name];
+  if (providerEntry) {
+    console.log(`'${name}' is a provider (API-key auth) — there is no login flow.`);
+    console.log(`Export ${providerEntry.authTokenEnv} in the shell that starts garden; sessions reference it by name.`);
+    console.log(`Check presence with: garden auth status`);
+    return;
+  }
+
   const profile = cfg.claudeProfiles?.[name];
   if (!profile) {
     throw new Error(`Unknown profile: ${name}. Add it with 'garden claude-profile add ${name}'.`);

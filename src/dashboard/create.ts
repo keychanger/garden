@@ -36,7 +36,7 @@ import {
   GROW_SKILL_CONTENT, GROW_SKILL_DIRNAME, GROW_SKILL_FILENAME,
   installClaudeSkills,
 } from "./skills.js";
-import { claudeEnvPrefix } from "./claude-env.js";
+import { workerEnvPrefix, syncAllProviderTokens } from "./claude-env.js";
 import { gardenWindowName, shellWindowName as shellWin, workerWindowName as workerWin, isGardenWindow } from "./window-names.js";
 
 const DASHBOARD_COLS = 250;
@@ -195,6 +195,11 @@ export function ensureDashboard(): void {
     const healed = validateAndHeal(state);
     writeDashState(healed);
 
+    // Re-push provider API keys into the session env on every attach — this
+    // process has the operator's shell env; the running server's env was
+    // frozen at its creation.
+    try { syncAllProviderTokens(loadConfig()); } catch { /* config unavailable */ }
+
     // Heal sessions from older builds that left history-limit at tmux's 2000-line default.
     try { tmux("set-option", "-t", DASHBOARD_SESSION, "history-limit", "1000000"); } catch { /* ignore */ }
 
@@ -308,6 +313,10 @@ export function ensureDashboard(): void {
     "new-session", "-d", "-s", DASHBOARD_SESSION, "-n", "main", "-c", cwd,
     "-x", cols, "-y", rows
   );
+
+  // The fresh server inherited this process's env, but set-environment makes
+  // the provider keys survive server-env quirks and later config edits.
+  syncAllProviderTokens(config);
 
   tmux("set-option", "-t", DASHBOARD_SESSION, "set-titles", "on");
   tmux("set-option", "-t", DASHBOARD_SESSION, "set-titles-string", "garden");
@@ -603,7 +612,7 @@ export function buildWorkerCommand(projectName: string, projectPath: string, ses
   installClaudeHooks(projectPath, project);
   const gardenRunner = resolveGardenRunner();
   const contextFile = writeContextFile(projectName, projectPath);
-  const envPrefix = claudeEnvPrefix(project);
+  const envPrefix = workerEnvPrefix(project);
   const claudeCmd = `${envPrefix}claude --rc --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${claudeCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
@@ -614,7 +623,7 @@ export function buildResumeCommand(projectName: string, projectPath: string, ses
   installClaudeHooks(projectPath, project);
   const gardenRunner = resolveGardenRunner();
   const contextFile = writeContextFile(projectName, projectPath);
-  const envPrefix = claudeEnvPrefix(project);
+  const envPrefix = workerEnvPrefix(project);
   const claudeCmd = `${envPrefix}claude --rc --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${claudeCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
@@ -658,7 +667,7 @@ export function buildWorktreeWorkerCommand(
     { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow },
   );
   const project = resolveProjectForHooks(projectName, projectPath);
-  const envPrefix = claudeEnvPrefix(project);
+  const envPrefix = workerEnvPrefix(project);
   const modelFlag = opts?.model ? ` --model ${shellEscape(opts.model)}` : "";
   const claudeCmd = `${envPrefix}claude --rc${modelFlag} --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
   return `${claudeCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
@@ -758,7 +767,7 @@ export function buildWorktreeBootstrapScript(
   const growSkillLit = shellEscape(GROW_SKILL_CONTENT);
   const growSkillDirnameLit = shellEscape(GROW_SKILL_DIRNAME);
   const growSkillFilenameLit = shellEscape(GROW_SKILL_FILENAME);
-  const envPrefix = claudeEnvPrefix(project);
+  const envPrefix = workerEnvPrefix(project);
   const modelFlag = opts?.model ? ` --model ${shellEscape(opts.model)}` : "";
 
   const base = baseBranch ?? "main";
@@ -967,7 +976,7 @@ export function buildWorktreeResumeCommand(
   );
   const gardenRunner = resolveGardenRunner();
   const project = resolveProjectForHooks(projectName, projectPath);
-  const envPrefix = claudeEnvPrefix(project);
+  const envPrefix = workerEnvPrefix(project);
   const identityExports = workerEnvExports(projectName, workerName, branchName, baseBranch);
   const modelFlag = opts?.model ? ` --model ${shellEscape(opts.model)}` : "";
   const claudeCmd = `${envPrefix}claude --rc${modelFlag} --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;

@@ -30,6 +30,9 @@ vi.mock("../src/config.js", () => ({
   loadConfig: vi.fn(() => ({ projects: { myproject: { path: "/repo/myproject" } } })),
   tryGetProject: vi.fn(() => ({ path: "/repo/myproject" })),
   tryResolveClaudeProfile: vi.fn(() => null),
+  tryResolveProvider: vi.fn(() => null),
+  anyAnthropicMeteredProject: vi.fn(() => true),
+  ENV_VAR_NAME_RE: /^[A-Z_][A-Z0-9_]*$/,
   getFocusedProjectNames: vi.fn(() => ["myproject"]),
   SESSIONS_DIR: "/tmp/fake-sessions",
 }));
@@ -38,6 +41,26 @@ vi.mock("../src/rules.js", () => ({
   buildRulesContext: vi.fn(() => "rules"),
   buildWorktreeRules: vi.fn(() => "worktree rules"),
 }));
+
+describe("provider env in worker commands", () => {
+  it("prepends the provider env ahead of the claude binary", async () => {
+    const { tryResolveProvider } = await import("../src/config.js");
+    vi.mocked(tryResolveProvider).mockReturnValue({
+      name: "deepseek", label: "deepseek",
+      baseUrl: "https://api.deepseek.com/anthropic",
+      authTokenEnv: "DEEPSEEK_API_KEY",
+      modelMap: { opus: "deepseek-v4-pro" },
+    });
+    const { buildWorkerCommand } = await import("../src/dashboard/create.js");
+    const cmd = buildWorkerCommand("myproject", "/repo/myproject", "sess-1");
+    vi.mocked(tryResolveProvider).mockReturnValue(null);
+    expect(cmd).toContain("ANTHROPIC_BASE_URL=");
+    expect(cmd).toContain('ANTHROPIC_AUTH_TOKEN="$DEEPSEEK_API_KEY"');
+    expect(cmd).toContain("ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro");
+    // The env assignments must precede the binary they configure.
+    expect(cmd.indexOf("ANTHROPIC_BASE_URL=")).toBeLessThan(cmd.indexOf("claude --rc"));
+  });
+});
 
 vi.mock("../src/dashboard/state.js", () => ({
   readDashState: vi.fn(() => ({
