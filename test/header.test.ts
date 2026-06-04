@@ -437,25 +437,6 @@ describe("updateHeaderVar", () => {
     expect(leftCall![4]).toContain("#[bold]");
   });
 
-  it("prefixes the active project with its log-color dot in @garden_left", () => {
-    vi.mocked(logColorKeyForProject).mockReturnValue("orange");
-    updateHeaderVar();
-
-    const calls = vi.mocked(tmux).mock.calls;
-    const leftCall = calls.find(c => c[0] === "set-option" && c[3] === "@garden_left");
-    // orange = 256-color index 208; reset before the bold project name.
-    expect(leftCall![4]).toContain("#[fg=colour208]●#[default] #[bold]garden");
-  });
-
-  it("omits the dot from @garden_left when the project has no log color", () => {
-    vi.mocked(logColorKeyForProject).mockReturnValue(null);
-    updateHeaderVar();
-
-    const calls = vi.mocked(tmux).mock.calls;
-    const leftCall = calls.find(c => c[0] === "set-option" && c[3] === "@garden_left");
-    expect(leftCall![4]).not.toContain("●");
-  });
-
   it("sets @garden_right with version string", () => {
     updateHeaderVar();
 

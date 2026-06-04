@@ -49,13 +49,6 @@ vi.mock("../src/config.js", () => {
       const p = cfg.projects[name];
       return p ? { ...p, name } : null;
     }),
-    // Mirrors the real lookup: reserved green for garden, else the project's
-    // assigned logColor key.
-    logColorKeyForProject: vi.fn((name: string, config?: unknown) => {
-      if (name === "garden") return "green";
-      const cfg = (config ?? loadConfig()) as { projects: Record<string, { logColor?: string }> };
-      return cfg.projects[name]?.logColor ?? null;
-    }),
     SESSIONS_DIR: "/tmp/fake-sessions",
   };
 });
@@ -412,23 +405,4 @@ describe("renderQuickStatus", () => {
     expect(result).toContain("beta");
   });
 
-  it("renders a log-color dot after each project name", () => {
-    vi.mocked(loadConfig).mockReturnValue({
-      projects: { alpha: { path: "/alpha", logColor: "cyan" }, beta: { path: "/beta", logColor: "orange" } },
-    });
-    vi.mocked(getWorkers).mockReturnValue([]);
-    const result = renderQuickStatus({ ...state, activeProject: "alpha" });
-    // cyan = 256-color index 39, orange = 208; dot follows the project name.
-    expect(result).toMatch(/alpha\x1b\[0m \x1b\[38;5;39m●\x1b\[0m/);
-    expect(result).toMatch(/beta \x1b\[38;5;208m●\x1b\[0m/);
-  });
-
-  it("omits the dot for a project without an assigned logColor", () => {
-    vi.mocked(loadConfig).mockReturnValue({
-      projects: { alpha: { path: "/alpha" } },
-    });
-    vi.mocked(getWorkers).mockReturnValue([]);
-    const result = renderQuickStatus({ ...state, activeProject: "alpha" });
-    expect(result).not.toContain("●\x1b[0m");
-  });
 });

@@ -115,11 +115,8 @@ function formatLeft(
   const repoPath = projectConfig?.path ?? "";
   const branch = repoPath ? (currentBranch(repoPath) ?? "main") : "main";
   const plotPrefix = activePlot ? `${activePlot} #[fg=colour244]\u203a#[default] ` : "";
-  const colorKey = logColorKeyForProject(activeProject, config);
-  const tmuxColor = colorKey ? logColorTmux(colorKey) : null;
-  const dot = tmuxColor ? `#[fg=${tmuxColor}]\u25cf#[default] ` : "";
   const trellisSummary = formatTrellisSummary(activeProject);
-  return ` ${plotPrefix}${dot}#[bold]${activeProject}#[default]  ${branch}${trellisSummary} `;
+  return ` ${plotPrefix}#[bold]${activeProject}#[default]  ${branch}${trellisSummary} `;
 }
 
 // Append a compact trellis summary to the left status segment when the
