@@ -165,10 +165,13 @@ A worker never returns to `ready` once it has received its first input.
 ## How transitions are detected
 
 Every transition above is delivered by an identifiable event from a
-specific source. **There is no recurring tick. There is no fallback
-poll. There is no "let's check just in case."** The poller is a pure
-dispatcher: it wakes when an event arrives, runs one unit of work, and
-goes back to sleep.
+specific source. **No recurring tick drives a transition; no fallback
+poll discovers state; there is no "let's check just in case."** The
+poller is a pure dispatcher: it wakes when an event arrives, runs one
+unit of work, and goes back to sleep. (The single recurring tick in the
+system — the poke-only liveness watchdog — only re-delivers a lost poke;
+it discovers nothing and transitions nothing. See "Scheduled wake-ups"
+and invariant 6.)
 
 ### Event sources
 
