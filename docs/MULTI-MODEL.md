@@ -10,10 +10,15 @@ requires touching the dispatcher, pollers, or state machine.
 
 ## Status
 
-Forward-looking design for Phases 2-5; **Phase 1 (the provider layer) is
-implemented** — `garden provider`, the `provider` project-config key,
-worker env injection, sandbox egress union, reviewer Opus pinning, and
-usage-meter gating are live. Commissioned 2026-06-03 from a full coupling
+Forward-looking design for Phases 3-5; **Phases 1 and 2 are
+implemented**. Phase 1 (the provider layer): `garden provider`, the
+`provider` project-config key, worker env injection, sandbox egress
+union, reviewer Opus pinning, and usage-meter gating. Phase 2 (the
+neutral core): the `agentStatus`/`lastEventAt` rename with registry
+migration, the normalized lifecycle event vocabulary on
+`WorkflowHookHandlers`, opaque model strings end to end with `--model`
+accepted on every workflow, and meter-neutral gate/fallback readers.
+Commissioned 2026-06-03 from a full coupling
 audit of the codebase (~150 coupling points across 8 subsystems) plus a
 landscape survey of harnesses, providers, and agent protocols, with
 load-bearing external claims independently re-verified against primary
@@ -38,6 +43,25 @@ original sketch:
 - Reviewer pinning is unconditional, not opt-out: provider-backed
   projects always get an Anthropic reviewer pinned to Opus. The
   per-project relax knob waits for a concrete need.
+
+Where Phase 2's implementation deliberately settled or trimmed the
+original sketch:
+
+- The per-worker `--provider` flag on `workers new` moved to Phase 3: a
+  per-worker provider must thread through sandbox generation, resume,
+  bounce, loop respawn, and the reviewer pin together with
+  `WorkerEntry.harness`, and a half-threaded override that silently
+  reverts to the project provider on respawn would be worse than
+  project-level-only. Model intent tiers (workhorse/quality) likewise
+  wait for the adapter interface they parameterize.
+- The `Turn[]` transcript seam needed no new code: `resolveTranscriptPath`
+  + `readConversation → Turn[]` in `conversation.ts` are already the
+  typed, exported contract; Phase 3 makes them adapter-supplied.
+- The usage pane still renders Anthropic's three fixed meter rows; the
+  neutral `Meter[]` accessor (`snapshotMeters`) now feeds the
+  auto-continue gate, but the render path keeps its fixed layout until a
+  second meter source exists (the pane height is part of the layout
+  contract).
 
 ## The two axes
 
@@ -99,7 +123,7 @@ enforces this structurally in profile validation.
 Distilled from the audit, in descending order of how load-bearing they are:
 
 1. **A turn-end signal.** The Stop hook is the *autonomous* entry point
-   to the review/merge pipeline (`hooks/default.ts` `onStop` →
+   to the review/merge pipeline (`hooks/default.ts` `onTurnEnded` →
    commits-ahead check → `pendingReviewAt` → FIFO poke). Operator
    overrides exist (`garden kick`, trellis plant, internal re-review
    re-entries also set `pendingReviewAt`), but a worker that never
@@ -142,7 +166,7 @@ semantics):
 | Subsystem | Chokepoints | Dominant severity |
 |---|---|---|
 | Session launch | Five sibling builders in `create.ts` (`buildWorkerCommand`, `buildResumeCommand`, `buildWorktreeWorkerCommand`, `buildWorktreeBootstrapScript`, `buildWorktreeResumeCommand`) all string-concatenate the same `claude --rc [--session-id\|--resume] ... --append-system-prompt-file ...` shape | adapter-method |
-| Hook/status engine | `buildSettingsJson` (`create.ts:48-104`) binds six Claude hook events; `hook-dispatcher.ts` routes garden's already-shortened event names (`stop`, `prompt`, `posttooluse`, ..., plus a seventh, `notification`); `claudeStatus` written by the hook handlers for in-session transitions, by the tmux pane-died handler and `validate.ts` reconciliation for `exited`, and by the bounce/attach resume paths for `idle` (because `--resume` does not fire SessionStart) | **architectural** |
+| Hook/status engine | `buildSettingsJson` (`create.ts:48-104`) binds six Claude hook events; `hook-dispatcher.ts` routes garden's already-shortened event names (`stop`, `prompt`, `posttooluse`, ..., plus a seventh, `notification`); `agentStatus` written by the hook handlers for in-session transitions, by the tmux pane-died handler and `validate.ts` reconciliation for `exited`, and by the bounce/attach resume paths for `idle` (because `--resume` does not fire SessionStart) | **architectural** |
 | Headless agents | `launchHeadlessAgent` (`headless-agent.ts`) — already a single clean primitive, but hardcodes the `claude -p` contract and `"opus" \| "sonnet"` | adapter-method |
 | Transcript/history | `conversation.ts` parses Claude's JSONL envelope, content blocks, and tool-name vocabulary; the seam is two-part: `resolveTranscriptPath(entry)` (derives `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`) + `readConversation(path) → Turn[]` | adapter-method |
 | Credentials/usage | `credentials.ts` models every credential as a Claude OAuth blob (Keychain entry, refresh endpoint); `usage.ts` parses Anthropic's `five_hour`/`seven_day`/`seven_day_sonnet` buckets; consumed by the auto-continue gate (`poller-merge.ts checkUsageThreshold`) and trellis model fallback (`trellis-model.ts`); `usage-poller.ts` runs a dedicated hidden window polling Anthropic's usage endpoint | **architectural** |
@@ -342,7 +366,7 @@ Vocabulary changes that make the core harness-agnostic without changing
 behavior. All are mechanical, all need the `readRegistry` legacy-shape
 migration treatment:
 
-- **`claudeStatus` → `agentStatus`** (and `lastHookAt` → `lastEventAt`).
+- **`claudeStatus` → `agentStatus`** (and `lastHookAt` → `lastEventAt`) — applied.
   The vocabulary `{loading, ready, working, asking, idle, exited}` is
   already harness-neutral; only the name and the writers are
   Claude-shaped. Writers to re-key: the hook handlers, the pane-died
@@ -365,20 +389,19 @@ migration treatment:
   translation is what `hook-entry.ts`/`hook-dispatcher.ts` already do
   (the settings.json command strings shorten the names before the
   dispatcher sees them).
-- **Opaque model strings + intent tiers.** Every `"opus" | "sonnet"`
-  union (`workflows/types.ts`, `registry.ts`, `create.ts`,
-  `trellis-model.ts`, `commands/workers.ts`) widens to `string`,
-  validated by the adapter/provider. Workflows declare model *intent* —
-  `workhorse` (cheap default) vs `quality` (pinned reviewer) — and the
-  provider's `modelMap` resolves intent to a concrete model at launch
-  time (resolution is per-launch, carried in `LaunchOptions`, not baked
-  into session env alone). Trellis's Sonnet-exhaustion fallback
-  generalizes to: "preferred model unavailable → escalate to fallback
-  model | pause", with availability supplied by the provider's meter
-  source (Anthropic: sonnet bucket; meterless providers: always
-  available). This phase also lifts the `commands/workers.ts`
-  restriction that rejects `--model` outside trellis, and adds
-  `--provider` (and later `--harness`) flags to `workers new`.
+- **Opaque model strings.** Every `"opus" | "sonnet"` union
+  (`workflows/types.ts`, `registry.ts`, `create.ts`, `trellis-model.ts`,
+  `commands/workers.ts`) widens to `string`; `--model` is accepted on
+  every workflow (persisted to `WorkerEntry.model` for default/grow,
+  `trellis.workerModel` for vines, threaded through bounce/resume/
+  respawn). Trellis's Sonnet-exhaustion fallback engages only for the
+  literal "sonnet" alias and is skipped entirely for provider-backed
+  projects (the Anthropic meter says nothing about the backend the
+  alias maps to there). Model *intent* tiers — `workhorse` (cheap
+  default) vs `quality` (pinned reviewer), resolved per launch through
+  the provider's `modelMap` — and the per-worker `--provider`/
+  `--harness` flags are Phase 3 work alongside the adapter interface
+  they parameterize.
 - **`Turn[]` as the transcript contract.** The seam in `conversation.ts`
   is two-part and both halves become adapter-supplied:
   `resolveTranscriptPath(entry)` (path derivation) and
@@ -474,7 +497,8 @@ Notes pinned down by the audit:
   `allocateSessionId`/`recoverSessionId` so both contracts fit.
 - **Where identity lives**: `WorkerEntry.harness?: string` (flat,
   defaulted to `"claude-code"`, exactly like the existing `workflow`
-  field), `WorkerEntry.provider?: string`, `WorkerEntry.model?: string`.
+  field) and `WorkerEntry.provider?: string` (`WorkerEntry.model` already
+  landed in Phase 2 with the per-worker `--model` override).
   Per-project defaults: `garden config <project> harness` / `provider` /
   `model`. Per-worker override at `workers new`. Anything a harness
   accumulates per worker goes in a sub-object (`entry.codex?: {...}`)
@@ -528,7 +552,7 @@ to newly created or bounced workers only; live workers keep their pinned
 contract until recreated — the same staleness model the dashboard
 already has for rebuilds. The Phase 2 rename pairs the `readRegistry`
 migration with a transition window in which live workers still writing
-`claudeStatus` are read correctly. Rollback at every phase is "remove
+`agentStatus` are read correctly. Rollback at every phase is "remove
 the config key": running workers are unaffected and new workers fall
 back to the Claude-only defaults.
 
@@ -557,21 +581,28 @@ through the full review/merge cycle with a Claude reviewer, and the
 meter pane is honest about what it can't see. Zero behavior change for
 unconfigured projects.
 
-**Phase 2 — neutral core.** `claudeStatus` → `agentStatus` rename with
-registry migration and live-worker tolerance; normalized lifecycle event
-vocabulary between dispatcher and workflows; opaque model strings +
-intent tiers replacing the `"opus" | "sonnet"` unions; neutral `Meter[]`
-render seam plus meter-neutral auto-continue gate and trellis fallback;
-`--model`
-restriction lift + `--provider` flag in `workers new`; trellis
-fallback/auto-continue gate re-read against neutral `Meter[]`; `Turn[]`
-seam formalized. Pure refactor otherwise, bit-for-bit behavior.
+**Phase 2 — neutral core. SHIPPED.** `claudeStatus` → `agentStatus`
+rename with registry migration (lazy migrate-on-read, same pattern as
+the trellis sub-object migration); normalized lifecycle event vocabulary
+on `WorkflowHookHandlers` (`onTurnEnded` / `onPromptSubmitted` /
+`onBlockedOnOperator` / `onToolActivity`), with the dispatcher's wire-name
+switch as the Claude adapter's translation; opaque model strings
+replacing the `"opus" | "sonnet"` unions, `--model` accepted on every
+workflow and persisted (`WorkerEntry.model` for default/grow,
+`trellis.workerModel` for vines) through respawn/bounce/resume; the
+`snapshotMeters` neutral accessor feeding a provider-aware auto-continue
+gate and trellis fallback (both inert for provider-backed work). The
+per-worker `--provider` flag and model intent tiers moved to Phase 3 —
+see the Status deviations. Pure refactor otherwise, bit-for-bit
+behavior.
 
 **Phase 3 — harness adapter extraction.** `HarnessAdapter` interface +
 registry; `claude-code` adapter as sole implementation; collapse the five
 launch builders; route `launchHeadlessAgent`, `installClaudeHooks`,
 transcript reading, prompt delivery, and credential env through the
-adapter; `WorkerEntry.harness` field. The workflows-registry refactor is
+adapter; `WorkerEntry.harness` field, plus the per-worker `--provider`
+override and model intent tiers deferred from Phase 2 (they thread
+through the same launch/resume/bounce/respawn sites the adapter owns). The workflows-registry refactor is
 the precedent: same shape, same bit-for-bit bar, same test strategy
 (`test/workflows.test.ts` analog plus integration tests on real fs/git).
 

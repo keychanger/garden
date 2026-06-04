@@ -195,7 +195,7 @@ undermine the entire design. Do not split this phase.
      primitive `bounceWorker` uses, but the inline command is
      `claude --rc --session-id <new-uuid> --append-system-prompt-file
      <contextFile>` (no `--resume`). The new sessionId is persisted via
-     `updateWorkerFields(..., { sessionId: newId, claudeStatus: "loading" })`
+     `updateWorkerFields(..., { sessionId: newId, agentStatus: "loading" })`
      so subsequent `garden bounce` uses the latest. Reuse
      `buildWorktreeWorkerCommand` for the cold-start invocation; rewrite
      `.claude/settings.json` first via `installClaudeHooks` so a rebuilt
@@ -210,7 +210,7 @@ undermine the entire design. Do not split this phase.
      (`<worktree>/.garden/trellis-lessons.md` if present — file size cap
      is v1.5, no eviction yet).
   3. Sends the prompt via the same `seedWorker` polling primitive
-     (`poll until claudeStatus !== "loading"`, then send keys, deadline
+     (`poll until agentStatus !== "loading"`, then send keys, deadline
      90s). Reuse the existing `seedWorker` function in `continue.ts` —
      write the message to a temp file and call it.
 - `src/dashboard/skills.ts` — bundle the `trellis-author` skill alongside

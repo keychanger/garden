@@ -59,13 +59,13 @@ export const TRANSIENT_REVIEW_BACKOFFS_MS: readonly number[] = [
   300_000,   // 5m
 ];
 
-// Threshold past which `claudeStatus="working"` is treated as stale in
+// Threshold past which `agentStatus="working"` is treated as stale in
 // handleWorking — i.e. the worker's Claude is hung (sandbox-killed, network
 // died mid-stream, in-flight bug). Hooks fire on every tool use and on Stop,
 // so a healthy working Claude emits something well inside this window;
 // silence past the threshold means the status is no longer accurate.
 // Tuned conservative enough that a slow think-then-act turn won't trip it.
-export const STALE_CLAUDE_STATUS_MS = 15 * 60 * 1000;
+export const STALE_AGENT_STATUS_MS = 15 * 60 * 1000;
 
 const REVIEW_VERDICT_VOCAB = ["CLEAN", "FIXED", "FAILED"] as const;
 
@@ -99,28 +99,28 @@ export function handleWorking(
   if (entry.reviewWindowName && windowExists(entry.reviewWindowName)) return false;
 
   // Don't launch a review while Claude is mid-response. The Stop hook is
-  // what sets pendingReviewAt, so claudeStatus should already be "idle" by
+  // what sets pendingReviewAt, so agentStatus should already be "idle" by
   // the time we get here — this guard catches the race where a fresh
   // UserPromptSubmit landed between the Stop and the poller wake.
   //
   // Stale-status escape hatch: hooks fire on every tool use, so even a
   // long-running Claude turn emits something every few minutes. If
-  // claudeStatus has been pinned to "working" with no hook activity past
-  // STALE_CLAUDE_STATUS_MS, the worker's Claude is hung (crashed mid-stream,
+  // agentStatus has been pinned to "working" with no hook activity past
+  // STALE_AGENT_STATUS_MS, the worker's Claude is hung (crashed mid-stream,
   // sandbox-killed, etc.). Without this escape hatch, `garden kick` on a
   // failing worker whose Claude is stuck would re-arm pendingReviewAt but
   // the review would still never launch — exactly the wedged state the
   // operator hit. We log a warn so the staleness is visible.
-  if (entry.claudeStatus === "working") {
-    const stale = entry.lastHookAt !== undefined
-      && Date.now() - entry.lastHookAt >= STALE_CLAUDE_STATUS_MS;
+  if (entry.agentStatus === "working") {
+    const stale = entry.lastEventAt !== undefined
+      && Date.now() - entry.lastEventAt >= STALE_AGENT_STATUS_MS;
     if (!stale) return false;
-    log.warn("poller", "claudeStatus=working is stale; proceeding with review launch", {
+    log.warn("poller", "agentStatus=working is stale; proceeding with review launch", {
       worker: entry.name,
       data: {
         project: projectName,
-        lastHookAt: entry.lastHookAt,
-        ageMs: entry.lastHookAt ? Date.now() - entry.lastHookAt : null,
+        lastEventAt: entry.lastEventAt,
+        ageMs: entry.lastEventAt ? Date.now() - entry.lastEventAt : null,
       },
     });
   }
@@ -928,7 +928,7 @@ function launchReview(
   // (sessionstart/prompt/stop fired from the same worktree as the worker)
   // can be distinguished from worker hooks and short-circuited by the
   // hook handler. Without this, the reviewer's Stop hook would be treated
-  // as the worker's Stop hook and would (a) write claudeStatus="idle" for
+  // as the worker's Stop hook and would (a) write agentStatus="idle" for
   // the worker, and (b) poke the poller to start another review.
   //
   // Reviewer model: trellis pins to workflow.reviewerModel ("opus") per

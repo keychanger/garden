@@ -749,7 +749,7 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(call).toBeDefined();
     const script = call![1] as string;
     // Removing the registry entry (via _bootstrap-fail) prevents the orphan
-    // (claudeStatus="exited" + no worktree) that the ghost sweep can't drop.
+    // (agentStatus="exited" + no worktree) that the ghost sweep can't drop.
     expect(script).toContain('dashboard _bootstrap-fail myproject bold-ash');
     // exec $SHELL keeps the right-slot pane alive — exit 1 would let tmux
     // close it, leaving state.activePaneId stale and wedging park/swap.

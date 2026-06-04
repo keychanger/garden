@@ -172,7 +172,7 @@ export function loopAutoContinueAfterMerge(
   );
   updateWorkerFields(projectName, workerName, {
     sessionId: newSessionId,
-    claudeStatus: "loading",
+    agentStatus: "loading",
     // Clear pending continue scaffolding — the loop seed handles
     // changed-files inline rather than via the default pendingContinue* path.
     pendingContinueChangedFiles: undefined,
@@ -195,7 +195,7 @@ export function loopAutoContinueAfterMerge(
 
   // Build the continue prompt and stash to a temp file for seedWorker —
   // dispatchDelayedSeed reads from a file (avoids long argv) and polls until
-  // claudeStatus exits "loading", then sends keys. The local `entry` was
+  // agentStatus exits "loading", then sends keys. The local `entry` was
   // captured BEFORE the updateWorkerFields call above, so its
   // pendingContinueChangedFiles is still populated for the prompt builder
   // to read. Disk has been cleared.

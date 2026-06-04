@@ -56,7 +56,7 @@ beforeEach(() => {
         worktreePath,
         branchName: WORKER,
         baseBranch: "main",
-        claudeStatus: "working",
+        agentStatus: "working",
       }],
     },
   }));

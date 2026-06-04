@@ -215,7 +215,24 @@ describe("garden workers new --workflow grow", () => {
     ).rejects.toThrow(/positive integer/);
   });
 
-  it("rejects --model on grow workers (account default applies)", async () => {
+  it("accepts --model on grow workers and threads the pin to newWorker", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+    await captureConsoleLog(() =>
+      workers([
+        "new", "proj",
+        "--workflow", "grow",
+        "--seed", "x",
+        "--model", "deepseek-v4-flash",
+      ]),
+    );
+    expect(newWorker).toHaveBeenCalledWith(
+      expect.objectContaining({ workflow: "grow", model: "deepseek-v4-flash" }),
+    );
+  });
+
+  it("rejects an empty --model value", async () => {
     await setupProject("proj");
     const { workers } = await importWorkersCmd();
     await expect(
@@ -223,9 +240,9 @@ describe("garden workers new --workflow grow", () => {
         "new", "proj",
         "--workflow", "grow",
         "--seed", "x",
-        "--model", "sonnet",
+        "--model", "  ",
       ]),
-    ).rejects.toThrow(/--model is not supported with --workflow grow/);
+    ).rejects.toThrow(/--model requires a non-empty value/);
   });
 
   it("rejects --trellis on grow workers", async () => {

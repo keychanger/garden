@@ -122,7 +122,7 @@ describe("default workflow — full state machine drive (real fs/git)", () => {
     // explicitly here so handleWorking enters launchReview on the first poll.
     await makeWorker({
       prState: "working",
-      claudeStatus: "idle",
+      agentStatus: "idle",
       pendingReviewAt: Date.now(),
     });
 
@@ -189,7 +189,7 @@ describe("default workflow — full state machine drive (real fs/git)", () => {
       baseBranch: "main",
       worktreePath,
       prState: "working",
-      claudeStatus: "idle",
+      agentStatus: "idle",
       pendingReviewAt: Date.now(),
     });
 

@@ -3,7 +3,7 @@
 // Two flavors:
 //
 // 1) Interrupt recovery — when the dashboard is killed (or a worker is
-//    bounced) while claudeStatus is "working", the worker has no way to
+//    bounced) while agentStatus is "working", the worker has no way to
 //    resume on its own. The pane-died hook records `interruptedWhileWorking`
 //    on the registry entry; on resume, ensureDashboard fires a delayed
 //    subprocess that sends a "continue from where you left off" prompt.
@@ -141,7 +141,7 @@ function resolveWorkerPaneId(project: string, worker: string): string | null {
 // Build and dispatch a handoff-callback prompt at the parent pane of a worker
 // that just reached a terminal prState (merged/done/failing). Best-effort:
 // silently no-ops if the parent has been removed, has no live pane, or is
-// currently mid-turn (continueWorker's claudeStatus gate). One-shot per child:
+// currently mid-turn (continueWorker's agentStatus gate). One-shot per child:
 // the caller is expected to have checked + set handoffCallbackFiredAt under
 // the registry lock to prevent re-fires from replayed terminal transitions.
 //
@@ -202,10 +202,10 @@ export function continueWorker(
     });
     return false;
   }
-  if (entry.claudeStatus === "working" || entry.claudeStatus === "asking") {
+  if (entry.agentStatus === "working" || entry.agentStatus === "asking") {
     log.info("workers", "continue skipped, worker already active", {
       worker: workerName,
-      data: { project: projectName, claudeStatus: entry.claudeStatus },
+      data: { project: projectName, agentStatus: entry.agentStatus },
     });
     updateWorkerFields(projectName, workerName, { interruptedWhileWorking: undefined });
     return false;
@@ -237,10 +237,10 @@ export function continueWorker(
 export function continueWorkerIfStuck(projectName: string, workerName: string): void {
   const entry = findWorkerByName(projectName, workerName);
   if (!entry) return;
-  if (entry.claudeStatus !== "ready") {
+  if (entry.agentStatus !== "ready") {
     log.info("workers", "continue retry skipped, status moved", {
       worker: workerName,
-      data: { project: projectName, claudeStatus: entry.claudeStatus },
+      data: { project: projectName, agentStatus: entry.agentStatus },
     });
     return;
   }
@@ -284,7 +284,7 @@ export function continueWorkerAfterMerge(projectName: string, workerName: string
 // landed: prState is still `merged`. A delivered prompt fires UserPromptSubmit,
 // which clears `merged` (hooks/default.ts) — so any other prState means it got
 // through and we no-op rather than double-prompt. continueWorkerAfterMerge's
-// own claudeStatus gate covers the case where the worker is mid-turn again.
+// own agentStatus gate covers the case where the worker is mid-turn again.
 export function continueWorkerAfterMergeIfStuck(projectName: string, workerName: string): void {
   const entry = findWorkerByName(projectName, workerName);
   if (!entry) return;
@@ -415,7 +415,7 @@ export function seedWorker(
       cleanup();
       return;
     }
-    if (entry.claudeStatus !== "loading") {
+    if (entry.agentStatus !== "loading") {
       continueWorker(projectName, workerName, message);
       cleanup();
       return;
@@ -423,7 +423,7 @@ export function seedWorker(
     if (Date.now() >= deadline) {
       log.warn("workers", "seed timed out, sending anyway", {
         worker: workerName,
-        data: { project: projectName, claudeStatus: entry.claudeStatus },
+        data: { project: projectName, agentStatus: entry.agentStatus },
       });
       continueWorker(projectName, workerName, message);
       cleanup();

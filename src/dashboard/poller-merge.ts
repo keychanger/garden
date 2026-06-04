@@ -8,6 +8,7 @@
 import { execSync, execFileSync, spawn } from "node:child_process";
 import {
   tryGetProject, getAutoContinueConfig, setAutoContinueConfig,
+  anyAnthropicMeteredProject,
 } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { addAlert } from "./alerts.js";
@@ -29,7 +30,7 @@ import {
   type PrState, type WorkerEntry,
 } from "./registry.js";
 import { tmux, getFirstPaneId, windowExists, pasteAndSubmit } from "./tmux.js";
-import { readUsageSnapshot } from "./usage.js";
+import { readUsageSnapshot, snapshotMeters } from "./usage.js";
 import { workerWindowName } from "./window-names.js";
 import { scheduleDelayedPoke } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
@@ -503,7 +504,7 @@ function transitionToTerminal(
   // of write). If the worker is already working again, clear the stale
   // terminal state immediately so the renderer doesn't show a phantom merge.
   const fresh = findWorkerByName(projectName, entry.name);
-  if (fresh?.claudeStatus === "working") {
+  if (fresh?.agentStatus === "working") {
     log.info("poller", "worker already active after merge, clearing terminal state", {
       worker: entry.name,
       data: { project: projectName, clearedFrom: terminalState },
@@ -633,8 +634,8 @@ function autoContinueSkipReason(
   trigger: "merge" | "sweep",
 ): string | null {
   if (isDoneSet(entry.worktreePath)) return "done-sentinel";
-  if (entry.claudeStatus === "working" || entry.claudeStatus === "asking") {
-    return `claude-${entry.claudeStatus}`;
+  if (entry.agentStatus === "working" || entry.agentStatus === "asking") {
+    return `claude-${entry.agentStatus}`;
   }
   // Sweep-only: a dead pane has no Claude to paste into — reviving an
   // exited worker is bounce territory, not the sweep's.
@@ -697,11 +698,13 @@ export function autoContinueGateReason(): string | null {
 // unused. When multiple meters trip, pause until the latest reset so we don't
 // re-enable into a still-tripped meter.
 export function checkUsageThreshold(threshold: number): { pausedUntil: string; reason: string } | null {
+  // Provider-only fleet: the Anthropic snapshot is no longer refreshed
+  // (Phase 1 gating), so whatever is on disk is stale by construction —
+  // a gate decision based on it would pause/resume against meters that
+  // describe nothing the fleet uses.
+  try { if (!anyAnthropicMeteredProject()) return null; } catch { /* config unavailable: keep gate */ }
   const snap = readUsageSnapshot();
-  if (!snap?.data) return null;
-  const candidates: Array<{ label: string; pct: number; resetsAt: string }> = [];
-  if (snap.data.fiveHour) candidates.push({ label: "5h", ...snap.data.fiveHour });
-  if (snap.data.weekly)   candidates.push({ label: "week", ...snap.data.weekly });
+  const candidates = snapshotMeters(snap).filter(m => m.key !== "sonnet");
   const tripped = candidates.filter(c => c.pct >= threshold);
   if (tripped.length === 0) return null;
   const latest = tripped.reduce((a, b) =>
@@ -800,9 +803,9 @@ function notifySiblingWorkers(
     const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
     if (!paneId) continue;
 
-    // Liveness from the registry (claudeStatus is hook-driven). A sibling
+    // Liveness from the registry (agentStatus is hook-driven). A sibling
     // marked exited is dead — skip.
-    if (sibling.claudeStatus === "exited") {
+    if (sibling.agentStatus === "exited") {
       log.info("poller", "skipping dead sibling", {
         worker: sibling.name,
         data: { project: projectName, mergedWorker: mergedEntry.name },

@@ -14,9 +14,9 @@ import { atomicWriteFile } from "./atomic-write.js";
 import { withFileLock } from "./file-lock.js";
 import { log } from "./log.js";
 
-// claudeStatus is written by Claude Code hooks and the tmux pane-died handler.
+// agentStatus is written by Claude Code hooks and the tmux pane-died handler.
 // prState is written by the poller. There are no other writers. See STATUS.md.
-export type ClaudeStatus = "loading" | "ready" | "working" | "asking" | "idle" | "exited";
+export type AgentStatus = "loading" | "ready" | "working" | "asking" | "idle" | "exited";
 export type PrState = "working" | "reviewing" | "merge-pending" | "resolving" | "ci-fixing" | "merged" | "done" | "failing";
 
 // Trellis reviewer verdict vocabulary. See WORKFLOWS.md "Reviewer prompt and
@@ -71,8 +71,8 @@ export interface WorkerEntry {
   mergedAt?: string;
   failCount?: number;
   failingSha?: string;
-  claudeStatus?: ClaudeStatus;
-  lastHookAt?: number;    // epoch ms when a Claude hook last fired for this worker
+  agentStatus?: AgentStatus;
+  lastEventAt?: number;    // epoch ms when a Claude hook last fired for this worker
   // Set by the worker's Stop hook when it sees commits ahead of base. The
   // poller's handleWorking gates launchReview on this — without it, an idle
   // worker with stale commits would be reviewed on every FIFO poke. Cleared
@@ -128,7 +128,7 @@ export interface WorkerEntry {
   // poller-review.ts handleTransientReviewFailure / handleWorking.
   reviewRetryCount?: number;
   reviewRetryAt?: number;
-  // Set by handlePaneDied when claudeStatus was "working" at the moment the
+  // Set by handlePaneDied when agentStatus was "working" at the moment the
   // pane died (dashboard kill, tmux server gone). Read by ensureDashboard's
   // resume loop to decide whether to auto-send a "continue" prompt after the
   // worker is brought back via `claude --resume`. Cleared by _continue-worker
@@ -170,6 +170,14 @@ export interface WorkerEntry {
   // (poller, transitionState, hook dispatcher) read with `entry.workflow ?? "default"`.
   // See WORKFLOWS.md and src/dashboard/workflows/.
   workflow?: string;
+  // Per-worker model, set via `--model` at creation for default and grow
+  // workers. Opaque string: an Anthropic alias ("opus"/"sonnet" — resolved
+  // through the provider's modelMap on provider-backed projects) or any
+  // concrete model id the backend accepts. Threaded into every launch,
+  // respawn, and bounce so the pin survives the worker's lifetime. Trellis
+  // vines use `trellis.workerModel` instead (iteration-resolved with the
+  // Sonnet-exhaustion fallback). See docs/MULTI-MODEL.md "Layer 2".
+  model?: string;
   // Reason the worker is in `failing`. See FailingReason above and
   // WORKFLOWS.md "Equilibrium and termination". Default workflow sets "code"
   // (Q8 retrofit) or "unparseable-verdict" (Q9 retrofit, phase 2).
@@ -222,9 +230,10 @@ export interface TrellisData {
   modelFallbackAt?: number;
   /** Per-worker model override, set via `--model` at plant time. Read
    *  each iteration; falls back to WorkflowDefinition.workerModel,
-   *  then project default. Trellis-only — default workers don't carry
-   *  this. */
-  workerModel?: "opus" | "sonnet";
+   *  then project default. Trellis-only — default/grow workers carry
+   *  the flat `WorkerEntry.model` instead. Opaque string: Anthropic
+   *  aliases or any concrete model id the backend accepts. */
+  workerModel?: string;
 }
 
 /** Grow-workflow per-worker data. The seed prompt is captured at plant
@@ -321,6 +330,7 @@ export function readRegistry(): WorkerRegistry {
     for (const entries of Object.values(raw.workers)) {
       for (const e of entries as WorkerEntry[]) {
         migrateLegacyTrellisFields(e);
+        migrateLegacyStatusFields(e);
       }
     }
     cachedRegistry = { mtimeMs: stat.mtimeMs, size: stat.size, value: raw };
@@ -368,9 +378,26 @@ function migrateLegacyTrellisFields(entry: WorkerEntry): void {
     flaggedClauses: e.trellisFlaggedClauses as string[] | undefined,
     aligned: e.trellisAligned as boolean | undefined,
     modelFallbackAt: e.trellisModelFallbackAt as number | undefined,
-    workerModel: e.workerModel as "opus" | "sonnet" | undefined,
+    workerModel: e.workerModel as string | undefined,
   };
   for (const k of LEGACY_TRELLIS_KEYS) delete e[k];
+}
+
+// Lazily migrate the pre-multi-model status field names: claudeStatus →
+// agentStatus, lastHookAt → lastEventAt (docs/MULTI-MODEL.md "Layer 2").
+// Idempotent: migrated entries pass through untouched, and when both names
+// are somehow present the new name wins. The next writeRegistry persists
+// the new shape, exactly like the trellis migration above.
+function migrateLegacyStatusFields(entry: WorkerEntry): void {
+  const e = entry as unknown as Record<string, unknown>;
+  if (e.claudeStatus !== undefined) {
+    if (entry.agentStatus === undefined) entry.agentStatus = e.claudeStatus as AgentStatus;
+    delete e.claudeStatus;
+  }
+  if (e.lastHookAt !== undefined) {
+    if (entry.lastEventAt === undefined) entry.lastEventAt = e.lastHookAt as number;
+    delete e.lastHookAt;
+  }
 }
 
 export function writeRegistry(registry: WorkerRegistry): void {

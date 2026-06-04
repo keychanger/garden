@@ -23,7 +23,7 @@ export async function kick(args: string[]): Promise<void> {
     project: string;
     worker: string;
     state?: string;
-    claudeStatus?: string;
+    agentStatus?: string;
     failingReason?: FailingReason;
   }> = [];
   for (const [project, entries] of Object.entries(registry.workers)) {
@@ -33,7 +33,7 @@ export async function kick(args: string[]): Promise<void> {
           project,
           worker: entry.name,
           state: entry.prState,
-          claudeStatus: entry.claudeStatus,
+          agentStatus: entry.agentStatus,
           failingReason: entry.failingReason,
         });
       }
@@ -48,7 +48,7 @@ export async function kick(args: string[]): Promise<void> {
     throw new Error(`Multiple workers match '${workerName}':\n${list}\nKill or rename one first.`);
   }
 
-  const { project, state, claudeStatus, failingReason } = matches[0];
+  const { project, state, agentStatus, failingReason } = matches[0];
 
   // failing → working recovery for review-side failures. The worker's code is
   // fine; the reviewer itself was unavailable or garbled. Clear the failing
@@ -77,11 +77,11 @@ export async function kick(args: string[]): Promise<void> {
   // own stale-status detection so a truly hung Claude won't deadlock the
   // launch. We still reject in the normal `working`-state kick path because
   // that's the path where the original race is reachable.
-  if (!isReviewSideFailure && (claudeStatus === "working" || claudeStatus === "asking")) {
+  if (!isReviewSideFailure && (agentStatus === "working" || agentStatus === "asking")) {
     throw new Error(
-      `Worker ${project}/${workerName} is currently ${claudeStatus} — Claude is ` +
+      `Worker ${project}/${workerName} is currently ${agentStatus} — Claude is ` +
       `still mid-turn. Kick only re-arms workers whose turn has ended ` +
-      `(claudeStatus=idle). Wait for the Stop hook, or if you believe the ` +
+      `(agentStatus=idle). Wait for the Stop hook, or if you believe the ` +
       `status is truly stuck, edit the registry directly.`,
     );
   }

@@ -541,7 +541,7 @@ describe("updateHeaderVar", () => {
 
   it("renders a yellow ⚑ icon when any worker in the plot is asking", () => {
     vi.mocked(readRegistry).mockReturnValue({
-      workers: { garden: [{ name: "w1", sessionId: "s", task: "", claudeStatus: "asking" }] },
+      workers: { garden: [{ name: "w1", sessionId: "s", task: "", agentStatus: "asking" }] },
     } as never);
     vi.mocked(resolveWorkerStatus).mockReturnValue("asking" as never);
 
@@ -575,7 +575,7 @@ describe("updateHeaderVar", () => {
 
   it("renders a spinner frame when a worker is working, and writes the template with a sentinel", () => {
     vi.mocked(readRegistry).mockReturnValue({
-      workers: { garden: [{ name: "w1", sessionId: "s", task: "", claudeStatus: "working" }] },
+      workers: { garden: [{ name: "w1", sessionId: "s", task: "", agentStatus: "working" }] },
     } as never);
     vi.mocked(resolveWorkerStatus).mockReturnValue("working" as never);
 
@@ -601,13 +601,13 @@ describe("updateHeaderVar", () => {
   it("prioritizes failing > asking > merged > working > idle across workers in a plot", () => {
     vi.mocked(readRegistry).mockReturnValue({
       workers: { garden: [
-        { name: "w1", sessionId: "s", task: "", claudeStatus: "working" },
-        { name: "w2", sessionId: "s", task: "", claudeStatus: "asking" },
+        { name: "w1", sessionId: "s", task: "", agentStatus: "working" },
+        { name: "w2", sessionId: "s", task: "", agentStatus: "asking" },
         { name: "w3", sessionId: "s", task: "", prState: "failing" },
       ]},
     } as never);
-    vi.mocked(resolveWorkerStatus).mockImplementation((e: { prState?: string; claudeStatus?: string } | undefined) => {
-      return (e?.prState ?? e?.claudeStatus ?? "idle") as never;
+    vi.mocked(resolveWorkerStatus).mockImplementation((e: { prState?: string; agentStatus?: string } | undefined) => {
+      return (e?.prState ?? e?.agentStatus ?? "idle") as never;
     });
 
     updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "imp" }) });
@@ -687,18 +687,18 @@ describe("handlePaneDied", () => {
     expect(updateWorkerFields).not.toHaveBeenCalled();
   });
 
-  it("sets claudeStatus to exited and flags mid-turn interruption when worker was working", () => {
+  it("sets agentStatus to exited and flags mid-turn interruption when worker was working", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "bold-ash",
       sessionId: "test",
       task: "",
-      claudeStatus: "working",
+      agentStatus: "working",
     });
     handlePaneDied("_garden-worker-bold-ash");
 
     expect(updateWorkerFields).toHaveBeenCalledWith(
       "garden", "bold-ash",
-      { claudeStatus: "exited", interruptedWhileWorking: true },
+      { agentStatus: "exited", interruptedWhileWorking: true },
     );
   });
 
@@ -707,13 +707,13 @@ describe("handlePaneDied", () => {
       name: "bold-ash",
       sessionId: "test",
       task: "",
-      claudeStatus: "idle",
+      agentStatus: "idle",
     });
     handlePaneDied("_garden-worker-bold-ash");
 
     expect(updateWorkerFields).toHaveBeenCalledWith(
       "garden", "bold-ash",
-      { claudeStatus: "exited" },
+      { agentStatus: "exited" },
     );
   });
 
@@ -722,7 +722,7 @@ describe("handlePaneDied", () => {
       name: "bold-ash",
       sessionId: "test",
       task: "",
-      claudeStatus: "working",
+      agentStatus: "working",
     });
     handlePaneDied("_garden-worker-bold-ash");
 
@@ -744,23 +744,23 @@ describe("handlePaneDied", () => {
       name: "bold-ash",
       sessionId: "test",
       task: "",
-      claudeStatus: "idle",
+      agentStatus: "idle",
     });
     vi.mocked(updateWorkerFields).mockImplementation(() => { throw new Error("lock fail"); });
     expect(() => handlePaneDied("_garden-worker-bold-ash")).not.toThrow();
   });
 
   // Regression: a worker whose bootstrap aborted before reaching Claude
-  // Code (claudeStatus="loading", no worktree on disk) would otherwise be
+  // Code (agentStatus="loading", no worktree on disk) would otherwise be
   // marked "exited" here and persist forever — the ghost sweep filters on
-  // claudeStatus="loading" so the "exited" relabel takes the entry out of
+  // agentStatus="loading" so the "exited" relabel takes the entry out of
   // its reach. We remove the entry outright in this narrow case.
   it("removes the registry entry when pane dies during bootstrap (loading + no worktree)", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "bold-ash",
       sessionId: "test",
       task: "",
-      claudeStatus: "loading",
+      agentStatus: "loading",
       worktreePath: "/wt/garden/bold-ash",
     });
     vi.mocked(worktreeExists).mockReturnValue(false);
@@ -771,12 +771,12 @@ describe("handlePaneDied", () => {
     expect(updateWorkerFields).not.toHaveBeenCalled();
   });
 
-  it("does NOT remove the entry when worktree exists, even if claudeStatus is loading", () => {
+  it("does NOT remove the entry when worktree exists, even if agentStatus is loading", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "bold-ash",
       sessionId: "test",
       task: "",
-      claudeStatus: "loading",
+      agentStatus: "loading",
       worktreePath: "/wt/garden/bold-ash",
     });
     vi.mocked(worktreeExists).mockReturnValue(true);
@@ -786,7 +786,7 @@ describe("handlePaneDied", () => {
     expect(removeWorker).not.toHaveBeenCalled();
     expect(updateWorkerFields).toHaveBeenCalledWith(
       "garden", "bold-ash",
-      { claudeStatus: "exited" },
+      { agentStatus: "exited" },
     );
   });
 });
@@ -800,7 +800,7 @@ describe("refreshWorkerTasks (via refreshDashboard)", () => {
     vi.mocked(readRegistry).mockReturnValue({
       workers: {
         garden: [
-          { name: "bold-ash", sessionId: "s1", task: "old task", claudeStatus: "working" },
+          { name: "bold-ash", sessionId: "s1", task: "old task", agentStatus: "working" },
         ],
       },
     });
@@ -827,7 +827,7 @@ describe("refreshWorkerTasks (via refreshDashboard)", () => {
     vi.mocked(readRegistry).mockReturnValue({
       workers: {
         garden: [
-          { name: "bold-ash", sessionId: "s1", task: "same task", claudeStatus: "working" },
+          { name: "bold-ash", sessionId: "s1", task: "same task", agentStatus: "working" },
         ],
       },
     });
@@ -849,7 +849,7 @@ describe("refreshWorkerTasks (via refreshDashboard)", () => {
     vi.mocked(readRegistry).mockReturnValue({
       workers: {
         garden: [
-          { name: "calm-elm", sessionId: "s2", task: "old", claudeStatus: "idle" },
+          { name: "calm-elm", sessionId: "s2", task: "old", agentStatus: "idle" },
         ],
       },
     });

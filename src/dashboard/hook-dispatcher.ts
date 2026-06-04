@@ -63,14 +63,19 @@ export function handleClaudeHook(event: string): void {
   method(ctx);
 }
 
+// Wire events (the shortened Claude hook names baked into settings.json
+// command strings) translate to garden's normalized lifecycle methods here.
+// This switch IS the Claude Code adapter's event translation; a future
+// harness adapter supplies its own mapping onto the same handler interface
+// (docs/MULTI-MODEL.md "Layer 2").
 function pickHookMethod(handlers: WorkflowHookHandlers, event: string): HookMethod | null {
   switch (event) {
     case "sessionstart": return handlers.onSessionStart;
-    case "prompt":       return handlers.onUserPromptSubmit;
-    case "stop":         return handlers.onStop;
-    case "notification": return handlers.onNotification;
-    case "pretooluse":   return handlers.onPreToolUse;
-    case "posttooluse":  return handlers.onPostToolUse;
+    case "prompt":       return handlers.onPromptSubmitted;
+    case "stop":         return handlers.onTurnEnded;
+    case "notification": return handlers.onBlockedOnOperator;
+    case "pretooluse":   return handlers.onBlockedOnOperator;
+    case "posttooluse":  return handlers.onToolActivity;
     default:             return null;
   }
 }

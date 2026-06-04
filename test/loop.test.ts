@@ -98,7 +98,7 @@ function makeWorker(overrides: Partial<WorkerEntry> = {}): WorkerEntry {
     worktreePath: "/tmp/wt/myproject/bold-ash",
     branchName: "bold-ash",
     baseBranch: "main",
-    claudeStatus: "idle",
+    agentStatus: "idle",
     workflow: "trellis",
     ...overrides,
   };
@@ -263,7 +263,7 @@ describe("loopAutoContinueAfterMerge", () => {
     const fields = updateCall[2];
     expect(fields.sessionId).toEqual(expect.any(String));
     expect(fields.sessionId).not.toEqual("old-uuid");
-    expect(fields.claudeStatus).toBe("loading");
+    expect(fields.agentStatus).toBe("loading");
     expect(fields.pendingContinueChangedFiles).toBeUndefined();
     expect(fields.pendingContinueSyncFailed).toBeUndefined();
     expect(fields.mergedAt).toBeUndefined();

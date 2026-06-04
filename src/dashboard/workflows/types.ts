@@ -29,13 +29,20 @@ export interface HookContext {
 
 export type HookMethod = (ctx: HookContext) => void;
 
+// Workflow handlers are keyed by garden's normalized lifecycle events, not
+// the harness's native hook names (docs/MULTI-MODEL.md "Layer 2"). The
+// dispatcher translates wire events to these: Claude Code's Stop →
+// onTurnEnded, UserPromptSubmit → onPromptSubmitted, PostToolUse →
+// onToolActivity, and both Notification and the PreToolUse matchers →
+// onBlockedOnOperator (they signal the same thing: the agent is blocked on
+// operator input mid-turn). A future harness adapter feeds the same methods
+// from its own event mechanism without the workflow layer changing.
 export interface WorkflowHookHandlers {
   onSessionStart: HookMethod;
-  onUserPromptSubmit: HookMethod;
-  onStop: HookMethod;
-  onNotification: HookMethod;
-  onPreToolUse: HookMethod;
-  onPostToolUse: HookMethod;
+  onPromptSubmitted: HookMethod;
+  onTurnEnded: HookMethod;
+  onBlockedOnOperator: HookMethod;
+  onToolActivity: HookMethod;
 }
 
 export interface WorkflowDefinition {
@@ -56,17 +63,20 @@ export interface WorkflowDefinition {
   hookHandlers: WorkflowHookHandlers;
   /** Default model for worker iterations. When set, the worker bootstrap
    *  passes `--model <workerModel>` to claude unless the worker entry
-   *  carries a per-worker override (`WorkerEntry.workerModel`). When
-   *  unset (default workflow), no `--model` flag is passed and claude
-   *  uses the account's default model. Trellis sets this to "sonnet"
-   *  per WORKFLOWS.md "Model selection and budget". */
-  workerModel?: "opus" | "sonnet";
+   *  carries a per-worker override (`WorkerEntry.trellis.workerModel`).
+   *  When unset (default workflow), no `--model` flag is passed and claude
+   *  uses the account's default model. An opaque string, not an Anthropic
+   *  alias union: aliases ("opus"/"sonnet") resolve through the provider's
+   *  modelMap for provider-backed projects, and arbitrary concrete model
+   *  ids pass through to the backend (docs/MULTI-MODEL.md "Layer 2").
+   *  Trellis sets "sonnet" per WORKFLOWS.md "Model selection and budget". */
+  workerModel?: string;
   /** Model used by the workflow's reviewer. When set, `launchHeadlessAgent`
    *  passes `--model <reviewerModel>` to the reviewer claude. Not
    *  overridable per worker — see WORKFLOWS.md Invariant 10 ("reviewer
    *  quality is non-negotiable"). When unset, no `--model` flag is
    *  passed and claude uses the account default. */
-  reviewerModel?: "opus" | "sonnet";
+  reviewerModel?: string;
 }
 
 // Per-workflow valid-transitions tables. Lives at this layer (not on the

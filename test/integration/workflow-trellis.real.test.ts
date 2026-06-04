@@ -148,7 +148,7 @@ describe("trellis workflow — state machine drive on real fs/git", () => {
     await setupWorktreeAndCommit();
     await plantVine({
       prState: "working",
-      claudeStatus: "idle",
+      agentStatus: "idle",
       pendingReviewAt: Date.now(),
     });
 
@@ -191,7 +191,7 @@ describe("trellis workflow — state machine drive on real fs/git", () => {
     await setupWorktreeAndCommit();
     await plantVine({
       prState: "working",
-      claudeStatus: "idle",
+      agentStatus: "idle",
       pendingReviewAt: Date.now(),
     });
 
@@ -241,7 +241,7 @@ DRIFT
     // tries to increment to 2 (which exceeds maxIterations=1).
     await plantVine({
       prState: "working",
-      claudeStatus: "idle",
+      agentStatus: "idle",
       pendingReviewAt: Date.now(),
       trellis: {
         name: "auth",
@@ -274,7 +274,7 @@ DRIFT
     await setupWorktreeAndCommit();
     await plantVine({
       prState: "working",
-      claudeStatus: "idle",
+      agentStatus: "idle",
       pendingReviewAt: Date.now(),
     });
 
@@ -325,7 +325,7 @@ DRIFT
     // Plant a vine on Sonnet to verify the reviewer is independent.
     await plantVine({
       prState: "working",
-      claudeStatus: "idle",
+      agentStatus: "idle",
       pendingReviewAt: Date.now(),
       trellis: { name: "auth", path: trellisPath, workerModel: "sonnet" },
     });
@@ -353,7 +353,7 @@ DRIFT
     await setupWorktreeAndCommit();
     await plantVine({
       prState: "merged",
-      claudeStatus: "idle",
+      agentStatus: "idle",
       trellis: {
         name: "auth",
         path: trellisPath,
@@ -406,7 +406,7 @@ DRIFT
 
     await plantVine({
       prState: "merged",
-      claudeStatus: "idle",
+      agentStatus: "idle",
       trellis: {
         name: "auth",
         path: trellisPath,

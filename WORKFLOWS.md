@@ -408,9 +408,13 @@ export type StateHandler = (
 ) => boolean;
 
 export interface WorkflowHookHandlers {
+  // Keyed by garden's normalized lifecycle events, not the harness's
+  // native hook names (docs/MULTI-MODEL.md "Layer 2").
   onSessionStart: (ctx: HookContext) => HookAction;
-  onUserPromptSubmit: (ctx: HookContext) => HookAction;
-  onStop: (ctx: HookContext) => HookAction;
+  onPromptSubmitted: (ctx: HookContext) => HookAction;
+  onTurnEnded: (ctx: HookContext) => HookAction;
+  onBlockedOnOperator: (ctx: HookContext) => HookAction;
+  onToolActivity: (ctx: HookContext) => HookAction;
 }
 
 export interface WorkflowDefinition {
@@ -1094,9 +1098,11 @@ trellis-shaped prompt.
 
 #### Hook handlers
 
-Identical to default for `onSessionStart`, `onUserPromptSubmit`,
-`onNotification`, `onPreToolUse`, `onPostToolUse`. The only override is
-`onStop`:
+Trellis wires `defaultHookHandlers` directly — `onSessionStart`,
+`onPromptSubmitted`, `onBlockedOnOperator`, `onToolActivity`, and
+`onTurnEnded` are all the default implementations (the trellis-specific
+behavior lives in the state handlers, not in hook overrides). What
+`onTurnEnded` does for a vine:
 
 - **Stop with new commits ahead of base** — same as default: pokes the
   poller FIFO, sets `pendingReviewAt`. Triggers an iteration.
@@ -1634,7 +1640,12 @@ global gate. The fallback is local to trellis spawn logic.
 **Rule:** before spawning a Claude process for a trellis iteration,
 check the Sonnet 5h and weekly meters against the project's
 `usageThreshold` (default 95%). If either is at or above threshold,
-fall back to **Opus** for that iteration. Fire one alert per Sonnet
+fall back to **Opus** for that iteration. Two pass-through cases skip
+the fallback entirely: a requested model other than the literal
+"sonnet" alias (the fallback models Anthropic's Sonnet quota economy,
+nothing else), and a project whose workers run on a provider
+(`garden config <project> provider` — the Anthropic meter says nothing
+about the backend the alias maps to there; see docs/MULTI-MODEL.md). Fire one alert per Sonnet
 reset window (source `trellis-budget`, deduped via
 `WorkerEntry.trellisModelFallbackAt`), so the operator knows the
 quota stance has flipped.
@@ -1957,7 +1968,7 @@ New optional fields on `WorkerEntry` (registry.ts), populated only when
 | `failingReason`                | `string`    | New field, multi-workflow. Allowed values: `"code"` (default-workflow failure; trellis FAILED), `"trellis-flagged"`, `"iteration-budget"`, `"stagnation"`, `"unparseable-verdict"`. Default workflow uses only `"code"`. |
 | `trellisFlaggedClauses`        | `string[]`  | When flagged: cited clauses for the alert and resume command.        |
 | `trellisAligned`               | `boolean`   | True when the terminal `done` was reached via reviewer `ALIGNED` (vs. operator-set `.garden-done`). Drives the `✓ aligned, N iters` row decoration. Set by `finalizeMerge` on the ALIGNED path; absent → operator-sentinel done. |
-| `workerModel`                  | `"opus" \| "sonnet"` | Per-worker model override (set via `--model` at plant time). Read by each iteration's spawn. Falls back to workflow definition's `workerModel`, then to project default. |
+| `workerModel`                  | `string`    | Per-worker model override (set via `--model` at plant time). Opaque: an Anthropic alias ("opus"/"sonnet") or any concrete model id the backend accepts (docs/MULTI-MODEL.md "Layer 2"). Read by each iteration's spawn. Falls back to workflow definition's `workerModel`, then to project default. |
 | `trellisModelFallbackAt`       | `number`    | Epoch ms of the most recent Sonnet → Opus fallback. Used to dedupe alerts within a single Sonnet 5h reset window. |
 
 The fields are additive and optional. Existing default-workflow workers
@@ -2049,7 +2060,7 @@ the only safety net that fails closed.
   the reviewer can run a test suite.
 
 - **Worker crashes mid-iteration.** `pane-died` hook fires,
-  `claudeStatus = "exited"`. The trellis fields are preserved on the
+  `agentStatus = "exited"`. The trellis fields are preserved on the
   registry entry. Unlike default workflow, the interrupt-recovery
   prompt does not fire — see "Per-iteration context reset." When the
   pane is restored (`garden bounce`, dashboard reattach), Claude
@@ -2313,7 +2324,7 @@ export function loopAutoContinueAfterMerge(
    `trellisRelativePath` + `model`; grow passes `grow: { iteration,
    maxIterations }` so the rules file embeds the iteration count).
 5. Update worker fields: clear `pendingContinueChangedFiles`,
-   `pendingContinueSyncFailed`, `mergedAt`; set `claudeStatus =
+   `pendingContinueSyncFailed`, `mergedAt`; set `agentStatus =
    "loading"`. The local `entry` snapshot retains
    `pendingContinueChangedFiles` for the prompt builder — disk is
    cleared, in-memory carries forward.
@@ -2561,8 +2572,10 @@ garden workers new <project> --workflow grow \
 ```
 
 Either `--seed` or `--seed-file` is required (mutually exclusive).
-Empty seeds are rejected. `--model` and `--trellis` are not allowed
-on grow workflow. `--max-iterations` overrides
+Empty seeds are rejected. `--trellis` is not allowed on grow workflow;
+`--model <alias-or-id>` pins the loop's model (persisted to
+`WorkerEntry.model`, threaded through every cold respawn — absent means
+the account default). `--max-iterations` overrides
 `project.maxGrowIterations` (default 5). The cold-plant path produces
 the goal artifact via the iter-1 seed prompt instructing the worker to
 write `<seed verbatim>` to `.garden/grow-goal.md`.

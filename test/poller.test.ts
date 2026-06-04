@@ -43,6 +43,8 @@ vi.mock("../src/config.js", () => ({
 
 vi.mock("../src/dashboard/usage.js", () => ({
   readUsageSnapshot: vi.fn(() => null),
+  // Mirror the real accessor's null-snapshot behavior: no data, no meters.
+  snapshotMeters: vi.fn(() => []),
 }));
 
 vi.mock("../src/dashboard/log.js", () => ({
@@ -269,7 +271,7 @@ beforeEach(() => {
 describe("poll — working state", () => {
   it("launches review when pendingReviewAt is set and commits exist", () => {
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", claudeStatus: "idle", pendingReviewAt: Date.now() }),
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
     ]);
 
     poll("myproject");
@@ -299,7 +301,7 @@ describe("poll — working state", () => {
     // resume-after-restart. Without pendingReviewAt set by the Stop hook,
     // we MUST NOT launch a review on it.
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", claudeStatus: "idle" }),
+      makeWorker({ prState: "working", agentStatus: "idle" }),
     ]);
     // Commits ahead of base, but no pendingReviewAt
     vi.mocked(getCommitSummary).mockReturnValue("abc123 some old commit");
@@ -315,9 +317,9 @@ describe("poll — working state", () => {
     );
   });
 
-  it("does nothing when claudeStatus is working (Claude still active)", () => {
+  it("does nothing when agentStatus is working (Claude still active)", () => {
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", claudeStatus: "working", pendingReviewAt: Date.now() }),
+      makeWorker({ prState: "working", agentStatus: "working", pendingReviewAt: Date.now() }),
     ]);
 
     poll("myproject");
@@ -325,15 +327,15 @@ describe("poll — working state", () => {
     expect(forcePushBranch).not.toHaveBeenCalled();
   });
 
-  it("defers review launch when claudeStatus=working with a fresh lastHookAt", () => {
+  it("defers review launch when agentStatus=working with a fresh lastEventAt", () => {
     // Normal mid-turn race: Claude is actively working and emitted a hook
     // recently. Don't launch the review — wait for the next Stop hook.
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "working",
-        claudeStatus: "working",
+        agentStatus: "working",
         pendingReviewAt: Date.now(),
-        lastHookAt: Date.now() - 30_000, // 30s ago: fresh
+        lastEventAt: Date.now() - 30_000, // 30s ago: fresh
       }),
     ]);
 
@@ -346,22 +348,22 @@ describe("poll — working state", () => {
     );
   });
 
-  it("proceeds with review launch when claudeStatus=working is stale (>15min lastHookAt)", () => {
+  it("proceeds with review launch when agentStatus=working is stale (>15min lastEventAt)", () => {
     // Hung-Claude case: status is pinned to "working" but no hook has fired
     // in over 15 minutes. Without this escape hatch, `garden kick` on a
     // failing worker whose Claude hung would never actually start the review.
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "working",
-        claudeStatus: "working",
+        agentStatus: "working",
         pendingReviewAt: Date.now(),
-        lastHookAt: Date.now() - 20 * 60 * 1000, // 20min ago: stale
+        lastEventAt: Date.now() - 20 * 60 * 1000, // 20min ago: stale
       }),
     ]);
 
     poll("myproject");
 
-    // Review window is launched even though claudeStatus says "working".
+    // Review window is launched even though agentStatus says "working".
     expect(tmux).toHaveBeenCalledWith(
       "new-window", "-d", "-t", expect.any(String), "-n", "_myproject-review-bold-ash",
       "-c", "/tmp/wt/myproject/bold-ash", "bash", "-c", expect.any(String),
@@ -371,17 +373,17 @@ describe("poll — working state", () => {
     );
   });
 
-  it("does not treat claudeStatus=working as stale when lastHookAt is undefined", () => {
-    // Legacy entries without lastHookAt should fall through to today's
+  it("does not treat agentStatus=working as stale when lastEventAt is undefined", () => {
+    // Legacy entries without lastEventAt should fall through to today's
     // behavior (defer). Treating undefined as "infinitely stale" would
     // launch reviews against genuinely active workers that pre-date the
-    // lastHookAt field.
+    // lastEventAt field.
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "working",
-        claudeStatus: "working",
+        agentStatus: "working",
         pendingReviewAt: Date.now(),
-        // lastHookAt deliberately undefined
+        // lastEventAt deliberately undefined
       }),
     ]);
 
@@ -402,7 +404,7 @@ describe("poll — working state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "working",
-        claudeStatus: "idle",
+        agentStatus: "idle",
         pendingReviewAt: Date.now(),
         reviewRetryCount: 1,
         reviewRetryAt: Date.now() + 60_000, // 60s in the future
@@ -426,7 +428,7 @@ describe("poll — working state", () => {
     // gone (force-pushed away, base advanced past them, etc.). Clear the
     // flag so we don't keep retrying.
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", claudeStatus: "idle", pendingReviewAt: Date.now() }),
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
     ]);
     vi.mocked(getCommitSummary).mockReturnValue("");
 
@@ -440,7 +442,7 @@ describe("poll — working state", () => {
 
   it("launchReview clears pendingReviewAt", () => {
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", claudeStatus: "idle", pendingReviewAt: Date.now() }),
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
     ]);
 
     poll("myproject");
@@ -454,11 +456,11 @@ describe("poll — working state", () => {
 
   it("allows multiple workers to transition independently", () => {
     registryMock._setEntries("myproject", [
-      makeWorker({ name: "calm-bay", prState: "reviewing", claudeStatus: "idle",
+      makeWorker({ name: "calm-bay", prState: "reviewing", agentStatus: "idle",
         sessionId: "s1", task: "t1", reviewWindowName: "_myproject-review-calm-bay",
         worktreePath: "/tmp/wt/myproject/calm-bay", branchName: "calm-bay",
         lastSeenSha: "abc123" }),
-      makeWorker({ name: "bold-ash", prState: "working", claudeStatus: "idle",
+      makeWorker({ name: "bold-ash", prState: "working", agentStatus: "idle",
         pendingReviewAt: Date.now(),
         sessionId: "s2", task: "t2" }),
     ]);
@@ -475,7 +477,7 @@ describe("poll — working state", () => {
 
   it("launchReview stamps reviewStartedAt and arms the timeout poke", () => {
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", claudeStatus: "idle", pendingReviewAt: Date.now() }),
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
     ]);
 
     poll("myproject");
@@ -505,7 +507,7 @@ describe("poll — working state", () => {
       baseUrl: "https://api.deepseek.com/anthropic", authTokenEnv: "DEEPSEEK_API_KEY",
     });
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", claudeStatus: "idle", pendingReviewAt: Date.now() }),
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
     ]);
 
     poll("myproject");
@@ -525,7 +527,7 @@ describe("poll — working state", () => {
 
   it("adds no reviewer model flag for first-party projects (account default)", () => {
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", claudeStatus: "idle", pendingReviewAt: Date.now() }),
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
     ]);
 
     poll("myproject");
@@ -1354,7 +1356,7 @@ describe("poll — merge-pending state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
-        claudeStatus: "working",
+        agentStatus: "working",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
       }),
     ]);
@@ -1383,7 +1385,7 @@ describe("poll — merge-pending state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
-        claudeStatus: "idle",
+        agentStatus: "idle",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
       }),
     ]);
@@ -1406,7 +1408,7 @@ describe("poll — merge-pending state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
-        claudeStatus: "idle",
+        agentStatus: "idle",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
       }),
     ]);
@@ -1432,11 +1434,11 @@ describe("poll — merge-pending state", () => {
     );
   });
 
-  it("skips auto-continue when claudeStatus is working (race)", () => {
+  it("skips auto-continue when agentStatus is working (race)", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
-        claudeStatus: "working",
+        agentStatus: "working",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
       }),
     ]);
@@ -1452,7 +1454,7 @@ describe("poll — merge-pending state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
-        claudeStatus: "idle",
+        agentStatus: "idle",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
         lastAutoContinueAt: Date.now() - 1000, // 1s ago, well inside the 10s window
       }),
@@ -1476,7 +1478,7 @@ describe("poll — merge-pending state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
-        claudeStatus: "idle",
+        agentStatus: "idle",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
       }),
     ]);
@@ -1504,7 +1506,7 @@ describe("poll — merge-pending state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
-        claudeStatus: "idle",
+        agentStatus: "idle",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
         preReviewSha: "pre-review-sha",
       }),
@@ -1539,7 +1541,7 @@ describe("poll — merge-pending state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
-        claudeStatus: "idle",
+        agentStatus: "idle",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
         preReviewSha: "same-sha",
       }),
@@ -1562,7 +1564,7 @@ describe("poll — merge-pending state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
-        claudeStatus: "idle",
+        agentStatus: "idle",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
         preReviewSha: "pre-review-sha",
       }),
@@ -1598,7 +1600,7 @@ describe("poll — merge-pending state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
-        claudeStatus: "idle",
+        agentStatus: "idle",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
         preReviewSha: "pre-review-sha",
       }),
@@ -1635,7 +1637,7 @@ describe("poll — merge-pending state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
-        claudeStatus: "idle",
+        agentStatus: "idle",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
         preReviewSha: "pre-review-sha",
       }),
@@ -1663,7 +1665,7 @@ describe("poll — merge-pending state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
-        claudeStatus: "idle",
+        agentStatus: "idle",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
         preReviewSha: "pre-review-sha",
       }),
@@ -1838,7 +1840,7 @@ describe("poll — merge-pending state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
-        claudeStatus: "idle",
+        agentStatus: "idle",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
         lastReviewBody: "Code looks good.",
         task: "fix the bug",
@@ -1869,7 +1871,7 @@ describe("poll — merge-pending state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
-        claudeStatus: "idle",
+        agentStatus: "idle",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
         resolveAttempts: 2, // budget already consumed
       }),
@@ -1908,7 +1910,7 @@ describe("poll — merge-pending state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
-        claudeStatus: "working",
+        agentStatus: "working",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
       }),
     ]);
@@ -1974,7 +1976,7 @@ describe("poll — merge-pending state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
-        claudeStatus: "idle",
+        agentStatus: "idle",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
         lastReviewBody: "Code is well structured.",
         task: "add retry logic",
@@ -2079,7 +2081,7 @@ describe("poll — merge-pending state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
-        claudeStatus: "idle",
+        agentStatus: "idle",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
         workflow: "grow",
         grow: { seed: "harden auth", iteration: 5, maxIterations: 5 },
@@ -2107,7 +2109,7 @@ describe("poll — merge-pending state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
-        claudeStatus: "idle",
+        agentStatus: "idle",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
         workflow: "grow",
         grow: { seed: "harden auth", iteration: 2, maxIterations: 5 },
@@ -2626,7 +2628,7 @@ describe("poll — ci-fixing state", () => {
 describe("poll — reviewer prompt", () => {
   function setupForReview() {
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", claudeStatus: "idle", pendingReviewAt: Date.now() }),
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
     ]);
   }
 
@@ -2680,7 +2682,7 @@ describe("poll — reviewer prompt", () => {
 
   it("includes worker task in prompt", () => {
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", claudeStatus: "idle",
+      makeWorker({ prState: "working", agentStatus: "idle",
         pendingReviewAt: Date.now(), task: "refactor the dashboard" }),
     ]);
 
@@ -3054,7 +3056,7 @@ describe("poll — sibling merge notification", () => {
       makeWorker({
         name: "calm-bay",
         prState: "working",
-        claudeStatus: "idle", // alive
+        agentStatus: "idle", // alive
         sessionId: "s2",
         task: "t2",
         worktreePath: "/tmp/wt/myproject/calm-bay",
@@ -3088,7 +3090,7 @@ describe("poll — sibling merge notification", () => {
       makeWorker({
         name: "calm-bay",
         prState: "working",
-        claudeStatus: "idle",
+        agentStatus: "idle",
         sessionId: "s2",
         task: "t2",
         worktreePath: "/tmp/wt/myproject/calm-bay",
@@ -3109,7 +3111,7 @@ describe("poll — sibling merge notification", () => {
     expect(sendKeyCalls).toHaveLength(0);
   });
 
-  it("skips dead sibling (claudeStatus=exited)", () => {
+  it("skips dead sibling (agentStatus=exited)", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         name: "bold-ash",
@@ -3123,7 +3125,7 @@ describe("poll — sibling merge notification", () => {
       makeWorker({
         name: "calm-bay",
         prState: "working",
-        claudeStatus: "exited",
+        agentStatus: "exited",
         sessionId: "s2",
         task: "t2",
         worktreePath: "/tmp/wt/myproject/calm-bay",
@@ -3158,7 +3160,7 @@ describe("poll — sibling merge notification", () => {
       makeWorker({
         name: "calm-bay",
         prState: "working",
-        claudeStatus: "idle", // alive — only the sentinel should suppress
+        agentStatus: "idle", // alive — only the sentinel should suppress
         sessionId: "s2",
         task: "t2",
         worktreePath: "/tmp/wt/myproject/calm-bay",
@@ -3279,7 +3281,7 @@ describe("poll — alerts", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "reviewing",
-        claudeStatus: "idle",
+        agentStatus: "idle",
         failCount: 1,
         reviewWindowName: "_myproject-review-bold-ash",
         lastSeenSha: "abc123",

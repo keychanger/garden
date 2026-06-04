@@ -47,6 +47,29 @@ export interface UsageSnapshot {
   retryAfterMs?: number;   // server hint when known (only used as a lower bound for the snapshot's own next-attempt timing)
 }
 
+// Neutral read seam over the snapshot's named buckets: consumers (the
+// auto-continue gate, future meter sources) iterate a list instead of
+// reaching into Anthropic's bucket names. `key` is the source-specific
+// meter id — policy that cares about a specific meter (the gate's sonnet
+// exclusion, trellis's sonnet fallback) filters by it at the policy site.
+// See docs/MULTI-MODEL.md "Layer 2".
+export interface Meter {
+  key: "fiveHour" | "weekly" | "sonnet";
+  label: string;
+  pct: number;
+  resetsAt: string;
+}
+
+export function snapshotMeters(snap: UsageSnapshot | null): Meter[] {
+  const d = snap?.data;
+  if (!d) return [];
+  const out: Meter[] = [];
+  if (d.fiveHour) out.push({ key: "fiveHour", label: "5h", ...d.fiveHour });
+  if (d.weekly) out.push({ key: "weekly", label: "week", ...d.weekly });
+  if (d.sonnet) out.push({ key: "sonnet", label: "sonnet", ...d.sonnet });
+  return out;
+}
+
 // -----------------------------------------------------------------------------
 // Credential discovery
 // -----------------------------------------------------------------------------

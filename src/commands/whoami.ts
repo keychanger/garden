@@ -12,7 +12,7 @@ interface WhoamiResult {
   worktreePath?: string;
   sessionId: string;
   prState?: string;
-  claudeStatus?: string;
+  agentStatus?: string;
   displayStatus: string;
   task?: string;
   pendingReviewAt?: string;
@@ -70,7 +70,7 @@ export async function whoami(args: string[]): Promise<void> {
     worktreePath: entry.worktreePath,
     sessionId: entry.sessionId,
     prState: entry.prState,
-    claudeStatus: entry.claudeStatus,
+    agentStatus: entry.agentStatus,
     displayStatus: resolveWorkerStatus(entry),
     task: entry.task || undefined,
     pendingReviewAt: entry.pendingReviewAt ? new Date(entry.pendingReviewAt).toISOString() : undefined,
@@ -92,7 +92,7 @@ export async function whoami(args: string[]): Promise<void> {
   if (result.worktreePath) console.log(`    worktree     ${result.worktreePath}`);
   if (result.role) console.log(`    role         ${result.role}${result.parentWorker ? ` (parent: ${result.parentWorker})` : ""}`);
   if (result.task) console.log(`    task         ${result.task}`);
-  if (result.claudeStatus) console.log(`    claude       ${result.claudeStatus}`);
+  if (result.agentStatus) console.log(`    claude       ${result.agentStatus}`);
   if (result.prState) console.log(`    pr           ${result.prState}`);
   if (result.pendingReviewAt) console.log(`    review queued ${result.pendingReviewAt}`);
   if (result.reviewStartedAt) console.log(`    review running since ${result.reviewStartedAt}`);

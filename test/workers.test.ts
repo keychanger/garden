@@ -304,7 +304,7 @@ describe("newWorker", () => {
       worktreePath: "/home/user/.garden/worktrees/myproject/bold-ash",
       branchName: "bold-ash",
       baseBranch: "main",
-      claudeStatus: "loading",
+      agentStatus: "loading",
       workflow: "default",
     });
   });
@@ -865,11 +865,11 @@ describe("bounceWorker", () => {
     ]));
   });
 
-  it("writes claudeStatus=idle because --resume skips SessionStart", () => {
+  it("writes agentStatus=idle because --resume skips SessionStart", () => {
     bounceWorker("myproject", "swift-oak");
 
     expect(vi.mocked(updateWorkerFields)).toHaveBeenCalledWith(
-      "myproject", "swift-oak", { claudeStatus: "idle" },
+      "myproject", "swift-oak", { agentStatus: "idle" },
     );
   });
 
@@ -942,7 +942,7 @@ describe("bounceWorker", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "swift-oak", sessionId: "sess-abc", task: "",
       branchName: "swift-oak", worktreePath: "/wt/swift-oak",
-      claudeStatus: "working",
+      agentStatus: "working",
     });
 
     bounceWorker("myproject", "swift-oak");
@@ -962,7 +962,7 @@ describe("bounceWorker", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "swift-oak", sessionId: "sess-abc", task: "",
       branchName: "swift-oak", worktreePath: "/wt/swift-oak",
-      claudeStatus: "idle",
+      agentStatus: "idle",
     });
 
     bounceWorker("myproject", "swift-oak");
@@ -973,19 +973,19 @@ describe("bounceWorker", () => {
     expect(continueCall).toBeUndefined();
   });
 
-  it("captures wasWorking before overwriting claudeStatus to idle (call order)", () => {
+  it("captures wasWorking before overwriting agentStatus to idle (call order)", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "swift-oak", sessionId: "sess-abc", task: "",
       branchName: "swift-oak", worktreePath: "/wt/swift-oak",
-      claudeStatus: "working",
+      agentStatus: "working",
     });
 
     bounceWorker("myproject", "swift-oak");
 
-    // updateWorkerFields(...claudeStatus: idle) is called; the dispatch must
-    // still see "working" because we snapshotted entry.claudeStatus pre-write.
+    // updateWorkerFields(...agentStatus: idle) is called; the dispatch must
+    // still see "working" because we snapshotted entry.agentStatus pre-write.
     expect(vi.mocked(updateWorkerFields)).toHaveBeenCalledWith(
-      "myproject", "swift-oak", { claudeStatus: "idle" },
+      "myproject", "swift-oak", { agentStatus: "idle" },
     );
     const continueCall = vi.mocked(spawn).mock.calls.find(c =>
       Array.isArray(c[1]) && (c[1] as string[])[1]?.includes("_continue-worker"),

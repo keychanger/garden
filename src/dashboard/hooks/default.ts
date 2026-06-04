@@ -127,8 +127,8 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
         worker: workerName,
         data: { project: projectName },
       });
-      // The onStop applyAndLog upstream already wrote claudeStatus="idle"
-      // and refreshed — but resolveWorkerStatus reads claudeStatus only
+      // The onStop applyAndLog upstream already wrote agentStatus="idle"
+      // and refreshed — but resolveWorkerStatus reads agentStatus only
       // when prState is absent. Without this second refresh the dashboard
       // stays painted as "idle" until the next hook event fires, even
       // though the registry already says "done". Terminal states are
@@ -163,7 +163,7 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
 // ---------------------------------------------------------------------------
 
 type FieldsDelta = Partial<Pick<WorkerEntry,
-  "claudeStatus" | "lastHookAt" | "prState" | "task" | "transcriptPath">>;
+  "agentStatus" | "lastEventAt" | "prState" | "task" | "transcriptPath">>;
 
 // pretooluse/posttooluse fire on every Claude tool call and dominate hook
 // traffic — a busy agent completes many tools per second, and with N agents in
@@ -183,18 +183,18 @@ function applyAndLog(
   if (!ctx.workerInfo) return;
 
   // Throttle heartbeat-only hooks. Safe because the only consumers of
-  // lastHookAt are 15-minute staleness checks (STALE_CLAUDE_STATUS_MS in
-  // poller-review, STALE_HOOK_MS in health) and the task title is
+  // lastEventAt are 15-minute staleness checks (STALE_AGENT_STATUS_MS in
+  // poller-review, STALE_EVENT_MS in health) and the task title is
   // independently refreshed by the status render path (refreshWorkerTasks).
-  // Every real transition sets claudeStatus or prState, so it counts as a
+  // Every real transition sets agentStatus or prState, so it counts as a
   // state change and always takes the full path below — the STATUS.md state
   // machine is untouched.
-  const stateChanged = fields.claudeStatus !== undefined || fields.prState !== undefined;
+  const stateChanged = fields.agentStatus !== undefined || fields.prState !== undefined;
   const now = Date.now();
-  if (!stateChanged && now - (ctx.workerInfo.entry.lastHookAt ?? 0) < HOOK_HEARTBEAT_MS) {
+  if (!stateChanged && now - (ctx.workerInfo.entry.lastEventAt ?? 0) < HOOK_HEARTBEAT_MS) {
     return;
   }
-  fields.lastHookAt = now;
+  fields.lastEventAt = now;
 
   // Capture the transcript path Claude Code reports on the hook input. It
   // rarely changes (once per session), so only write it when it differs —
@@ -226,7 +226,7 @@ function applyAndLog(
   }
 
   // Info only when something actually moved: a lifecycle event (sessionstart /
-  // prompt / stop) or a claudeStatus flip. Raw posttooluse/pretooluse that
+  // prompt / stop) or a agentStatus flip. Raw posttooluse/pretooluse that
   // don't change state are heartbeats — demoted to debug so the default log
   // level shows signal, not the per-tool-call stream.
   const isLifecycle = ctx.event === "sessionstart" || ctx.event === "prompt" || ctx.event === "stop";
@@ -236,7 +236,7 @@ function applyAndLog(
     data: {
       project: ctx.workerInfo.project,
       event: ctx.event,
-      claudeStatus: fields.claudeStatus,
+      agentStatus: fields.agentStatus,
       prStateCleared: fields.prState === undefined && ctx.event === "prompt",
       ...extraLogData,
     },
@@ -244,7 +244,7 @@ function applyAndLog(
 
   // Skip the dashboard cascade when nothing visible changed — pretooluse and
   // posttooluse fire on every Claude tool call and dominate hook traffic, but
-  // most don't flip claudeStatus (the cs guards above narrow the writes).
+  // most don't flip agentStatus (the cs guards above narrow the writes).
   if (stateChanged) refreshDashboard();
 }
 
@@ -258,20 +258,20 @@ const onSessionStart: HookMethod = (ctx) => {
   // resume/compact fire mid-turn (auto-compact in particular) and must not clobber working/asking; see STATUS.md.
   const source = typeof ctx.input.source === "string" ? ctx.input.source : "";
   if (source === "resume" || source === "compact") {
-    const cs = ctx.workerInfo.entry.claudeStatus;
+    const cs = ctx.workerInfo.entry.agentStatus;
     if (cs !== "working" && cs !== "asking") {
-      fields.claudeStatus = "ready";
+      fields.agentStatus = "ready";
     }
   } else {
-    fields.claudeStatus = "ready";
+    fields.agentStatus = "ready";
   }
   const extraLog = source ? { source } : undefined;
   applyAndLog(ctx, fields, extraLog);
 };
 
-const onUserPromptSubmit: HookMethod = (ctx) => {
+const onPromptSubmitted: HookMethod = (ctx) => {
   if (!ctx.workerInfo) return;
-  const fields: FieldsDelta = { claudeStatus: "working" };
+  const fields: FieldsDelta = { agentStatus: "working" };
   // Clear merged/done prState on the next prompt — invariant 4 (terminal
   // states are sticky until new input). The hook handler is the only place
   // this clear happens. Also clear the on-disk `.garden-done` sentinel so a
@@ -286,35 +286,32 @@ const onUserPromptSubmit: HookMethod = (ctx) => {
   applyAndLog(ctx, fields);
 };
 
-const onStop: HookMethod = (ctx) => {
+const onTurnEnded: HookMethod = (ctx) => {
   if (!ctx.workerInfo) return;
-  applyAndLog(ctx, { claudeStatus: "idle" });
+  applyAndLog(ctx, { agentStatus: "idle" });
   // routeStopHookEnd reads the registry fresh — the applyAndLog above has
-  // already written claudeStatus="idle". See STATUS.md invariant 2 (review
+  // already written agentStatus="idle". See STATUS.md invariant 2 (review
   // entry) and invariant 4 (merged stickiness).
   routeStopHookEnd(ctx.workerInfo.project, ctx.workerInfo.name);
   maybeRefreshUsage(resolveGardenRunner());
 };
 
-const onNotification: HookMethod = (ctx) => {
+// Fed by both Notification and the PreToolUse matchers (AskUserQuestion /
+// ExitPlanMode) — the two wire events signal the same condition.
+const onBlockedOnOperator: HookMethod = (ctx) => {
   if (!ctx.workerInfo) return;
   applyAndLog(ctx, midTurnAskingFields(ctx));
 };
 
-const onPreToolUse: HookMethod = (ctx) => {
-  if (!ctx.workerInfo) return;
-  applyAndLog(ctx, midTurnAskingFields(ctx));
-};
-
-const onPostToolUse: HookMethod = (ctx) => {
+const onToolActivity: HookMethod = (ctx) => {
   if (!ctx.workerInfo) return;
   // asking → working is the primary path (user answered, Claude resumes).
   // idle → working is a self-heal: a PostToolUse arriving while idle means
   // the turn is still active and our state is stale; trust the event.
   const fields: FieldsDelta = {};
-  const cs = ctx.workerInfo.entry.claudeStatus;
+  const cs = ctx.workerInfo.entry.agentStatus;
   if (cs === "asking" || cs === "idle") {
-    fields.claudeStatus = "working";
+    fields.agentStatus = "working";
   }
   applyAndLog(ctx, fields);
 };
@@ -325,22 +322,21 @@ const onPostToolUse: HookMethod = (ctx) => {
 // so idle status is stale).
 function midTurnAskingFields(ctx: HookContext): FieldsDelta {
   if (!ctx.workerInfo) return {};
-  const cs = ctx.workerInfo.entry.claudeStatus;
+  const cs = ctx.workerInfo.entry.agentStatus;
   if (cs === "working" || cs === "idle") {
-    return { claudeStatus: "asking" };
+    return { agentStatus: "asking" };
   }
   log.info("hook", "mid-turn asking hook skipped (non-working, non-idle)", {
     worker: ctx.workerInfo.name,
-    data: { project: ctx.workerInfo.project, event: ctx.event, claudeStatus: cs },
+    data: { project: ctx.workerInfo.project, event: ctx.event, agentStatus: cs },
   });
   return {};
 }
 
 export const defaultHookHandlers: WorkflowHookHandlers = {
   onSessionStart,
-  onUserPromptSubmit,
-  onStop,
-  onNotification,
-  onPreToolUse,
-  onPostToolUse,
+  onPromptSubmitted,
+  onTurnEnded,
+  onBlockedOnOperator,
+  onToolActivity,
 };

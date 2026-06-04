@@ -58,8 +58,8 @@ describe("garden health — stale hook detection", () => {
           name: "bold-ash",
           sessionId: "abc",
           task: "fix the build",
-          claudeStatus: "working",
-          lastHookAt: Date.now() - 30 * 60 * 1000, // 30 minutes ago
+          agentStatus: "working",
+          lastEventAt: Date.now() - 30 * 60 * 1000, // 30 minutes ago
         }],
       },
     });
@@ -79,8 +79,8 @@ describe("garden health — stale hook detection", () => {
           name: "bold-ash",
           sessionId: "abc",
           task: "fix the build",
-          claudeStatus: "working",
-          // lastHookAt absent
+          agentStatus: "working",
+          // lastEventAt absent
         }],
       },
     });
@@ -98,8 +98,8 @@ describe("garden health — stale hook detection", () => {
           name: "bold-ash",
           sessionId: "abc",
           task: "fix the build",
-          claudeStatus: "working",
-          lastHookAt: Date.now() - 30_000, // 30s ago
+          agentStatus: "working",
+          lastEventAt: Date.now() - 30_000, // 30s ago
         }],
       },
     });
@@ -117,8 +117,8 @@ describe("garden health — stale hook detection", () => {
           name: "bold-ash",
           sessionId: "abc",
           task: "fix the build",
-          claudeStatus: "idle",
-          lastHookAt: Date.now() - 60 * 60 * 1000, // 1 hour ago
+          agentStatus: "idle",
+          lastEventAt: Date.now() - 60 * 60 * 1000, // 1 hour ago
         }],
       },
     });
@@ -131,14 +131,14 @@ describe("garden health — stale hook detection", () => {
 });
 
 describe("garden health — dead pane PID detection", () => {
-  it("flags a worker whose pane PID is dead but claudeStatus != exited", async () => {
+  it("flags a worker whose pane PID is dead but agentStatus != exited", async () => {
     vi.mocked(readRegistry).mockReturnValue({
       workers: {
         garden: [{
           name: "bold-ash",
           sessionId: "abc",
           task: "fix the build",
-          claudeStatus: "idle",
+          agentStatus: "idle",
         }],
       },
     });
@@ -160,14 +160,14 @@ describe("garden health — dead pane PID detection", () => {
     expect(issueLine).toBeDefined();
   });
 
-  it("does not flag a worker whose claudeStatus is already 'exited'", async () => {
+  it("does not flag a worker whose agentStatus is already 'exited'", async () => {
     vi.mocked(readRegistry).mockReturnValue({
       workers: {
         garden: [{
           name: "bold-ash",
           sessionId: "abc",
           task: "",
-          claudeStatus: "exited",
+          agentStatus: "exited",
         }],
       },
     });
@@ -189,14 +189,14 @@ describe("garden health — dead pane PID detection", () => {
     expect(issueLines).toHaveLength(0);
   });
 
-  it("with --fix, writes claudeStatus=exited for dead pane workers", async () => {
+  it("with --fix, writes agentStatus=exited for dead pane workers", async () => {
     vi.mocked(readRegistry).mockReturnValue({
       workers: {
         garden: [{
           name: "bold-ash",
           sessionId: "abc",
           task: "",
-          claudeStatus: "idle",
+          agentStatus: "idle",
         }],
       },
     });
@@ -213,7 +213,7 @@ describe("garden health — dead pane PID detection", () => {
       process.kill = realKill;
     }
 
-    expect(updateWorkerFields).toHaveBeenCalledWith("garden", "bold-ash", { claudeStatus: "exited" });
+    expect(updateWorkerFields).toHaveBeenCalledWith("garden", "bold-ash", { agentStatus: "exited" });
   });
 
   it("does not auto-fix without --fix", async () => {
@@ -223,7 +223,7 @@ describe("garden health — dead pane PID detection", () => {
           name: "bold-ash",
           sessionId: "abc",
           task: "",
-          claudeStatus: "idle",
+          agentStatus: "idle",
         }],
       },
     });

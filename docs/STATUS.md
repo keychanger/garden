@@ -221,7 +221,7 @@ Drives:
 
 **4. tmux `pane-died` hook** — tmux fires this automatically when a
 pane process exits. The dashboard listens and writes
-`claudeStatus = "exited"` to the registry.
+`agentStatus = "exited"` to the registry.
 
 Drives:
 
@@ -349,7 +349,7 @@ clock. Update the list above when you do.
    Race case: if a new prompt landed before `finalizeMerge` ran, the
    prompt hook cannot clear `merged`/`done` (because prState was still
    an active pipeline state at prompt time). `finalizeMerge` handles
-   this by checking `claudeStatus` after writing the terminal state —
+   this by checking `agentStatus` after writing the terminal state —
    if the worker is already working, it transitions immediately to
    `working`.
 
@@ -398,33 +398,33 @@ clock. Update the list above when you do.
 
 ## Detection machinery
 
-The status of every worker is two fields in the registry: `claudeStatus`
+The status of every worker is two fields in the registry: `agentStatus`
 and `prState`. There are exactly four writers and one reader. There is
 no `pgrep`, no marker file, no activity-text parsing, no fallback poll.
 
 ### Writers
 
-**Worker creation** writes `claudeStatus = "loading"` when `newWorker()`
+**Worker creation** writes `agentStatus = "loading"` when `newWorker()`
 spawns the worker pane.
 
-**Claude Code hooks** write `claudeStatus`. The hooks fire from every
+**Claude Code hooks** write `agentStatus`. The hooks fire from every
 Claude process and call `garden dashboard _claude-hook <event>`:
 
 - `SessionStart` → branches on the hook input's `source` field:
-  - `startup` or `clear` → `claudeStatus = "ready"` (fresh context).
-  - `resume` or `compact` → preserve `claudeStatus` if it is currently
+  - `startup` or `clear` → `agentStatus = "ready"` (fresh context).
+  - `resume` or `compact` → preserve `agentStatus` if it is currently
     `working` or `asking`; otherwise set `ready`. Auto-compaction in
     particular fires SessionStart mid-turn (Claude crosses the context
     threshold and resets context while the operator's prompt is still
     being answered) — overwriting `working` here would silently strand
     the worker as "ready" in the dashboard until the next tool call or
     Stop, which is what bug-stranded workers reported pre-fix.
-  - Missing/unknown `source` → `claudeStatus = "ready"` (back-compat
+  - Missing/unknown `source` → `agentStatus = "ready"` (back-compat
     with older Claude Code builds that did not emit `source`).
-- `UserPromptSubmit` → `claudeStatus = "working"`. Also clears `prState`
+- `UserPromptSubmit` → `agentStatus = "working"`. Also clears `prState`
   if it equals `merged` or `done` (this is the only place either is
   cleared).
-- `Stop` → `claudeStatus = "idle"`. If commits ahead of base exist, also
+- `Stop` → `agentStatus = "idle"`. If commits ahead of base exist, also
   sets `pendingReviewAt = Date.now()` and pokes the project's poller FIFO
   so review begins immediately. `pendingReviewAt` is the per-worker mark
   that the Stop hook just observed new commits — without it, the poller
@@ -434,7 +434,7 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   only the poller's working→reviewing transition reads it, and
   `launchReview` clears it.
 - `PreToolUse` (matched to `AskUserQuestion`, `ExitPlanMode`) →
-  `claudeStatus = "asking"` if currently `working` or `idle`. Fires when
+  `agentStatus = "asking"` if currently `working` or `idle`. Fires when
   Claude is about to execute a tool that requires user input. The `idle`
   path is a self-heal: a user-input tool only fires mid-turn, so an
   `idle` worker at this point has a stale status (usually left over from
@@ -449,7 +449,7 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   user-input cases are fully covered by PreToolUse/PostToolUse on the
   specific tools.
 - `PermissionRequest` (no matcher — all tools) →
-  `claudeStatus = "asking"` (only if currently `working`). Fires when
+  `agentStatus = "asking"` (only if currently `working`). Fires when
   auto-mode's classifier escalates a tool call for operator approval —
   it is the only event that reports "a permission dialog is actually
   being shown" (unlike `PreToolUse`, which fires for every tool call
@@ -462,7 +462,7 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   the `asking` status (yellow row in the status pane) is the signal;
   the bottom-bar alert badge is reserved for failures and errors.
 - `PostToolUse` (no matcher — fires for all tools) →
-  `claudeStatus = "working"` if currently `asking` or `idle`. Fires
+  `agentStatus = "working"` if currently `asking` or `idle`. Fires
   when the user has responded and Claude resumes processing. The
   catch-all matcher is what restores `working` after the operator
   approves an auto-mode permission prompt — auto-mode escalates any
@@ -483,12 +483,12 @@ in-progress lifecycle states (`reviewing`, `merge-pending`, `failing`,
 `.garden-done` sentinel is present at merge time. The Stop hook is the
 only other writer of `done` (the post-auto-continue path).
 
-**The tmux `pane-died` handler** writes `claudeStatus = "exited"` when
+**The tmux `pane-died` handler** writes `agentStatus = "exited"` when
 a worker pane process exits.
 
 ### Reader
 
-The status renderer reads `claudeStatus` and `prState` from the registry
+The status renderer reads `agentStatus` and `prState` from the registry
 and combines them with `resolveWorkerStatus()`. There is exactly one
 render path. The renderer never executes `pgrep`, never reads a marker
 file, never parses activity text. If the registry says a worker is
@@ -498,7 +498,7 @@ working, it is working — full stop.
 
 ```mermaid
 flowchart TD
-    Start["resolveWorkerStatus(claudeStatus, prState)"] --> A{prState set?}
+    Start["resolveWorkerStatus(agentStatus, prState)"] --> A{prState set?}
     A -->|reviewing| reviewing
     A -->|merge-pending| merge_pending["merge-pending"]
     A -->|resolving| resolving
@@ -506,7 +506,7 @@ flowchart TD
     A -->|failing| failing
     A -->|merged| merged
     A -->|done| done
-    A -->|none| B["return claudeStatus"]
+    A -->|none| B["return agentStatus"]
 ```
 
 Lifecycle states (`reviewing`, `merge-pending`, `resolving`, `ci-fixing`,
@@ -527,15 +527,15 @@ sequenceDiagram
 
     User->>Claude: sends message
     Claude->>Hook: UserPromptSubmit fires
-    Hook->>Registry: claudeStatus = "working"; clear prState if "merged" or "done"
+    Hook->>Registry: agentStatus = "working"; clear prState if "merged" or "done"
     Hook->>StatusPane: SIGUSR1
-    StatusPane->>Registry: read claudeStatus + prState
+    StatusPane->>Registry: read agentStatus + prState
     StatusPane->>User: shows "working"
 
     Note over Claude: processing...
 
     Claude->>Hook: Stop fires
-    Hook->>Registry: claudeStatus = "idle"
+    Hook->>Registry: agentStatus = "idle"
     Hook->>StatusPane: SIGUSR1
     StatusPane->>User: shows "idle"
 ```
@@ -552,28 +552,28 @@ sequenceDiagram
 
     User->>Claude: sends message
     Claude->>Hook: UserPromptSubmit fires
-    Hook->>Registry: claudeStatus = "working"
+    Hook->>Registry: agentStatus = "working"
     Hook->>StatusPane: SIGUSR1
     StatusPane->>User: shows "working"
 
     Note over Claude: processing...
 
     Claude->>Hook: PreToolUse fires (ExitPlanMode / AskUserQuestion / PermissionRequest)
-    Hook->>Registry: claudeStatus = "asking" (was "working")
+    Hook->>Registry: agentStatus = "asking" (was "working")
     Hook->>StatusPane: SIGUSR1
     StatusPane->>User: shows "asking"
 
     Note over User: approves plan / answers question
 
     Claude->>Hook: PostToolUse fires
-    Hook->>Registry: claudeStatus = "working" (was "asking")
+    Hook->>Registry: agentStatus = "working" (was "asking")
     Hook->>StatusPane: SIGUSR1
     StatusPane->>User: shows "working"
 
     Note over Claude: continues processing...
 
     Claude->>Hook: Stop fires
-    Hook->>Registry: claudeStatus = "idle"
+    Hook->>Registry: agentStatus = "idle"
     Hook->>StatusPane: SIGUSR1
     StatusPane->>User: shows "idle"
 ```
@@ -588,7 +588,7 @@ because there is no detection — only event delivery.
 The remaining failure modes are honest:
 
 **Hook fails to fire.** If Claude crashes or Claude Code's hook plumbing
-is broken, `claudeStatus` is not updated and the worker shows its last
+is broken, `agentStatus` is not updated and the worker shows its last
 known state. The `garden health` command detects workers whose hooks
 haven't fired in an unusually long time and surfaces them to the user.
 We do not auto-correct via fallback polling — that mechanism is the

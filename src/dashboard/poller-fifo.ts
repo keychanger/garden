@@ -68,7 +68,7 @@ export function scheduleDelayedPoke(projectName: string, delayMs: number): void 
 // lifecycle handlers to defer work that would race the worker's own session.
 export function isWorkerClaudeWorking(projectName: string, workerName: string): boolean {
   const entry = findWorkerByName(projectName, workerName);
-  return entry?.claudeStatus === "working";
+  return entry?.agentStatus === "working";
 }
 
 // Create the FIFO if missing; idempotent. Used by startProjectPoller and any

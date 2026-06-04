@@ -150,7 +150,7 @@ function seedWorker(
       name,
       sessionId: "test-session",
       task: "",
-      claudeStatus: "working",
+      agentStatus: "working",
       ...fields,
     });
   }
@@ -172,11 +172,11 @@ afterAll(() => {
   }
 });
 
-// Reads the worker's actual claudeStatus from the in-memory registry mock —
+// Reads the worker's actual agentStatus from the in-memory registry mock —
 // the mock applies updates via Object.assign, so this is a state assertion,
 // not a mock-call assertion.
 function statusAfter(project: string, worker: string): string | undefined {
-  return entries[project]?.find(e => e.name === worker)?.claudeStatus;
+  return entries[project]?.find(e => e.name === worker)?.agentStatus;
 }
 
 describe("handleClaudeHook — mid-turn asking transitions (differential)", () => {
@@ -195,7 +195,7 @@ describe("handleClaudeHook — mid-turn asking transitions (differential)", () =
   it.each(askingRule)(
     "notification: %s → %s",
     (start, expected) => {
-      seedWorker("garden", "bold-ash", { claudeStatus: start });
+      seedWorker("garden", "bold-ash", { agentStatus: start });
       setCwd("garden", "bold-ash");
       handleClaudeHook("notification");
       expect(statusAfter("garden", "bold-ash")).toBe(expected);
@@ -204,7 +204,7 @@ describe("handleClaudeHook — mid-turn asking transitions (differential)", () =
   it.each(askingRule)(
     "pretooluse: %s → %s",
     (start, expected) => {
-      seedWorker("garden", "bold-ash", { claudeStatus: start });
+      seedWorker("garden", "bold-ash", { agentStatus: start });
       setCwd("garden", "bold-ash");
       handleClaudeHook("pretooluse");
       expect(statusAfter("garden", "bold-ash")).toBe(expected);
@@ -226,7 +226,7 @@ describe("handleClaudeHook — mid-turn asking transitions (differential)", () =
   it.each(workingRule)(
     "posttooluse: %s → %s",
     (start, expected) => {
-      seedWorker("garden", "bold-ash", { claudeStatus: start });
+      seedWorker("garden", "bold-ash", { agentStatus: start });
       setCwd("garden", "bold-ash");
       handleClaudeHook("posttooluse");
       expect(statusAfter("garden", "bold-ash")).toBe(expected);
@@ -234,7 +234,7 @@ describe("handleClaudeHook — mid-turn asking transitions (differential)", () =
   );
 
   it("pretooluse and posttooluse have OPPOSITE effects on the same starting state", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    seedWorker("garden", "bold-ash", { agentStatus: "working" });
     setCwd("garden", "bold-ash");
     handleClaudeHook("pretooluse");
     expect(statusAfter("garden", "bold-ash")).toBe("asking");
@@ -243,14 +243,14 @@ describe("handleClaudeHook — mid-turn asking transitions (differential)", () =
   });
 
   it("notification does not fire an operator alert (status pane is the signal)", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    seedWorker("garden", "bold-ash", { agentStatus: "working" });
     setCwd("garden", "bold-ash");
     handleClaudeHook("notification");
     expect(addAlert).not.toHaveBeenCalled();
   });
 
   it("pretooluse does not fire an operator alert", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    seedWorker("garden", "bold-ash", { agentStatus: "working" });
     setCwd("garden", "bold-ash");
     handleClaudeHook("pretooluse");
     expect(addAlert).not.toHaveBeenCalled();
@@ -259,7 +259,7 @@ describe("handleClaudeHook — mid-turn asking transitions (differential)", () =
 
 describe("handleClaudeHook — guards", () => {
   it("ignores hook when cwd is outside any worktree (workerFromCwd returns null)", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    seedWorker("garden", "bold-ash", { agentStatus: "working" });
     process.cwd = () => "/somewhere/else";
     handleClaudeHook("notification");
     expect(updateWorkerFields).not.toHaveBeenCalled();
@@ -267,7 +267,7 @@ describe("handleClaudeHook — guards", () => {
   });
 
   it("ignores hook when GARDEN_REVIEWER=1 (reviewer's hooks must not write registry)", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    seedWorker("garden", "bold-ash", { agentStatus: "working" });
     setCwd("garden", "bold-ash");
     process.env.GARDEN_REVIEWER = "1";
     try {
@@ -306,7 +306,7 @@ describe("handleClaudeHook — core events", () => {
   it.each(sessionstartTable)(
     "sessionstart source=%s starting=%s → %s",
     async (source, start, expected) => {
-      seedWorker("garden", "bold-ash", { claudeStatus: start });
+      seedWorker("garden", "bold-ash", { agentStatus: start });
       setCwd("garden", "bold-ash");
       await sessionstartWithSource(source);
       expect(statusAfter("garden", "bold-ash")).toBe(expected);
@@ -314,7 +314,7 @@ describe("handleClaudeHook — core events", () => {
   );
 
   it("prompt sets working from any prior state", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "idle" });
+    seedWorker("garden", "bold-ash", { agentStatus: "idle" });
     setCwd("garden", "bold-ash");
     handleClaudeHook("prompt");
     expect(statusAfter("garden", "bold-ash")).toBe("working");
@@ -322,7 +322,7 @@ describe("handleClaudeHook — core events", () => {
 
   it("prompt clears prState=done AND deletes the .garden-done sentinel", async () => {
     seedWorker("garden", "bold-ash", {
-      claudeStatus: "idle",
+      agentStatus: "idle",
       prState: "done",
       worktreePath: "/tmp/wt/garden/bold-ash",
     });
@@ -332,14 +332,14 @@ describe("handleClaudeHook — core events", () => {
     handleClaudeHook("prompt");
 
     const entry = entries.garden.find(e => e.name === "bold-ash")!;
-    expect(entry.claudeStatus).toBe("working");
+    expect(entry.agentStatus).toBe("working");
     expect(entry.prState).toBeUndefined();
     expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/wt/garden/bold-ash/.garden-done");
   });
 
   it("prompt does NOT touch the sentinel when prState was not merged/done", async () => {
     seedWorker("garden", "bold-ash", {
-      claudeStatus: "idle",
+      agentStatus: "idle",
       worktreePath: "/tmp/wt/garden/bold-ash",
     });
     setCwd("garden", "bold-ash");
@@ -348,12 +348,12 @@ describe("handleClaudeHook — core events", () => {
     handleClaudeHook("prompt");
 
     const entry = entries.garden.find(e => e.name === "bold-ash")!;
-    expect(entry.claudeStatus).toBe("working");
+    expect(entry.agentStatus).toBe("working");
     expect(fs.unlinkSync).not.toHaveBeenCalled();
   });
 
   it("stop sets idle from any prior state", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    seedWorker("garden", "bold-ash", { agentStatus: "working" });
     setCwd("garden", "bold-ash");
     handleClaudeHook("stop");
     expect(statusAfter("garden", "bold-ash")).toBe("idle");
@@ -361,7 +361,7 @@ describe("handleClaudeHook — core events", () => {
 
   it("stop sets prState=done when .garden-done is present and no commits ahead", async () => {
     seedWorker("garden", "bold-ash", {
-      claudeStatus: "working",
+      agentStatus: "working",
       worktreePath: "/tmp/wt/garden/bold-ash",
     });
     setCwd("garden", "bold-ash");
@@ -380,7 +380,7 @@ describe("handleClaudeHook — core events", () => {
     handleClaudeHook("stop");
 
     const entry = entries.garden.find(e => e.name === "bold-ash")!;
-    expect(entry.claudeStatus).toBe("idle");
+    expect(entry.agentStatus).toBe("idle");
     expect(entry.prState).toBe("done");
     expect(typeof entry.mergedAt).toBe("string");
   });
@@ -388,7 +388,7 @@ describe("handleClaudeHook — core events", () => {
 
   it("stop does NOT set done when .garden-done is absent", async () => {
     seedWorker("garden", "bold-ash", {
-      claudeStatus: "working",
+      agentStatus: "working",
       worktreePath: "/tmp/wt/garden/bold-ash",
     });
     setCwd("garden", "bold-ash");
@@ -407,13 +407,13 @@ describe("handleClaudeHook — core events", () => {
     handleClaudeHook("stop");
 
     const entry = entries.garden.find(e => e.name === "bold-ash")!;
-    expect(entry.claudeStatus).toBe("idle");
+    expect(entry.agentStatus).toBe("idle");
     expect(entry.prState).toBeUndefined();
   });
 
   it("stop with commits ahead AND .garden-done queues review (does NOT set done)", async () => {
     seedWorker("garden", "bold-ash", {
-      claudeStatus: "working",
+      agentStatus: "working",
       worktreePath: "/tmp/wt/garden/bold-ash",
     });
     setCwd("garden", "bold-ash");
@@ -434,14 +434,14 @@ describe("handleClaudeHook — core events", () => {
     // whether .garden-done is present at merge time. The stop hook MUST NOT
     // pre-set either terminal state here.
     const entry = entries.garden.find(e => e.name === "bold-ash")!;
-    expect(entry.claudeStatus).toBe("idle");
+    expect(entry.agentStatus).toBe("idle");
     expect(typeof entry.pendingReviewAt).toBe("number");
     expect(entry.prState).toBeUndefined();
   });
 
   it("stop fires base-drift alert when rev-list against origin/<base> throws", async () => {
     seedWorker("garden", "bold-ash", {
-      claudeStatus: "working",
+      agentStatus: "working",
       baseBranch: "improvement/hardening",
     });
     setCwd("garden", "bold-ash");
@@ -473,7 +473,7 @@ describe("handleClaudeHook — core events", () => {
 
   it("stop skips duplicate base-drift alert within cooldown window", async () => {
     seedWorker("garden", "bold-ash", {
-      claudeStatus: "working",
+      agentStatus: "working",
       baseBranch: "improvement/hardening",
     });
     setCwd("garden", "bold-ash");
@@ -506,7 +506,7 @@ describe("handleClaudeHook — core events", () => {
   });
 
   it("unknown event logs at debug and does not update", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    seedWorker("garden", "bold-ash", { agentStatus: "working" });
     setCwd("garden", "bold-ash");
 
     handleClaudeHook("bogus");
@@ -523,13 +523,13 @@ describe("handleClaudeHook — core events", () => {
 });
 
 // pretooluse/posttooluse fire on every Claude tool call and dominate hook
-// traffic. When they don't flip claudeStatus or prState, refreshDashboard
+// traffic. When they don't flip agentStatus or prState, refreshDashboard
 // must NOT cascade — the perf optimization in this commit. Detection: every
 // refreshDashboard ends with tmux refresh-client -S via setBarVars; counting
 // those calls is the cleanest signal that the cascade ran (or didn't).
 describe("handleClaudeHook — refresh skip on no-op transitions", () => {
   it("pretooluse on a non-working/non-idle worker skips the dashboard refresh", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "ready" });
+    seedWorker("garden", "bold-ash", { agentStatus: "ready" });
     setCwd("garden", "bold-ash");
 
     handleClaudeHook("pretooluse");
@@ -540,8 +540,8 @@ describe("handleClaudeHook — refresh skip on no-op transitions", () => {
     expect(refreshCalls).toHaveLength(0);
   });
 
-  it("posttooluse on a working worker skips the dashboard refresh (no claudeStatus flip)", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+  it("posttooluse on a working worker skips the dashboard refresh (no agentStatus flip)", () => {
+    seedWorker("garden", "bold-ash", { agentStatus: "working" });
     setCwd("garden", "bold-ash");
 
     handleClaudeHook("posttooluse");
@@ -553,7 +553,7 @@ describe("handleClaudeHook — refresh skip on no-op transitions", () => {
   });
 
   it("pretooluse that flips working → asking DOES refresh the dashboard", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+    seedWorker("garden", "bold-ash", { agentStatus: "working" });
     setCwd("garden", "bold-ash");
 
     handleClaudeHook("pretooluse");
@@ -564,8 +564,8 @@ describe("handleClaudeHook — refresh skip on no-op transitions", () => {
     expect(refreshCalls.length).toBeGreaterThan(0);
   });
 
-  it("stop always refreshes (claudeStatus → idle is a state change)", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "idle" });
+  it("stop always refreshes (agentStatus → idle is a state change)", () => {
+    seedWorker("garden", "bold-ash", { agentStatus: "idle" });
     setCwd("garden", "bold-ash");
 
     handleClaudeHook("stop");
@@ -578,14 +578,14 @@ describe("handleClaudeHook — refresh skip on no-op transitions", () => {
 });
 
 // pretooluse/posttooluse fire on every Claude tool call. A heartbeat hook
-// (no claudeStatus/prState change) refreshes lastHookAt at most once per
+// (no agentStatus/prState change) refreshes lastEventAt at most once per
 // HOOK_HEARTBEAT_MS (10s) per worker, so N busy agents don't churn the
 // registry lock + tmux server on every tool. A real transition is never
-// throttled. lastHookAt is consumed only by 15-minute staleness checks, so
+// throttled. lastEventAt is consumed only by 15-minute staleness checks, so
 // coarse heartbeat resolution is safe.
 describe("handleClaudeHook — heartbeat throttle (perf)", () => {
-  it("posttooluse with a recent lastHookAt and no state change skips the registry write", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "working", lastHookAt: Date.now() });
+  it("posttooluse with a recent lastEventAt and no state change skips the registry write", () => {
+    seedWorker("garden", "bold-ash", { agentStatus: "working", lastEventAt: Date.now() });
     setCwd("garden", "bold-ash");
 
     handleClaudeHook("posttooluse");
@@ -594,7 +594,7 @@ describe("handleClaudeHook — heartbeat throttle (perf)", () => {
   });
 
   it("the skipped heartbeat does not fork tmux to read the pane title", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "working", lastHookAt: Date.now() });
+    seedWorker("garden", "bold-ash", { agentStatus: "working", lastEventAt: Date.now() });
     setCwd("garden", "bold-ash");
 
     handleClaudeHook("posttooluse");
@@ -602,19 +602,19 @@ describe("handleClaudeHook — heartbeat throttle (perf)", () => {
     expect(getPaneTitle).not.toHaveBeenCalled();
   });
 
-  it("posttooluse with a stale lastHookAt refreshes the heartbeat", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "working", lastHookAt: Date.now() - 30_000 });
+  it("posttooluse with a stale lastEventAt refreshes the heartbeat", () => {
+    seedWorker("garden", "bold-ash", { agentStatus: "working", lastEventAt: Date.now() - 30_000 });
     setCwd("garden", "bold-ash");
 
     handleClaudeHook("posttooluse");
 
     expect(updateWorkerFields).toHaveBeenCalled();
     const entry = entries.garden.find(e => e.name === "bold-ash")!;
-    expect(Date.now() - (entry.lastHookAt ?? 0)).toBeLessThan(5_000);
+    expect(Date.now() - (entry.lastEventAt ?? 0)).toBeLessThan(5_000);
   });
 
-  it("a heartbeat with no prior lastHookAt is not throttled (undefined reads as stale)", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "working" });
+  it("a heartbeat with no prior lastEventAt is not throttled (undefined reads as stale)", () => {
+    seedWorker("garden", "bold-ash", { agentStatus: "working" });
     setCwd("garden", "bold-ash");
 
     handleClaudeHook("posttooluse");
@@ -622,10 +622,10 @@ describe("handleClaudeHook — heartbeat throttle (perf)", () => {
     expect(updateWorkerFields).toHaveBeenCalled();
   });
 
-  it("a state-changing hook is NEVER throttled, even with a fresh lastHookAt", () => {
+  it("a state-changing hook is NEVER throttled, even with a fresh lastEventAt", () => {
     // asking → working is a real transition; it must write regardless of how
     // recently the heartbeat fired, or the worker would appear stuck in asking.
-    seedWorker("garden", "bold-ash", { claudeStatus: "asking", lastHookAt: Date.now() });
+    seedWorker("garden", "bold-ash", { agentStatus: "asking", lastEventAt: Date.now() });
     setCwd("garden", "bold-ash");
 
     handleClaudeHook("posttooluse");
@@ -655,7 +655,7 @@ describe("writeQuickStatus — status pane resize", () => {
 
   it("resizes status pane to content line count when statusPaneId is set", () => {
     vi.mocked(readDashState).mockReturnValue(stateWithPane);
-    seedWorker("garden", "bold-ash", { claudeStatus: "idle" });
+    seedWorker("garden", "bold-ash", { agentStatus: "idle" });
     setCwd("garden", "bold-ash");
 
     handleClaudeHook("stop");
@@ -667,7 +667,7 @@ describe("writeQuickStatus — status pane resize", () => {
   });
 
   it("skips resize when statusPaneId is null", () => {
-    seedWorker("garden", "bold-ash", { claudeStatus: "idle" });
+    seedWorker("garden", "bold-ash", { agentStatus: "idle" });
     setCwd("garden", "bold-ash");
 
     handleClaudeHook("stop");

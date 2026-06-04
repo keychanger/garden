@@ -22,7 +22,7 @@
 // interprets the result, fires the alert, updates `trellis.modelFallbackAt`.
 // Keeping it pure makes it easy to unit-test with synthetic snapshots.
 import {
-  getAutoContinueConfig, setAutoContinueConfig, tryGetProject,
+  getAutoContinueConfig, setAutoContinueConfig, tryGetProject, tryResolveProvider,
   type AutoContinueConfig, type ProjectConfig,
 } from "../config.js";
 import { addAlert } from "./alerts.js";
@@ -31,7 +31,10 @@ import { updateWorkerFields, type WorkerEntry } from "./registry.js";
 import { readUsageSnapshot, type UsageSnapshot } from "./usage.js";
 import type { WorkflowDefinition } from "./workflows/types.js";
 
-export type ResolvedModel = "opus" | "sonnet";
+// Opaque model string (an Anthropic alias or any concrete model id). The
+// Sonnet-exhaustion fallback below only engages when the requested model is
+// literally "sonnet" — other values pass through untouched.
+export type ResolvedModel = string;
 
 export interface ResolveVineModelResult {
   /** Model to spawn this iteration with. `null` means: do not spawn —
@@ -56,6 +59,11 @@ export function resolveVineModel(
   workflow: WorkflowDefinition,
   snapshot: UsageSnapshot | null,
   autoContinue: AutoContinueConfig,
+  // True when the project's workers run on a provider (resolved by the
+  // side-effecting caller so this stays a pure function). The Anthropic
+  // Sonnet meter says nothing about the backend the "sonnet" alias maps
+  // to over there, so the fallback is skipped entirely.
+  workerOnProvider = false,
 ): ResolveVineModelResult {
   // 1. Resolve the requested model from the chain.
   const requested: ResolvedModel | undefined =
@@ -69,10 +77,16 @@ export function resolveVineModel(
     return { model: null, fellBack: false, reason: "no model requested (account default)" };
   }
 
-  // 2. If the requested model is opus, no fallback applies — Sonnet
-  // exhaustion doesn't affect Opus iterations.
-  if (requested === "opus") {
-    return { model: "opus", fellBack: false };
+  if (workerOnProvider) {
+    return { model: requested, fellBack: false };
+  }
+
+  // 2. The fallback only models Anthropic's Sonnet quota economy: any
+  // requested model other than the literal "sonnet" alias (opus, or an
+  // arbitrary concrete model id) passes through untouched — Sonnet
+  // exhaustion says nothing about it.
+  if (requested !== "sonnet") {
+    return { model: requested, fellBack: false };
   }
 
   // 3. Sonnet path. Check the snapshot.
@@ -169,7 +183,8 @@ export function resolveAndApplyVineModel(
   }
   const snapshot = readUsageSnapshot();
   const autoContinue = getAutoContinueConfig();
-  const result = resolveVineModel(entry, project, workflow, snapshot, autoContinue);
+  const workerOnProvider = tryResolveProvider(project) !== null;
+  const result = resolveVineModel(entry, project, workflow, snapshot, autoContinue, workerOnProvider);
 
   if (result.fellBack) {
     if (shouldFireFallbackAlert(entry, snapshot)) {

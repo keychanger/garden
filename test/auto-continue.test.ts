@@ -76,7 +76,10 @@ describe("setAutoContinueConfig", () => {
 const addAlertMock = vi.fn();
 
 function mockGateDeps(snap: unknown) {
-  vi.doMock("../src/dashboard/usage.js", () => ({
+  // Keep the real snapshotMeters (the accessor under test reads through it);
+  // only the snapshot source is stubbed.
+  vi.doMock("../src/dashboard/usage.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../src/dashboard/usage.js")>()),
     readUsageSnapshot: () => snap,
   }));
   vi.doMock("../src/dashboard/alerts.js", () => ({

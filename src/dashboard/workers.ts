@@ -62,15 +62,21 @@ export interface NewWorkerOptions {
   // Trellis vines pass "trellis" along with the trellis.name/trellis.path
   // pair below; see WORKFLOWS.md "Spawning a trellis vine".
   workflow?: string;
+  // Per-worker model from `--model` for default and grow workers. Persisted
+  // to entry.model and threaded into every launch/respawn/bounce. Opaque
+  // string: an Anthropic alias or a concrete model id. Trellis vines use
+  // trellis.workerModel below instead (iteration-resolved with fallback).
+  model?: string;
   // Trellis-specific options, ignored unless workflow === "trellis".
   trellis?: {
     name: string;
     path: string;
     maxIterations: number;
     /** Per-worker model override from `--model` at plant time. Persisted
-     *  to entry.workerModel and read by each iteration's resolveVineModel
-     *  call. Absent → workflow.workerModel default ("sonnet"). */
-    workerModel?: "opus" | "sonnet";
+     *  to entry.trellis.workerModel and read by each iteration's
+     *  resolveVineModel call. Absent → workflow.workerModel default
+     *  ("sonnet"). */
+    workerModel?: string;
   };
   // Grow-specific options, ignored unless workflow === "grow". The seed is
   // the operator's task description, persisted on entry.grow.seed and
@@ -247,8 +253,11 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       worktreePath: wtPath,
       branchName,
       baseBranch,
-      claudeStatus: "loading",
+      agentStatus: "loading",
       workflow: workflowName,
+      // Per-worker model pin for default/grow workers (trellis resolves
+      // per iteration via trellis.workerModel below).
+      ...(workflowName !== "trellis" && opts.model ? { model: opts.model } : {}),
       // Trellis vine data — populated only when workflow === "trellis".
       // iteration starts at 0; launchReview increments to 1 before the
       // first review fires. See WORKFLOWS.md "Worker entry additions".
@@ -290,7 +299,8 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // refuse outright when Sonnet is exhausted and trellisOpusFallback
     // is false. A refusal rolls back the entry and bails — no pane
     // spawned, no worktree created.
-    let resolvedModel: "opus" | "sonnet" | undefined;
+    let resolvedModel: string | undefined =
+      workflowName !== "trellis" ? opts.model : undefined;
     if (workflowName === "trellis") {
       const stamped = findWorkerByName(targetProject, workerName);
       if (stamped) {
@@ -314,7 +324,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // with progress output instead of blocking the hotkey handler. Default
     // workers omit the options argument entirely (preserves arity for existing
     // callers and tests).
-    const bootstrapOpts: { trellisRelativePath?: string; model?: "opus" | "sonnet" } = {};
+    const bootstrapOpts: { trellisRelativePath?: string; model?: string } = {};
     if (trellisRelativePath) bootstrapOpts.trellisRelativePath = trellisRelativePath;
     if (resolvedModel) bootstrapOpts.model = resolvedModel;
     const scriptFile = (bootstrapOpts.trellisRelativePath || bootstrapOpts.model)
@@ -374,7 +384,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       }
     } catch (err) {
       // addWorker (and trellis model resolution) already wrote the registry
-      // entry; if pane creation fails it would otherwise sit in claudeStatus=
+      // entry; if pane creation fails it would otherwise sit in agentStatus=
       // "loading" forever with no worktree and no pane. Roll back so the next
       // attempt isn't blocked by name collision and the dashboard isn't lying
       // about pending workers.
@@ -560,13 +570,18 @@ export function bounceWorker(projectName: string, workerName: string): void {
   const trellisRelativePath = projectInfo
     ? trellisRelativePathForEntry(entry, projectInfo.path)
     : undefined;
-  // Default workers omit the options arg so existing tests (which assert
-  // exact argument arity) still pass.
+  // entry.model carries the default/grow per-worker pin; trellis vines
+  // resolve their model per iteration, not on bounce. Plain workers omit
+  // the options arg so existing tests (which assert exact argument arity)
+  // still pass.
+  const resumeOpts: { trellisRelativePath?: string; model?: string } = {};
+  if (trellisRelativePath) resumeOpts.trellisRelativePath = trellisRelativePath;
+  if (entry.model) resumeOpts.model = entry.model;
   const resumeCmd = entry.worktreePath && entry.branchName && projectInfo
-    ? (trellisRelativePath
+    ? (resumeOpts.trellisRelativePath || resumeOpts.model
         ? buildWorktreeResumeCommand(
             projectName, projectInfo.path, entry.name, entry.branchName,
-            entry.sessionId, baseBranch, { trellisRelativePath },
+            entry.sessionId, baseBranch, resumeOpts,
           )
         : buildWorktreeResumeCommand(
             projectName, projectInfo.path, entry.name, entry.branchName,
@@ -580,7 +595,7 @@ export function bounceWorker(projectName: string, workerName: string): void {
 
   // Capture pre-bounce status before we overwrite to "idle" — used to decide
   // whether to auto-send a continue prompt below.
-  const wasWorking = entry.claudeStatus === "working";
+  const wasWorking = entry.agentStatus === "working";
 
   const cwd = entry.worktreePath ?? projectInfo?.path;
   const respawnArgs = ["respawn-pane", "-k"];
@@ -588,9 +603,9 @@ export function bounceWorker(projectName: string, workerName: string): void {
   respawnArgs.push("-t", paneId, "sh", "-c", resumeCmd);
   tmux(...respawnArgs);
 
-  // --resume does not fire SessionStart, so write claudeStatus directly.
+  // --resume does not fire SessionStart, so write agentStatus directly.
   // Mirrors the attach-time resume path in ensureDashboard().
-  updateWorkerFields(projectName, workerName, { claudeStatus: "idle" });
+  updateWorkerFields(projectName, workerName, { agentStatus: "idle" });
 
   if (wasWorking) {
     dispatchDelayedContinue(resolveGardenRunner(), projectName, workerName);

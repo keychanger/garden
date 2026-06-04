@@ -138,7 +138,7 @@ function healStatusPaneInState(state: DashboardState): DashboardState {
 }
 
 // Ghost entries: never-bootstrapped workers from a failed handoff or hotkey
-// spawn. Identified by the combination of claudeStatus === "loading" (never
+// spawn. Identified by the combination of agentStatus === "loading" (never
 // advanced to ready/idle), no tmux window, and no worktree on disk. A genuine
 // in-flight worker has a tmux window at this point (tmuxNewWindow creates it
 // before bootstrap runs), so this rule doesn't race with normal creation.
@@ -152,7 +152,7 @@ function dropGhostEntries(registry: WorkerRegistry, activeWindowName: string | n
   for (const projectName of Object.keys(registry.workers)) {
     const entries = registry.workers[projectName];
     const kept = entries.filter(entry => {
-      if (entry.claudeStatus !== "loading") return true;
+      if (entry.agentStatus !== "loading") return true;
       if (entry.worktreePath && worktreeExists(entry.worktreePath)) return true;
       const windowName = workerWindowName(projectName, entry.name);
       if (windowExists(windowName)) return true;
@@ -253,14 +253,14 @@ export function validateAndHeal(state: DashboardState): DashboardState {
   // and the branch on origin both persist. The "never auto-cleanup workers"
   // rule (per the operator's standing feedback) means we must NOT remove
   // the registry entry: a transient tmux glitch (server crash + restart)
-  // would otherwise discard the worker permanently. Mark `claudeStatus =
+  // would otherwise discard the worker permanently. Mark `agentStatus =
   // "exited"` (matching the pane-died hook's effect) and surface an alert
   // so the operator can either resume manually or `⌥x` to clean up.
   const registry = readRegistry();
   let registryChanged = false;
 
   // Drop ghost entries FIRST. Must run before the "mark exited" pass —
-  // that pass would otherwise rewrite claudeStatus from "loading" to
+  // that pass would otherwise rewrite agentStatus from "loading" to
   // "exited" and the ghost would slip through as a preserved exited worker.
   if (dropGhostEntries(registry, healed.activeWindowName)) {
     registryChanged = true;
@@ -271,12 +271,12 @@ export function validateAndHeal(state: DashboardState): DashboardState {
       const windowName = workerWindowName(projectName, entry.name);
       const exists = windowExists(windowName) || windowName === healed.activeWindowName;
       if (exists) continue;
-      if (entry.claudeStatus === "exited") continue; // already marked
+      if (entry.agentStatus === "exited") continue; // already marked
       log.warn("validate", "worker window missing, marking exited (entry preserved)", {
         worker: entry.name,
         data: { project: projectName, prState: entry.prState },
       });
-      entry.claudeStatus = "exited";
+      entry.agentStatus = "exited";
       registryChanged = true;
       addAlert({
         level: "warn",

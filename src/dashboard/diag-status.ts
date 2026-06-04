@@ -110,7 +110,7 @@ export async function runDiagStatus(): Promise<void> {
     for (const [project, entries] of Object.entries(reg.workers)) {
       sections.push(`${project}: ${entries.length} entries`);
       for (const e of entries) {
-        sections.push(`  - ${e.name}  claudeStatus=${e.claudeStatus ?? "?"}  prState=${e.prState ?? "?"}  task=${JSON.stringify(e.task ?? "")}`);
+        sections.push(`  - ${e.name}  agentStatus=${e.agentStatus ?? "?"}  prState=${e.prState ?? "?"}  task=${JSON.stringify(e.task ?? "")}`);
       }
     }
   } catch (err) {

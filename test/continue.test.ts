@@ -100,7 +100,7 @@ describe("continueWorker", () => {
   it("skips the send when no pane can be located and does not clear the flag", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "bold-ash", sessionId: "s", task: "",
-      claudeStatus: "idle", interruptedWhileWorking: true,
+      agentStatus: "idle", interruptedWhileWorking: true,
     });
     vi.mocked(windowExists).mockReturnValue(false);
     // activePaneId path also fails
@@ -116,7 +116,7 @@ describe("continueWorker", () => {
   it("skips the send when the worker is already working (operator typed first) and clears the flag", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "bold-ash", sessionId: "s", task: "",
-      claudeStatus: "working", interruptedWhileWorking: true,
+      agentStatus: "working", interruptedWhileWorking: true,
     });
     continueWorker("myproject", "bold-ash");
 
@@ -129,7 +129,7 @@ describe("continueWorker", () => {
   it("skips the send when the worker is asking and clears the flag", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "bold-ash", sessionId: "s", task: "",
-      claudeStatus: "asking", interruptedWhileWorking: true,
+      agentStatus: "asking", interruptedWhileWorking: true,
     });
     continueWorker("myproject", "bold-ash");
 
@@ -142,7 +142,7 @@ describe("continueWorker", () => {
   it("sends the literal continue prompt followed by Enter when worker is idle, then clears the flag", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "bold-ash", sessionId: "s", task: "",
-      claudeStatus: "idle", interruptedWhileWorking: true,
+      agentStatus: "idle", interruptedWhileWorking: true,
     });
     // Prefer activePaneId path
     vi.mocked(readDashState).mockReturnValue(makeState({
@@ -162,7 +162,7 @@ describe("continueWorker", () => {
 
   it("falls back to the hidden window pane id when the worker is parked", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
     });
     // Active pane points elsewhere; window-resolution path fires.
     vi.mocked(readDashState).mockReturnValue(makeState({
@@ -178,7 +178,7 @@ describe("continueWorker", () => {
 
   it("does not clear the flag when the send-keys call throws", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
     });
     // mockImplementationOnce, not mockImplementation: clearAllMocks (in
     // beforeEach) clears call records but NOT implementations, so a persistent
@@ -205,7 +205,7 @@ describe("continueWorkerIfStuck", () => {
 
   it("re-pastes when the worker is still parked at ready (cold-start retry path)", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "ready",
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "ready",
     });
 
     continueWorkerIfStuck("myproject", "bold-ash");
@@ -215,7 +215,7 @@ describe("continueWorkerIfStuck", () => {
 
   it("skips when the worker has moved to working (first paste landed, response in flight)", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "working",
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "working",
     });
 
     continueWorkerIfStuck("myproject", "bold-ash");
@@ -225,7 +225,7 @@ describe("continueWorkerIfStuck", () => {
 
   it("skips when the worker has moved to idle (first paste landed, response already finished inside the retry window)", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
     });
 
     continueWorkerIfStuck("myproject", "bold-ash");
@@ -309,7 +309,7 @@ describe("dispatchDelayedAutoContinue", () => {
 describe("continueWorkerAfterMergeIfStuck", () => {
   it("re-fires the merge prompt when prState is still `merged` (prompt never landed)", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
       prState: "merged",
     });
     vi.mocked(readDashState).mockReturnValue(makeState({
@@ -327,7 +327,7 @@ describe("continueWorkerAfterMergeIfStuck", () => {
 
   it("no-ops when prState has moved off `merged` (delivered prompt cleared it via UserPromptSubmit)", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
       prState: "working",
     });
 
@@ -338,7 +338,7 @@ describe("continueWorkerAfterMergeIfStuck", () => {
 
   it("no-ops when prState is `done` (worker self-declared; never re-prompt)", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
       prState: "done",
     });
 
@@ -347,9 +347,9 @@ describe("continueWorkerAfterMergeIfStuck", () => {
     expect(pasteAndSubmit).not.toHaveBeenCalled();
   });
 
-  it("does not double-prompt: when prState is `merged` but the worker is working again, the inner claudeStatus gate skips the paste", () => {
+  it("does not double-prompt: when prState is `merged` but the worker is working again, the inner agentStatus gate skips the paste", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "working",
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "working",
       prState: "merged",
     });
 
@@ -369,7 +369,7 @@ describe("continueWorkerAfterMergeIfStuck", () => {
 describe("continueWorkerAfterMerge", () => {
   it("sends the merge-flavored prompt referencing the .garden-done sentinel", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
     });
     vi.mocked(readDashState).mockReturnValue(makeState({
       activeWindowName: "_myproject-worker-bold-ash",
@@ -387,7 +387,7 @@ describe("continueWorkerAfterMerge", () => {
 
   it("skips when the worker is already working", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "working",
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "working",
     });
     continueWorkerAfterMerge("myproject", "bold-ash");
     expect(pasteAndSubmit).not.toHaveBeenCalled();
@@ -405,7 +405,7 @@ describe("continueWorkerAfterMerge", () => {
     // all-undefined object as equal, so not.toHaveBeenCalledWith can't
     // distinguish the interrupted-clear from the pending-clear.
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "working",
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "working",
       branchName: "bold-ash",
       pendingContinueChangedFiles: ["src/foo.ts"],
     });
@@ -416,7 +416,7 @@ describe("continueWorkerAfterMerge", () => {
 
   it("prepends a stale-files preamble when the reviewer modified files", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
       branchName: "bold-ash",
       pendingContinueChangedFiles: ["src/foo.ts", "src/bar.ts"],
     });
@@ -442,7 +442,7 @@ describe("continueWorkerAfterMerge", () => {
   it("truncates the file list past 20 entries", () => {
     const files = Array.from({ length: 25 }, (_, i) => `src/file${i}.ts`);
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
       branchName: "bold-ash",
       pendingContinueChangedFiles: files,
     });
@@ -462,7 +462,7 @@ describe("continueWorkerAfterMerge", () => {
 
   it("appends a manual-sync nudge targeting the base branch when the post-merge sync failed", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
       branchName: "bold-ash",
       baseBranch: "main",
       pendingContinueSyncFailed: true,
@@ -487,7 +487,7 @@ describe("continueWorkerAfterMerge", () => {
       name: "myproject", path: "/tmp/myproject", postMerge: "npm install && npm run build",
     });
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
     });
     vi.mocked(readDashState).mockReturnValue(makeState({
       activeWindowName: "_myproject-worker-bold-ash",
@@ -504,7 +504,7 @@ describe("continueWorkerAfterMerge", () => {
 
   it("uses the bare base prompt when no transient fields are set", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "idle",
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
     });
     vi.mocked(readDashState).mockReturnValue(makeState({
       activeWindowName: "_myproject-worker-bold-ash",
@@ -604,7 +604,7 @@ describe("seedWorker", () => {
 
   it("reads the briefing, sends it once the worker leaves loading, and unlinks the file", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "ready",
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "ready",
     });
     vi.mocked(readDashState).mockReturnValue(makeState({
       activeWindowName: "_myproject-worker-bold-ash",
@@ -624,7 +624,7 @@ describe("seedWorker", () => {
   it("polls while the worker is still loading and sends as soon as it transitions", () => {
     let status: "loading" | "ready" = "loading";
     vi.mocked(findWorkerByName).mockImplementation(() => ({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: status,
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: status,
     }));
     vi.mocked(readDashState).mockReturnValue(makeState({
       activeWindowName: "_myproject-worker-bold-ash",
@@ -644,7 +644,7 @@ describe("seedWorker", () => {
 
   it("times out after 90s if the worker never leaves loading, sends anyway, and unlinks", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", claudeStatus: "loading",
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "loading",
     });
     vi.mocked(readDashState).mockReturnValue(makeState({
       activeWindowName: "_myproject-worker-bold-ash",
@@ -687,7 +687,7 @@ describe("notifyHandoffCallback", () => {
     // Default: parent is idle in a known window, pane resolves cleanly.
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "calm-bay", sessionId: "s", task: "",
-      claudeStatus: "idle",
+      agentStatus: "idle",
     });
     vi.mocked(readDashState).mockReturnValue(makeState({
       activeWindowName: "_fox-worker-calm-bay",
@@ -752,7 +752,7 @@ describe("notifyHandoffCallback", () => {
   it("silently no-ops when the parent is currently working (continueWorker gate)", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "calm-bay", sessionId: "s", task: "",
-      claudeStatus: "working",
+      agentStatus: "working",
     });
 
     notifyHandoffCallback({

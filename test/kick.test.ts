@@ -100,17 +100,17 @@ describe("kick command", () => {
     expect(triggerProjectPoll).not.toHaveBeenCalled();
   });
 
-  it("errors when Claude is mid-turn (claudeStatus=working)", async () => {
+  it("errors when Claude is mid-turn (agentStatus=working)", async () => {
     // A reviewer racing a live worker can force-push over unfinished commits.
-    registryMock._setEntries("myproject", [makeWorker({ claudeStatus: "working" })]);
+    registryMock._setEntries("myproject", [makeWorker({ agentStatus: "working" })]);
 
     await expect(kick(["bold-ash"])).rejects.toThrow(/currently working/);
     expect(updateWorkerFields).not.toHaveBeenCalled();
     expect(triggerProjectPoll).not.toHaveBeenCalled();
   });
 
-  it("errors when Claude is mid-turn (claudeStatus=asking)", async () => {
-    registryMock._setEntries("myproject", [makeWorker({ claudeStatus: "asking" })]);
+  it("errors when Claude is mid-turn (agentStatus=asking)", async () => {
+    registryMock._setEntries("myproject", [makeWorker({ agentStatus: "asking" })]);
 
     await expect(kick(["bold-ash"])).rejects.toThrow(/currently asking/);
     expect(updateWorkerFields).not.toHaveBeenCalled();
@@ -215,10 +215,10 @@ describe("kick command", () => {
     expect(triggerProjectPoll).not.toHaveBeenCalled();
   });
 
-  it("recovers a failing worker even when claudeStatus is stuck on 'working'", async () => {
+  it("recovers a failing worker even when agentStatus is stuck on 'working'", async () => {
     // Real-world case: reviewer hit a 500, worker transitioned to failing,
     // operator bounced (which sets idle), then a UserPromptSubmit flipped
-    // claudeStatus back to "working" — but Claude is now hung and no Stop
+    // agentStatus back to "working" — but Claude is now hung and no Stop
     // hook will ever fire. Without this relaxation, kick refuses and the
     // operator has to edit the registry by hand.
     registryMock._setEntries("myproject", [
@@ -226,7 +226,7 @@ describe("kick command", () => {
         prState: "failing",
         failingReason: "transient-review",
         failingSha: "abc123",
-        claudeStatus: "working",
+        agentStatus: "working",
       }),
     ]);
 
@@ -244,11 +244,11 @@ describe("kick command", () => {
     expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
   });
 
-  it("still rejects claudeStatus=working when worker is in normal 'working' state", async () => {
+  it("still rejects agentStatus=working when worker is in normal 'working' state", async () => {
     // The race protection still applies in the non-failing path: a kick on a
     // live working worker could land a review while Claude is making commits.
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", claudeStatus: "working" }),
+      makeWorker({ prState: "working", agentStatus: "working" }),
     ]);
 
     await expect(kick(["bold-ash"])).rejects.toThrow(/currently working/);

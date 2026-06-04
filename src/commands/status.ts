@@ -1,7 +1,7 @@
 // Shows project status: registered projects, active workers, and their states.
 //
 // Per STATUS.md, the registry is the single source of truth and there is one
-// render path. This file reads claudeStatus and prState from the registry,
+// render path. This file reads agentStatus and prState from the registry,
 // combines them via resolveWorkerStatus(), and renders. It does not call
 // pgrep and does not read marker files. Before rendering, it refreshes
 // worker task summaries from live tmux pane titles so the registry stays
@@ -16,7 +16,7 @@ import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/w
 import { currentBranch } from "../dashboard/git.js";
 
 // Display states from STATUS.md. These are the only values the renderer ever
-// emits. `loading`/`ready`/`working`/`idle`/`exited` come from claudeStatus
+// emits. `loading`/`ready`/`working`/`idle`/`exited` come from agentStatus
 // (written by hooks). `reviewing`/`merge-pending`/`failing`/`merged`/`done`
 // come from prState (written by the poller and the Stop hook). The combine
 // function gives prState priority because it describes where the worker's
@@ -213,21 +213,21 @@ function colorizeRow(status: WorkerStatus, line: string): string {
   return line;
 }
 
-// Combine claudeStatus and prState into a single display state.
+// Combine agentStatus and prState into a single display state.
 // Lifecycle states (reviewing, merge-pending, failing, merged, done) take
 // priority because they describe where the worker's *code* is, not what
 // Claude is doing right now. The hook handler is the only place that clears
 // `merged`/`done` from prState (on UserPromptSubmit) — this function never
 // mutates state.
 export function resolveWorkerStatus(
-  entry: { claudeStatus?: string; prState?: string } | undefined,
+  entry: { agentStatus?: string; prState?: string } | undefined,
 ): WorkerStatus {
   const pr = entry?.prState;
   if (pr === "reviewing" || pr === "merge-pending" || pr === "resolving" || pr === "ci-fixing" || pr === "failing" || pr === "merged" || pr === "done") {
     return pr;
   }
-  const cs = entry?.claudeStatus as ProcessStatus | undefined;
-  // No claudeStatus yet (e.g., entry just created without "loading"): show
+  const cs = entry?.agentStatus as ProcessStatus | undefined;
+  // No agentStatus yet (e.g., entry just created without "loading"): show
   // "ready" as the safest neutral state.
   return cs ?? "ready";
 }

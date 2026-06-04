@@ -294,7 +294,7 @@ describe("switchProject", () => {
       name: "active",
       sessionId: "s1",
       task: "fix bug",
-      claudeStatus: "working",
+      agentStatus: "working",
     });
 
     switchProject("2");
@@ -388,7 +388,7 @@ describe("focusWorker", () => {
       name: "bold-ash",
       sessionId: "s1",
       task: "do stuff",
-      claudeStatus: "working",
+      agentStatus: "working",
     });
 
     focusWorker();

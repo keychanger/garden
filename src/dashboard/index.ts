@@ -262,7 +262,7 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     // resolvable origin/HEAD). The worker entry was stamped in addWorker
     // before the bootstrap ran but never reached worktree creation, so
     // remove it before the pane dies — otherwise it persists as a ghost
-    // (claudeStatus="exited" with no worktree on disk) that the ghost
+    // (agentStatus="exited" with no worktree on disk) that the ghost
     // sweep can't clean.
     const [, projectName, workerName, ...rest] = args;
     const errText = rest.join(" ").slice(0, 400);

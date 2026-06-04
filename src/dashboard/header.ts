@@ -347,7 +347,7 @@ export function findWorkerPaneId(project: string, worker: string): string | null
 // ---------------------------------------------------------------------------
 
 // tmux fires pane-died with the window name. We parse out project + worker,
-// look up the registry entry, and write claudeStatus="exited". No-op when
+// look up the registry entry, and write agentStatus="exited". No-op when
 // the window name does not match a worker pattern (reviewer windows, garden
 // panes) or when the registry entry is missing (bootstrap-failure race).
 export function handlePaneDied(windowName: string | undefined): void {
@@ -359,15 +359,15 @@ export function handlePaneDied(windowName: string | undefined): void {
   if (!entry) return;
 
   // Bootstrap-abort detection: the pane died before reaching Claude Code
-  // (claudeStatus still "loading" — the dispatch_loaded path in workers.ts
+  // (agentStatus still "loading" — the dispatch_loaded path in workers.ts
   // only flips this once Claude is running) AND no worktree exists on disk.
   // This is a never-bootstrapped worker — `_bootstrap-fail` should have
   // already removed the registry entry, but cover the path where bootstrap
   // crashed for an unrelated reason (segfault, OOM, operator ⌥x while the
   // script was mid-fetch). Without this, the entry persists as a ghost the
-  // standard sweep can't clean (claudeStatus would become "exited" below,
+  // standard sweep can't clean (agentStatus would become "exited" below,
   // taking it out of the ghost rule's "loading" filter).
-  if (entry.claudeStatus === "loading"
+  if (entry.agentStatus === "loading"
       && (!entry.worktreePath || !worktreeExists(entry.worktreePath))) {
     try {
       removeWorker(project, worker);
@@ -385,15 +385,15 @@ export function handlePaneDied(windowName: string | undefined): void {
     return;
   }
 
-  const wasWorking = entry.claudeStatus === "working";
+  const wasWorking = entry.agentStatus === "working";
   try {
     updateWorkerFields(project, worker, {
-      claudeStatus: "exited",
+      agentStatus: "exited",
       ...(wasWorking ? { interruptedWhileWorking: true } : {}),
     });
   } catch (err) {
     // Lock contention. Logging here surfaces real registry contention so the
-    // operator can correlate "stuck claudeStatus" with lock pressure instead
+    // operator can correlate "stuck agentStatus" with lock pressure instead
     // of guessing the cause.
     log.warn("hook", "pane-died update failed", {
       worker,
@@ -880,8 +880,8 @@ function renderHistoryContent(
       if (turns.length === 0) {
         lines = [dimLine("no conversation yet")];
       } else {
-        const status = entry.claudeStatus === "working" ? "working"
-          : entry.claudeStatus === "asking" ? "asking" : undefined;
+        const status = entry.agentStatus === "working" ? "working"
+          : entry.agentStatus === "asking" ? "asking" : undefined;
         lines = formatConversationPane(turns, { width, status });
       }
     }

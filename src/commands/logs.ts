@@ -249,7 +249,7 @@ const SUPPRESSED: SuppressRule[] = [
   // Bulk on startup; only the *first* sessionstart per worker is interesting,
   // and that's hard to detect without extra state. Ready-state ones are the
   // mechanical bulk; non-ready ones still pass through.
-  { src: "hook", msg: "claude hook", data: { event: "sessionstart", claudeStatus: "ready" } },
+  { src: "hook", msg: "claude hook", data: { event: "sessionstart", agentStatus: "ready" } },
   // No-transition wakes.
   { src: "poller", msg: "poll cycle" },
   // Verbose, not actionable; full bash command in payload.
@@ -364,7 +364,7 @@ const SUMMARIZERS: Record<string, Summarizer> = {
   "poller:auto-continued worker after merge": () => "↻ auto-continued (next phase)",
   "hook:claude hook": (e) => {
     const event = String(e.data?.event ?? "?");
-    const status = e.data?.claudeStatus;
+    const status = e.data?.agentStatus;
     return typeof status === "string" ? `${event} → ${status}` : event;
   },
   "workers:created": () => "worker created",

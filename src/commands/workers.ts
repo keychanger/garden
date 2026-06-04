@@ -28,10 +28,21 @@ export async function workers(args: string[]): Promise<void> {
   throw new Error(
     `Usage:\n`
     + `  garden workers new <project> [--workflow trellis|grow] [--trellis <name>] `
-    + `[--seed <text> | --seed-file <path>] [--model opus|sonnet] [--max-iterations N]\n`
+    + `[--seed <text> | --seed-file <path>] [--model <alias-or-id>] [--max-iterations N]\n`
     + `  garden workers grow [<worker>] [--seed <text> | --seed-file <path> | --goal-file <path>] `
     + `[--max-iterations N]`,
   );
+}
+
+// --model accepts an Anthropic alias ("opus"/"sonnet" — resolved through the
+// provider's modelMap on provider-backed projects) or any concrete model id
+// the backend accepts; garden does not maintain a model list to validate
+// against (docs/MULTI-MODEL.md "Layer 2"). It is interpolated into launch
+// commands via shellEscape, so the only hard requirement is non-emptiness.
+function requireModelValue(raw: string): string {
+  const model = raw.trim();
+  if (!model) throw new Error("--model requires a non-empty value");
+  return model;
 }
 
 async function newCommand(args: string[]): Promise<void> {
@@ -80,31 +91,20 @@ async function newCommand(args: string[]): Promise<void> {
     if (flags.has("max-iterations")) {
       throw new Error("--max-iterations can only be used with --workflow trellis or grow");
     }
-    if (flags.has("model")) {
-      throw new Error(
-        "--model is currently only supported with --workflow trellis. " +
-        "Default workflow workers run on the account default model.",
-      );
-    }
-    const newName = newWorker({ projectName, workflow });
+    const model = flags.has("model") ? requireModelValue(flags.get("model")!) : undefined;
+    const newName = newWorker({ projectName, workflow, model });
     if (!newName) {
       throw new Error(
         `Failed to spawn worker on '${projectName}'. Is the dashboard running? Check 'garden health'.`,
       );
     }
-    console.log(`Created worker ${projectName}/${newName}.`);
+    console.log(`Created worker ${projectName}/${newName}${model ? ` (model=${model})` : ""}.`);
     return;
   }
 
   if (workflow === "grow") {
     if (flags.has("trellis")) {
       throw new Error("--trellis can only be used with --workflow trellis");
-    }
-    if (flags.has("model")) {
-      throw new Error(
-        "--model is not supported with --workflow grow. "
-        + "Grow loops run on the account default model.",
-      );
     }
     if (flags.has("seed") && flags.has("seed-file")) {
       throw new Error("--seed and --seed-file are mutually exclusive; pass exactly one.");
@@ -153,9 +153,11 @@ async function newCommand(args: string[]): Promise<void> {
     fs.mkdirSync(path.dirname(seedFile), { recursive: true });
     fs.writeFileSync(seedFile, buildGrowIteration1Seed(seed, maxIter));
 
+    const model = flags.has("model") ? requireModelValue(flags.get("model")!) : undefined;
     const newName = newWorker({
       projectName,
       workflow: "grow",
+      model,
       grow: { seed, maxIterations: maxIter },
       seedMessageFile: seedFile,
     });
@@ -167,7 +169,7 @@ async function newCommand(args: string[]): Promise<void> {
       );
     }
     console.log(
-      `Started grow loop ${projectName}/${newName} (up to ${maxIter} iterations).`,
+      `Started grow loop ${projectName}/${newName} (up to ${maxIter} iterations${model ? `, model=${model}` : ""}).`,
     );
     return;
   }
@@ -178,13 +180,9 @@ async function newCommand(args: string[]): Promise<void> {
     throw new Error("--workflow trellis requires --trellis <name>");
   }
 
-  let workerModel: "opus" | "sonnet" | undefined;
+  let workerModel: string | undefined;
   if (flags.has("model")) {
-    const raw = flags.get("model")!;
-    if (raw !== "opus" && raw !== "sonnet") {
-      throw new Error(`--model must be 'opus' or 'sonnet', got '${raw}'`);
-    }
-    workerModel = raw;
+    workerModel = requireModelValue(flags.get("model")!);
   }
 
   // Pre-flight: validates the trellis exists, isn't retired, has the

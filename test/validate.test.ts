@@ -178,7 +178,7 @@ describe("validateAndHeal", () => {
     // The "never auto-cleanup workers" rule means a missing tmux pane must
     // not delete the entry — a transient tmux glitch would otherwise discard
     // the worker permanently along with its on-disk worktree. The pane-died
-    // shape (claudeStatus="exited") is what we expose; an alert tells the
+    // shape (agentStatus="exited") is what we expose; an alert tells the
     // operator to bounce or ⌥x explicitly.
     vi.mocked(readRegistry).mockReturnValue({
       workers: {
@@ -199,7 +199,7 @@ describe("validateAndHeal", () => {
     // Both entries persist.
     expect(written.workers.garden).toHaveLength(2);
     const missing = written.workers.garden.find(w => w.name === "missing-one");
-    expect(missing?.claudeStatus).toBe("exited");
+    expect(missing?.agentStatus).toBe("exited");
     expect(vi.mocked(addAlert)).toHaveBeenCalledWith(
       expect.objectContaining({
         level: "warn",
@@ -209,9 +209,9 @@ describe("validateAndHeal", () => {
     );
   });
 
-  it("removes a ghost entry: claudeStatus=loading + no worktree + no window (failed sandboxed handoff)", async () => {
+  it("removes a ghost entry: agentStatus=loading + no worktree + no window (failed sandboxed handoff)", async () => {
     // A handoff from a sandboxed worker that crashed at tmuxNewWindow used
-    // to leave addWorker's entry stranded in claudeStatus="loading" forever
+    // to leave addWorker's entry stranded in agentStatus="loading" forever
     // — no worktree, no pane, just registry rot. The new rollback in
     // workers.ts catches this at the source, and validate sweeps any
     // pre-existing ghosts on reattach. "Loading + no worktree + no window"
@@ -226,7 +226,7 @@ describe("validateAndHeal", () => {
             sessionId: "b",
             task: "",
             worktreePath: "/nope",
-            claudeStatus: "loading",
+            agentStatus: "loading",
           },
         ],
       },
@@ -245,7 +245,7 @@ describe("validateAndHeal", () => {
 
   it("keeps a still-bootstrapping worker (loading + window exists) even if the worktree isn't on disk yet", async () => {
     // Race-protection: between tmuxNewWindow and the bootstrap script creating
-    // the worktree, claudeStatus is "loading" and worktreePath doesn't exist
+    // the worktree, agentStatus is "loading" and worktreePath doesn't exist
     // on disk yet. The window does exist (tmuxNewWindow created it), so the
     // ghost sweep must NOT remove these in-flight workers.
     const { worktreeExists } = await import("../src/dashboard/git.js");
@@ -257,7 +257,7 @@ describe("validateAndHeal", () => {
             sessionId: "a",
             task: "",
             worktreePath: "/not-yet",
-            claudeStatus: "loading",
+            agentStatus: "loading",
           },
         ],
       },
@@ -278,7 +278,7 @@ describe("validateAndHeal", () => {
     vi.mocked(readRegistry).mockReturnValue({
       workers: {
         garden: [
-          { name: "merged-one", sessionId: "c", task: "done", prState: "merged", claudeStatus: "exited" },
+          { name: "merged-one", sessionId: "c", task: "done", prState: "merged", agentStatus: "exited" },
         ],
       },
     });
@@ -379,7 +379,7 @@ describe("sweepGhostEntries", () => {
             name: "grave-tall-loon",
             sessionId: "a",
             task: "",
-            claudeStatus: "loading",
+            agentStatus: "loading",
           },
           { name: "hale-rich-mere", sessionId: "b", task: "real" },
         ],

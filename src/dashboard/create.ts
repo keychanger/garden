@@ -364,7 +364,7 @@ export function ensureDashboard(): void {
   setupStatusBar(gardenRunner);
 
   // tmux pane-died hook: when a worker pane process exits, write
-  // claudeStatus="exited" to the registry. This is the only mechanism in
+  // agentStatus="exited" to the registry. This is the only mechanism in
   // the new status model that observes process liveness — and tmux delivers
   // it as an event, not a poll.
   // gardenRunner is already pre-escaped per token by resolveGardenRunner();
@@ -435,23 +435,28 @@ export function ensureDashboard(): void {
         installPollTriggerHook(entry.worktreePath, gardenRunner, projectName);
         installClaudeHooks(entry.worktreePath, projectConfig);
       }
-      // Capture mid-turn interruption before we overwrite claudeStatus below.
-      // pane-died sets interruptedWhileWorking when claudeStatus was "working"
-      // at exit; if pane-died never fired (tmux server crash), claudeStatus
+      // Capture mid-turn interruption before we overwrite agentStatus below.
+      // pane-died sets interruptedWhileWorking when agentStatus was "working"
+      // at exit; if pane-died never fired (tmux server crash), agentStatus
       // itself will still be "working".
       const wasInterrupted = entry.interruptedWhileWorking === true
-        || entry.claudeStatus === "working";
+        || entry.agentStatus === "working";
       // Claude Code does not fire SessionStart on --resume, so the SessionStart
-      // hook will not write claudeStatus for resumed workers. Write "idle"
+      // hook will not write agentStatus for resumed workers. Write "idle"
       // directly: a resumed worker is at the prompt by definition, and the
       // first user prompt will flip it to "working" via UserPromptSubmit.
       // prState is preserved as-is from the previous session.
-      updateWorkerFields(projectName, entry.name, { claudeStatus: "idle" });
+      updateWorkerFields(projectName, entry.name, { agentStatus: "idle" });
       const workerCwd = entry.worktreePath ?? projectConfig.path;
       const trellisRelativePath = trellisRelativePathForEntry(entry, projectConfig.path);
+      // entry.model: default/grow per-worker pin; trellis resolves per
+      // iteration, so vines never carry it.
+      const resumeOpts: { trellisRelativePath?: string; model?: string } = {};
+      if (trellisRelativePath) resumeOpts.trellisRelativePath = trellisRelativePath;
+      if (entry.model) resumeOpts.model = entry.model;
       const resumeCmd = entry.worktreePath && entry.branchName
-        ? (trellisRelativePath
-            ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch, { trellisRelativePath })
+        ? (resumeOpts.trellisRelativePath || resumeOpts.model
+            ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch, resumeOpts)
             : buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch))
         : buildResumeCommand(projectName, projectConfig.path, entry.sessionId);
       const workerWindowName = workerWin(projectName, entry.name);
@@ -645,12 +650,13 @@ export interface WorktreeCommandOptions {
   };
   /** Model to pass to claude via `--model` in the bootstrap/respawn/resume
    *  invocation. When set, the launched claude process is pinned to that
-   *  model. When unset (default workers), claude uses the account default
-   *  and no `--model` flag is passed. Trellis vines pass "sonnet" by
-   *  default; the per-worker `--model` override (persisted to
-   *  `entry.workerModel`) and the Sonnet exhaustion fallback (resolved
-   *  via `resolveVineModel`) override per iteration. */
-  model?: "opus" | "sonnet";
+   *  model. When unset, claude uses the account default and no `--model`
+   *  flag is passed. Opaque string: an Anthropic alias or any concrete
+   *  model id the backend accepts. Default/grow workers thread the
+   *  persisted `entry.model`; trellis vines resolve per iteration
+   *  (per-worker `trellis.workerModel` override + the Sonnet exhaustion
+   *  fallback via `resolveVineModel`). */
+  model?: string;
 }
 
 export function buildWorktreeWorkerCommand(

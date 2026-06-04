@@ -97,6 +97,9 @@ export function growAutoContinueAfterMerge(
 
   loopAutoContinueAfterMerge(projectName, workerName, growLoopHooks, {
     grow: { iteration: upcoming, maxIterations: max },
+    // Per-worker model pin (--model at plant time) survives the loop's
+    // cold respawns; absent for unpinned workers (account default).
+    ...(entry.model ? { model: entry.model } : {}),
   });
 }
 

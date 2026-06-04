@@ -117,13 +117,13 @@ high). The verdict is one of:
   and exposes intervention keys: `n` to nudge, `h` to handoff. Detection
   parameters are configurable (`PingTimeout = 30s`,
   `ConsecutiveFailures = 3`, `Cooldown = 5min`).
-- **Garden today.** `registry.ts` carries `claudeStatus` ∈ {loading, ready,
+- **Garden today.** `registry.ts` carries `agentStatus` ∈ {loading, ready,
   working, asking, idle, exited}. Hooks write the value, `pane-died` writes
   `exited`. There is no `stalled` state — a worker that's been "working" for
   2 hours with no diff shows the same indicator as one that's actively
   committing.
 - **Lift.** Medium. Add a derived `stalled` predicate in `registry.ts` keyed
-  on `(claudeStatus === "working") && (now - lastActivityTs > threshold)`,
+  on `(agentStatus === "working") && (now - lastActivityTs > threshold)`,
   surface it in `header.ts` / `status.ts`, and (optionally) auto-emit an alert
   via `addAlert`. Wire `lastActivityTs` from the existing pane-output stream
   in `usage-poller.ts` or hook events.

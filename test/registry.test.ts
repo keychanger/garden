@@ -231,23 +231,23 @@ describe("batchUpdateWorkerFields", () => {
     addWorker("proj", { name: "bold-ash", sessionId: "a", task: "" });
     addWorker("proj", { name: "calm-bay", sessionId: "b", task: "" });
     batchUpdateWorkerFields([
-      { project: "proj", workerName: "bold-ash", fields: { claudeStatus: "working" } },
-      { project: "proj", workerName: "calm-bay", fields: { claudeStatus: "idle" } },
+      { project: "proj", workerName: "bold-ash", fields: { agentStatus: "working" } },
+      { project: "proj", workerName: "calm-bay", fields: { agentStatus: "idle" } },
     ]);
     const workers = getWorkers("proj");
-    expect(workers.find(w => w.name === "bold-ash")!.claudeStatus).toBe("working");
-    expect(workers.find(w => w.name === "calm-bay")!.claudeStatus).toBe("idle");
+    expect(workers.find(w => w.name === "bold-ash")!.agentStatus).toBe("working");
+    expect(workers.find(w => w.name === "calm-bay")!.agentStatus).toBe("idle");
   });
 
   it("skips unknown workers and projects without error", async () => {
     const { addWorker, batchUpdateWorkerFields, getWorkers } = await importRegistry();
     addWorker("proj", { name: "bold-ash", sessionId: "a", task: "" });
     batchUpdateWorkerFields([
-      { project: "proj", workerName: "bold-ash", fields: { claudeStatus: "working" } },
-      { project: "proj", workerName: "nonexistent", fields: { claudeStatus: "idle" } },
-      { project: "unknown", workerName: "any", fields: { claudeStatus: "idle" } },
+      { project: "proj", workerName: "bold-ash", fields: { agentStatus: "working" } },
+      { project: "proj", workerName: "nonexistent", fields: { agentStatus: "idle" } },
+      { project: "unknown", workerName: "any", fields: { agentStatus: "idle" } },
     ]);
-    expect(getWorkers("proj")[0].claudeStatus).toBe("working");
+    expect(getWorkers("proj")[0].agentStatus).toBe("working");
   });
 
   it("is a no-op for empty updates array", async () => {
@@ -507,6 +507,66 @@ describe("trellis WorkerEntry fields", () => {
     expect(w.trellis?.iteration).toBe(7);
     expect((w as Record<string, unknown>).trellisName).toBeUndefined();
     expect((w as Record<string, unknown>).trellisIteration).toBeUndefined();
+  });
+
+  it("readRegistry migrates legacy claudeStatus/lastHookAt to agentStatus/lastEventAt", async () => {
+    // Pre-rename entries (and writes from an in-flight old binary during the
+    // rebuild window) carry the legacy field names on disk. readRegistry
+    // migrates on read, exactly like the trellis migration above.
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const { SESSIONS_DIR } = await import("../src/config.js");
+    const registryFile = path.join(SESSIONS_DIR, "dashboard.registry.json");
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    fs.writeFileSync(registryFile, JSON.stringify({
+      workers: {
+        proj: [{
+          name: "legacy-status",
+          sessionId: "s1",
+          task: "",
+          claudeStatus: "working",
+          lastHookAt: 1234567,
+        }],
+      },
+    }, null, 2));
+
+    const { readRegistry } = await importRegistry();
+    const w = readRegistry().workers.proj[0];
+    expect(w.agentStatus).toBe("working");
+    expect(w.lastEventAt).toBe(1234567);
+    expect((w as Record<string, unknown>).claudeStatus).toBeUndefined();
+    expect((w as Record<string, unknown>).lastHookAt).toBeUndefined();
+  });
+
+  it("keeps the new status fields when both old and new names are present", async () => {
+    // A fresh old-binary write landing on an already-migrated entry leaves
+    // both names on disk; the migrated name is authoritative and the legacy
+    // key is stripped so subsequent writes don't resurrect it.
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const { SESSIONS_DIR } = await import("../src/config.js");
+    const registryFile = path.join(SESSIONS_DIR, "dashboard.registry.json");
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    fs.writeFileSync(registryFile, JSON.stringify({
+      workers: {
+        proj: [{
+          name: "mixed-status",
+          sessionId: "s1",
+          task: "",
+          claudeStatus: "idle",
+          agentStatus: "working",
+          lastHookAt: 1,
+          lastEventAt: 2,
+        }],
+      },
+    }, null, 2));
+
+    const { readRegistry } = await importRegistry();
+    const w = readRegistry().workers.proj[0];
+    expect(w.agentStatus).toBe("working");
+    expect(w.lastEventAt).toBe(2);
+    expect((w as Record<string, unknown>).claudeStatus).toBeUndefined();
+    expect((w as Record<string, unknown>).lastHookAt).toBeUndefined();
   });
 });
 

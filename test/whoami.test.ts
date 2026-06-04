@@ -17,8 +17,8 @@ vi.mock("../src/dashboard/registry.js", () => {
 });
 
 vi.mock("../src/commands/status.js", () => ({
-  resolveWorkerStatus: (entry: { prState?: string; claudeStatus?: string } | undefined) =>
-    entry?.prState ?? entry?.claudeStatus ?? "ready",
+  resolveWorkerStatus: (entry: { prState?: string; agentStatus?: string } | undefined) =>
+    entry?.prState ?? entry?.agentStatus ?? "ready",
 }));
 
 import { whoami } from "../src/commands/whoami.js";
@@ -37,7 +37,7 @@ function makeWorker(overrides: Partial<WorkerEntry> = {}): WorkerEntry {
     branchName: "bold-ash",
     baseBranch: "main",
     worktreePath: "/tmp/wt/myproject/bold-ash",
-    claudeStatus: "idle",
+    agentStatus: "idle",
     ...overrides,
   };
 }
@@ -93,7 +93,7 @@ describe("whoami command", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ name: "bold-ash" }),
       makeWorker({ name: "swift-oak", prState: "reviewing" }),
-      makeWorker({ name: "alpha-fern", claudeStatus: "working" }),
+      makeWorker({ name: "alpha-fern", agentStatus: "working" }),
     ]);
 
     const lines = await captureConsoleLog(() => whoami(["bold-ash"]));

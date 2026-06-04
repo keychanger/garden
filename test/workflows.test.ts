@@ -153,20 +153,19 @@ describe("defaultWorkflow", () => {
     // "hook fired outside any worktree" case — the handler must early-return
     // without throwing or mutating any registry state.
     expect(() =>
-      defaultWorkflow.hookHandlers.onStop({ event: "stop", input: {}, workerInfo: null })
+      defaultWorkflow.hookHandlers.onTurnEnded({ event: "stop", input: {}, workerInfo: null })
     ).not.toThrow();
   });
 
-  it("hookHandlers exposes one method per Claude Code event", () => {
-    // The dispatcher in hook-dispatcher.ts switches on event name and selects a
-    // method; each event must have a corresponding handler. Catches
-    // typos in the WorkflowHookHandlers type.
+  it("hookHandlers exposes one method per normalized lifecycle event", () => {
+    // The dispatcher in hook-dispatcher.ts translates wire event names to
+    // garden's normalized lifecycle methods; each must have a handler.
+    // Catches typos in the WorkflowHookHandlers type.
     expect(typeof defaultWorkflow.hookHandlers.onSessionStart).toBe("function");
-    expect(typeof defaultWorkflow.hookHandlers.onUserPromptSubmit).toBe("function");
-    expect(typeof defaultWorkflow.hookHandlers.onStop).toBe("function");
-    expect(typeof defaultWorkflow.hookHandlers.onNotification).toBe("function");
-    expect(typeof defaultWorkflow.hookHandlers.onPreToolUse).toBe("function");
-    expect(typeof defaultWorkflow.hookHandlers.onPostToolUse).toBe("function");
+    expect(typeof defaultWorkflow.hookHandlers.onPromptSubmitted).toBe("function");
+    expect(typeof defaultWorkflow.hookHandlers.onTurnEnded).toBe("function");
+    expect(typeof defaultWorkflow.hookHandlers.onBlockedOnOperator).toBe("function");
+    expect(typeof defaultWorkflow.hookHandlers.onToolActivity).toBe("function");
   });
 
   it("hookHandlers are bound at module-init time (vitest sanity check)", () => {
@@ -178,8 +177,8 @@ describe("defaultWorkflow", () => {
     // Keep this assertion as cheap insurance against the source-level form
     // of the bug, but trust the bundled test for cycle regressions.
     expect(defaultWorkflow.hookHandlers).not.toBeUndefined();
-    expect(defaultWorkflow.hookHandlers.onStop).not.toBeUndefined();
-    expect(typeof defaultWorkflow.hookHandlers.onStop).toBe("function");
+    expect(defaultWorkflow.hookHandlers.onTurnEnded).not.toBeUndefined();
+    expect(typeof defaultWorkflow.hookHandlers.onTurnEnded).toBe("function");
   });
 });
 

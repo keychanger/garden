@@ -420,7 +420,7 @@ Periodic check that a project's garden integration is still healthy.
   - Trellis files under `trellisDir` have valid front-matter
 - **Worker hygiene**
   - No worker in `failing` state for more than N hours
-  - No worker with `claudeStatus` stale beyond expected event cadence
+  - No worker with `agentStatus` stale beyond expected event cadence
 
 #### Output
 

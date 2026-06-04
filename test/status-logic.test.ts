@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { captureConsoleLog } from "./helpers.js";
 
-// The new status system is registry-driven: claudeStatus and prState are
+// The new status system is registry-driven: agentStatus and prState are
 // the only inputs to the renderer. There is no pgrep, no marker file, no
 // pane-title parsing. These tests exercise the combine function and the
 // rendering of each state.
@@ -88,13 +88,13 @@ beforeEach(() => {
 });
 
 describe("resolveWorkerStatus", () => {
-  it("returns claudeStatus when no prState is set", () => {
-    expect(resolveWorkerStatus({ claudeStatus: "loading" })).toBe("loading");
-    expect(resolveWorkerStatus({ claudeStatus: "ready" })).toBe("ready");
-    expect(resolveWorkerStatus({ claudeStatus: "working" })).toBe("working");
-    expect(resolveWorkerStatus({ claudeStatus: "asking" })).toBe("asking");
-    expect(resolveWorkerStatus({ claudeStatus: "idle" })).toBe("idle");
-    expect(resolveWorkerStatus({ claudeStatus: "exited" })).toBe("exited");
+  it("returns agentStatus when no prState is set", () => {
+    expect(resolveWorkerStatus({ agentStatus: "loading" })).toBe("loading");
+    expect(resolveWorkerStatus({ agentStatus: "ready" })).toBe("ready");
+    expect(resolveWorkerStatus({ agentStatus: "working" })).toBe("working");
+    expect(resolveWorkerStatus({ agentStatus: "asking" })).toBe("asking");
+    expect(resolveWorkerStatus({ agentStatus: "idle" })).toBe("idle");
+    expect(resolveWorkerStatus({ agentStatus: "exited" })).toBe("exited");
   });
 
   it("returns 'ready' when neither field is set", () => {
@@ -102,18 +102,18 @@ describe("resolveWorkerStatus", () => {
     expect(resolveWorkerStatus(undefined)).toBe("ready");
   });
 
-  it("lifecycle prState takes priority over claudeStatus", () => {
-    expect(resolveWorkerStatus({ claudeStatus: "working", prState: "reviewing" })).toBe("reviewing");
-    expect(resolveWorkerStatus({ claudeStatus: "idle", prState: "merge-pending" })).toBe("merge-pending");
-    expect(resolveWorkerStatus({ claudeStatus: "working", prState: "failing" })).toBe("failing");
-    expect(resolveWorkerStatus({ claudeStatus: "idle", prState: "merged" })).toBe("merged");
+  it("lifecycle prState takes priority over agentStatus", () => {
+    expect(resolveWorkerStatus({ agentStatus: "working", prState: "reviewing" })).toBe("reviewing");
+    expect(resolveWorkerStatus({ agentStatus: "idle", prState: "merge-pending" })).toBe("merge-pending");
+    expect(resolveWorkerStatus({ agentStatus: "working", prState: "failing" })).toBe("failing");
+    expect(resolveWorkerStatus({ agentStatus: "idle", prState: "merged" })).toBe("merged");
   });
 
-  it("prState='working' is not displayed (claudeStatus shows through)", () => {
+  it("prState='working' is not displayed (agentStatus shows through)", () => {
     // prState='working' means "no in-flight lifecycle state". The display
     // should reflect what Claude is doing, not the placeholder.
-    expect(resolveWorkerStatus({ claudeStatus: "working", prState: "working" })).toBe("working");
-    expect(resolveWorkerStatus({ claudeStatus: "idle", prState: "working" })).toBe("idle");
+    expect(resolveWorkerStatus({ agentStatus: "working", prState: "working" })).toBe("working");
+    expect(resolveWorkerStatus({ agentStatus: "idle", prState: "working" })).toBe("idle");
   });
 });
 
@@ -121,7 +121,7 @@ describe("worker deduplication", () => {
   it("active worker appearing in hidden windows list shows up exactly once", async () => {
     vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_garden-worker-bold-ash"]);
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "idle" },
+      { name: "bold-ash", sessionId: "abc", task: "fixing auth", agentStatus: "idle" },
     ]);
 
     const lines = await captureConsoleLog(() => status([]));
@@ -133,7 +133,7 @@ describe("worker deduplication", () => {
 describe("status display", () => {
   it("shows loading from registry", async () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "loading" },
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "loading" },
     ]);
     const lines = await captureConsoleLog(() => status([]));
     expect(lines.some(l => l.includes("loading"))).toBe(true);
@@ -141,7 +141,7 @@ describe("status display", () => {
 
   it("shows ready from registry", async () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "ready" },
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "ready" },
     ]);
     const lines = await captureConsoleLog(() => status([]));
     expect(lines.some(l => l.includes("ready"))).toBe(true);
@@ -149,7 +149,7 @@ describe("status display", () => {
 
   it("shows working from registry", async () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "working" },
+      { name: "bold-ash", sessionId: "abc", task: "fixing auth", agentStatus: "working" },
     ]);
     const lines = await captureConsoleLog(() => status([]));
     expect(lines.some(l => l.includes("working"))).toBe(true);
@@ -157,7 +157,7 @@ describe("status display", () => {
 
   it("shows idle from registry", async () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "idle" },
+      { name: "bold-ash", sessionId: "abc", task: "fixing auth", agentStatus: "idle" },
     ]);
     const lines = await captureConsoleLog(() => status([]));
     expect(lines.some(l => l.includes("idle"))).toBe(true);
@@ -165,7 +165,7 @@ describe("status display", () => {
 
   it("shows asking from registry and wraps the row in bold-yellow", async () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "awaiting plan approval", claudeStatus: "asking" },
+      { name: "bold-ash", sessionId: "abc", task: "awaiting plan approval", agentStatus: "asking" },
     ]);
     const lines = await captureConsoleLog(() => status([]));
     const askingLine = lines.find(l => l.includes("asking") && l.includes("bold-ash"));
@@ -175,7 +175,7 @@ describe("status display", () => {
 
   it("shows exited from registry", async () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "exited" },
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "exited" },
     ]);
     const lines = await captureConsoleLog(() => status([]));
     expect(lines.some(l => l.includes("exited"))).toBe(true);
@@ -183,9 +183,9 @@ describe("status display", () => {
 });
 
 describe("lifecycle state display (prState takes priority)", () => {
-  it("shows reviewing when prState=reviewing, even if claudeStatus=working", async () => {
+  it("shows reviewing when prState=reviewing, even if agentStatus=working", async () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "working", prState: "reviewing" },
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "working", prState: "reviewing" },
     ]);
     const lines = await captureConsoleLog(() => status([]));
     expect(lines.some(l => l.includes("reviewing"))).toBe(true);
@@ -194,7 +194,7 @@ describe("lifecycle state display (prState takes priority)", () => {
 
   it("shows merging when prState=merge-pending", async () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "merge-pending" },
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "idle", prState: "merge-pending" },
     ]);
     const lines = await captureConsoleLog(() => status([]));
     expect(lines.some(l => l.includes("merging"))).toBe(true);
@@ -202,7 +202,7 @@ describe("lifecycle state display (prState takes priority)", () => {
 
   it("shows failing without count and wraps the row in bold-red", async () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "failing", failCount: 3 },
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "idle", prState: "failing", failCount: 3 },
     ]);
     const lines = await captureConsoleLog(() => status([]));
     const failingLine = lines.find(l => l.includes("failing") && l.includes("bold-ash"));
@@ -212,7 +212,7 @@ describe("lifecycle state display (prState takes priority)", () => {
 
   it("shows merged from prState as a neutral row (transient post-merge beat, not green)", async () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "merged" },
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "idle", prState: "merged" },
     ]);
     const lines = await captureConsoleLog(() => status([]));
     const mergedLine = lines.find(l => l.includes("merged") && l.includes("bold-ash"));
@@ -223,7 +223,7 @@ describe("lifecycle state display (prState takes priority)", () => {
 
   it("shows done from prState and wraps the row in bold-green", async () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "done" },
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "idle", prState: "done" },
     ]);
     const lines = await captureConsoleLog(() => status([]));
     const doneLine = lines.find(l => l.includes("done") && l.includes("bold-ash"));
@@ -244,7 +244,7 @@ describe("renderQuickStatus", () => {
 
   it("renders working from registry", () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "fixing the build", claudeStatus: "working" },
+      { name: "bold-ash", sessionId: "abc", task: "fixing the build", agentStatus: "working" },
     ]);
     const result = renderQuickStatus(state);
     expect(result).toContain("bold-ash");
@@ -254,7 +254,7 @@ describe("renderQuickStatus", () => {
   it("caches the project branch across re-bakes within the TTL (one rev-parse per project)", () => {
     vi.mocked(currentBranch).mockReturnValue("main");
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "working" },
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "working" },
     ]);
     renderQuickStatus(state);
     renderQuickStatus(state);
@@ -265,15 +265,15 @@ describe("renderQuickStatus", () => {
 
   it("renders loading from registry", () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "loading" },
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "loading" },
     ]);
     const result = renderQuickStatus(state);
     expect(result).toContain("loading");
   });
 
-  it("renders idle when claudeStatus=idle and no lifecycle state", () => {
+  it("renders idle when agentStatus=idle and no lifecycle state", () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "idle" },
+      { name: "bold-ash", sessionId: "abc", task: "fixing auth", agentStatus: "idle" },
     ]);
     const result = renderQuickStatus(state);
     expect(result).toContain("idle");
@@ -281,7 +281,7 @@ describe("renderQuickStatus", () => {
 
   it("renders asking rows wrapped in bold-yellow ANSI", () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "awaiting plan approval", claudeStatus: "asking" },
+      { name: "bold-ash", sessionId: "abc", task: "awaiting plan approval", agentStatus: "asking" },
     ]);
     const result = renderQuickStatus(state);
     expect(result).toContain("asking");
@@ -291,7 +291,7 @@ describe("renderQuickStatus", () => {
 
   it("does not wrap non-asking rows in bold-yellow", () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "idle" },
+      { name: "bold-ash", sessionId: "abc", task: "fixing auth", agentStatus: "idle" },
     ]);
     const result = renderQuickStatus(state);
     // bold-yellow is asking-only; an idle row must not carry it
@@ -300,7 +300,7 @@ describe("renderQuickStatus", () => {
 
   it("renders failing rows wrapped in bold-red ANSI", () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "failing" },
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "idle", prState: "failing" },
     ]);
     const result = renderQuickStatus(state);
     expect(result).toContain("failing");
@@ -309,7 +309,7 @@ describe("renderQuickStatus", () => {
 
   it("does not wrap non-failing rows in bold-red", () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "idle" },
+      { name: "bold-ash", sessionId: "abc", task: "fixing auth", agentStatus: "idle" },
     ]);
     const result = renderQuickStatus(state);
     expect(result).not.toMatch(/\x1b\[1;31m[^\n]*bold-ash/);
@@ -317,7 +317,7 @@ describe("renderQuickStatus", () => {
 
   it("renders done rows wrapped in bold-green ANSI", () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "done" },
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "idle", prState: "done" },
     ]);
     const result = renderQuickStatus(state);
     expect(result).toContain("done");
@@ -326,7 +326,7 @@ describe("renderQuickStatus", () => {
 
   it("does NOT render transient merged rows in bold-green (only done is the green signal)", () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle", prState: "merged" },
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "idle", prState: "merged" },
     ]);
     const result = renderQuickStatus(state);
     expect(result).toContain("merged");
@@ -335,15 +335,15 @@ describe("renderQuickStatus", () => {
 
   it("does not wrap non-done rows in bold-green", () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "fixing auth", claudeStatus: "idle" },
+      { name: "bold-ash", sessionId: "abc", task: "fixing auth", agentStatus: "idle" },
     ]);
     const result = renderQuickStatus(state);
     expect(result).not.toMatch(/\x1b\[1;32m[^\n]*bold-ash/);
   });
 
-  it("renders reviewing even if claudeStatus is working", () => {
+  it("renders reviewing even if agentStatus is working", () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "working", prState: "reviewing" },
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "working", prState: "reviewing" },
     ]);
     const result = renderQuickStatus(state);
     expect(result).toContain("reviewing");
@@ -383,7 +383,7 @@ describe("renderQuickStatus", () => {
 
   it("appends clear-to-end-of-line escape to every line", () => {
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "", claudeStatus: "idle" },
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "idle" },
     ]);
     const result = renderQuickStatus(state);
     const lines = result.split("\n");
