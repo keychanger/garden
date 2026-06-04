@@ -60,8 +60,9 @@ export function setupStatusBar(_gardenRunner: string): void {
     // @garden_name). Worker/shell panes prefix the label with a \u25cf in the
     // project's log color (gated on @garden_color, set alongside
     // @garden_clock via setPaneProjectColor) so the border echoes the
-    // project's color in the logs and status panes; tmux expands the nested
-    // #{@garden_color} inside #[fg=...] before parsing the style. The
+    // color the project carries in `garden logs` — the one place the
+    // pane otherwise names the worker, never the project; tmux expands the
+    // nested #{@garden_color} inside #[fg=...] before parsing the style. The
     // trailing segment renders a right-aligned wall clock on the right pane
     // \u2014 worker or shell \u2014 (gated on @garden_clock, set in
     // restoreWorkerPaneVars, focusShell, and at worker/shell pane creation).
