@@ -1,5 +1,4 @@
 // Worker lifecycle: creation and destruction of Claude worker sessions.
-import crypto from "node:crypto";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { DASHBOARD_SESSION } from "../session.js";
@@ -24,8 +23,9 @@ import { resolveAndApplyVineModel } from "./trellis-model.js";
 import { getWorkflow } from "./workflows/index.js";
 import {
   buildWorktreeBootstrapScript, buildWorktreeResumeCommand, buildResumeCommand,
-  createShellWindow, installClaudeHooks, trellisRelativePathForEntry,
+  createShellWindow, trellisRelativePathForEntry,
 } from "./create.js";
+import { getHarness } from "./harness/index.js";
 import { resolveGardenRunner } from "./runner.js";
 import {
   worktreePath, resolveBaseBranch, branchExistsOnOrigin, tryPublishBranch,
@@ -181,7 +181,11 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
 
     const existingNames = getAllWorkerNames();
     const workerName = generateWorkerName(existingNames);
-    const sessionId = crypto.randomUUID();
+    // Session identity is harness-shaped (Claude Code accepts a minted
+    // UUID; a harness that assigns its own ids allocates a placeholder).
+    // No spawn-time harness selector exists yet, so the default adapter
+    // mints it.
+    const sessionId = getHarness().allocateSessionId();
     const branchName = workerName;
     const wtPath = worktreePath(targetProject, workerName);
     const gardenRunner = resolveGardenRunner();
@@ -564,7 +568,7 @@ export function bounceWorker(projectName: string, workerName: string): void {
   // this on its own (unlike buildResumeCommand); the attach-time resume
   // path in ensureDashboard() calls it for the same reason.
   if (entry.worktreePath && projectInfo) {
-    installClaudeHooks(entry.worktreePath, projectInfo);
+    getHarness(entry.harness).installRuntimeConfig(entry.worktreePath, projectInfo);
   }
 
   const trellisRelativePath = projectInfo
@@ -574,11 +578,12 @@ export function bounceWorker(projectName: string, workerName: string): void {
   // resolve their model per iteration, not on bounce. Plain workers omit
   // the options arg so existing tests (which assert exact argument arity)
   // still pass.
-  const resumeOpts: { trellisRelativePath?: string; model?: string } = {};
+  const resumeOpts: { trellisRelativePath?: string; model?: string; harness?: string } = {};
   if (trellisRelativePath) resumeOpts.trellisRelativePath = trellisRelativePath;
   if (entry.model) resumeOpts.model = entry.model;
+  if (entry.harness) resumeOpts.harness = entry.harness;
   const resumeCmd = entry.worktreePath && entry.branchName && projectInfo
-    ? (resumeOpts.trellisRelativePath || resumeOpts.model
+    ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.harness
         ? buildWorktreeResumeCommand(
             projectName, projectInfo.path, entry.name, entry.branchName,
             entry.sessionId, baseBranch, resumeOpts,

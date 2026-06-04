@@ -10,15 +10,18 @@ requires touching the dispatcher, pollers, or state machine.
 
 ## Status
 
-Forward-looking design for Phases 3-5; **Phases 1 and 2 are
-implemented**. Phase 1 (the provider layer): `garden provider`, the
+Forward-looking design for Phases 4-5; **Phases 1-3 are implemented**. Phase 1 (the provider layer): `garden provider`, the
 `provider` project-config key, worker env injection, sandbox egress
 union, reviewer Opus pinning, and usage-meter gating. Phase 2 (the
 neutral core): the `agentStatus`/`lastEventAt` rename with registry
 migration, the normalized lifecycle event vocabulary on
 `WorkflowHookHandlers`, opaque model strings end to end with `--model`
-accepted on every workflow, and meter-neutral gate/fallback readers.
-Commissioned 2026-06-03 from a full coupling
+accepted on every workflow, and meter-neutral gate/fallback readers. Phase 3 (the
+harness adapter registry): `HarnessAdapter` + the `claude-code`
+reference adapter in `src/dashboard/harness/`, the five launch builders
+collapsed onto `buildAgentCommand`, headless/transcript/prompt-delivery/
+transient-error/session-identity routed through the registry, and
+`WorkerEntry.harness`. Commissioned 2026-06-03 from a full coupling
 audit of the codebase (~150 coupling points across 8 subsystems) plus a
 landscape survey of harnesses, providers, and agent protocols, with
 load-bearing external claims independently re-verified against primary
@@ -43,6 +46,29 @@ original sketch:
 - Reviewer pinning is unconditional, not opt-out: provider-backed
   projects always get an Anthropic reviewer pinned to Opus. The
   per-project relax knob waits for a concrete need.
+
+Where Phase 3's implementation deliberately settled or trimmed the
+original sketch:
+
+- The adapter splits into a light `HarnessCore` (command dialects, prompt
+  delivery, transcript reading, transient-error shapes — resolved via
+  `harness/core.ts`) and the full `HarnessAdapter` (adds
+  `installRuntimeConfig`, resolved via `harness/index.ts`). The split is
+  load-bearing for `dist/hook.js` size: the adapter object retains every
+  method it references, and the config installer's closure carries the
+  skills/sandbox content — bundling them into one object grew the hook
+  bundle ~19% mid-implementation. The split plus `package.json`'s new
+  `"sideEffects": false` (import-time side effects are now forbidden
+  outside entry points) keeps the shipped bundle neutral relative to the
+  pre-adapter baseline (~166kb with production flags); a guard test pins
+  the shaking so it cannot silently regress.
+- `deliverPrompt`/`readTurns` call sites inside the hook-bundle closure
+  (`continue.ts` prompt injection, `header.ts` history view) still call
+  `pasteAndSubmit`/`conversation.ts` directly — routing them lands with
+  the second adapter, which is what makes the indirection real.
+- The per-worker `--provider` flag and model intent tiers defer again,
+  to Phase 4 — same reasoning as before; the adapter seams they thread
+  through now exist.
 
 Where Phase 2's implementation deliberately settled or trimmed the
 original sketch:
@@ -596,9 +622,9 @@ per-worker `--provider` flag and model intent tiers moved to Phase 3 —
 see the Status deviations. Pure refactor otherwise, bit-for-bit
 behavior.
 
-**Phase 3 — harness adapter extraction.** `HarnessAdapter` interface +
+**Phase 3 — harness adapter extraction. SHIPPED.** `HarnessAdapter` interface +
 registry; `claude-code` adapter as sole implementation; collapse the five
-launch builders; route `launchHeadlessAgent`, `installClaudeHooks`,
+launch builders; route `launchHeadlessAgent`, `installClaudeHooks` (shipped as `installRuntimeConfig`),
 transcript reading, prompt delivery, and credential env through the
 adapter; `WorkerEntry.harness` field, plus the per-worker `--provider`
 override and model intent tiers deferred from Phase 2 (they thread

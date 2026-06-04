@@ -19,16 +19,16 @@
 // command builder lives in create.ts and create.ts already imports from
 // continue.ts for the default auto-continue. Putting the loop primitive in
 // continue.ts would close that into a cycle.
-import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { tryGetProject, SESSIONS_DIR } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import {
-  buildWorktreeWorkerCommand, installClaudeHooks,
+  buildWorktreeWorkerCommand,
   type WorktreeCommandOptions,
 } from "./create.js";
+import { getHarness } from "./harness/index.js";
 import { dispatchDelayedSeed } from "./continue.js";
 import { log } from "./log.js";
 import {
@@ -154,13 +154,13 @@ export function loopAutoContinueAfterMerge(
   }
 
   // Refresh hook config so a rebuilt garden's settings.json takes effect on
-  // the cold respawn (mirrors bounceWorker's installClaudeHooks call).
-  installClaudeHooks(wtPath, project);
+  // the cold respawn (mirrors bounceWorker's installRuntimeConfig call).
+  getHarness(entry.harness).installRuntimeConfig(wtPath, project);
 
   // Regenerate sessionId per iteration — Claude cold-starts in the pane with
   // no prior conversation history. Persist BEFORE the respawn so concurrent
   // reads see the new value.
-  const newSessionId = crypto.randomUUID();
+  const newSessionId = getHarness(entry.harness).allocateSessionId();
   const respawnCmd = buildWorktreeWorkerCommand(
     projectName,
     project.path,
@@ -168,7 +168,10 @@ export function loopAutoContinueAfterMerge(
     branchName,
     newSessionId,
     entry.baseBranch,
-    workerCommandOpts,
+    // The respawn must build with the same harness whose allocateSessionId
+    // and installRuntimeConfig ran above — thread the entry's adapter
+    // unless the hooks caller already pinned one.
+    { ...workerCommandOpts, harness: workerCommandOpts.harness ?? entry.harness },
   );
   updateWorkerFields(projectName, workerName, {
     sessionId: newSessionId,

@@ -65,7 +65,7 @@ describe("installClaudeSkills", () => {
   });
 
   it("is idempotent: a second call writes the same files without erroring", () => {
-    // installClaudeHooks is invoked on every refresh and bounce, so this
+    // installRuntimeConfig is invoked on every refresh and bounce, so this
     // helper runs many times against the same worktree across a worker's
     // lifetime. The file-system path must be safe to repeat:
     // mkdirSync(recursive) tolerates an existing directory, atomicWriteFile

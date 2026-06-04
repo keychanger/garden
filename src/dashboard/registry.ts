@@ -170,6 +170,14 @@ export interface WorkerEntry {
   // (poller, transitionState, hook dispatcher) read with `entry.workflow ?? "default"`.
   // See WORKFLOWS.md and src/dashboard/workflows/.
   workflow?: string;
+  // Harness adapter that drives this worker's agent CLI (launch dialect,
+  // runtime config, transcript format, prompt delivery). Absent =
+  // "claude-code" — consumers read with `getHarness(entry.harness)`,
+  // mirroring the `entry.workflow ?? "default"` pattern. No spawn-time
+  // selector exists yet; the field lands ahead of the second adapter so
+  // resume/bounce/loop paths thread it from day one.
+  // See docs/MULTI-MODEL.md "Layer 3".
+  harness?: string;
   // Per-worker model, set via `--model` at creation for default and grow
   // workers. Opaque string: an Anthropic alias ("opus"/"sonnet" — resolved
   // through the provider's modelMap on provider-backed projects) or any

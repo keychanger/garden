@@ -47,12 +47,12 @@ describe("worker bootstrap (real fs + real git)", () => {
     expect(fs.existsSync(path.join(worktreePath, "README.md"))).toBe(true);
   });
 
-  it("installClaudeHooks writes settings.json with hooks for every Claude Code event", async () => {
+  it("installRuntimeConfig writes settings.json with hooks for every Claude Code event", async () => {
     const { createWorktree } = await import("../../src/dashboard/git.js");
-    const { installClaudeHooks } = await import("../../src/dashboard/create.js");
+    const { claudeCodeAdapter } = await import("../../src/dashboard/harness/claude-code.js");
 
     createWorktree(projectPath, worktreePath, WORKER);
-    installClaudeHooks(worktreePath, { path: projectPath });
+    claudeCodeAdapter.installRuntimeConfig(worktreePath, { path: projectPath });
 
     const settingsPath = path.join(worktreePath, ".claude", "settings.json");
     expect(fs.existsSync(settingsPath)).toBe(true);
@@ -69,10 +69,10 @@ describe("worker bootstrap (real fs + real git)", () => {
 
   it("settings.json has permissions.defaultMode auto and the documented allowlist", async () => {
     const { createWorktree } = await import("../../src/dashboard/git.js");
-    const { installClaudeHooks } = await import("../../src/dashboard/create.js");
+    const { claudeCodeAdapter } = await import("../../src/dashboard/harness/claude-code.js");
 
     createWorktree(projectPath, worktreePath, WORKER);
-    installClaudeHooks(worktreePath, { path: projectPath });
+    claudeCodeAdapter.installRuntimeConfig(worktreePath, { path: projectPath });
 
     const settings = JSON.parse(fs.readFileSync(
       path.join(worktreePath, ".claude", "settings.json"), "utf-8"));
@@ -85,10 +85,10 @@ describe("worker bootstrap (real fs + real git)", () => {
 
   it("settings.json sandbox config includes worktree allowWrite and Anthropic domain", async () => {
     const { createWorktree } = await import("../../src/dashboard/git.js");
-    const { installClaudeHooks } = await import("../../src/dashboard/create.js");
+    const { claudeCodeAdapter } = await import("../../src/dashboard/harness/claude-code.js");
 
     createWorktree(projectPath, worktreePath, WORKER);
-    installClaudeHooks(worktreePath, { path: projectPath });
+    claudeCodeAdapter.installRuntimeConfig(worktreePath, { path: projectPath });
 
     const settings = JSON.parse(fs.readFileSync(
       path.join(worktreePath, ".claude", "settings.json"), "utf-8"));
@@ -98,10 +98,10 @@ describe("worker bootstrap (real fs + real git)", () => {
 
   it("installs the done skill at .claude/skills/done/SKILL.md", async () => {
     const { createWorktree } = await import("../../src/dashboard/git.js");
-    const { installClaudeHooks } = await import("../../src/dashboard/create.js");
+    const { claudeCodeAdapter } = await import("../../src/dashboard/harness/claude-code.js");
 
     createWorktree(projectPath, worktreePath, WORKER);
-    installClaudeHooks(worktreePath, { path: projectPath });
+    claudeCodeAdapter.installRuntimeConfig(worktreePath, { path: projectPath });
 
     const skillPath = path.join(worktreePath, ".claude", "skills", "done", "SKILL.md");
     expect(fs.existsSync(skillPath)).toBe(true);

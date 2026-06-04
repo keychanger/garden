@@ -98,9 +98,19 @@ vi.mock("../src/dashboard/create.js", () => ({
   buildWorktreeResumeCommand: vi.fn(() => "claude --resume FAKE-ID"),
   buildResumeCommand: vi.fn(() => "claude --resume FAKE-ID-NW"),
   createShellWindow: vi.fn(),
-  installClaudeHooks: vi.fn(),
   trellisRelativePathForEntry: vi.fn(() => undefined),
 }));
+
+vi.mock("../src/dashboard/harness/index.js", () => {
+  // One stable adapter object so assertions can reach the same mocks the
+  // code under test called, regardless of which getHarness() call made them.
+  const adapter = {
+    name: "claude-code",
+    allocateSessionId: vi.fn(() => "fake-uuid-1234"),
+    installRuntimeConfig: vi.fn(),
+  };
+  return { getHarness: vi.fn(() => adapter), DEFAULT_HARNESS: "claude-code" };
+});
 
 vi.mock("../src/dashboard/runner.js", () => ({
   resolveGardenRunner: vi.fn(() => "garden"),
@@ -143,8 +153,9 @@ import {
 } from "../src/dashboard/registry.js";
 import {
   buildWorktreeBootstrapScript, buildWorktreeResumeCommand, buildResumeCommand,
-  createShellWindow, installClaudeHooks,
+  createShellWindow,
 } from "../src/dashboard/create.js";
+import { getHarness } from "../src/dashboard/harness/index.js";
 import { resolveGardenRunner } from "../src/dashboard/runner.js";
 import {
   worktreePath, resolveBaseBranch, branchExistsOnOrigin, tryPublishBranch,
@@ -876,7 +887,7 @@ describe("bounceWorker", () => {
   it("reinstalls claude hooks so settings.json picks up rebuild changes", () => {
     bounceWorker("myproject", "swift-oak");
 
-    expect(vi.mocked(installClaudeHooks)).toHaveBeenCalledWith(
+    expect(vi.mocked(getHarness)().installRuntimeConfig).toHaveBeenCalledWith(
       "/wt/swift-oak", expect.objectContaining({ path: "/repo/myproject" }),
     );
   });

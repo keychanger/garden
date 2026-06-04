@@ -13,11 +13,16 @@ vi.mock("node:fs", () => ({
 
 vi.mock("../src/config.js", () => ({
   tryGetProject: vi.fn(),
+  tryResolveClaudeProfile: vi.fn(() => null),
+  tryResolveProvider: vi.fn(() => null),
+  anyAnthropicMeteredProject: vi.fn(() => true),
+  ENV_VAR_NAME_RE: /^[A-Z_][A-Z0-9_]*$/,
   SESSIONS_DIR: "/tmp/garden-sessions-test",
 }));
 
 vi.mock("../src/session.js", () => ({
   DASHBOARD_SESSION: "garden-dashboard",
+  dashboardExists: vi.fn(() => false),
 }));
 
 vi.mock("../src/dashboard/state.js", () => ({
@@ -48,7 +53,6 @@ vi.mock("../src/dashboard/log.js", () => ({
 
 vi.mock("../src/dashboard/create.js", () => ({
   buildWorktreeWorkerCommand: vi.fn(() => "claude --resume sess-mock"),
-  installClaudeHooks: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/continue.js", () => ({
@@ -59,6 +63,17 @@ vi.mock("../src/dashboard/runner.js", () => ({
   resolveGardenRunner: vi.fn(() => "/usr/local/bin/garden"),
 }));
 
+vi.mock("../src/dashboard/harness/index.js", () => {
+  // One stable adapter object so assertions reach the same mocks the code
+  // under test called (same pattern as workers.test.ts).
+  const adapter = {
+    name: "claude-code",
+    allocateSessionId: vi.fn(() => "fresh-uuid-5678"),
+    installRuntimeConfig: vi.fn(),
+  };
+  return { getHarness: vi.fn(() => adapter), DEFAULT_HARNESS: "claude-code" };
+});
+
 import {
   persistIteration, dispatchDelayedLoopContinue, loopAutoContinueAfterMerge,
   type LoopHooks,
@@ -68,7 +83,8 @@ import { readDashState } from "../src/dashboard/state.js";
 import { tryGetProject } from "../src/config.js";
 import { tmux, paneExists, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
 import { dispatchDelayedSeed } from "../src/dashboard/continue.js";
-import { buildWorktreeWorkerCommand, installClaudeHooks } from "../src/dashboard/create.js";
+import { buildWorktreeWorkerCommand } from "../src/dashboard/create.js";
+import { getHarness } from "../src/dashboard/harness/index.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
@@ -251,8 +267,8 @@ describe("loopAutoContinueAfterMerge", () => {
 
     expect(result).toBe(true);
 
-    // installClaudeHooks fired before the respawn so settings.json is fresh.
-    expect(installClaudeHooks).toHaveBeenCalledWith(
+    // installRuntimeConfig fired before the respawn so settings.json is fresh.
+    expect(vi.mocked(getHarness)().installRuntimeConfig).toHaveBeenCalledWith(
       "/tmp/wt/myproject/bold-ash",
       expect.objectContaining({ path: "/tmp/projects/myproject" }),
     );

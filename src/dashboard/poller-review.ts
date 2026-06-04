@@ -10,6 +10,7 @@ import path from "node:path";
 import { tryGetProject, tryResolveProvider, SESSIONS_DIR } from "../config.js";
 import { addAlert } from "./alerts.js";
 import { reviewerEnvPrefix } from "./claude-env.js";
+import { getHarnessCore } from "./harness/core.js";
 import { setDoneSentinel } from "./continue.js";
 import {
   forcePushBranch, getBranchHeadSha, getCommitSummary, getRemoteTrackingSha,
@@ -234,36 +235,14 @@ export function handleReviewing(
   // unparseable-verdict path.
   if (
     rawOutput !== null
-    && isTransientReviewFailureTail(rawOutput)
+    // The reviewer's harness (claude-code — independent of the worker's)
+    // knows its backend's transient-error shapes.
+    && getHarnessCore().isTransientError(rawOutput)
     && !didReviewerAdvanceHead(projectPath, entry)
   ) {
     return handleTransientReviewFailure(projectName, projectPath, entry, rawOutput);
   }
   return handleUnparseableReview(projectName, projectPath, entry);
-}
-
-// True if the reviewer's tail output indicates an Anthropic API error rather
-// than a reviewer-emitted verdict. Scans the last 5 non-empty lines for the
-// `claude -p` error prefix (`API Error: <5xx|429|529> ...`) or the JSON error
-// types Anthropic emits (`overloaded_error`, `rate_limit_error`). The match
-// is anchored to line-start and a fixed error-code set so a reviewer who
-// merely discusses "API errors" in body text can't trip the detection — that
-// reviewer's verdict line would also have parsed if it followed the format,
-// and only unparsed verdicts reach this function.
-//
-// Exported for unit tests.
-export function isTransientReviewFailureTail(output: string): boolean {
-  const lines = output.split("\n");
-  const tail: string[] = [];
-  for (let i = lines.length - 1; i >= 0 && tail.length < 5; i--) {
-    const t = lines[i].trim();
-    if (t) tail.push(t);
-  }
-  for (const line of tail) {
-    if (/^API Error:\s*(5\d{2}|429|529)\b/.test(line)) return true;
-    if (/"type"\s*:\s*"(overloaded_error|rate_limit_error|api_error)"/.test(line)) return true;
-  }
-  return false;
 }
 
 // Did the reviewer's run move HEAD past the SHA captured at launch? The

@@ -151,12 +151,12 @@ vi.mock("../src/dashboard/window-names.js", async () => {
 });
 
 import fs from "node:fs";
+import { claudeCodeAdapter } from "../src/dashboard/harness/claude-code.js";
 import {
   createShellWindow,
   createLogsWindow,
   createGardenGrowhouseWindow,
   createGardenRootWindow,
-  installClaudeHooks,
   buildWorkerCommand,
   buildResumeCommand,
   buildWorktreeWorkerCommand,
@@ -173,10 +173,12 @@ beforeEach(() => {
   process.argv[1] = "/usr/local/bin/garden";
 });
 
-describe("installClaudeHooks", () => {
+describe("claude-code adapter installRuntimeConfig", () => {
+  // Moved from create.ts onto the harness adapter (docs/MULTI-MODEL.md
+  // "Layer 3"); the behavioral contract is unchanged.
   it("writes hooks JSON to .claude/settings.json", () => {
     process.argv[1] = "/usr/local/bin/garden";
-    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
+    claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
     expect(fs.mkdirSync).toHaveBeenCalledWith(
       expect.stringContaining(".claude"),
       { recursive: true },
@@ -190,7 +192,7 @@ describe("installClaudeHooks", () => {
 
   it("does not write to settings.local.json (Claude Code auto-edits it)", () => {
     process.argv[1] = "/usr/local/bin/garden";
-    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
+    claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
     // Settings.local.json must not appear as a rename target either.
     const renameTargets = vi.mocked(fs.renameSync).mock.calls.map(c => String(c[1]));
     expect(renameTargets.every(p => !p.endsWith("settings.local.json"))).toBe(true);
@@ -206,7 +208,7 @@ describe("installClaudeHooks", () => {
 
   it("includes all required hook events", () => {
     process.argv[1] = "/usr/local/bin/garden";
-    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
+    claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
     const parsed = JSON.parse(settingsJsonContent());
     expect(parsed.hooks.SessionStart).toBeDefined();
     expect(parsed.hooks.UserPromptSubmit).toBeDefined();
@@ -218,7 +220,7 @@ describe("installClaudeHooks", () => {
 
   it("registers a PermissionRequest hook that flips the worker to idle on approval prompts", () => {
     process.argv[1] = "/usr/local/bin/garden";
-    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
+    claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
     const parsed = JSON.parse(settingsJsonContent());
     const permReq = parsed.hooks.PermissionRequest[0];
     expect(permReq.matcher).toBe("");
@@ -227,7 +229,7 @@ describe("installClaudeHooks", () => {
 
   it("registers a catch-all PostToolUse hook so asking flips back to working after any tool completes", () => {
     process.argv[1] = "/usr/local/bin/garden";
-    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
+    claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
     const parsed = JSON.parse(settingsJsonContent());
     const catchAll = parsed.hooks.PostToolUse.find((h: { matcher: string }) => h.matcher === "");
     expect(catchAll).toBeDefined();
@@ -236,7 +238,7 @@ describe("installClaudeHooks", () => {
 
   it("also writes the bundled `done` skill at .claude/skills/done/SKILL.md (Claude Code's required dir+SKILL.md layout)", () => {
     process.argv[1] = "/usr/local/bin/garden";
-    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
+    claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
     const writes = vi.mocked(fs.writeFileSync).mock.calls;
     // atomic-write goes through a tmp path; match the prefix.
     const skillCall = writes.find(c => /\.claude\/skills\/done\/SKILL\.md\.[0-9a-f-]+\.tmp$/.test(String(c[0])));
@@ -258,7 +260,7 @@ describe("installClaudeHooks", () => {
 
   it("sets permissions.defaultMode to auto and pre-allows tmux plus read-only tail utilities so compound tmux chains don't escalate", () => {
     process.argv[1] = "/usr/local/bin/garden";
-    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
+    claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
     const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
     const parsed = JSON.parse(written);
     expect(parsed.permissions).toEqual({
@@ -277,7 +279,7 @@ describe("installClaudeHooks", () => {
 
   // Worktrees spawned before a new exclude pattern was added (e.g. .garden/
   // when the grow workflow shipped) carry stale info/exclude — the bootstrap
-  // script's exclude block runs once at spawn, never again. installClaudeHooks
+  // script's exclude block runs once at spawn, never again. installRuntimeConfig
   // runs on every refresh + bounce + post-merge auto-continue, so it's the
   // hook that heals existing workers without requiring a re-bootstrap.
   it("appends missing exclude patterns to .git/info/exclude on existing worktrees", async () => {
@@ -290,7 +292,7 @@ describe("installClaudeHooks", () => {
     // pattern is missing.
     vi.mocked(fs.readFileSync).mockReturnValueOnce(".claude/\n.garden-hooks/\n");
 
-    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
+    claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
 
     const appendCall = vi.mocked(fs.appendFileSync).mock.calls.find(
       c => String(c[0]).endsWith("info/exclude"),
@@ -318,7 +320,7 @@ describe("installClaudeHooks", () => {
       ".claude/\n.garden-hooks/\n.garden/\n",
     );
 
-    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
+    claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
 
     const appendCall = vi.mocked(fs.appendFileSync).mock.calls.find(
       c => String(c[0]).endsWith("info/exclude"),
@@ -337,7 +339,7 @@ describe("installClaudeHooks", () => {
       ".claude/\n.garden-hooks/\n.garden/\n.garden-done\n",
     );
 
-    installClaudeHooks("/repo/myproject", { path: "/repo/myproject" });
+    claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
 
     const appendCalls = vi.mocked(fs.appendFileSync).mock.calls.filter(
       c => String(c[0]).endsWith("info/exclude"),
@@ -354,7 +356,7 @@ describe("installClaudeHooks", () => {
     });
 
     expect(() =>
-      installClaudeHooks("/repo/myproject", { path: "/repo/myproject" }),
+      claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" }),
     ).not.toThrow();
   });
 });

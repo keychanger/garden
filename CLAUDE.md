@@ -8,7 +8,7 @@ Garden is a CLI orchestrator for managing interactive Claude Code sessions acros
 - `rules.md` — coding rules loaded into every Claude session (commit/test/scope discipline)
 - `WORKFLOWS.md` — workflow registry design, "how to add a new workflow", and trellis/grow workflow specs
 - `docs/STATUS.md` — worker status state machine (spec)
-- `docs/MULTI-MODEL.md` — multi-model / multi-harness architecture (Phases 1-2 shipped — provider layer + neutral core; later phases design targets)
+- `docs/MULTI-MODEL.md` — multi-model / multi-harness architecture (Phases 1-3 shipped — provider layer, neutral core, harness adapter registry; Codex adapter and beyond are design targets)
 - `docs/TRACKS.md` — multi-track / promotion pipeline (design target, no code yet)
 - `docs/` — additional design docs and behavioral specs; see `docs/README.md` for the index
 
@@ -21,7 +21,7 @@ npm run dev -- help    # tsx during development
 npm test               # vitest unit + integration; tsc --noEmit
 ```
 
-`npm link` makes `garden` global. `dist/cli.js` is the symlink target — `npm run build` is all you need after edits. The build emits a second minimal bundle, `dist/hook.js` (from `src/hook-entry.ts`), that serves the per-tool-call Claude hook: it bundles only the hook dispatcher's import closure (~60% smaller than `cli.js`) so each fire's node cold-start is cheaper. Worker `settings.json` hook commands invoke it via `resolveHookRunner()` (`dashboard/runner.ts`); `cli.js` keeps its own `_claude-hook` route for workers whose settings predate it.
+`npm link` makes `garden` global. `dist/cli.js` is the symlink target — `npm run build` is all you need after edits. `package.json` sets `"sideEffects": false` so esbuild tree-shakes imported-but-unused modules (load-bearing for keeping `dist/hook.js` lean); modules must stay free of import-time side effects — only the entry points (`cli.ts`, `hook-entry.ts`) execute at top level. The build emits a second minimal bundle, `dist/hook.js` (from `src/hook-entry.ts`), that serves the per-tool-call Claude hook: it bundles only the hook dispatcher's import closure (~60% smaller than `cli.js`) so each fire's node cold-start is cheaper. Worker `settings.json` hook commands invoke it via `resolveHookRunner()` (`dashboard/runner.ts`); `cli.js` keeps its own `_claude-hook` route for workers whose settings predate it.
 
 ## Source layout
 
@@ -36,6 +36,7 @@ npm test               # vitest unit + integration; tsc --noEmit
   - `poller.ts` + `poller-state.ts` + `poller-{review,merge,resolve,ci,ci-fix,fifo}.ts` — per-project review/merge/resolve/ci-fix lifecycle, event-driven via FIFO. `poller-ci-fix.ts` mirrors `poller-resolve.ts` for self-healing red CI
   - `handoff-dispatch.ts` — request-file IPC the `garden handoff` CLI uses to spawn workers from inside a sandboxed worker pane; pollers process pending requests in their poll cycle. With `--expect-callback`, the dispatcher stamps parent linkage on the child entry so `transitionState`'s terminal-state chokepoint can fire a one-shot prompt back at the parent pane via `notifyHandoffCallback` (`continue.ts`); the child stages an optional reply via `garden reply`
   - `workflows/` — workflow registry (`default.ts`, `trellis.ts`, `grow.ts`, `types.ts`, `index.ts`); see `WORKFLOWS.md`
+  - `harness/` — harness adapter registry (`types.ts`, `claude-code-core.ts`, `claude-code.ts`, `core.ts`, `index.ts`): every agent-CLI dialect decision (launch/resume command, headless command, runtime config install, prompt delivery, transcript reading, transient-error shapes, session identity). Split registries: `core.ts` (light, safe for the hook bundle) vs `index.ts` (full adapter with `installRuntimeConfig`; CLI bundle only — its closure carries the skills/sandbox content). Spec: `docs/MULTI-MODEL.md` "Layer 3"
   - `hooks/default.ts` + `hook-dispatcher.ts` — Claude Code hook routing
   - `trellis-{tag,verdict,prompts,continue,model,picker}.ts` — trellis workflow internals
   - `grow-continue.ts` — grow workflow's `LoopHooks`, continue-prompt builder, and iter-1 seed prompt
@@ -104,6 +105,10 @@ Permanent tmux layout — content is moved between visible slots and **hidden un
 See `WORKFLOWS.md`. Short version: define a `WorkflowDefinition` in `src/dashboard/workflows/<name>.ts`, register in `workflows/index.ts`, reuse `default.ts`'s state handlers and `defaultHookHandlers` wherever possible. Tests: `test/workflows.test.ts` + an integration test on real fs/git. Two concrete examples in the registry: `trellis.ts` (full-spec divergence — own reviewer prompt, verdict vocab, model pinning, post-merge dispatch) and `grow.ts` (minimal divergence — reuses default's reviewer/verdicts/hooks; only the iteration counter and post-merge dispatch differ). If your workflow shares the cold-respawn-per-iteration mechanics, supply a `LoopHooks` instance (see `src/dashboard/loop.ts`) instead of forking the dance.
 
 **Per-workflow runtime data** (the trellis pattern). Anything the workflow accumulates per worker goes under an optional sub-object on `WorkerEntry`, not as flat fields — `entry.trellis?: TrellisData` and `entry.grow?: GrowData` are the two concrete examples (`registry.ts`). `updateWorkerFields({ <subObject>: { <field>: ... } })` deep-merges that sub-object so callers don't clobber sibling fields. Add a legacy-shape migration to `readRegistry` so on-disk entries from earlier shapes get rebuilt at next read. Don't add flat per-workflow fields to `WorkerEntry`; the flat-fields path was deliberately removed (the migration in `readRegistry` exists to scrub stragglers from old on-disk entries).
+
+## Adding a new harness
+
+See `docs/MULTI-MODEL.md` "Layer 3". Short version: implement `HarnessCore` in `src/dashboard/harness/<name>-core.ts` (command dialects, prompt delivery, transcript reader, transient-error shapes — keep its import closure light; it is reachable from `dist/hook.js`), add `installRuntimeConfig` in `harness/<name>.ts`, and register in both `harness/core.ts` and `harness/index.ts`. A harness without a turn-end signal cannot be registered — `capabilities.turnEnd` is typed `true` because STATUS.md's no-polling invariant is preserved by refusing such harnesses, not polling around them. The event side: translate the harness's native lifecycle onto the normalized `WorkflowHookHandlers` methods (`onTurnEnded` etc.) — for claude-code that translation is `hook-dispatcher.ts`'s wire-name switch.
 
 ## Keeping docs current
 

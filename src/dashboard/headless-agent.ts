@@ -12,6 +12,7 @@ import fs from "node:fs";
 import { atomicWriteFile } from "./atomic-write.js";
 import { tmux, windowExists, killWindowSafe, shellEscape } from "./tmux.js";
 import { DASHBOARD_SESSION } from "../session.js";
+import { getHarnessCore } from "./harness/core.js";
 
 export interface HeadlessAgentLaunchOptions {
   /** Working directory for the claude process (typically the worktree). */
@@ -45,6 +46,10 @@ export interface HeadlessAgentLaunchOptions {
    *  WORKFLOWS.md Invariant 10 — reviewer quality is non-negotiable, so
    *  the model is pinned regardless of the worker's model or quota state. */
   model?: string;
+  /** Harness adapter running this headless agent. Absent = claude-code.
+   *  This is the AGENT's harness (reviewer/resolver/ci-fix), independent
+   *  of the worker's — see docs/MULTI-MODEL.md "Mixed fleets". */
+  harness?: string;
 }
 
 export interface HeadlessAgentLaunchResult {
@@ -65,14 +70,20 @@ export function launchHeadlessAgent(
     killWindowSafe(opts.windowName);
   }
 
-  const escapedPrompt = shellEscape(opts.promptFile);
-  const escapedResult = shellEscape(opts.resultFile);
   const escapedFifo = shellEscape(opts.signalFifo);
   const inlineEnv = opts.envVars
     ? Object.entries(opts.envVars).map(([k, v]) => `${k}=${shellEscape(v)} `).join("")
     : "";
-  const modelFlag = opts.model ? ` --model ${shellEscape(opts.model)}` : "";
-  const cmd = `${inlineEnv}${opts.envPrefix}claude -p${modelFlag} < ${escapedPrompt} > ${escapedResult} 2>&1; [ -p ${escapedFifo} ] && (echo > ${escapedFifo}) 2>/dev/null`;
+  // The harness owns the agent invocation; the FIFO-poke suffix is garden's
+  // completion signal and stays caller-composed.
+  const agentCmd = getHarnessCore(opts.harness).buildHeadlessCommand({
+    promptFile: opts.promptFile,
+    resultFile: opts.resultFile,
+    model: opts.model,
+    envPrefix: opts.envPrefix,
+    inlineEnv,
+  });
+  const cmd = `${agentCmd}; [ -p ${escapedFifo} ] && (echo > ${escapedFifo}) 2>/dev/null`;
 
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", opts.windowName,
     "-c", opts.cwd, "bash", "-c", cmd);

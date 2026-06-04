@@ -29,7 +29,8 @@ import {
   findWorkerByName, getWorkers, updateWorkerFields,
   type PrState, type WorkerEntry,
 } from "./registry.js";
-import { tmux, getFirstPaneId, windowExists, pasteAndSubmit } from "./tmux.js";
+import { tmux, getFirstPaneId, windowExists } from "./tmux.js";
+import { getHarnessCore } from "./harness/core.js";
 import { readUsageSnapshot, snapshotMeters } from "./usage.js";
 import { workerWindowName } from "./window-names.js";
 import { scheduleDelayedPoke } from "./poller-fifo.js";
@@ -825,7 +826,9 @@ function notifySiblingWorkers(
       continue;
     }
 
-    pasteAndSubmit(paneId, message);
+    // Delivery dialect belongs to the sibling's harness (TUI paste
+    // semantics differ per agent CLI).
+    getHarnessCore(sibling.harness).deliverPrompt(paneId, message);
     log.info("poller", "notified sibling of merge overlap", {
       worker: sibling.name,
       data: { project: projectName, mergedWorker: mergedEntry.name, overlapFiles: overlap },

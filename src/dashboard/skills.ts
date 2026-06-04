@@ -8,7 +8,7 @@ import { atomicWriteFile } from "./atomic-write.js";
 export const DONE_SKILL_DIRNAME = "done";
 export const DONE_SKILL_FILENAME = "SKILL.md";
 
-// Single source of truth: the bootstrap script inlines this string before the worktree exists, and installClaudeHooks rewrites it on refresh/bounce.
+// Single source of truth: the bootstrap script inlines this string before the worktree exists, and installRuntimeConfig rewrites it on refresh/bounce.
 export const DONE_SKILL_CONTENT = `---
 name: done
 description: Use when you have re-read the operator's original request and confirmed every deliverable they asked for has landed in a merged commit and is verified working. Invoke at the end of the same turn that pushed your final commit; this saves a round-trip versus waiting for the post-merge prompt. Writes the .garden-done sentinel so the next merge transitions straight to "done" instead of auto-continuing. The bias is still toward stopping over inventing busywork — but "done" means every requested deliverable is accounted for, not "I feel finished." Do NOT invoke while any operator-requested deliverable is unlanded or unverified.

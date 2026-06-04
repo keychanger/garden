@@ -3360,12 +3360,14 @@ describe("restartLongLivedPollers", () => {
   });
 });
 
-describe("isTransientReviewFailureTail", () => {
-  // Pure detector — no fs/tmux/registry interaction. Tests live here rather
+describe("claude-code adapter isTransientError", () => {
+  // Pure detector — no fs/tmux/registry interaction. Moved onto the harness
+  // adapter (the error shapes are Anthropic's); tests live here rather
   // than a dedicated file so the module's existing mocks don't need to be
   // duplicated. See poller-review.ts handleTransientReviewFailure.
   it("matches a 500 Internal server error tail", async () => {
-    const { isTransientReviewFailureTail } = await import("../src/dashboard/poller-review.js");
+    const { claudeCodeAdapter } = await import("../src/dashboard/harness/claude-code.js");
+    const isTransientReviewFailureTail = claudeCodeAdapter.isTransientError;
     const output = [
       "Looking at the diff...",
       "Everything looks reasonable here.",
@@ -3375,19 +3377,22 @@ describe("isTransientReviewFailureTail", () => {
   });
 
   it("matches a 529 overloaded_error JSON tail", async () => {
-    const { isTransientReviewFailureTail } = await import("../src/dashboard/poller-review.js");
+    const { claudeCodeAdapter } = await import("../src/dashboard/harness/claude-code.js");
+    const isTransientReviewFailureTail = claudeCodeAdapter.isTransientError;
     const output = `Some reviewer body text.\nAPI Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`;
     expect(isTransientReviewFailureTail(output)).toBe(true);
   });
 
   it("matches a 429 rate_limit_error tail", async () => {
-    const { isTransientReviewFailureTail } = await import("../src/dashboard/poller-review.js");
+    const { claudeCodeAdapter } = await import("../src/dashboard/harness/claude-code.js");
+    const isTransientReviewFailureTail = claudeCodeAdapter.isTransientError;
     const output = `API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"..."}}`;
     expect(isTransientReviewFailureTail(output)).toBe(true);
   });
 
   it("does not match a reviewer that merely mentions API errors in body text", async () => {
-    const { isTransientReviewFailureTail } = await import("../src/dashboard/poller-review.js");
+    const { claudeCodeAdapter } = await import("../src/dashboard/harness/claude-code.js");
+    const isTransientReviewFailureTail = claudeCodeAdapter.isTransientError;
     // The line is in the middle, not the tail. The verdict line at the bottom
     // would have been parsed in the normal path; only unparsed output reaches
     // this detector, and we don't want body-text false positives.
@@ -3404,7 +3409,8 @@ describe("isTransientReviewFailureTail", () => {
   });
 
   it("does not match a 4xx that isn't rate-limit (e.g. 400 bad request)", async () => {
-    const { isTransientReviewFailureTail } = await import("../src/dashboard/poller-review.js");
+    const { claudeCodeAdapter } = await import("../src/dashboard/harness/claude-code.js");
+    const isTransientReviewFailureTail = claudeCodeAdapter.isTransientError;
     // 400/401/403/404 indicate operator-action failures (auth, malformed
     // request) — auto-retry would just burn the budget. The detector is
     // scoped to 5xx and 429.
@@ -3413,7 +3419,8 @@ describe("isTransientReviewFailureTail", () => {
   });
 
   it("does not match empty or whitespace-only output", async () => {
-    const { isTransientReviewFailureTail } = await import("../src/dashboard/poller-review.js");
+    const { claudeCodeAdapter } = await import("../src/dashboard/harness/claude-code.js");
+    const isTransientReviewFailureTail = claudeCodeAdapter.isTransientError;
     expect(isTransientReviewFailureTail("")).toBe(false);
     expect(isTransientReviewFailureTail("   \n  \n")).toBe(false);
   });

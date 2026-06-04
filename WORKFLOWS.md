@@ -2316,7 +2316,7 @@ export function loopAutoContinueAfterMerge(
 `loopAutoContinueAfterMerge` runs the workflow-agnostic sequence:
 
 1. Resolve the worker's pane (active-pane fast path → window-name fallback).
-2. Refresh `.claude/settings.json` via `installClaudeHooks`.
+2. Refresh `.claude/settings.json` via the worker's harness adapter (`getHarness(entry.harness).installRuntimeConfig`).
 3. Generate a fresh `sessionId` and persist before respawn (concurrent
    reads see the new value).
 4. Build the worker command via `buildWorktreeWorkerCommand` with the

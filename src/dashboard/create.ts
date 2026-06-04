@@ -28,15 +28,16 @@ import { startUsagePoller } from "./usage-poller.js";
 import { installPollTriggerHook, worktreeExists as wtExists, getWorkerBaseBranch, getRemoteHost } from "./git.js";
 import { dispatchDelayedContinue } from "./continue.js";
 import { resolveGardenRunner, resolveHookRunner } from "./runner.js";
-import { buildSandboxConfig, type SandboxConfig } from "./sandbox.js";
+import { buildSandboxConfig } from "./sandbox.js";
 import {
   DONE_SKILL_CONTENT, DONE_SKILL_DIRNAME, DONE_SKILL_FILENAME,
   HANDOFF_SKILL_CONTENT, HANDOFF_SKILL_DIRNAME, HANDOFF_SKILL_FILENAME,
   TRELLIS_AUTHOR_SKILL_CONTENT, TRELLIS_AUTHOR_SKILL_DIRNAME, TRELLIS_AUTHOR_SKILL_FILENAME,
   GROW_SKILL_CONTENT, GROW_SKILL_DIRNAME, GROW_SKILL_FILENAME,
-  installClaudeSkills,
 } from "./skills.js";
 import { workerEnvPrefix, syncAllProviderTokens } from "./claude-env.js";
+import { getHarness } from "./harness/index.js";
+import { buildSettingsJson } from "./harness/claude-code.js";
 import { gardenWindowName, shellWindowName as shellWin, workerWindowName as workerWin, isGardenWindow } from "./window-names.js";
 
 const DASHBOARD_COLS = 250;
@@ -44,144 +45,6 @@ const DASHBOARD_ROWS = 60;
 
 // Usage pane height: 3 meter lines + 1 leading blank + 1 pane-border-status top row.
 export const USAGE_PANE_HEIGHT = 5;
-
-function buildSettingsJson(hookRunner: string, sandbox: SandboxConfig): string {
-  // The hook commands are written into JSON and ultimately executed by Claude
-  // Code as shell commands. The hook runner targets the minimal dist/hook.js
-  // bundle (resolveHookRunner) so each per-tool-call fire parses only the
-  // dispatcher's closure, not the whole CLI. Already pre-escaped per token, so
-  // it interpolates safely without re-wrapping. The event name is appended by
-  // each hook entry below; hook-entry.ts reads it from process.argv[2].
-  const hookCmd = hookRunner;
-  return JSON.stringify({
-    hooks: {
-      SessionStart: [{
-        matcher: "",
-        hooks: [{ type: "command", command: `${hookCmd} sessionstart`, timeout: 5 }],
-      }],
-      UserPromptSubmit: [{
-        matcher: "",
-        hooks: [{ type: "command", command: `${hookCmd} prompt`, timeout: 5 }],
-      }],
-      Stop: [{
-        matcher: "",
-        hooks: [{ type: "command", command: `${hookCmd} stop`, timeout: 5 }],
-      }],
-      PreToolUse: [{
-        matcher: "AskUserQuestion",
-        hooks: [{ type: "command", command: `${hookCmd} pretooluse`, timeout: 5 }],
-      }, {
-        matcher: "ExitPlanMode",
-        hooks: [{ type: "command", command: `${hookCmd} pretooluse`, timeout: 5 }],
-      }],
-      PermissionRequest: [{
-        matcher: "",
-        hooks: [{ type: "command", command: `${hookCmd} pretooluse`, timeout: 5 }],
-      }],
-      PostToolUse: [{
-        // Catch-all: auto-mode escalates any tool the classifier flags (Write,
-        // Edit, Read, Bash, WebFetch, ...), not just Bash — so we need to see
-        // every tool completion to clear "asking" after the operator approves.
-        matcher: "",
-        hooks: [{ type: "command", command: `${hookCmd} posttooluse`, timeout: 5 }],
-      }],
-    },
-    sandbox,
-    permissions: {
-      defaultMode: "auto",
-      // Every subcommand of a compound bash call must match a rule, so tmux chains like `tmux ... | head` still prompt without tail-utility allowances.
-      allow: [
-        "Bash(tmux:*)",
-        "Bash(echo:*)",
-        "Bash(head:*)",
-        "Bash(tail:*)",
-        "Bash(cat:*)",
-        "Bash(grep:*)",
-        "Bash(wc:*)",
-      ],
-    },
-  }, null, 2);
-}
-
-// Build the sandbox config for a Claude session rooted at targetDir. The
-// worktree path becomes the writable root; the project's origin remote host
-// is auto-added to the network allowlist; per-project sandboxDomains extend it.
-function sandboxForTarget(targetDir: string, project: ProjectConfig): SandboxConfig {
-  return buildSandboxConfig({
-    worktreePath: targetDir,
-    project,
-    remoteHost: getRemoteHost(project.path),
-  });
-}
-
-// Write to settings.json, not settings.local.json — Claude Code auto-edits the latter (permission approvals) and clobbers our hooks.
-// Atomic write: Claude reads settings.json on SessionStart and on every --resume, so a partial file would break hook config silently.
-// Mode 0o444 (read-only): defense-in-depth against an agent self-disabling
-// its own sandbox. The worktree itself is writable by the worker (that's
-// the point of the sandbox's allowWrite root), so a determined process can
-// chmod the file before editing — but auto-mode's classifier escalates a
-// chmod, and `installClaudeHooks` is invoked on every refresh/bounce, so
-// any tampering is rewritten on the next cycle. This makes the path of
-// least resistance "ask the operator" rather than "edit the file."
-export function installClaudeHooks(targetDir: string, project: ProjectConfig): void {
-  const sandbox = sandboxForTarget(targetDir, project);
-  const json = buildSettingsJson(resolveHookRunner(), sandbox);
-  const settingsPath = path.join(targetDir, ".claude", "settings.json");
-  // atomicWriteFile preserves the mode through tmp→rename. If the file
-  // already exists with a different mode (operator chmod, agent
-  // tampering), the rename replaces it with the read-only version.
-  atomicWriteFile(settingsPath, json, { mode: 0o444 });
-  installClaudeSkills(targetDir);
-  ensureWorktreeExcludes(targetDir);
-}
-
-// Heal `.git/info/exclude` for existing worktrees. The bootstrap script
-// writes these patterns at worker-spawn time (see further down this file),
-// but workers spawned before a new pattern was added need a refresh path.
-// installClaudeHooks runs on every dashboard refresh + bounce + post-merge
-// auto-continue, so worktrees from earlier garden versions heal on their
-// next cycle instead of carrying stale excludes forever.
-//
-// The exclude file lives at the git common dir (shared across worktrees);
-// a missing entry is added once and persists.
-function ensureWorktreeExcludes(targetDir: string): void {
-  // The patterns must stay in sync with the bootstrap script's `for pattern`
-  // loop further down in this file. .claude/ + .garden-hooks/ shipped with
-  // the original worker; .garden/ was added when the grow workflow's goal +
-  // log files needed to be hidden from git status; .garden-done is the
-  // auto-continue suppression sentinel (so an accidental `git add -A` won't
-  // start tracking it the way it did on wolf's main).
-  const patterns = [".claude/", ".garden-hooks/", ".garden/", ".garden-done"];
-  let commonDir: string;
-  try {
-    commonDir = execFileSync("git", ["-C", targetDir, "rev-parse", "--git-common-dir"], {
-      encoding: "utf-8",
-    }).trim();
-  } catch {
-    return; // Worktree may not exist yet on first hook installation.
-  }
-  // commonDir may be relative when targetDir is a worktree — resolve it
-  // against targetDir so the join below points at the right info/exclude.
-  const resolvedCommonDir = path.isAbsolute(commonDir)
-    ? commonDir
-    : path.resolve(targetDir, commonDir);
-  const excludeFile = path.join(resolvedCommonDir, "info", "exclude");
-  let current: string;
-  try {
-    current = fs.readFileSync(excludeFile, "utf-8");
-  } catch {
-    return; // No exclude file yet (rare; bootstrap will create one).
-  }
-  const lines = new Set(current.split("\n").map(l => l.trim()));
-  const missing = patterns.filter(p => !lines.has(p));
-  if (missing.length === 0) return;
-  const tail = (current.endsWith("\n") ? "" : "\n") + missing.join("\n") + "\n";
-  try {
-    fs.appendFileSync(excludeFile, tail);
-  } catch {
-    /* best effort — exclude is informational, not load-bearing */
-  }
-}
 
 export function resizeTerminal(): void {
   try {
@@ -255,7 +118,7 @@ export function ensureDashboard(): void {
         for (const entry of entries) {
           if (!entry.worktreePath || !wtExists(entry.worktreePath)) continue;
           installPollTriggerHook(entry.worktreePath, resolveGardenRunner(), pname);
-          installClaudeHooks(entry.worktreePath, proj);
+          getHarness(entry.harness).installRuntimeConfig(entry.worktreePath, proj);
         }
       }
     } catch { /* best effort — initial-create path will catch up next restart */ }
@@ -433,7 +296,7 @@ export function ensureDashboard(): void {
       const baseBranch = getWorkerBaseBranch(entry, projectConfig.path);
       if (entry.worktreePath && wtExists(entry.worktreePath)) {
         installPollTriggerHook(entry.worktreePath, gardenRunner, projectName);
-        installClaudeHooks(entry.worktreePath, projectConfig);
+        getHarness(entry.harness).installRuntimeConfig(entry.worktreePath, projectConfig);
       }
       // Capture mid-turn interruption before we overwrite agentStatus below.
       // pane-died sets interruptedWhileWorking when agentStatus was "working"
@@ -451,11 +314,12 @@ export function ensureDashboard(): void {
       const trellisRelativePath = trellisRelativePathForEntry(entry, projectConfig.path);
       // entry.model: default/grow per-worker pin; trellis resolves per
       // iteration, so vines never carry it.
-      const resumeOpts: { trellisRelativePath?: string; model?: string } = {};
+      const resumeOpts: { trellisRelativePath?: string; model?: string; harness?: string } = {};
       if (trellisRelativePath) resumeOpts.trellisRelativePath = trellisRelativePath;
       if (entry.model) resumeOpts.model = entry.model;
+      if (entry.harness) resumeOpts.harness = entry.harness;
       const resumeCmd = entry.worktreePath && entry.branchName
-        ? (resumeOpts.trellisRelativePath || resumeOpts.model
+        ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.harness
             ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch, resumeOpts)
             : buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch))
         : buildResumeCommand(projectName, projectConfig.path, entry.sessionId);
@@ -614,24 +478,28 @@ export function createShellWindow(projectName: string, projectPath: string): voi
 
 export function buildWorkerCommand(projectName: string, projectPath: string, sessionId: string): string {
   const project = resolveProjectForHooks(projectName, projectPath);
-  installClaudeHooks(projectPath, project);
+  const harness = getHarness();
+  harness.installRuntimeConfig(projectPath, project);
   const gardenRunner = resolveGardenRunner();
   const contextFile = writeContextFile(projectName, projectPath);
-  const envPrefix = workerEnvPrefix(project);
-  const claudeCmd = `${envPrefix}claude --rc --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const agentCmd = harness.buildAgentCommand({
+    sessionId, resume: false, contextFile, envPrefix: workerEnvPrefix(project),
+  });
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
-  return `${claudeCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
+  return `${agentCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
 }
 
 export function buildResumeCommand(projectName: string, projectPath: string, sessionId: string): string {
   const project = resolveProjectForHooks(projectName, projectPath);
-  installClaudeHooks(projectPath, project);
+  const harness = getHarness();
+  harness.installRuntimeConfig(projectPath, project);
   const gardenRunner = resolveGardenRunner();
   const contextFile = writeContextFile(projectName, projectPath);
-  const envPrefix = workerEnvPrefix(project);
-  const claudeCmd = `${envPrefix}claude --rc --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const agentCmd = harness.buildAgentCommand({
+    sessionId, resume: true, contextFile, envPrefix: workerEnvPrefix(project),
+  });
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
-  return `${claudeCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
+  return `${agentCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
 }
 
 export interface WorktreeCommandOptions {
@@ -657,6 +525,10 @@ export interface WorktreeCommandOptions {
    *  (per-worker `trellis.workerModel` override + the Sonnet exhaustion
    *  fallback via `resolveVineModel`). */
   model?: string;
+  /** Harness adapter name (`WorkerEntry.harness`). Absent = the default
+   *  claude-code adapter. Threaded by resume/bounce/loop callers from the
+   *  entry; spawn-time selection arrives with the second adapter. */
+  harness?: string;
 }
 
 export function buildWorktreeWorkerCommand(
@@ -673,13 +545,14 @@ export function buildWorktreeWorkerCommand(
     { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow },
   );
   const project = resolveProjectForHooks(projectName, projectPath);
-  const envPrefix = workerEnvPrefix(project);
-  const modelFlag = opts?.model ? ` --model ${shellEscape(opts.model)}` : "";
-  const claudeCmd = `${envPrefix}claude --rc${modelFlag} --session-id ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
-  return `${claudeCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
+  const agentCmd = getHarness(opts?.harness).buildAgentCommand({
+    sessionId, resume: false, contextFile, model: opts?.model,
+    envPrefix: workerEnvPrefix(project),
+  });
+  return `${agentCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }
 
-// Resolve a ProjectConfig for installClaudeHooks. Callers of buildWorkerCommand
+// Resolve a ProjectConfig for the harness adapter installRuntimeConfig calls. Callers of buildWorkerCommand
 // only carry a name and path (pre-worktree API shape), so look up the registered
 // project when possible and fall back to a minimal stub for unknown projects
 // (e.g., tests or ad-hoc invocations).
@@ -735,7 +608,6 @@ export function buildWorktreeBootstrapScript(
 
   const projectPathLit = shellEscape(projectPath);
   const wtPathLit = shellEscape(wtPath);
-  const contextFileLit = shellEscape(contextFile);
   const hooksDirLit = shellEscape(path.join(wtPath, ".garden-hooks"));
   const hookPathLit = shellEscape(path.join(wtPath, ".garden-hooks", "pre-push"));
   const signalFifoPath_ = path.join(SESSIONS_DIR, `${projectName}-poll-signal`);
@@ -758,8 +630,16 @@ export function buildWorktreeBootstrapScript(
   // would single-quote the whole multi-token string.
   const gardenRunnerLit = gardenRunner;
   const project = resolveProjectForHooks(projectName, projectPath);
-  const sandbox = sandboxForTarget(wtPath, project);
-  const settingsJson = buildSettingsJson(resolveHookRunner(), sandbox);
+  // The bootstrap inlines the Claude Code runtime config in shell form
+  // (settings.json + skills layout below) — this whole script is the
+  // claude-code dialect today. A second harness adds an adapter method
+  // that renders its own bootstrap config section (docs/MULTI-MODEL.md
+  // "Layer 3"); until then the adapter's internals are imported directly.
+  const settingsJson = buildSettingsJson(resolveHookRunner(), buildSandboxConfig({
+    worktreePath: wtPath,
+    project,
+    remoteHost: getRemoteHost(project.path),
+  }));
   const settingsJsonLit = shellEscape(settingsJson);
   const doneSkillLit = shellEscape(DONE_SKILL_CONTENT);
   const doneSkillDirnameLit = shellEscape(DONE_SKILL_DIRNAME);
@@ -773,8 +653,10 @@ export function buildWorktreeBootstrapScript(
   const growSkillLit = shellEscape(GROW_SKILL_CONTENT);
   const growSkillDirnameLit = shellEscape(GROW_SKILL_DIRNAME);
   const growSkillFilenameLit = shellEscape(GROW_SKILL_FILENAME);
-  const envPrefix = workerEnvPrefix(project);
-  const modelFlag = opts?.model ? ` --model ${shellEscape(opts.model)}` : "";
+  const agentCmd = getHarness(opts?.harness).buildAgentCommand({
+    sessionId, resume: false, contextFile, model: opts?.model,
+    envPrefix: workerEnvPrefix(project),
+  });
 
   const base = baseBranch ?? "main";
   const baseLit = shellEscape(base);
@@ -922,7 +804,7 @@ git -C ${wtPathLit} config --local core.hooksPath ${hooksDirLit}
 
 # Install Claude Code hooks — settings.json (not .local.json, which Claude Code auto-edits and would clobber).
 # chmod 444: defense-in-depth so an agent can't trivially edit its own
-# sandbox without first chmod'ing — installClaudeHooks rewrites this on
+# sandbox without first chmod'ing — installRuntimeConfig rewrites this on
 # every refresh/bounce anyway, so tampering doesn't survive long.
 mkdir -p ${wtPathLit}/.claude
 printf '%s' ${settingsJsonLit} | atomic_write ${wtPathLit}/.claude/settings.json
@@ -953,8 +835,8 @@ done
 cd ${wtPathLit}
 printf '  Ready.\\n\\n'
 
-# Launch claude
-${envPrefix}claude --rc${modelFlag} --session-id ${sessionId} --append-system-prompt-file ${contextFileLit}
+# Launch the agent
+${agentCmd}
 ${gardenRunnerLit} dashboard _claude-hook stop 2>/dev/null || true
 ${pollSignal}
 exec $SHELL
@@ -982,10 +864,11 @@ export function buildWorktreeResumeCommand(
   );
   const gardenRunner = resolveGardenRunner();
   const project = resolveProjectForHooks(projectName, projectPath);
-  const envPrefix = workerEnvPrefix(project);
   const identityExports = workerEnvExports(projectName, workerName, branchName, baseBranch);
-  const modelFlag = opts?.model ? ` --model ${shellEscape(opts.model)}` : "";
-  const claudeCmd = `${envPrefix}claude --rc${modelFlag} --resume ${sessionId} --append-system-prompt-file ${shellEscape(contextFile)}`;
+  const claudeCmd = getHarness(opts?.harness).buildAgentCommand({
+    sessionId, resume: true, contextFile, model: opts?.model,
+    envPrefix: workerEnvPrefix(project),
+  });
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${identityExports} ${claudeCmd}; ${exitHook}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }
