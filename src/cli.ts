@@ -62,6 +62,7 @@ Projects:
   remove <name>                  Remove a project (also purges from plots)
   list, ls                       List all projects
   config <project> [key] [value] View or set project config
+  pad [project] [--path]         Open the project's scratch pad in $EDITOR (--path prints the file path)
   claude-profile [list|add|remove|login]
                                  Manage alternate Claude config dirs (per-project plan)
   provider [list|add|remove]     Manage model providers (Anthropic-compatible backends

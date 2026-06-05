@@ -465,6 +465,43 @@ export function createGardenHistoryWindow(gardenRunner: string): void {
   }
 }
 
+// Pad view (⌥d): the focused project's scratch pad open in $EDITOR. The
+// wrapper loop re-resolves the focused project each time the editor exits,
+// so quitting the editor after a project switch reopens on the new pad.
+export function createGardenPadWindow(gardenRunner: string): void {
+  const scriptFile = writePadViewScript(gardenRunner);
+  const windowName = gardenWindowName("pad");
+  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName,
+    "sh", "-c", `sh ${shellEscape(scriptFile)}`);
+  const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
+  if (paneId) {
+    setPaneLabel(paneId, "pad");
+    setPaneTitle(paneId, "pad");
+  }
+}
+
+function writePadViewScript(gardenRunner: string): string {
+  // gardenRunner is pre-escaped per token by resolveGardenRunner(), so it
+  // interpolates raw (see writeGrowhouseInitScript). $EDITOR stays unquoted
+  // so multi-word values ("code -w") split into command + args.
+  const script = `#!/bin/sh
+# Garden pad view — edits the focused project's scratch pad in $EDITOR.
+while :; do
+  f="$(${gardenRunner} dashboard _pad-path 2>/dev/null)"
+  if [ -z "$f" ]; then
+    clear
+    echo "No focused project. Select one (Alt-1..9) and the pad reopens."
+    sleep 2
+    continue
+  fi
+  \${EDITOR:-vi} "$f" || sleep 1
+done
+`;
+  const scriptFile = path.join(SESSIONS_DIR, "pad-view.sh");
+  atomicWriteFile(scriptFile, script, { mode: 0o755 });
+  return scriptFile;
+}
+
 export function createShellWindow(projectName: string, projectPath: string): void {
   const windowName = shellWin(projectName);
   tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName, "-c", projectPath);

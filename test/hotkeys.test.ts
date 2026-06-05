@@ -99,4 +99,19 @@ describe("setupKeybindings", () => {
     expect(argv.join(" ")).toContain("_workflow-picker");
     expect(argv.join(" ")).not.toContain("_trellis-picker");
   });
+
+  it("binds M-d to the pad view on the root table", () => {
+    setupKeybindings("/path/to/garden");
+    const rootBind = execFileSyncMock.mock.calls.find((call) => {
+      const argv = call[1] as string[];
+      return Array.isArray(argv)
+        && argv[0] === "bind-key"
+        && argv[1] === "-n"
+        && argv[2] === "M-d";
+    });
+    expect(rootBind).toBeDefined();
+    const argv = rootBind![1] as string[];
+    expect(argv).toContain("run-shell");
+    expect(argv.join(" ")).toContain("_focus-pad");
+  });
 });

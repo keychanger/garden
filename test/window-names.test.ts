@@ -41,6 +41,7 @@ describe("window name construction", () => {
     expect(gardenWindowName("root")).toBe("_garden-root");
     expect(gardenWindowName("logs")).toBe("_garden-logs");
     expect(gardenWindowName("history")).toBe("_garden-history");
+    expect(gardenWindowName("pad")).toBe("_garden-pad");
   });
 
   it("usagePollerWindowName", () => {
@@ -100,11 +101,12 @@ describe("roundtrip", () => {
 });
 
 describe("isGardenWindow", () => {
-  it("returns true for growhouse/root/logs/history windows", () => {
+  it("returns true for growhouse/root/logs/history/pad windows", () => {
     expect(isGardenWindow("_garden-growhouse")).toBe(true);
     expect(isGardenWindow("_garden-root")).toBe(true);
     expect(isGardenWindow("_garden-logs")).toBe(true);
     expect(isGardenWindow("_garden-history")).toBe(true);
+    expect(isGardenWindow("_garden-pad")).toBe(true);
   });
 
   it("returns false for non-garden windows", () => {

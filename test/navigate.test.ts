@@ -77,6 +77,7 @@ vi.mock("../src/dashboard/create.js", () => ({
   createGardenRootWindow: vi.fn(),
   createGardenGrowhouseWindow: vi.fn(),
   createGardenHistoryWindow: vi.fn(),
+  createGardenPadWindow: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/runner.js", () => ({
@@ -102,6 +103,7 @@ import {
   focusRoot,
   focusLogs,
   focusHistory,
+  focusPad,
   cyclePane,
   cyclePlot,
 } from "../src/dashboard/navigate.js";
@@ -117,7 +119,7 @@ import {
 import { findWorkerByName } from "../src/dashboard/registry.js";
 import { plotsMap, getFocusedProjectNames } from "../src/config.js";
 import { acknowledgeAlerts } from "../src/dashboard/alerts.js";
-import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow, createGardenHistoryWindow } from "../src/dashboard/create.js";
+import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow, createGardenHistoryWindow, createGardenPadWindow } from "../src/dashboard/create.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 
 // --- Helpers ---
@@ -563,6 +565,33 @@ describe("focusGrowhouse / focusRoot / focusLogs (switchGardenTo)", () => {
     expect(createLogsWindow).toHaveBeenCalled();
     expect(state.gardenPaneType).toBe("logs");
     expect(state.gardenWindowName).toBe("_garden-logs");
+  });
+
+  it("creates pad window if missing when switching to pad", () => {
+    const state = makeState({
+      gardenPaneType: "growhouse",
+      gardenWindowName: "_garden-growhouse",
+    });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(windowExists).mockReturnValue(false);
+
+    focusPad();
+
+    expect(createGardenPadWindow).toHaveBeenCalledWith("/usr/bin/garden");
+    expect(gardenSwapToHidden).toHaveBeenCalledWith(
+      "_garden-growhouse", "_garden-pad", state,
+    );
+    expect(state.gardenPaneType).toBe("pad");
+    expect(state.gardenWindowName).toBe("_garden-pad");
+  });
+
+  it("focusPad selects existing pane when already on pad view", () => {
+    vi.mocked(readDashState).mockReturnValue(
+      makeState({ gardenPaneType: "pad", gardenShellPaneId: "%1" }),
+    );
+    focusPad();
+    expect(tmux).toHaveBeenCalledWith("select-pane", "-t", "%1");
+    expect(writeDashState).not.toHaveBeenCalled();
   });
 
   it("creates history window if missing when switching to history", () => {

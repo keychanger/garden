@@ -23,7 +23,7 @@ export interface DashboardState {
   statusPaneId: string | null;
   usagePaneId: string | null;
   gardenShellPaneId: string | null; // current pane ID in the growhouse slot (lower-left)
-  gardenPaneType: "growhouse" | "root" | "logs" | "history" | null;
+  gardenPaneType: "growhouse" | "root" | "logs" | "history" | "pad" | null;
   gardenWindowName: string | null; // logical name for parking, e.g. "_garden-growhouse" or "_garden-logs"
   // Right side — activePaneId is the pane currently in the right slot
   activePaneId: string | null;

@@ -6,7 +6,7 @@ import {
   attachDashboardSession,
   killDashboardSession,
 } from "../session.js";
-import { STATE_FILE } from "./state.js";
+import { STATE_FILE, readDashState } from "./state.js";
 import { REGISTRY_FILE } from "./registry.js";
 import { ALERTS_FILE } from "./alerts.js";
 import { printHeader, handlePaneDied, handleTitleChanged } from "./header.js";
@@ -24,7 +24,8 @@ import {
   runTrellisPicker, plantVineFromPicker, spawnTrellisAuthor, runReviveSubmenu,
   runWorkflowPicker, plantGrowFromPicker,
 } from "./trellis-picker.js";
-import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, focusHistory, cyclePane, cyclePlot } from "./navigate.js";
+import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, focusHistory, focusPad, cyclePane, cyclePlot } from "./navigate.js";
+import { padFilePath } from "../pads.js";
 import { openLogsFilterPrompt, applyLogsFilter } from "./logs-filter.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
 import { runUsagePollerLoop, stopUsagePoller } from "./usage-poller.js";
@@ -83,6 +84,14 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   if (sub === "_focus-root") return focusRoot();
   if (sub === "_focus-logs") return focusLogs();
   if (sub === "_focus-history") return focusHistory();
+  if (sub === "_focus-pad") return focusPad();
+  if (sub === "_pad-path") {
+    // Consumed by the pad view's editor loop (pad-view.sh): prints the
+    // focused project's pad file path, or nothing when no project is focused.
+    const project = readDashState().activeProject;
+    if (project) console.log(padFilePath(project));
+    return;
+  }
   if (sub === "_logs-filter") return openLogsFilterPrompt();
   if (sub === "_logs-filter-apply") {
     applyLogsFilter(args.slice(1).join(" "));
@@ -333,6 +342,7 @@ Hotkeys (⌥ = Option/Alt, no prefix needed):
   ⌥g           Focus growhouse (garden> prompt with auto-dispatch)
   ⌥r           Focus root shell
   ⌥l           Focus logs
+  ⌥d           Focus pad (focused project's scratch pad in $EDITOR)
   ⌥/           Edit sticky logs filter (key:value or fuzzy; empty clears)
   ⌥.           Clear sticky logs filter immediately
 
