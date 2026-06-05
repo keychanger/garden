@@ -24,8 +24,8 @@ import {
   runTrellisPicker, plantVineFromPicker, spawnTrellisAuthor, runReviveSubmenu,
   runWorkflowPicker, plantGrowFromPicker,
 } from "./trellis-picker.js";
-import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, focusHistory, focusPad, cyclePane, cyclePlot } from "./navigate.js";
-import { padFilePath } from "../pads.js";
+import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, focusHistory, focusDiary, cyclePane, cyclePlot } from "./navigate.js";
+import { diaryFilePath } from "../diary.js";
 import { openLogsFilterPrompt, applyLogsFilter } from "./logs-filter.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
 import { runUsagePollerLoop, stopUsagePoller } from "./usage-poller.js";
@@ -84,12 +84,12 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   if (sub === "_focus-root") return focusRoot();
   if (sub === "_focus-logs") return focusLogs();
   if (sub === "_focus-history") return focusHistory();
-  if (sub === "_focus-pad") return focusPad();
-  if (sub === "_pad-path") {
-    // Consumed by the pad view's editor loop (pad-view.sh): prints the
-    // focused project's pad file path, or nothing when no project is focused.
+  if (sub === "_focus-diary") return focusDiary();
+  if (sub === "_diary-path") {
+    // Consumed by the diary view's editor loop (diary-view.sh): prints the
+    // focused project's diary file path, or nothing when no project is focused.
     const project = readDashState().activeProject;
-    if (project) console.log(padFilePath(project));
+    if (project) console.log(diaryFilePath(project));
     return;
   }
   if (sub === "_logs-filter") return openLogsFilterPrompt();
@@ -342,7 +342,7 @@ Hotkeys (⌥ = Option/Alt, no prefix needed):
   ⌥g           Focus growhouse (garden> prompt with auto-dispatch)
   ⌥r           Focus root shell
   ⌥l           Focus logs
-  ⌥d           Focus pad (focused project's scratch pad in $EDITOR)
+  ⌥d           Focus diary (focused project's diary in $EDITOR)
   ⌥/           Edit sticky logs filter (key:value or fuzzy; empty clears)
   ⌥.           Clear sticky logs filter immediately
 

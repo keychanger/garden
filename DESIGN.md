@@ -10,7 +10,7 @@ Garden is a personal tool — opinionated toward a single developer managing man
 A named reference to a directory on disk where Claude Code can operate. Projects are added with `garden add [path]` (name is derived from the directory basename).
 
 ### Dashboard
-A tmux session (`garden-dashboard`) that serves as the primary interface. The dashboard is a left/right split: garden title and usage meters (top), project status (middle), and a growhouse pane (bottom) on the left; an active pane (worker or shell) on the right with a header bar. The growhouse pane cycles between five views: the growhouse (`⌥g`) with a bold green `garden>` prompt and auto-dispatch for garden commands, the root shell (`⌥r`) for general-purpose terminal use, a logs view (`⌥l`), a history view (`⌥h`) showing the focused worker's prompt history, and a pad view (`⌥d`) editing the focused project's scratch pad in `$EDITOR`. The same swap-pane mechanism as the right pane is used. You never interact with tmux directly — garden sets up the layout, keybindings, and pane management.
+A tmux session (`garden-dashboard`) that serves as the primary interface. The dashboard is a left/right split: garden title and usage meters (top), project status (middle), and a growhouse pane (bottom) on the left; an active pane (worker or shell) on the right with a header bar. The growhouse pane cycles between five views: the growhouse (`⌥g`) with a bold green `garden>` prompt and auto-dispatch for garden commands, the root shell (`⌥r`) for general-purpose terminal use, a logs view (`⌥l`), a history view (`⌥h`) showing the focused worker's prompt history, and a diary view (`⌥d`) editing the focused project's diary in `$EDITOR`. The same swap-pane mechanism as the right pane is used. You never interact with tmux directly — garden sets up the layout, keybindings, and pane management.
 
 ### Workers
 Interactive Claude Code sessions running inside the dashboard. Each project can have multiple workers (e.g., one for a feature, one for a review). Workers persist when you switch between projects — they're parked in hidden tmux windows and swapped back in when you return.
@@ -56,7 +56,7 @@ Rules are plain markdown. Edit them directly.
 
 - **Garden title + Usage Meters** (top-left) — Dedicated pane with a bold green `garden` title label on the pane border and three Claude quota bars inside (5-hour rolling window, weekly total, Sonnet-specific weekly meter). Height auto-sizes to the rendered content — 5 rows at rest, 6 when a one-line health tag is shown below the meters (stale snapshot or last-fetch error). Refreshed via SIGUSR1 from a pre-baked `usage.rendered` file.
 - **Project Status** (mid-left) — Live-updating display of all projects and their workers. Shows which project is active (`◄`), each worker's lifecycle state via status icons (braille spinner for working, Unicode symbols for other states), a focus indicator (filled/empty circle) showing which worker is active, and aligned columns for name/status/activity. Auto-sizes to the number of projects.
-- **Growhouse Pane** (lower-left) — Cycles between five views: growhouse (bold green `garden>` prompt with auto-dispatch for garden commands), root (general-purpose shell), logs, history, and pad. `⌥g` jumps to growhouse, `⌥r` jumps to root, `⌥l` jumps to logs, `⌥h` jumps to history (the focused worker's operator prompts + verb-tagged assistant summaries, read from the worker's Claude transcript JSONL by `conversation.ts`), `⌥d` jumps to the pad (the focused project's scratch pad at `~/.garden/pads/<project>.md`, open in `$EDITOR`). The history pane renders via the same pre-baked-file + SIGUSR1 path as the usage meter; `writeHistoryRendered` parses the transcript only while history is the active mode. The pad pane runs a wrapper loop (`pad-view.sh`) that re-resolves the focused project via `garden dashboard _pad-path` each time the editor exits, so quitting the editor after a project switch reopens on the new project's pad; switching views parks the editor with its state intact.
+- **Growhouse Pane** (lower-left) — Cycles between five views: growhouse (bold green `garden>` prompt with auto-dispatch for garden commands), root (general-purpose shell), logs, history, and diary. `⌥g` jumps to growhouse, `⌥r` jumps to root, `⌥l` jumps to logs, `⌥h` jumps to history (the focused worker's operator prompts + verb-tagged assistant summaries, read from the worker's Claude transcript JSONL by `conversation.ts`), `⌥d` jumps to the diary (the focused project's diary at `~/.garden/diary/<project>.md`, open in `$EDITOR`). The history pane renders via the same pre-baked-file + SIGUSR1 path as the usage meter; `writeHistoryRendered` parses the transcript only while history is the active mode. The diary pane runs a wrapper loop (`diary-view.sh`) that re-resolves the focused project via `garden dashboard _diary-path` each time the editor exits, so quitting the editor after a project switch reopens on the new project's diary; switching views parks the editor with its state intact.
 - **Bottom bar** (tmux status line) — Two-sided display. Left side shows the active project name (bold) and its current git branch. Right side shows the garden build version (git short SHA, or "dev" when running via tsx); when unread alerts exist it is prefixed with a red `⚠ N alerts — ⌥l to clear` badge.
 - **Active Pane** (right) — The currently visible pane for the active project. Either a worker (Claude session) or the project shell. Only one is visible at a time; others are parked in hidden tmux windows.
 
@@ -115,7 +115,7 @@ Requires terminal setup: iTerm2 → Profiles → Keys → Left Option key → "E
 | `⌥r` | Focus root shell (lower-left) |
 | `⌥l` | Focus logs view (lower-left); also acknowledges the alert badge |
 | `⌥h` | Focus history view (lower-left): the focused worker's prompt history + brief assistant summaries |
-| `⌥d` | Focus pad view (lower-left): the focused project's scratch pad open in `$EDITOR` |
+| `⌥d` | Focus diary view (lower-left): the focused project's diary open in `$EDITOR` |
 | `⌥/` | Edit the sticky logs filter via `tmux command-prompt` (pre-filled with current value); empty input clears |
 | `⌥.` | Clear the sticky logs filter immediately (no prompt) |
 
@@ -131,7 +131,7 @@ Each project's workers and shell live in hidden tmux windows when not active. Wh
 This preserves both the layout tree (the right pane slot is never destroyed) and all worker state across switches.
 
 ### Hidden Window Naming
-Hidden windows follow the convention: `_<project>-worker-<N>`, `_<project>-shell`, `_<project>-poller`, `_<project>-review-<worker>`, `_garden-growhouse`, `_garden-root`, `_garden-logs`, `_garden-history`, `_garden-pad`, `_garden-usage-poller`, and `_garden-watchdog`. When switching projects, the visible pane is parked as `_<project>-active`. The underscore prefix marks them as managed by garden — not user-facing.
+Hidden windows follow the convention: `_<project>-worker-<N>`, `_<project>-shell`, `_<project>-poller`, `_<project>-review-<worker>`, `_garden-growhouse`, `_garden-root`, `_garden-logs`, `_garden-history`, `_garden-diary`, `_garden-usage-poller`, and `_garden-watchdog`. When switching projects, the visible pane is parked as `_<project>-active`. The underscore prefix marks them as managed by garden — not user-facing.
 
 ### Worker Lifecycle
 1. `⌥n` creates a git worktree at `~/.garden/worktrees/<project>/<worker-name>/`, with a branch named after the worker that points at `origin/<base>` directly. Worker freshness does not depend on the main checkout being clean or fast-forwarded — a stale main checkout raises an alert but does not infect the worker
@@ -313,7 +313,7 @@ garden create <path>               # Scaffold a new project: mkdir, git init -b 
 garden remove <name>               # Remove a project
 garden list                        # List all projects
 garden config <project> [key] [val]  # View or set project config
-garden pad [project] [--path]      # Open the project's scratch pad in $EDITOR (--path prints the file path)
+garden diary [project] [--path]    # Open the project's diary in $EDITOR (--path prints the file path)
 garden plot [name]                 # List plots (no arg) or activate a plot
 garden plot create <name> [proj...]# Create a plot (auto-activates if none active)
 garden plot add <plot> <project>   # Add a project to a plot (append)
@@ -405,7 +405,7 @@ All read commands detect whether stdout is a TTY:
     dashboard.log           # Structured JSON log
     <project>-poll-signal   # FIFO for waking project pollers
     growhouse-init.zsh            # Garden growhouse init (custom prompt + auto-dispatch)
-    pad-view.sh                   # Pad view editor loop (⌥d)
+    diary-view.sh                 # Diary view editor loop (⌥d)
     bootstrap-<project>-<branch>.sh       # Transient worktree bootstrap script
     <project>-<worker>-review-prompt.txt  # Transient review prompt
     <project>-<worker>-review-result.txt  # Transient review output
@@ -413,8 +413,8 @@ All read commands detect whether stdout is a TTY:
     usage.rendered            # Pre-rendered usage meter snapshot for the usage pane
     history.rendered          # Pre-rendered conversation snapshot for the ⌥h history pane
     claude-usage.json         # Claude quota snapshot (5h / weekly / sonnet)
-  pads/
-    <project>.md          # Per-project scratch pad (operator notes; garden pad / ⌥d)
+  diary/
+    <project>.md          # Per-project diary (operator notes; garden diary / ⌥d)
   worktrees/
     <project>/
       <worker-name>/      # Git worktree for each worker

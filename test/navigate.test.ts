@@ -77,7 +77,7 @@ vi.mock("../src/dashboard/create.js", () => ({
   createGardenRootWindow: vi.fn(),
   createGardenGrowhouseWindow: vi.fn(),
   createGardenHistoryWindow: vi.fn(),
-  createGardenPadWindow: vi.fn(),
+  createGardenDiaryWindow: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/runner.js", () => ({
@@ -103,7 +103,7 @@ import {
   focusRoot,
   focusLogs,
   focusHistory,
-  focusPad,
+  focusDiary,
   cyclePane,
   cyclePlot,
 } from "../src/dashboard/navigate.js";
@@ -119,7 +119,7 @@ import {
 import { findWorkerByName } from "../src/dashboard/registry.js";
 import { plotsMap, getFocusedProjectNames } from "../src/config.js";
 import { acknowledgeAlerts } from "../src/dashboard/alerts.js";
-import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow, createGardenHistoryWindow, createGardenPadWindow } from "../src/dashboard/create.js";
+import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow, createGardenHistoryWindow, createGardenDiaryWindow } from "../src/dashboard/create.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 
 // --- Helpers ---
@@ -567,7 +567,7 @@ describe("focusGrowhouse / focusRoot / focusLogs (switchGardenTo)", () => {
     expect(state.gardenWindowName).toBe("_garden-logs");
   });
 
-  it("creates pad window if missing when switching to pad", () => {
+  it("creates diary window if missing when switching to diary", () => {
     const state = makeState({
       gardenPaneType: "growhouse",
       gardenWindowName: "_garden-growhouse",
@@ -575,21 +575,21 @@ describe("focusGrowhouse / focusRoot / focusLogs (switchGardenTo)", () => {
     vi.mocked(readDashState).mockReturnValue(state);
     vi.mocked(windowExists).mockReturnValue(false);
 
-    focusPad();
+    focusDiary();
 
-    expect(createGardenPadWindow).toHaveBeenCalledWith("/usr/bin/garden");
+    expect(createGardenDiaryWindow).toHaveBeenCalledWith("/usr/bin/garden");
     expect(gardenSwapToHidden).toHaveBeenCalledWith(
-      "_garden-growhouse", "_garden-pad", state,
+      "_garden-growhouse", "_garden-diary", state,
     );
-    expect(state.gardenPaneType).toBe("pad");
-    expect(state.gardenWindowName).toBe("_garden-pad");
+    expect(state.gardenPaneType).toBe("diary");
+    expect(state.gardenWindowName).toBe("_garden-diary");
   });
 
-  it("focusPad selects existing pane when already on pad view", () => {
+  it("focusDiary selects existing pane when already on diary view", () => {
     vi.mocked(readDashState).mockReturnValue(
-      makeState({ gardenPaneType: "pad", gardenShellPaneId: "%1" }),
+      makeState({ gardenPaneType: "diary", gardenShellPaneId: "%1" }),
     );
-    focusPad();
+    focusDiary();
     expect(tmux).toHaveBeenCalledWith("select-pane", "-t", "%1");
     expect(writeDashState).not.toHaveBeenCalled();
   });

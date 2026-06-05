@@ -1,12 +1,12 @@
-// Opens the project's scratch pad in $EDITOR.
+// Opens the project's diary in $EDITOR.
 import { spawnSync } from "node:child_process";
 import { resolveProjectFromArgs } from "../config.js";
 import { shellEscape } from "../dashboard/tmux.js";
-import { padFilePath } from "../pads.js";
+import { diaryFilePath } from "../diary.js";
 
-export async function pad(args: string[]): Promise<void> {
+export async function diary(args: string[]): Promise<void> {
   const { project, remainingArgs } = resolveProjectFromArgs(args);
-  const file = padFilePath(project.name);
+  const file = diaryFilePath(project.name);
 
   if (remainingArgs.includes("--path")) {
     console.log(file);

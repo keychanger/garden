@@ -100,7 +100,7 @@ describe("setupKeybindings", () => {
     expect(argv.join(" ")).not.toContain("_trellis-picker");
   });
 
-  it("binds M-d to the pad view on the root table", () => {
+  it("binds M-d to the diary view on the root table", () => {
     setupKeybindings("/path/to/garden");
     const rootBind = execFileSyncMock.mock.calls.find((call) => {
       const argv = call[1] as string[];
@@ -112,6 +112,6 @@ describe("setupKeybindings", () => {
     expect(rootBind).toBeDefined();
     const argv = rootBind![1] as string[];
     expect(argv).toContain("run-shell");
-    expect(argv.join(" ")).toContain("_focus-pad");
+    expect(argv.join(" ")).toContain("_focus-diary");
   });
 });

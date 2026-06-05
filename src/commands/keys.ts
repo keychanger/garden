@@ -7,7 +7,7 @@ Garden Dashboard Keybindings (⌥ = Option/Alt)
     ⌥g           Focus growhouse (garden> prompt)
     ⌥r           Focus root shell
     ⌥l           Focus logs
-    ⌥d           Focus pad (focused project's scratch pad in $EDITOR)
+    ⌥d           Focus diary (focused project's diary in $EDITOR)
     ⌥w           Jump to first worker
     ⌥s           Jump to project shell
     ⌥] / ⌥[     Cycle workers (right pane)
