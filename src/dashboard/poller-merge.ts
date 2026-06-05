@@ -506,7 +506,7 @@ function transitionToTerminal(
   // terminal state immediately so the renderer doesn't show a phantom merge.
   const fresh = findWorkerByName(projectName, entry.name);
   if (fresh?.agentStatus === "working") {
-    log.info("poller", "worker already active after merge, clearing terminal state", {
+    log.info("poller", "worker active again, clearing merge state", {
       worker: entry.name,
       data: { project: projectName, clearedFrom: terminalState },
     });

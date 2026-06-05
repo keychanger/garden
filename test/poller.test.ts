@@ -1376,7 +1376,7 @@ describe("poll — merge-pending state", () => {
     expect(workingCall).toBeDefined();
     expect((workingCall![2] as Record<string, unknown>).mergedAt).toBeUndefined();
     expect(log.info).toHaveBeenCalledWith(
-      "poller", "worker already active after merge, clearing terminal state",
+      "poller", "worker active again, clearing merge state",
       expect.objectContaining({ worker: "bold-ash" }),
     );
   });
