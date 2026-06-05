@@ -145,6 +145,24 @@ describe("writeDashState / readDashState", () => {
     expect(loaded.gardenWindowName).toBe("_garden-history");
   });
 
+  it("migrates pad view to diary", async () => {
+    const { readDashState, STATE_FILE } = await importState();
+    const oldState = {
+      activeProject: "myproject",
+      statusPaneId: "%1",
+      gardenShellPaneId: "%2",
+      gardenPaneType: "pad",
+      gardenWindowName: "_garden-pad",
+      activePaneId: "%3",
+      activePaneType: "worker",
+      activeWindowName: "_myproject-worker-bold-ash",
+    };
+    fs.writeFileSync(STATE_FILE, JSON.stringify(oldState));
+    const loaded = readDashState();
+    expect(loaded.gardenPaneType).toBe("diary");
+    expect(loaded.gardenWindowName).toBe("_garden-diary");
+  });
+
   it("backfills lastActiveWorker for old state files", async () => {
     const { readDashState, STATE_FILE } = await importState();
     const oldState = {

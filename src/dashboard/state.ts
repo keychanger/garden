@@ -113,6 +113,9 @@ export function readDashState(): DashboardState {
     // The "conversation" view was renamed to "history" (⌥c → ⌥h).
     if (raw.gardenPaneType === "conversation") raw.gardenPaneType = "history";
     if (raw.gardenWindowName === "_garden-conversation") raw.gardenWindowName = "_garden-history";
+    // The "pad" view was renamed to "diary" (same ⌥d slot).
+    if (raw.gardenPaneType === "pad") raw.gardenPaneType = "diary";
+    if (raw.gardenWindowName === "_garden-pad") raw.gardenWindowName = "_garden-diary";
     if (raw.gardenWindowName === undefined) raw.gardenWindowName = null;
     if (raw.usagePaneId === undefined) raw.usagePaneId = null;
     if (raw.activePlot === undefined) raw.activePlot = null;
