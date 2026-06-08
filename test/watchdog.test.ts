@@ -28,7 +28,7 @@ vi.mock("../src/dashboard/poller-fifo.js", () => ({
 }));
 
 import {
-  latestActivityMs, isWatchedState, isWorkerStale, tick,
+  latestActivityMs, isWatchedState, isWorkerStale, tick, respawnDeadPollers,
   WATCHDOG_THRESHOLD_MS,
 } from "../src/dashboard/watchdog.js";
 import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
@@ -184,5 +184,46 @@ describe("tick", () => {
     registryMock._setEntries("proj", [entry({ pendingReviewAt: STALE_MS })]);
     tick(new Map(), NOW);
     expect(triggerProjectPoll).toHaveBeenCalledWith("proj");
+  });
+});
+
+describe("respawnDeadPollers", () => {
+  it("respawns a project whose poller window is dead", () => {
+    registryMock._setEntries("dead", [entry({ prState: "reviewing" })]);
+    const start = vi.fn();
+    const respawned = respawnDeadPollers(() => false, start);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(start).toHaveBeenCalledWith("dead");
+    expect(respawned).toEqual(["dead"]);
+  });
+
+  it("leaves a project whose poller is alive untouched", () => {
+    registryMock._setEntries("alive", [entry({ prState: "reviewing" })]);
+    const start = vi.fn();
+    expect(respawnDeadPollers(() => true, start)).toEqual([]);
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("ignores projects with no workers", () => {
+    registryMock._setEntries("empty", []);
+    const start = vi.fn();
+    expect(respawnDeadPollers(() => false, start)).toEqual([]);
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("respawns regardless of worker state — a quiescent project still needs its poller", () => {
+    registryMock._setEntries("quiescent", [entry({ prState: "working", lastEventAt: 1 })]);
+    const start = vi.fn();
+    expect(respawnDeadPollers(() => false, start)).toEqual(["quiescent"]);
+  });
+
+  it("respawns only the projects whose pollers are down", () => {
+    registryMock._setEntries("down", [entry({ prState: "reviewing" })]);
+    registryMock._setEntries("up", [entry({ name: "bold-elm", sessionId: "s-2", task: "", prState: "reviewing" })]);
+    const start = vi.fn();
+    const respawned = respawnDeadPollers((p) => p === "up", start);
+    expect(respawned).toEqual(["down"]);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(start).toHaveBeenCalledWith("down");
   });
 });
