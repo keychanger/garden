@@ -972,7 +972,7 @@ function writeWorktreeContextFile(
   return contextFile;
 }
 
-function writeGrowhouseInitScript(gardenRunner: string): string {
+export function writeGrowhouseInitScript(gardenRunner: string): string {
   // gardenRunner is pre-escaped per token by resolveGardenRunner(), so it
   // expands inside the not-found handler body as separate words. Wrapping
   // in shellEscape would single-quote the multi-token string and break it.
@@ -984,6 +984,16 @@ function writeGrowhouseInitScript(gardenRunner: string): string {
   // SHELL is bash. (The file extension stays .zsh because the prompt
   // string above uses zsh-style $'...\\033...' escapes which bash also
   // understands via ANSI-C quoting.)
+  //
+  // Auto-dispatch via the not-found handler only fires for words the shell
+  // can't otherwise resolve. A few garden subcommands share a name with a
+  // real binary on PATH — login -> /usr/bin/login, whoami, reset — so the
+  // shell runs the binary and the handler never sees them. /usr/bin/login is
+  // interactive: it hijacks the growhouse pane with a `login:` prompt that
+  // can't be dismissed. Shadow each collision with a function (functions
+  // outrank external commands in both bash and zsh) so it routes to garden
+  // like any other word at the prompt. `command login` still reaches the
+  // real binary if ever needed.
   const script = `# Garden growhouse init — custom prompt with auto-dispatch
 PS1=$'\\033[1;32mgarden>\\033[0m '
 
@@ -994,6 +1004,10 @@ command_not_found_handler() {
 command_not_found_handle() {
   ${gardenRunner} "$@"
 }
+
+login()  { ${gardenRunner} login "$@"; }
+whoami() { ${gardenRunner} whoami "$@"; }
+reset()  { ${gardenRunner} reset "$@"; }
 `;
   const scriptFile = path.join(SESSIONS_DIR, "growhouse-init.zsh");
   atomicWriteFile(scriptFile, script, { mode: 0o644 });

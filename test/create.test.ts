@@ -791,3 +791,32 @@ describe("buildWorktreeResumeCommand", () => {
     expect(cmd).toContain("GARDEN_BASE_BRANCH=main");
   });
 });
+
+describe("writeGrowhouseInitScript", () => {
+  async function generateScript(): Promise<string> {
+    vi.mocked(fs.writeFileSync).mockClear();
+    const { writeGrowhouseInitScript } = await import("../src/dashboard/create.js");
+    writeGrowhouseInitScript("node /opt/garden/cli.js");
+    const write = vi.mocked(fs.writeFileSync).mock.calls
+      .map(c => String(c[1]))
+      .find(content => content.includes("Garden growhouse init"));
+    if (!write) throw new Error("growhouse init script was not written");
+    return write;
+  }
+
+  it("shadows garden subcommands that collide with real PATH binaries so the pane is never hijacked", async () => {
+    const script = await generateScript();
+    // /usr/bin/login is interactive and would hijack the pane; whoami/reset
+    // also shadow real binaries that pre-empt the not-found handler.
+    expect(script).toContain('login()  { node /opt/garden/cli.js login "$@"; }');
+    expect(script).toContain('whoami() { node /opt/garden/cli.js whoami "$@"; }');
+    expect(script).toContain('reset()  { node /opt/garden/cli.js reset "$@"; }');
+  });
+
+  it("still routes unknown words to garden via the not-found handler", async () => {
+    const script = await generateScript();
+    expect(script).toContain("command_not_found_handler()");
+    expect(script).toContain("command_not_found_handle()");
+    expect(script).toContain('node /opt/garden/cli.js "$@"');
+  });
+});
