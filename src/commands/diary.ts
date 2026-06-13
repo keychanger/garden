@@ -14,8 +14,9 @@ export async function diary(args: string[]): Promise<void> {
   }
 
   // $EDITOR may carry arguments ("code -w"), so run it through a shell and
-  // escape only the file path.
-  const editor = process.env.EDITOR || "vi";
+  // escape only the file path. Fallback is nano (modeless, self-documenting)
+  // rather than vi so an unset $EDITOR is friendly out of the box.
+  const editor = process.env.EDITOR || "nano";
   const result = spawnSync("sh", ["-c", `${editor} ${shellEscape(file)}`], { stdio: "inherit" });
   if (result.error) {
     throw new Error(`Failed to launch editor '${editor}' for ${file}: ${result.error.message}`);

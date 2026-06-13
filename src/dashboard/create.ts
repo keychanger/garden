@@ -483,7 +483,9 @@ export function createGardenDiaryWindow(gardenRunner: string): void {
 function writeDiaryViewScript(gardenRunner: string): string {
   // gardenRunner is pre-escaped per token by resolveGardenRunner(), so it
   // interpolates raw (see writeGrowhouseInitScript). $EDITOR stays unquoted
-  // so multi-word values ("code -w") split into command + args.
+  // so multi-word values ("code -w") split into command + args. The fallback
+  // is nano (ships with macOS, self-documenting save/exit hints) rather than
+  // vi, so an unset $EDITOR gives a friendly modeless editor out of the box.
   const script = `#!/bin/sh
 # Garden diary view — edits the focused project's diary in $EDITOR.
 while :; do
@@ -494,7 +496,7 @@ while :; do
     sleep 2
     continue
   fi
-  \${EDITOR:-vi} "$f" || sleep 1
+  \${EDITOR:-nano} "$f" || sleep 1
 done
 `;
   const scriptFile = path.join(SESSIONS_DIR, "diary-view.sh");
