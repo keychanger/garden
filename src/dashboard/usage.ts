@@ -458,11 +458,19 @@ export function shouldRefreshOnHook(nowMs: number = Date.now()): boolean {
 // On crash mid-fetch the bumped `fetchedAt` naturally expires after the
 // applicable backoff window (60s for hooks, 5min for poller), so a stuck
 // claim self-heals rather than wedging the meter.
-export async function refreshUsage(): Promise<UsageSnapshot> {
+export async function refreshUsage(force = false): Promise<UsageSnapshot> {
   const claim = withFileLock(USAGE_LOCK, () => {
     const prior = readUsageSnapshot();
     const decision = decideRefresh(prior, Date.now(), "hook");
-    if (!decision.shouldRefresh && prior) {
+    // A forced refresh (manual `garden usage refresh`, post-login heal) bypasses
+    // the auth and generic-error backoffs so a fresh login clears a stale "login
+    // expired" snapshot immediately instead of echoing it for the next 30 min.
+    // It deliberately does NOT bypass a 429 `rate-limited` backoff — the usage
+    // endpoint is strictly rate-limited, so its retry-after is the one wait a
+    // human-initiated refresh must still honor.
+    const rateLimited = prior?.error === "rate-limited";
+    const shouldRefresh = decision.shouldRefresh || (force && !rateLimited);
+    if (!shouldRefresh && prior) {
       return { fetched: false as const, snap: prior };
     }
     const claimSnap: UsageSnapshot = {

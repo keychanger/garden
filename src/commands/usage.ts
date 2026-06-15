@@ -36,7 +36,9 @@ function showUsage(): void {
 
 async function refreshAndShow(): Promise<void> {
   if (!meteredOrExplain()) return;
-  const snap = await refreshUsage();
+  // Explicit operator command: force past the auth/error backoff so a refresh
+  // right after `garden login` re-hits the API instead of echoing a stale error.
+  const snap = await refreshUsage(true);
   try { refreshDashboard(); } catch { /* no dashboard running or pane gone */ }
   output(snap, renderPretty);
 }

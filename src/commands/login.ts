@@ -64,9 +64,11 @@ async function loginProfile(name: string): Promise<void> {
 }
 
 // Heal the dashboard meter now instead of waiting for the poller's auth backoff to elapse.
+// Force past that backoff: a stale "login expired" snapshot would otherwise short-circuit
+// this refresh for up to 30 min and the just-completed login would appear to do nothing.
 async function healUsageMeter(): Promise<void> {
   try {
-    const snap = await refreshUsage();
+    const snap = await refreshUsage(true);
     try { refreshDashboard(); } catch { /* no dashboard running */ }
     if (snap.error) {
       console.log(`⚠ Usage refresh: ${snap.error}`);

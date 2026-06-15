@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useTmpHome } from "./helpers.js";
 
@@ -171,5 +173,72 @@ describe("refreshUsage — login expired path uses the auth backoff", () => {
     const decision = decideRefresh(snap, Date.now(), "poller");
     expect(decision.shouldRefresh).toBe(false);
     expect(decision.nextAttemptInMs).toBeGreaterThanOrEqual(AUTH_BACKOFF_MS - 1000);
+  });
+});
+
+describe("refreshUsage — force bypasses the auth backoff but not the rate limit", () => {
+  const env = useTmpHome();
+
+  beforeEach(() => {
+    vi.resetModules();
+    mockState.readPersonalCredential.mockReset();
+    mockState.refreshOAuthToken.mockReset();
+    mockState.persistCredential.mockReset();
+    delete process.env.GARDEN_CLAUDE_SESSION_KEY;
+  });
+
+  function seedSnapshot(snap: unknown): void {
+    fs.writeFileSync(path.join(env.sessionsDir, "claude-usage.json"), JSON.stringify(snap));
+  }
+
+  it("force re-attempts a 'login expired' snapshot still inside the auth backoff", async () => {
+    const now = Date.now();
+    // 5 min old: well inside the 30-min auth backoff, so the unforced path holds.
+    seedSnapshot({
+      fetchedAt: new Date(now - 5 * 60_000).toISOString(),
+      error: "login expired",
+      retryAfterMs: 30 * 60_000,
+    });
+    // Drive resolveCredential to a deterministic login_expired (revoked refresh
+    // token) so the re-attempt never touches the network.
+    mockState.readPersonalCredential.mockReturnValue({
+      source: "file",
+      oauth: { accessToken: "stale", refreshToken: "revoked", expiresAt: now - 1000 },
+    });
+    const err = new Error("invalid_grant") as Error & { code: string };
+    err.code = "invalid_grant";
+    mockState.refreshOAuthToken.mockRejectedValue(err);
+
+    const { refreshUsage } = await import("../src/dashboard/usage.js");
+
+    // Without force the backoff holds: cached snapshot returned, credential untouched.
+    const cached = await refreshUsage(false);
+    expect(cached.fetchedAt).toBe(new Date(now - 5 * 60_000).toISOString());
+    expect(mockState.readPersonalCredential).not.toHaveBeenCalled();
+
+    // With force the gate is bypassed: it re-reads the credential and re-stamps
+    // the snapshot, even though this particular attempt also fails.
+    const forced = await refreshUsage(true);
+    expect(mockState.readPersonalCredential).toHaveBeenCalled();
+    expect(forced.fetchedAt).not.toBe(cached.fetchedAt);
+    expect(forced.error).toBe("login expired");
+  });
+
+  it("force still honors a 'rate-limited' retry-after so it never hammers the endpoint", async () => {
+    const now = Date.now();
+    seedSnapshot({
+      fetchedAt: new Date(now - 30_000).toISOString(),
+      error: "rate-limited",
+      retryAfterMs: 50 * 60_000,
+    });
+
+    const { refreshUsage } = await import("../src/dashboard/usage.js");
+    const forced = await refreshUsage(true);
+
+    // The rate-limit backoff is the one wait force must respect: no re-fetch,
+    // no credential read, cached snapshot returned unchanged.
+    expect(forced.fetchedAt).toBe(new Date(now - 30_000).toISOString());
+    expect(forced.error).toBe("rate-limited");
+    expect(mockState.readPersonalCredential).not.toHaveBeenCalled();
   });
 });
