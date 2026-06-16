@@ -25,9 +25,11 @@ import { readDashState } from "./state.js";
 import { findWorkerByName, updateWorkerFields } from "./registry.js";
 import {
   shellEscape, getFirstPaneId, paneExists, windowExists, pasteAndSubmit,
+  capturePaneText,
 } from "./tmux.js";
 import { workerWindowName as workerWin } from "./window-names.js";
 import { log } from "./log.js";
+import { resolveGardenRunner } from "./runner.js";
 import { tryGetProject } from "../config.js";
 
 // The fenced [garden] prefix marks the message as system-injected so the
@@ -138,6 +140,77 @@ function resolveWorkerPaneId(project: string, worker: string): string | null {
   return null;
 }
 
+// Claude Code's TUI input prompt glyph (U+276F). An empty box renders the
+// marker followed only by padding whitespace; once the operator types, their
+// text appears right after it. capture-pane strips color, but we don't need it
+// — current Claude Code shows no placeholder text on the prompt line, so a
+// non-empty remainder is unambiguously an unsent draft.
+const PROMPT_MARKER = "❯";
+
+// Backoff for re-arming an auto-continue prompt that was deferred because the
+// operator had an unsent draft in the box. 12s spacing × 15 attempts ≈ 3min of
+// patience; past that we stop (the operator is clearly driving the worker by
+// hand, and the merge path's gate-reopen sweep remains a long-tail backstop).
+const DRAFT_BACKOFF_MS = 12_000;
+const MAX_DRAFT_RETRIES = 15;
+
+// Pull the operator's unsent draft out of a captured Claude pane. The live
+// input line is the bottom-most line whose first non-space glyph is the prompt
+// marker (the status/mode lines sit below it, agent output above), so we scan
+// upward and take the first match. Returns "" when the box is empty or no
+// prompt line is visible.
+export function extractOperatorDraft(captured: string): string {
+  const lines = captured.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].replace(/^\s+/, "");
+    if (line.startsWith(PROMPT_MARKER)) {
+      return line.slice(PROMPT_MARKER.length).trim();
+    }
+  }
+  return "";
+}
+
+export function paneHasOperatorDraft(paneId: string): boolean {
+  return extractOperatorDraft(capturePaneText(paneId)).length > 0;
+}
+
+// True when the worker's pane currently holds an unsent operator draft. Used by
+// the backoff re-arm to tell a draft-deferred skip apart from the other skip
+// reasons (no pane, agent mid-turn) that should not retry on this loop.
+export function workerHasOperatorDraft(projectName: string, workerName: string): boolean {
+  const paneId = resolveWorkerPaneId(projectName, workerName);
+  if (!paneId) return false;
+  return paneHasOperatorDraft(paneId);
+}
+
+// Re-arm a deferred auto-continue after DRAFT_BACKOFF_MS when — and only when —
+// the worker still has an unsent draft. Called by the _continue-worker* dispatch
+// handlers after a skipped delivery: a skip caused by the agentStatus gate (box
+// empty) leaves no draft, so this no-ops and the existing *-if-stuck retry leg
+// owns that case. Stops after MAX_DRAFT_RETRIES so a draft left sitting forever
+// can't spawn an unbounded chain of detached children.
+export function rearmContinueIfDrafting(
+  sub: string,
+  projectName: string,
+  workerName: string,
+  attempt: number,
+): void {
+  if (!workerHasOperatorDraft(projectName, workerName)) return;
+  if (attempt >= MAX_DRAFT_RETRIES) {
+    log.warn("workers", "continue backoff exhausted, operator still drafting", {
+      worker: workerName,
+      data: { project: projectName, attempts: attempt },
+    });
+    return;
+  }
+  log.info("workers", "continue deferred, operator drafting; re-arming", {
+    worker: workerName,
+    data: { project: projectName, attempt, backoffMs: DRAFT_BACKOFF_MS },
+  });
+  spawnDelayed(resolveGardenRunner(), DRAFT_BACKOFF_MS, sub, projectName, workerName,
+    "--attempt", String(attempt + 1));
+}
+
 // Build and dispatch a handoff-callback prompt at the parent pane of a worker
 // that just reached a terminal prState (merged/done/failing). Best-effort:
 // silently no-ops if the parent has been removed, has no live pane, or is
@@ -210,6 +283,18 @@ export function continueWorker(
     updateWorkerFields(projectName, workerName, { interruptedWhileWorking: undefined });
     return false;
   }
+  // The operator is mid-compose in this pane — pasting now would concatenate
+  // garden's prompt onto their draft and submit the mangled result. Skip; the
+  // dispatch handler's backoff re-arm retries once the box is clear. Leave
+  // interruptedWhileWorking set (unlike the active gate above) so the retry
+  // still knows there is a prompt owed.
+  if (paneHasOperatorDraft(paneId)) {
+    log.info("workers", "continue skipped, operator has unsent draft", {
+      worker: workerName,
+      data: { project: projectName },
+    });
+    return false;
+  }
   try {
     pasteAndSubmit(paneId, message);
   } catch (err) {
@@ -255,8 +340,9 @@ export function continueWorkerIfStuck(projectName: string, workerName: string): 
 // but with a merge-flavored message that lists files modified during review
 // (so Claude re-reads them) and warns when the post-merge worktree sync was
 // skipped. Reads the transient pendingContinue* fields written by
-// finalizeMerge and clears them after sending.
-export function continueWorkerAfterMerge(projectName: string, workerName: string): void {
+// finalizeMerge and clears them after sending. Returns whether the prompt was
+// delivered so the dispatch handler can re-arm a draft-deferred skip.
+export function continueWorkerAfterMerge(projectName: string, workerName: string): boolean {
   const entry = findWorkerByName(projectName, workerName);
   const message = buildMergeContinuePrompt(
     projectName,
@@ -274,6 +360,7 @@ export function continueWorkerAfterMerge(projectName: string, workerName: string
       pendingContinueSyncFailed: undefined,
     });
   }
+  return delivered;
 }
 
 // Retry leg of dispatchDelayedAutoContinue, mirroring continueWorkerIfStuck for

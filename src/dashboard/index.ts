@@ -16,7 +16,7 @@ import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.j
 import { newWorker, killPane, bounceActiveWorker } from "./workers.js";
 import {
   continueWorker, continueWorkerAfterMerge, continueWorkerAfterMergeIfStuck,
-  continueWorkerIfStuck, seedWorker,
+  continueWorkerIfStuck, rearmContinueIfDrafting, seedWorker,
 } from "./continue.js";
 import { growAutoContinueAfterMerge } from "./grow-continue.js";
 import { trellisAutoContinueAfterMerge } from "./trellis-continue.js";
@@ -45,6 +45,16 @@ function takeDelayMs(args: string[]): { delayMs: number; rest: string[] } {
   const delayMs = parseInt(args[idx + 1] ?? "0", 10);
   return { delayMs: Number.isFinite(delayMs) ? Math.max(0, delayMs) : 0,
            rest: [...args.slice(0, idx), ...args.slice(idx + 2)] };
+}
+
+// Read the backoff attempt counter the draft-deferral re-arm threads through
+// `_continue-worker* --attempt N`. Positional, so it sits after project/worker
+// and leaves args[1]/args[2] untouched. Absent on the first (dispatch) fire.
+function getAttempt(args: string[]): number {
+  const idx = args.indexOf("--attempt");
+  if (idx === -1) return 0;
+  const n = parseInt(args[idx + 1] ?? "0", 10);
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
 }
 
 export async function dashboard(rawArgs: string[]): Promise<void> {
@@ -102,7 +112,10 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   if (sub === "_kill-pane") return killPane();
   if (sub === "_bounce") return bounceActiveWorker();
   if (sub === "_continue-worker") {
-    if (args[1] && args[2]) continueWorker(args[1], args[2]);
+    if (args[1] && args[2]) {
+      const delivered = continueWorker(args[1], args[2]);
+      if (!delivered) rearmContinueIfDrafting("_continue-worker", args[1], args[2], getAttempt(args));
+    }
     return;
   }
   if (sub === "_continue-worker-if-stuck") {
@@ -110,7 +123,12 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     return;
   }
   if (sub === "_continue-worker-after-merge") {
-    if (args[1] && args[2]) continueWorkerAfterMerge(args[1], args[2]);
+    if (args[1] && args[2]) {
+      const delivered = continueWorkerAfterMerge(args[1], args[2]);
+      if (!delivered) {
+        rearmContinueIfDrafting("_continue-worker-after-merge", args[1], args[2], getAttempt(args));
+      }
+    }
     return;
   }
   if (sub === "_continue-worker-after-merge-if-stuck") {

@@ -131,6 +131,24 @@ export function getActivePaneId(): string | null {
   }
 }
 
+// Read the visible content of a pane (not its scrollback). Used to inspect a
+// worker's Claude TUI input box before delivering an auto-continue prompt, so
+// garden doesn't paste onto an operator's half-typed draft. `-J` joins
+// soft-wrapped lines so a wrapped draft collapses to one logical line; `-p`
+// prints to stdout. Returns "" on any failure (pane gone, sandbox), which the
+// caller reads as "no draft" — failing open preserves the common auto-continue
+// path rather than blocking it on a capture error.
+export function capturePaneText(paneId: string): string {
+  try {
+    return execFileSync("tmux", ["capture-pane", "-p", "-J", "-t", paneId], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return "";
+  }
+}
+
 export function tmuxDisplay(msg: string): void {
   try {
     tmux("display-message", "-t", DASHBOARD_SESSION, msg);

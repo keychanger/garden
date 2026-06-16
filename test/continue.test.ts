@@ -40,6 +40,9 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   getFirstPaneId: vi.fn(() => "%20"),
   paneExists: vi.fn(() => true),
   windowExists: vi.fn(() => true),
+  // Default: empty box → no operator draft → continue prompts deliver as before.
+  // Tests that exercise the draft gate override this per-case.
+  capturePaneText: vi.fn(() => ""),
 }));
 
 vi.mock("../src/dashboard/window-names.js", () => ({
@@ -56,10 +59,11 @@ import {
   dispatchDelayedContinue, dispatchDelayedAutoContinue,
   dispatchDelayedSeed, seedWorker, notifyHandoffCallback,
   donePath, isDoneSet, clearDoneSentinel,
+  extractOperatorDraft, rearmContinueIfDrafting,
 } from "../src/dashboard/continue.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { findWorkerByName, updateWorkerFields } from "../src/dashboard/registry.js";
-import { tmux, pasteAndSubmit, paneExists, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
+import { tmux, pasteAndSubmit, paneExists, windowExists, getFirstPaneId, capturePaneText } from "../src/dashboard/tmux.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { tryGetProject } from "../src/config.js";
@@ -81,12 +85,34 @@ function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
   };
 }
 
+// Real captures from a Claude worker pane (see the draft-detection design):
+// the empty input box is the prompt marker followed only by padding; a draft
+// puts the operator's text right after it. RULE mimics the box's ─ border.
+const RULE = "─".repeat(80);
+const EMPTY_BOX = [
+  RULE,
+  "❯ " + " ".repeat(60),
+  RULE,
+  "  garden·proud-brief-sedge | Opus 4.8 (1M context) | ctx:10%" + " ".repeat(20) + "/rc active",
+  "  ⏵⏵ auto mode on (shift+tab to cycle)",
+].join("\n");
+const DRAFT_BOX = [
+  RULE,
+  "❯ the quick brown fox" + " ".repeat(40),
+  RULE,
+  "  garden·proud-brief-sedge | Opus 4.8 | ctx:10%" + " ".repeat(20) + "/rc active",
+  "  ⏵⏵ auto mode on (shift+tab to cycle)",
+].join("\n");
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(paneExists).mockReturnValue(true);
   vi.mocked(windowExists).mockReturnValue(true);
   vi.mocked(getFirstPaneId).mockReturnValue("%30");
   vi.mocked(readDashState).mockReturnValue(makeState());
+  // clearAllMocks resets call history but NOT return values, so re-arm the
+  // empty-box default each test; draft cases override it locally.
+  vi.mocked(capturePaneText).mockReturnValue("");
 });
 
 describe("continueWorker", () => {
@@ -189,6 +215,124 @@ describe("continueWorker", () => {
     expect(() => continueWorker("myproject", "bold-ash")).not.toThrow();
     // Flag stays so a later attempt can retry.
     expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
+
+  it("skips the send when the operator has an unsent draft, and leaves interruptedWhileWorking set", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "",
+      agentStatus: "idle", interruptedWhileWorking: true,
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+    vi.mocked(capturePaneText).mockReturnValue(DRAFT_BOX);
+
+    const delivered = continueWorker("myproject", "bold-ash");
+
+    expect(delivered).toBe(false);
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
+    // Unlike the active-worker gate, the draft skip must NOT clear the flag —
+    // the backoff re-arm still owes this worker a prompt once the box clears.
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
+
+  it("delivers when the pane resolves but the box is empty (no false-positive)", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+    vi.mocked(capturePaneText).mockReturnValue(EMPTY_BOX);
+
+    const delivered = continueWorker("myproject", "bold-ash");
+
+    expect(delivered).toBe(true);
+    expect(pasteAndSubmit).toHaveBeenCalledWith("%9", expect.any(String));
+  });
+});
+
+describe("extractOperatorDraft", () => {
+  it("returns empty for an empty Claude input box (marker + padding only)", () => {
+    expect(extractOperatorDraft(EMPTY_BOX)).toBe("");
+  });
+
+  it("extracts the unsent draft text after the prompt marker", () => {
+    expect(extractOperatorDraft(DRAFT_BOX)).toBe("the quick brown fox");
+  });
+
+  it("tolerates a marker indented by leading whitespace", () => {
+    expect(extractOperatorDraft("────\n   ❯ hello there   \n────\n  status")).toBe("hello there");
+  });
+
+  it("takes the bottom-most prompt line so a stale ❯ above the box is ignored", () => {
+    const captured = [
+      "❯ stale echoed prompt from earlier",
+      "─".repeat(40),
+      "❯ " + " ".repeat(30), // the live, empty box
+      "─".repeat(40),
+      "  garden·proj | Opus 4.8 | ctx:5%",
+    ].join("\n");
+    expect(extractOperatorDraft(captured)).toBe("");
+  });
+
+  it("keeps a draft that itself contains the marker glyph", () => {
+    expect(extractOperatorDraft("❯ use the ❯ symbol")).toBe("use the ❯ symbol");
+  });
+
+  it("treats a whitespace-only draft as empty (safe to deliver)", () => {
+    expect(extractOperatorDraft("❯        ")).toBe("");
+  });
+
+  it("returns empty when no prompt line is visible (capture failed / odd state)", () => {
+    expect(extractOperatorDraft("")).toBe("");
+    expect(extractOperatorDraft("just some text\nno box here")).toBe("");
+  });
+});
+
+describe("rearmContinueIfDrafting", () => {
+  beforeEach(() => {
+    // Pane resolves via the hidden-window fallback to %30 (getFirstPaneId).
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(windowExists).mockReturnValue(true);
+    vi.mocked(getFirstPaneId).mockReturnValue("%30");
+    // Guard against a throwing spawn impl leaking from a later describe.
+    vi.mocked(spawn).mockImplementation(() => ({ unref: vi.fn() }) as never);
+  });
+
+  it("re-arms the same subcommand with attempt+1 while the operator is still drafting", () => {
+    vi.mocked(capturePaneText).mockReturnValue(DRAFT_BOX);
+
+    rearmContinueIfDrafting("_continue-worker", "myproject", "bold-ash", 0);
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    const cmd = (vi.mocked(spawn).mock.calls[0][1] as string[])[1];
+    expect(cmd).toContain("dashboard _continue-worker --delay-ms 12000");
+    expect(cmd).toContain(" myproject ");
+    expect(cmd).toContain(" bold-ash ");
+    expect(cmd).toContain("--attempt 1");
+  });
+
+  it("does not re-arm when the box is empty (the skip was not draft-related)", () => {
+    vi.mocked(capturePaneText).mockReturnValue(EMPTY_BOX);
+    rearmContinueIfDrafting("_continue-worker-after-merge", "myproject", "bold-ash", 0);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("stops re-arming once the attempt cap is reached, even with a draft present", () => {
+    vi.mocked(capturePaneText).mockReturnValue(DRAFT_BOX);
+    rearmContinueIfDrafting("_continue-worker", "myproject", "bold-ash", 15);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("threads the merge subcommand through so the re-fire rebuilds the enriched prompt", () => {
+    vi.mocked(capturePaneText).mockReturnValue(DRAFT_BOX);
+    rearmContinueIfDrafting("_continue-worker-after-merge", "myproject", "bold-ash", 3);
+    const cmd = (vi.mocked(spawn).mock.calls[0][1] as string[])[1];
+    expect(cmd).toContain("dashboard _continue-worker-after-merge --delay-ms 12000");
+    expect(cmd).toContain("--attempt 4");
   });
 });
 
