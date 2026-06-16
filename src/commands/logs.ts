@@ -300,12 +300,22 @@ const BORING_DATA_KEYS = new Set([
   "prStateCleared", "windowName", "source", "level",
 ]);
 
+// Render a structured-log data value as a single display line. Subprocess
+// errors (e.g. String(err) over an execFileSync failure) carry embedded
+// newlines from the child's stderr; left raw they break out of the indented
+// detail column and render at column 0, mangling the layout. Collapse every
+// whitespace run — newlines, tabs, repeated spaces — to one space so each
+// value stays one logical line in both the pretty and raw renderers.
+export function renderDataValue(v: unknown): string {
+  const s = typeof v === "string" ? v : JSON.stringify(v);
+  return s.replace(/\s+/g, " ").trim();
+}
+
 function compactDataLines(data: Record<string, unknown>): string[] {
   const parts: string[] = [];
   for (const [k, v] of Object.entries(data)) {
     if (BORING_DATA_KEYS.has(k)) continue;
-    const s = typeof v === "string" ? v : JSON.stringify(v);
-    parts.push(`${k}=${s}`);
+    parts.push(`${k}=${renderDataValue(v)}`);
   }
   return parts;
 }
@@ -403,7 +413,7 @@ function formatRawEntry(entry: LogEntry, useRelativeTime: boolean): string {
   const workerStr = entry.worker ? `${color.magenta}${entry.worker.padEnd(20)}${color.reset} ` : "";
   const dataStr = entry.data
     ? `  ${color.dim}${Object.entries(entry.data).map(([k, v]) =>
-        `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join(" ")}${color.reset}`
+        `${k}=${renderDataValue(v)}`).join(" ")}${color.reset}`
     : "";
   return `${color.dim}${ts}${color.reset} ${levelColor}${symbol} ${level}${color.reset} ${color.cyan}${src}${color.reset} ${workerStr}${entry.msg}${dataStr}`;
 }

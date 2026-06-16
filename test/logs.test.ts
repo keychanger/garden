@@ -27,6 +27,7 @@ import {
   dedup,
   relativeTime,
   wrapDetail,
+  renderDataValue,
   parseFilterExpr,
   applyStickyDefaults,
   formatLogsPaneLabel,
@@ -484,6 +485,27 @@ describe("relativeTime", () => {
   it("returns 'just now' for future timestamps", () => {
     const ts = new Date(Date.now() + 10_000).toISOString();
     expect(relativeTime(ts)).toBe("just now");
+  });
+});
+
+describe("renderDataValue", () => {
+  it("collapses embedded newlines so a multi-line error stays one display line", () => {
+    // Reproduces the mkfifo failure: String(err) over an execFileSync error
+    // carries the child's multi-line stderr. Left raw, the newline broke the
+    // detail out of its indented column and rendered the tail at column 0.
+    const err = "Error: Command failed: mkfifo /Users/joshua/.garden/sessions/lex-benchmarks-poll-signal\nmkfifo: /Users/joshua/.garden/sessions/lex-benchmarks-poll-signal: File exists";
+    const rendered = renderDataValue(err);
+    expect(rendered).not.toContain("\n");
+    expect(rendered).toBe("Error: Command failed: mkfifo /Users/joshua/.garden/sessions/lex-benchmarks-poll-signal mkfifo: /Users/joshua/.garden/sessions/lex-benchmarks-poll-signal: File exists");
+  });
+
+  it("collapses tabs and repeated spaces and trims", () => {
+    expect(renderDataValue("  a\t\tb   c \n")).toBe("a b c");
+  });
+
+  it("stringifies non-string values", () => {
+    expect(renderDataValue({ a: 1, b: 2 })).toBe('{"a":1,"b":2}');
+    expect(renderDataValue(42)).toBe("42");
   });
 });
 
