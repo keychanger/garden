@@ -425,7 +425,8 @@ clock. Update the list above when you do.
    events, not driven by a clock. One bounded exception exists: the
    liveness watchdog (`watchdog.ts`, see "Scheduled wake-ups")
    re-pokes projects whose workers are stranded in active states past
-   a staleness threshold and respawns poller windows that died. It is a
+   a staleness threshold and keeps each project's poller window healthy
+   (respawning a dead one, collapsing duplicates a spawn race left). It is a
    backstop, not a scheduler — it only restores lost event *delivery*
    (the ordinary FIFO poke a lost event would have sent, or a poller
    process that can receive one) and never transitions state itself; the
