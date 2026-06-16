@@ -112,7 +112,16 @@ export function respawnDeadPollers(
   const respawned: string[] = [];
   for (const [project, entries] of Object.entries(registry.workers)) {
     if (entries.length === 0 || isPollerRunning(project)) continue;
-    startPoller(project);
+    try {
+      startPoller(project);
+    } catch (err) {
+      // Isolate per project: one project's spawn failure must not abort the
+      // cycle and skip the staleness sweep (tick) for every other project.
+      log.warn("watchdog", "failed to respawn dead poller", {
+        data: { project, error: String(err) },
+      });
+      continue;
+    }
     respawned.push(project);
     log.warn("watchdog", "respawned dead poller", {
       data: { project, workers: entries.length },

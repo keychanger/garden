@@ -135,7 +135,16 @@ export function startProjectPoller(projectName: string, gardenRunner: string): v
   if (windowExists(window)) return;
 
   const fifo = signalFifoPath(projectName);
-  ensureSignalFifo(fifo);
+  if (!ensureSignalFifo(fifo)) {
+    // Another process won the FIFO-creation race and is spawning this poller
+    // right now (e.g. a post-rebuild restart racing the watchdog respawn).
+    // Defer to it rather than create a duplicate poller window on the same
+    // FIFO. The poller will be running either way.
+    log.debug("poller", "deferred poller spawn to concurrent starter", {
+      data: { project: projectName },
+    });
+    return;
+  }
   // Event-driven poller loop: poll once, then block on the FIFO until an
   // event arrives. Per STATUS.md invariant 6, there is no fallback poll.
   // Every transition is delivered by an event from one of these sources:

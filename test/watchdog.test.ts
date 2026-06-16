@@ -226,4 +226,19 @@ describe("respawnDeadPollers", () => {
     expect(start).toHaveBeenCalledTimes(1);
     expect(start).toHaveBeenCalledWith("down");
   });
+
+  it("isolates a per-project spawn failure so other projects still respawn", () => {
+    registryMock._setEntries("boom", [entry({ prState: "reviewing" })]);
+    registryMock._setEntries("ok", [entry({ name: "bold-elm", sessionId: "s-2", task: "", prState: "reviewing" })]);
+    const start = vi.fn((project: string) => {
+      if (project === "boom") throw new Error("tmux new-window failed");
+    });
+    // Must not throw (a thrown error would abort the watchdog cycle and skip
+    // the staleness tick for every project), and the healthy project still
+    // respawns and is the only one reported.
+    let respawned: string[] = [];
+    expect(() => { respawned = respawnDeadPollers(() => false, start); }).not.toThrow();
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(respawned).toEqual(["ok"]);
+  });
 });

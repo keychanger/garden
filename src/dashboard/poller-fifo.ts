@@ -71,15 +71,40 @@ export function isWorkerClaudeWorking(projectName: string, workerName: string): 
   return entry?.agentStatus === "working";
 }
 
-// Create the FIFO if missing; idempotent. Used by startProjectPoller and any
-// caller that wants to trigger before the poller window is up.
-export function ensureSignalFifo(fifoPath: string): void {
+// Create the FIFO if missing; idempotent and race-safe. Returns true when the
+// caller should proceed to (re)spawn the poller — the FIFO is ready and either
+// we created it or it was already a healthy FIFO. Returns false when a
+// concurrent caller won the creation race: mkfifo's atomic create is the
+// cross-process election, so a false return means another process is spawning
+// this same poller right now and the caller must NOT create a second poller
+// window on the same FIFO (two readers on one FIFO split pokes and double-run
+// lifecycle work).
+//
+// The race is routine: a post-rebuild restartLongLivedPollers unlinks then
+// recreates each project's FIFO while the watchdog's respawnDeadPollers
+// independently revives the same just-killed poller, and both reach mkfifo
+// with the FIFO absent. Before this election the loser's mkfifo threw "File
+// exists", surfacing as a spurious error alert ("failed to restart project
+// poller" / "tick failed"); now the loser quietly defers to the winner.
+export function ensureSignalFifo(fifoPath: string): boolean {
   try {
     const stat = fs.statSync(fifoPath);
-    if (stat.isFIFO()) return;
+    if (stat.isFIFO()) return true;
     fs.unlinkSync(fifoPath);
   } catch { /* doesn't exist */ }
   fs.mkdirSync(path.dirname(fifoPath), { recursive: true });
   // mkfifo is the syscall; node has no direct binding, so shell out.
-  execFileSync("mkfifo", [fifoPath]);
+  try {
+    execFileSync("mkfifo", [fifoPath]);
+    return true;
+  } catch (err) {
+    // A concurrent creator may have made the FIFO between our stat (absent)
+    // and this mkfifo. If the path is now a healthy FIFO, that race is benign
+    // and we are the loser — defer. Any other failure (mkfifo missing, no
+    // permission, a non-FIFO squatting the path) is real: rethrow.
+    try {
+      if (fs.statSync(fifoPath).isFIFO()) return false;
+    } catch { /* still absent — not an EEXIST race */ }
+    throw err;
+  }
 }
