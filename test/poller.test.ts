@@ -33,6 +33,7 @@ vi.mock("../src/config.js", () => ({
   ENV_VAR_NAME_RE: /^[A-Z_][A-Z0-9_]*$/,
   loadConfig: vi.fn(() => ({ projects: { myproject: { path: "/repo/myproject" } } })),
   SESSIONS_DIR: "/tmp/fake-sessions",
+  GARDEN_DIR: "/tmp/fake-garden",
   getAutoContinueConfig: vi.fn(() => ({
     enabled: true, usageThreshold: 95, resumeAfterReset: false,
   })),

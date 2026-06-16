@@ -14,6 +14,7 @@ import { getWorkers, readRegistry, batchUpdateWorkerFields, type WorkerRegistry 
 import { listHiddenWorkerWindows, windowExists, getFirstPaneId, getPaneTitle } from "../dashboard/tmux.js";
 import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/window-names.js";
 import { currentBranch } from "../dashboard/git.js";
+import { diaryHasContent } from "../diary.js";
 
 // Display states from STATUS.md. These are the only values the renderer ever
 // emits. `loading`/`ready`/`working`/`idle`/`exited` come from agentStatus
@@ -172,7 +173,7 @@ export async function status(args: string[]): Promise<void> {
     const project = statuses[pi];
     const marker = project.isActive ? " \u25C4" : "";
     const name = project.isActive ? `\x1b[1;32m${project.name}\x1b[0m` : project.name;
-    console.log(`  ${project.index}. ${name}${marker}`);
+    console.log(`  ${project.index}. ${name}${formatDiaryGlyph(project.name)}${marker}`);
 
     if (project.workers.length === 0) {
       console.log("    (no workers)");
@@ -376,6 +377,14 @@ function formatBaseDivergence(
   return ` \x1b[33m→ ${workerBase}\x1b[0m`;
 }
 
+// Dimmed pencil appended to a project's header row when its diary holds
+// non-whitespace content — answers "did I leave notes here?", which nothing
+// else on the row shows. Intentionally quiet (grey) so it reads as metadata,
+// not as a worker-status glyph; placed before the active-project marker.
+function formatDiaryGlyph(projectName: string): string {
+  return diaryHasContent(projectName) ? " \x1b[90m✎\x1b[0m" : "";
+}
+
 function colorizeIteration(iter: number, max: number): string {
   const ratio = max > 0 ? iter / max : 0;
   const text = `${iter}/${max}`;
@@ -472,7 +481,7 @@ export function renderQuickStatus(
     const marker = isActive ? " \u25C4" : "";
     const displayName = isActive ? `\x1b[1;32m${name}\x1b[0m` : name;
     const projectBranch = projectBranches[pi];
-    lines.push(`  ${pi + 1}. ${displayName}${marker}`);
+    lines.push(`  ${pi + 1}. ${displayName}${formatDiaryGlyph(name)}${marker}`);
 
     const workers = projectWorkers[pi];
     if (workers.length === 0) {

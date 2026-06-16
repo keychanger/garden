@@ -15,6 +15,7 @@ vi.mock("node:fs", () => ({
 vi.mock("../src/config.js", () => ({
   tryGetProject: vi.fn(),
   SESSIONS_DIR: "/tmp/garden-sessions-test",
+  GARDEN_DIR: "/tmp/garden-test",
 }));
 
 vi.mock("../src/dashboard/workers.js", () => ({

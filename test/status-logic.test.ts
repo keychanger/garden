@@ -57,6 +57,10 @@ vi.mock("../src/dashboard/git.js", () => ({
   currentBranch: vi.fn(() => null),
 }));
 
+vi.mock("../src/diary.js", () => ({
+  diaryHasContent: vi.fn(() => false),
+}));
+
 vi.mock("../src/output.js", () => ({
   output: vi.fn(),
   isTTY: true,
@@ -64,6 +68,7 @@ vi.mock("../src/output.js", () => ({
 
 import { status, renderQuickStatus, resolveWorkerStatus, _resetStatusBranchCacheForTest } from "../src/commands/status.js";
 import { currentBranch } from "../src/dashboard/git.js";
+import { diaryHasContent } from "../src/diary.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { getWorkers } from "../src/dashboard/registry.js";
 import { dashboardExists } from "../src/session.js";
@@ -249,6 +254,22 @@ describe("renderQuickStatus", () => {
     const result = renderQuickStatus(state);
     expect(result).toContain("bold-ash");
     expect(result).toContain("working");
+  });
+
+  it("marks a project that has diary content with a dimmed pencil glyph", () => {
+    vi.mocked(diaryHasContent).mockReturnValue(true);
+    vi.mocked(getWorkers).mockReturnValue([]);
+    const result = renderQuickStatus(state);
+    // Grey-wrapped pencil (U+270E) on the project header row.
+    expect(result).toContain("\x1b[90m✎\x1b[0m");
+    expect(vi.mocked(diaryHasContent)).toHaveBeenCalledWith("garden");
+  });
+
+  it("omits the diary glyph when the diary is empty", () => {
+    vi.mocked(diaryHasContent).mockReturnValue(false);
+    vi.mocked(getWorkers).mockReturnValue([]);
+    const result = renderQuickStatus(state);
+    expect(result).not.toContain("✎");
   });
 
   it("caches the project branch across re-bakes within the TTL (one rev-parse per project)", () => {

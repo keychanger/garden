@@ -10,6 +10,7 @@ vi.mock("../src/config.js", () => ({
   tryGetProject: vi.fn(),
   getFocusedProjectNames: vi.fn(),
   SESSIONS_DIR: "/tmp/test-sessions",
+  GARDEN_DIR: "/tmp/test-garden",
 }));
 
 vi.mock("../src/rules.js", () => ({
