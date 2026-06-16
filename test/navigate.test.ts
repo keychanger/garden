@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // --- Mocks ---
 
@@ -1089,5 +1089,135 @@ describe("cyclePlot", () => {
 
     expect(state.activePlot).toBe("b");
     expect(state.activeProject).toBe("other");
+  });
+});
+
+// =============================================================================
+// diary follow-on-switch (reloadDiaryEditor)
+// =============================================================================
+
+describe("diary follows project switches", () => {
+  // diary-view.sh reopens the focused project's diary whenever the editor
+  // exits. When the diary pane is active, a project switch drives nano's
+  // save+exit (^O Enter ^X) so the loop reopens on the now-focused project
+  // without losing unsaved notes. See reloadDiaryEditor in navigate.ts.
+  const SAVE_EXIT = ["send-keys", "-t", "%1", "C-o", "Enter", "C-x"];
+  const originalEditor = process.env.EDITOR;
+
+  function sentSaveExit(): boolean {
+    return vi.mocked(tmux).mock.calls.some(
+      (call) => JSON.stringify(call) === JSON.stringify(SAVE_EXIT),
+    );
+  }
+
+  beforeEach(() => {
+    delete process.env.EDITOR; // unset -> nano default
+  });
+
+  afterEach(() => {
+    if (originalEditor === undefined) delete process.env.EDITOR;
+    else process.env.EDITOR = originalEditor;
+  });
+
+  it("drives nano save+exit when switching projects with the diary pane active", () => {
+    const state = makeState({
+      activeProject: "garden",
+      gardenPaneType: "diary",
+      gardenShellPaneId: "%1",
+    });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(listAllWindowNames).mockReturnValue(["_other-shell"]);
+
+    switchProject("2"); // switch to "other"
+
+    expect(state.activeProject).toBe("other");
+    expect(sentSaveExit()).toBe(true);
+  });
+
+  it("does not touch the editor when the diary pane is not active", () => {
+    const state = makeState({
+      activeProject: "garden",
+      gardenPaneType: "growhouse",
+      gardenShellPaneId: "%1",
+    });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(listAllWindowNames).mockReturnValue(["_other-shell"]);
+
+    switchProject("2");
+
+    expect(sentSaveExit()).toBe(false);
+  });
+
+  it("leaves a custom $EDITOR untouched (cannot drive its save keys blindly)", () => {
+    process.env.EDITOR = "vim";
+    const state = makeState({
+      activeProject: "garden",
+      gardenPaneType: "diary",
+      gardenShellPaneId: "%1",
+    });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(listAllWindowNames).mockReturnValue(["_other-shell"]);
+
+    switchProject("2");
+
+    expect(sentSaveExit()).toBe(false);
+  });
+
+  it("matches nano even when $EDITOR carries a path and flags", () => {
+    process.env.EDITOR = "/opt/homebrew/bin/nano -w";
+    const state = makeState({
+      activeProject: "garden",
+      gardenPaneType: "diary",
+      gardenShellPaneId: "%1",
+    });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(listAllWindowNames).mockReturnValue(["_other-shell"]);
+
+    switchProject("2");
+
+    expect(sentSaveExit()).toBe(true);
+  });
+
+  it("reloads the diary on cyclePlot when the project changes", () => {
+    const state = makeState({
+      activePlot: "a",
+      activeProject: "garden",
+      gardenPaneType: "diary",
+      gardenShellPaneId: "%1",
+    });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(plotsMap).mockReturnValue({
+      a: { projects: ["garden"] },
+      b: { projects: ["other"] },
+    });
+    vi.mocked(getFocusedProjectNames).mockReturnValue(["other"]);
+    vi.mocked(listAllWindowNames).mockReturnValue(["_other-shell"]);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+
+    cyclePlot(1);
+
+    expect(state.activeProject).toBe("other");
+    expect(sentSaveExit()).toBe(true);
+  });
+
+  it("does not reload the diary on cyclePlot when the project stays the same", () => {
+    const state = makeState({
+      activePlot: "a",
+      activeProject: "garden",
+      gardenPaneType: "diary",
+      gardenShellPaneId: "%1",
+    });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(plotsMap).mockReturnValue({
+      a: { projects: ["garden"] },
+      b: { projects: ["garden", "other"] },
+    });
+    vi.mocked(getFocusedProjectNames).mockReturnValue(["garden", "other"]);
+
+    cyclePlot(1);
+
+    expect(state.activePlot).toBe("b");
+    expect(state.activeProject).toBe("garden");
+    expect(sentSaveExit()).toBe(false);
   });
 });

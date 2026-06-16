@@ -100,6 +100,23 @@ export function swapVisibleToProject(
   state.activeProject = projectName;
 }
 
+// When the diary view (⌥d) is the active garden pane, switching projects must
+// re-point the editor at the now-focused project's diary. A live modal editor
+// can only be re-targeted by restarting it — which would discard unsaved notes
+// — so we drive the editor's own save+exit and let diary-view.sh's loop reopen
+// on the new project. Only nano (the shipped default) has a key sequence we can
+// drive blindly: ^O Enter writes the buffer to its current file, ^X then exits
+// cleanly (the buffer is no longer modified, so there is no exit prompt). A
+// custom $EDITOR is left untouched; it still reopens on the operator's own exit.
+function reloadDiaryEditor(state: DashboardState): void {
+  if (state.gardenPaneType !== "diary") return;
+  const pane = state.gardenShellPaneId;
+  if (!pane || !paneExists(pane)) return;
+  const editorCmd = (process.env.EDITOR || "nano").trim().split(/\s+/)[0];
+  if (editorCmd.split("/").pop() !== "nano") return;
+  tmux("send-keys", "-t", pane, "C-o", "Enter", "C-x");
+}
+
 export function switchProject(indexArg: string): void {
   log.info("navigate", "switchProject", { data: { index: indexArg } });
   const index = parseInt(indexArg, 10) - 1;
@@ -126,6 +143,7 @@ export function switchProject(indexArg: string): void {
     swapVisibleToProject(projectName, project, state);
     writeDashState(state);
     refreshDashboard({ state });
+    reloadDiaryEditor(state);
   });
 }
 
@@ -317,6 +335,7 @@ export function cyclePlot(direction: 1 | -1): void {
     // Swap the visible pane when the target project changes so
     // activeWindowName stays aligned with activeProject (the status pane
     // reads activeWindowName to label the active worker).
+    const prevProject = state.activeProject;
     if (desired && desired !== state.activeProject) {
       swapVisibleToProject(desired, config.projects[desired], state);
     } else if (!desired) {
@@ -325,6 +344,7 @@ export function cyclePlot(direction: 1 | -1): void {
 
     writeDashState(state);
     refreshDashboardPlotCycle({ state });
+    if (state.activeProject !== prevProject) reloadDiaryEditor(state);
   });
 }
 
