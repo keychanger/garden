@@ -223,12 +223,20 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     // Skip refresh-client/full refresh — those broke copy-mode scrolling (a10642c).
     const { readDashState } = await import("./state.js");
     const { tmux } = await import("./tmux.js");
-    const { USAGE_PANE_HEIGHT } = await import("./create.js");
+    const { USAGE_PANE_HEIGHT, presizeHiddenWindows } = await import("./create.js");
     try {
       const state = readDashState();
       if (state.usagePaneId) {
         tmux("resize-pane", "-t", state.usagePaneId, "-y", String(USAGE_PANE_HEIGHT));
       }
+      // The right slot is 60% of the terminal, so resizing the terminal changes
+      // its width. Hidden worker windows are window-size=manual (resize-window
+      // sets that), so they stay frozen at the old width and a worker that keeps
+      // working while parked paints scrollback that wraps early when later
+      // viewed. Re-presize hidden windows to the new slot width. Only touches
+      // hidden windows (drift-guarded) — never the visible pane, so it can't
+      // disturb copy-mode the way a full refresh did (a10642c).
+      presizeHiddenWindows(state);
     } catch { /* pane gone or no client */ }
     return;
   }

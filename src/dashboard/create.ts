@@ -18,7 +18,7 @@ import { formatLogsPaneLabel } from "../commands/logs.js";
 import {
   tmux, tmuxOutput, tmuxSplit, setPaneTitle, setPaneLabel, setPaneVar,
   getFirstPaneId, shellEscape, tmuxDoubleQuote,
-  getPaneSize, resizeWindow, listAllWindowNames, disablePaneInput,
+  getPaneSize, resizeWindow, listSessionPanes, disablePaneInput,
 } from "./tmux.js";
 import { readRegistry, updateWorkerFields } from "./registry.js";
 import { log, truncateLog } from "./log.js";
@@ -1055,7 +1055,12 @@ export function respawnLogsPane(state: DashboardState): void {
  * garden pane. Called on attach so hidden windows are already sized
  * correctly before the first swap — avoiding the SIGWINCH race where
  * resize-window fires right before swap-pane and the TUI hasn't finished
- * redrawing yet.
+ * redrawing yet — and on every client-resized tick so a hidden worker that
+ * keeps working while parked paints its scrollback at the *current* right-slot
+ * width. resize-window sets window-size=manual on each window, so without this
+ * a terminal resize leaves hidden windows frozen at their old width; the
+ * worker's frozen-width scrollback then wraps early (or late) when the operator
+ * swaps it in and scrolls up.
  */
 export function presizeHiddenWindows(state: DashboardState): void {
   const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
@@ -1063,13 +1068,30 @@ export function presizeHiddenWindows(state: DashboardState): void {
 
   if (!rightSize && !gardenSize) return;
 
-  const windows = listAllWindowNames();
-  for (const name of windows) {
+  // Current size of each (single-pane) hidden window, from one tmux fork, so we
+  // only resize the windows that actually drifted. An unconditional
+  // resize-window fires SIGWINCH and forces a Claude redraw in every hidden
+  // worker — wasteful when nothing changed, and this now runs on every
+  // client-resized tick during a terminal drag.
+  const current = new Map<string, { width: number; height: number }>();
+  for (const pane of listSessionPanes()) {
+    if (!current.has(pane.windowName)) {
+      current.set(pane.windowName, { width: pane.width, height: pane.height });
+    }
+  }
+
+  const sizeIfDrifted = (name: string, target: { width: number; height: number }) => {
+    const cur = current.get(name);
+    if (cur && cur.width === target.width && cur.height === target.height) return;
+    resizeWindow(name, target.width, target.height);
+  };
+
+  for (const name of current.keys()) {
     if (name === "main") continue;
 
     // Garden pane targets
     if (isGardenWindow(name)) {
-      if (gardenSize) resizeWindow(name, gardenSize.width, gardenSize.height);
+      if (gardenSize) sizeIfDrifted(name, gardenSize);
       continue;
     }
 
@@ -1077,7 +1099,7 @@ export function presizeHiddenWindows(state: DashboardState): void {
     if (name.endsWith("-poller") || name.includes("-review-")) continue;
 
     // Worker and shell windows target the right pane
-    if (rightSize) resizeWindow(name, rightSize.width, rightSize.height);
+    if (rightSize) sizeIfDrifted(name, rightSize);
   }
 }
 

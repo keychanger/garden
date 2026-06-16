@@ -48,7 +48,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   shellEscape: vi.fn((s: string) => s),
   getPaneSize: vi.fn(),
   resizeWindow: vi.fn(),
-  listAllWindowNames: vi.fn(),
+  listSessionPanes: vi.fn(() => []),
 }));
 
 vi.mock("../src/dashboard/registry.js", () => ({
@@ -78,8 +78,17 @@ vi.mock("../src/dashboard/git.js", () => ({
 }));
 
 import { presizeHiddenWindows } from "../src/dashboard/create.js";
-import { getPaneSize, resizeWindow, listAllWindowNames } from "../src/dashboard/tmux.js";
+import { getPaneSize, resizeWindow, listSessionPanes } from "../src/dashboard/tmux.js";
+import type { SessionPane } from "../src/dashboard/tmux.js";
 import type { DashboardState } from "../src/dashboard/state.js";
+
+// Hidden windows are reported as a single stale-sized pane so the drift guard
+// always fires a resize. The drift-skip case overrides this with matching sizes.
+function panes(...names: string[]): SessionPane[] {
+  return names.map((windowName, i) => ({
+    windowName, paneId: `%${100 + i}`, width: 80, height: 24,
+  }));
+}
 
 function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
   return {
@@ -100,9 +109,9 @@ beforeEach(() => {
 describe("presizeHiddenWindows", () => {
   it("resizes worker and shell windows to right pane size", () => {
     vi.mocked(getPaneSize).mockReturnValue({ width: 129, height: 58 });
-    vi.mocked(listAllWindowNames).mockReturnValue([
+    vi.mocked(listSessionPanes).mockReturnValue(panes(
       "main", "_garden-worker-bold-ash", "_api-shell",
-    ]);
+    ));
 
     presizeHiddenWindows(makeState());
 
@@ -114,9 +123,9 @@ describe("presizeHiddenWindows", () => {
     vi.mocked(getPaneSize)
       .mockReturnValueOnce({ width: 129, height: 58 })
       .mockReturnValueOnce({ width: 60, height: 20 });
-    vi.mocked(listAllWindowNames).mockReturnValue([
+    vi.mocked(listSessionPanes).mockReturnValue(panes(
       "main", "_garden-growhouse", "_garden-root", "_garden-logs",
-    ]);
+    ));
 
     presizeHiddenWindows(makeState());
 
@@ -128,9 +137,9 @@ describe("presizeHiddenWindows", () => {
 
   it("skips poller and review windows", () => {
     vi.mocked(getPaneSize).mockReturnValue({ width: 129, height: 58 });
-    vi.mocked(listAllWindowNames).mockReturnValue([
+    vi.mocked(listSessionPanes).mockReturnValue(panes(
       "main", "_garden-poller", "_api-poller", "_garden-review-bold-ash",
-    ]);
+    ));
 
     presizeHiddenWindows(makeState());
 
@@ -139,11 +148,27 @@ describe("presizeHiddenWindows", () => {
 
   it("skips main window", () => {
     vi.mocked(getPaneSize).mockReturnValue({ width: 129, height: 58 });
-    vi.mocked(listAllWindowNames).mockReturnValue(["main"]);
+    vi.mocked(listSessionPanes).mockReturnValue(panes("main"));
 
     presizeHiddenWindows(makeState());
 
     expect(resizeWindow).not.toHaveBeenCalled();
+  });
+
+  it("skips windows already at the target size (drift guard)", () => {
+    vi.mocked(getPaneSize).mockReturnValue({ width: 129, height: 58 });
+    vi.mocked(listSessionPanes).mockReturnValue([
+      { windowName: "main", paneId: "%0", width: 129, height: 58 },
+      // Already at the right-slot size — must not be re-resized (no needless SIGWINCH).
+      { windowName: "_garden-worker-bold-ash", paneId: "%1", width: 129, height: 58 },
+      // Drifted (stale narrow width) — must be resized to the current slot.
+      { windowName: "_api-shell", paneId: "%2", width: 80, height: 24 },
+    ]);
+
+    presizeHiddenWindows(makeState());
+
+    expect(resizeWindow).toHaveBeenCalledWith("_api-shell", 129, 58);
+    expect(resizeWindow).toHaveBeenCalledTimes(1);
   });
 
   it("is a no-op when both pane sizes are null", () => {
@@ -151,7 +176,7 @@ describe("presizeHiddenWindows", () => {
 
     presizeHiddenWindows(makeState());
 
-    expect(listAllWindowNames).not.toHaveBeenCalled();
+    expect(listSessionPanes).not.toHaveBeenCalled();
     expect(resizeWindow).not.toHaveBeenCalled();
   });
 
@@ -159,12 +184,12 @@ describe("presizeHiddenWindows", () => {
     vi.mocked(getPaneSize)
       .mockReturnValueOnce({ width: 129, height: 58 })
       .mockReturnValueOnce({ width: 60, height: 20 });
-    vi.mocked(listAllWindowNames).mockReturnValue([
+    vi.mocked(listSessionPanes).mockReturnValue(panes(
       "main",
       "_garden-growhouse", "_garden-root", "_garden-logs",
       "_garden-worker-bold-ash", "_api-shell",
       "_garden-poller", "_api-review-calm-bay",
-    ]);
+    ));
 
     presizeHiddenWindows(makeState());
 
@@ -180,9 +205,9 @@ describe("presizeHiddenWindows", () => {
     vi.mocked(getPaneSize)
       .mockReturnValueOnce(null)
       .mockReturnValueOnce({ width: 60, height: 20 });
-    vi.mocked(listAllWindowNames).mockReturnValue([
+    vi.mocked(listSessionPanes).mockReturnValue(panes(
       "main", "_garden-growhouse", "_garden-worker-bold-ash",
-    ]);
+    ));
 
     presizeHiddenWindows(makeState());
 
