@@ -286,10 +286,12 @@ export function resizeWindow(windowName: string, width: number, height: number):
   } catch { /* ignore — window may not exist */ }
 }
 
+// Kill every window with this name. There should only ever be one, but a
+// respawn race can transiently produce duplicates; killing all of them is the
+// correct "this window should be gone" semantics and self-heals the duplicate.
+// A name target is ambiguous once duplicates exist, so kill each by index.
 export function killWindowSafe(windowName: string): void {
-  try {
-    tmux("kill-window", "-t", `${DASHBOARD_SESSION}:${windowName}`);
-  } catch { /* ignore */ }
+  killWindowsByName(windowName);
 }
 
 export function getPanePid(paneId: string): string | null {

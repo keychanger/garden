@@ -495,18 +495,45 @@ describe("resizeWindow", () => {
 // ===========================================================================
 
 describe("killWindowSafe", () => {
-  it("calls tmux kill-window with session-qualified target", () => {
-    mockExecFileSync.mockReturnValue(undefined);
+  it("kills the matching window by index", () => {
+    mockExecFileSync.mockImplementation((_cmd: string, args: string[]) =>
+      args[0] === "list-windows" ? "1 main\n2 _garden-worker-bold-ash\n" : "");
     killWindowSafe("_garden-worker-bold-ash");
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "tmux",
-      ["kill-window", "-t", "garden-dashboard:_garden-worker-bold-ash"],
+      ["kill-window", "-t", "garden-dashboard:2"],
       { stdio: ["ignore", "ignore", "pipe"] },
     );
   });
 
+  // Regression: stopProjectPoller relies on killWindowSafe to remove a
+  // project's poller. A name-targeted kill is ambiguous (kills nothing) once
+  // duplicates exist, so a duplicate pair would persist across restarts.
+  // Killing every matching index removes all copies, self-healing the pair.
+  it("kills every window when the name is duplicated", () => {
+    mockExecFileSync.mockImplementation((_cmd: string, args: string[]) =>
+      args[0] === "list-windows" ? "5 _wolf-poller\n6 _wolf-poller\n7 _wolf-poller\n" : "");
+    killWindowSafe("_wolf-poller");
+    const killCalls = mockExecFileSync.mock.calls.filter(
+      (c) => Array.isArray(c[1]) && (c[1] as string[])[0] === "kill-window",
+    );
+    expect(killCalls.map((c) => (c[1] as string[])[2])).toEqual([
+      "garden-dashboard:5", "garden-dashboard:6", "garden-dashboard:7",
+    ]);
+  });
+
+  it("does nothing when no window matches", () => {
+    mockExecFileSync.mockImplementation((_cmd: string, args: string[]) =>
+      args[0] === "list-windows" ? "1 main\n" : "");
+    killWindowSafe("missing");
+    const killCalls = mockExecFileSync.mock.calls.filter(
+      (c) => Array.isArray(c[1]) && (c[1] as string[])[0] === "kill-window",
+    );
+    expect(killCalls).toHaveLength(0);
+  });
+
   it("swallows error silently", () => {
-    mockExecFileSync.mockImplementation(() => { throw new Error("no window"); });
+    mockExecFileSync.mockImplementation(() => { throw new Error("no server"); });
     expect(() => killWindowSafe("missing")).not.toThrow();
   });
 });
