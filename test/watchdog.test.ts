@@ -28,7 +28,7 @@ vi.mock("../src/dashboard/poller-fifo.js", () => ({
 }));
 
 import {
-  latestActivityMs, isWatchedState, isWorkerStale, tick, respawnDeadPollers,
+  latestActivityMs, isWatchedState, isWorkerStale, tick, healProjectPollers,
   WATCHDOG_THRESHOLD_MS,
 } from "../src/dashboard/watchdog.js";
 import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
@@ -187,58 +187,51 @@ describe("tick", () => {
   });
 });
 
-describe("respawnDeadPollers", () => {
-  it("respawns a project whose poller window is dead", () => {
-    registryMock._setEntries("dead", [entry({ prState: "reviewing" })]);
-    const start = vi.fn();
-    const respawned = respawnDeadPollers(() => false, start);
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(start).toHaveBeenCalledWith("dead");
-    expect(respawned).toEqual(["dead"]);
-  });
-
-  it("leaves a project whose poller is alive untouched", () => {
-    registryMock._setEntries("alive", [entry({ prState: "reviewing" })]);
-    const start = vi.fn();
-    expect(respawnDeadPollers(() => true, start)).toEqual([]);
-    expect(start).not.toHaveBeenCalled();
+describe("healProjectPollers", () => {
+  it("ensures a poller for every project that holds workers", () => {
+    registryMock._setEntries("one", [entry({ prState: "reviewing" })]);
+    const ensure = vi.fn();
+    const ensured = healProjectPollers(ensure);
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(ensure).toHaveBeenCalledWith("one");
+    expect(ensured).toEqual(["one"]);
   });
 
   it("ignores projects with no workers", () => {
     registryMock._setEntries("empty", []);
-    const start = vi.fn();
-    expect(respawnDeadPollers(() => false, start)).toEqual([]);
-    expect(start).not.toHaveBeenCalled();
+    const ensure = vi.fn();
+    expect(healProjectPollers(ensure)).toEqual([]);
+    expect(ensure).not.toHaveBeenCalled();
   });
 
-  it("respawns regardless of worker state — a quiescent project still needs its poller", () => {
+  it("ensures regardless of worker state — a quiescent project still needs its poller", () => {
     registryMock._setEntries("quiescent", [entry({ prState: "working", lastEventAt: 1 })]);
-    const start = vi.fn();
-    expect(respawnDeadPollers(() => false, start)).toEqual(["quiescent"]);
+    const ensure = vi.fn();
+    expect(healProjectPollers(ensure)).toEqual(["quiescent"]);
   });
 
-  it("respawns only the projects whose pollers are down", () => {
-    registryMock._setEntries("down", [entry({ prState: "reviewing" })]);
-    registryMock._setEntries("up", [entry({ name: "bold-elm", sessionId: "s-2", task: "", prState: "reviewing" })]);
-    const start = vi.fn();
-    const respawned = respawnDeadPollers((p) => p === "up", start);
-    expect(respawned).toEqual(["down"]);
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(start).toHaveBeenCalledWith("down");
+  it("calls ensurePoller once per project with workers (convergence is the callback's job)", () => {
+    // Delegates blindly: spawn-vs-dedup-vs-noop lives in startProjectPoller, so
+    // the watchdog no longer pre-checks liveness — it just ensures every project.
+    registryMock._setEntries("a", [entry({ prState: "reviewing" })]);
+    registryMock._setEntries("b", [entry({ name: "bold-elm", sessionId: "s-2", task: "", prState: "working", lastEventAt: 1 })]);
+    const ensure = vi.fn();
+    expect(healProjectPollers(ensure)).toEqual(["a", "b"]);
+    expect(ensure).toHaveBeenCalledTimes(2);
   });
 
-  it("isolates a per-project spawn failure so other projects still respawn", () => {
+  it("isolates a per-project failure so other projects are still ensured", () => {
     registryMock._setEntries("boom", [entry({ prState: "reviewing" })]);
     registryMock._setEntries("ok", [entry({ name: "bold-elm", sessionId: "s-2", task: "", prState: "reviewing" })]);
-    const start = vi.fn((project: string) => {
+    const ensure = vi.fn((project: string) => {
       if (project === "boom") throw new Error("tmux new-window failed");
     });
-    // Must not throw (a thrown error would abort the watchdog cycle and skip
-    // the staleness tick for every project), and the healthy project still
-    // respawns and is the only one reported.
-    let respawned: string[] = [];
-    expect(() => { respawned = respawnDeadPollers(() => false, start); }).not.toThrow();
-    expect(start).toHaveBeenCalledTimes(2);
-    expect(respawned).toEqual(["ok"]);
+    // Must not throw — a thrown error would abort the watchdog cycle and skip
+    // the staleness tick for every project — and the healthy project is still
+    // ensured and the only one reported.
+    let ensured: string[] = [];
+    expect(() => { ensured = healProjectPollers(ensure); }).not.toThrow();
+    expect(ensure).toHaveBeenCalledTimes(2);
+    expect(ensured).toEqual(["ok"]);
   });
 });

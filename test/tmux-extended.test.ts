@@ -43,6 +43,9 @@ import {
   getFirstPaneId,
   paneExists,
   windowExists,
+  windowIndices,
+  dedupeWindows,
+  killWindowsByName,
   renameWindow,
   getPaneSize,
   resizeWindow,
@@ -203,19 +206,70 @@ describe("paneExists", () => {
 // ===========================================================================
 
 describe("windowExists", () => {
-  it("returns true when tmux succeeds", () => {
-    mockExecFileSync.mockReturnValue("%1\n");
-    expect(windowExists("_garden-worker-bold-ash")).toBe(true);
+  it("returns true when a window with the name is listed", () => {
+    mockExecFileSync.mockReturnValue("13 _garden-poller\n22 _sharona-poller\n");
+    expect(windowExists("_sharona-poller")).toBe(true);
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "tmux",
-      ["list-panes", "-t", "garden-dashboard:_garden-worker-bold-ash", "-F", "#{pane_id}"],
+      ["list-windows", "-t", "garden-dashboard", "-F", "#{window_index} #{window_name}"],
       expect.anything(),
     );
   });
 
+  it("returns true even when the name is duplicated (the runaway-loop fix)", () => {
+    // A name-targeted probe errored on the ambiguous target and reported the
+    // poller dead; membership stays true so the watchdog stops respawning.
+    mockExecFileSync.mockReturnValue("18 _wolf-poller\n34 _wolf-poller\n66 _wolf-poller\n");
+    expect(windowExists("_wolf-poller")).toBe(true);
+  });
+
+  it("returns false when no window carries the name", () => {
+    mockExecFileSync.mockReturnValue("13 _garden-poller\n");
+    expect(windowExists("_wolf-poller")).toBe(false);
+  });
+
   it("returns false when tmux throws", () => {
-    mockExecFileSync.mockImplementation(() => { throw new Error("no window"); });
-    expect(windowExists("_garden-worker-bold-ash")).toBe(false);
+    mockExecFileSync.mockImplementation(() => { throw new Error("no session"); });
+    expect(windowExists("_garden-poller")).toBe(false);
+  });
+});
+
+describe("windowIndices / dedupeWindows / killWindowsByName", () => {
+  it("windowIndices returns every index matching the exact name", () => {
+    mockExecFileSync.mockReturnValue(
+      "13 _garden-poller\n18 _wolf-poller\n34 _wolf-poller\n66 _wolf-poller\n19 _garden-usage-poller\n",
+    );
+    expect(windowIndices("_wolf-poller")).toEqual([18, 34, 66]);
+    // Must not match a name that merely shares a prefix.
+    expect(windowIndices("_garden-poller")).toEqual([13]);
+  });
+
+  it("dedupeWindows keeps the lowest index and kills the rest by index", () => {
+    mockExecFileSync.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "list-windows") return "66 _wolf-poller\n18 _wolf-poller\n34 _wolf-poller\n";
+      return ""; // kill-window
+    });
+    expect(dedupeWindows("_wolf-poller")).toBe(2);
+    const kills = mockExecFileSync.mock.calls.filter((c) => c[1][0] === "kill-window");
+    expect(kills.map((c) => c[1])).toEqual([
+      ["kill-window", "-t", "garden-dashboard:34"],
+      ["kill-window", "-t", "garden-dashboard:66"],
+    ]);
+  });
+
+  it("dedupeWindows is a no-op for a single window", () => {
+    mockExecFileSync.mockImplementation((_cmd: string, args: string[]) =>
+      args[0] === "list-windows" ? "13 _garden-poller\n" : "");
+    expect(dedupeWindows("_garden-poller")).toBe(0);
+    expect(mockExecFileSync.mock.calls.filter((c) => c[1][0] === "kill-window")).toHaveLength(0);
+  });
+
+  it("killWindowsByName kills every matching window by index", () => {
+    mockExecFileSync.mockImplementation((_cmd: string, args: string[]) =>
+      args[0] === "list-windows" ? "18 _wolf-poller\n34 _wolf-poller\n" : "");
+    expect(killWindowsByName("_wolf-poller")).toBe(2);
+    const kills = mockExecFileSync.mock.calls.filter((c) => c[1][0] === "kill-window");
+    expect(kills).toHaveLength(2);
   });
 });
 

@@ -8,7 +8,7 @@
 // existing handlers in poller-state/review/merge/resolve. See WORKFLOWS.md
 // Component 5a and src/dashboard/workflows/.
 import fs from "node:fs";
-import { tmux, windowExists, killWindowSafe, shellEscape } from "./tmux.js";
+import { tmux, windowExists, windowIndices, killWindowsByName, dedupeWindows, shellEscape } from "./tmux.js";
 import {
   readRegistry, getWorkers, type WorkerEntry,
 } from "./registry.js";
@@ -132,7 +132,20 @@ function triggerAllPollers(): void {
 
 export function startProjectPoller(projectName: string, gardenRunner: string): void {
   const window = pollerWindowName(projectName);
-  if (windowExists(window)) return;
+  // Convergent: spawn when no poller window exists, collapse to one when a
+  // prior spawn race left duplicates, no-op when exactly one is live. Resolve
+  // by index, not the `windowExists` name probe, so duplicates are counted
+  // rather than mistaken for "dead" (the bug that drove the respawn runaway).
+  const existing = windowIndices(window);
+  if (existing.length > 0) {
+    if (existing.length > 1) {
+      const killed = dedupeWindows(window);
+      log.warn("poller", "collapsed duplicate poller windows", {
+        data: { project: projectName, killed },
+      });
+    }
+    return;
+  }
 
   const fifo = signalFifoPath(projectName);
   if (!ensureSignalFifo(fifo)) {
@@ -175,7 +188,10 @@ export function startProjectPoller(projectName: string, gardenRunner: string): v
 
 export function stopProjectPoller(projectName: string): void {
   const window = pollerWindowName(projectName);
-  killWindowSafe(window);
+  // Kill all windows of this name (by index), not just one — a prior spawn
+  // race may have left duplicates, and a single name-targeted kill can't
+  // remove them (the target is ambiguous).
+  killWindowsByName(window);
   const fifo = signalFifoPath(projectName);
   try { fs.unlinkSync(fifo); } catch { /* ignore */ }
   log.info("poller", "stopped", { data: { project: projectName } });

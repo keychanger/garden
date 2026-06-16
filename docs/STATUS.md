@@ -282,19 +282,26 @@ cannot be expressed as "wait for an event":
   review-launch poke) by re-delivering the same FIFO poke the lost event
   would have sent; this is damped to at most one poke per project per
   threshold, and quiescent states (idle `working`, `failing`, `done`) are
-  never watched, so a settled garden produces zero pokes. (2) It respawns
-  the poller window of any project that has workers but whose
-  `_<project>-poller` window has died — a poke is useless if no poller is
-  reading the FIFO, and a poller window can vanish uncleanly (collateral
-  from a worker-kill/worktree-cleanup, a lost tmux pane, an OS signal)
-  outside the `stopProjectPoller` path that normally logs and only fires
-  on last-worker removal. Once gone, a poller is otherwise revived only by
-  a dashboard re-attach (`validate`) or a worker-create
-  (`ensureProjectPoller`); if the session stays attached and no new worker
-  is created, the project's review/merge pipeline stalls silently. Respawn
-  is self-damping (once the window is back the next tick no-ops) and, like
-  the re-poke, restores event *delivery* without discovering or driving
-  any transition. Source: `watchdog.ts`.
+  never watched, so a settled garden produces zero pokes. (2) It keeps each
+  project's `_<project>-poller` window healthy: exactly one must be live —
+  a poke is useless if no poller is reading the FIFO, and several pollers
+  on one FIFO split the pokes between them and double-run lifecycle work.
+  A poller window can vanish uncleanly (collateral from a
+  worker-kill/worktree-cleanup, a lost tmux pane, an OS signal) outside the
+  `stopProjectPoller` path that normally logs and only fires on last-worker
+  removal; once gone it is otherwise revived only by a dashboard re-attach
+  (`validate`) or a worker-create (`ensureProjectPoller`), so the watchdog
+  respawns it. Conversely a spawn race (a post-rebuild restart overlapping
+  this respawn) can leave *duplicate* same-named windows; the watchdog
+  collapses them to one. Both are delivered by calling the convergent
+  `startProjectPoller` for every project each tick — it spawns when none
+  exists, collapses duplicates to one, and no-ops when exactly one is live.
+  Window liveness is resolved by index, not by name: a tmux name target is
+  ambiguous once duplicates exist (`can't find window`), so the old
+  name-based liveness probe reported duplicated pollers as dead and
+  respawned one every tick — an unbounded window leak. Self-damping (a
+  healthy project no-ops) and, like the re-poke, restores event *delivery*
+  without discovering or driving any transition. Source: `watchdog.ts`.
 
 What this spec rejects is the OTHER kind of timer: the `setInterval`,
 recurring re-check, or "fallback poll" that drives transitions on a

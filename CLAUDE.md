@@ -45,7 +45,7 @@ npm test               # vitest unit + integration; tsc --noEmit
   - `loop.ts` — workflow-agnostic loop primitive (cold-respawn + per-iteration counter) shared by trellis and grow workflows
   - `skills.ts` — bundles `done` / `handoff` / `trellis-author` / `grow` skills into worker worktrees
   - `usage.ts` + `usage-poller.ts` — Claude quota meter
-  - `watchdog.ts` — liveness watchdog: recurring tick that recovers lost event delivery — re-pokes workers stranded in active states by a lost one-shot event, and respawns poller windows that died uncleanly. Transitions nothing.
+  - `watchdog.ts` — liveness watchdog: recurring tick that recovers lost event delivery — re-pokes workers stranded in active states by a lost one-shot event, and keeps each project's poller window healthy (respawns it if it died, collapses duplicates to one if a spawn race left several — resolving windows by index, since tmux name targets are ambiguous across duplicates). Transitions nothing.
   - `conversation.ts` — transcript parser feeding the per-worker history view (`⌥h`): tail-reads the worker's Claude transcript JSONL into turns (operator prompts + verb-tagged assistant summaries) and formats the pane; transcript path captured from the hook input (`WorkerEntry.transcriptPath`) or derived from worktree cwd + session id. (The view is "history"; the module parses the underlying conversation transcript.)
   - `sandbox.ts`, `credentials.ts`, `claude-env.ts` — Claude profile / Keychain / sandbox config
   - `alerts.ts`, `log.ts`, `git.ts`, `names.ts`, `runner.ts`, `plot-status.ts` — utilities

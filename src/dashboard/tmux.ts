@@ -172,13 +172,60 @@ export function paneExists(paneId: string): boolean {
   }
 }
 
-export function windowExists(windowName: string): boolean {
+// All window indices in the dashboard session whose name matches exactly.
+// tmux name targets ("session:name") fail outright ("can't find window") when
+// more than one window shares the name, so any caller that must survive
+// duplicate-named windows — poller windows after a spawn race — resolves by
+// index (a unique, unambiguous target) through this instead.
+export function windowIndices(windowName: string): number[] {
   try {
-    tmuxOutput("list-panes", "-t", `${DASHBOARD_SESSION}:${windowName}`, "-F", "#{pane_id}");
-    return true;
+    const out = tmuxOutput(
+      "list-windows", "-t", DASHBOARD_SESSION, "-F", "#{window_index} #{window_name}",
+    );
+    const indices: number[] = [];
+    for (const line of out.split("\n")) {
+      const sep = line.indexOf(" ");
+      if (sep < 0) continue;
+      if (line.slice(sep + 1) !== windowName) continue;
+      const idx = parseInt(line.slice(0, sep), 10);
+      if (Number.isFinite(idx)) indices.push(idx);
+    }
+    return indices;
   } catch {
-    return false;
+    return [];
   }
+}
+
+// Membership test by name. Returns true when at least one window carries the
+// name. Critically — unlike the old `list-panes -t session:name` probe — this
+// stays true when duplicates exist; that probe errored on the ambiguous name
+// target and reported the window dead, which turned a single stray duplicate
+// into an unbounded respawn loop (the watchdog spawning a fresh poller every
+// tick because it could never see the ones already there).
+export function windowExists(windowName: string): boolean {
+  return windowIndices(windowName).length > 0;
+}
+
+// Kill every window with this name, addressing each by index so duplicates are
+// fully removed (a name target would be ambiguous). Returns the count killed.
+export function killWindowsByName(windowName: string): number {
+  let killed = 0;
+  for (const idx of windowIndices(windowName)) {
+    try { tmux("kill-window", "-t", `${DASHBOARD_SESSION}:${idx}`); killed++; } catch { /* ignore */ }
+  }
+  return killed;
+}
+
+// Collapse duplicate same-named windows to one survivor (the lowest index),
+// killing the rest by index. Returns how many were killed (0 for none/one).
+// The convergence step that heals a poller spawn race back to a single window.
+export function dedupeWindows(windowName: string): number {
+  const [, ...extra] = windowIndices(windowName).sort((a, b) => a - b);
+  let killed = 0;
+  for (const idx of extra) {
+    try { tmux("kill-window", "-t", `${DASHBOARD_SESSION}:${idx}`); killed++; } catch { /* ignore */ }
+  }
+  return killed;
 }
 
 export function renameWindow(oldName: string, newName: string): void {

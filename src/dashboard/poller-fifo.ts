@@ -81,7 +81,7 @@ export function isWorkerClaudeWorking(projectName: string, workerName: string): 
 // lifecycle work).
 //
 // The race is routine: a post-rebuild restartLongLivedPollers unlinks then
-// recreates each project's FIFO while the watchdog's respawnDeadPollers
+// recreates each project's FIFO while the watchdog's healProjectPollers
 // independently revives the same just-killed poller, and both reach mkfifo
 // with the FIFO absent. Before this election the loser's mkfifo threw "File
 // exists", surfacing as a spurious error alert ("failed to restart project

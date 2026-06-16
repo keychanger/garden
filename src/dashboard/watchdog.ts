@@ -9,13 +9,14 @@
 // bounds that blast radius: it delivers only the ordinary FIFO poke the lost
 // event would have sent.
 //
-// 2. Respawn project pollers whose tmux window has died. A poke is useless if
-// no poller is reading the FIFO: a poller window can vanish uncleanly (see
-// respawnDeadPollers) and, once gone, is only revived by a dashboard
-// re-attach (validate) or a worker-create (ensureProjectPoller). If the
-// session stays attached and no new worker is created, the project's whole
-// review/merge pipeline stalls silently. The watchdog closes that gap so a
-// dead poller self-heals within one tick.
+// 2. Keep each project's poller window healthy: respawn it if it died and
+// collapse duplicates to one if a spawn race left several (see
+// healProjectPollers). A poke is useless if no poller is reading the FIFO: a
+// poller window can vanish uncleanly and, once gone, is otherwise only revived
+// by a dashboard re-attach (validate) or a worker-create (ensureProjectPoller).
+// If the session stays attached and no new worker is created, the project's
+// whole review/merge pipeline stalls silently. The watchdog closes that gap so
+// a dead — or accidentally duplicated — poller self-heals within one tick.
 //
 // Runs in a single hidden tmux window (_garden-watchdog), mirroring the usage
 // poller's lifecycle: the window being killed (reset or exit) is the
@@ -94,40 +95,35 @@ export function tick(lastPokeAt: Map<string, number>, nowMs: number): void {
   }
 }
 
-// Respawn pollers for projects that hold workers but whose poller window is
-// gone. A poller window dies cleanly only through stopProjectPoller, which
-// logs "stopped" and fires only when a project's last worker is removed. Any
-// other disappearance — collateral from a worker-kill/worktree-cleanup, a tmux
-// pane lost, an OS signal — leaves no log and no recovery: the watchdog's poke
-// (duty 1) writes to a FIFO with no reader. Respawning is self-damping: once
-// the window is back, isPollerRunning returns true and later ticks no-op. The
-// poller/runner callbacks are injected so this module never statically imports
-// poller.ts, which would close the cycle poller.ts -> watchdog.ts ->
-// poller.ts. Returns the names of the projects respawned this cycle.
-export function respawnDeadPollers(
-  isPollerRunning: (project: string) => boolean,
-  startPoller: (project: string) => void,
+// Ensure every project that holds workers has exactly one live poller window.
+// Delegates to the injected `ensurePoller` (startProjectPoller), which is
+// convergent: it spawns when no window exists, collapses duplicates to one,
+// and no-ops when exactly one is live. Calling it for every project each tick
+// therefore both revives a poller that died uncleanly (collateral from a
+// worker-kill/worktree-cleanup, a lost tmux pane, an OS signal — none of which
+// log "stopped") and heals the duplicate-window leak a spawn race can produce.
+// Self-damping: once each project has its single poller, later calls no-op
+// silently. `ensurePoller` is injected so this module never statically imports
+// poller.ts (which imports this one for start/stopWatchdog) — that would close
+// a cycle. Per-project failures are isolated so one can't abort the cycle and
+// skip the staleness sweep. Returns the projects acted on this cycle.
+export function healProjectPollers(
+  ensurePoller: (project: string) => void,
 ): string[] {
   const registry = readRegistry();
-  const respawned: string[] = [];
+  const ensured: string[] = [];
   for (const [project, entries] of Object.entries(registry.workers)) {
-    if (entries.length === 0 || isPollerRunning(project)) continue;
+    if (entries.length === 0) continue;
     try {
-      startPoller(project);
+      ensurePoller(project);
+      ensured.push(project);
     } catch (err) {
-      // Isolate per project: one project's spawn failure must not abort the
-      // cycle and skip the staleness sweep (tick) for every other project.
-      log.warn("watchdog", "failed to respawn dead poller", {
+      log.warn("watchdog", "failed to ensure project poller", {
         data: { project, error: String(err) },
       });
-      continue;
     }
-    respawned.push(project);
-    log.warn("watchdog", "respawned dead poller", {
-      data: { project, workers: entries.length },
-    });
   }
-  return respawned;
+  return ensured;
 }
 
 export async function runWatchdogLoop(): Promise<void> {
@@ -138,7 +134,7 @@ export async function runWatchdogLoop(): Promise<void> {
   // resolveGardenRunner, so respawned pollers bake the same canonical garden
   // path the watchdog window itself was spawned with.
   const { resolveGardenRunner } = await import("./runner.js");
-  const { projectPollerRunning, startProjectPoller } = await import("./poller.js");
+  const { startProjectPoller } = await import("./poller.js");
   const gardenRunner = resolveGardenRunner();
   // Damping state lives in the loop closure: it persists across ticks and
   // resets on window respawn, which is fine — a respawn is itself a restart
@@ -146,10 +142,9 @@ export async function runWatchdogLoop(): Promise<void> {
   const lastPokeAt = new Map<string, number>();
   while (true) {
     try {
-      // Respawn before poking so a just-revived poller receives this cycle's
-      // staleness poke (and resumes work) without waiting another tick.
-      respawnDeadPollers(
-        projectPollerRunning,
+      // Heal pollers before poking so a just-revived poller receives this
+      // cycle's staleness poke (and resumes work) without waiting another tick.
+      healProjectPollers(
         (project) => startProjectPoller(project, gardenRunner),
       );
       tick(lastPokeAt, Date.now());

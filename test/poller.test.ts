@@ -70,7 +70,10 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   pasteAndSubmit: vi.fn(),
   getFirstPaneId: vi.fn(() => "%5"),
   windowExists: vi.fn(() => true),
+  windowIndices: vi.fn(() => [1]),
   killWindowSafe: vi.fn(),
+  killWindowsByName: vi.fn(),
+  dedupeWindows: vi.fn(() => 0),
   // Mirror the real shellEscape: pass safe-token strings through unquoted,
   // wrap others in single quotes with the inner-quote escape. headless-agent
   // and poller-* import it for bash command construction.
@@ -200,11 +203,12 @@ vi.mock("../src/dashboard/poller-fifo.js", async () => {
     ...actual,
     triggerProjectPoll: vi.fn(),
     scheduleDelayedPoke: vi.fn(),
+    ensureSignalFifo: vi.fn(() => true),
   };
 });
 
 import fs from "node:fs";
-import { poll, postPush, restartLongLivedPollers } from "../src/dashboard/poller.js";
+import { poll, postPush, restartLongLivedPollers, startProjectPoller } from "../src/dashboard/poller.js";
 import { tryGetProject, getAutoContinueConfig } from "../src/config.js";
 import { updateWorkerFields, findWorkerByName } from "../src/dashboard/registry.js";
 import {
@@ -216,7 +220,7 @@ import {
   syncWorktreeToRemote,
   ensureNoRebaseInProgress, hasRebaseInProgress, isAncestor, getUnmergedFiles,
 } from "../src/dashboard/git.js";
-import { tmux, pasteAndSubmit, windowExists, getFirstPaneId, killWindowSafe } from "../src/dashboard/tmux.js";
+import { tmux, pasteAndSubmit, windowExists, windowIndices, dedupeWindows, getFirstPaneId, killWindowSafe, killWindowsByName } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { log } from "../src/dashboard/log.js";
 import { dispatchDelayedAutoContinue, isDoneSet, setDoneSentinel } from "../src/dashboard/continue.js";
@@ -3312,8 +3316,10 @@ describe("restartLongLivedPollers", () => {
     // start*Poller early-returns when the window already exists. In the real
     // flow, stop*Poller has already killed it; here the mock doesn't know
     // about that linkage, so we pretend the windows are gone so the spawn
-    // side of restart runs.
+    // side of restart runs. startProjectPoller now gates on windowIndices
+    // (counting by index to survive duplicates), so clear that too.
     vi.mocked(windowExists).mockReturnValue(false);
+    vi.mocked(windowIndices).mockReturnValue([]);
   });
 
   it("stops and respawns the usage poller", () => {
@@ -3331,8 +3337,10 @@ describe("restartLongLivedPollers", () => {
 
     restartLongLivedPollers("node /usr/local/bin/garden");
 
-    expect(killWindowSafe).toHaveBeenCalledWith("_alpha-poller");
-    expect(killWindowSafe).toHaveBeenCalledWith("_beta-poller");
+    // Project pollers tear down via killWindowsByName (kills any duplicates by
+    // index); the usage poller still uses killWindowSafe.
+    expect(killWindowsByName).toHaveBeenCalledWith("_alpha-poller");
+    expect(killWindowsByName).toHaveBeenCalledWith("_beta-poller");
 
     const newWindowCalls = vi.mocked(tmux).mock.calls.filter(c => c[0] === "new-window");
     const windowNames = newWindowCalls.map(c => c[5] as string);
@@ -3345,19 +3353,51 @@ describe("restartLongLivedPollers", () => {
 
     restartLongLivedPollers("node /usr/local/bin/garden");
 
-    expect(killWindowSafe).not.toHaveBeenCalledWith("_alpha-poller");
+    expect(killWindowsByName).not.toHaveBeenCalledWith("_alpha-poller");
   });
 
   it("keeps going when an individual poller restart throws", () => {
     registryMock._setEntries("alpha", [makeWorker({ name: "bold-ash" })]);
     registryMock._setEntries("beta",  [makeWorker({ name: "hot-moss" })]);
-    // usage-poller kill succeeds; throw on alpha so beta still gets restarted.
-    vi.mocked(killWindowSafe).mockImplementation((name: string) => {
+    // throw on alpha's teardown so beta still gets restarted.
+    vi.mocked(killWindowsByName).mockImplementation((name: string) => {
       if (name === "_alpha-poller") throw new Error("tmux gone");
+      return 0;
     });
 
     expect(() => restartLongLivedPollers("node /usr/local/bin/garden")).not.toThrow();
-    expect(killWindowSafe).toHaveBeenCalledWith("_beta-poller");
+    expect(killWindowsByName).toHaveBeenCalledWith("_beta-poller");
+  });
+});
+
+describe("startProjectPoller — window convergence", () => {
+  beforeEach(() => {
+    vi.mocked(tryGetProject).mockReturnValue(
+      { path: "/repo/solo" } as ReturnType<typeof tryGetProject>);
+  });
+
+  const newWindowNames = () =>
+    vi.mocked(tmux).mock.calls.filter(c => c[0] === "new-window").map(c => c[5]);
+
+  it("spawns a poller window when none exists", () => {
+    vi.mocked(windowIndices).mockReturnValue([]);
+    startProjectPoller("solo", "node /usr/local/bin/garden");
+    expect(newWindowNames()).toContain("_solo-poller");
+    expect(dedupeWindows).not.toHaveBeenCalled();
+  });
+
+  it("no-ops when exactly one poller window is live", () => {
+    vi.mocked(windowIndices).mockReturnValue([7]);
+    startProjectPoller("solo", "node /usr/local/bin/garden");
+    expect(newWindowNames()).toHaveLength(0);
+    expect(dedupeWindows).not.toHaveBeenCalled();
+  });
+
+  it("collapses duplicates instead of spawning another (the runaway-loop fix)", () => {
+    vi.mocked(windowIndices).mockReturnValue([7, 12, 19]);
+    startProjectPoller("solo", "node /usr/local/bin/garden");
+    expect(dedupeWindows).toHaveBeenCalledWith("_solo-poller");
+    expect(newWindowNames()).toHaveLength(0);
   });
 });
 
