@@ -43,6 +43,9 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   // Default: empty box → no operator draft → continue prompts deliver as before.
   // Tests that exercise the draft gate override this per-case.
   capturePaneText: vi.fn(() => ""),
+  // Default: cursor unknown → extractOperatorDraft falls back to the whole
+  // post-marker remainder. Tests that exercise ghost-text exclusion override it.
+  capturePaneCursor: vi.fn(() => null),
 }));
 
 vi.mock("../src/dashboard/window-names.js", () => ({
@@ -63,7 +66,7 @@ import {
 } from "../src/dashboard/continue.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { findWorkerByName, updateWorkerFields } from "../src/dashboard/registry.js";
-import { tmux, pasteAndSubmit, paneExists, windowExists, getFirstPaneId, capturePaneText } from "../src/dashboard/tmux.js";
+import { tmux, pasteAndSubmit, paneExists, windowExists, getFirstPaneId, capturePaneText, capturePaneCursor } from "../src/dashboard/tmux.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { tryGetProject } from "../src/config.js";
@@ -103,6 +106,17 @@ const DRAFT_BOX = [
   "  garden·proud-brief-sedge | Opus 4.8 | ctx:10%" + " ".repeat(20) + "/rc active",
   "  ⏵⏵ auto mode on (shift+tab to cycle)",
 ].join("\n");
+// An empty box with Claude Code's dimmed ghost/placeholder text rendered into
+// it — capture-pane strips the dimming, so the suggestion text lands right after
+// the marker looking exactly like a draft. The caret stays at the input origin
+// (column 2, just past "❯ "), which is what tells the two apart. Row index 1.
+const GHOST_BOX = [
+  RULE,
+  "❯ Try \"how does auth work?\"" + " ".repeat(20),
+  RULE,
+  "  garden·vain-tall-brush | Opus 4.8 | ctx:10%",
+  "  ⏵⏵ auto mode on (shift+tab to cycle)",
+].join("\n");
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -113,6 +127,7 @@ beforeEach(() => {
   // clearAllMocks resets call history but NOT return values, so re-arm the
   // empty-box default each test; draft cases override it locally.
   vi.mocked(capturePaneText).mockReturnValue("");
+  vi.mocked(capturePaneCursor).mockReturnValue(null);
 });
 
 describe("continueWorker", () => {
@@ -252,19 +267,38 @@ describe("continueWorker", () => {
     expect(delivered).toBe(true);
     expect(pasteAndSubmit).toHaveBeenCalledWith("%9", expect.any(String));
   });
+
+  it("delivers when the empty box shows dimmed ghost/placeholder text and the caret is at the origin", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "vain-tall-brush", sessionId: "s", task: "", agentStatus: "idle",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-vain-tall-brush",
+      activePaneId: "%9",
+    }));
+    // Ghost text after the marker would read as a draft on its own; the caret at
+    // the input origin (row 1, column 2) is what proves the box is really empty.
+    vi.mocked(capturePaneText).mockReturnValue(GHOST_BOX);
+    vi.mocked(capturePaneCursor).mockReturnValue({ x: 2, y: 1 });
+
+    const delivered = continueWorker("myproject", "vain-tall-brush");
+
+    expect(delivered).toBe(true);
+    expect(pasteAndSubmit).toHaveBeenCalledWith("%9", expect.any(String));
+  });
 });
 
-describe("extractOperatorDraft", () => {
+describe("extractOperatorDraft (cursor unknown → whole-remainder fallback)", () => {
   it("returns empty for an empty Claude input box (marker + padding only)", () => {
-    expect(extractOperatorDraft(EMPTY_BOX)).toBe("");
+    expect(extractOperatorDraft(EMPTY_BOX, null)).toBe("");
   });
 
   it("extracts the unsent draft text after the prompt marker", () => {
-    expect(extractOperatorDraft(DRAFT_BOX)).toBe("the quick brown fox");
+    expect(extractOperatorDraft(DRAFT_BOX, null)).toBe("the quick brown fox");
   });
 
   it("tolerates a marker indented by leading whitespace", () => {
-    expect(extractOperatorDraft("────\n   ❯ hello there   \n────\n  status")).toBe("hello there");
+    expect(extractOperatorDraft("────\n   ❯ hello there   \n────\n  status", null)).toBe("hello there");
   });
 
   it("takes the bottom-most prompt line so a stale ❯ above the box is ignored", () => {
@@ -275,20 +309,47 @@ describe("extractOperatorDraft", () => {
       "─".repeat(40),
       "  garden·proj | Opus 4.8 | ctx:5%",
     ].join("\n");
-    expect(extractOperatorDraft(captured)).toBe("");
+    expect(extractOperatorDraft(captured, null)).toBe("");
   });
 
   it("keeps a draft that itself contains the marker glyph", () => {
-    expect(extractOperatorDraft("❯ use the ❯ symbol")).toBe("use the ❯ symbol");
+    expect(extractOperatorDraft("❯ use the ❯ symbol", null)).toBe("use the ❯ symbol");
   });
 
   it("treats a whitespace-only draft as empty (safe to deliver)", () => {
-    expect(extractOperatorDraft("❯        ")).toBe("");
+    expect(extractOperatorDraft("❯        ", null)).toBe("");
   });
 
   it("returns empty when no prompt line is visible (capture failed / odd state)", () => {
-    expect(extractOperatorDraft("")).toBe("");
-    expect(extractOperatorDraft("just some text\nno box here")).toBe("");
+    expect(extractOperatorDraft("", null)).toBe("");
+    expect(extractOperatorDraft("just some text\nno box here", null)).toBe("");
+  });
+});
+
+describe("extractOperatorDraft (cursor-bounded — excludes ghost/placeholder text)", () => {
+  // The regression: dimmed ghost/placeholder text in an EMPTY box looks like a
+  // draft once capture-pane strips the color, but the caret is still at the
+  // input origin (column 2, on the marker row). Span marker→cursor is empty.
+  it("ignores ghost/placeholder text when the caret is at the input origin", () => {
+    expect(extractOperatorDraft(GHOST_BOX, { x: 2, y: 1 })).toBe("");
+  });
+
+  it("extracts only the text left of the caret, dropping a trailing ghost completion", () => {
+    // "❯ fix " typed (caret at column 6), "the auth bug" is the dimmed ghost.
+    expect(extractOperatorDraft("❯ fix the auth bug", { x: 6, y: 0 })).toBe("fix");
+  });
+
+  it("extracts a full real draft bounded by the caret at its end", () => {
+    // "❯ the quick brown fox" — caret sits just past the 'x' at column 21.
+    expect(extractOperatorDraft(DRAFT_BOX, { x: 21, y: 1 })).toBe("the quick brown fox");
+  });
+
+  it("treats a caret on a row below the marker as a wrapped (non-empty) draft", () => {
+    expect(extractOperatorDraft(DRAFT_BOX, { x: 4, y: 2 })).toBe("the quick brown fox");
+  });
+
+  it("returns empty when the caret is above the marker row (not on the input line)", () => {
+    expect(extractOperatorDraft(DRAFT_BOX, { x: 10, y: 0 })).toBe("");
   });
 });
 

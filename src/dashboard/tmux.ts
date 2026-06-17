@@ -133,19 +133,44 @@ export function getActivePaneId(): string | null {
 
 // Read the visible content of a pane (not its scrollback). Used to inspect a
 // worker's Claude TUI input box before delivering an auto-continue prompt, so
-// garden doesn't paste onto an operator's half-typed draft. `-J` joins
-// soft-wrapped lines so a wrapped draft collapses to one logical line; `-p`
-// prints to stdout. Returns "" on any failure (pane gone, sandbox), which the
-// caller reads as "no draft" — failing open preserves the common auto-continue
-// path rather than blocking it on a capture error.
+// garden doesn't paste onto an operator's half-typed draft. `-p` prints to
+// stdout. We deliberately do NOT pass `-J`: draft detection pairs this capture
+// with capturePaneCursor, and cursor_y is in physical-row space, so the output
+// must stay one line per pane row (joining wrapped lines would desync the row
+// indices). Returns "" on any failure (pane gone, sandbox), which the caller
+// reads as "no draft" — failing open preserves the common auto-continue path
+// rather than blocking it on a capture error.
 export function capturePaneText(paneId: string): string {
   try {
-    return execFileSync("tmux", ["capture-pane", "-p", "-J", "-t", paneId], {
+    return execFileSync("tmux", ["capture-pane", "-p", "-t", paneId], {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
     });
   } catch {
     return "";
+  }
+}
+
+export interface PaneCursor { x: number; y: number; }
+
+// Read the terminal caret position within a pane (0-based column, row),
+// independent of whether the pane is active. Draft detection uses it to tell an
+// operator's typed text apart from the dimmed ghost/placeholder text Claude Code
+// renders into an empty input box: the caret sits at the end of typed text, so
+// anything to its right is a suggestion, not a draft. Returns null on any
+// failure, which the caller reads as "cursor unknown".
+export function capturePaneCursor(paneId: string): PaneCursor | null {
+  try {
+    const out = execFileSync(
+      "tmux",
+      ["display-message", "-p", "-t", paneId, "#{cursor_x},#{cursor_y}"],
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] },
+    ).trim();
+    const [x, y] = out.split(",").map(Number);
+    if (!Number.isInteger(x) || !Number.isInteger(y)) return null;
+    return { x, y };
+  } catch {
+    return null;
   }
 }
 

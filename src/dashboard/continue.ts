@@ -25,7 +25,7 @@ import { readDashState } from "./state.js";
 import { findWorkerByName, updateWorkerFields } from "./registry.js";
 import {
   shellEscape, getFirstPaneId, paneExists, windowExists, pasteAndSubmit,
-  capturePaneText,
+  capturePaneText, capturePaneCursor, type PaneCursor,
 } from "./tmux.js";
 import { workerWindowName as workerWin } from "./window-names.js";
 import { log } from "./log.js";
@@ -140,11 +140,13 @@ function resolveWorkerPaneId(project: string, worker: string): string | null {
   return null;
 }
 
-// Claude Code's TUI input prompt glyph (U+276F). An empty box renders the
-// marker followed only by padding whitespace; once the operator types, their
-// text appears right after it. capture-pane strips color, but we don't need it
-// — current Claude Code shows no placeholder text on the prompt line, so a
-// non-empty remainder is unambiguously an unsent draft.
+// Claude Code's TUI input prompt glyph (U+276F). The operator's typed text
+// appears right after the marker — but the box is NOT blank when empty: Claude
+// Code renders dimmed ghost/placeholder/autosuggest text into an empty box, and
+// capture-pane strips the dimming, so the bare remainder after the marker can't
+// distinguish a real draft from a suggestion. The caret can: it sits at the end
+// of typed text, with any suggestion rendered to its right. So the draft is the
+// span between the marker and the cursor column (see extractOperatorDraft).
 const PROMPT_MARKER = "❯";
 
 // Backoff for re-arming an auto-continue prompt that was deferred because the
@@ -155,23 +157,41 @@ const DRAFT_BACKOFF_MS = 12_000;
 const MAX_DRAFT_RETRIES = 15;
 
 // Pull the operator's unsent draft out of a captured Claude pane. The live
-// input line is the bottom-most line whose first non-space glyph is the prompt
-// marker (the status/mode lines sit below it, agent output above), so we scan
-// upward and take the first match. Returns "" when the box is empty or no
-// prompt line is visible.
-export function extractOperatorDraft(captured: string): string {
+// input line is the bottom-most line whose only glyphs before the prompt marker
+// are whitespace (the status/mode lines sit below it, agent output above), so we
+// scan upward and take the first match.
+//
+// `cursor` (0-based col,row from the same pane) excludes the dimmed
+// ghost/placeholder text Claude Code paints into an empty box: the caret marks
+// the end of typed text, so only the span between the marker and the cursor
+// column is the operator's draft — anything to the caret's right is a suggestion.
+// A caret on a row below the marker means the draft wrapped (so the first row
+// holds text); a caret above it is not on the input line. When the cursor is
+// unknown (null — pane unreachable), fall back to the whole post-marker
+// remainder. Returns "" when the box is empty or no prompt line is visible.
+export function extractOperatorDraft(captured: string, cursor: PaneCursor | null): string {
   const lines = captured.split("\n");
+  let markerRow = -1;
+  let markerCol = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i].replace(/^\s+/, "");
-    if (line.startsWith(PROMPT_MARKER)) {
-      return line.slice(PROMPT_MARKER.length).trim();
+    const col = lines[i].indexOf(PROMPT_MARKER);
+    if (col !== -1 && lines[i].slice(0, col).trim() === "") {
+      markerRow = i;
+      markerCol = col;
+      break;
     }
   }
-  return "";
+  if (markerRow === -1) return "";
+
+  const inputStart = markerCol + PROMPT_MARKER.length;
+  if (!cursor) return lines[markerRow].slice(inputStart).trim();
+  if (cursor.y < markerRow) return "";
+  if (cursor.y > markerRow) return lines[markerRow].slice(inputStart).trim();
+  return lines[markerRow].slice(inputStart, cursor.x).trim();
 }
 
 export function paneHasOperatorDraft(paneId: string): boolean {
-  return extractOperatorDraft(capturePaneText(paneId)).length > 0;
+  return extractOperatorDraft(capturePaneText(paneId), capturePaneCursor(paneId)).length > 0;
 }
 
 // True when the worker's pane currently holds an unsent operator draft. Used by
