@@ -25,26 +25,41 @@
 import { tmux, windowExists, killWindowSafe } from "./tmux.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { watchdogWindowName } from "./window-names.js";
-import { readRegistry, type WorkerEntry, type PrState } from "./registry.js";
+import { readRegistry, PR_STATE_KIND, type WorkerEntry } from "./registry.js";
 import { triggerProjectPoll } from "./poller-fifo.js";
 import { log } from "./log.js";
 
 export const WATCHDOG_TICK_MS = 60_000;
 export const WATCHDOG_THRESHOLD_MS = 5 * 60_000;
 
-// States where the poller owes the worker a future action. Quiescent states
-// (idle working, failing, done) park legitimately waiting on operator or
-// worker action that carries its own event, so they are never watched.
-const WATCHED_PR_STATES = new Set<PrState>([
-  "reviewing", "resolving", "ci-fixing", "merge-pending", "merged",
-]);
-
+// States the watchdog watches: those where the poller owes the worker a future
+// action (PR_STATE_KIND.pollerOwed), plus the one stranding class that lives in
+// the working state. The pollerOwed classification is the single source of
+// truth in registry.ts; quiescent states (idle working, failing, done) park
+// legitimately on an event of their own, so they are never watched.
 export function isWatchedState(entry: WorkerEntry): boolean {
   const state = entry.prState ?? "working";
-  if (WATCHED_PR_STATES.has(state)) return true;
+  if (PR_STATE_KIND[state].pollerOwed) return true;
   // A Stop hook saw commits ahead of base but the review-launch poke never
   // arrived — the one stranding class that lives in the working state.
   return state === "working" && entry.pendingReviewAt !== undefined;
+}
+
+// A worker in a `windowed` state (reviewing/resolving/ci-fixing) whose hidden
+// tmux window is still alive is actively in flight, not stranded — the work is
+// progressing and bounded by its own timeout (REVIEW_TIMEOUT_MS). The watchdog
+// exists to recover *dropped* events; a live window is proof the event was not
+// dropped. Without this, any review/resolve/ci-fix running past the staleness
+// threshold (routine for a substantial review) draws a spurious poke every
+// threshold window — harmless (handleReviewing no-ops while the window lives)
+// but it logs a misleading "poked stale project" each time. The genuine
+// stranding class — the window exited but its completion poke was lost — has a
+// dead window and still trips, so recovery is preserved.
+export function hasLiveWork(entry: WorkerEntry): boolean {
+  const state = entry.prState ?? "working";
+  return PR_STATE_KIND[state].windowed
+    && entry.reviewWindowName !== undefined
+    && windowExists(entry.reviewWindowName);
 }
 
 // Most recent relevant activity as epoch ms, 0 when no timestamp is set.
@@ -65,6 +80,8 @@ export function isWorkerStale(
   entry: WorkerEntry, nowMs: number, thresholdMs = WATCHDOG_THRESHOLD_MS,
 ): boolean {
   if (!isWatchedState(entry)) return false;
+  // A live windowed worker is in flight, not stranded — never stale.
+  if (hasLiveWork(entry)) return false;
   const lastActivity = latestActivityMs(entry);
   // No timestamp means no clock to age against — age would be unbounded.
   if (lastActivity === 0) return false;

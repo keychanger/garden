@@ -274,15 +274,21 @@ cannot be expressed as "wait for an event":
 - **Liveness watchdog (staleness backstop)** — a dedicated long-lived
   window (`_garden-watchdog`) ticks every 60 s and performs two recovery
   actions, neither of which transitions worker state. (1) It re-pokes any
-  project holding a worker in an active state (`reviewing`, `resolving`,
-  `ci-fixing`, `merge-pending`, `merged`, or `working` with
+  project holding a worker in a *poller-owed* state (the `pollerOwed`
+  states in `PR_STATE_KIND`, `registry.ts`: `reviewing`, `resolving`,
+  `ci-fixing`, `merge-pending`, `merged`; plus `working` with
   `pendingReviewAt` set) whose latest activity timestamp has aged past a
   5 min threshold, recovering dropped one-shot events (a poke lost in the
   poller kill→spawn gap, a reboot-killed detached delayed poke, a dropped
   review-launch poke) by re-delivering the same FIFO poke the lost event
-  would have sent; this is damped to at most one poke per project per
-  threshold, and quiescent states (idle `working`, `failing`, `done`) are
-  never watched, so a settled garden produces zero pokes. (2) It keeps each
+  would have sent. A worker in a `windowed` poller-owed state (`reviewing`,
+  `resolving`, `ci-fixing`) whose hidden tmux window is still alive is in
+  flight, not stranded — its work is bounded by `REVIEW_TIMEOUT_MS`, not the
+  staleness threshold — so it is exempt: a live window is proof the event was
+  not dropped, and the genuine stranding class (window exited, completion poke
+  lost) has a dead window and still trips. Poking is damped to at most one poke
+  per project per threshold, and quiescent states (idle `working`, `failing`,
+  `done`) are never watched, so a settled garden produces zero pokes. (2) It keeps each
   project's `_<project>-poller` window healthy: exactly one must be live —
   a poke is useless if no poller is reading the FIFO, and several pollers
   on one FIFO split the pokes between them and double-run lifecycle work.

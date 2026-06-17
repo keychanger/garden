@@ -19,6 +19,34 @@ import { log } from "./log.js";
 export type AgentStatus = "loading" | "ready" | "working" | "asking" | "idle" | "exited";
 export type PrState = "working" | "reviewing" | "merge-pending" | "resolving" | "ci-fixing" | "merged" | "done" | "failing";
 
+// Operational classification of each prState, the single source of truth for
+// "what does the poller owe this worker?" Consumers (today: the liveness
+// watchdog) derive their state sets from this table instead of re-listing
+// states inline, so adding a PrState to the union forces a classification
+// decision here — the Record has no index signature, so an unclassified state
+// is a compile error, not a silently un-watched worker.
+//
+// - pollerOwed: the poller owes a future action, so a dropped one-shot event
+//   (a poke lost in the poller kill->spawn gap, a reboot-killed delayed poke)
+//   would strand the worker. The watchdog watches these. The quiescent states
+//   (`working`, `failing`, `done`) park legitimately: `working` is driven by
+//   the worker's own Claude hook firehose, `failing`/`done` wait on operator
+//   action — each carries its own future event, so none is owed a poke.
+// - windowed: the owed action runs in a hidden tmux window whose name lives in
+//   entry.reviewWindowName, so its liveness is probeable. A live window is
+//   proof the work is in flight (not stranded) and bounded by its own timeout;
+//   merge-pending/merged do their work inline with no window to probe.
+export const PR_STATE_KIND: Record<PrState, { pollerOwed: boolean; windowed: boolean }> = {
+  working: { pollerOwed: false, windowed: false },
+  reviewing: { pollerOwed: true, windowed: true },
+  resolving: { pollerOwed: true, windowed: true },
+  "ci-fixing": { pollerOwed: true, windowed: true },
+  "merge-pending": { pollerOwed: true, windowed: false },
+  merged: { pollerOwed: true, windowed: false },
+  failing: { pollerOwed: false, windowed: false },
+  done: { pollerOwed: false, windowed: false },
+};
+
 // Trellis reviewer verdict vocabulary. See WORKFLOWS.md "Reviewer prompt and
 // verdict". Persisted on WorkerEntry.trellis.lastVerdict for trellis vines.
 export type TrellisVerdict = "ALIGNED" | "DRIFT" | "FAILED" | "FLAGGED";

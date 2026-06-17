@@ -10,9 +10,13 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   killWindowSafe: vi.fn(),
 }));
 
-vi.mock("../src/dashboard/registry.js", () => {
+vi.mock("../src/dashboard/registry.js", async (importActual) => {
+  // Spread the real module so PR_STATE_KIND (the state-classification table the
+  // watchdog derives its sets from) stays live; only readRegistry is faked.
+  const actual = await importActual<typeof import("../src/dashboard/registry.js")>();
   const entries: Record<string, import("../src/dashboard/registry.js").WorkerEntry[]> = {};
   return {
+    ...actual,
     readRegistry: vi.fn(() => ({ workers: entries })),
     _setEntries: (project: string, list: import("../src/dashboard/registry.js").WorkerEntry[]) => {
       entries[project] = list;
@@ -28,11 +32,14 @@ vi.mock("../src/dashboard/poller-fifo.js", () => ({
 }));
 
 import {
-  latestActivityMs, isWatchedState, isWorkerStale, tick, healProjectPollers,
-  WATCHDOG_THRESHOLD_MS,
+  latestActivityMs, isWatchedState, isWorkerStale, hasLiveWork, tick,
+  healProjectPollers, WATCHDOG_THRESHOLD_MS,
 } from "../src/dashboard/watchdog.js";
 import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
+import { windowExists } from "../src/dashboard/tmux.js";
 import type { WorkerEntry, PrState } from "../src/dashboard/registry.js";
+
+const windowExistsMock = vi.mocked(windowExists);
 
 const registryMock = await import("../src/dashboard/registry.js") as unknown as {
   _setEntries: (project: string, list: WorkerEntry[]) => void;
@@ -47,6 +54,9 @@ function entry(overrides: Partial<WorkerEntry> = {}): WorkerEntry {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks wipes call history but not implementations, so a prior
+  // mockReturnValue(true) would leak — restore the "no live window" default.
+  windowExistsMock.mockReturnValue(false);
   registryMock._clear();
 });
 
@@ -99,9 +109,67 @@ describe("isWatchedState", () => {
   });
 });
 
+describe("hasLiveWork", () => {
+  it.each(["reviewing", "resolving", "ci-fixing"] as PrState[])(
+    "true for windowed state %s with a live window", (state) => {
+      windowExistsMock.mockReturnValue(true);
+      expect(hasLiveWork(entry({ prState: state, reviewWindowName: "_p-review-w" }))).toBe(true);
+    },
+  );
+
+  it("false for a windowed state whose window has died", () => {
+    windowExistsMock.mockReturnValue(false);
+    expect(hasLiveWork(entry({ prState: "reviewing", reviewWindowName: "_p-review-w" }))).toBe(false);
+  });
+
+  it("false for a windowed state with no recorded window name", () => {
+    windowExistsMock.mockReturnValue(true);
+    expect(hasLiveWork(entry({ prState: "reviewing" }))).toBe(false);
+  });
+
+  it.each(["merge-pending", "merged"] as PrState[])(
+    "false for non-windowed state %s even with a live named window", (state) => {
+      // These states do their work inline with no window to probe; a stray
+      // reviewWindowName must not be mistaken for live work.
+      windowExistsMock.mockReturnValue(true);
+      expect(hasLiveWork(entry({ prState: state, reviewWindowName: "_p-review-w" }))).toBe(false);
+    },
+  );
+
+  it("false for quiescent states", () => {
+    windowExistsMock.mockReturnValue(true);
+    expect(hasLiveWork(entry({ prState: "working", reviewWindowName: "_p-review-w" }))).toBe(false);
+    expect(hasLiveWork(entry({ prState: "failing" }))).toBe(false);
+  });
+});
+
 describe("isWorkerStale", () => {
   it("true for a watched worker aged past the threshold", () => {
     const e = entry({ prState: "reviewing", reviewStartedAt: NOW - WATCHDOG_THRESHOLD_MS - 1 });
+    expect(isWorkerStale(e, NOW)).toBe(true);
+  });
+
+  it("false for a long-running review whose window is still alive", () => {
+    // The regression this fix targets: a review aged well past the threshold
+    // but actively in flight (window alive) must not read as stale.
+    windowExistsMock.mockReturnValue(true);
+    const e = entry({
+      prState: "reviewing",
+      reviewStartedAt: NOW - 3 * WATCHDOG_THRESHOLD_MS,
+      reviewWindowName: "_p-review-w",
+    });
+    expect(isWorkerStale(e, NOW)).toBe(false);
+  });
+
+  it("true for a stranded review whose window died and completion poke was lost", () => {
+    // The genuine stranding class the watchdog must still recover: window gone,
+    // aged past the threshold.
+    windowExistsMock.mockReturnValue(false);
+    const e = entry({
+      prState: "reviewing",
+      reviewStartedAt: NOW - WATCHDOG_THRESHOLD_MS - 1,
+      reviewWindowName: "_p-review-w",
+    });
     expect(isWorkerStale(e, NOW)).toBe(true);
   });
 
@@ -184,6 +252,15 @@ describe("tick", () => {
     registryMock._setEntries("proj", [entry({ pendingReviewAt: STALE_MS })]);
     tick(new Map(), NOW);
     expect(triggerProjectPoll).toHaveBeenCalledWith("proj");
+  });
+
+  it("does not poke a clock-stale review whose window is still alive", () => {
+    windowExistsMock.mockReturnValue(true);
+    registryMock._setEntries("proj", [
+      entry({ prState: "reviewing", reviewStartedAt: STALE_MS, reviewWindowName: "_p-review-w" }),
+    ]);
+    tick(new Map(), NOW);
+    expect(triggerProjectPoll).not.toHaveBeenCalled();
   });
 });
 
