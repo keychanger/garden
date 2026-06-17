@@ -54,6 +54,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   tmuxDisplay: vi.fn(),
   paneExists: vi.fn(() => true),
   windowExists: vi.fn(() => false),
+  getFirstPaneId: vi.fn(() => null),
   listAllWindowNames: vi.fn(() => []),
   listHiddenWorkerWindows: vi.fn(() => []),
   setPaneLabel: vi.fn(),
@@ -113,7 +114,7 @@ import { readDashState, writeDashState } from "../src/dashboard/state.js";
 import { parkToHidden, restoreFromHidden, swapToHidden, swapDirect, gardenSwapToHidden } from "../src/dashboard/layout.js";
 import { refreshDashboard, setPaneProjectColor } from "../src/dashboard/header.js";
 import {
-  tmux, tmuxDisplay, paneExists, windowExists,
+  tmux, tmuxDisplay, paneExists, windowExists, getFirstPaneId,
   listAllWindowNames, listHiddenWorkerWindows,
   setPaneLabel, setPaneVar,
 } from "../src/dashboard/tmux.js";
@@ -1099,20 +1100,23 @@ describe("cyclePlot", () => {
 
 describe("diary follows project switches", () => {
   // diary-view.sh reopens the focused project's diary whenever the editor
-  // exits. When the diary pane is active, a project switch drives nano's
-  // save+exit (^O Enter ^X) so the loop reopens on the now-focused project
-  // without losing unsaved notes. See reloadDiaryEditor in navigate.ts.
-  const SAVE_EXIT = ["send-keys", "-t", "%1", "C-o", "Enter", "C-x"];
+  // exits. When the diary editor is alive — live in the visible garden slot or
+  // parked in the hidden _garden-diary window after the operator switched the
+  // garden pane to another view — a project switch drives nano's save+exit
+  // (^O Enter ^X) so the loop reopens on the now-focused project without losing
+  // unsaved notes. See reloadDiaryEditor in navigate.ts.
   const originalEditor = process.env.EDITOR;
 
-  function sentSaveExit(): boolean {
+  function sentSaveExit(pane = "%1"): boolean {
+    const expected = ["send-keys", "-t", pane, "C-o", "Enter", "C-x"];
     return vi.mocked(tmux).mock.calls.some(
-      (call) => JSON.stringify(call) === JSON.stringify(SAVE_EXIT),
+      (call) => JSON.stringify(call) === JSON.stringify(expected),
     );
   }
 
   beforeEach(() => {
     delete process.env.EDITOR; // unset -> nano default
+    vi.mocked(getFirstPaneId).mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -1135,18 +1139,41 @@ describe("diary follows project switches", () => {
     expect(sentSaveExit()).toBe(true);
   });
 
-  it("does not touch the editor when the diary pane is not active", () => {
+  it("does not touch the editor when no diary editor is alive", () => {
+    // Diary view never opened: no live pane and no parked _garden-diary window.
     const state = makeState({
       activeProject: "garden",
       gardenPaneType: "growhouse",
       gardenShellPaneId: "%1",
     });
     vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(getFirstPaneId).mockReturnValue(null); // no parked diary window
     vi.mocked(listAllWindowNames).mockReturnValue(["_other-shell"]);
 
     switchProject("2");
 
     expect(sentSaveExit()).toBe(false);
+  });
+
+  it("reloads a parked diary editor when switching projects from another view", () => {
+    // Repro: diary opened on garden, operator switched the garden pane to logs
+    // (parking the diary's nano in _garden-diary), then switched project. The
+    // parked editor must reload or re-entering the diary view shows garden's
+    // diary while focused on the new project.
+    const state = makeState({
+      activeProject: "garden",
+      gardenPaneType: "logs",
+      gardenShellPaneId: "%1", // visible slot holds logs, not the diary
+    });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(getFirstPaneId).mockReturnValue("%7"); // parked _garden-diary pane
+    vi.mocked(listAllWindowNames).mockReturnValue(["_other-shell"]);
+
+    switchProject("2");
+
+    expect(state.activeProject).toBe("other");
+    expect(sentSaveExit("%7")).toBe(true); // drove save+exit on the parked pane
+    expect(sentSaveExit("%1")).toBe(false); // not the logs pane
   });
 
   it("leaves a custom $EDITOR untouched (cannot drive its save keys blindly)", () => {

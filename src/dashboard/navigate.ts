@@ -7,6 +7,7 @@ import { refreshDashboard, refreshDashboardCycle, refreshDashboardPlotCycle, set
 import {
   tmux, tmuxDisplay,
   paneExists, windowExists,
+  getFirstPaneId,
   listAllWindowNames,
   listHiddenWorkerWindows,
   setPaneLabel,
@@ -20,6 +21,7 @@ import { formatLogsPaneLabel } from "../commands/logs.js";
 import { editorIsNano } from "../diary.js";
 import { resolveGardenRunner } from "./runner.js";
 import { parkingWindowName, shellWindowName as shellWin, gardenWindowName, parseWorkerSuffix, isWorkerWindow, type GardenView } from "./window-names.js";
+import { DASHBOARD_SESSION } from "../session.js";
 
 /**
  * Re-apply pane variables after a worker pane is swapped into the visible
@@ -101,17 +103,24 @@ export function swapVisibleToProject(
   state.activeProject = projectName;
 }
 
-// When the diary view (⌥d) is the active garden pane, switching projects must
-// re-point the editor at the now-focused project's diary. A live modal editor
-// can only be re-targeted by restarting it — which would discard unsaved notes
-// — so we drive the editor's own save+exit and let diary-view.sh's loop reopen
-// on the new project. Only nano/pico (the shipped default) have a key sequence
-// we can drive blindly: ^O Enter writes the buffer to its current file, ^X then
-// exits cleanly (the buffer is no longer modified, so there is no exit prompt).
-// A custom $EDITOR is left untouched; it still reopens on the operator's own exit.
+// When a project switch happens, the diary editor must re-point at the
+// now-focused project's diary. A live modal editor can only be re-targeted by
+// restarting it — which would discard unsaved notes — so we drive the editor's
+// own save+exit and let diary-view.sh's loop reopen on the new project. Only
+// nano/pico (the shipped default) have a key sequence we can drive blindly: ^O
+// Enter writes the buffer to its current file, ^X then exits cleanly (the buffer
+// is no longer modified, so there is no exit prompt). A custom $EDITOR is left
+// untouched; it still reopens on the operator's own exit.
+//
+// The editor may be live in the visible garden slot (diary is the active view)
+// or parked in the hidden _garden-diary window (the operator switched the garden
+// pane to another view, but the editor loop keeps running there). The parked
+// case matters because re-entering the diary view does not restart the editor —
+// without this reload it would show whatever project was focused when it parked.
 function reloadDiaryEditor(state: DashboardState): void {
-  if (state.gardenPaneType !== "diary") return;
-  const pane = state.gardenShellPaneId;
+  const pane = state.gardenPaneType === "diary"
+    ? state.gardenShellPaneId
+    : getFirstPaneId(`${DASHBOARD_SESSION}:${gardenWindowName("diary")}`);
   if (!pane || !paneExists(pane)) return;
   if (!editorIsNano(process.env.EDITOR || "nano")) return;
   tmux("send-keys", "-t", pane, "C-o", "Enter", "C-x");
