@@ -41,3 +41,13 @@ export function diaryHasContent(projectName: string): boolean {
 export function _resetDiaryContentCacheForTest(): void {
   contentCache.clear();
 }
+
+// Whether an $EDITOR command resolves to nano or pico. On macOS `nano` is a
+// symlink to pico (UW PICO); both accept -b to enable word wrap and share the
+// ^O/^X save+exit keys the dashboard drives when switching projects. Extracts
+// the binary from a command that may carry args ("nano -l") or a path
+// ("/usr/bin/nano").
+export function editorIsNano(editorCommand: string): boolean {
+  const bin = editorCommand.trim().split(/\s+/)[0].split("/").pop();
+  return bin === "nano" || bin === "pico";
+}

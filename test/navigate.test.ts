@@ -24,6 +24,7 @@ vi.mock("../src/config.js", () => ({
   plotsMap: vi.fn(() => ({})),
   isPlotFocused: (plot: { focused?: boolean }) => plot.focused !== false,
   SESSIONS_DIR: "/tmp/fake-sessions",
+  GARDEN_DIR: "/tmp/fake-garden",
 }));
 
 vi.mock("../src/dashboard/state.js", () => ({

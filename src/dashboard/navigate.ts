@@ -17,6 +17,7 @@ import { acknowledgeAlerts } from "./alerts.js";
 import { log } from "./log.js";
 import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow, createGardenHistoryWindow, createGardenDiaryWindow } from "./create.js";
 import { formatLogsPaneLabel } from "../commands/logs.js";
+import { editorIsNano } from "../diary.js";
 import { resolveGardenRunner } from "./runner.js";
 import { parkingWindowName, shellWindowName as shellWin, gardenWindowName, parseWorkerSuffix, isWorkerWindow, type GardenView } from "./window-names.js";
 
@@ -104,16 +105,15 @@ export function swapVisibleToProject(
 // re-point the editor at the now-focused project's diary. A live modal editor
 // can only be re-targeted by restarting it — which would discard unsaved notes
 // — so we drive the editor's own save+exit and let diary-view.sh's loop reopen
-// on the new project. Only nano (the shipped default) has a key sequence we can
-// drive blindly: ^O Enter writes the buffer to its current file, ^X then exits
-// cleanly (the buffer is no longer modified, so there is no exit prompt). A
-// custom $EDITOR is left untouched; it still reopens on the operator's own exit.
+// on the new project. Only nano/pico (the shipped default) have a key sequence
+// we can drive blindly: ^O Enter writes the buffer to its current file, ^X then
+// exits cleanly (the buffer is no longer modified, so there is no exit prompt).
+// A custom $EDITOR is left untouched; it still reopens on the operator's own exit.
 function reloadDiaryEditor(state: DashboardState): void {
   if (state.gardenPaneType !== "diary") return;
   const pane = state.gardenShellPaneId;
   if (!pane || !paneExists(pane)) return;
-  const editorCmd = (process.env.EDITOR || "nano").trim().split(/\s+/)[0];
-  if (editorCmd.split("/").pop() !== "nano") return;
+  if (!editorIsNano(process.env.EDITOR || "nano")) return;
   tmux("send-keys", "-t", pane, "C-o", "Enter", "C-x");
 }
 

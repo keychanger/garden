@@ -486,6 +486,8 @@ function writeDiaryViewScript(gardenRunner: string): string {
   // so multi-word values ("code -w") split into command + args. The fallback
   // is nano (ships with macOS, self-documenting save/exit hints) rather than
   // vi, so an unset $EDITOR gives a friendly modeless editor out of the box.
+  // nano/pico get -b to enable word wrap so long diary lines wrap to the pane
+  // width instead of scrolling off the right edge.
   const script = `#!/bin/sh
 # Garden diary view — edits the focused project's diary in $EDITOR.
 while :; do
@@ -496,7 +498,14 @@ while :; do
     sleep 2
     continue
   fi
-  \${EDITOR:-nano} "$f" || sleep 1
+  ed="\${EDITOR:-nano}"
+  bin="\${ed%% *}"
+  bin="\${bin##*/}"
+  wrap=""
+  case "$bin" in
+    nano|pico) wrap="-b" ;;
+  esac
+  $ed $wrap "$f" || sleep 1
 done
 `;
   const scriptFile = path.join(SESSIONS_DIR, "diary-view.sh");
