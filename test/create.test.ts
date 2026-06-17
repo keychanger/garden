@@ -820,3 +820,33 @@ describe("writeGrowhouseInitScript", () => {
     expect(script).toContain('node /opt/garden/cli.js "$@"');
   });
 });
+
+describe("writeDiaryViewScript (via createGardenDiaryWindow)", () => {
+  async function generateScript(): Promise<string> {
+    vi.mocked(fs.writeFileSync).mockClear();
+    const { createGardenDiaryWindow } = await import("../src/dashboard/create.js");
+    createGardenDiaryWindow("node /opt/garden/cli.js");
+    const write = vi.mocked(fs.writeFileSync).mock.calls
+      .map(c => String(c[1]))
+      .find(content => content.includes("Garden diary view"));
+    if (!write) throw new Error("diary view script was not written");
+    return write;
+  }
+
+  it("launches nano/pico with -b so long diary lines wrap to the pane width", async () => {
+    const script = await generateScript();
+    // Shell mirror of editorIsNano: take the first $EDITOR token, reduce to its
+    // basename, and only nano/pico get -b (word wrap). Others run with no flag.
+    expect(script).toContain('bin="${ed%% *}"');
+    expect(script).toContain('bin="${bin##*/}"');
+    expect(script).toContain('nano|pico) wrap="-b" ;;');
+  });
+
+  it("keeps $ed and $wrap unquoted (word-split) but quotes the diary path", async () => {
+    const script = await generateScript();
+    // $ed must split so "code -w" becomes command+args; an empty $wrap must
+    // collapse to nothing rather than pass an empty argument; "$f" stays quoted
+    // so a diary path with spaces is one argument.
+    expect(script).toContain('$ed $wrap "$f"');
+  });
+});
