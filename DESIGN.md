@@ -284,12 +284,13 @@ Worker "needs operator input" events (AskUserQuestion, ExitPlanMode, auto-mode p
 
 Each worker has two independent status axes:
 
-**Process status** — what Claude is doing, written by Claude Code hooks:
+**Process status** — what Claude is doing, written by Claude Code hooks (except `paused`, written by the operator `hold` action — a raw Escape fires no hook):
 - ⏳ **loading** — worker pane started, bootstrap script running, Claude not yet launched
 - ◇ **ready** — Claude launched but not yet tasked
 - ⠋ **working** — Claude is processing a submitted prompt (braille spinner animation)
 - ⚑ **asking** — Claude is blocked mid-turn on operator input (plan approval, question, permission escalation); row is highlighted bold-yellow in the status pane
 - ◆ **idle** — turn has ended, Claude is at the prompt waiting for the next message
+- ‖ **paused** — operator deliberately halted the worker mid-turn via the hold action (`⌥e` / `garden hold`); held awaiting a redirect, cleared by the next prompt; row is highlighted bold-cyan in the status pane
 - ○ **exited** — process has terminated
 
 **Lifecycle status** — where the worker's code is in the review pipeline, written by the poller:

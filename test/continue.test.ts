@@ -180,6 +180,21 @@ describe("continueWorker", () => {
     );
   });
 
+  it("skips the send when the worker is held (paused) and leaves the prompt owed", () => {
+    // A worker the operator held (garden hold / ⌥e → paused) must not be
+    // auto-resumed — most reachably a post-merge continue on a worker held
+    // while in `merged`. The operator's own redirect is the resume, so the
+    // owed-prompt flag stays set rather than being cleared.
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "",
+      agentStatus: "paused", interruptedWhileWorking: true,
+    });
+    continueWorker("myproject", "bold-ash");
+
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
+
   it("sends the literal continue prompt followed by Enter when worker is idle, then clears the flag", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "bold-ash", sessionId: "s", task: "",

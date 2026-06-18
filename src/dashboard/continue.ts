@@ -303,6 +303,19 @@ export function continueWorker(
     updateWorkerFields(projectName, workerName, { interruptedWhileWorking: undefined });
     return false;
   }
+  // The operator deliberately held this worker (garden hold / ⌥e → paused) and
+  // is waiting to redirect it themselves. Auto-resuming here — most reachably a
+  // post-merge continue on a worker held while in `merged` — would defeat the
+  // hold. Leave the prompt owed (don't clear interruptedWhileWorking): the
+  // operator's own redirect (UserPromptSubmit → working) clears paused and is
+  // the resume.
+  if (entry.agentStatus === "paused") {
+    log.info("workers", "continue skipped, worker held by operator", {
+      worker: workerName,
+      data: { project: projectName },
+    });
+    return false;
+  }
   // The operator is mid-compose in this pane — pasting now would concatenate
   // garden's prompt onto their draft and submit the mangled result. Skip; the
   // dispatch handler's backoff re-arm retries once the box is clear. Leave
