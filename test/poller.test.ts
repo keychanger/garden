@@ -3399,6 +3399,41 @@ describe("startProjectPoller — window convergence", () => {
     expect(dedupeWindows).toHaveBeenCalledWith("_solo-poller");
     expect(newWindowNames()).toHaveLength(0);
   });
+
+  // The duplicate-window race: two independent processes (watchdog heal,
+  // post-rebuild restart, validate-on-attach, worker create) each run the
+  // windowIndices check-then-spawn. windowIndices is a snapshot, not a claim,
+  // so both can see zero windows and both spawn. The mkfifo election doesn't
+  // serialize them — the FIFO file persists after an unclean poller death, so
+  // the respawn case skips the election entirely. The fix wraps the whole
+  // check-and-spawn in a per-project file lock; the second caller acquires it
+  // only after the first's new-window registered, sees one window, and no-ops.
+  // A true cross-process interleave isn't reproducible in single-process
+  // vitest, so this pins the mechanism: the spawn happens inside the lock.
+  it("runs the check-and-spawn inside the per-project spawn lock", () => {
+    vi.mocked(windowIndices).mockReturnValue([]);
+
+    startProjectPoller("solo", "node /usr/local/bin/garden");
+
+    const lockOpenIdx = vi.mocked(fs.openSync).mock.calls.findIndex(
+      c => String(c[0]).includes("solo-poller.spawn.lock"),
+    );
+    expect(lockOpenIdx).toBeGreaterThanOrEqual(0);
+
+    // new-window must fall between the lock's acquire (openSync) and release
+    // (unlinkSync of the lock file) — proving the spawn is serialized.
+    const lockUnlinkIdx = vi.mocked(fs.unlinkSync).mock.calls.findIndex(
+      c => String(c[0]).includes("solo-poller.spawn.lock"),
+    );
+    const spawnIdx = vi.mocked(tmux).mock.calls.findIndex(c => c[0] === "new-window");
+    expect(spawnIdx).toBeGreaterThanOrEqual(0);
+
+    const acquireOrder = vi.mocked(fs.openSync).mock.invocationCallOrder[lockOpenIdx];
+    const spawnOrder = vi.mocked(tmux).mock.invocationCallOrder[spawnIdx];
+    const releaseOrder = vi.mocked(fs.unlinkSync).mock.invocationCallOrder[lockUnlinkIdx];
+    expect(acquireOrder).toBeLessThan(spawnOrder);
+    expect(spawnOrder).toBeLessThan(releaseOrder);
+  });
 });
 
 describe("claude-code adapter isTransientError", () => {

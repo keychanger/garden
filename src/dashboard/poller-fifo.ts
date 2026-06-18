@@ -14,6 +14,14 @@ export function signalFifoPath(project: string): string {
   return path.join(SESSIONS_DIR, `${project}-poll-signal`);
 }
 
+// Per-project lock serializing the poller's check-and-spawn critical section
+// across the dashboard's federation of independent processes. Distinct from the
+// poll-signal FIFO: the FIFO carries pokes, this elects a single spawner. See
+// startProjectPoller for why the FIFO alone can't serialize the spawn.
+export function pollerSpawnLockPath(project: string): string {
+  return path.join(SESSIONS_DIR, `${project}-poller.spawn.lock`);
+}
+
 // Poke the project's poller without blocking. The poller blocks on `read` from
 // the FIFO; any byte wakes it for one cycle.
 export function triggerProjectPoll(projectName: string): void {

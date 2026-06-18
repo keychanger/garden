@@ -22,8 +22,9 @@ import { pollerWindowName } from "./window-names.js";
 import { stopUsagePoller, startUsagePoller } from "./usage-poller.js";
 import { stopWatchdog, startWatchdog } from "./watchdog.js";
 import {
-  signalFifoPath, ensureSignalFifo, triggerProjectPoll,
+  signalFifoPath, ensureSignalFifo, triggerProjectPoll, pollerSpawnLockPath,
 } from "./poller-fifo.js";
+import { withFileLock } from "./file-lock.js";
 import { getWorkflow } from "./workflows/index.js";
 import { processPendingHandoffs } from "./handoff-dispatch.js";
 
@@ -132,58 +133,72 @@ function triggerAllPollers(): void {
 
 export function startProjectPoller(projectName: string, gardenRunner: string): void {
   const window = pollerWindowName(projectName);
-  // Convergent: spawn when no poller window exists, collapse to one when a
-  // prior spawn race left duplicates, no-op when exactly one is live. Resolve
-  // by index, not the `windowExists` name probe, so duplicates are counted
-  // rather than mistaken for "dead" (the bug that drove the respawn runaway).
-  const existing = windowIndices(window);
-  if (existing.length > 0) {
-    if (existing.length > 1) {
-      const killed = dedupeWindows(window);
-      log.warn("poller", "collapsed duplicate poller windows", {
-        data: { project: projectName, killed },
-      });
+  // Serialize the check-and-spawn across the dashboard's federation of
+  // independent processes (watchdog heal, post-rebuild restartLongLivedPollers,
+  // validate-on-attach, worker create). The windowIndices snapshot below is
+  // only a read, not a claim: without a cross-process lock two starters can
+  // both observe zero windows and both reach `new-window`, leaving a duplicate
+  // that the next watchdog tick must collapse (logging "collapsed duplicate
+  // poller windows"). The FIFO's mkfifo election does NOT cover this — it elects
+  // a winner only when the FIFO is absent, but the FIFO file persists on disk
+  // after an unclean poller death (only stopProjectPoller unlinks it), so the
+  // common respawn case has no election at all. Holding this lock around the
+  // whole check-and-spawn closes the window: the second caller acquires the
+  // lock only after the first's new-window has registered with the tmux server,
+  // so its windowIndices read sees one window and it no-ops.
+  withFileLock(pollerSpawnLockPath(projectName), () => {
+    // Convergent: spawn when no poller window exists, collapse to one when a
+    // prior spawn race left duplicates, no-op when exactly one is live. Resolve
+    // by index, not the `windowExists` name probe, so duplicates are counted
+    // rather than mistaken for "dead" (the bug that drove the respawn runaway).
+    const existing = windowIndices(window);
+    if (existing.length > 0) {
+      if (existing.length > 1) {
+        const killed = dedupeWindows(window);
+        log.warn("poller", "collapsed duplicate poller windows", {
+          data: { project: projectName, killed },
+        });
+      }
+      return;
     }
-    return;
-  }
 
-  const fifo = signalFifoPath(projectName);
-  if (!ensureSignalFifo(fifo)) {
-    // Another process won the FIFO-creation race and is spawning this poller
-    // right now (e.g. a post-rebuild restart racing the watchdog respawn).
-    // Defer to it rather than create a duplicate poller window on the same
-    // FIFO. The poller will be running either way.
-    log.debug("poller", "deferred poller spawn to concurrent starter", {
-      data: { project: projectName },
-    });
-    return;
-  }
-  // Event-driven poller loop: poll once, then block on the FIFO until an
-  // event arrives. Per STATUS.md invariant 6, there is no fallback poll.
-  // Every transition is delivered by an event from one of these sources:
-  // Claude Code hooks, worker push hook, merge queue completion, tmux
-  // pane-died, or the auto-continue gate-reset wake (usage poller /
-  // `garden auto on`). The poller is a pure dispatcher that does one unit
-  // of work per wake.
-  //
-  // `exec 3<>${fifo}` holds the FIFO open in R+W mode for the loop's whole
-  // lifetime (not just the per-iteration `read`). Without this, the FIFO has
-  // no reader during `_poll`'s execution — which is exactly when lifecycle
-  // handlers fire scheduleDelayedPoke. The handler's detached writer would
-  // open R+W, write, close, and the byte would be reclaimed by the kernel
-  // before the loop's next `read` opened the FIFO again. Persistent fd 3
-  // keeps a reader present so buffered bytes survive until consumed.
-  const cmd = [
-    `exec 3<>${shellEscape(fifo)};`,
-    `while true; do`,
-    `  ${gardenRunner} dashboard _poll ${shellEscape(projectName)} 2>/dev/null;`,
-    `  read -u 3 2>/dev/null || true;`,
-    `done`,
-  ].join(" ");
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", window,
-    "bash", "-c", cmd);
+    const fifo = signalFifoPath(projectName);
+    if (!ensureSignalFifo(fifo)) {
+      // Another process won the FIFO-creation race and is spawning this poller
+      // right now. With the spawn lock held this is now unreachable in practice,
+      // but keep it as a defensive second gate.
+      log.debug("poller", "deferred poller spawn to concurrent starter", {
+        data: { project: projectName },
+      });
+      return;
+    }
+    // Event-driven poller loop: poll once, then block on the FIFO until an
+    // event arrives. Per STATUS.md invariant 6, there is no fallback poll.
+    // Every transition is delivered by an event from one of these sources:
+    // Claude Code hooks, worker push hook, merge queue completion, tmux
+    // pane-died, or the auto-continue gate-reset wake (usage poller /
+    // `garden auto on`). The poller is a pure dispatcher that does one unit
+    // of work per wake.
+    //
+    // `exec 3<>${fifo}` holds the FIFO open in R+W mode for the loop's whole
+    // lifetime (not just the per-iteration `read`). Without this, the FIFO has
+    // no reader during `_poll`'s execution — which is exactly when lifecycle
+    // handlers fire scheduleDelayedPoke. The handler's detached writer would
+    // open R+W, write, close, and the byte would be reclaimed by the kernel
+    // before the loop's next `read` opened the FIFO again. Persistent fd 3
+    // keeps a reader present so buffered bytes survive until consumed.
+    const cmd = [
+      `exec 3<>${shellEscape(fifo)};`,
+      `while true; do`,
+      `  ${gardenRunner} dashboard _poll ${shellEscape(projectName)} 2>/dev/null;`,
+      `  read -u 3 2>/dev/null || true;`,
+      `done`,
+    ].join(" ");
+    tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", window,
+      "bash", "-c", cmd);
 
-  log.info("poller", "started", { data: { project: projectName } });
+    log.info("poller", "started", { data: { project: projectName } });
+  }, { name: `poller-spawn:${projectName}` });
 }
 
 export function stopProjectPoller(projectName: string): void {
