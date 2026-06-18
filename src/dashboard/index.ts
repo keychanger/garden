@@ -186,6 +186,11 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     return;
   }
   if (sub === "_post-push") return postPush(args[1]);
+  if (sub === "_holistic-backtest") {
+    const { runHolisticBacktest } = await import("./holistic-backtest.js");
+    await runHolisticBacktest(args.slice(1));
+    return;
+  }
   if (sub === "_usage-poll-loop") {
     await runUsagePollerLoop();
     return;
