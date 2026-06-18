@@ -399,7 +399,13 @@ clock. Update the list above when you do.
       then decided to stop, wrote `.garden-done`, and ended its turn
       with no new commits. The Stop hook detects this combination
       (no commits ahead + `.garden-done` present) and sets
-      `prState = "done"`.
+      `prState = "done"`, then pokes the project poller once so
+      `handleDone` runs. This path bypasses `transitionToTerminal`
+      (the merge-driven path), so the poke is the only way `handleDone`
+      can fire the trail-off holistic-review trigger for a multi-phase
+      worker that finished without a final merge (see the holistic-review
+      workflow). The poke is one-shot (tied to the Stop-hook done write),
+      not a clock tick, so it respects invariant 6.
 
    Race case: if a new prompt landed before `finalizeMerge` ran, the
    prompt hook cannot clear `merged`/`done` (because prState was still
@@ -496,7 +502,10 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   stale commits for a month" and would spuriously review old branches.
   This is what makes invariant 2 enforceable: only Stop sets the flag,
   only the poller's working→reviewing transition reads it, and
-  `launchReview` clears it.
+  `launchReview` clears it. If instead there are no commits ahead and
+  `.garden-done` is present (invariant 4 path 2), the Stop hook writes
+  `prState = "done"` and pokes the poller once so `handleDone` runs the
+  trail-off holistic-review trigger.
 - `PreToolUse` (matched to `AskUserQuestion`, `ExitPlanMode`) →
   `agentStatus = "asking"` if currently `working` or `idle`. Fires when
   Claude is about to execute a tool that requires user input. The `idle`

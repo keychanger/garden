@@ -35,6 +35,7 @@ import { readUsageSnapshot, snapshotMeters } from "./usage.js";
 import { workerWindowName } from "./window-names.js";
 import { scheduleDelayedPoke } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
+import { maybeDispatchHolisticReview } from "./poller-holistic-review.js";
 import { killReviewWindow } from "./poller-review.js";
 import { launchResolver } from "./poller-resolve.js";
 import { launchCiFix } from "./poller-ci-fix.js";
@@ -353,7 +354,7 @@ function completeFinalization(
     ? { changedFiles: [], syncFailed: false }
     : syncWorktreeAfterMerge(projectName, branchName, entry, sentinelPresent);
   notifyPostMerge(projectName, projectPath, baseBranch, entry, preMergeChangedFiles);
-  transitionToTerminal(projectName, branchName, entry, sentinelPresent, sync, preMergeChangedFiles);
+  transitionToTerminal(projectName, projectPath, baseBranch, branchName, entry, sentinelPresent, sync, preMergeChangedFiles);
   refreshDashboard();
 }
 
@@ -475,6 +476,8 @@ function notifyPostMerge(
 // dispatch the post-merge auto-continue prompt.
 function transitionToTerminal(
   projectName: string,
+  projectPath: string,
+  baseBranch: string,
   branchName: string,
   entry: WorkerEntry,
   sentinelPresent: boolean,
@@ -530,6 +533,17 @@ function transitionToTerminal(
   }
 
   maybeAutoContinue(projectName, branchName, fresh ?? entry);
+
+  // Merge-driven holistic trigger site: a worker that wrote .garden-done before
+  // its final push lands `done` here (the sentinel-on-last-phase shape, e.g.
+  // brown-blunt-flock). Re-read post-maybeAutoContinue — if the worker resumed
+  // (settled back to working), it is mid-task and not a completion. The gate
+  // (>=2 merges, default workflow) and the high-water guard live inside the
+  // dispatcher. The trail-off shape (no final merge) is handled by handleDone.
+  const settled = findWorkerByName(projectName, entry.name) ?? fresh ?? entry;
+  if (settled.prState === "done") {
+    maybeDispatchHolisticReview(projectName, projectPath, baseBranch, settled, "transitionToTerminal");
+  }
 }
 
 // Merged-state handler (shared by every workflow). Two legs:

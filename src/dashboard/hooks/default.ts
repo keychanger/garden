@@ -131,10 +131,14 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
       // and refreshed — but resolveWorkerStatus reads agentStatus only
       // when prState is absent. Without this second refresh the dashboard
       // stays painted as "idle" until the next hook event fires, even
-      // though the registry already says "done". Terminal states are
-      // event-driven only (no poller poll re-fires on a done worker), so
-      // the missed refresh sticks until something unrelated nudges it.
+      // though the registry already says "done".
       refreshDashboard();
+      // Poke the poller once so handleDone runs. This is the ONLY entry into
+      // done for a trail-off completion (the worker finished a multi-phase task
+      // without a final merge, so transitionToTerminal — the other holistic
+      // trigger site — never ran). handleDone dispatches the holistic review
+      // when the gate is eligible; for everything else it is a cheap no-op.
+      triggerProjectPoll(projectName);
     }
   } catch (err) {
     const errStr = String(err).slice(0, 200);
