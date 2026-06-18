@@ -37,6 +37,44 @@ export const reviewSpecWarningSection: PromptSection = {
   },
 };
 
+// Deliberate-decision interlock for a holistic FIX branch. The holistic worker
+// reviewed a completed multi-phase task's whole-task diff and is fixing a
+// cross-phase coherence defect — but it lacks the original worker's full
+// context, so it can mistake a deliberate decision for a bug. This hands the
+// reviewer the original task's cross-phase commit history and a hard gate:
+// FAIL any change that reverts a deliberate decision. The existing spec-warning
+// (findSpecFiles) does not cover non-spec decisions like an un-ratcheted
+// baseline or a deliberately-kept registry entry, so this is a separate gate.
+// Renders only for a holistic-review worker carrying its rationale (fix-mode
+// branches; shadow workers never commit and so are never reviewed).
+export const reviewHolisticInterlockSection: PromptSection = {
+  name: "holistic-interlock",
+  render(ctx) {
+    if ((ctx.entry.workflow ?? "default") !== "holistic-review") return null;
+    const rationale = ctx.entry.holisticRationale?.trim();
+    if (!rationale) return null;
+    return [
+      "## Holistic fix — deliberate-decision interlock",
+      "",
+      "This branch is a HOLISTIC FIX of a completed multi-phase task: a fresh worker reviewed",
+      "the whole assembled task and is fixing a cross-phase coherence defect. It does NOT carry",
+      "the original worker's full context, so it can mistake a deliberate decision for a bug.",
+      "",
+      "HARD GATE: if ANY change in this diff reverts or weakens a decision the original task made",
+      "on purpose — un-ratcheting a baseline, deleting a deliberately-kept registry/config entry,",
+      "touching a file the task treated as off-limits, loosening a contract a phase tightened —",
+      "return FAILED and name the decision it undoes. A genuine cross-phase fix (removing dead",
+      "code a later phase orphaned, reconciling a real collision) is fine.",
+      "",
+      "Original task's cross-phase commit history (the deliberate decisions are here):",
+      "",
+      "```",
+      rationale,
+      "```",
+    ].join("\n");
+  },
+};
+
 export const reviewRebaseStepSection: PromptSection = {
   name: "rebase-step",
   render(ctx) {
@@ -194,6 +232,7 @@ export const reviewVerdictFormatSection: PromptSection = {
 export const reviewSections: readonly PromptSection[] = [
   reviewIntroSection,
   reviewSpecWarningSection,
+  reviewHolisticInterlockSection,
   reviewRebaseStepSection,
   reviewChecksStepSection,
   reviewCodeReviewStepSection,

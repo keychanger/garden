@@ -111,6 +111,9 @@ describe("shadow spawn path (touched files present)", () => {
     const seed = fs.readFileSync(seedPath, "utf-8");
     expect(seed).toContain("SHADOW (ANALYSIS-ONLY)");
     expect(seed).toContain(".holistic-findings.md");
+    // The rationale file is written for the spawn subprocess to stamp onto the
+    // child (the per-branch reviewer's deliberate-decision interlock).
+    expect(fs.existsSync(path.join(cfg.SESSIONS_DIR, "holistic-rationale-proj-multi-phase.txt"))).toBe(true);
   });
 });
 

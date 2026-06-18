@@ -158,6 +158,13 @@ export function maybeDispatchHolisticReview(
   const rationale = getCommitLogRange(projectPath, fromSha, toSha, files);
   updateWorkerFields(projectName, entry.name, { holisticRationale: rationale });
 
+  // Also persist the rationale to a file so the spawn subprocess can stamp it
+  // onto the CHILD worker's entry — the per-branch reviewer of a fix branch
+  // reads ctx.entry.holisticRationale (the deliberate-decision interlock), and
+  // the child, not the original, is what gets reviewed.
+  const rationaleFile = path.join(SESSIONS_DIR, `holistic-rationale-${projectName}-${entry.name}.txt`);
+  try { atomicWriteFile(rationaleFile, rationale); } catch { /* best effort */ }
+
   const seed = buildHolisticSeed({
     originalName: entry.name,
     baseBranch,
@@ -187,7 +194,7 @@ export function maybeDispatchHolisticReview(
   // spawnDelayed trampoline.
   try {
     const runner = resolveGardenRunner();
-    const cmd = `${runner} dashboard _spawn-holistic-worker ${shellEscape(projectName)} ${shellEscape(seedFile)} 2>/dev/null`;
+    const cmd = `${runner} dashboard _spawn-holistic-worker ${shellEscape(projectName)} ${shellEscape(seedFile)} ${shellEscape(rationaleFile)} 2>/dev/null`;
     const child = spawn("sh", ["-c", cmd], { detached: true, stdio: "ignore" });
     child.unref();
     log.info("poller", "holistic-review worker spawn dispatched", {

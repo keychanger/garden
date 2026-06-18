@@ -193,15 +193,29 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   }
   if (sub === "_spawn-holistic-worker") {
     // Spawned (detached) by the poller's holistic dispatcher so workers.ts stays
-    // out of the hook bundle. args: <project> <seedFile>.
+    // out of the hook bundle. args: <project> <seedFile> [rationaleFile].
     const { newWorker } = await import("./workers.js");
-    newWorker({
+    const child = newWorker({
       projectName: args[1],
       seedMessageFile: args[2],
       background: true,
       workflow: "holistic-review",
       model: "opus",
     });
+    // Stamp the cross-phase rationale onto the child so the per-branch reviewer
+    // of its fix branch sees the deliberate-decision interlock (prompts.ts
+    // reviewHolisticInterlockSection). The dispatcher can't write it directly —
+    // it doesn't know the child's name until newWorker mints it here.
+    const rationaleFile = args[3];
+    if (child && rationaleFile) {
+      const fsmod = await import("node:fs");
+      try {
+        const rationale = fsmod.readFileSync(rationaleFile, "utf-8");
+        const { updateWorkerFields } = await import("./registry.js");
+        updateWorkerFields(args[1], child, { holisticRationale: rationale });
+      } catch { /* rationale file gone — reviewer falls back to no interlock section */ }
+      try { fsmod.unlinkSync(rationaleFile); } catch { /* best effort */ }
+    }
     return;
   }
   if (sub === "_usage-poll-loop") {

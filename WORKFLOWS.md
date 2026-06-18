@@ -2673,3 +2673,96 @@ the convert step; amend is unbounded.
   (e.g., "iteration K and K-1 changed the same files with identical
   diffs") could fire a `failing/stagnation` alert. Deferred — the
   iteration cap is the primary safety net.
+
+## Holistic-review workflow
+
+Garden reviews each worker push in isolation (`origin/<base>..HEAD`) — one delta
+against the then-current base. Nothing reviews a multi-phase task's *assembled
+whole*, so cross-phase coherence defects survive every per-phase review: an
+abstraction an early phase introduced that a later phase obsoleted, dead code a
+later phase orphaned, a shared-registry collision "resolved" by keeping every
+entry, a contract a later phase silently broke.
+
+The holistic-review workflow closes that gap. When a multi-phase **default**
+worker reaches `done`, the poller spawns ONE `holistic-review` worker to review
+the whole-task cumulative diff and (in `fix` mode) fix genuine cross-phase
+defects through the normal review/CI/merge gate.
+
+### Gate (`evaluateHolisticGate`, `poller-holistic-review.ts`)
+
+Dispatch fires iff:
+- `prState === "done"`, AND
+- `(workflow ?? "default") === "default"` — **load-bearing**: excludes grow,
+  trellis, AND the holistic child (recursion safety) in one clause; all three
+  legitimately reach `mergeCount >= 2`, and only this gate keeps them out, AND
+- `mergeCount >= 2` — a one-shot worker's whole-task diff equals the single
+  delta the per-phase reviewer already saw, so it is skipped, AND
+- `(holisticReviewedThroughMergeCount ?? 0) < mergeCount` — the high-water guard.
+  Set the moment a completion is found eligible, it makes the dispatch
+  once-per-arrival; it re-arms if a re-opened worker adds more phases.
+
+Two trigger sites cover both paths into `done` (see `docs/STATUS.md` invariant 4):
+`transitionToTerminal` (the sentinel-on-last-phase merge-driven path) and
+`handleDone` (the trail-off path, where the Stop hook wrote `done` without a
+final merge and pokes the poller).
+
+### Modes (per-project `holisticReview` config: `off` | `shadow` | `fix`)
+
+- **`off`** (default) — evaluate the gate, emit the decision trace, never spawn.
+- **`shadow`** — spawn an analysis-only worker that writes findings to
+  `.holistic-findings.md` and never commits. `finalizeShadowHolistic` (from
+  `handleDone`) surfaces the findings as a `warn` alert, copies them to a durable
+  sessions path, and consumes the worktree file (idempotency without a reap).
+- **`fix`** — spawn a worker that fixes genuine defects, commits, and rides the
+  normal per-branch review + CI + merge gate.
+
+Graduate a project `off → shadow → fix` only as the validation gate holds
+(precision, spec-violation rate, yield — see the plan's validation ladder). The
+config is live-read, so it doubles as a no-restart kill switch.
+
+### Dispatch and spawn
+
+The dispatcher captures the cross-phase rationale (`getCommitLogRange` over
+`baseBranchSha..origin/<base>`, scoped to `holisticTouchedFiles`), builds the
+seed (`buildHolisticSeed`, mode-specific disposition), and launches the worker
+via a detached `garden dashboard _spawn-holistic-worker` subprocess — NOT an
+in-process `newWorker` import: esbuild inlines dynamic imports into the
+single-file hook bundle, and `workers.ts` (→ `create.ts`/`skills.ts`) would
+bloat `dist/hook.js` by ~75kb. Safety: a per-project concurrency cap
+(`HOLISTIC_CONCURRENCY_CAP = 1`) and the shared usage gate
+(`autoContinueGateReason`) **defer without setting the guard**, so a deferred
+dispatch retries on the next merged/done sweep poke.
+
+The workflow definition (`workflows/holistic-review.ts`) reuses the default
+state handlers and hook handlers verbatim and pins `reviewerModel: "opus"`. A
+holistic worker walks the normal `working → reviewing → merge-pending → done`
+lifecycle; the only divergences are external (poller-spawned, opus-pinned,
+self-excluded by the workflow gate).
+
+### Fix-mode reviewer interlock (`reviewHolisticInterlockSection`, `prompts.ts`)
+
+A holistic worker lacks the original worker's full context, so it can mistake a
+deliberate decision for a bug. When its fix branch is reviewed, the per-branch
+reviewer is handed the original task's cross-phase commit history (threaded onto
+the child entry as `holisticRationale` at spawn) plus a HARD GATE: return
+`FAILED` for any change that reverts a deliberate decision (un-ratcheting a
+baseline, deleting a deliberately-kept entry, touching an off-limits file). This
+is separate from the spec-warning (`findSpecFiles`), which covers only marked
+spec files, not arbitrary deliberate decisions. The interlock plus the
+independent review + CI gate is the safety the fix-and-push decision rests on.
+
+### Registry fields (all flat, optional, no migration)
+
+`mergeCount`, `baseBranchSha`, `holisticTouchedFiles`,
+`holisticReviewedThroughMergeCount` (the high-water guard), and
+`holisticRationale`. The dispatcher writes only these bookkeeping fields on the
+original entry — never `agentStatus`/`prState`. See `docs/STATUS.md` Writers.
+
+### Validation harness
+
+`garden dashboard _holistic-backtest <project> <worker>` replays the production
+review against a PAST completed worker (read-only, zero risk) by reconstructing
+the diff endpoints from the dashboard log + the base-branch reflog and running
+the same `resolveHolisticDiff`/`buildHolisticSeed` code. The decision trace
+(`msg: "holistic-review gate"`) validates trigger correctness on live traffic
+with dispatch in `off`.
