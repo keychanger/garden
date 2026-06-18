@@ -175,6 +175,32 @@ export interface WorkerEntry {
   // finalizeMerge → detached-subprocess → send-keys window.
   pendingContinueChangedFiles?: string[];
   pendingContinueSyncFailed?: boolean;
+  // Holistic post-merge review plumbing. A multi-phase default worker that
+  // reaches `done` having merged >=2 times gets one whole-task coherence
+  // review (see docs/STATUS.md and the holistic-review workflow). All five
+  // fields are flat (cross-workflow scalars, not per-workflow sub-objects) and
+  // optional — absent on legacy entries; no readRegistry migration is needed
+  // (gates read `?? 0` / `?? "default"`).
+  //
+  //  - mergeCount: completed-merge counter, +1 per merge in transitionToTerminal.
+  //    The `>=2` gate. NOT incremented on grow's direct-done path (which bypasses
+  //    transitionToTerminal), so grow/trellis are excluded by both the workflow
+  //    clause and (for grow) the increment site.
+  //  - baseBranchSha: origin/<baseBranch> tip captured at worker creation — the
+  //    `from` endpoint of the whole-task cumulative diff.
+  //  - holisticTouchedFiles: union of each cycle's preMergeChangedFiles; scopes
+  //    the cumulative diff to files this worker actually touched.
+  //  - holisticReviewedThroughMergeCount: high-water-mark guard. Dispatch fires
+  //    when mergeCount>=2 && (reviewedThrough ?? 0) < mergeCount, so it is
+  //    idempotent against a replayed `done` at the same count yet re-arms if a
+  //    re-opened worker adds more phases.
+  //  - holisticRationale: cross-phase commit log captured at dispatch; seeds both
+  //    the holistic worker's brief and its fix branch's reviewer interlock.
+  mergeCount?: number;
+  baseBranchSha?: string;
+  holisticTouchedFiles?: string[];
+  holisticReviewedThroughMergeCount?: number;
+  holisticRationale?: string;
   role?: string;
   // Handoff lineage. `parentWorker` + `parentProject` are set by newWorker on
   // workers created via `garden handoff` so the child knows where it came

@@ -115,8 +115,16 @@ export const trellisValidTransitions: Record<PrState, PrState[]> = defaultValidT
 // state) without fighting the type system or callers.
 export const growValidTransitions: Record<PrState, PrState[]> = defaultValidTransitions;
 
+// Holistic-review workers walk the default lifecycle (working → reviewing →
+// merge-pending → done). Their branch is reviewed and merged exactly like any
+// worker's; the only divergence from default is how they are spawned (by the
+// poller, seeded with the whole-task diff) and that they never themselves
+// trigger another holistic review (excluded by the workflow !== "default" gate).
+export const holisticReviewValidTransitions: Record<PrState, PrState[]> = defaultValidTransitions;
+
 export function getValidTransitions(workflowName: string): Record<PrState, PrState[]> {
   if (workflowName === "trellis") return trellisValidTransitions;
   if (workflowName === "grow") return growValidTransitions;
+  if (workflowName === "holistic-review") return holisticReviewValidTransitions;
   return defaultValidTransitions;
 }

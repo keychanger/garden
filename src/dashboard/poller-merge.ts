@@ -353,7 +353,7 @@ function completeFinalization(
     ? { changedFiles: [], syncFailed: false }
     : syncWorktreeAfterMerge(projectName, branchName, entry, sentinelPresent);
   notifyPostMerge(projectName, projectPath, baseBranch, entry, preMergeChangedFiles);
-  transitionToTerminal(projectName, branchName, entry, sentinelPresent, sync);
+  transitionToTerminal(projectName, branchName, entry, sentinelPresent, sync, preMergeChangedFiles);
   refreshDashboard();
 }
 
@@ -479,12 +479,23 @@ function transitionToTerminal(
   entry: WorkerEntry,
   sentinelPresent: boolean,
   sync: SyncOutcome,
+  preMergeChangedFiles: string[],
 ): void {
   // Per STATUS.md invariant 4: pick `done` when the worker wrote .garden-done
   // before its final push (skip the transient `merged` beat and go straight
   // to the operator-actionable cleanup signal). Otherwise set `merged` —
   // auto-continue clears it on the next prompt.
   const terminalState: PrState = sentinelPresent ? "done" : "merged";
+  // Holistic-review bookkeeping (folded into the same terminal write so it is
+  // atomic with the prState change). mergeCount counts every completed merge
+  // — both `merged` (intermediate phase) and `done` (final) outcomes; the
+  // grow direct-done path bypasses this function and so never increments.
+  // holisticTouchedFiles accumulates the union of each cycle's pre-merge diff
+  // so a later whole-task review can scope to files this worker touched.
+  const mergeCount = (entry.mergeCount ?? 0) + 1;
+  const holisticTouchedFiles = [
+    ...new Set([...(entry.holisticTouchedFiles ?? []), ...preMergeChangedFiles]),
+  ];
   transitionState(projectName, entry.name, terminalState, {
     mergedAt: new Date().toISOString(),
     failCount: 0,
@@ -496,6 +507,8 @@ function transitionToTerminal(
     preResolveSha: undefined,
     lastResolveBody: undefined,
     preReviewSha: undefined,
+    mergeCount,
+    holisticTouchedFiles,
     pendingContinueChangedFiles: sync.changedFiles.length ? sync.changedFiles : undefined,
     pendingContinueSyncFailed: sync.syncFailed ? true : undefined,
   });

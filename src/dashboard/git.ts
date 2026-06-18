@@ -388,6 +388,53 @@ export function getChangedFilesBetween(
   }
 }
 
+// Commit log across an arbitrary SHA range, optionally scoped to a file set.
+// The whole-task rationale source for holistic review: unlike getCommitSummary
+// (origin/<base>..HEAD, which is empty once the worktree is synced to the
+// merged tip), this takes explicit endpoints so it stays populated at `done`.
+export function getCommitLogRange(
+  wtPath: string,
+  fromSha: string,
+  toSha: string,
+  files?: string[],
+): string {
+  try {
+    const args = ["log", "--oneline", `${fromSha}..${toSha}`];
+    if (files && files.length > 0) args.push("--", ...files);
+    return git(wtPath, ...args);
+  } catch (err) {
+    log.warn("git", "getCommitLogRange failed", {
+      data: { fromSha, toSha, error: String(err) },
+    });
+    return "";
+  }
+}
+
+// The production whole-task diff-scoping function, shared by the live holistic
+// dispatcher and the offline backtest harness so both exercise one code path.
+// Computes the cumulative diff from a worker's creation-time base SHA to the
+// assembled tip, scoped to the union of files the worker touched. The scoping
+// suppresses sibling-merge noise that advanced the base in between; its known
+// limitation (blind to ripple into untouched files) is documented in the
+// holistic worker's brief.
+export function resolveHolisticDiff(
+  wtPath: string,
+  fromSha: string,
+  toRef: string,
+  touchedFiles: string[],
+): string {
+  try {
+    const args = ["diff", `${fromSha}..${toRef}`];
+    if (touchedFiles.length > 0) args.push("--", ...touchedFiles);
+    return git(wtPath, ...args);
+  } catch (err) {
+    log.warn("git", "resolveHolisticDiff failed", {
+      data: { fromSha, toRef, error: String(err) },
+    });
+    return "";
+  }
+}
+
 export type SyncWorktreeResult =
   | { ok: true }
   | { ok: false; reason: "dirty" | "fetch-failed" | "reset-failed"; error?: string };

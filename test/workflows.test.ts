@@ -8,6 +8,7 @@ import {
   defaultWorkflow,
   growWorkflow,
   trellisWorkflow,
+  holisticReviewWorkflow,
   getWorkflow,
   registerWorkflow,
   _resetUnknownWarnDedup,
@@ -256,6 +257,38 @@ describe("growWorkflow", () => {
     // pinned at the workflow level.
     expect(growWorkflow.workerModel).toBeUndefined();
     expect(growWorkflow.reviewerModel).toBeUndefined();
+  });
+});
+
+describe("holisticReviewWorkflow", () => {
+  // Holistic-review workers walk the default lifecycle; the divergence is
+  // external (poller-spawned, opus-pinned, excluded from triggering itself).
+
+  it("is registered under name 'holistic-review'", () => {
+    expect(getWorkflow("holistic-review")).toBe(holisticReviewWorkflow);
+  });
+
+  it("validTransitions deep-equal default's (same state machine)", () => {
+    expect(holisticReviewWorkflow.validTransitions).toEqual(PRE_REFACTOR_VALID_TRANSITIONS);
+  });
+
+  it("has a registered handler for every PrState (exhaustiveness)", () => {
+    for (const state of ALL_PR_STATES) {
+      expect(
+        holisticReviewWorkflow.stateHandlers[state],
+        `holistic-review workflow missing handler for state ${state}`,
+      ).toBeDefined();
+    }
+  });
+
+  it("reuses default's hookHandlers verbatim", () => {
+    expect(holisticReviewWorkflow.hookHandlers).toBe(defaultWorkflow.hookHandlers);
+  });
+
+  it("pins reviewerModel to opus (the fix's independent review is the fix-and-push safety net)", () => {
+    expect(holisticReviewWorkflow.reviewerModel).toBe("opus");
+    // The holistic worker's own model is pinned per-worker at spawn, not here.
+    expect(holisticReviewWorkflow.workerModel).toBeUndefined();
   });
 });
 

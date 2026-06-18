@@ -122,6 +122,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   branchExistsOnOrigin: vi.fn(() => true),
   tryPublishBranch: vi.fn(() => ({ ok: true })),
   gardenDoneTrackedInHead: vi.fn(() => false),
+  getRemoteTrackingSha: vi.fn(() => "basesha1234"),
 }));
 
 vi.mock("../src/dashboard/alerts.js", () => ({
@@ -315,6 +316,9 @@ describe("newWorker", () => {
       worktreePath: "/home/user/.garden/worktrees/myproject/bold-ash",
       branchName: "bold-ash",
       baseBranch: "main",
+      // origin/<base> tip captured at creation — the cumulative-diff baseline
+      // a later holistic review uses.
+      baseBranchSha: "basesha1234",
       agentStatus: "loading",
       workflow: "default",
     });

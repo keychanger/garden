@@ -29,7 +29,7 @@ import { getHarness } from "./harness/index.js";
 import { resolveGardenRunner } from "./runner.js";
 import {
   worktreePath, resolveBaseBranch, branchExistsOnOrigin, tryPublishBranch,
-  gardenDoneTrackedInHead,
+  gardenDoneTrackedInHead, getRemoteTrackingSha,
 } from "./git.js";
 import { addAlert } from "./alerts.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
@@ -250,6 +250,12 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // it. If model resolution refuses (Sonnet exhausted + fallback
     // disabled), we roll back via removeWorker before any tmux/disk work.
     const workflowName = opts.workflow ?? "default";
+    // origin/<baseBranch> tip at creation — the `from` endpoint of the
+    // whole-task cumulative diff a later holistic review computes. Captured
+    // here (after the publish gesture guarantees the ref exists) because the
+    // base advances as this and sibling workers merge, so it cannot be
+    // reconstructed reliably afterward.
+    const baseBranchSha = getRemoteTrackingSha(project.path, baseBranch) ?? undefined;
     addWorker(targetProject, {
       name: workerName,
       sessionId,
@@ -257,6 +263,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       worktreePath: wtPath,
       branchName,
       baseBranch,
+      ...(baseBranchSha ? { baseBranchSha } : {}),
       agentStatus: "loading",
       workflow: workflowName,
       // Per-worker model pin for default/grow workers (trellis resolves

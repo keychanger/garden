@@ -12,7 +12,7 @@ import { output } from "../output.js";
 const SETTABLE_KEYS = [
   "checks", "postMerge", "sandboxDomains", "claudeProfile", "provider",
   "logColor", "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
-  "maxGrowIterations", "requireCiSuccess",
+  "maxGrowIterations", "requireCiSuccess", "holisticReview",
 ] as const;
 type SettableKey = typeof SETTABLE_KEYS[number];
 
@@ -257,6 +257,16 @@ function setConfigKey(projectName: string, key: SettableKey, value: string): voi
       console.log(`Set ${key} = ${value} for ${projectName}`);
     } else {
       throw new Error(`requireCiSuccess must be 'true' or 'false', got '${value}'`);
+    }
+  } else if (key === "holisticReview") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.holisticReview;
+      console.log(`Cleared ${key} for ${projectName} (default: off)`);
+    } else if (value === "off" || value === "shadow" || value === "fix") {
+      project.holisticReview = value;
+      console.log(`Set ${key} = ${value} for ${projectName}`);
+    } else {
+      throw new Error(`holisticReview must be 'off', 'shadow', or 'fix', got '${value}'`);
     }
   } else if (value === "" || value === "unset" || value === "null") {
     delete project[key];

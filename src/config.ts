@@ -61,12 +61,24 @@ export interface ProjectConfig {
   // safety (no workflow, advisory-only, or being intentionally bypassed).
   // See `src/dashboard/poller-ci.ts`.
   requireCiSuccess?: boolean;
+  // Holistic post-merge review mode for this project. When a multi-phase
+  // default worker (>=2 merges) reaches `done`, the poller may dispatch one
+  // whole-task coherence review:
+  //   "off"    (default) — evaluate the gate and log the decision, never spawn.
+  //   "shadow" — spawn an analyze-only reviewer that writes findings + a warn
+  //              alert and pushes nothing.
+  //   "fix"    — spawn a reviewer that fixes genuine cross-phase defects and
+  //              pushes through the normal review/CI/merge gate.
+  // Read live per poll, so it doubles as a no-restart kill switch. Graduate a
+  // project off -> shadow -> fix only when the validation gate holds (see the
+  // holistic-review workflow docs).
+  holisticReview?: "off" | "shadow" | "fix";
 }
 
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "path", "checks", "postMerge", "sandboxDomains", "claudeProfile", "provider",
   "logColor", "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
-  "maxGrowIterations", "requireCiSuccess",
+  "maxGrowIterations", "requireCiSuccess", "holisticReview",
 ]);
 
 export function isValidConfigKey(key: string): boolean {
