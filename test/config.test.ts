@@ -617,3 +617,56 @@ describe("requireCiSuccess project config key", () => {
     expect(cfg.projects.garden.requireCiSuccess).toBeUndefined();
   });
 });
+
+// Holistic post-merge review mode — a three-value enum config key
+// ("off" | "shadow" | "fix"; see src/config.ts and the dispatcher in
+// src/dashboard/poller-holistic-review.ts). Beyond the sibling-key pattern
+// (isValidConfigKey + round-trip + optional), this drives the public config()
+// command so the new setConfigKey validation branch is exercised: it accepts
+// each mode, clears on empty, and rejects anything else.
+describe("holisticReview project config key", () => {
+  it("isValidConfigKey accepts holisticReview", async () => {
+    const { isValidConfigKey } = await importConfig();
+    expect(isValidConfigKey("holisticReview")).toBe(true);
+  });
+
+  it("round-trips holisticReview = 'shadow' through saveConfig + loadConfig", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({
+      projects: { garden: { path: "/tmp/garden", holisticReview: "shadow" } },
+    });
+    const cfg = loadConfig();
+    expect(cfg.projects.garden.holisticReview).toBe("shadow");
+  });
+
+  it("treats holisticReview as optional (absence means off)", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
+    const cfg = loadConfig();
+    expect(cfg.projects.garden.holisticReview).toBeUndefined();
+  });
+
+  it("config() persists each valid mode and clears on empty", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    const { config } = await import("../src/commands/config.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
+    for (const mode of ["shadow", "fix", "off"] as const) {
+      await config(["garden", "holisticReview", mode]);
+      expect(loadConfig().projects.garden.holisticReview).toBe(mode);
+    }
+    await config(["garden", "holisticReview", ""]);
+    expect(loadConfig().projects.garden.holisticReview).toBeUndefined();
+  });
+
+  it("config() rejects an invalid mode", async () => {
+    const { saveConfig, GARDEN_DIR } = await importConfig();
+    const { config } = await import("../src/commands/config.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
+    await expect(config(["garden", "holisticReview", "bogus"]))
+      .rejects.toThrow(/holisticReview must be 'off', 'shadow', or 'fix'/);
+  });
+});
