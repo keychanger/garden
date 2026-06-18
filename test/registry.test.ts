@@ -1,11 +1,16 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import { useTmpHome } from "./helpers.js";
+import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 const env = useTmpHome();
 
 async function importRegistry() {
   return await import("../src/dashboard/registry.js");
+}
+
+function mkEntry(partial: Partial<WorkerEntry> & { name: string }): WorkerEntry {
+  return { sessionId: "s", task: "", ...partial };
 }
 
 describe("readRegistry", () => {
@@ -621,5 +626,114 @@ describe("readRegistry mtime cache", () => {
     fs.utimesSync(REGISTRY_FILE, future, future);
 
     expect(readRegistry().workers.proj[0].name).toBe("gamma");
+  });
+});
+
+describe("worker ordering helpers", () => {
+  it("workerFreshness prefers lastEventAt, falls back to createdAt, then 0", async () => {
+    const { workerFreshness } = await importRegistry();
+    expect(workerFreshness(mkEntry({ name: "a", lastEventAt: 500, createdAt: 100 }))).toBe(500);
+    expect(workerFreshness(mkEntry({ name: "b", createdAt: 100 }))).toBe(100);
+    expect(workerFreshness(mkEntry({ name: "c" }))).toBe(0);
+  });
+
+  it("workerSortTier classifies by attention", async () => {
+    const { workerSortTier } = await importRegistry();
+    expect(workerSortTier(mkEntry({ name: "a", prState: "failing" }))).toBe(0);
+    expect(workerSortTier(mkEntry({ name: "b", agentStatus: "asking" }))).toBe(0);
+    expect(workerSortTier(mkEntry({ name: "c", agentStatus: "ready" }))).toBe(1);
+    expect(workerSortTier(mkEntry({ name: "d", agentStatus: "loading" }))).toBe(1);
+    expect(workerSortTier(mkEntry({ name: "e", prState: "reviewing" }))).toBe(2);
+    expect(workerSortTier(mkEntry({ name: "f", prState: "merge-pending" }))).toBe(2);
+    expect(workerSortTier(mkEntry({ name: "g", prState: "merged" }))).toBe(2);
+    expect(workerSortTier(mkEntry({ name: "h", agentStatus: "idle" }))).toBe(3);
+    expect(workerSortTier(mkEntry({ name: "i", agentStatus: "working" }))).toBe(3);
+    expect(workerSortTier(mkEntry({ name: "j", prState: "done" }))).toBe(4);
+  });
+
+  it("an in-flight prState outranks a ready/loading agentStatus", async () => {
+    const { workerSortTier } = await importRegistry();
+    expect(workerSortTier(mkEntry({ name: "a", agentStatus: "ready", prState: "reviewing" }))).toBe(2);
+  });
+
+  it("sorts blocked-on-you to the top and done to the bottom, across tiers", async () => {
+    const { compareWorkerFreshness } = await importRegistry();
+    const sorted = [
+      mkEntry({ name: "done-1", prState: "done", lastEventAt: 9999 }),
+      mkEntry({ name: "idle-1", agentStatus: "idle", lastEventAt: 5000 }),
+      mkEntry({ name: "new-1", agentStatus: "ready", createdAt: 1000 }),
+      mkEntry({ name: "fail-1", prState: "failing", lastEventAt: 10 }),
+      mkEntry({ name: "review-1", prState: "reviewing", lastEventAt: 20 }),
+    ].sort(compareWorkerFreshness);
+    expect(sorted.map(e => e.name)).toEqual(["fail-1", "new-1", "review-1", "idle-1", "done-1"]);
+  });
+
+  it("within a tier, fresher sorts first but same-60s-bucket falls back to name", async () => {
+    const { compareWorkerFreshness } = await importRegistry();
+    const base = 60_000 * 100; // aligned to a 60s bucket boundary
+    // A full bucket apart: fresher wins regardless of name.
+    const fresher = mkEntry({ name: "zzz", agentStatus: "idle", lastEventAt: base + 120_000 });
+    const older = mkEntry({ name: "aaa", agentStatus: "idle", lastEventAt: base });
+    expect([older, fresher].sort(compareWorkerFreshness).map(e => e.name)).toEqual(["zzz", "aaa"]);
+    // Same 60s bucket: name-stable, so a flurry of events doesn't reshuffle.
+    const a = mkEntry({ name: "aaa", agentStatus: "idle", lastEventAt: base + 1_000 });
+    const b = mkEntry({ name: "bbb", agentStatus: "idle", lastEventAt: base + 59_000 });
+    expect([b, a].sort(compareWorkerFreshness).map(e => e.name)).toEqual(["aaa", "bbb"]);
+  });
+
+  it("isWorkerStale is true only for tier-3 workers untouched past WORKER_STALE_MS", async () => {
+    const { isWorkerStale, WORKER_STALE_MS } = await importRegistry();
+    const now = 1_700_000_000_000;
+    const old = now - WORKER_STALE_MS - 1;
+    const recent = now - 1_000;
+    expect(isWorkerStale(mkEntry({ name: "a", agentStatus: "idle", lastEventAt: old }), now)).toBe(true);
+    expect(isWorkerStale(mkEntry({ name: "b", agentStatus: "idle", lastEventAt: recent }), now)).toBe(false);
+    // Blocked / done never dim, even when ancient.
+    expect(isWorkerStale(mkEntry({ name: "c", prState: "failing", lastEventAt: old }), now)).toBe(false);
+    expect(isWorkerStale(mkEntry({ name: "d", prState: "done", lastEventAt: old }), now)).toBe(false);
+  });
+});
+
+describe("createdAt backfill on read", () => {
+  function writeEntry(REGISTRY_FILE: string, entry: Record<string, unknown>): void {
+    fs.writeFileSync(REGISTRY_FILE, JSON.stringify({ workers: { proj: [{ name: "w", sessionId: "s", task: "", ...entry }] } }));
+  }
+
+  it("backfills createdAt from lastEventAt when present", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    writeEntry(REGISTRY_FILE, { lastEventAt: 4242 });
+    expect(readRegistry().workers.proj[0].createdAt).toBe(4242);
+  });
+
+  it("backfills from mergedAt (ISO) when lastEventAt is absent", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    const iso = "2026-01-02T03:04:05.000Z";
+    writeEntry(REGISTRY_FILE, { mergedAt: iso });
+    expect(readRegistry().workers.proj[0].createdAt).toBe(Date.parse(iso));
+  });
+
+  it("backfills from lastShaChangeAt (ISO) when earlier sources are absent", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    const iso = "2026-02-03T04:05:06.000Z";
+    writeEntry(REGISTRY_FILE, { lastShaChangeAt: iso });
+    expect(readRegistry().workers.proj[0].createdAt).toBe(Date.parse(iso));
+  });
+
+  it("backfills from the legacy lastHookAt timestamp (via the status migration)", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    writeEntry(REGISTRY_FILE, { lastHookAt: 31337 });
+    expect(readRegistry().workers.proj[0].createdAt).toBe(31337);
+  });
+
+  it("falls back to 0 for an entry with no usable timestamp", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    writeEntry(REGISTRY_FILE, {});
+    expect(readRegistry().workers.proj[0].createdAt).toBe(0);
+  });
+
+  it("leaves an existing createdAt untouched", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    writeEntry(REGISTRY_FILE, { createdAt: 7, lastEventAt: 999 });
+    expect(readRegistry().workers.proj[0].createdAt).toBe(7);
   });
 });

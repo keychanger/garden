@@ -10,7 +10,7 @@ import { loadConfig, getFocusedProjectNames, allPlotProjectNames, tryGetProject 
 import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
-import { getWorkers, readRegistry, batchUpdateWorkerFields, type WorkerRegistry } from "../dashboard/registry.js";
+import { getWorkers, readRegistry, batchUpdateWorkerFields, compareWorkerFreshness, isWorkerStale, type WorkerRegistry } from "../dashboard/registry.js";
 import { listHiddenWorkerWindows, windowExists, getFirstPaneId, getPaneTitle } from "../dashboard/tmux.js";
 import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/window-names.js";
 import { currentBranch } from "../dashboard/git.js";
@@ -31,6 +31,10 @@ interface WorkerInfo {
   status: WorkerStatus;
   activity: string | null;
   active: boolean;
+  // True when the worker is in the active/recent tier and nothing has touched
+  // it in over WORKER_STALE_MS — the renderer dims the row. Other tiers
+  // (blocked, new, in-flight, done) are never stale-dimmed.
+  stale: boolean;
   failCount: number;
   // The branch this worker is pinned to merge into. Undefined for legacy
   // entries written before the field existed. The renderer compares it
@@ -186,7 +190,8 @@ export async function status(args: string[]): Promise<void> {
         const wstatus = formatStatus(worker).padEnd(statusWidth);
         const baseHint = formatBaseDivergence(worker.baseBranch, project.projectBranch);
         const line = `    ${focus} ${icon} ${wname}  ${wstatus}${formatRowTail(worker, baseHint, activityMax)}`;
-        console.log(colorizeRow(worker.status, line));
+        const colored = colorizeRow(worker.status, line);
+        console.log(worker.stale ? dimRow(colored) : colored);
       }
     }
   }
@@ -213,6 +218,18 @@ function colorizeRow(status: WorkerStatus, line: string): string {
   // deliberate hold, distinct from the yellow/red/green attention states.
   if (status === "paused") return `\x1b[1;36m${line}\x1b[0m`;
   return line;
+}
+
+// Render a status row dimmed (faint). Rows embed inner ANSI that ends in a full
+// reset — the base-divergence hint and the trellis iteration counter — so a
+// naive `\x1b[2m…\x1b[0m` wrap would let the first inner reset cancel the faint
+// attribute, half-brightening the rest of the row. Re-arm faint after every
+// inner reset so the whole line stays dimmed. Only ever applied to tier-3
+// (active/recent) rows, which colorizeRow leaves uncolored.
+export function dimRow(line: string): string {
+  const FAINT = "\x1b[2m";
+  const RESET = "\x1b[0m";
+  return FAINT + line.split(RESET).join(RESET + FAINT) + RESET;
 }
 
 // Combine agentStatus and prState into a single display state.
@@ -437,6 +454,7 @@ function collectWorkers(
       status: resolveWorkerStatus(entry),
       activity: entry?.task || null,
       active: true,
+      stale: entry ? isWorkerStale(entry) : false,
       failCount: entry?.failCount ?? 0,
       baseBranch: entry?.baseBranch,
       trellis: trellisInfoFor(entry),
@@ -454,6 +472,7 @@ function collectWorkers(
       status: resolveWorkerStatus(entry),
       activity: entry?.task || null,
       active: false,
+      stale: entry ? isWorkerStale(entry) : false,
       failCount: entry?.failCount ?? 0,
       baseBranch: entry?.baseBranch,
       trellis: trellisInfoFor(entry),
@@ -461,7 +480,17 @@ function collectWorkers(
     });
   }
 
-  workers.sort((a, b) => a.name.localeCompare(b.name));
+  // Order by attention/recency, not name (the name is just an address handle).
+  // Compares the underlying registry entries; orphan windows with no entry sort
+  // last by name. See compareWorkerFreshness in registry.ts.
+  workers.sort((a, b) => {
+    const ea = registryByName.get(a.name);
+    const eb = registryByName.get(b.name);
+    if (ea && eb) return compareWorkerFreshness(ea, eb);
+    if (ea) return -1;
+    if (eb) return 1;
+    return a.name.localeCompare(b.name);
+  });
   return workers;
 }
 
@@ -515,7 +544,8 @@ export function renderQuickStatus(
         const wstatus = formatStatus(worker).padEnd(statusWidth);
         const baseHint = formatBaseDivergence(worker.baseBranch, projectBranch);
         const line = `    ${focus} ${icon} ${wname}  ${wstatus}${formatRowTail(worker, baseHint)}`;
-        lines.push(colorizeRow(worker.status, line));
+        const colored = colorizeRow(worker.status, line);
+        lines.push(worker.stale ? dimRow(colored) : colored);
       }
     }
   }

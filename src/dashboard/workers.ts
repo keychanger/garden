@@ -265,6 +265,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       baseBranch,
       ...(baseBranchSha ? { baseBranchSha } : {}),
       agentStatus: "loading",
+      createdAt: Date.now(),
       workflow: workflowName,
       // Per-worker model pin for default/grow workers (trellis resolves
       // per iteration via trellis.workerModel below).

@@ -323,6 +323,7 @@ describe("newWorker", () => {
       // a later holistic review uses.
       baseBranchSha: "basesha1234",
       agentStatus: "loading",
+      createdAt: expect.any(Number),
       workflow: "default",
     });
   });

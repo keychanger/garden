@@ -7,6 +7,9 @@ vi.mock("../src/dashboard/registry.js", () => {
     readRegistry: vi.fn(() => ({ workers: entries })),
     findWorkerByName: (project: string, workerName: string) =>
       (entries[project] ?? []).find(e => e.name === workerName),
+    // Stub sibling ordering to alphabetical (prior behavior); the real
+    // comparator is unit-tested in registry.test.ts.
+    compareWorkerFreshness: (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name),
     _setEntries: (project: string, list: import("../src/dashboard/registry.js").WorkerEntry[]) => {
       entries[project] = list;
     },

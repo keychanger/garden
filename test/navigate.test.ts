@@ -63,6 +63,11 @@ vi.mock("../src/dashboard/tmux.js", () => ({
 
 vi.mock("../src/dashboard/registry.js", () => ({
   findWorkerByName: vi.fn(() => null),
+  getWorkers: vi.fn(() => []),
+  // With no entries, cyclePane falls back to ordering by worker-name suffix —
+  // equivalent to the prior lexicographic window-name sort for windows in one
+  // project. The real comparator is unit-tested in registry.test.ts.
+  compareWorkerFreshness: (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name),
 }));
 
 vi.mock("../src/dashboard/log.js", () => ({

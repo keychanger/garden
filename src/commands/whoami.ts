@@ -1,4 +1,4 @@
-import { readRegistry, findWorkerByName, type WorkerEntry } from "../dashboard/registry.js";
+import { readRegistry, findWorkerByName, compareWorkerFreshness, type WorkerEntry } from "../dashboard/registry.js";
 import { output, isTTY } from "../output.js";
 import { resolveWorkerStatus } from "./status.js";
 
@@ -57,8 +57,8 @@ export async function whoami(args: string[]): Promise<void> {
 
   const siblings = (registry.workers[resolvedProject] ?? [])
     .filter(e => e.name !== entry!.name)
-    .map(e => ({ name: e.name, displayStatus: resolveWorkerStatus(e) }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort(compareWorkerFreshness)
+    .map(e => ({ name: e.name, displayStatus: resolveWorkerStatus(e) }));
 
   const result: WhoamiResult = {
     project: resolvedProject,

@@ -102,6 +102,11 @@ export interface WorkerEntry {
   failingSha?: string;
   agentStatus?: AgentStatus;
   lastEventAt?: number;    // epoch ms when a Claude hook last fired for this worker
+  // Epoch ms when the worker was created (set in addWorker). Acts as the floor
+  // for a brand-new worker's freshness before its first hook fires, so a
+  // just-made worker sorts fresh instead of sinking to the bottom. Optional
+  // only for backward compat: old entries are backfilled in migrateCreatedAt.
+  createdAt?: number;
   // Set by the worker's Stop hook when it sees commits ahead of base. The
   // poller's handleWorking gates launchReview on this — without it, an idle
   // worker with stale commits would be reviewed on every FIFO poke. Cleared
@@ -322,6 +327,70 @@ export interface WorkerRegistry {
   workers: Record<string, WorkerEntry[]>;
 }
 
+// ---------------------------------------------------------------------------
+// Worker ordering: recency, attention tiers, staleness
+// ---------------------------------------------------------------------------
+
+// A worker's freshness timestamp (epoch ms): the most recent of "the operator
+// or the agent did something" (lastEventAt — set by every Claude hook,
+// including UserPromptSubmit) and "the worker was created" (createdAt, the
+// floor for a brand-new worker that hasn't fired a hook yet). Used both for
+// recency ordering and the stale-dim threshold.
+export function workerFreshness(entry: WorkerEntry): number {
+  return entry.lastEventAt ?? entry.createdAt ?? 0;
+}
+
+// Attention tier for sort ordering — lower sorts higher on screen. Computed
+// from raw agentStatus + prState (not the resolved display status) so this
+// stays free of any commands/ dependency. Predicates are checked top-down,
+// first match wins:
+//   0  needs you      — blocked on the operator (failing / asking)
+//   1  new            — launched, awaiting its first prompt (loading / ready)
+//   2  in flight      — the poller is actively driving it
+//   3  active/recent  — working / idle / exited; ordered by freshness, dims when stale
+//   4  done           — terminal, sinks to the bottom as a cleanup candidate
+export function workerSortTier(entry: WorkerEntry): number {
+  const pr = entry.prState;
+  if (pr === "failing" || entry.agentStatus === "asking") return 0;
+  if (pr === "reviewing" || pr === "resolving" || pr === "ci-fixing"
+      || pr === "merge-pending" || pr === "merged") return 2;
+  if (pr === "done") return 4;
+  if (entry.agentStatus === "loading" || entry.agentStatus === "ready") return 1;
+  return 3;
+}
+
+// Freshness is compared at 60-second granularity so a burst of hook events
+// among co-active workers produces no reshuffling (the list stays calm); a
+// worker quiet for over a minute still floats up promptly relative to one
+// active now. The 10s hook heartbeat throttle damps write frequency but not
+// reorder churn — this bucket is what actually keeps the pane still.
+const FRESHNESS_BUCKET_MS = 60_000;
+
+// Sort comparator (use with Array.sort): attention tier ascending, then
+// freshness descending (bucketed), then name as a stable tiebreak. Most
+// attention-worthy workers rise to the top; alphabetical only breaks ties.
+export function compareWorkerFreshness(a: WorkerEntry, b: WorkerEntry): number {
+  const tierDiff = workerSortTier(a) - workerSortTier(b);
+  if (tierDiff !== 0) return tierDiff;
+  const bucketDiff =
+    Math.floor(workerFreshness(b) / FRESHNESS_BUCKET_MS)
+    - Math.floor(workerFreshness(a) / FRESHNESS_BUCKET_MS);
+  if (bucketDiff !== 0) return bucketDiff;
+  return a.name.localeCompare(b.name);
+}
+
+// A worker is "stale to the operator's eye" when nothing has touched it in a
+// day. Deliberately far coarser than the 15-min STALE_* health constants
+// (health.ts), which mean "Claude looks hung and the poller should act"; this
+// only drives a dimmed status row. Staleness applies to tier 3 (active/recent)
+// only — blocked, new, in-flight, and done rows are never dimmed.
+export const WORKER_STALE_MS = 24 * 60 * 60 * 1000;
+
+export function isWorkerStale(entry: WorkerEntry, now: number = Date.now()): boolean {
+  if (workerSortTier(entry) !== 3) return false;
+  return now - workerFreshness(entry) > WORKER_STALE_MS;
+}
+
 export const REGISTRY_FILE = path.join(SESSIONS_DIR, "dashboard.registry.json");
 const LOCK_FILE = REGISTRY_FILE + ".lock";
 
@@ -394,6 +463,7 @@ export function readRegistry(): WorkerRegistry {
       for (const e of entries as WorkerEntry[]) {
         migrateLegacyTrellisFields(e);
         migrateLegacyStatusFields(e);
+        migrateCreatedAt(e);
       }
     }
     cachedRegistry = { mtimeMs: stat.mtimeMs, size: stat.size, value: raw };
@@ -461,6 +531,24 @@ function migrateLegacyStatusFields(entry: WorkerEntry): void {
     if (entry.lastEventAt === undefined) entry.lastEventAt = e.lastHookAt as number;
     delete e.lastHookAt;
   }
+}
+
+// Backfill createdAt (the worker's birth timestamp, used for recency ordering)
+// on entries that predate the field. In-memory only — readRegistry is hot, so
+// no statSync. Prefer the freshness signal already on the entry, then the ISO
+// transition timestamps, else 0 (a genuinely inactive entry that correctly
+// sinks + dims; its next hook self-heals it via lastEventAt). Must run after
+// migrateLegacyStatusFields so it observes the migrated lastEventAt. Idempotent
+// and persisted on the next writeRegistry, like the migrations above.
+function migrateCreatedAt(entry: WorkerEntry): void {
+  if (entry.createdAt !== undefined) return;
+  const isoMs = (s?: string): number | undefined => {
+    if (!s) return undefined;
+    const t = Date.parse(s);
+    return Number.isNaN(t) ? undefined : t;
+  };
+  entry.createdAt =
+    entry.lastEventAt ?? isoMs(entry.mergedAt) ?? isoMs(entry.lastShaChangeAt) ?? 0;
 }
 
 export function writeRegistry(registry: WorkerRegistry): void {

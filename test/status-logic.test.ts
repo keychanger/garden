@@ -25,6 +25,11 @@ vi.mock("../src/dashboard/state.js", () => ({
 
 vi.mock("../src/dashboard/registry.js", () => ({
   getWorkers: vi.fn(() => []),
+  // Stub ordering to the prior alphabetical behavior so these render tests
+  // stay order-stable; the real comparator + staleness are unit-tested in
+  // registry.test.ts.
+  compareWorkerFreshness: (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name),
+  isWorkerStale: () => false,
 }));
 
 vi.mock("../src/session.js", () => ({
@@ -66,7 +71,7 @@ vi.mock("../src/output.js", () => ({
   isTTY: true,
 }));
 
-import { status, renderQuickStatus, resolveWorkerStatus, _resetStatusBranchCacheForTest } from "../src/commands/status.js";
+import { status, renderQuickStatus, resolveWorkerStatus, dimRow, _resetStatusBranchCacheForTest } from "../src/commands/status.js";
 import { currentBranch } from "../src/dashboard/git.js";
 import { diaryHasContent } from "../src/diary.js";
 import { readDashState } from "../src/dashboard/state.js";
@@ -483,4 +488,25 @@ describe("renderQuickStatus", () => {
     expect(result).toContain("rewiring the poller");
   });
 
+});
+
+describe("dimRow", () => {
+  const FAINT = "\x1b[2m";
+  const RESET = "\x1b[0m";
+
+  it("wraps a plain line in faint and a trailing reset", () => {
+    expect(dimRow("hello")).toBe(`${FAINT}hello${RESET}`);
+  });
+
+  it("re-arms faint after an inner reset so the whole row stays dimmed", () => {
+    // A row with an embedded colored segment (the base-divergence hint) whose
+    // own reset would otherwise cancel the faint attribute and half-brighten
+    // the rest of the line.
+    const line = `worker  \x1b[33m→ main${RESET}`;
+    const dimmed = dimRow(line);
+    expect(dimmed).toContain(`${RESET}${FAINT}`);          // faint re-armed after the inner reset
+    expect(dimmed.startsWith(FAINT)).toBe(true);
+    expect(dimmed.endsWith(RESET)).toBe(true);
+    expect(dimmed).toBe(`${FAINT}worker  \x1b[33m→ main${RESET}${FAINT}${RESET}`);
+  });
 });

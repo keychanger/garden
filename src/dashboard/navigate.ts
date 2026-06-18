@@ -13,7 +13,7 @@ import {
   setPaneLabel,
   setPaneVar,
 } from "./tmux.js";
-import { findWorkerByName } from "./registry.js";
+import { findWorkerByName, getWorkers, compareWorkerFreshness } from "./registry.js";
 import { acknowledgeAlerts } from "./alerts.js";
 import { log } from "./log.js";
 import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow, createGardenHistoryWindow, createGardenDiaryWindow } from "./create.js";
@@ -374,9 +374,24 @@ export function cyclePane(direction: 1 | -1): void {
     const currentName = lockedState.activeWindowName;
     const isCurrentWorker = currentName && isWorkerWindow(currentName);
 
+    // Order the cycle by attention/recency so ⌥]/⌥[ matches the visible status
+    // list (see compareWorkerFreshness). Resolve each window name to its
+    // registry entry via the worker-name suffix; windows with no entry sort
+    // last by suffix.
+    const entryByLabel = new Map(getWorkers(lockedState.activeProject).map(e => [e.name, e]));
+    const labelOf = (w: string | undefined): string => (w ? parseWorkerSuffix(w) ?? w : "");
+    const byFreshness = (wa: string | undefined, wb: string | undefined): number => {
+      const la = labelOf(wa), lb = labelOf(wb);
+      const ea = entryByLabel.get(la);
+      const eb = entryByLabel.get(lb);
+      if (ea && eb) return compareWorkerFreshness(ea, eb);
+      if (ea) return -1;
+      if (eb) return 1;
+      return la.localeCompare(lb);
+    };
     const allWorkers = isCurrentWorker
-      ? [...new Set([currentName, ...hiddenWorkers])].sort()
-      : [...hiddenWorkers];
+      ? [...new Set([currentName, ...hiddenWorkers])].sort(byFreshness)
+      : [...hiddenWorkers].sort(byFreshness);
 
     if (allWorkers.length === 0) {
       tmuxDisplay("No workers to cycle to. Press ⌥n to create one.");
