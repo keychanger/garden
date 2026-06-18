@@ -39,6 +39,7 @@ and the original may be deleted or kept as historical record. When a
 | [future/SPRIG.md](future/SPRIG.md) | speculative | Sprig: latent self-improvement on idle quota — operator-curated per-project backlog planted as grow workers, reviewer-enforced risk tiers, default-off surplus autoplant. No code today. |
 | [future/MODEL-SELECTION.md](future/MODEL-SELECTION.md) | speculative | Automating model selection (Opus/Sonnet/Haiku + effort + provider): the measurement-not-prediction reframe, five code constraints, the escalate-safe/de-escalate-conservative asymmetry, a layered resolver, and Bedrock/Vertex-first multi-provider. No code today beyond trellis's `resolveVineModel`. |
 | [future/DESKTOP-NOTIFICATIONS.md](future/DESKTOP-NOTIFICATIONS.md) | speculative | Native macOS banners/sound when a worker finishes or gets stuck, riding the existing `transitionState` and `addAlert` chokepoints; plus a heavier menu-bar-app track. No code today (`garden notify`, `notify` config, `notify.ts` do not exist). |
+| [future/SCHEDULED-HORIZON-REVIEW.md](future/SCHEDULED-HORIZON-REVIEW.md) | speculative | A deferred review that wakes a fresh worker days after a multi-phase merge to check whether a recorded decision drifted, using accumulated git/CI/sibling history. The longer-horizon sibling of the merge-time holistic review; gated on a pre-registered revisit hypothesis so it verifies rather than fishes. No code today. |
 
 ## Adding a new doc
 
