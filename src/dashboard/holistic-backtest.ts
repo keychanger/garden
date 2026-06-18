@@ -147,6 +147,7 @@ export async function runHolisticBacktest(args: string[]): Promise<void> {
     touchedFiles,
     transcriptPath: entry?.transcriptPath,
     rationale,
+    mode: "shadow", // backtest is analysis-only
   });
 
   const tmp = process.env.TMPDIR ?? os.tmpdir();

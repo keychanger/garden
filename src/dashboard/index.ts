@@ -191,6 +191,19 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     await runHolisticBacktest(args.slice(1));
     return;
   }
+  if (sub === "_spawn-holistic-worker") {
+    // Spawned (detached) by the poller's holistic dispatcher so workers.ts stays
+    // out of the hook bundle. args: <project> <seedFile>.
+    const { newWorker } = await import("./workers.js");
+    newWorker({
+      projectName: args[1],
+      seedMessageFile: args[2],
+      background: true,
+      workflow: "holistic-review",
+      model: "opus",
+    });
+    return;
+  }
   if (sub === "_usage-poll-loop") {
     await runUsagePollerLoop();
     return;

@@ -19,7 +19,9 @@ import {
 } from "./registry.js";
 import { scheduleDelayedPoke } from "./poller-fifo.js";
 import { getValidTransitions } from "./workflows/types.js";
-import { maybeDispatchHolisticReview, evaluateHolisticGate } from "./poller-holistic-review.js";
+import {
+  maybeDispatchHolisticReview, evaluateHolisticGate, finalizeShadowHolistic,
+} from "./poller-holistic-review.js";
 
 export const DEBOUNCE_MS = 30_000;
 
@@ -204,6 +206,14 @@ export function handleDone(
   if (!wtPath) return false;
   const commitSummary = getCommitSummary(wtPath, baseBranch);
   if (!commitSummary) {
+    // A SHADOW holistic worker reaching quiescent done (it analyzed, wrote
+    // findings, and did not commit): surface its findings and consume them.
+    // Fix-mode holistic workers commit, so they go through review/merge and
+    // never land here.
+    if ((entry.workflow ?? "default") === "holistic-review") {
+      finalizeShadowHolistic(projectName, entry);
+      return false;
+    }
     // Quiescent done. This is the trail-off holistic trigger site: a worker
     // that finished a multi-phase task WITHOUT a final merge reached `done` via
     // the Stop hook (hooks/default.ts), bypassing transitionToTerminal — so

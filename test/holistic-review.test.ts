@@ -72,7 +72,7 @@ describe("evaluateHolisticGate", () => {
 });
 
 describe("buildHolisticSeed", () => {
-  const seed = buildHolisticSeed({
+  const base = {
     originalName: "brown-blunt-flock",
     baseBranch: "main",
     baseBranchSha: "4276499c",
@@ -80,24 +80,35 @@ describe("buildHolisticSeed", () => {
     touchedFiles: ["src/routing.ts", "src/factory.ts"],
     transcriptPath: "/x/transcript.jsonl",
     rationale: "abc123 phase 1: add helper\ndef456 phase 3: replace uses",
-  });
+  };
+  const fixSeed = buildHolisticSeed({ ...base, mode: "fix" });
+  const shadowSeed = buildHolisticSeed({ ...base, mode: "shadow" });
 
   it("carries the scoped diff command with the base SHA and the touched-file list", () => {
-    expect(seed).toContain("git diff 4276499c..origin/main -- src/routing.ts src/factory.ts");
+    expect(fixSeed).toContain("git diff 4276499c..origin/main -- src/routing.ts src/factory.ts");
   });
 
   it("includes the original worker name and the rationale", () => {
-    expect(seed).toContain("brown-blunt-flock");
-    expect(seed).toContain("phase 3: replace uses");
+    expect(fixSeed).toContain("brown-blunt-flock");
+    expect(fixSeed).toContain("phase 3: replace uses");
   });
 
-  it("instructs a clean no-op when the assembled whole is coherent", () => {
-    expect(seed).toMatch(/IF COHERENT/);
-    expect(seed).toContain("change NOTHING");
+  it("states the scoped-diff limitation (not a fence) and recursion safety in both modes", () => {
+    for (const s of [fixSeed, shadowSeed]) {
+      expect(s).toContain("not a fence");
+      expect(s).toContain("never spawn another");
+    }
   });
 
-  it("states the scoped-diff limitation (not a fence) and recursion safety", () => {
-    expect(seed).toContain("not a fence");
-    expect(seed).toContain("never spawn another");
+  it("fix mode tells the worker to fix + commit through the normal gate", () => {
+    expect(fixSeed).toContain("change NOTHING");
+    expect(fixSeed).toContain("commit naming the cross-phase defect");
+    expect(fixSeed).not.toContain(".holistic-findings.md");
+  });
+
+  it("shadow mode is analysis-only: write findings to the findings file, no commit", () => {
+    expect(shadowSeed).toContain("SHADOW (ANALYSIS-ONLY)");
+    expect(shadowSeed).toContain(".holistic-findings.md");
+    expect(shadowSeed).toContain("Do NOT edit code or commit");
   });
 });
