@@ -347,7 +347,8 @@ export function workerFreshness(entry: WorkerEntry): number {
 //   0  needs you      — blocked on the operator (failing / asking)
 //   1  new            — launched, awaiting its first prompt (loading / ready)
 //   2  in flight      — the poller is actively driving it
-//   3  active/recent  — working / idle / exited; ordered by freshness, dims when stale
+//   3  active/recent  — working / idle / paused / exited; ordered by freshness,
+//                       dims when stale (paused excepted — see isWorkerStale)
 //   4  done           — terminal, sinks to the bottom as a cleanup candidate
 export function workerSortTier(entry: WorkerEntry): number {
   const pr = entry.prState;
@@ -383,11 +384,17 @@ export function compareWorkerFreshness(a: WorkerEntry, b: WorkerEntry): number {
 // day. Deliberately far coarser than the 15-min STALE_* health constants
 // (health.ts), which mean "Claude looks hung and the poller should act"; this
 // only drives a dimmed status row. Staleness applies to tier 3 (active/recent)
-// only — blocked, new, in-flight, and done rows are never dimmed.
+// only — blocked, new, in-flight, and done rows are never dimmed. The one
+// tier-3 state that is also never dimmed is `paused`: an explicit operator hold
+// rendered in bold cyan, where a dim would both fight that color (bold overrides
+// faint) and hide a deliberate state the operator means to return to. Excluding
+// it also keeps dimRow's invariant true — every row it dims is left uncolored
+// by colorizeRow.
 export const WORKER_STALE_MS = 24 * 60 * 60 * 1000;
 
 export function isWorkerStale(entry: WorkerEntry, now: number = Date.now()): boolean {
   if (workerSortTier(entry) !== 3) return false;
+  if (entry.agentStatus === "paused") return false;
   return now - workerFreshness(entry) > WORKER_STALE_MS;
 }
 

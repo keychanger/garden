@@ -648,6 +648,8 @@ describe("worker ordering helpers", () => {
     expect(workerSortTier(mkEntry({ name: "g", prState: "merged" }))).toBe(2);
     expect(workerSortTier(mkEntry({ name: "h", agentStatus: "idle" }))).toBe(3);
     expect(workerSortTier(mkEntry({ name: "i", agentStatus: "working" }))).toBe(3);
+    // paused (operator hold) is an active/recent state, not a "needs you" one.
+    expect(workerSortTier(mkEntry({ name: "k", agentStatus: "paused" }))).toBe(3);
     expect(workerSortTier(mkEntry({ name: "j", prState: "done" }))).toBe(4);
   });
 
@@ -691,6 +693,8 @@ describe("worker ordering helpers", () => {
     // Blocked / done never dim, even when ancient.
     expect(isWorkerStale(mkEntry({ name: "c", prState: "failing", lastEventAt: old }), now)).toBe(false);
     expect(isWorkerStale(mkEntry({ name: "d", prState: "done", lastEventAt: old }), now)).toBe(false);
+    // paused is tier-3 but is an explicit operator hold (bold cyan) — never dimmed.
+    expect(isWorkerStale(mkEntry({ name: "e", agentStatus: "paused", lastEventAt: old }), now)).toBe(false);
   });
 });
 
