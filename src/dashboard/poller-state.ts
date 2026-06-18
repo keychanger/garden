@@ -191,8 +191,9 @@ export function handleFailing(
 // worker into a new work cycle (commits appear) without going through
 // UserPromptSubmit, recover into `working`.
 //
-// projectPath parameter is unused — handlers take a uniform signature so the
-// workflow registry can dispatch them through one interface (see workflows/types.ts).
+// Handlers take a uniform signature so the workflow registry can dispatch them
+// through one interface (see workflows/types.ts). projectPath is consumed here
+// by the trail-off holistic-review dispatch below.
 export function handleDone(
   projectName: string,
   projectPath: string,

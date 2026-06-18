@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { useTmpHome } from "./helpers.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
-useTmpHome();
+const env = useTmpHome();
 
 // Real config + registry (temp HOME), so the dispatcher's tryGetProject read
 // and its high-water guard write go through production code paths.
@@ -62,5 +62,29 @@ describe("maybeDispatchHolisticReview (real config + registry)", () => {
     const entry = reg.findWorkerByName("proj", "multi-phase")!;
     hol.maybeDispatchHolisticReview("proj", "/tmp/proj", "main", entry, "transitionToTerminal");
     expect(reg.findWorkerByName("proj", "multi-phase")!.holisticReviewedThroughMergeCount).toBe(3);
+  });
+});
+
+// The trail-off trigger site (the only path into holistic review for a worker
+// that finished a multi-phase task with no final merge). worktreePath points at
+// a non-git dir so getCommitSummary returns "" — the quiescent-done branch where
+// the dispatch is wired. Proves handleDone actually invokes the dispatcher;
+// maybeDispatchHolisticReview's own behavior is covered above.
+describe("handleDone wires the trail-off holistic trigger", () => {
+  it("fires the dispatcher for an eligible quiescent done worker (guard set)", async () => {
+    const { reg } = await setup("shadow", { worktreePath: env.gardenDir });
+    const ps = await import("../src/dashboard/poller-state.js");
+    const entry = reg.findWorkerByName("proj", "multi-phase")!;
+    const resumed = ps.handleDone("proj", "/tmp/proj", "main", entry);
+    expect(resumed).toBe(false); // quiescent: no commits ahead, stays done
+    expect(reg.findWorkerByName("proj", "multi-phase")!.holisticReviewedThroughMergeCount).toBe(3);
+  });
+
+  it("does not fire for an ineligible quiescent done worker (one-shot, mergeCount 1)", async () => {
+    const { reg } = await setup("shadow", { worktreePath: env.gardenDir, mergeCount: 1 });
+    const ps = await import("../src/dashboard/poller-state.js");
+    const entry = reg.findWorkerByName("proj", "multi-phase")!;
+    ps.handleDone("proj", "/tmp/proj", "main", entry);
+    expect(reg.findWorkerByName("proj", "multi-phase")!.holisticReviewedThroughMergeCount).toBeUndefined();
   });
 });
