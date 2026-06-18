@@ -16,7 +16,7 @@ import {
 import { generateWorkerName } from "./names.js";
 import {
   addWorker, removeWorker, findWorkerByName, getAllWorkerNames,
-  updateWorkerFields, getWorkers,
+  updateWorkerFields, getWorkers, type AgentStatus,
 } from "./registry.js";
 import { log } from "./log.js";
 import { resolveAndApplyVineModel } from "./trellis-model.js";
@@ -650,6 +650,92 @@ export function bounceActiveWorker(): void {
   } catch (err) {
     tmuxDisplay(`Bounce failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+// Operator "hold": interrupt the worker's current Claude turn and mark it
+// `paused`. Unlike every other agentStatus writer (hooks, pane-died), this is
+// operator-initiated — a hotkey / CLI keystroke is the event, which is exactly
+// as event-driven as a hook firing (STATUS.md invariant 6). There is no hook
+// for a user interrupt, so garden cannot observe a raw Escape; the operator
+// drives both the interrupt and the state through this one action. The next
+// UserPromptSubmit clears paused -> working, so the operator's redirect
+// unpauses it for free (the same path that clears merged/done).
+export interface HoldDecision {
+  ok: boolean;
+  // Whether to send Escape to interrupt a live turn. Only working/asking have
+  // a turn in flight; idle/ready/loading have nothing to interrupt but can
+  // still be marked paused as a deliberate "I'm holding this" signal.
+  sendEscape: boolean;
+  message: string;
+}
+
+export function decideHold(
+  entry: { agentStatus?: AgentStatus; prState?: string } | undefined,
+  worker: string,
+): HoldDecision {
+  if (!entry) return { ok: false, sendEscape: false, message: `No worker found with name '${worker}'` };
+  // Pipeline lifecycle states own the display and are not the worker's own
+  // Claude turn — you can't hold a reviewer/resolver/merge from the worker
+  // pane. (merged/done are transient/terminal agent-side states, holdable.)
+  const pr = entry.prState;
+  if (pr && pr !== "working" && pr !== "merged" && pr !== "done") {
+    return { ok: false, sendEscape: false, message: `Cannot hold ${worker}: in ${pr}. Hold only acts on an active worker turn.` };
+  }
+  const cs = entry.agentStatus;
+  if (cs === "exited") return { ok: false, sendEscape: false, message: `Cannot hold ${worker}: its process has exited.` };
+  if (cs === "paused") return { ok: false, sendEscape: false, message: `${worker} is already held.` };
+  return {
+    ok: true,
+    sendEscape: cs === "working" || cs === "asking",
+    message: `Held ${worker} (interrupted, awaiting your redirect). Prompt it to resume.`,
+  };
+}
+
+// Apply a hold by name. Returns the decision so callers can surface the
+// message. Idempotent: holding an already-held worker is a no-op.
+export function holdWorker(project: string, worker: string): HoldDecision {
+  const entry = findWorkerByName(project, worker);
+  const decision = decideHold(entry, worker);
+  if (!decision.ok) return decision;
+  if (decision.sendEscape) {
+    const paneId = resolveWorkerPaneId(project, worker);
+    if (paneId) tmux("send-keys", "-t", paneId, "Escape");
+  }
+  updateWorkerFields(project, worker, { agentStatus: "paused" });
+  refreshDashboard();
+  return decision;
+}
+
+// Release a held worker back to idle without sending a prompt. The next
+// prompt would clear paused anyway (UserPromptSubmit -> working); this is the
+// "never mind" escape hatch for the dashboard toggle.
+export function releaseWorker(project: string, worker: string): { ok: boolean; message: string } {
+  const entry = findWorkerByName(project, worker);
+  if (!entry) return { ok: false, message: `No worker found with name '${worker}'` };
+  if (entry.agentStatus !== "paused") return { ok: true, message: `${worker} is not held.` };
+  updateWorkerFields(project, worker, { agentStatus: "idle" });
+  refreshDashboard();
+  return { ok: true, message: `Released ${worker}.` };
+}
+
+// Dashboard hotkey: toggle hold/release on the focused worker pane. Held ->
+// release; anything else -> hold.
+export function holdActiveWorker(): void {
+  const state = readDashState();
+  if (state.activePaneType !== "worker" || !state.activeProject || !state.activeWindowName) {
+    tmuxDisplay("Hold only works on worker panes.");
+    return;
+  }
+  const workerName = parseWorkerSuffix(state.activeWindowName);
+  if (!workerName) {
+    tmuxDisplay("Could not identify active worker.");
+    return;
+  }
+  const entry = findWorkerByName(state.activeProject, workerName);
+  const result = entry?.agentStatus === "paused"
+    ? releaseWorker(state.activeProject, workerName)
+    : holdWorker(state.activeProject, workerName);
+  tmuxDisplay(result.message);
 }
 
 function resolveWorkerPaneId(project: string, worker: string): string | null {

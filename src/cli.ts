@@ -114,6 +114,7 @@ Dashboard:
   health                         Check dashboard state consistency
   kick <worker>                  Re-arm a stranded 'working' worker for review
   bounce <worker>                Restart a worker's Claude process (preserves session history)
+  hold <worker>                  Interrupt a working worker and mark it 'paused' (sends Escape; ⌥e in the dashboard toggles this on the focused worker; the next prompt resumes it)
   pause <worker>                 Suppress post-merge auto-continue (writes the .garden-done sentinel; a worker UserPromptSubmit also clears it, so prompting an explicitly-paused worker is itself an unpause)
   resume <worker>                Re-arm post-merge auto-continue (clears the .garden-done sentinel)
   handoff <project> [-m "<msg>"] Spawn a fresh worker on <project> seeded with a briefing (stdin or -m)

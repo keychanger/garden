@@ -21,6 +21,7 @@ These are the only states the user sees in the status pane.
 | working       | `@`  | Claude is generating a response to a submitted prompt. See "What 'working' means" below. |
 | asking        | `?`  | Claude is blocked mid-turn waiting for operator input — plan approval, a question answer, or a permission-request escalation. The turn has not ended. |
 | idle          | `#`  | Turn has ended — Claude finished its response and is waiting at the prompt for the next user message. Not in the review cycle. |
+| paused        | `‖`  | Operator interrupted the worker mid-turn and is holding it (the `hold` action / `⌥e`). Distinct from `idle`: the operator deliberately halted active work and intends to redirect. Cleared by the next prompt. See "Operator hold" below. |
 | reviewing     | `%`  | Automated reviewer is checking the worker's code. |
 | merge-pending | `&`  | Review passed. Queued for merge.                 |
 | resolving     | `~`  | Automated resolver is fixing a merge-queue rebase conflict. |
@@ -59,6 +60,31 @@ is a bug — the PreToolUse hook for the blocking tool (`ExitPlanMode`,
 `AskUserQuestion`) didn't fire or didn't reach the registry. The correct
 state in that situation is `asking`.
 
+### Operator hold (paused)
+
+There is one case where a worker that is *not* working can still legitimately
+display `working`, and it is the reason the `paused` state exists: a **user
+interrupt**. When the operator presses Escape in the worker's Claude pane, the
+turn is aborted but **no hook fires** — Claude Code's `Stop` hook does not run
+on a user interrupt, and there is no interrupt/abort hook at all. So the
+registry never hears about the interrupt and the worker stays painted as
+`working` until the operator submits a new prompt.
+
+The `paused` state closes that gap, but only as an *operator-initiated* action,
+because a raw Escape is unobservable. The `hold` action (`garden hold <worker>`
+or the dashboard `⌥e` hotkey on the focused worker) does two things atomically:
+it sends Escape to the worker's pane (the interrupt) and writes
+`agentStatus = "paused"`. The operator action — a keystroke — is the event; it
+is exactly as event-driven as a hook firing (invariant 6). `paused` means "the
+operator deliberately halted this worker mid-turn and is holding it for a
+redirect"; it is distinct from `idle` (turn ended naturally) in provenance and
+intent, even though both sit at the prompt awaiting input.
+
+`paused` clears the moment the operator submits their redirect
+(`UserPromptSubmit → working`), the same path that clears `merged`/`done`. The
+dashboard `⌥e` hotkey also toggles: pressing it on an already-held worker
+releases it back to `idle` (the "never mind" path) without sending a prompt.
+
 ## State transitions
 
 ```mermaid
@@ -71,13 +97,19 @@ stateDiagram-v2
     working --> asking : PreToolUse (mid-turn user-input)
     working --> asking : PermissionRequest
     working --> reviewing : Stop / new commits
+    working --> paused : operator hold
+    asking --> paused : operator hold
 
     idle --> working : UserPromptSubmit
     idle --> working : PostToolUse (self-heal)
     idle --> asking : PreToolUse (self-heal)
+    idle --> paused : operator hold
 
     asking --> working : UserPromptSubmit
     asking --> working : PostToolUse (mid-turn resume)
+
+    paused --> working : UserPromptSubmit (redirect)
+    paused --> idle : operator release
 
     reviewing --> merge_pending : reviewer Stop (passes)
     reviewing --> failing : reviewer Stop (fails)
@@ -139,6 +171,11 @@ a terminal state — it returns to `working` when the operator responds
 | idle          | asking        | Worker `PreToolUse` (self-heal; stale idle)          |
 | asking        | working       | Worker `UserPromptSubmit`                            |
 | asking        | working       | Worker `PostToolUse` (mid-turn resume)               |
+| working       | paused        | Operator `hold` action (`garden hold` / `⌥e`)        |
+| asking        | paused        | Operator `hold` action                               |
+| idle          | paused        | Operator `hold` action                               |
+| paused        | working       | Worker `UserPromptSubmit` (operator's redirect)      |
+| paused        | idle          | Operator release (`⌥e` toggle on a held worker)      |
 | reviewing     | merge-pending | Reviewer `Stop` with verdict CLEAN or FIXED          |
 | reviewing     | failing       | Reviewer `Stop` with verdict FAILED                  |
 | reviewing     | working       | Worker push event (commits during review, aborted)   |
@@ -177,7 +214,7 @@ pokes can land again. It discovers nothing and transitions nothing. See
 
 ### Event sources
 
-Four sources cover the entire state machine.
+Five sources cover the entire state machine.
 
 **1. Claude Code hooks** — `SessionStart`, `UserPromptSubmit`, `Stop`,
 `PreToolUse`, `PostToolUse`.
@@ -234,6 +271,23 @@ pane process exits. The dashboard listens and writes
 Drives:
 
 - `any → exited`
+
+**5. Operator hold action** — `garden hold <worker>` or the dashboard `⌥e`
+hotkey. The operator keystroke is the event: it sends Escape to the worker's
+pane (interrupting the live turn) and writes `agentStatus = "paused"`. This is
+the only operator-initiated state writer, and it exists because a user
+interrupt is invisible to every Claude Code hook (see "Operator hold (paused)"
+above). It is not a clock or a poll — it fires once per operator action, so it
+respects invariant 6 exactly as a hook does.
+
+Drives:
+
+- `working → paused`, `asking → paused`, `idle → paused` (hold)
+- `paused → idle` (release; the `⌥e` toggle on an already-held worker)
+
+The exit from `paused` toward active work is owned by the hook source, not this
+one: `paused → working` fires on the worker's `UserPromptSubmit` when the
+operator submits their redirect.
 
 ### Scheduled wake-ups (deliberate, finite, event-tied)
 
@@ -442,7 +496,8 @@ clock. Update the list above when you do.
 6. **Every transition is event-triggered.** No transition is discovered
    by a recurring tick or fallback poll. The poller wakes only when
    poked by an event (a hook firing, a worker pushing, a reviewer
-   exiting, a merge queue item completing) and does one unit of work.
+   exiting, a merge queue item completing, an operator holding a worker)
+   and does one unit of work.
    The system schedules one-shot wake-ups for hold-offs and hand-offs
    (failing-debounce, reviewer wall-clock cap, auto-continue delays —
    see "Scheduled wake-ups" above), but those are tied to specific
@@ -481,7 +536,7 @@ clock. Update the list above when you do.
 ## Detection machinery
 
 The status of every worker is two fields in the registry: `agentStatus`
-and `prState`. There are exactly four writers and one reader. There is
+and `prState`. There are exactly five writers and one reader. There is
 no `pgrep`, no marker file, no activity-text parsing, no fallback poll.
 
 ### Writers
@@ -582,6 +637,14 @@ excluded from triggering its OWN holistic review by the gate's `workflow ===
 "default"` clause). A SHADOW holistic worker that reaches quiescent `done` has
 its findings surfaced and consumed by `finalizeShadowHolistic` (called from
 `handleDone`) — a side effect, not a state write.
+
+**The operator `hold` action** writes `agentStatus = "paused"` (and, on
+release, `idle`). This is the only operator-initiated writer of either field;
+it is driven by `garden hold <worker>` or the dashboard `⌥e` hotkey
+(`holdActiveWorker` / `holdWorker` in `workers.ts`), not by any hook or tick.
+It exists because a user interrupt is invisible to every Claude Code hook, so
+the only way `paused` can be reached is an explicit operator action. `paused`
+is never written by a hook; it is cleared by one (`UserPromptSubmit → working`).
 
 ### Reader
 

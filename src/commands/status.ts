@@ -22,7 +22,7 @@ import { diaryHasContent } from "../diary.js";
 // come from prState (written by the poller and the Stop hook). The combine
 // function gives prState priority because it describes where the worker's
 // *code* is.
-export type ProcessStatus = "loading" | "ready" | "working" | "asking" | "idle" | "exited";
+export type ProcessStatus = "loading" | "ready" | "working" | "asking" | "idle" | "paused" | "exited";
 type LifecycleStatus = "reviewing" | "merge-pending" | "resolving" | "ci-fixing" | "failing" | "merged" | "done";
 type WorkerStatus = ProcessStatus | LifecycleStatus;
 
@@ -80,6 +80,7 @@ const STATUS_ICONS: Record<WorkerStatus, string> = {
   working:        SPINNER_FRAMES[0],
   asking:         "\u2691",     // black flag — worker is blocked on operator input
   idle:           "\u25C6",     // filled diamond
+  paused:         "\u2016",     // double vertical bar - operator-held (interrupted, awaiting redirect)
   reviewing:      "\u25CE",     // bullseye
   "merge-pending": "\u25F7",    // circle with right half - queued
   resolving:      "\u25D4",     // circle with upper-right quadrant - resolving
@@ -208,6 +209,9 @@ function colorizeRow(status: WorkerStatus, line: string): string {
   if (status === "asking") return `\x1b[1;33m${line}\x1b[0m`;
   if (status === "failing") return `\x1b[1;31m${line}\x1b[0m`;
   if (status === "done") return `\x1b[1;32m${line}\x1b[0m`;
+  // paused is operator-controlled, not urgent — bold cyan marks it as a
+  // deliberate hold, distinct from the yellow/red/green attention states.
+  if (status === "paused") return `\x1b[1;36m${line}\x1b[0m`;
   return line;
 }
 

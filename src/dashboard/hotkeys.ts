@@ -33,6 +33,11 @@ export function setupKeybindings(gardenRunner: string): void {
   bindMeta("w", `${gr} dashboard _focus-worker`);
   bindMeta("x", `${gr} dashboard _kill-pane`);
   bindMeta("b", `${gr} dashboard _bounce`);
+  // ⌥e — the tracked Escape: interrupt the focused worker's turn and mark it
+  // `paused` (toggles back to idle when already held). Garden cannot observe a
+  // raw Escape (no Claude Code hook fires on interrupt), so this is how a
+  // deliberate hold becomes visible in the dashboard.
+  bindMeta("e", `${gr} dashboard _hold-worker`);
 
   // Navigation
   bindMeta("]", `${gr} dashboard _cycle-pane next`);

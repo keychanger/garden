@@ -14,9 +14,10 @@ import { atomicWriteFile } from "./atomic-write.js";
 import { withFileLock } from "./file-lock.js";
 import { log } from "./log.js";
 
-// agentStatus is written by Claude Code hooks and the tmux pane-died handler.
-// prState is written by the poller. There are no other writers. See STATUS.md.
-export type AgentStatus = "loading" | "ready" | "working" | "asking" | "idle" | "exited";
+// agentStatus is written by Claude Code hooks, the tmux pane-died handler, and
+// the operator `hold` action (which writes "paused"). prState is written by
+// the poller. There are no other writers. See STATUS.md.
+export type AgentStatus = "loading" | "ready" | "working" | "asking" | "idle" | "paused" | "exited";
 export type PrState = "working" | "reviewing" | "merge-pending" | "resolving" | "ci-fixing" | "merged" | "done" | "failing";
 
 // Operational classification of each prState, the single source of truth for

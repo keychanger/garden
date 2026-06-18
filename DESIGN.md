@@ -111,6 +111,7 @@ Requires terminal setup: iTerm2 → Profiles → Keys → Left Option key → "E
 | `⌥]` / `⌥[` | Cycle workers and shell |
 | `⌥x` | Kill current worker (shell is protected) |
 | `⌥b` | Bounce current worker (restart Claude via `--resume`, preserve history) |
+| `⌥e` | Hold/release current worker — interrupt its turn (sends Escape) and mark it `paused`; toggles back to `idle` when already held |
 | `⌥g` | Focus growhouse (lower-left) |
 | `⌥r` | Focus root shell (lower-left) |
 | `⌥l` | Focus logs view (lower-left); also acknowledges the alert badge |
@@ -303,7 +304,7 @@ The display combines both axes: lifecycle state takes priority when present, oth
 
 **Base-branch divergence indicator**: a worker whose pinned `baseBranch` differs from the branch currently checked out in its project's main directory gets a yellow `→ <baseBranch>` appended to its row in the status pane. This is the leading-indicator surface for the "did not fast-forward after merge" alert pattern: workers pin their base at creation time, so switching the project's checkout afterwards leaves any in-flight workers merging to the old branch. The yellow arrow makes that pin/checkout mismatch visible without requiring a registry inspection. The project's current branch itself isn't repeated next to the project name — the bottom status bar (`formatLeft` in `header.ts`) already shows it for the active project. The post-merge alert is similarly differentiated — `notifyPostMerge` distinguishes the "off-base" case (operator switched checkouts, local base ref is now stale) from the "stuck" case (dirty tree or divergent local base) and names both the worker's base and the current checkout in the off-base message.
 
-The full specification for status tracking and display lives in `docs/STATUS.md`. The registry is the single source of truth: Claude Code hooks (`SessionStart`, `UserPromptSubmit`, `Stop`) write `agentStatus`; the poller writes `prState`; the tmux `pane-died` hook writes `agentStatus="exited"`. There is no pgrep, no marker file, no fallback poll. Every transition is event-triggered. The single recurring tick in the system is the liveness watchdog (`watchdog.ts`, `_garden-watchdog` window): every 60 s it (1) re-pokes any project holding a worker stranded in an active state past a 5 min staleness threshold, recovering dropped one-shot pokes (poller respawn gap, reboot-killed detached wake-ups), and (2) keeps each project's poller window healthy — respawning it if it died uncleanly (a poke is useless with no poller reading the FIFO) and collapsing duplicates to one if a spawn race left several (resolving windows by index, since a tmux name target is ambiguous across duplicates). Both actions only restore lost event delivery — it never transitions state itself.
+The full specification for status tracking and display lives in `docs/STATUS.md`. The registry is the single source of truth: Claude Code hooks (`SessionStart`, `UserPromptSubmit`, `Stop`) write `agentStatus`; the poller writes `prState`; the tmux `pane-died` hook writes `agentStatus="exited"`; the operator `hold` action (`⌥e` / `garden hold`) writes `agentStatus="paused"` (the one operator-initiated writer — a raw Escape interrupt fires no hook, so a deliberate halt is otherwise invisible). There is no pgrep, no marker file, no fallback poll. Every transition is event-triggered. The single recurring tick in the system is the liveness watchdog (`watchdog.ts`, `_garden-watchdog` window): every 60 s it (1) re-pokes any project holding a worker stranded in an active state past a 5 min staleness threshold, recovering dropped one-shot pokes (poller respawn gap, reboot-killed detached wake-ups), and (2) keeps each project's poller window healthy — respawning it if it died uncleanly (a poke is useless with no poller reading the FIFO) and collapsing duplicates to one if a spawn race left several (resolving windows by index, since a tmux name target is ambiguous across duplicates). Both actions only restore lost event delivery — it never transitions state itself.
 
 ## Commands
 
@@ -349,6 +350,7 @@ garden kick <worker>               # Re-arm a stranded 'working' worker for revi
                                    # `failing` workers whose failingReason is review-side
                                    # (`unparseable-verdict` / `transient-review`)
 garden bounce <worker>             # Restart a worker's Claude process (preserves session history)
+garden hold <worker>               # Interrupt a working worker and mark it 'paused' (⌥e in the dashboard; next prompt resumes)
 garden pause <worker>              # Suppress post-merge auto-continue (writes the .garden-done sentinel)
 garden resume <worker>             # Re-arm post-merge auto-continue (clears the .garden-done sentinel)
 garden handoff <project> [--expect-callback] [-m ...]  # Spawn a fresh worker on <project> seeded with a briefing (stdin or -m); callback fires a prompt at the source pane on terminal state

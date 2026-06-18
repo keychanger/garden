@@ -99,6 +99,7 @@ describe("resolveWorkerStatus", () => {
     expect(resolveWorkerStatus({ agentStatus: "working" })).toBe("working");
     expect(resolveWorkerStatus({ agentStatus: "asking" })).toBe("asking");
     expect(resolveWorkerStatus({ agentStatus: "idle" })).toBe("idle");
+    expect(resolveWorkerStatus({ agentStatus: "paused" })).toBe("paused");
     expect(resolveWorkerStatus({ agentStatus: "exited" })).toBe("exited");
   });
 
@@ -112,6 +113,8 @@ describe("resolveWorkerStatus", () => {
     expect(resolveWorkerStatus({ agentStatus: "idle", prState: "merge-pending" })).toBe("merge-pending");
     expect(resolveWorkerStatus({ agentStatus: "working", prState: "failing" })).toBe("failing");
     expect(resolveWorkerStatus({ agentStatus: "idle", prState: "merged" })).toBe("merged");
+    // A pipeline state still wins even over an operator-set paused agentStatus.
+    expect(resolveWorkerStatus({ agentStatus: "paused", prState: "reviewing" })).toBe("reviewing");
   });
 
   it("prState='working' is not displayed (agentStatus shows through)", () => {
@@ -184,6 +187,16 @@ describe("status display", () => {
     ]);
     const lines = await captureConsoleLog(() => status([]));
     expect(lines.some(l => l.includes("exited"))).toBe(true);
+  });
+
+  it("shows paused from registry and wraps the row in bold-cyan", async () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "held by operator", agentStatus: "paused" },
+    ]);
+    const lines = await captureConsoleLog(() => status([]));
+    const pausedLine = lines.find(l => l.includes("paused") && l.includes("bold-ash"));
+    expect(pausedLine).toBeDefined();
+    expect(pausedLine).toMatch(/\x1b\[1;36m/);
   });
 });
 
@@ -360,6 +373,15 @@ describe("renderQuickStatus", () => {
     ]);
     const result = renderQuickStatus(state);
     expect(result).not.toMatch(/\x1b\[1;32m[^\n]*bold-ash/);
+  });
+
+  it("renders paused rows wrapped in bold-cyan ANSI", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "held by operator", agentStatus: "paused" },
+    ]);
+    const result = renderQuickStatus(state);
+    expect(result).toContain("paused");
+    expect(result).toMatch(/\x1b\[1;36m[^\n]*bold-ash[^\n]*\x1b\[0m/);
   });
 
   it("renders reviewing even if agentStatus is working", () => {

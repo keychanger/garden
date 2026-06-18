@@ -13,7 +13,7 @@ import { printHeader, handlePaneDied, handleTitleChanged } from "./header.js";
 import { handleClaudeHook } from "./hook-dispatcher.js";
 import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
-import { newWorker, killPane, bounceActiveWorker } from "./workers.js";
+import { newWorker, killPane, bounceActiveWorker, holdActiveWorker } from "./workers.js";
 import {
   continueWorker, continueWorkerAfterMerge, continueWorkerAfterMergeIfStuck,
   continueWorkerIfStuck, rearmContinueIfDrafting, seedWorker,
@@ -111,6 +111,7 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   if (sub === "_cycle-plot") return cyclePlot(args[1] === "prev" ? -1 : 1);
   if (sub === "_kill-pane") return killPane();
   if (sub === "_bounce") return bounceActiveWorker();
+  if (sub === "_hold-worker") return holdActiveWorker();
   if (sub === "_continue-worker") {
     if (args[1] && args[2]) {
       const delivered = continueWorker(args[1], args[2]);

@@ -137,7 +137,10 @@ vi.mock("../src/dashboard/poller.js", () => ({
 
 // --- Imports (after mocks) ---
 
-import { newWorker, killPane, bounceWorker, bounceActiveWorker } from "../src/dashboard/workers.js";
+import {
+  newWorker, killPane, bounceWorker, bounceActiveWorker,
+  decideHold, holdWorker, releaseWorker, holdActiveWorker,
+} from "../src/dashboard/workers.js";
 import { readDashState, writeDashState, withStateLock } from "../src/dashboard/state.js";
 import { parkToHidden, restoreFromHidden } from "../src/dashboard/layout.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
@@ -1040,5 +1043,152 @@ describe("bounceActiveWorker", () => {
     expect(vi.mocked(tmuxDisplay)).toHaveBeenCalledWith(
       expect.stringContaining("worker panes"),
     );
+  });
+});
+
+describe("decideHold", () => {
+  it("refuses when there is no entry", () => {
+    expect(decideHold(undefined, "ghost")).toMatchObject({ ok: false });
+    expect(decideHold(undefined, "ghost").message).toContain("No worker found");
+  });
+
+  it("refuses a worker in a pipeline lifecycle state", () => {
+    for (const pr of ["reviewing", "merge-pending", "resolving", "ci-fixing", "failing"]) {
+      const d = decideHold({ agentStatus: "working", prState: pr }, "w");
+      expect(d.ok).toBe(false);
+      expect(d.message).toContain(pr);
+    }
+  });
+
+  it("allows holding a merged/done worker (agent-side, not pipeline)", () => {
+    expect(decideHold({ agentStatus: "working", prState: "merged" }, "w").ok).toBe(true);
+    expect(decideHold({ agentStatus: "idle", prState: "done" }, "w").ok).toBe(true);
+  });
+
+  it("refuses an exited worker and an already-held worker", () => {
+    expect(decideHold({ agentStatus: "exited" }, "w").ok).toBe(false);
+    const held = decideHold({ agentStatus: "paused" }, "w");
+    expect(held.ok).toBe(false);
+    expect(held.message).toContain("already held");
+  });
+
+  it("sends Escape only for an active turn (working/asking), not idle/ready", () => {
+    expect(decideHold({ agentStatus: "working" }, "w")).toMatchObject({ ok: true, sendEscape: true });
+    expect(decideHold({ agentStatus: "asking" }, "w")).toMatchObject({ ok: true, sendEscape: true });
+    expect(decideHold({ agentStatus: "idle" }, "w")).toMatchObject({ ok: true, sendEscape: false });
+    expect(decideHold({ agentStatus: "ready" }, "w")).toMatchObject({ ok: true, sendEscape: false });
+  });
+});
+
+describe("holdWorker", () => {
+  it("interrupts a working worker and marks it paused", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ activeWindowName: "_myproject-worker-swift-oak" }));
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "s", task: "", agentStatus: "working",
+      worktreePath: "/wt/swift-oak",
+    });
+
+    const result = holdWorker("myproject", "swift-oak");
+
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(tmux)).toHaveBeenCalledWith("send-keys", "-t", "%2", "Escape");
+    expect(vi.mocked(updateWorkerFields)).toHaveBeenCalledWith(
+      "myproject", "swift-oak", { agentStatus: "paused" },
+    );
+    expect(vi.mocked(refreshDashboard)).toHaveBeenCalled();
+  });
+
+  it("does not send Escape or mutate state for a pipeline worker", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "s", task: "", agentStatus: "working", prState: "reviewing",
+    });
+
+    const result = holdWorker("myproject", "swift-oak");
+
+    expect(result.ok).toBe(false);
+    expect(vi.mocked(tmux)).not.toHaveBeenCalledWith("send-keys", "-t", expect.any(String), "Escape");
+    expect(vi.mocked(updateWorkerFields)).not.toHaveBeenCalled();
+  });
+
+  it("does not send Escape for an idle worker but still marks it paused", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "s", task: "", agentStatus: "idle",
+    });
+
+    holdWorker("myproject", "swift-oak");
+
+    expect(vi.mocked(tmux)).not.toHaveBeenCalledWith("send-keys", "-t", expect.any(String), "Escape");
+    expect(vi.mocked(updateWorkerFields)).toHaveBeenCalledWith(
+      "myproject", "swift-oak", { agentStatus: "paused" },
+    );
+  });
+});
+
+describe("releaseWorker", () => {
+  it("returns a held worker to idle", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "s", task: "", agentStatus: "paused",
+    });
+
+    const result = releaseWorker("myproject", "swift-oak");
+
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(updateWorkerFields)).toHaveBeenCalledWith(
+      "myproject", "swift-oak", { agentStatus: "idle" },
+    );
+  });
+
+  it("is a no-op for a worker that is not held", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "s", task: "", agentStatus: "working",
+    });
+
+    const result = releaseWorker("myproject", "swift-oak");
+
+    expect(result.message).toContain("not held");
+    expect(vi.mocked(updateWorkerFields)).not.toHaveBeenCalled();
+  });
+});
+
+describe("holdActiveWorker", () => {
+  it("holds the focused working worker", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "s", task: "", agentStatus: "working",
+      worktreePath: "/wt/swift-oak",
+    });
+
+    holdActiveWorker();
+
+    expect(vi.mocked(updateWorkerFields)).toHaveBeenCalledWith(
+      "myproject", "swift-oak", { agentStatus: "paused" },
+    );
+    expect(vi.mocked(tmuxDisplay)).toHaveBeenCalledWith(expect.stringContaining("Held"));
+  });
+
+  it("toggles a held worker back to idle (release)", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "s", task: "", agentStatus: "paused",
+    });
+
+    holdActiveWorker();
+
+    expect(vi.mocked(updateWorkerFields)).toHaveBeenCalledWith(
+      "myproject", "swift-oak", { agentStatus: "idle" },
+    );
+    expect(vi.mocked(tmuxDisplay)).toHaveBeenCalledWith(expect.stringContaining("Released"));
+  });
+
+  it("refuses when the active pane is the project shell", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activePaneType: "shell",
+      activeWindowName: "_myproject-shell",
+    }));
+
+    holdActiveWorker();
+
+    expect(vi.mocked(updateWorkerFields)).not.toHaveBeenCalled();
+    expect(vi.mocked(tmuxDisplay)).toHaveBeenCalledWith(expect.stringContaining("worker panes"));
   });
 });
