@@ -16,13 +16,19 @@ import { workerWindowPrefix } from "./window-names.js";
 // test's refreshAlertBadge writing @garden_right on the live session, then
 // wiped by the dashboard's next legitimate refresh.
 //
-// So mutating tmux commands are inert by default under the runner. Tests that
-// assert tmux behavior either mock this module wholesale (the real functions
-// never run) or — like tmux-extended.test.ts — mock `execFileSync` to exercise
-// the wrapper argv directly without touching a real server; the latter opt back
-// in via __setTmuxExecAllowedForTests(true), which is safe precisely because
-// their execFileSync is a stub. VITEST is set to "true" by the runner in every
-// test worker process and never in the built CLI/hook binaries, so production
+// So mutating tmux commands are inert by default under the runner. Every
+// helper that runs a tmux command with side effects guards on this flag:
+// tmux() and pasteAndSubmit() (which shell out via their own execFileSync),
+// plus tmuxSplit() (split-window) and tmuxNewWindow() (new-window). Read-only
+// helpers (tmuxOutput / capturePaneText / capturePaneCursor) are left
+// unguarded — they observe the live server but never mutate it. A new mutating
+// helper must add the same guard. Tests that assert tmux behavior either mock
+// this module wholesale (the real functions never run) or — like
+// tmux-extended.test.ts — mock `execFileSync` to exercise the wrapper argv
+// directly without touching a real server; the latter opt back in via
+// __setTmuxExecAllowedForTests(true), which is safe precisely because their
+// execFileSync is a stub. VITEST is set to "true" by the runner in every test
+// worker process and never in the built CLI/hook binaries, so production
 // behavior is unchanged.
 let tmuxExecAllowed = process.env.VITEST !== "true";
 
@@ -131,6 +137,7 @@ export function tmuxOutput(...args: string[]): string {
 }
 
 export function tmuxSplit(...args: string[]): string {
+  if (!tmuxExecAllowed) return "";
   try {
     return execFileSync("tmux", ["split-window", "-P", "-F", "#{pane_id}", ...args], {
       encoding: "utf-8",
@@ -142,6 +149,7 @@ export function tmuxSplit(...args: string[]): string {
 }
 
 export function tmuxNewWindow(...args: string[]): string {
+  if (!tmuxExecAllowed) return "";
   try {
     return execFileSync("tmux", ["new-window", "-P", "-F", "#{pane_id}", ...args], {
       encoding: "utf-8",

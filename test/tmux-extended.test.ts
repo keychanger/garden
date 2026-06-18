@@ -82,13 +82,18 @@ afterEach(() => {
 // ===========================================================================
 
 describe("tmux exec disabled under the runner", () => {
-  it("tmux() and pasteAndSubmit() never shell out when exec is disallowed", () => {
+  it("no mutating helper shells out when exec is disallowed", () => {
     // Reproduces the fix for the live-dashboard badge flash: a test running on
     // a machine with a live `garden-dashboard` session must not let
     // refreshAlertBadge's `tmux set-option @garden_right` reach the real server.
+    // The guard covers every mutating helper — tmux() and pasteAndSubmit() plus
+    // the window/pane creators tmuxSplit() and tmuxNewWindow(), which would
+    // otherwise spawn real windows in the operator's dashboard.
     __setTmuxExecAllowedForTests(false);
     tmux("set-option", "-t", "garden-dashboard", "@garden_right", "#[bg=red] ⚠ 1 alert — ⌥l to clear ");
     pasteAndSubmit("%1", "phantom keystrokes");
+    expect(tmuxSplit("-v", "-t", "garden-dashboard")).toBe("");
+    expect(tmuxNewWindow("-d", "-t", "garden-dashboard", "-n", "phantom")).toBe("");
     expect(mockExecFileSync).not.toHaveBeenCalled();
   });
 
