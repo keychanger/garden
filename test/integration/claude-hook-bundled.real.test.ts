@@ -38,6 +38,14 @@ const WORKER = "bold-ash";
 let worktreePath: string;
 
 beforeEach(() => {
+  // Reviewer env var leaks in when these tests run inside `garden review`
+  // (the reviewer process exports GARDEN_REVIEWER=1, and the spawn helpers
+  // inherit process.env). handleClaudeHook short-circuits on it before
+  // dispatching, so the bundled-hook regression checks would silently pass
+  // without exercising the dispatcher. Clear it so the child behaves as a
+  // worker regardless of host — matching the sibling claude-hook.real.test.ts.
+  delete process.env.GARDEN_REVIEWER;
+
   runCli(["init"], { home: env.home });
 
   // Seed a worktree-shaped cwd. We don't need a real git worktree — just a
