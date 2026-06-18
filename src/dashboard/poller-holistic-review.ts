@@ -8,11 +8,11 @@
 //
 // Phasing: Phase 1 wired the two trigger sites — transitionToTerminal
 // (merge-driven done) and handleDone (trail-off done) — to evaluate the gate
-// and emit the decision trace (mode "off": no spawn). Phase 2 (current) spawns
-// a holistic worker for mode "shadow" | "fix": shadow writes findings to
+// and emit the decision trace (mode "off": no spawn). Phase 2 spawns a holistic
+// worker for mode "shadow" | "fix": shadow writes findings to
 // HOLISTIC_FINDINGS_FILE (surfaced by finalizeShadowHolistic), fix commits
-// through the normal review/merge gate. Phase 3 adds the reviewer interlock
-// that hands the cross-phase rationale to the fix branch's reviewer.
+// through the normal review/merge gate. Phase 3 (current) adds the reviewer
+// interlock that hands the cross-phase rationale to the fix branch's reviewer.
 //
 // The high-water guard is set the moment a completion is found eligible — even
 // in mode "off" — so the decision fires exactly once per done-arrival on both
