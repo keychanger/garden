@@ -21,7 +21,7 @@ import { execFileSync } from "node:child_process";
 import { SESSIONS_DIR, tryGetProject } from "../config.js";
 import { findWorkerByName } from "./registry.js";
 import {
-  getChangedFilesBetween, getCommitLogRange, resolveHolisticDiff, getRemoteTrackingSha,
+  getChangedFilesBetween, getCommitLogRange, resolveHolisticDiff,
 } from "./git.js";
 import { buildHolisticSeed } from "./poller-holistic-review.js";
 
@@ -42,15 +42,20 @@ function readBaseReflog(repoPath: string, baseBranch: string): ReflogEntry[] {
   return entries.sort((a, b) => a.epoch - b.epoch);
 }
 
-// Epoch (seconds) of each "merged to base branch" log event for this worker.
-function workerMergeEpochs(worker: string): number[] {
-  if (!fs.existsSync(LOG_FILE)) return [];
+// Epoch (seconds) of each actual merge for this worker, ascending. A single
+// successful merge logs "merged to base branch" TWICE — once from mergeToBase
+// (src "git", the real base push) and once from finalizeMerge's poller line —
+// so matching on msg+worker alone would double every worker's merge count and
+// let a single-merge (non-multi-phase) worker slip past the `mergeCount < 2`
+// guard. Count only the src:"git" line: it fires exactly once per base push,
+// including a resumed interrupted merge (whose poller line never ran).
+export function workerMergeEpochs(logText: string, worker: string): number[] {
   const epochs: number[] = [];
-  for (const line of fs.readFileSync(LOG_FILE, "utf-8").split("\n")) {
+  for (const line of logText.split("\n")) {
     if (!line) continue;
     try {
-      const e = JSON.parse(line) as { ts?: string; worker?: string; msg?: string };
-      if (e.worker === worker && e.msg === "merged to base branch" && e.ts) {
+      const e = JSON.parse(line) as { ts?: string; src?: string; worker?: string; msg?: string };
+      if (e.src === "git" && e.worker === worker && e.msg === "merged to base branch" && e.ts) {
         epochs.push(Date.parse(e.ts) / 1000);
       }
     } catch { /* skip malformed line */ }
@@ -92,7 +97,8 @@ export async function runHolisticBacktest(args: string[]): Promise<void> {
 
   const entry = findWorkerByName(project, worker);
   const baseBranch = flags.base ?? entry?.baseBranch ?? "main";
-  const mergeEpochs = workerMergeEpochs(worker);
+  const logText = fs.existsSync(LOG_FILE) ? fs.readFileSync(LOG_FILE, "utf-8") : "";
+  const mergeEpochs = workerMergeEpochs(logText, worker);
   const mergeCount = mergeEpochs.length;
 
   // Reconstruct the diff endpoints (explicit flags win; else reflog join).
