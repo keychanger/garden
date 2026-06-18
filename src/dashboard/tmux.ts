@@ -5,6 +5,33 @@ import { DASHBOARD_SESSION } from "../session.js";
 import { log } from "./log.js";
 import { workerWindowPrefix } from "./window-names.js";
 
+// Test isolation: the dashboard drives a single hardcoded tmux session
+// (DASHBOARD_SESSION = "garden-dashboard"). The vitest suite is routinely run
+// on a machine that HAS a live dashboard — every garden worker runs `npm test`
+// as part of its checks. A test that exercises addAlert / refreshAlertBadge /
+// poller / hook flows WITHOUT mocking this module would otherwise shell out to
+// the operator's live session and mutate it. The observed symptom: a fake
+// "⚠ 1 alert — ⌥l to clear" badge (rendered "garden dev", the unbuilt version
+// string) flashing onto the real status bar with no matching real alert — a
+// test's refreshAlertBadge writing @garden_right on the live session, then
+// wiped by the dashboard's next legitimate refresh.
+//
+// So mutating tmux commands are inert by default under the runner. Tests that
+// assert tmux behavior either mock this module wholesale (the real functions
+// never run) or — like tmux-extended.test.ts — mock `execFileSync` to exercise
+// the wrapper argv directly without touching a real server; the latter opt back
+// in via __setTmuxExecAllowedForTests(true), which is safe precisely because
+// their execFileSync is a stub. VITEST is set to "true" by the runner in every
+// test worker process and never in the built CLI/hook binaries, so production
+// behavior is unchanged.
+let tmuxExecAllowed = process.env.VITEST !== "true";
+
+// Test-only seam: re-enable real exec for tests that mock execFileSync and
+// assert on the wrapper's argv. Never called from production code.
+export function __setTmuxExecAllowedForTests(allowed: boolean): void {
+  tmuxExecAllowed = allowed;
+}
+
 // Re-throws with tmux's stderr appended. Without this the caller sees a bare
 // "Command failed: tmux ..." with no reason — and tmux failures from inside a
 // Claude Code sandbox ("Operation not permitted" on the server socket) are
@@ -17,6 +44,7 @@ function rethrowWithStderr(err: unknown, label: string): never {
 }
 
 export function tmux(...args: string[]): void {
+  if (!tmuxExecAllowed) return;
   try {
     execFileSync("tmux", args, { stdio: ["ignore", "ignore", "pipe"] });
   } catch (err) {
@@ -58,6 +86,7 @@ export function tmux(...args: string[]): void {
 // was a synchronous `execFileSync("sleep", "0.3")` that monopolized the tick.
 let pasteBufferCounter = 0;
 export function pasteAndSubmit(paneId: string, message: string): void {
+  if (!tmuxExecAllowed) return;
   const bufferName = `garden-paste-${process.pid}-${++pasteBufferCounter}`;
   try {
     execFileSync("tmux", ["load-buffer", "-b", bufferName, "-"], {

@@ -58,6 +58,7 @@ import {
   listSessionPaneTitles,
   cleanPaneTitle,
   pasteAndSubmit,
+  __setTmuxExecAllowedForTests,
 } from "../src/dashboard/tmux.js";
 
 import { log } from "../src/dashboard/log.js";
@@ -66,6 +67,37 @@ import { log } from "../src/dashboard/log.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // This suite mocks execFileSync to assert the exec wrappers' argv, so re-enable
+  // real exec (which the test runner disables by default to keep tests off any
+  // live tmux server — see __setTmuxExecAllowedForTests in tmux.ts).
+  __setTmuxExecAllowedForTests(true);
+});
+
+afterEach(() => {
+  __setTmuxExecAllowedForTests(false);
+});
+
+// ===========================================================================
+// Test-isolation guard — regression for the badge-flash bug
+// ===========================================================================
+
+describe("tmux exec disabled under the runner", () => {
+  it("tmux() and pasteAndSubmit() never shell out when exec is disallowed", () => {
+    // Reproduces the fix for the live-dashboard badge flash: a test running on
+    // a machine with a live `garden-dashboard` session must not let
+    // refreshAlertBadge's `tmux set-option @garden_right` reach the real server.
+    __setTmuxExecAllowedForTests(false);
+    tmux("set-option", "-t", "garden-dashboard", "@garden_right", "#[bg=red] ⚠ 1 alert — ⌥l to clear ");
+    pasteAndSubmit("%1", "phantom keystrokes");
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
+
+  it("default under VITEST is disallowed (the guard is on unless a test opts in)", () => {
+    // beforeEach opts this suite back in; clear that to observe the default.
+    __setTmuxExecAllowedForTests(false);
+    tmux("kill-server");
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
 });
 
 // ===========================================================================
