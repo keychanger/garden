@@ -275,8 +275,9 @@ function trellisInfoFor(entry?: { workflow?: string; trellis?: { name: string; i
 // Format the CI bracket for a default-workflow row when the worker is in
 // `ci-fixing` (auto-fix in flight) or `failing` with reason `ci` (auto-fix
 // exhausted). Trellis vines route through formatTrellisBracket above and
-// don't reach here. The bracket sits between the status column and the
-// activity text, matching the trellis bracket's slot.
+// don't reach here. The bracket keeps a single leading space, so it sits one
+// column left of the activity slot the trellis bracket now aligns to (see
+// formatRowTail) — default CI rows are otherwise unchanged.
 export function formatCiBracket(ci: WorkerInfo["ci"]): string {
   if (!ci) return "";
   if (ci.fixing) {
