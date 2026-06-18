@@ -6,12 +6,13 @@
 // workflow and docs/STATUS.md). This module owns the gate, the decision trace,
 // the high-water idempotency guard, and the seed the spawned worker receives.
 //
-// Phasing: this module is exported but UNCALLED at first (Phase 0). The two
-// trigger sites — transitionToTerminal (merge-driven done) and handleDone
-// (trail-off done) — wire it in Phase 1, where it evaluates the gate and emits
-// the decision trace with the project in mode "off" (no spawn). The shadow
-// (analyze-only) and fix (fix-and-push) spawn paths land in Phases 2 and 3 at
-// the marked site below.
+// Phasing: Phase 1 wired the two trigger sites — transitionToTerminal
+// (merge-driven done) and handleDone (trail-off done) — to evaluate the gate
+// and emit the decision trace (mode "off": no spawn). Phase 2 (current) spawns
+// a holistic worker for mode "shadow" | "fix": shadow writes findings to
+// HOLISTIC_FINDINGS_FILE (surfaced by finalizeShadowHolistic), fix commits
+// through the normal review/merge gate. Phase 3 adds the reviewer interlock
+// that hands the cross-phase rationale to the fix branch's reviewer.
 //
 // The high-water guard is set the moment a completion is found eligible — even
 // in mode "off" — so the decision fires exactly once per done-arrival on both
@@ -242,14 +243,13 @@ export function finalizeShadowHolistic(projectName: string, entry: WorkerEntry):
   try { fs.unlinkSync(findingsPath); } catch { /* already gone */ }
 }
 
-// Assemble the seed prompt the spawned holistic worker receives. Pure string
-// assembly (no git, no spawn) so it is unit-testable and callable from the
-// dispatch path once spawning is wired. `rationale` is the cross-phase commit
-// log captured at dispatch time (see git.getCommitLogRange).
 // Relative path (in the holistic worker's worktree) where a shadow-mode review
 // writes its findings. The poller reads it when the worker reaches `done`.
 export const HOLISTIC_FINDINGS_FILE = ".holistic-findings.md";
 
+// Assemble the seed prompt the spawned holistic worker receives. Pure string
+// assembly (no git, no spawn) so it is unit-testable. `rationale` is the
+// cross-phase commit log captured at dispatch time (see git.getCommitLogRange).
 export function buildHolisticSeed(args: {
   originalName: string;
   baseBranch: string;

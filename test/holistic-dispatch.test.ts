@@ -114,6 +114,22 @@ describe("shadow spawn path (touched files present)", () => {
   });
 });
 
+describe("dispatch deferral (cap hit leaves the guard unset → retries next poke)", () => {
+  it("does not set the high-water guard when a holistic worker is already in flight", async () => {
+    const { reg, hol } = await setup("shadow", { holisticTouchedFiles: ["src/a.ts"] });
+    // An active holistic-review worker saturates the per-project cap
+    // (HOLISTIC_CONCURRENCY_CAP = 1), so this eligible completion must defer.
+    reg.addWorker("proj", {
+      name: "holistic-1", sessionId: "h", task: "t",
+      workflow: "holistic-review", prState: "working",
+    });
+    const entry = reg.findWorkerByName("proj", "multi-phase")!;
+    hol.maybeDispatchHolisticReview("proj", env.gardenDir, "main", entry, "transitionToTerminal");
+    // Guard NOT set — the next merged/done sweep poke (or pokeOnGateReset) retries.
+    expect(reg.findWorkerByName("proj", "multi-phase")!.holisticReviewedThroughMergeCount).toBeUndefined();
+  });
+});
+
 describe("finalizeShadowHolistic (surface findings + consume)", () => {
   async function finalizeSetup(findings: string) {
     const { reg, hol } = await setup("shadow", { workflow: "holistic-review" });
