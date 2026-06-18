@@ -183,11 +183,8 @@ export async function status(args: string[]): Promise<void> {
         const icon = iconFor(worker);
         const wname = worker.name.padEnd(nameWidth);
         const wstatus = formatStatus(worker).padEnd(statusWidth);
-        const trellis = formatTrellisBracket(worker.trellis);
-        const ciBracket = formatCiBracket(worker.ci);
-        const activity = worker.activity ? `  ${truncateActivity(worker.activity, activityMax)}` : "";
         const baseHint = formatBaseDivergence(worker.baseBranch, project.projectBranch);
-        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${trellis}${ciBracket}${activity}${baseHint}`;
+        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${formatRowTail(worker, baseHint, activityMax)}`;
         console.log(colorizeRow(worker.status, line));
       }
     }
@@ -302,29 +299,48 @@ export function formatCiBracket(ci: WorkerInfo["ci"]): string {
 //   Budget exhausted:        [trellis: auth-rewrite | budget exhausted]
 //   Stagnated (v1.5):        [trellis: auth-rewrite | stagnated]
 // Iteration counter color: white normally, yellow at ≥80% of cap,
-// red at ≥95%.
+// red at ≥95%. The bracket is returned without a leading separator; the
+// row renderer (formatRowTail) places it in the activity slot so its "["
+// aligns with the activity column of sibling rows.
 export function formatTrellisBracket(t: WorkerInfo["trellis"]): string {
   if (!t) return "";
   // Failed states: prefer the failure reason over the iteration counter.
   if (t.failingReason === "trellis-flagged") {
-    return ` [trellis: ${t.name} | flagged]`;
+    return `[trellis: ${t.name} | flagged]`;
   }
   if (t.failingReason === "iteration-budget") {
-    return ` [trellis: ${t.name} | budget exhausted]`;
+    return `[trellis: ${t.name} | budget exhausted]`;
   }
   if (t.failingReason === "stagnation") {
-    return ` [trellis: ${t.name} | stagnated]`;
+    return `[trellis: ${t.name} | stagnated]`;
   }
   // Aligned terminal: distinguish reviewer-declared success from operator
   // sentinel-set with a check decoration + iteration count.
   if (t.aligned) {
     const noun = t.iteration === 1 ? "iter" : "iters";
-    return ` [trellis: ${t.name} | ✓ aligned, ${t.iteration} ${noun}]`;
+    return `[trellis: ${t.name} | ✓ aligned, ${t.iteration} ${noun}]`;
   }
   // Active loop. Iteration counter with color thresholds.
   const iterStr = colorizeIteration(t.iteration, t.maxIterations);
   const driftSeg = t.driftCount > 0 ? ` | ${t.driftCount} drift` : "";
-  return ` [trellis: ${t.name} | ${iterStr}${driftSeg}]`;
+  return `[trellis: ${t.name} | ${iterStr}${driftSeg}]`;
+}
+
+// Compose the row segment that trails the status column. Trellis vines show
+// only their bracket — placed in the activity slot (two spaces after the
+// status, matching the activity column) so its "[" lines up with the
+// description text on sibling rows — and drop the live activity, which
+// restates the trellis name. A base-divergence hint still trails the bracket
+// when the worker's pinned base diverges from the checkout (a real warning,
+// not redundant). Default/grow rows keep the CI bracket + activity.
+function formatRowTail(worker: WorkerInfo, baseHint: string, activityMax?: number): string {
+  const trellis = formatTrellisBracket(worker.trellis);
+  if (trellis) return `  ${trellis}${baseHint}`;
+  const ciBracket = formatCiBracket(worker.ci);
+  const text = worker.activity
+    ? `  ${activityMax !== undefined ? truncateActivity(worker.activity, activityMax) : worker.activity}`
+    : "";
+  return `${ciBracket}${text}${baseHint}`;
 }
 
 // Look up the project's currently checked-out branch. Returns null if the
@@ -492,11 +508,8 @@ export function renderQuickStatus(
         const icon = iconFor(worker);
         const wname = worker.name.padEnd(nameWidth);
         const wstatus = formatStatus(worker).padEnd(statusWidth);
-        const trellis = formatTrellisBracket(worker.trellis);
-        const ciBracket = formatCiBracket(worker.ci);
-        const activity = worker.activity ? `  ${worker.activity}` : "";
         const baseHint = formatBaseDivergence(worker.baseBranch, projectBranch);
-        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${trellis}${ciBracket}${activity}${baseHint}`;
+        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${formatRowTail(worker, baseHint)}`;
         lines.push(colorizeRow(worker.status, line));
       }
     }

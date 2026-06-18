@@ -426,4 +426,39 @@ describe("renderQuickStatus", () => {
     expect(result).toContain("beta");
   });
 
+  it("renders a trellis vine's bracket in the activity slot and drops its activity", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      {
+        name: "bold-ash",
+        sessionId: "abc",
+        task: "implementing the auth rewrite per the trellis",
+        agentStatus: "working",
+        workflow: "trellis",
+        trellis: {
+          name: "auth-rewrite",
+          iteration: 4,
+          maxIterations: 30,
+          lastVerdict: "DRIFT",
+          lastDrift: ["a", "b", "c"],
+        },
+      },
+    ]);
+    const result = renderQuickStatus(state);
+    // The bracket renders, and the live activity is dropped (redundant with
+    // the trellis name) so the row can't blow its width and wrap in the pane.
+    expect(result).toContain("[trellis: auth-rewrite | 4/30 | 3 drift]");
+    expect(result).not.toContain("implementing the auth rewrite");
+    // The bracket sits in the activity slot — two spaces ahead of "[" — so its
+    // "[" lines up with the activity column on sibling rows.
+    expect(result).toContain("  [trellis: auth-rewrite");
+  });
+
+  it("keeps the live activity on a default-workflow row (bracket drop is trellis-only)", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "rewiring the poller", agentStatus: "working" },
+    ]);
+    const result = renderQuickStatus(state);
+    expect(result).toContain("rewiring the poller");
+  });
+
 });
