@@ -72,6 +72,28 @@ export function setupKeybindings(gardenRunner: string): void {
     ], { stdio: "ignore" });
   } catch { /* ignore */ }
 
+  // Mouse selection: copy without exiting copy-mode. tmux's default
+  // selection-ending bindings (MouseDragEnd / Double / TripleClick) all finish
+  // with copy-pipe-and-cancel, which cancels copy-mode on mouse release.
+  // Cancelling snaps a scrolled-up pane back to the live (bottom) screen, so the
+  // operator loses their scroll position the instant they finish highlighting
+  // text. copy-pipe-no-clear still copies (and pipes to the clipboard) but keeps
+  // copy-mode active at the current offset. Each body is a single argv string: a
+  // bare ";" argv is a top-level command separator, not part of the bound
+  // command (see bindMeta's copy-mode body for the same constraint).
+  const selectionBindings: Record<string, string> = {
+    MouseDragEnd1Pane: "send-keys -X copy-pipe-no-clear",
+    DoubleClick1Pane: "select-pane ; send-keys -X select-word ; run-shell -d 0.3 ; send-keys -X copy-pipe-no-clear",
+    TripleClick1Pane: "select-pane ; send-keys -X select-line ; run-shell -d 0.3 ; send-keys -X copy-pipe-no-clear",
+  };
+  for (const table of ["copy-mode", "copy-mode-vi"]) {
+    for (const [event, body] of Object.entries(selectionBindings)) {
+      try {
+        execFileSync("tmux", ["bind-key", "-T", table, event, body], { stdio: "ignore" });
+      } catch { /* ignore */ }
+    }
+  }
+
   // Lock window navigation to main so prefix+n/p can't escape to hidden windows
   try {
     const mainTarget = `${DASHBOARD_SESSION}:main`;

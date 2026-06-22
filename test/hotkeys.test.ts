@@ -100,6 +100,36 @@ describe("setupKeybindings", () => {
     expect(argv.join(" ")).not.toContain("_trellis-picker");
   });
 
+  it("rebinds mouse selection to copy without cancelling copy-mode", () => {
+    // tmux's default MouseDragEnd / Double / TripleClick bindings end in
+    // copy-pipe-and-cancel, which exits copy-mode on mouse release and snaps a
+    // scrolled-up pane back to the live screen — the operator loses their scroll
+    // position the moment they finish highlighting text. The fix rebinds all
+    // three selection-ending events to copy-pipe-no-clear in both copy-mode
+    // tables so the copy still happens but the scroll offset is preserved.
+    setupKeybindings("/path/to/garden");
+    for (const table of ["copy-mode", "copy-mode-vi"]) {
+      for (const event of ["MouseDragEnd1Pane", "DoubleClick1Pane", "TripleClick1Pane"]) {
+        const bind = execFileSyncMock.mock.calls.find((call) => {
+          const argv = call[1] as string[];
+          return Array.isArray(argv)
+            && argv[0] === "bind-key"
+            && argv[1] === "-T"
+            && argv[2] === table
+            && argv[3] === event;
+        });
+        expect(bind, `${table} ${event} should be bound`).toBeDefined();
+        const argv = bind![1] as string[];
+        // The bound command body is a single trailing argv string (a bare ";"
+        // argv would be a top-level command separator).
+        expect(argv.length).toBe(5);
+        const body = argv[4];
+        expect(body).toContain("copy-pipe-no-clear");
+        expect(body).not.toContain("and-cancel");
+      }
+    }
+  });
+
   it("binds M-d to the diary view on the root table", () => {
     setupKeybindings("/path/to/garden");
     const rootBind = execFileSyncMock.mock.calls.find((call) => {
