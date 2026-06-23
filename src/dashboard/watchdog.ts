@@ -1,4 +1,4 @@
-// Liveness watchdog: a slow recurring tick with two duties, neither of which
+// Liveness watchdog: a slow recurring tick with three duties, none of which
 // transitions worker state itself.
 //
 // 1. Re-poke projects holding workers stranded in active states. The state
@@ -18,15 +18,22 @@
 // whole review/merge pipeline stalls silently. The watchdog closes that gap so
 // a dead — or accidentally duplicated — poller self-heals within one tick.
 //
+// 3. Alert on orphaned worker windows: a live tmux worker window with no
+// registry entry (see alertOrphanedWindows). The create/sweep race could
+// delete a worker's entry mid-bootstrap, leaving a running but invisible pane
+// that no poller reviews. Detection only — the watchdog never reconstructs an
+// entry; it makes the casualty visible so the operator can recover it.
+//
 // Runs in a single hidden tmux window (_garden-watchdog), mirroring the usage
 // poller's lifecycle: the window being killed (reset or exit) is the
 // termination signal — no signal file, no FIFO. Unlike the usage poller it
 // starts unconditionally; provider-only fleets still need liveness.
-import { tmux, windowExists, killWindowSafe } from "./tmux.js";
+import { tmux, windowExists, killWindowSafe, listAllWindowNames } from "./tmux.js";
 import { DASHBOARD_SESSION } from "../session.js";
-import { watchdogWindowName } from "./window-names.js";
-import { readRegistry, PR_STATE_KIND, type WorkerEntry } from "./registry.js";
+import { watchdogWindowName, parseWorkerWindow } from "./window-names.js";
+import { readRegistry, PR_STATE_KIND, type WorkerEntry, type WorkerRegistry } from "./registry.js";
 import { triggerProjectPoll } from "./poller-fifo.js";
+import { addAlert } from "./alerts.js";
 import { log } from "./log.js";
 
 export const WATCHDOG_TICK_MS = 60_000;
@@ -143,6 +150,50 @@ export function healProjectPollers(
   return ensured;
 }
 
+// Surface orphaned worker windows: a live tmux worker window with no registry
+// entry. This is the inverse of validate's "window missing → mark exited" pass
+// — here the *entry* is missing while the window lives. The create/sweep race
+// (now fixed in dropGhostEntries) could delete a freshly-created worker's entry
+// mid-bootstrap, leaving the pane running but detached: its hooks no-op
+// (updateWorkerFields finds no entry) and the poller, which only iterates the
+// registry, never reviews or merges its work. The grace fix should prevent new
+// orphans; this alert is the backstop that makes any that still slip through
+// (or predate the fix) visible so the operator can recover them. Detection
+// only — reconstructing a usable entry from a window is unsafe (workflow,
+// sessionId, and base branch can't be recovered reliably), so the watchdog
+// never re-adds; addAlert's stable dedupKey caps this at one alert per orphan
+// per hour despite the 60s tick.
+export function alertOrphanedWindows(registry: WorkerRegistry): void {
+  let windows: string[];
+  try {
+    windows = listAllWindowNames();
+  } catch {
+    return;
+  }
+  for (const name of windows) {
+    const parsed = parseWorkerWindow(name);
+    if (!parsed) continue;
+    const { project, worker } = parsed;
+    if ((registry.workers[project] ?? []).some(e => e.name === worker)) continue;
+    addAlert({
+      level: "warn",
+      source: "watchdog",
+      project,
+      worker,
+      message:
+        `Worker '${worker}' has a live tmux window but no registry entry — it is ` +
+        `orphaned from the review/merge pipeline (its hooks no-op and the poller ` +
+        `can't see it). The worktree and branch are intact on disk; recreate the ` +
+        `worker or recover its branch manually to land its work. [orphan]`,
+      dedupKey: `watchdog-orphan:${project}:${worker}`,
+    });
+    log.warn("watchdog", "orphaned worker window (no registry entry)", {
+      worker,
+      data: { project, window: name },
+    });
+  }
+}
+
 export async function runWatchdogLoop(): Promise<void> {
   log.info("watchdog", "started");
   // Imported dynamically to avoid a static cycle (poller.ts statically imports
@@ -165,6 +216,7 @@ export async function runWatchdogLoop(): Promise<void> {
         (project) => startProjectPoller(project, gardenRunner),
       );
       tick(lastPokeAt, Date.now());
+      alertOrphanedWindows(readRegistry());
     } catch (err) {
       log.warn("watchdog", "tick failed", { data: { error: String(err) } });
     }

@@ -8,6 +8,11 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
   windowExists: vi.fn(() => false),
   killWindowSafe: vi.fn(),
+  listAllWindowNames: vi.fn(() => []),
+}));
+
+vi.mock("../src/dashboard/alerts.js", () => ({
+  addAlert: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/registry.js", async (importActual) => {
@@ -33,10 +38,11 @@ vi.mock("../src/dashboard/poller-fifo.js", () => ({
 
 import {
   latestActivityMs, isWatchedState, isWorkerStale, hasLiveWork, tick,
-  healProjectPollers, WATCHDOG_THRESHOLD_MS,
+  healProjectPollers, alertOrphanedWindows, WATCHDOG_THRESHOLD_MS,
 } from "../src/dashboard/watchdog.js";
 import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
-import { windowExists } from "../src/dashboard/tmux.js";
+import { windowExists, listAllWindowNames } from "../src/dashboard/tmux.js";
+import { addAlert } from "../src/dashboard/alerts.js";
 import type { WorkerEntry, PrState } from "../src/dashboard/registry.js";
 
 const windowExistsMock = vi.mocked(windowExists);
@@ -310,5 +316,41 @@ describe("healProjectPollers", () => {
     expect(() => { ensured = healProjectPollers(ensure); }).not.toThrow();
     expect(ensure).toHaveBeenCalledTimes(2);
     expect(ensured).toEqual(["ok"]);
+  });
+});
+
+describe("alertOrphanedWindows", () => {
+  const listWindowsMock = vi.mocked(listAllWindowNames);
+  const addAlertMock = vi.mocked(addAlert);
+
+  it("alerts on a live worker window with no registry entry", () => {
+    // The create/sweep race deletes a freshly-created worker's registry entry
+    // while its tmux window keeps running — the orphan the grace fix prevents
+    // and this backstop surfaces.
+    listWindowsMock.mockReturnValue(["_board-worker-low-arch-wolf", "_board-poller"]);
+    alertOrphanedWindows({ workers: {} });
+    expect(addAlertMock).toHaveBeenCalledTimes(1);
+    const alert = addAlertMock.mock.calls[0][0];
+    expect(alert.project).toBe("board");
+    expect(alert.worker).toBe("low-arch-wolf");
+    expect(alert.dedupKey).toBe("watchdog-orphan:board:low-arch-wolf");
+    expect(alert.message).toContain("orphaned");
+  });
+
+  it("does not alert when the worker window has a registry entry", () => {
+    listWindowsMock.mockReturnValue(["_board-worker-low-arch-wolf"]);
+    alertOrphanedWindows({
+      workers: { board: [entry({ name: "low-arch-wolf", sessionId: "s-9" })] },
+    });
+    expect(addAlertMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores non-worker windows (poller, review, shell, garden)", () => {
+    listWindowsMock.mockReturnValue([
+      "_board-poller", "_board-review-low-arch-wolf", "_board-ci-fix-low-arch-wolf",
+      "_board-shell", "_garden-watchdog", "_garden-logs",
+    ]);
+    alertOrphanedWindows({ workers: {} });
+    expect(addAlertMock).not.toHaveBeenCalled();
   });
 });
