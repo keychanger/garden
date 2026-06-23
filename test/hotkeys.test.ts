@@ -130,6 +130,30 @@ describe("setupKeybindings", () => {
     }
   });
 
+  it("clears the selection on a plain click so the lingering highlight can be dismissed", () => {
+    // copy-pipe-no-clear leaves the selection highlighted after a drag. Without
+    // clearing it on a plain click, the highlight lingers with no way to dismiss
+    // it by clicking elsewhere. MouseDown1Pane fires before MouseDrag1Pane's
+    // begin-selection, so this stays compatible with starting a fresh drag.
+    setupKeybindings("/path/to/garden");
+    for (const table of ["copy-mode", "copy-mode-vi"]) {
+      const bind = execFileSyncMock.mock.calls.find((call) => {
+        const argv = call[1] as string[];
+        return Array.isArray(argv)
+          && argv[0] === "bind-key"
+          && argv[1] === "-T"
+          && argv[2] === table
+          && argv[3] === "MouseDown1Pane";
+      });
+      expect(bind, `${table} MouseDown1Pane should be bound`).toBeDefined();
+      const argv = bind![1] as string[];
+      expect(argv.length).toBe(5);
+      const body = argv[4];
+      expect(body).toContain("select-pane");
+      expect(body).toContain("clear-selection");
+    }
+  });
+
   it("binds M-d to the diary view on the root table", () => {
     setupKeybindings("/path/to/garden");
     const rootBind = execFileSyncMock.mock.calls.find((call) => {
