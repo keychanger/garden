@@ -403,6 +403,68 @@ describe("sweepGhostEntries", () => {
     expect(written.workers.garden.map(w => w.name)).toEqual(["meek-shrewd-vow"]);
   });
 
+  it("keeps a worker mid-creation (loading, no window, no worktree) within the creation grace", async () => {
+    // The race a1ef188 exposed: addWorker writes the "loading" entry before
+    // tmuxNewWindow creates the window, and the worktree is created later still
+    // inside the bootstrap pane. A poke-frequency sweep that lands in that gap
+    // must NOT delete the live worker — its recent createdAt protects it, or it
+    // gets orphaned from the registry and never reviewed/merged.
+    const { worktreeExists } = await import("../src/dashboard/git.js");
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: {
+        garden: [
+          {
+            name: "low-arch-wolf",
+            sessionId: "a",
+            task: "",
+            worktreePath: "/not-yet",
+            agentStatus: "loading",
+            createdAt: Date.now(),
+          },
+        ],
+      },
+    });
+    vi.mocked(windowExists).mockReturnValue(false);
+    vi.mocked(worktreeExists).mockReturnValue(false);
+    vi.mocked(readDashState).mockReturnValue({
+      ...makeState({ activeWindowName: null }),
+    });
+
+    const changed = sweepGhostEntries();
+    expect(changed).toBe(false);
+    expect(vi.mocked(writeRegistry)).not.toHaveBeenCalled();
+  });
+
+  it("still sweeps a loading entry once its creation grace has lapsed", async () => {
+    // A genuine ghost (a bootstrap that never produced a window or worktree)
+    // still matches the signature after the grace, so cleanup is only delayed,
+    // not abandoned.
+    const { worktreeExists } = await import("../src/dashboard/git.js");
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: {
+        garden: [
+          {
+            name: "stale-ghost",
+            sessionId: "a",
+            task: "",
+            agentStatus: "loading",
+            createdAt: Date.now() - 5 * 60_000,
+          },
+        ],
+      },
+    });
+    vi.mocked(windowExists).mockReturnValue(false);
+    vi.mocked(worktreeExists).mockReturnValue(false);
+    vi.mocked(readDashState).mockReturnValue({
+      ...makeState({ activeWindowName: null }),
+    });
+
+    const changed = sweepGhostEntries();
+    expect(changed).toBe(true);
+    const written = vi.mocked(writeRegistry).mock.calls[0][0];
+    expect(written.workers.garden).toHaveLength(0);
+  });
+
   it("returns false and does not write when no ghosts present", () => {
     vi.mocked(readRegistry).mockReturnValue({
       workers: {

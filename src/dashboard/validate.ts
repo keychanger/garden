@@ -137,12 +137,24 @@ function healStatusPaneInState(state: DashboardState): DashboardState {
   return healed;
 }
 
+// A freshly-created worker briefly matches the ghost signature below: addWorker
+// writes the "loading" registry entry BEFORE tmuxNewWindow creates its window,
+// and the worktree is created later still — inside the bootstrap pane (git
+// fetch + worktree add + npm install). Sweeping in that gap deletes a live
+// worker and orphans it from the registry; its hooks then no-op (updateWorkerFields
+// finds no entry to update), so it is never advanced past "ready" and never
+// reviewed or merged. This grace keeps recently-created entries off the
+// chopping block; a real ghost is still "loading" with no window/worktree once
+// the grace lapses and is cleaned on a later sweep. The window only matters
+// because a1ef188 moved dropGhostEntries onto every poller poke — at attach-only
+// frequency the race almost never fired; at poke frequency, with many projects
+// polling, a sweep routinely lands inside the creation gap.
+const GHOST_CREATION_GRACE_MS = 60_000;
+
 // Ghost entries: never-bootstrapped workers from a failed handoff or hotkey
 // spawn. Identified by the combination of agentStatus === "loading" (never
-// advanced to ready/idle), no tmux window, and no worktree on disk. A genuine
-// in-flight worker has a tmux window at this point (tmuxNewWindow creates it
-// before bootstrap runs), so this rule doesn't race with normal creation.
-// The "never auto-cleanup" rule is about preserving operator work on real
+// advanced to ready/idle), no tmux window, and no worktree on disk. The
+// "never auto-cleanup" rule is about preserving operator work on real
 // workers; these never produced any work to preserve.
 //
 // Mutates `registry` in place; returns true if anything was dropped. Caller
@@ -153,6 +165,12 @@ function dropGhostEntries(registry: WorkerRegistry, activeWindowName: string | n
     const entries = registry.workers[projectName];
     const kept = entries.filter(entry => {
       if (entry.agentStatus !== "loading") return true;
+      // Within the creation grace the window/worktree may simply not exist yet
+      // (see GHOST_CREATION_GRACE_MS). Trust the recent createdAt over the
+      // absent window so a poll-cycle sweep can't delete a worker mid-bootstrap.
+      if (entry.createdAt !== undefined && Date.now() - entry.createdAt < GHOST_CREATION_GRACE_MS) {
+        return true;
+      }
       if (entry.worktreePath && worktreeExists(entry.worktreePath)) return true;
       const windowName = workerWindowName(projectName, entry.name);
       if (windowExists(windowName)) return true;
