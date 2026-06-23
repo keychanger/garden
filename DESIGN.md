@@ -262,6 +262,7 @@ The dashboard surfaces important events as alerts — persistent messages that r
 - Base-branch drift after worker creation (Stop hook cannot count commits against `origin/<pinned-base>`; deduped to one firing per worker per hour)
 - Auto-continue auto-disabled by usage threshold (source: `usage`, level: `warn`)
 - `.garden-done` tracked in HEAD of the project main at worker spawn (source: `create`, level: `warn`; deduped per project per hour).
+- Orphaned worker window: a live tmux worker window with no registry entry (the create/sweep race casualty; source: `watchdog`, level: `warn`; deduped per orphan per hour).
 
 Worker "needs operator input" events (AskUserQuestion, ExitPlanMode, auto-mode permission prompts) do **not** fire alerts — they flip the worker to `asking` (yellow row in the status pane), which is the visual signal. The alert channel is reserved for failures and errors.
 
