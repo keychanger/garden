@@ -490,6 +490,60 @@ describe("renderQuickStatus", () => {
 
 });
 
+describe("branch hint", () => {
+  const YELLOW = "\x1b[33m";
+  const GREY = "\x1b[90m";
+  const RESET = "\x1b[0m";
+  const state = {
+    activeProject: "garden",
+    statusPaneId: "%0",
+    gardenShellPaneId: "%1",
+    activePaneId: "%2",
+    activePaneType: "worker" as const,
+    activeWindowName: "_garden-worker-bold-ash",
+  };
+
+  const lineFor = (result: string, name: string): string =>
+    result.split("\n").find(l => l.includes(name)) ?? "";
+
+  it("flags a worker whose pinned base diverges from the checkout in yellow", () => {
+    vi.mocked(currentBranch).mockReturnValue("main");
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "working", baseBranch: "feature-x" },
+    ]);
+    const result = renderQuickStatus(state);
+    expect(lineFor(result, "bold-ash")).toContain(`${YELLOW}→ feature-x${RESET}`);
+  });
+
+  it("omits the hint when a lone worker's base matches the checkout", () => {
+    vi.mocked(currentBranch).mockReturnValue("main");
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "working", baseBranch: "main" },
+    ]);
+    const result = renderQuickStatus(state);
+    expect(result).not.toContain("→");
+  });
+
+  it("shows every worker's base when any one diverges — diverging yellow, matching grey", () => {
+    vi.mocked(currentBranch).mockReturnValue("main");
+    // calm-bay is also surfaced via a hidden window so two workers render under
+    // the one project; the comparator mock orders them alphabetically.
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_garden-worker-calm-bay"]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "working", baseBranch: "main" },
+      { name: "calm-bay", sessionId: "def", task: "", agentStatus: "working", baseBranch: "feature-x" },
+    ]);
+    const result = renderQuickStatus(state);
+    // The off-base worker keeps the yellow warning.
+    expect(lineFor(result, "calm-bay")).toContain(`${YELLOW}→ feature-x${RESET}`);
+    // The on-base worker now shows its base too, but in grey so it doesn't read
+    // as a warning — answering "what does this one target?" unambiguously.
+    expect(lineFor(result, "bold-ash")).toContain(`${GREY}→ main${RESET}`);
+  });
+});
+
 describe("dimRow", () => {
   const FAINT = "\x1b[2m";
   const RESET = "\x1b[0m";

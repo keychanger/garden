@@ -183,12 +183,13 @@ export async function status(args: string[]): Promise<void> {
     if (project.workers.length === 0) {
       console.log("    (no workers)");
     } else {
+      const showAllBranches = projectHasBranchDivergence(project.workers, project.projectBranch);
       for (const worker of project.workers) {
         const focus = worker.active ? "\u25CF" : "\u25CB";
         const icon = iconFor(worker);
         const wname = worker.name.padEnd(nameWidth);
         const wstatus = formatStatus(worker).padEnd(statusWidth);
-        const baseHint = formatBaseDivergence(worker.baseBranch, project.projectBranch);
+        const baseHint = formatBranchHint(worker.baseBranch, project.projectBranch, showAllBranches);
         const line = `    ${focus} ${icon} ${wname}  ${wstatus}${formatRowTail(worker, baseHint, activityMax)}`;
         const colored = colorizeRow(worker.status, line);
         console.log(worker.stale ? dimRow(colored) : colored);
@@ -221,7 +222,7 @@ function colorizeRow(status: WorkerStatus, line: string): string {
 }
 
 // Render a status row dimmed (faint). Rows embed inner ANSI that ends in a full
-// reset — the base-divergence hint and the trellis iteration counter — so a
+// reset — the branch hint and the trellis iteration counter — so a
 // naive `\x1b[2m…\x1b[0m` wrap would let the first inner reset cancel the faint
 // attribute, half-brightening the rest of the row. Re-arm faint after every
 // inner reset so the whole line stays dimmed. Only ever applied to tier-3
@@ -354,9 +355,9 @@ export function formatTrellisBracket(t: WorkerInfo["trellis"]): string {
 // only their bracket — placed in the activity slot (two spaces after the
 // status, matching the activity column) so its "[" lines up with the
 // description text on sibling rows — and drop the live activity, which
-// restates the trellis name. A base-divergence hint still trails the bracket
-// when the worker's pinned base diverges from the checkout (a real warning,
-// not redundant). Default/grow rows keep the CI bracket + activity.
+// restates the trellis name. A branch hint still trails the bracket when the
+// worker's pinned base diverges from the checkout (a real warning, not
+// redundant). Default/grow rows keep the CI bracket + activity.
 function formatRowTail(worker: WorkerInfo, baseHint: string, activityMax?: number): string {
   const trellis = formatTrellisBracket(worker.trellis);
   if (trellis) return `  ${trellis}${baseHint}`;
@@ -402,19 +403,40 @@ function resolveProjectBranch(projectName: string): string | null {
   return branch;
 }
 
-// Per-worker suffix appended when a worker's pinned base diverges from the
-// project's current checkout. This is the leading indicator of the "did not
-// fast-forward after merge" alert pattern — the operator switched checkouts
-// after creating the worker, and the worker will still merge to its pinned
-// base. Showing "→ <base>" in yellow makes the divergence obvious without
-// requiring a registry inspection.
-function formatBaseDivergence(
+// Branch hint appended to a worker row. The yellow "→ <base>" flags a worker
+// whose pinned base diverges from the project's current checkout — the leading
+// indicator of the "did not fast-forward after merge" alert pattern (the
+// operator switched checkouts after creating the worker, and the worker still
+// merges to its pinned base). Showing it in yellow makes the divergence obvious
+// without requiring a registry inspection.
+//
+// When ANY worker in the project diverges (showMatching), the workers whose
+// base *matches* the checkout also render their base — in grey, not yellow — so
+// the operator sees, per row, what each worker targets. Without this, a mixed
+// project would show "→ feature" on one row and nothing on the others, leaving
+// it ambiguous whether the silent rows target the checkout or just aren't
+// flagged. Grey keeps the yellow reserved for the actual divergence warning.
+function formatBranchHint(
   workerBase: string | undefined,
   projectBranch: string | null | undefined,
+  showMatching: boolean,
 ): string {
   if (!workerBase || !projectBranch) return "";
-  if (workerBase === projectBranch) return "";
-  return ` \x1b[33m→ ${workerBase}\x1b[0m`;
+  if (workerBase !== projectBranch) return ` \x1b[33m→ ${workerBase}\x1b[0m`;
+  if (showMatching) return ` \x1b[90m→ ${workerBase}\x1b[0m`;
+  return "";
+}
+
+// True when at least one worker's pinned base diverges from the project's
+// current checkout. Drives formatBranchHint's showMatching: a project with any
+// off-base worker renders every row's target so the picture is unambiguous.
+// Legacy workers without a pinned baseBranch never count as divergent.
+function projectHasBranchDivergence(
+  workers: WorkerInfo[],
+  projectBranch: string | null | undefined,
+): boolean {
+  if (!projectBranch) return false;
+  return workers.some(w => w.baseBranch !== undefined && w.baseBranch !== projectBranch);
 }
 
 // Dimmed pencil appended to a project's header row when its diary holds
@@ -539,12 +561,13 @@ export function renderQuickStatus(
     if (workers.length === 0) {
       lines.push("    (no workers)");
     } else {
+      const showAllBranches = projectHasBranchDivergence(workers, projectBranch);
       for (const worker of workers) {
         const focus = worker.active ? "\u25CF" : "\u25CB";
         const icon = iconFor(worker);
         const wname = worker.name.padEnd(nameWidth);
         const wstatus = formatStatus(worker).padEnd(statusWidth);
-        const baseHint = formatBaseDivergence(worker.baseBranch, projectBranch);
+        const baseHint = formatBranchHint(worker.baseBranch, projectBranch, showAllBranches);
         const line = `    ${focus} ${icon} ${wname}  ${wstatus}${formatRowTail(worker, baseHint)}`;
         const colored = colorizeRow(worker.status, line);
         lines.push(worker.stale ? dimRow(colored) : colored);
