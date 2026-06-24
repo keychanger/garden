@@ -417,9 +417,12 @@ function syncWorktreeAfterMerge(
 }
 
 // Phase 2 of finalizeMerge: side-effects against the project as a whole —
-// delete the remote branch, fast-forward the local checkout (so postMerge
-// runs against the merged code), notify any siblings whose branches
-// overlap, run postMerge if configured, alert on stuck checkout.
+// delete the remote branch, advance the local base ref to the merged tip
+// (moving the working tree too when the base is the checked-out branch),
+// notify any siblings whose branches overlap, run postMerge if configured
+// (only when the working tree advanced), and alert on a genuine anomaly
+// (diverged / checked-out-elsewhere / stuck — a clean off-base ref advance
+// is silent).
 function notifyPostMerge(
   projectName: string,
   projectPath: string,

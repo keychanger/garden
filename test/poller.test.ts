@@ -1840,6 +1840,35 @@ describe("poll — merge-pending state", () => {
     );
   });
 
+  it("warns (not errors) and names the worktree when the base is checked out elsewhere", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        baseBranch: "develop",
+      }),
+    ]);
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject", checks: undefined,
+    } as ReturnType<typeof tryGetProject>);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue({
+      ok: false, reason: "checked-out-elsewhere", currentBranch: "operator-manual", checkedOutAt: "/some/wt",
+    });
+
+    poll("myproject");
+
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        source: "poller",
+        project: "myproject",
+        worker: "bold-ash",
+        message: expect.stringMatching(/merged to origin\/develop.*checked out in another worktree \(\/some\/wt\)/),
+      }),
+    );
+  });
+
   it("spawns detached _post-rebuild-refresh after garden self-rebuild", () => {
     registryMock._setEntries("garden", [
       makeWorker({
