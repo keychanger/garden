@@ -306,10 +306,27 @@ export function mergeToBase(
 }
 
 export type FastForwardResult =
-  | { ok: true }
-  | { ok: false; reason: "off-base"; currentBranch: string | null }
+  // `worktree`: the base branch was checked out, so `merge --ff-only` advanced
+  // the working tree too — a configured postMerge can build it. `ref`: the
+  // base was parked off to the side, so only its branch ref was advanced; the
+  // working tree is on another branch and postMerge must be skipped.
+  | { ok: true; advanced: "worktree" | "ref" }
+  | { ok: false; reason: "diverged"; currentBranch: string | null; ahead: number; behind: number }
+  | { ok: false; reason: "checked-out-elsewhere"; currentBranch: string | null; checkedOutAt: string | null }
   | { ok: false; reason: "stuck"; error: string };
 
+// Advance the project's local base branch to the freshly-merged origin tip.
+// Two shapes, because `git merge --ff-only` only ever moves HEAD:
+//   - base IS the checked-out branch -> `merge --ff-only` updates the working
+//     tree as well (advanced: "worktree").
+//   - base is NOT checked out (the operator parked the project checkout on
+//     another branch — the deliberate many-base workflow) -> advance the ref
+//     alone with `git fetch origin <base>:<base>` (advanced: "ref"). That
+//     refspec is both fast-forward-enforced (it rejects a non-ff update — real
+//     divergence) and worktree-aware (it refuses to move a branch checked out
+//     in another worktree), so we never clobber local-only commits or desync a
+//     sibling worktree. The common "ref simply trailed origin" case advances
+//     silently; only genuine divergence or contention surfaces to the operator.
 export function fastForwardBase(
   repoPath: string,
   baseBranch: string,
@@ -318,25 +335,78 @@ export function fastForwardBase(
   const worker = ctx?.worker;
   const baseData = { baseBranch, ...(ctx?.project ? { project: ctx.project } : {}) };
   const current = currentBranch(repoPath);
-  if (current !== baseBranch) {
-    log.info("git", "skipping fast-forward: not on base branch", {
+  if (current === baseBranch) {
+    try {
+      git(repoPath, "fetch", "origin", baseBranch);
+      git(repoPath, "merge", "--ff-only", `origin/${baseBranch}`);
+      log.info("git", "fast-forwarded local base checkout", { worker, data: baseData });
+      return { ok: true, advanced: "worktree" };
+    } catch (err) {
+      const error = gitErrText(err);
+      log.info("git", "local base checkout not fast-forwarded (postMerge will be skipped)", {
+        worker,
+        data: { ...baseData, error },
+      });
+      return { ok: false, reason: "stuck", error };
+    }
+  }
+  // Off-base: refresh the tracking ref (so divergence math below is accurate),
+  // then advance the local branch ref without touching the working tree.
+  try {
+    git(repoPath, "fetch", "origin", baseBranch);
+  } catch (err) {
+    return { ok: false, reason: "stuck", error: gitErrText(err) };
+  }
+  try {
+    git(repoPath, "fetch", "origin", `${baseBranch}:${baseBranch}`);
+    log.info("git", "advanced off-base local base ref to origin", {
       worker,
       data: { ...baseData, currentBranch: current },
     });
-    return { ok: false, reason: "off-base", currentBranch: current };
-  }
-  try {
-    git(repoPath, "fetch", "origin", baseBranch);
-    git(repoPath, "merge", "--ff-only", `origin/${baseBranch}`);
-    log.info("git", "fast-forwarded local base branch", { worker, data: baseData });
-    return { ok: true };
+    return { ok: true, advanced: "ref" };
   } catch (err) {
-    const error = String(err);
-    log.info("git", "local base checkout not fast-forwarded (postMerge will be skipped)", {
-      worker,
-      data: { ...baseData, error },
-    });
-    return { ok: false, reason: "stuck", error };
+    const text = gitErrText(err);
+    if (/refusing to fetch into branch|checked out at/.test(text)) {
+      const checkedOutAt = text.match(/checked out at '([^']+)'/)?.[1] ?? null;
+      log.info("git", "off-base base ref not advanced: checked out elsewhere", {
+        worker,
+        data: { ...baseData, currentBranch: current, checkedOutAt },
+      });
+      return { ok: false, reason: "checked-out-elsewhere", currentBranch: current, checkedOutAt };
+    }
+    if (/non-fast-forward|\[rejected\]/.test(text)) {
+      const { ahead, behind } = aheadBehind(repoPath, baseBranch, `origin/${baseBranch}`);
+      log.info("git", "off-base base ref not advanced: diverged from origin", {
+        worker,
+        data: { ...baseData, currentBranch: current, ahead, behind },
+      });
+      return { ok: false, reason: "diverged", currentBranch: current, ahead, behind };
+    }
+    return { ok: false, reason: "stuck", error: text };
+  }
+}
+
+// Captured-stderr-first error text — execFileSync's own message omits the git
+// stderr we need to classify the failure (non-fast-forward vs checked-out).
+function gitErrText(err: unknown): string {
+  const stderr = (err as { stderr?: string | Buffer }).stderr;
+  return (stderr ? String(stderr) : String(err)).trim();
+}
+
+// Commit counts on either side of a divergence: `<local>...<remote>` left/right
+// is (local-only, remote-only). Reported in the divergence alert so the
+// operator sees how much local-only history they'd drop before reconciling.
+function aheadBehind(
+  repoPath: string,
+  local: string,
+  remote: string,
+): { ahead: number; behind: number } {
+  try {
+    const out = git(repoPath, "rev-list", "--left-right", "--count", `${local}...${remote}`);
+    const [a, b] = out.split(/\s+/);
+    return { ahead: Number(a) || 0, behind: Number(b) || 0 };
+  } catch {
+    return { ahead: 0, behind: 0 };
   }
 }
 

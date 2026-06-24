@@ -438,35 +438,52 @@ function notifyPostMerge(
   notifySiblingWorkers(projectName, baseBranch, entry, preMergeChangedFiles);
 
   if (ffResult.ok) {
-    runPostMerge(projectName, projectPath);
+    // Run postMerge only when the working tree itself advanced. An off-base
+    // ref advance (advanced: "ref") left the working tree on a different
+    // branch — building it would build the wrong branch, so skip postMerge.
+    // No alert either: parking the checkout off the worker's base while the
+    // ref trails origin is the deliberate many-base workflow, not drift.
+    if (ffResult.advanced === "worktree") runPostMerge(projectName, projectPath);
     return;
   }
-  // Always alert on a stuck checkout: drift rots manual workflow regardless
-  // of whether postMerge was configured. Distinguish the two failure modes:
-  // "off-base" (operator switched the project checkout off the worker's
-  // pinned base — common when juggling feature branches) is a benign drift
-  // with a clear remediation; "stuck" (dirty tree or divergent local base)
-  // is a state the operator must clean up by hand.
+  // The remote merge already landed; only the local base ref lagged, and the
+  // benign "checkout parked elsewhere, ref simply trailed" case advanced
+  // silently above. What remains are genuine anomalies worth surfacing:
+  //   - diverged: the local base ref has its own commits not on origin, so we
+  //     refuse to move it (warn — origin holds the work, operator reconciles).
+  //   - checked-out-elsewhere: base is live in another worktree (warn — that
+  //     worktree just needs a pull).
+  //   - stuck: dirty/wedged on-base checkout or a fetch failure (error — the
+  //     operator must clean it up).
   const postMergeNote = tryGetProject(projectName)?.postMerge
     ? " postMerge was skipped."
     : "";
-  log.error("poller", "local base checkout did not fast-forward after merge", {
+  let level: "warn" | "error";
+  let message: string;
+  if (ffResult.reason === "diverged") {
+    level = "warn";
+    message = `Worker ${entry.name} merged to origin/${baseBranch}, but the local ${baseBranch} ref at ${projectPath} has diverged from origin (${ffResult.ahead} ahead, ${ffResult.behind} behind) and was left untouched. origin/${baseBranch} holds the merged work; reconcile the local ref by hand (rebase or reset it onto origin/${baseBranch} once you've confirmed the ${ffResult.ahead} local-only commit(s) are safe to drop).${postMergeNote}`;
+  } else if (ffResult.reason === "checked-out-elsewhere") {
+    level = "warn";
+    const where = ffResult.checkedOutAt ? ` (${ffResult.checkedOutAt})` : "";
+    message = `Worker ${entry.name} merged to origin/${baseBranch}, but ${baseBranch} is checked out in another worktree${where}, so its local ref was left untouched. Run \`git pull --ff-only\` in that worktree to pick up the merged work.${postMergeNote}`;
+  } else {
+    level = "error";
+    message = `Local ${baseBranch} checkout at ${projectPath} did not fast-forward after merge (dirty working tree, divergent branch, or fetch failure).${postMergeNote} Clean the checkout so it stays current with merged work.`;
+  }
+  (level === "error" ? log.error : log.warn)("poller", "local base ref not advanced after merge", {
     worker: entry.name,
     data: { project: projectName, projectPath, baseBranch, reason: ffResult.reason },
   });
-  const message = ffResult.reason === "off-base"
-    ? `Worker ${entry.name} merged to origin/${baseBranch}, but ${projectPath} is checked out on ${ffResult.currentBranch ?? "an unknown branch"}. Local ${baseBranch} ref is now stale. Switch back to ${baseBranch} (or run \`git fetch origin ${baseBranch} && git update-ref refs/heads/${baseBranch} refs/remotes/origin/${baseBranch}\`) to advance it.${postMergeNote}`
-    : `Local ${baseBranch} checkout at ${projectPath} did not fast-forward after merge (likely a dirty working tree or divergent branch).${postMergeNote} Clean the checkout so it stays current with merged work.`;
   addAlert({
-    level: "error",
+    level,
     source: "poller",
     project: projectName,
     worker: entry.name,
     message,
-    // Off-base alerts repeat once per worker-merge cycle; the existing 1-hour
-    // dedup window is fine, but include the reason+currentBranch in the key
-    // so a transition between failure modes isn't suppressed.
-    dedupKey: `ff-fail:${ffResult.reason}:${projectName}:${baseBranch}:${ffResult.reason === "off-base" ? ffResult.currentBranch ?? "?" : ""}`,
+    // Re-fires once per worker-merge cycle; the 1-hour dedup window covers the
+    // spam. Key on reason so a transition between failure modes isn't suppressed.
+    dedupKey: `ff-fail:${ffResult.reason}:${projectName}:${baseBranch}`,
   });
 }
 

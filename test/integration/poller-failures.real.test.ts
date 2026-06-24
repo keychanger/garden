@@ -209,8 +209,8 @@ describe("poller failure modes (real fs/git, mocked tmux/dashboard)", () => {
     });
   });
 
-  describe("merge succeeds but local fast-forward fails", () => {
-    it("alerts on checkout drift and still completes the merge", async () => {
+  describe("merge succeeds while the checkout is parked off-base", () => {
+    it("advances the local base ref without checking it out, and raises no alert", async () => {
       const { createWorktree } = await import("../../src/dashboard/git.js");
       createWorktree(projectPath, worktreePath, WORKER);
 
@@ -219,10 +219,10 @@ describe("poller failure modes (real fs/git, mocked tmux/dashboard)", () => {
       git(worktreePath, "commit", "-m", "feature");
       git(worktreePath, "push", "origin", WORKER);
 
-      // Force the local main checkout off the base branch so fastForwardBase
-      // bails (currentBranch !== baseBranch). This is one of the conditions
-      // the operator hits when they manually checkout a feature branch and
-      // forget to switch back.
+      // Park the main checkout on another branch — the deliberate many-base
+      // workflow: the operator keeps the project checkout on one feature branch
+      // while a worker merges into a different one. The local `main` ref simply
+      // trails origin; it is not checked out anywhere.
       git(projectPath, "checkout", "-b", "operator-manual");
 
       await makeWorker({
@@ -234,25 +234,65 @@ describe("poller failure modes (real fs/git, mocked tmux/dashboard)", () => {
       poll(PROJECT);
 
       const { findWorkerByName } = await import("../../src/dashboard/registry.js");
-      const entry = findWorkerByName(PROJECT, WORKER);
-      // The merge to origin/main succeeds (mergeToBase pushes via refspec, no
-      // local checkout needed); finalizeMerge transitions to merged regardless
-      // of whether the local FF lands.
-      expect(entry?.prState).toBe("merged");
+      expect(findWorkerByName(PROJECT, WORKER)?.prState).toBe("merged");
 
-      // Origin/main carries the worker's commit.
+      // Origin/main carries the worker's commit...
       const originMainSha = git(originPath, "rev-parse", "main");
       const workerSha = git(worktreePath, "rev-parse", "HEAD");
       expect(originMainSha).toBe(workerSha);
 
-      // But the alert fires because the local main checkout is on a different
-      // branch and could not fast-forward. The off-base message names both
-      // the worker's base and the current checkout so the operator knows
-      // exactly what diverged.
+      // ...and the local `main` ref was advanced to match it even though the
+      // checkout stayed on operator-manual (ff via `fetch origin main:main`).
+      expect(git(projectPath, "rev-parse", "main")).toBe(originMainSha);
+      expect(git(projectPath, "rev-parse", "--abbrev-ref", "HEAD")).toBe("operator-manual");
+
+      // A trailing-then-advanced ref is normal in this workflow — no alert.
       const messages = await readAlertsForWorker();
-      expect(messages.find(m =>
-        m.includes("merged to origin/main") && m.includes("operator-manual"),
-      )).toBeDefined();
+      expect(messages.find(m => /diverged|fast-forward/.test(m))).toBeUndefined();
+    });
+
+    it("warns and leaves the local ref untouched when local base has diverged from origin", async () => {
+      const { createWorktree } = await import("../../src/dashboard/git.js");
+      createWorktree(projectPath, worktreePath, WORKER);
+
+      fs.writeFileSync(path.join(worktreePath, "feature.txt"), "feature\n");
+      git(worktreePath, "add", "feature.txt");
+      git(worktreePath, "commit", "-m", "feature");
+      git(worktreePath, "push", "origin", WORKER);
+
+      // Give local `main` a commit that was never pushed, so once the worker
+      // merges into origin/main the two genuinely diverge (each has a commit
+      // the other lacks). This is the lex case: the local ref is not merely
+      // behind origin — it has its own history.
+      fs.writeFileSync(path.join(projectPath, "local-only.txt"), "local\n");
+      git(projectPath, "add", "local-only.txt");
+      git(projectPath, "commit", "-m", "local-only work");
+      const divergedSha = git(projectPath, "rev-parse", "main");
+      git(projectPath, "checkout", "-b", "operator-manual");
+
+      await makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date().toISOString(),
+      });
+
+      const { poll } = await import("../../src/dashboard/poller.js");
+      poll(PROJECT);
+
+      const { findWorkerByName } = await import("../../src/dashboard/registry.js");
+      expect(findWorkerByName(PROJECT, WORKER)?.prState).toBe("merged");
+
+      // The remote merge still landed; the local diverged ref was left alone.
+      expect(git(originPath, "rev-parse", "main")).toBe(git(worktreePath, "rev-parse", "HEAD"));
+      expect(git(projectPath, "rev-parse", "main")).toBe(divergedSha);
+
+      // A warn-level alert names the divergence (1 ahead, 1 behind) rather than
+      // suggesting a force update-ref that would silently drop the local commit.
+      const { readAlerts } = await import("../../src/dashboard/alerts.js");
+      const diverged = readAlerts().alerts.find(
+        a => a.worker === WORKER && /diverged from origin \(1 ahead, 1 behind\)/.test(a.message),
+      );
+      expect(diverged).toBeDefined();
+      expect(diverged?.level).toBe("warn");
     });
   });
 

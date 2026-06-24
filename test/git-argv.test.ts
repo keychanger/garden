@@ -667,24 +667,56 @@ describe("getWorkerBaseBranch", () => {
 });
 
 describe("fastForwardBase", () => {
-  it("returns ok after a clean fetch + ff-only merge on the base branch", () => {
+  it("advances the working tree after a clean fetch + ff-only merge on the base branch", () => {
     mockExec
       .mockReturnValueOnce("main\n")  // rev-parse --abbrev-ref HEAD (currentBranch)
       .mockReturnValueOnce("")        // fetch origin main
       .mockReturnValueOnce("");       // merge --ff-only origin/main
-    expect(fastForwardBase("/repo", "main")).toEqual({ ok: true });
+    expect(fastForwardBase("/repo", "main")).toEqual({ ok: true, advanced: "worktree" });
     const calls = mockExec.mock.calls;
     expect(calls[1]).toEqual(["git", ["fetch", "origin", "main"], expect.objectContaining({ cwd: "/repo" })]);
     expect(calls[2]).toEqual(["git", ["merge", "--ff-only", "origin/main"], expect.objectContaining({ cwd: "/repo" })]);
   });
 
-  it("returns off-base with currentBranch when checkout is not on the base branch", () => {
-    mockExec.mockReturnValueOnce("feature-x\n"); // currentBranch
+  it("advances the ref alone (advanced: ref) when the checkout is parked off-base", () => {
+    mockExec
+      .mockReturnValueOnce("feature-x\n") // currentBranch
+      .mockReturnValueOnce("")            // fetch origin main (refresh tracking ref)
+      .mockReturnValueOnce("");           // fetch origin main:main (advance ref)
+    expect(fastForwardBase("/repo", "main")).toEqual({ ok: true, advanced: "ref" });
+    const calls = mockExec.mock.calls;
+    // The working tree is never touched — no `merge`, just the ref-advancing refspec.
+    expect(calls[2]).toEqual(["git", ["fetch", "origin", "main:main"], expect.objectContaining({ cwd: "/repo" })]);
+    expect(mockExec.mock.calls.some(c => (c[1] as string[])[0] === "merge")).toBe(false);
+  });
+
+  it("returns diverged with ahead/behind counts when the off-base ref refspec is rejected", () => {
+    mockExec
+      .mockReturnValueOnce("feature-x\n") // currentBranch
+      .mockReturnValueOnce("")            // fetch origin main
+      .mockImplementationOnce(() => {     // fetch origin main:main rejected
+        throw Object.assign(new Error("Command failed"), {
+          stderr: " ! [rejected]        main -> main  (non-fast-forward)\n",
+        });
+      })
+      .mockReturnValueOnce("3\t2\n");     // rev-list --left-right --count main...origin/main
     expect(fastForwardBase("/repo", "main")).toEqual({
-      ok: false, reason: "off-base", currentBranch: "feature-x",
+      ok: false, reason: "diverged", currentBranch: "feature-x", ahead: 3, behind: 2,
     });
-    // Only the currentBranch probe should have run — no fetch, no merge.
-    expect(mockExec).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns checked-out-elsewhere with the worktree path when the base is live in another worktree", () => {
+    mockExec
+      .mockReturnValueOnce("feature-x\n") // currentBranch
+      .mockReturnValueOnce("")            // fetch origin main
+      .mockImplementationOnce(() => {     // fetch origin main:main refused
+        throw Object.assign(new Error("Command failed"), {
+          stderr: "fatal: refusing to fetch into branch 'refs/heads/main' checked out at '/some/wt'\n",
+        });
+      });
+    expect(fastForwardBase("/repo", "main")).toEqual({
+      ok: false, reason: "checked-out-elsewhere", currentBranch: "feature-x", checkedOutAt: "/some/wt",
+    });
   });
 
   it("returns stuck when ff-only merge aborts (dirty working tree)", () => {
