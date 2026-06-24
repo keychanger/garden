@@ -38,6 +38,36 @@ const CONTINUE_PROMPT =
   "[garden] You were interrupted by a restart. Continue from where you left "
   + "off, or say so if your task was already finished.";
 
+// A leading [garden] line pinning an autocontinue'd worker to its own branch.
+// Every worker runs in a git worktree of the SHARED project repo, so sibling
+// workers' branches — and their origin/<branch> tracking refs — are visible in
+// `git branch -a` from this worktree. The post-merge continue prompt named no
+// branch, so a worker on a multi-worker project (two workers on `lex`) rebased
+// onto the OTHER worker's branch when it tried to "continue on the merged
+// base". Naming the worker's own branch and base, and forbidding sibling-branch
+// git operations, removes that ambiguity. Note the base operations the
+// sync-failed nudge relies on (`git reset --hard origin/<base>`) stay allowed —
+// only OTHER workers' branches are off-limits.
+function branchIdentityLine(branch: string | undefined, base: string | undefined): string {
+  const b = branch ? `\`${branch}\`` : "your own worker branch";
+  const baseClause = base
+    ? ` It was branched from \`${base}\`; if you need the merged mainline, use \`origin/${base}\` — never a sibling worker's branch.`
+    : "";
+  return (
+    `[garden] You are working in your own git worktree on branch ${b}. This `
+    + "project may have other active workers whose branches share this repository "
+    + "and show up in `git branch -a` here — do NOT rebase onto, merge, reset to, "
+    + `or check out any branch other than ${b}.${baseClause} Stay on ${b}.`
+  );
+}
+
+// Interrupt-recovery prompt, branch-pinned. Built per-worker (rather than a
+// const) so it can name the worker's own branch — same anti-confusion guard as
+// the post-merge prompt.
+function buildInterruptContinuePrompt(branch: string | undefined, base: string | undefined): string {
+  return `${branchIdentityLine(branch, base)}\n\n${CONTINUE_PROMPT}`;
+}
+
 const MERGE_CONTINUE_BASE =
   "[garden] Your previous changes were reviewed and merged. Before you decide "
   + "you are finished, re-read the operator's ORIGINAL request (scroll back to "
@@ -65,8 +95,11 @@ function buildMergeContinuePrompt(
   changedFiles: string[] | undefined,
   syncFailed: boolean | undefined,
   baseBranch: string | undefined,
+  branchName: string | undefined,
 ): string {
-  const parts: string[] = [];
+  // Lead with the branch identity so the worker knows which branch it owns
+  // before any "continue building" instruction tempts it onto a sibling's.
+  const parts: string[] = [branchIdentityLine(branchName, baseBranch)];
   if (changedFiles && changedFiles.length > 0) {
     const list = changedFiles.length <= MAX_LISTED_FILES
       ? changedFiles.join(", ")
@@ -283,10 +316,14 @@ export function notifyHandoffCallback(opts: {
 export function continueWorker(
   projectName: string,
   workerName: string,
-  message: string = CONTINUE_PROMPT,
+  message?: string,
 ): boolean {
   const entry = findWorkerByName(projectName, workerName);
   if (!entry) return false;
+  // Interrupt-recovery callers pass no message; build a branch-pinned default
+  // from the entry so the prompt names the worker's own branch. Explicit
+  // messages (post-merge, handoff callback, seed) already carry their own text.
+  const text = message ?? buildInterruptContinuePrompt(entry.branchName ?? workerName, entry.baseBranch);
   const paneId = resolveWorkerPaneId(projectName, workerName);
   if (!paneId) {
     log.warn("workers", "continue skipped, no pane", {
@@ -329,7 +366,7 @@ export function continueWorker(
     return false;
   }
   try {
-    pasteAndSubmit(paneId, message);
+    pasteAndSubmit(paneId, text);
   } catch (err) {
     log.warn("workers", "continue send-keys failed", {
       worker: workerName,
@@ -382,6 +419,7 @@ export function continueWorkerAfterMerge(projectName: string, workerName: string
     entry?.pendingContinueChangedFiles,
     entry?.pendingContinueSyncFailed,
     entry?.baseBranch,
+    entry?.branchName ?? workerName,
   );
   const delivered = continueWorker(projectName, workerName, message);
   // Clear the transient stale-files / sync-failed context only once the prompt

@@ -216,6 +216,26 @@ describe("continueWorker", () => {
     );
   });
 
+  it("names the worker's own branch in the interrupt-recovery default prompt", () => {
+    // The interrupt prompt is branch-pinned too: a worker resumed after a
+    // dashboard restart must not be tempted onto a sibling's branch either.
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "blithe-bold-wren", sessionId: "s", task: "", agentStatus: "idle",
+      branchName: "blithe-bold-wren", baseBranch: "main",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_lex-worker-blithe-bold-wren",
+      activePaneId: "%9",
+    }));
+
+    continueWorker("lex", "blithe-bold-wren");
+
+    const message = vi.mocked(pasteAndSubmit).mock.calls[0][1];
+    expect(message).toContain("branch `blithe-bold-wren`");
+    expect(message).toContain("do NOT rebase");
+    expect(message).toContain("interrupted by a restart");
+  });
+
   it("falls back to the hidden window pane id when the worker is parked", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
@@ -611,6 +631,46 @@ describe("continueWorkerAfterMerge", () => {
     });
     continueWorkerAfterMerge("myproject", "bold-ash");
     expect(pasteAndSubmit).not.toHaveBeenCalled();
+  });
+
+  it("names the worker's own branch and forbids rebasing onto a sibling's branch", () => {
+    // Regression: the post-merge prompt was branch-agnostic, so a worker on a
+    // multi-worker project (two workers on `lex`) rebased onto the OTHER
+    // worker's branch — sibling branches are visible via `git branch -a` across
+    // worktrees of the shared repo. The prompt must pin the worker to its own
+    // branch and point any base sync at origin/<base>, never a sibling.
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "blithe-bold-wren", sessionId: "s", task: "", agentStatus: "idle",
+      branchName: "blithe-bold-wren", baseBranch: "main",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_lex-worker-blithe-bold-wren",
+      activePaneId: "%9",
+    }));
+
+    continueWorkerAfterMerge("lex", "blithe-bold-wren");
+
+    const message = vi.mocked(pasteAndSubmit).mock.calls[0][1];
+    expect(message).toContain("branch `blithe-bold-wren`");
+    expect(message).toContain("do NOT rebase");
+    expect(message).toContain("origin/main");
+  });
+
+  it("falls back to the worker name for the branch when branchName is unset", () => {
+    // Old on-disk entries predate branchName; the branch is always named after
+    // the worker, so the worker name is the correct fallback.
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+
+    continueWorkerAfterMerge("myproject", "bold-ash");
+
+    const message = vi.mocked(pasteAndSubmit).mock.calls[0][1];
+    expect(message).toContain("branch `bold-ash`");
   });
 
   it("preserves the stale-files context when delivery is skipped, so the +16s retry can re-emit it", () => {
