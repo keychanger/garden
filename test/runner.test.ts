@@ -4,11 +4,12 @@ vi.mock("node:fs", () => ({
   default: {
     existsSync: vi.fn(() => false),
     realpathSync: vi.fn(() => { throw new Error("ENOENT"); }),
+    statSync: vi.fn(() => { throw new Error("ENOENT"); }),
   },
 }));
 
 import fs from "node:fs";
-import { resolveGardenRunner, resolveHookRunner, findStableGardenBin } from "../src/dashboard/runner.js";
+import { resolveGardenRunner, resolveHookRunner, findStableGardenBin, resolveNodeBin } from "../src/dashboard/runner.js";
 
 const savedArgv1 = process.argv[1];
 const savedPath = process.env.PATH;
@@ -22,6 +23,7 @@ beforeEach(() => {
   process.argv[1] = "/usr/local/bin/garden";
   process.env.PATH = "/usr/local/bin:/opt/homebrew/bin";
   vi.mocked(fs.realpathSync).mockImplementation(() => { throw new Error("ENOENT"); });
+  vi.mocked(fs.statSync).mockImplementation(() => { throw new Error("ENOENT"); });
 });
 
 describe("resolveGardenRunner", () => {
@@ -155,5 +157,45 @@ describe("findStableGardenBin", () => {
     process.env.PATH = "/usr/local/bin";
     vi.mocked(fs.realpathSync).mockReturnValue("/usr/local/bin/garden");
     expect(findStableGardenBin()).toBeNull();
+  });
+});
+
+// Regression: a node upgrade (even an incidental one pulled in by an unrelated
+// `brew install`) deletes the versioned Cellar dir, so baking process.execPath
+// — the version-pinned realpath — turns every persisted command into a 127.
+// resolveNodeBin bakes the stable PATH symlink (/opt/homebrew/bin/node) whose
+// target Homebrew rewrites on upgrade, keeping the baked path valid.
+describe("resolveNodeBin", () => {
+  it("returns the un-resolved node from the first PATH dir that has one", () => {
+    process.env.PATH = "/usr/local/bin:/opt/homebrew/bin";
+    vi.mocked(fs.statSync).mockImplementation((p) => {
+      if (String(p) === "/opt/homebrew/bin/node") return { isFile: () => true } as ReturnType<typeof fs.statSync>;
+      throw new Error("ENOENT");
+    });
+    // The symlink path itself, NOT its versioned Cellar realpath.
+    expect(resolveNodeBin()).toBe("/opt/homebrew/bin/node");
+  });
+
+  it("does not realpath the candidate — a node upgrade keeps the baked path valid", () => {
+    process.env.PATH = "/opt/homebrew/bin";
+    vi.mocked(fs.statSync).mockReturnValue({ isFile: () => true } as ReturnType<typeof fs.statSync>);
+    const result = resolveNodeBin();
+    expect(result).toBe("/opt/homebrew/bin/node");
+    expect(result).not.toContain("Cellar");
+  });
+
+  it("falls back to process.execPath when no node is on PATH", () => {
+    process.env.PATH = "/usr/bin:/bin";
+    // statSync default throws everywhere → no usable node on PATH.
+    expect(resolveNodeBin()).toBe(process.execPath);
+  });
+
+  it("bakes the stable PATH node into the garden runner command", () => {
+    process.argv[1] = "/opt/homebrew/bin/garden";
+    process.env.PATH = "/opt/homebrew/bin";
+    vi.mocked(fs.statSync).mockReturnValue({ isFile: () => true } as ReturnType<typeof fs.statSync>);
+    const result = resolveGardenRunner();
+    expect(result).toContain("/opt/homebrew/bin/node");
+    expect(result).not.toContain("Cellar");
   });
 });

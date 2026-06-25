@@ -36,6 +36,33 @@ import { shellEscape } from "./tmux.js";
 // the failure to fresh workers that never touched the original worktree.
 const WORKTREE_MARKER = "/.garden/worktrees/";
 
+// process.execPath is version-pinned to the concrete interpreter — under
+// Homebrew it is /opt/homebrew/Cellar/node/<ver>/bin/node, a path that ceases
+// to exist the moment node is upgraded, even incidentally as a dependency of
+// an unrelated `brew install` (e.g. `brew install heroku` bumps node). Baking
+// it into the long-lived command strings these runners feed — tmux key
+// bindings, Claude hook commands in worker settings.json, hidden-window
+// shells — turns every one of them into a 127 (command not found) after such
+// an upgrade. Prefer instead a node on PATH whose own path is the stable
+// indirection (Homebrew rewrites /opt/homebrew/bin/node's symlink target on
+// upgrade but keeps the name), and deliberately do NOT realpath the candidate
+// — that would re-pin to the versioned Cellar path we are trying to avoid.
+// Fall back to execPath only when no node is on PATH, preserving the
+// absolute-path guarantee that lets baked commands run in minimal hook shells.
+export function resolveNodeBin(): string {
+  const dirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  for (const dir of dirs) {
+    const candidate = path.join(dir, "node");
+    try {
+      // statSync follows symlinks: it succeeds only when the target really
+      // exists, so we never bake a dangling path — while we keep the
+      // un-resolved candidate (the stable symlink), not its versioned target.
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch { /* no usable node in this dir */ }
+  }
+  return process.execPath;
+}
+
 export function resolveGardenRunner(): string {
   const direct = path.resolve(process.argv[1]);
 
@@ -57,10 +84,10 @@ export function resolveGardenRunner(): string {
   // operators without `npm link` get the old behavior.
   if (direct.includes(WORKTREE_MARKER)) {
     const stable = findStableGardenBin();
-    if (stable) return `${shellEscape(process.execPath)} ${shellEscape(stable)}`;
+    if (stable) return `${shellEscape(resolveNodeBin())} ${shellEscape(stable)}`;
   }
   // Use absolute path for node so hooks work in minimal shell environments
-  return `${shellEscape(process.execPath)} ${shellEscape(direct)}`;
+  return `${shellEscape(resolveNodeBin())} ${shellEscape(direct)}`;
 }
 
 // Companion runner for the per-tool-call Claude hook. The hook fires on every
@@ -96,14 +123,14 @@ export function resolveHookRunner(): string {
     // findStableGardenBin already returns a realpath'd dist/cli.js; fall back
     // to the worktree's own dist when no stable global exists.
     const cliJs = stable ?? direct;
-    return `${shellEscape(process.execPath)} ${shellEscape(path.join(path.dirname(cliJs), "hook.js"))}`;
+    return `${shellEscape(resolveNodeBin())} ${shellEscape(path.join(path.dirname(cliJs), "hook.js"))}`;
   }
 
   // Outside a worktree, argv[1] may be a bin symlink; resolve to the real
   // cli.js so hook.js maps to its actual dist sibling.
   let cliJs = direct;
   try { cliJs = fs.realpathSync(direct); } catch { /* use argv[1] as-is */ }
-  return `${shellEscape(process.execPath)} ${shellEscape(path.join(path.dirname(cliJs), "hook.js"))}`;
+  return `${shellEscape(resolveNodeBin())} ${shellEscape(path.join(path.dirname(cliJs), "hook.js"))}`;
 }
 
 // Walk PATH looking for a `garden` executable, then resolve through symlinks
