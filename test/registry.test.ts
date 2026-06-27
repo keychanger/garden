@@ -637,6 +637,15 @@ describe("worker ordering helpers", () => {
     expect(workerFreshness(mkEntry({ name: "c" }))).toBe(0);
   });
 
+  it("workerSortFreshness prefers lastStateChangeAt, then lastEventAt, then createdAt, then 0", async () => {
+    const { workerSortFreshness } = await importRegistry();
+    expect(workerSortFreshness(
+      mkEntry({ name: "a", lastStateChangeAt: 900, lastEventAt: 500, createdAt: 100 }))).toBe(900);
+    expect(workerSortFreshness(mkEntry({ name: "b", lastEventAt: 500, createdAt: 100 }))).toBe(500);
+    expect(workerSortFreshness(mkEntry({ name: "c", createdAt: 100 }))).toBe(100);
+    expect(workerSortFreshness(mkEntry({ name: "d" }))).toBe(0);
+  });
+
   it("workerSortTier classifies by attention", async () => {
     const { workerSortTier } = await importRegistry();
     expect(workerSortTier(mkEntry({ name: "a", prState: "failing" }))).toBe(0);
@@ -681,6 +690,32 @@ describe("worker ordering helpers", () => {
     const a = mkEntry({ name: "aaa", agentStatus: "idle", lastEventAt: base + 1_000 });
     const b = mkEntry({ name: "bbb", agentStatus: "idle", lastEventAt: base + 59_000 });
     expect([b, a].sort(compareWorkerFreshness).map(e => e.name)).toEqual(["aaa", "bbb"]);
+  });
+
+  it("orders by lastStateChangeAt, not the heartbeat — a heartbeat bump doesn't reshuffle", async () => {
+    const { compareWorkerFreshness } = await importRegistry();
+    const base = 60_000 * 100;
+    // alpha last changed state a full bucket *before* beta, so beta sorts first
+    // by state-change time even though alpha's heartbeat (lastEventAt) is newer.
+    const alpha = mkEntry({
+      name: "alpha", agentStatus: "working",
+      lastStateChangeAt: base, lastEventAt: base + 600_000,
+    });
+    const beta = mkEntry({
+      name: "beta", agentStatus: "working",
+      lastStateChangeAt: base + 120_000, lastEventAt: base + 120_000,
+    });
+    expect([alpha, beta].sort(compareWorkerFreshness).map(e => e.name)).toEqual(["beta", "alpha"]);
+
+    // A working agent's silent heartbeat advances lastEventAt across many
+    // buckets, but lastStateChangeAt is fixed — so the order is unchanged. This
+    // is the regression: ordering must not drift while the agent just works.
+    const alphaAfterHeartbeats = mkEntry({
+      name: "alpha", agentStatus: "working",
+      lastStateChangeAt: base, lastEventAt: base + 5_000_000,
+    });
+    expect([alphaAfterHeartbeats, beta].sort(compareWorkerFreshness).map(e => e.name))
+      .toEqual(["beta", "alpha"]);
   });
 
   it("isWorkerStale is true only for tier-3 workers untouched past WORKER_STALE_MS", async () => {
@@ -739,5 +774,23 @@ describe("createdAt backfill on read", () => {
     const { readRegistry, REGISTRY_FILE } = await importRegistry();
     writeEntry(REGISTRY_FILE, { createdAt: 7, lastEventAt: 999 });
     expect(readRegistry().workers.proj[0].createdAt).toBe(7);
+  });
+
+  it("backfills lastStateChangeAt from lastEventAt so order is unchanged at upgrade", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    writeEntry(REGISTRY_FILE, { lastEventAt: 4242 });
+    expect(readRegistry().workers.proj[0].lastStateChangeAt).toBe(4242);
+  });
+
+  it("backfills lastStateChangeAt from createdAt when lastEventAt is absent", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    writeEntry(REGISTRY_FILE, { createdAt: 77 });
+    expect(readRegistry().workers.proj[0].lastStateChangeAt).toBe(77);
+  });
+
+  it("leaves an existing lastStateChangeAt untouched", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    writeEntry(REGISTRY_FILE, { lastStateChangeAt: 5, lastEventAt: 999 });
+    expect(readRegistry().workers.proj[0].lastStateChangeAt).toBe(5);
   });
 });

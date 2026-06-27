@@ -102,6 +102,13 @@ export interface WorkerEntry {
   failingSha?: string;
   agentStatus?: AgentStatus;
   lastEventAt?: number;    // epoch ms when a Claude hook last fired for this worker
+  // Epoch ms of the worker's last *meaningful* state change — an agentStatus or
+  // prState transition, not the 10s hook heartbeat. Drives row ordering
+  // (workerSortFreshness) so the list only reshuffles when the worker actually
+  // moves, never on the silent heartbeat that bumps lastEventAt without a
+  // repaint. Set by applyAndLog when stateChanged; backfilled in
+  // migrateLastStateChangeAt for entries that predate the field.
+  lastStateChangeAt?: number;
   // Epoch ms when the worker was created (set in addWorker). Acts as the floor
   // for a brand-new worker's freshness before its first hook fires, so a
   // just-made worker sorts fresh instead of sinking to the bottom. Optional
@@ -331,13 +338,29 @@ export interface WorkerRegistry {
 // Worker ordering: recency, attention tiers, staleness
 // ---------------------------------------------------------------------------
 
-// A worker's freshness timestamp (epoch ms): the most recent of "the operator
-// or the agent did something" (lastEventAt — set by every Claude hook,
-// including UserPromptSubmit) and "the worker was created" (createdAt, the
-// floor for a brand-new worker that hasn't fired a hook yet). Used both for
-// recency ordering and the stale-dim threshold.
+// A worker's liveness timestamp (epoch ms): the most recent of "a Claude hook
+// fired" (lastEventAt — bumped by every hook including the 10s heartbeat) and
+// "the worker was created" (createdAt, the floor before its first hook). This
+// is the heartbeat signal — it answers "did anything touch this worker
+// recently" — and so it drives the 24h stale-dim threshold (isWorkerStale),
+// NOT row ordering. Ordering uses workerSortFreshness; see its note.
 export function workerFreshness(entry: WorkerEntry): number {
   return entry.lastEventAt ?? entry.createdAt ?? 0;
+}
+
+// A worker's ordering timestamp (epoch ms): the most recent meaningful state
+// change (lastStateChangeAt — an agentStatus/prState transition), falling back
+// to the heartbeat then createdAt for entries that predate the field. Used by
+// compareWorkerFreshness so rows reshuffle ONLY when a worker genuinely moves.
+// Deliberately not lastEventAt: the heartbeat bumps lastEventAt every 10s for a
+// working agent without repainting the status pane (the refresh is gated on a
+// real state change — see applyAndLog), so ordering by lastEventAt lets the
+// registry order drift silently and then snap on the next unrelated repaint
+// (e.g. the operator navigating to another worker). Keying on the
+// state-change time keeps every reorder coincident with the repaint that the
+// same transition already triggers.
+export function workerSortFreshness(entry: WorkerEntry): number {
+  return entry.lastStateChangeAt ?? entry.lastEventAt ?? entry.createdAt ?? 0;
 }
 
 // Attention tier for sort ordering — lower sorts higher on screen. Computed
@@ -360,11 +383,11 @@ export function workerSortTier(entry: WorkerEntry): number {
   return 3;
 }
 
-// Freshness is compared at 60-second granularity so a burst of hook events
+// Freshness is compared at 60-second granularity so a burst of state changes
 // among co-active workers produces no reshuffling (the list stays calm); a
 // worker quiet for over a minute still floats up promptly relative to one
-// active now. The 10s hook heartbeat throttle damps write frequency but not
-// reorder churn — this bucket is what actually keeps the pane still.
+// active now. This bucket plus keying on the state-change time (not the
+// heartbeat — see workerSortFreshness) is what keeps the pane still.
 const FRESHNESS_BUCKET_MS = 60_000;
 
 // Sort comparator (use with Array.sort): attention tier ascending, then
@@ -374,8 +397,8 @@ export function compareWorkerFreshness(a: WorkerEntry, b: WorkerEntry): number {
   const tierDiff = workerSortTier(a) - workerSortTier(b);
   if (tierDiff !== 0) return tierDiff;
   const bucketDiff =
-    Math.floor(workerFreshness(b) / FRESHNESS_BUCKET_MS)
-    - Math.floor(workerFreshness(a) / FRESHNESS_BUCKET_MS);
+    Math.floor(workerSortFreshness(b) / FRESHNESS_BUCKET_MS)
+    - Math.floor(workerSortFreshness(a) / FRESHNESS_BUCKET_MS);
   if (bucketDiff !== 0) return bucketDiff;
   return a.name.localeCompare(b.name);
 }
@@ -471,6 +494,7 @@ export function readRegistry(): WorkerRegistry {
         migrateLegacyTrellisFields(e);
         migrateLegacyStatusFields(e);
         migrateCreatedAt(e);
+        migrateLastStateChangeAt(e);
       }
     }
     cachedRegistry = { mtimeMs: stat.mtimeMs, size: stat.size, value: raw };
@@ -556,6 +580,17 @@ function migrateCreatedAt(entry: WorkerEntry): void {
   };
   entry.createdAt =
     entry.lastEventAt ?? isoMs(entry.mergedAt) ?? isoMs(entry.lastShaChangeAt) ?? 0;
+}
+
+// Backfill lastStateChangeAt (the row-ordering timestamp) on entries that
+// predate the field. Seed it from the heartbeat (lastEventAt) so an entry's
+// order is unchanged at upgrade time, then freezes there — closing the drift
+// window for a worker mid-turn at upgrade instead of waiting for its next
+// transition. createdAt is the floor (migrateCreatedAt runs first). In-memory
+// only, persisted on the next writeRegistry, like the migrations above.
+function migrateLastStateChangeAt(entry: WorkerEntry): void {
+  if (entry.lastStateChangeAt !== undefined) return;
+  entry.lastStateChangeAt = entry.lastEventAt ?? entry.createdAt ?? 0;
 }
 
 export function writeRegistry(registry: WorkerRegistry): void {

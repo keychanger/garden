@@ -635,6 +635,38 @@ describe("handleClaudeHook — heartbeat throttle (perf)", () => {
   });
 });
 
+// Row ordering keys on lastStateChangeAt (the last real transition), not the
+// heartbeat lastEventAt — so a working agent's silent 10s heartbeats don't
+// reshuffle the status pane and then snap on the operator's next navigation.
+// applyAndLog stamps lastStateChangeAt only when agentStatus/prState moves.
+describe("handleClaudeHook — lastStateChangeAt (row-ordering timestamp)", () => {
+  it("a state-changing hook stamps lastStateChangeAt", () => {
+    seedWorker("garden", "bold-ash", { agentStatus: "idle", lastStateChangeAt: 1 });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("posttooluse"); // idle → working is a real transition
+
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(entry.agentStatus).toBe("working");
+    expect(Date.now() - (entry.lastStateChangeAt ?? 0)).toBeLessThan(5_000);
+  });
+
+  it("a heartbeat hook bumps lastEventAt but leaves lastStateChangeAt fixed", () => {
+    // working + a stale heartbeat: posttooluse is a no-op transition (stays
+    // working), so it refreshes the heartbeat without touching the order key.
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "working", lastEventAt: Date.now() - 30_000, lastStateChangeAt: 12345,
+    });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("posttooluse");
+
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(Date.now() - (entry.lastEventAt ?? 0)).toBeLessThan(5_000); // heartbeat advanced
+    expect(entry.lastStateChangeAt).toBe(12345);                        // order key fixed
+  });
+});
+
 describe("writeQuickStatus — status pane resize", () => {
   const stateWithPane = {
     activeProject: "garden",

@@ -167,7 +167,7 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
 // ---------------------------------------------------------------------------
 
 type FieldsDelta = Partial<Pick<WorkerEntry,
-  "agentStatus" | "lastEventAt" | "prState" | "task" | "transcriptPath">>;
+  "agentStatus" | "lastEventAt" | "lastStateChangeAt" | "prState" | "task" | "transcriptPath">>;
 
 // pretooluse/posttooluse fire on every Claude tool call and dominate hook
 // traffic — a busy agent completes many tools per second, and with N agents in
@@ -199,6 +199,10 @@ function applyAndLog(
     return;
   }
   fields.lastEventAt = now;
+  // Row ordering keys on the last real transition, not the heartbeat — so a
+  // working agent's silent 10s lastEventAt bumps don't reshuffle the status
+  // pane (which only repaints on stateChanged below). See workerSortFreshness.
+  if (stateChanged) fields.lastStateChangeAt = now;
 
   // Capture the transcript path Claude Code reports on the hook input. It
   // rarely changes (once per session), so only write it when it differs —
