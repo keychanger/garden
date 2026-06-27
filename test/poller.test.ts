@@ -209,6 +209,7 @@ vi.mock("../src/dashboard/poller-fifo.js", async () => {
 
 import fs from "node:fs";
 import { poll, postPush, restartLongLivedPollers, startProjectPoller } from "../src/dashboard/poller.js";
+import { __resetFfStateForTest } from "../src/dashboard/poller-merge.js";
 import { tryGetProject, getAutoContinueConfig } from "../src/config.js";
 import { updateWorkerFields, findWorkerByName } from "../src/dashboard/registry.js";
 import {
@@ -249,6 +250,7 @@ function makeWorker(overrides: Partial<WorkerEntry> = {}): WorkerEntry {
 beforeEach(() => {
   vi.resetAllMocks();
   registryMock._clear();
+  __resetFfStateForTest();
   // Re-establish factory defaults after reset
   vi.mocked(windowExists).mockReturnValue(true);
   vi.mocked(getFirstPaneId).mockReturnValue("%5");
@@ -1720,7 +1722,7 @@ describe("poll — merge-pending state", () => {
     expect(addAlert).not.toHaveBeenCalled();
   });
 
-  it("skips postMerge and alerts when fastForwardBase does not advance (stuck checkout)", () => {
+  it("skips postMerge and warns (not errors) when the local checkout is dirty", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
@@ -1731,7 +1733,7 @@ describe("poll — merge-pending state", () => {
       path: "/repo/myproject", checks: undefined, postMerge: "npm run build",
     } as ReturnType<typeof tryGetProject>);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue({ ok: false, reason: "stuck", error: "dirty" });
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: false, reason: "dirty", currentBranch: "main", error: "dirty" });
 
     poll("myproject");
 
@@ -1740,13 +1742,15 @@ describe("poll — merge-pending state", () => {
       "npm run build",
       expect.anything(),
     );
+    // A dirty checkout is the operator's own working state, not a merge failure
+    // — warn, and lead with the fact that the merge already landed on origin.
     expect(addAlert).toHaveBeenCalledWith(
       expect.objectContaining({
-        level: "error",
+        level: "warn",
         source: "poller",
         project: "myproject",
         worker: "bold-ash",
-        message: expect.stringMatching(/did not fast-forward.*postMerge was skipped/),
+        message: expect.stringMatching(/merged to origin\/main.*uncommitted changes.*postMerge was skipped/),
       }),
     );
     // Worker still reaches merged — the remote merge succeeded, only the
@@ -1756,20 +1760,20 @@ describe("poll — merge-pending state", () => {
     );
   });
 
-  it("alerts when fastForwardBase fails even without postMerge configured", () => {
+  it("errors when the local checkout is wedged (stuck: fetch failed) even without postMerge", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
       }),
     ]);
-    // Drift of the local checkout is an alertable event regardless of
-    // whether a postMerge command exists — stale main rots manual workflow.
+    // A wedged/unfetchable checkout is infra trouble, not the operator's normal
+    // working state — that one stays error-level regardless of postMerge.
     vi.mocked(tryGetProject).mockReturnValue({
       path: "/repo/myproject", checks: undefined,
     } as ReturnType<typeof tryGetProject>);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
-    vi.mocked(fastForwardBase).mockReturnValue({ ok: false, reason: "stuck", error: "dirty" });
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: false, reason: "stuck", error: "fatal: unable to access origin" });
 
     poll("myproject");
 
@@ -1779,9 +1783,36 @@ describe("poll — merge-pending state", () => {
         source: "poller",
         project: "myproject",
         worker: "bold-ash",
-        message: expect.stringContaining("did not fast-forward"),
+        message: expect.stringContaining("could not be advanced"),
       }),
     );
+  });
+
+  it("alerts only on entry into the un-advanceable state, not every merge cycle", () => {
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject", checks: undefined, postMerge: "npm run build",
+    } as ReturnType<typeof tryGetProject>);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: false, reason: "dirty", currentBranch: "main", error: "dirty" });
+
+    // Each merge re-seeds a fresh merge-pending worker (updateWorkerFields
+    // mutates the prior one to `merged` in place), so both polls genuinely run
+    // the post-merge path with the same dirty checkout — only the first alerts.
+    const seedMergePending = () => registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+
+    seedMergePending();
+    poll("myproject"); // entry into dirty -> alert
+    seedMergePending();
+    poll("myproject"); // still dirty -> suppressed
+
+    expect(vi.mocked(addAlert).mock.calls.filter(
+      c => /uncommitted changes/.test(String((c[0] as { message?: string }).message ?? "")),
+    )).toHaveLength(1);
   });
 
   it("advances the off-base ref silently — no alert, no postMerge", () => {

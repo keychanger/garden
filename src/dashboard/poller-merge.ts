@@ -42,6 +42,19 @@ import { launchCiFix } from "./poller-ci-fix.js";
 import { checkCiStatus, getGitHubRepoSlug, type CiStatus } from "./poller-ci.js";
 
 const AUTO_CONTINUE_DEBOUNCE_MS = 10_000;
+// Last fast-forward outcome per `${project}:${base}`, so the post-merge alert
+// fires only when the local base checkout *enters* an un-advanceable state (or
+// switches failure modes), not on every subsequent merge while it stays broken.
+// In-memory, per poller process: a poller restart re-alerts once, which is
+// acceptable. Keyed by project:base (not worker) because a stuck checkout
+// affects every worker's merge — the operator wants one alert, not one each.
+const lastFfState = new Map<string, string>();
+
+// Test seam: clear the entry-tracking map so each test starts from a clean
+// "never seen" state and its single poll() counts as an entry.
+export function __resetFfStateForTest(): void {
+  lastFfState.clear();
+}
 // Stranded threshold for the merged-state sweep. Must outlast the +6s/+16s
 // delivery legs of a merge-time dispatch so the sweep never races an
 // in-flight prompt with a duplicate paste.
@@ -440,6 +453,15 @@ function notifyPostMerge(
 
   notifySiblingWorkers(projectName, baseBranch, entry, preMergeChangedFiles);
 
+  // Alert only when the checkout *enters* an un-advanceable state (or switches
+  // failure modes). A diverged/dirty checkout stays that way, so re-alerting on
+  // every merge cycle is noise — origin already has the work; the operator
+  // reconciles once. Recovery resets the memory so the next break re-alerts.
+  const ffStateKey = `${projectName}:${baseBranch}`;
+  const prevFfState = lastFfState.get(ffStateKey);
+  const currFfState = ffResult.ok ? "ok" : ffResult.reason;
+  lastFfState.set(ffStateKey, currFfState);
+
   if (ffResult.ok) {
     // Run postMerge only when the working tree itself advanced. An off-base
     // ref advance (advanced: "ref") left the working tree on a different
@@ -449,15 +471,16 @@ function notifyPostMerge(
     if (ffResult.advanced === "worktree") runPostMerge(projectName, projectPath);
     return;
   }
-  // The remote merge already landed; only the local base ref lagged, and the
-  // benign "checkout parked elsewhere, ref simply trailed" case advanced
-  // silently above. What remains are genuine anomalies worth surfacing:
-  //   - diverged: the local base ref has its own commits not on origin, so we
-  //     refuse to move it (warn — origin holds the work, operator reconciles).
-  //   - checked-out-elsewhere: base is live in another worktree (warn — that
-  //     worktree just needs a pull).
-  //   - stuck: dirty/wedged on-base checkout or a fetch failure (error — the
-  //     operator must clean it up).
+  if (currFfState === prevFfState) return;
+
+  // The remote merge already landed; only the local base checkout lagged, and
+  // the benign cases (off-base ref trailed origin; redundant local commit
+  // auto-healed) returned ok above. What remains are states the operator should
+  // know about — all framed as "merge succeeded, local checkout needs a hand":
+  //   - diverged: local base has its own commits not on origin (warn).
+  //   - checked-out-elsewhere: base is live in another worktree (warn).
+  //   - dirty: uncommitted local changes collide with the merge (warn).
+  //   - stuck: a fetch failure or wedged checkout (error — infra, not workflow).
   const postMergeNote = tryGetProject(projectName)?.postMerge
     ? " postMerge was skipped."
     : "";
@@ -470,9 +493,12 @@ function notifyPostMerge(
     level = "warn";
     const where = ffResult.checkedOutAt ? ` (${ffResult.checkedOutAt})` : "";
     message = `Worker ${entry.name} merged to origin/${baseBranch}, but ${baseBranch} is checked out in another worktree${where}, so its local ref was left untouched. Run \`git pull --ff-only\` in that worktree to pick up the merged work.${postMergeNote}`;
+  } else if (ffResult.reason === "dirty") {
+    level = "warn";
+    message = `Worker ${entry.name} merged to origin/${baseBranch}, but the local ${baseBranch} checkout at ${projectPath} has uncommitted changes, so it was left untouched. origin/${baseBranch} holds the merged work; commit, stash, or discard the local changes to let it fast-forward.${postMergeNote}`;
   } else {
     level = "error";
-    message = `Local ${baseBranch} checkout at ${projectPath} did not fast-forward after merge (dirty working tree, divergent branch, or fetch failure).${postMergeNote} Clean the checkout so it stays current with merged work.`;
+    message = `Worker ${entry.name} merged to origin/${baseBranch}, but the local ${baseBranch} checkout at ${projectPath} could not be advanced (fetch failed or the checkout is wedged).${postMergeNote} origin/${baseBranch} holds the merged work; resolve the checkout so it stays current.`;
   }
   (level === "error" ? log.error : log.warn)("poller", "local base ref not advanced after merge", {
     worker: entry.name,
@@ -484,8 +510,8 @@ function notifyPostMerge(
     project: projectName,
     worker: entry.name,
     message,
-    // Re-fires once per worker-merge cycle; the 1-hour dedup window covers the
-    // spam. Key on reason so a transition between failure modes isn't suppressed.
+    // Entry-gated above, so this only fires on a state change. Key on reason as
+    // a second guard so a transition between failure modes is never suppressed.
     dedupKey: `ff-fail:${ffResult.reason}:${projectName}:${baseBranch}`,
   });
 }

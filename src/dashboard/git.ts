@@ -313,6 +313,7 @@ export type FastForwardResult =
   | { ok: true; advanced: "worktree" | "ref" }
   | { ok: false; reason: "diverged"; currentBranch: string | null; ahead: number; behind: number }
   | { ok: false; reason: "checked-out-elsewhere"; currentBranch: string | null; checkedOutAt: string | null }
+  | { ok: false; reason: "dirty"; currentBranch: string | null; error: string }
   | { ok: false; reason: "stuck"; error: string };
 
 // Advance the project's local base branch to the freshly-merged origin tip.
@@ -338,16 +339,55 @@ export function fastForwardBase(
   if (current === baseBranch) {
     try {
       git(repoPath, "fetch", "origin", baseBranch);
+    } catch (err) {
+      return { ok: false, reason: "stuck", error: gitErrText(err) };
+    }
+    try {
       git(repoPath, "merge", "--ff-only", `origin/${baseBranch}`);
       log.info("git", "fast-forwarded local base checkout", { worker, data: baseData });
       return { ok: true, advanced: "worktree" };
     } catch (err) {
       const error = gitErrText(err);
-      log.info("git", "local base checkout not fast-forwarded (postMerge will be skipped)", {
+      // ff-only refused. The base checkout is the operator's shared working
+      // directory, not a pristine mirror, so this is expected — and benign for
+      // merge correctness (the work already landed on origin; only the local
+      // rebuild lags). Classify into three sub-cases instead of one `stuck`.
+      const dirty = isWorktreeDirty(repoPath);
+      if (dirty === false && treeMatchesOrigin(repoPath, baseBranch)) {
+        // Clean tree whose committed content already equals origin/<base>: the
+        // local-only commit(s) carry no unique content (e.g. an operator heal
+        // commit whose change also merged the normal way). Reset onto origin —
+        // the reflog preserves the dropped commits and the working tree doesn't
+        // move, since its content already matches. Never reset a dirty tree:
+        // that would destroy uncommitted operator work.
+        try {
+          git(repoPath, "reset", "--hard", `origin/${baseBranch}`);
+          log.info("git", "auto-healed redundant local base divergence onto origin", {
+            worker,
+            data: baseData,
+          });
+          return { ok: true, advanced: "worktree" };
+        } catch (resetErr) {
+          return { ok: false, reason: "stuck", error: gitErrText(resetErr) };
+        }
+      }
+      if (dirty === false) {
+        // Clean tree carrying real local-only content: genuine divergence.
+        // origin holds the merged work; the operator reconciles by hand.
+        const { ahead, behind } = aheadBehind(repoPath, baseBranch, `origin/${baseBranch}`);
+        log.debug("git", "local base checkout diverged from origin (postMerge skipped)", {
+          worker,
+          data: { ...baseData, ahead, behind },
+        });
+        return { ok: false, reason: "diverged", currentBranch: current, ahead, behind };
+      }
+      // Dirty (or status unknowable): uncommitted local changes collide with the
+      // merge. Leave the checkout untouched rather than clobber operator edits.
+      log.debug("git", "local base checkout dirty, not fast-forwarded (postMerge skipped)", {
         worker,
         data: { ...baseData, error },
       });
-      return { ok: false, reason: "stuck", error };
+      return { ok: false, reason: "dirty", currentBranch: current, error };
     }
   }
   // Off-base: refresh the tracking ref (so divergence math below is accurate),
@@ -391,6 +431,20 @@ export function fastForwardBase(
 function gitErrText(err: unknown): string {
   const stderr = (err as { stderr?: string | Buffer }).stderr;
   return (stderr ? String(stderr) : String(err)).trim();
+}
+
+// True when the checkout's committed tree (HEAD) is byte-identical to
+// origin/<base> — i.e. its local-only commits introduce no content origin
+// lacks. `git diff --quiet` exits 0 on an identical tree (no throw) and
+// non-zero otherwise (throw); any error is treated as "not identical" so the
+// caller never resets onto origin under uncertainty.
+function treeMatchesOrigin(repoPath: string, baseBranch: string): boolean {
+  try {
+    git(repoPath, "diff", "--quiet", "HEAD", `origin/${baseBranch}`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // Commit counts on either side of a divergence: `<local>...<remote>` left/right

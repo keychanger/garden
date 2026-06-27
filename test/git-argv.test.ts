@@ -719,14 +719,43 @@ describe("fastForwardBase", () => {
     });
   });
 
-  it("returns stuck when ff-only merge aborts (dirty working tree)", () => {
+  it("returns dirty when ff-only merge aborts and the working tree has uncommitted changes", () => {
     mockExec
       .mockReturnValueOnce("main\n") // currentBranch
-      .mockReturnValueOnce("")       // fetch
-      .mockImplementationOnce(() => { throw new Error("Your local changes to the following files would be overwritten by merge: rules.md"); });
+      .mockReturnValueOnce("")       // fetch origin main
+      .mockImplementationOnce(() => { throw new Error("Your local changes to the following files would be overwritten by merge: rules.md"); }) // merge --ff-only
+      .mockReturnValueOnce(" M rules.md\n"); // status --porcelain (isWorktreeDirty -> dirty)
     const result = fastForwardBase("/repo", "main");
-    expect(result.ok).toBe(false);
-    expect(result).toMatchObject({ reason: "stuck" });
+    expect(result).toMatchObject({ ok: false, reason: "dirty", currentBranch: "main" });
+    // A dirty checkout is never reset — that would clobber operator edits.
+    expect(mockExec.mock.calls.some(c => (c[1] as string[]).join(" ").startsWith("reset --hard"))).toBe(false);
+  });
+
+  it("auto-heals a redundant local commit: resets onto origin when the clean tree already matches", () => {
+    mockExec
+      .mockReturnValueOnce("main\n") // currentBranch
+      .mockReturnValueOnce("")       // fetch origin main
+      .mockImplementationOnce(() => { throw new Error("fatal: Not possible to fast-forward, aborting."); }) // merge --ff-only (diverged)
+      .mockReturnValueOnce("")       // status --porcelain (clean)
+      .mockReturnValueOnce("")       // diff --quiet HEAD origin/main (exit 0 = identical -> no throw)
+      .mockReturnValueOnce("");      // reset --hard origin/main
+    expect(fastForwardBase("/repo", "main")).toEqual({ ok: true, advanced: "worktree" });
+    expect(mockExec.mock.calls.some(c => (c[1] as string[]).join(" ") === "reset --hard origin/main")).toBe(true);
+  });
+
+  it("returns diverged (clean tree, real local commits) when the content differs from origin", () => {
+    mockExec
+      .mockReturnValueOnce("main\n") // currentBranch
+      .mockReturnValueOnce("")       // fetch origin main
+      .mockImplementationOnce(() => { throw new Error("fatal: Not possible to fast-forward, aborting."); }) // merge --ff-only
+      .mockReturnValueOnce("")       // status --porcelain (clean)
+      .mockImplementationOnce(() => { throw new Error("differences"); }) // diff --quiet (exit 1 = differs -> throw)
+      .mockReturnValueOnce("2\t5\n"); // rev-list --left-right --count main...origin/main
+    expect(fastForwardBase("/repo", "main")).toEqual({
+      ok: false, reason: "diverged", currentBranch: "main", ahead: 2, behind: 5,
+    });
+    // Real local-only content is never reset away.
+    expect(mockExec.mock.calls.some(c => (c[1] as string[]).join(" ").startsWith("reset --hard"))).toBe(false);
   });
 
   it("returns stuck when fetch fails", () => {
