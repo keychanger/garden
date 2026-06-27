@@ -365,22 +365,32 @@ export function workerSortFreshness(entry: WorkerEntry): number {
 
 // Attention tier for sort ordering — lower sorts higher on screen. Computed
 // from raw agentStatus + prState (not the resolved display status) so this
-// stays free of any commands/ dependency. Predicates are checked top-down,
-// first match wins:
+// stays free of any commands/ dependency. The bands follow a worker's life
+// from top to bottom: things that need you sit at the top, then the work
+// descends through active → in-flight → done as it heads toward merge.
+// Predicates are checked top-down, first match wins:
 //   0  needs you      — blocked on the operator (failing / asking)
 //   1  new            — launched, awaiting its first prompt (loading / ready)
-//   2  in flight      — the poller is actively driving it
-//   3  active/recent  — working / idle / paused / exited; ordered by freshness,
+//   2  active/recent  — working / idle / paused / exited; ordered by freshness,
 //                       dims when stale (paused excepted — see isWorkerStale)
+//   3  in flight      — the poller is driving it (reviewing → merging → merged),
+//                       below active because it is descending toward done
 //   4  done           — terminal, sinks to the bottom as a cleanup candidate
+// The in-flight prState is checked before the new (loading/ready) agentStatus so
+// a worker whose turn ended and was picked up for review is classified in-flight
+// even if its agentStatus is a stale ready/loading (STATUS.md invariant).
+//
+// The active/recent band's tier number is named because isWorkerStale keys the
+// stale-dim on it — a renumber must move both together or the wrong band dims.
+export const ACTIVE_SORT_TIER = 2;
 export function workerSortTier(entry: WorkerEntry): number {
   const pr = entry.prState;
   if (pr === "failing" || entry.agentStatus === "asking") return 0;
-  if (pr === "reviewing" || pr === "resolving" || pr === "ci-fixing"
-      || pr === "merge-pending" || pr === "merged") return 2;
   if (pr === "done") return 4;
+  if (pr === "reviewing" || pr === "resolving" || pr === "ci-fixing"
+      || pr === "merge-pending" || pr === "merged") return 3;
   if (entry.agentStatus === "loading" || entry.agentStatus === "ready") return 1;
-  return 3;
+  return ACTIVE_SORT_TIER;
 }
 
 // Freshness is compared at 60-second granularity so a burst of state changes
@@ -406,17 +416,17 @@ export function compareWorkerFreshness(a: WorkerEntry, b: WorkerEntry): number {
 // A worker is "stale to the operator's eye" when nothing has touched it in a
 // day. Deliberately far coarser than the 15-min STALE_* health constants
 // (health.ts), which mean "Claude looks hung and the poller should act"; this
-// only drives a dimmed status row. Staleness applies to tier 3 (active/recent)
+// only drives a dimmed status row. Staleness applies to the active/recent band
 // only — blocked, new, in-flight, and done rows are never dimmed. The one
-// tier-3 state that is also never dimmed is `paused`: an explicit operator hold
-// rendered in bold cyan, where a dim would both fight that color (bold overrides
-// faint) and hide a deliberate state the operator means to return to. Excluding
-// it also keeps dimRow's invariant true — every row it dims is left uncolored
-// by colorizeRow.
+// active-band state that is also never dimmed is `paused`: an explicit operator
+// hold rendered in bold cyan, where a dim would both fight that color (bold
+// overrides faint) and hide a deliberate state the operator means to return to.
+// Excluding it also keeps dimRow's invariant true — every row it dims is left
+// uncolored by colorizeRow.
 export const WORKER_STALE_MS = 24 * 60 * 60 * 1000;
 
 export function isWorkerStale(entry: WorkerEntry, now: number = Date.now()): boolean {
-  if (workerSortTier(entry) !== 3) return false;
+  if (workerSortTier(entry) !== ACTIVE_SORT_TIER) return false;
   if (entry.agentStatus === "paused") return false;
   return now - workerFreshness(entry) > WORKER_STALE_MS;
 }

@@ -225,10 +225,10 @@ function colorizeRow(status: WorkerStatus, line: string): string {
 // reset — the branch hint and the trellis iteration counter — so a
 // naive `\x1b[2m…\x1b[0m` wrap would let the first inner reset cancel the faint
 // attribute, half-brightening the rest of the row. Re-arm faint after every
-// inner reset so the whole line stays dimmed. Only ever applied to tier-3
-// (active/recent) rows, which colorizeRow leaves uncolored — the one colored
-// tier-3 state, `paused`, is excluded from staleness (isWorkerStale) so a
-// row-level color never reaches here to fight the faint.
+// inner reset so the whole line stays dimmed. Only ever applied to active/recent
+// rows, which colorizeRow leaves uncolored — the one colored active-band state,
+// `paused`, is excluded from staleness (isWorkerStale) so a row-level color never
+// reaches here to fight the faint.
 export function dimRow(line: string): string {
   const FAINT = "\x1b[2m";
   const RESET = "\x1b[0m";

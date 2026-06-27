@@ -652,19 +652,24 @@ describe("worker ordering helpers", () => {
     expect(workerSortTier(mkEntry({ name: "b", agentStatus: "asking" }))).toBe(0);
     expect(workerSortTier(mkEntry({ name: "c", agentStatus: "ready" }))).toBe(1);
     expect(workerSortTier(mkEntry({ name: "d", agentStatus: "loading" }))).toBe(1);
-    expect(workerSortTier(mkEntry({ name: "e", prState: "reviewing" }))).toBe(2);
-    expect(workerSortTier(mkEntry({ name: "f", prState: "merge-pending" }))).toBe(2);
-    expect(workerSortTier(mkEntry({ name: "g", prState: "merged" }))).toBe(2);
-    expect(workerSortTier(mkEntry({ name: "h", agentStatus: "idle" }))).toBe(3);
-    expect(workerSortTier(mkEntry({ name: "i", agentStatus: "working" }))).toBe(3);
+    expect(workerSortTier(mkEntry({ name: "e", prState: "reviewing" }))).toBe(3);
+    expect(workerSortTier(mkEntry({ name: "f", prState: "merge-pending" }))).toBe(3);
+    expect(workerSortTier(mkEntry({ name: "g", prState: "merged" }))).toBe(3);
+    expect(workerSortTier(mkEntry({ name: "h", agentStatus: "idle" }))).toBe(2);
+    expect(workerSortTier(mkEntry({ name: "i", agentStatus: "working" }))).toBe(2);
     // paused (operator hold) is an active/recent state, not a "needs you" one.
-    expect(workerSortTier(mkEntry({ name: "k", agentStatus: "paused" }))).toBe(3);
+    expect(workerSortTier(mkEntry({ name: "k", agentStatus: "paused" }))).toBe(2);
     expect(workerSortTier(mkEntry({ name: "j", prState: "done" }))).toBe(4);
   });
 
-  it("an in-flight prState outranks a ready/loading agentStatus", async () => {
+  it("the in-flight band sits below active but is still classified by prState", async () => {
     const { workerSortTier } = await importRegistry();
-    expect(workerSortTier(mkEntry({ name: "a", agentStatus: "ready", prState: "reviewing" }))).toBe(2);
+    // in flight (3) is below active (2) — it descends toward done.
+    expect(workerSortTier(mkEntry({ name: "w", agentStatus: "working" }))).toBe(2);
+    expect(workerSortTier(mkEntry({ name: "r", prState: "reviewing" }))).toBe(3);
+    // A stale ready/loading agentStatus does not pull a reviewing worker up into
+    // the new band — prState classification wins (STATUS.md invariant).
+    expect(workerSortTier(mkEntry({ name: "a", agentStatus: "ready", prState: "reviewing" }))).toBe(3);
   });
 
   it("sorts blocked-on-you to the top and done to the bottom, across tiers", async () => {
@@ -676,7 +681,8 @@ describe("worker ordering helpers", () => {
       mkEntry({ name: "fail-1", prState: "failing", lastEventAt: 10 }),
       mkEntry({ name: "review-1", prState: "reviewing", lastEventAt: 20 }),
     ].sort(compareWorkerFreshness);
-    expect(sorted.map(e => e.name)).toEqual(["fail-1", "new-1", "review-1", "idle-1", "done-1"]);
+    // needs-you → new → active → in-flight → done (in-flight now below active).
+    expect(sorted.map(e => e.name)).toEqual(["fail-1", "new-1", "idle-1", "review-1", "done-1"]);
   });
 
   it("within a tier, fresher sorts first but same-60s-bucket falls back to name", async () => {
@@ -718,7 +724,7 @@ describe("worker ordering helpers", () => {
       .toEqual(["beta", "alpha"]);
   });
 
-  it("isWorkerStale is true only for tier-3 workers untouched past WORKER_STALE_MS", async () => {
+  it("isWorkerStale is true only for active-band workers untouched past WORKER_STALE_MS", async () => {
     const { isWorkerStale, WORKER_STALE_MS } = await importRegistry();
     const now = 1_700_000_000_000;
     const old = now - WORKER_STALE_MS - 1;
@@ -728,7 +734,10 @@ describe("worker ordering helpers", () => {
     // Blocked / done never dim, even when ancient.
     expect(isWorkerStale(mkEntry({ name: "c", prState: "failing", lastEventAt: old }), now)).toBe(false);
     expect(isWorkerStale(mkEntry({ name: "d", prState: "done", lastEventAt: old }), now)).toBe(false);
-    // paused is tier-3 but is an explicit operator hold (bold cyan) — never dimmed.
+    // In-flight (now the band below active) never dims — guards the stale-dim
+    // staying keyed on the active band after the tier renumber.
+    expect(isWorkerStale(mkEntry({ name: "f", prState: "reviewing", lastEventAt: old }), now)).toBe(false);
+    // paused is an active-band state but is an explicit operator hold (bold cyan) — never dimmed.
     expect(isWorkerStale(mkEntry({ name: "e", agentStatus: "paused", lastEventAt: old }), now)).toBe(false);
   });
 });
