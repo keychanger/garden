@@ -11,12 +11,14 @@
 // claude-code, unknown falls back with a warning.
 import { log } from "../log.js";
 import { claudeCodeCore } from "./claude-code-core.js";
+import { codexCore } from "./codex-core.js";
 import type { HarnessCore } from "./types.js";
 
 export const DEFAULT_HARNESS = "claude-code";
 
 const CORES: Record<string, HarnessCore> = {
   [claudeCodeCore.name]: claudeCodeCore,
+  [codexCore.name]: codexCore,
 };
 
 export function getHarnessCore(name?: string): HarnessCore {

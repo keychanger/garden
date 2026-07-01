@@ -6,6 +6,7 @@
 // hand-broken registry entry, matching tryResolveProvider's posture.
 import { log } from "../log.js";
 import { claudeCodeAdapter } from "./claude-code.js";
+import { codexAdapter } from "./codex.js";
 import type { HarnessAdapter } from "./types.js";
 
 import { DEFAULT_HARNESS } from "./core.js";
@@ -14,6 +15,7 @@ export { DEFAULT_HARNESS };
 
 const HARNESSES: Record<string, HarnessAdapter> = {
   [claudeCodeAdapter.name]: claudeCodeAdapter,
+  [codexAdapter.name]: codexAdapter,
 };
 
 export function getHarness(name?: string): HarnessAdapter {

@@ -3,6 +3,10 @@
 // paths previously inlined — the Phase 3 extraction is bit-for-bit, so
 // these are the regression net for the collapse.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -36,7 +40,7 @@ describe("harness registries", () => {
   it("falls back to the default on unknown names with a warning", async () => {
     const { getHarness } = await importHarness();
     const { log } = await import("../src/dashboard/log.js");
-    expect(getHarness("codex").name).toBe("claude-code");
+    expect(getHarness("opencode").name).toBe("claude-code");
     expect(log.warn).toHaveBeenCalledWith(
       "harness", expect.stringContaining("unknown harness"), expect.anything(),
     );
@@ -141,5 +145,105 @@ describe("claude-code adapter dialect", () => {
     const { pasteAndSubmit } = await import("../src/dashboard/tmux.js");
     getHarnessCore().deliverPrompt("%5", "hello");
     expect(pasteAndSubmit).toHaveBeenCalledWith("%5", "hello");
+  });
+});
+
+describe("codex adapter dialect", () => {
+  it("is registered in both registries", async () => {
+    const { getHarness } = await importHarness();
+    const { getHarnessCore } = await importCore();
+    expect(getHarnessCore("codex").name).toBe("codex");
+    expect(getHarness("codex").name).toBe("codex");
+    expect(typeof getHarness("codex").installRuntimeConfig).toBe("function");
+  });
+
+  it("builds the headless command: stdout->result, stderr->sidecar, no hook-trust bypass", async () => {
+    const { getHarnessCore } = await importCore();
+    const cmd = getHarnessCore("codex").buildHeadlessCommand({
+      promptFile: "/tmp/p.txt", resultFile: "/tmp/r.txt",
+      model: "gpt-5-codex", envPrefix: "", inlineEnv: "GARDEN_REVIEWER=1 ",
+    });
+    // The verdict is stdout's last line; the token trailer is stderr, so the
+    // result file is stdout-only (not 2>&1) with stderr to a sidecar.
+    expect(cmd).toBe(
+      "GARDEN_REVIEWER=1 codex exec --dangerously-bypass-approvals-and-sandbox -m gpt-5-codex"
+      + " < /tmp/p.txt > /tmp/r.txt 2> /tmp/r.txt.stderr",
+    );
+    // A headless reviewer must NOT bypass hook trust — it wants Codex to skip
+    // the worktree's untrusted hooks so it fires no relay of its own.
+    expect(cmd).not.toContain("--dangerously-bypass-hook-trust");
+  });
+
+  it("builds the interactive launch: no --session-id, hook-trust bypass on", async () => {
+    const { getHarnessCore } = await importCore();
+    const fresh = getHarnessCore("codex").buildAgentCommand({
+      sessionId: "", resume: false, contextFile: "/ignored", model: "gpt-5-codex", envPrefix: "",
+    });
+    expect(fresh).toBe(
+      "codex --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox -m gpt-5-codex",
+    );
+    expect(fresh).not.toContain("--session-id");
+    const resume = getHarnessCore("codex").buildAgentCommand({
+      sessionId: "019f-abc", resume: true, contextFile: "/ignored", envPrefix: "",
+    });
+    expect(resume).toBe(
+      "codex resume 019f-abc --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox",
+    );
+  });
+
+  it("allocateSessionId returns the empty sentinel (Codex assigns its own)", async () => {
+    const { getHarnessCore } = await importCore();
+    expect(getHarnessCore("codex").allocateSessionId()).toBe("");
+  });
+
+  it("declares capabilities (skills folded into rules)", async () => {
+    const { getHarnessCore } = await importCore();
+    expect(getHarnessCore("codex").capabilities).toEqual({
+      turnEnd: true, promptSubmitted: true, toolActivity: true, askingSignal: true,
+      resume: true, sandbox: true, skills: false,
+    });
+  });
+
+  it("classifies a transient backend error but not a clean verdict", async () => {
+    const { getHarnessCore } = await importCore();
+    const t = getHarnessCore("codex").isTransientError;
+    expect(t("some progress\nERROR: 429 rate limit exceeded")).toBe(true);
+    expect(t('done\n{"type":"server_error","message":"x"}')).toBe(true);
+    expect(t("Reviewed the diff.\nFIXED")).toBe(false);
+  });
+
+  it("readTurns parses the rollout into turns with verb tagging", async () => {
+    const { getHarnessCore } = await importCore();
+    const fixture = path.join(HERE, "fixtures/codex/rollout-sample.jsonl");
+    const turns = getHarnessCore("codex").readTurns(fixture);
+    expect(turns).toHaveLength(4);
+    expect(turns[0]).toMatchObject({ role: "user", text: "Review calc.py for bugs and fix them." });
+    // a patch_apply_end since the last prompt -> "worked"
+    expect(turns[1]).toMatchObject({ role: "assistant", text: "Fixed the off-by-sign bug in add().", verb: "worked" });
+    expect(turns[2]).toMatchObject({ role: "user", text: "What does calc.py do now?" });
+    // no tools since the last prompt -> "answered"
+    expect(turns[3]).toMatchObject({ role: "assistant", verb: "answered" });
+  });
+
+  it("readTurns returns [] for a null or unreadable path", async () => {
+    const { getHarnessCore } = await importCore();
+    expect(getHarnessCore("codex").readTurns(null)).toEqual([]);
+    expect(getHarnessCore("codex").readTurns("/no/such/rollout.jsonl")).toEqual([]);
+  });
+});
+
+describe("codex hooks.json event relay", () => {
+  it("maps Codex events onto garden's wire event names", async () => {
+    const { buildCodexHooksJson } = await import("../src/dashboard/harness/codex.js");
+    const parsed = JSON.parse(buildCodexHooksJson("node /hook.js"));
+    const cmd = (ev: string) => parsed.hooks[ev][0].hooks[0].command;
+    expect(cmd("SessionStart")).toBe("node /hook.js sessionstart");
+    expect(cmd("UserPromptSubmit")).toBe("node /hook.js prompt");
+    expect(cmd("Stop")).toBe("node /hook.js stop");
+    expect(cmd("PostToolUse")).toBe("node /hook.js posttooluse");
+    // Codex PreToolUse fires for every tool -> a working heartbeat, not asking.
+    expect(cmd("PreToolUse")).toBe("node /hook.js posttooluse");
+    // PermissionRequest is the real blocked-on-operator signal.
+    expect(cmd("PermissionRequest")).toBe("node /hook.js pretooluse");
   });
 });
