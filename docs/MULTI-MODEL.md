@@ -10,7 +10,12 @@ requires touching the dispatcher, pollers, or state machine.
 
 ## Status
 
-Forward-looking design for Phases 4-5; **Phases 1-3 are implemented**. Phase 1 (the provider layer): `garden provider`, the
+**Phases 1-3 are implemented; Phase 4 is in progress** — reframed
+2026-07 around a per-role resolution matrix (arbitrary `(harness,
+provider, model)` per role, opinionated-by-default) with **Codex-as-
+reviewer** as the operator's primary use case; see the reviewer-first
+Phase 4 slices in the phased plan below (the Codex facts there are
+live-verified against codex 0.142.5, not the June snapshot). Phase 1 (the provider layer): `garden provider`, the
 `provider` project-config key, worker env injection, sandbox egress
 union, reviewer Opus pinning, and usage-meter gating. Phase 2 (the
 neutral core): the `agentStatus`/`lastEventAt` rename with registry
@@ -632,21 +637,98 @@ through the same launch/resume/bounce/respawn sites the adapter owns). The workf
 the precedent: same shape, same bit-for-bit bar, same test strategy
 (`test/workflows.test.ts` analog plus integration tests on real fs/git).
 
-**Phase 4 — Codex CLI adapter (first foreign harness).** `hooks.json`
-event shim (stdin-JSON translation to garden events); `notify` as
-turn-end insurance; `codex exec` headless; rollout-JSONL transcript
-reader; `AGENTS.md` rules delivery; `CODEX_HOME` profiles; Codex sandbox
-serialization; session-id recovery; partial-heartbeat tolerance in
-`health`. Proves the interface against a harness that was not its
-template. OpenAI models land here.
+**Phase 4 — per-role resolution + Codex, reviewer-first. IN PROGRESS.**
 
-**Phase 5 — opencode adapter + fleet polish (optional, on demand).**
-Event-bus/plugin shim (Tier A target); per-provider meters side by side
-in the title pane; history view across transcript dialects; `health
---fix` and validate paths exercised against mixed fleets. Most of what
-this buys (open-source model breadth) is already reachable via
-Ollama-behind-Claude after Phase 1; build it only if a concrete need
-appears.
+The reframe (operator, 2026-06/07): garden should let *every role* in
+*every workflow* independently resolve `(harness, provider, model)` —
+arbitrary-per-role, opinionated-by-default — with Codex / DeepSeek / any
+future model as interchangeable first-class instances. Roles are worker,
+reviewer, resolver, ci-fix. The mechanism is a pure
+`resolveRole(project, workflow, role) → {harness, provider, model}` that
+resolves each dimension independently (first-defined-wins), fed by a
+per-project `roles` sub-object (`garden config <p> role <role> <dim>
+<value>`), with the flat `provider` key retained as the worker-provider
+shortcut (zero migration). Defaults stay safe: reviewer/resolver/ci-fix
+default to strong first-party Anthropic Opus; workers to the
+account/backend default. Roles are structurally independent —
+`resolveRole` reads only its own slot, so there is no shared-model knob
+(the trap the operator reverted 2026-06-30).
+
+The operator's primary use case is **Codex-as-reviewer** — a strong,
+subsidized second-opinion reviewer over Claude or DeepSeek workers — so
+the build is reviewer-first. Verified live 2026-07-01 (codex 0.142.5):
+`codex exec` performs full agentic review — it found a planted bug,
+fixed and committed it, and emitted a clean `FIXED` verdict on the last
+line of stdout — so garden's `parseLastLineVerdict` contract holds
+against Codex. Load-bearing details from that spike: the verdict is on
+stdout, the token-count trailer on stderr, so Codex's headless command
+captures stdout→result / stderr→sidecar (not `2>&1`, which would make
+the token count the last line); `GARDEN_REVIEWER=1` suppression is
+already harness-agnostic (checked in garden's hook entry), so a
+cross-harness reviewer needs no new suppression; and the reviewer takes
+its prompt on stdin, so the AGENTS.md-collision concern below is
+worker-only.
+
+Verified Codex facts (0.142.5): headless `codex exec --json
+--output-schema --cd -m --sandbox --skip-git-repo-check`; interactive
+`codex` Ratatui TUI; session identity is a Codex-assigned `thread_id`
+(recovered post-launch, not minted — the one real divergence from
+claude-code); transcript JSONL at
+`$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<thread_id>.jsonl` (created
+on first run); hooks via `.codex/hooks.json` (stdin-JSON payload carrying
+`transcript_path`/`session_id`/`cwd`/`hook_event_name`, mapping 1:1 onto
+garden's wire events) but trust-gated → `--dangerously-bypass-hook-trust`
+is mandatory on the interactive worker launch for the event relay to
+fire (the headless reviewer omits it, so Codex skips the untrusted
+hooks — which is what a reviewer wants); rules via `AGENTS.md` (no
+system-prompt flag); Codex enforces its own sandbox (`--sandbox` modes).
+
+Reviewer-first slices (each independently mergeable, Claude fleet
+byte-identical, full gate green):
+
+- **Slice A — Codex adapter, headless-first (dormant).** `codex-core.ts`
+  (headless command with the stdout/stderr split; `isTransientError` for
+  OpenAI/Codex shapes; capabilities; the light methods) + `codex.ts`
+  (`installRuntimeConfig` → `.codex/config.toml` + `hooks.json`) +
+  register in both registries. Selectable by nothing yet — the existing
+  fleet is untouched. Most of the core is already spike-verified.
+- **Slice B — headless agents install their own config.** reviewer /
+  resolver / ci-fix resolve the agent's harness, install its runtime
+  config into the worktree (idempotent; git-excludes become the union of
+  every registered harness's config dir so a Codex reviewer's `.codex/`
+  and a Claude worker's `.claude/` coexist), and launch through the
+  adapter.
+- **Slice C — reviewer-role resolution + config + Opus defaults.**
+  `resolveRole` for the review roles (`{harness, model}`; no `provider`
+  on review roles — a provider only ever defeats the safety net); the
+  `garden config <p> role reviewer harness codex` surface; a capability
+  gate on the review harness; and an explicit Opus default for reviewer,
+  resolver, *and* ci-fix (operator choice, each overridable). This
+  delivers Codex-as-reviewer.
+
+Then the **worker path** (second priority): interactive
+`buildAgentCommand`, a spike proving Codex fires `Stop` per-turn (the
+poller's liveness poke), session-identity recovery across
+newWorker/loop/bounce/resume, `--harness` worker selection with a runtime
+capability gate, the bootstrap config-install seam (stop inlining the
+claude dialect), the deferred `continue.ts`/`header.ts`
+`deliverPrompt`/`readTurns` routing, and the full per-role resolver for
+the worker. AGENTS.md-collision handling (never clobber a repo's own
+`AGENTS.md`) and Codex sandbox/network translation live here.
+
+Resolved decisions: Codex-reviewer is primary and *not* Claude-locked;
+all three review roles default to explicit Opus; worker-provider stays
+single-source (the flat `provider` key — no higher-precedence
+`roles.worker.provider` split-brain); a provider on a non-claude-code
+role is rejected in v1 (`ProviderProfile` is an `ANTHROPIC_*` env-swap
+descriptor that cannot describe a Codex backend); review-family knobs are
+project-config-only (no per-worker reviewer flag).
+
+**Phase 5 — Codex worker completion + opencode + fleet polish (on
+demand).** The Codex worker path above, then opencode (Tier A via its
+event bus) for open-source breadth beyond Ollama-behind-Claude, plus
+mixed-fleet `health`/`validate` and per-provider meters. Build when a
+concrete need appears.
 
 ## Risks and open questions
 
