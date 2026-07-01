@@ -46,6 +46,10 @@ export interface HandoffRequest {
   expectCallback?: boolean;
   parentProject?: string;
   parentWorker?: string;
+  // Set when the source worker invoked `garden handoff --ultracode`. The child
+  // is created with the ultracode preset (Opus + max effort + dynamic-workflow
+  // trigger). See `NewWorkerOptions.ultracode`.
+  ultracode?: boolean;
 }
 
 export interface HandoffResponse {
@@ -68,6 +72,7 @@ export function submitHandoffRequest(opts: {
   expectCallback?: boolean;
   parentProject?: string;
   parentWorker?: string;
+  ultracode?: boolean;
 }): string {
   fs.mkdirSync(requestsDir(), { recursive: true });
   const id = crypto.randomUUID();
@@ -79,6 +84,7 @@ export function submitHandoffRequest(opts: {
     expectCallback: opts.expectCallback,
     parentProject: opts.parentProject,
     parentWorker: opts.parentWorker,
+    ultracode: opts.ultracode,
   };
   atomicWriteFile(requestPath(id), JSON.stringify(req));
   return id;
@@ -156,6 +162,7 @@ export function processPendingHandoffs(): void {
         seedMessageFile: req.seedFile,
         background: true,
         handoffCallback,
+        ...(req.ultracode ? { ultracode: true } : {}),
       });
       response = workerName
         ? { workerName, completedAt: Date.now() }

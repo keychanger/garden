@@ -25,6 +25,10 @@ export interface AgentCommandOptions {
   /** Opaque model string (alias or concrete id). Absent = the account
    *  or backend default. */
   model?: string;
+  /** Ultracode preset: launch in Claude Code's ultracode mode (max effort +
+   *  the dynamic-workflow keyword trigger). Absent/false = normal launch.
+   *  The paired Opus model pin is threaded separately via `model`. */
+  ultracode?: boolean;
   /** Pre-composed env-assignments prefix (provider/profile env from
    *  claude-env.ts). Already shell-safe; prepended verbatim. */
   envPrefix: string;

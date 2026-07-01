@@ -253,6 +253,13 @@ export interface WorkerEntry {
   // vines use `trellis.workerModel` instead (iteration-resolved with the
   // Sonnet-exhaustion fallback). See docs/MULTI-MODEL.md "Layer 2".
   model?: string;
+  // Ultracode preset flag, set via `garden handoff --ultracode`. When true,
+  // the worker launches in Claude Code's ultracode mode: `--effort max` plus
+  // `ultracodeKeywordTrigger: on` (the dynamic-workflow standing opt-in),
+  // rendered by the harness buildAgentCommand. The paired Opus pin lives on
+  // `model` above (stamped at creation). Threaded into every launch, resume,
+  // and bounce so the mode survives the worker's lifetime.
+  ultracode?: boolean;
   // Reason the worker is in `failing`. See FailingReason above and
   // WORKFLOWS.md "Equilibrium and termination". Default workflow sets "code"
   // (Q8 retrofit) or "unparseable-verdict" (Q9 retrofit, phase 2).

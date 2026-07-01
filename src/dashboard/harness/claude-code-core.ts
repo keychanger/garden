@@ -14,6 +14,13 @@ import type { WorkerEntry } from "../registry.js";
 import { shellEscape, pasteAndSubmit } from "../tmux.js";
 import type { AgentCommandOptions, HarnessCore, HeadlessCommandOptions } from "./types.js";
 
+// The non-effort half of the ultracode preset: enable Claude Code's
+// dynamic-workflow keyword trigger (the standing "ultracode is on" opt-in).
+// Delivered as an extra `--settings` source rather than baked into the
+// generated .claude/settings.json, so garden's hook/sandbox/permissions
+// generator stays worker-agnostic. Effort is set alongside via `--effort max`.
+const ULTRACODE_SETTINGS_JSON = '{"ultracodeKeywordTrigger":"on"}';
+
 // `claude -p` error prefix (`API Error: <5xx|429|529> ...`) or the JSON error
 // types Anthropic emits (`overloaded_error`, `rate_limit_error`). The match
 // is anchored to line-start and a fixed error-code set so a reviewer who
@@ -61,10 +68,18 @@ export const claudeCodeCore: HarnessCore = {
   // id outside it would render quoted where the legacy path was raw.
   buildAgentCommand(opts: AgentCommandOptions): string {
     const modelFlag = opts.model ? ` --model ${shellEscape(opts.model)}` : "";
+    // Ultracode preset: max effort plus the dynamic-workflow keyword trigger.
+    // `--effort max` is the session-effort flag; `ultracodeKeywordTrigger` has
+    // no dedicated flag, so it rides in via `--settings <json>` (an additional
+    // settings source Claude Code merges over .claude/settings.json). The
+    // paired Opus pin arrives through `opts.model`, not here.
+    const ultracodeFlags = opts.ultracode
+      ? ` --effort max --settings ${shellEscape(ULTRACODE_SETTINGS_JSON)}`
+      : "";
     const sessionFlag = opts.resume
       ? `--resume ${shellEscape(opts.sessionId)}`
       : `--session-id ${shellEscape(opts.sessionId)}`;
-    return `${opts.envPrefix}claude --rc${modelFlag} ${sessionFlag} `
+    return `${opts.envPrefix}claude --rc${modelFlag}${ultracodeFlags} ${sessionFlag} `
       + `--append-system-prompt-file ${shellEscape(opts.contextFile)}`;
   },
 

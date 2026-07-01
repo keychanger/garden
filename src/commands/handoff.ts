@@ -22,9 +22,11 @@ export async function handoff(args: string[]): Promise<void> {
   const targetProject = args[0];
   if (!targetProject || targetProject.startsWith("-")) {
     throw new Error(
-      "Usage: garden handoff <target-project> [--expect-callback] [-m \"message\"]\n"
-      + "       garden handoff <target-project> [--expect-callback] < message-file\n"
-      + "       garden handoff <target-project> [--expect-callback] <<'EOF' ... EOF",
+      "Usage: garden handoff <target-project> [--expect-callback] [--ultracode] [-m \"message\"]\n"
+      + "       garden handoff <target-project> [--expect-callback] [--ultracode] < message-file\n"
+      + "       garden handoff <target-project> [--expect-callback] [--ultracode] <<'EOF' ... EOF\n"
+      + "\n"
+      + "  --ultracode  create the new worker in ultracode mode (Opus + max effort + dynamic workflows)",
     );
   }
 
@@ -36,6 +38,13 @@ export async function handoff(args: string[]): Promise<void> {
   const callbackIdx = rest.indexOf("--expect-callback");
   const expectCallback = callbackIdx !== -1;
   if (expectCallback) rest.splice(callbackIdx, 1);
+
+  // --ultracode: create the child in Claude Code's ultracode mode (Opus +
+  // max effort + the dynamic-workflow keyword trigger). No further knobs;
+  // the recipe is fixed. Strip it before the briefing is read from `rest`.
+  const ultracodeIdx = rest.indexOf("--ultracode");
+  const ultracode = ultracodeIdx !== -1;
+  if (ultracode) rest.splice(ultracodeIdx, 1);
 
   const briefing = await readBriefing(rest);
   if (!briefing.trim()) {
@@ -71,6 +80,7 @@ export async function handoff(args: string[]): Promise<void> {
     expectCallback,
     parentProject: sourceProject,
     parentWorker: sourceWorker,
+    ultracode,
   });
 
   // Poke any poller that might be listening. The target's poller is the
@@ -107,7 +117,11 @@ export async function handoff(args: string[]): Promise<void> {
     throw new Error(`Handoff to '${targetProject}' returned no worker name.`);
   }
 
-  const suffix = expectCallback ? " (callback requested on terminal state)" : "";
+  const notes = [
+    ultracode ? "ultracode mode" : null,
+    expectCallback ? "callback requested on terminal state" : null,
+  ].filter(Boolean);
+  const suffix = notes.length ? ` (${notes.join("; ")})` : "";
   console.log(`Handed off to ${targetProject}/${resp.workerName}.${suffix}`);
 }
 

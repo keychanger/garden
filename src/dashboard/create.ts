@@ -315,12 +315,13 @@ export function ensureDashboard(): void {
       const trellisRelativePath = trellisRelativePathForEntry(entry, projectConfig.path);
       // entry.model: default/grow per-worker pin; trellis resolves per
       // iteration, so vines never carry it.
-      const resumeOpts: { trellisRelativePath?: string; model?: string; harness?: string } = {};
+      const resumeOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; harness?: string } = {};
       if (trellisRelativePath) resumeOpts.trellisRelativePath = trellisRelativePath;
       if (entry.model) resumeOpts.model = entry.model;
+      if (entry.ultracode) resumeOpts.ultracode = true;
       if (entry.harness) resumeOpts.harness = entry.harness;
       const resumeCmd = entry.worktreePath && entry.branchName
-        ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.harness
+        ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.ultracode || resumeOpts.harness
             ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch, resumeOpts)
             : buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch))
         : buildResumeCommand(projectName, projectConfig.path, entry.sessionId);
@@ -575,6 +576,12 @@ export interface WorktreeCommandOptions {
    *  (per-worker `trellis.workerModel` override + the Sonnet exhaustion
    *  fallback via `resolveVineModel`). */
   model?: string;
+  /** Ultracode preset (`WorkerEntry.ultracode`). When set, the launched
+   *  claude gets `--effort max` plus the dynamic-workflow keyword trigger.
+   *  Threaded from the entry through spawn/resume/bounce so the mode
+   *  survives the worker's lifetime. The paired Opus pin travels via
+   *  `model`. */
+  ultracode?: boolean;
   /** Harness adapter name (`WorkerEntry.harness`). Absent = the default
    *  claude-code adapter. Threaded by resume/bounce/loop callers from the
    *  entry; spawn-time selection arrives with the second adapter. */
@@ -597,7 +604,7 @@ export function buildWorktreeWorkerCommand(
   const project = resolveProjectForHooks(projectName, projectPath);
   const agentCmd = getHarness(opts?.harness).buildAgentCommand({
     sessionId, resume: false, contextFile, model: opts?.model,
-    envPrefix: workerEnvPrefix(project),
+    ultracode: opts?.ultracode, envPrefix: workerEnvPrefix(project),
   });
   return `${agentCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }
@@ -705,7 +712,7 @@ export function buildWorktreeBootstrapScript(
   const growSkillFilenameLit = shellEscape(GROW_SKILL_FILENAME);
   const agentCmd = getHarness(opts?.harness).buildAgentCommand({
     sessionId, resume: false, contextFile, model: opts?.model,
-    envPrefix: workerEnvPrefix(project),
+    ultracode: opts?.ultracode, envPrefix: workerEnvPrefix(project),
   });
 
   const base = baseBranch ?? "main";
@@ -917,7 +924,7 @@ export function buildWorktreeResumeCommand(
   const identityExports = workerEnvExports(projectName, workerName, branchName, baseBranch);
   const claudeCmd = getHarness(opts?.harness).buildAgentCommand({
     sessionId, resume: true, contextFile, model: opts?.model,
-    envPrefix: workerEnvPrefix(project),
+    ultracode: opts?.ultracode, envPrefix: workerEnvPrefix(project),
   });
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${identityExports} ${claudeCmd}; ${exitHook}; ${pollSignalSnippet(projectName)} exec $SHELL`;

@@ -82,6 +82,29 @@ describe("claude-code adapter dialect", () => {
     );
   });
 
+  it("builds the ultracode launch command (max effort + workflow trigger + Opus pin)", async () => {
+    const { getHarnessCore } = await importCore();
+    const cmd = getHarnessCore().buildAgentCommand({
+      sessionId: "abc-123", resume: false, contextFile: "/tmp/ctx.md",
+      model: "opus[1m]", ultracode: true, envPrefix: "",
+    });
+    expect(cmd).toBe(
+      "claude --rc --model 'opus[1m]' --effort max "
+      + "--settings '{\"ultracodeKeywordTrigger\":\"on\"}' "
+      + "--session-id abc-123 --append-system-prompt-file /tmp/ctx.md",
+    );
+  });
+
+  it("omits ultracode flags when the flag is unset", async () => {
+    const { getHarnessCore } = await importCore();
+    const cmd = getHarnessCore().buildAgentCommand({
+      sessionId: "abc-123", resume: false, contextFile: "/tmp/ctx.md",
+      envPrefix: "",
+    });
+    expect(cmd).not.toContain("--effort");
+    expect(cmd).not.toContain("--settings");
+  });
+
   it("builds the headless command core", async () => {
     const { getHarnessCore } = await importCore();
     const cmd = getHarnessCore().buildHeadlessCommand({

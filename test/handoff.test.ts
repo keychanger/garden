@@ -85,6 +85,7 @@ describe("garden handoff command", () => {
       expectCallback: false,
       parentProject: undefined,
       parentWorker: undefined,
+      ultracode: false,
     });
   });
 
@@ -177,5 +178,36 @@ describe("garden handoff command", () => {
     await captureConsoleLog(() => handoff(["other", "-m", "msg", "--expect-callback"]));
     const call = vi.mocked(submitHandoffRequest).mock.calls[0][0];
     expect(call.expectCallback).toBe(true);
+  });
+
+  it("passes ultracode:true to the dispatch when --ultracode is set", async () => {
+    await captureConsoleLog(() => handoff(["other", "--ultracode", "-m", "make it strong"]));
+    const call = vi.mocked(submitHandoffRequest).mock.calls[0][0];
+    expect(call.ultracode).toBe(true);
+  });
+
+  it("does not treat --ultracode as part of the briefing (strips it before reading -m)", async () => {
+    await captureConsoleLog(() => handoff(["other", "--ultracode", "-m", "the real briefing"]));
+    const seedsDir = path.join(tmpDir, "seeds");
+    const body = fs.readFileSync(path.join(seedsDir, fs.readdirSync(seedsDir)[0]), "utf8");
+    expect(body).toContain("the real briefing");
+    expect(body).not.toContain("--ultracode");
+  });
+
+  it("notes ultracode mode in the success line", async () => {
+    const lines = await captureConsoleLog(() => handoff(["other", "--ultracode", "-m", "msg"]));
+    expect(lines.join("\n")).toMatch(/ultracode mode/);
+  });
+
+  it("composes --ultracode with --expect-callback in the success line and dispatch", async () => {
+    process.env.GARDEN_PROJECT = "src";
+    process.env.GARDEN_WORKER = "blue-pine";
+    const lines = await captureConsoleLog(
+      () => handoff(["other", "--ultracode", "--expect-callback", "-m", "msg"]),
+    );
+    const call = vi.mocked(submitHandoffRequest).mock.calls[0][0];
+    expect(call.ultracode).toBe(true);
+    expect(call.expectCallback).toBe(true);
+    expect(lines.join("\n")).toMatch(/ultracode mode; callback requested/);
   });
 });

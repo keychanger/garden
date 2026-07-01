@@ -174,7 +174,7 @@ export const HANDOFF_SKILL_FILENAME = "SKILL.md";
 
 export const HANDOFF_SKILL_CONTENT = `---
 name: handoff
-description: Use when the operator instructs you to hand off work to one or more fresh workers — a single pass-the-baton handoff, or a fan-out where you delegate several deferred items in parallel. Targets can be the same project (context reset) or a different project (cross-repo). Spawns named garden workers that participate in the normal review/merge flow, seeds each with a briefing you compose, and leaves you to mark yourself done. Do NOT invoke without an explicit operator instruction.
+description: Use when the operator instructs you to hand off work to one or more fresh workers — a single pass-the-baton handoff, or a fan-out where you delegate several deferred items in parallel. Targets can be the same project (context reset) or a different project (cross-repo). Spawns named garden workers that participate in the normal review/merge flow, seeds each with a briefing you compose, and leaves you to mark yourself done. Supports --ultracode to create the new worker in Claude Code's ultracode mode (Opus + max effort + dynamic workflows), e.g. "hand this off to an ultracode worker". Do NOT invoke without an explicit operator instruction.
 ---
 
 # Handoff
@@ -237,6 +237,18 @@ For a one-line briefing you can use \`-m\`:
 \`\`\`bash
 garden handoff <target-project> -m "Take over the failing-tests investigation on branch foo. See commit abc123 for context."
 \`\`\`
+
+### Ultracode mode (\`--ultracode\`)
+
+Pass \`--ultracode\` when the operator asks to hand off to an "ultracode worker" (or otherwise wants the new worker running at full strength). The child is created directly in Claude Code's ultracode mode — pinned to Opus, \`--effort max\`, and the dynamic-workflow keyword trigger enabled — so there is no manual "escape the worker, edit settings, tell it to continue" step.
+
+\`\`\`bash
+garden handoff <target-project> --ultracode <<'EOF'
+<briefing>
+EOF
+\`\`\`
+
+The flag composes with \`--expect-callback\` and \`-m\`. It configures the worker's launch only; it does not by itself force the first task to run as a multi-agent workflow. If the operator wants that, say so in the briefing (the worker will honor the ultracode keyword) — otherwise the worker simply runs at max effort with workflows available on demand.
 
 ### Callback mode (\`--expect-callback\`)
 

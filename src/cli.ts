@@ -119,6 +119,7 @@ Dashboard:
   resume <worker>                Re-arm post-merge auto-continue (clears the .garden-done sentinel)
   handoff <project> [-m "<msg>"] Spawn a fresh worker on <project> seeded with a briefing (stdin or -m)
                                  Add --expect-callback to receive a one-shot prompt at this pane when the child terminates
+                                 Add --ultracode to create the worker in ultracode mode (Opus + max effort + dynamic workflows)
   reply [-m "<msg>"]             Stage a freeform note for the parent that handed off to this worker (delivered with the callback)
   auto [on|off|status]           Toggle the global auto-continue gate
   auto threshold <N>             Set the usage-threshold percent (auto-disable above this)

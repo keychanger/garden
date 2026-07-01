@@ -37,6 +37,12 @@ import { dispatchDelayedContinue, dispatchDelayedSeed } from "./continue.js";
 import { swapVisibleToProject } from "./navigate.js";
 import { workerWindowName as workerWin, parkingWindowName, shellWindowName as shellWin, parseWorkerSuffix } from "./window-names.js";
 
+// Model half of the `--ultracode` handoff preset: pin the worker to Opus
+// (1M context). The effort + dynamic-workflow half is rendered by the harness
+// buildAgentCommand from the entry's `ultracode` flag. Operator-chosen recipe:
+// max effort + workflows on + Opus.
+const ULTRACODE_MODEL = "opus[1m]";
+
 export interface NewWorkerOptions {
   // Target project. Defaults to state.activeProject. When the target differs
   // from the current active project AND background is false, the dashboard's
@@ -67,6 +73,12 @@ export interface NewWorkerOptions {
   // string: an Anthropic alias or a concrete model id. Trellis vines use
   // trellis.workerModel below instead (iteration-resolved with fallback).
   model?: string;
+  // Ultracode preset (`garden handoff --ultracode`). When true, the worker is
+  // stamped with the Opus model pin and launches in Claude Code's ultracode
+  // mode (`--effort max` + the dynamic-workflow keyword trigger). Persisted to
+  // entry.ultracode + entry.model and threaded into every launch/resume/bounce.
+  // Ignored for trellis vines (they resolve their own model per iteration).
+  ultracode?: boolean;
   // Trellis-specific options, ignored unless workflow === "trellis".
   trellis?: {
     name: string;
@@ -250,6 +262,11 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // it. If model resolution refuses (Sonnet exhausted + fallback
     // disabled), we roll back via removeWorker before any tmux/disk work.
     const workflowName = opts.workflow ?? "default";
+    // Ultracode preset pins Opus (unless an explicit --model was also passed).
+    // Trellis vines resolve their own model per iteration, so the preset's
+    // model pin does not apply there — only its non-trellis workers get it.
+    const ultracode = opts.ultracode === true && workflowName !== "trellis";
+    const effectiveModel = ultracode ? (opts.model ?? ULTRACODE_MODEL) : opts.model;
     // origin/<baseBranch> tip at creation — the `from` endpoint of the
     // whole-task cumulative diff a later holistic review computes. Captured
     // here (after the publish gesture guarantees the ref exists) because the
@@ -268,8 +285,12 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       createdAt: Date.now(),
       workflow: workflowName,
       // Per-worker model pin for default/grow workers (trellis resolves
-      // per iteration via trellis.workerModel below).
-      ...(workflowName !== "trellis" && opts.model ? { model: opts.model } : {}),
+      // per iteration via trellis.workerModel below). Ultracode folds its
+      // Opus pin into effectiveModel above.
+      ...(workflowName !== "trellis" && effectiveModel ? { model: effectiveModel } : {}),
+      // Ultracode launch mode (max effort + dynamic-workflow trigger),
+      // threaded into every launch/resume/bounce.
+      ...(ultracode ? { ultracode: true } : {}),
       // Trellis vine data — populated only when workflow === "trellis".
       // iteration starts at 0; launchReview increments to 1 before the
       // first review fires. See WORKFLOWS.md "Worker entry additions".
@@ -312,7 +333,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // is false. A refusal rolls back the entry and bails — no pane
     // spawned, no worktree created.
     let resolvedModel: string | undefined =
-      workflowName !== "trellis" ? opts.model : undefined;
+      workflowName !== "trellis" ? effectiveModel : undefined;
     if (workflowName === "trellis") {
       const stamped = findWorkerByName(targetProject, workerName);
       if (stamped) {
@@ -336,10 +357,11 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // with progress output instead of blocking the hotkey handler. Default
     // workers omit the options argument entirely (preserves arity for existing
     // callers and tests).
-    const bootstrapOpts: { trellisRelativePath?: string; model?: string } = {};
+    const bootstrapOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean } = {};
     if (trellisRelativePath) bootstrapOpts.trellisRelativePath = trellisRelativePath;
     if (resolvedModel) bootstrapOpts.model = resolvedModel;
-    const scriptFile = (bootstrapOpts.trellisRelativePath || bootstrapOpts.model)
+    if (ultracode) bootstrapOpts.ultracode = true;
+    const scriptFile = (bootstrapOpts.trellisRelativePath || bootstrapOpts.model || bootstrapOpts.ultracode)
       ? buildWorktreeBootstrapScript(
           project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
           bootstrapOpts,
@@ -586,12 +608,13 @@ export function bounceWorker(projectName: string, workerName: string): void {
   // resolve their model per iteration, not on bounce. Plain workers omit
   // the options arg so existing tests (which assert exact argument arity)
   // still pass.
-  const resumeOpts: { trellisRelativePath?: string; model?: string; harness?: string } = {};
+  const resumeOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; harness?: string } = {};
   if (trellisRelativePath) resumeOpts.trellisRelativePath = trellisRelativePath;
   if (entry.model) resumeOpts.model = entry.model;
+  if (entry.ultracode) resumeOpts.ultracode = true;
   if (entry.harness) resumeOpts.harness = entry.harness;
   const resumeCmd = entry.worktreePath && entry.branchName && projectInfo
-    ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.harness
+    ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.ultracode || resumeOpts.harness
         ? buildWorktreeResumeCommand(
             projectName, projectInfo.path, entry.name, entry.branchName,
             entry.sessionId, baseBranch, resumeOpts,

@@ -174,6 +174,24 @@ describe("processPendingHandoffs", () => {
     expect(call?.handoffCallback).toBeUndefined();
   });
 
+  it("passes ultracode:true to newWorker when the request carries it", () => {
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    submitHandoffRequest({ targetProject: "wolf", seedFile: "/tmp/seed.txt", ultracode: true });
+    processPendingHandoffs();
+    expect(vi.mocked(newWorker)).toHaveBeenCalledWith(expect.objectContaining({
+      projectName: "wolf",
+      ultracode: true,
+    }));
+  });
+
+  it("does not pass ultracode to newWorker for a plain request", () => {
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    submitHandoffRequest({ targetProject: "wolf", seedFile: "/tmp/seed.txt" });
+    processPendingHandoffs();
+    const call = vi.mocked(newWorker).mock.calls[0][0];
+    expect(call?.ultracode).toBeUndefined();
+  });
+
   it("processes multiple pending requests in one pass", () => {
     vi.mocked(newWorker)
       .mockReturnValueOnce("a-one")
