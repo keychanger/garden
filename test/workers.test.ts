@@ -561,6 +561,62 @@ describe("newWorker", () => {
       }),
     );
   });
+
+  // ===== Ultracode preset (garden handoff --ultracode) =====
+  // newWorker translates opts.ultracode into two stamped fields: entry.model
+  // pinned to Opus and entry.ultracode. These branches are the seam between
+  // the dispatch layer (handoff-dispatch.test.ts) and the render layer
+  // (harness.test.ts), so they are exercised here directly.
+
+  it("ultracode: stamps entry.model=opus[1m] and entry.ultracode on a default worker", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ ultracode: true });
+    expect(vi.mocked(addWorker)).toHaveBeenCalledWith(
+      "myproject",
+      expect.objectContaining({
+        workflow: "default",
+        model: "opus[1m]",
+        ultracode: true,
+      }),
+    );
+  });
+
+  it("ultracode: an explicit --model wins over the Opus default, ultracode still stamped", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ ultracode: true, model: "sonnet" });
+    expect(vi.mocked(addWorker)).toHaveBeenCalledWith(
+      "myproject",
+      expect.objectContaining({
+        model: "sonnet",
+        ultracode: true,
+      }),
+    );
+  });
+
+  it("plain worker: neither model nor ultracode is stamped", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker();
+    const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
+    expect(entry.ultracode).toBeUndefined();
+    expect(entry.model).toBeUndefined();
+  });
+
+  it("ultracode: ignored for trellis vines (they resolve their own model per iteration)", () => {
+    // The guard is `opts.ultracode === true && workflowName !== "trellis"`.
+    // A trellis plant with ultracode:true must stamp NEITHER the Opus pin
+    // (it would clobber per-iteration vine model resolution) nor entry.ultracode.
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({
+      workflow: "trellis",
+      trellis: { name: "auth", path: "/repo/myproject/.garden/trellises/auth.md", maxIterations: 30 },
+      ultracode: true,
+    });
+    const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
+    expect(entry.workflow).toBe("trellis");
+    expect(entry.ultracode).toBeUndefined();
+    expect(entry.model).toBeUndefined();
+    expect(entry.trellis).toBeDefined();
+  });
 });
 
 // =============================================================================
