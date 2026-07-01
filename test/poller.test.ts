@@ -1052,6 +1052,65 @@ describe("poll — reviewing state (async)", () => {
     );
   });
 
+  it("retries with backoff for a Codex reviewer whose transient error lands only in the stderr sidecar", () => {
+    // Codex splits its streams: verdict -> stdout (result file), errors +
+    // progress -> a stderr sidecar. On a transient backend error Codex
+    // typically writes NOTHING to stdout, so rawOutput is null and the error is
+    // ONLY in the sidecar. The transient-retry safety net must still engage,
+    // which requires (a) not gating the check on rawOutput !== null, and (b)
+    // reading the sidecar BEFORE cleanReviewFiles deletes it. The deletion-
+    // tracking fs mock below guards both: if the sidecar were read after clean,
+    // existsSync would return false and the worker would wrongly park in failing.
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject",
+      roles: { reviewer: { harness: "codex" } },
+    } as ReturnType<typeof tryGetProject>);
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123",
+        preReviewSha: "pre456",
+      }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    const deleted = new Set<string>();
+    vi.mocked(fs.unlinkSync).mockImplementation((p: unknown) => { deleted.add(String(p)); });
+    // stdout result file is absent (rawOutput === null); only the sidecar exists.
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) => {
+      const s = String(p);
+      if (deleted.has(s)) return false;
+      return s.endsWith(".stderr");
+    });
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      const s = String(p);
+      if (deleted.has(s)) return "";
+      if (s.endsWith(".stderr")) return "ERROR: 429 Too Many Requests - rate limit exceeded";
+      return "{}";
+    });
+    // Head unchanged and remote unchanged, so neither the reviewer-committed-work
+    // nor the worker-push recovery path fires — only the transient path can.
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre456");
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("abc123");
+
+    poll("myproject");
+
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "working",
+        reviewRetryCount: 1,
+        reviewRetryAt: expect.any(Number),
+      }),
+    );
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 30_000);
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "failing" }),
+    );
+  });
+
   it("transitions to failing with reason transient-review after the budget is exhausted", () => {
     // Three prior attempts already burned; this is attempt #4 and it should
     // escalate to failing with failingReason="transient-review" instead of

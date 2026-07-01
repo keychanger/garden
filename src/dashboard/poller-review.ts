@@ -185,6 +185,10 @@ export function handleReviewing(
   const branchName = entry.branchName ?? entry.name;
   const isTrellis = entry.workflow === "trellis";
   const rawOutput = readReviewOutputRaw(projectName, entry);
+  // Read the stderr sidecar up front too: cleanReviewFiles below deletes it,
+  // and a non-claude reviewer's transient error lands only there (empty when
+  // absent, e.g. claude-code, which has no sidecar).
+  const rawStderrSidecar = readReviewStderrSidecar(projectName, entry);
   const review = rawOutput === null
     ? null
     : isTrellis
@@ -236,19 +240,24 @@ export function handleReviewing(
   // The reviewer's harness (independent of the worker's) knows its backend's
   // transient-error shapes. Codex sends the verdict to stdout (rawOutput) and
   // errors to a stderr sidecar, so inspect the sidecar too for a non-claude
-  // reviewer; claude-code merges both into rawOutput (2>&1).
+  // reviewer; claude-code merges both into rawOutput (2>&1). Gate on the
+  // combined source, NOT on rawOutput alone: a Codex transient backend error
+  // typically writes nothing to stdout (rawOutput === null) and lands only in
+  // the sidecar, so keying off rawOutput would skip the retry in exactly that
+  // case. transientSource collapses to null when neither stream has content.
   const reviewerHarness = resolveReviewRole(
     tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "reviewer",
   ).harness;
-  const transientSource = reviewerHarness === "claude-code"
+  const transientSource = (reviewerHarness === "claude-code"
     ? rawOutput
-    : [rawOutput, readReviewStderrSidecar(projectName, entry)].filter(Boolean).join("\n");
+    : [rawOutput, rawStderrSidecar].filter(Boolean).join("\n")
+  ) || null;
   if (
-    rawOutput !== null
-    && getHarnessCore(reviewerHarness).isTransientError(transientSource ?? "")
+    transientSource !== null
+    && getHarnessCore(reviewerHarness).isTransientError(transientSource)
     && !didReviewerAdvanceHead(projectPath, entry)
   ) {
-    return handleTransientReviewFailure(projectName, projectPath, entry, rawOutput);
+    return handleTransientReviewFailure(projectName, projectPath, entry, transientSource);
   }
   return handleUnparseableReview(projectName, projectPath, entry);
 }

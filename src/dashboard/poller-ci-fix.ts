@@ -15,6 +15,7 @@ import path from "node:path";
 import { SESSIONS_DIR, tryGetProject } from "../config.js";
 import { addAlert } from "./alerts.js";
 import { resolveReviewRole } from "./roles.js";
+import { codexStderrSidecar } from "./harness/codex-core.js";
 import { getBranchHeadSha, getRemoteTrackingSha } from "./git.js";
 import { refreshDashboard } from "./header.js";
 import { launchHeadlessAgent } from "./headless-agent.js";
@@ -440,7 +441,10 @@ function readCiFixResult(
 }
 
 export function cleanCiFixFiles(projectName: string, workerName: string): void {
-  try { fs.unlinkSync(ciFixResultPath(projectName, workerName)); } catch { /* ignore */ }
+  const resultFile = ciFixResultPath(projectName, workerName);
+  try { fs.unlinkSync(resultFile); } catch { /* ignore */ }
+  // A codex-routed ci-fix agent splits stderr into a sidecar (see cleanReviewFiles).
+  try { fs.unlinkSync(codexStderrSidecar(resultFile)); } catch { /* ignore */ }
   try { fs.unlinkSync(ciFixPromptPath(projectName, workerName)); } catch { /* ignore */ }
 }
 

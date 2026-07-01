@@ -34,8 +34,8 @@ export const SAFE_REVIEW_MODEL = "opus";
 // Resolve one review role. Each dimension resolves independently, first
 // defined value wins:
 //   harness: roles.<role>.harness -> "claude-code"
-//   model:   roles.<role>.model -> workflow.reviewerModel (reviewer only)
-//            -> Opus (claude-code only) -> harness default
+//   model:   roles.<role>.model -> (claude-code only: workflow.reviewerModel
+//            (reviewer only) -> Opus) -> harness default
 //   env:     claude-code -> the neutralizing first-party prefix (so a provider
 //            worker's backend can't bleed into review); foreign harness -> ""
 //            (it authenticates itself, e.g. Codex via ~/.codex/auth.json).
@@ -50,9 +50,12 @@ export function resolveReviewRole(
   // The reviewer inherits its workflow's reviewerModel (trellis pins "opus"
   // per WORKFLOWS.md Invariant 10); resolver/ci-fix have no workflow source.
   const workflowModel = role === "reviewer" ? getWorkflow(workflow).reviewerModel : undefined;
+  // Both the workflow model and SAFE_REVIEW_MODEL are Anthropic aliases,
+  // meaningless to a foreign harness — so an unpinned foreign harness (codex)
+  // gets NO model flag and uses its own account default. Only an explicit
+  // per-role model (target.model) reaches a foreign harness.
   const model = target.model
-    ?? workflowModel
-    ?? (harness === "claude-code" ? SAFE_REVIEW_MODEL : undefined);
+    ?? (harness === "claude-code" ? (workflowModel ?? SAFE_REVIEW_MODEL) : undefined);
   const envPrefix = harness === "claude-code" ? reviewerEnvPrefix(project, config) : "";
   return { harness, model, envPrefix };
 }

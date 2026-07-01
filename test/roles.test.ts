@@ -69,6 +69,26 @@ describe("resolveReviewRole", () => {
     expect(r.model).toBe("haiku");
   });
 
+  it("still applies the workflow's reviewerModel on the claude-code path", async () => {
+    const { resolveReviewRole } = await importRoles();
+    // trellis pins reviewerModel=opus; a default (unpinned) claude-code reviewer
+    // on a trellis worker inherits it.
+    const r = resolveReviewRole(project(), "trellis", "reviewer");
+    expect(r.harness).toBe("claude-code");
+    expect(r.model).toBe("opus");
+  });
+
+  it("does not leak the workflow's reviewerModel to an unpinned Codex reviewer", async () => {
+    const { resolveReviewRole } = await importRoles();
+    // trellis (and holistic-review) pin reviewerModel=opus, an Anthropic alias
+    // meaningless to Codex. An unpinned Codex reviewer must get NO model so
+    // codex uses its own default — the workflow model is a claude-code-only term.
+    const r = resolveReviewRole(
+      project({ roles: { reviewer: { harness: "codex" } } }), "trellis", "reviewer");
+    expect(r.harness).toBe("codex");
+    expect(r.model).toBeUndefined();
+  });
+
   it("keeps role knobs independent — a Codex reviewer does not move the resolver", async () => {
     const { resolveReviewRole } = await importRoles();
     const p = project({ roles: { reviewer: { harness: "codex" } } });
