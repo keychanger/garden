@@ -225,6 +225,16 @@ describe("codex adapter dialect", () => {
     expect(turns[3]).toMatchObject({ role: "assistant", verb: "answered" });
   });
 
+  it("readTurns tags a tool-only turn (no edit) as planned", async () => {
+    const { getHarnessCore } = await importCore();
+    const fixture = path.join(HERE, "fixtures/codex/rollout-planned.jsonl");
+    const turns = getHarnessCore("codex").readTurns(fixture);
+    expect(turns).toHaveLength(2);
+    expect(turns[0]).toMatchObject({ role: "user", text: "What files are in the repo?" });
+    // a non-edit tool call (exec_command) since the last prompt, no patch_apply_end -> "planned"
+    expect(turns[1]).toMatchObject({ role: "assistant", verb: "planned" });
+  });
+
   it("readTurns returns [] for a null or unreadable path", async () => {
     const { getHarnessCore } = await importCore();
     expect(getHarnessCore("codex").readTurns(null)).toEqual([]);

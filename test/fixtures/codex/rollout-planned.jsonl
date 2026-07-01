@@ -1,0 +1,4 @@
+{"type":"session_meta","timestamp":"2026-07-01T14:00:00.000Z","payload":{"session_id":"019f2000-0000-7000-8000-000000000001","cwd":"/tmp/wt","model":"gpt-5-codex","cli_version":"0.142.5","source":"exec"}}
+{"type":"event_msg","timestamp":"2026-07-01T14:00:01.000Z","payload":{"type":"user_message","message":"What files are in the repo?","text_elements":[]}}
+{"type":"response_item","timestamp":"2026-07-01T14:00:02.000Z","payload":{"type":"function_call","name":"exec_command","call_id":"c1","arguments":"{\"cmd\":\"ls\"}"}}
+{"type":"event_msg","timestamp":"2026-07-01T14:00:03.000Z","payload":{"type":"agent_message","message":"There are three files: a.ts, b.ts, and README.","phase":"final"}}

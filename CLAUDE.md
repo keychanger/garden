@@ -8,7 +8,7 @@ Garden is a CLI orchestrator for managing interactive Claude Code sessions acros
 - `rules.md` — coding rules loaded into every Claude session (commit/test/scope discipline)
 - `WORKFLOWS.md` — workflow registry design, "how to add a new workflow", and trellis/grow workflow specs
 - `docs/STATUS.md` — worker status state machine (spec)
-- `docs/MULTI-MODEL.md` — multi-model / multi-harness architecture (Phases 1-3 shipped — provider layer, neutral core, harness adapter registry; Codex adapter and beyond are design targets)
+- `docs/MULTI-MODEL.md` — multi-model / multi-harness architecture (Phases 1-3 shipped — provider layer, neutral core, harness adapter registry; Phase 4 in progress — Codex adapter registered but dormant, per-role resolution next)
 - `docs/TRACKS.md` — multi-track / promotion pipeline (design target, no code yet)
 - `docs/` — additional design docs and behavioral specs; see `docs/README.md` for the index
 
