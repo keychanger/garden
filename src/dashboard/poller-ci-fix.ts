@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR, tryGetProject } from "../config.js";
 import { addAlert } from "./alerts.js";
-import { reviewerEnvPrefix } from "./claude-env.js";
+import { resolveReviewRole } from "./roles.js";
 import { getBranchHeadSha, getRemoteTrackingSha } from "./git.js";
 import { refreshDashboard } from "./header.js";
 import { launchHeadlessAgent } from "./headless-agent.js";
@@ -117,6 +117,12 @@ export function launchCiFix(
     return false;
   }
 
+  // Ci-fix role resolution (independent of reviewer/resolver) — same strong
+  // first-party Anthropic + Opus default, overridable via `garden config <p>
+  // role ci-fix ...`. See docs/MULTI-MODEL.md "Phase 4".
+  const ciFix = resolveReviewRole(
+    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "ciFix",
+  );
   const cfWindow = ciFixWindowName(projectName, entry.name);
   launchHeadlessAgent({
     cwd: wtPath,
@@ -124,10 +130,12 @@ export function launchCiFix(
     prompt,
     promptFile: ciFixPromptPath(projectName, entry.name),
     resultFile: ciFixResultPath(projectName, entry.name),
-    envPrefix: reviewerEnvPrefix(tryGetProject(projectName) ?? {}),
+    envPrefix: ciFix.envPrefix,
     envVars: { GARDEN_REVIEWER: "1" },
     signalFifo: signalFifoPath(projectName),
     onLaunched: () => scheduleReviewTimeoutPoke(projectName),
+    model: ciFix.model,
+    harness: ciFix.harness,
   });
 
   const preCiFixSha = getBranchHeadSha(wtPath);

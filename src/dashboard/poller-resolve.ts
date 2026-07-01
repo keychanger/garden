@@ -6,7 +6,7 @@
 import fs from "node:fs";
 import { tryGetProject } from "../config.js";
 import { addAlert } from "./alerts.js";
-import { reviewerEnvPrefix } from "./claude-env.js";
+import { resolveReviewRole } from "./roles.js";
 import {
   abortRebase, forcePushBranch, getBranchHeadSha, getRemoteTrackingSha,
   getUnmergedFiles, hasRebaseInProgress, isAncestor,
@@ -67,6 +67,12 @@ export function launchResolver(
     return false;
   }
 
+  // Resolver role resolution (independent of the reviewer's) — defaults to the
+  // same strong first-party Anthropic + Opus safety net, overridable via
+  // `garden config <p> role resolver ...`. See docs/MULTI-MODEL.md "Phase 4".
+  const resolver = resolveReviewRole(
+    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "resolver",
+  );
   const revWindow = reviewWindowName(projectName, entry.name);
   launchHeadlessAgent({
     cwd: wtPath,
@@ -74,10 +80,12 @@ export function launchResolver(
     prompt,
     promptFile: reviewPromptPath(projectName, entry.name),
     resultFile: reviewResultPath(projectName, entry.name),
-    envPrefix: reviewerEnvPrefix(tryGetProject(projectName) ?? {}),
+    envPrefix: resolver.envPrefix,
     envVars: { GARDEN_REVIEWER: "1" },
     signalFifo: signalFifoPath(projectName),
     onLaunched: () => scheduleReviewTimeoutPoke(projectName),
+    model: resolver.model,
+    harness: resolver.harness,
   });
 
   const preResolveSha = getBranchHeadSha(wtPath);

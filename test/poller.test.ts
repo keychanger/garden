@@ -503,11 +503,14 @@ describe("poll — working state", () => {
     expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 60 * 60 * 1000);
   });
 
-  // Provider-backed projects pin the reviewer to Opus on the Anthropic path:
-  // the reviewer is the safety net that makes a cheap worker model safe to
-  // try, so it must not inherit the account default. First-party projects
-  // keep the no-model-flag behavior (account default).
-  it("pins the reviewer model to opus when the project's workers run on a provider", async () => {
+  // The review family defaults to explicit strong Anthropic Opus on the
+  // claude-code path — operator choice 2026-07 (resolveReviewRole's
+  // SAFE_REVIEW_MODEL) — so a cheap/experimental worker is never reviewed
+  // cheaply. This holds for BOTH provider-backed and first-party projects; a
+  // provider project additionally gets its inherited provider env neutralized
+  // so the Opus reviewer never runs on the worker's backend. Overridable per
+  // role via `garden config <p> role reviewer ...`.
+  it("pins the reviewer to opus and neutralizes provider env for provider projects", async () => {
     const { tryResolveProvider } = await import("../src/config.js");
     vi.mocked(tryResolveProvider).mockReturnValueOnce({
       name: "deepseek", label: "deepseek",
@@ -524,15 +527,15 @@ describe("poll — working state", () => {
     );
     expect(reviewLaunch).toBeDefined();
     expect(String(reviewLaunch![10])).toContain("--model opus");
-    // Pins the assumption mockReturnValueOnce relies on: launchReview
-    // resolves the provider exactly twice — first for the model pin (the
-    // call the Once stub feeds), then inside reviewerEnvPrefix (which gets
-    // the default null here). If this count changes, the Once stub is
-    // feeding the wrong consumer and the test needs restructuring.
-    expect(vi.mocked(tryResolveProvider).mock.calls.length).toBe(2);
+    // The Opus default no longer depends on a provider probe: resolveReviewRole
+    // resolves the reviewer env exactly once (reviewerEnvPrefix ->
+    // tryResolveProvider), which the Once stub feeds so the neutralization
+    // fires. If this count changes, the stub is feeding the wrong consumer.
+    expect(String(reviewLaunch![10])).toContain("ANTHROPIC_BASE_URL=''");
+    expect(vi.mocked(tryResolveProvider).mock.calls.length).toBe(1);
   });
 
-  it("adds no reviewer model flag for first-party projects (account default)", () => {
+  it("defaults the reviewer to opus for first-party projects too", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
     ]);
@@ -543,7 +546,9 @@ describe("poll — working state", () => {
       c => c[0] === "new-window" && String(c[5]).includes("review"),
     );
     expect(reviewLaunch).toBeDefined();
-    expect(String(reviewLaunch![10])).not.toContain("--model");
+    // Explicit Opus default now applies to every claude-code review, not just
+    // provider-backed projects (operator choice, overridable per role).
+    expect(String(reviewLaunch![10])).toContain("--model opus");
   });
 });
 

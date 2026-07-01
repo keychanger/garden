@@ -670,3 +670,46 @@ describe("holisticReview project config key", () => {
       .rejects.toThrow(/holisticReview must be 'off', 'shadow', or 'fix'/);
   });
 });
+
+describe("config role subcommand", () => {
+  async function setup() {
+    const { saveConfig, GARDEN_DIR, loadConfig } = await importConfig();
+    const { config } = await import("../src/commands/config.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
+    return { config, loadConfig };
+  }
+
+  it("routes the reviewer to codex", async () => {
+    const { config, loadConfig } = await setup();
+    await config(["garden", "role", "reviewer", "harness", "codex"]);
+    expect(loadConfig().projects.garden.roles?.reviewer?.harness).toBe("codex");
+  });
+
+  it("maps the ci-fix CLI name to the ciFix config key", async () => {
+    const { config, loadConfig } = await setup();
+    await config(["garden", "role", "ci-fix", "model", "sonnet"]);
+    expect(loadConfig().projects.garden.roles?.ciFix?.model).toBe("sonnet");
+  });
+
+  it("rejects an unregistered harness", async () => {
+    const { config } = await setup();
+    await expect(config(["garden", "role", "reviewer", "harness", "gpt4all"]))
+      .rejects.toThrow(/Unknown harness 'gpt4all'/);
+  });
+
+  it("rejects an unknown role and dimension", async () => {
+    const { config } = await setup();
+    await expect(config(["garden", "role", "worker", "harness", "codex"]))
+      .rejects.toThrow(/Unknown role 'worker'/);
+    await expect(config(["garden", "role", "reviewer", "provider", "deepseek"]))
+      .rejects.toThrow(/Unknown role dimension 'provider'/);
+  });
+
+  it("clears a role dimension and prunes the empty object", async () => {
+    const { config, loadConfig } = await setup();
+    await config(["garden", "role", "resolver", "harness", "codex"]);
+    await config(["garden", "role", "resolver", "harness", "unset"]);
+    expect(loadConfig().projects.garden.roles).toBeUndefined();
+  });
+});

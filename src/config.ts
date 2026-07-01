@@ -73,6 +73,25 @@ export interface ProjectConfig {
   // project off -> shadow -> fix only when the validation gate holds (see the
   // holistic-review workflow docs).
   holisticReview?: "off" | "shadow" | "fix";
+  // Per-role overrides for the review family (reviewer / resolver / ci-fix).
+  // Each role independently resolves its harness + model; unset falls back to
+  // the safe default (claude-code + Opus). This is how Codex-as-reviewer is
+  // selected: `garden config <p> role reviewer harness codex`. Only harness +
+  // model in v1 — a provider on a review role only ever defeats the safety
+  // net, and the worker keeps the flat `provider` key. See resolveReviewRole
+  // (dashboard/roles.ts) + docs/MULTI-MODEL.md "Phase 4".
+  roles?: {
+    reviewer?: RoleTarget;
+    resolver?: RoleTarget;
+    ciFix?: RoleTarget;
+  };
+}
+
+// One review role's harness/model selection. Both optional — an absent
+// dimension resolves through the default chain in resolveReviewRole.
+export interface RoleTarget {
+  harness?: string;
+  model?: string;
 }
 
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([

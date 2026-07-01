@@ -1,6 +1,8 @@
 // View or set project configuration values.
 import { loadConfig, saveConfig, resolveProject, isValidConfigKey, type ProjectConfig } from "../config.js";
 import { syncProviderTokenToSession } from "../dashboard/claude-env.js";
+import { resolveReviewRole, type ReviewRole } from "../dashboard/roles.js";
+import { isRegisteredHarness, harnessNames } from "../dashboard/harness/core.js";
 import {
   ASSIGNABLE_LOG_COLOR_KEYS,
   RESERVED_LOG_COLOR_KEY,
@@ -30,6 +32,14 @@ export async function config(args: string[]): Promise<void> {
     throw new Error(
       "'focused' is no longer a project setting. Use 'garden plot focus <plot>' / 'garden plot unfocus <plot>' to control what appears in the dashboard.",
     );
+  }
+
+  // Per-role harness/model selection for the review family lives under a
+  // subcommand, not the flat key ladder: `garden config <p> role <role>
+  // [<harness|model> [<value|unset>]]`.
+  if (key === "role") {
+    handleRoleCommand(project, args.slice(2));
+    return;
   }
 
   if (!isValidConfigKey(key)) {
@@ -150,6 +160,106 @@ function showConfigKey(project: ProjectConfig & { name: string }, key: SettableK
   } else {
     output({ [key]: null }, () => `(not set)`);
   }
+}
+
+// CLI role name -> config sub-object key. The review family only; the worker
+// role selects its harness/model via `workers new --model` (and --harness in
+// the worker-path slice), not this config surface.
+const REVIEW_ROLE_KEYS: Record<string, ReviewRole> = {
+  reviewer: "reviewer",
+  resolver: "resolver",
+  "ci-fix": "ciFix",
+};
+const ROLE_DIMS = ["harness", "model"] as const;
+type RoleDim = typeof ROLE_DIMS[number];
+
+function handleRoleCommand(
+  project: ProjectConfig & { name: string },
+  roleArgs: string[],
+): void {
+  const roleArg = roleArgs[0];
+  if (!roleArg) {
+    showRoleMatrix(project);
+    return;
+  }
+  const roleKey = REVIEW_ROLE_KEYS[roleArg];
+  if (!roleKey) {
+    throw new Error(
+      `Unknown role '${roleArg}'. Valid roles: ${Object.keys(REVIEW_ROLE_KEYS).join(", ")}.`,
+    );
+  }
+  const dim = roleArgs[1];
+  if (!dim) {
+    showRoleResolution(project, roleArg, roleKey);
+    return;
+  }
+  if (!ROLE_DIMS.includes(dim as RoleDim)) {
+    throw new Error(`Unknown role dimension '${dim}'. Valid dimensions: ${ROLE_DIMS.join(", ")}.`);
+  }
+  const value = roleArgs[2];
+  if (value === undefined) {
+    showRoleDim(project, roleArg, roleKey, dim as RoleDim);
+    return;
+  }
+  setRoleDim(project.name, roleArg, roleKey, dim as RoleDim, value);
+}
+
+function roleLine(project: ProjectConfig & { name: string }, roleKey: ReviewRole): string {
+  const res = resolveReviewRole(project, "default", roleKey);
+  return `harness=${res.harness} model=${res.model ?? "(harness default)"}`;
+}
+
+function showRoleMatrix(project: ProjectConfig & { name: string }): void {
+  const data: Record<string, string> = {};
+  for (const roleArg of Object.keys(REVIEW_ROLE_KEYS)) {
+    data[roleArg] = roleLine(project, REVIEW_ROLE_KEYS[roleArg]);
+  }
+  output(data, (d) =>
+    Object.entries(d as Record<string, string>).map(([k, v]) => `  ${k}: ${v}`).join("\n"));
+}
+
+function showRoleResolution(project: ProjectConfig & { name: string }, roleArg: string, roleKey: ReviewRole): void {
+  const res = resolveReviewRole(project, "default", roleKey);
+  output(
+    { role: roleArg, harness: res.harness, model: res.model ?? null },
+    () => `  ${roleArg}: ${roleLine(project, roleKey)}`,
+  );
+}
+
+function showRoleDim(project: ProjectConfig & { name: string }, roleArg: string, roleKey: ReviewRole, dim: RoleDim): void {
+  const v = project.roles?.[roleKey]?.[dim];
+  if (v) output({ [dim]: v }, () => v);
+  else output({ [dim]: null }, () => `(not set — using default)`);
+}
+
+function setRoleDim(projectName: string, roleArg: string, roleKey: ReviewRole, dim: RoleDim, value: string): void {
+  const cfg = loadConfig();
+  const project = cfg.projects[projectName];
+  if (!project) throw new Error(`Unknown project: ${projectName}`);
+
+  const clearing = value === "" || value === "unset" || value === "null";
+  if (dim === "harness" && !clearing && !isRegisteredHarness(value)) {
+    throw new Error(
+      `Unknown harness '${value}'. Registered harnesses: ${harnessNames().join(", ")}.`,
+    );
+  }
+
+  const roles = project.roles ?? (project.roles = {});
+  const target = roles[roleKey] ?? (roles[roleKey] = {});
+  if (clearing) {
+    delete target[dim];
+    // Prune empty objects so config.yml stays tidy.
+    if (Object.keys(target).length === 0) delete roles[roleKey];
+    if (Object.keys(roles).length === 0) delete project.roles;
+    console.log(`Cleared ${roleArg} ${dim} for ${projectName} (using default)`);
+  } else {
+    target[dim] = value;
+    console.log(`Set ${roleArg} ${dim} = ${value} for ${projectName}`);
+    if (dim === "harness" && value !== "claude-code") {
+      console.log(`  note: ${value} authenticates itself — the Anthropic provider/model neutralization does not apply to this role.`);
+    }
+  }
+  saveConfig(cfg);
 }
 
 function setConfigKey(projectName: string, key: SettableKey, value: string): void {

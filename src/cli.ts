@@ -62,6 +62,9 @@ Projects:
   remove <name>                  Remove a project (also purges from plots)
   list, ls                       List all projects
   config <project> [key] [value] View or set project config
+  config <project> role [<role> [harness|model] [value]]
+                                 Per-role review harness/model (role: reviewer|resolver|ci-fix)
+                                 e.g. 'config <p> role reviewer harness codex' for a Codex reviewer
   diary [project] [--path]       Open the project's diary in $EDITOR (--path prints the file path)
   claude-profile [list|add|remove|login]
                                  Manage alternate Claude config dirs (per-project plan)

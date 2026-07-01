@@ -29,3 +29,15 @@ export function getHarnessCore(name?: string): HarnessCore {
   });
   return claudeCodeCore;
 }
+
+// Is this a registered harness name? Config-set paths validate STRICTLY with
+// this (reject an unknown harness at the operator surface) rather than relying
+// on getHarnessCore's launch-time warn-fallback. Launch paths keep the
+// fallback for resilience; the operator surface should fail loudly.
+export function isRegisteredHarness(name: string): boolean {
+  return name in CORES;
+}
+
+export function harnessNames(): string[] {
+  return Object.keys(CORES);
+}

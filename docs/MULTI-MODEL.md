@@ -686,25 +686,31 @@ system-prompt flag); Codex enforces its own sandbox (`--sandbox` modes).
 Reviewer-first slices (each independently mergeable, Claude fleet
 byte-identical, full gate green):
 
-- **Slice A — Codex adapter, headless-first (dormant).** `codex-core.ts`
-  (headless command with the stdout/stderr split; `isTransientError` for
-  OpenAI/Codex shapes; capabilities; the light methods) + `codex.ts`
-  (`installRuntimeConfig` → `.codex/config.toml` + `hooks.json`) +
-  register in both registries. Selectable by nothing yet — the existing
-  fleet is untouched. Most of the core is already spike-verified.
-- **Slice B — headless agents install their own config.** reviewer /
-  resolver / ci-fix resolve the agent's harness, install its runtime
-  config into the worktree (idempotent; git-excludes become the union of
-  every registered harness's config dir so a Codex reviewer's `.codex/`
-  and a Claude worker's `.claude/` coexist), and launch through the
-  adapter.
-- **Slice C — reviewer-role resolution + config + Opus defaults.**
-  `resolveRole` for the review roles (`{harness, model}`; no `provider`
-  on review roles — a provider only ever defeats the safety net); the
-  `garden config <p> role reviewer harness codex` surface; a capability
-  gate on the review harness; and an explicit Opus default for reviewer,
-  resolver, *and* ci-fix (operator choice, each overridable). This
-  delivers Codex-as-reviewer.
+- **Slice A — Codex adapter, headless-first (dormant). SHIPPED.**
+  `codex-core.ts` (headless command with the stdout/stderr split;
+  `isTransientError` for OpenAI/Codex shapes; capabilities; the light
+  methods incl. the rollout `readTurns`) + `codex.ts`
+  (`installRuntimeConfig` → `.codex/hooks.json`) + register in both
+  registries. Selectable by nothing yet — the existing fleet is untouched.
+- **Slices B+C — reviewer-role resolution → Codex-as-reviewer. SHIPPED**
+  (landed together — a Codex reviewer needs no per-worktree config, which
+  collapsed the drafted "headless installs its own config" work into the
+  worker path). `resolveReviewRole(project, workflow, role)` in `roles.ts`
+  independently resolves each review role's `{harness, model, envPrefix}`
+  (no `provider` on review roles — a provider only ever defeats the safety
+  net); the `garden config <p> role <role> harness|model` surface (strict
+  harness validation); env is harness-aware (claude-code keeps the
+  provider-neutralizing prefix, Codex gets none — it uses `~/.codex/auth`);
+  the three review pollers route `harness`+`model`+`env` through
+  `launchHeadlessAgent`; the transient-error check reads the Codex stderr
+  sidecar; and reviewer, resolver, *and* ci-fix default to explicit Opus
+  on the claude-code path (operator choice — a behavior change from the old
+  provider-only Opus pin, each overridable). A Codex reviewer works because
+  its prompt is delivered on stdin (no AGENTS.md), it authenticates itself
+  (no env), and it omits `--dangerously-bypass-hook-trust` (fires no relay).
+  Deferred to the worker path: a *claude* reviewer installing its own
+  `.claude/` config into a *Codex worker's* worktree (only reachable once
+  Codex workers exist) and the union git-excludes that go with it.
 
 Then the **worker path** (second priority): interactive
 `buildAgentCommand`, a spike proving Codex fires `Stop` per-turn (the

@@ -7,9 +7,10 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { tryGetProject, tryResolveProvider, SESSIONS_DIR } from "../config.js";
+import { tryGetProject, SESSIONS_DIR } from "../config.js";
 import { addAlert } from "./alerts.js";
-import { reviewerEnvPrefix } from "./claude-env.js";
+import { resolveReviewRole } from "./roles.js";
+import { codexStderrSidecar } from "./harness/codex-core.js";
 import { getHarnessCore } from "./harness/core.js";
 import { setDoneSentinel } from "./continue.js";
 import {
@@ -36,7 +37,6 @@ import { parseLastLineVerdict } from "./verdict.js";
 import { reviewWindowName } from "./window-names.js";
 import { signalFifoPath, scheduleDelayedPoke } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
-import { getWorkflow } from "./workflows/index.js";
 
 // Wall-clock ceiling on a single reviewer or resolver run. If the tmux window
 // is still alive past this, the poller kills it and escalates to `failing`.
@@ -233,11 +233,19 @@ export function handleReviewing(
   // missing file, empty file, reviewer went off-rails, reviewer committed
   // work but skipped the verdict line — flows through the existing
   // unparseable-verdict path.
+  // The reviewer's harness (independent of the worker's) knows its backend's
+  // transient-error shapes. Codex sends the verdict to stdout (rawOutput) and
+  // errors to a stderr sidecar, so inspect the sidecar too for a non-claude
+  // reviewer; claude-code merges both into rawOutput (2>&1).
+  const reviewerHarness = resolveReviewRole(
+    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "reviewer",
+  ).harness;
+  const transientSource = reviewerHarness === "claude-code"
+    ? rawOutput
+    : [rawOutput, readReviewStderrSidecar(projectName, entry)].filter(Boolean).join("\n");
   if (
     rawOutput !== null
-    // The reviewer's harness (claude-code — independent of the worker's)
-    // knows its backend's transient-error shapes.
-    && getHarnessCore().isTransientError(rawOutput)
+    && getHarnessCore(reviewerHarness).isTransientError(transientSource ?? "")
     && !didReviewerAdvanceHead(projectPath, entry)
   ) {
     return handleTransientReviewFailure(projectName, projectPath, entry, rawOutput);
@@ -910,21 +918,17 @@ function launchReview(
   // as the worker's Stop hook and would (a) write agentStatus="idle" for
   // the worker, and (b) poke the poller to start another review.
   //
-  // Reviewer model: trellis pins to workflow.reviewerModel ("opus") per
-  // Invariant 10 — reviewer quality is non-negotiable, never falls back.
-  // Default workflow leaves reviewerModel unset and the account default
-  // applies (today: Opus). No model flag is added in that case — unless the
-  // project's workers run on a provider: then the reviewer is the safety
-  // net that makes a cheap/experimental worker model safe to try, so it is
-  // pinned to Opus on the first-party Anthropic path rather than inheriting
-  // whatever the account default happens to be. (reviewerEnvPrefix below
-  // exists for the same reason — it actively neutralizes any provider env
-  // inherited from the tmux server so the reviewer never runs against the
-  // worker's backend. See docs/MULTI-MODEL.md "Mixed fleets".)
-  const projectForEnv = tryGetProject(projectName);
-  const workerOnProvider = tryResolveProvider(projectForEnv ?? {}) !== null;
-  const reviewerModel = getWorkflow(entry.workflow ?? "default").reviewerModel
-    ?? (workerOnProvider ? "opus" : undefined);
+  // Reviewer role resolution: harness + model + env, arbitrary-per-role but
+  // defaulting to a strong first-party Anthropic reviewer (Opus). That default
+  // is the safety net that makes a cheap/experimental worker safe to try —
+  // resolveReviewRole's claude-code env prefix also neutralizes any provider
+  // env inherited from the tmux server so the reviewer never runs against the
+  // worker's backend. Codex-as-reviewer (`garden config <p> role reviewer
+  // harness codex`) flows through the same path with its own auth and no
+  // Anthropic env. See docs/MULTI-MODEL.md "Phase 4".
+  const reviewer = resolveReviewRole(
+    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "reviewer",
+  );
   const revWindow = reviewWindowName(projectName, entry.name);
   launchHeadlessAgent({
     cwd: wtPath,
@@ -932,11 +936,12 @@ function launchReview(
     prompt,
     promptFile: reviewPromptPath(projectName, entry.name),
     resultFile: reviewResultPath(projectName, entry.name),
-    envPrefix: reviewerEnvPrefix(projectForEnv ?? {}),
+    envPrefix: reviewer.envPrefix,
     envVars: { GARDEN_REVIEWER: "1" },
     signalFifo: signalFifoPath(projectName),
     onLaunched: () => scheduleReviewTimeoutPoke(projectName),
-    model: reviewerModel,
+    model: reviewer.model,
+    harness: reviewer.harness,
   });
 
   // Capture the remote tracking SHA at launch time. handleReviewing compares
@@ -1040,6 +1045,20 @@ export function killReviewWindow(projectName: string, workerName: string): void 
 }
 
 export function cleanReviewFiles(projectName: string, workerName: string): void {
-  try { fs.unlinkSync(reviewResultPath(projectName, workerName)); } catch { /* ignore */ }
+  const resultFile = reviewResultPath(projectName, workerName);
+  try { fs.unlinkSync(resultFile); } catch { /* ignore */ }
+  try { fs.unlinkSync(codexStderrSidecar(resultFile)); } catch { /* ignore */ }
   try { fs.unlinkSync(reviewPromptPath(projectName, workerName)); } catch { /* ignore */ }
+}
+
+// The stderr sidecar written by a non-claude headless reviewer (Codex sends
+// its verdict to stdout, errors + progress to stderr). Returns "" when absent
+// (claude-code merges stderr into the result file, so there is no sidecar).
+function readReviewStderrSidecar(projectName: string, entry: WorkerEntry): string {
+  const sidecar = codexStderrSidecar(reviewResultPath(projectName, entry.name));
+  try {
+    return fs.existsSync(sidecar) ? fs.readFileSync(sidecar, "utf-8").trim() : "";
+  } catch {
+    return "";
+  }
 }
