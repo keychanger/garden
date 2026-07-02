@@ -150,6 +150,28 @@ describe("registry durability", () => {
   });
 });
 
+describe("mutateRegistry", () => {
+  it("persists the mutation when the callback reports a change", async () => {
+    const { addWorker, mutateRegistry, getWorkers } = await importRegistry();
+    addWorker("proj", { name: "a", sessionId: "1", task: "orig" });
+    mutateRegistry((reg) => {
+      reg.workers.proj[0].task = "updated";
+      return true;
+    });
+    expect(getWorkers("proj")[0].task).toBe("updated");
+  });
+
+  it("does not write when the callback reports no change", async () => {
+    const { addWorker, mutateRegistry, getWorkers } = await importRegistry();
+    addWorker("proj", { name: "a", sessionId: "1", task: "orig" });
+    mutateRegistry((reg) => {
+      reg.workers.proj[0].task = "ignored"; // mutated in memory, but...
+      return false;                          // ...reported no change -> no write
+    });
+    expect(getWorkers("proj")[0].task).toBe("orig");
+  });
+});
+
 describe("addWorker / getWorkers", () => {
   it("persists and retrieves a worker", async () => {
     const { addWorker, getWorkers } = await importRegistry();

@@ -23,6 +23,13 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
 }));
 
+// These unit tests exercise alert logic against a fully-mocked fs, not real
+// cross-process locking. Pass the lock through so addAlert/ack/clear run their
+// read-modify-write without needing fs.constants / openSync on the mock.
+vi.mock("../src/dashboard/file-lock.js", () => ({
+  withFileLock: (_lockPath: string, fn: () => unknown) => fn(),
+}));
+
 vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));

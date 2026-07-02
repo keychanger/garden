@@ -6,6 +6,7 @@ import { SESSIONS_DIR } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux } from "./tmux.js";
 import { atomicWriteFile } from "./atomic-write.js";
+import { withFileLock } from "./file-lock.js";
 import { log } from "./log.js";
 import { GARDEN_VERSION } from "../version.js";
 
@@ -49,6 +50,7 @@ const ALERT_DEDUP_WINDOW_MS = 60 * 60 * 1000;
 const DEDUP_MESSAGE_PREFIX_LEN = 200;
 
 export const ALERTS_FILE = path.join(SESSIONS_DIR, "dashboard.alerts.json");
+const ALERTS_LOCK_FILE = ALERTS_FILE + ".lock";
 
 // Shape guard for parsed alerts. Top-level needs `alerts` as an array;
 // each entry must carry the load-bearing string fields (level, source,
@@ -130,48 +132,59 @@ function findRecentByDedupKey(store: AlertStore, key: string, now: number): Aler
 }
 
 export function addAlert(fields: AddAlertInput): void {
-  const store = readAlerts();
   const now = Date.now();
   const key = fields.dedupKey ?? defaultDedupKey(fields);
-  const recent = findRecentByDedupKey(store, key, now);
-  if (recent) {
-    // Suppress: refresh the badge so the existing alert's visibility is
-    // reaffirmed (operator sees N stays steady rather than ticking up), but
-    // don't write a new entry or emit a duplicate log line.
-    refreshAlertBadge();
-    return;
+  // Serialize the read-dedup-append-write cycle: concurrent writers (many
+  // pollers and hooks alerting at the same instant — exactly the systemic
+  // failure this store exists to record) would otherwise drop each other's
+  // alerts through a lost update. Best-effort: on lock-acquisition timeout,
+  // drop this one alert rather than throw from a best-effort caller (poller /
+  // validate paths that never expect addAlert to throw).
+  let created: Alert | null = null;
+  try {
+    created = withFileLock(ALERTS_LOCK_FILE, () => {
+      const store = readAlerts();
+      if (findRecentByDedupKey(store, key, now)) {
+        return null; // duplicate within the dedup window — suppress
+      }
+      const alert: Alert = {
+        level: fields.level,
+        source: fields.source,
+        project: fields.project,
+        worker: fields.worker,
+        message: fields.message,
+        dedupKey: key,
+        id: crypto.randomUUID(),
+        ts: new Date(now).toISOString(),
+      };
+      store.alerts.push(alert);
+      if (store.alerts.length > MAX_ALERTS) {
+        store.alerts = store.alerts.slice(-MAX_ALERTS);
+      }
+      writeAlerts(store);
+      return alert;
+    }, { name: "alerts" });
+  } catch {
+    return; // could not acquire the alerts lock — drop rather than throw
   }
 
-  const alert: Alert = {
-    level: fields.level,
-    source: fields.source,
-    project: fields.project,
-    worker: fields.worker,
-    message: fields.message,
-    dedupKey: key,
-    id: crypto.randomUUID(),
-    ts: new Date(now).toISOString(),
-  };
-  store.alerts.push(alert);
-  // Cap at MAX_ALERTS, drop oldest
-  if (store.alerts.length > MAX_ALERTS) {
-    store.alerts = store.alerts.slice(-MAX_ALERTS);
-  }
-  writeAlerts(store);
-
-  // Emit to dashboard.log so the line streams live into `garden logs --follow`
-  // (the _garden-logs pane). Route by the alert's own level so warn alerts
-  // are not miscategorized as errors.
-  log[fields.level]("alert", fields.message, {
-    worker: fields.worker,
-    data: { project: fields.project, source: fields.source, level: fields.level },
-  });
-
+  // Side effects outside the lock: refresh the badge (reaffirms visibility even
+  // when suppressed, so N stays steady rather than ticking up) and, for a newly
+  // written alert, emit to dashboard.log so the line streams live into
+  // `garden logs --follow` at the alert's own level.
   refreshAlertBadge();
+  if (created) {
+    log[created.level]("alert", created.message, {
+      worker: created.worker,
+      data: { project: created.project, source: created.source, level: created.level },
+    });
+  }
 }
 
 export function clearAlerts(): void {
-  writeAlerts({ alerts: [], lastSeenAt: new Date().toISOString() });
+  withFileLock(ALERTS_LOCK_FILE, () => {
+    writeAlerts({ alerts: [], lastSeenAt: new Date().toISOString() });
+  }, { name: "alerts" });
   refreshAlertBadge();
 }
 
@@ -190,9 +203,11 @@ export function unreadAlertCount(): number {
 // garden often runs autonomously while the user is away, and a silent ack
 // would defeat the whole point of the bar badge.
 export function acknowledgeAlerts(): void {
-  const store = readAlerts();
-  store.lastSeenAt = new Date().toISOString();
-  writeAlerts(store);
+  withFileLock(ALERTS_LOCK_FILE, () => {
+    const store = readAlerts();
+    store.lastSeenAt = new Date().toISOString();
+    writeAlerts(store);
+  }, { name: "alerts" });
   refreshAlertBadge();
 }
 

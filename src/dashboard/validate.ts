@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import { SESSIONS_DIR, loadConfig } from "../config.js";
 import { type DashboardState, readDashState, writeDashState } from "./state.js";
-import { readRegistry, writeRegistry, updateWorkerFields, type WorkerRegistry } from "./registry.js";
+import { mutateRegistry, readRegistry, updateWorkerFields, type WorkerRegistry } from "./registry.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, killWindowSafe, tmuxSplit, setPaneTitle, setPaneLabel, tmux, disablePaneInput, renameWindow } from "./tmux.js";
 import { log } from "./log.js";
 import { worktreeExists, removeWorktree, pruneWorktrees } from "./git.js";
@@ -197,11 +197,13 @@ function dropGhostEntries(registry: WorkerRegistry, activeWindowName: string | n
  * next dashboard restart. Returns true if any entry was dropped.
  */
 export function sweepGhostEntries(): boolean {
-  const registry = readRegistry();
-  const state = readDashState();
-  if (!dropGhostEntries(registry, state.activeWindowName)) return false;
-  writeRegistry(registry);
-  return true;
+  const activeWindowName = readDashState().activeWindowName;
+  let dropped = false;
+  mutateRegistry((registry) => {
+    dropped = dropGhostEntries(registry, activeWindowName);
+    return dropped;
+  });
+  return dropped;
 }
 
 /**
@@ -278,63 +280,68 @@ export function validateAndHeal(state: DashboardState): DashboardState {
   // would otherwise discard the worker permanently. Mark `agentStatus =
   // "exited"` (matching the pane-died hook's effect) and surface an alert
   // so the operator can either resume manually or `⌥x` to clean up.
-  const registry = readRegistry();
-  let registryChanged = false;
+  // One locked read-modify-write for the whole registry pass. The per-entry
+  // window/worktree probes (tmux/git forks) run inside the lock, so the hold is
+  // longer than a field update — but this is the attach-time / `health --fix`
+  // path, not the hot poll loop, and it is strictly safer than the previous
+  // unlocked read-modify-write, which silently reverted concurrent poller/hook
+  // transitions when it wrote its stale snapshot.
+  mutateRegistry((registry) => {
+    let registryChanged = false;
 
-  // Drop ghost entries FIRST. Must run before the "mark exited" pass —
-  // that pass would otherwise rewrite agentStatus from "loading" to
-  // "exited" and the ghost would slip through as a preserved exited worker.
-  if (dropGhostEntries(registry, healed.activeWindowName)) {
-    registryChanged = true;
-  }
-
-  for (const [projectName, entries] of Object.entries(registry.workers)) {
-    for (const entry of entries) {
-      const windowName = workerWindowName(projectName, entry.name);
-      const exists = windowExists(windowName) || windowName === healed.activeWindowName;
-      if (exists) continue;
-      if (entry.agentStatus === "exited") continue; // already marked
-      log.warn("validate", "worker window missing, marking exited (entry preserved)", {
-        worker: entry.name,
-        data: { project: projectName, prState: entry.prState },
-      });
-      entry.agentStatus = "exited";
+    // Drop ghost entries FIRST. Must run before the "mark exited" pass —
+    // that pass would otherwise rewrite agentStatus from "loading" to
+    // "exited" and the ghost would slip through as a preserved exited worker.
+    if (dropGhostEntries(registry, healed.activeWindowName)) {
       registryChanged = true;
-      addAlert({
-        level: "warn",
-        source: "validate",
-        project: projectName,
-        worker: entry.name,
-        message:
-          `Worker '${entry.name}' has no tmux pane. The worktree on disk is preserved — ` +
-          `restart the dashboard ('garden dashboard exit && garden dashboard') to recreate ` +
-          `the pane from the registry, or kill the worker (⌥x) to clean up. ` +
-          `'garden bounce' won't work without a live pane.`,
-        // Stable key so a single missing pane doesn't spam the badge across
-        // every reattach within the dedup window.
-        dedupKey: `validate-exited:${projectName}:${entry.name}`,
-      });
     }
-  }
 
-  // Validate worktrees for registry entries
-  for (const [projectName, entries] of Object.entries(registry.workers)) {
-    for (const entry of entries) {
-      if (!entry.worktreePath) continue;
-      if (!worktreeExists(entry.worktreePath)) {
-        log.warn("validate", "worktree missing for worker", {
+    for (const [projectName, entries] of Object.entries(registry.workers)) {
+      for (const entry of entries) {
+        const windowName = workerWindowName(projectName, entry.name);
+        const exists = windowExists(windowName) || windowName === healed.activeWindowName;
+        if (exists) continue;
+        if (entry.agentStatus === "exited") continue; // already marked
+        log.warn("validate", "worker window missing, marking exited (entry preserved)", {
           worker: entry.name,
-          data: { project: projectName },
+          data: { project: projectName, prState: entry.prState },
         });
-        entry.worktreePath = undefined;
+        entry.agentStatus = "exited";
         registryChanged = true;
+        addAlert({
+          level: "warn",
+          source: "validate",
+          project: projectName,
+          worker: entry.name,
+          message:
+            `Worker '${entry.name}' has no tmux pane. The worktree on disk is preserved — ` +
+            `restart the dashboard ('garden dashboard exit && garden dashboard') to recreate ` +
+            `the pane from the registry, or kill the worker (⌥x) to clean up. ` +
+            `'garden bounce' won't work without a live pane.`,
+          // Stable key so a single missing pane doesn't spam the badge across
+          // every reattach within the dedup window.
+          dedupKey: `validate-exited:${projectName}:${entry.name}`,
+        });
       }
     }
-  }
 
-  if (registryChanged) {
-    writeRegistry(registry);
-  }
+    // Validate worktrees for registry entries
+    for (const [projectName, entries] of Object.entries(registry.workers)) {
+      for (const entry of entries) {
+        if (!entry.worktreePath) continue;
+        if (!worktreeExists(entry.worktreePath)) {
+          log.warn("validate", "worktree missing for worker", {
+            worker: entry.name,
+            data: { project: projectName },
+          });
+          entry.worktreePath = undefined;
+          registryChanged = true;
+        }
+      }
+    }
+
+    return registryChanged;
+  });
 
   // Clean stale lastActiveWorker references pointing to dead windows
   for (const [proj, winName] of Object.entries(healed.lastActiveWorker ?? {})) {
@@ -356,7 +363,10 @@ export function validateAndHeal(state: DashboardState): DashboardState {
   // Clean stale context files
   cleanContextFiles();
 
-  // Restart per-project pollers if not running
+  // Restart per-project pollers if not running. Read a fresh snapshot for the
+  // read-only consumers below (poller restart, orphaned-window cleanup) so they
+  // observe the post-heal registry rather than a pre-mutation copy.
+  const registry = readRegistry();
   const gardenRunner = resolveGardenRunner();
   for (const projectName of Object.keys(registry.workers)) {
     if (registry.workers[projectName].length > 0 && !projectPollerRunning(projectName)) {

@@ -754,6 +754,24 @@ export function writeRegistry(registry: WorkerRegistry): void {
   invalidateRegistryCache();
 }
 
+// Locked whole-registry read-modify-write for callers outside this module that
+// need to mutate more than a single worker's fields (e.g. the validator's ghost
+// sweep and its mark-exited pass). `withRegistryLock` is module-private on
+// purpose — this is the one blessed way to run a caller-defined registry
+// mutation under the same lock every built-in mutator holds. `fn` receives a
+// freshly-read (under the lock) registry, mutates it in place, and returns
+// whether anything changed; the write happens iff it returns true. Callers must
+// mutate only inside `fn`, never persist their own snapshot via writeRegistry —
+// that is exactly the unlocked read-modify-write this replaces. The freshly
+// read registry means concurrent writes to other workers' fields are never
+// clobbered by a stale snapshot.
+export function mutateRegistry(fn: (registry: WorkerRegistry) => boolean): void {
+  withRegistryLock(() => {
+    const registry = readRegistry();
+    if (fn(registry)) writeRegistry(registry);
+  });
+}
+
 export function addWorker(project: string, entry: WorkerEntry): void {
   withRegistryLock(() => {
     const registry = readRegistry();

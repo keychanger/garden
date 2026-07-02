@@ -14,11 +14,23 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   disablePaneInput: vi.fn(),
 }));
 
-vi.mock("../src/dashboard/registry.js", () => ({
-  readRegistry: vi.fn(() => ({ workers: {} })),
-  writeRegistry: vi.fn(),
-  updateWorkerFields: vi.fn(),
-}));
+vi.mock("../src/dashboard/registry.js", () => {
+  const readRegistry = vi.fn(() => ({ workers: {} }));
+  const writeRegistry = vi.fn();
+  return {
+    readRegistry,
+    writeRegistry,
+    updateWorkerFields: vi.fn(),
+    // Mirror the real mutateRegistry: read (via the mocked readRegistry so a
+    // test's mockReturnValue still applies), run the caller's mutation, and
+    // write (via the mocked writeRegistry) iff it reports a change. This keeps
+    // the existing readRegistry/writeRegistry-based assertions intact.
+    mutateRegistry: vi.fn((fn: (r: { workers: Record<string, unknown[]> }) => boolean) => {
+      const reg = readRegistry();
+      if (fn(reg as { workers: Record<string, unknown[]> })) writeRegistry(reg);
+    }),
+  };
+});
 
 vi.mock("../src/dashboard/state.js", () => ({
   readDashState: vi.fn(() => ({
