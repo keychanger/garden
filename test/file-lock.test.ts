@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { useTmpHome } from "./helpers.js";
@@ -10,6 +10,8 @@ async function importHelper() {
 }
 
 describe("withFileLock", () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
   it("runs fn under the lock and returns its value", async () => {
     const { withFileLock } = await importHelper();
     const lockPath = path.join(env.sessionsDir, "test.lock");
@@ -79,10 +81,51 @@ describe("withFileLock", () => {
     const lockPath = path.join(env.sessionsDir, "garbage.lock");
     // A partial write or filesystem corruption could leave non-numeric
     // content. Without a parsable pid we can't prove the holder is dead,
-    // so the safe behavior is to wait, not unlink.
+    // and while it is young the safe behavior is to wait, not unlink.
     fs.writeFileSync(lockPath, "not-a-pid");
     expect(() => withFileLock(lockPath, () => { /* never runs */ }, { deadlineMs: 100 }))
       .toThrow(/Could not acquire/);
     expect(fs.existsSync(lockPath)).toBe(true);
+  });
+
+  it("cleans up the lockfile if stamping the pid fails", async () => {
+    // openSync creates the lockfile; if the pid write then fails (ENOSPC, or the
+    // holder killed mid-write), leaving the empty file behind would wedge every
+    // future writer (parseInt("") is NaN, so no pid check could reclaim it while
+    // it is young). The acquire path must remove its own half-made lock.
+    const { withFileLock } = await importHelper();
+    const lockPath = path.join(env.sessionsDir, "writefail.lock");
+    const err = Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
+    vi.spyOn(fs, "writeSync").mockImplementationOnce(() => { throw err; });
+    expect(() => withFileLock(lockPath, () => 1)).toThrow("ENOSPC");
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+
+  it("reclaims an empty lockfile once it is older than the stale threshold", async () => {
+    // The empty-lock wedge: a holder killed between open and pid-write leaves an
+    // unparseable lock. The age fallback reclaims it so it is a transient hiccup,
+    // not a permanent deadlock.
+    const { withFileLock } = await importHelper();
+    const lockPath = path.join(env.sessionsDir, "oldempty.lock");
+    fs.writeFileSync(lockPath, "");
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lockPath, old, old);
+    let ran = false;
+    withFileLock(lockPath, () => { ran = true; });
+    expect(ran).toBe(true);
+    expect(fs.existsSync(lockPath)).toBe(false); // released after fn
+  });
+
+  it("reclaims a lock older than the stale threshold even with a live-looking pid", async () => {
+    // pid reuse after a reboot: the recorded pid now belongs to an unrelated
+    // live process, so the liveness probe lies. Age is the tiebreaker.
+    const { withFileLock } = await importHelper();
+    const lockPath = path.join(env.sessionsDir, "oldlive.lock");
+    fs.writeFileSync(lockPath, String(process.pid));
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lockPath, old, old);
+    let ran = false;
+    withFileLock(lockPath, () => { ran = true; });
+    expect(ran).toBe(true);
   });
 });

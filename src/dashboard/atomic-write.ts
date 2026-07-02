@@ -31,6 +31,20 @@ export function atomicWriteFile(
     } else {
       fs.writeFileSync(tmpFile, content);
     }
+    // Best-effort durability: flush the tmp file to stable storage before the
+    // rename. The atomic rename guarantees concurrent *readers* never see a
+    // partial file, but on its own it does not guarantee the bytes survive a
+    // power loss or kernel panic — a crash right after the rename can leave the
+    // target zero-length even though the rename "succeeded". fsync closes that
+    // window for the state files (registry/state/config) that must survive an
+    // unclean shutdown. Wrapped and swallowed because fsync is genuinely
+    // optional here: it can be unavailable on some filesystems, EACCES on a
+    // read-only-mode tmp file (e.g. 0o444 settings.json), or stubbed out under
+    // a partial fs mock — none of which should fail the write.
+    try {
+      const fd = fs.openSync(tmpFile, "r+");
+      try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    } catch { /* durability is best-effort */ }
     fs.renameSync(tmpFile, filePath);
   } catch (err) {
     try { fs.unlinkSync(tmpFile); } catch { /* tmp may not exist */ }
