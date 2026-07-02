@@ -12,6 +12,7 @@ import path from "node:path";
 import { SESSIONS_DIR } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { withFileLock } from "./file-lock.js";
+import { addAlert } from "./alerts.js";
 import { log } from "./log.js";
 
 // agentStatus is written by Claude Code hooks, the tmux pane-died handler, and
@@ -487,43 +488,125 @@ function invalidateRegistryCache(): void {
   cachedRegistry = null;
 }
 
-export function readRegistry(): WorkerRegistry {
+// Marks an empty registry returned by readRegistry as unsafe to persist. It is
+// set only when a *transient* read fault (a non-ENOENT IO error — EACCES,
+// EMFILE, a busy fd) prevented reading a file that is still intact on disk.
+// writeRegistry refuses to overwrite the file with such a result, because the
+// next addWorker would otherwise erase every worker record permanently (the
+// single worst-case data-loss vector). A genuinely-corrupt file is handled
+// separately (quarantined below), so its empty fallback is NOT tainted — the
+// bad bytes have been moved aside and a fresh start is the honest recovery.
+const REGISTRY_TAINT = Symbol("registryReadFailed");
+
+function taintedEmpty(): WorkerRegistry {
+  const empty: WorkerRegistry = { workers: {} };
+  Object.defineProperty(empty, REGISTRY_TAINT, { value: true, enumerable: false });
+  return empty;
+}
+
+function isTaintedRegistry(registry: WorkerRegistry): boolean {
+  return (registry as unknown as Record<PropertyKey, unknown>)[REGISTRY_TAINT] === true;
+}
+
+// Move a corrupt registry aside for forensics instead of letting the empty
+// fallback silently overwrite it, and alert the operator that the fleet was
+// reloaded empty. Best-effort: if the rename fails the next writeRegistry
+// overwrites the corrupt file (the pre-existing behavior), which is no worse
+// than before. The returned empty registry is deliberately NOT tainted — the
+// bad file is gone, so a fresh addWorker legitimately recreates it.
+function quarantineCorruptRegistry(reason: string): void {
+  const dest = `${REGISTRY_FILE}.corrupt-${Date.now()}`;
+  let moved = false;
   try {
-    const stat = fs.statSync(REGISTRY_FILE);
-    if (cachedRegistry
-        && cachedRegistry.mtimeMs === stat.mtimeMs
-        && cachedRegistry.size === stat.size) {
-      return structuredClone(cachedRegistry.value);
-    }
-    const raw = JSON.parse(fs.readFileSync(REGISTRY_FILE, "utf-8"));
-    if (!isWorkerRegistry(raw)) {
-      log.warn("registry", "registry file failed shape check, using empty", {
-        data: { topLevelKeys: Object.keys(raw ?? {}) },
-      });
+    fs.renameSync(REGISTRY_FILE, dest);
+    moved = true;
+  } catch { /* best-effort — leave the file for writeRegistry to overwrite */ }
+  log.error("registry", "registry file corrupt, reloading empty", {
+    data: { reason, quarantine: moved ? dest : "(rename failed)" },
+  });
+  addAlert({
+    level: "error",
+    source: "registry",
+    project: "",
+    message:
+      `Registry file was corrupt${moved ? ` and moved to ${path.basename(dest)}` : ""}. ` +
+      `Workers were reloaded from an empty registry and may need re-adopting. ` +
+      `The corrupt file is preserved for recovery.`,
+    // Stable key: one alert per corruption event, not per re-read.
+    dedupKey: "registry-corrupt",
+  });
+}
+
+export function readRegistry(): WorkerRegistry {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(REGISTRY_FILE);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      // No registry yet (fresh install). Writable empty: the first addWorker
+      // legitimately creates the file.
       return { workers: {} };
     }
-    // Lazily migrate legacy flat trellis* fields to the nested
-    // entry.trellis sub-object. Idempotent: entries already in the new
-    // shape pass through unchanged. The next writeRegistry persists the
-    // new shape; readers below this layer never see the old flat keys.
-    for (const entries of Object.values(raw.workers)) {
-      for (const e of entries as WorkerEntry[]) {
-        migrateLegacyTrellisFields(e);
-        migrateLegacyStatusFields(e);
-        migrateCreatedAt(e);
-        migrateLastStateChangeAt(e);
-      }
-    }
-    cachedRegistry = { mtimeMs: stat.mtimeMs, size: stat.size, value: raw };
-    return structuredClone(raw);
+    // The file exists but stat failed (permissions/IO). Taint so a write can't
+    // clobber the intact-but-unreadable file with empty.
+    log.warn("registry", "failed to stat registry, using tainted empty", {
+      data: { error: String(err) },
+    });
+    return taintedEmpty();
+  }
+
+  if (cachedRegistry
+      && cachedRegistry.mtimeMs === stat.mtimeMs
+      && cachedRegistry.size === stat.size) {
+    return structuredClone(cachedRegistry.value);
+  }
+
+  let contents: string;
+  try {
+    contents = fs.readFileSync(REGISTRY_FILE, "utf-8");
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      log.warn("registry", "failed to read registry, using empty", {
-        data: { error: String(err) },
-      });
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      // Deleted between stat and read — treat as fresh (writable empty).
+      return { workers: {} };
+    }
+    // Transient IO error: file intact, momentarily unreadable. Taint the empty
+    // fallback so writeRegistry refuses to persist it.
+    log.warn("registry", "failed to read registry, using tainted empty", {
+      data: { error: String(err) },
+    });
+    return taintedEmpty();
+  }
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(contents);
+  } catch (err) {
+    // Corrupt JSON (hand-edit, or a half-write that escaped atomic-rename).
+    quarantineCorruptRegistry(`parse error: ${String(err)}`);
+    return { workers: {} };
+  }
+
+  if (!isWorkerRegistry(raw)) {
+    quarantineCorruptRegistry(
+      `shape check failed (top-level keys: ${Object.keys(raw ?? {}).join(",")})`,
+    );
+    return { workers: {} };
+  }
+
+  // Lazily migrate legacy flat trellis* fields to the nested entry.trellis
+  // sub-object. Idempotent: entries already in the new shape pass through
+  // unchanged. The next writeRegistry persists the new shape; readers below
+  // this layer never see the old flat keys.
+  for (const entries of Object.values(raw.workers)) {
+    for (const e of entries as WorkerEntry[]) {
+      migrateLegacyTrellisFields(e);
+      migrateLegacyStatusFields(e);
+      migrateCreatedAt(e);
+      migrateLastStateChangeAt(e);
     }
   }
-  return { workers: {} };
+  cachedRegistry = { mtimeMs: stat.mtimeMs, size: stat.size, value: raw };
+  return structuredClone(raw);
 }
 
 const LEGACY_TRELLIS_KEYS = [
@@ -610,7 +693,55 @@ function migrateLastStateChangeAt(entry: WorkerEntry): void {
   entry.lastStateChangeAt = entry.lastEventAt ?? entry.createdAt ?? 0;
 }
 
+const MAX_REGISTRY_BACKUPS = 5;
+
+function countWorkers(reg: WorkerRegistry): number {
+  let n = 0;
+  for (const entries of Object.values(reg.workers)) n += entries.length;
+  return n;
+}
+
+// Snapshot the current registry before a write that reduces the total worker
+// count. Mass shrinkage — a bug, a bad hand-edit, or removeWorker acting on a
+// stale read — is the one write shape that can lose worker records the
+// read-time guards don't catch, so a rotating backup makes it recoverable.
+// Field-only updates (the hot path) don't change the count, so they read the
+// small file, compare, and return without copying. Best-effort throughout.
+function backupOnShrink(next: WorkerRegistry): void {
+  let currentRaw: string;
+  try {
+    currentRaw = fs.readFileSync(REGISTRY_FILE, "utf-8");
+  } catch {
+    return; // no current file to protect
+  }
+  let current: unknown;
+  try { current = JSON.parse(currentRaw); } catch { return; }
+  if (!isWorkerRegistry(current)) return;
+  const oldCount = countWorkers(current);
+  if (oldCount === 0 || countWorkers(next) >= oldCount) return;
+  try {
+    fs.writeFileSync(`${REGISTRY_FILE}.bak-${Date.now()}`, currentRaw);
+    const dir = path.dirname(REGISTRY_FILE);
+    const prefix = `${path.basename(REGISTRY_FILE)}.bak-`;
+    const backups = fs.readdirSync(dir).filter(f => f.startsWith(prefix)).sort();
+    for (const stale of backups.slice(0, Math.max(0, backups.length - MAX_REGISTRY_BACKUPS))) {
+      try { fs.unlinkSync(path.join(dir, stale)); } catch { /* ignore */ }
+    }
+  } catch { /* best-effort */ }
+}
+
 export function writeRegistry(registry: WorkerRegistry): void {
+  if (isTaintedRegistry(registry)) {
+    // This registry descends from a failed read of an intact file. Persisting
+    // it would erase every worker record. Refuse and preserve the on-disk
+    // file; the transient fault self-heals and the next mutation reads real
+    // state. The mutation that produced this write is silently dropped — a lost
+    // field update recovers on the next event; a lost addWorker is caught by
+    // the create flow noticing the missing entry.
+    log.error("registry", "refusing to persist registry built from a failed read", {});
+    return;
+  }
+  backupOnShrink(registry);
   atomicWriteFile(REGISTRY_FILE, JSON.stringify(registry, null, 2));
   // Invalidate after write so the next readRegistry picks up fresh state.
   // mtime would change anyway, but explicit invalidation guards against

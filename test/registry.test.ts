@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import fs from "node:fs";
+import path from "node:path";
 import { useTmpHome } from "./helpers.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
@@ -56,6 +57,77 @@ describe("readRegistry", () => {
     const reg = readRegistry();
     expect(reg.workers.proj).toHaveLength(1);
     expect(reg.workers.proj[0].name).toBe("legacy-worker");
+  });
+});
+
+describe("registry durability", () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  function backupSiblings(REGISTRY_FILE: string, suffix: string): string[] {
+    const dir = path.dirname(REGISTRY_FILE);
+    const prefix = `${path.basename(REGISTRY_FILE)}.${suffix}-`;
+    return fs.readdirSync(dir).filter(f => f.startsWith(prefix));
+  }
+
+  it("quarantines a corrupt file instead of silently overwriting it", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    fs.writeFileSync(REGISTRY_FILE, "bad json!!!");
+    expect(readRegistry()).toEqual({ workers: {} });
+    // Original moved aside for recovery; a .corrupt-<ts> sibling exists.
+    expect(fs.existsSync(REGISTRY_FILE)).toBe(false);
+    expect(backupSiblings(REGISTRY_FILE, "corrupt")).toHaveLength(1);
+  });
+
+  it("quarantines a shape-invalid file", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    fs.writeFileSync(REGISTRY_FILE, JSON.stringify({ workers: [] }));
+    expect(readRegistry()).toEqual({ workers: {} });
+    expect(backupSiblings(REGISTRY_FILE, "corrupt")).toHaveLength(1);
+  });
+
+  it("after quarantine, a fresh addWorker recreates the registry", async () => {
+    const { readRegistry, addWorker, getWorkers, REGISTRY_FILE } = await importRegistry();
+    fs.writeFileSync(REGISTRY_FILE, "{{{ not json");
+    readRegistry(); // triggers quarantine
+    addWorker("proj", { name: "fresh", sessionId: "s", task: "" });
+    expect(getWorkers("proj")).toHaveLength(1);
+  });
+
+  it("refuses to persist a registry built from a transient (tainted) read", async () => {
+    const mod = await importRegistry();
+    const { addWorker, readRegistry, writeRegistry, getWorkers, REGISTRY_FILE } = mod;
+    // Seed a real, intact registry with a worker.
+    addWorker("proj", { name: "keep-me", sessionId: "s", task: "important" });
+    const good = fs.readFileSync(REGISTRY_FILE, "utf-8");
+
+    // Simulate a transient IO failure on the next read (file stays intact on
+    // disk). readRegistry must return an empty result that writeRegistry then
+    // refuses to persist — otherwise the worker would be erased.
+    const err = Object.assign(new Error("EACCES"), { code: "EACCES" });
+    vi.spyOn(fs, "readFileSync").mockImplementationOnce(() => { throw err; });
+
+    const tainted = readRegistry();
+    expect(tainted).toEqual({ workers: {} });
+
+    writeRegistry(tainted); // must be a no-op, not a clobber
+
+    // The intact file is untouched and the worker survives.
+    expect(fs.readFileSync(REGISTRY_FILE, "utf-8")).toBe(good);
+    expect(getWorkers("proj")).toHaveLength(1);
+  });
+
+  it("snapshots the registry before a write that shrinks the worker set", async () => {
+    const { addWorker, removeWorker, REGISTRY_FILE } = await importRegistry();
+    addWorker("proj", { name: "a", sessionId: "1", task: "" });
+    addWorker("proj", { name: "b", sessionId: "2", task: "" });
+    addWorker("proj", { name: "c", sessionId: "3", task: "" });
+    expect(backupSiblings(REGISTRY_FILE, "bak")).toHaveLength(0); // growth: no backup
+    removeWorker("proj", "b"); // shrink 3 -> 2
+    const bak = backupSiblings(REGISTRY_FILE, "bak");
+    expect(bak).toHaveLength(1);
+    // The snapshot holds the pre-shrink state (all three workers).
+    const snap = JSON.parse(fs.readFileSync(path.join(path.dirname(REGISTRY_FILE), bak[0]), "utf-8"));
+    expect(snap.workers.proj).toHaveLength(3);
   });
 });
 

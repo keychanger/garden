@@ -1,14 +1,11 @@
 // Dashboard entry point: subcommand dispatch and help.
-import fs from "node:fs";
 import {
   checkTmux,
   dashboardExists,
   attachDashboardSession,
   killDashboardSession,
 } from "../session.js";
-import { STATE_FILE, readDashState } from "./state.js";
-import { REGISTRY_FILE } from "./registry.js";
-import { ALERTS_FILE } from "./alerts.js";
+import { readDashState } from "./state.js";
 import { printHeader, handlePaneDied, handleTitleChanged } from "./header.js";
 import { handleClaudeHook } from "./hook-dispatcher.js";
 import { log } from "./log.js";
@@ -77,9 +74,14 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     stopUsagePoller();
     stopWatchdog();
     killDashboardSession();
-    try { fs.unlinkSync(STATE_FILE); } catch { /* ignore */ }
-    try { fs.unlinkSync(REGISTRY_FILE); } catch { /* ignore */ }
-    try { fs.unlinkSync(ALERTS_FILE); } catch { /* ignore */ }
+    // Preserve the persisted state files across a clean exit. The registry is
+    // the only record of each worker's sessionId / branch / worktree, and the
+    // resume-on-restart path (create.ts) rebuilds the whole fleet from it —
+    // deleting it here turned the validator's own recovery advice ("exit &&
+    // dashboard") into fleet-wide worker loss. State and alerts are equally
+    // reusable across a restart. Deliberate full teardown (including remote
+    // branch deletion) is `garden reset`, which confirms first. Only the
+    // transient per-worker context files are swept here.
     cleanupContextFiles();
     console.log("Dashboard closed.");
     return;
