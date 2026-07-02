@@ -43,6 +43,7 @@ vi.mock("../src/dashboard/state.js", () => ({
     activeWindowName: null,
   })),
   writeDashState: vi.fn(),
+  withStateLock: vi.fn((fn: () => unknown) => fn()),
 }));
 
 vi.mock("../src/config.js", () => ({
@@ -87,8 +88,8 @@ vi.mock("../src/dashboard/alerts.js", () => ({
   addAlert: vi.fn(),
 }));
 
-import { validateAndHeal, sweepGhostEntries } from "../src/dashboard/validate.js";
-import { readDashState } from "../src/dashboard/state.js";
+import { validateAndHeal, sweepGhostEntries, healStatusPane } from "../src/dashboard/validate.js";
+import { readDashState, writeDashState, withStateLock } from "../src/dashboard/state.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, tmuxSplit } from "../src/dashboard/tmux.js";
 import { readRegistry, writeRegistry } from "../src/dashboard/registry.js";
 import type { DashboardState } from "../src/dashboard/state.js";
@@ -113,6 +114,35 @@ beforeEach(() => {
   vi.mocked(paneExists).mockReturnValue(true);
   vi.mocked(windowExists).mockReturnValue(true);
   vi.mocked(readRegistry).mockReturnValue({ workers: {} });
+});
+
+describe("healStatusPane", () => {
+  it("no-ops without taking the state lock when both panes exist", () => {
+    vi.mocked(paneExists).mockReturnValue(true);
+    healStatusPane();
+    expect(withStateLock).not.toHaveBeenCalled();
+    expect(writeDashState).not.toHaveBeenCalled();
+  });
+
+  it("recreates a missing status pane under the state lock and persists the new id", () => {
+    // status pane %0 is gone; garden shell %1 survives as the recreate anchor.
+    vi.mocked(paneExists).mockImplementation((id: string) => id !== "%0");
+    vi.mocked(tmuxSplit).mockReturnValue("%9");
+    healStatusPane();
+    expect(withStateLock).toHaveBeenCalled();
+    expect(writeDashState).toHaveBeenCalled();
+    const written = vi.mocked(writeDashState).mock.calls[0][0];
+    expect(written.statusPaneId).toBe("%9");
+  });
+
+  it("does not throw when the state lock cannot be acquired (poll entry safety)", () => {
+    vi.mocked(paneExists).mockImplementation((id: string) => id !== "%0");
+    vi.mocked(withStateLock).mockImplementationOnce(() => {
+      throw new Error("Could not acquire state lock after 2000ms");
+    });
+    expect(() => healStatusPane()).not.toThrow();
+    expect(writeDashState).not.toHaveBeenCalled();
+  });
 });
 
 describe("validateAndHeal", () => {

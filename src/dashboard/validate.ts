@@ -1,7 +1,7 @@
 // State validation and self-healing: reconciles dashboard state with tmux reality.
 import fs from "node:fs";
 import { SESSIONS_DIR, loadConfig } from "../config.js";
-import { type DashboardState, readDashState, writeDashState } from "./state.js";
+import { type DashboardState, readDashState, writeDashState, withStateLock } from "./state.js";
 import { mutateRegistry, readRegistry, updateWorkerFields, type WorkerRegistry } from "./registry.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, killWindowSafe, tmuxSplit, setPaneTitle, setPaneLabel, tmux, disablePaneInput, renameWindow } from "./tmux.js";
 import { log } from "./log.js";
@@ -20,11 +20,35 @@ import { addAlert } from "./alerts.js";
  * and also from validateAndHeal on reattach.
  */
 export function healStatusPane(): void {
-  const state = readDashState();
-  let healed = healStatusPaneInState(state);
-  healed = healUsagePaneInState(healed);
-  if (healed !== state) {
-    writeDashState(healed);
+  // Fast path: if both panes still exist there is nothing to heal, so return
+  // without taking the state lock — this runs on every poll cycle and the
+  // common case must stay lock-free. Only when a pane is actually missing do
+  // we take the lock to recreate it and persist: the recreation (tmuxSplit)
+  // then happens once under the lock so two concurrent healers can't both split
+  // a pane, and the write re-reads fresh state so it can't revert a concurrent
+  // hotkey navigation (activePaneId/activeWindowName) via a stale snapshot —
+  // the unlocked read-modify-write this replaces did exactly that.
+  const probe = readDashState();
+  const statusOk = !!probe.statusPaneId && paneExists(probe.statusPaneId);
+  const usageOk = !!probe.usagePaneId && paneExists(probe.usagePaneId);
+  if (statusOk && usageOk) return;
+
+  try {
+    withStateLock(() => {
+      const state = readDashState();
+      let healed = healStatusPaneInState(state);
+      healed = healUsagePaneInState(healed);
+      if (healed !== state) {
+        writeDashState(healed);
+      }
+    });
+  } catch (err) {
+    // The state lock is contended (e.g. an attach-time heal is holding it).
+    // Skip this cycle — the next poll retries. Never throw from the poll entry
+    // point (poll() calls healStatusPane without a guard).
+    log.warn("validate", "healStatusPane skipped: state lock unavailable", {
+      data: { error: String(err) },
+    });
   }
 }
 
