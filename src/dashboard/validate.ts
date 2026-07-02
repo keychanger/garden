@@ -285,7 +285,11 @@ export function validateAndHeal(state: DashboardState): DashboardState {
   // longer than a field update — but this is the attach-time / `health --fix`
   // path, not the hot poll loop, and it is strictly safer than the previous
   // unlocked read-modify-write, which silently reverted concurrent poller/hook
-  // transitions when it wrote its stale snapshot.
+  // transitions when it wrote its stale snapshot. The missing-pane alerts fire
+  // AFTER the lock releases (each addAlert takes the separate alerts lock, which
+  // has its own deadline) — keeping that nested lock acquisition off the
+  // registry-lock hold, the same way addAlert keeps its own side effects out.
+  const markedExited: Array<{ project: string; worker: string }> = [];
   mutateRegistry((registry) => {
     let registryChanged = false;
 
@@ -308,20 +312,7 @@ export function validateAndHeal(state: DashboardState): DashboardState {
         });
         entry.agentStatus = "exited";
         registryChanged = true;
-        addAlert({
-          level: "warn",
-          source: "validate",
-          project: projectName,
-          worker: entry.name,
-          message:
-            `Worker '${entry.name}' has no tmux pane. The worktree on disk is preserved — ` +
-            `restart the dashboard ('garden dashboard exit && garden dashboard') to recreate ` +
-            `the pane from the registry, or kill the worker (⌥x) to clean up. ` +
-            `'garden bounce' won't work without a live pane.`,
-          // Stable key so a single missing pane doesn't spam the badge across
-          // every reattach within the dedup window.
-          dedupKey: `validate-exited:${projectName}:${entry.name}`,
-        });
+        markedExited.push({ project: projectName, worker: entry.name });
       }
     }
 
@@ -342,6 +333,26 @@ export function validateAndHeal(state: DashboardState): DashboardState {
 
     return registryChanged;
   });
+
+  // Surface the "worker has no tmux pane" alerts outside the registry lock (see
+  // above). The dedupKey is stable per (project, worker), so firing after the
+  // lock doesn't change dedup behavior.
+  for (const { project, worker } of markedExited) {
+    addAlert({
+      level: "warn",
+      source: "validate",
+      project,
+      worker,
+      message:
+        `Worker '${worker}' has no tmux pane. The worktree on disk is preserved — ` +
+        `restart the dashboard ('garden dashboard exit && garden dashboard') to recreate ` +
+        `the pane from the registry, or kill the worker (⌥x) to clean up. ` +
+        `'garden bounce' won't work without a live pane.`,
+      // Stable key so a single missing pane doesn't spam the badge across
+      // every reattach within the dedup window.
+      dedupKey: `validate-exited:${project}:${worker}`,
+    });
+  }
 
   // Clean stale lastActiveWorker references pointing to dead windows
   for (const [proj, winName] of Object.entries(healed.lastActiveWorker ?? {})) {

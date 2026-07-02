@@ -25,9 +25,11 @@ vi.mock("../src/dashboard/tmux.js", () => ({
 
 // These unit tests exercise alert logic against a fully-mocked fs, not real
 // cross-process locking. Pass the lock through so addAlert/ack/clear run their
-// read-modify-write without needing fs.constants / openSync on the mock.
+// read-modify-write without needing fs.constants / openSync on the mock. A
+// vi.fn (not a bare arrow) so a test can override it with mockImplementationOnce
+// to simulate a lock-acquisition failure.
 vi.mock("../src/dashboard/file-lock.js", () => ({
-  withFileLock: (_lockPath: string, fn: () => unknown) => fn(),
+  withFileLock: vi.fn((_lockPath: string, fn: () => unknown) => fn()),
 }));
 
 vi.mock("../src/dashboard/log.js", () => ({
@@ -48,6 +50,7 @@ import {
   unreadAlertCount, acknowledgeAlerts, formatRightBar,
 } from "../src/dashboard/alerts.js";
 import { log } from "../src/dashboard/log.js";
+import { withFileLock } from "../src/dashboard/file-lock.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -263,6 +266,25 @@ describe("addAlert dedup", () => {
       level: "error", source: "poller", project: "p", worker: "w", message: "Legacy body",
     });
     expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+});
+
+describe("addAlert lock failure", () => {
+  it("drops the alert without throwing when the lock cannot be acquired", () => {
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    // Simulate withFileLock's deadline throw. addAlert is best-effort: callers
+    // (poller / validate — the latter fires it inside the registry lock) never
+    // expect it to throw, so it must swallow the failure and persist nothing.
+    vi.mocked(withFileLock).mockImplementationOnce(() => {
+      throw new Error("Could not acquire alerts lock after 2000ms");
+    });
+    expect(() =>
+      addAlert({ level: "error", source: "poller", project: "p", worker: "w", message: "boom" }),
+    ).not.toThrow();
+    // Nothing persisted and no log line emitted for a dropped alert.
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+    expect(log.error).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
   });
 });
 
