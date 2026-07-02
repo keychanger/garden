@@ -116,6 +116,25 @@ describe("registry durability", () => {
     expect(getWorkers("proj")).toHaveLength(1);
   });
 
+  it("refuses to persist a registry built from a tainted stat failure", async () => {
+    const { addWorker, readRegistry, writeRegistry, getWorkers, REGISTRY_FILE } = await importRegistry();
+    // Seed a real, intact registry, then fault statSync (the first fs call in
+    // readRegistry) so the intact-but-unreadable branch tags the empty result.
+    addWorker("proj", { name: "keep-me", sessionId: "s", task: "important" });
+    const good = fs.readFileSync(REGISTRY_FILE, "utf-8");
+
+    const err = Object.assign(new Error("EACCES"), { code: "EACCES" });
+    vi.spyOn(fs, "statSync").mockImplementationOnce(() => { throw err; });
+
+    const tainted = readRegistry();
+    expect(tainted).toEqual({ workers: {} });
+
+    writeRegistry(tainted); // must be a no-op, not a clobber
+
+    expect(fs.readFileSync(REGISTRY_FILE, "utf-8")).toBe(good);
+    expect(getWorkers("proj")).toHaveLength(1);
+  });
+
   it("snapshots the registry before a write that shrinks the worker set", async () => {
     const { addWorker, removeWorker, REGISTRY_FILE } = await importRegistry();
     addWorker("proj", { name: "a", sessionId: "1", task: "" });

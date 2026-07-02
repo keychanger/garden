@@ -409,6 +409,8 @@ All read commands detect whether stdout is a TTY:
   sessions/
     dashboard.state.json  # Dashboard pane state
     dashboard.registry.json  # Worker registry (persists across restarts)
+    dashboard.registry.json.bak-<ts>      # Rotating pre-shrink registry snapshot (keep 5)
+    dashboard.registry.json.corrupt-<ts>  # Quarantined unreadable registry, preserved for recovery
     dashboard.alerts.json # Operator alerts (review failures, merge errors)
     dashboard-<project>.context  # System prompt for project's Claude sessions
     dashboard-<project>-<branch>.context  # Worktree worker context

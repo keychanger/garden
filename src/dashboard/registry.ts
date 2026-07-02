@@ -527,7 +527,9 @@ function quarantineCorruptRegistry(reason: string): void {
   addAlert({
     level: "error",
     source: "registry",
-    project: "",
+    // Not tied to a single project — the registry spans the whole fleet. A
+    // non-empty label keeps `garden alerts` from rendering a bare ": <msg>".
+    project: "(all)",
     message:
       `Registry file was corrupt${moved ? ` and moved to ${path.basename(dest)}` : ""}. ` +
       `Workers were reloaded from an empty registry and may need re-adopting. ` +
@@ -705,21 +707,23 @@ function countWorkers(reg: WorkerRegistry): number {
 // count. Mass shrinkage — a bug, a bad hand-edit, or removeWorker acting on a
 // stale read — is the one write shape that can lose worker records the
 // read-time guards don't catch, so a rotating backup makes it recoverable.
-// Field-only updates (the hot path) don't change the count, so they read the
-// small file, compare, and return without copying. Best-effort throughout.
+// oldCount comes from the cached pre-mutation registry the caller just read
+// under the lock (readRegistry populates it, then returns a clone the caller
+// mutates), so the no-shrink hot path — every field/heartbeat update from the
+// hook firehose — compares two in-memory counts and returns without touching
+// disk. The cache is populated exactly when there is a file worth protecting:
+// the ENOENT/quarantine paths leave it null (nothing on disk to snapshot) and
+// the taint/stat-fail paths make writeRegistry return before reaching here.
+// Best-effort throughout.
 function backupOnShrink(next: WorkerRegistry): void {
-  let currentRaw: string;
-  try {
-    currentRaw = fs.readFileSync(REGISTRY_FILE, "utf-8");
-  } catch {
-    return; // no current file to protect
-  }
-  let current: unknown;
-  try { current = JSON.parse(currentRaw); } catch { return; }
-  if (!isWorkerRegistry(current)) return;
+  const current = cachedRegistry?.value;
+  if (!current) return; // no cached pre-write state -> nothing on disk to protect
   const oldCount = countWorkers(current);
   if (oldCount === 0 || countWorkers(next) >= oldCount) return;
+  // Confirmed shrink: read the actual on-disk bytes (not the cached value) so
+  // the backup is a faithful copy of what is about to be overwritten.
   try {
+    const currentRaw = fs.readFileSync(REGISTRY_FILE, "utf-8");
     fs.writeFileSync(`${REGISTRY_FILE}.bak-${Date.now()}`, currentRaw);
     const dir = path.dirname(REGISTRY_FILE);
     const prefix = `${path.basename(REGISTRY_FILE)}.bak-`;
