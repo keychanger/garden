@@ -33,6 +33,23 @@ describe("atomicWriteFile", () => {
     expect(stat.mode & 0o777).toBe(0o600);
   });
 
+  it("writes a read-only-mode (0o444) file despite the durability fsync being unable to reopen it", async () => {
+    // installRuntimeConfig writes worker settings.json at mode 0o444, so the
+    // post-write durability fsync reopens the tmp file with "r+" and hits
+    // EACCES on a non-owner-writable file. That failure must be swallowed and
+    // the rename must still complete — otherwise every worker settings.json
+    // rewrite would throw on SessionStart/resume/bounce. Assert the observable
+    // end state (file written, mode preserved, no tmp leftover) so the test
+    // holds whether the fsync reopen throws (non-root) or succeeds (root).
+    const { atomicWriteFile } = await importHelper();
+    const dest = path.join(env.sessionsDir, "readonly.json");
+    atomicWriteFile(dest, "{}", { mode: 0o444 });
+    expect(fs.readFileSync(dest, "utf-8")).toBe("{}");
+    expect(fs.statSync(dest).mode & 0o777).toBe(0o444);
+    const siblings = fs.readdirSync(env.sessionsDir);
+    expect(siblings.filter(f => f.startsWith("readonly.json.") && f.endsWith(".tmp"))).toHaveLength(0);
+  });
+
   it("overwrites an existing file atomically", async () => {
     const { atomicWriteFile } = await importHelper();
     const dest = path.join(env.sessionsDir, "overwrite.txt");
