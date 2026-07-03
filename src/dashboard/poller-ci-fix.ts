@@ -398,6 +398,11 @@ function handleCiFixTimeout(
     reviewWindowName: undefined,
     reviewStartedAt: undefined,
     mergePendingAt: undefined,
+    // Reset the ci-fix budget on the timeout park, mirroring
+    // escalateCiFixBudget — otherwise a worker that recovers from one timeout
+    // carries a silently-reduced budget into later merge cycles.
+    ciFixAttempts: 0,
+    preCiFixSha: undefined,
   });
   refreshDashboard();
   return true;

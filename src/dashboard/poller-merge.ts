@@ -629,6 +629,15 @@ function transitionToTerminal(
     resolveAttempts: 0,
     preResolveSha: undefined,
     lastResolveBody: undefined,
+    // The ci-fix per-merge-cycle budget must reset on a successful merge, same
+    // as resolveAttempts above — registry.ts documents ciFixAttempts as
+    // "resets on worker push or successful merge", but the successful-merge half
+    // was never implemented, so a multi-phase worker accumulated attempts across
+    // cycles until launchCiFix refused with a spurious "exhausted" alert.
+    ciFixAttempts: 0,
+    preCiFixSha: undefined,
+    lastCiFixBody: undefined,
+    failingCheckSummary: undefined,
     preReviewSha: undefined,
     mergeCount,
     holisticTouchedFiles,

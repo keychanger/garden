@@ -1462,6 +1462,11 @@ describe("poll — merge-pending state", () => {
         mergedAt: expect.any(String),
         failCount: 0,
         mergePendingAt: undefined,
+        // Both per-merge-cycle budgets reset on a successful merge so a
+        // multi-phase worker's next cycle starts fresh (the ci-fix half was
+        // previously leaking across the worker's lifetime).
+        resolveAttempts: 0,
+        ciFixAttempts: 0,
       }),
     );
   });
