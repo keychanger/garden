@@ -30,8 +30,10 @@ export interface TrellisVerdictResult {
 // separator branch, so a reviewer that enumerates a tally but omits the verdict
 // line would falsely converge the vine. The `\d+\s*(?:\/|$)` boundary is what
 // separates a tally (bare number, then end-of-line or a `/` delimiter) from a
-// digit-decorated genuine verdict ("ALIGNED: 0 drift", "ALIGNED = 7 present"),
-// which carries a WORD after the number and must survive as ALIGNED.
+// digit-decorated genuine verdict ("ALIGNED: 0 drift", "ALIGNED: 7 present"),
+// which carries a WORD after the number and must survive as ALIGNED. (Only ':'
+// is a VERDICT_LINE separator, so a bare "ALIGNED = 7" never parses as the
+// ALIGNED verdict in the first place.)
 const ALIGNED_COUNT_LINE = /^\s*aligned\s*[:=]\s*\d+\s*(?:\/|$)/i;
 
 // Wrapper around parseLastLineVerdict typed to the trellis vocabulary.
