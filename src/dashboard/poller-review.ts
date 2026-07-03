@@ -683,7 +683,14 @@ function dispatchTrellisVerdict(
 
   if (review.verdict === "DRIFT") {
     const drift = parseDriftList(review.body);
-    const driftLines = drift.items.map((it, i) => renderDriftItem(it, i));
+    // DRIFT is mergeable; iterate. When the reviewer named drift but emitted no
+    // parseable bullets (parseDriftList null), seed the continue prompt with its
+    // raw prose instead of an empty list — an empty list fires the continue
+    // builder's "none reported" branch, inviting a false convergence.
+    const driftLines = drift
+      ? drift.items.map((it, i) => renderDriftItem(it, i))
+      : [review.body.trim().split("\n").slice(0, 8).join(" ").slice(0, 400)
+          || "reviewer reported drift without structured items"];
     if (!tryForcePushAfterReview(projectName, entry, wtPath, branchName, "trellis DRIFT")) {
       return true;
     }
@@ -698,7 +705,7 @@ function dispatchTrellisVerdict(
       trellis: {
         lastVerdict: "DRIFT",
         lastDrift: driftLines,
-        alignedCount: drift.alignedCount,
+        alignedCount: drift?.alignedCount,
       },
     });
     refreshDashboard();

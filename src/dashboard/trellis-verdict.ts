@@ -11,9 +11,11 @@
 //
 // The drift parser tolerates loose formatting — markdown numbering quirks,
 // extra whitespace, missing line numbers — because reviewers are LLMs and
-// will not always emit pixel-perfect output. It refuses only when the
-// block contains zero recognizable items, in which case the caller treats
-// the verdict as unparseable.
+// will not always emit pixel-perfect output. It returns null when the block
+// contains zero recognizable items; the DRIFT caller then seeds the worker's
+// continue prompt with the reviewer's raw prose (DRIFT still merges) rather
+// than an empty drift list, which would otherwise fire the "none reported"
+// branch and invite a false convergence.
 import { parseLastLineVerdict } from "./verdict.js";
 
 export const TRELLIS_VERDICTS = ["ALIGNED", "DRIFT", "FAILED", "FLAGGED"] as const;
@@ -107,7 +109,7 @@ const ALIGNED_COUNT = /(?:^|\b)(?:aligned\s*[:=]?\s*|aligned\s+items?\s*[:=]?\s*
 // Parse the body that comes back from a DRIFT verdict. The body is the
 // reviewer's full output above the verdict line; this scans it for
 // numbered drift bullets and an aligned count.
-export function parseDriftList(body: string): DriftListParseResult {
+export function parseDriftList(body: string): DriftListParseResult | null {
   const items: DriftItem[] = [];
   for (const line of body.split("\n")) {
     const match = DRIFT_BULLET.exec(line);
@@ -124,6 +126,11 @@ export function parseDriftList(body: string): DriftListParseResult {
     }
     items.push({ tag, body: bodyText, line: lineNum, raw: line.trim() });
   }
+  // Refuse a zero-item block per the contract above. Returning null (rather
+  // than {items:[]}) makes TS-strict force every caller to confront the empty
+  // case — so a DRIFT with no parseable bullets can't silently seed an empty
+  // drift list into the continue prompt and read as convergence.
+  if (items.length === 0) return null;
   const alignedMatch = ALIGNED_COUNT.exec(body);
   const alignedCount = alignedMatch
     ? Number.parseInt(alignedMatch[1] ?? alignedMatch[2], 10)

@@ -111,10 +111,13 @@ describe("parseDriftList", () => {
     expect(r.items[1].tag).toBe("tests");
   });
 
-  it("returns empty items when no numbered bullets present", () => {
-    const r = parseDriftList("just some prose, no drift items");
-    expect(r.items).toHaveLength(0);
-    expect(r.alignedCount).toBeUndefined();
+  it("returns null when no numbered bullets are present (zero-item refusal)", () => {
+    // A DRIFT with no parseable bullets must not yield an empty list — the
+    // caller would seed a "none reported" continue prompt and invite a false
+    // convergence. null forces the caller onto its prose-fallback route.
+    expect(parseDriftList("just some prose, no drift items")).toBeNull();
+    expect(parseDriftList("Aligned: 5")).toBeNull();
+    expect(parseDriftList("prose line one\nprose line two")).toBeNull();
   });
 
   it("recognizes 'N aligned' phrasing too", () => {
