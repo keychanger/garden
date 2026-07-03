@@ -1222,6 +1222,92 @@ describe("poll — reviewing state (async)", () => {
     expect(workingCall).toBeDefined();
   });
 
+  it("a quota-retry relaunch does NOT re-increment the trellis iteration counter", () => {
+    // A quota cutoff re-queues the SAME iteration through `working` on a flat
+    // 15-min ladder (budget 24). launchReview must NOT treat each relaunch as a
+    // fresh iteration, or a multi-hour quota wait would inflate trellis.iteration
+    // by up to 24 and trip the iteration-budget cap prematurely — parking the
+    // vine in the non-kick-recoverable failing/"iteration-budget" instead of the
+    // kick-recoverable quota wait it actually is. quotaRetryCount marks the retry.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        name: "swift-vine",
+        prState: "working",
+        agentStatus: "idle",
+        workflow: "trellis",
+        pendingReviewAt: Date.now(),
+        quotaRetryCount: 1,
+        reviewRetryAt: Date.now() - 1000, // backoff already elapsed
+        trellis: { name: "auth", path: "/tmp/auth.md", iteration: 20, maxIterations: 30 },
+      }),
+    ]);
+
+    poll("myproject");
+
+    // No iteration write of any value: the relaunch reviews iteration 20 again.
+    const iterWrite = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "swift-vine"
+        && (c[2] as { trellis?: { iteration?: number } }).trellis?.iteration !== undefined,
+    );
+    expect(iterWrite).toBeUndefined();
+    // And the cap was not tripped by a phantom increment.
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "swift-vine",
+      expect.objectContaining({ failingReason: "iteration-budget" }),
+    );
+  });
+
+  it("a fresh (non-retry) trellis launch DOES increment the iteration counter", () => {
+    // Positive control for the guard above: without retry state, launchReview
+    // advances the counter exactly as before (20 -> 21). This proves the
+    // !isRetryRelaunch guard doesn't disable the normal per-iteration increment.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        name: "swift-vine",
+        prState: "working",
+        agentStatus: "idle",
+        workflow: "trellis",
+        pendingReviewAt: Date.now(),
+        trellis: { name: "auth", path: "/tmp/auth.md", iteration: 20, maxIterations: 30 },
+      }),
+    ]);
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "swift-vine",
+      expect.objectContaining({ trellis: { iteration: 21 } }),
+    );
+  });
+
+  it("a quota-retry relaunch does NOT re-increment the grow iteration counter (but still launches)", () => {
+    // Same guard for grow: an inflated grow.iteration would make maybeAutoContinue
+    // see the budget as spent and end the hardening loop several passes early once
+    // the window resets and the review merges. The relaunch must still fire.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        name: "tall-fern",
+        prState: "working",
+        agentStatus: "idle",
+        workflow: "grow",
+        pendingReviewAt: Date.now(),
+        quotaRetryCount: 2,
+        reviewRetryAt: Date.now() - 1000,
+        grow: { seed: "harden auth", iteration: 4, maxIterations: 5 },
+      }),
+    ]);
+
+    poll("myproject");
+
+    const iterWrite = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "tall-fern"
+        && (c[2] as { grow?: { iteration?: number } }).grow?.iteration !== undefined,
+    );
+    expect(iterWrite).toBeUndefined();
+    // The review still launches (grow uses the default prompt builder).
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "tall-fern",
+      expect.objectContaining({ prState: "reviewing" }),
+    );
+  });
+
   it("retries with backoff for a Codex reviewer whose transient error lands only in the stderr sidecar", () => {
     // Codex splits its streams: verdict -> stdout (result file), errors +
     // progress -> a stderr sidecar. On a transient backend error Codex

@@ -1036,6 +1036,24 @@ function launchReview(
   const isTrellis = entry.workflow === "trellis";
   const isGrow = entry.workflow === "grow";
 
+  // A retry relaunch (a transient- or quota-review backoff re-queued the SAME
+  // iteration through `working`) re-drives launchReview without any new worker
+  // work: the reviewer failed to emit a verdict, the commits are unchanged.
+  // The loop iteration counter must track real iterations, not retries, so a
+  // retry must NOT re-increment it (nor re-run the trellis budget check). Left
+  // unguarded, a quota wait's flat 15-min ladder (budget MAX_QUOTA_REVIEW_RETRIES
+  // = 24) would inflate trellis.iteration / grow.iteration by up to 24 while the
+  // operator's Claude window is exhausted — tripping the trellis iteration-budget
+  // cap prematurely (parking in the non-kick-recoverable failing/"iteration-budget"
+  // with amend/raise-budget advice instead of the kick-recoverable failing/"quota"
+  // wait it actually is) and ending grow loops several passes early once the
+  // window resets and the review merges. reviewRetryCount / quotaRetryCount are
+  // set by handleTransientReviewFailure / handleQuotaLimitReview and cleared on
+  // any parseable verdict or worker push, so their presence uniquely marks a
+  // retry relaunch.
+  const isRetryRelaunch =
+    (entry.reviewRetryCount ?? 0) > 0 || (entry.quotaRetryCount ?? 0) > 0;
+
   // Trellis workflow: increment iteration counter *before* the budget check
   // and *before* dispatch (WORKFLOWS.md "One iteration, in detail" / step 5).
   // After the increment, the counter reflects the iteration about to be
@@ -1043,7 +1061,7 @@ function launchReview(
   // the increment exceeds maxIterations, short-circuit to failing with
   // failingReason="iteration-budget" — the iteration cap is the primary
   // safety net (Invariant 4).
-  if (isTrellis) {
+  if (isTrellis && !isRetryRelaunch) {
     const state = trellisLoopHooks.readIteration(entry);
     const nextIter = (state?.iteration ?? 0) + 1;
     const cap = state?.maxIterations ?? 30;
@@ -1087,7 +1105,7 @@ function launchReview(
   // with trellis via persistIteration; the grow-specific bookkeeping is
   // the sub-object field path (entry.grow.iteration vs
   // entry.trellis.iteration), encapsulated in growLoopHooks.
-  if (isGrow) {
+  if (isGrow && !isRetryRelaunch) {
     const state = growLoopHooks.readIteration(entry);
     const nextIter = (state?.iteration ?? 0) + 1;
     persistIteration(projectName, entry.name, entry, growLoopHooks, nextIter);
