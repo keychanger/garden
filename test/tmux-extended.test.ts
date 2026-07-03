@@ -51,6 +51,7 @@ import {
   resizeWindow,
   killWindowSafe,
   getPanePid,
+  paneRunningOnlyShell,
   getPaneLabel,
   getPaneTitle,
   listAllWindowNames,
@@ -588,6 +589,73 @@ describe("getPanePid", () => {
   it("returns null on failure", () => {
     mockExecFileSync.mockImplementation(() => { throw new Error("fail"); });
     expect(getPanePid("%5")).toBeNull();
+  });
+});
+
+// ===========================================================================
+// paneRunningOnlyShell — negative pane-liveness probe (tty → ps comm=)
+// ===========================================================================
+
+describe("paneRunningOnlyShell", () => {
+  // Wire pane_tty (via tmuxOutput → execFileSync "tmux") and the `ps -t` comm
+  // listing (execFileSync "ps") through the single mocked execFileSync. Dispatch
+  // on the binary so each test controls the two probes independently.
+  function wire(tty: string, ps: string | (() => never)): void {
+    mockExecFileSync.mockImplementation((cmd: string) => {
+      if (cmd === "tmux") return `${tty}\n`;
+      if (cmd === "ps") return typeof ps === "function" ? ps() : ps;
+      return "";
+    });
+  }
+
+  it("returns true when every process on the tty is a login shell (agent exited)", () => {
+    // A clean Claude exit exec-replaces its node process with the login shell,
+    // which macOS `comm=` renders with a leading dash and a path.
+    wire("/dev/ttys003", "/bin/-zsh\n");
+    expect(paneRunningOnlyShell("%9")).toBe(true);
+  });
+
+  it("recognizes multiple bare shells (bash + zsh, no path) as all-shells", () => {
+    wire("/dev/ttys003", "-zsh\nbash\n");
+    expect(paneRunningOnlyShell("%9")).toBe(true);
+  });
+
+  it("returns false when the agent process (node) is still on the tty — the never-wrongly-flag invariant", () => {
+    // A LIVE worker always carries `node` (claude, or an npm install) alongside
+    // the shell wrapper, so it is never all-shells and auto-continue is never
+    // wrongly blocked.
+    wire("/dev/ttys003", "node\n-zsh\n");
+    expect(paneRunningOnlyShell("%9")).toBe(false);
+  });
+
+  it("returns false when a non-shell foreground process is present", () => {
+    wire("/dev/ttys003", "vim\n-zsh\n");
+    expect(paneRunningOnlyShell("%9")).toBe(false);
+  });
+
+  it("fails open (false) when the tty probe throws", () => {
+    mockExecFileSync.mockImplementation((cmd: string) => {
+      if (cmd === "tmux") throw new Error("no such pane");
+      return "";
+    });
+    expect(paneRunningOnlyShell("%9")).toBe(false);
+  });
+
+  it("fails open (false) when ps throws", () => {
+    wire("/dev/ttys003", () => { throw new Error("ps failed"); });
+    expect(paneRunningOnlyShell("%9")).toBe(false);
+  });
+
+  it("fails open (false) on empty ps output", () => {
+    wire("/dev/ttys003", "\n");
+    expect(paneRunningOnlyShell("%9")).toBe(false);
+  });
+
+  it("fails open (false) when pane_tty is blank", () => {
+    wire("", "-zsh\n");
+    expect(paneRunningOnlyShell("%9")).toBe(false);
+    // The ps probe is never reached once the tty resolves empty.
+    expect(mockExecFileSync).not.toHaveBeenCalledWith("ps", expect.anything(), expect.anything());
   });
 });
 
