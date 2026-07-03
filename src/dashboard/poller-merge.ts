@@ -173,10 +173,24 @@ export function handleMergePending(
       worker: entry.name,
       data: { project: projectName, error: String(err) },
     });
+    // Re-arm rather than strand the worker in an unwatched `working` state (see
+    // tryForcePushAfterReview): a transient failure self-heals via a fresh
+    // review, a persistent one is surfaced by the deduped alert, and the 30s
+    // poke floor keeps it from tight-looping.
+    addAlert({
+      level: "warn",
+      source: "poller",
+      project: projectName,
+      worker: entry.name,
+      message: `Force-push in the merge queue failed for '${entry.name}'; re-queuing a review to retry. ${String(err).slice(0, 200)}`,
+      dedupKey: `push-failed:${projectName}:${entry.name}`,
+    });
     transitionState(projectName, entry.name, "working", {
+      pendingReviewAt: Date.now(),
       mergePendingAt: undefined,
     });
     refreshDashboard();
+    scheduleDelayedPoke(projectName, 30_000);
     return true;
   }
 

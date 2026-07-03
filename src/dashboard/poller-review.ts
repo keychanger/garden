@@ -484,11 +484,28 @@ function tryForcePushAfterReview(
       worker: entry.name,
       data: { project: projectName, error: String(err) },
     });
+    // Do NOT leave the worker in an unwatched `working` state with the verdict
+    // discarded — that strands the pipeline silently. Re-arm for a retry
+    // (pendingReviewAt + a delayed poke) so a transient push failure (network,
+    // or a lease mismatch from a push on another machine) self-heals via a
+    // fresh review, and alert so a persistent failure (e.g. branch protection)
+    // is visible. The deduped alert fires at most once per window and the 30s
+    // poke floor keeps a permanent failure from tight-looping a review per poke.
+    addAlert({
+      level: "warn",
+      source: "poller",
+      project: projectName,
+      worker: entry.name,
+      message: `Force-push after ${context} failed for '${entry.name}'; re-queuing a review to retry. ${String(err).slice(0, 200)}`,
+      dedupKey: `push-failed:${projectName}:${entry.name}`,
+    });
     transitionState(projectName, entry.name, "working", {
+      pendingReviewAt: Date.now(),
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
     });
     refreshDashboard();
+    scheduleDelayedPoke(projectName, 30_000);
     return false;
   }
 }

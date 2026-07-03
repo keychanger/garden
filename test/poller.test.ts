@@ -798,7 +798,7 @@ describe("poll — reviewing state (async)", () => {
     expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 0);
   });
 
-  it("resets to working when force-push fails after review", () => {
+  it("re-arms and alerts (does not silently strand) when force-push fails after review", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",
         lastSeenSha: "abc123" }),
@@ -818,8 +818,20 @@ describe("poll — reviewing state (async)", () => {
     poll("myproject");
 
     expect(mergeToBase).not.toHaveBeenCalled();
+    // Re-arm rather than strand: pendingReviewAt set so handleWorking re-reviews
+    // (retrying the push), review window cleared.
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
-      expect.objectContaining({ prState: "working", reviewWindowName: undefined }),
+      expect.objectContaining({
+        prState: "working",
+        pendingReviewAt: expect.any(Number),
+        reviewWindowName: undefined,
+      }),
+    );
+    // A delayed poke guarantees the retry even with no other event, and the
+    // operator is alerted (deduped) so a persistent failure is visible.
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 30_000);
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ dedupKey: "push-failed:myproject:bold-ash" }),
     );
   });
 
