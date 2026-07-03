@@ -447,6 +447,13 @@ describe("poll — working state", () => {
       expect.objectContaining({ pendingReviewAt: undefined }),
     );
     expect(forcePushBranch).not.toHaveBeenCalled();
+    // No review launched: clearing and launching both null pendingReviewAt, so
+    // the assertion above cannot tell them apart — pin down that the false
+    // branch clears and stops rather than falling through to launchReview,
+    // which is the one path that transitions to "reviewing".
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "reviewing" }),
+    );
   });
 
   it("does NOT clear pendingReviewAt when the commit check errors (transient git failure)", () => {

@@ -777,7 +777,7 @@ export function resetToWorkingOnWorkerPush(
   killReviewWindow(projectName, entry.name);
 
   const commitSummary = getCommitSummary(wtPath, baseBranch);
-  const hasCommitsAhead = commitSummary.length > 0;
+  const hasCommits = commitSummary.length > 0;
 
   transitionState(projectName, entry.name, "working", {
     lastShaChangeAt: new Date().toISOString(),
@@ -791,7 +791,7 @@ export function resetToWorkingOnWorkerPush(
     // state so any prior in-flight backoff doesn't bleed into the new review.
     reviewRetryCount: undefined,
     reviewRetryAt: undefined,
-    pendingReviewAt: hasCommitsAhead ? Date.now() : entry.pendingReviewAt,
+    pendingReviewAt: hasCommits ? Date.now() : entry.pendingReviewAt,
   });
   refreshDashboard();
   // The FIFO poke that woke us dispatched to the prior state's handler, not
