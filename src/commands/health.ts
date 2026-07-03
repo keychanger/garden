@@ -1,6 +1,6 @@
 // Diagnostic command: validates dashboard state against tmux reality.
 import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
-import { readDashState, writeDashState } from "../dashboard/state.js";
+import { readDashState, writeDashState, withStateLock } from "../dashboard/state.js";
 import { readRegistry, updateWorkerFields } from "../dashboard/registry.js";
 import { validateAndHeal } from "../dashboard/validate.js";
 import {
@@ -159,8 +159,12 @@ export async function health(args: string[]): Promise<void> {
     }
     if (fix) {
       console.log("\nHealing...");
-      const healed = validateAndHeal(state);
-      writeDashState(healed);
+      // Reconcile under the state lock, re-reading fresh so the heal + write is
+      // atomic against concurrent hotkey navigation (see ensureDashboard).
+      withStateLock(() => {
+        const healed = validateAndHeal(readDashState());
+        writeDashState(healed);
+      });
       console.log("Done. Run 'garden health' again to verify.");
     } else {
       console.log("\nRun 'garden health --fix' to attempt repair.");

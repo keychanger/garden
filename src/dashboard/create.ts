@@ -9,7 +9,7 @@ import {
 import { atomicWriteFile } from "./atomic-write.js";
 import { loadConfig, tryGetProject, getFocusedProjectNames, firstFocusedPlotName, plotNames, SESSIONS_DIR, type ProjectConfig } from "../config.js";
 import { buildRulesContext, buildWorktreeRules } from "../rules.js";
-import { type DashboardState, readDashState, writeDashState, STATE_FILE } from "./state.js";
+import { type DashboardState, readDashState, writeDashState, withStateLock, STATE_FILE } from "./state.js";
 import { restoreFromHidden } from "./layout.js";
 import { setupKeybindings } from "./hotkeys.js";
 import { setupStatusBar, buildStatusCommand, buildUsageCommand, buildHistoryCommand, updateHeaderVar, installInputGuard, setPaneProjectColor } from "./header.js";
@@ -55,9 +55,20 @@ export function resizeTerminal(): void {
 
 export function ensureDashboard(): void {
   if (dashboardExists()) {
-    const state = readDashState();
-    const healed = validateAndHeal(state);
-    writeDashState(healed);
+    // Reconcile dashboard state against tmux reality under the state lock, so
+    // the whole read-modify-write is atomic against a concurrent hotkey
+    // navigation (which also writes under withStateLock). The unlocked version
+    // could revert such a write and leave activeWindowName pointing at a hidden
+    // window the next park would killWindowSafe — destroying a live worker pane.
+    // validateAndHeal's slow side tasks (registry mutation, prunes, poller
+    // restarts) never acquire the state lock, so holding it across them cannot
+    // deadlock; the hold is bounded and this runs only at attach.
+    const healed = withStateLock(() => {
+      const state = readDashState();
+      const h = validateAndHeal(state);
+      writeDashState(h);
+      return h;
+    });
 
     // Re-push provider API keys into the session env on every attach — this
     // process has the operator's shell env; the running server's env was

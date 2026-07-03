@@ -16,6 +16,7 @@ vi.mock("../src/dashboard/state.js", () => ({
     activeWindowName: "_garden-worker-bold-ash",
   })),
   writeDashState: vi.fn(),
+  withStateLock: vi.fn((fn: () => unknown) => fn()),
 }));
 
 vi.mock("../src/dashboard/registry.js", () => ({
