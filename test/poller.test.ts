@@ -2556,6 +2556,22 @@ describe("poll — merge-pending CI gate", () => {
     expect(mergeToBase).toHaveBeenCalled();
   });
 
+  it("defers a no-ci SHA on a project already known to have CI (fresh force-push grace)", () => {
+    registryMock._setEntries("myproject", [pending()]);
+    // A prior poll observes pending check-runs — the gate learns this project
+    // has CI.
+    vi.mocked(checkCiStatus).mockReturnValue({ kind: "pending", pending: ["build"] });
+    poll("myproject");
+    expect(mergeToBase).not.toHaveBeenCalled();
+
+    // Now the SHA shows zero check-runs — a freshly force-pushed reviewer-fix /
+    // ci-fix commit whose runs have not materialized yet. The gate must NOT read
+    // this as "no CI" and merge un-gated; it defers within the grace window.
+    vi.mocked(checkCiStatus).mockReturnValue({ kind: "no-ci" });
+    poll("myproject");
+    expect(mergeToBase).not.toHaveBeenCalled();
+  });
+
   it("skips the gate entirely when requireCiSuccess is false", () => {
     vi.mocked(tryGetProject).mockReturnValue({
       path: "/repo/myproject",

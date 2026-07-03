@@ -54,6 +54,9 @@ const lastFfState = new Map<string, string>();
 // "never seen" state and its single poll() counts as an entry.
 export function __resetFfStateForTest(): void {
   lastFfState.clear();
+  projectHasCi.clear();
+  ciNoRunsSince.clear();
+  ciRecheckArmedUntil.clear();
 }
 // Stranded threshold for the merged-state sweep. Must outlast the +6s/+16s
 // delivery legs of a merge-time dispatch so the sweep never races an
@@ -63,6 +66,35 @@ const SWEEP_STRANDED_MS = 60_000;
 // is cheap and gh's rate limit is generous; a 60s cadence is fast enough
 // that the merge doesn't feel stuck without burning quota on a tight loop.
 const CI_PENDING_RECHECK_MS = 60_000;
+// Per-project (in-memory, per poller) knowledge that the project HAS GitHub
+// Actions — set the first time any check-run is observed. Lets the CI gate tell
+// "genuinely no CI" (never saw a check-run → pass empty check-runs through at
+// once) from "checks not yet materialized" (this project has CI, so zero
+// check-runs on a freshly force-pushed SHA — a reviewer `fixed` or ci-fix commit
+// the poller pokes with delay 0 — means they are still spinning up, so defer,
+// otherwise the exact commit CI most needs to vet merges un-gated). A poller
+// restart re-learns it on the first check-run.
+const projectHasCi = new Map<string, boolean>();
+// Epoch ms when the gate first saw zero check-runs on a CI-having project,
+// keyed by `${project}:${sha}`, so the grace-window defer is bounded.
+const ciNoRunsSince = new Map<string, number>();
+// Check-runs materialize within ~30s of a push; 3 min is a safe ceiling past
+// which we conclude a CI project's SHA genuinely has none and stop deferring.
+const CI_NO_RUNS_GRACE_MS = 3 * 60_000;
+// Per-project epoch ms until which a 60s recheck poke is already armed, so a
+// burst of external pokes during a pending / grace stall doesn't stack a fresh
+// self-perpetuating sleeper on each one (they would otherwise accumulate).
+const ciRecheckArmedUntil = new Map<string, number>();
+
+// Arm the single 60s CI recheck poke for a project, deduped: if one is already
+// scheduled (armed time still in the future) do nothing, so repeated gate
+// defers across a stall don't stack sleepers.
+function armCiRecheck(projectName: string): void {
+  const now = Date.now();
+  if ((ciRecheckArmedUntil.get(projectName) ?? 0) > now) return;
+  ciRecheckArmedUntil.set(projectName, now + CI_PENDING_RECHECK_MS);
+  scheduleDelayedPoke(projectName, CI_PENDING_RECHECK_MS);
+}
 // Failure budget before the worker is parked in `failing` instead of
 // re-reviewing again. Compared against the shared `failCount` (all failure
 // kinds since the last successful merge, which resets it), so in the common
@@ -256,6 +288,13 @@ function gateCiStatus(
 
   const status: CiStatus = checkCiStatus(slug, sha);
 
+  // Learn that this project has CI the moment we observe any check-run, and
+  // clear a stale no-runs grace stamp for this SHA now that runs exist.
+  if (status.kind === "success" || status.kind === "failed" || status.kind === "pending") {
+    projectHasCi.set(projectName, true);
+    ciNoRunsSince.delete(`${projectName}:${sha}`);
+  }
+
   switch (status.kind) {
     case "success":
       log.info("poller", "ci gate passed", {
@@ -264,12 +303,38 @@ function gateCiStatus(
       });
       return true;
 
-    case "no-ci":
+    case "no-ci": {
+      // On a project known to have CI, zero check-runs means they haven't
+      // materialized yet (we may have queried within seconds of a reviewer-fix
+      // / ci-fix force-push). Defer so the freshly-amended commit is actually
+      // gated — up to a grace ceiling, after which we accept there are none.
+      // Projects that genuinely have no CI (never saw a check-run) pass through
+      // immediately, so a no-CI merge is never delayed.
+      if (projectHasCi.get(projectName) === true) {
+        const key = `${projectName}:${sha}`;
+        let since = ciNoRunsSince.get(key);
+        if (since === undefined) { since = Date.now(); ciNoRunsSince.set(key, since); }
+        if (Date.now() - since < CI_NO_RUNS_GRACE_MS) {
+          log.info("poller", "ci gate: check-runs not yet materialized on a CI project, deferring", {
+            worker: entry.name,
+            data: { project: projectName, sha: sha.slice(0, 7) },
+          });
+          armCiRecheck(projectName);
+          return false;
+        }
+        log.warn("poller", "ci gate: still no check-runs after grace on a CI project, passing through", {
+          worker: entry.name,
+          data: { project: projectName, sha: sha.slice(0, 7) },
+        });
+        ciNoRunsSince.delete(key);
+        return true;
+      }
       log.debug("poller", "ci gate: no check-runs on commit, skipping", {
         worker: entry.name,
         data: { project: projectName, sha: sha.slice(0, 7) },
       });
       return true;
+    }
 
     case "unavailable":
       // Don't block on infrastructure problems. One alert per reason to
@@ -293,7 +358,7 @@ function gateCiStatus(
         worker: entry.name,
         data: { project: projectName, sha: sha.slice(0, 7), pending: status.pending },
       });
-      scheduleDelayedPoke(projectName, CI_PENDING_RECHECK_MS);
+      armCiRecheck(projectName);
       return false;
     }
 
