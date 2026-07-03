@@ -113,6 +113,33 @@ describe("isWatchedState", () => {
     expect(isWatchedState(entry({ prState: "failing", pendingReviewAt: NOW }))).toBe(false);
     expect(isWatchedState(entry({ prState: "done", pendingReviewAt: NOW }))).toBe(false);
   });
+
+  it("watches a failing worker with new commits pending the debounce transition", () => {
+    // lastSeenSha advanced past the pinned failingSha => handleFailing observed
+    // an operator fix and owes a debounced failing->working transition. If its
+    // one-shot poke was lost, the watchdog is the only thing that re-pokes it.
+    expect(isWatchedState(entry({
+      prState: "failing", failingReason: "code",
+      failingSha: "old", lastSeenSha: "new",
+    }))).toBe(true);
+  });
+
+  it("does not watch a parked failing worker with no new commits", () => {
+    // lastSeenSha still at failingSha => no fix pushed yet; leave it parked.
+    expect(isWatchedState(entry({
+      prState: "failing", failingReason: "code",
+      failingSha: "same", lastSeenSha: "same",
+    }))).toBe(false);
+  });
+
+  it("does not watch operator-action failing dispositions even with new commits", () => {
+    // trellis-flagged etc. require an explicit trellis command; pushing commits
+    // must not auto-resume them.
+    expect(isWatchedState(entry({
+      prState: "failing", failingReason: "trellis-flagged",
+      failingSha: "old", lastSeenSha: "new",
+    }))).toBe(false);
+  });
 });
 
 describe("hasLiveWork", () => {

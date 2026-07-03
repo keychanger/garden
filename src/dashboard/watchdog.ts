@@ -31,7 +31,7 @@
 import { tmux, windowExists, killWindowSafe, listAllWindowNames } from "./tmux.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { watchdogWindowName, parseWorkerWindow } from "./window-names.js";
-import { readRegistry, PR_STATE_KIND, type WorkerEntry, type WorkerRegistry } from "./registry.js";
+import { readRegistry, PR_STATE_KIND, OPERATOR_ACTION_FAILING_REASONS, type WorkerEntry, type WorkerRegistry } from "./registry.js";
 import { triggerProjectPoll } from "./poller-fifo.js";
 import { addAlert } from "./alerts.js";
 import { log } from "./log.js";
@@ -49,7 +49,19 @@ export function isWatchedState(entry: WorkerEntry): boolean {
   if (PR_STATE_KIND[state].pollerOwed) return true;
   // A Stop hook saw commits ahead of base but the review-launch poke never
   // arrived — the one stranding class that lives in the working state.
-  return state === "working" && entry.pendingReviewAt !== undefined;
+  if (state === "working" && entry.pendingReviewAt !== undefined) return true;
+  // A `failing` worker that observed new commits (lastSeenSha has advanced past
+  // the pinned failingSha) owes a debounced failing->working transition, which
+  // handleFailing schedules as a one-shot delayed poke. `failing` is
+  // pollerOwed:false, so if that poke is lost (poller killed in the gap, a
+  // reboot) nothing re-pokes it and the operator's pushed fix is never picked
+  // up — the worker sits in `failing` forever. Watch that pending-debounce case
+  // so the watchdog re-pokes it. Operator-action dispositions (trellis-flagged /
+  // iteration-budget / stagnation) are deliberately parked and excluded.
+  return state === "failing"
+    && !OPERATOR_ACTION_FAILING_REASONS.has(entry.failingReason ?? "code")
+    && entry.lastSeenSha !== undefined
+    && entry.lastSeenSha !== entry.failingSha;
 }
 
 // A worker in a `windowed` state (reviewing/resolving/ci-fixing) whose hidden

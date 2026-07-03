@@ -85,6 +85,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
 vi.mock("../src/dashboard/registry.js", () => {
   const entries: Record<string, import("../src/dashboard/registry.js").WorkerEntry[]> = {};
   return {
+    OPERATOR_ACTION_FAILING_REASONS: new Set(["trellis-flagged", "iteration-budget", "stagnation"]),
     readRegistry: vi.fn(() => ({ workers: entries })),
     getWorkers: vi.fn((project: string) => entries[project] ?? []),
     updateWorkerFields: vi.fn(

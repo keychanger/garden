@@ -14,7 +14,7 @@ import {
 import { refreshDashboard } from "./header.js";
 import { log } from "./log.js";
 import {
-  findWorkerByName, updateWorkerFields,
+  findWorkerByName, updateWorkerFields, OPERATOR_ACTION_FAILING_REASONS,
   type WorkerEntry, type PrState, type WorkerFieldsUpdate,
 } from "./registry.js";
 import { scheduleDelayedPoke } from "./poller-fifo.js";
@@ -106,14 +106,7 @@ function maybeFireHandoffCallback(
 // `garden trellis resume`; iteration-budget needs `garden trellis budget`
 // or kill; stagnation (v1.5) needs amend or kill.
 function requiresOperatorAction(entry: WorkerEntry): boolean {
-  switch (entry.failingReason) {
-    case "trellis-flagged":
-    case "iteration-budget":
-    case "stagnation":
-      return true;
-    default:
-      return false;
-  }
+  return OPERATOR_ACTION_FAILING_REASONS.has(entry.failingReason ?? "code");
 }
 
 export function handleFailing(

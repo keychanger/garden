@@ -77,6 +77,16 @@ export type FailingReason =
   // the check green; the poller does not auto-retry.
   | "ci";
 
+// Failing reasons that park the worker until the operator runs a specific
+// command (a trellis disposition) — pushing new commits does NOT auto-resume
+// them. Both the failing-state debounce (handleFailing) and the watchdog's
+// failing-debounce backstop (isWatchedState) skip these so a parked worker is
+// left alone. Every other reason follows the "push a fix, it re-reviews after
+// the debounce" path.
+export const OPERATOR_ACTION_FAILING_REASONS: ReadonlySet<FailingReason> = new Set([
+  "trellis-flagged", "iteration-budget", "stagnation",
+]);
+
 export interface WorkerEntry {
   name: string;       // adjective-noun name, e.g. "swift-oak"
   sessionId: string;  // claude session UUID for direct resume
