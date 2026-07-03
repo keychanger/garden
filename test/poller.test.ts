@@ -2192,11 +2192,14 @@ describe("poll — merge-pending state", () => {
     expect(mergeCalls[0]).toEqual(["/repo/myproject", "calm-bay", "main", { project: "myproject", worker: "calm-bay" }]);
   });
 
-  it("resets to working when force-push fails", () => {
+  it("re-arms and alerts (does not silently strand) when force-push fails in merge queue", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        // A resolver-verified branch reaches this force-push with the budget
+        // spent; the re-arm must reset it so the re-reviewed cycle is fresh.
+        resolveAttempts: 2,
       }),
     ]);
     vi.mocked(forcePushBranch).mockImplementation(() => { throw new Error("push failed"); });
@@ -2204,8 +2207,22 @@ describe("poll — merge-pending state", () => {
     poll("myproject");
 
     expect(mergeToBase).not.toHaveBeenCalled();
+    // Re-arm rather than strand: pendingReviewAt set so handleWorking re-reviews
+    // (retrying the push), merge-queue timestamp cleared, and the resolver budget
+    // reset so the fresh cycle does not inherit an exhausted count.
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
-      expect.objectContaining({ prState: "working", mergePendingAt: undefined }),
+      expect.objectContaining({
+        prState: "working",
+        pendingReviewAt: expect.any(Number),
+        mergePendingAt: undefined,
+        resolveAttempts: 0,
+      }),
+    );
+    // A delayed poke guarantees the retry even with no other event, and the
+    // operator is alerted (deduped) so a persistent failure is visible.
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 30_000);
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ dedupKey: "push-failed:myproject:bold-ash" }),
     );
   });
 
@@ -2540,6 +2557,38 @@ describe("poll — resolving state", () => {
     );
     // Queues the next merge-queue attempt
     expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 0);
+  });
+
+  it("re-arms and alerts (does not silently strand) when force-push fails after resolve", () => {
+    setupResolver();
+    vi.mocked(getBranchHeadSha).mockReturnValue("post-rebase-sha"); // differs from preResolveSha
+    vi.mocked(isAncestor).mockReturnValue(true);
+    vi.mocked(hasRebaseInProgress).mockReturnValue(false);
+    vi.mocked(forcePushBranch).mockImplementation(() => { throw new Error("push failed"); });
+
+    poll("myproject");
+
+    // Verification passed and the push was attempted, but it threw — re-arm for
+    // a fresh review rather than stranding the worker in an unwatched `working`
+    // state. pendingReviewAt set, review/merge-queue fields cleared, and the
+    // resolver budget (seeded to 1 by setupResolver) reset so the fresh cycle
+    // does not inherit an exhausted count.
+    expect(forcePushBranch).toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "working",
+        pendingReviewAt: expect.any(Number),
+        reviewWindowName: undefined,
+        mergePendingAt: undefined,
+        resolveAttempts: 0,
+      }),
+    );
+    // A delayed poke guarantees the retry even with no other event, and the
+    // operator is alerted (deduped) so a persistent failure is visible.
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 30_000);
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ dedupKey: "push-failed:myproject:bold-ash" }),
+    );
   });
 
   it("retries when resolver says DONE but rebase is still in progress", () => {

@@ -268,6 +268,13 @@ export function handleResolving(
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
       mergePendingAt: undefined,
+      // Fresh cycle: reset the resolver budget and stale resolve state, matching
+      // resetToWorkingOnWorkerPush / finalizeMerge. Without this, the (already at
+      // or near budget) resolveAttempts would carry into the re-reviewed cycle
+      // and prematurely escalate the next genuine conflict to `failing`.
+      resolveAttempts: 0,
+      preResolveSha: undefined,
+      lastResolveBody: undefined,
     });
     refreshDashboard();
     scheduleDelayedPoke(projectName, 30_000);

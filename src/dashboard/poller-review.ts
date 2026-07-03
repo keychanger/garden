@@ -503,6 +503,12 @@ function tryForcePushAfterReview(
       pendingReviewAt: Date.now(),
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
+      // Fresh cycle: reset the resolver budget and stale resolve state, matching
+      // resetToWorkingOnWorkerPush / finalizeMerge, so a re-reviewed worker never
+      // inherits a prior cycle's exhausted budget.
+      resolveAttempts: 0,
+      preResolveSha: undefined,
+      lastResolveBody: undefined,
     });
     refreshDashboard();
     scheduleDelayedPoke(projectName, 30_000);
