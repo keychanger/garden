@@ -1557,16 +1557,20 @@ describe("poll — merge-pending state", () => {
     );
   });
 
-  it("skips auto-continue when agentStatus is working (race)", () => {
-    registryMock._setEntries("myproject", [
-      makeWorker({
-        prState: "merge-pending",
-        agentStatus: "working",
-        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
-      }),
-    ]);
+  it("skips auto-continue when the worker becomes active during finalization (race)", () => {
+    // Idle at the pre-merge guard (so finalization proceeds), then the operator
+    // prompts it mid-finalize. The finalize-time skip (agentStatus flips to
+    // working before maybeAutoContinue) must suppress the post-merge prompt. A
+    // statically-working worker now defers at the pre-merge guard and never
+    // reaches this path, so flip the status mid-merge to exercise the skip.
+    const w = makeWorker({
+      prState: "merge-pending",
+      mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+    });
+    registryMock._setEntries("myproject", [w]);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
     vi.mocked(fastForwardBase).mockReturnValue({ ok: true, advanced: "worktree" });
+    vi.mocked(mergeToBase).mockImplementation(() => { w.agentStatus = "working"; });
 
     poll("myproject");
 
@@ -2129,6 +2133,34 @@ describe("poll — merge-pending state", () => {
 
     poll("myproject");
 
+    expect(cleanWorktree).not.toHaveBeenCalled();
+    expect(rebaseBranch).not.toHaveBeenCalled();
+    expect(mergeToBase).not.toHaveBeenCalled();
+  });
+
+  it("resumes an already-pushed merge even while the worker's Claude is active", () => {
+    // The mid-turn guard sits deliberately AFTER the resume check: a prior
+    // finalization already fast-forward-pushed HEAD onto origin/<base> (poller
+    // torn down mid-finalize by a rebuild), so finishing the idempotent tail is
+    // safe and must not be blocked just because the worker resumed working. If
+    // the guard were moved above the resume check this would defer indefinitely.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        agentStatus: "working",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(isAncestor).mockReturnValue(true); // HEAD already contained in origin/<base>
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true, advanced: "worktree" });
+
+    poll("myproject");
+
+    expect(log.info).toHaveBeenCalledWith(
+      "poller", "merge already on base, resuming interrupted finalization",
+      expect.objectContaining({ worker: "bold-ash" }),
+    );
+    // Resumed the idempotent tail, did not re-merge or touch the worktree.
     expect(cleanWorktree).not.toHaveBeenCalled();
     expect(rebaseBranch).not.toHaveBeenCalled();
     expect(mergeToBase).not.toHaveBeenCalled();
