@@ -41,6 +41,34 @@ function isTransientError(output: string): boolean {
   return false;
 }
 
+// A session/usage-quota cutoff — the operator's rolling window is exhausted and
+// the reviewer's Claude was cut off before emitting a verdict. Distinct from
+// isTransientError (a seconds-scale API blip): this needs an hours-scale wait
+// for the window to reset. Anchored to the line-START of the ground-truth
+// message ("You've hit your session limit · resets 3:40pm (America/Denver)")
+// so a verdict body that merely discusses a "session limit" cannot trip it; the
+// separator after "limit" varies (·, comma), so the reset hint is extracted
+// separately rather than baked into the anchor. Only the verified "you've hit
+// your ... limit" phrasing is matched — the unverified "usage limit reached"
+// family is deliberately left out until a real sample is captured.
+const SESSION_LIMIT_LINE = /^you['’]?ve\s+hit\s+your\s+(?:session|usage)\s+limit\b/i;
+
+function quotaLimitResetHint(output: string): string | null {
+  const lines = output.split("\n");
+  const tail: string[] = [];
+  for (let i = lines.length - 1; i >= 0 && tail.length < 5; i--) {
+    const t = lines[i].trim();
+    if (t) tail.push(t);
+  }
+  for (const line of tail) {
+    if (SESSION_LIMIT_LINE.test(line)) {
+      const reset = line.match(/reset(?:s|ting)?\s+(?:at\s+)?(.+?)\s*$/i);
+      return reset ? reset[1].trim() : "";
+    }
+  }
+  return null;
+}
+
 export const claudeCodeCore: HarnessCore = {
   name: "claude-code",
   // Tier A: the full normalized lifecycle, harness-enforced sandbox, native
@@ -98,6 +126,7 @@ export const claudeCodeCore: HarnessCore = {
   },
 
   isTransientError,
+  quotaLimitResetHint,
 
   resolveTranscriptPath(entry: WorkerEntry): string | null {
     return resolveTranscriptPath(entry);

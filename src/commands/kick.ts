@@ -12,6 +12,7 @@ import { tryGetProject } from "../config.js";
 const REVIEW_SIDE_FAILING_REASONS: ReadonlySet<FailingReason> = new Set<FailingReason>([
   "unparseable-verdict",
   "transient-review",
+  "quota",
 ]);
 
 export async function kick(args: string[]): Promise<void> {
@@ -111,6 +112,7 @@ export async function kick(args: string[]): Promise<void> {
       unparseableReviewAt: undefined,
       reviewRetryCount: undefined,
       reviewRetryAt: undefined,
+      quotaRetryCount: undefined,
     });
     triggerProjectPoll(project);
     console.log(`Kicked ${project}/${workerName} — recovered from failing (${failingReason}), review re-queued.`);

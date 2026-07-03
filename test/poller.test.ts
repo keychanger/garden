@@ -1095,6 +1095,133 @@ describe("poll — reviewing state (async)", () => {
     );
   });
 
+  it("auto-retries on a long backoff when the reviewer hits the Claude session limit", () => {
+    // Quota cutoff (the operator's rolling window), NOT a transient API blip:
+    // the reviewer produced no verdict and did not advance HEAD. Auto-retry on
+    // the 15-min quota cadence so it self-heals when the window resets, rather
+    // than hard-failing into unparseable-verdict.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123",
+        preReviewSha: "pre456",
+      }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) => !name.includes("-review-"));
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) => String(p).includes("review-result"));
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result")
+        ? "Reviewing…\nYou've hit your session limit · resets 3:40pm (America/Denver)"
+        : "{}");
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre456"); // reviewer did NOT advance HEAD
+
+    poll("myproject");
+
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "working",
+        pendingReviewAt: expect.any(Number),
+        quotaRetryCount: 1,
+        reviewRetryAt: expect.any(Number),
+        reviewWindowName: undefined,
+      }),
+    );
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 900_000);
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "failing" }),
+    );
+  });
+
+  it("parks in failing/quota after the quota retry budget is exhausted", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123",
+        preReviewSha: "pre456",
+        quotaRetryCount: 24, // at budget
+      }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) => !name.includes("-review-"));
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) => String(p).includes("review-result"));
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result") ? "You've hit your session limit · resets 3:40pm" : "{}");
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre456");
+
+    poll("myproject");
+
+    const failingCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "failing",
+    );
+    expect(failingCall).toBeDefined();
+    const fields = failingCall![2] as Record<string, unknown>;
+    expect(fields.failingReason).toBe("quota");
+    expect(fields.quotaRetryCount).toBeUndefined();
+  });
+
+  it("dispatches a parsed verdict even when a session-limit line is present (parse-first, not quota)", () => {
+    // A real verdict short-circuits BEFORE the quota detector, so a session-limit
+    // line above a CLEAN verdict still merges — the detector can never trap a
+    // verdict-emitting review.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123",
+        preReviewSha: "pre456",
+      }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) => !name.includes("-review-"));
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) => String(p).includes("review-result"));
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result")
+        ? "You've hit your session limit · resets 3pm\nCLEAN"
+        : "{}");
+
+    poll("myproject");
+
+    expect(forcePushBranch).toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merge-pending" }),
+    );
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ quotaRetryCount: 1 }),
+    );
+  });
+
+  it("takes the unparseable recovery (not quota) when the reviewer advanced HEAD before the cutoff", () => {
+    // The !advanced guard: if the reviewer committed work before running out,
+    // we do NOT relaunch on top of it — it falls through to the unparseable
+    // force-push + re-queue path.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123",
+        preReviewSha: "pre456",
+      }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) => !name.includes("-review-"));
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) => String(p).includes("review-result"));
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result") ? "You've hit your session limit · resets 3:40pm" : "{}");
+    vi.mocked(getBranchHeadSha).mockReturnValue("post789"); // reviewer advanced HEAD
+
+    poll("myproject");
+
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ quotaRetryCount: 1 }),
+    );
+    const workingCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash"
+        && (c[2] as Record<string, unknown>).prState === "working"
+        && (c[2] as Record<string, unknown>).unparseableReviewAt !== undefined,
+    );
+    expect(workingCall).toBeDefined();
+  });
+
   it("retries with backoff for a Codex reviewer whose transient error lands only in the stderr sidecar", () => {
     // Codex splits its streams: verdict -> stdout (result file), errors +
     // progress -> a stderr sidecar. On a transient backend error Codex

@@ -87,6 +87,13 @@ export interface HarnessCore {
   /** Does this output tail look like a transient backend error (worth a
    *  retry) rather than an agent failure? Provider/API-shaped. */
   isTransientError(outputTail: string): boolean;
+  /** Did the agent hit a session/usage QUOTA cutoff (distinct from a transient
+   *  blip — this needs an hours-scale wall-clock wait for the operator's window
+   *  to reset, not a seconds retry)? Returns `null` when it is NOT a quota
+   *  cutoff; a non-null string (possibly "") when it IS — the string is a human
+   *  reset hint for the alert (e.g. "3:40pm"). Callers MUST test `=== null`,
+   *  never truthiness, since "" is a hit with no parseable reset time. */
+  quotaLimitResetHint(outputTail: string): string | null;
   /** Locate the on-disk transcript for the history view. */
   resolveTranscriptPath(entry: WorkerEntry): string | null;
   /** Parse the transcript into the neutral Turn[] model. */

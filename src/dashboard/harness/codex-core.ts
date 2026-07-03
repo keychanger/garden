@@ -58,6 +58,31 @@ function isTransientError(output: string): boolean {
   return false;
 }
 
+// A session/usage-quota cutoff for Codex — the ChatGPT-subscription rolling
+// window or an API-key hard billing quota (insufficient_quota). Contract as
+// claudeCodeCore.quotaLimitResetHint: null = not quota; non-null string = quota
+// hit, string is the reset hint. The caller runs this BEFORE isTransientError,
+// so a "429 ... insufficient_quota" is treated as a quota wait rather than the
+// seconds-scale transient retry its bare 429 would otherwise trip. Provisional
+// pending a captured real Codex quota sample (like isTransientError above);
+// anchored to error-shaped, line-start phrasing so a verdict body can't trip it.
+function quotaLimitResetHint(output: string): string | null {
+  const lines = output.split("\n");
+  const tail: string[] = [];
+  for (let i = lines.length - 1; i >= 0 && tail.length < 5; i--) {
+    const t = lines[i].trim();
+    if (t) tail.push(t);
+  }
+  for (const line of tail) {
+    if (/"(?:type|code)"\s*:\s*"insufficient_quota"/.test(line)) return "";
+    if (/^(?:ERROR|error):?.*\b(?:usage|quota)\s+limit\b/i.test(line)) {
+      const reset = line.match(/reset[a-z]*\s+(?:at\s+|in\s+)?(.+?)\s*$/i);
+      return reset ? reset[1].trim() : "";
+    }
+  }
+  return null;
+}
+
 export const codexCore: HarnessCore = {
   name: "codex",
   // Tier A intent: Codex 0.142.5's hooks.json covers the full lifecycle
@@ -124,6 +149,7 @@ export const codexCore: HarnessCore = {
   },
 
   isTransientError,
+  quotaLimitResetHint,
 
   // Prefer the hook-captured path (Codex's hook payload carries
   // transcript_path); else locate the rollout file by thread_id under

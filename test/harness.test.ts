@@ -212,6 +212,30 @@ describe("codex adapter dialect", () => {
     expect(t("Reviewed the diff.\nFIXED")).toBe(false);
   });
 
+  it("claude quotaLimitResetHint detects a session-limit cutoff, not a verdict body", async () => {
+    const { getHarnessCore } = await importCore();
+    const q = getHarnessCore("claude-code").quotaLimitResetHint;
+    // Observed message (middle-dot separator) -> reset hint extracted.
+    expect(q("Reviewing…\nYou've hit your session limit · resets 3:40pm (America/Denver)"))
+      .toBe("3:40pm (America/Denver)");
+    // Apostrophe-agnostic; a hit with no parseable reset -> "" (not null).
+    expect(q("Youve hit your usage limit")).toBe("");
+    // Line-start anchored: a verdict body merely mentioning it is NOT a hit.
+    expect(q("We gracefully handle the session limit reset here.\nCLEAN")).toBeNull();
+    // A transient API error is not a quota cutoff.
+    expect(q("API Error: 529 overloaded")).toBeNull();
+  });
+
+  it("codex quotaLimitResetHint detects insufficient_quota / usage-limit, not a transient 429", async () => {
+    const { getHarnessCore } = await importCore();
+    const q = getHarnessCore("codex").quotaLimitResetHint;
+    expect(q('stream\nERROR: 429 {"type":"insufficient_quota"}')).toBe("");
+    expect(q("error: usage limit reached, resets in 2h")).toBe("2h");
+    // A bare 429 rate-limit is transient, not a quota cutoff -> null.
+    expect(q("some progress\nERROR: 429 rate limit exceeded")).toBeNull();
+    expect(q("Reviewed the diff.\nFIXED")).toBeNull();
+  });
+
   it("readTurns parses the rollout into turns with verb tagging", async () => {
     const { getHarnessCore } = await importCore();
     const fixture = path.join(HERE, "fixtures/codex/rollout-sample.jsonl");

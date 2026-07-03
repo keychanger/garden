@@ -61,6 +61,15 @@ export const TRANSIENT_REVIEW_BACKOFFS_MS: readonly number[] = [
   300_000,   // 5m
 ];
 
+// Session/usage-quota retry schedule (handleQuotaLimitReview). A quota cutoff
+// is the operator's rolling window, which resets on an hours scale — so unlike
+// the transient ladder this is a FLAT ~15-min cadence over a ~6h ceiling
+// (24 retries), landing a relaunch within 15 min of the true reset regardless
+// of when in the window it was hit. Past the budget → `failing`/"quota"
+// (kick-recoverable).
+export const QUOTA_REVIEW_BACKOFF_MS = 15 * 60_000; // 15m
+export const MAX_QUOTA_REVIEW_RETRIES = 24;         // 24 × 15m ≈ 6h
+
 // Threshold past which `agentStatus="working"` is treated as stale in
 // handleWorking — i.e. the worker's Claude is hung (sandbox-killed, network
 // died mid-stream, in-flight bug). Hooks fire on every tool use and on Stop,
@@ -260,10 +269,28 @@ export function handleReviewing(
     ? rawOutput
     : [rawOutput, rawStderrSidecar].filter(Boolean).join("\n")
   ) || null;
+  const core = getHarnessCore(reviewerHarness);
+  // Whether the reviewer committed work before its output ran out. If so we
+  // never relaunch on top of it (a quota or transient retry would) — it falls
+  // through to handleUnparseableReview's force-push + re-queue recovery.
+  const reviewerAdvanced = didReviewerAdvanceHead(projectPath, entry);
+  // Quota BEFORE transient. A session/usage-limit cutoff needs an hours-scale
+  // wait for the operator's window to reset, not a seconds retry — and codex's
+  // "429 insufficient_quota" would otherwise trip the bare-429 transient rule.
+  // (This detector only runs on an already-unparseable review, so a real
+  // CLEAN/FIXED verdict — even one whose body mentions a "session limit" — has
+  // already dispatched above and can never reach it. That parse-first ordering
+  // is load-bearing; do not move this below verdict dispatch.)
+  if (transientSource !== null && !reviewerAdvanced) {
+    const resetHint = core.quotaLimitResetHint(transientSource);
+    if (resetHint !== null) {
+      return handleQuotaLimitReview(projectName, projectPath, entry, resetHint);
+    }
+  }
   if (
     transientSource !== null
-    && getHarnessCore(reviewerHarness).isTransientError(transientSource)
-    && !didReviewerAdvanceHead(projectPath, entry)
+    && core.isTransientError(transientSource)
+    && !reviewerAdvanced
   ) {
     return handleTransientReviewFailure(projectName, projectPath, entry, transientSource);
   }
@@ -334,6 +361,7 @@ function handleTransientReviewFailure(
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
       reviewRetryCount: undefined,
+      quotaRetryCount: undefined,
       reviewRetryAt: undefined,
     });
     refreshDashboard();
@@ -366,6 +394,100 @@ function handleTransientReviewFailure(
   });
   refreshDashboard();
   scheduleDelayedPoke(projectName, backoffMs);
+  return true;
+}
+
+// The reviewer hit the Claude session/usage QUOTA cutoff (the operator's
+// rolling window) with no parseable verdict and no committed work. Unlike a
+// transient API blip, a quota window resets on an hours scale — so auto-retry
+// on a FLAT ~15-min cadence until it clears, up to MAX_QUOTA_REVIEW_RETRIES
+// (~6h), then park in `failing`/"quota" (kick-recoverable). The reviewer runs
+// on the operator's own account, so its session limit *is* the operator's
+// window; a 15-min relaunch lands within 15 min of the reset with no operator
+// action. Reuses reviewRetryAt as the cause-agnostic relaunch gate
+// (handleWorking) but keeps its own quotaRetryCount budget so a fast transient
+// blip and this hours-scale wait can't conflate.
+function handleQuotaLimitReview(
+  projectName: string,
+  projectPath: string,
+  entry: WorkerEntry,
+  resetHint: string,
+): boolean {
+  const wtPath = entry.worktreePath ?? projectPath;
+  const headSha = getBranchHeadSha(wtPath);
+  const prior = entry.quotaRetryCount ?? 0;
+  const next = prior + 1;
+  const resetSuffix = resetHint ? ` (resets ${resetHint})` : "";
+
+  if (next > MAX_QUOTA_REVIEW_RETRIES) {
+    log.warn("poller", "quota review retries exhausted, transitioning to failing", {
+      worker: entry.name,
+      data: { project: projectName, attempts: prior },
+    });
+    addAlert({
+      level: "error",
+      source: "review",
+      project: projectName,
+      worker: entry.name,
+      message:
+        `Review for worker ${entry.name} is still blocked by the Claude ` +
+        `session/usage limit${resetSuffix} after ${prior} auto-retries. Run ` +
+        `\`garden kick ${entry.name}\` once your Claude window has reset.`,
+      dedupKey: `quota-review-exhausted:${projectName}:${entry.name}`,
+    });
+    transitionState(projectName, entry.name, "failing", {
+      failCount: (entry.failCount ?? 0) + 1,
+      failingReason: "quota",
+      failingSha: headSha ?? undefined,
+      lastSeenSha: headSha ?? undefined,
+      lastShaChangeAt: new Date().toISOString(),
+      reviewWindowName: undefined,
+      reviewStartedAt: undefined,
+      reviewRetryCount: undefined,
+      reviewRetryAt: undefined,
+      quotaRetryCount: undefined,
+    });
+    refreshDashboard();
+    return true;
+  }
+
+  // Alert once, on first detection (prior===0), so the operator isn't spammed
+  // across the multi-hour wait; intermediate retries only log.
+  if (prior === 0) {
+    addAlert({
+      level: "warn",
+      source: "review",
+      project: projectName,
+      worker: entry.name,
+      message:
+        `Review for worker ${entry.name} paused: the reviewer hit the Claude ` +
+        `session/usage limit${resetSuffix}. Auto-retrying every 15 min until ` +
+        `your window resets; run \`garden kick ${entry.name}\` to retry now.`,
+      dedupKey: `quota-review:${projectName}:${entry.name}`,
+    });
+  }
+
+  const nextAt = Date.now() + QUOTA_REVIEW_BACKOFF_MS;
+  log.info("poller", "quota review cutoff; scheduling long-backoff retry", {
+    worker: entry.name,
+    data: {
+      project: projectName,
+      attempt: next,
+      maxAttempts: MAX_QUOTA_REVIEW_RETRIES,
+      backoffMs: QUOTA_REVIEW_BACKOFF_MS,
+      resetHint,
+    },
+  });
+  transitionState(projectName, entry.name, "working", {
+    pendingReviewAt: Date.now(),
+    quotaRetryCount: next,
+    reviewRetryAt: nextAt,
+    reviewWindowName: undefined,
+    reviewStartedAt: undefined,
+    preReviewSha: undefined,
+  });
+  refreshDashboard();
+  scheduleDelayedPoke(projectName, QUOTA_REVIEW_BACKOFF_MS);
   return true;
 }
 
@@ -412,6 +534,7 @@ function handleUnparseableReview(
         reviewWindowName: undefined,
         reviewStartedAt: undefined,
         reviewRetryCount: undefined,
+        quotaRetryCount: undefined,
         reviewRetryAt: undefined,
       });
       refreshDashboard();
@@ -430,6 +553,7 @@ function handleUnparseableReview(
       reviewStartedAt: undefined,
       preReviewSha: undefined,
       reviewRetryCount: undefined,
+      quotaRetryCount: undefined,
       reviewRetryAt: undefined,
     });
     refreshDashboard();
@@ -462,6 +586,7 @@ function handleUnparseableReview(
     reviewWindowName: undefined,
     reviewStartedAt: undefined,
     reviewRetryCount: undefined,
+    quotaRetryCount: undefined,
     reviewRetryAt: undefined,
   });
   refreshDashboard();
@@ -572,6 +697,7 @@ function dispatchDefaultVerdict(
       reviewStartedAt: undefined,
       unparseableReviewAt: undefined,
       reviewRetryCount: undefined,
+      quotaRetryCount: undefined,
       reviewRetryAt: undefined,
     });
     refreshDashboard();
@@ -604,6 +730,7 @@ function dispatchDefaultVerdict(
     preReviewSha: undefined,
     unparseableReviewAt: undefined,
     reviewRetryCount: undefined,
+    quotaRetryCount: undefined,
     reviewRetryAt: undefined,
   });
   refreshDashboard();
@@ -666,6 +793,7 @@ function dispatchTrellisVerdict(
       reviewStartedAt: undefined,
       unparseableReviewAt: undefined,
       reviewRetryCount: undefined,
+      quotaRetryCount: undefined,
       reviewRetryAt: undefined,
       trellis: {
         lastVerdict: "ALIGNED",
@@ -701,6 +829,7 @@ function dispatchTrellisVerdict(
       reviewStartedAt: undefined,
       unparseableReviewAt: undefined,
       reviewRetryCount: undefined,
+      quotaRetryCount: undefined,
       reviewRetryAt: undefined,
       trellis: {
         lastVerdict: "DRIFT",
@@ -744,6 +873,7 @@ function dispatchTrellisVerdict(
       preReviewSha: undefined,
       unparseableReviewAt: undefined,
       reviewRetryCount: undefined,
+      quotaRetryCount: undefined,
       reviewRetryAt: undefined,
       trellis: {
         lastVerdict: "FLAGGED",
@@ -777,6 +907,7 @@ function dispatchTrellisVerdict(
     preReviewSha: undefined,
     unparseableReviewAt: undefined,
     reviewRetryCount: undefined,
+    quotaRetryCount: undefined,
     reviewRetryAt: undefined,
     trellis: { lastVerdict: "FAILED" },
   });
@@ -819,6 +950,7 @@ export function resetToWorkingOnWorkerPush(
     // Worker pushed mid-review: this is a fresh cycle, reset transient retry
     // state so any prior in-flight backoff doesn't bleed into the new review.
     reviewRetryCount: undefined,
+    quotaRetryCount: undefined,
     reviewRetryAt: undefined,
     pendingReviewAt: hasCommits ? Date.now() : entry.pendingReviewAt,
   });
@@ -885,6 +1017,7 @@ export function handleReviewTimeout(
     reviewStartedAt: undefined,
     mergePendingAt: kind === "resolve" ? undefined : entry.mergePendingAt,
     reviewRetryCount: undefined,
+    quotaRetryCount: undefined,
     reviewRetryAt: undefined,
   });
   refreshDashboard();

@@ -71,6 +71,14 @@ export type FailingReason =
   // accepts this reason and re-queues the review without requiring new
   // commits (see commands/kick.ts).
   | "transient-review"
+  // Set by handleQuotaLimitReview after the reviewer hit the Claude session/
+  // usage QUOTA cutoff (the operator's rolling window) and the ~6h auto-retry
+  // budget was exhausted. Distinct from "transient-review" (a seconds-scale API
+  // blip): the reviewer's Claude was cut off before emitting a verdict and the
+  // window resets on an hours scale, so the review auto-retries every ~15 min
+  // until it clears. `garden kick` accepts this reason and re-queues the review
+  // with no new commit (see commands/kick.ts).
+  | "quota"
   // Set by the poller's CI gate (poller-ci.ts) when GitHub Actions reports
   // any failed/cancelled/timed-out check-run on the worker's branch HEAD.
   // The merge is held until the operator pushes a new commit that turns
@@ -180,6 +188,15 @@ export interface WorkerEntry {
   // poller-review.ts handleTransientReviewFailure / handleWorking.
   reviewRetryCount?: number;
   reviewRetryAt?: number;
+  // Quota-review retry state. Parallels reviewRetryCount but on the session/
+  // usage-quota schedule: set by handleQuotaLimitReview when the reviewer hit
+  // the Claude session limit, budget MAX_QUOTA_REVIEW_RETRIES (24) on a flat
+  // ~15-min cadence (~6h ceiling). Reuses reviewRetryAt as the cause-agnostic
+  // relaunch gate (only one review is ever pending), but keeps its own budget
+  // so a fast transient blip and an hours-scale quota wait can't conflate.
+  // Clears wherever reviewRetryCount clears. See poller-review.ts
+  // handleQuotaLimitReview.
+  quotaRetryCount?: number;
   // Set by handlePaneDied when agentStatus was "working" at the moment the
   // pane died (dashboard kill, tmux server gone). Read by ensureDashboard's
   // resume loop to decide whether to auto-send a "continue" prompt after the
