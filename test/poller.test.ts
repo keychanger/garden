@@ -2749,6 +2749,25 @@ describe("poll — resolving state", () => {
     );
   });
 
+  it("escalates with the kick-recoverable transient-review reason when the resolver hit a transient API error", () => {
+    setupResolver({ resolveAttempts: 2 }); // at budget
+    vi.mocked(isAncestor).mockReturnValue(false); // verification fails
+    vi.mocked(getBranchHeadSha).mockReturnValue("post-sha");
+    // The resolver's Claude couldn't reach the API — an outage, not a failed
+    // resolve. Must escalate recoverably (kick), not with the `code` reason.
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result") ? "API Error: 529 overloaded_error" : "{}",
+    );
+
+    poll("myproject");
+
+    const failingCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "failing",
+    );
+    expect(failingCall).toBeDefined();
+    expect((failingCall![2] as Record<string, unknown>).failingReason).toBe("transient-review");
+  });
+
   it("stores resolver body when it parses even if verification fails", () => {
     setupResolver();
     vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
@@ -2895,6 +2914,22 @@ describe("poll — ci-fixing state", () => {
       level: "error",
       message: expect.stringContaining("exhausted"),
     }));
+  });
+
+  it("escalates with the kick-recoverable transient-review reason when the ci-fix agent hit a transient API error", () => {
+    setupCiFix({ ciFixAttempts: 3 });
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) =>
+      String(p).includes("ci-fix-result") ? "API Error: 503 Service Unavailable" : "{}",
+    );
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre-fix-sha");
+
+    poll("myproject");
+
+    const failingCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "failing",
+    );
+    expect(failingCall).toBeDefined();
+    expect((failingCall![2] as Record<string, unknown>).failingReason).toBe("transient-review");
   });
 
   it("times out to failing and resets the ci-fix budget", () => {

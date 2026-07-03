@@ -16,6 +16,7 @@ import { SESSIONS_DIR, tryGetProject } from "../config.js";
 import { addAlert } from "./alerts.js";
 import { resolveReviewRole } from "./roles.js";
 import { codexStderrSidecar } from "./harness/codex-core.js";
+import { getHarnessCore } from "./harness/core.js";
 import { getBranchHeadSha, getRemoteTrackingSha } from "./git.js";
 import { refreshDashboard } from "./header.js";
 import { launchHeadlessAgent } from "./headless-agent.js";
@@ -179,11 +180,34 @@ export function launchCiFix(
   return true;
 }
 
+// The ci-fix analog of resolverOutputWasTransient: was the ci-fix agent's run a
+// transient backend error (5xx / 429 / overloaded) rather than a genuine
+// couldn't-fix? An outage should escalate recoverably instead of parking in the
+// `ci` reason that tells the operator to push a fix. Harness-aware; read before
+// cleanCiFixFiles removes the result/sidecar.
+function ciFixOutputWasTransient(projectName: string, entry: WorkerEntry): boolean {
+  const harness = resolveReviewRole(
+    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "ciFix",
+  ).harness;
+  const resultFile = ciFixResultPath(projectName, entry.name);
+  let rawOutput = "";
+  try { rawOutput = fs.readFileSync(resultFile, "utf-8"); } catch { /* missing */ }
+  let sidecar = "";
+  if (harness !== "claude-code") {
+    try { sidecar = fs.readFileSync(codexStderrSidecar(resultFile), "utf-8"); } catch { /* missing */ }
+  }
+  const source = (harness === "claude-code"
+    ? rawOutput
+    : [rawOutput, sidecar].filter(Boolean).join("\n")) || null;
+  return source !== null && getHarnessCore(harness).isTransientError(source);
+}
+
 function escalateCiFixBudget(
   projectName: string,
   wtPath: string,
   entry: WorkerEntry,
   sha: string,
+  wasTransient = false,
 ): void {
   const bodyTail = entry.lastCiFixBody
     ? `\n\nLast ci-fix output:\n${entry.lastCiFixBody.slice(0, 500)}`
@@ -197,9 +221,10 @@ function escalateCiFixBudget(
     source: "poller",
     project: projectName,
     worker: entry.name,
-    message:
-      `CI fix-agent exhausted ${CI_FIX_BUDGET} attempts for ${entry.name} on ${sha.slice(0, 7)}. ` +
-      `Parking in failing. Push a fix or set 'requireCiSuccess false' to bypass.${bodyTail}`,
+    message: wasTransient
+      ? `CI fix-agent for ${entry.name} on ${sha.slice(0, 7)} could not reach its backend (transient API errors) across ${CI_FIX_BUDGET} attempts — CI is still red but this is not a code failure. 'garden kick' retries once the outage clears.${bodyTail}`
+      : `CI fix-agent exhausted ${CI_FIX_BUDGET} attempts for ${entry.name} on ${sha.slice(0, 7)}. ` +
+        `Parking in failing. Push a fix or set 'requireCiSuccess false' to bypass.${bodyTail}`,
     // Per-SHA so a new commit that fails CI differently deserves a fresh
     // alert. lastCiFixBody varies across runs and would defeat the default
     // 200-char dedup key.
@@ -208,7 +233,9 @@ function escalateCiFixBudget(
   const headSha = getBranchHeadSha(wtPath);
   transitionState(projectName, entry.name, "failing", {
     failCount: (entry.failCount ?? 0) + 1,
-    failingReason: "ci",
+    // A transient outage is kick-recoverable; the `ci` reason (push a fix) is
+    // for a genuinely red CI the agent couldn't repair.
+    failingReason: wasTransient ? "transient-review" : "ci",
     failingSha: sha,
     lastSeenSha: headSha ?? sha,
     lastShaChangeAt: new Date().toISOString(),
@@ -246,6 +273,8 @@ export function handleCiFixing(
   const branchName = entry.branchName ?? entry.name;
 
   const result = readCiFixResult(projectName, entry);
+  // Detect a transient backend outage before cleanCiFixFiles removes the files.
+  const wasTransient = ciFixOutputWasTransient(projectName, entry);
   cleanCiFixFiles(projectName, entry.name);
 
   if (result) {
@@ -308,7 +337,7 @@ export function handleCiFixing(
 
     const attempts = entry.ciFixAttempts ?? 0;
     if (attempts >= CI_FIX_BUDGET) {
-      escalateCiFixBudget(projectName, wtPath, entry, entry.failingSha ?? entry.lastSeenSha ?? "");
+      escalateCiFixBudget(projectName, wtPath, entry, entry.failingSha ?? entry.lastSeenSha ?? "", wasTransient);
       return true;
     }
 

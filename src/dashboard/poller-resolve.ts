@@ -7,6 +7,8 @@ import fs from "node:fs";
 import { tryGetProject } from "../config.js";
 import { addAlert } from "./alerts.js";
 import { resolveReviewRole } from "./roles.js";
+import { getHarnessCore } from "./harness/core.js";
+import { codexStderrSidecar } from "./harness/codex-core.js";
 import {
   abortRebase, forcePushBranch, getBranchHeadSha, getRemoteTrackingSha,
   getUnmergedFiles, hasRebaseInProgress, isAncestor,
@@ -35,6 +37,30 @@ import {
 export const RESOLVE_BUDGET = 2;
 
 const RESOLVE_VERDICT_VOCAB = ["DONE", "FAILED"] as const;
+
+// Was the resolver's run a transient backend error (5xx / 429 / overloaded /
+// rate-limit) rather than a genuine "could not resolve"? An Anthropic (or codex)
+// outage during a rebase-conflict resolve should not park the worker in the
+// unrecoverable `code` failing reason that `garden kick` refuses. Harness-aware,
+// mirroring handleReviewing: claude-code merges stderr into the result via 2>&1;
+// codex sends the verdict to stdout and errors to a stderr sidecar. Must be read
+// before cleanReviewFiles deletes the result/sidecar.
+function resolverOutputWasTransient(projectName: string, entry: WorkerEntry): boolean {
+  const harness = resolveReviewRole(
+    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "resolver",
+  ).harness;
+  const resultFile = reviewResultPath(projectName, entry.name);
+  let rawOutput = "";
+  try { rawOutput = fs.readFileSync(resultFile, "utf-8"); } catch { /* missing */ }
+  let sidecar = "";
+  if (harness !== "claude-code") {
+    try { sidecar = fs.readFileSync(codexStderrSidecar(resultFile), "utf-8"); } catch { /* missing */ }
+  }
+  const source = (harness === "claude-code"
+    ? rawOutput
+    : [rawOutput, sidecar].filter(Boolean).join("\n")) || null;
+  return source !== null && getHarnessCore(harness).isTransientError(source);
+}
 
 interface ResolveResult {
   verdict: "done" | "failed";
@@ -114,6 +140,7 @@ function escalateResolveBudget(
   projectName: string,
   wtPath: string,
   entry: WorkerEntry,
+  wasTransient = false,
 ): void {
   const conflictFiles = getUnmergedFiles(wtPath);
   const fileList = conflictFiles.length > 0
@@ -124,14 +151,20 @@ function escalateResolveBudget(
     : "";
   log.error("poller", "resolver budget exhausted", {
     worker: entry.name,
-    data: { project: projectName, budget: RESOLVE_BUDGET, conflictFiles },
+    data: { project: projectName, budget: RESOLVE_BUDGET, conflictFiles, transient: wasTransient },
   });
+  // A transient backend outage is not a code failure: escalate with a
+  // kick-recoverable reason so `garden kick` re-queues the merge once the
+  // outage clears, instead of the `code` reason that tells the operator to push
+  // a commit they don't need.
   addAlert({
     level: "error",
     source: "poller",
     project: projectName,
     worker: entry.name,
-    message: `Worker ${entry.name}: resolver could not fix the merge-queue rebase conflict after ${RESOLVE_BUDGET} attempts. Conflict files: ${fileList}. A new worker push will reset the retry budget.${bodyTail}`,
+    message: wasTransient
+      ? `Worker ${entry.name}: the resolver could not reach its backend (transient API errors) across ${RESOLVE_BUDGET} attempts, so the merge-queue conflict is unresolved. This is not a code failure — 'garden kick' retries once the outage clears.${bodyTail}`
+      : `Worker ${entry.name}: resolver could not fix the merge-queue rebase conflict after ${RESOLVE_BUDGET} attempts. Conflict files: ${fileList}. A new worker push will reset the retry budget.${bodyTail}`,
     // fileList and bodyTail vary across runs; without a stable key, every
     // resolve-budget exhaustion would persist a fresh alert.
     dedupKey: `resolve-budget:${projectName}:${entry.name}`,
@@ -139,7 +172,7 @@ function escalateResolveBudget(
   const headSha = getBranchHeadSha(wtPath);
   transitionState(projectName, entry.name, "failing", {
     failCount: (entry.failCount ?? 0) + 1,
-    failingReason: "code",
+    failingReason: wasTransient ? "transient-review" : "code",
     failingSha: headSha ?? undefined,
     lastSeenSha: headSha ?? undefined,
     lastShaChangeAt: new Date().toISOString(),
@@ -180,6 +213,9 @@ export function handleResolving(
   }
 
   const resolveResult = readResolveResult(projectName, entry);
+  // Detect a transient backend outage before cleanReviewFiles removes the
+  // result/sidecar, so a budget-exhausting outage escalates recoverably.
+  const wasTransient = resolverOutputWasTransient(projectName, entry);
   cleanReviewFiles(projectName, entry.name);
 
   if (resolveResult) {
@@ -220,7 +256,7 @@ export function handleResolving(
     // merge-pending so the rebase attempt is fresh.
     const attempts = entry.resolveAttempts ?? 0;
     if (attempts >= RESOLVE_BUDGET) {
-      escalateResolveBudget(projectName, wtPath, entry);
+      escalateResolveBudget(projectName, wtPath, entry, wasTransient);
       return true;
     }
 
