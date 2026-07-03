@@ -2897,6 +2897,31 @@ describe("poll — ci-fixing state", () => {
     }));
   });
 
+  it("times out to failing and resets the ci-fix budget", () => {
+    const REVIEW_TIMEOUT_MS = 60 * 60 * 1000;
+    setupCiFix({
+      ciFixAttempts: 2,
+      reviewStartedAt: Date.now() - REVIEW_TIMEOUT_MS - 60 * 1000,
+    });
+    // Agent window still alive past the cap — a hung ci-fix agent.
+    vi.mocked(windowExists).mockReturnValue(true);
+    vi.mocked(getBranchHeadSha).mockReturnValue("hung-head-sha");
+
+    poll("myproject");
+
+    expect(killWindowSafe).toHaveBeenCalledWith("_myproject-ci-fix-bold-ash");
+    const failingCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "failing",
+    );
+    expect(failingCall).toBeDefined();
+    const fields = failingCall![2] as Record<string, unknown>;
+    expect(fields.failingReason).toBe("ci");
+    // The timeout park resets the budget so a worker that recovers from one
+    // timeout doesn't carry a reduced budget into later merge cycles.
+    expect(fields.ciFixAttempts).toBe(0);
+    expect(fields.preCiFixSha).toBeUndefined();
+  });
+
   it("resets to working on a worker-authored push during ci-fix", () => {
     setupCiFix({ lastSeenSha: "origin-baseline" });
     vi.mocked(getRemoteTrackingSha).mockReturnValue("worker-pushed-sha");
