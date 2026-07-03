@@ -40,9 +40,12 @@ export const WATCHDOG_TICK_MS = 60_000;
 export const WATCHDOG_THRESHOLD_MS = 5 * 60_000;
 
 // States the watchdog watches: those where the poller owes the worker a future
-// action (PR_STATE_KIND.pollerOwed), plus the one stranding class that lives in
-// the working state. The pollerOwed classification is the single source of
-// truth in registry.ts; quiescent states (idle working, failing, done) park
+// action (PR_STATE_KIND.pollerOwed), plus two stranding classes that live in
+// otherwise-quiescent states — a `working` worker with commits ahead awaiting a
+// lost review-launch poke, and a `failing` worker mid-debounce awaiting a lost
+// failing->working poke. The pollerOwed classification is the single source of
+// truth in registry.ts; the genuinely quiescent states (an idle `working` with
+// no pending review, a parked `failing` with no pushed fix, `done`) park
 // legitimately on an event of their own, so they are never watched.
 export function isWatchedState(entry: WorkerEntry): boolean {
   const state = entry.prState ?? "working";
