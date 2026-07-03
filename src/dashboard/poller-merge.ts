@@ -63,6 +63,12 @@ const SWEEP_STRANDED_MS = 60_000;
 // is cheap and gh's rate limit is generous; a 60s cadence is fast enough
 // that the merge doesn't feel stuck without burning quota on a tight loop.
 const CI_PENDING_RECHECK_MS = 60_000;
+// Consecutive mergeToBase failures before the worker is parked in `failing`
+// instead of re-reviewing again. A merge failure re-arms a full review each
+// cycle, so an un-bounded loop (a diverged base, branch protection) would burn
+// one Opus review every few seconds forever. A transient cause clears within a
+// couple of retries; past this we stop and surface it for the operator.
+const MAX_MERGE_RETRIES = 3;
 
 export function handleMergePending(
   projectName: string,
@@ -326,21 +332,46 @@ function finalizeMerge(
   try {
     mergeToBase(projectPath, branchName, baseBranch, { project: projectName, worker: entry.name });
   } catch (err) {
+    const failCount = (entry.failCount ?? 0) + 1;
     log.error("poller", "merge failed", {
       worker: entry.name,
-      data: { project: projectName, error: String(err) },
+      data: { project: projectName, error: String(err), attempt: failCount },
     });
+    if (failCount >= MAX_MERGE_RETRIES) {
+      // Persistent failure — stop re-reviewing on every cycle (each retry burns
+      // a full review) and park the worker in a visible, operator-actionable
+      // state. `transient-review` so `garden kick` re-queues it without
+      // demanding a new commit; the alert carries the real cause.
+      addAlert({
+        level: "error",
+        source: "poller",
+        project: projectName,
+        worker: entry.name,
+        message: `Merge failed ${failCount} times for worker ${entry.name}: ${String(err).slice(0, 200)}. Not retrying automatically — check for a diverged base or branch protection; 'garden kick' retries.`,
+        dedupKey: `merge-failed:${projectName}:${entry.name}`,
+      });
+      transitionState(projectName, entry.name, "failing", {
+        failCount,
+        failingReason: "transient-review",
+        mergePendingAt: undefined,
+      });
+      refreshDashboard();
+      return;
+    }
     addAlert({
-      level: "error",
+      level: "warn",
       source: "poller",
       project: projectName,
       worker: entry.name,
-      message: `Merge failed for worker ${entry.name}: ${String(err).slice(0, 200)}`,
+      message: `Merge failed for worker ${entry.name} (attempt ${failCount}/${MAX_MERGE_RETRIES}); re-queuing a review to retry: ${String(err).slice(0, 200)}`,
+      dedupKey: `merge-retry:${projectName}:${entry.name}`,
     });
     // Set pendingReviewAt so the worker gets re-reviewed instead of being
-    // stuck in "working" with no trigger to advance.
+    // stuck in "working" with no trigger to advance; count the failure so a
+    // persistent one escalates instead of looping forever.
     transitionState(projectName, entry.name, "working", {
       pendingReviewAt: Date.now(),
+      failCount,
       mergePendingAt: undefined,
     });
     refreshDashboard();

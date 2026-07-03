@@ -2256,7 +2256,7 @@ describe("poll — merge-pending state", () => {
     );
   });
 
-  it("adds alert on merge failure and sets pendingReviewAt for re-review", () => {
+  it("re-arms for re-review on the first merge failure (bounded retry)", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
@@ -2269,21 +2269,51 @@ describe("poll — merge-pending state", () => {
 
     expect(addAlert).toHaveBeenCalledWith(
       expect.objectContaining({
-        level: "error",
+        level: "warn",
         source: "poller",
         project: "myproject",
         message: expect.stringContaining("Merge failed"),
+        dedupKey: "merge-retry:myproject:bold-ash",
       }),
     );
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({
         prState: "working",
         pendingReviewAt: expect.any(Number),
+        failCount: 1,
         mergePendingAt: undefined,
       }),
     );
     // Must schedule a delayed poke so the poller picks up the re-review
     expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", expect.any(Number));
+  });
+
+  it("parks in failing after MAX_MERGE_RETRIES consecutive merge failures", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        failCount: 2, // one more failure reaches the budget of 3
+      }),
+    ]);
+    vi.mocked(mergeToBase).mockImplementation(() => { throw new Error("branch protection"); });
+
+    poll("myproject");
+
+    // Escalates instead of re-reviewing again — visible, kick-recoverable.
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "failing",
+        failingReason: "transient-review",
+        failCount: 3,
+      }),
+    );
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "error",
+        dedupKey: "merge-failed:myproject:bold-ash",
+      }),
+    );
   });
 
   // ─── grow workflow: budget exhaustion → done at the auto-continue site ──
