@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../src/dashboard/tmux.js", () => ({
   paneExists: vi.fn(() => true),
@@ -88,7 +88,8 @@ vi.mock("../src/dashboard/alerts.js", () => ({
   addAlert: vi.fn(),
 }));
 
-import { validateAndHeal, sweepGhostEntries, healStatusPane } from "../src/dashboard/validate.js";
+import fs from "node:fs";
+import { validateAndHeal, sweepGhostEntries, healStatusPane, cleanContextFiles } from "../src/dashboard/validate.js";
 import { readDashState, writeDashState, withStateLock } from "../src/dashboard/state.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, tmuxSplit } from "../src/dashboard/tmux.js";
 import { readRegistry, writeRegistry } from "../src/dashboard/registry.js";
@@ -517,5 +518,60 @@ describe("sweepGhostEntries", () => {
     const changed = sweepGhostEntries();
     expect(changed).toBe(false);
     expect(vi.mocked(writeRegistry)).not.toHaveBeenCalled();
+  });
+});
+
+describe("cleanContextFiles", () => {
+  const DIR = "/tmp/fake-sessions"; // matches the mocked SESSIONS_DIR
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("deletes stale review files but protects an in-flight review's files", () => {
+    // Spy on the shared node:fs so no real filesystem is touched.
+    vi.spyOn(fs, "readdirSync").mockReturnValue([
+      "myproject-live-worker-review-result.txt",
+      "myproject-live-worker-review-prompt.txt",
+      "myproject-stale-worker-review-result.txt",
+    ] as unknown as ReturnType<typeof fs.readdirSync>);
+    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+    // A worker whose review window is still up must keep its files; a worker
+    // with no live review window is stale and its leftover files are swept.
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: {
+        myproject: [
+          { name: "live-worker", sessionId: "s", task: "",
+            reviewWindowName: "_myproject-review-live-worker" },
+        ],
+      },
+    });
+    vi.mocked(windowExists).mockReturnValue(true);
+
+    cleanContextFiles();
+
+    expect(unlink).toHaveBeenCalledWith(`${DIR}/myproject-stale-worker-review-result.txt`);
+    expect(unlink).not.toHaveBeenCalledWith(`${DIR}/myproject-live-worker-review-result.txt`);
+    expect(unlink).not.toHaveBeenCalledWith(`${DIR}/myproject-live-worker-review-prompt.txt`);
+  });
+
+  it("sweeps a review file when its worker's review window has died", () => {
+    vi.spyOn(fs, "readdirSync").mockReturnValue([
+      "myproject-gone-worker-review-result.txt",
+    ] as unknown as ReturnType<typeof fs.readdirSync>);
+    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: {
+        myproject: [
+          { name: "gone-worker", sessionId: "s", task: "",
+            reviewWindowName: "_myproject-review-gone-worker" },
+        ],
+      },
+    });
+    vi.mocked(windowExists).mockReturnValue(false); // window gone -> not protected
+
+    cleanContextFiles();
+
+    expect(unlink).toHaveBeenCalledWith(`${DIR}/myproject-gone-worker-review-result.txt`);
   });
 });

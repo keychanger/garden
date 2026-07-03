@@ -10,6 +10,7 @@ import { startProjectPoller, projectPollerRunning } from "./poller.js";
 import { createGardenGrowhouseWindow, USAGE_PANE_HEIGHT } from "./create.js";
 import { resolveGardenRunner } from "./runner.js";
 import { gardenWindowName, workerWindowName } from "./window-names.js";
+import { reviewResultPath, reviewPromptPath } from "./poller-review.js";
 import { buildStatusCommand, buildUsageCommand } from "./header.js";
 import { gardenRestoreFromHidden } from "./layout.js";
 import { addAlert } from "./alerts.js";
@@ -420,10 +421,25 @@ export function validateAndHeal(state: DashboardState): DashboardState {
   return healed;
 }
 
-function cleanContextFiles(): void {
+export function cleanContextFiles(): void {
   try {
     const config = loadConfig();
     const projectNames = new Set(Object.keys(config.projects));
+    // A reviewer or resolver writes its verdict into the review-result file and
+    // reads its prompt from the review-prompt file. If cleanContextFiles runs
+    // during a live review (this fires on every dashboard attach), deleting
+    // those files leaves the verdict unreadable and spuriously fails the review.
+    // Protect the files of any worker whose review/resolve window is still up.
+    const registry = readRegistry();
+    const protectedFiles = new Set<string>();
+    for (const [projectName, entries] of Object.entries(registry.workers)) {
+      for (const entry of entries) {
+        if (entry.reviewWindowName && windowExists(entry.reviewWindowName)) {
+          protectedFiles.add(reviewResultPath(projectName, entry.name).split("/").pop()!);
+          protectedFiles.add(reviewPromptPath(projectName, entry.name).split("/").pop()!);
+        }
+      }
+    }
     const files = fs.readdirSync(SESSIONS_DIR);
     for (const file of files) {
       // Clean stale context files
@@ -435,8 +451,10 @@ function cleanContextFiles(): void {
         }
         continue;
       }
-      // Clean stale review result/prompt files
+      // Clean stale review result/prompt files — but never one belonging to an
+      // in-flight review/resolve (its window is still alive).
       if (file.endsWith("-review-result.txt") || file.endsWith("-review-prompt.txt")) {
+        if (protectedFiles.has(file)) continue;
         fs.unlinkSync(`${SESSIONS_DIR}/${file}`);
         log.info("validate", "removed stale review file", { data: { file } });
       }
