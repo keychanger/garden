@@ -67,6 +67,7 @@ const cases: Case[] = [
       fiveHour: { pct: 80, resetsAt: "2026-04-15T20:00:00+00:00" },
       weekly:   { pct: 91, resetsAt: "2026-04-19T04:00:00+00:00" },
       sonnet:   { pct: 12, resetsAt: "2026-04-20T15:00:00+00:00" },
+      extraUsage: { enabled: true, monthlyLimit: 5000, usedCredits: 1234, utilization: 25 },
     },
   },
   {

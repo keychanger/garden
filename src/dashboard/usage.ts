@@ -33,10 +33,22 @@ export interface UsageMeter {
   resetsAt: string; // ISO 8601
 }
 
+// Pay-as-you-go overflow credits beyond the plan quota. Surfaced only when the
+// account has extra usage turned on (is_enabled); a disabled bucket is dropped
+// so the pane stays at three bars. The numeric fields are optional because the
+// endpoint returns null limits for an uncapped account.
+export interface ExtraUsage {
+  enabled: boolean;
+  monthlyLimit?: number;
+  usedCredits?: number;
+  utilization?: number; // percent, server-computed
+}
+
 export interface UsageData {
   fiveHour?: UsageMeter;
   weekly?: UsageMeter;
   sonnet?: UsageMeter;
+  extraUsage?: ExtraUsage;
 }
 
 export interface UsageSnapshot {
@@ -256,9 +268,11 @@ export function parseRetryAfter(header: unknown, nowMs: number = Date.now()): nu
 // finds nothing so both shapes Just Work without coordinating with the
 // server's rollout. On Max plans seven_day_opus is typically null (Opus
 // usage is rolled into seven_day); seven_day_sonnet is the populated
-// model-specific bucket, so that's what the third bar shows. Fields are
-// parsed defensively so any shape shift or null bucket degrades to "—"
-// rather than throwing.
+// model-specific bucket, so that's what the third bar shows. The extra_usage
+// bucket is surfaced as `extraUsage` only when is_enabled, rendered as a dim
+// credit footer under the three bars rather than a fourth resetting meter.
+// Fields are parsed defensively so any shape shift or null bucket degrades to
+// "—" rather than throwing.
 export function normalizeUsage(raw: unknown): UsageData {
   if (!raw || typeof raw !== "object") return {};
   const r = raw as Record<string, unknown>;
@@ -302,7 +316,42 @@ function pickBuckets(r: Record<string, unknown>): UsageData {
   if (w) out.weekly = w;
   const s = pickMeter(r["seven_day_sonnet"]);
   if (s) out.sonnet = s;
+  const x = pickExtraUsage(r["extra_usage"]);
+  if (x) out.extraUsage = x;
   return out;
+}
+
+// The extra_usage bucket → ExtraUsage, but only when the account has it
+// enabled: a disabled or absent bucket returns undefined so the pane keeps
+// three bars. Numeric fields are parsed defensively (the endpoint returns null
+// for an uncapped monthly_limit / utilization), so a partial bucket degrades
+// to the fields it does carry rather than throwing. Note: the "found any
+// buckets?" check in normalizeUsage keys on the three time buckets, not this
+// one, so an extra-usage-only response still falls through to the
+// envelope/shape-shift handling rather than short-circuiting on credits alone.
+function pickExtraUsage(bucket: unknown): ExtraUsage | undefined {
+  if (!bucket || typeof bucket !== "object") return undefined;
+  const b = bucket as Record<string, unknown>;
+  if (b["is_enabled"] !== true) return undefined;
+  const out: ExtraUsage = { enabled: true };
+  if (typeof b["monthly_limit"] === "number") out.monthlyLimit = b["monthly_limit"];
+  if (typeof b["used_credits"] === "number") out.usedCredits = b["used_credits"];
+  if (typeof b["utilization"] === "number") out.utilization = b["utilization"];
+  return out;
+}
+
+// The credit tally shared by the dashboard footer and `garden usage`:
+// "1234 / 5000 credits (25%)", degrading to whatever fields the endpoint
+// returned for an uncapped or partial bucket ("1234 credits used", "enabled").
+export function formatExtraUsageCredits(extra: ExtraUsage): string {
+  const { usedCredits: used, monthlyLimit: limit, utilization: util } = extra;
+  let text: string;
+  if (used != null && limit != null) text = `${used} / ${limit} credits`;
+  else if (used != null) text = `${used} credits used`;
+  else if (limit != null) text = `${limit} credits limit`;
+  else text = "enabled";
+  if (util != null) text += ` (${Math.round(util)}%)`;
+  return text;
 }
 
 // One-level structural sketch: for each top-level key, emit either the
@@ -673,21 +722,37 @@ export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number):
   // A null seven_day_sonnet bucket renders "—" rather than a flat-zero bar — a 0% sliver
   // next to the weekly bar reads as broken, and "no data" is the truer signal.
   lines.push(renderMeterLine("sonnet", d.sonnet,   nowMs, SEVEN_DAY_MS, fit));
+  // Extra usage (pay-as-you-go credits) sits below the meters as a dim footnote
+  // and above the health tag — real data first, freshness annotation last.
+  if (d.extraUsage) lines.push(formatExtraUsageLine(d.extraUsage, paneWidth));
   if (tag) lines.push(formatHealthLine(tag, paneWidth));
 
   return lines.map(l => l + "\x1b[K").join("\n");
 }
 
-// Width-aware single-line health row. Truncates with an ellipsis when the
-// `(stale 2h, …)` content would exceed the pane and wrap — wrapping would
+// Indented, fully-dimmed footer row under the meters. Truncates with an
+// ellipsis when the content would exceed the pane and wrap — wrapping would
 // add extra rows to the pane height the auto-resize in writeUsageRendered
-// doesn't budget for.
-function formatHealthLine(tag: string, paneWidth: number | undefined): string {
-  const text = `(${tag})`;
+// doesn't budget for. Shared by the health tag and the extra-usage line.
+function dimFooterLine(text: string, paneWidth: number | undefined): string {
   if (paneWidth === undefined) return `${INDENT}${dim(text)}`;
   const budget = Math.max(1, paneWidth - INDENT.length);
   const fitted = text.length <= budget ? text : text.slice(0, Math.max(1, budget - 1)) + "…";
   return `${INDENT}${dim(fitted)}`;
+}
+
+// Width-aware single-line health row, e.g. "(stale 2h, rate-limited)".
+function formatHealthLine(tag: string, paneWidth: number | undefined): string {
+  return dimFooterLine(`(${tag})`, paneWidth);
+}
+
+// Dim credit footer for pay-as-you-go extra usage. Not a resetting time-window
+// bar — an absolute credit tally — so it renders as text under the three bars
+// with a matching label column, dimmed so it reads as a footnote rather than a
+// fourth peer meter.
+function formatExtraUsageLine(extra: ExtraUsage, paneWidth: number | undefined): string {
+  const text = `${"extra".padEnd(LABEL_WIDTH)}  ${formatExtraUsageCredits(extra)}`;
+  return dimFooterLine(text, paneWidth);
 }
 
 const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;

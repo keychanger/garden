@@ -1,6 +1,7 @@
 // Manual usage-meter inspection and force-refresh.
 import {
   formatDuration,
+  formatExtraUsageCredits,
   readUsageSnapshot,
   refreshUsage,
   type UsageSnapshot,
@@ -67,9 +68,9 @@ function renderPretty(data: unknown): string {
     `5h      ${meterRow(d.fiveHour)}`,
     `week    ${meterRow(d.weekly)}`,
     `sonnet  ${meterRow(d.sonnet)}`,
-    ``,
-    ageText,
   ];
+  if (d.extraUsage) rows.push(`extra   ${formatExtraUsageCredits(d.extraUsage)}`);
+  rows.push(``, ageText);
   return rows.join("\n");
 }
 

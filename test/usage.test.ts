@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   normalizeUsage,
   formatDuration,
+  formatExtraUsageCredits,
   formatBriefAge,
   shouldRefreshOnHookWith,
   decideRefresh,
@@ -57,6 +58,39 @@ describe("normalizeUsage", () => {
     expect(normalizeUsage(null)).toEqual({});
     expect(normalizeUsage("nope")).toEqual({});
     expect(normalizeUsage({})).toEqual({});
+  });
+
+  it("surfaces extra_usage only when enabled, defensively parsing partial buckets", () => {
+    const base = { five_hour: { utilization: 5, resets_at: "2026-04-15T20:00:00Z" } };
+    // Disabled → dropped so the pane keeps three bars.
+    expect(normalizeUsage({ ...base, extra_usage: { is_enabled: false, monthly_limit: 5000, used_credits: 0 } }).extraUsage)
+      .toBeUndefined();
+    // Enabled and fully populated.
+    expect(normalizeUsage({ ...base, extra_usage: { is_enabled: true, monthly_limit: 5000, used_credits: 1234, utilization: 25 } }).extraUsage)
+      .toEqual({ enabled: true, monthlyLimit: 5000, usedCredits: 1234, utilization: 25 });
+    // Enabled but uncapped (null limit / utilization) → keeps only the fields it carries.
+    expect(normalizeUsage({ ...base, extra_usage: { is_enabled: true, monthly_limit: null, used_credits: 1234, utilization: null } }).extraUsage)
+      .toEqual({ enabled: true, usedCredits: 1234 });
+  });
+});
+
+describe("formatExtraUsageCredits", () => {
+  it("shows used / limit with utilization when fully populated", () => {
+    expect(formatExtraUsageCredits({ enabled: true, monthlyLimit: 5000, usedCredits: 1234, utilization: 25 }))
+      .toBe("1234 / 5000 credits (25%)");
+  });
+  it("rounds a fractional utilization", () => {
+    expect(formatExtraUsageCredits({ enabled: true, monthlyLimit: 5000, usedCredits: 1234, utilization: 24.68 }))
+      .toBe("1234 / 5000 credits (25%)");
+  });
+  it("falls back to used-only when the limit is absent", () => {
+    expect(formatExtraUsageCredits({ enabled: true, usedCredits: 1234 })).toBe("1234 credits used");
+  });
+  it("falls back to limit-only when usage is absent", () => {
+    expect(formatExtraUsageCredits({ enabled: true, monthlyLimit: 5000 })).toBe("5000 credits limit");
+  });
+  it("says 'enabled' when no figures are present", () => {
+    expect(formatExtraUsageCredits({ enabled: true })).toBe("enabled");
   });
 });
 
@@ -606,6 +640,78 @@ describe("renderUsagePane", () => {
     const visible = tagLine.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
     expect(visible.length).toBeLessThanOrEqual(40);
     expect(visible).toContain("…"); // ellipsis
+  });
+
+  it("renders a dim extra-usage credit footer under the meters when enabled", async () => {
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        fiveHour: { pct: 26, resetsAt: new Date(now + 2 * 60 * 60_000).toISOString() },
+        weekly:   { pct: 35, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
+        sonnet:   { pct: 4,  resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
+        extraUsage: { enabled: true, monthlyLimit: 5000, usedCredits: 1234, utilization: 25 },
+      },
+    });
+    const render = await importRender();
+    const lines = render(now).split("\n");
+    // Leading blank + 3 meters + 1 extra footer = 5 lines.
+    expect(lines).toHaveLength(5);
+    const extraLine = lines[4];
+    expect(extraLine).toContain("extra");
+    expect(extraLine).toContain("1234 / 5000 credits (25%)");
+    expect(extraLine).toContain("\x1b[2m"); // fully dimmed footer
+    expect(extraLine).not.toContain("█"); // not a bar
+  });
+
+  it("places the extra-usage footer above the health tag when both are present", async () => {
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      error: "rate-limited",
+      dataAt: new Date(now - 2 * 60 * 60_000).toISOString(),
+      data: {
+        fiveHour: { pct: 42, resetsAt: new Date(now + 60 * 60_000).toISOString() },
+        weekly:   { pct: 35, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
+        sonnet:   { pct: 4,  resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
+        extraUsage: { enabled: true, monthlyLimit: 5000, usedCredits: 1234, utilization: 25 },
+      },
+    });
+    const render = await importRender();
+    const lines = render(now).split("\n");
+    // Leading blank + 3 meters + extra footer + health tag = 6 lines.
+    expect(lines).toHaveLength(6);
+    expect(lines[4]).toContain("1234 / 5000 credits");
+    expect(lines[5]).toContain("(stale 2h, rate-limited)");
+  });
+
+  it("degrades an uncapped extra-usage bucket to the fields it carries", async () => {
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        fiveHour: { pct: 26, resetsAt: new Date(now + 2 * 60 * 60_000).toISOString() },
+        extraUsage: { enabled: true, usedCredits: 1234 },
+      },
+    });
+    const render = await importRender();
+    const extraLine = render(now).split("\n").find(l => l.includes("extra"));
+    expect(extraLine).toBeDefined();
+    expect(extraLine).toContain("1234 credits used");
+    expect(extraLine).not.toContain("/"); // no limit → no "used / limit" form
+  });
+
+  it("truncates a wide extra-usage footer to fit a narrow pane", async () => {
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        fiveHour: { pct: 26, resetsAt: new Date(now + 2 * 60 * 60_000).toISOString() },
+        extraUsage: { enabled: true, monthlyLimit: 500000, usedCredits: 123456, utilization: 25 },
+      },
+    });
+    const render = await importRender();
+    const lines = render(now, 24).split("\n");
+    const extraLine = lines.find(l => l.includes("extra"))!;
+    const visible = extraLine.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+    expect(visible.length).toBeLessThanOrEqual(24);
+    expect(visible).toContain("…");
   });
 });
 
