@@ -2261,6 +2261,7 @@ describe("poll — merge-pending state", () => {
       makeWorker({
         prState: "merge-pending",
         mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        resolveAttempts: 2, // budget-exhausted from a prior resolved conflict
       }),
     ]);
     vi.mocked(mergeToBase).mockImplementation(() => { throw new Error("merge conflict"); });
@@ -2276,12 +2277,15 @@ describe("poll — merge-pending state", () => {
         dedupKey: "merge-retry:myproject:bold-ash",
       }),
     );
+    // Re-arms a fresh review cycle and resets the resolver budget so the next
+    // genuine conflict isn't spuriously escalated by a carried-over count.
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({
         prState: "working",
         pendingReviewAt: expect.any(Number),
         failCount: 1,
         mergePendingAt: undefined,
+        resolveAttempts: 0,
       }),
     );
     // Must schedule a delayed poke so the poller picks up the re-review
@@ -2301,11 +2305,14 @@ describe("poll — merge-pending state", () => {
     poll("myproject");
 
     // Escalates instead of re-reviewing again — visible, kick-recoverable.
+    // failingSha is pinned so handleFailing keeps it parked rather than
+    // debouncing back to `working` on its 30s timer.
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({
         prState: "failing",
         failingReason: "transient-review",
         failCount: 3,
+        failingSha: "abc123",
       }),
     );
     expect(addAlert).toHaveBeenCalledWith(

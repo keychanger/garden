@@ -63,11 +63,14 @@ const SWEEP_STRANDED_MS = 60_000;
 // is cheap and gh's rate limit is generous; a 60s cadence is fast enough
 // that the merge doesn't feel stuck without burning quota on a tight loop.
 const CI_PENDING_RECHECK_MS = 60_000;
-// Consecutive mergeToBase failures before the worker is parked in `failing`
-// instead of re-reviewing again. A merge failure re-arms a full review each
-// cycle, so an un-bounded loop (a diverged base, branch protection) would burn
-// one Opus review every few seconds forever. A transient cause clears within a
-// couple of retries; past this we stop and surface it for the operator.
+// Failure budget before the worker is parked in `failing` instead of
+// re-reviewing again. Compared against the shared `failCount` (all failure
+// kinds since the last successful merge, which resets it), so in the common
+// case of a pure merge-failure loop this is the merge-attempt count. A merge
+// failure re-arms a full review each cycle, so an un-bounded loop (a diverged
+// base, branch protection) would burn one Opus review every few seconds
+// forever. A transient cause clears within a couple of retries; past this we
+// stop and surface it for the operator.
 const MAX_MERGE_RETRIES = 3;
 
 export function handleMergePending(
@@ -347,12 +350,20 @@ function finalizeMerge(
         source: "poller",
         project: projectName,
         worker: entry.name,
-        message: `Merge failed ${failCount} times for worker ${entry.name}: ${String(err).slice(0, 200)}. Not retrying automatically — check for a diverged base or branch protection; 'garden kick' retries.`,
+        message: `Merge failed for worker ${entry.name}; ${failCount} consecutive failures reached the retry budget (${MAX_MERGE_RETRIES}). Not retrying automatically — check for a diverged base or branch protection; 'garden kick' retries: ${String(err).slice(0, 200)}`,
         dedupKey: `merge-failed:${projectName}:${entry.name}`,
       });
+      // Pin failingSha so handleFailing keeps the worker parked (its
+      // stay-parked guard requires it) instead of debouncing back to
+      // `working` — the point of the escalation is to stop automatic retries
+      // until the operator kicks it or pushes a new commit.
+      const headSha = getBranchHeadSha(entry.worktreePath ?? projectPath);
       transitionState(projectName, entry.name, "failing", {
         failCount,
         failingReason: "transient-review",
+        failingSha: headSha ?? undefined,
+        lastSeenSha: headSha ?? undefined,
+        lastShaChangeAt: new Date().toISOString(),
         mergePendingAt: undefined,
       });
       refreshDashboard();
@@ -373,6 +384,15 @@ function finalizeMerge(
       pendingReviewAt: Date.now(),
       failCount,
       mergePendingAt: undefined,
+      // Fresh cycle: reset the resolver budget and stale resolve state, matching
+      // the force-push re-arm paths (tryForcePushAfterReview / after-resolve).
+      // Without this, a resolver-verified branch that reaches this merge failure
+      // with resolveAttempts already at budget would, after re-review, hit
+      // escalateResolveBudget on the next genuine conflict without ever
+      // launching a resolver.
+      resolveAttempts: 0,
+      preResolveSha: undefined,
+      lastResolveBody: undefined,
     });
     refreshDashboard();
     scheduleDelayedPoke(projectName, 5_000);
