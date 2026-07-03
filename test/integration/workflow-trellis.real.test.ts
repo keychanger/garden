@@ -235,6 +235,51 @@ DRIFT
     expect(entry?.trellis?.lastDrift).toHaveLength(2);
   });
 
+  it("DRIFT with prose only (no parseable bullets) seeds the prose, never an empty list", async () => {
+    // Regression guard for the zero-item refusal. When the reviewer returns
+    // DRIFT but emits no numbered bullets, parseDriftList returns null and the
+    // dispatcher must seed lastDrift with the reviewer's raw prose. An empty
+    // lastDrift would make buildTrellisContinuePrompt render its "none reported;
+    // write .garden-done" branch, inviting the loop to converge while drift
+    // still remains — a false convergence. lastDrift must be non-empty.
+    await setupWorktreeAndCommit();
+    await plantVine({
+      prState: "working",
+      agentStatus: "idle",
+      pendingReviewAt: Date.now(),
+    });
+
+    const { poll } = await import("../../src/dashboard/poller.js");
+    poll(PROJECT);
+
+    // Reviewer names drift in prose, with no numbered bullets to parse.
+    const { reviewResultPath } = await import("../../src/dashboard/poller-review.js");
+    const resultFile = reviewResultPath(PROJECT, WORKER);
+    fs.mkdirSync(path.dirname(resultFile), { recursive: true });
+    fs.writeFileSync(
+      resultFile,
+      `The timeout handling still looks wrong and no test covers the error path.
+
+DRIFT
+`,
+    );
+
+    const { windowExists } = await import("../../src/dashboard/tmux.js");
+    vi.mocked(windowExists).mockReturnValue(false);
+
+    poll(PROJECT);
+    const { findWorkerByName } = await import("../../src/dashboard/registry.js");
+    const entry = findWorkerByName(PROJECT, WORKER);
+    expect(entry?.prState).toBe("merge-pending");
+    expect(entry?.trellis?.lastVerdict).toBe("DRIFT");
+    // The prose fallback fired: exactly one non-empty line carrying the prose,
+    // not the empty list that drift.items.map would have produced.
+    expect(entry?.trellis?.lastDrift).toHaveLength(1);
+    expect(entry?.trellis?.lastDrift?.[0]).toContain("timeout handling still looks wrong");
+    // No structured aligned count survives an unparseable body.
+    expect(entry?.trellis?.alignedCount).toBeUndefined();
+  });
+
   it("budget exhaustion short-circuits to failing with iteration-budget reason", async () => {
     await setupWorktreeAndCommit();
     // Plant with iteration already at the cap so the next launchReview
