@@ -29,7 +29,7 @@ import {
   type WorktreeCommandOptions,
 } from "./create.js";
 import { getHarness } from "./harness/index.js";
-import { dispatchDelayedSeed } from "./continue.js";
+import { dispatchDelayedSeed, paneHasOperatorDraft } from "./continue.js";
 import { log } from "./log.js";
 import {
   findWorkerByName, updateWorkerFields, type WorkerEntry,
@@ -149,6 +149,26 @@ export function loopAutoContinueAfterMerge(
   if (!paneId) {
     log.warn("workers", `${hooks.logTag} continue skipped, no pane`, {
       worker: workerName, data: { project: projectName },
+    });
+    return false;
+  }
+
+  // Do NOT cold-respawn over an operator who has re-engaged this worker. The
+  // respawn-pane -k below kills the pane's process and throws away its Claude
+  // context — so if the operator paused it, is mid-turn (working/asking), or has
+  // an unsent draft in the input box, defer and leave prState=merged. The
+  // merged-state gate-reopen sweep (handleMerged) replays this decision on the
+  // next poke, so the iteration resumes once the worker is idle again. Mirrors
+  // continueWorker's paused/draft skips.
+  if (
+    entry.agentStatus === "paused"
+    || entry.agentStatus === "working"
+    || entry.agentStatus === "asking"
+    || paneHasOperatorDraft(paneId)
+  ) {
+    log.info("workers", `${hooks.logTag} continue deferred, worker active or drafting`, {
+      worker: workerName,
+      data: { project: projectName, agentStatus: entry.agentStatus },
     });
     return false;
   }

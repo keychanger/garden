@@ -57,6 +57,7 @@ vi.mock("../src/dashboard/create.js", () => ({
 
 vi.mock("../src/dashboard/continue.js", () => ({
   dispatchDelayedSeed: vi.fn(),
+  paneHasOperatorDraft: vi.fn(() => false),
 }));
 
 vi.mock("../src/dashboard/runner.js", () => ({
@@ -82,7 +83,7 @@ import { findWorkerByName, updateWorkerFields } from "../src/dashboard/registry.
 import { readDashState } from "../src/dashboard/state.js";
 import { tryGetProject } from "../src/config.js";
 import { tmux, paneExists, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
-import { dispatchDelayedSeed } from "../src/dashboard/continue.js";
+import { dispatchDelayedSeed, paneHasOperatorDraft } from "../src/dashboard/continue.js";
 import { buildWorktreeWorkerCommand } from "../src/dashboard/create.js";
 import { getHarness } from "../src/dashboard/harness/index.js";
 import { spawn } from "node:child_process";
@@ -146,6 +147,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(paneExists).mockReturnValue(true);
   vi.mocked(windowExists).mockReturnValue(true);
+  vi.mocked(paneHasOperatorDraft).mockReturnValue(false);
   vi.mocked(getFirstPaneId).mockReturnValue("%30");
   vi.mocked(readDashState).mockReturnValue(makeState());
   vi.mocked(tryGetProject).mockReturnValue({ path: "/tmp/projects/myproject" });
@@ -246,6 +248,45 @@ describe("loopAutoContinueAfterMerge", () => {
 
     expect(result).toBe(false);
     expect(tmux).not.toHaveBeenCalled();
+  });
+
+  it.each(["working", "asking", "paused"] as const)(
+    "defers (no respawn, stays merged) when the worker is %s",
+    (agentStatus) => {
+      vi.mocked(findWorkerByName).mockReturnValue(makeWorker({ agentStatus }));
+      vi.mocked(readDashState).mockReturnValue(makeState({
+        activeWindowName: "_myproject-worker-bold-ash",
+        activePaneId: "%9",
+      }));
+
+      const result = loopAutoContinueAfterMerge(
+        "myproject", "bold-ash", makeHooks(), { trellisRelativePath: ".garden/trellises/foo.md" },
+      );
+
+      // Bail before any destructive step: no respawn-pane kill, no state clear,
+      // so prState stays merged for the gate-reopen sweep to replay.
+      expect(result).toBe(false);
+      expect(tmux).not.toHaveBeenCalled();
+      expect(dispatchDelayedSeed).not.toHaveBeenCalled();
+      expect(updateWorkerFields).not.toHaveBeenCalled();
+    },
+  );
+
+  it("defers when the operator has an unsent draft in the input box", () => {
+    vi.mocked(findWorkerByName).mockReturnValue(makeWorker({ agentStatus: "idle" }));
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+    vi.mocked(paneHasOperatorDraft).mockReturnValue(true);
+
+    const result = loopAutoContinueAfterMerge(
+      "myproject", "bold-ash", makeHooks(), { trellisRelativePath: ".garden/trellises/foo.md" },
+    );
+
+    expect(result).toBe(false);
+    expect(tmux).not.toHaveBeenCalled();
+    expect(updateWorkerFields).not.toHaveBeenCalled();
   });
 
   it("on success: regenerates sessionId, respawns the pane, clears pendingContinue*, writes the seed file, dispatches seed", () => {
