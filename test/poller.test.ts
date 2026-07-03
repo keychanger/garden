@@ -1415,6 +1415,73 @@ describe("poll — reviewing state (async)", () => {
     expect(resetCall).toBeUndefined();
   });
 
+  it("resets to working when a worker pushed new commits during a CLEAN review (stale verdict)", () => {
+    // The reviewer found nothing to change (CLEAN) so it pushed nothing — yet
+    // origin advanced past the reviewed SHA. That advance is the worker's own
+    // mid-review push; force-pushing a CLEAN stamp onto it would merge
+    // never-reviewed code. The verdict must be discarded and the new commits
+    // re-reviewed. (Contrast west-old-reef above: a FIXED reviewer-push is
+    // SHA-indistinguishable and must still dispatch, so the guard is CLEAN-only.)
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "reviewed-sha",
+      }),
+    ]);
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("worker-pushed-sha");
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result") ? "Looks good.\nCLEAN" : "{}",
+    );
+    vi.mocked(getCommitSummary).mockReturnValue("worker-pushed-sha new work");
+
+    poll("myproject");
+
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    const mergePendingCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "merge-pending",
+    );
+    expect(mergePendingCall).toBeUndefined();
+    const resetCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "working",
+    );
+    expect(resetCall).toBeDefined();
+    expect((resetCall![2] as Record<string, unknown>).pendingReviewAt).toEqual(expect.any(Number));
+  });
+
+  it("dispatches CLEAN when the remote SHA is unreadable (fail-open, no false reset)", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "reviewed-sha",
+      }),
+    ]);
+    vi.mocked(getRemoteTrackingSha).mockReturnValue(null);
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result") ? "Looks good.\nCLEAN" : "{}",
+    );
+
+    poll("myproject");
+
+    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merge-pending" }),
+    );
+  });
+
   it("omits pendingReviewAt on worker-push reset when no commits are ahead of base", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",

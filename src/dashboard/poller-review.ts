@@ -218,7 +218,7 @@ export function handleReviewing(
       );
     }
     return dispatchDefaultVerdict(
-      projectName, projectPath, entry, review as ReviewResult,
+      projectName, projectPath, baseBranch, entry, review as ReviewResult,
     );
   }
 
@@ -530,12 +530,34 @@ function tryForcePushAfterReview(
 function dispatchDefaultVerdict(
   projectName: string,
   projectPath: string,
+  baseBranch: string,
   entry: WorkerEntry,
   review: ReviewResult,
 ): boolean {
   if (review.verdict === "clean" || review.verdict === "fixed") {
     const wtPath = entry.worktreePath ?? projectPath;
     const branchName = entry.branchName ?? entry.name;
+    // Stale-verdict guard (CLEAN only). A CLEAN verdict means the reviewer found
+    // nothing to change, so it committed and pushed nothing. If origin/<branch>
+    // has nonetheless advanced past the SHA the reviewer reviewed (lastSeenSha,
+    // captured from the remote ref at launch), the worker itself published new
+    // commits during the review — force-pushing now would merge never-reviewed
+    // code under a CLEAN stamp. Discard the stale verdict and re-review.
+    //
+    // Deliberately NOT applied to FIXED: a reviewer that fixes DOES sometimes
+    // push its own commit (the west-old-reef incident), which is
+    // SHA-indistinguishable from a worker push (both leave origin == local HEAD
+    // in the shared worktree). CLEAN carries no such ambiguity — a clean review
+    // never pushes — so the remote-advance signal is unambiguous there. A null
+    // remoteSha (no remote / transient git failure) fails open to dispatch,
+    // matching the review===null worker-push guard above.
+    if (review.verdict === "clean") {
+      const remoteSha = getRemoteTrackingSha(wtPath, branchName);
+      if (remoteSha && entry.lastSeenSha && remoteSha !== entry.lastSeenSha) {
+        resetToWorkingOnWorkerPush(projectName, wtPath, baseBranch, entry, "review");
+        return true;
+      }
+    }
     if (!tryForcePushAfterReview(projectName, entry, wtPath, branchName, "review")) {
       return true;
     }
