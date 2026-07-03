@@ -8,13 +8,16 @@
 // module provides the defense-in-depth gate.
 //
 // Contract for handleMergePending (poller-merge.ts):
-//   - "success" / "no-ci" / "unavailable" → proceed with merge
+//   - "success" / "unavailable" → proceed with merge
+//   - "no-ci" → proceed, UNLESS the caller has observed this project run CI
+//     before, in which case zero check-runs is treated as "not yet
+//     materialized" and the merge defers within a bounded grace window before
+//     passing through (the disambiguation lives in gateCiStatus, poller-merge.ts)
 //   - "pending" → defer (caller stays in merge-pending, schedules a re-poke)
 //   - "failed" → caller transitions worker to `failing` with reason "ci"
 //
-// "no-ci" (zero check-runs on the SHA) and "unavailable" (gh missing,
-// not a github remote, or API error) both pass through. Failing closed
-// on those would block legitimate non-GitHub projects.
+// "unavailable" (gh missing, not a github remote, or API error) always passes
+// through — failing closed there would block legitimate non-GitHub projects.
 import { execFileSync, spawnSync } from "node:child_process";
 import { log } from "./log.js";
 

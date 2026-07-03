@@ -2572,6 +2572,53 @@ describe("poll — merge-pending CI gate", () => {
     expect(mergeToBase).not.toHaveBeenCalled();
   });
 
+  it("passes a persistently no-ci SHA through once the grace window elapses", () => {
+    const t0 = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(t0);
+    try {
+      registryMock._setEntries("myproject", [pending()]);
+      // Learn the project has CI, then observe zero check-runs on the same SHA:
+      // the first no-ci poll stamps the grace start and defers.
+      vi.mocked(checkCiStatus).mockReturnValue({ kind: "pending", pending: ["build"] });
+      poll("myproject");
+      vi.mocked(checkCiStatus).mockReturnValue({ kind: "no-ci" });
+      poll("myproject");
+      expect(mergeToBase).not.toHaveBeenCalled();
+
+      // Past the 3-minute grace ceiling the gate concludes the SHA genuinely
+      // has no check-runs (path-filtered commit, deleted workflow) and lets the
+      // merge proceed rather than deferring forever.
+      nowSpy.mockReturnValue(t0 + 3 * 60_000 + 1);
+      poll("myproject");
+      expect(mergeToBase).toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("arms only one CI recheck poke across repeated defers in the same window", () => {
+    // Freeze the clock so the armed window (now + 60s) stays in the future for
+    // all three polls, exercising armCiRecheck's dedup guard deterministically.
+    const t0 = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(t0);
+    try {
+      vi.mocked(checkCiStatus).mockReturnValue({ kind: "pending", pending: ["build"] });
+      registryMock._setEntries("myproject", [pending()]);
+
+      // Three defers inside one 60s window: the first arms a recheck poke, the
+      // next two must find one already scheduled and NOT stack another sleeper.
+      poll("myproject");
+      poll("myproject");
+      poll("myproject");
+
+      const recheckPokes = vi.mocked(scheduleDelayedPoke).mock.calls.filter(c => c[1] === 60_000);
+      expect(recheckPokes).toHaveLength(1);
+      expect(mergeToBase).not.toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("skips the gate entirely when requireCiSuccess is false", () => {
     vi.mocked(tryGetProject).mockReturnValue({
       path: "/repo/myproject",

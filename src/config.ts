@@ -56,8 +56,10 @@ export interface ProjectConfig {
   // CI gate at the poller's merge step. When true (default) the poller
   // queries GitHub Actions check-runs on the worker's HEAD before each
   // merge — pending defers the merge, failure parks the worker in
-  // `failing` with reason "ci", success (or no check-runs at all)
-  // proceeds. Set to false on projects whose CI is irrelevant to merge
+  // `failing` with reason "ci", success (or no check-runs on a project
+  // without CI) proceeds. Zero check-runs on a project the poller has
+  // observed run CI defer briefly first, in case they haven't materialized.
+  // Set to false on projects whose CI is irrelevant to merge
   // safety (no workflow, advisory-only, or being intentionally bypassed).
   // See `src/dashboard/poller-ci.ts`.
   requireCiSuccess?: boolean;

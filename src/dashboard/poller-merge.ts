@@ -256,10 +256,13 @@ export function handleMergePending(
 //
 // Behaves as a no-op for projects with requireCiSuccess: false, projects
 // whose origin isn't a github.com remote, environments without `gh`, and
-// projects with zero check-runs on the SHA (nothing to gate against).
-// The handoff explicitly called out the last two: blocking workers from
-// merging just because the operator's box doesn't have `gh` installed
-// would be a worse regression than the bug this fixes.
+// projects with zero check-runs on the SHA that have never been observed to
+// run CI (nothing to gate against). On a project already known to run CI,
+// zero check-runs means they haven't materialized yet, so the merge defers
+// within a bounded grace window (CI_NO_RUNS_GRACE_MS) before passing through.
+// The handoff explicitly called out the `gh`/non-github cases: blocking
+// workers from merging just because the operator's box doesn't have `gh`
+// installed would be a worse regression than the bug this fixes.
 function gateCiStatus(
   projectName: string,
   projectPath: string,
