@@ -199,6 +199,39 @@ describe("kick command", () => {
     expect(lines.join("\n")).toContain("recovered from failing (transient-review)");
   });
 
+  it("recovers a failing worker whose reason is quota", async () => {
+    // The reviewer hit the operator's rolling Claude session/usage window and
+    // the ~6h auto-retry budget was exhausted before it reset. Same recovery
+    // shape as transient-review — the code is fine, the window just needs to
+    // have reset — and the quota-specific retry counter must be cleared too.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "failing",
+        failingReason: "quota",
+        failingSha: "abc123",
+        quotaRetryCount: 24,
+      }),
+    ]);
+
+    const lines = await captureConsoleLog(() => kick(["bold-ash"]));
+
+    expect(updateWorkerFields).toHaveBeenCalledWith(
+      "myproject",
+      "bold-ash",
+      expect.objectContaining({
+        prState: "working",
+        pendingReviewAt: expect.any(Number),
+        failingReason: undefined,
+        failingSha: undefined,
+        reviewRetryCount: undefined,
+        reviewRetryAt: undefined,
+        quotaRetryCount: undefined,
+      }),
+    );
+    expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
+    expect(lines.join("\n")).toContain("recovered from failing (quota)");
+  });
+
   it("refuses to recover a failing worker whose reason is 'code'", async () => {
     // Code-side failures require a new commit to retry — kick should refuse
     // and point the operator at the right recovery path.
