@@ -268,6 +268,32 @@ describe("tick", () => {
     expect(triggerProjectPoll).not.toHaveBeenCalled();
   });
 
+  it("re-pokes a stale failing worker whose pushed fix advanced its SHA", () => {
+    // End-to-end backstop: lastSeenSha advanced past failingSha (a fix was
+    // observed) and the one-shot debounce poke was lost. lastShaChangeAt is the
+    // only clock latestActivityMs can age this worker against, so this guards
+    // that dependency along with the isWatchedState clause.
+    registryMock._setEntries("proj", [entry({
+      prState: "failing", failingReason: "code",
+      failingSha: "old", lastSeenSha: "new",
+      lastShaChangeAt: new Date(STALE_MS).toISOString(),
+    })]);
+    tick(new Map(), NOW);
+    expect(triggerProjectPoll).toHaveBeenCalledWith("proj");
+  });
+
+  it("does not poke a parked failing worker with no pushed fix, however old", () => {
+    // lastSeenSha still pinned at failingSha => nothing owed; a settled garden
+    // must produce zero pokes no matter how long it has sat.
+    registryMock._setEntries("proj", [entry({
+      prState: "failing", failingReason: "code",
+      failingSha: "same", lastSeenSha: "same",
+      lastShaChangeAt: new Date(STALE_MS).toISOString(),
+    })]);
+    tick(new Map(), NOW);
+    expect(triggerProjectPoll).not.toHaveBeenCalled();
+  });
+
   it("pokes only the project with the stale worker", () => {
     registryMock._setEntries("stale-proj", [
       entry({ prState: "merge-pending", mergePendingAt: new Date(STALE_MS).toISOString() }),
