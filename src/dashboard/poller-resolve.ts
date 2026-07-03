@@ -179,6 +179,14 @@ function escalateResolveBudget(
     reviewWindowName: undefined,
     reviewStartedAt: undefined,
     mergePendingAt: undefined,
+    // Clear the exhausted resolve budget on entry to `failing`, mirroring
+    // escalateCiFixBudget. A transient-review failing state is kick-recoverable;
+    // kick re-queues a review without resetting these, so a stale resolveAttempts
+    // at budget would make the next genuine conflict re-escalate via
+    // launchResolver without ever launching a resolver (see poller-merge.ts's
+    // merge-failure re-arm for the same invariant).
+    resolveAttempts: 0,
+    preResolveSha: undefined,
   });
   refreshDashboard();
 }

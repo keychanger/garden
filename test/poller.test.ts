@@ -2766,6 +2766,11 @@ describe("poll — resolving state", () => {
     );
     expect(failingCall).toBeDefined();
     expect((failingCall![2] as Record<string, unknown>).failingReason).toBe("transient-review");
+    // The exhausted resolve budget must clear on entry to `failing`: a
+    // transient-review failure is kick-recoverable, and kick re-queues a review
+    // without resetting resolveAttempts, so a stale budget at exhaustion would
+    // make the next genuine conflict re-escalate without launching a resolver.
+    expect((failingCall![2] as Record<string, unknown>).resolveAttempts).toBe(0);
   });
 
   it("stores resolver body when it parses even if verification fails", () => {
