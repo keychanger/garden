@@ -24,12 +24,40 @@ export interface TrellisVerdictResult {
   body: string;
 }
 
+// A claim-tally line ("Aligned: 4", "aligned: 4 / partial: 1 / absent: 2") the
+// reviewer writes while enumerating present claims — NOT the ALIGNED verdict.
+// VERDICT_LINE would otherwise read "Aligned:" as the ALIGNED token via its ':'
+// separator branch, so a reviewer that enumerates a tally but omits the verdict
+// line would falsely converge the vine. The `\d+\s*(?:\/|$)` boundary is what
+// separates a tally (bare number, then end-of-line or a `/` delimiter) from a
+// digit-decorated genuine verdict ("ALIGNED: 0 drift", "ALIGNED = 7 present"),
+// which carries a WORD after the number and must survive as ALIGNED.
+const ALIGNED_COUNT_LINE = /^\s*aligned\s*[:=]\s*\d+\s*(?:\/|$)/i;
+
 // Wrapper around parseLastLineVerdict typed to the trellis vocabulary.
 // Returns null when the output ends with no recognizable trellis verdict
 // — the caller's existing unparseable-verdict retry path handles it.
 export function parseTrellisVerdict(output: string): TrellisVerdictResult | null {
   const parsed = parseLastLineVerdict(output, TRELLIS_VERDICTS);
   if (!parsed) return null;
+  if (parsed.verdict === "ALIGNED") {
+    // The bottom-most vocab match was ALIGNED — but it may be a claim tally
+    // ("Aligned: 4") misread as the verdict. Blank every tally line and
+    // re-scan: a genuine verdict above still wins, and a reviewer that wrote
+    // only a tally (omitted the verdict) falls through to null, which routes to
+    // the caller's fail-safe unparseable-verdict path rather than a false
+    // convergence. Scoped to ALIGNED so DRIFT/FAILED/FLAGGED — and the DRIFT
+    // alignedCount pipeline that reads a tally above a DRIFT line — are
+    // untouched.
+    const scrubbed = output.split("\n")
+      .map(line => (ALIGNED_COUNT_LINE.test(line) ? "" : line))
+      .join("\n");
+    if (scrubbed !== output) {
+      const reparsed = parseLastLineVerdict(scrubbed, TRELLIS_VERDICTS);
+      if (!reparsed) return null;
+      return { verdict: reparsed.verdict, body: reparsed.body };
+    }
+  }
   return { verdict: parsed.verdict, body: parsed.body };
 }
 

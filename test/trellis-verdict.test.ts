@@ -40,6 +40,41 @@ describe("parseTrellisVerdict", () => {
     expect(parseTrellisVerdict("body\nCLEAN")).toBeNull();
   });
 
+  it("does not read an 'Aligned: N' claim tally as the ALIGNED verdict", () => {
+    // A reviewer that enumerates a tally but omits the verdict line must NOT
+    // falsely converge the vine — the tally is scrubbed, leaving no verdict.
+    expect(parseTrellisVerdict("Reviewed.\nAligned: 4")).toBeNull();
+    expect(parseTrellisVerdict("Aligned:4")).toBeNull();
+    expect(parseTrellisVerdict("aligned: 3")).toBeNull();
+    expect(parseTrellisVerdict("Aligned: 4 / Partial: 1 / Absent: 2")).toBeNull();
+    expect(parseTrellisVerdict("Aligned: 4\nPartial: 1\nAbsent: 2")).toBeNull();
+  });
+
+  it("keeps a genuine ALIGNED verdict that carries a digit-decorated tail", () => {
+    // "ALIGNED: 0 drift" is a real verdict (a word follows the number), not a
+    // tally (bare number then end-of-line or a `/`). It must survive. (Only ':'
+    // is a VERDICT_LINE separator, so '=' forms never parse as ALIGNED at all.)
+    expect(parseTrellisVerdict("ALIGNED: 0 drift").verdict).toBe("ALIGNED");
+    expect(parseTrellisVerdict("ALIGNED: 7 present").verdict).toBe("ALIGNED");
+    expect(parseTrellisVerdict("ALIGNED — matches spec").verdict).toBe("ALIGNED");
+    expect(parseTrellisVerdict("ALIGNED: everything present").verdict).toBe("ALIGNED");
+  });
+
+  it("recovers a real verdict sitting above a trailing tally line", () => {
+    // Scrubbing the tally exposes the genuine verdict beneath it rather than
+    // returning the tally-as-ALIGNED.
+    const r = parseTrellisVerdict("1. [surface] foo missing\nDRIFT\nAligned: 3");
+    expect(r?.verdict).toBe("DRIFT");
+  });
+
+  it("leaves a normal DRIFT with a tally above it fully intact", () => {
+    // The guard is ALIGNED-scoped, so the DRIFT alignedCount pipeline (a tally
+    // ABOVE the DRIFT verdict) keeps its body and count.
+    const r = parseTrellisVerdict("Aligned: 7\n1. [surface] foo (trellis line 5)\nDRIFT");
+    expect(r?.verdict).toBe("DRIFT");
+    expect(r?.body).toContain("Aligned: 7");
+  });
+
   it("vocabulary contains exactly the four trellis verdicts", () => {
     expect([...TRELLIS_VERDICTS].sort()).toEqual(
       ["ALIGNED", "DRIFT", "FAILED", "FLAGGED"].sort(),
