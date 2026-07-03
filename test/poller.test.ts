@@ -151,6 +151,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   getChangedFiles: vi.fn(() => []),
   getChangedFilesBetween: vi.fn(() => []),
   getCommitSummary: vi.fn(() => "abc123 fix something"),
+  hasCommitsAhead: vi.fn(() => true),
   getNewCommitSummary: vi.fn(() => "def456 address review feedback"),
   resolveBaseBranch: vi.fn(() => "main"),
   getWorkerBaseBranch: vi.fn((entry: { baseBranch?: string }) => entry.baseBranch ?? "main"),
@@ -217,7 +218,7 @@ import {
   forcePushBranch, mergeToBase, rebaseBranch, abortRebase,
   fastForwardBase,
   getChangedFiles, getChangedFilesBetween,
-  getCommitSummary, getNewCommitSummary, getDiffAgainstBase,
+  getCommitSummary, hasCommitsAhead, getNewCommitSummary, getDiffAgainstBase,
   syncWorktreeToRemote,
   ensureNoRebaseInProgress, hasRebaseInProgress, isAncestor, getUnmergedFiles,
 } from "../src/dashboard/git.js";
@@ -257,6 +258,7 @@ beforeEach(() => {
   vi.mocked(getChangedFiles).mockReturnValue([]);
   vi.mocked(getDiffAgainstBase).mockReturnValue("diff --git a/file.ts b/file.ts");
   vi.mocked(getCommitSummary).mockReturnValue("abc123 fix something");
+  vi.mocked(hasCommitsAhead).mockReturnValue(true);
   vi.mocked(getNewCommitSummary).mockReturnValue("def456 address review feedback");
   vi.mocked(sweepGhostEntries).mockReturnValue(false);
   vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject", checks: undefined } as ReturnType<typeof tryGetProject>);
@@ -437,7 +439,7 @@ describe("poll — working state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
     ]);
-    vi.mocked(getCommitSummary).mockReturnValue("");
+    vi.mocked(hasCommitsAhead).mockReturnValue(false);
 
     poll("myproject");
 
@@ -445,6 +447,27 @@ describe("poll — working state", () => {
       expect.objectContaining({ pendingReviewAt: undefined }),
     );
     expect(forcePushBranch).not.toHaveBeenCalled();
+  });
+
+  it("does NOT clear pendingReviewAt when the commit check errors (transient git failure)", () => {
+    // hasCommitsAhead returns null when the git call itself failed. Treating
+    // that as "no commits" would silently cancel a review that should still
+    // run. Leave pendingReviewAt set and re-poke to retry.
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
+    ]);
+    vi.mocked(hasCommitsAhead).mockReturnValue(null);
+
+    poll("myproject");
+
+    // pendingReviewAt must NOT be cleared.
+    const clearedPending = vi.mocked(updateWorkerFields).mock.calls.some(
+      ([, , fields]) => (fields as { pendingReviewAt?: unknown }).pendingReviewAt === undefined
+        && "pendingReviewAt" in (fields as object),
+    );
+    expect(clearedPending).toBe(false);
+    // And a retry is scheduled.
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 30_000);
   });
 
   it("launchReview clears pendingReviewAt", () => {

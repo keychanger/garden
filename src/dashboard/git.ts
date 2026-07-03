@@ -670,6 +670,30 @@ export function getCommitSummary(wtPath: string, baseBranch: string): string {
   }
 }
 
+// Does the worktree HEAD have commits ahead of origin/<base>? Returns a
+// boolean on success, or null when the git call itself failed (error/timeout).
+// Callers that gate a review launch on "are there commits" MUST distinguish
+// null from false: getCommitSummary returns "" for both, so treating its empty
+// result as "no commits" lets a transient git failure permanently cancel a
+// pending review. rev-list --count is cheaper than log --oneline and all the
+// caller needs is the yes/no.
+export function hasCommitsAhead(wtPath: string, baseBranch: string): boolean | null {
+  try {
+    const out = execFileSync("git", [
+      "rev-list", "--count", `origin/${baseBranch}..HEAD`,
+    ], {
+      cwd: wtPath,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10_000,
+    }).trim();
+    return parseInt(out, 10) > 0;
+  } catch (err) {
+    log.warn("git", "hasCommitsAhead failed", { data: { baseBranch, error: String(err) } });
+    return null;
+  }
+}
+
 export function getNewCommitSummary(wtPath: string, sinceSha: string | undefined): string {
   if (!sinceSha) return "";
   try {

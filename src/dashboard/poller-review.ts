@@ -15,6 +15,7 @@ import { getHarnessCore } from "./harness/core.js";
 import { setDoneSentinel } from "./continue.js";
 import {
   forcePushBranch, getBranchHeadSha, getCommitSummary, getRemoteTrackingSha,
+  hasCommitsAhead,
 } from "./git.js";
 import { refreshDashboard } from "./header.js";
 import { launchHeadlessAgent } from "./headless-agent.js";
@@ -138,8 +139,15 @@ export function handleWorking(
   }
 
   const wtPath = entry.worktreePath ?? projectPath;
-  const commitSummary = getCommitSummary(wtPath, baseBranch);
-  if (!commitSummary) {
+  const ahead = hasCommitsAhead(wtPath, baseBranch);
+  if (ahead === null) {
+    // The git call failed (transient error/timeout), NOT "no commits". Clearing
+    // pendingReviewAt here would silently cancel a review that should still
+    // happen. Leave it set and re-poke so the next cycle retries the check.
+    scheduleDelayedPoke(projectName, 30_000);
+    return false;
+  }
+  if (!ahead) {
     // Stop hook said commits existed; they no longer do (force-pushed away,
     // base advanced past us, etc.). Clear the flag — nothing to review.
     updateWorkerFields(projectName, entry.name, { pendingReviewAt: undefined });
