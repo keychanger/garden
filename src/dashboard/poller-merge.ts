@@ -33,7 +33,7 @@ import { tmux, getFirstPaneId, windowExists } from "./tmux.js";
 import { getHarnessCore } from "./harness/core.js";
 import { readUsageSnapshot, snapshotMeters } from "./usage.js";
 import { workerWindowName } from "./window-names.js";
-import { scheduleDelayedPoke } from "./poller-fifo.js";
+import { scheduleDelayedPoke, isWorkerClaudeWorking } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
 import { maybeDispatchHolisticReview } from "./poller-holistic-review.js";
 import { killReviewWindow } from "./poller-review.js";
@@ -149,6 +149,24 @@ export function handleMergePending(
   if (headSha && isAncestor(wtPath, headSha, `origin/${baseBranch}`)) {
     resumeInterruptedMerge(projectName, projectPath, baseBranch, entry);
     return true;
+  }
+
+  // Do NOT touch the shared worktree while the worker's Claude is mid-turn.
+  // cleanWorktree (`git checkout -- .`) and the rebase below rewrite tracked
+  // files and HEAD; if the operator prompted this merge-pending worker and it is
+  // editing files not yet committed, git rebase would refuse on the dirty tree
+  // but cleanWorktree turns that refusal into a silent wipe of the unstaged
+  // edits (there is no reflog for unstaged changes). launchResolver guards the
+  // identical shared-worktree hazard. Defer past the resume check (an
+  // already-pushed merge is safe to finalize regardless): the worker's Stop hook
+  // re-pokes on turn end, and the watchdog backstops a lost poke since
+  // merge-pending is a watched state.
+  if (isWorkerClaudeWorking(projectName, entry.name)) {
+    log.debug("poller", "merge deferred: worker Claude is active in the shared worktree", {
+      worker: entry.name,
+      data: { project: projectName },
+    });
+    return false;
   }
 
   // CI gate: defense-in-depth against merging a branch with red GitHub

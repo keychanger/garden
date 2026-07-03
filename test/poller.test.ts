@@ -216,7 +216,7 @@ import { tryGetProject, getAutoContinueConfig } from "../src/config.js";
 import { updateWorkerFields, findWorkerByName } from "../src/dashboard/registry.js";
 import {
   getBranchHeadSha, getRemoteTrackingSha, deleteRemoteBranch,
-  forcePushBranch, mergeToBase, rebaseBranch, abortRebase,
+  forcePushBranch, mergeToBase, rebaseBranch, abortRebase, cleanWorktree,
   fastForwardBase,
   getChangedFiles, getChangedFilesBetween,
   getCommitSummary, hasCommitsAhead, getNewCommitSummary, getDiffAgainstBase,
@@ -1471,16 +1471,20 @@ describe("poll — merge-pending state", () => {
     );
   });
 
-  it("clears merged to working when worker is already active (race)", () => {
-    registryMock._setEntries("myproject", [
-      makeWorker({
-        prState: "merge-pending",
-        agentStatus: "working",
-        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
-      }),
-    ]);
+  it("clears merged to working when the worker becomes active during finalization (race)", () => {
+    // The worker is idle when the merge guard runs (so finalization proceeds),
+    // but the operator prompts it mid-finalize. Simulate the hook flipping
+    // agentStatus to working while mergeToBase is in flight, so the guard passes
+    // yet the post-merge race-clear still fires. (A statically-working worker now
+    // hits the pre-merge guard and never reaches finalization.)
+    const w = makeWorker({
+      prState: "merge-pending",
+      mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+    });
+    registryMock._setEntries("myproject", [w]);
     vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
     vi.mocked(fastForwardBase).mockReturnValue({ ok: true, advanced: "worktree" });
+    vi.mocked(mergeToBase).mockImplementation(() => { w.agentStatus = "working"; });
 
     poll("myproject");
 
@@ -2110,7 +2114,10 @@ describe("poll — merge-pending state", () => {
     );
   });
 
-  it("skips resolver launch when rebase conflicts and Claude is working", () => {
+  it("defers the whole merge (no worktree mutation) when the worker's Claude is active", () => {
+    // The operator prompted this merge-pending worker; it may be editing tracked
+    // files that are not yet committed. handleMergePending must defer BEFORE
+    // cleanWorktree/rebase so those edits are never wiped.
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "merge-pending",
@@ -2122,14 +2129,9 @@ describe("poll — merge-pending state", () => {
 
     poll("myproject");
 
-    expect(rebaseBranch).toHaveBeenCalled();
-    expect(abortRebase).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(cleanWorktree).not.toHaveBeenCalled();
+    expect(rebaseBranch).not.toHaveBeenCalled();
     expect(mergeToBase).not.toHaveBeenCalled();
-    expect(tmux).not.toHaveBeenCalledWith(
-      "new-window", expect.anything(), expect.anything(), expect.anything(),
-      "-n", "_myproject-review-bold-ash",
-      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
-    );
   });
 
   it("clears leftover rebase state before attempting rebase", () => {
