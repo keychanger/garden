@@ -364,7 +364,22 @@ export function loadConfig(): GardenConfig {
   let dirty = false;
   if (migratePlots(parsed)) dirty = true;
   if (migrateLogColors(parsed)) dirty = true;
-  if (dirty) saveConfig(parsed);
+  if (dirty) {
+    // loadConfig is a read path — hotkey plot cycling, the poller, and every
+    // command call it — so a bare unlocked save here turns every reader into a
+    // writer that can clobber a concurrent operator or poller config write
+    // (e.g. the poller's auto-continue threshold trip). Persist the one-time,
+    // idempotent migration only when the config lock is free, and skip on
+    // contention: it re-runs harmlessly on the next load, and whoever holds the
+    // lock persists the migrated shape via its own save. The short deadline also
+    // avoids a re-entrant self-deadlock when loadConfig runs inside a
+    // withConfigLock'd mutation (setAutoContinueConfig / setLogsMode).
+    try {
+      withFileLock(CONFIG_LOCK_FILE, () => saveConfig(parsed), { deadlineMs: 250, name: "config-migrate" });
+    } catch {
+      /* lock contended or self-held — migration persists on a later load */
+    }
+  }
   return parsed;
 }
 
