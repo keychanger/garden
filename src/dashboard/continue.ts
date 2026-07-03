@@ -25,7 +25,7 @@ import { readDashState } from "./state.js";
 import { findWorkerByName, updateWorkerFields } from "./registry.js";
 import {
   shellEscape, getFirstPaneId, paneExists, windowExists, pasteAndSubmit,
-  capturePaneText, capturePaneCursor, type PaneCursor,
+  capturePaneText, capturePaneCursor, paneRunningOnlyShell, type PaneCursor,
 } from "./tmux.js";
 import { workerWindowName as workerWin } from "./window-names.js";
 import { log } from "./log.js";
@@ -348,6 +348,21 @@ export function continueWorker(
   // the resume.
   if (entry.agentStatus === "paused") {
     log.info("workers", "continue skipped, worker held by operator", {
+      worker: workerName,
+      data: { project: projectName },
+    });
+    return false;
+  }
+  // The worker's Claude has exited and the pane is now a bare shell. A clean
+  // exit `exec $SHELL`s the launch wrapper WITHOUT firing pane-died, so
+  // agentStatus can still read `idle` while the pane is an interactive shell.
+  // Pasting the continue prompt — which carries backticked git commands
+  // (`git reset --hard origin/<base>`) — would execute it in that shell. Skip:
+  // reviving an exited worker is `garden bounce` territory. Leave
+  // interruptedWhileWorking set (like the draft skip below) so the prompt stays
+  // owed for the bounce / gate-reopen replay.
+  if (paneRunningOnlyShell(paneId)) {
+    log.info("workers", "continue skipped, pane is a bare shell (agent exited)", {
       worker: workerName,
       data: { project: projectName },
     });

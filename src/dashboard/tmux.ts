@@ -382,6 +382,51 @@ export function getPanePid(paneId: string): string | null {
   }
 }
 
+const SHELL_COMMANDS = new Set([
+  "sh", "bash", "zsh", "dash", "ksh", "fish", "tcsh", "csh",
+]);
+
+// Is the pane a bare shell — i.e. the worker's Claude has exited? Reads the
+// pane's tty and returns true iff EVERY process on it is a login/interactive
+// shell. This is a NEGATIVE check by design: a LIVE worker's tty always carries
+// its agent process (`claude`, or `node` for an npm install) alongside the `sh`
+// launch wrapper and any Bash-tool `bash`, so it is never "all shells" and can
+// never be wrongly flagged — the failure mode that would break auto-continue.
+// A clean Claude exit `exec $SHELL`s the wrapper WITHOUT firing tmux pane-died
+// (so agentStatus can still read `idle`), leaving only the shell on the tty —
+// the exact state a live `#{pane_current_command}` probe can't distinguish
+// (Claude Code holds a `bash` in the pty foreground even while alive). Fails
+// OPEN (returns false → treat as live) on any probe error, empty output, or
+// ambiguity, so a live worker is never blocked; the cost of a miss is only that
+// the pre-existing paste-into-shell hazard is not caught in that edge.
+export function paneRunningOnlyShell(paneId: string): boolean {
+  let tty: string;
+  try {
+    tty = tmuxOutput("display-message", "-t", paneId, "-p", "#{pane_tty}").trim();
+  } catch {
+    return false;
+  }
+  const ttyName = tty.replace(/^\/dev\//, "");
+  if (!ttyName) return false;
+  let out: string;
+  try {
+    out = execFileSync("ps", ["-t", ttyName, "-o", "comm="], {
+      encoding: "utf-8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return false;
+  }
+  const comms = out.split("\n")
+    // macOS `comm=` yields a path and marks login shells with a leading `-`;
+    // reduce to the bare, lowercased basename ("/bin/-zsh" / "-zsh" -> "zsh").
+    .map(l => l.trim().replace(/^.*\//, "").replace(/^-/, "").toLowerCase())
+    .filter(Boolean);
+  if (comms.length === 0) return false;
+  return comms.every(c => SHELL_COMMANDS.has(c));
+}
+
 // `select-pane -d` blocks tmux from forwarding keystrokes to the pane's pty —
 // the chars never reach the terminal driver, so no echo, no buffering. Used on
 // the status/usage panes which run a passive sleep loop with nothing to read

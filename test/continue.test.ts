@@ -46,6 +46,9 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   // Default: cursor unknown → extractOperatorDraft falls back to the whole
   // post-marker remainder. Tests that exercise ghost-text exclusion override it.
   capturePaneCursor: vi.fn(() => null),
+  // Default: pane is a live agent (not a bare shell) → continue prompts deliver.
+  // The exited-pane test overrides this to true.
+  paneRunningOnlyShell: vi.fn(() => false),
 }));
 
 vi.mock("../src/dashboard/window-names.js", () => ({
@@ -66,7 +69,7 @@ import {
 } from "../src/dashboard/continue.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { findWorkerByName, updateWorkerFields } from "../src/dashboard/registry.js";
-import { tmux, pasteAndSubmit, paneExists, windowExists, getFirstPaneId, capturePaneText, capturePaneCursor } from "../src/dashboard/tmux.js";
+import { tmux, pasteAndSubmit, paneExists, windowExists, getFirstPaneId, capturePaneText, capturePaneCursor, paneRunningOnlyShell } from "../src/dashboard/tmux.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { tryGetProject } from "../src/config.js";
@@ -128,6 +131,7 @@ beforeEach(() => {
   // empty-box default each test; draft cases override it locally.
   vi.mocked(capturePaneText).mockReturnValue("");
   vi.mocked(capturePaneCursor).mockReturnValue(null);
+  vi.mocked(paneRunningOnlyShell).mockReturnValue(false);
 });
 
 describe("continueWorker", () => {
@@ -189,6 +193,27 @@ describe("continueWorker", () => {
       name: "bold-ash", sessionId: "s", task: "",
       agentStatus: "paused", interruptedWhileWorking: true,
     });
+    continueWorker("myproject", "bold-ash");
+
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
+
+  it("skips the send when the pane is a bare shell (agent exited) and leaves the prompt owed", () => {
+    // A clean Claude exit exec-replaces the pane with a shell without firing
+    // pane-died, so agentStatus reads idle. Pasting the continue prompt would
+    // run its backticked git commands in the shell — skip and leave the prompt
+    // owed for a `garden bounce`.
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "",
+      agentStatus: "idle", interruptedWhileWorking: true,
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+    vi.mocked(paneRunningOnlyShell).mockReturnValue(true);
+
     continueWorker("myproject", "bold-ash");
 
     expect(pasteAndSubmit).not.toHaveBeenCalled();
