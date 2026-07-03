@@ -342,8 +342,13 @@ cannot be expressed as "wait for an event":
   actions, neither of which transitions worker state. (1) It re-pokes any
   project holding a worker in a *poller-owed* state (the `pollerOwed`
   states in `PR_STATE_KIND`, `registry.ts`: `reviewing`, `resolving`,
-  `ci-fixing`, `merge-pending`, `merged`; plus `working` with
-  `pendingReviewAt` set) whose latest activity timestamp has aged past a
+  `ci-fixing`, `merge-pending`, `merged`; plus two stranding sub-states in
+  otherwise-quiescent states — `working` with `pendingReviewAt` set, and
+  `failing` mid-debounce, where an operator's pushed fix advanced `lastSeenSha`
+  past the pinned `failingSha` so a debounced failing→working poke is owed
+  (operator-action dispositions — `trellis-flagged`/`iteration-budget`/
+  `stagnation` — are excluded, they stay parked)) whose latest activity
+  timestamp has aged past a
   5 min threshold, recovering dropped one-shot events (a poke lost in the
   poller kill→spawn gap, a reboot-killed detached delayed poke, a dropped
   review-launch poke) by re-delivering the same FIFO poke the lost event
@@ -353,7 +358,8 @@ cannot be expressed as "wait for an event":
   staleness threshold — so it is exempt: a live window is proof the event was
   not dropped, and the genuine stranding class (window exited, completion poke
   lost) has a dead window and still trips. Poking is damped to at most one poke
-  per project per threshold, and quiescent states (idle `working`, `failing`,
+  per project per threshold, and the genuinely quiescent states (an idle
+  `working` with no pending review, a *parked* `failing` with no pushed fix,
   `done`) are never watched, so a settled garden produces zero pokes. (2) It keeps each
   project's `_<project>-poller` window healthy: exactly one must be live —
   a poke is useless if no poller is reading the FIFO, and several pollers
