@@ -870,6 +870,28 @@ describe("stripControlSequences", () => {
     expect(stripControlSequences("bell\x07del\x7f")).toBe("belldel");
     expect(stripControlSequences("plain text")).toBe("plain text");
   });
+
+  it("strips carriage return (cursor-to-column-0) while keeping tab and newline", () => {
+    // \r repositions the cursor to column 0 and overwrites the rendered line —
+    // the exact vector this function exists to defeat — so it must not survive.
+    expect(stripControlSequences("a\rb")).toBe("ab");
+    expect(stripControlSequences("done\r\nnext")).toBe("done\nnext");
+  });
+
+  it("strips private-param CSI (hide cursor / alternate screen takeover)", () => {
+    expect(stripControlSequences("a\x1b[?25lb")).toBe("ab");
+    expect(stripControlSequences("a\x1b[?1049hb")).toBe("ab");
+  });
+
+  it("strips OSC terminated by ST and left unterminated to end-of-string", () => {
+    expect(stripControlSequences("a\x1b]8;;https://x\x1b\\b")).toBe("ab"); // ST terminator
+    expect(stripControlSequences("safe\x1b]0;evil")).toBe("safe");        // unterminated
+  });
+
+  it("strips a bare Fe escape and an 8-bit C1 control introducer", () => {
+    expect(stripControlSequences("a\x1bMb")).toBe("ab"); // reverse index (Fe escape)
+    expect(stripControlSequences("a\x9bb")).toBe("ab");  // C1 CSI introducer
+  });
 });
 
 describe("listSessionPaneTitles", () => {

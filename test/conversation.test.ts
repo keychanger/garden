@@ -199,6 +199,22 @@ describe("readConversation", () => {
     ]);
   });
 
+  it("strips terminal escape sequences from prompts and action summaries", () => {
+    // Both display paths route worker-controlled text through stripControlSequences:
+    // the operator prompt via collapse(), and the action summary (a worker-chosen
+    // file_path) via summarizeTurn — so neither can smuggle a cursor-move / CR into
+    // the ⌥h history render.
+    const p = writeTranscript([
+      user("say \x1b[31mred\x1b[0m now"),
+      assistant([{ type: "tool_use", name: "Edit", input: { file_path: "src/a\x1b[2Jfoo\rbar.ts" } }]),
+    ]);
+    expect(readConversation(p)).toEqual([
+      { role: "user", text: "say red now", ts: "2026-05-30T17:00:00Z" },
+      // tool-only turn: ts is inherited from the preceding prompt (no text block to restamp it).
+      { role: "assistant", text: "edited afoobar.ts", verb: "worked", ts: "2026-05-30T17:00:00Z" },
+    ]);
+  });
+
   it("keeps only the last maxTurns entries", () => {
     const lines: Array<Record<string, unknown>> = [];
     for (let i = 0; i < 10; i++) {

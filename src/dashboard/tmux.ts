@@ -447,12 +447,6 @@ export function getPaneLabel(paneId: string): string | null {
   }
 }
 
-// Read the tmux pane title. Claude Code sets this via terminal escape
-// sequences (OSC 0/2) as it works, so it doubles as a "what is this worker
-// currently doing" summary. We strip the leading non-alphanumeric noise
-// (Claude prefixes with characters like "✱ ") and reject the default
-// "Claude Code" placeholder and system hostname (tmux defaults new panes
-// to the hostname, which would overwrite the persisted task on resume).
 // Strip terminal control sequences (ANSI CSI/OSC escapes, other Fe escapes, and
 // C0/C1 control chars — keeping only tab and newline) from text that originates
 // OUTSIDE garden — pane titles, worker task strings, transcript lines — before
@@ -466,9 +460,15 @@ export function stripControlSequences(s: string): string {
     .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\|$)/g, "")       // OSC (… BEL / ST)
     .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")             // CSI (cursor/color/clear)
     .replace(/\x1b[@-_]/g, "")                             // other Fe escapes
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, ""); // C0 (keep \t\n) + C1 + DEL + lone ESC
+    .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");        // C0 (keep \t\n; drop \r) + C1 + DEL + lone ESC
 }
 
+// Read the tmux pane title. Claude Code sets this via terminal escape
+// sequences (OSC 0/2) as it works, so it doubles as a "what is this worker
+// currently doing" summary. We strip the leading non-alphanumeric noise
+// (Claude prefixes with characters like "✱ ") and reject the default
+// "Claude Code" placeholder and system hostname (tmux defaults new panes
+// to the hostname, which would overwrite the persisted task on resume).
 export function cleanPaneTitle(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const cleaned = stripControlSequences(raw).replace(/^[^a-zA-Z0-9]+/, "").trim();
