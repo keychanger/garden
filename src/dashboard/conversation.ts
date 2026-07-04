@@ -15,6 +15,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { WorkerEntry } from "./registry.js";
+import { stripControlSequences } from "./tmux.js";
 
 export type Verb = "worked" | "planned" | "answered";
 
@@ -258,7 +259,7 @@ export function summarizeTurn(tools: ToolUse[], firstText: string): { text: stri
   if (verb !== "worked" && (committed || pushed || built || tested)) verb = "worked";
 
   const text = parts.length > 0 ? parts.join(" · ") : (firstSentence(firstText) || "answered");
-  return { text, verb };
+  return { text: stripControlSequences(text), verb };
 }
 
 // Extract operator prompt text from a user message's content. Returns "" for a
@@ -293,7 +294,9 @@ function firstSentence(s: string): string {
 }
 
 function collapse(s: string): string {
-  return s.replace(/\s+/g, " ").trim();
+  // Strip terminal escapes from operator-prompt / transcript text before it is
+  // painted into the history pane, then normalize whitespace.
+  return stripControlSequences(s).replace(/\s+/g, " ").trim();
 }
 
 // ---------------------------------------------------------------------------

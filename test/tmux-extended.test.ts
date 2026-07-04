@@ -58,6 +58,7 @@ import {
   listHiddenWorkerWindows,
   listSessionPaneTitles,
   cleanPaneTitle,
+  stripControlSequences,
   pasteAndSubmit,
   __setTmuxExecAllowedForTests,
 } from "../src/dashboard/tmux.js";
@@ -851,8 +852,23 @@ describe("cleanPaneTitle", () => {
     expect(cleanPaneTitle("my-macbook.local")).toBeNull();
   });
 
+  it("strips embedded terminal escape sequences", () => {
+    // A title carrying a cursor-move / color escape must not reach the pane raw.
+    expect(cleanPaneTitle("Building \x1b[2Jtests\x1b[0m")).toBe("Building tests");
+    expect(cleanPaneTitle("\x1b]0;evil title\x07real")).toBe("real");
+  });
   it("returns alphanumeric titles as-is", () => {
     expect(cleanPaneTitle("Writing unit tests")).toBe("Writing unit tests");
+  });
+});
+
+describe("stripControlSequences", () => {
+  it("removes CSI, OSC, and C0/C1 control chars but keeps tab/newline", () => {
+    expect(stripControlSequences("a\x1b[31mred\x1b[0mb")).toBe("aredb");
+    expect(stripControlSequences("t\x1b]0;title\x07x")).toBe("tx");
+    expect(stripControlSequences("keep\ttab\nnewline")).toBe("keep\ttab\nnewline");
+    expect(stripControlSequences("bell\x07del\x7f")).toBe("belldel");
+    expect(stripControlSequences("plain text")).toBe("plain text");
   });
 });
 

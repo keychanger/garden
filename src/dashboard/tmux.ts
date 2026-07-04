@@ -453,9 +453,25 @@ export function getPaneLabel(paneId: string): string | null {
 // (Claude prefixes with characters like "✱ ") and reject the default
 // "Claude Code" placeholder and system hostname (tmux defaults new panes
 // to the hostname, which would overwrite the persisted task on resume).
+// Strip terminal control sequences (ANSI CSI/OSC escapes, other Fe escapes, and
+// C0/C1 control chars — keeping only tab and newline) from text that originates
+// OUTSIDE garden — pane titles, worker task strings, transcript lines — before
+// it is painted into a dashboard pane. Otherwise a worker's output (or the code
+// it reviews) could smuggle cursor-movement / screen-clear / OSC sequences that
+// corrupt the operator's dashboard render or reposition their cursor. Aggressive
+// by design: this text is for display, not round-tripping. Garden's own ANSI
+// coloring is applied to the template AROUND these values, never through this.
+export function stripControlSequences(s: string): string {
+  return s
+    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\|$)/g, "")       // OSC (… BEL / ST)
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")             // CSI (cursor/color/clear)
+    .replace(/\x1b[@-_]/g, "")                             // other Fe escapes
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, ""); // C0 (keep \t\n) + C1 + DEL + lone ESC
+}
+
 export function cleanPaneTitle(raw: string | null | undefined): string | null {
   if (!raw) return null;
-  const cleaned = raw.replace(/^[^a-zA-Z0-9]+/, "").trim();
+  const cleaned = stripControlSequences(raw).replace(/^[^a-zA-Z0-9]+/, "").trim();
   if (!cleaned || cleaned === "Claude Code") return null;
   if (cleaned === os.hostname()) return null;
   return cleaned;
