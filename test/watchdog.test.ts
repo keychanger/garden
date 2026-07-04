@@ -23,6 +23,10 @@ vi.mock("../src/dashboard/registry.js", async (importActual) => {
   return {
     ...actual,
     readRegistry: vi.fn(() => ({ workers: entries })),
+    // Apply the mutation to the in-memory entries in place (no real fs / lock).
+    mutateRegistry: (fn: (r: import("../src/dashboard/registry.js").WorkerRegistry) => boolean) => {
+      fn({ workers: entries });
+    },
     _setEntries: (project: string, list: import("../src/dashboard/registry.js").WorkerEntry[]) => {
       entries[project] = list;
     },
@@ -39,6 +43,7 @@ vi.mock("../src/dashboard/poller-fifo.js", () => ({
 import {
   latestActivityMs, isWatchedState, isWorkerStale, hasLiveWork, tick,
   healProjectPollers, alertOrphanedWindows, WATCHDOG_THRESHOLD_MS,
+  absorbSleep, WATCHDOG_TICK_MS, SLEEP_SLACK_MS,
 } from "../src/dashboard/watchdog.js";
 import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
 import { windowExists, listAllWindowNames } from "../src/dashboard/tmux.js";
@@ -405,5 +410,77 @@ describe("alertOrphanedWindows", () => {
     ]);
     alertOrphanedWindows({ workers: {} });
     expect(addAlertMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("absorbSleep", () => {
+  const TWO_HOURS = 2 * 60 * 60_000;
+
+  it("does nothing when the loop ran on cadence (no suspend)", () => {
+    windowExistsMock.mockReturnValue(true);
+    const e = entry({ prState: "reviewing", reviewWindowName: "w", reviewStartedAt: NOW - 1000 });
+    registryMock._setEntries("p", [e]);
+    expect(absorbSleep(WATCHDOG_TICK_MS)).toBe(0);
+    expect(e.reviewStartedAt).toBe(NOW - 1000);
+  });
+
+  it("does nothing for a gap within the slack window", () => {
+    windowExistsMock.mockReturnValue(true);
+    const e = entry({ prState: "reviewing", reviewWindowName: "w", reviewStartedAt: NOW - 1000 });
+    registryMock._setEntries("p", [e]);
+    // slippage == SLEEP_SLACK_MS (boundary) -> not a suspend.
+    expect(absorbSleep(WATCHDOG_TICK_MS + SLEEP_SLACK_MS)).toBe(0);
+    expect(e.reviewStartedAt).toBe(NOW - 1000);
+  });
+
+  it("shifts reviewStartedAt forward by the slippage past a real suspend", () => {
+    windowExistsMock.mockReturnValue(true);
+    const e = entry({ prState: "reviewing", reviewWindowName: "w", reviewStartedAt: NOW - TWO_HOURS });
+    registryMock._setEntries("p", [e]);
+    expect(absorbSleep(WATCHDOG_TICK_MS + TWO_HOURS)).toBe(TWO_HOURS);
+    expect(e.reviewStartedAt).toBe(NOW); // (NOW - 2h) + 2h
+  });
+
+  it("shifts all three windowed roles but not a non-windowed worker", () => {
+    windowExistsMock.mockReturnValue(true);
+    const start = NOW - TWO_HOURS;
+    const reviewing = entry({ name: "rev", prState: "reviewing", reviewWindowName: "w1", reviewStartedAt: start });
+    const resolving = entry({ name: "res", prState: "resolving", reviewWindowName: "w2", reviewStartedAt: start });
+    const ciFixing = entry({ name: "cf", prState: "ci-fixing", reviewWindowName: "w3", reviewStartedAt: start });
+    const working = entry({ name: "wk", prState: "working", reviewStartedAt: start });
+    registryMock._setEntries("p", [reviewing, resolving, ciFixing, working]);
+    absorbSleep(WATCHDOG_TICK_MS + TWO_HOURS);
+    expect(reviewing.reviewStartedAt).toBe(start + TWO_HOURS);
+    expect(resolving.reviewStartedAt).toBe(start + TWO_HOURS);
+    expect(ciFixing.reviewStartedAt).toBe(start + TWO_HOURS);
+    expect(working.reviewStartedAt).toBe(start);
+  });
+
+  it("does not shift a reviewing worker whose window has died", () => {
+    windowExistsMock.mockImplementation((name: string) => name === "alive");
+    const start = NOW - TWO_HOURS;
+    const alive = entry({ name: "a", prState: "reviewing", reviewWindowName: "alive", reviewStartedAt: start });
+    const dead = entry({ name: "d", prState: "reviewing", reviewWindowName: "dead", reviewStartedAt: start });
+    registryMock._setEntries("p", [alive, dead]);
+    absorbSleep(WATCHDOG_TICK_MS + TWO_HOURS);
+    expect(alive.reviewStartedAt).toBe(start + TWO_HOURS);
+    expect(dead.reviewStartedAt).toBe(start);
+  });
+
+  it("shifts only reviewStartedAt, never the backoff/debounce/owed gates", () => {
+    windowExistsMock.mockReturnValue(true);
+    const start = NOW - TWO_HOURS;
+    const e = entry({
+      prState: "reviewing", reviewWindowName: "w", reviewStartedAt: start,
+      reviewRetryAt: NOW + 5000, lastShaChangeAt: "2026-06-04T11:00:00Z",
+      mergePendingAt: "2026-06-04T11:00:00Z", pendingReviewAt: NOW + 7000,
+    });
+    registryMock._setEntries("p", [e]);
+    absorbSleep(WATCHDOG_TICK_MS + TWO_HOURS);
+    expect(e.reviewStartedAt).toBe(start + TWO_HOURS);
+    expect(e.reviewRetryAt).toBe(NOW + 5000);
+    expect(e.lastShaChangeAt).toBe("2026-06-04T11:00:00Z");
+    expect(e.mergePendingAt).toBe("2026-06-04T11:00:00Z");
+    expect(e.pendingReviewAt).toBe(NOW + 7000);
   });
 });

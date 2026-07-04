@@ -305,7 +305,13 @@ cannot be expressed as "wait for an event":
   subprocess (e.g. `npm test` with no timeout, blocked by the sandbox)
   so the state machine can escalate to `failing` instead of wedging.
   Source: `poller-review.ts` REVIEW_TIMEOUT_MS, scheduled by
-  `scheduleReviewTimeoutPoke` at agent launch.
+  `scheduleReviewTimeoutPoke` at agent launch. This cap is wall-clock
+  (`Date.now() - reviewStartedAt`), so machine sleep would otherwise count
+  as elapsed and kill a healthy reviewer on wake; the watchdog's
+  `absorbSleep` detects a suspend from its own fixed-cadence overrun and
+  shifts `reviewStartedAt` forward by the slippage, discounting the sleep.
+  An awake-time hang still times out (the anchor is only shifted on an
+  actual suspend).
 - **Unparseable-verdict re-poke (0 s)** — re-arms the FIFO so the next
   poll cycle picks up the just-written `pendingReviewAt`. Logically a
   hand-off, not a wait. Source: `poller-review.ts` after the retry

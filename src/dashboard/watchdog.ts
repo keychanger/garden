@@ -31,13 +31,18 @@
 import { tmux, windowExists, killWindowSafe, listAllWindowNames } from "./tmux.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { watchdogWindowName, parseWorkerWindow } from "./window-names.js";
-import { readRegistry, PR_STATE_KIND, OPERATOR_ACTION_FAILING_REASONS, type WorkerEntry, type WorkerRegistry } from "./registry.js";
+import { readRegistry, mutateRegistry, PR_STATE_KIND, OPERATOR_ACTION_FAILING_REASONS, type WorkerEntry, type WorkerRegistry } from "./registry.js";
 import { triggerProjectPoll } from "./poller-fifo.js";
 import { addAlert } from "./alerts.js";
 import { log } from "./log.js";
 
 export const WATCHDOG_TICK_MS = 60_000;
 export const WATCHDOG_THRESHOLD_MS = 5 * 60_000;
+// A watchdog loop iteration that overran its intended cadence by more than this
+// means the process was suspended (machine sleep / clock jump) — a real suspend
+// is minutes-to-hours, an over-long tick body is seconds. One full extra tick of
+// slack keeps a slow body (poller respawns under a large fleet) well clear.
+export const SLEEP_SLACK_MS = WATCHDOG_TICK_MS;
 
 // States the watchdog watches: those where the poller owes the worker a future
 // action (PR_STATE_KIND.pollerOwed), plus two stranding classes that live in
@@ -209,6 +214,70 @@ export function alertOrphanedWindows(registry: WorkerRegistry): void {
   }
 }
 
+// Discount machine-sleep / clock-jump time from live review/resolve/ci-fix
+// timeouts. isReviewTimedOut / isCiFixTimedOut kill a reviewer whose window has
+// lived past REVIEW_TIMEOUT_MS (Date.now() - reviewStartedAt), transitioning a
+// HEALTHY review into `failing` — but a laptop that sleeps mid-review makes that
+// wall-clock difference include the suspend and spuriously trips the timeout on
+// wake. The watchdog is the fleet's one fixed-cadence process, so the wall-clock
+// it overran its intended loop interval by (gapMs) directly measures suspend
+// time. When that overrun exceeds a full tick of slack, shift reviewStartedAt
+// forward by the slippage for every live-windowed worker, so the naive
+// downstream checks exclude the sleep. All three role timeouts read
+// entry.reviewStartedAt behind a live entry.reviewWindowName, so one durable
+// shift corrects reviewing, resolving, and ci-fixing alike.
+//
+// Only reviewStartedAt is shifted: backoff gates (reviewRetryAt), the failing
+// debounce (lastShaChangeAt), and owed-action anchors (mergePendingAt /
+// pendingReviewAt) SHOULD come due on wake — the API recovered, the quota
+// window reset, the fix aged — so they are deliberately left alone. The shift
+// re-reads under the registry lock and re-checks the window fields, so a
+// concurrent verdict-dispatch (which clears reviewStartedAt + reviewWindowName)
+// can't resurrect a stale anchor onto a merged worker. Returns the slippage
+// applied (0 when no suspend), for logging and tests. This transitions no state
+// — it is delivery-time bookkeeping, consistent with the watchdog contract.
+//
+// Residual (documented): if the OS suspends while a poll process is already
+// mid-worker-loop, that poll resumes on wake and can reach isReviewTimedOut
+// before this shift lands (a scheduler coin-flip). Rare (the machine is idle
+// between short, event-driven polls) and operator-recoverable (`garden kick`);
+// closing it deterministically would need a sleep-aware check on every timeout,
+// which is not worth the added failure surface.
+export function absorbSleep(gapMs: number): number {
+  const slippage = gapMs - WATCHDOG_TICK_MS;
+  if (slippage <= SLEEP_SLACK_MS) return 0;
+  const registry = readRegistry();
+  const eligible = new Set<string>();
+  for (const [project, entries] of Object.entries(registry.workers)) {
+    for (const e of entries) {
+      if (e.reviewStartedAt !== undefined && hasLiveWork(e)) {
+        eligible.add(`${project} ${e.name}`);
+      }
+    }
+  }
+  if (eligible.size === 0) return 0;
+  mutateRegistry((reg) => {
+    let changed = false;
+    for (const [project, entries] of Object.entries(reg.workers)) {
+      for (const e of entries) {
+        // Re-check the window fields under the lock — not windowExists again
+        // (a rare op shouldn't hold the lock across tmux calls); a dispatch that
+        // cleared reviewStartedAt/reviewWindowName drops the entry from the shift.
+        if (eligible.has(`${project} ${e.name}`)
+            && e.reviewStartedAt !== undefined && e.reviewWindowName !== undefined) {
+          e.reviewStartedAt += slippage;
+          changed = true;
+        }
+      }
+    }
+    return changed;
+  });
+  log.info("watchdog", "discounted machine-sleep from live review timeouts", {
+    data: { slippageMs: slippage, workers: eligible.size },
+  });
+  return slippage;
+}
+
 export async function runWatchdogLoop(): Promise<void> {
   log.info("watchdog", "started");
   // Imported dynamically to avoid a static cycle (poller.ts statically imports
@@ -223,8 +292,17 @@ export async function runWatchdogLoop(): Promise<void> {
   // resets on window respawn, which is fine — a respawn is itself a restart
   // event and one extra poke is harmless.
   const lastPokeAt = new Map<string, number>();
+  // Timestamp the START of each iteration; the gap to the next start spans the
+  // whole loop (tick body + the fixed sleep), so a suspend during EITHER is
+  // measured — capturing only around the sleep would miss a suspend mid-body.
+  let iterStart = Date.now();
   while (true) {
+    const gap = Date.now() - iterStart;
+    iterStart = Date.now();
     try {
+      // First thing on (re)entry: reconcile any machine-sleep that spanned the
+      // previous iteration, before the timeout-bearing tick runs.
+      absorbSleep(gap);
       // Heal pollers before poking so a just-revived poller receives this
       // cycle's staleness poke (and resumes work) without waiting another tick.
       healProjectPollers(
