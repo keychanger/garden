@@ -113,6 +113,42 @@ export async function waitForHandoffResponse(
 // Called by the poller loop on every wake. O(pending requests) per cycle;
 // usually zero. Safe to call concurrently — atomic-rename claim ensures one
 // poller wins each request.
+// Shape guard for a worker-authored request file. The request crosses the
+// sandbox boundary (a sandboxed worker writes it; the unsandboxed poller acts on
+// it), so its fields must be validated before use rather than trusted from
+// JSON.parse's `any`.
+function isHandoffRequest(x: unknown): x is HandoffRequest {
+  if (typeof x !== "object" || x === null) return false;
+  const r = x as Record<string, unknown>;
+  return typeof r.id === "string"
+    && typeof r.targetProject === "string"
+    && typeof r.seedFile === "string"
+    && typeof r.createdAt === "number"
+    && (r.expectCallback === undefined || typeof r.expectCallback === "boolean")
+    && (r.parentProject === undefined || typeof r.parentProject === "string")
+    && (r.parentWorker === undefined || typeof r.parentWorker === "string")
+    && (r.ultracode === undefined || typeof r.ultracode === "boolean");
+}
+
+// The seed file MUST resolve (through symlinks) to inside the handoff seeds
+// directory. Without this a worker-authored request could point seedFile at an
+// arbitrary path (/etc/…, ~/.ssh/…, a sibling worktree) or a symlink escaping
+// the seeds dir, and newWorker would read its contents into the child's first
+// prompt — an info-disclosure read across the sandbox boundary.
+function seedFileWithinSeedsDir(seedFile: string): boolean {
+  const seedsDir = path.join(SESSIONS_DIR, "seeds");
+  let realFile: string;
+  let realDir: string;
+  try {
+    realFile = fs.realpathSync(seedFile);
+    realDir = fs.realpathSync(seedsDir);
+  } catch {
+    return false; // missing file / dir, or a dangling symlink
+  }
+  const rel = path.relative(realDir, realFile);
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
 export function processPendingHandoffs(): void {
   const dir = requestsDir();
   if (!fs.existsSync(dir)) return;
@@ -133,12 +169,27 @@ export function processPendingHandoffs(): void {
       continue;
     }
 
-    let req: HandoffRequest;
+    let parsed: unknown;
     try {
-      req = JSON.parse(fs.readFileSync(claimFile, "utf8"));
+      parsed = JSON.parse(fs.readFileSync(claimFile, "utf8"));
     } catch (err) {
       log.error("handoff", "invalid request file", {
         data: { file, error: String(err) },
+      });
+      try { fs.unlinkSync(claimFile); } catch { /* ignore */ }
+      continue;
+    }
+    if (!isHandoffRequest(parsed)) {
+      log.error("handoff", "malformed request file (shape guard rejected)", {
+        data: { file },
+      });
+      try { fs.unlinkSync(claimFile); } catch { /* ignore */ }
+      continue;
+    }
+    const req = parsed;
+    if (!seedFileWithinSeedsDir(req.seedFile)) {
+      log.error("handoff", "rejected: seedFile escapes the seeds directory", {
+        data: { file, targetProject: req.targetProject, seedFile: req.seedFile },
       });
       try { fs.unlinkSync(claimFile); } catch { /* ignore */ }
       continue;
