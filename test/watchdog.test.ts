@@ -20,17 +20,28 @@ vi.mock("../src/dashboard/registry.js", async (importActual) => {
   // watchdog derives its sets from) stays live; only readRegistry is faked.
   const actual = await importActual<typeof import("../src/dashboard/registry.js")>();
   const entries: Record<string, import("../src/dashboard/registry.js").WorkerEntry[]> = {};
+  // Runs just before mutateRegistry invokes its callback, modeling a concurrent
+  // write (a verdict-dispatch) that landed between absorbSleep's unlocked
+  // eligible-building read and its locked mutate — the exact race the inner
+  // re-check guard defends. Real mutateRegistry does a fresh readRegistry inside
+  // the lock, so the callback can observe state the eligible set no longer matches.
+  let onMutate: (() => void) | undefined;
   return {
     ...actual,
     readRegistry: vi.fn(() => ({ workers: entries })),
     // Apply the mutation to the in-memory entries in place (no real fs / lock).
     mutateRegistry: (fn: (r: import("../src/dashboard/registry.js").WorkerRegistry) => boolean) => {
+      onMutate?.();
       fn({ workers: entries });
     },
     _setEntries: (project: string, list: import("../src/dashboard/registry.js").WorkerEntry[]) => {
       entries[project] = list;
     },
+    _setOnMutate: (cb: (() => void) | undefined) => {
+      onMutate = cb;
+    },
     _clear: () => {
+      onMutate = undefined;
       for (const key of Object.keys(entries)) delete entries[key];
     },
   };
@@ -54,6 +65,7 @@ const windowExistsMock = vi.mocked(windowExists);
 
 const registryMock = await import("../src/dashboard/registry.js") as unknown as {
   _setEntries: (project: string, list: WorkerEntry[]) => void;
+  _setOnMutate: (cb: (() => void) | undefined) => void;
   _clear: () => void;
 };
 
@@ -482,5 +494,24 @@ describe("absorbSleep", () => {
     expect(e.lastShaChangeAt).toBe("2026-06-04T11:00:00Z");
     expect(e.mergePendingAt).toBe("2026-06-04T11:00:00Z");
     expect(e.pendingReviewAt).toBe(NOW + 7000);
+  });
+
+  it("does not shift (and produces no NaN) when a dispatch cleared the anchor between the two reads", () => {
+    // A verdict-dispatch clears reviewStartedAt + reviewWindowName the instant a
+    // review completes. If it lands between the unlocked eligible read and the
+    // locked mutate, the worker is still in `eligible` but its anchor is gone.
+    // The inner re-check (reviewStartedAt/reviewWindowName still defined) must
+    // drop it — otherwise `undefined += slippage` would resurrect a NaN anchor
+    // onto an already-merged worker.
+    windowExistsMock.mockReturnValue(true);
+    const e = entry({ prState: "reviewing", reviewWindowName: "w", reviewStartedAt: NOW - TWO_HOURS });
+    registryMock._setEntries("p", [e]);
+    registryMock._setOnMutate(() => {
+      e.reviewStartedAt = undefined;
+      e.reviewWindowName = undefined;
+    });
+    // eligible.size is 1 (built from the pre-clear read), so the mutate runs.
+    expect(absorbSleep(WATCHDOG_TICK_MS + TWO_HOURS)).toBe(TWO_HOURS);
+    expect(e.reviewStartedAt).toBeUndefined();
   });
 });
