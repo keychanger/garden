@@ -248,4 +248,47 @@ describe("processPendingHandoffs", () => {
     expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(reqDir, "bad.req.json.processing"))).toBe(false);
   });
+
+  it("drops a request body that parses to null / a primitive / an array without throwing", () => {
+    // isHandoffRequest runs on JSON.parse's output OUTSIDE any try/catch, so its
+    // non-object guard (null / primitive / array) must reject cleanly rather than
+    // throw — a throw would abort the whole poll pass and strand sibling requests.
+    fs.mkdirSync(reqDir, { recursive: true });
+    for (const [name, body] of [
+      ["null.req.json", "null"],
+      ["number.req.json", "42"],
+      ["array.req.json", "[]"],
+    ]) {
+      fs.writeFileSync(path.join(reqDir, name), body);
+    }
+    expect(() => processPendingHandoffs()).not.toThrow();
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    for (const name of ["null.req.json", "number.req.json", "array.req.json"]) {
+      expect(fs.existsSync(path.join(reqDir, name + ".processing"))).toBe(false);
+    }
+  });
+
+  it("rejects a seedFile that does not exist on disk (realpath throws)", () => {
+    // Drives seedFileWithinSeedsDir's realpathSync catch branch: a seedFile named
+    // inside seeds/ but never written resolves to nothing, so the request is
+    // dropped rather than handed to newWorker.
+    const missingSeed = path.join(tmpDir, "seeds", "gone.txt");
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: missingSeed });
+    processPendingHandoffs();
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(reqDir, `${id}.req.json.processing`))).toBe(false);
+    expect(fs.existsSync(path.join(reqDir, `${id}.req.json`))).toBe(false);
+  });
+
+  it("rejects a seedFile that is a dangling symlink inside seeds/", () => {
+    // A symlink living inside seeds/ whose target was deleted: realpathSync throws,
+    // the catch returns false, and the request is dropped.
+    const target = path.join(tmpDir, "vanished.txt");
+    const link = path.join(tmpDir, "seeds", "dangling.txt");
+    fs.symlinkSync(target, link); // target intentionally never created
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: link });
+    processPendingHandoffs();
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(reqDir, `${id}.req.json.processing`))).toBe(false);
+  });
 });

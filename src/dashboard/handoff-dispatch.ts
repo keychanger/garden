@@ -110,9 +110,6 @@ export async function waitForHandoffResponse(
   return null;
 }
 
-// Called by the poller loop on every wake. O(pending requests) per cycle;
-// usually zero. Safe to call concurrently — atomic-rename claim ensures one
-// poller wins each request.
 // Shape guard for a worker-authored request file. The request crosses the
 // sandbox boundary (a sandboxed worker writes it; the unsandboxed poller acts on
 // it), so its fields must be validated before use rather than trusted from
@@ -149,6 +146,9 @@ function seedFileWithinSeedsDir(seedFile: string): boolean {
   return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 
+// Called by the poller loop on every wake. O(pending requests) per cycle;
+// usually zero. Safe to call concurrently — atomic-rename claim ensures one
+// poller wins each request.
 export function processPendingHandoffs(): void {
   const dir = requestsDir();
   if (!fs.existsSync(dir)) return;
