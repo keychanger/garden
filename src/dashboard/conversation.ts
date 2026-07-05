@@ -20,7 +20,10 @@ import { stripControlSequences } from "./tmux.js";
 export type Verb = "worked" | "planned" | "answered";
 
 export interface Turn {
-  role: "user" | "assistant";
+  // "garden" marks a garden-injected continuation prompt (post-merge auto-
+  // continue, handoff callback, trellis/grow iteration) — rendered as a compact
+  // labeled marker, not the multi-paragraph text.
+  role: "user" | "assistant" | "garden";
   text: string;
   verb?: Verb; // assistant turns only
   ts: string; // ISO timestamp from the transcript, "" if absent
@@ -101,7 +104,6 @@ export function readConversation(
   const turns: Turn[] = [];
   let pending: { tools: ToolUse[]; firstText: string; ts: string } | null = null;
   let seenUser = false;
-  let suppress = false; // dropping a [garden]-injected exchange
 
   const flush = (): void => {
     if (pending && (pending.tools.length > 0 || pending.firstText)) {
@@ -133,6 +135,14 @@ export function readConversation(
       {
         const raw = userPromptText(message.content);
         if (!raw) continue;
+        // System-injected user-role messages — background-task completions
+        // (`<task-notification>`), slash-command echoes — are not operator
+        // prompts and not turn boundaries. Skip them so the surrounding
+        // assistant activity folds into one turn (a Workflow launch and the
+        // edits it drove read as a single summary rather than being split by a
+        // multi-KB notification blob painted as a fake prompt).
+        const promptSource = typeof obj.promptSource === "string" ? obj.promptSource : undefined;
+        if (isInjectedSystemMessage(raw, promptSource)) continue;
         // The typed prompt carries an inline "[Image #N]" reference when a
         // screenshot is attached. Strip it and flag the turn so the view shows
         // a clean "[screenshot]" marker instead of the placeholder.
@@ -140,16 +150,18 @@ export function readConversation(
         const text = collapse(raw.replace(/\[Image #\d+\]/g, " "));
         if (!text) continue;
         flush();
-        // garden-injected system prompts (interrupt/merge continuation,
-        // handoff callbacks, postMerge notices) are all tagged "[garden] ".
-        // They aren't something the operator typed — drop the prompt and its
-        // response so the view shows only the real conversation.
+        // garden's own continuation prompts (interrupt/merge auto-continue,
+        // handoff callbacks, trellis/grow iterations) are pasted into the pane,
+        // so they read as `promptSource:"typed"` — the [garden] fence, not the
+        // source, identifies them. Show a compact labeled marker instead of the
+        // multi-paragraph text, and keep the response: a post-merge auto-
+        // continue is often a whole phase of real work.
         if (text.startsWith("[garden]")) {
-          pending = null;
-          suppress = true;
+          turns.push({ role: "garden", text: gardenLabel(text), ts });
+          pending = { tools: [], firstText: "", ts };
+          seenUser = true;
           continue;
         }
-        suppress = false;
         turns.push({ role: "user", text, ts, ...(image ? { image: true } : {}) });
         pending = { tools: [], firstText: "", ts };
         seenUser = true;
@@ -158,7 +170,6 @@ export function readConversation(
     }
 
     if (type === "assistant" && message?.role === "assistant" && Array.isArray(message.content)) {
-      if (suppress) continue; // response to a [garden]-injected prompt
       if (!seenUser) continue; // drop a dangling assistant turn from a truncated head
       if (!pending) pending = { tools: [], firstText: "", ts };
       for (const block of message.content as Array<Record<string, unknown>>) {
@@ -190,6 +201,39 @@ export function classifyVerb(tools: string[]): Verb {
   return "answered";
 }
 
+// Operator-authored prompts carry `promptSource:"typed"` (or "queued"); Claude
+// Code's own injected user-role messages carry "system" (or another value). Use
+// that as the authoritative signal, and fall back to a denylist of known
+// wrapper tags for legacy transcripts that predate the field (the prompt itself
+// is the collapsed content, so a genuine prompt never opens with one of these).
+const GENUINE_PROMPT_SOURCES = new Set(["typed", "queued"]);
+const INJECTED_WRAPPER =
+  /^\s*<(?:task-notification|local-command-[a-z]+|command-(?:name|message|args)|bash-(?:input|stdout|stderr))\b/;
+
+export function isInjectedSystemMessage(raw: string, promptSource: string | undefined): boolean {
+  if (promptSource !== undefined) return !GENUINE_PROMPT_SOURCES.has(promptSource);
+  return INJECTED_WRAPPER.test(raw);
+}
+
+// Map a [garden]-fenced continuation prompt to a compact marker. The prompts
+// are multi-paragraph and usually lead with a branch-identity preamble, so
+// match the distinctive phrase anywhere in the collapsed text, most-specific
+// first. Kept in sync with the prompt builders in continue.ts / grow-continue.ts
+// / trellis-continue.ts / trellis-picker.ts / poller-merge.ts.
+export function gardenLabel(text: string): string {
+  const grow = text.match(/Iteration (\d+) of \d+.{0,4}keep growing/i);
+  if (grow) return `grow iteration ${grow[1]}`;
+  if (/Grow loop, iteration 1 of/i.test(text)) return "grow start";
+  if (/previous iteration was merged\..*trellis/i.test(text)) return "trellis iteration";
+  if (/trellis vine bound/i.test(text)) return "trellis start";
+  if (/trellis-author/i.test(text)) return "author a trellis";
+  if (/Handoff callback:/i.test(text)) return "handoff callback";
+  if (/just merged into/i.test(text)) return "sibling merged";
+  if (/interrupted by a restart/i.test(text)) return "resumed after interrupt";
+  if (/reviewed and merged/i.test(text)) return "continue after merge";
+  return "autocontinue";
+}
+
 // Summarize an assistant turn by what it DID, not what it said last. The closing
 // line of a response is almost always a question or sign-off — a poor summary —
 // so we synthesize a terse action phrase from the turn's tool calls (files
@@ -199,7 +243,7 @@ export function summarizeTurn(tools: ToolUse[], firstText: string): { text: stri
   const edited = new Set<string>();
   const readFiles = new Set<string>();
   const bash: string[] = [];
-  let searched = false, exitPlan = false, asked = false, agents = 0, web = false;
+  let searched = false, exitPlan = false, asked = false, agents = 0, web = false, workflow = false;
 
   for (const t of tools) {
     if (EDIT_TOOLS.has(t.name)) {
@@ -214,6 +258,8 @@ export function summarizeTurn(tools: ToolUse[], firstText: string): { text: stri
       if (typeof t.input.command === "string") bash.push(t.input.command);
     } else if (t.name === "Task" || t.name === "Agent") {
       agents++;
+    } else if (t.name === "Workflow") {
+      workflow = true;
     } else if (t.name === "ExitPlanMode") {
       exitPlan = true;
     } else if (t.name === "AskUserQuestion") {
@@ -230,6 +276,9 @@ export function summarizeTurn(tools: ToolUse[], firstText: string): { text: stri
   const built = /\b(?:npm|pnpm|yarn)\s+run\s+build\b|\bmake\b|\bcargo build\b|\bgo build\b/.test(allBash);
 
   const parts: string[] = [];
+  // A launched Workflow is notable and often co-occurs with the edits it drove,
+  // so lead with it rather than folding it into the single-action chain below.
+  if (workflow) parts.push("ran a workflow");
   const editedNames = [...edited].filter(Boolean);
   if (edited.size > 0) {
     parts.push(editedNames.length > 0
@@ -329,18 +378,23 @@ export function formatConversationPane(turns: Turn[], opts: FormatOpts): string[
 
   turns.forEach((turn, i) => {
     // Each exchange opens with a dim, timestamped divider rule — strong visual
-    // separation between threads, and a "when did I ask this" cue.
-    if (turn.role === "user") {
+    // separation between threads, and a "when did I ask this" cue. Both operator
+    // prompts and garden continuation markers are conversation boundaries.
+    if (turn.role !== "assistant") {
       if (i > 0) lines.push("");
       lines.push(dividerLine(turn.ts, opts.width));
     }
     const label = turn.role === "user"
       ? paint("1", "you".padEnd(LABEL_W))
-      : paint(VERB_COLOR[turn.verb ?? "answered"], (turn.verb ?? "answered").padEnd(LABEL_W));
+      : turn.role === "garden"
+        ? paint("2", "garden".padEnd(LABEL_W)) // dim: system-injected, subordinate
+        : paint(VERB_COLOR[turn.verb ?? "answered"], (turn.verb ?? "answered").padEnd(LABEL_W));
     const wrapped = wrapText(turn.text, textWidth);
     wrapped.forEach((w, j) => {
       const gutter = j === 0 ? label : " ".repeat(LABEL_W);
-      let styled = turn.role === "user" ? paint("1", w) : w;
+      let styled = turn.role === "user" ? paint("1", w)
+        : turn.role === "garden" ? paint("2", w)
+        : w;
       // A dim "[screenshot]" marker on the last line of a prompt that had one.
       if (turn.role === "user" && turn.image && j === wrapped.length - 1) {
         styled += " " + paint("2", "[screenshot]");

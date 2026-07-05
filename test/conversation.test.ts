@@ -7,6 +7,8 @@ import {
   summarizeTurn,
   resolveTranscriptPath,
   formatConversationPane,
+  gardenLabel,
+  isInjectedSystemMessage,
   type Turn,
 } from "../src/dashboard/conversation.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
@@ -71,10 +73,21 @@ describe("summarizeTurn", () => {
     expect(summarizeTurn([tool("AskUserQuestion")], "").text).toBe("asked a question");
     expect(summarizeTurn([tool("Agent"), tool("Agent")], "").text).toBe("ran 2 subagents");
     expect(summarizeTurn([tool("WebSearch")], "").text).toBe("researched");
+    expect(summarizeTurn([tool("Workflow")], "").text).toBe("ran a workflow");
     expect(summarizeTurn(
       [tool("Read", { file_path: "a.ts" }), tool("Read", { file_path: "b.ts" })], "").text)
       .toBe("explored 2 files");
     expect(summarizeTurn([tool("Grep", { pattern: "x" })], "").text).toBe("searched the codebase");
+  });
+
+  it("leads with the workflow, then the concrete work it drove", () => {
+    const r = summarizeTurn([
+      tool("Workflow"),
+      tool("Edit", { file_path: "notes.md" }),
+      tool("Bash", { command: "git commit -m x && git push" }),
+    ], "");
+    expect(r.text).toBe("ran a workflow · edited notes.md · committed · pushed");
+    expect(r.verb).toBe("worked");
   });
 
   it("upgrades the verb to worked when a turn commits without editing", () => {
@@ -168,22 +181,62 @@ describe("readConversation", () => {
     ]);
   });
 
-  it("drops garden-injected [garden] prompts and their responses", () => {
+  it("renders a garden continuation as a compact marker and keeps its response", () => {
     const p = writeTranscript([
       user("real prompt one"),
       assistant([{ type: "text", text: "real answer one" }]),
-      // merge auto-continue: injected as a user prompt, tagged [garden]
-      user("[garden] Your previous changes were reviewed and merged. Continue…", "2026-05-30T17:05:00Z"),
-      assistant([{ type: "tool_use", name: "Edit" }], "2026-05-30T17:05:01Z"),
-      assistant([{ type: "text", text: "auto-continue housekeeping" }], "2026-05-30T17:05:02Z"),
+      // merge auto-continue: injected as a user prompt, tagged [garden]. It reads
+      // as a typed prompt (garden pastes it), so the [garden] fence identifies it.
+      user("[garden] Your previous changes were reviewed and merged. Continue…",
+        "2026-05-30T17:05:00Z", { promptSource: "typed" }),
+      assistant([{ type: "tool_use", name: "Edit", input: { file_path: "a.ts" } }], "2026-05-30T17:05:01Z"),
+      assistant([{ type: "tool_use", name: "Bash", input: { command: "git push" } }], "2026-05-30T17:05:02Z"),
       user("real prompt two", "2026-05-30T17:06:00Z"),
       assistant([{ type: "text", text: "real answer two" }], "2026-05-30T17:06:01Z"),
     ]);
     expect(readConversation(p)).toEqual([
       { role: "user", text: "real prompt one", ts: "2026-05-30T17:00:00Z" },
       { role: "assistant", text: "real answer one", verb: "answered", ts: "2026-05-30T17:00:01Z" },
+      { role: "garden", text: "continue after merge", ts: "2026-05-30T17:05:00Z" },
+      { role: "assistant", text: "edited a.ts · pushed", verb: "worked", ts: "2026-05-30T17:05:00Z" },
       { role: "user", text: "real prompt two", ts: "2026-05-30T17:06:00Z" },
       { role: "assistant", text: "real answer two", verb: "answered", ts: "2026-05-30T17:06:01Z" },
+    ]);
+  });
+
+  it("skips a system-injected task-notification so its turn folds into one summary", () => {
+    const p = writeTranscript([
+      user("kick off the research"),
+      // launch a background workflow, then end the turn
+      assistant([{ type: "tool_use", name: "Workflow", input: {} }], "2026-05-30T17:00:01Z"),
+      // the completion arrives as a user-role message with promptSource:"system"
+      user("<task-notification>\n<status>completed</status>\n" + "x".repeat(9000) + "\n</task-notification>",
+        "2026-05-30T17:20:00Z", { promptSource: "system" }),
+      // the agent resumes in a fresh assistant message — folds into the same turn
+      assistant([{ type: "tool_use", name: "Edit", input: { file_path: "out.md" } }], "2026-05-30T17:20:01Z"),
+      assistant([{ type: "tool_use", name: "Bash", input: { command: "git commit -m x" } }], "2026-05-30T17:20:02Z"),
+    ]);
+    expect(readConversation(p)).toEqual([
+      { role: "user", text: "kick off the research", ts: "2026-05-30T17:00:00Z" },
+      // tool-only turn: ts inherited from the prompt that seeded it (no text block to restamp).
+      { role: "assistant", text: "ran a workflow · edited out.md · committed", verb: "worked", ts: "2026-05-30T17:00:00Z" },
+    ]);
+  });
+
+  it("skips legacy synthetic wrapper messages that lack promptSource", () => {
+    const p = writeTranscript([
+      user("real prompt"),
+      assistant([{ type: "text", text: "real answer" }]),
+      // old transcript: no promptSource field, recognized by its wrapper tag
+      user("<local-command-stdout>build ok</local-command-stdout>", "2026-05-30T17:05:00Z"),
+      user("real prompt two", "2026-05-30T17:06:00Z"),
+      assistant([{ type: "text", text: "second answer" }], "2026-05-30T17:06:01Z"),
+    ]);
+    expect(readConversation(p)).toEqual([
+      { role: "user", text: "real prompt", ts: "2026-05-30T17:00:00Z" },
+      { role: "assistant", text: "real answer", verb: "answered", ts: "2026-05-30T17:00:01Z" },
+      { role: "user", text: "real prompt two", ts: "2026-05-30T17:06:00Z" },
+      { role: "assistant", text: "second answer", verb: "answered", ts: "2026-05-30T17:06:01Z" },
     ]);
   });
 
@@ -280,6 +333,18 @@ describe("formatConversationPane", () => {
     expect(out[2]).toMatch(/^ {10}/);
   });
 
+  it("renders a garden marker with its own timestamped divider and a garden gutter", () => {
+    const out = formatConversationPane([
+      { role: "user", text: "do the thing", ts: "" },
+      { role: "assistant", text: "did it.", verb: "worked", ts: "" },
+      { role: "garden", text: "continue after merge", ts: "" },
+      { role: "assistant", text: "kept going.", verb: "worked", ts: "" },
+    ], { width: 60 }).map(plain);
+    const marker = out.findIndex(l => /^ garden\s+continue after merge$/.test(l));
+    expect(marker).toBeGreaterThan(0);
+    expect(out[marker - 1]).toMatch(/^─ ─+$/); // divider precedes the marker
+  });
+
   it("appends a live status indicator when the worker is busy", () => {
     expect(formatConversationPane(turns, { width: 60, status: "working" }).map(plain).at(-1))
       .toMatch(/working…/);
@@ -296,6 +361,50 @@ describe("formatConversationPane", () => {
     ];
     const out = formatConversationPane(two, { width: 60 }).map(plain);
     expect(out).toContain(""); // blank line between the two exchanges
+  });
+});
+
+describe("gardenLabel", () => {
+  // The branch-identity preamble leads most continuation prompts, so labels are
+  // matched on the distinctive phrase anywhere in the text.
+  const preamble = "[garden] You are working in your own git worktree on branch `x`. ";
+  it("classifies each continuation kind", () => {
+    expect(gardenLabel(preamble + "Your previous changes were reviewed and merged. Before you decide"))
+      .toBe("continue after merge");
+    expect(gardenLabel("[garden] You were interrupted by a restart. Continue"))
+      .toBe("resumed after interrupt");
+    expect(gardenLabel("[garden] Handoff callback: proj/worker reached terminal state `merged`."))
+      .toBe("handoff callback");
+    expect(gardenLabel("[garden] Worker `spry` just merged into main: some title"))
+      .toBe("sibling merged");
+    expect(gardenLabel("[garden] Your last iteration was merged. Iteration 3 of 5 — keep growing this codebase."))
+      .toBe("grow iteration 3");
+    expect(gardenLabel("[garden] Grow loop, iteration 1 of 5."))
+      .toBe("grow start");
+    expect(gardenLabel("[garden] Your previous iteration was merged. The trellis at `t.md`"))
+      .toBe("trellis iteration");
+    expect(gardenLabel("[garden] You are a trellis vine bound to `t.md`."))
+      .toBe("trellis start");
+    expect(gardenLabel("[garden] Please invoke the `trellis-author` skill"))
+      .toBe("author a trellis");
+  });
+  it("falls back to a generic autocontinue label", () => {
+    expect(gardenLabel("[garden] Something new we don't recognize yet")).toBe("autocontinue");
+  });
+});
+
+describe("isInjectedSystemMessage", () => {
+  it("trusts promptSource when present", () => {
+    expect(isInjectedSystemMessage("anything", "typed")).toBe(false);
+    expect(isInjectedSystemMessage("anything", "queued")).toBe(false);
+    expect(isInjectedSystemMessage("<task-notification>…", "system")).toBe(true);
+  });
+  it("falls back to wrapper-tag matching when promptSource is absent", () => {
+    expect(isInjectedSystemMessage("<task-notification> …", undefined)).toBe(true);
+    expect(isInjectedSystemMessage("<local-command-caveat> …", undefined)).toBe(true);
+    expect(isInjectedSystemMessage("a normal typed prompt", undefined)).toBe(false);
+    // a genuine prompt that merely mentions a tag name is not injected
+    expect(isInjectedSystemMessage("what does <task-notification> mean?", undefined)).toBe(false);
   });
 });
 
