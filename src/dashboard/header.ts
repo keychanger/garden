@@ -812,16 +812,40 @@ function statusPaneFloorLines(
 let lastWrittenQuickStatus: string | null = null;
 let lastWrittenUsageRendered: string | null = null;
 
+// The status pane width changes only on terminal/layout resize, so a short TTL
+// lets writeQuickStatus cap rows to the pane width without forking a tmux size
+// query on every hook-driven refresh, while still tracking a resize within ~1s.
+const STATUS_PANE_WIDTH_TTL_MS = 1000;
+let cachedStatusWidth: { paneId: string; width: number | undefined; at: number } | null = null;
+
+function cachedStatusPaneWidth(paneId: string): number | undefined {
+  const now = Date.now();
+  if (cachedStatusWidth && cachedStatusWidth.paneId === paneId
+      && now - cachedStatusWidth.at < STATUS_PANE_WIDTH_TTL_MS) {
+    return cachedStatusWidth.width;
+  }
+  const width = getPaneSize(paneId)?.width;
+  cachedStatusWidth = { paneId, width, at: now };
+  return width;
+}
+
 function writeQuickStatus(opts?: RefreshOptions): void {
   try {
     const state = opts?.state ?? readDashState();
-    const rendered = renderQuickStatus(state, opts?.windowNames, opts?.config, opts?.registry);
+    // Width for row-capping, via a short TTL cache: the pane width changes only
+    // on terminal/layout resize, so this avoids a tmux size fork on every no-op
+    // refresh — the PostToolUse-storm path the dedup below exists to keep quiet.
+    const width = state.statusPaneId ? cachedStatusPaneWidth(state.statusPaneId) : undefined;
+    const rendered = renderQuickStatus(
+      state, opts?.windowNames, opts?.config, opts?.registry, width,
+    );
     if (rendered === lastWrittenQuickStatus) return;
     atomicWriteFile(STATUS_RENDERED_FILE, rendered);
     lastWrittenQuickStatus = rendered;
     if (state.statusPaneId) {
       // +1 for the pane-border-status top row, which is included in pane_height
-      // but not in the rendered line count.
+      // but not in the rendered line count. Height is read fresh here (past the
+      // dedup) so no-op refreshes still fork nothing.
       const h = Math.max(statusPaneFloorLines(opts?.config, opts?.registry), rendered.split("\n").length) + 1;
       const cur = getPaneSize(state.statusPaneId);
       resizeAndSignal(state.statusPaneId, h, cur?.height ?? null);

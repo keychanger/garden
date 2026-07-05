@@ -235,6 +235,57 @@ export function dimRow(line: string): string {
   return FAINT + line.split(RESET).join(RESET + FAINT) + RESET;
 }
 
+// Approximate terminal column width of one code point: 0 for combining marks,
+// zero-width joiners, and variation selectors; 2 for East-Asian Wide/Fullwidth
+// and all astral-plane code points (emoji, pictographs, astral CJK) so a wide
+// glyph is never UNDERcounted — an undercounted wide glyph lets a capped row
+// still wrap, the exact failure the cap prevents. Ambiguous-width BMP glyphs
+// (the geometric status icons, ●/○, arrows, ✓/✗) count as 1, correct on a
+// non-CJK terminal; the row cap's 2-column margin absorbs the rare terminal
+// that renders a couple of them double-wide.
+function codePointWidth(cp: number): number {
+  if (cp === 0x200d || (cp >= 0xfe00 && cp <= 0xfe0f) || (cp >= 0x0300 && cp <= 0x036f)) return 0;
+  if ((cp >= 0x1100 && cp <= 0x115f)      // Hangul Jamo
+      || (cp >= 0x2e80 && cp <= 0xa4cf)   // CJK radicals … Yi
+      || (cp >= 0xac00 && cp <= 0xd7a3)   // Hangul syllables
+      || (cp >= 0xf900 && cp <= 0xfaff)   // CJK compatibility ideographs
+      || (cp >= 0xff00 && cp <= 0xff60)   // Fullwidth forms
+      || (cp >= 0xffe0 && cp <= 0xffe6)   // Fullwidth signs
+      || cp >= 0x1f000)                    // astral: emoji, pictographs, CJK ext
+    return 2;
+  return 1;
+}
+
+// Truncate `s` to at most `maxWidth` visible columns, preserving CSI escape
+// sequences (zero-width) and closing with a reset so a color cut mid-run does
+// not bleed into the next line. Visible width is summed via codePointWidth so
+// wide glyphs are not undercounted. Status rows carry only CSI color codes
+// (never OSC or bare ESC), so CSI-only handling is complete here. Used to
+// hard-cap each row to the pane width: a row wider than the pane wraps onto a
+// second terminal line, which desyncs the in-place repaint (the rendered line
+// count no longer matches the displayed height) and corrupts the pane on the
+// next refresh.
+export function truncateToVisibleWidth(s: string, maxWidth: number): string {
+  const CSI = /^\x1b\[[0-9;?]*[ -/]*[@-~]/;
+  let out = "";
+  let visible = 0;
+  let sawEscape = false;
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] === "\x1b") {
+      const m = CSI.exec(s.slice(i));
+      if (m) { out += m[0]; sawEscape = true; i += m[0].length; continue; }
+    }
+    const cp = s.codePointAt(i)!;
+    const w = codePointWidth(cp);
+    if (visible + w > maxWidth) return sawEscape ? out + "\x1b[0m" : out;
+    out += String.fromCodePoint(cp);
+    visible += w;
+    i += cp > 0xffff ? 2 : 1;
+  }
+  return out;
+}
+
 // Combine agentStatus and prState into a single display state.
 // Lifecycle states (reviewing, merge-pending, failing, merged, done) take
 // priority because they describe where the worker's *code* is, not what
@@ -528,6 +579,7 @@ export function renderQuickStatus(
   windowNames?: string[],
   cachedConfig?: ReturnType<typeof loadConfig>,
   cachedRegistry?: WorkerRegistry,
+  paneWidth?: number,
 ): string {
   const config = cachedConfig ?? loadConfig();
   const names = getFocusedProjectNames(config, state.activePlot);
@@ -576,7 +628,14 @@ export function renderQuickStatus(
   }
   lines.push("");
 
-  // Append clear-to-end-of-line to each line so the status pane can
-  // overwrite in place without full screen clears (avoids flashing).
-  return lines.map(l => l + "\x1b[K").join("\n");
+  // Hard-cap each line to the pane width (with a 2-column margin for terminals
+  // that render the ambiguous-width focus/icon glyphs double-wide) so no row
+  // wraps, then append clear-to-end-of-line so the status pane can overwrite in
+  // place without full screen clears (avoids flashing). Without paneWidth (the
+  // height-only callers in create.ts) rows are left uncapped — the line COUNT
+  // is identical either way, so their height math is unaffected.
+  const cap = paneWidth && paneWidth > 0 ? Math.max(1, paneWidth - 2) : undefined;
+  return lines
+    .map(l => (cap !== undefined ? truncateToVisibleWidth(l, cap) : l) + "\x1b[K")
+    .join("\n");
 }

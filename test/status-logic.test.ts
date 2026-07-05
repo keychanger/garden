@@ -71,7 +71,7 @@ vi.mock("../src/output.js", () => ({
   isTTY: true,
 }));
 
-import { status, renderQuickStatus, resolveWorkerStatus, dimRow, _resetStatusBranchCacheForTest } from "../src/commands/status.js";
+import { status, renderQuickStatus, resolveWorkerStatus, dimRow, truncateToVisibleWidth, _resetStatusBranchCacheForTest } from "../src/commands/status.js";
 import { currentBranch } from "../src/dashboard/git.js";
 import { diaryHasContent } from "../src/diary.js";
 import { readDashState } from "../src/dashboard/state.js";
@@ -272,6 +272,32 @@ describe("renderQuickStatus", () => {
     const result = renderQuickStatus(state);
     expect(result).toContain("bold-ash");
     expect(result).toContain("working");
+  });
+
+  const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+  // The rendered worker name comes from the focused window suffix (collectWorkers),
+  // so a long name is produced via the active window, not a registry entry.
+  const longName = "a-really-long-worker-name-that-would-wrap-the-status-pane";
+  const longState = { ...state, activeWindowName: `_garden-worker-${longName}` };
+
+  it("hard-caps every row to the pane width when paneWidth is given", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: longName, sessionId: "abc", task: "and a long activity too ".repeat(4), agentStatus: "working" },
+    ]);
+    const width = 40;
+    const result = renderQuickStatus(longState, undefined, undefined, undefined, width);
+    for (const line of result.split("\n")) {
+      expect(stripAnsi(line).length).toBeLessThanOrEqual(width - 2);
+    }
+  });
+
+  it("leaves rows uncapped when paneWidth is omitted (height-only callers)", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: longName, sessionId: "abc", task: "", agentStatus: "working" },
+    ]);
+    const result = renderQuickStatus(longState);
+    const longest = Math.max(...result.split("\n").map(l => stripAnsi(l).length));
+    expect(longest).toBeGreaterThan(40);
   });
 
   it("marks a project that has diary content with a dimmed pencil glyph", () => {
@@ -562,5 +588,56 @@ describe("dimRow", () => {
     expect(dimmed.startsWith(FAINT)).toBe(true);
     expect(dimmed.endsWith(RESET)).toBe(true);
     expect(dimmed).toBe(`${FAINT}worker  \x1b[33m→ main${RESET}${FAINT}${RESET}`);
+  });
+});
+
+describe("truncateToVisibleWidth", () => {
+  const visible = (s: string) => s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").length;
+
+  it("leaves a plain string within width untouched", () => {
+    expect(truncateToVisibleWidth("hello", 10)).toBe("hello");
+  });
+
+  it("truncates a plain string to the visible width", () => {
+    expect(truncateToVisibleWidth("hello world", 5)).toBe("hello");
+  });
+
+  it("does not count CSI escapes toward the width, and preserves them", () => {
+    // 5 visible chars wrapped in color — fits within width 5, unchanged.
+    const s = "\x1b[36mhello\x1b[0m";
+    expect(truncateToVisibleWidth(s, 5)).toBe(s);
+    expect(visible(truncateToVisibleWidth(s, 5))).toBe(5);
+  });
+
+  it("closes a color cut mid-run with a reset so it does not bleed", () => {
+    const out = truncateToVisibleWidth("\x1b[31mredtext", 3);
+    expect(out).toBe("\x1b[31mred\x1b[0m");
+  });
+
+  it("adds no reset when truncating a string that had no escapes", () => {
+    expect(truncateToVisibleWidth("plaintext", 4)).toBe("plai");
+  });
+
+  it("caps a dimRow-wrapped line to the visible width and stays balanced", () => {
+    const row = dimRow("worker  \x1b[33m→ main\x1b[0m");
+    const out = truncateToVisibleWidth(row, 4);
+    expect(visible(out)).toBe(4);      // "work"
+    expect(out.endsWith("\x1b[0m")).toBe(true);
+  });
+
+  it("returns only escapes (or empty) at width 0", () => {
+    expect(visible(truncateToVisibleWidth("\x1b[31mabc", 0))).toBe(0);
+  });
+
+  it("counts wide glyphs (emoji, CJK) as two columns so they never wrap", () => {
+    // Each 🚀 renders two columns; width 4 fits exactly two, and the third is
+    // dropped before it can push the row past the cap.
+    expect(truncateToVisibleWidth("🚀🚀🚀 go", 4)).toBe("🚀🚀");
+    expect(truncateToVisibleWidth("中文字", 4)).toBe("中文");
+  });
+
+  it("treats combining marks as zero width", () => {
+    // "e" + combining acute (U+0301) is one column, so it plus "f" fits width 2.
+    expect(truncateToVisibleWidth("e" + String.fromCodePoint(0x301) + "fg", 2)).toBe("e" + String.fromCodePoint(0x301) + "f");
   });
 });
