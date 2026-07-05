@@ -352,6 +352,25 @@ describe("formatConversationPane", () => {
       .toMatch(/asking…/);
   });
 
+  it("never prints a rendered line wider than the pane width", () => {
+    // Regression: the gutter overhead is " " + label(8) + " " = 10 chars, but
+    // textWidth used to reserve only 9, so a line ending in a full-width word
+    // was exactly one char too long — invisible here, but the terminal itself
+    // hard-wraps that overflow char onto a bare continuation row (the dangling
+    // "g" bug), which plain string assertions on wrapText's own output can't see.
+    const long: Turn[] = [{
+      role: "user",
+      text: "workstation Please dive deeply and assess what it would take to release garden to my friend I am fine with maintaining",
+      ts: "",
+    }];
+    for (let width = 20; width <= 80; width++) {
+      const out = formatConversationPane(long, { width }).map(plain);
+      for (const line of out) {
+        expect(line.length).toBeLessThanOrEqual(width);
+      }
+    }
+  });
+
   it("inserts a blank separator before each exchange after the first", () => {
     const two: Turn[] = [
       { role: "user", text: "one", ts: "" },

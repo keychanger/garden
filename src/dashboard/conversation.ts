@@ -373,7 +373,9 @@ export interface FormatOpts {
 }
 
 export function formatConversationPane(turns: Turn[], opts: FormatOpts): string[] {
-  const textWidth = Math.max(10, opts.width - (LABEL_W + 1));
+  // Overhead per printed line is " " + gutter(LABEL_W) + " " = LABEL_W + 2 —
+  // both the leading margin and the gap between gutter and text count.
+  const textWidth = Math.max(10, opts.width - (LABEL_W + 2));
   const lines: string[] = [];
 
   turns.forEach((turn, i) => {
