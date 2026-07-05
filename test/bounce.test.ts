@@ -25,7 +25,7 @@ describe("garden bounce", () => {
   it("throws when no worker matches", async () => {
     seedRegistry("proj", "alpha");
     const { bounce } = await import("../src/commands/bounce.js");
-    await expect(bounce(["ghost"])).rejects.toThrow("No worker found with name 'ghost'");
+    await expect(bounce(["ghost"])).rejects.toThrow("No worker matches 'ghost'");
   });
 
   it("throws when the name is ambiguous", async () => {
@@ -39,7 +39,7 @@ describe("garden bounce", () => {
       }),
     );
     const { bounce } = await import("../src/commands/bounce.js");
-    await expect(bounce(["shared"])).rejects.toThrow(/Multiple workers match 'shared'/);
+    await expect(bounce(["shared"])).rejects.toThrow(/'shared' matches multiple workers/);
   });
 
   it("calls bounceWorker with the matched project and worker", async () => {

@@ -34,7 +34,7 @@ describe("garden pause", () => {
   it("throws when no worker matches the name", async () => {
     seedRegistry({ proj: [{ name: "alpha", worktreePath: makeWorktree("proj", "alpha") }] });
     const { pause } = await import("../src/commands/pause.js");
-    await expect(pause(["ghost"])).rejects.toThrow("No worker found with name 'ghost'");
+    await expect(pause(["ghost"])).rejects.toThrow("No worker matches 'ghost'");
   });
 
   it("throws when the name is ambiguous across projects", async () => {
@@ -43,7 +43,7 @@ describe("garden pause", () => {
       b: [{ name: "shared", worktreePath: makeWorktree("b", "shared") }],
     });
     const { pause } = await import("../src/commands/pause.js");
-    await expect(pause(["shared"])).rejects.toThrow(/Multiple workers match 'shared'/);
+    await expect(pause(["shared"])).rejects.toThrow(/'shared' matches multiple workers/);
   });
 
   it("throws when the matched worker has no worktreePath (legacy entry)", async () => {
@@ -79,7 +79,7 @@ describe("garden resume", () => {
   it("throws when no worker matches", async () => {
     seedRegistry({ proj: [{ name: "alpha", worktreePath: makeWorktree("proj", "alpha") }] });
     const { resume } = await import("../src/commands/resume.js");
-    await expect(resume(["ghost"])).rejects.toThrow(/No worker found/);
+    await expect(resume(["ghost"])).rejects.toThrow(/No worker matches/);
   });
 
   it("deletes the sentinel and reports resumed when sentinel was present", async () => {
@@ -106,6 +106,6 @@ describe("garden resume", () => {
       b: [{ name: "shared", worktreePath: makeWorktree("b", "shared") }],
     });
     const { resume } = await import("../src/commands/resume.js");
-    await expect(resume(["shared"])).rejects.toThrow(/Multiple workers match 'shared'/);
+    await expect(resume(["shared"])).rejects.toThrow(/'shared' matches multiple workers/);
   });
 });

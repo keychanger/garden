@@ -29,13 +29,13 @@ describe("garden hold", () => {
   it("throws when no worker matches the name", async () => {
     seedRegistry({ proj: ["alpha"] });
     const { hold } = await import("../src/commands/hold.js");
-    await expect(hold(["ghost"])).rejects.toThrow("No worker found with name 'ghost'");
+    await expect(hold(["ghost"])).rejects.toThrow("No worker matches 'ghost'");
   });
 
   it("throws when the name is ambiguous across projects", async () => {
     seedRegistry({ a: ["shared"], b: ["shared"] });
     const { hold } = await import("../src/commands/hold.js");
-    await expect(hold(["shared"])).rejects.toThrow(/Multiple workers match 'shared'/);
+    await expect(hold(["shared"])).rejects.toThrow(/'shared' matches multiple workers/);
   });
 
   it("delegates to holdWorker for the resolved project and prints its message", async () => {

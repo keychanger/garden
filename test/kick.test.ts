@@ -27,6 +27,7 @@ vi.mock("../src/dashboard/git.js", () => ({
 
 vi.mock("../src/config.js", () => ({
   tryGetProject: vi.fn(() => ({ path: "/repo/myproject" })),
+  SESSIONS_DIR: "/tmp/fake-sessions",
 }));
 
 import { kick } from "../src/commands/kick.js";
@@ -80,14 +81,15 @@ describe("kick command", () => {
   });
 
   it("errors when no worker matches the name", async () => {
-    await expect(kick(["ghost"])).rejects.toThrow(/No worker found with name 'ghost'/);
+    registryMock._setEntries("myproject", [{ name: "bold-ash", sessionId: "s", task: "" }]);
+    await expect(kick(["ghost"])).rejects.toThrow(/No worker matches 'ghost'/);
   });
 
   it("errors when multiple workers share the name across projects", async () => {
     registryMock._setEntries("projA", [makeWorker()]);
     registryMock._setEntries("projB", [makeWorker()]);
 
-    await expect(kick(["bold-ash"])).rejects.toThrow(/Multiple workers match 'bold-ash'/);
+    await expect(kick(["bold-ash"])).rejects.toThrow(/'bold-ash' matches multiple workers/);
     expect(updateWorkerFields).not.toHaveBeenCalled();
     expect(triggerProjectPoll).not.toHaveBeenCalled();
   });

@@ -1,7 +1,8 @@
-import { readRegistry, updateWorkerFields, type FailingReason } from "../dashboard/registry.js";
+import { updateWorkerFields, type FailingReason } from "../dashboard/registry.js";
 import { triggerProjectPoll } from "../dashboard/poller.js";
 import { getCommitSummary, getWorkerBaseBranch } from "../dashboard/git.js";
 import { tryGetProject } from "../config.js";
+import { resolveWorkerArg } from "./resolve-worker.js";
 
 // Failing reasons where the worker's *code* is fine and the failure is on the
 // reviewer side — Anthropic API blip, reviewer crashed mid-stream, reviewer
@@ -16,40 +17,13 @@ const REVIEW_SIDE_FAILING_REASONS: ReadonlySet<FailingReason> = new Set<FailingR
 ]);
 
 export async function kick(args: string[]): Promise<void> {
-  const workerName = args[0];
-  if (!workerName) throw new Error("Usage: garden kick <worker>");
+  const arg = args[0];
+  if (!arg) throw new Error("Usage: garden kick <worker>");
 
-  const registry = readRegistry();
-  const matches: Array<{
-    project: string;
-    worker: string;
-    state?: string;
-    agentStatus?: string;
-    failingReason?: FailingReason;
-  }> = [];
-  for (const [project, entries] of Object.entries(registry.workers)) {
-    for (const entry of entries) {
-      if (entry.name === workerName) {
-        matches.push({
-          project,
-          worker: entry.name,
-          state: entry.prState,
-          agentStatus: entry.agentStatus,
-          failingReason: entry.failingReason,
-        });
-      }
-    }
-  }
-
-  if (matches.length === 0) {
-    throw new Error(`No worker found with name '${workerName}'`);
-  }
-  if (matches.length > 1) {
-    const list = matches.map(m => `  ${m.project}/${m.worker} (${m.state ?? "working"})`).join("\n");
-    throw new Error(`Multiple workers match '${workerName}':\n${list}\nKill or rename one first.`);
-  }
-
-  const { project, state, agentStatus, failingReason } = matches[0];
+  const { project, worker: workerName, entry } = resolveWorkerArg(arg);
+  const state = entry.prState;
+  const agentStatus = entry.agentStatus;
+  const failingReason = entry.failingReason;
 
   // failing → working recovery for review-side failures. The worker's code is
   // fine; the reviewer itself was unavailable or garbled. Clear the failing
@@ -89,9 +63,8 @@ export async function kick(args: string[]): Promise<void> {
 
   const projectInfo = tryGetProject(project);
   if (projectInfo) {
-    const entry = registry.workers[project].find(e => e.name === workerName);
-    const wtPath = entry?.worktreePath ?? projectInfo.path;
-    const baseBranch = getWorkerBaseBranch(entry ?? {}, projectInfo.path);
+    const wtPath = entry.worktreePath ?? projectInfo.path;
+    const baseBranch = getWorkerBaseBranch(entry, projectInfo.path);
     const commits = getCommitSummary(wtPath, baseBranch);
     if (!commits) {
       throw new Error(
