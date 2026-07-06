@@ -154,40 +154,38 @@ convenience, and the granular keys remain the escape hatch.
 
 The plumbing is threaded; these are the substantive gaps, ordered by risk.
 
-### 1. Sandbox — a correctness blocker, not a nicety
+### 1. Sandbox — BUILT (2026-07-06, codex 0.142.5)
 
-`codexCore.buildAgentCommand` hard-codes
+`codexCore.buildAgentCommand` used to hard-code
 `--dangerously-bypass-approvals-and-sandbox` on the **interactive worker**
-launch (fresh and resume). For the short-lived headless reviewer, garden owns
-the trust boundary and that is defensible. For an autonomous worker looping
-unattended it means **no sandbox at all**, violating requirement #4 of
-`MULTI-MODEL.md` ("run unsandboxed… is unacceptable for autonomous workers").
+launch. For the short-lived headless reviewer that is defensible (garden owns
+the trust boundary); for an autonomous worker looping unattended it meant **no
+sandbox at all**, violating requirement #4 of `MULTI-MODEL.md`. The worker
+launch now renders Codex's own `workspace-write` sandbox instead
+(`codexSandboxFlags`): `-s workspace-write -a never -c
+sandbox_workspace_write.network_access=true -c
+sandbox_workspace_write.writable_roots=[...]`. cwd and `/tmp` are writable by
+default; the extra roots mirror the HOME-based entries of `sandbox.ts`
+`DEFAULT_ALLOW_WRITE`. The reviewer's headless command keeps the blanket
+bypass — unchanged. Dormant until selection (gap 6) sets `entry.harness`.
 
-The worker launch must translate garden's existing `buildSandboxConfig`
-(writable roots + egress hosts) into Codex's native `sandbox_mode =
-"workspace-write"` + `[sandbox_workspace_write]` writable_roots + network
-allowlist in `config.toml`.
+**The macOS footgun is GONE — verified fixed.** Prior docs (`AUTONOMY-PROGRAM.md`
+§4a, openai/codex #10390/#13373) warned that macOS Seatbelt *silently ignores*
+`network_access = true` in `workspace-write`, which would have forced a
+push-outside-the-turn workaround. Re-verified directly against codex 0.142.5
+with `codex sandbox`: default `workspace-write` blocks network (curl → "could
+not resolve host"), and `workspace-write` + `network_access=true` → HTTP 200.
+**The bug is fixed**, so a Codex worker `git push`es to origin from inside its
+sandbox exactly like a Claude worker — no workaround needed.
 
-**The macOS footgun (load-bearing).** In `workspace-write`, Codex disables
-network by default, and on macOS the Seatbelt sandbox **silently ignores**
-`network_access = true` (openai/codex #10390, #13373). An autonomous worker
-that must `git push` to origin therefore cannot rely on `network_access` on a
-Mac. Options, in preference order:
-
-- **Push outside the sandboxed turn.** Garden already owns the pane's shell
-  scaffolding; the agent commits inside the sandbox and a garden-owned,
-  non-sandboxed post-turn step performs the push. Cleanest — it keeps the
-  agent sandboxed for all of its own work and confines network to a garden
-  step, not agent-controlled code.
-- **`--sandbox danger-full-access`** for the whole worker. Rejected for
-  autonomous workers: it is exactly the unsandboxed posture requirement #4
-  forbids.
-- **A local egress proxy** the sandbox is allowed to reach. Heavier; defer.
-
-This gap gates shipping a Codex *worker* at all. Until it lands, `workers new
---harness codex` should be **refused** with a concrete message, not shipped
-half-safe. Gate at spawn on the sandbox being *actually honored*, not merely
-declared in `capabilities`.
+**One fidelity gap, documented not fixed.** Codex's `network_access` is
+**boolean** — no per-domain egress allowlist (`allowed_domains` is ignored,
+verified: github still reachable). So garden's Claude-side domain allowlist
+(anthropic/github/npm) maps to `network_access=true` (all-or-nothing) for a
+Codex worker; the worktree *filesystem* confinement is what the sandbox
+actually enforces. Acceptable for v1 — the operator already trusts the worker
+enough to run it autonomously — and noted here as a known posture difference
+from Claude workers.
 
 ### 2. The turn-end spike — VERIFIED (2026-07-06, codex 0.142.5)
 
@@ -304,12 +302,17 @@ gate green — the same discipline the reviewer-first slices used.
 1. **Spike (gap 2). DONE (2026-07-06).** Proved interactive `Stop` fires
    per-turn with the payload garden needs. Surfaced the directory-trust
    requirement (now folded into slice 3). See gap 2.
-2. **Sandbox translation (gap 1).** `buildSandboxConfig` → Codex
-   `config.toml`; resolve the macOS self-push path (push-outside-the-turn
-   preferred). The correctness gate — the *next* slice to build.
+2. **Sandbox translation (gap 1). DONE (2026-07-06).** `codexSandboxFlags` →
+   `workspace-write` + `network_access` + writable roots. The macOS network
+   bug is verified fixed, so no push-outside-the-turn workaround. See gap 1.
 3. **Rules + AGENTS.md + directory-trust (gap 3).** Garden rules to a Codex
-   worker without clobbering a repo `AGENTS.md`, plus `config.toml`
-   trust pre-seeding so the worker does not halt on the trust prompt.
+   worker without clobbering a repo `AGENTS.md` (AGENTS.md is Codex's *only*
+   instruction channel — no instructions-file config key exists, verified),
+   plus `config.toml` trust pre-seeding so the worker does not halt on the
+   trust prompt. Delivered through the bootstrap config-install seam (the
+   bootstrap currently inlines the claude dialect — `.claude/settings.json` +
+   skills; a Codex worker branches to `.codex/hooks.json` + `AGENTS.md` +
+   trust). The *next* slice to build.
 4. **Selection + capability gate (gap 6).** `resolveRole` worker generalization,
    `config harness` / `--harness`, spawn-time gate, `entry.harness` persisted.
 5. **Session identity (gap 4).** `recoverSessionId`; bounce/resume/loop via
@@ -397,10 +400,16 @@ gate green — the same discipline the reviewer-first slices used.
 
 - ~~Does `hooks.json` `Stop` fire per-turn in the interactive Codex TUI under
   `--dangerously-bypass-hook-trust`?~~ **Resolved 2026-07-06: yes** — see gap 2.
-- macOS self-push: is push-outside-the-turn clean enough to be the default, or
-  does it complicate the commit/push discipline garden's rules prescribe?
-- The exact non-clobbering mechanism for garden rules vs. a repo `AGENTS.md`,
-  pinned to a specific Codex release.
+- ~~macOS self-push: is push-outside-the-turn clean enough to be the default?~~
+  **Moot 2026-07-06:** the Seatbelt `network_access` bug is fixed in 0.142.5, so
+  a `workspace-write` worker pushes normally — no workaround. See gap 1.
+- The exact non-clobbering mechanism for garden rules vs. a repo `AGENTS.md`.
+  Constrained now: `AGENTS.md` is Codex's *only* instruction channel (no
+  `experimental_instructions_file`/`instructions_file` config key exists in
+  0.142.5 — all rejected under `--strict-config`). So garden must own the
+  worktree `AGENTS.md`, composing its rules with any repo-tracked original
+  (skip-worktree to keep `git status` clean) rather than pointing Codex at a
+  separate garden-owned file.
 - Codex's `--output-schema` is documented broken when MCP tools are active
   (and can degrade the `--json` stream) — does garden's worker path touch
   either? (Reviewer path avoids both.)

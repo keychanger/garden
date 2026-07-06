@@ -36,6 +36,35 @@ export function codexStderrSidecar(resultFile: string): string {
   return `${resultFile}.stderr`;
 }
 
+// Sandbox flags for an autonomous Codex worker launch. Codex enforces its own
+// `workspace-write` sandbox: cwd and /tmp are writable by default, network is
+// off by default, and approvals are disabled (`-a never`) so the worker never
+// blocks on a prompt. Garden layers on:
+//   - network_access=true — a worker must `git push` to origin. Verified
+//     against codex 0.142.5: macOS Seatbelt honors this (the older
+//     openai/codex#10390 silent-ignore bug is fixed). Codex network is
+//     boolean — no per-domain allowlist — so garden's Claude-side domain
+//     allowlist (sandbox.ts) maps to "on"; filesystem confinement to the
+//     worktree is what the sandbox actually enforces for a Codex worker.
+//   - writable_roots — garden's shared extra roots beyond cwd + /tmp. Mirrors
+//     the HOME-based entries of sandbox.ts DEFAULT_ALLOW_WRITE (npm/cache/
+//     registry writes during checks); these are constant across all workers,
+//     since the per-project domain bits Codex cannot express anyway.
+// Every dynamic value is shell-escaped: the result is spliced into the launch
+// command string.
+function codexSandboxFlags(): string {
+  const home = process.env.HOME || os.homedir();
+  const writableRoots = [
+    path.join(home, ".npm"),
+    path.join(home, ".cache"),
+    path.join(home, ".garden", "sessions"),
+  ];
+  const rootsToml = `sandbox_workspace_write.writable_roots=[${writableRoots.map(r => `"${r}"`).join(", ")}]`;
+  return "-s workspace-write -a never"
+    + ` -c ${shellEscape("sandbox_workspace_write.network_access=true")}`
+    + ` -c ${shellEscape(rootsToml)}`;
+}
+
 // Codex/OpenAI transient backend errors (rate limit / 5xx / overload /
 // stream drop) worth a retry, vs. a genuine review failure. Scanned over the
 // last few non-empty lines of the STDERR sidecar (where codex exec emits
@@ -112,16 +141,23 @@ export const codexCore: HarnessCore = {
   },
 
   // Interactive worker launch (worker-path; refined + live-verified there).
-  // No --session-id (Codex assigns thread_id) and no system-prompt flag —
+  // No --session-id (Codex assigns its own id) and no system-prompt flag —
   // garden's rules reach Codex via AGENTS.md (installRuntimeConfig). The
   // event relay REQUIRES --dangerously-bypass-hook-trust: garden's
   // programmatically-written .codex/hooks.json is untrusted, so without the
   // bypass Codex silently skips every hook and no turn-end/status reaches the
-  // poller. Resume is the `codex resume <thread_id>` subcommand.
+  // poller (verified 2026-07-06: Stop fires per turn interactively with the
+  // bypass). Resume is the `codex resume <session-id>` subcommand.
+  //
+  // Sandbox: an autonomous worker runs under Codex's own `workspace-write`
+  // sandbox (see codexSandboxFlags) — NOT the headless reviewer's
+  // --dangerously-bypass-approvals-and-sandbox, which is safe only because the
+  // reviewer is short-lived and garden owns its trust boundary. A looping
+  // worker running unbounded model-generated commands must stay confined.
   buildAgentCommand(opts: AgentCommandOptions): string {
     const modelFlag = opts.model ? ` -m ${shellEscape(opts.model)}` : "";
     const trust = "--dangerously-bypass-hook-trust";
-    const sandbox = "--dangerously-bypass-approvals-and-sandbox";
+    const sandbox = codexSandboxFlags();
     return opts.resume
       ? `${opts.envPrefix}codex resume ${shellEscape(opts.sessionId)} ${trust} ${sandbox}${modelFlag}`
       : `${opts.envPrefix}codex ${trust} ${sandbox}${modelFlag}`;

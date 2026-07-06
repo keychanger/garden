@@ -174,21 +174,29 @@ describe("codex adapter dialect", () => {
     expect(cmd).not.toContain("--dangerously-bypass-hook-trust");
   });
 
-  it("builds the interactive launch: no --session-id, hook-trust bypass on", async () => {
+  it("builds the interactive launch: no --session-id, hook-trust bypass on, real workspace-write sandbox", async () => {
     const { getHarnessCore } = await importCore();
     const fresh = getHarnessCore("codex").buildAgentCommand({
       sessionId: "", resume: false, contextFile: "/ignored", model: "gpt-5-codex", envPrefix: "",
     });
-    expect(fresh).toBe(
-      "codex --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox -m gpt-5-codex",
-    );
+    // Event relay needs the hook-trust bypass; the model flag rides through.
+    expect(fresh).toContain("codex --dangerously-bypass-hook-trust");
+    expect(fresh).toContain("-m gpt-5-codex");
     expect(fresh).not.toContain("--session-id");
+    // A worker runs under Codex's own workspace-write sandbox, NOT the
+    // reviewer's blanket bypass. Network on (for `git push`), approvals off.
+    expect(fresh).toContain("-s workspace-write");
+    expect(fresh).toContain("-a never");
+    expect(fresh).toContain("sandbox_workspace_write.network_access=true");
+    expect(fresh).toContain("sandbox_workspace_write.writable_roots=[");
+    expect(fresh).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+
     const resume = getHarnessCore("codex").buildAgentCommand({
       sessionId: "019f-abc", resume: true, contextFile: "/ignored", envPrefix: "",
     });
-    expect(resume).toBe(
-      "codex resume 019f-abc --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox",
-    );
+    expect(resume).toContain("codex resume 019f-abc --dangerously-bypass-hook-trust");
+    expect(resume).toContain("-s workspace-write");
+    expect(resume).not.toContain("--dangerously-bypass-approvals-and-sandbox");
   });
 
   it("allocateSessionId returns the empty sentinel (Codex assigns its own)", async () => {
