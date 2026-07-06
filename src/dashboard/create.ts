@@ -740,6 +740,19 @@ export function buildWorktreeBootstrapScript(
   const branchLit = shellEscape(branchName);
   const workerLit = shellEscape(workerName);
 
+  // The inline config below is the claude-code dialect (.claude/settings.json +
+  // skills). For a Codex worker it is inert (Codex ignores .claude/), so rather
+  // than fork the whole bootstrap we leave it and ADD the Codex runtime after
+  // worktree setup: .codex/hooks.json + directory-trust + the composed rules as
+  // AGENTS.md, installed by the _install-worker-runtime subcommand (reuses the
+  // adapter's TS, no fragile shell-gen). Empty string for claude keeps the
+  // generated script byte-identical to today.
+  const contextFileLit = shellEscape(contextFile);
+  const codexRuntimeInstall = opts?.harness === "codex"
+    ? `\n# Install the Codex worker runtime the inline claude config above omits.\n`
+      + `${gardenRunnerLit} dashboard _install-worker-runtime ${projectNameLit} ${workerLit} ${contextFileLit} 2>/dev/null || true\n`
+    : "";
+
   const script = `#!/bin/sh
 set -e
 
@@ -906,7 +919,7 @@ EXCLUDE_FILE="$(git -C ${wtPathLit} rev-parse --git-common-dir)/info/exclude"
 for pattern in .claude/ .garden-hooks/ .garden/ .garden-done; do
   grep -qxF "$pattern" "$EXCLUDE_FILE" 2>/dev/null || printf '%s\\n' "$pattern" >> "$EXCLUDE_FILE"
 done
-
+${codexRuntimeInstall}
 # Switch to the worktree directory
 cd ${wtPathLit}
 printf '  Ready.\\n\\n'

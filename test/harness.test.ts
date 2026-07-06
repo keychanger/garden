@@ -309,18 +309,25 @@ describe("codex adapter dialect", () => {
   });
 });
 
-describe("codex hooks.json event relay", () => {
-  it("maps Codex events onto garden's wire event names", async () => {
-    const { buildCodexHooksJson } = await import("../src/dashboard/harness/codex.js");
-    const parsed = JSON.parse(buildCodexHooksJson("node /hook.js"));
-    const cmd = (ev: string) => parsed.hooks[ev][0].hooks[0].command;
-    expect(cmd("SessionStart")).toBe("node /hook.js sessionstart");
-    expect(cmd("UserPromptSubmit")).toBe("node /hook.js prompt");
-    expect(cmd("Stop")).toBe("node /hook.js stop");
-    expect(cmd("PostToolUse")).toBe("node /hook.js posttooluse");
+describe("codex -c hook injection (worker turn-end relay)", () => {
+  it("injects the lifecycle hooks with garden's wire event names", async () => {
+    const { getHarnessCore } = await importCore();
+    // Hooks ride the launch command as -c overrides, NOT a .codex/hooks.json
+    // file: Codex resolves project hooks at the repo root, so a file written
+    // into a linked worktree never fires (verified 2026-07-06).
+    const cmd = getHarnessCore("codex").buildAgentCommand({
+      sessionId: "", resume: false, contextFile: "/ignored", envPrefix: "",
+    });
+    expect(cmd).toMatch(/hooks\.SessionStart=.*sessionstart"/);
+    expect(cmd).toMatch(/hooks\.UserPromptSubmit=.* prompt"/);
+    expect(cmd).toMatch(/hooks\.Stop=.* stop"/);
+    expect(cmd).toMatch(/hooks\.PostToolUse=.*posttooluse"/);
     // Codex PreToolUse fires for every tool -> a working heartbeat, not asking.
-    expect(cmd("PreToolUse")).toBe("node /hook.js posttooluse");
+    expect(cmd).toMatch(/hooks\.PreToolUse=.*posttooluse"/);
     // PermissionRequest is the real blocked-on-operator signal.
-    expect(cmd("PermissionRequest")).toBe("node /hook.js pretooluse");
+    expect(cmd).toMatch(/hooks\.PermissionRequest=.*pretooluse"/);
+    // The relay only fires with the hook-trust bypass (garden's hooks are
+    // programmatically written, hence untrusted).
+    expect(cmd).toContain("--dangerously-bypass-hook-trust");
   });
 });

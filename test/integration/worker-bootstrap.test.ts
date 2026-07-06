@@ -47,6 +47,27 @@ describe("worker bootstrap (real fs + real git)", () => {
     expect(fs.existsSync(path.join(worktreePath, "README.md"))).toBe(true);
   });
 
+  it("codex worker bootstrap installs the codex runtime + launches codex; claude bootstrap does neither", async () => {
+    const { buildWorktreeBootstrapScript } = await import("../../src/dashboard/create.js");
+    const codex = fs.readFileSync(
+      buildWorktreeBootstrapScript(PROJECT, projectPath, WORKER, WORKER, "sid", worktreePath, "main", { harness: "codex" }),
+      "utf-8",
+    );
+    // The additive codex branch: the runtime subcommand runs after worktree
+    // setup, and the launch is the codex dialect (sandbox + hook-trust bypass).
+    expect(codex).toContain("_install-worker-runtime");
+    expect(codex).toContain("codex --dangerously-bypass-hook-trust");
+    expect(codex).toContain("-s workspace-write");
+
+    const claude = fs.readFileSync(
+      buildWorktreeBootstrapScript(PROJECT, projectPath, WORKER, WORKER, "sid", worktreePath, "main"),
+      "utf-8",
+    );
+    // Byte-for-byte the existing dialect: no codex install, launches claude.
+    expect(claude).not.toContain("_install-worker-runtime");
+    expect(claude).toContain("claude --rc");
+  });
+
   it("installRuntimeConfig writes settings.json with hooks for every Claude Code event", async () => {
     const { createWorktree } = await import("../../src/dashboard/git.js");
     const { claudeCodeAdapter } = await import("../../src/dashboard/harness/claude-code.js");

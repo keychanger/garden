@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { tryGetProject, SESSIONS_DIR } from "../config.js";
 import { newWorker } from "../dashboard/workers.js";
+import { isRegisteredHarness, harnessNames } from "../dashboard/harness/core.js";
 import { buildGrowIteration1Seed, GROW_GOAL_FILE_REL } from "../dashboard/grow-continue.js";
 import {
   readRegistry, findWorkerByName, updateWorkerFields,
@@ -81,6 +82,17 @@ async function newCommand(args: string[]): Promise<void> {
     throw new Error(`--workflow must be 'default', 'trellis', or 'grow', got '${workflow}'`);
   }
 
+  // Worker harness (agent CLI). Default workflow only in v1 — trellis/grow
+  // model resolution and cold-respawn identity are not yet exercised against a
+  // foreign harness.
+  const harness = flags.get("harness");
+  if (harness && !isRegisteredHarness(harness)) {
+    throw new Error(`--harness must be one of: ${harnessNames().join(", ")}, got '${harness}'`);
+  }
+  if (harness && workflow !== "default") {
+    throw new Error(`--harness is only supported with --workflow default (got '${workflow}').`);
+  }
+
   if (workflow === "default") {
     if (flags.has("trellis")) {
       throw new Error("--trellis can only be used with --workflow trellis");
@@ -92,13 +104,14 @@ async function newCommand(args: string[]): Promise<void> {
       throw new Error("--max-iterations can only be used with --workflow trellis or grow");
     }
     const model = flags.has("model") ? requireModelValue(flags.get("model")!) : undefined;
-    const newName = newWorker({ projectName, workflow, model });
+    const newName = newWorker({ projectName, workflow, model, ...(harness ? { harness } : {}) });
     if (!newName) {
       throw new Error(
         `Failed to spawn worker on '${projectName}'. Is the dashboard running? Check 'garden health'.`,
       );
     }
-    console.log(`Created worker ${projectName}/${newName}${model ? ` (model=${model})` : ""}.`);
+    const suffix = [model ? `model=${model}` : "", harness ? `harness=${harness}` : ""].filter(Boolean).join(", ");
+    console.log(`Created worker ${projectName}/${newName}${suffix ? ` (${suffix})` : ""}.`);
     return;
   }
 

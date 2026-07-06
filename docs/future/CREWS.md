@@ -42,16 +42,40 @@ and still calls the Codex adapter "zero code." That is stale — see below.
   `getHarness(opts?.harness).buildAgentCommand`, and `installRuntimeConfig` /
   transcript reading / prompt delivery already dispatch through the adapter.
 
-### What does not ship (the subject of this doc)
+### What ships now (the Codex worker path — runnable)
 
-The **Codex worker path**: no operator surface sets `entry.harness` for a
-worker, no garden rules reach a Codex worker, and session identity is not
-recovered. Detailed and ranked below.
+As of 2026-07-06 a Codex worker runs end-to-end: `garden workers new <project>
+--harness codex` spawns a sandboxed, rules-aware Codex worker that commits,
+pushes, and signals turn-end into the review/merge pipeline. Verified against
+codex 0.142.5 in a real linked worktree (commit + push under `workspace-write`,
+all lifecycle hooks firing via `-c` injection). What landed:
 
-The one fact that *gated* this path — whether the interactive Codex TUI fires
-`Stop` per turn — was **verified 2026-07-06** (codex 0.142.5) and is no longer
-a risk; see gap 2. The sandbox slice (gap 1) is now built; what remains is
-rules delivery, worker selection, and session identity.
+- **Sandbox** (gap 1): `workspace-write` + `network_access` + writable roots
+  including the shared git common dir (a linked worktree's git store).
+- **Hooks** (gap 2): the lifecycle relay injected as `-c` overrides on the
+  launch — NOT a `.codex/hooks.json` file (Codex loads project hooks from the
+  repo root, so a worktree file never fires).
+- **Rules** (gap 3): garden's composed rules delivered as the worktree
+  `AGENTS.md` (Codex's only instruction channel; loads from cwd), composing
+  over a repo's own `AGENTS.md` without clobbering it.
+- **Directory trust** (gap 3): pre-seeded for the REPO ROOT in
+  `CODEX_HOME/config.toml` (Codex scopes trust to the main checkout for a
+  linked worktree), so the worker never halts on the trust prompt.
+- **Selection** (gap 6): `workers new --harness codex`, validated against the
+  registry, persisted to `entry.harness`, threaded through the bootstrap.
+
+### What does not ship yet
+
+- **Session-identity recovery** (gap 4): Codex assigns its own id; garden does
+  not yet capture it from the hook payload, so `bounce`/resume/loop cold-start
+  a Codex worker rather than resuming its thread. A single-task run does not
+  need it; multi-phase robustness does.
+- **`continue.ts` / `header.ts` routing** (gap 5): auto-continue prompt
+  injection and the history view still assume the claude path, so multi-phase
+  auto-continue and the `⌥h` view are not yet correct for a Codex worker.
+- **Project-default harness** (`config <p> harness`) and `--harness` for
+  trellis/grow: deferred; `--harness codex` on the default workflow is the v1
+  surface.
 
 ## Thesis: a crew is not a workflow
 
@@ -312,22 +336,26 @@ gate green — the same discipline the reviewer-first slices used.
 2. **Sandbox translation (gap 1). DONE (2026-07-06).** `codexSandboxFlags` →
    `workspace-write` + `network_access` + writable roots. The macOS network
    bug is verified fixed, so no push-outside-the-turn workaround. See gap 1.
-3. **Rules + AGENTS.md + directory-trust (gap 3).** Garden rules to a Codex
-   worker without clobbering a repo `AGENTS.md` (AGENTS.md is Codex's *only*
-   instruction channel — no instructions-file config key exists, verified),
-   plus `config.toml` trust pre-seeding so the worker does not halt on the
-   trust prompt. Delivered through the bootstrap config-install seam (the
-   bootstrap currently inlines the claude dialect — `.claude/settings.json` +
-   skills; a Codex worker branches to `.codex/hooks.json` + `AGENTS.md` +
-   trust). The *next* slice to build.
-4. **Selection + capability gate (gap 6).** `resolveRole` worker generalization,
-   `config harness` / `--harness`, spawn-time gate, `entry.harness` persisted.
-5. **Session identity (gap 4).** `recoverSessionId`; bounce/resume/loop via
-   `codex resume`.
+3. **Rules + AGENTS.md + directory-trust + hooks (gaps 2/3). DONE (2026-07-06).**
+   Rules delivered as the worktree `AGENTS.md` (composing over a repo's own
+   without clobbering); trust pre-seeded for the REPO ROOT; the hook relay
+   injected via `-c` on the launch (NOT a file — Codex loads project hooks from
+   the repo root). Delivered additively: the bootstrap keeps the (inert-for-
+   Codex) inline claude config and calls `_install-worker-runtime` after
+   worktree setup, so the claude script stays byte-identical.
+4. **Selection + capability gate (gap 6). DONE (2026-07-06).** `workers new
+   --harness codex` validated against the registry, persisted to
+   `entry.harness`, threaded through the bootstrap. Project-default `config
+   harness` and `roles.worker` deferred (the flag is the v1 surface).
+5. **Session identity (gap 4).** `recoverSessionId`; capture the id from the
+   hook payload; bounce/resume/loop via `codex resume`. NOT YET.
 6. **Continue/history routing (gap 5).** Route `deliverPrompt`/`readTurns`
-   through the adapter.
+   through the adapter. NOT YET.
 7. **Crews + picker (this doc's UX).** Named crews as sugar over the role
-   matrix; `⌥⇧N` gains a crew dimension.
+   matrix; `⌥⇧N` gains a crew dimension. NOT YET.
+
+The runnable worker path (slices 1–4) landed 2026-07-06; slices 5–7 harden
+multi-phase/bounce and add the crew ergonomics.
 
 ## Operator surface
 

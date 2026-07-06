@@ -26,6 +26,7 @@ import {
   createShellWindow, trellisRelativePathForEntry,
 } from "./create.js";
 import { getHarness } from "./harness/index.js";
+import { isRegisteredHarness, harnessNames } from "./harness/core.js";
 import { resolveGardenRunner } from "./runner.js";
 import {
   worktreePath, resolveBaseBranch, branchExistsOnOrigin, tryPublishBranch,
@@ -64,6 +65,12 @@ export interface NewWorkerOptions {
   // yank the operator out of their current pane. The new worker is reachable
   // via ⌥n on the target project + ⌥w to cycle to it.
   background?: boolean;
+  // Harness adapter for this worker (agent CLI in the pane). Defaults to
+  // claude-code. "codex" spawns a Codex worker (own sandbox, .codex/hooks.json
+  // event relay, AGENTS.md rules). Validated against the registry; an unknown
+  // harness is refused. Persisted on entry.harness and threaded through
+  // launch/resume/loop.
+  harness?: string;
   // Workflow that drives the new worker's lifecycle. Defaults to "default".
   // Trellis vines pass "trellis" along with the trellis.name/trellis.path
   // pair below; see WORKFLOWS.md "Spawning a trellis vine".
@@ -123,6 +130,18 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     const project = tryGetProject(targetProject);
     if (!project) {
       tmuxDisplay(`Unknown project '${targetProject}'.`);
+      return;
+    }
+
+    // Worker harness selection (agent CLI in the pane). Undefined = the
+    // claude-code default. Validate against the registry so an unknown name
+    // fails loudly here rather than silently falling back at launch.
+    const resolvedHarness = opts.harness;
+    if (resolvedHarness && !isRegisteredHarness(resolvedHarness)) {
+      tmuxDisplay(`Unknown harness '${resolvedHarness}'. Known: ${harnessNames().join(", ")}.`);
+      log.error("workers", "rejected newWorker: unknown harness", {
+        data: { project: targetProject, harness: resolvedHarness },
+      });
       return;
     }
 
@@ -194,10 +213,9 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     const existingNames = getAllWorkerNames();
     const workerName = generateWorkerName(existingNames);
     // Session identity is harness-shaped (Claude Code accepts a minted
-    // UUID; a harness that assigns its own ids allocates a placeholder).
-    // No spawn-time harness selector exists yet, so the default adapter
-    // mints it.
-    const sessionId = getHarness().allocateSessionId();
+    // UUID; Codex assigns its own id post-launch, so its adapter returns the
+    // empty sentinel — recovered from the hook payload later).
+    const sessionId = getHarness(resolvedHarness).allocateSessionId();
     const branchName = workerName;
     const wtPath = worktreePath(targetProject, workerName);
     const gardenRunner = resolveGardenRunner();
@@ -284,6 +302,9 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       agentStatus: "loading",
       createdAt: Date.now(),
       workflow: workflowName,
+      // Harness adapter (agent CLI). Absent = claude-code; consumers read via
+      // getHarness(entry.harness). Threaded into launch/resume/loop.
+      ...(resolvedHarness ? { harness: resolvedHarness } : {}),
       // Per-worker model pin for default/grow workers (trellis resolves
       // per iteration via trellis.workerModel below). Ultracode folds its
       // Opus pin into effectiveModel above.
@@ -357,11 +378,12 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // with progress output instead of blocking the hotkey handler. Default
     // workers omit the options argument entirely (preserves arity for existing
     // callers and tests).
-    const bootstrapOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean } = {};
+    const bootstrapOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; harness?: string } = {};
     if (trellisRelativePath) bootstrapOpts.trellisRelativePath = trellisRelativePath;
     if (resolvedModel) bootstrapOpts.model = resolvedModel;
     if (ultracode) bootstrapOpts.ultracode = true;
-    const scriptFile = (bootstrapOpts.trellisRelativePath || bootstrapOpts.model || bootstrapOpts.ultracode)
+    if (resolvedHarness) bootstrapOpts.harness = resolvedHarness;
+    const scriptFile = (bootstrapOpts.trellisRelativePath || bootstrapOpts.model || bootstrapOpts.ultracode || bootstrapOpts.harness)
       ? buildWorktreeBootstrapScript(
           project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
           bootstrapOpts,

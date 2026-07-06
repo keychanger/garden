@@ -9,52 +9,139 @@
 // or continue.ts — a back-edge would re-open the init-cycle class
 // hook-dispatcher.ts was extracted to kill. Only leaf modules are safe.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import type { ProjectConfig } from "../../config.js";
 import { atomicWriteFile } from "../atomic-write.js";
-import { resolveHookRunner } from "../runner.js";
 import { codexCore } from "./codex-core.js";
 import type { HarnessAdapter } from "./types.js";
 
-// The .codex/hooks.json content: garden's normalized lifecycle relay, reusing
-// the SAME hook runner (dist/hook.js) and the SAME garden wire event names as
-// argv that claude-code's settings.json uses (hook-dispatcher.ts switches on
-// them; readHookInput reads Codex's stdin-JSON payload, which carries
-// transcript_path/session_id/cwd exactly like Claude's). The one divergence
-// from claude-code's mapping: Codex's PreToolUse fires for EVERY tool (not a
-// matcher-gated approval prompt), so it maps to `posttooluse` (a working
-// heartbeat), while `PermissionRequest` is the real blocked-on-operator
-// (`pretooluse` -> asking) signal. Trust: garden writes this file
-// programmatically, so Codex treats it as untrusted and skips it unless the
-// worker launch passes --dangerously-bypass-hook-trust (codex-core's
-// buildAgentCommand does; the headless reviewer deliberately does not).
-// The precise per-turn Stop firing is verified in the worker-path slice.
-export function buildCodexHooksJson(hookRunner: string): string {
-  const entry = (event: string) => [{
-    hooks: [{ type: "command", command: `${hookRunner} ${event}`, timeout: 5 }],
-  }];
-  return JSON.stringify({
-    hooks: {
-      SessionStart: entry("sessionstart"),
-      UserPromptSubmit: entry("prompt"),
-      Stop: entry("stop"),
-      PostToolUse: entry("posttooluse"),
-      PreToolUse: entry("posttooluse"),
-      PermissionRequest: entry("pretooluse"),
-    },
-  }, null, 2);
+function codexHome(): string {
+  return process.env.CODEX_HOME || path.join(process.env.HOME || os.homedir(), ".codex");
 }
 
-// Write the Codex runtime config into the worktree. For Slice A this is the
-// event-relay hooks.json plus the git-exclude for .codex/ — enough for a
-// Codex WORKER's status to reach the poller and for a Codex REVIEWER (which
-// skips the hooks) to run cleanly. AGENTS.md rules delivery, sandbox/network
-// translation, and the union-excludes generalization land in later slices.
+// Marker prefixing garden's rules inside a worktree AGENTS.md, so a re-install
+// is idempotent and a composed file is recognizable.
+const AGENTS_MARKER = "<!-- garden worker rules (managed by garden; not committed) -->";
+
+// Write the Codex runtime config into the worktree/CODEX_HOME. Idempotent;
+// called at bootstrap (via the _install-worker-runtime subcommand), refresh,
+// bounce, and loop respawn. Installs the git-excludes and the per-repo
+// directory-trust entry so an autonomous Codex worker does not halt on the
+// interactive "trust this directory?" prompt. The lifecycle hook relay is NOT
+// a file here — it is injected into the launch command as `-c` overrides
+// (codex-core codexHookFlags), because Codex does not load hooks from a linked
+// worktree's .codex/hooks.json (it resolves project hooks at the repo root).
+// Rules delivery (AGENTS.md, loaded from the worktree cwd) is separate — it
+// needs the composed rules text and rides installCodexAgentsMd at spawn.
 function installRuntimeConfig(targetDir: string, _project: ProjectConfig): void {
-  const hooksPath = path.join(targetDir, ".codex", "hooks.json");
-  atomicWriteFile(hooksPath, buildCodexHooksJson(resolveHookRunner()));
   ensureWorktreeExcludes(targetDir);
+  ensureDirectoryTrust(targetDir);
+}
+
+// Pre-seed the worktree's repository as a trusted project in
+// CODEX_HOME/config.toml. The interactive Codex TUI halts on a "Do you trust
+// the contents of this directory?" prompt on first entry into an untrusted
+// repo — a separate gate from --dangerously-bypass-hook-trust (which only
+// covers hooks). An autonomous worker cannot answer it, so garden writes the
+// same `[projects."<dir>"] trust_level = "trusted"` block Codex persists on
+// "Yes".
+//
+// Load-bearing (verified 2026-07-06): Codex scopes trust to the REPOSITORY
+// ROOT, and for a linked git worktree that root is the MAIN checkout — the git
+// common dir's parent — NOT the worktree itself. Seeding the worktree path
+// leaves Codex still prompting ("Trusting will apply to the repository root:
+// <main>"). So garden seeds the repo root; one entry then covers every
+// worktree of the project. Idempotent; appended (garden seeds before launching
+// Codex, so there is no concurrent writer to clobber).
+function ensureDirectoryTrust(targetDir: string): void {
+  const repoRoot = resolveRepoRoot(targetDir);
+  if (!repoRoot) return;
+  const cfg = path.join(codexHome(), "config.toml");
+  const header = `[projects.${JSON.stringify(repoRoot)}]`;
+  let current = "";
+  try {
+    current = fs.readFileSync(cfg, "utf-8");
+  } catch {
+    /* file may not exist yet — created by the append below */
+  }
+  if (current.includes(header)) return;
+  const sep = current === "" ? "" : current.endsWith("\n") ? "\n" : "\n\n";
+  try {
+    fs.mkdirSync(codexHome(), { recursive: true });
+    fs.appendFileSync(cfg, `${sep}${header}\ntrust_level = "trusted"\n`);
+  } catch {
+    /* best effort — a missed trust entry surfaces as the interactive prompt */
+  }
+}
+
+// The repository root Codex resolves for a (possibly linked) worktree: the
+// parent of the git common dir. For a standard checkout that is the checkout
+// itself; for a linked worktree it is the main checkout. Null if not a repo.
+function resolveRepoRoot(targetDir: string): string | null {
+  try {
+    const commonDir = execFileSync("git", ["-C", targetDir, "rev-parse", "--git-common-dir"], {
+      encoding: "utf-8",
+    }).trim();
+    const abs = path.isAbsolute(commonDir) ? commonDir : path.resolve(targetDir, commonDir);
+    const root = path.dirname(abs);
+    // Codex resolves symlinks before matching the trust entry (macOS /var ->
+    // /private/var, etc.), so seed the realpath or the entry silently misses.
+    try {
+      return fs.realpathSync(root);
+    } catch {
+      return root;
+    }
+  } catch {
+    return null;
+  }
+}
+
+// Deliver garden's composed worker rules to a Codex worker. Codex has no
+// system-prompt flag — its only instruction channel is AGENTS.md (verified
+// against 0.142.5: no instructions-file config key exists) — so garden owns
+// the worktree AGENTS.md. If the repo ships its own, garden's rules are
+// prepended above a delimiter, the original preserved, and the file marked
+// skip-worktree so `git status` stays clean and it is never committed. If not,
+// garden writes it fresh (excluded via ensureWorktreeExcludes). Idempotent on
+// the marker. rulesText is the same composed rules a Claude worker gets via
+// --append-system-prompt-file.
+export function installCodexAgentsMd(targetDir: string, rulesText: string): void {
+  const agentsPath = path.join(targetDir, "AGENTS.md");
+  const body = `${AGENTS_MARKER}\n\n${rulesText.trim()}\n`;
+  const tracked = isTracked(targetDir, "AGENTS.md");
+  if (tracked) {
+    let original = "";
+    try {
+      original = fs.readFileSync(agentsPath, "utf-8");
+    } catch {
+      /* tracked but missing in the worktree — treat as empty original */
+    }
+    if (original.startsWith(AGENTS_MARKER)) return;
+    atomicWriteFile(agentsPath, `${body}\n---\n\n${original.trimStart()}`);
+    // Keep the local composition out of `git status` / commits.
+    try {
+      execFileSync("git", ["-C", targetDir, "update-index", "--skip-worktree", "AGENTS.md"]);
+    } catch {
+      /* best effort */
+    }
+  } else {
+    atomicWriteFile(agentsPath, body);
+    // Untracked garden file — exclude it (ensureWorktreeExcludes carries the
+    // AGENTS.md pattern) so it never appears in the worker's git status.
+  }
+}
+
+function isTracked(targetDir: string, relPath: string): boolean {
+  try {
+    execFileSync("git", ["-C", targetDir, "ls-files", "--error-unmatch", relPath], {
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // Add .codex/ (plus the garden-generic patterns) to the shared git-common-dir
@@ -62,7 +149,11 @@ function installRuntimeConfig(targetDir: string, _project: ProjectConfig): void 
 // cross-harness worktree ends up excluding both — the full union is formalized
 // in the headless-config slice. Mirrors claude-code.ts's ensureWorktreeExcludes.
 function ensureWorktreeExcludes(targetDir: string): void {
-  const patterns = [".codex/", ".garden-hooks/", ".garden/", ".garden-done"];
+  // AGENTS.md: garden writes the worker rules here for Codex (installCodexAgentsMd).
+  // Excluded so the untracked garden file never shows in the worker's git
+  // status; harmless when the repo tracks its own AGENTS.md (info/exclude never
+  // ignores a tracked path — that case is handled via skip-worktree instead).
+  const patterns = [".codex/", ".garden-hooks/", ".garden/", ".garden-done", "AGENTS.md"];
   let commonDir: string;
   try {
     commonDir = execFileSync("git", ["-C", targetDir, "rev-parse", "--git-common-dir"], {

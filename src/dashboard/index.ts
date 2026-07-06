@@ -364,6 +364,39 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     return;
   }
 
+  if (sub === "_install-worker-runtime") {
+    // Called from a Codex worker's bootstrap script AFTER `git worktree add`,
+    // BEFORE launching codex: install the harness runtime config the inline
+    // bootstrap does not (it inlines only the claude dialect). For a claude
+    // worker this is a no-op — its config is inlined. For codex: hooks.json +
+    // directory-trust + excludes (installRuntimeConfig) plus the composed rules
+    // as AGENTS.md (Codex's only instruction channel). Best-effort: a failure
+    // logs but does not abort the pane (the worker still launches; a missing
+    // relay/rules degrades, it does not wedge).
+    const [, projectName, workerName, contextFile] = args;
+    if (!projectName || !workerName) return;
+    try {
+      const { findWorkerByName } = await import("./registry.js");
+      const entry = findWorkerByName(projectName, workerName);
+      if (!entry?.worktreePath || entry.harness !== "codex") return;
+      const { tryGetProject } = await import("../config.js");
+      const project = tryGetProject(projectName) ?? { path: entry.worktreePath };
+      const { getHarness } = await import("./harness/index.js");
+      getHarness(entry.harness).installRuntimeConfig(entry.worktreePath, project);
+      if (contextFile) {
+        const { installCodexAgentsMd } = await import("./harness/codex.js");
+        const { readFileSync } = await import("node:fs");
+        installCodexAgentsMd(entry.worktreePath, readFileSync(contextFile, "utf-8"));
+      }
+    } catch (err) {
+      log.warn("bootstrap", "install-worker-runtime failed", {
+        worker: workerName,
+        data: { project: projectName, error: String(err) },
+      });
+    }
+    return;
+  }
+
   if (sub === "help") {
     printDashboardHelp();
     return;

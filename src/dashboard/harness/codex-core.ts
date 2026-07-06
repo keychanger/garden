@@ -20,7 +20,41 @@ import path from "node:path";
 import type { Turn, Verb } from "../conversation.js";
 import type { WorkerEntry } from "../registry.js";
 import { shellEscape, pasteAndSubmit } from "../tmux.js";
+import { resolveHookRunner } from "../runner.js";
 import type { AgentCommandOptions, HarnessCore, HeadlessCommandOptions } from "./types.js";
+
+// Garden's lifecycle hooks for a Codex WORKER, injected into the launch command
+// as `-c` config overrides rather than a .codex/hooks.json file. Verified
+// 2026-07-06 (codex 0.142.5): a linked git worktree does NOT load hooks from a
+// worktree-local .codex/hooks.json — Codex resolves project hooks at the REPO
+// ROOT (the main checkout), so a file written into the worktree never fires.
+// A `-c`-injected hooks table DOES fire per turn, and injection sidesteps the
+// whole repo-root-file problem (never clobbers a repo's own hooks, never mutates
+// the operator's main checkout, travels with the launch like the sandbox flags).
+// Wire-event mapping matches garden's dispatcher: Codex's PreToolUse fires for
+// every tool -> posttooluse (a working heartbeat); PermissionRequest is the real
+// blocked-on-operator -> pretooluse (asking). Requires
+// --dangerously-bypass-hook-trust on the launch (garden's hooks are untrusted).
+const CODEX_HOOK_EVENTS: ReadonlyArray<readonly [string, string]> = [
+  ["SessionStart", "sessionstart"],
+  ["UserPromptSubmit", "prompt"],
+  ["Stop", "stop"],
+  ["PostToolUse", "posttooluse"],
+  ["PreToolUse", "posttooluse"],
+  ["PermissionRequest", "pretooluse"],
+];
+
+// The `-c` flags injecting garden's hook relay. hookRunner is the shell-ready
+// runner command (node + dist/hook.js); Codex shell-splits the hook `command`
+// string, so `<runner> <wire>` runs `dist/hook.js <wire>` exactly like the
+// claude settings.json path. Each dynamic value is shell-escaped for the
+// launch command line.
+function codexHookFlags(hookRunner: string): string {
+  return CODEX_HOOK_EVENTS.map(([event, wire]) => {
+    const toml = `hooks.${event}=[{ hooks = [{ type = "command", command = "${hookRunner} ${wire}", timeout = 5 }] }]`;
+    return `-c ${shellEscape(toml)}`;
+  }).join(" ");
+}
 
 // $CODEX_HOME is Codex's CLAUDE_CONFIG_DIR analog (relocates sessions/, auth,
 // config). Defaults to ~/.codex.
@@ -163,9 +197,10 @@ export const codexCore: HarnessCore = {
     const modelFlag = opts.model ? ` -m ${shellEscape(opts.model)}` : "";
     const trust = "--dangerously-bypass-hook-trust";
     const sandbox = codexSandboxFlags(opts.worktreeGitDir);
+    const hooks = codexHookFlags(resolveHookRunner());
     return opts.resume
-      ? `${opts.envPrefix}codex resume ${shellEscape(opts.sessionId)} ${trust} ${sandbox}${modelFlag}`
-      : `${opts.envPrefix}codex ${trust} ${sandbox}${modelFlag}`;
+      ? `${opts.envPrefix}codex resume ${shellEscape(opts.sessionId)} ${trust} ${sandbox} ${hooks}${modelFlag}`
+      : `${opts.envPrefix}codex ${trust} ${sandbox} ${hooks}${modelFlag}`;
   },
 
   // Headless one-shot (reviewer/resolver/ci-fix) — the spike-verified path.
