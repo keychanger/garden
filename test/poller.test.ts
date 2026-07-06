@@ -3652,6 +3652,39 @@ describe("poll — merged state", () => {
     expect(infoBlocks[0][2]).toMatchObject({ data: { reason: "usage-paused" } });
   });
 
+  it("re-logs immediately when a worker re-strands after the gate reopens", () => {
+    const gateClosed = {
+      enabled: false, usageThreshold: 95, resumeAfterReset: false,
+      pausedUntil: "2099-01-01T00:00:00Z", pausedReason: "5h at 100%",
+    };
+    const gateOpen = { enabled: true, usageThreshold: 95, resumeAfterReset: false };
+    const countInfoBlocks = () =>
+      vi.mocked(log.info).mock.calls.filter(
+        c => c[1] === "auto-continue blocked by global gate",
+      ).length;
+
+    // First strand while the gate is closed: logs once, stamping the throttle.
+    vi.mocked(getAutoContinueConfig).mockReturnValue(gateClosed);
+    registryMock._setEntries("myproject", [strandedWorker()]);
+    poll("myproject");
+    expect(countInfoBlocks()).toBe(1);
+
+    // Gate reopens: the sweep dispatches and drops the throttle record. A fresh
+    // stranded entry (no lastAutoContinueAt) keeps the per-worker idempotency
+    // skip from masking the gate-block log on the re-strand below.
+    vi.mocked(getAutoContinueConfig).mockReturnValue(gateOpen);
+    registryMock._setEntries("myproject", [strandedWorker()]);
+    poll("myproject");
+
+    // Gate closes again within the hour: because the record was cleared on
+    // reopen, this re-strand logs immediately rather than being suppressed by
+    // the stale timestamp from the first closure.
+    vi.mocked(getAutoContinueConfig).mockReturnValue(gateClosed);
+    registryMock._setEntries("myproject", [strandedWorker()]);
+    poll("myproject");
+    expect(countInfoBlocks()).toBe(2);
+  });
+
   it("sweep does not double-dispatch inside the stranded window of a prior dispatch", () => {
     registryMock._setEntries("myproject", [
       strandedWorker({ lastAutoContinueAt: Date.now() - 30_000 }),
