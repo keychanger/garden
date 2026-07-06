@@ -707,6 +707,7 @@ export function _resetHeaderCachesForTest(): void {
   lastWrittenHistory = null;
   lastBarLeft = null;
   lastBarRight = null;
+  cachedStatusWidth = null;
 }
 
 // Lean refresh for plot cycling: plot strip + status only. Skips usage (account-wide,

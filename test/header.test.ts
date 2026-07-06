@@ -1039,6 +1039,66 @@ describe("writeQuickStatus (via refreshDashboard)", () => {
 });
 
 // ===========================================================================
+// status pane width threading (writeQuickStatus -> renderQuickStatus)
+// ===========================================================================
+
+describe("status pane width threading (via refreshDashboard)", () => {
+  // The 5th arg to renderQuickStatus (index 4) is the raw pane width that
+  // writeQuickStatus resolves via the cachedStatusPaneWidth TTL cache. It is the
+  // hard-cap input that keeps status rows from wrapping onto a second terminal
+  // line (which desyncs the in-place repaint). renderQuickStatus is mocked here,
+  // so these assertions guard the header-side wiring/cache — the capping math
+  // itself lives in status-logic.test.ts.
+  const lastWidthArg = () => vi.mocked(renderQuickStatus).mock.calls.at(-1)?.[4];
+
+  it("threads the status pane width from getPaneSize into renderQuickStatus", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 10 });
+
+    refreshDashboard();
+
+    // A regression that dropped the arg, passed the height, or forgot to read
+    // the pane size would surface here as undefined / the wrong number.
+    expect(lastWidthArg()).toBe(120);
+  });
+
+  it("passes an undefined width when there is no status pane", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: null }));
+
+    refreshDashboard();
+
+    expect(lastWidthArg()).toBeUndefined();
+  });
+
+  it("reuses the cached width within the TTL for the same pane (no re-fork per refresh)", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 10 });
+    refreshDashboard();
+
+    // The pane width changes underneath, but within the 1s TTL and the same
+    // pane id the cache is a hit — renderQuickStatus still sees the first width,
+    // so no per-refresh tmux size fork happens.
+    vi.mocked(getPaneSize).mockReturnValue({ width: 40, height: 10 });
+    refreshDashboard();
+
+    expect(lastWidthArg()).toBe(120);
+  });
+
+  it("re-reads the width when the status pane id changes (cache invalidated)", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 10 });
+    refreshDashboard();
+
+    // A different pane id is a cache miss, so the width is read fresh.
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%1" }));
+    vi.mocked(getPaneSize).mockReturnValue({ width: 40, height: 10 });
+    refreshDashboard();
+
+    expect(lastWidthArg()).toBe(40);
+  });
+});
+
+// ===========================================================================
 // refreshStatusPane
 // ===========================================================================
 
