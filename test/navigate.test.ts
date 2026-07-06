@@ -117,7 +117,7 @@ import {
 
 import { readDashState, writeDashState } from "../src/dashboard/state.js";
 import { parkToHidden, restoreFromHidden, swapToHidden, swapDirect, gardenSwapToHidden } from "../src/dashboard/layout.js";
-import { refreshDashboard, setPaneProjectColor } from "../src/dashboard/header.js";
+import { refreshDashboard, refreshDashboardPlotCycle, setPaneProjectColor } from "../src/dashboard/header.js";
 import {
   tmux, tmuxDisplay, paneExists, windowExists, getFirstPaneId,
   listAllWindowNames, listHiddenWorkerWindows,
@@ -180,6 +180,9 @@ describe("switchProject", () => {
     switchProject("1"); // index 1 -> "garden"
     expect(tmuxDisplay).toHaveBeenCalledWith("Already on garden");
     expect(writeDashState).not.toHaveBeenCalled();
+    // No-op path returns null from withStateLock, so the post-lock refresh
+    // must be skipped by the `if (snapshot)` gate the nav-lock shrink added.
+    expect(refreshDashboard).not.toHaveBeenCalled();
   });
 
   it("records lastActiveWorker for the project being left", () => {
@@ -344,6 +347,9 @@ describe("focusWorker", () => {
     vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
     focusWorker();
     expect(tmuxDisplay).toHaveBeenCalledWith("No workers. Press \u2325n to create one.");
+    // Early-return path returns null from withStateLock, so the post-lock
+    // refresh must be skipped by the `if (snapshot)` gate.
+    expect(refreshDashboard).not.toHaveBeenCalled();
   });
 
   it("swaps from shell to preferred last-active worker", () => {
@@ -632,6 +638,9 @@ describe("focusGrowhouse / focusRoot / focusLogs (switchGardenTo)", () => {
     );
     expect(setPaneLabel).toHaveBeenCalledWith("%1", "root");
     expect(refreshDashboard).toHaveBeenCalledWith({ state });
+    // The focus select-pane was relocated outside withStateLock by the nav-lock
+    // shrink; it must still run after the swap, targeting the garden shell pane.
+    expect(tmux).toHaveBeenCalledWith("select-pane", "-t", "%1");
   });
 });
 
@@ -891,6 +900,9 @@ describe("cyclePlot", () => {
     cyclePlot(1);
     expect(state.activePlot).toBe("c");
     expect(writeDashState).toHaveBeenCalledWith(state);
+    // The post-lock refresh (relocated outside withStateLock by the nav-lock
+    // shrink) must still fire with the final committed state.
+    expect(refreshDashboardPlotCycle).toHaveBeenCalledWith({ state });
   });
 
   it("cycles backward, wrapping past index 0", () => {
