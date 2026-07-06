@@ -836,3 +836,20 @@ function git(cwd: string, ...args: string[]): string {
     maxBuffer: 256 * 1024 * 1024,
   }).trim();
 }
+
+// Absolute path to the repo's shared git common dir (`<main>/.git`) — the
+// object store and refs every linked worktree writes through. A worktree's own
+// git dir (HEAD/index/logs) lives under it at `worktrees/<name>/`, so this one
+// path covers all of a worker's git writes. Resolved from the main checkout so
+// it works before a worktree exists; returns null if git can't resolve it.
+// Used to grant a Codex worker's workspace-write sandbox access to its git
+// storage, which sits OUTSIDE the worktree cwd (claude-code's sandbox
+// auto-grants the git dir; Codex's does not).
+export function getGitCommonDir(repoPath: string): string | null {
+  try {
+    const dir = git(repoPath, "rev-parse", "--git-common-dir");
+    return path.isAbsolute(dir) ? dir : path.resolve(repoPath, dir);
+  } catch {
+    return null;
+  }
+}

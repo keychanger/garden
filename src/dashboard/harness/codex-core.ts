@@ -48,25 +48,22 @@ export function codexStderrSidecar(resultFile: string): string {
 //     worktree is what the sandbox actually enforces for a Codex worker.
 //   - writable_roots — garden's shared extra roots beyond cwd + /tmp. Mirrors
 //     the HOME-based entries of sandbox.ts DEFAULT_ALLOW_WRITE (npm/cache/
-//     registry writes during checks); these are constant across all workers,
-//     since the per-project domain bits Codex cannot express anyway.
-// KNOWN GAP (worker-path slice): a garden worker runs in a *linked* git
-// worktree whose real git dir is the main checkout's `.git` (the common dir),
-// well outside cwd + these roots. Claude Code's sandbox layer auto-grants that
-// git dir; Codex workspace-write does not, so a Codex worker cannot commit or
-// push until the resolved `git rev-parse --git-common-dir` is added here — it
-// needs the worktree path, absent from AgentCommandOptions today. Dormant
-// until worker selection sets entry.harness, so tracked here rather than
-// plumbed through every buildAgentCommand call site pre-emptively.
+//     registry writes during checks) plus the worktree's shared git common dir
+//     (worktreeGitDir). A garden worker runs in a *linked* worktree whose real
+//     git dir is the main checkout's `.git` — outside cwd — so without that
+//     root a Codex worker could not commit or push (claude-code's sandbox
+//     auto-grants the git dir; Codex workspace-write does not). The HOME roots
+//     are constant across workers; the git dir is per-project, passed in.
 // Every dynamic value is shell-escaped: the result is spliced into the launch
 // command string.
-function codexSandboxFlags(): string {
+function codexSandboxFlags(worktreeGitDir?: string): string {
   const home = process.env.HOME || os.homedir();
   const writableRoots = [
     path.join(home, ".npm"),
     path.join(home, ".cache"),
     path.join(home, ".garden", "sessions"),
   ];
+  if (worktreeGitDir) writableRoots.push(worktreeGitDir);
   const rootsToml = `sandbox_workspace_write.writable_roots=[${writableRoots.map(r => `"${r}"`).join(", ")}]`;
   return "-s workspace-write -a never"
     + ` -c ${shellEscape("sandbox_workspace_write.network_access=true")}`
@@ -165,7 +162,7 @@ export const codexCore: HarnessCore = {
   buildAgentCommand(opts: AgentCommandOptions): string {
     const modelFlag = opts.model ? ` -m ${shellEscape(opts.model)}` : "";
     const trust = "--dangerously-bypass-hook-trust";
-    const sandbox = codexSandboxFlags();
+    const sandbox = codexSandboxFlags(opts.worktreeGitDir);
     return opts.resume
       ? `${opts.envPrefix}codex resume ${shellEscape(opts.sessionId)} ${trust} ${sandbox}${modelFlag}`
       : `${opts.envPrefix}codex ${trust} ${sandbox}${modelFlag}`;

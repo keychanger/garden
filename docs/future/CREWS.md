@@ -167,8 +167,14 @@ launch now renders Codex's own `workspace-write` sandbox instead
 sandbox_workspace_write.network_access=true -c
 sandbox_workspace_write.writable_roots=[...]`. cwd and `/tmp` are writable by
 default; the extra roots mirror the HOME-based entries of `sandbox.ts`
-`DEFAULT_ALLOW_WRITE`. The reviewer's headless command keeps the blanket
-bypass — unchanged. Dormant until selection (gap 6) sets `entry.harness`.
+`DEFAULT_ALLOW_WRITE`, **plus the worktree's shared git common dir**
+(`AgentCommandOptions.worktreeGitDir`, resolved via `getGitCommonDir`). That
+last root is load-bearing: a garden worker runs in a *linked* worktree whose
+git store lives at the main checkout's `.git`, outside cwd — Codex
+`workspace-write` does not auto-grant it (Claude Code's sandbox does), so
+without it a Codex worker could not `git commit`/`push`. The reviewer's
+headless command keeps the blanket bypass — unchanged. Dormant until selection
+(gap 6) sets `entry.harness`.
 
 **The macOS footgun is GONE — verified fixed.** Prior docs (`AUTONOMY-PROGRAM.md`
 §4a, openai/codex #10390/#13373) warned that macOS Seatbelt *silently ignores*

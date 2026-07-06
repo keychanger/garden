@@ -32,6 +32,14 @@ export interface AgentCommandOptions {
   /** Pre-composed env-assignments prefix (provider/profile env from
    *  claude-env.ts). Already shell-safe; prepended verbatim. */
   envPrefix: string;
+  /** Absolute path to the worktree's shared git common dir (`<main>/.git`).
+   *  A harness whose sandbox does not auto-grant the git dir (Codex
+   *  workspace-write) adds it to its writable roots so the worker can
+   *  commit/push — the git store sits outside the worktree cwd. claude-code
+   *  ignores it (its sandbox layer grants the git dir automatically). Absent
+   *  when the caller has no worktree context (e.g. the ad-hoc project-dir
+   *  launch) or the harness does not need it. */
+  worktreeGitDir?: string;
 }
 
 export interface HeadlessCommandOptions {

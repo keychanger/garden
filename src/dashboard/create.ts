@@ -26,7 +26,7 @@ import { validateAndHeal } from "./validate.js";
 import { startProjectPoller, signalFifoPath, restartLongLivedPollers } from "./poller.js";
 import { startUsagePoller } from "./usage-poller.js";
 import { startWatchdog } from "./watchdog.js";
-import { installPollTriggerHook, worktreeExists as wtExists, getWorkerBaseBranch, getRemoteHost } from "./git.js";
+import { installPollTriggerHook, worktreeExists as wtExists, getWorkerBaseBranch, getRemoteHost, getGitCommonDir } from "./git.js";
 import { dispatchDelayedContinue } from "./continue.js";
 import { resolveGardenRunner, resolveHookRunner } from "./runner.js";
 import { buildSandboxConfig } from "./sandbox.js";
@@ -616,8 +616,18 @@ export function buildWorktreeWorkerCommand(
   const agentCmd = getHarness(opts?.harness).buildAgentCommand({
     sessionId, resume: false, contextFile, model: opts?.model,
     ultracode: opts?.ultracode, envPrefix: workerEnvPrefix(project),
+    worktreeGitDir: codexWorktreeGitDir(opts?.harness, projectPath),
   });
   return `${agentCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
+}
+
+// The worktree git common dir a Codex worker's sandbox must be able to write
+// (its git store sits outside the worktree cwd — see AgentCommandOptions
+// .worktreeGitDir). Resolved from the project's main checkout so it works
+// before the worktree exists; only for the codex harness (skips the git spawn
+// on the hot claude-code path). Other harnesses ignore the field.
+function codexWorktreeGitDir(harness: string | undefined, projectPath: string): string | undefined {
+  return harness === "codex" ? (getGitCommonDir(projectPath) ?? undefined) : undefined;
 }
 
 // Resolve a ProjectConfig for the harness adapter installRuntimeConfig calls. Callers of buildWorkerCommand
@@ -724,6 +734,7 @@ export function buildWorktreeBootstrapScript(
   const agentCmd = getHarness(opts?.harness).buildAgentCommand({
     sessionId, resume: false, contextFile, model: opts?.model,
     ultracode: opts?.ultracode, envPrefix: workerEnvPrefix(project),
+    worktreeGitDir: codexWorktreeGitDir(opts?.harness, projectPath),
   });
 
   const base = baseBranch ?? "main";
@@ -936,6 +947,7 @@ export function buildWorktreeResumeCommand(
   const claudeCmd = getHarness(opts?.harness).buildAgentCommand({
     sessionId, resume: true, contextFile, model: opts?.model,
     ultracode: opts?.ultracode, envPrefix: workerEnvPrefix(project),
+    worktreeGitDir: codexWorktreeGitDir(opts?.harness, projectPath),
   });
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${identityExports} ${claudeCmd}; ${exitHook}; ${pollSignalSnippet(projectName)} exec $SHELL`;

@@ -216,6 +216,24 @@ describe("codex adapter dialect", () => {
     expect(resume).not.toContain("--dangerously-bypass-approvals-and-sandbox");
   });
 
+  it("adds the worktree git common dir to the sandbox writable roots", async () => {
+    const { getHarnessCore } = await importCore();
+    // A linked worktree's git store lives at the main checkout's .git, outside
+    // cwd — Codex workspace-write must be granted it or the worker cannot
+    // commit/push (claude-code's sandbox auto-grants it; Codex's does not).
+    const withGit = getHarnessCore("codex").buildAgentCommand({
+      sessionId: "", resume: false, contextFile: "/ignored", envPrefix: "",
+      worktreeGitDir: "/Users/x/proj/.git",
+    });
+    expect(withGit).toContain('"/Users/x/proj/.git"');
+    expect(withGit).toContain("sandbox_workspace_write.writable_roots=[");
+    // Absent when no git dir is threaded (e.g. the ad-hoc project-dir launch).
+    const withoutGit = getHarnessCore("codex").buildAgentCommand({
+      sessionId: "", resume: false, contextFile: "/ignored", envPrefix: "",
+    });
+    expect(withoutGit).not.toContain("/.git\"");
+  });
+
   it("allocateSessionId returns the empty sentinel (Codex assigns its own)", async () => {
     const { getHarnessCore } = await importCore();
     expect(getHarnessCore("codex").allocateSessionId()).toBe("");
