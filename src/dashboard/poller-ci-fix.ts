@@ -159,23 +159,15 @@ export function launchCiFix(
   const detail = failed
     .map(f => `${f.name} (${f.conclusion})`)
     .join(", ");
-  addAlert({
-    level: "warn",
-    source: "poller",
-    project: projectName,
-    worker: entry.name,
-    message:
-      `CI fix-agent launched for ${entry.name} (attempt ${nextAttempts}/${CI_FIX_BUDGET}): ` +
-      `investigating ${sha.slice(0, 7)} — ${detail}`,
-    // Dedup per (worker, SHA). A retry on the same SHA after a non-pushing
-    // FAILED verdict is the same logical event; a new SHA from the agent's
-    // push (which would trigger a fresh failure) deserves a fresh alert.
-    dedupKey: `ci-fix-launch:${projectName}:${entry.name}:${sha}`,
-  });
-
+  // Launch is a routine lifecycle beat — log it (streams into `garden logs`)
+  // but do not raise an operator alert. The alert badge is reserved for states
+  // that need the operator: only ci-fix budget *exhaustion* (below) alerts.
   log.info("poller", "launched ci-fix", {
     worker: entry.name,
-    data: { project: projectName, attempt: nextAttempts, budget: CI_FIX_BUDGET, sha: sha.slice(0, 7) },
+    data: {
+      project: projectName, attempt: nextAttempts, budget: CI_FIX_BUDGET,
+      sha: sha.slice(0, 7), detail,
+    },
   });
   return true;
 }
@@ -354,27 +346,14 @@ export function handleCiFixing(
     return true;
   }
 
-  // Success: agent pushed a fix. Lifecycle alert so the operator can watch
-  // the auto-heal land, then re-enter merge-pending. The next CI gate query
-  // runs against the new SHA — if the fix works, the merge proceeds; if it
-  // doesn't, gateCiStatus will see a new SHA and spawn another ci-fix
-  // attempt against the new failure detail.
+  // Success: agent pushed a fix and re-enters merge-pending; the next CI gate
+  // query runs against the new SHA — if the fix works the merge proceeds, if it
+  // doesn't gateCiStatus sees the new SHA and spawns another attempt. A routine
+  // lifecycle beat: log it (visible in `garden logs`) but raise no operator
+  // alert — the badge is reserved for exhaustion.
   log.info("poller", "ci-fix pushed", {
     worker: entry.name,
     data: { project: projectName, attempts: entry.ciFixAttempts ?? 0, newSha: headSha?.slice(0, 7) },
-  });
-  addAlert({
-    level: "warn",
-    source: "poller",
-    project: projectName,
-    worker: entry.name,
-    message:
-      `CI fix-agent pushed fix for ${entry.name}: ${headSha!.slice(0, 7)}. ` +
-      `Re-running CI gate.`,
-    // Per-newSha so successive successful pushes (each against a different
-    // SHA) each get their own alert. The 1-hour dedup window then handles
-    // the case where the same SHA's success event somehow replays.
-    dedupKey: `ci-fix-success:${projectName}:${entry.name}:${headSha}`,
   });
 
   transitionState(projectName, entry.name, "merge-pending", {

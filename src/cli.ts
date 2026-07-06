@@ -110,7 +110,8 @@ Dashboard:
   status [--all]                 Show project and worker status (--all: every plot, not just the active one)
   whoami [worker]                Show the current worker's registry entry (uses $GARDEN_WORKER)
   review [worker]                Show a worker's last review: verdict, review-window diff, notes (default: focused)
-  alerts                         View dashboard alerts
+  queue [project]                Show the merge pipeline: queue order, in-review, blocked, CI markers
+  alerts                         View dashboard alerts (unread/read split, relative time)
   alerts clear                   Dismiss all alerts
   logs [options]                 View dashboard logs (pretty by default)
   logs -f                        Follow logs in real time
@@ -126,6 +127,7 @@ Dashboard:
   logs filter [<expr>]           Show / set sticky filter (also via ⌥/ in dashboard)
   logs filter --clear            Remove the sticky filter
   health                         Check dashboard state consistency
+  doctor                         Environment preflight (tmux / claude / gh / Option-key)
   kick <worker>                  Re-arm a stranded 'working' worker for review
   bounce <worker>                Restart a worker's Claude process (preserves session history)
   hold <worker>                  Interrupt a working worker and mark it 'paused' (sends Escape; ⌥e in the dashboard toggles this on the focused worker; the next prompt resumes it)

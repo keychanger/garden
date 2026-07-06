@@ -2796,15 +2796,13 @@ describe("poll — merge-pending CI gate", () => {
     expect(fields.reviewWindowName).toBe("_myproject-ci-fix-bold-ash");
     expect(fields.mergePendingAt).toBeUndefined();
 
-    // The launch alert is at warn level (lifecycle), not error. Operator
-    // sees CI failed AND the auto-fix is in flight on the same SHA.
-    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
-      level: "warn",
-      source: "poller",
-      project: "myproject",
-      worker: "bold-ash",
-      message: expect.stringContaining("CI fix-agent launched"),
-    }));
+    // Launch is a routine lifecycle beat — logged, but NOT raised as an
+    // operator alert (the badge is reserved for ci-fix budget exhaustion).
+    const launchAlert = vi.mocked(addAlert).mock.calls.find(
+      c => String((c[0] as { message?: string }).message ?? "").includes("CI fix-agent launched"),
+    );
+    expect(launchAlert).toBeUndefined();
+    expect(log.info).toHaveBeenCalledWith("poller", "launched ci-fix", expect.anything());
 
     // No worker should be parked in failing on this first attempt.
     const failingCall = vi.mocked(updateWorkerFields).mock.calls.find(
@@ -3272,10 +3270,12 @@ describe("poll — ci-fixing state", () => {
       c => (c[2] as Record<string, unknown>).prState === "merge-pending",
     );
     expect(mpCall).toBeDefined();
-    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
-      level: "warn",
-      message: expect.stringContaining("CI fix-agent pushed fix"),
-    }));
+    // Success is log-only now — no operator alert for the routine push.
+    const successAlert = vi.mocked(addAlert).mock.calls.find(
+      c => String((c[0] as { message?: string }).message ?? "").includes("CI fix-agent pushed fix"),
+    );
+    expect(successAlert).toBeUndefined();
+    expect(log.info).toHaveBeenCalledWith("poller", "ci-fix pushed", expect.anything());
     expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 0);
   });
 
