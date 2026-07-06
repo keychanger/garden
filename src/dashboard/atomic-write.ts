@@ -11,6 +11,15 @@ import path from "node:path";
 
 export interface AtomicWriteOpts {
   mode?: number;
+  // Flush the tmp file to stable storage before the rename (default true).
+  // Set false for throwaway files that a crash can safely lose because the
+  // next event rebuilds them — the repaint render caches (status.rendered,
+  // usage.rendered, history.rendered, plot-strip.template). fsync is ~97% of
+  // this call's cost, and those files are rewritten on every hook/keystroke,
+  // so skipping it takes the repaint cascade off the disk-sync path. The
+  // atomic rename still guarantees concurrent readers never see a partial
+  // file; only crash-durability is traded away.
+  durable?: boolean;
 }
 
 export function atomicWriteFile(
@@ -37,14 +46,18 @@ export function atomicWriteFile(
     // power loss or kernel panic — a crash right after the rename can leave the
     // target zero-length even though the rename "succeeded". fsync closes that
     // window for the state files (registry/state/config) that must survive an
-    // unclean shutdown. Wrapped and swallowed because fsync is genuinely
-    // optional here: it can be unavailable on some filesystems, EACCES on a
-    // read-only-mode tmp file (e.g. 0o444 settings.json), or stubbed out under
-    // a partial fs mock — none of which should fail the write.
-    try {
-      const fd = fs.openSync(tmpFile, "r+");
-      try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    } catch { /* durability is best-effort */ }
+    // unclean shutdown. Skipped when durable === false for throwaway repaint
+    // caches whose next event rebuilds them. Wrapped and swallowed because
+    // fsync is genuinely optional here: it can be unavailable on some
+    // filesystems, EACCES on a read-only-mode tmp file (e.g. 0o444
+    // settings.json), or stubbed out under a partial fs mock — none of which
+    // should fail the write.
+    if (opts?.durable !== false) {
+      try {
+        const fd = fs.openSync(tmpFile, "r+");
+        try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      } catch { /* durability is best-effort */ }
+    }
     fs.renameSync(tmpFile, filePath);
   } catch (err) {
     try { fs.unlinkSync(tmpFile); } catch { /* tmp may not exist */ }

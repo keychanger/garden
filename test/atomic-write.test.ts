@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { useTmpHome } from "./helpers.js";
@@ -92,6 +92,34 @@ describe("atomicWriteFile", () => {
       (fs.writeFileSync as unknown) = realWrite;
     }
     expect(observedTmpPath).toMatch(/\.[0-9a-f-]{36}\.tmp$/);
+  });
+
+  it("fsyncs by default for durability", async () => {
+    const { atomicWriteFile } = await importHelper();
+    const spy = vi.spyOn(fs, "fsyncSync");
+    try {
+      const dest = path.join(env.sessionsDir, "durable.txt");
+      atomicWriteFile(dest, "state");
+      expect(fs.readFileSync(dest, "utf-8")).toBe("state");
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("skips the fsync when durable is false but still writes atomically", async () => {
+    const { atomicWriteFile } = await importHelper();
+    const spy = vi.spyOn(fs, "fsyncSync");
+    try {
+      const dest = path.join(env.sessionsDir, "render.cache");
+      atomicWriteFile(dest, "repaint", { durable: false });
+      expect(fs.readFileSync(dest, "utf-8")).toBe("repaint");
+      expect(spy).not.toHaveBeenCalled();
+      const siblings = fs.readdirSync(env.sessionsDir);
+      expect(siblings.filter(f => f.startsWith("render.cache.") && f.endsWith(".tmp"))).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("removes the temp file when the rename fails", async () => {

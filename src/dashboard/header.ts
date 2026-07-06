@@ -252,7 +252,7 @@ let lastWrittenPlotStripTemplate: string | null = null;
 function writePlotStripTemplate(template: string): void {
   if (template === lastWrittenPlotStripTemplate) return;
   try {
-    atomicWriteFile(PLOT_STRIP_TEMPLATE_FILE, template);
+    atomicWriteFile(PLOT_STRIP_TEMPLATE_FILE, template, { durable: false });
     lastWrittenPlotStripTemplate = template;
   } catch { /* sessions dir not yet created; best effort */ }
 }
@@ -863,7 +863,7 @@ function writeQuickStatus(opts?: RefreshOptions): void {
       state, opts?.windowNames, opts?.config, opts?.registry, width,
     );
     if (rendered === lastWrittenQuickStatus) return;
-    atomicWriteFile(STATUS_RENDERED_FILE, rendered);
+    atomicWriteFile(STATUS_RENDERED_FILE, rendered, { durable: false });
     lastWrittenQuickStatus = rendered;
     if (state.statusPaneId) {
       // +1 for the pane-border-status top row, which is included in pane_height
@@ -891,7 +891,7 @@ export function writeHistoryRendered(opts?: RefreshOptions): void {
     const width = size?.width ?? 60;
     const rendered = renderHistoryContent(state, width, opts?.registry);
     if (rendered === lastWrittenHistory) return;
-    atomicWriteFile(HISTORY_RENDERED_FILE, rendered);
+    atomicWriteFile(HISTORY_RENDERED_FILE, rendered, { durable: false });
     lastWrittenHistory = rendered;
     signalPane(state.gardenShellPaneId);
   } catch { /* best effort */ }
@@ -942,7 +942,7 @@ function writeUsageRendered(opts?: RefreshOptions): void {
     const cur = state.usagePaneId ? getPaneSize(state.usagePaneId) : null;
     const rendered = renderUsagePane(Date.now(), cur?.width);
     if (rendered === lastWrittenUsageRendered) return;
-    atomicWriteFile(USAGE_RENDERED_FILE, rendered);
+    atomicWriteFile(USAGE_RENDERED_FILE, rendered, { durable: false });
     lastWrittenUsageRendered = rendered;
     if (state.usagePaneId) {
       // +1 for the pane-border-status top row.
