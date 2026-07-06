@@ -141,40 +141,48 @@ export function switchProject(indexArg: string): void {
   const projectName = projectNames[index];
   const project = config.projects[projectName];
 
-  withStateLock(() => {
+  // Only the swap + state write must be atomic against a concurrent nav; the
+  // read-only repaint and diary reload run after the lock releases. Holding the
+  // lock across the full refresh cascade serialized whole keystroke bursts and
+  // could exceed the file-lock deadline, silently dropping a keystroke.
+  const snapshot = withStateLock(() => {
     const state = readDashState();
 
     if (state.activeProject === projectName) {
       tmuxDisplay(`Already on ${projectName}`);
-      return;
+      return null;
     }
 
     swapVisibleToProject(projectName, project, state);
     writeDashState(state);
-    refreshDashboard({ state });
-    reloadDiaryEditor(state);
+    return state;
   });
+
+  if (snapshot) {
+    refreshDashboard({ state: snapshot });
+    reloadDiaryEditor(snapshot);
+  }
 }
 
 export function focusWorker(): void {
-  withStateLock(() => {
+  const snapshot = withStateLock(() => {
     const state = readDashState();
     if (!state.activeProject) {
       tmuxDisplay("No project selected.");
-      return;
+      return null;
     }
 
     if (state.activePaneType === "worker") {
       if (state.activePaneId && paneExists(state.activePaneId)) {
         tmux("select-pane", "-t", state.activePaneId);
       }
-      return;
+      return null;
     }
 
     const workerWindows = listHiddenWorkerWindows(state.activeProject);
     if (workerWindows.length === 0) {
       tmuxDisplay("No workers. Press ⌥n to create one.");
-      return;
+      return null;
     }
 
     const preferred = state.lastActiveWorker[state.activeProject];
@@ -194,23 +202,25 @@ export function focusWorker(): void {
     state.activePaneType = "worker";
     state.activeWindowName = targetWorker;
     writeDashState(state);
-    refreshDashboard({ state });
+    return state;
   });
+
+  if (snapshot) refreshDashboard({ state: snapshot });
 }
 
 export function focusShell(): void {
-  withStateLock(() => {
+  const snapshot = withStateLock(() => {
     const state = readDashState();
     if (!state.activeProject) {
       tmuxDisplay("No project selected.");
-      return;
+      return null;
     }
 
     if (state.activePaneType === "shell") {
       if (state.activePaneId && paneExists(state.activePaneId)) {
         tmux("select-pane", "-t", state.activePaneId);
       }
-      return;
+      return null;
     }
 
     log.info("navigate", "focusShell", { data: { project: state.activeProject } });
@@ -235,8 +245,10 @@ export function focusShell(): void {
     state.activePaneType = "shell";
     state.activeWindowName = shellTarget;
     writeDashState(state);
-    refreshDashboard({ state });
+    return state;
   });
+
+  if (snapshot) refreshDashboard({ state: snapshot });
 }
 
 function ensureGardenView(view: GardenView): void {
@@ -250,14 +262,14 @@ function ensureGardenView(view: GardenView): void {
 }
 
 function switchGardenTo(view: GardenView): void {
-  withStateLock(() => {
+  const snapshot = withStateLock(() => {
     const state = readDashState();
 
     if (state.gardenPaneType === view) {
       if (state.gardenShellPaneId && paneExists(state.gardenShellPaneId)) {
         tmux("select-pane", "-t", state.gardenShellPaneId);
       }
-      return;
+      return null;
     }
 
     log.info("navigate", "switchGardenTo", { data: { view, from: state.gardenPaneType } });
@@ -271,12 +283,15 @@ function switchGardenTo(view: GardenView): void {
       setPaneLabel(state.gardenShellPaneId, view === "logs" ? formatLogsPaneLabel() : view);
     }
     writeDashState(state);
-    refreshDashboard({ state });
-
-    if (state.gardenShellPaneId && paneExists(state.gardenShellPaneId)) {
-      tmux("select-pane", "-t", state.gardenShellPaneId);
-    }
+    return state;
   });
+
+  if (snapshot) {
+    refreshDashboard({ state: snapshot });
+    if (snapshot.gardenShellPaneId && paneExists(snapshot.gardenShellPaneId)) {
+      tmux("select-pane", "-t", snapshot.gardenShellPaneId);
+    }
+  }
 }
 
 export function focusGrowhouse(): void {
@@ -301,18 +316,18 @@ export function focusDiary(): void {
 }
 
 export function cyclePlot(direction: 1 | -1): void {
-  withStateLock(() => {
+  const result = withStateLock(() => {
     const config = loadConfig();
     const plots = plotsMap(config);
     const focusedNames = Object.keys(plots).filter(name => isPlotFocused(plots[name]));
 
     if (focusedNames.length === 0) {
       tmuxDisplay("No focused plots. Use 'garden focus <plot>' to add one to the cycle.");
-      return;
+      return null;
     }
     if (focusedNames.length === 1) {
       tmuxDisplay(`Only one focused plot ('${focusedNames[0]}').`);
-      return;
+      return null;
     }
 
     const state = readDashState();
@@ -322,7 +337,7 @@ export function cyclePlot(direction: 1 | -1): void {
       : (currentIdx + direction + focusedNames.length) % focusedNames.length;
 
     const target = focusedNames[nextIdx];
-    if (target === state.activePlot) return;
+    if (target === state.activePlot) return null;
 
     log.info("navigate", "cyclePlot", { data: { direction, from: state.activePlot, to: target } });
 
@@ -352,20 +367,24 @@ export function cyclePlot(direction: 1 | -1): void {
     }
 
     writeDashState(state);
-    refreshDashboardPlotCycle({ state });
-    if (state.activeProject !== prevProject) reloadDiaryEditor(state);
+    return { state, changedProject: state.activeProject !== prevProject };
   });
+
+  if (result) {
+    refreshDashboardPlotCycle({ state: result.state });
+    if (result.changedProject) reloadDiaryEditor(result.state);
+  }
 }
 
 export function cyclePane(direction: 1 | -1): void {
   // All state mutations must go through withStateLock to prevent races with
   // switchProject/focusWorker/focusShell which hold the same lock.
-  withStateLock(() => {
+  const result = withStateLock(() => {
     const lockedState = readDashState();
 
     if (!lockedState.activeProject) {
       tmuxDisplay("No project selected.");
-      return;
+      return null;
     }
 
     // Single window list for the entire operation
@@ -395,7 +414,7 @@ export function cyclePane(direction: 1 | -1): void {
 
     if (allWorkers.length === 0) {
       tmuxDisplay("No workers to cycle to. Press ⌥n to create one.");
-      return;
+      return null;
     }
 
     const currentIdx = currentName ? allWorkers.indexOf(currentName) : -1;
@@ -407,7 +426,7 @@ export function cyclePane(direction: 1 | -1): void {
     }
 
     const targetWindow = allWorkers[nextIdx];
-    if (targetWindow === currentName) return;
+    if (targetWindow === currentName) return null;
 
     log.info("navigate", "cyclePane", { data: { direction, from: currentName, to: targetWindow } });
 
@@ -431,6 +450,10 @@ export function cyclePane(direction: 1 | -1): void {
 
     // Update window list in memory: target was renamed to park name
     const updatedNames = windowNames.map(n => n === targetWindow ? parkName : n);
-    refreshDashboardCycle({ state: lockedState, windowNames: updatedNames });
+    return { state: lockedState, updatedNames };
   });
+
+  if (result) {
+    refreshDashboardCycle({ state: result.state, windowNames: result.updatedNames });
+  }
 }

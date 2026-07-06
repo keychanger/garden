@@ -111,9 +111,15 @@ function unbindMeta(key: string): void {
 
 function bindMeta(key: string, command: string): void {
   const guarded = `if [ "$(tmux display-message -p '##{session_name}')" = "${DASHBOARD_SESSION}" ]; then ${command} >/dev/null 2>&1; fi`;
+  // `-b` runs the handler in the background so it does NOT block tmux's command
+  // queue: without it, run-shell holds the queue until the handler process
+  // exits (node cold start + the full repaint cascade), so a burst of nav
+  // keystrokes serialized one-behind-another and latency visibly accumulated.
+  // Handlers still serialize their state mutation via withStateLock; only the
+  // tmux-queue block is removed.
   try {
     execFileSync("tmux", [
-      "bind-key", "-n", `M-${key}`, "run-shell", guarded
+      "bind-key", "-n", `M-${key}`, "run-shell", "-b", guarded
     ], { stdio: "ignore" });
   } catch { /* ignore */ }
 
@@ -130,7 +136,7 @@ function bindMeta(key: string, command: string): void {
   // immediately at setup time — once per key per table, dispatching every
   // dashboard hotkey command (including _trellis-picker) every time
   // setupKeybindings runs (e.g., after each garden post-merge rebuild).
-  const body = `send-keys -X cancel ; run-shell ${tmuxDoubleQuote(guarded)}`;
+  const body = `send-keys -X cancel ; run-shell -b ${tmuxDoubleQuote(guarded)}`;
   for (const table of ["copy-mode", "copy-mode-vi"]) {
     try {
       execFileSync("tmux", [

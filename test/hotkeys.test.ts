@@ -76,7 +76,7 @@ describe("setupKeybindings", () => {
       expect(argv.length).toBe(5);
       const body = argv[4];
       expect(body).toContain("send-keys -X cancel");
-      expect(body).toContain("run-shell");
+      expect(body).toContain("run-shell -b");
       // M-N now opens the workflow picker (default / trellis / grow).
       // The trellis picker is reachable via the (t) row, not the top-level
       // hotkey. See trellis-picker.ts buildWorkflowPickerPlan.
@@ -99,6 +99,24 @@ describe("setupKeybindings", () => {
     expect(argv).toContain("run-shell");
     expect(argv.join(" ")).toContain("_workflow-picker");
     expect(argv.join(" ")).not.toContain("_trellis-picker");
+  });
+
+  it("backgrounds root hotkey handlers with run-shell -b so keystroke bursts don't queue", () => {
+    // Without -b, run-shell blocks tmux's command queue until the handler
+    // process exits (node start + full repaint), so a burst of nav keystrokes
+    // serialized one-behind-another. The -b must sit immediately after
+    // run-shell (it is a run-shell flag, not part of the shell command).
+    setupKeybindings("/path/to/garden");
+    const rootBinds = execFileSyncMock.mock.calls
+      .map(call => call[1] as string[])
+      .filter(argv =>
+        Array.isArray(argv) && argv[0] === "bind-key" && argv[1] === "-n" && argv[2]?.startsWith("M-"));
+    expect(rootBinds.length).toBeGreaterThan(0);
+    for (const argv of rootBinds) {
+      const runShellIdx = argv.indexOf("run-shell");
+      expect(runShellIdx).toBeGreaterThanOrEqual(0);
+      expect(argv[runShellIdx + 1]).toBe("-b");
+    }
   });
 
   it("rebinds mouse selection to copy without cancelling copy-mode", () => {
