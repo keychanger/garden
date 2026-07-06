@@ -48,6 +48,10 @@ The **Codex worker path**: no operator surface sets `entry.harness` for a
 worker, the interactive launch is unsandboxed, no garden rules reach a Codex
 worker, and session identity is not recovered. Detailed and ranked below.
 
+The one fact that *gated* this path — whether the interactive Codex TUI fires
+`Stop` per turn — was **verified 2026-07-06** (codex 0.142.5) and is no longer
+a risk; see gap 2. What remains is engineering, led by the sandbox slice.
+
 ## Thesis: a crew is not a workflow
 
 The tempting framing — "a full-Anthropic workflow, a full-Codex workflow, and
@@ -185,28 +189,56 @@ This gap gates shipping a Codex *worker* at all. Until it lands, `workers new
 half-safe. Gate at spawn on the sandbox being *actually honored*, not merely
 declared in `capabilities`.
 
-### 2. The turn-end spike — de-risk before everything
+### 2. The turn-end spike — VERIFIED (2026-07-06, codex 0.142.5)
 
 Requirement #1 (a turn-end signal reaching the FIFO) is non-negotiable, and
-STATUS.md forbids polling around a missing one. Two unverified facts gate the
-entire worker path, and they interact:
+STATUS.md forbids polling around a missing one. This gated the entire worker
+path. **It is now settled: the interactive Codex TUI fires `Stop` per turn.**
 
-- **Mechanism.** The shipped `codex.ts` relays turn-end via
-  `.codex/hooks.json` `Stop` (requiring `--dangerously-bypass-hook-trust`,
-  since garden writes the file programmatically). `AUTONOMY-PROGRAM.md` §4a
-  instead describes consuming `codex exec --json`'s inline `turn.completed`
-  event — but that is a *headless* stream, not the interactive TUI. The
-  interactive worker has no consumable `--json` stream in its pane, so
-  `hooks.json` `Stop` is the right mechanism for it.
-- **The unverified claim:** that `hooks.json` `Stop` fires **per-turn in the
-  interactive TUI** with the trust bypass. Verified for `codex exec`
-  (headless); not for the long-lived pane.
+The mechanism question resolved first. The shipped `codex.ts` relays turn-end
+via `.codex/hooks.json` `Stop` (requiring `--dangerously-bypass-hook-trust`,
+since garden writes the file programmatically). `AUTONOMY-PROGRAM.md` §4a
+instead describes consuming `codex exec --json`'s inline `turn.completed`
+event — but that is a *headless* stream; the interactive worker has no
+consumable `--json` stream in its pane, so `hooks.json` `Stop` is the right
+mechanism, and the spike confirms it works.
 
-Spike this first, cheaply: launch `codex --dangerously-bypass-hook-trust` in a
-pane with a garden `hooks.json`, drive one task, confirm `Stop` fires
-`dist/hook.js stop` → FIFO poke → review entry. If it does not fire reliably,
-the worker path is blocked and garden stays reviewer-only — which is a fine
-resting state. Everything below is comfortable engineering *once this holds.*
+**Spike setup.** A temp git repo with a garden-shaped `.codex/hooks.json`
+(byte-identical to `buildCodexHooksJson`, runner swapped for an observing
+probe), launched as an interactive `codex --dangerously-bypass-hook-trust
+--dangerously-bypass-approvals-and-sandbox '<prompt>'` in a tmux pane, driven
+for two turns.
+
+**Results — all green:**
+
+- **`Stop` fires once per turn.** Two turns produced exactly two `Stop`
+  firings (not one at session end). `SessionStart` fired once; `UserPromptSubmit`
+  fired per turn. This is the gate, and it holds.
+- **The command-string arg parsing garden relies on works.** `buildCodexHooksJson`
+  emits `command: "<runner> <wire-event>"` (runner + arg in one string); Codex
+  shell-splits it and passed `stop`/`prompt`/etc. as `$1`. The format is correct.
+- **The `Stop` stdin payload carries everything `readHookInput` needs**, and
+  more: `session_id` (a UUID), `transcript_path` (the exact
+  `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` path — no reconstruction
+  needed), `cwd`, `hook_event_name`, plus bonus `turn_id`, `model`,
+  `permission_mode`, `stop_hook_active`, and `last_assistant_message`.
+- **`send-keys` prompt delivery drives the TUI** (turn 2 was injected this
+  way) — early corroboration for gap 5 (`deliverPrompt`). Caveat observed:
+  the empty Codex input box paints a dimmed ghost-suggestion that
+  `capture-pane` renders as literal text — the *same* draft-vs-placeholder
+  hazard `continue.ts` already handles for Claude, so the auto-continue
+  draft-detection guard must extend to Codex.
+
+**One new blocking integration requirement surfaced — the directory-trust
+prompt.** On first entry into an untrusted directory the interactive TUI
+halts on "Do you trust the contents of this directory?" *before* running
+anything. `--dangerously-bypass-hook-trust` covers *hook* trust, **not**
+*directory* trust — they are separate gates. An autonomous worker cannot
+answer an interactive prompt, so garden must pre-seed trust: write
+`[projects."<worktree>"]\ntrust_level = "trusted"` into `$CODEX_HOME/config.toml`
+at bootstrap (this is what the pre-existing `[projects."..."]` blocks in a
+used config.toml are). This belongs in `installRuntimeConfig` (gap 3) and is
+now part of that slice.
 
 ### 3. Rules delivery + the AGENTS.md collision
 
@@ -225,14 +257,25 @@ merge-and-restore of a repo file (fragile across crashes/interrupts). The
 exact Codex mechanism moves between releases — re-verify against the pinned
 Codex version before committing to one.
 
+This slice also owns **directory-trust pre-seeding** (surfaced by the spike,
+gap 2): `installRuntimeConfig` must write `[projects."<worktree>"] trust_level
+= "trusted"` into `$CODEX_HOME/config.toml` so the interactive worker does not
+halt on the untrusted-directory prompt. It is idempotent and separate from
+`--dangerously-bypass-hook-trust` (which only covers hook trust).
+
 ### 4. Session-identity recovery
 
-Codex mints its own `thread_id`; `codexCore.allocateSessionId()` returns `""`
+Codex mints its own session id; `codexCore.allocateSessionId()` returns `""`
 by design. `HarnessCore` needs the `recoverSessionId(entry)` method
-`AUTONOMY-PROGRAM.md` §4a names: capture the assigned id from the first hook
-payload (or the rollout filename) onto `entry.sessionId`, and route
-bounce/resume/loop-respawn through `codex resume <thread_id>`. Nothing
-persists it today, so a bounced Codex worker cold-starts and loses its thread.
+`AUTONOMY-PROGRAM.md` §4a names. The spike (gap 2) makes this cheap: **every
+hook payload carries `session_id` (a UUID) and `transcript_path` directly.**
+So garden captures the id from the first hook payload onto `entry.sessionId`
+(and `transcript_path` onto `entry.transcriptPath`, exactly the Claude
+hook-captured path pattern — no rollout-filename reconstruction needed for a
+live worker), then routes bounce/resume/loop-respawn through `codex resume
+<session_id>`. Nothing persists it today, so a bounced Codex worker
+cold-starts and loses its session; the fix is a few lines in the hook
+dispatcher plus the resume plumbing.
 
 ### 5. `continue.ts` / `header.ts` call-site routing
 
@@ -258,13 +301,15 @@ the launch builders already consume it.
 Each slice independently mergeable, the Claude-only fleet byte-identical, full
 gate green — the same discipline the reviewer-first slices used.
 
-1. **Spike (gap 2).** Prove interactive `Stop` → poller. Blocks all of the
-   below; settle first.
+1. **Spike (gap 2). DONE (2026-07-06).** Proved interactive `Stop` fires
+   per-turn with the payload garden needs. Surfaced the directory-trust
+   requirement (now folded into slice 3). See gap 2.
 2. **Sandbox translation (gap 1).** `buildSandboxConfig` → Codex
    `config.toml`; resolve the macOS self-push path (push-outside-the-turn
-   preferred). The correctness gate.
-3. **Rules + AGENTS.md (gap 3).** Garden rules to a Codex worker without
-   clobbering a repo `AGENTS.md`.
+   preferred). The correctness gate — the *next* slice to build.
+3. **Rules + AGENTS.md + directory-trust (gap 3).** Garden rules to a Codex
+   worker without clobbering a repo `AGENTS.md`, plus `config.toml`
+   trust pre-seeding so the worker does not halt on the trust prompt.
 4. **Selection + capability gate (gap 6).** `resolveRole` worker generalization,
    `config harness` / `--harness`, spawn-time gate, `entry.harness` persisted.
 5. **Session identity (gap 4).** `recoverSessionId`; bounce/resume/loop via
@@ -350,8 +395,8 @@ gate green — the same discipline the reviewer-first slices used.
 
 ## Open questions
 
-- Does `hooks.json` `Stop` fire per-turn in the interactive Codex TUI under
-  `--dangerously-bypass-hook-trust`? (Gap 2 — blocks everything.)
+- ~~Does `hooks.json` `Stop` fire per-turn in the interactive Codex TUI under
+  `--dangerously-bypass-hook-trust`?~~ **Resolved 2026-07-06: yes** — see gap 2.
 - macOS self-push: is push-outside-the-turn clean enough to be the default, or
   does it complicate the commit/push discipline garden's rules prescribe?
 - The exact non-clobbering mechanism for garden rules vs. a repo `AGENTS.md`,
