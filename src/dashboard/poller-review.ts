@@ -46,6 +46,11 @@ import { transitionState } from "./poller-state.js";
 // denies their network calls).
 export const REVIEW_TIMEOUT_MS = 60 * 60 * 1000;
 
+// Cap on the reviewer body stored in the durable lastReview snapshot (registry
+// is read/written on the hook hot path, so the blob stays bounded). The tail is
+// kept — the verdict rationale and any error trailer land at the end.
+const REVIEW_BODY_TAIL_CHARS = 4000;
+
 // Transient-review auto-retry budget. When the reviewer's output ends in an
 // Anthropic API error (5xx / 429 / 529 / overloaded_error / rate_limit_error)
 // and the reviewer didn't commit anything, handleTransientReviewFailure
@@ -219,6 +224,20 @@ export function handleReviewing(
     log.info("poller", "review complete", {
       worker: entry.name,
       data: { project: projectName, verdict: review.verdict },
+    });
+
+    // Record the durable last-review snapshot before dispatch, at the single
+    // point where a parseable verdict is known for both default and trellis.
+    // preReviewSha is still on the entry here (the failing/merge resets that
+    // clear it run inside the dispatch below); tipSha is the reviewed HEAD.
+    updateWorkerFields(projectName, entry.name, {
+      lastReview: {
+        verdict: review.verdict,
+        at: Date.now(),
+        body: review.body.slice(-REVIEW_BODY_TAIL_CHARS),
+        preReviewSha: entry.preReviewSha,
+        tipSha: getBranchHeadSha(wtPath) ?? undefined,
+      },
     });
 
     if (isTrellis) {

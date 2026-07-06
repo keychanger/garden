@@ -512,6 +512,24 @@ export function getChangedFilesBetween(
   }
 }
 
+// `git diff --stat from..to` as a human-readable block (files + insertion/
+// deletion counts), for `garden review`. Empty string on a no-op range (a
+// CLEAN review, where the reviewer pushed nothing) or any git failure.
+export function getDiffStat(
+  wtPath: string,
+  fromSha: string,
+  toSha: string,
+): string {
+  try {
+    return git(wtPath, "diff", "--stat", `${fromSha}..${toSha}`).trim();
+  } catch (err) {
+    log.warn("git", "getDiffStat failed", {
+      data: { fromSha, toSha, error: String(err) },
+    });
+    return "";
+  }
+}
+
 // Commit log across an arbitrary SHA range, optionally scoped to a file set.
 // The whole-task rationale source for holistic review: unlike getCommitSummary
 // (origin/<base>..HEAD, which is empty once the worktree is synced to the

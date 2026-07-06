@@ -829,6 +829,29 @@ describe("poll — reviewing state (async)", () => {
     expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 0);
   });
 
+  it("records a durable lastReview snapshot at verdict dispatch", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123", preReviewSha: "pre1234" }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) => !name.includes("-review-"));
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) => String(p).includes("review-result"));
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result") ? "Looks good.\nCLEAN" : "{}");
+
+    poll("myproject");
+
+    const lastReviewCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).lastReview !== undefined,
+    );
+    expect(lastReviewCall).toBeDefined();
+    expect((lastReviewCall![2] as { lastReview: Record<string, unknown> }).lastReview).toMatchObject({
+      verdict: "clean",
+      preReviewSha: "pre1234",
+      at: expect.any(Number),
+    });
+  });
+
   it("re-arms and alerts (does not silently strand) when force-push fails after review", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",

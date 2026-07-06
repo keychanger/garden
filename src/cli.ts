@@ -99,6 +99,7 @@ Dashboard:
   keys                           Show dashboard keybindings
   status [--all]                 Show project and worker status (--all: every plot, not just the active one)
   whoami [worker]                Show the current worker's registry entry (uses $GARDEN_WORKER)
+  review [worker]                Show a worker's last review: verdict, reviewer diff, notes (default: focused)
   alerts                         View dashboard alerts
   alerts clear                   Dismiss all alerts
   logs [options]                 View dashboard logs (pretty by default)

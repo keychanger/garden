@@ -95,6 +95,22 @@ export const OPERATOR_ACTION_FAILING_REASONS: ReadonlySet<FailingReason> = new S
   "trellis-flagged", "iteration-budget", "stagnation",
 ]);
 
+// Durable record of the worker's most recent completed review, kept so
+// `garden review <worker>` can show what the reviewer decided and changed
+// without digging through logs. Written at verdict dispatch (handleReviewing)
+// and deliberately NOT cleared by the merge/failing resets — unlike the
+// transient lastReviewBody/preReviewSha, which those resets scrub — so it
+// survives into `merged`/`done`. `preReviewSha`..`tipSha` is the review-window
+// delta: the reviewer's own edits when the base held still, but it also captures
+// base advancement if the reviewer rebased onto a sibling merge mid-review.
+export interface LastReviewData {
+  verdict: string;        // clean | fixed | failed | ALIGNED | DRIFT | ... (workflow verdict vocab)
+  at: number;             // epoch ms of the verdict dispatch
+  body: string;           // reviewer output body, capped to a tail
+  preReviewSha?: string;  // worker HEAD the reviewer started from
+  tipSha?: string;        // HEAD after the reviewer ran (the reviewed tip)
+}
+
 export interface WorkerEntry {
   name: string;       // adjective-noun name, e.g. "swift-oak"
   sessionId: string;  // claude session UUID for direct resume
@@ -150,6 +166,10 @@ export interface WorkerEntry {
   reviewStartedAt?: number;
   mergePendingAt?: string;
   lastReviewBody?: string;
+  // Durable last-review record for `garden review` (see LastReviewData). Set at
+  // verdict dispatch, survives the merge/failing resets. Distinct from
+  // lastReviewBody (transient, feeds the "previous review" prompt).
+  lastReview?: LastReviewData;
   // Resolver state (see STATUS.md invariants 7 and 8). preResolveSha is the
   // HEAD SHA captured the moment before the resolver launches — the poller
   // compares post-resolver HEAD against it to confirm the resolver actually
