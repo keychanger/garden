@@ -353,6 +353,7 @@ garden dashboard exit              # Close the dashboard
 garden keys                        # Show dashboard keybindings
 garden status [--all]              # Show worker status for the active plot (--all: every plot)
 garden whoami [worker]             # Show the current worker's registry entry (uses $GARDEN_WORKER)
+garden review [worker]             # Show a worker's last review: verdict, review-window diff, notes (default: focused)
 garden alerts                      # View dashboard alerts
 garden alerts clear                # Dismiss all alerts
 garden logs [options]              # View dashboard logs (pretty-printed)

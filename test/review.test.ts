@@ -85,6 +85,17 @@ describe("garden review", () => {
     expect(lines.join("\n")).toContain("checks    not passing");
   });
 
+  it("shows a neutral checks line for a trellis FLAGGED verdict, not 'not passing'", async () => {
+    // FLAGGED means the trellis spec is self-contradictory, not that the
+    // project checks failed — a flagged vine can be green. Also exercises the
+    // uppercase trellis verdict vocab through checksLine/colorVerdict.
+    setWorker({ verdict: "FLAGGED", at: Date.UTC(2026, 0, 1), body: "Spec contradicts itself.", preReviewSha: "aaaaaaa1", tipSha: "aaaaaaa1" });
+    const lines = (await captureConsoleLog(() => review(["bold-ash"]))).map(strip);
+    const text = lines.join("\n");
+    expect(text).toContain("checks    n/a (spec flagged)");
+    expect(text).not.toContain("not passing");
+  });
+
   it("does not compute a diff when the worktree is gone", async () => {
     // worktreePath set undefined directly — a defaulted param would swallow it.
     h.resolved = {

@@ -230,6 +230,10 @@ export function handleReviewing(
     // point where a parseable verdict is known for both default and trellis.
     // preReviewSha is still on the entry here (the failing/merge resets that
     // clear it run inside the dispatch below); tipSha is the reviewed HEAD.
+    // This records the parsed verdict even in the uncommon case a downstream
+    // guard then discards it (the worker pushed mid-review, or the post-review
+    // force-push failed); the next review overwrites the snapshot, so any such
+    // staleness is transient and read-only.
     updateWorkerFields(projectName, entry.name, {
       lastReview: {
         verdict: review.verdict,
