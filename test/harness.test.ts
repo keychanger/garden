@@ -191,6 +191,23 @@ describe("codex adapter dialect", () => {
     expect(fresh).toContain("sandbox_workspace_write.writable_roots=[");
     expect(fresh).not.toContain("--dangerously-bypass-approvals-and-sandbox");
 
+    // Pin HOME to assert the writable_roots content, comma-joining, TOML
+    // quoting, and shell-escaping the loose toContain above cannot see — the
+    // three roots must mirror the HOME-based entries of DEFAULT_ALLOW_WRITE.
+    const savedHome = process.env.HOME;
+    process.env.HOME = "/home/fixture";
+    try {
+      const pinned = getHarnessCore("codex").buildAgentCommand({
+        sessionId: "", resume: false, contextFile: "/ignored", envPrefix: "",
+      });
+      expect(pinned).toContain(
+        `-c 'sandbox_workspace_write.writable_roots=["/home/fixture/.npm", ` +
+        `"/home/fixture/.cache", "/home/fixture/.garden/sessions"]'`,
+      );
+    } finally {
+      process.env.HOME = savedHome;
+    }
+
     const resume = getHarnessCore("codex").buildAgentCommand({
       sessionId: "019f-abc", resume: true, contextFile: "/ignored", envPrefix: "",
     });

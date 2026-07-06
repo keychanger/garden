@@ -45,12 +45,13 @@ and still calls the Codex adapter "zero code." That is stale — see below.
 ### What does not ship (the subject of this doc)
 
 The **Codex worker path**: no operator surface sets `entry.harness` for a
-worker, the interactive launch is unsandboxed, no garden rules reach a Codex
-worker, and session identity is not recovered. Detailed and ranked below.
+worker, no garden rules reach a Codex worker, and session identity is not
+recovered. Detailed and ranked below.
 
 The one fact that *gated* this path — whether the interactive Codex TUI fires
 `Stop` per turn — was **verified 2026-07-06** (codex 0.142.5) and is no longer
-a risk; see gap 2. What remains is engineering, led by the sandbox slice.
+a risk; see gap 2. The sandbox slice (gap 1) is now built; what remains is
+rules delivery, worker selection, and session identity.
 
 ## Thesis: a crew is not a workflow
 
@@ -392,9 +393,10 @@ gate green — the same discipline the reviewer-first slices used.
 - A `roles.worker.provider` key. Worker-provider stays single-source (the flat
   `provider` key) to avoid split-brain — the shipped Phase 4 decision.
 - A provider on any review role. It only ever defeats the safety net.
-- Shipping a Codex *worker* before the sandbox translation (gap 1) lands. It
-  can invalidate the plan; settle it first. (The turn-end spike, gap 2, is
-  already settled — verified 2026-07-06.)
+- Shipping a Codex *worker* before its remaining blockers land — rules
+  delivery (gap 3), selection (gap 6), session identity (gap 4). Landing them
+  out of order can invalidate the plan. (The sandbox translation, gap 1, and
+  the turn-end spike, gap 2, are already settled — verified 2026-07-06.)
 
 ## Open questions
 

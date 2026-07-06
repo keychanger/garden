@@ -50,6 +50,14 @@ export function codexStderrSidecar(resultFile: string): string {
 //     the HOME-based entries of sandbox.ts DEFAULT_ALLOW_WRITE (npm/cache/
 //     registry writes during checks); these are constant across all workers,
 //     since the per-project domain bits Codex cannot express anyway.
+// KNOWN GAP (worker-path slice): a garden worker runs in a *linked* git
+// worktree whose real git dir is the main checkout's `.git` (the common dir),
+// well outside cwd + these roots. Claude Code's sandbox layer auto-grants that
+// git dir; Codex workspace-write does not, so a Codex worker cannot commit or
+// push until the resolved `git rev-parse --git-common-dir` is added here — it
+// needs the worktree path, absent from AgentCommandOptions today. Dormant
+// until worker selection sets entry.harness, so tracked here rather than
+// plumbed through every buildAgentCommand call site pre-emptively.
 // Every dynamic value is shell-escaped: the result is spliced into the launch
 // command string.
 function codexSandboxFlags(): string {
