@@ -211,7 +211,7 @@ vi.mock("../src/dashboard/poller-fifo.js", async () => {
 
 import fs from "node:fs";
 import { poll, postPush, restartLongLivedPollers, startProjectPoller } from "../src/dashboard/poller.js";
-import { __resetFfStateForTest } from "../src/dashboard/poller-merge.js";
+import { __resetFfStateForTest, _resetGateBlockThrottleForTest } from "../src/dashboard/poller-merge.js";
 import { tryGetProject, getAutoContinueConfig } from "../src/config.js";
 import { updateWorkerFields, findWorkerByName } from "../src/dashboard/registry.js";
 import {
@@ -3596,6 +3596,7 @@ describe("poll — merged state", () => {
     vi.mocked(getAutoContinueConfig).mockReturnValue({
       enabled: true, usageThreshold: 95, resumeAfterReset: false,
     });
+    _resetGateBlockThrottleForTest();
   });
 
   function strandedWorker(overrides: Partial<WorkerEntry> = {}) {
@@ -3633,7 +3634,7 @@ describe("poll — merged state", () => {
     expect(lastAcCall).toBeDefined();
   });
 
-  it("sweep stays quiet while the gate is closed (debug, not info)", () => {
+  it("surfaces a gate-closed sweep at info, throttled to once per worker", () => {
     vi.mocked(getAutoContinueConfig).mockReturnValue({
       enabled: false, usageThreshold: 95, resumeAfterReset: false,
       pausedUntil: "2099-01-01T00:00:00Z", pausedReason: "5h at 100%",
@@ -3641,16 +3642,14 @@ describe("poll — merged state", () => {
     registryMock._setEntries("myproject", [strandedWorker()]);
 
     poll("myproject");
+    poll("myproject"); // immediate re-poke — should be throttled, not re-logged
 
     expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
-    const infoBlock = vi.mocked(log.info).mock.calls.find(
+    const infoBlocks = vi.mocked(log.info).mock.calls.filter(
       c => c[1] === "auto-continue blocked by global gate",
     );
-    expect(infoBlock).toBeUndefined();
-    const debugBlock = vi.mocked(log.debug).mock.calls.find(
-      c => c[1] === "auto-continue blocked by global gate",
-    );
-    expect(debugBlock).toBeDefined();
+    expect(infoBlocks).toHaveLength(1);
+    expect(infoBlocks[0][2]).toMatchObject({ data: { reason: "usage-paused" } });
   });
 
   it("sweep does not double-dispatch inside the stranded window of a prior dispatch", () => {

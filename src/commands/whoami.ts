@@ -1,5 +1,6 @@
 import { readRegistry, findWorkerByName, compareWorkerFreshness, type WorkerEntry } from "../dashboard/registry.js";
 import { output, isTTY } from "../output.js";
+import { getAutoContinueConfig, type AutoContinueConfig } from "../config.js";
 import { resolveWorkerStatus } from "./status.js";
 
 interface WhoamiResult {
@@ -19,6 +20,10 @@ interface WhoamiResult {
   reviewStartedAt?: string;
   mergedAt?: string;
   failCount?: number;
+  // Global post-merge auto-continue gate. Governs whether this worker gets a
+  // "please proceed" prompt after its next merge — so it's the answer to "will
+  // this worker keep going on its own?", which nothing else on the worker shows.
+  autoContinue: AutoContinueConfig;
   siblings: Array<{ name: string; displayStatus: string }>;
 }
 
@@ -77,6 +82,7 @@ export async function whoami(args: string[]): Promise<void> {
     reviewStartedAt: entry.reviewStartedAt ? new Date(entry.reviewStartedAt).toISOString() : undefined,
     mergedAt: entry.mergedAt,
     failCount: entry.failCount,
+    autoContinue: getAutoContinueConfig(),
     siblings,
   };
 
@@ -98,6 +104,7 @@ export async function whoami(args: string[]): Promise<void> {
   if (result.reviewStartedAt) console.log(`    review running since ${result.reviewStartedAt}`);
   if (result.mergedAt) console.log(`    merged       ${result.mergedAt}`);
   if (result.failCount) console.log(`    fail count   ${result.failCount}`);
+  console.log(`    auto-cont.   ${formatAutoContinueLine(result.autoContinue)}`);
 
   if (result.siblings.length > 0) {
     console.log("");
@@ -109,4 +116,17 @@ export async function whoami(args: string[]): Promise<void> {
   console.log("");
   console.log("    \x1b[2mgarden logs -w " + result.worker + "  # your history\x1b[0m");
   console.log("");
+}
+
+// One-line summary of the global auto-continue gate for the TTY view. Green
+// "on" when the gate is open; yellow "OFF" with the pause reason/window (or the
+// `garden auto on` hint for a manual disable) when it's holding merged workers
+// parked.
+export function formatAutoContinueLine(ac: AutoContinueConfig): string {
+  if (ac.enabled) return "\x1b[32mon\x1b[0m \x1b[2m(post-merge)\x1b[0m";
+  if (ac.pausedReason) {
+    const until = ac.pausedUntil ? ` until ${ac.pausedUntil}` : "";
+    return `\x1b[33mOFF\x1b[0m \x1b[2m${ac.pausedReason}${until}\x1b[0m`;
+  }
+  return "\x1b[33mOFF\x1b[0m \x1b[2m(garden auto on to re-enable)\x1b[0m";
 }

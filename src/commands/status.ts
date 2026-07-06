@@ -6,7 +6,7 @@
 // pgrep and does not read marker files. Before rendering, it refreshes
 // worker task summaries from live tmux pane titles so the registry stays
 // current between hook events.
-import { loadConfig, getFocusedProjectNames, allPlotProjectNames, tryGetProject } from "../config.js";
+import { loadConfig, getFocusedProjectNames, allPlotProjectNames, tryGetProject, getAutoContinueConfig } from "../config.js";
 import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
@@ -180,6 +180,7 @@ export async function status(args: string[]): Promise<void> {
 
   // One clock read per render so every row's elapsed suffix is consistent.
   const now = Date.now();
+  const gateClosed = !getAutoContinueConfig(config).enabled;
 
   console.log("");
   for (let pi = 0; pi < statuses.length; pi++) {
@@ -200,7 +201,8 @@ export async function status(args: string[]): Promise<void> {
         const wstatus = formatStatus(worker).padEnd(statusWidth);
         const baseHint = formatBranchHint(worker.baseBranch, project.projectBranch, showAllBranches);
         const elapsed = formatTimeInState(worker.status, worker.lastStateChangeAt, now);
-        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${formatRowTail(worker, baseHint, activityMax)}${elapsed}`;
+        const gate = formatGateSuffix(worker.status, gateClosed);
+        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${formatRowTail(worker, baseHint, activityMax)}${elapsed}${gate}`;
         const colored = colorizeRow(worker.status, line);
         console.log(worker.stale ? dimRow(colored) : colored);
       }
@@ -571,6 +573,19 @@ export function formatTimeInState(
   return ` \x1b[${color}m${humanizeElapsed(elapsed)}\x1b[0m`;
 }
 
+// Suffix on a `merged` row when the global auto-continue gate is closed. A
+// merged worker would normally auto-continue into its next phase; a closed gate
+// (operator `garden auto off`, or a usage-threshold pause) holds it parked
+// instead — the "why is this merged worker just sitting here" the row otherwise
+// can't answer. Yellow because it's operator-actionable (`garden auto on`).
+// Only `merged` strands on the gate: `done` opted out via its own sentinel, and
+// active states aren't waiting on it. Placed last on the row like the
+// time-in-state suffix so it stays ANSI-clean and truncates first.
+export function formatGateSuffix(status: WorkerStatus, gateClosed: boolean): string {
+  if (status !== "merged" || !gateClosed) return "";
+  return " \x1b[33mgate closed\x1b[0m";
+}
+
 function collectWorkers(
   projectName: string,
   state: DashboardState,
@@ -668,6 +683,9 @@ export function renderQuickStatus(
 
   // One clock read per bake so every row's elapsed suffix is consistent.
   const now = Date.now();
+  // Global auto-continue gate — read once (from the already-loaded config, no
+  // extra IO) so `merged` rows can flag when the gate is holding them parked.
+  const gateClosed = !getAutoContinueConfig(config).enabled;
 
   lines.push("");
   for (let pi = 0; pi < names.length; pi++) {
@@ -691,7 +709,8 @@ export function renderQuickStatus(
         const wstatus = formatStatus(worker).padEnd(statusWidth);
         const baseHint = formatBranchHint(worker.baseBranch, projectBranch, showAllBranches);
         const elapsed = formatTimeInState(worker.status, worker.lastStateChangeAt, now);
-        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${formatRowTail(worker, baseHint)}${elapsed}`;
+        const gate = formatGateSuffix(worker.status, gateClosed);
+        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${formatRowTail(worker, baseHint)}${elapsed}${gate}`;
         const colored = colorizeRow(worker.status, line);
         lines.push(worker.stale ? dimRow(colored) : colored);
       }

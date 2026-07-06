@@ -807,8 +807,20 @@ export function handleMerged(
 //
 // trigger "merge" is the one-shot call from finalizeMerge; trigger "sweep"
 // is handleMerged replaying the decision on every poke for a worker still
-// parked in `merged`. The sweep logs gate blocks at debug — a closed gate
-// would otherwise emit one info line per stranded worker per poke.
+// parked in `merged`.
+//
+// Per-worker throttle for the "blocked by closed gate" info line: the sweep
+// replays maybeAutoContinue on every poke, so this caps the log at one line per
+// worker per hour instead of one per poke. In-memory, cleared when the worker's
+// gate opens again (see below) — a fresh strand after that logs immediately.
+const GATE_BLOCK_LOG_WINDOW_MS = 60 * 60 * 1000;
+const gateBlockLoggedAt = new Map<string, number>();
+
+/** Test-only: clear the gate-block log throttle between cases. */
+export function _resetGateBlockThrottleForTest(): void {
+  gateBlockLoggedAt.clear();
+}
+
 function maybeAutoContinue(
   projectName: string,
   branchName: string,
@@ -825,13 +837,25 @@ function maybeAutoContinue(
   }
   const gateReason = autoContinueGateReason();
   if (gateReason) {
-    const logGateBlock = trigger === "sweep" ? log.debug : log.info;
-    logGateBlock("poller", "auto-continue blocked by global gate", {
-      worker: entry.name,
-      data: { project: projectName, reason: gateReason, trigger },
-    });
+    // The sweep replays this on every poke for each stranded worker, so a raw
+    // info line would flood. Throttle to once per worker per hour (mirrors
+    // addAlert's dedup window) so `garden logs` shows "parked because the gate
+    // is closed" without the per-poke spam that kept this at debug before.
+    const gateKey = `${projectName}/${entry.name}`;
+    const lastLogged = gateBlockLoggedAt.get(gateKey) ?? 0;
+    if (Date.now() - lastLogged >= GATE_BLOCK_LOG_WINDOW_MS) {
+      gateBlockLoggedAt.set(gateKey, Date.now());
+      log.info("poller", "auto-continue blocked by global gate", {
+        worker: entry.name,
+        data: { project: projectName, reason: gateReason, trigger },
+      });
+    }
     return false;
   }
+  // Gate is open again (or was never closed): drop any throttle record so a
+  // future re-strand logs immediately rather than being suppressed by a stale
+  // timestamp from a previous gate-closure episode.
+  gateBlockLoggedAt.delete(`${projectName}/${entry.name}`);
   // Grow budget check: if iter K just completed and K >= max, the loop is
   // done — budget exhaustion lands on `done`, not `failing`, because grow
   // has no convergence target to fail against. Write the sentinel so any

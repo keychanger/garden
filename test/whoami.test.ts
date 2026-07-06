@@ -24,7 +24,15 @@ vi.mock("../src/commands/status.js", () => ({
     entry?.prState ?? entry?.agentStatus ?? "ready",
 }));
 
-import { whoami } from "../src/commands/whoami.js";
+// Stub only getAutoContinueConfig (keep the rest of config real) so the gate
+// block is deterministic and the test never reads the operator's real config.
+vi.mock("../src/config.js", async (importActual) => ({
+  ...(await importActual<typeof import("../src/config.js")>()),
+  getAutoContinueConfig: vi.fn(() => ({ enabled: true, usageThreshold: 95, resumeAfterReset: false })),
+}));
+
+import { whoami, formatAutoContinueLine } from "../src/commands/whoami.js";
+import { getAutoContinueConfig } from "../src/config.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 const registryMock = await import("../src/dashboard/registry.js") as {
@@ -116,5 +124,39 @@ describe("whoami command", () => {
     const parsed = JSON.parse(lines[0]);
     expect(parsed.pendingReviewAt).toBe(new Date(t).toISOString());
     expect(parsed.reviewStartedAt).toBe(new Date(t).toISOString());
+  });
+
+  it("includes the global auto-continue gate state", async () => {
+    vi.mocked(getAutoContinueConfig).mockReturnValue({ enabled: false, usageThreshold: 95, resumeAfterReset: true, pausedReason: "opus at 96%", pausedUntil: "2026-01-01T13:00:00.000Z" });
+    registryMock._setEntries("myproject", [makeWorker()]);
+    process.env.GARDEN_WORKER = "bold-ash";
+
+    const lines = await captureConsoleLog(() => whoami([]));
+    const parsed = JSON.parse(lines[0]);
+    expect(parsed.autoContinue).toEqual({
+      enabled: false, usageThreshold: 95, resumeAfterReset: true,
+      pausedReason: "opus at 96%", pausedUntil: "2026-01-01T13:00:00.000Z",
+    });
+  });
+});
+
+describe("formatAutoContinueLine", () => {
+  const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+
+  it("shows 'on' in green when the gate is open", () => {
+    const out = formatAutoContinueLine({ enabled: true, usageThreshold: 95, resumeAfterReset: false });
+    expect(stripAnsi(out)).toBe("on (post-merge)");
+    expect(out).toContain("\x1b[32m"); // green
+  });
+
+  it("shows the pause reason and window when usage-paused", () => {
+    const out = formatAutoContinueLine({ enabled: false, usageThreshold: 95, resumeAfterReset: true, pausedReason: "opus at 96%", pausedUntil: "2026-01-01T13:00:00.000Z" });
+    expect(stripAnsi(out)).toBe("OFF opus at 96% until 2026-01-01T13:00:00.000Z");
+    expect(out).toContain("\x1b[33m"); // yellow
+  });
+
+  it("shows the re-enable hint when disabled without a pause reason", () => {
+    const out = formatAutoContinueLine({ enabled: false, usageThreshold: 95, resumeAfterReset: false });
+    expect(stripAnsi(out)).toBe("OFF (garden auto on to re-enable)");
   });
 });

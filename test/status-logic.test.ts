@@ -54,6 +54,7 @@ vi.mock("../src/config.js", () => {
       const p = cfg.projects[name];
       return p ? { ...p, name } : null;
     }),
+    getAutoContinueConfig: vi.fn(() => ({ enabled: true, usageThreshold: 95, resumeAfterReset: false })),
     SESSIONS_DIR: "/tmp/fake-sessions",
   };
 });
@@ -71,7 +72,8 @@ vi.mock("../src/output.js", () => ({
   isTTY: true,
 }));
 
-import { status, renderQuickStatus, resolveWorkerStatus, dimRow, truncateToVisibleWidth, formatTimeInState, _resetStatusBranchCacheForTest } from "../src/commands/status.js";
+import { status, renderQuickStatus, resolveWorkerStatus, dimRow, truncateToVisibleWidth, formatTimeInState, formatGateSuffix, _resetStatusBranchCacheForTest } from "../src/commands/status.js";
+import { getAutoContinueConfig } from "../src/config.js";
 import { currentBranch } from "../src/dashboard/git.js";
 import { diaryHasContent } from "../src/diary.js";
 import { readDashState } from "../src/dashboard/state.js";
@@ -319,6 +321,24 @@ describe("renderQuickStatus", () => {
     const result = renderQuickStatus(state);
     // working is not a time-tracked state — no minute/hour suffix.
     expect(result).not.toMatch(/\d+[mhd]\x1b\[0m/);
+  });
+
+  it("flags a merged row 'gate closed' when auto-continue is disabled", () => {
+    vi.mocked(getAutoContinueConfig).mockReturnValue({ enabled: false, usageThreshold: 95, resumeAfterReset: false });
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", prState: "merged" },
+    ]);
+    const result = renderQuickStatus(state);
+    expect(result).toContain("gate closed");
+  });
+
+  it("does not flag a merged row when the gate is open", () => {
+    vi.mocked(getAutoContinueConfig).mockReturnValue({ enabled: true, usageThreshold: 95, resumeAfterReset: false });
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", prState: "merged" },
+    ]);
+    const result = renderQuickStatus(state);
+    expect(result).not.toContain("gate closed");
   });
 
   it("marks a project that has diary content with a dimmed pencil glyph", () => {
@@ -712,5 +732,26 @@ describe("formatTimeInState", () => {
 
   it("ends in a reset so it stays ANSI-clean at the end of a row", () => {
     expect(formatTimeInState("merge-pending", NOW - 5 * 60_000, NOW).endsWith("\x1b[0m")).toBe(true);
+  });
+});
+
+describe("formatGateSuffix", () => {
+  const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+
+  it("flags a merged row when the gate is closed", () => {
+    const out = formatGateSuffix("merged", true);
+    expect(stripAnsi(out)).toBe(" gate closed");
+    expect(out).toContain("\x1b[33m");        // yellow — operator-actionable
+    expect(out.endsWith("\x1b[0m")).toBe(true);
+  });
+
+  it("is empty for a merged row when the gate is open", () => {
+    expect(formatGateSuffix("merged", false)).toBe("");
+  });
+
+  it("is empty for non-merged states even when the gate is closed", () => {
+    for (const st of ["working", "reviewing", "done", "failing", "asking"] as const) {
+      expect(formatGateSuffix(st, true)).toBe("");
+    }
   });
 });
