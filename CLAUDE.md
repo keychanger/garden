@@ -52,7 +52,7 @@ npm test               # vitest unit + integration; tsc --noEmit
 
 ## CLI surface
 
-Use `garden <cmd> --help` for flag-level detail. High-level groupings:
+Run `garden help` for the full command list with arguments (`garden <cmd> --help` prints the same — there are no per-command flag pages). High-level groupings:
 
 - **Projects**: `add` / `create` / `remove` / `config` (keys: `checks`, `postMerge`, `sandboxDomains`, `claudeProfile`, `provider`, `logColor`, `requireCiSuccess`, `holisticReview`). `register`/`unregister` aliased. **Per-role review selection** via the `config <p> role [<role> [harness|model] [value]]` subcommand (roles: reviewer/resolver/ci-fix) — `resolveReviewRole` (`roles.ts`) independently resolves each role's `{harness, model, env}`, defaulting to strong first-party Anthropic Opus, overridable to e.g. `role reviewer harness codex`. Review-family provider is deliberately not a knob (a provider only defeats the safety net); the worker keeps the flat `provider` key.
 - **Plots**: `plot` (alias `p`) — named ordered subsets of projects (max 9). `⌥1–⌥9` index into the active plot, `⌥p` cycles focused plots. `focus` / `unfocus` / `reorder` toggle and order ⌥p inclusion. Storage: `~/.garden/config.yml`.

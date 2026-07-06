@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, tmuxDoubleQuote } from "./tmux.js";
+import { DASHBOARD_HOTKEYS } from "./keybindings.js";
 
 // Alt keys garden used to bind and no longer does. tmux key bindings are
 // server-global and survive a key being repurposed, so a plain reattach won't
@@ -22,38 +23,17 @@ export function setupKeybindings(gardenRunner: string): void {
   // Drop retired bindings before (re)installing the current set.
   for (const key of RETIRED_META_KEYS) unbindMeta(key);
 
-  // Project switching: ⌥1 through ⌥9
+  // Project switching: ⌥1 through ⌥9 (a generated range — documented in
+  // keys.ts as one line, so kept out of the shared DASHBOARD_HOTKEYS table).
   for (let i = 1; i <= 9; i++) {
     bindMeta(String(i), `${gr} dashboard _switch ${i}`);
   }
 
-  // Worker management
-  bindMeta("n", `${gr} dashboard _new-worker`);
-  bindMeta("N", `${gr} dashboard _workflow-picker`);
-  bindMeta("w", `${gr} dashboard _focus-worker`);
-  bindMeta("x", `${gr} dashboard _kill-pane`);
-  bindMeta("b", `${gr} dashboard _bounce`);
-  // ⌥e — the tracked Escape: interrupt the focused worker's turn and mark it
-  // `paused` (toggles back to idle when already held). Garden cannot observe a
-  // raw Escape (no Claude Code hook fires on interrupt), so this is how a
-  // deliberate hold becomes visible in the dashboard.
-  bindMeta("e", `${gr} dashboard _hold-worker`);
-
-  // Navigation
-  bindMeta("]", `${gr} dashboard _cycle-pane next`);
-  bindMeta("[", `${gr} dashboard _cycle-pane prev`);
-  bindMeta("s", `${gr} dashboard _focus-shell`);
-  bindMeta("g", `${gr} dashboard _focus-growhouse`);
-  bindMeta("r", `${gr} dashboard _focus-root`);
-  bindMeta("l", `${gr} dashboard _focus-logs`);
-  bindMeta("h", `${gr} dashboard _focus-history`);
-  bindMeta("d", `${gr} dashboard _focus-diary`);
-  bindMeta("/", `${gr} dashboard _logs-filter`);
-  bindMeta(".", `${gr} dashboard _logs-filter-apply`);
-  bindMeta("p", `${gr} dashboard _cycle-plot next`);
-  bindMeta("P", `${gr} dashboard _cycle-plot prev`);
-  bindMeta("o", `${gr} dashboard _cycle-plot prev`);
-  bindMeta("k", "tmux clear-history; tmux send-keys -R C-l");
+  // Every other Meta-key binding derives from the shared table so `garden keys`
+  // documents exactly what is bound here (see keybindings.ts).
+  for (const b of DASHBOARD_HOTKEYS) {
+    bindMeta(b.key, b.raw ? b.command : `${gr} dashboard ${b.command}`);
+  }
 
   // Mouse scroll: always enter copy-mode on wheel-up instead of passing
   // events to alternate-screen apps (like Claude Code).

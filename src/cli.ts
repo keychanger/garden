@@ -40,6 +40,16 @@ if (!command) {
   process.exit(1);
 }
 
+// `garden <cmd> --help` / `-h`: show the full help rather than letting the
+// command mis-read the flag (e.g. `garden kick --help` would otherwise resolve
+// "--help" as a worker name and error). Garden has no per-command flag pages, so
+// the top-level help — which lists every command and its arguments — is the
+// answer; `garden help` is the same output.
+if (commandArgs[0] === "--help" || commandArgs[0] === "-h") {
+  printHelp();
+  process.exit(0);
+}
+
 try {
   await command(commandArgs);
 } catch (err) {
@@ -132,11 +142,17 @@ Dashboard:
   rebuild                        Rebuild garden and relaunch dashboard
 
 Workers:
-  workers new <project> [--workflow trellis --trellis <name>]
-                        [--model opus|sonnet] [--max-iterations N]
-                                 Spawn a new worker. Default workflow plants an interactive worker;
-                                 trellis plants a vine bound to the named trellis. --model overrides
-                                 the trellis default (Sonnet).
+  workers new <project> [--workflow default|trellis|grow] [--model <alias-or-id>]
+                        [--trellis <name>] [--seed <text> | --seed-file <path>] [--max-iterations N]
+                                 Spawn a new worker. default plants an interactive worker;
+                                 trellis plants a vine bound to the named trellis (--trellis);
+                                 grow plants a bounded hardening loop from a --seed / --seed-file
+                                 (--max-iterations caps the passes, default 5). --model overrides
+                                 the workflow's default worker model.
+  workers grow [<worker>] --seed <text> | --seed-file <path> | --goal-file <path>
+                                 Convert an active default worker into a grow loop after its
+                                 current work merges (self-resolves via $GARDEN_WORKER). The durable
+                                 goal lives at <worktree>/.garden/grow-goal.md, editable mid-loop.
 
 Trellis (spec-driven loop workflow — see WORKFLOWS.md § "Trellis workflow"):
   trellis list <project> [--active]   List trellises (active + archived)
