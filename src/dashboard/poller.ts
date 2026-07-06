@@ -8,7 +8,7 @@
 // existing handlers in poller-state/review/merge/resolve. See WORKFLOWS.md
 // Component 5a and src/dashboard/workflows/.
 import fs from "node:fs";
-import { tmux, windowExists, windowIndices, killWindowsByName, dedupeWindows, shellEscape } from "./tmux.js";
+import { newDashboardWindow, windowExists, windowIndices, killWindowsByName, dedupeWindows, shellEscape } from "./tmux.js";
 import {
   readRegistry, getWorkers, type WorkerEntry,
 } from "./registry.js";
@@ -194,8 +194,7 @@ export function startProjectPoller(projectName: string, gardenRunner: string): v
       `  read -u 3 2>/dev/null || true;`,
       `done`,
     ].join(" ");
-    tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", window,
-      "bash", "-c", cmd);
+    newDashboardWindow(window, "bash", "-c", cmd);
 
     log.info("poller", "started", { data: { project: projectName } });
   }, { name: `poller-spawn:${projectName}` });

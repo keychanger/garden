@@ -4,8 +4,7 @@
 // (5 min on success) and honors server Retry-After on 429s. Cadence comes from
 // usage.ts:decideRefresh — same rule the Stop-hook opportunistic refresh uses,
 // so neither path can outpace the other.
-import { tmux, windowExists, killWindowSafe } from "./tmux.js";
-import { DASHBOARD_SESSION } from "../session.js";
+import { newDashboardWindow, windowExists, killWindowSafe } from "./tmux.js";
 import { usagePollerWindowName } from "./window-names.js";
 import { decideRefresh, readUsageSnapshot, refreshUsage } from "./usage.js";
 import { refreshDashboard } from "./header.js";
@@ -78,8 +77,7 @@ export function startUsagePoller(gardenRunner: string): void {
   if (windowExists(window)) return;
   // Single long-running process. The tmux window being killed (reset or exit)
   // is the termination signal — no signal file, no FIFO.
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", window,
-    "bash", "-c", `${gardenRunner} dashboard _usage-poll-loop 2>/dev/null`);
+  newDashboardWindow(window, "bash", "-c", `${gardenRunner} dashboard _usage-poll-loop 2>/dev/null`);
   log.info("usage-poller", "spawned window", { data: { window } });
 }
 

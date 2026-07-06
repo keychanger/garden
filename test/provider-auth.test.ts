@@ -26,6 +26,7 @@ vi.mock("../src/dashboard/header.js", () => ({
 
 vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
+  newDashboardWindow: vi.fn(),
   tmuxOutput: vi.fn(() => ""),
   windowExists: vi.fn(() => false),
   killWindowSafe: vi.fn(),
@@ -184,11 +185,11 @@ describe("startUsagePoller provider gate", () => {
       projects: { a: { path: "/a", provider: "deepseek" }, b: { path: "/b" } },
       providers: { deepseek: PROVIDER },
     });
-    const { tmux } = await import("../src/dashboard/tmux.js");
+    const { newDashboardWindow } = await import("../src/dashboard/tmux.js");
     const { startUsagePoller } = await import("../src/dashboard/usage-poller.js");
     startUsagePoller("garden");
-    expect(tmux).toHaveBeenCalledWith(
-      "new-window", "-d", "-t", "garden", "-n", expect.any(String),
+    expect(newDashboardWindow).toHaveBeenCalledWith(
+      expect.any(String),
       "bash", "-c", expect.stringContaining("_usage-poll-loop"),
     );
   });

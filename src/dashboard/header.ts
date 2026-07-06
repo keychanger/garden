@@ -11,7 +11,7 @@ import path from "node:path";
 import { SESSIONS_DIR, loadConfig, tryGetProject, plotsMap, isPlotFocused, logColorKeyForProject } from "../config.js";
 import { logColorTmux } from "../log-palette.js";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, tmuxOutput, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize, listAllWindowNames, listSessionPaneTitles, cleanPaneTitle, type PaneInfo } from "./tmux.js";
+import { tmux, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize, listAllWindowNames, listSessionPaneTitles, cleanPaneTitle, type PaneInfo } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
 import { findWorkerByName, updateWorkerFields, removeWorker, readRegistry, batchUpdateWorkerFields, type WorkerRegistry } from "./registry.js";
 import { atomicWriteFile } from "./atomic-write.js";
@@ -284,35 +284,6 @@ function setBarVars(left: string, right: string): void {
     lastBarLeft = left;
     lastBarRight = right;
   } catch { /* no client attached or session gone */ }
-}
-
-// Suppresses window-name leakage in the tmux status bar's center strip. ~200ms
-// for ~16 windows because each window costs 2 sync `tmux set-option` shell-outs.
-// Skip when the window-name set hasn't changed since the last call: the
-// suppression is idempotent (tmux remembers the set-option setting per window),
-// so re-applying to the same set is pure overhead. Reset on session restart by
-// virtue of the dashboard process restarting.
-let lastSuppressedWindowSet: string | null = null;
-
-function suppressWindowNames(cachedWindowNames?: string[]): void {
-  try {
-    const raw = cachedWindowNames
-      ? cachedWindowNames.join("\n")
-      : tmuxOutput("list-windows", "-t", DASHBOARD_SESSION, "-F", "#{window_name}");
-    const windows = raw.split("\n").filter(Boolean);
-    // Identity-equal set check: sort keeps the cache stable when tmux returns
-    // a different ordering for the same windows.
-    const setKey = [...windows].sort().join("\n");
-    if (setKey === lastSuppressedWindowSet) return;
-    for (const win of windows) {
-      const target = `${DASHBOARD_SESSION}:${win}`;
-      try {
-        tmux("set-option", "-t", target, "window-status-format", "");
-        tmux("set-option", "-t", target, "window-status-current-format", "");
-      } catch { /* window may have been killed */ }
-    }
-    lastSuppressedWindowSet = setKey;
-  } catch { /* session gone */ }
 }
 
 // Status/usage panes are passive sleep loops that swallow keystrokes on focus-in; bounce to the right column (`select-pane -R` is layout-relative so it survives swaps).
@@ -680,12 +651,13 @@ export function refreshDashboard(opts?: RefreshOptions): void {
     registry: opts?.registry ?? readRegistry(),
   };
   // Paint first (writeQuickStatus/writeUsageRendered signal their panes inline);
-  // tmux-heavy suppressWindowNames + refreshWorkerTasks run after so latency stays off plot switches.
+  // tmux-heavy refreshWorkerTasks runs after so latency stays off plot switches.
+  // Window names are suppressed at window-creation time (newDashboardWindow), so
+  // there is no per-refresh window-name sweep here.
   updateHeaderVar(shared);
   writeQuickStatus(shared);
   writeUsageRendered(shared);
   writeHistoryRendered(shared);
-  suppressWindowNames(shared.windowNames);
   refreshWorkerTasks(shared.registry, shared.state);
 }
 
@@ -722,7 +694,6 @@ export function refreshStatusElapsed(): void {
 // production code shouldn't call this — caches reset naturally when the
 // dashboard process restarts.
 export function _resetHeaderCachesForTest(): void {
-  lastSuppressedWindowSet = null;
   lastWrittenPlotStripTemplate = null;
   lastWrittenQuickStatus = null;
   lastWrittenUsageRendered = null;
@@ -733,7 +704,7 @@ export function _resetHeaderCachesForTest(): void {
 }
 
 // Lean refresh for plot cycling: plot strip + status only. Skips usage (account-wide,
-// not per-plot), suppressWindowNames, and refreshWorkerTasks — the next hook/poller event picks them up.
+// not per-plot) and refreshWorkerTasks — the next hook/poller event picks them up.
 export function refreshDashboardPlotCycle(opts?: RefreshOptions): void {
   const shared: RefreshOptions = {
     state: opts?.state ?? readDashState(),

@@ -67,6 +67,7 @@ vi.mock("../src/dashboard/runner.js", () => ({
 
 vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
+  newDashboardWindow: vi.fn(),
   pasteAndSubmit: vi.fn(),
   getFirstPaneId: vi.fn(() => "%5"),
   windowExists: vi.fn(() => true),
@@ -223,7 +224,7 @@ import {
   syncWorktreeToRemote,
   ensureNoRebaseInProgress, hasRebaseInProgress, isAncestor, getUnmergedFiles,
 } from "../src/dashboard/git.js";
-import { tmux, pasteAndSubmit, windowExists, windowIndices, dedupeWindows, getFirstPaneId, killWindowSafe, killWindowsByName } from "../src/dashboard/tmux.js";
+import { tmux, newDashboardWindow, pasteAndSubmit, windowExists, windowIndices, dedupeWindows, getFirstPaneId, killWindowSafe, killWindowsByName } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { log } from "../src/dashboard/log.js";
 import { dispatchDelayedAutoContinue, isDoneSet, setDoneSentinel } from "../src/dashboard/continue.js";
@@ -293,8 +294,8 @@ describe("poll — working state", () => {
       expect.stringContaining("myproject-bold-ash-review-prompt.txt"),
       expect.any(String),
     );
-    expect(tmux).toHaveBeenCalledWith(
-      "new-window", "-d", "-t", expect.any(String), "-n", "_myproject-review-bold-ash",
+    expect(newDashboardWindow).toHaveBeenCalledWith(
+      "_myproject-review-bold-ash",
       "-c", "/tmp/wt/myproject/bold-ash", "bash", "-c", expect.any(String),
     );
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
@@ -320,9 +321,8 @@ describe("poll — working state", () => {
 
     expect(forcePushBranch).not.toHaveBeenCalled();
     expect(updateWorkerFields).not.toHaveBeenCalled();
-    expect(tmux).not.toHaveBeenCalledWith(
-      "new-window", expect.anything(), expect.anything(), expect.anything(),
-      "-n", expect.stringContaining("review"),
+    expect(newDashboardWindow).not.toHaveBeenCalledWith(
+      expect.stringContaining("review"),
       expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
     );
   });
@@ -351,9 +351,8 @@ describe("poll — working state", () => {
 
     poll("myproject");
 
-    expect(tmux).not.toHaveBeenCalledWith(
-      "new-window", expect.anything(), expect.anything(), expect.anything(),
-      "-n", expect.stringContaining("review"),
+    expect(newDashboardWindow).not.toHaveBeenCalledWith(
+      expect.stringContaining("review"),
       expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
     );
   });
@@ -374,8 +373,8 @@ describe("poll — working state", () => {
     poll("myproject");
 
     // Review window is launched even though agentStatus says "working".
-    expect(tmux).toHaveBeenCalledWith(
-      "new-window", "-d", "-t", expect.any(String), "-n", "_myproject-review-bold-ash",
+    expect(newDashboardWindow).toHaveBeenCalledWith(
+      "_myproject-review-bold-ash",
       "-c", "/tmp/wt/myproject/bold-ash", "bash", "-c", expect.any(String),
     );
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
@@ -399,9 +398,8 @@ describe("poll — working state", () => {
 
     poll("myproject");
 
-    expect(tmux).not.toHaveBeenCalledWith(
-      "new-window", expect.anything(), expect.anything(), expect.anything(),
-      "-n", expect.stringContaining("review"),
+    expect(newDashboardWindow).not.toHaveBeenCalledWith(
+      expect.stringContaining("review"),
       expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
     );
   });
@@ -424,9 +422,8 @@ describe("poll — working state", () => {
     poll("myproject");
 
     // No review window launched.
-    expect(tmux).not.toHaveBeenCalledWith(
-      "new-window", expect.anything(), expect.anything(), expect.anything(),
-      "-n", expect.stringContaining("review"),
+    expect(newDashboardWindow).not.toHaveBeenCalledWith(
+      expect.stringContaining("review"),
       expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
     );
     // Re-schedules a delayed poke for the remaining time.
@@ -553,16 +550,16 @@ describe("poll — working state", () => {
 
     poll("myproject");
 
-    const reviewLaunch = vi.mocked(tmux).mock.calls.find(
-      c => c[0] === "new-window" && String(c[5]).includes("review"),
+    const reviewLaunch = vi.mocked(newDashboardWindow).mock.calls.find(
+      c => String(c[0]).includes("review"),
     );
     expect(reviewLaunch).toBeDefined();
-    expect(String(reviewLaunch![10])).toContain("--model opus");
+    expect(String(reviewLaunch![5])).toContain("--model opus");
     // The Opus default no longer depends on a provider probe: resolveReviewRole
     // resolves the reviewer env exactly once (reviewerEnvPrefix ->
     // tryResolveProvider), which the Once stub feeds so the neutralization
     // fires. If this count changes, the stub is feeding the wrong consumer.
-    expect(String(reviewLaunch![10])).toContain("ANTHROPIC_BASE_URL=''");
+    expect(String(reviewLaunch![5])).toContain("ANTHROPIC_BASE_URL=''");
     expect(vi.mocked(tryResolveProvider).mock.calls.length).toBe(1);
   });
 
@@ -573,13 +570,13 @@ describe("poll — working state", () => {
 
     poll("myproject");
 
-    const reviewLaunch = vi.mocked(tmux).mock.calls.find(
-      c => c[0] === "new-window" && String(c[5]).includes("review"),
+    const reviewLaunch = vi.mocked(newDashboardWindow).mock.calls.find(
+      c => String(c[0]).includes("review"),
     );
     expect(reviewLaunch).toBeDefined();
     // Explicit Opus default now applies to every claude-code review, not just
     // provider-backed projects (operator choice, overridable per role).
-    expect(String(reviewLaunch![10])).toContain("--model opus");
+    expect(String(reviewLaunch![5])).toContain("--model opus");
   });
 });
 
@@ -2368,8 +2365,8 @@ describe("poll — merge-pending state", () => {
 
     expect(abortRebase).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
     expect(mergeToBase).not.toHaveBeenCalled();
-    expect(tmux).toHaveBeenCalledWith(
-      "new-window", "-d", "-t", expect.any(String), "-n", "_myproject-review-bold-ash",
+    expect(newDashboardWindow).toHaveBeenCalledWith(
+      "_myproject-review-bold-ash",
       "-c", "/tmp/wt/myproject/bold-ash", "bash", "-c", expect.any(String),
     );
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
@@ -2398,9 +2395,8 @@ describe("poll — merge-pending state", () => {
 
     expect(abortRebase).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
     // No new resolver window launched
-    expect(tmux).not.toHaveBeenCalledWith(
-      "new-window", expect.anything(), expect.anything(), expect.anything(),
-      "-n", "_myproject-review-bold-ash",
+    expect(newDashboardWindow).not.toHaveBeenCalledWith(
+      "_myproject-review-bold-ash",
       expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
     );
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
@@ -2816,8 +2812,8 @@ describe("poll — merge-pending CI gate", () => {
       expect.stringContaining("myproject-bold-ash-ci-fix-prompt.txt"),
       expect.any(String),
     );
-    expect(tmux).toHaveBeenCalledWith(
-      "new-window", "-d", "-t", expect.any(String), "-n", "_myproject-ci-fix-bold-ash",
+    expect(newDashboardWindow).toHaveBeenCalledWith(
+      "_myproject-ci-fix-bold-ash",
       "-c", "/tmp/wt/myproject/bold-ash", "bash", "-c", expect.any(String),
     );
   });
@@ -4110,8 +4106,8 @@ describe("restartLongLivedPollers", () => {
     restartLongLivedPollers("node /usr/local/bin/garden");
 
     expect(killWindowSafe).toHaveBeenCalledWith("_garden-usage-poller");
-    const newWindowCalls = vi.mocked(tmux).mock.calls.filter(c => c[0] === "new-window");
-    const windowNames = newWindowCalls.map(c => c[5] as string);
+    const newWindowCalls = vi.mocked(newDashboardWindow).mock.calls;
+    const windowNames = newWindowCalls.map(c => c[0] as string);
     expect(windowNames).toContain("_garden-usage-poller");
   });
 
@@ -4126,8 +4122,8 @@ describe("restartLongLivedPollers", () => {
     expect(killWindowsByName).toHaveBeenCalledWith("_alpha-poller");
     expect(killWindowsByName).toHaveBeenCalledWith("_beta-poller");
 
-    const newWindowCalls = vi.mocked(tmux).mock.calls.filter(c => c[0] === "new-window");
-    const windowNames = newWindowCalls.map(c => c[5] as string);
+    const newWindowCalls = vi.mocked(newDashboardWindow).mock.calls;
+    const windowNames = newWindowCalls.map(c => c[0] as string);
     expect(windowNames).toContain("_alpha-poller");
     expect(windowNames).toContain("_beta-poller");
   });
@@ -4161,7 +4157,7 @@ describe("startProjectPoller — window convergence", () => {
   });
 
   const newWindowNames = () =>
-    vi.mocked(tmux).mock.calls.filter(c => c[0] === "new-window").map(c => c[5]);
+    vi.mocked(newDashboardWindow).mock.calls.map(c => c[0]);
 
   it("spawns a poller window when none exists", () => {
     vi.mocked(windowIndices).mockReturnValue([]);
@@ -4209,11 +4205,11 @@ describe("startProjectPoller — window convergence", () => {
     const lockUnlinkIdx = vi.mocked(fs.unlinkSync).mock.calls.findIndex(
       c => String(c[0]).includes("solo-poller.spawn.lock"),
     );
-    const spawnIdx = vi.mocked(tmux).mock.calls.findIndex(c => c[0] === "new-window");
+    const spawnIdx = vi.mocked(newDashboardWindow).mock.calls.findIndex(c => String(c[0]).includes("poller"));
     expect(spawnIdx).toBeGreaterThanOrEqual(0);
 
     const acquireOrder = vi.mocked(fs.openSync).mock.invocationCallOrder[lockOpenIdx];
-    const spawnOrder = vi.mocked(tmux).mock.invocationCallOrder[spawnIdx];
+    const spawnOrder = vi.mocked(newDashboardWindow).mock.invocationCallOrder[spawnIdx];
     const releaseOrder = vi.mocked(fs.unlinkSync).mock.invocationCallOrder[lockUnlinkIdx];
     expect(acquireOrder).toBeLessThan(spawnOrder);
     expect(spawnOrder).toBeLessThan(releaseOrder);

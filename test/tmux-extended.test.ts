@@ -35,6 +35,8 @@ import {
   tmuxOutput,
   tmuxSplit,
   tmuxNewWindow,
+  newDashboardWindow,
+  newDashboardWindowPaned,
   getActivePaneId,
   tmuxDisplay,
   setPaneTitle,
@@ -356,6 +358,38 @@ describe("tmuxNewWindow", () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "tmux",
       ["new-window", "-P", "-F", "#{pane_id}", "-d", "-t", "garden-dashboard", "-n", "test"],
+      expect.anything(),
+    );
+  });
+});
+
+describe("newDashboardWindow / newDashboardWindowPaned", () => {
+  it("newDashboardWindow batches creation + name suppression into one client invocation", () => {
+    newDashboardWindow("_garden-worker-1", "-c", "/tmp/wt", "bash", "-c", "run");
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      [
+        "new-window", "-d", "-t", "garden-dashboard", "-n", "_garden-worker-1",
+        "-c", "/tmp/wt", "bash", "-c", "run",
+        ";", "set-option", "-t", "garden-dashboard:_garden-worker-1", "window-status-format", "",
+        ";", "set-option", "-t", "garden-dashboard:_garden-worker-1", "window-status-current-format", "",
+      ],
+      expect.anything(),
+    );
+  });
+
+  it("newDashboardWindowPaned suppresses the name and returns the pane id", () => {
+    mockExecFileSync.mockReturnValue("%7\n");
+    const paneId = newDashboardWindowPaned("_garden-poller");
+    expect(paneId).toBe("%7");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      [
+        "new-window", "-P", "-F", "#{pane_id}", "-d", "-t", "garden-dashboard", "-n", "_garden-poller",
+        ";", "set-option", "-t", "garden-dashboard:_garden-poller", "window-status-format", "",
+        ";", "set-option", "-t", "garden-dashboard:_garden-poller", "window-status-current-format", "",
+      ],
       expect.anything(),
     );
   });

@@ -194,9 +194,9 @@ beforeEach(() => {
   vi.mocked(renderQuickStatus).mockReturnValue("line1\nline2\nline3");
   vi.mocked(currentBranch).mockReturnValue("main");
   // Module-level write caches (writePlotStripTemplate, writeQuickStatus,
-  // writeUsageRendered, setBarVars, suppressWindowNames) persist across
-  // test cases within the same module instance. Each test that asserts
-  // "the write happened" needs a clean slate.
+  // writeUsageRendered, setBarVars) persist across test cases within the same
+  // module instance. Each test that asserts "the write happened" needs a clean
+  // slate.
   _resetHeaderCachesForTest();
 });
 
@@ -1396,29 +1396,15 @@ describe("refreshDashboard", () => {
     expect(secondRefreshClient).toBe(0);
   });
 
-  it("skips suppressWindowNames per-window set-option calls when window-name set is unchanged", () => {
-    const windowSet = ["main", "_garden-worker-bold-ash", "_garden-shell"];
-
-    refreshDashboard({ windowNames: windowSet });
-    const firstCallCount = vi.mocked(tmux).mock.calls.filter(
-      c => c[0] === "set-option" && c[2]?.toString().includes("_garden-worker-bold-ash"),
+  it("does not sweep per-window set-option calls on refresh (suppression is now at window creation)", () => {
+    // Window-name suppression moved to window-creation time (newDashboardWindow),
+    // so a refresh must never fork per-window window-status-format set-options —
+    // that per-refresh sweep, cold in every fresh hook process, was the cost this
+    // removed.
+    refreshDashboard({ windowNames: ["main", "_garden-worker-bold-ash", "_garden-shell"] });
+    const sweepCalls = vi.mocked(tmux).mock.calls.filter(
+      c => c[0] === "set-option" && c[3] === "window-status-format",
     ).length;
-    expect(firstCallCount).toBeGreaterThan(0);
-
-    vi.mocked(tmux).mockClear();
-    // Same set, different order — should still hit the cache.
-    refreshDashboard({ windowNames: ["_garden-shell", "_garden-worker-bold-ash", "main"] });
-    const secondCallCount = vi.mocked(tmux).mock.calls.filter(
-      c => c[0] === "set-option" && c[2]?.toString().includes("_garden-worker-bold-ash"),
-    ).length;
-    expect(secondCallCount).toBe(0);
-
-    vi.mocked(tmux).mockClear();
-    // Window added — set differs, suppression must re-apply.
-    refreshDashboard({ windowNames: [...windowSet, "_garden-worker-calm-elm"] });
-    const thirdCallCount = vi.mocked(tmux).mock.calls.filter(
-      c => c[0] === "set-option" && c[2]?.toString().includes("_garden-worker-calm-elm"),
-    ).length;
-    expect(thirdCallCount).toBeGreaterThan(0);
+    expect(sweepCalls).toBe(0);
   });
 });

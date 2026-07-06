@@ -28,6 +28,10 @@ vi.mock("../../src/dashboard/tmux.js", async () => {
   return {
     ...actual,
     tmux: vi.fn(),
+    // Reviewer/worker windows are created via newDashboardWindow; override it
+    // so the launch command can be inspected (the real impl's internal tmux
+    // call bypasses the tmux vi.fn() above under importActual).
+    newDashboardWindow: vi.fn(),
     tmuxOutput: vi.fn(() => ""),
     windowExists: vi.fn(() => false),
     killWindowSafe: vi.fn(),
@@ -376,14 +380,14 @@ DRIFT
     });
 
     const { poll } = await import("../../src/dashboard/poller.js");
-    const { tmux } = await import("../../src/dashboard/tmux.js");
+    const { newDashboardWindow } = await import("../../src/dashboard/tmux.js");
     poll(PROJECT);
 
-    // The reviewer was launched via launchHeadlessAgent → tmux new-window.
-    // Inspect the recorded tmux calls for the bash -c command and confirm
+    // The reviewer was launched via launchHeadlessAgent → newDashboardWindow.
+    // Inspect the recorded creation calls for the bash -c command and confirm
     // it contains '--model opus' (Invariant 10).
-    const launchCalls = vi.mocked(tmux).mock.calls.filter(
-      args => args[0] === "new-window" && args.includes("bash"),
+    const launchCalls = vi.mocked(newDashboardWindow).mock.calls.filter(
+      args => args.includes("bash"),
     );
     expect(launchCalls.length).toBeGreaterThan(0);
     const reviewLaunch = launchCalls.find(args =>

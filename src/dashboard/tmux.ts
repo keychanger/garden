@@ -160,6 +160,39 @@ export function tmuxNewWindow(...args: string[]): string {
   }
 }
 
+// Blank a window's name in the status bar's center strip, appended to a
+// new-window command via tmux's `;` argv command separator so creation and
+// suppression happen in one client connect. tmux keeps the per-window option
+// until the window dies, so setting it once at birth is durable — this
+// replaces the old per-refresh suppressWindowNames sweep, whose process-local
+// skip cache was always cold in the fresh hook/hotkey process and so re-forked
+// two set-options for every window on every full refresh (every hook fire runs
+// one). The trailing shell-command of new-window terminates at the standalone
+// `;` argv, so a window that runs a command still gets suppressed.
+function windowNameSuppressionArgs(windowName: string): string[] {
+  const target = `${DASHBOARD_SESSION}:${windowName}`;
+  return [
+    ";", "set-option", "-t", target, "window-status-format", "",
+    ";", "set-option", "-t", target, "window-status-current-format", "",
+  ];
+}
+
+// Create a detached window in DASHBOARD_SESSION with its name pre-suppressed.
+// Use for every window added to the dashboard session so the status bar's
+// center strip stays empty without a per-refresh sweep.
+export function newDashboardWindow(windowName: string, ...rest: string[]): void {
+  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName, ...rest,
+    ...windowNameSuppressionArgs(windowName));
+}
+
+// Same as newDashboardWindow but returns the new window's first pane id (the
+// `-P -F #{pane_id}` form); the batched set-options print nothing, so stdout is
+// just the pane id.
+export function newDashboardWindowPaned(windowName: string, ...rest: string[]): string {
+  return tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", windowName, ...rest,
+    ...windowNameSuppressionArgs(windowName));
+}
+
 export function getActivePaneId(): string | null {
   try {
     return tmuxOutput("display-message", "-t", DASHBOARD_SESSION, "-p", "#{pane_id}");

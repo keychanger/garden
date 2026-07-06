@@ -100,6 +100,7 @@ vi.mock("../src/commands/status.js", () => ({
 
 vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
+  newDashboardWindow: vi.fn(),
   tmuxOutput: vi.fn(() => ""),
   tmuxSplit: vi.fn(() => "%1"),
   setPaneTitle: vi.fn(),
@@ -163,7 +164,7 @@ import {
   buildWorktreeBootstrapScript,
   buildWorktreeResumeCommand,
 } from "../src/dashboard/create.js";
-import { tmux, tmuxSplit, getFirstPaneId, setPaneLabel, setPaneTitle, setPaneVar, shellEscape, disablePaneInput } from "../src/dashboard/tmux.js";
+import { tmux, newDashboardWindow, tmuxSplit, getFirstPaneId, setPaneLabel, setPaneTitle, setPaneVar, shellEscape, disablePaneInput } from "../src/dashboard/tmux.js";
 
 const savedArgv1 = process.argv[1];
 afterAll(() => { process.argv[1] = savedArgv1; });
@@ -419,9 +420,8 @@ describe("buildWorktreeWorkerCommand", () => {
 describe("createShellWindow", () => {
   it("creates tmux window with project path", () => {
     createShellWindow("myproject", "/repo/myproject");
-    expect(tmux).toHaveBeenCalledWith(
-      "new-window", "-d", "-t", "garden-dashboard",
-      "-n", "_myproject-shell", "-c", "/repo/myproject",
+    expect(newDashboardWindow).toHaveBeenCalledWith(
+      "_myproject-shell", "-c", "/repo/myproject",
     );
   });
 
@@ -440,9 +440,8 @@ describe("createShellWindow", () => {
 describe("createLogsWindow", () => {
   it("creates tmux window running logs script", () => {
     createLogsWindow();
-    expect(tmux).toHaveBeenCalledWith(
-      "new-window", "-d", "-t", "garden-dashboard",
-      "-n", "_garden-logs",
+    expect(newDashboardWindow).toHaveBeenCalledWith(
+      "_garden-logs",
       expect.any(String), expect.any(String), expect.any(String),
     );
   });
@@ -461,10 +460,7 @@ describe("createLogsWindow", () => {
 describe("createGardenGrowhouseWindow", () => {
   it("creates window and sends init command", () => {
     createGardenGrowhouseWindow("garden-runner");
-    expect(tmux).toHaveBeenCalledWith(
-      "new-window", "-d", "-t", "garden-dashboard",
-      "-n", "_garden-growhouse",
-    );
+    expect(newDashboardWindow).toHaveBeenCalledWith("_garden-growhouse");
     expect(tmux).toHaveBeenCalledWith(
       "send-keys", "-t", "%5",
       expect.stringContaining("source"),
@@ -481,10 +477,7 @@ describe("createGardenGrowhouseWindow", () => {
 describe("createGardenRootWindow", () => {
   it("creates window with root label", () => {
     createGardenRootWindow();
-    expect(tmux).toHaveBeenCalledWith(
-      "new-window", "-d", "-t", "garden-dashboard",
-      "-n", "_garden-root",
-    );
+    expect(newDashboardWindow).toHaveBeenCalledWith("_garden-root");
     expect(setPaneLabel).toHaveBeenCalledWith("%5", "root");
   });
 });

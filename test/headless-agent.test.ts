@@ -12,6 +12,7 @@ vi.mock("node:fs", () => ({
 
 vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
+  newDashboardWindow: vi.fn(),
   windowExists: vi.fn(() => false),
   killWindowSafe: vi.fn(),
   // Mirror the real shellEscape: pass safe-token strings through unquoted,
@@ -26,7 +27,7 @@ vi.mock("../src/session.js", () => ({
 }));
 
 import fs from "node:fs";
-import { tmux, windowExists, killWindowSafe } from "../src/dashboard/tmux.js";
+import { tmux, newDashboardWindow, windowExists, killWindowSafe } from "../src/dashboard/tmux.js";
 import { launchHeadlessAgent } from "../src/dashboard/headless-agent.js";
 
 function baseOpts(overrides: Partial<Parameters<typeof launchHeadlessAgent>[0]> = {}) {
@@ -85,12 +86,11 @@ describe("launchHeadlessAgent", () => {
     expect(killWindowSafe).not.toHaveBeenCalled();
   });
 
-  it("issues a single tmux new-window with the expected args", () => {
+  it("issues a single dashboard window creation with the expected args", () => {
     launchHeadlessAgent(baseOpts());
-    expect(tmux).toHaveBeenCalledTimes(1);
-    expect(tmux).toHaveBeenCalledWith(
-      "new-window", "-d", "-t", "garden-dashboard",
-      "-n", "_myproject-review-bold-ash",
+    expect(newDashboardWindow).toHaveBeenCalledTimes(1);
+    expect(newDashboardWindow).toHaveBeenCalledWith(
+      "_myproject-review-bold-ash",
       "-c", "/tmp/wt/myproject/bold-ash",
       "bash", "-c", expect.any(String),
     );
@@ -100,7 +100,7 @@ describe("launchHeadlessAgent", () => {
     launchHeadlessAgent(baseOpts({
       envVars: { GARDEN_REVIEWER: "1", FOO: "bar" },
     }));
-    const cmd = vi.mocked(tmux).mock.calls[0][10] as string;
+    const cmd = vi.mocked(newDashboardWindow).mock.calls[0][5] as string;
     // Safe-token values (1, bar) pass through shellEscape unquoted; bash
     // assignment semantics are identical with or without the surrounding quotes.
     expect(cmd).toMatch(/^GARDEN_REVIEWER=1 FOO=bar claude -p /);
@@ -108,20 +108,20 @@ describe("launchHeadlessAgent", () => {
 
   it("prepends envPrefix when provided", () => {
     launchHeadlessAgent(baseOpts({ envPrefix: "CLAUDE_CONFIG_DIR=/tmp/.claude " }));
-    const cmd = vi.mocked(tmux).mock.calls[0][10] as string;
+    const cmd = vi.mocked(newDashboardWindow).mock.calls[0][5] as string;
     expect(cmd).toMatch(/^CLAUDE_CONFIG_DIR=\/tmp\/\.claude claude -p /);
   });
 
   it("redirects stdin from promptFile and stdout/stderr to resultFile", () => {
     launchHeadlessAgent(baseOpts());
-    const cmd = vi.mocked(tmux).mock.calls[0][10] as string;
+    const cmd = vi.mocked(newDashboardWindow).mock.calls[0][5] as string;
     expect(cmd).toContain("< /tmp/sessions/myproject-bold-ash-review-prompt.txt");
     expect(cmd).toContain("> /tmp/sessions/myproject-bold-ash-review-result.txt 2>&1");
   });
 
   it("pokes the signal FIFO with a [-p] guard so a missing FIFO is a no-op", () => {
     launchHeadlessAgent(baseOpts());
-    const cmd = vi.mocked(tmux).mock.calls[0][10] as string;
+    const cmd = vi.mocked(newDashboardWindow).mock.calls[0][5] as string;
     expect(cmd).toContain("[ -p /tmp/sessions/myproject-poll-signal ]");
     expect(cmd).toContain("(echo > /tmp/sessions/myproject-poll-signal) 2>/dev/null");
   });
@@ -145,7 +145,7 @@ describe("launchHeadlessAgent", () => {
     launchHeadlessAgent(baseOpts({
       envVars: { TRICKY: "it's \"fine\"" },
     }));
-    const cmd = vi.mocked(tmux).mock.calls[0][10] as string;
+    const cmd = vi.mocked(newDashboardWindow).mock.calls[0][5] as string;
     // Single quotes inside a single-quoted value must be split-quoted as '\''.
     expect(cmd).toContain(`TRICKY='it'\\''s "fine"'`);
   });

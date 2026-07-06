@@ -63,7 +63,7 @@ vi.mock("../src/dashboard/header.js", () => ({
 vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
   tmuxDisplay: vi.fn(),
-  tmuxNewWindow: vi.fn(() => "%10"),
+  newDashboardWindowPaned: vi.fn(() => "%10"),
   setPaneLabel: vi.fn(),
   setPaneVar: vi.fn(),
   shellEscape: vi.fn((s: string) => `'${s}'`),
@@ -145,7 +145,7 @@ import { readDashState, writeDashState, withStateLock } from "../src/dashboard/s
 import { parkToHidden, restoreFromHidden } from "../src/dashboard/layout.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
 import {
-  tmux, tmuxDisplay, tmuxNewWindow, setPaneLabel, setPaneVar,
+  tmux, tmuxDisplay, newDashboardWindowPaned, setPaneLabel, setPaneVar,
   getFirstPaneId, paneExists, windowExists,
   listHiddenWorkerWindows, killWindowSafe,
   getPaneSize, resizeWindow,
@@ -195,7 +195,7 @@ beforeEach(() => {
   // Reset default mock return values
   vi.mocked(paneExists).mockReturnValue(true);
   vi.mocked(windowExists).mockReturnValue(true);
-  vi.mocked(tmuxNewWindow).mockReturnValue("%10");
+  vi.mocked(newDashboardWindowPaned).mockReturnValue("%10");
   vi.mocked(getFirstPaneId).mockReturnValue("%20");
   vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
   vi.mocked(getWorkers).mockReturnValue([]);
@@ -262,8 +262,8 @@ describe("newWorker", () => {
   it("creates worker window with sleep placeholder then respawns bootstrap script", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     newWorker();
-    expect(vi.mocked(tmuxNewWindow)).toHaveBeenCalledWith(
-      "-d", "-t", "garden-dashboard", "-n", "_myproject-worker-bold-ash",
+    expect(vi.mocked(newDashboardWindowPaned)).toHaveBeenCalledWith(
+      "_myproject-worker-bold-ash",
       "-c", "/repo/myproject",
       "sh", "-c", "exec sleep 86400",
     );
@@ -440,8 +440,8 @@ describe("newWorker", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
     vi.mocked(tryGetProject).mockReturnValueOnce({ name: "other", path: "/repo/other" });
     newWorker({ projectName: "other", seedMessageFile: "/tmp/seed.txt", background: true });
-    expect(vi.mocked(tmuxNewWindow)).toHaveBeenCalledWith(
-      "-d", "-t", "garden-dashboard", "-n", "_other-worker-bold-ash",
+    expect(vi.mocked(newDashboardWindowPaned)).toHaveBeenCalledWith(
+      "_other-worker-bold-ash",
       "-c", "/repo/other",
       "sh", "-c", "exec sleep 86400",
     );
@@ -483,10 +483,10 @@ describe("newWorker", () => {
     expect(cmd).toContain("'/tmp/seed.txt'");
   });
 
-  it("rolls back the registry entry when tmuxNewWindow throws so a sandbox-blocked spawn doesn't leave a ghost", () => {
+  it("rolls back the registry entry when newDashboardWindowPaned throws so a sandbox-blocked spawn doesn't leave a ghost", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
     vi.mocked(tryGetProject).mockReturnValueOnce({ name: "other", path: "/repo/other" });
-    vi.mocked(tmuxNewWindow).mockImplementationOnce(() => {
+    vi.mocked(newDashboardWindowPaned).mockImplementationOnce(() => {
       throw new Error("tmux new-window failed: Operation not permitted");
     });
     expect(() =>

@@ -17,7 +17,7 @@ import { renderQuickStatus } from "../commands/status.js";
 import { formatLogsPaneLabel } from "../commands/logs.js";
 import {
   tmux, tmuxOutput, tmuxSplit, setPaneTitle, setPaneLabel, setPaneVar,
-  getFirstPaneId, shellEscape, tmuxDoubleQuote,
+  getFirstPaneId, shellEscape, tmuxDoubleQuote, newDashboardWindow,
   getPaneSize, resizeWindow, listSessionPanes, disablePaneInput,
 } from "./tmux.js";
 import { readRegistry, updateWorkerFields } from "./registry.js";
@@ -345,8 +345,7 @@ export function ensureDashboard(): void {
       // in scrollback at the narrow width.
       // `sleep infinity` is GNU-only; macOS BSD sleep exits 1 and the
       // placeholder pane dies before respawn-pane lands. Use a finite value.
-      tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", workerCwd,
-        "sh", "-c", "exec sleep 86400");
+      newDashboardWindow(workerWindowName, "-c", workerCwd, "sh", "-c", "exec sleep 86400");
       if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
       const workerPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindowName}`);
       if (workerPaneId) {
@@ -409,8 +408,7 @@ export function createLogsWindow(): void {
   const windowName = gardenWindowName("logs");
   const scriptFile = writeLogsScript();
 
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName,
-    "sh", "-c", `sh ${shellEscape(scriptFile)}`);
+  newDashboardWindow(windowName, "sh", "-c", `sh ${shellEscape(scriptFile)}`);
 
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (paneId) {
@@ -443,7 +441,7 @@ exec garden logs --follow --count 5000
 export function createGardenGrowhouseWindow(gardenRunner: string): void {
   const growhouseInit = writeGrowhouseInitScript(gardenRunner);
   const windowName = gardenWindowName("growhouse");
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName);
+  newDashboardWindow(windowName);
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (paneId) {
     setPaneLabel(paneId, "growhouse");
@@ -454,7 +452,7 @@ export function createGardenGrowhouseWindow(gardenRunner: string): void {
 
 export function createGardenRootWindow(): void {
   const windowName = gardenWindowName("root");
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName);
+  newDashboardWindow(windowName);
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (paneId) {
     setPaneLabel(paneId, "root");
@@ -468,7 +466,7 @@ export function createGardenRootWindow(): void {
 export function createGardenHistoryWindow(gardenRunner: string): void {
   const windowName = gardenWindowName("history");
   const cmd = buildHistoryCommand(gardenRunner);
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName, "sh", "-c", cmd);
+  newDashboardWindow(windowName, "sh", "-c", cmd);
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (paneId) {
     setPaneLabel(paneId, "history");
@@ -483,8 +481,7 @@ export function createGardenHistoryWindow(gardenRunner: string): void {
 export function createGardenDiaryWindow(gardenRunner: string): void {
   const scriptFile = writeDiaryViewScript(gardenRunner);
   const windowName = gardenWindowName("diary");
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName,
-    "sh", "-c", `sh ${shellEscape(scriptFile)}`);
+  newDashboardWindow(windowName, "sh", "-c", `sh ${shellEscape(scriptFile)}`);
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (paneId) {
     setPaneLabel(paneId, "diary");
@@ -527,7 +524,7 @@ done
 
 export function createShellWindow(projectName: string, projectPath: string): void {
   const windowName = shellWin(projectName);
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", windowName, "-c", projectPath);
+  newDashboardWindow(windowName, "-c", projectPath);
   const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
   if (paneId) {
     setPaneLabel(paneId, `shell-${projectName}`);

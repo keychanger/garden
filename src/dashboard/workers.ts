@@ -8,7 +8,7 @@ import { readDashState, writeDashState, withStateLock } from "./state.js";
 import { parkToHidden, restoreFromHidden } from "./layout.js";
 import { refreshDashboard, setPaneProjectColor } from "./header.js";
 import {
-  tmux, tmuxDisplay, tmuxNewWindow, setPaneLabel, setPaneVar, shellEscape,
+  tmux, tmuxDisplay, newDashboardWindowPaned, setPaneLabel, setPaneVar, shellEscape,
   getFirstPaneId, paneExists, windowExists,
   listHiddenWorkerWindows, killWindowSafe,
   getPaneSize, resizeWindow,
@@ -389,7 +389,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         // Hidden creation only — no park, no restore. The window is born detached
         // and stays detached. The operator's visible pane and dashboard state are
         // not touched.
-        const workerPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
+        const workerPaneId = newDashboardWindowPaned(workerWindowName, "-c", project.path,
           "sh", "-c", "exec sleep 86400");
         if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
         tmux("respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd);
@@ -403,7 +403,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject!);
         parkToHidden(parkName, state);
 
-        const workerPaneId = tmuxNewWindow("-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
+        const workerPaneId = newDashboardWindowPaned(workerWindowName, "-c", project.path,
           "sh", "-c", "exec sleep 86400");
         if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
         tmux("respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd);

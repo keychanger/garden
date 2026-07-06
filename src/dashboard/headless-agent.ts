@@ -10,8 +10,7 @@
 // `onLaunched`, and pass the result file's contents to `parseLastLineVerdict`.
 import fs from "node:fs";
 import { atomicWriteFile } from "./atomic-write.js";
-import { tmux, windowExists, killWindowSafe, shellEscape } from "./tmux.js";
-import { DASHBOARD_SESSION } from "../session.js";
+import { newDashboardWindow, windowExists, killWindowSafe, shellEscape } from "./tmux.js";
 import { getHarnessCore } from "./harness/core.js";
 
 export interface HeadlessAgentLaunchOptions {
@@ -85,8 +84,7 @@ export function launchHeadlessAgent(
   });
   const cmd = `${agentCmd}; [ -p ${escapedFifo} ] && (echo > ${escapedFifo}) 2>/dev/null`;
 
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", opts.windowName,
-    "-c", opts.cwd, "bash", "-c", cmd);
+  newDashboardWindow(opts.windowName, "-c", opts.cwd, "bash", "-c", cmd);
 
   const launchedAt = Date.now();
   if (opts.onLaunched) opts.onLaunched();
