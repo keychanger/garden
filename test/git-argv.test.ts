@@ -51,6 +51,7 @@ import {
   getRemoteHost,
   branchExistsOnOrigin,
   getWorkerBaseBranch,
+  getGitCommonDir,
 } from "../src/dashboard/git.js";
 
 const mockExec = vi.mocked(execFileSync);
@@ -808,5 +809,32 @@ describe("getRemoteHost", () => {
   it("returns null for unparseable URLs", () => {
     mockExec.mockReturnValue("not-a-url\n");
     expect(getRemoteHost("/repo")).toBeNull();
+  });
+});
+
+describe("getGitCommonDir", () => {
+  it("resolves a relative --git-common-dir against the repo path", () => {
+    // Run from the main checkout (how create.ts calls it), git prints the
+    // relative ".git"; the resolve-to-absolute branch is the real prod path,
+    // since the Codex sandbox writable_roots need an absolute git store path.
+    mockExec.mockReturnValue(".git\n");
+    expect(getGitCommonDir("/repo/myproject")).toBe("/repo/myproject/.git");
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["rev-parse", "--git-common-dir"],
+      expect.objectContaining({ cwd: "/repo/myproject" }),
+    );
+  });
+
+  it("returns an already-absolute --git-common-dir unchanged", () => {
+    mockExec.mockReturnValue("/repo/myproject/.git\n");
+    expect(getGitCommonDir("/repo/myproject")).toBe("/repo/myproject/.git");
+  });
+
+  it("returns null on error", () => {
+    mockExec.mockImplementation(() => {
+      throw new Error("not a git repo");
+    });
+    expect(getGitCommonDir("/repo/myproject")).toBeNull();
   });
 });
