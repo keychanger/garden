@@ -6,6 +6,7 @@ vi.mock("../src/dashboard/log.js", () => ({
 
 vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
+  newDashboardWindow: vi.fn(),
   windowExists: vi.fn(() => false),
   killWindowSafe: vi.fn(),
   listAllWindowNames: vi.fn(() => []),
@@ -54,10 +55,10 @@ vi.mock("../src/dashboard/poller-fifo.js", () => ({
 import {
   latestActivityMs, isWatchedState, isWorkerStale, hasLiveWork, tick,
   healProjectPollers, alertOrphanedWindows, WATCHDOG_THRESHOLD_MS,
-  absorbSleep, WATCHDOG_TICK_MS, SLEEP_SLACK_MS,
+  absorbSleep, WATCHDOG_TICK_MS, SLEEP_SLACK_MS, startWatchdog,
 } from "../src/dashboard/watchdog.js";
 import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
-import { windowExists, listAllWindowNames } from "../src/dashboard/tmux.js";
+import { newDashboardWindow, windowExists, listAllWindowNames } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import type { WorkerEntry, PrState } from "../src/dashboard/registry.js";
 
@@ -513,5 +514,31 @@ describe("absorbSleep", () => {
     // eligible.size is 1 (built from the pre-clear read), so the mutate runs.
     expect(absorbSleep(WATCHDOG_TICK_MS + TWO_HOURS)).toBe(TWO_HOURS);
     expect(e.reviewStartedAt).toBeUndefined();
+  });
+});
+
+describe("startWatchdog", () => {
+  const newDashboardWindowMock = vi.mocked(newDashboardWindow);
+
+  it("creates the watchdog window through newDashboardWindow so its name is suppressed at birth", () => {
+    // Regression guard: the _garden-watchdog window is a persistent hidden
+    // window. With no per-refresh window-name sweep, a raw tmux new-window
+    // would leave its name showing in the status-bar center strip. It must go
+    // through newDashboardWindow (which batches the name-suppression set-option
+    // into the same client invocation), exactly like the poller / usage-poller.
+    windowExistsMock.mockReturnValue(false);
+    startWatchdog("node /usr/local/bin/garden");
+
+    expect(newDashboardWindowMock).toHaveBeenCalledTimes(1);
+    const call = newDashboardWindowMock.mock.calls[0];
+    expect(call[0]).toBe("_garden-watchdog");
+    expect(call).toContain("bash");
+    expect(String(call.at(-1))).toContain("_watchdog-loop");
+  });
+
+  it("is a no-op when the watchdog window already exists", () => {
+    windowExistsMock.mockReturnValue(true);
+    startWatchdog("node /usr/local/bin/garden");
+    expect(newDashboardWindowMock).not.toHaveBeenCalled();
   });
 });

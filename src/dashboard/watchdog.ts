@@ -28,8 +28,7 @@
 // poller's lifecycle: the window being killed (reset or exit) is the
 // termination signal — no signal file, no FIFO. Unlike the usage poller it
 // starts unconditionally; provider-only fleets still need liveness.
-import { tmux, windowExists, killWindowSafe, listAllWindowNames } from "./tmux.js";
-import { DASHBOARD_SESSION } from "../session.js";
+import { newDashboardWindow, windowExists, killWindowSafe, listAllWindowNames } from "./tmux.js";
 import { watchdogWindowName, parseWorkerWindow } from "./window-names.js";
 import { readRegistry, mutateRegistry, PR_STATE_KIND, OPERATOR_ACTION_FAILING_REASONS, type WorkerEntry, type WorkerRegistry } from "./registry.js";
 import { triggerProjectPoll } from "./poller-fifo.js";
@@ -342,8 +341,7 @@ function sleep(ms: number): Promise<void> {
 export function startWatchdog(gardenRunner: string): void {
   const window = watchdogWindowName();
   if (windowExists(window)) return;
-  tmux("new-window", "-d", "-t", DASHBOARD_SESSION, "-n", window,
-    "bash", "-c", `${gardenRunner} dashboard _watchdog-loop 2>/dev/null`);
+  newDashboardWindow(window, "bash", "-c", `${gardenRunner} dashboard _watchdog-loop 2>/dev/null`);
   log.info("watchdog", "spawned window", { data: { window } });
 }
 
