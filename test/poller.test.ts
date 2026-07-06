@@ -3567,6 +3567,7 @@ describe("poll — failing state", () => {
       prState: "working",
       failingSha: undefined,
       lastSeenSha: undefined,
+      lastStateChangeAt: expect.any(Number),
     });
   });
 
@@ -3974,6 +3975,7 @@ describe("poll — alerts", () => {
       prState: "working",
       failingSha: undefined,
       lastSeenSha: undefined,
+      lastStateChangeAt: expect.any(Number),
     });
   });
 

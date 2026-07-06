@@ -31,6 +31,12 @@ interface WorkerInfo {
   status: WorkerStatus;
   activity: string | null;
   active: boolean;
+  // Epoch ms the worker last entered its current state — an agentStatus or
+  // prState transition (registry.lastStateChangeAt). Drives the dim
+  // time-in-state suffix on in-flight/blocked rows. Undefined for orphan
+  // windows with no registry entry and for legacy entries that predate the
+  // field, in which case the suffix is omitted.
+  lastStateChangeAt?: number;
   // True when the worker is in the active/recent tier and nothing has touched
   // it in over WORKER_STALE_MS — the renderer dims the row. Other tiers
   // (blocked, new, in-flight, done) are never stale-dimmed.
@@ -172,6 +178,9 @@ export async function status(args: string[]): Promise<void> {
   const cols = process.stdout.columns || 120;
   const activityMax = Math.max(20, cols - (8 + nameWidth + 2 + statusWidth + 2));
 
+  // One clock read per render so every row's elapsed suffix is consistent.
+  const now = Date.now();
+
   console.log("");
   for (let pi = 0; pi < statuses.length; pi++) {
     if (pi > 0) console.log("");
@@ -190,7 +199,8 @@ export async function status(args: string[]): Promise<void> {
         const wname = worker.name.padEnd(nameWidth);
         const wstatus = formatStatus(worker).padEnd(statusWidth);
         const baseHint = formatBranchHint(worker.baseBranch, project.projectBranch, showAllBranches);
-        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${formatRowTail(worker, baseHint, activityMax)}`;
+        const elapsed = formatTimeInState(worker.status, worker.lastStateChangeAt, now);
+        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${formatRowTail(worker, baseHint, activityMax)}${elapsed}`;
         const colored = colorizeRow(worker.status, line);
         console.log(worker.stale ? dimRow(colored) : colored);
       }
@@ -506,6 +516,61 @@ function colorizeIteration(iter: number, max: number): string {
   return text;                                          // default
 }
 
+// States that carry a dim elapsed-time-in-state suffix ("reviewing 12m",
+// "merging 47m", "asking 2h"). These are the pipeline and blocked states — the
+// "autonomous middle" where a row is otherwise log-shaped and the operator
+// can't tell a progressing worker from a wedged one. `working` is excluded (its
+// spinner already signals liveness); terminal `merged`/`done` are excluded
+// (their decoration belongs to the auto-continue gate surface, not here).
+const TIME_IN_STATE_STATES = new Set<WorkerStatus>([
+  "reviewing", "merge-pending", "resolving", "ci-fixing", "asking", "failing",
+]);
+
+// Soft per-state expectations: once elapsed passes this, the suffix turns yellow
+// to flag "taking unusually long." Only the otherwise-uncolored pipeline states
+// escalate — `asking`/`failing` rows are already whole-row colored (bold-yellow
+// / bold-red via colorizeRow), so their elapsed stays dim rather than fight the
+// row color. All thresholds sit well under the hard REVIEW_TIMEOUT_MS (60m)
+// kill so "slow" reads long before "killed."
+const TIME_IN_STATE_SOFT_MS: Partial<Record<WorkerStatus, number>> = {
+  reviewing: 10 * 60_000,
+  "merge-pending": 10 * 60_000,
+  resolving: 10 * 60_000,
+  "ci-fixing": 15 * 60_000,
+};
+
+// Below this the suffix is suppressed: a freshly entered state doesn't need a
+// "0m", and the value would be noise between the entry-triggered bake and the
+// watchdog's first 60s re-bake.
+const TIME_IN_STATE_FLOOR_MS = 60_000;
+
+function humanizeElapsed(ms: number): string {
+  const min = Math.floor(ms / 60_000);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 48) return `${hr}h`;
+  return `${Math.floor(hr / 24)}d`;
+}
+
+// Dim elapsed-time-in-state suffix for a worker row, or "" when the state isn't
+// time-tracked, the timestamp is missing, or the state was entered under a
+// minute ago. Grey by default, yellow past the state's soft expectation.
+// Rendered as a self-contained color span (ends in a reset) and placed LAST on
+// the row so it stays ANSI-clean inside colorizeRow/dimRow wrapping and is the
+// first thing dropped if the row is width-capped.
+export function formatTimeInState(
+  status: WorkerStatus,
+  lastStateChangeAt: number | undefined,
+  now: number,
+): string {
+  if (lastStateChangeAt === undefined || !TIME_IN_STATE_STATES.has(status)) return "";
+  const elapsed = now - lastStateChangeAt;
+  if (elapsed < TIME_IN_STATE_FLOOR_MS) return "";
+  const soft = TIME_IN_STATE_SOFT_MS[status];
+  const color = soft !== undefined && elapsed >= soft ? "33" : "90"; // yellow : grey
+  return ` \x1b[${color}m${humanizeElapsed(elapsed)}\x1b[0m`;
+}
+
 function collectWorkers(
   projectName: string,
   state: DashboardState,
@@ -529,6 +594,7 @@ function collectWorkers(
       status: resolveWorkerStatus(entry),
       activity: entry?.task || null,
       active: true,
+      lastStateChangeAt: entry?.lastStateChangeAt,
       stale: entry ? isWorkerStale(entry) : false,
       failCount: entry?.failCount ?? 0,
       baseBranch: entry?.baseBranch,
@@ -547,6 +613,7 @@ function collectWorkers(
       status: resolveWorkerStatus(entry),
       activity: entry?.task || null,
       active: false,
+      lastStateChangeAt: entry?.lastStateChangeAt,
       stale: entry ? isWorkerStale(entry) : false,
       failCount: entry?.failCount ?? 0,
       baseBranch: entry?.baseBranch,
@@ -599,6 +666,9 @@ export function renderQuickStatus(
 
   const projectBranches = names.map(n => resolveProjectBranch(n));
 
+  // One clock read per bake so every row's elapsed suffix is consistent.
+  const now = Date.now();
+
   lines.push("");
   for (let pi = 0; pi < names.length; pi++) {
     if (pi > 0) lines.push("");
@@ -620,7 +690,8 @@ export function renderQuickStatus(
         const wname = worker.name.padEnd(nameWidth);
         const wstatus = formatStatus(worker).padEnd(statusWidth);
         const baseHint = formatBranchHint(worker.baseBranch, projectBranch, showAllBranches);
-        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${formatRowTail(worker, baseHint)}`;
+        const elapsed = formatTimeInState(worker.status, worker.lastStateChangeAt, now);
+        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${formatRowTail(worker, baseHint)}${elapsed}`;
         const colored = colorizeRow(worker.status, line);
         lines.push(worker.stale ? dimRow(colored) : colored);
       }

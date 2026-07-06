@@ -125,8 +125,10 @@ export interface WorkerEntry {
   // prState transition, not the 10s hook heartbeat. Drives row ordering
   // (workerSortFreshness) so the list only reshuffles when the worker actually
   // moves, never on the silent heartbeat that bumps lastEventAt without a
-  // repaint. Set by applyAndLog when stateChanged; backfilled in
-  // migrateLastStateChangeAt for entries that predate the field.
+  // repaint, and the status pane's time-in-state suffix (how long a worker has
+  // sat in its current state). Stamped by applyAndLog on an agentStatus change
+  // (hook side) and by transitionState on a prState change (poller side);
+  // backfilled in migrateLastStateChangeAt for entries that predate the field.
   lastStateChangeAt?: number;
   // Epoch ms when the worker was created (set in addWorker). Acts as the floor
   // for a brand-new worker's freshness before its first hook fires, so a

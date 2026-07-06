@@ -287,6 +287,10 @@ export async function runWatchdogLoop(): Promise<void> {
   // path the watchdog window itself was spawned with.
   const { resolveGardenRunner } = await import("./runner.js");
   const { startProjectPoller } = await import("./poller.js");
+  // Dynamic-imported (like the poller above) to keep watchdog.ts's static import
+  // surface minimal; header.ts is heavy and this module is start/stop-imported by
+  // poller.ts. Re-bakes the status pane each tick so time-in-state suffixes tick.
+  const { refreshStatusElapsed } = await import("./header.js");
   const gardenRunner = resolveGardenRunner();
   // Damping state lives in the loop closure: it persists across ticks and
   // resets on window respawn, which is fine — a respawn is itself a restart
@@ -310,6 +314,16 @@ export async function runWatchdogLoop(): Promise<void> {
       );
       tick(lastPokeAt, Date.now());
       alertOrphanedWindows(readRegistry());
+      // Advance the status pane's time-in-state suffixes ("reviewing 12m" ->
+      // "13m"). Content-deduped inside, so this is a no-op when nothing is in
+      // flight. Wrapped separately (it runs after tick/alerts, which are already
+      // done) so a repaint failure logs its own specific reason instead of the
+      // generic "tick failed".
+      try {
+        refreshStatusElapsed();
+      } catch (err) {
+        log.warn("watchdog", "status elapsed refresh failed", { data: { error: String(err) } });
+      }
     } catch (err) {
       log.warn("watchdog", "tick failed", { data: { error: String(err) } });
     }

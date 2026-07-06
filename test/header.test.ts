@@ -150,6 +150,7 @@ import {
   refreshStatusPane,
   refreshUsagePane,
   refreshDashboard,
+  refreshStatusElapsed,
   installInputGuard,
   setPaneProjectColor,
   _resetHeaderCachesForTest,
@@ -905,6 +906,31 @@ describe("writeQuickStatus (via refreshDashboard)", () => {
 
     // 4 lines -> Math.max(16, 4) + 1 = 17
     expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "17");
+  });
+
+  // refreshStatusElapsed is the watchdog's 60s re-bake hook: it re-renders the
+  // status pane so time-in-state suffixes advance, and must re-read state itself
+  // (no opts) since the watchdog runs in its own process.
+  it("refreshStatusElapsed re-bakes the status file from freshly-read state", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
+    vi.mocked(renderQuickStatus).mockReturnValue("reviewing 12m");
+
+    refreshStatusElapsed();
+
+    const renameCalls = vi.mocked(fs.renameSync).mock.calls;
+    expect(renameCalls.length).toBeGreaterThanOrEqual(1);
+    expect(renameCalls[0][1] as string).toContain("status.rendered");
+  });
+
+  it("refreshStatusElapsed suppresses the write when content is unchanged", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
+    vi.mocked(renderQuickStatus).mockReturnValue("reviewing 12m");
+
+    refreshStatusElapsed();       // first bake writes
+    vi.mocked(fs.renameSync).mockClear();
+    refreshStatusElapsed();       // identical content -> deduped, no write
+
+    expect(vi.mocked(fs.renameSync).mock.calls.length).toBe(0);
   });
 
   it("skips resize when current height already matches", () => {

@@ -695,6 +695,28 @@ export function refreshDashboardCycle(opts?: RefreshOptions): void {
   writeHistoryRendered(opts); // follow focus when cycling workers in ⌥h mode
 }
 
+// Re-bake the status pane so time-in-state elapsed suffixes advance without a
+// state transition to drive them. The status pane is otherwise fully
+// event-driven; the watchdog's 60s tick is the sole recurring caller, so a
+// "reviewing 12m" row ticks to "13m" once a minute. Threads its inputs the same
+// way refreshDashboard does — one registry read, one config load, one
+// list-windows — so the 60s re-bake doesn't re-read the registry and fork
+// git/tmux once per project. Deliberately status-only: it must not drive the
+// header/usage/tasks tmux work on a fixed cadence. writeQuickStatus's content
+// dedup suppresses the write+signal when the baked text is byte-identical to
+// the last; in practice a `working` row's animated spinner frame changes each
+// bake, so a fleet with an active worker still repaints each tick (harmless —
+// the pane already animates that spinner locally at 0.12s), while a fully
+// quiescent fleet with nothing time-tracked stays deduped.
+export function refreshStatusElapsed(): void {
+  writeQuickStatus({
+    state: readDashState(),
+    windowNames: listAllWindowNames(),
+    config: loadConfig(),
+    registry: readRegistry(),
+  });
+}
+
 // Reset module-level write/idempotency caches. Intended for tests that
 // instantiate the module once but exercise multiple "first-write" scenarios;
 // production code shouldn't call this — caches reset naturally when the

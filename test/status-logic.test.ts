@@ -71,7 +71,7 @@ vi.mock("../src/output.js", () => ({
   isTTY: true,
 }));
 
-import { status, renderQuickStatus, resolveWorkerStatus, dimRow, truncateToVisibleWidth, _resetStatusBranchCacheForTest } from "../src/commands/status.js";
+import { status, renderQuickStatus, resolveWorkerStatus, dimRow, truncateToVisibleWidth, formatTimeInState, _resetStatusBranchCacheForTest } from "../src/commands/status.js";
 import { currentBranch } from "../src/dashboard/git.js";
 import { diaryHasContent } from "../src/diary.js";
 import { readDashState } from "../src/dashboard/state.js";
@@ -298,6 +298,27 @@ describe("renderQuickStatus", () => {
     const result = renderQuickStatus(longState);
     const longest = Math.max(...result.split("\n").map(l => stripAnsi(l).length));
     expect(longest).toBeGreaterThan(40);
+  });
+
+  it("appends a yellow time-in-state suffix to a long-running reviewing row", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", prState: "reviewing",
+        lastStateChangeAt: Date.now() - 12 * 60_000 },
+    ]);
+    const result = renderQuickStatus(state);
+    expect(result).toContain("reviewing");
+    // 12m is past the 10m soft expectation for reviewing -> yellow.
+    expect(result).toMatch(/\x1b\[33m12m\x1b\[0m/);
+  });
+
+  it("omits the time-in-state suffix for a working row", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "building", agentStatus: "working",
+        lastStateChangeAt: Date.now() - 30 * 60_000 },
+    ]);
+    const result = renderQuickStatus(state);
+    // working is not a time-tracked state — no minute/hour suffix.
+    expect(result).not.toMatch(/\d+[mhd]\x1b\[0m/);
   });
 
   it("marks a project that has diary content with a dimmed pencil glyph", () => {
@@ -639,5 +660,57 @@ describe("truncateToVisibleWidth", () => {
   it("treats combining marks as zero width", () => {
     // "e" + combining acute (U+0301) is one column, so it plus "f" fits width 2.
     expect(truncateToVisibleWidth("e" + String.fromCodePoint(0x301) + "fg", 2)).toBe("e" + String.fromCodePoint(0x301) + "f");
+  });
+});
+
+describe("formatTimeInState", () => {
+  const NOW = 1_700_000_000_000;
+  const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+
+  it("returns empty for states that are not time-tracked", () => {
+    // working/idle/ready/loading/exited/merged/done never carry the suffix.
+    for (const st of ["working", "idle", "ready", "loading", "exited", "merged", "done"] as const) {
+      expect(formatTimeInState(st, NOW - 30 * 60_000, NOW)).toBe("");
+    }
+  });
+
+  it("returns empty when the timestamp is missing", () => {
+    expect(formatTimeInState("reviewing", undefined, NOW)).toBe("");
+  });
+
+  it("suppresses the suffix under a minute (no 0m)", () => {
+    expect(formatTimeInState("reviewing", NOW - 59_000, NOW)).toBe("");
+  });
+
+  it("shows minutes as a dim grey suffix under the soft threshold", () => {
+    const out = formatTimeInState("reviewing", NOW - 5 * 60_000, NOW);
+    expect(stripAnsi(out)).toBe(" 5m");
+    expect(out).toContain("\x1b[90m");   // grey
+    expect(out).not.toContain("\x1b[33m"); // not yellow
+  });
+
+  it("escalates to yellow once a pipeline state passes its soft expectation", () => {
+    const out = formatTimeInState("reviewing", NOW - 12 * 60_000, NOW);
+    expect(stripAnsi(out)).toBe(" 12m");
+    expect(out).toContain("\x1b[33m");   // yellow
+  });
+
+  it("keeps blocked states (asking/failing) dim — the row color already carries urgency", () => {
+    // 3h in — well past any pipeline threshold — but asking/failing never escalate.
+    for (const st of ["asking", "failing"] as const) {
+      const out = formatTimeInState(st, NOW - 3 * 60 * 60_000, NOW);
+      expect(stripAnsi(out)).toBe(" 3h");
+      expect(out).toContain("\x1b[90m");
+      expect(out).not.toContain("\x1b[33m");
+    }
+  });
+
+  it("humanizes hours and days", () => {
+    expect(stripAnsi(formatTimeInState("reviewing", NOW - 2 * 60 * 60_000, NOW))).toBe(" 2h");
+    expect(stripAnsi(formatTimeInState("failing", NOW - 3 * 24 * 60 * 60_000, NOW))).toBe(" 3d");
+  });
+
+  it("ends in a reset so it stays ANSI-clean at the end of a row", () => {
+    expect(formatTimeInState("merge-pending", NOW - 5 * 60_000, NOW).endsWith("\x1b[0m")).toBe(true);
   });
 });

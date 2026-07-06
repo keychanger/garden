@@ -16,10 +16,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-// Generous ceiling above today's ~170kb production bundle (minify +
-// keep-names): trips on the ~30kb step a retained adapter closure adds,
-// not on routine drift.
-const HOOK_BUNDLE_CEILING_BYTES = 200 * 1024;
+// Ceiling above today's ~200kb minified production bundle (minify +
+// keep-names): trips on the ~28kb step a retained adapter/skills closure adds,
+// not on routine drift. The precise detector for that regression is
+// SKILLS_BYTES_CEILING below (it reads skills.ts's bytesInOutput straight from
+// the metafile); this total-size ceiling is the coarse backstop for any other
+// large retained closure. renderQuickStatus and its row-render helpers are
+// import-reachable from the hook graph via header.ts, so incremental status-pane
+// work lands here — a future extraction of the render path out of the commands
+// layer would shrink this back down.
+const HOOK_BUNDLE_CEILING_BYTES = 216 * 1024;
 // skills.ts contributes only a tree-shaken sliver today (<100 bytes); a
 // retained skills bundle is ~28kb. The threshold sits well between.
 const SKILLS_BYTES_CEILING = 2 * 1024;

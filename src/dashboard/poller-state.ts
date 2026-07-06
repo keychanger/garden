@@ -45,7 +45,17 @@ export function transitionState(
       data: { project: projectName, workflow: workflowName, requested: entry?.workflow },
     });
   }
-  updateWorkerFields(projectName, workerName, { ...extraFields, prState: toState });
+  // Stamp lastStateChangeAt on a genuine prState move so it tracks the last
+  // real state transition on the poller side too — the hook path already stamps
+  // it for agentStatus changes (applyAndLog). This keeps the field authoritative
+  // for both the row-ordering freshness key (workerSortFreshness) and the status
+  // pane's time-in-state suffix: without it, a poller-driven move (e.g.
+  // reviewing -> merge-pending) would leave the field pinned to the worker's
+  // last hook and mis-measure how long it has sat in the new state. Only on an
+  // actual change so a redundant same-state re-write doesn't reset the clock.
+  const stateFields: Omit<WorkerFieldsUpdate, "prState"> =
+    toState !== fromState ? { ...extraFields, lastStateChangeAt: Date.now() } : { ...extraFields };
+  updateWorkerFields(projectName, workerName, { ...stateFields, prState: toState });
   maybeFireHandoffCallback(projectName, workerName, toState);
 }
 
