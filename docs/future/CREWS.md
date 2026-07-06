@@ -389,9 +389,9 @@ gate green — the same discipline the reviewer-first slices used.
 - A `roles.worker.provider` key. Worker-provider stays single-source (the flat
   `provider` key) to avoid split-brain — the shipped Phase 4 decision.
 - A provider on any review role. It only ever defeats the safety net.
-- Shipping a Codex *worker* before the sandbox translation (gap 1) and the
-  interactive turn-end spike (gap 2). Both can invalidate the plan; settle them
-  first.
+- Shipping a Codex *worker* before the sandbox translation (gap 1) lands. It
+  can invalidate the plan; settle it first. (The turn-end spike, gap 2, is
+  already settled — verified 2026-07-06.)
 
 ## Open questions
 
