@@ -4,6 +4,7 @@
 // lists every worker; this is scoped to the pipeline and answers "what merges
 // next, and what's stuck?".
 import { readRegistry, type WorkerEntry } from "../dashboard/registry.js";
+import { getProject } from "../config.js";
 import { output, isTTY } from "../output.js";
 
 // Mirrors poller-ci-fix.ts CI_FIX_BUDGET; inlined so this command doesn't pull
@@ -69,6 +70,10 @@ function buildRows(entries: WorkerEntry[], now: number): QueueRow[] {
 
 export async function queue(args: string[]): Promise<void> {
   const only = args[0];
+  // Validate a named project up front so a typo errors clearly (getProject
+  // throws "Unknown project: …") instead of silently reporting an empty
+  // pipeline — the same message a real-but-empty project would produce.
+  if (only) getProject(only);
   const registry = readRegistry();
   const now = Date.now();
 
@@ -94,7 +99,9 @@ export async function queue(args: string[]): Promise<void> {
     console.log(`  \x1b[1m${p.name}\x1b[0m`);
     const nameWidth = Math.max(...p.rows.map(r => r.worker.length));
     for (const r of p.rows) {
-      const pos = r.queuePos ? `${r.queuePos}.` : "  ";
+      // padStart to a stable width so a two-digit queue position (10+ workers
+      // in merge-pending at once) doesn't shift the name column right by one.
+      const pos = (r.queuePos ? `${r.queuePos}.` : "").padStart(3);
       const next = r.queuePos === 1 ? " \x1b[2m← next\x1b[0m" : "";
       // Pad the visible age (not the ANSI-wrapped string) so the CI column lines up.
       const since = `\x1b[2m${(r.sinceMs !== null ? formatAgo(r.sinceMs) : "").padEnd(4)}\x1b[0m`;

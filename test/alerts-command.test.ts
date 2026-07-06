@@ -62,6 +62,22 @@ describe("garden alerts", () => {
     expect(text).toContain("old-one");
   });
 
+  it("classifies an alert whose ts equals lastSeenAt as read (<= boundary)", async () => {
+    h.store = {
+      lastSeenAt: "2026-01-01T12:00:00Z",
+      alerts: [
+        a({ message: "boundary", ts: "2026-01-01T12:00:00Z" }), // == seen -> read
+        a({ message: "later", ts: "2026-01-01T12:00:01Z" }),    // > seen  -> unread
+      ],
+    };
+    const text = (await captureConsoleLog(() => alerts([]))).map(strip).join("\n");
+    expect(text).toMatch(/unread \(1\)/);
+    expect(text).toMatch(/\bread \(1\)/);
+    // The read block prints after the unread block, so the boundary alert
+    // (classified read) appears after the "read (1)" header.
+    expect(text.indexOf("boundary")).toBeGreaterThan(text.search(/\bread \(1\)/));
+  });
+
   it("treats every alert as unread when never acknowledged", async () => {
     h.store = { lastSeenAt: undefined, alerts: [a({ message: "x" }), a({ message: "y" })] };
     const text = (await captureConsoleLog(() => alerts([]))).map(strip).join("\n");

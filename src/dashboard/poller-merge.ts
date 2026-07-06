@@ -388,16 +388,15 @@ function gateCiStatus(
         worker: entry.name,
         data: { project: projectName, sha: sha.slice(0, 7), failed: status.failed },
       });
-      // Hand off to the ci-fix agent. launchCiFix fires its own per-SHA
-      // lifecycle alert (warn, "CI fix-agent launched...") and transitions
-      // the worker to `ci-fixing`. If the budget is already exhausted
-      // (third failure on the same SHA), it escalates internally to
-      // `failing` with reason "ci" and an error alert — preserving the
-      // pre-self-heal terminal behavior. Returns true in both cases so the
-      // caller defers the merge; only returns false if launch could not
-      // proceed (worker Claude busy, prompt-build failure), in which case
-      // we leave the worker in merge-pending and the next FIFO event will
-      // re-try.
+      // Hand off to the ci-fix agent. launchCiFix logs the launch (a routine
+      // lifecycle beat, no operator alert) and transitions the worker to
+      // `ci-fixing`. If the budget is already exhausted (third failure on the
+      // same SHA), it escalates internally to `failing` with reason "ci" and an
+      // error alert — preserving the pre-self-heal terminal behavior. Returns
+      // true in both cases so the caller defers the merge; only returns false
+      // if launch could not proceed (worker Claude busy, prompt-build failure),
+      // in which case we leave the worker in merge-pending and the next FIFO
+      // event will re-try.
       launchCiFix(projectName, projectPath, _baseBranch, entry, status.failed, sha);
       return false;
     }
