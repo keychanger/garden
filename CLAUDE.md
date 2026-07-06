@@ -30,7 +30,7 @@ npm test               # vitest unit + integration; tsc --noEmit
 - `src/commands/<name>.ts` — one async function per CLI command, registered in `commands/index.ts`
 - `src/config.ts` / `src/session.ts` / `src/rules.ts` / `src/output.ts` / `src/version.ts` — config (`~/.garden/config.yml`), tmux sessions, system-prompt assembly, TTY-aware output, build version
 - `src/dashboard/` — the dashboard. Notable modules:
-  - `index.ts`, `create.ts`, `workers.ts`, `navigate.ts`, `layout.ts`, `hotkeys.ts`, `header.ts` — UI lifecycle and pane swapping
+  - `index.ts`, `create.ts`, `workers.ts`, `navigate.ts`, `layout.ts`, `hotkeys.ts`, `keybindings.ts`, `header.ts` — UI lifecycle and pane swapping. `keybindings.ts` is the single source of truth for the Meta-key hotkeys: `hotkeys.ts` binds each row into tmux and `garden keys` (`commands/keys.ts`) documents it, so a new hotkey is one row in `DASHBOARD_HOTKEYS` and the bound set can't drift from the documented one
   - `state.ts`, `registry.ts`, `validate.ts` — atomic state files + tmux/state reconciliation
   - `tmux.ts`, `window-names.ts`, `atomic-write.ts` — low-level helpers
   - `poller.ts` + `poller-state.ts` + `poller-{review,merge,resolve,ci,ci-fix,fifo}.ts` — per-project review/merge/resolve/ci-fix lifecycle, event-driven via FIFO. `poller-ci-fix.ts` mirrors `poller-resolve.ts` for self-healing red CI

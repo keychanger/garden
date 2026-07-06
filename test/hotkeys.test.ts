@@ -12,6 +12,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
 }));
 
 import { setupKeybindings } from "../src/dashboard/hotkeys.js";
+import { DASHBOARD_HOTKEYS } from "../src/dashboard/keybindings.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -167,5 +168,26 @@ describe("setupKeybindings", () => {
     const argv = rootBind![1] as string[];
     expect(argv).toContain("run-shell");
     expect(argv.join(" ")).toContain("_focus-diary");
+  });
+
+  it("binds every DASHBOARD_HOTKEYS entry on the root table with its command", () => {
+    // The refactor's anti-drift guarantee has two sides: keybindings.test.ts
+    // proves the table drives `garden keys` (docs), and this proves the same
+    // table drives the tmux bindings. Without it, a future edit to the bind loop
+    // (a stray filter, a dropped category) could unbind a documented key with no
+    // failing test.
+    setupKeybindings("/path/to/garden");
+    const rootBinds = execFileSyncMock.mock.calls
+      .map(call => call[1] as string[])
+      .filter(argv =>
+        Array.isArray(argv) && argv[0] === "bind-key" && argv[1] === "-n" && argv[2]?.startsWith("M-"));
+    for (const b of DASHBOARD_HOTKEYS) {
+      const bind = rootBinds.find(argv => argv[2] === `M-${b.key}`);
+      expect(bind, `⌥${b.key} should be bound on the root table`).toBeDefined();
+      // The guarded run-shell body carries the dashboard subcommand, or the
+      // literal command when the row is `raw`.
+      const body = bind!.join(" ");
+      expect(body).toContain(b.raw ? b.command : `dashboard ${b.command}`);
+    }
   });
 });
