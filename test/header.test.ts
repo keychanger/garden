@@ -933,6 +933,29 @@ describe("writeQuickStatus (via refreshDashboard)", () => {
     expect(vi.mocked(fs.renameSync).mock.calls.length).toBe(0);
   });
 
+  it("suppresses the write and SIGUSR1 when the on-disk file already matches, even with a cold in-process cache", () => {
+    // A fresh hook/hotkey process has an empty lastWritten* cache, so the
+    // in-process dedup can't fire. The cross-process file-compare must still
+    // skip the write + the signal when status.rendered already holds this exact
+    // content — the common case under the hook firehose.
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
+    vi.mocked(renderQuickStatus).mockReturnValue("reviewing 12m");
+    vi.mocked(getPanePid).mockReturnValue("999"); // a signal WOULD fire if not skipped
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.mocked(fs.readFileSync).mockImplementation(
+      ((p: unknown) => (String(p).includes("status.rendered") ? "reviewing 12m" : "{}")) as never,
+    );
+    _resetHeaderCachesForTest(); // cold in-process cache, like a fresh hook process
+
+    refreshStatusElapsed();
+
+    const statusRenames = vi.mocked(fs.renameSync).mock.calls
+      .filter(c => String(c[1]).includes("status.rendered"));
+    expect(statusRenames.length).toBe(0);
+    expect(killSpy).not.toHaveBeenCalled();
+    killSpy.mockRestore();
+  });
+
   it("skips resize when current height already matches", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
     vi.mocked(renderQuickStatus).mockReturnValue("line1\nline2\nline3\nline4");

@@ -102,10 +102,12 @@ const STATUS_ICONS: Record<WorkerStatus, string> = {
 };
 
 function iconFor(worker: WorkerInfo): string {
-  if (worker.status === "working") {
-    const frame = Math.floor(Date.now() / 2000) % SPINNER_FRAMES.length;
-    return SPINNER_FRAMES[frame];
-  }
+  // Bake a FIXED spinner frame (STATUS_ICONS.working === SPINNER_FRAMES[0]) for
+  // a working row, not a Date.now()-derived one. The status pane animates the
+  // frame locally at 0.12s by replacing the baked braille char, so a
+  // time-varying baked frame was redundant — and worse, it churned the rendered
+  // bytes every ~2s, defeating the cross-process byte-compare that skips the
+  // write + SIGUSR1 when the fleet is unchanged (see writeQuickStatus).
   return STATUS_ICONS[worker.status];
 }
 
