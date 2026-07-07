@@ -187,6 +187,24 @@ describe("checkUsageThreshold", () => {
     expect(tripped!.reason).toContain("week");
     expect(tripped!.reason).not.toContain("5h");
   });
+
+  it("still trips on a high meter with an unparseable resetsAt", async () => {
+    // The reset-skip guard keeps a meter whose resetsAt does not parse, so a
+    // malformed-but-high snapshot still pauses rather than silently disabling
+    // the gate. (It just won't auto-resume until the operator intervenes,
+    // since autoContinueGateReason can't parse the pausedUntil either.)
+    mockGateDeps({
+      fetchedAt: "2026-04-30T00:00:00Z",
+      data: {
+        weekly: { pct: 99, resetsAt: "not-a-date" },
+      },
+    });
+    const { checkUsageThreshold } = await importGate();
+    const tripped = checkUsageThreshold(95);
+    expect(tripped).not.toBeNull();
+    expect(tripped!.pausedUntil).toBe("not-a-date");
+    expect(tripped!.reason).toContain("week");
+  });
 });
 
 describe("autoContinueGateReason", () => {
