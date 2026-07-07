@@ -901,3 +901,60 @@ describe("garden workers grow (convert)", () => {
     expect(continueMod.dispatchDelayedSeed).not.toHaveBeenCalled();
   });
 });
+
+describe("garden workers new --harness", () => {
+  it("rejects an unknown harness before spawning", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    await expect(
+      workers(["new", "proj", "--harness", "bogus"]),
+    ).rejects.toThrow(/--harness must be one of/);
+    expect(newWorker).not.toHaveBeenCalled();
+  });
+
+  it("rejects --harness on a non-default workflow", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    await expect(
+      workers([
+        "new", "proj",
+        "--workflow", "grow",
+        "--seed", "x",
+        "--harness", "codex",
+      ]),
+    ).rejects.toThrow(/only supported with --workflow default/);
+    expect(newWorker).not.toHaveBeenCalled();
+  });
+
+  it("threads --harness codex into newWorker and reports it in the created line", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    const out = await captureConsoleLog(() =>
+      workers(["new", "proj", "--harness", "codex"]),
+    );
+
+    expect(newWorker).toHaveBeenCalledWith(expect.objectContaining({
+      projectName: "proj",
+      workflow: "default",
+      harness: "codex",
+    }));
+    expect(out.join("\n")).toContain("harness=codex");
+  });
+
+  it("omits the harness field for a plain default worker", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    await captureConsoleLog(() => workers(["new", "proj"]));
+
+    const opts = vi.mocked(newWorker).mock.calls[0][0] as Record<string, unknown>;
+    expect(opts.harness).toBeUndefined();
+  });
+});

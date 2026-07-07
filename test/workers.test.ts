@@ -617,6 +617,47 @@ describe("newWorker", () => {
     expect(entry.model).toBeUndefined();
     expect(entry.trellis).toBeDefined();
   });
+
+  // ===== Harness selection (workers new --harness codex) =====
+  // opts.harness is validated against the real registry (harness/core.js is
+  // NOT mocked here, so isRegisteredHarness/harnessNames are real), stamped
+  // onto the entry, and threaded into the bootstrap opts. An unknown harness
+  // is refused before any worker is created.
+
+  it("harness: rejects an unknown harness without creating a worker", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    const name = newWorker({ harness: "bogus" });
+    expect(name).toBeNull();
+    expect(vi.mocked(addWorker)).not.toHaveBeenCalled();
+    const msgs = vi.mocked(tmuxDisplay).mock.calls.map((c) => c[0] as string);
+    expect(msgs.some((m) => m.includes("Unknown harness 'bogus'"))).toBe(true);
+  });
+
+  it("harness: stamps entry.harness for a codex worker", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    expect(newWorker({ harness: "codex" })).toBe("bold-ash");
+    expect(vi.mocked(addWorker)).toHaveBeenCalledWith(
+      "myproject",
+      expect.objectContaining({ workflow: "default", harness: "codex" }),
+    );
+  });
+
+  it("harness: threads harness into the bootstrap opts (8th arg)", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ harness: "codex" });
+    const call = vi.mocked(buildWorktreeBootstrapScript).mock.calls[0];
+    expect(call).toHaveLength(8);
+    expect(call[7]).toEqual(expect.objectContaining({ harness: "codex" }));
+  });
+
+  it("harness: absent for a plain default worker (7-arg bootstrap call)", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker();
+    const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
+    expect(entry.harness).toBeUndefined();
+    // Default worker preserves the legacy 7-arg bootstrap arity (no opts object).
+    expect(vi.mocked(buildWorktreeBootstrapScript).mock.calls[0]).toHaveLength(7);
+  });
 });
 
 // =============================================================================

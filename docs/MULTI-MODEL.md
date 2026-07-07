@@ -489,19 +489,21 @@ Notes pinned down by the audit:
 
 - **Event delivery is the adapter's problem, normalized events are the
   contract.** Claude Code: settings.json hooks → `dist/hook.js` (today's
-  path, unchanged). Codex: `hooks.json` written by `installRuntimeConfig`
-  — same stdin-JSON shape, near-identical event names, so the Codex shim
-  is a thin payload translation, with `notify` as redundant turn-end
-  insurance. opencode: a bundled plugin emitting the five events. The
+  path, unchanged). Codex: lifecycle hooks injected as `-c` overrides on
+  the worker launch (`codexHookFlags`) — a worktree-local `.codex/hooks.json`
+  does not fire, since Codex resolves project hooks at the repo root — same
+  stdin-JSON shape, near-identical event names, so the Codex shim is a thin
+  payload translation, with `notify` as redundant turn-end insurance. opencode: a bundled plugin emitting the five events. The
   FIFO, the dispatcher interface, and the status machine do not change
   per harness. No adapter may introduce polling to synthesize an event
   it lacks — a missing capability is declared, not papered over
   (STATUS.md's no-polling invariant binds adapters too).
 - **`installRuntimeConfig` owns the config-file dialect**:
   `.claude/settings.json` + `.claude/skills/` for Claude;
-  `.codex/config.toml` + `.codex/hooks.json` + `AGENTS.md` for Codex
+  `CODEX_HOME/config.toml` directory-trust + `AGENTS.md` for Codex
   (rules text written to `AGENTS.md`; skills folded into the rules text
-  when `capabilities.skills` is false); `opencode.json` + plugin +
+  when `capabilities.skills` is false; the lifecycle hooks ride `-c` launch
+  overrides, not a config file); `opencode.json` + plugin +
   `AGENTS.md` for opencode. The rules *content* (`rules.ts`) stays
   shared; the small number of Claude-specific phrasings in it ("invoke
   the done skill", ".claude/skills/done/SKILL.md") become template

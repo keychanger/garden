@@ -1,9 +1,14 @@
 // The Codex harness adapter — the heavy half. The light dialect
 // (commands, transient-error, transcript, session identity) lives in
-// codex-core.ts; this module adds installRuntimeConfig — the
-// .codex/hooks.json event-relay installer — and must only be imported by
-// CLI-bundle modules. Same core/full split rationale as claude-code.ts (see
-// harness/core.ts): keeps the hook bundle lean.
+// codex-core.ts; this module adds installRuntimeConfig — the worktree
+// runtime installer (directory-trust seed in CODEX_HOME/config.toml +
+// git-excludes; the composed rules ride the worktree AGENTS.md via
+// installCodexAgentsMd). The lifecycle event relay is NOT installed here —
+// it is injected as `-c` launch overrides by codex-core's codexHookFlags
+// (a worktree .codex/hooks.json never fires — Codex resolves project hooks
+// at the repo root). Must only be imported by CLI-bundle modules. Same
+// core/full split rationale as claude-code.ts (see harness/core.ts): keeps
+// the hook bundle lean.
 //
 // Module-init discipline: never import create.ts, poller-*.ts, header.ts,
 // or continue.ts — a back-edge would re-open the init-cycle class
