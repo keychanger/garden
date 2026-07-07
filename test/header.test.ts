@@ -153,6 +153,7 @@ import {
   refreshStatusElapsed,
   installInputGuard,
   setPaneProjectColor,
+  repinStatusPaneHeight,
   _resetHeaderCachesForTest,
 } from "../src/dashboard/header.js";
 
@@ -1084,6 +1085,62 @@ describe("writeQuickStatus (via refreshDashboard)", () => {
     // resize must happen BEFORE SIGUSR1 on grow
     expect(resizeOrder).toBeLessThan(killOrder);
     killSpy.mockRestore();
+  });
+});
+
+// ===========================================================================
+// repinStatusPaneHeight (the _client-resized reconciliation)
+// ===========================================================================
+
+describe("repinStatusPaneHeight", () => {
+  // The status pane height drifts on a terminal resize (tmux redistributes the
+  // left column proportionally), but writeQuickStatus only re-pins it past its
+  // byte-identical dedup — so a resize that changes no rendered content is no
+  // longer self-healed by the next same-state hook. _client-resized calls this
+  // to reconcile the height on the resize event itself.
+  const twentyLines = Array.from({ length: 20 }, (_, i) => `l${i}`).join("\n");
+  const mockStatusFile = (content: string) =>
+    vi.mocked(fs.readFileSync).mockImplementation(
+      ((p: unknown) => (String(p).includes("status.rendered") ? content : "{}")) as never,
+    );
+
+  it("resizes the status pane to its content-derived height and repaints via SIGUSR1 (never refresh-client)", () => {
+    mockStatusFile(twentyLines); // 20 content lines exceed the 16-line floor
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 5 });
+    vi.mocked(getPanePid).mockReturnValue("999");
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    repinStatusPaneHeight(makeState({ statusPaneId: "%0" }));
+
+    // Math.max(16, 20) + 1 = 21.
+    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "21");
+    expect(killSpy).toHaveBeenCalledWith(999, "SIGUSR1");
+    // Copy-mode safety: the resize path must never fork a full client refresh.
+    expect(vi.mocked(tmux).mock.calls.some(c => c[0] === "refresh-client")).toBe(false);
+    killSpy.mockRestore();
+  });
+
+  it("is a no-op when the pane height already matches the content", () => {
+    mockStatusFile(twentyLines);
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 21 }); // already the target
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    repinStatusPaneHeight(makeState({ statusPaneId: "%0" }));
+
+    expect(vi.mocked(tmux).mock.calls.some(c => c[0] === "resize-pane")).toBe(false);
+    expect(killSpy).not.toHaveBeenCalled();
+    killSpy.mockRestore();
+  });
+
+  it("is a no-op when statusPaneId is null", () => {
+    repinStatusPaneHeight(makeState({ statusPaneId: null }));
+    expect(tmux).not.toHaveBeenCalled();
+  });
+
+  it("swallows a missing rendered file (first resize of a session)", () => {
+    vi.mocked(fs.readFileSync).mockImplementation((() => { throw new Error("ENOENT"); }) as never);
+    expect(() => repinStatusPaneHeight(makeState({ statusPaneId: "%0" }))).not.toThrow();
+    expect(vi.mocked(tmux).mock.calls.some(c => c[0] === "resize-pane")).toBe(false);
   });
 });
 

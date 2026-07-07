@@ -277,11 +277,16 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     const { readDashState } = await import("./state.js");
     const { tmux } = await import("./tmux.js");
     const { USAGE_PANE_HEIGHT, presizeHiddenWindows } = await import("./create.js");
+    const { repinStatusPaneHeight } = await import("./header.js");
     try {
       const state = readDashState();
       if (state.usagePaneId) {
         tmux("resize-pane", "-t", state.usagePaneId, "-y", String(USAGE_PANE_HEIGHT));
       }
+      // The status pane height is content-derived and drifts under the same
+      // proportional redistribution; writeQuickStatus only re-pins it past its
+      // content dedup, so reconcile it here on the resize event itself.
+      repinStatusPaneHeight(state);
       // The right slot is 60% of the terminal, so resizing the terminal changes
       // its width. Hidden worker windows are window-size=manual (resize-window
       // sets that), so they stay frozen at the old width and a worker that keeps

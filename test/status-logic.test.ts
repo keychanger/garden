@@ -276,6 +276,24 @@ describe("renderQuickStatus", () => {
     expect(result).toContain("working");
   });
 
+  it("bakes a time-invariant working row so a busy fleet stays byte-stable across bakes", () => {
+    // The load-bearing half of the cross-process repaint dedup (writeQuickStatus'
+    // on-disk byte-compare): a working row's spinner is baked as a FIXED frame
+    // and animated locally by the pane, so two bakes seconds apart are
+    // byte-identical and the write + SIGUSR1 can be skipped. The prior
+    // Date.now()-derived frame advanced every ~2s and churned the rendered
+    // bytes, defeating the dedup for any fleet with a live worker.
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "fixing the build", agentStatus: "working" },
+    ]);
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const first = renderQuickStatus(state);
+    nowSpy.mockReturnValue(1_000_000 + 5_000); // 5s later: a Date.now()-derived frame would have advanced
+    const second = renderQuickStatus(state);
+    nowSpy.mockRestore();
+    expect(second).toBe(first);
+  });
+
   const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
   // The rendered worker name comes from the focused window suffix (collectWorkers),
   // so a long name is produced via the active window, not a registry entry.

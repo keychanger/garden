@@ -965,6 +965,38 @@ function writeUsageRendered(opts?: RefreshOptions): void {
   } catch { /* best effort */ }
 }
 
+// Reconcile the status pane height to its current content on a terminal resize.
+// writeQuickStatus normally re-pins the height, but only past its byte-identical
+// short-circuit — so a bare terminal resize, which drifts the pane height via
+// tmux's proportional redistribution yet changes no rendered content, is no
+// longer self-healed by the next same-state hook (that was the cold-cache hook
+// processes' accidental job before the cross-process dedup). The _client-resized
+// handler calls this so the reconciliation rides the actual resize event, off
+// the hot hook path. Repaints via SIGUSR1, never refresh-client, so it can't
+// disturb copy-mode scrolling the way a full refresh did.
+export function repinStatusPaneHeight(state: DashboardState): void {
+  if (!state.statusPaneId) return;
+  try {
+    const rendered = fs.readFileSync(STATUS_RENDERED_FILE, "utf-8");
+    const h = Math.max(statusPaneFloorLines(), rendered.split("\n").length) + 1;
+    const cur = getPaneSize(state.statusPaneId)?.height ?? null;
+    if (cur === h) return;
+    resizeAndSignalNoRefresh(state.statusPaneId, h, cur);
+  } catch { /* no rendered file yet, or pane gone — best effort */ }
+}
+
+// resizeAndSignal's ordering (grow-then-signal / signal-then-shrink) without its
+// refresh-client -S, so it stays copy-mode-safe on the resize event.
+function resizeAndSignalNoRefresh(paneId: string, newH: number, curH: number | null): void {
+  if (curH == null || newH > curH) {
+    try { tmux("resize-pane", "-t", paneId, "-y", String(newH)); } catch { /* ignore */ }
+    signalPane(paneId);
+    return;
+  }
+  signalPane(paneId);
+  try { tmux("resize-pane", "-t", paneId, "-y", String(newH)); } catch { /* ignore */ }
+}
+
 function resizeAndSignal(paneId: string, newH: number, curH: number | null): void {
   if (curH == null || newH > curH) {
     // Grow first: else taller content scrolls its top rows off the still-small pane buffer.
