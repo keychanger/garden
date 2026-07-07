@@ -970,8 +970,21 @@ export function checkUsageThreshold(threshold: number): { pausedUntil: string; r
   // describe nothing the fleet uses.
   try { if (!anyAnthropicMeteredProject()) return null; } catch { /* config unavailable: keep gate */ }
   const snap = readUsageSnapshot();
+  const now = Date.now();
   const candidates = snapshotMeters(snap).filter(m => m.key !== "sonnet");
-  const tripped = candidates.filter(c => c.pct >= threshold);
+  // Skip a meter whose window has already reset (resets_at in the past): the
+  // snapshot predates the reset and still shows the old window's exhaustion.
+  // Tripping on it sets pausedUntil to a past instant, so a resumeAfterReset
+  // gate immediately re-enables (now >= pausedUntil) and re-trips on the same
+  // stale reading — a flip-flop that re-fires the alert every poll until the
+  // usage poller's next fetch (up to ~5 min later) lands the fresh window.
+  // Wait for that fresh reading instead. Unparseable resets_at is kept so a
+  // malformed-but-high snapshot still pauses.
+  const fresh = candidates.filter(m => {
+    const resetMs = Date.parse(m.resetsAt);
+    return !Number.isFinite(resetMs) || resetMs > now;
+  });
+  const tripped = fresh.filter(c => c.pct >= threshold);
   if (tripped.length === 0) return null;
   const latest = tripped.reduce((a, b) =>
     Date.parse(a.resetsAt) > Date.parse(b.resetsAt) ? a : b);

@@ -95,7 +95,15 @@ async function importGate() {
 }
 
 describe("checkUsageThreshold", () => {
-  beforeEach(() => addAlertMock.mockReset());
+  // Pin "now" before the fixtures' reset instants so their windows read as
+  // still-open regardless of the wall clock — the gate now skips meters whose
+  // window has already reset, and these fixtures use near-real dates.
+  beforeEach(() => {
+    addAlertMock.mockReset();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-01T00:00:00Z"));
+  });
+  afterEach(() => vi.useRealTimers());
 
   it("returns null when no meters are present", async () => {
     mockGateDeps({ fetchedAt: "2026-05-02T00:00:00Z", data: {} });
@@ -145,6 +153,39 @@ describe("checkUsageThreshold", () => {
     expect(tripped!.pausedUntil).toBe("2026-05-09T00:00:00Z");
     expect(tripped!.reason).toContain("5h");
     expect(tripped!.reason).toContain("week");
+  });
+
+  it("does not trip on a meter whose window has already reset", async () => {
+    // Boundary storm: the 5h window maxed out and then reset, but the on-disk
+    // snapshot still shows the old window at 100% with a now-past resets_at
+    // (the usage poller has not re-fetched yet). Tripping here would set
+    // pausedUntil to a past instant and flip-flop the gate every poll.
+    mockGateDeps({
+      fetchedAt: "2026-04-30T00:00:00Z",
+      data: {
+        fiveHour: { pct: 100, resetsAt: "2026-04-30T05:00:00Z" },
+        weekly: { pct: 50, resetsAt: "2026-05-09T00:00:00Z" },
+      },
+    });
+    const { checkUsageThreshold } = await importGate();
+    expect(checkUsageThreshold(95)).toBeNull();
+  });
+
+  it("still trips on a fresh meter alongside a reset one", async () => {
+    // Only the stale (already-reset) meter is skipped; a genuinely-exhausted
+    // meter with a future reset must still pause.
+    mockGateDeps({
+      fetchedAt: "2026-04-30T00:00:00Z",
+      data: {
+        fiveHour: { pct: 100, resetsAt: "2026-04-30T05:00:00Z" },
+        weekly: { pct: 99, resetsAt: "2026-05-09T00:00:00Z" },
+      },
+    });
+    const { checkUsageThreshold } = await importGate();
+    const tripped = checkUsageThreshold(95);
+    expect(tripped!.pausedUntil).toBe("2026-05-09T00:00:00Z");
+    expect(tripped!.reason).toContain("week");
+    expect(tripped!.reason).not.toContain("5h");
   });
 });
 
