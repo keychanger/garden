@@ -522,6 +522,31 @@ describe("handleClaudeHook — core events", () => {
   });
 });
 
+describe("handleClaudeHook — session id capture (self-assigning harness)", () => {
+  it("captures session_id when the worker has none yet (codex assigns its own)", async () => {
+    const fs = (await import("node:fs")).default;
+    seedWorker("garden", "bold-ash", { agentStatus: "working", sessionId: "" });
+    setCwd("garden", "bold-ash");
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(
+      JSON.stringify({ session_id: "codex-thread-abc", transcript_path: "/x/rollout.jsonl" }),
+    );
+    handleClaudeHook("posttooluse");
+    const entry = entries["garden"]?.find(e => e.name === "bold-ash");
+    expect(entry?.sessionId).toBe("codex-thread-abc");
+    expect(entry?.transcriptPath).toBe("/x/rollout.jsonl");
+  });
+
+  it("does NOT overwrite an existing session id (claude mints its own at creation)", async () => {
+    const fs = (await import("node:fs")).default;
+    seedWorker("garden", "bold-ash", { agentStatus: "working", sessionId: "claude-uuid" });
+    setCwd("garden", "bold-ash");
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({ session_id: "different-id" }));
+    handleClaudeHook("posttooluse");
+    const entry = entries["garden"]?.find(e => e.name === "bold-ash");
+    expect(entry?.sessionId).toBe("claude-uuid");
+  });
+});
+
 // pretooluse/posttooluse fire on every Claude tool call and dominate hook
 // traffic. When they don't flip agentStatus or prState, refreshDashboard
 // must NOT cascade — the perf optimization in this commit. Detection: every

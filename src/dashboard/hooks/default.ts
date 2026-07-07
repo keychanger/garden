@@ -167,7 +167,7 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
 // ---------------------------------------------------------------------------
 
 type FieldsDelta = Partial<Pick<WorkerEntry,
-  "agentStatus" | "lastEventAt" | "lastStateChangeAt" | "prState" | "task" | "transcriptPath">>;
+  "agentStatus" | "lastEventAt" | "lastStateChangeAt" | "prState" | "task" | "transcriptPath" | "sessionId">>;
 
 // pretooluse/posttooluse fire on every Claude tool call and dominate hook
 // traffic — a busy agent completes many tools per second, and with N agents in
@@ -211,6 +211,17 @@ function applyAndLog(
   const tp = ctx.input.transcript_path;
   if (typeof tp === "string" && tp && tp !== ctx.workerInfo.entry.transcriptPath) {
     fields.transcriptPath = tp;
+  }
+
+  // Capture the session id ONLY when the worker has none yet — the case of a
+  // harness that assigns its own id (Codex) rather than accepting a
+  // garden-minted one (Claude Code, whose sessionId is set at creation). This
+  // is what makes bounce/resume work for such a worker: buildResumeCommand
+  // reads entry.sessionId to `codex resume <id>`. Guarded on empty so a
+  // claude worker's id is never overwritten mid-session.
+  const sid = ctx.input.session_id;
+  if (typeof sid === "string" && sid && !ctx.workerInfo.entry.sessionId) {
+    fields.sessionId = sid;
   }
 
   // Capture the live pane title as the worker's task summary. Claude sets

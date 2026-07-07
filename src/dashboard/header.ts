@@ -21,7 +21,8 @@ import { log } from "./log.js";
 import { unreadAlertCount, formatRightBar } from "./alerts.js";
 import { workerWindowName as workerWin, parseWorkerWindow, parseWorkerSuffix } from "./window-names.js";
 import { renderUsagePane } from "./usage.js";
-import { readConversation, resolveTranscriptPath, formatConversationPane } from "./conversation.js";
+import { formatConversationPane } from "./conversation.js";
+import { getHarnessCore } from "./harness/core.js";
 import { resolvePlotStatus, type PlotState } from "./plot-status.js";
 
 export const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
@@ -894,7 +895,12 @@ function renderHistoryContent(
     if (!entry) {
       lines = [dimLine("no active worker")];
     } else {
-      const turns = readConversation(resolveTranscriptPath(entry), HISTORY_MAX_TURNS);
+      // Transcript reading is harness-shaped: claude-code parses its JSONL
+      // envelope, codex its rollout format. Route through the entry's adapter
+      // so the ⌥h view works for any harness (claude-code stays byte-identical
+      // — its adapter methods wrap the same conversation.ts functions).
+      const core = getHarnessCore(entry.harness);
+      const turns = core.readTurns(core.resolveTranscriptPath(entry), HISTORY_MAX_TURNS);
       if (turns.length === 0) {
         lines = [dimLine("no conversation yet")];
       } else {

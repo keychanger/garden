@@ -64,18 +64,31 @@ all lifecycle hooks firing via `-c` injection). What landed:
 - **Selection** (gap 6): `workers new --harness codex`, validated against the
   registry, persisted to `entry.harness`, threaded through the bootstrap.
 
+### Also shipped — multi-phase, history, session id (2026-07-06)
+
+- **Multi-phase auto-continue** works for a Codex worker: `continue.ts` drives
+  the pane via `pasteAndSubmit`, which *is* Codex's `deliverPrompt` contract,
+  and `transcript_path` capture is harness-neutral — so a Codex worker builds
+  → merges → auto-continues to the next phase like a Claude worker.
+- **History view** (`⌥h`): `header.ts` now reads the transcript through the
+  worker's adapter (`getHarnessCore(entry.harness).readTurns`), so a Codex
+  worker's rollout renders correctly; the claude-code path is byte-identical
+  (its adapter methods wrap the same `conversation.ts` functions).
+- **Session-identity capture** (gap 4): the hook handler captures the
+  Codex-assigned `session_id` onto `entry.sessionId` when the worker has none
+  (guarded so a Claude worker's minted id is never overwritten), wiring up
+  `bounce`/resume via `codex resume <id>`.
+
 ### What does not ship yet
 
-- **Session-identity recovery** (gap 4): Codex assigns its own id; garden does
-  not yet capture it from the hook payload, so `bounce`/resume/loop cold-start
-  a Codex worker rather than resuming its thread. A single-task run does not
-  need it; multi-phase robustness does.
-- **`continue.ts` / `header.ts` routing** (gap 5): auto-continue prompt
-  injection and the history view still assume the claude path, so multi-phase
-  auto-continue and the `⌥h` view are not yet correct for a Codex worker.
+- **Live-verified `codex resume`**: the capture + resume wiring is in place, but
+  `codex resume <captured-id>` restoring a bounced worker's thread is not yet
+  live-verified (the id and rollout filename match, so it should hold).
+- **`deliverPrompt` draft-detection** for Codex: auto-continue works, but its
+  unsent-draft guard keys on Claude's `❯` prompt marker, not Codex's `›`, so it
+  can't yet detect a half-typed Codex message (minor; the paste still lands).
 - **Project-default harness** (`config <p> harness`) and `--harness` for
-  trellis/grow: deferred; `--harness codex` on the default workflow is the v1
-  surface.
+  trellis/grow: deferred; `--harness codex` on the default workflow is v1.
 
 ## Thesis: a crew is not a workflow
 
@@ -347,15 +360,17 @@ gate green — the same discipline the reviewer-first slices used.
    --harness codex` validated against the registry, persisted to
    `entry.harness`, threaded through the bootstrap. Project-default `config
    harness` and `roles.worker` deferred (the flag is the v1 surface).
-5. **Session identity (gap 4).** `recoverSessionId`; capture the id from the
-   hook payload; bounce/resume/loop via `codex resume`. NOT YET.
-6. **Continue/history routing (gap 5).** Route `deliverPrompt`/`readTurns`
-   through the adapter. NOT YET.
-7. **Crews + picker (this doc's UX).** Named crews as sugar over the role
+5. **Session identity + history routing (gaps 4/5). DONE (2026-07-06).** The
+   hook captures the Codex-assigned `session_id` onto `entry.sessionId` (wiring
+   `bounce`/resume); the `⌥h` history view routes transcript reading through
+   the adapter. Multi-phase auto-continue already worked (identical paste +
+   harness-neutral transcript capture). Remaining: live-verify `codex resume`
+   and Codex-aware draft detection.
+6. **Crews + picker (this doc's UX).** Named crews as sugar over the role
    matrix; `⌥⇧N` gains a crew dimension. NOT YET.
 
-The runnable worker path (slices 1–4) landed 2026-07-06; slices 5–7 harden
-multi-phase/bounce and add the crew ergonomics.
+The full single- and multi-phase Codex worker experience landed 2026-07-06
+(slices 1–5); slice 6 adds the crew ergonomics over the now-working mechanics.
 
 ## Operator surface
 
