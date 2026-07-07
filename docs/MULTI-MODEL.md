@@ -719,7 +719,7 @@ Then the **worker path** (second priority): interactive
 poller's liveness poke), session-identity recovery across
 newWorker/loop/bounce/resume, `--harness` worker selection with a runtime
 capability gate, the bootstrap config-install seam (stop inlining the
-claude dialect), the deferred `continue.ts`/`header.ts`
+claude dialect), the `continue.ts`/`header.ts`
 `deliverPrompt`/`readTurns` routing, and the full per-role resolver for
 the worker. AGENTS.md-collision handling (never clobber a repo's own
 `AGENTS.md`) and Codex sandbox/network translation live here.
