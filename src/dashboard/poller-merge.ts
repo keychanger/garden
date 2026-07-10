@@ -8,7 +8,7 @@
 import { execSync, execFileSync, spawn } from "node:child_process";
 import {
   tryGetProject, getAutoContinueConfig, setAutoContinueConfig,
-  anyAnthropicMeteredProject,
+  anyAnthropicMeteredProject, projectUsageGateExempt,
 } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { addAlert } from "./alerts.js";
@@ -834,7 +834,7 @@ function maybeAutoContinue(
     });
     return false;
   }
-  const gateReason = autoContinueGateReason();
+  const gateReason = autoContinueGateReason(projectName);
   if (gateReason) {
     // The sweep replays this on every poke for each stranded worker, so a raw
     // info line would flood. Throttle to once per worker per hour (mirrors
@@ -919,7 +919,17 @@ function autoContinueSkipReason(
 // Global auto-continue gate. Mutates config when it auto-resumes after a
 // usage-window reset or auto-disables after a threshold cross. Returns null
 // when auto-continue is allowed to proceed; otherwise a short reason tag.
-export function autoContinueGateReason(): string | null {
+//
+// The usage-triggered closures are per-project: a project on a third-party
+// provider or a non-default claudeProfile draws tokens from a pool the
+// default account's meters do not describe, so `usage-paused` does not hold
+// it and its calls never evaluate the meters (no read, no trip side effect —
+// the threshold trip fires from the next metered project's check, where it
+// describes tokens that worker actually consumes). An explicit
+// `garden auto off` (enabled=false with no pausedUntil) still blocks every
+// project: that closure is operator intent, not a meter reading. Callers
+// that have no project context omit the argument and get the strict gate.
+export function autoContinueGateReason(projectName?: string): string | null {
   let cfg = getAutoContinueConfig();
 
   if (!cfg.enabled && cfg.pausedUntil && cfg.resumeAfterReset) {
@@ -934,9 +944,17 @@ export function autoContinueGateReason(): string | null {
     }
   }
 
-  if (!cfg.enabled) {
-    return cfg.pausedUntil ? "usage-paused" : "globally-disabled";
+  let usageExempt = false;
+  if (projectName) {
+    try { usageExempt = projectUsageGateExempt(projectName); } catch { /* config unavailable: keep gate */ }
   }
+
+  if (!cfg.enabled) {
+    if (!cfg.pausedUntil) return "globally-disabled";
+    return usageExempt ? null : "usage-paused";
+  }
+
+  if (usageExempt) return null;
 
   const tripped = checkUsageThreshold(cfg.usageThreshold);
   if (tripped) {

@@ -6,7 +6,7 @@
 // pgrep and does not read marker files. Before rendering, it refreshes
 // worker task summaries from live tmux pane titles so the registry stays
 // current between hook events.
-import { loadConfig, getFocusedProjectNames, allPlotProjectNames, tryGetProject, getAutoContinueConfig } from "../config.js";
+import { loadConfig, getFocusedProjectNames, allPlotProjectNames, tryGetProject, getAutoContinueConfig, projectUsageGateExempt, type AutoContinueConfig, type GardenConfig } from "../config.js";
 import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
@@ -184,12 +184,13 @@ export async function status(args: string[]): Promise<void> {
 
   // One clock read per render so every row's elapsed suffix is consistent.
   const now = Date.now();
-  const gateClosed = !getAutoContinueConfig(config).enabled;
+  const acConfig = getAutoContinueConfig(config);
 
   console.log("");
   for (let pi = 0; pi < statuses.length; pi++) {
     if (pi > 0) console.log("");
     const project = statuses[pi];
+    const gateClosed = gateHoldsProject(acConfig, project.name, config);
     const marker = project.isActive ? " \u25C4" : "";
     const name = project.isActive ? `\x1b[1;32m${project.name}\x1b[0m` : project.name;
     console.log(`  ${project.index}. ${name}${formatDiaryGlyph(project.name)}${marker}`);
@@ -606,6 +607,17 @@ export function formatGateSuffix(status: WorkerStatus, gateClosed: boolean): str
   return " \x1b[33mgate closed\x1b[0m";
 }
 
+// Whether the closed gate actually holds this project's workers — mirrors the
+// per-project branch in autoContinueGateReason (poller-merge.ts). A
+// usage-triggered closure (pausedUntil set) does not hold projects on a
+// separate token pool, so their merged rows must not claim "gate closed";
+// an explicit `garden auto off` (no pausedUntil) holds every project.
+function gateHoldsProject(ac: AutoContinueConfig, projectName: string, config: GardenConfig): boolean {
+  if (ac.enabled) return false;
+  if (!ac.pausedUntil) return true;
+  return !projectUsageGateExempt(projectName, config);
+}
+
 function collectWorkers(
   projectName: string,
   state: DashboardState,
@@ -705,12 +717,13 @@ export function renderQuickStatus(
   const now = Date.now();
   // Global auto-continue gate — read once (from the already-loaded config, no
   // extra IO) so `merged` rows can flag when the gate is holding them parked.
-  const gateClosed = !getAutoContinueConfig(config).enabled;
+  const acConfig = getAutoContinueConfig(config);
 
   lines.push("");
   for (let pi = 0; pi < names.length; pi++) {
     if (pi > 0) lines.push("");
     const name = names[pi];
+    const gateClosed = gateHoldsProject(acConfig, name, config);
     const isActive = state.activeProject === name;
     const marker = isActive ? " \u25C4" : "";
     const displayName = isActive ? `\x1b[1;32m${name}\x1b[0m` : name;

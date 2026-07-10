@@ -139,7 +139,11 @@ export function maybeDispatchHolisticReview(
     (w) => w.workflow === "holistic-review"
       && w.prState !== "done" && w.prState !== "merged" && w.prState !== "failing",
   ).length;
-  const gateReason = autoContinueGateReason();
+  // Project-scoped gate: the spawned holistic worker runs on this project's
+  // claudeProfile/provider env, so a usage-exempt project (separate token
+  // pool) dispatches through a usage-triggered closure — the same reasoning
+  // as its workers' auto-continue. An explicit `garden auto off` still defers.
+  const gateReason = autoContinueGateReason(projectName);
   if (inFlight >= HOLISTIC_CONCURRENCY_CAP || gateReason) {
     log.debug("poller", "holistic-review dispatch deferred", {
       worker: entry.name,

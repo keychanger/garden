@@ -361,6 +361,24 @@ export function anyAnthropicMeteredProject(config?: GardenConfig): boolean {
   return projects.some((p) => !p.provider);
 }
 
+// True when a project's workers draw tokens from a pool the default-account
+// usage meters do not describe: a third-party `provider`, or a claudeProfile
+// resolving to a config dir other than the default ~/.claude (a separate
+// Claude subscription). The auto-continue usage gate skips such projects —
+// pausing them on the default account's meters would strand work whose
+// tokens those meters never counted. Fails closed: an unknown project or an
+// unresolvable profile reference counts as metered, so the gate still applies.
+export function projectUsageGateExempt(projectName: string, config?: GardenConfig): boolean {
+  const cfg = config ?? loadConfig();
+  const project = cfg.projects[projectName];
+  if (!project) return false;
+  if (project.provider) return true;
+  if (!project.claudeProfile) return false;
+  const profile = tryResolveClaudeProfile(project, cfg);
+  if (!profile) return false;
+  return path.resolve(profile.configDir) !== path.resolve(HOME, ".claude");
+}
+
 export function loadConfig(): GardenConfig {
   if (!fs.existsSync(CONFIG_PATH)) {
     throw new Error(

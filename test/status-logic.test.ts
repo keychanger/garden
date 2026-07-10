@@ -55,6 +55,7 @@ vi.mock("../src/config.js", () => {
       return p ? { ...p, name } : null;
     }),
     getAutoContinueConfig: vi.fn(() => ({ enabled: true, usageThreshold: 95, resumeAfterReset: false })),
+    projectUsageGateExempt: vi.fn(() => false),
     SESSIONS_DIR: "/tmp/fake-sessions",
   };
 });
@@ -74,7 +75,7 @@ vi.mock("../src/output.js", () => ({
 }));
 
 import { status, renderQuickStatus, resolveWorkerStatus, dimRow, truncateToVisibleWidth, formatTimeInState, formatGateSuffix, _resetStatusBranchCacheForTest } from "../src/commands/status.js";
-import { getAutoContinueConfig } from "../src/config.js";
+import { getAutoContinueConfig, projectUsageGateExempt } from "../src/config.js";
 import { currentBranchFast } from "../src/dashboard/git.js";
 import { diaryHasContent } from "../src/diary.js";
 import { readDashState } from "../src/dashboard/state.js";
@@ -89,6 +90,7 @@ beforeEach(() => {
   vi.mocked(loadConfig).mockReturnValue({
     projects: { garden: { path: "/tmp/garden" } },
   });
+  vi.mocked(projectUsageGateExempt).mockReturnValue(false);
   vi.mocked(dashboardExists).mockReturnValue(true);
   vi.mocked(readDashState).mockReturnValue({
     activeProject: "garden",
@@ -358,6 +360,32 @@ describe("renderQuickStatus", () => {
     ]);
     const result = renderQuickStatus(state);
     expect(result).not.toContain("gate closed");
+  });
+
+  it("does not flag a usage-exempt project's merged row on a usage pause", () => {
+    // Usage-triggered closure (pausedUntil set): a project on a separate token
+    // pool auto-continues anyway, so its row must not claim "gate closed".
+    vi.mocked(getAutoContinueConfig).mockReturnValue({
+      enabled: false, usageThreshold: 95, resumeAfterReset: false,
+      pausedUntil: "2099-01-01T00:00:00Z", pausedReason: "5h at 99%",
+    });
+    vi.mocked(projectUsageGateExempt).mockReturnValue(true);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", prState: "merged" },
+    ]);
+    const result = renderQuickStatus(state);
+    expect(result).not.toContain("gate closed");
+  });
+
+  it("still flags a usage-exempt project's merged row on an explicit auto off", () => {
+    // Manual `garden auto off` (no pausedUntil) blocks every project.
+    vi.mocked(getAutoContinueConfig).mockReturnValue({ enabled: false, usageThreshold: 95, resumeAfterReset: false });
+    vi.mocked(projectUsageGateExempt).mockReturnValue(true);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", prState: "merged" },
+    ]);
+    const result = renderQuickStatus(state);
+    expect(result).toContain("gate closed");
   });
 
   it("marks a project that has diary content with a dimmed pencil glyph", () => {

@@ -313,6 +313,100 @@ describe("autoContinueGateReason", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Per-project usage exemption — a project on a third-party provider or a
+// non-default claudeProfile draws tokens from a pool the default account's
+// meters do not describe, so usage-triggered gate closures must not strand
+// its workers. An explicit `garden auto off` still blocks everyone.
+// ---------------------------------------------------------------------------
+
+async function initPooledProjects() {
+  const { saveConfig, GARDEN_DIR } = await importConfig();
+  fs.mkdirSync(GARDEN_DIR, { recursive: true });
+  saveConfig({
+    projects: {
+      plain: { path: "/tmp/plain" },
+      imp: { path: "/tmp/imp", claudeProfile: "imp" },
+      deep: { path: "/tmp/deep", provider: "deepseek" },
+      mainprof: { path: "/tmp/mainprof", claudeProfile: "main" },
+      broken: { path: "/tmp/broken", claudeProfile: "ghost" },
+    },
+    claudeProfiles: {
+      imp: { configDir: "~/.claude-imp" },
+      main: { configDir: "~/.claude" },
+    },
+    providers: {
+      deepseek: { baseUrl: "https://api.deepseek.com/anthropic", authTokenEnv: "DEEPSEEK_API_KEY" },
+    },
+  });
+}
+
+describe("projectUsageGateExempt", () => {
+  it("exempts provider-backed and non-default-profile projects only", async () => {
+    await initPooledProjects();
+    const { projectUsageGateExempt } = await importConfig();
+    expect(projectUsageGateExempt("deep")).toBe(true);
+    expect(projectUsageGateExempt("imp")).toBe(true);
+    // A profile pointing at the default ~/.claude IS the metered pool.
+    expect(projectUsageGateExempt("mainprof")).toBe(false);
+    expect(projectUsageGateExempt("plain")).toBe(false);
+    // Fail closed: unknown project / unresolvable profile keep the gate.
+    expect(projectUsageGateExempt("ghost-project")).toBe(false);
+    expect(projectUsageGateExempt("broken")).toBe(false);
+  });
+});
+
+describe("autoContinueGateReason per-project exemption", () => {
+  beforeEach(() => addAlertMock.mockReset());
+
+  it("bypasses a usage pause for exempt projects but not metered ones", async () => {
+    await initPooledProjects();
+    const { setAutoContinueConfig } = await importConfig();
+    setAutoContinueConfig({
+      enabled: false,
+      pausedUntil: "2099-01-01T00:00:00Z",
+      pausedReason: "5h at 99%",
+    });
+    mockGateDeps(null);
+    const { autoContinueGateReason } = await importGate();
+    expect(autoContinueGateReason("imp")).toBeNull();
+    expect(autoContinueGateReason("deep")).toBeNull();
+    expect(autoContinueGateReason("plain")).toBe("usage-paused");
+    expect(autoContinueGateReason("mainprof")).toBe("usage-paused");
+    expect(autoContinueGateReason()).toBe("usage-paused");
+  });
+
+  it("skips the meter evaluation entirely for an exempt project", async () => {
+    await initPooledProjects();
+    mockGateDeps({
+      fetchedAt: "2026-05-02T00:00:00Z",
+      data: { weekly: { pct: 99, resetsAt: "2099-01-01T00:00:00Z" } },
+    });
+    const { autoContinueGateReason } = await importGate();
+    const { getAutoContinueConfig } = await importConfig();
+    // Exempt project: no block, and crucially no trip side effect (the gate
+    // stays enabled, no alert) — the trip belongs to a metered worker's check.
+    expect(autoContinueGateReason("imp")).toBeNull();
+    expect(getAutoContinueConfig().enabled).toBe(true);
+    expect(addAlertMock).not.toHaveBeenCalled();
+    // The next metered project's check trips as before.
+    expect(autoContinueGateReason("plain")).toBe("usage-threshold");
+    expect(getAutoContinueConfig().enabled).toBe(false);
+    expect(addAlertMock).toHaveBeenCalledOnce();
+  });
+
+  it("still blocks exempt projects on an explicit garden auto off", async () => {
+    await initPooledProjects();
+    const { setAutoContinueConfig } = await importConfig();
+    setAutoContinueConfig({ enabled: false });
+    mockGateDeps(null);
+    const { autoContinueGateReason } = await importGate();
+    expect(autoContinueGateReason("imp")).toBe("globally-disabled");
+    expect(autoContinueGateReason("deep")).toBe("globally-disabled");
+    expect(autoContinueGateReason("plain")).toBe("globally-disabled");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Gate-reset wake — the usage poller's poke that lets an idle garden
 // auto-resume after a token wall (no hooks or pushes to deliver the poke
 // that would run the merged-state sweep).

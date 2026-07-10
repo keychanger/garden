@@ -1,6 +1,6 @@
 import { readRegistry, findWorkerByName, compareWorkerFreshness, type WorkerEntry } from "../dashboard/registry.js";
 import { output, isTTY } from "../output.js";
-import { getAutoContinueConfig, type AutoContinueConfig } from "../config.js";
+import { getAutoContinueConfig, projectUsageGateExempt, type AutoContinueConfig } from "../config.js";
 import { resolveWorkerStatus } from "./status.js";
 
 interface WhoamiResult {
@@ -24,6 +24,10 @@ interface WhoamiResult {
   // "please proceed" prompt after its next merge — so it's the answer to "will
   // this worker keep going on its own?", which nothing else on the worker shows.
   autoContinue: AutoContinueConfig;
+  // True when this worker's project runs on a separate token pool (provider
+  // or non-default claudeProfile), so usage-triggered gate closures above do
+  // not hold it — only an explicit `garden auto off` does.
+  usageGateExempt: boolean;
   siblings: Array<{ name: string; displayStatus: string }>;
 }
 
@@ -65,6 +69,9 @@ export async function whoami(args: string[]): Promise<void> {
     .sort(compareWorkerFreshness)
     .map(e => ({ name: e.name, displayStatus: resolveWorkerStatus(e) }));
 
+  let usageGateExempt = false;
+  try { usageGateExempt = projectUsageGateExempt(resolvedProject); } catch { /* config unavailable: report the strict gate */ }
+
   const result: WhoamiResult = {
     project: resolvedProject,
     worker: entry.name,
@@ -83,6 +90,7 @@ export async function whoami(args: string[]): Promise<void> {
     mergedAt: entry.mergedAt,
     failCount: entry.failCount,
     autoContinue: getAutoContinueConfig(),
+    usageGateExempt,
     siblings,
   };
 
@@ -104,7 +112,7 @@ export async function whoami(args: string[]): Promise<void> {
   if (result.reviewStartedAt) console.log(`    review running since ${result.reviewStartedAt}`);
   if (result.mergedAt) console.log(`    merged       ${result.mergedAt}`);
   if (result.failCount) console.log(`    fail count   ${result.failCount}`);
-  console.log(`    auto-cont.   ${formatAutoContinueLine(result.autoContinue)}`);
+  console.log(`    auto-cont.   ${formatAutoContinueLine(result.autoContinue, result.usageGateExempt)}`);
 
   if (result.siblings.length > 0) {
     console.log("");
@@ -121,10 +129,15 @@ export async function whoami(args: string[]): Promise<void> {
 // One-line summary of the global auto-continue gate for the TTY view. Green
 // "on" when the gate is open; yellow "OFF" with the pause reason/window (or the
 // `garden auto on` hint for a manual disable) when it's holding merged workers
-// parked.
-export function formatAutoContinueLine(ac: AutoContinueConfig): string {
+// parked. A usage pause does not hold a worker whose project is exempt
+// (separate token pool), so that combination reads "on" — the OFF answer
+// would be wrong for the one question this line exists to answer.
+export function formatAutoContinueLine(ac: AutoContinueConfig, usageGateExempt = false): string {
   if (ac.enabled) return "\x1b[32mon\x1b[0m \x1b[2m(post-merge)\x1b[0m";
   if (ac.pausedReason) {
+    if (usageGateExempt) {
+      return "\x1b[32mon\x1b[0m \x1b[2m(usage-paused globally; this project runs on a separate token pool)\x1b[0m";
+    }
     const until = ac.pausedUntil ? ` until ${ac.pausedUntil}` : "";
     return `\x1b[33mOFF\x1b[0m \x1b[2m${ac.pausedReason}${until}\x1b[0m`;
   }

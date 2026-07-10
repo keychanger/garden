@@ -2730,8 +2730,11 @@ in-process `newWorker` import: esbuild inlines dynamic imports into the
 single-file hook bundle, and `workers.ts` (→ `create.ts`/`skills.ts`) would
 bloat `dist/hook.js` by ~75kb. Safety: a per-project concurrency cap
 (`HOLISTIC_CONCURRENCY_CAP = 1`) and the shared usage gate
-(`autoContinueGateReason`) **defer without setting the guard**, so a deferred
-dispatch retries on the next merged/done sweep poke.
+(`autoContinueGateReason(projectName)` — project-scoped, so a usage-triggered
+closure does not defer a project on a separate token pool via `provider` or a
+non-default `claudeProfile`; an explicit `garden auto off` defers everyone)
+**defer without setting the guard**, so a deferred dispatch retries on the
+next merged/done sweep poke.
 
 The workflow definition (`workflows/holistic-review.ts`) reuses the default
 state handlers and hook handlers verbatim and pins `reviewerModel: "opus"`. A

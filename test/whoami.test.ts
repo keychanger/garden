@@ -24,15 +24,16 @@ vi.mock("../src/commands/status.js", () => ({
     entry?.prState ?? entry?.agentStatus ?? "ready",
 }));
 
-// Stub only getAutoContinueConfig (keep the rest of config real) so the gate
+// Stub only the gate accessors (keep the rest of config real) so the gate
 // block is deterministic and the test never reads the operator's real config.
 vi.mock("../src/config.js", async (importActual) => ({
   ...(await importActual<typeof import("../src/config.js")>()),
   getAutoContinueConfig: vi.fn(() => ({ enabled: true, usageThreshold: 95, resumeAfterReset: false })),
+  projectUsageGateExempt: vi.fn(() => false),
 }));
 
 import { whoami, formatAutoContinueLine } from "../src/commands/whoami.js";
-import { getAutoContinueConfig } from "../src/config.js";
+import { getAutoContinueConfig, projectUsageGateExempt } from "../src/config.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 const registryMock = await import("../src/dashboard/registry.js") as {
@@ -55,6 +56,7 @@ function makeWorker(overrides: Partial<WorkerEntry> = {}): WorkerEntry {
 
 beforeEach(() => {
   registryMock._clear();
+  vi.mocked(projectUsageGateExempt).mockReturnValue(false);
   delete process.env.GARDEN_PROJECT;
   delete process.env.GARDEN_WORKER;
 });
@@ -138,6 +140,16 @@ describe("whoami command", () => {
       pausedReason: "opus at 96%", pausedUntil: "2026-01-01T13:00:00.000Z",
     });
   });
+
+  it("reports whether the project is exempt from the usage gate", async () => {
+    vi.mocked(projectUsageGateExempt).mockReturnValue(true);
+    registryMock._setEntries("myproject", [makeWorker()]);
+    process.env.GARDEN_WORKER = "bold-ash";
+
+    const lines = await captureConsoleLog(() => whoami([]));
+    expect(JSON.parse(lines[0]).usageGateExempt).toBe(true);
+    expect(vi.mocked(projectUsageGateExempt)).toHaveBeenCalledWith("myproject");
+  });
 });
 
 describe("formatAutoContinueLine", () => {
@@ -157,6 +169,26 @@ describe("formatAutoContinueLine", () => {
 
   it("shows the re-enable hint when disabled without a pause reason", () => {
     const out = formatAutoContinueLine({ enabled: false, usageThreshold: 95, resumeAfterReset: false });
+    expect(stripAnsi(out)).toBe("OFF (garden auto on to re-enable)");
+  });
+
+  it("shows 'on' for a usage-exempt project during a usage pause", () => {
+    // The worker's project runs on a separate token pool, so a usage-triggered
+    // closure does not hold it — the line must not claim OFF.
+    const out = formatAutoContinueLine(
+      { enabled: false, usageThreshold: 95, resumeAfterReset: true, pausedReason: "opus at 96%", pausedUntil: "2026-01-01T13:00:00.000Z" },
+      true,
+    );
+    expect(stripAnsi(out)).toContain("on");
+    expect(stripAnsi(out)).not.toContain("OFF");
+    expect(out).toContain("\x1b[32m"); // green
+  });
+
+  it("still shows OFF for a usage-exempt project on an explicit auto off", () => {
+    const out = formatAutoContinueLine(
+      { enabled: false, usageThreshold: 95, resumeAfterReset: false },
+      true,
+    );
     expect(stripAnsi(out)).toBe("OFF (garden auto on to re-enable)");
   });
 });
