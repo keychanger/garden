@@ -9,7 +9,7 @@ vi.mock("node:fs", () => ({
 }));
 
 import fs from "node:fs";
-import { resolveGardenRunner, resolveHookRunner, findStableGardenBin, resolveNodeBin } from "../src/dashboard/runner.js";
+import { resolveGardenRunner, resolveHookRunner, findStableGardenBin, resolveNodeBin, hookCompileCachePrefix } from "../src/dashboard/runner.js";
 
 const savedArgv1 = process.argv[1];
 const savedPath = process.env.PATH;
@@ -125,6 +125,30 @@ describe("resolveHookRunner", () => {
     process.argv[1] = "/Users/joshua/.garden/worktrees/garden/blue-fern/dist/cli.js";
     const result = resolveHookRunner();
     expect(result).toContain("/Users/joshua/.garden/worktrees/garden/blue-fern/dist/hook.js");
+  });
+});
+
+describe("hookCompileCachePrefix", () => {
+  const savedHome = process.env.HOME;
+  afterAll(() => { process.env.HOME = savedHome; });
+
+  it("emits a NODE_COMPILE_CACHE assignment under ~/.cache", () => {
+    process.env.HOME = "/Users/joshua";
+    const prefix = hookCompileCachePrefix();
+    // A shell-safe path needs no quoting; the assignment is still valid.
+    expect(prefix).toBe("NODE_COMPILE_CACHE=/Users/joshua/.cache/garden/node-compile ");
+    // Trailing space so it prepends cleanly onto the runner command.
+    expect(prefix.endsWith(" ")).toBe(true);
+  });
+
+  it("shell-escapes a HOME containing spaces so the assignment stays one token", () => {
+    process.env.HOME = "/Users/jo shua";
+    expect(hookCompileCachePrefix()).toBe("NODE_COMPILE_CACHE='/Users/jo shua/.cache/garden/node-compile' ");
+  });
+
+  it("returns empty when HOME is unset (never bakes a bogus path)", () => {
+    delete process.env.HOME;
+    expect(hookCompileCachePrefix()).toBe("");
   });
 });
 

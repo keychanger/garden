@@ -133,6 +133,28 @@ export function resolveHookRunner(): string {
   return `${shellEscape(resolveNodeBin())} ${shellEscape(path.join(path.dirname(cliJs), "hook.js"))}`;
 }
 
+// Node's on-disk V8 compile cache (Node >= 22.1), as a ready-to-prepend shell
+// prefix for the per-tool-call hook command. That hook cold-starts a fresh node
+// process on every fire by every agent; caching the compiled bytecode of the
+// ~200KB hook.js bundle shaves a measured ~8% off each cold start. The dir sits
+// under ~/.cache — a sandbox-writable root for workers (sandbox.ts
+// DEFAULT_ALLOW_WRITE) — and is shared across every worker and project, so the
+// first fire compiles and all later fires across the whole fleet reuse it. Node
+// namespaces the dir by engine version+arch and keys entries by source-content
+// hash, so a node upgrade or a hook.js rebuild self-invalidates; an unwritable
+// or unsupported dir is silently ignored (best-effort), so this can never fail a
+// hook. Returned already shell-escaped with a trailing space; empty when HOME is
+// unknown. Applied only on the claude-code path (buildSettingsJson), whose hook
+// commands are verified to run through a shell — NOT folded into resolveHookRunner,
+// since the Codex adapter embeds that string in a TOML `command` value whose
+// exec semantics don't guarantee an env-assignment prefix survives.
+export function hookCompileCachePrefix(): string {
+  const home = process.env.HOME;
+  if (!home) return "";
+  const dir = path.join(home, ".cache", "garden", "node-compile");
+  return `NODE_COMPILE_CACHE=${shellEscape(dir)} `;
+}
+
 // Walk PATH looking for a `garden` executable, then resolve through symlinks
 // to the underlying file. The npm-linked global is itself a symlink chain:
 // /opt/homebrew/bin/garden -> ../lib/node_modules/garden/dist/cli.js

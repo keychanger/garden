@@ -86,6 +86,13 @@ describe("worker bootstrap (real fs + real git)", () => {
     expect(settings.hooks.PreToolUse).toBeDefined();
     expect(settings.hooks.PostToolUse).toBeDefined();
     expect(settings.hooks.PermissionRequest).toBeDefined();
+
+    // The firehose PostToolUse hook carries the NODE_COMPILE_CACHE prefix so
+    // each cold-started hook process reuses the bundle's cached bytecode.
+    const postCmd = settings.hooks.PostToolUse[0].hooks[0].command;
+    expect(postCmd).toContain("NODE_COMPILE_CACHE=");
+    expect(postCmd).toContain(".cache/garden/node-compile");
+    expect(postCmd).toMatch(/posttooluse$/);
   });
 
   it("settings.json has permissions.defaultMode auto and the documented allowlist", async () => {
