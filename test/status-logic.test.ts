@@ -61,6 +61,7 @@ vi.mock("../src/config.js", () => {
 
 vi.mock("../src/dashboard/git.js", () => ({
   currentBranch: vi.fn(() => null),
+  currentBranchFast: vi.fn(() => null),
 }));
 
 vi.mock("../src/diary.js", () => ({
@@ -74,7 +75,7 @@ vi.mock("../src/output.js", () => ({
 
 import { status, renderQuickStatus, resolveWorkerStatus, dimRow, truncateToVisibleWidth, formatTimeInState, formatGateSuffix, _resetStatusBranchCacheForTest } from "../src/commands/status.js";
 import { getAutoContinueConfig } from "../src/config.js";
-import { currentBranch } from "../src/dashboard/git.js";
+import { currentBranchFast } from "../src/dashboard/git.js";
 import { diaryHasContent } from "../src/diary.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { getWorkers } from "../src/dashboard/registry.js";
@@ -376,15 +377,15 @@ describe("renderQuickStatus", () => {
   });
 
   it("caches the project branch across re-bakes within the TTL (one rev-parse per project)", () => {
-    vi.mocked(currentBranch).mockReturnValue("main");
+    vi.mocked(currentBranchFast).mockReturnValue("main");
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "working" },
     ]);
     renderQuickStatus(state);
     renderQuickStatus(state);
-    // Two bakes, one focused project: currentBranch is forked once; the second
-    // bake hits the TTL cache instead of re-running git rev-parse.
-    expect(vi.mocked(currentBranch)).toHaveBeenCalledTimes(1);
+    // Two bakes, one focused project: the branch is resolved once; the second
+    // bake hits the TTL cache instead of re-reading .git/HEAD.
+    expect(vi.mocked(currentBranchFast)).toHaveBeenCalledTimes(1);
   });
 
   it("renders loading from registry", () => {
@@ -592,7 +593,7 @@ describe("branch hint", () => {
     result.split("\n").find(l => l.includes(name)) ?? "";
 
   it("flags a worker whose pinned base diverges from the checkout in yellow", () => {
-    vi.mocked(currentBranch).mockReturnValue("main");
+    vi.mocked(currentBranchFast).mockReturnValue("main");
     vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "working", baseBranch: "feature-x" },
@@ -602,7 +603,7 @@ describe("branch hint", () => {
   });
 
   it("omits the hint when a lone worker's base matches the checkout", () => {
-    vi.mocked(currentBranch).mockReturnValue("main");
+    vi.mocked(currentBranchFast).mockReturnValue("main");
     vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "working", baseBranch: "main" },
@@ -612,7 +613,7 @@ describe("branch hint", () => {
   });
 
   it("shows every worker's base when any one diverges — diverging yellow, matching grey", () => {
-    vi.mocked(currentBranch).mockReturnValue("main");
+    vi.mocked(currentBranchFast).mockReturnValue("main");
     // calm-bay is also surfaced via a hidden window so two workers render under
     // the one project; the comparator mock orders them alphabetically.
     vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_garden-worker-calm-bay"]);

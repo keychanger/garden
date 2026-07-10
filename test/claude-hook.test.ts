@@ -93,6 +93,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   resolveBaseBranch: vi.fn(() => "main"),
   getWorkerBaseBranch: vi.fn((entry: { baseBranch?: string }) => entry.baseBranch ?? "main"),
   currentBranch: vi.fn(() => "main"),
+  currentBranchFast: vi.fn(() => "main"),
 }));
 
 vi.mock("../src/dashboard/poller.js", () => ({

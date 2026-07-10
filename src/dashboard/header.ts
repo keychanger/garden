@@ -16,7 +16,7 @@ import { tmux, tmuxBatch, getPanePid, getPaneTitle, getFirstPaneId, windowExists
 import { readDashState, type DashboardState } from "./state.js";
 import { findWorkerByName, updateWorkerFields, removeWorker, readRegistry, batchUpdateWorkerFields, type WorkerRegistry } from "./registry.js";
 import { atomicWriteFile } from "./atomic-write.js";
-import { currentBranch, worktreeExists } from "./git.js";
+import { currentBranchFast, worktreeExists } from "./git.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { log } from "./log.js";
 import { unreadAlertCount, formatRightBar } from "./alerts.js";
@@ -116,7 +116,7 @@ function formatLeft(
   if (!activeProject) return " no projects";
   const projectConfig = config.projects[activeProject];
   const repoPath = projectConfig?.path ?? "";
-  const branch = repoPath ? (currentBranch(repoPath) ?? "main") : "main";
+  const branch = repoPath ? (currentBranchFast(repoPath) ?? "main") : "main";
   const plotPrefix = activePlot ? `${activePlot} #[fg=colour244]\u203a#[default] ` : "";
   const trellisSummary = formatTrellisSummary(activeProject);
   return ` ${plotPrefix}#[bold]${activeProject}#[default]  ${branch}${trellisSummary} `;

@@ -145,6 +145,38 @@ describe("currentBranch (real git)", () => {
   });
 });
 
+describe("currentBranchFast (real git)", () => {
+  it("reads the active branch straight from .git/HEAD", async () => {
+    const { currentBranchFast } = await import("../../src/dashboard/git.js");
+    expect(currentBranchFast(env.repoPath)).toBe("main");
+  });
+
+  it("follows the linked-worktree gitdir indirection (.git is a file)", async () => {
+    const { createWorktree, currentBranchFast } =
+      await import("../../src/dashboard/git.js");
+    const wt = path.join(env.home, "wt", "fast");
+    createWorktree(env.repoPath, wt, "fast-branch");
+    // A linked worktree's .git is a "gitdir: <path>" pointer file, not a dir.
+    expect(fs.statSync(path.join(wt, ".git")).isFile()).toBe(true);
+    expect(currentBranchFast(wt)).toBe("fast-branch");
+  });
+
+  it("falls back to the git fork on a detached HEAD", async () => {
+    const { currentBranchFast } = await import("../../src/dashboard/git.js");
+    const sha = git(env.repoPath, "rev-parse", "HEAD");
+    git(env.repoPath, "checkout", "--detach", sha);
+    // No `ref:` line in HEAD, so the fast path defers to currentBranch. That
+    // returns git rev-parse's literal "HEAD" for a detached head — the point is
+    // the displayed value matches the fork, not that it's meaningful.
+    expect(currentBranchFast(env.repoPath)).toBe("HEAD");
+  });
+
+  it("falls back to null when path is not a git checkout", async () => {
+    const { currentBranchFast } = await import("../../src/dashboard/git.js");
+    expect(currentBranchFast(path.join(env.home, "not-a-repo"))).toBeNull();
+  });
+});
+
 describe("deleteBranch (real git)", () => {
   it("deletes a local branch", async () => {
     const { deleteBranch } = await import("../../src/dashboard/git.js");

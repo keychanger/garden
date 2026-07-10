@@ -99,6 +99,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   resolveBaseBranch: vi.fn(() => "main"),
   getWorkerBaseBranch: vi.fn((entry: { baseBranch?: string }) => entry.baseBranch ?? "main"),
   currentBranch: vi.fn(() => "main"),
+  currentBranchFast: vi.fn(() => "main"),
   worktreeExists: vi.fn(() => true),
 }));
 
@@ -161,7 +162,7 @@ import {
 import { tmux, tmuxBatch, getPanePid, getPaneSize, getPaneTitle, setPaneVar, listSessionPaneTitles } from "../src/dashboard/tmux.js";
 import { readDashState, type DashboardState } from "../src/dashboard/state.js";
 import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields, removeWorker } from "../src/dashboard/registry.js";
-import { currentBranch, worktreeExists } from "../src/dashboard/git.js";
+import { currentBranchFast, worktreeExists } from "../src/dashboard/git.js";
 import { renderQuickStatus, resolveWorkerStatus } from "../src/commands/status.js";
 import { isPlotFocused, loadConfig, logColorKeyForProject } from "../src/config.js";
 import { log } from "../src/dashboard/log.js";
@@ -194,7 +195,7 @@ beforeEach(() => {
   vi.mocked(getPaneSize).mockReturnValue(null);
   vi.mocked(getPaneTitle).mockReturnValue(null);
   vi.mocked(renderQuickStatus).mockReturnValue("line1\nline2\nline3");
-  vi.mocked(currentBranch).mockReturnValue("main");
+  vi.mocked(currentBranchFast).mockReturnValue("main");
   // Module-level write caches (writePlotStripTemplate, writeQuickStatus,
   // writeUsageRendered, setBarVars) persist across test cases within the same
   // module instance. Each test that asserts "the write happened" needs a clean
@@ -429,7 +430,7 @@ describe("installInputGuard", () => {
 
 describe("updateHeaderVar", () => {
   it("sets @garden_left with active project name and branch", () => {
-    vi.mocked(currentBranch).mockReturnValue("feature-x");
+    vi.mocked(currentBranchFast).mockReturnValue("feature-x");
     updateHeaderVar();
 
     const calls = vi.mocked(tmuxBatch).mock.calls.flat();

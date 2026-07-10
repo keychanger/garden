@@ -807,6 +807,33 @@ export function currentBranch(repoPath: string): string | null {
   }
 }
 
+// Fast, DISPLAY-ONLY branch resolution: read the branch name straight from
+// .git/HEAD instead of forking `git rev-parse`. The status render resolves the
+// checked-out branch of every project in the active plot plus the header's
+// active project on every repaint (hook firehose + every nav) — that was ~6 git
+// forks (~8ms each) per repaint; a .git/HEAD read is ~0.05ms. Falls back to the
+// git fork on a detached HEAD (raw SHA, no `ref:`) or any read/parse failure,
+// so the displayed value matches `git rev-parse` in every case the fast path
+// can't resolve. NOT for merge decisions — those call currentBranch directly
+// for ground truth (a partial/racing HEAD read must never gate a force-push).
+export function currentBranchFast(repoPath: string): string | null {
+  try {
+    const dotGit = path.join(repoPath, ".git");
+    let gitDir = dotGit;
+    if (!fs.statSync(dotGit).isDirectory()) {
+      // Linked worktree: .git is a file "gitdir: <path>".
+      const m = fs.readFileSync(dotGit, "utf-8").trim().match(/^gitdir:\s*(.+)$/);
+      if (!m) return currentBranch(repoPath);
+      gitDir = m[1];
+    }
+    const head = fs.readFileSync(path.join(gitDir, "HEAD"), "utf-8").trim();
+    const ref = head.match(/^ref:\s*refs\/heads\/(.+)$/);
+    return ref ? ref[1] : currentBranch(repoPath);
+  } catch {
+    return currentBranch(repoPath);
+  }
+}
+
 // Extract the host from the origin remote URL. Handles both ssh-style
 // (git@host:owner/repo.git) and https-style (https://host/owner/repo.git)
 // forms. Returns null if there is no origin or the URL can't be parsed.

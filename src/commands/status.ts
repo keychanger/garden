@@ -13,7 +13,7 @@ import { readDashState, type DashboardState } from "../dashboard/state.js";
 import { getWorkers, readRegistry, batchUpdateWorkerFields, compareWorkerFreshness, isWorkerStale, type WorkerRegistry } from "../dashboard/registry.js";
 import { listHiddenWorkerWindows, windowExists, getFirstPaneId, getPaneTitle } from "../dashboard/tmux.js";
 import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/window-names.js";
-import { currentBranch } from "../dashboard/git.js";
+import { currentBranchFast } from "../dashboard/git.js";
 import { diaryHasContent } from "../diary.js";
 import { deriveCrew } from "../dashboard/crew.js";
 import type { GardenConfig, ProjectConfig } from "../config.js";
@@ -459,13 +459,20 @@ export function _resetStatusBranchCacheForTest(): void {
   projectBranchCache.clear();
 }
 
-function resolveProjectBranch(projectName: string): string | null {
+function resolveProjectBranch(
+  projectName: string,
+  config?: ReturnType<typeof loadConfig>,
+): string | null {
   const cached = projectBranchCache.get(projectName);
   const now = Date.now();
   if (cached && now - cached.at < PROJECT_BRANCH_TTL_MS) return cached.branch;
-  const project = tryGetProject(projectName);
-  if (!project) return null;
-  const branch = currentBranch(project.path);
+  // Take the repo path from the already-loaded config on the hot render path;
+  // tryGetProject re-parses config.yml, which the per-project render loop would
+  // otherwise pay N times per bake. Fall back to tryGetProject for the CLI path
+  // (once per `garden status`, no threaded config).
+  const repoPath = config ? config.projects[projectName]?.path : tryGetProject(projectName)?.path;
+  if (!repoPath) return null;
+  const branch = currentBranchFast(repoPath);
   projectBranchCache.set(projectName, { branch, at: now });
   return branch;
 }
@@ -692,7 +699,7 @@ export function renderQuickStatus(
   const nameWidth = Math.max(10, ...allWorkers.map(w => w.name.length));
   const statusWidth = STATUS_WIDTH;
 
-  const projectBranches = names.map(n => resolveProjectBranch(n));
+  const projectBranches = names.map(n => resolveProjectBranch(n, config));
 
   // One clock read per bake so every row's elapsed suffix is consistent.
   const now = Date.now();
