@@ -133,10 +133,11 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       return;
     }
 
-    // Worker harness selection (agent CLI in the pane). Undefined = the
-    // claude-code default. Validate against the registry so an unknown name
-    // fails loudly here rather than silently falling back at launch.
-    const resolvedHarness = opts.harness;
+    // Worker harness selection (agent CLI in the pane): per-worker --harness,
+    // else the project default (set directly or by a crew), else claude-code.
+    // Validate against the registry so an unknown name fails loudly here rather
+    // than silently falling back at launch.
+    const resolvedHarness = opts.harness ?? project.harness;
     if (resolvedHarness && !isRegisteredHarness(resolvedHarness)) {
       tmuxDisplay(`Unknown harness '${resolvedHarness}'. Known: ${harnessNames().join(", ")}.`);
       log.error("workers", "rejected newWorker: unknown harness", {

@@ -37,6 +37,13 @@ export interface ProjectConfig {
   // on the first-party Anthropic path (claudeProfile or personal) so a
   // cheap/experimental worker model is always reviewed by a strong one.
   provider?: string;
+  // Default worker harness (agent CLI) for this project's workers — the axis-2
+  // analog of `provider` (axis 1). Absent = "claude-code". `workers new
+  // --harness` overrides per worker; a crew sets this alongside the review
+  // roles. Only the WORKER default lives here; the review family selects its
+  // harness under `roles` (a provider never reaches review — the safety net).
+  // See crew.ts + docs/future/CREWS.md.
+  harness?: string;
   logColor?: string;
   // Trellis workflow keys. See WORKFLOWS.md "Project config".
   // Directory containing trellis files. Resolved relative to the project
@@ -98,7 +105,7 @@ export interface RoleTarget {
 
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "path", "checks", "postMerge", "sandboxDomains", "claudeProfile", "provider",
-  "logColor", "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
+  "harness", "logColor", "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
   "maxGrowIterations", "requireCiSuccess", "holisticReview",
 ]);
 

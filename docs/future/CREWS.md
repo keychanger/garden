@@ -140,23 +140,47 @@ genuinely good future (see Futures) and is exactly the territory of
 [`PLAN-WORKFLOW.md`](PLAN-WORKFLOW.md) — but it does not exist in the pipeline
 yet, and a crew selector must not be designed around a role that isn't wired.
 
-## The crew model
+## The crew model — SHIPPED (2026-07-10, `src/dashboard/crew.ts`)
 
-A **crew** is a named bundle of role→assignment mappings. It is sugar over the
-per-role resolution that already exists for the review family; it does not
-introduce a new resolution mechanism.
+A **crew** is a pair of **members** — `<worker>-<reviewer>`, with `all-X` sugar
+when one harness both builds and reviews. `garden config <p> crew <name>` is
+sugar that sets the worker harness/provider *and* the three review-role
+harnesses together; it introduces no new resolution mechanism (it writes the
+existing `harness`/`provider`/`roles.*` keys).
 
-### The four canonical crews
+A **member** is *data*, not code: the registered harnesses (`claude`, `codex`)
+plus one per configured provider (`deepseek` → claude-code against that
+backend). So DeepSeek, Ollama, a future harness like opencode — each slots in
+as a member and expands the crew set with **zero crew code**. This is the
+payoff of keeping axis 1 (provider) and axis 2 (harness) orthogonal: a crew
+composes over both under one operator-facing name.
 
-| Crew | worker | reviewer (+ resolver + ci-fix) | Status |
-|---|---|---|---|
-| `all-claude` | claude-code | claude-code (Opus) | ships (the default) |
-| `claude-build-codex-review` | claude-code | codex | **ships today** (`config role reviewer harness codex`) |
-| `codex-build-claude-review` | codex | claude-code (Opus) | needs the worker path |
-| `all-codex` | codex | codex | needs the worker path |
+**The load-bearing asymmetry:** any member may BUILD (worker), but only harness
+members may REVIEW. A provider on a review role defeats the safety net (a
+cheap/experimental worker must be reviewed by a strong first-party model), so
+provider members are worker-only. Hence `deepseek-claude` / `deepseek-codex`
+are valid crews but there is no `*-deepseek` — a DeepSeek worker is always
+reviewed by strong Claude or Codex.
 
-Two of the four already work. The worker path unlocks the other two, and the
-crew names are the ergonomic wrapper over the role keys.
+### The crews (generated from members)
+
+For members `{claude, codex}` + a configured `deepseek` provider, `listCrews`
+generates:
+
+| Crew | worker | reviewer (+ resolver + ci-fix) |
+|---|---|---|
+| `all-claude` | claude-code | claude-code (default) |
+| `all-codex` | codex | codex |
+| `claude-codex` | claude-code | codex |
+| `codex-claude` | codex | claude-code |
+| `deepseek-claude` | claude-code + deepseek provider | claude-code |
+| `deepseek-codex` | claude-code + deepseek provider | codex |
+
+`deriveCrew` reports a project's current crew (null when hand-tuned, e.g.
+reviewer ≠ resolver); `applyCrew` is authoritative over the worker
+harness/provider + the three review harnesses, clearing to default what the
+crew doesn't set. The naming (worker-first `<worker>-<reviewer>`) generalizes:
+a new provider `foo` yields `foo-claude`/`foo-codex` automatically.
 
 ### Resolution semantics
 
@@ -366,11 +390,16 @@ gate green — the same discipline the reviewer-first slices used.
    the adapter. Multi-phase auto-continue already worked (identical paste +
    harness-neutral transcript capture). Remaining: live-verify `codex resume`
    and Codex-aware draft detection.
-6. **Crews + picker (this doc's UX).** Named crews as sugar over the role
-   matrix; `⌥⇧N` gains a crew dimension. NOT YET.
+6. **Crews (config surface). DONE (2026-07-10).** `config <p> crew [<name>]`
+   (`crew.ts`) — member-based, generated from harnesses + providers (so
+   DeepSeek et al. compose for free), worker-only-provider safety asymmetry,
+   plus the project-default `harness` key. The `⌥⇧N` picker crew dimension is
+   the remaining UX polish (deferred — the config command is the functional
+   surface; a project-level crew doesn't map cleanly onto the per-spawn
+   workflow picker, so its shape is an open design question).
 
 The full single- and multi-phase Codex worker experience landed 2026-07-06
-(slices 1–5); slice 6 adds the crew ergonomics over the now-working mechanics.
+(slices 1–5); the crew config surface landed 2026-07-10 (slice 6).
 
 ## Operator surface
 

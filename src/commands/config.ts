@@ -3,6 +3,7 @@ import { loadConfig, saveConfig, resolveProject, isValidConfigKey, type ProjectC
 import { syncProviderTokenToSession } from "../dashboard/claude-env.js";
 import { resolveReviewRole, type ReviewRole } from "../dashboard/roles.js";
 import { isRegisteredHarness, harnessNames } from "../dashboard/harness/core.js";
+import { listCrews, getCrew, applyCrew, deriveCrew } from "../dashboard/crew.js";
 import {
   ASSIGNABLE_LOG_COLOR_KEYS,
   RESERVED_LOG_COLOR_KEY,
@@ -13,7 +14,7 @@ import { output } from "../output.js";
 
 const SETTABLE_KEYS = [
   "checks", "postMerge", "sandboxDomains", "claudeProfile", "provider",
-  "logColor", "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
+  "harness", "logColor", "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
   "maxGrowIterations", "requireCiSuccess", "holisticReview",
 ] as const;
 type SettableKey = typeof SETTABLE_KEYS[number];
@@ -39,6 +40,14 @@ export async function config(args: string[]): Promise<void> {
   // [<harness|model> [<value|unset>]]`.
   if (key === "role") {
     handleRoleCommand(project, args.slice(2));
+    return;
+  }
+
+  // `garden config <p> crew [<name>]` — a crew is sugar that sets the worker
+  // harness/provider and the review-role harnesses together. Show current +
+  // available when no name is given.
+  if (key === "crew") {
+    handleCrewCommand(project, args[2]);
     return;
   }
 
@@ -172,6 +181,37 @@ const REVIEW_ROLE_KEYS: Record<string, ReviewRole> = {
 };
 const ROLE_DIMS = ["harness", "model"] as const;
 type RoleDim = typeof ROLE_DIMS[number];
+
+function handleCrewCommand(
+  project: ProjectConfig & { name: string },
+  name: string | undefined,
+): void {
+  const config = loadConfig();
+  if (!name) {
+    const current = deriveCrew(project, config);
+    const available = listCrews(config).map((c) => c.name);
+    output(
+      { crew: current, available },
+      () =>
+        [
+          `  crew: ${current ?? "(custom — hand-tuned roles)"}`,
+          `  available: ${available.join(", ")}`,
+        ].join("\n"),
+    );
+    return;
+  }
+  const spec = getCrew(name, config);
+  if (!spec) {
+    throw new Error(
+      `Unknown crew '${name}'. Available: ${listCrews(config).map((c) => c.name).join(", ")}.`,
+    );
+  }
+  applyCrew(project.name, spec);
+  const workerDesc = spec.worker.provider
+    ? `${spec.worker.name} (claude-code via provider ${spec.worker.provider})`
+    : spec.worker.name;
+  console.log(`Set crew '${name}' for ${project.name}: worker=${workerDesc}, review=${spec.review.name}.`);
+}
 
 function handleRoleCommand(
   project: ProjectConfig & { name: string },
@@ -323,6 +363,18 @@ function setConfigKey(projectName: string, key: SettableKey, value: string): voi
       if (!process.env[providerEntry.authTokenEnv]) {
         console.log(`  note: ${providerEntry.authTokenEnv} is not set in this shell — export it, then run 'garden auth status' to sync and verify.`);
       }
+    }
+  } else if (key === "harness") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.harness;
+      console.log(`Cleared ${key} for ${projectName} (workers default to claude-code)`);
+    } else if (!isRegisteredHarness(value)) {
+      throw new Error(
+        `Unknown harness '${value}'. Registered harnesses: ${harnessNames().join(", ")}.`,
+      );
+    } else {
+      project.harness = value;
+      console.log(`Set ${key} = ${value} for ${projectName} (applies to newly created or bounced workers; review family selects its own harness under 'role')`);
     }
   } else if (key === "maxTrellisIterations") {
     if (value === "" || value === "unset" || value === "null") {

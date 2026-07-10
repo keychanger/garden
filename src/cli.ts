@@ -75,6 +75,11 @@ Projects:
   config <project> role [<role> [harness|model] [value]]
                                  Per-role review harness/model (role: reviewer|resolver|ci-fix)
                                  e.g. 'config <p> role reviewer harness codex' for a Codex reviewer
+  config <project> crew [<name>] View/set the crew: who builds and who reviews, in one word.
+                                 Names are <worker>-<reviewer> (all-X sugar): all-claude,
+                                 all-codex, codex-claude, claude-codex, plus <provider>-claude /
+                                 <provider>-codex per configured provider (e.g. deepseek-claude).
+                                 A provider can build but never reviews (safety net).
   diary [project] [--path]       Open the project's diary in $EDITOR (--path prints the file path)
   claude-profile [list|add|remove|login]
                                  Manage alternate Claude config dirs (per-project plan)
