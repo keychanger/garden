@@ -161,6 +161,17 @@ describe("currentBranchFast (real git)", () => {
     expect(currentBranchFast(wt)).toBe("fast-branch");
   });
 
+  it("returns a slash-bearing branch name in full, matching the git fork", async () => {
+    const { currentBranchFast, currentBranch } =
+      await import("../../src/dashboard/git.js");
+    git(env.repoPath, "checkout", "-b", "release/2.0");
+    // HEAD is `ref: refs/heads/release/2.0`; the `.+` capture must keep the
+    // slash rather than stop at the first path segment, so the displayed value
+    // stays identical to `git rev-parse --abbrev-ref HEAD`.
+    expect(currentBranchFast(env.repoPath)).toBe("release/2.0");
+    expect(currentBranchFast(env.repoPath)).toBe(currentBranch(env.repoPath));
+  });
+
   it("falls back to the git fork on a detached HEAD", async () => {
     const { currentBranchFast } = await import("../../src/dashboard/git.js");
     const sha = git(env.repoPath, "rev-parse", "HEAD");
