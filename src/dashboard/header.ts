@@ -12,7 +12,7 @@ import path from "node:path";
 import { SESSIONS_DIR, loadConfig, tryGetProject, plotsMap, isPlotFocused, logColorKeyForProject } from "../config.js";
 import { logColorTmux } from "../log-palette.js";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize, listAllWindowNames, listSessionPaneTitles, cleanPaneTitle, type PaneInfo } from "./tmux.js";
+import { tmux, tmuxBatch, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize, listAllWindowNames, listSessionPaneTitles, cleanPaneTitle, type PaneInfo } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
 import { findWorkerByName, updateWorkerFields, removeWorker, readRegistry, batchUpdateWorkerFields, type WorkerRegistry } from "./registry.js";
 import { atomicWriteFile } from "./atomic-write.js";
@@ -282,11 +282,15 @@ function setBarVars(left: string, right: string): void {
     const t = DASHBOARD_SESSION;
     // Ensure format strings point to the correct variables. Idempotent and
     // cheap — self-heals after CLI rebuilds without requiring dashboard restart.
-    tmux("set-option", "-t", t, "status-left", "#{@garden_left}");
-    tmux("set-option", "-t", t, "status-right", "#{@garden_right}");
-    tmux("set-option", "-t", t, "@garden_left", left);
-    tmux("set-option", "-t", t, "@garden_right", right);
-    tmux("refresh-client", "-S");
+    // One client connect for all five commands instead of five (setBarVars runs
+    // on every refresh, so this is on the hook firehose + every nav).
+    tmuxBatch(
+      ["set-option", "-t", t, "status-left", "#{@garden_left}"],
+      ["set-option", "-t", t, "status-right", "#{@garden_right}"],
+      ["set-option", "-t", t, "@garden_left", left],
+      ["set-option", "-t", t, "@garden_right", right],
+      ["refresh-client", "-S"],
+    );
     lastBarLeft = left;
     lastBarRight = right;
   } catch { /* no client attached or session gone */ }

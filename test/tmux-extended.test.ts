@@ -32,6 +32,7 @@ vi.mock("../src/dashboard/window-names.js", () => ({
 
 import {
   tmux,
+  tmuxBatch,
   tmuxOutput,
   tmuxSplit,
   tmuxNewWindow,
@@ -327,6 +328,36 @@ describe("tmux", () => {
       ["set-option", "-t", "garden-dashboard", "mouse", "on"],
       { stdio: ["ignore", "ignore", "pipe"] },
     );
+  });
+});
+
+describe("tmuxBatch", () => {
+  it("joins command groups with a ';' argv separator in one execFileSync", () => {
+    mockExecFileSync.mockReturnValue(undefined);
+    tmuxBatch(
+      ["set-option", "-t", "s", "@garden_left", "L"],
+      ["set-option", "-t", "s", "@garden_right", "R"],
+      ["refresh-client", "-S"],
+    );
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      [
+        "set-option", "-t", "s", "@garden_left", "L",
+        ";", "set-option", "-t", "s", "@garden_right", "R",
+        ";", "refresh-client", "-S",
+      ],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+  });
+
+  it("skips empty groups and no-ops when nothing is left to run", () => {
+    mockExecFileSync.mockReturnValue(undefined);
+    tmuxBatch([], ["kill-server"], []);
+    expect(mockExecFileSync).toHaveBeenCalledWith("tmux", ["kill-server"], expect.anything());
+    mockExecFileSync.mockClear();
+    tmuxBatch([], []);
+    expect(mockExecFileSync).not.toHaveBeenCalled();
   });
 });
 

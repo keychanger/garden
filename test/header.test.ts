@@ -50,6 +50,7 @@ vi.mock("../src/session.js", () => ({
 
 vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
+  tmuxBatch: vi.fn(),
   tmuxOutput: vi.fn(() => ""),
   getFirstPaneId: vi.fn(() => null),
   getPaneTitle: vi.fn(() => null),
@@ -157,7 +158,7 @@ import {
   _resetHeaderCachesForTest,
 } from "../src/dashboard/header.js";
 
-import { tmux, getPanePid, getPaneSize, getPaneTitle, setPaneVar, listSessionPaneTitles } from "../src/dashboard/tmux.js";
+import { tmux, tmuxBatch, getPanePid, getPaneSize, getPaneTitle, setPaneVar, listSessionPaneTitles } from "../src/dashboard/tmux.js";
 import { readDashState, type DashboardState } from "../src/dashboard/state.js";
 import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields, removeWorker } from "../src/dashboard/registry.js";
 import { currentBranch, worktreeExists } from "../src/dashboard/git.js";
@@ -431,7 +432,7 @@ describe("updateHeaderVar", () => {
     vi.mocked(currentBranch).mockReturnValue("feature-x");
     updateHeaderVar();
 
-    const calls = vi.mocked(tmux).mock.calls;
+    const calls = vi.mocked(tmuxBatch).mock.calls.flat();
     const leftCall = calls.find(c => c[0] === "set-option" && c[3] === "@garden_left");
     expect(leftCall).toBeDefined();
     expect(leftCall![4]).toContain("garden");
@@ -442,7 +443,7 @@ describe("updateHeaderVar", () => {
   it("sets @garden_right with version string", () => {
     updateHeaderVar();
 
-    const calls = vi.mocked(tmux).mock.calls;
+    const calls = vi.mocked(tmuxBatch).mock.calls.flat();
     const rightCall = calls.find(c => c[0] === "set-option" && c[3] === "@garden_right");
     expect(rightCall).toBeDefined();
     expect(rightCall![4]).toContain("abc1234");
@@ -453,7 +454,7 @@ describe("updateHeaderVar", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: null }));
     updateHeaderVar();
 
-    const calls = vi.mocked(tmux).mock.calls;
+    const calls = vi.mocked(tmuxBatch).mock.calls.flat();
     const leftCall = calls.find(c => c[0] === "set-option" && c[3] === "@garden_left");
     expect(leftCall).toBeDefined();
     expect(leftCall![4]).toContain("no projects");
@@ -465,19 +466,19 @@ describe("updateHeaderVar", () => {
 
     // Should not have called readDashState since we passed state directly
     // (readDashState is called in the default path; when we pass state, it skips that)
-    const calls = vi.mocked(tmux).mock.calls;
+    const calls = vi.mocked(tmuxBatch).mock.calls.flat();
     const leftCall = calls.find(c => c[0] === "set-option" && c[3] === "@garden_left");
     expect(leftCall![4]).toContain("other");
   });
 
   it("calls refresh-client -S after setting vars", () => {
     updateHeaderVar();
-    const calls = vi.mocked(tmux).mock.calls;
-    expect(calls).toContainEqual(["refresh-client", "-S"]);
+    const groups = vi.mocked(tmuxBatch).mock.calls.flat();
+    expect(groups).toContainEqual(["refresh-client", "-S"]);
   });
 
   it("swallows error when session is gone", () => {
-    vi.mocked(tmux).mockImplementation(() => { throw new Error("no session"); });
+    vi.mocked(tmuxBatch).mockImplementation(() => { throw new Error("no session"); });
     expect(() => updateHeaderVar()).not.toThrow();
   });
 
@@ -622,15 +623,16 @@ describe("updateHeaderVar", () => {
   it("sets status-pane border vars before the refresh-client -S so the border repaints immediately", () => {
     updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "imp" }) });
 
-    // setPaneVar writes pane-scoped @garden_name via the tmux mock too.
-    // Interleave its call order with tmux's to find the refresh-client -S index.
+    // setPaneVar writes pane-scoped @garden_name; setBarVars' refresh-client -S
+    // rides in the batched tmuxBatch call. The border var must be set before the
+    // batch (which flushes the client) so the border repaints immediately.
     const setPaneVarMock = vi.mocked(setPaneVar);
     const nameCallIdx = setPaneVarMock.mock.invocationCallOrder[
       setPaneVarMock.mock.calls.findIndex(c => c[1] === "garden_name")
     ];
-    const tmuxMock = vi.mocked(tmux);
-    const refreshIdx = tmuxMock.mock.invocationCallOrder[
-      tmuxMock.mock.calls.findIndex(c => c[0] === "refresh-client" && c[1] === "-S")
+    const batchMock = vi.mocked(tmuxBatch);
+    const refreshIdx = batchMock.mock.invocationCallOrder[
+      batchMock.mock.calls.findIndex(gs => gs.some(g => g[0] === "refresh-client" && g[1] === "-S"))
     ];
     expect(nameCallIdx).toBeDefined();
     expect(refreshIdx).toBeDefined();
@@ -1038,13 +1040,13 @@ describe("writeQuickStatus (via refreshDashboard)", () => {
 
     refreshDashboard();
 
-    // updateHeaderVar (called unconditionally by refreshDashboard) ends with
-    // its own refresh-client -S, so one refresh call is expected. The
-    // writeQuickStatus flush must not add a second one on this no-resize path.
+    // updateHeaderVar's refresh-client -S now rides in setBarVars' batched
+    // tmuxBatch call, so the only way a bare tmux refresh-client -S appears is
+    // writeQuickStatus's resize flush — which must NOT fire on this no-resize path.
     const refreshCalls = vi.mocked(tmux).mock.calls.filter(
       c => c[0] === "refresh-client" && c[1] === "-S",
     );
-    expect(refreshCalls).toHaveLength(1);
+    expect(refreshCalls).toHaveLength(0);
   });
 
   it("signals the pane before shrinking so old content doesn't briefly show in the smaller pane", () => {
@@ -1397,9 +1399,9 @@ describe("refreshDashboard", () => {
     // Default mocks are fine — just verify the key side effects happen
     refreshDashboard();
 
-    // updateHeaderVar sets tmux vars
-    const calls = vi.mocked(tmux).mock.calls;
-    const hasLeftVar = calls.some(c => c[0] === "set-option" && c[3] === "@garden_left");
+    // updateHeaderVar sets tmux vars (batched via tmuxBatch)
+    const groups = vi.mocked(tmuxBatch).mock.calls.flat();
+    const hasLeftVar = groups.some(g => g[0] === "set-option" && g[3] === "@garden_left");
     expect(hasLeftVar).toBe(true);
 
     // writeQuickStatus calls renderQuickStatus
@@ -1417,8 +1419,8 @@ describe("refreshDashboard", () => {
     refreshDashboard({ state: customState });
 
     // updateHeaderVar should use the custom state's activeProject
-    const calls = vi.mocked(tmux).mock.calls;
-    const leftCall = calls.find(c => c[0] === "set-option" && c[3] === "@garden_left");
+    const groups = vi.mocked(tmuxBatch).mock.calls.flat();
+    const leftCall = groups.find(g => g[0] === "set-option" && g[3] === "@garden_left");
     expect(leftCall![4]).toContain("other");
 
     // refreshStatusPane should use the custom state's statusPaneId
@@ -1457,23 +1459,18 @@ describe("refreshDashboard", () => {
   });
 
   it("skips setBarVars tmux subprocesses when left/right both unchanged", () => {
-    refreshDashboard();
-    const firstStatusLeftCalls = vi.mocked(tmux).mock.calls.filter(
-      c => c[0] === "set-option" && c[3] === "@garden_left",
+    const setBarBatches = () => vi.mocked(tmuxBatch).mock.calls.filter(
+      gs => gs.some(g => g[0] === "set-option" && g[3] === "@garden_left"),
     ).length;
-    expect(firstStatusLeftCalls).toBeGreaterThan(0);
 
-    vi.mocked(tmux).mockClear();
-    // Same active project / plot → same left+right → entire setBarVars block skipped.
     refreshDashboard();
-    const secondStatusLeftCalls = vi.mocked(tmux).mock.calls.filter(
-      c => c[0] === "set-option" && c[3] === "@garden_left",
-    ).length;
-    const secondRefreshClient = vi.mocked(tmux).mock.calls.filter(
-      c => c[0] === "refresh-client",
-    ).length;
-    expect(secondStatusLeftCalls).toBe(0);
-    expect(secondRefreshClient).toBe(0);
+    expect(setBarBatches()).toBeGreaterThan(0);
+
+    vi.mocked(tmuxBatch).mockClear();
+    // Same active project / plot → same left+right → entire setBarVars block
+    // (its one batched tmuxBatch client) skipped.
+    refreshDashboard();
+    expect(setBarBatches()).toBe(0);
   });
 
   it("does not sweep per-window set-option calls on refresh (suppression is now at window creation)", () => {

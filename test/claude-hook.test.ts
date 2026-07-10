@@ -46,6 +46,7 @@ vi.mock("../src/dashboard/log.js", () => ({
 
 vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
+  tmuxBatch: vi.fn(),
   tmuxOutput: vi.fn(() => ""),
   getFirstPaneId: vi.fn(() => null),
   getPaneTitle: vi.fn(() => ""),
@@ -124,7 +125,7 @@ import { handleClaudeHook } from "../src/dashboard/hook-dispatcher.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { updateWorkerFields } from "../src/dashboard/registry.js";
 import { log } from "../src/dashboard/log.js";
-import { tmux, getPaneTitle } from "../src/dashboard/tmux.js";
+import { tmux, tmuxBatch, getPaneTitle } from "../src/dashboard/tmux.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { _resetHeaderCachesForTest } from "../src/dashboard/header.js";
 
@@ -550,8 +551,9 @@ describe("handleClaudeHook — session id capture (self-assigning harness)", () 
 // pretooluse/posttooluse fire on every Claude tool call and dominate hook
 // traffic. When they don't flip agentStatus or prState, refreshDashboard
 // must NOT cascade — the perf optimization in this commit. Detection: every
-// refreshDashboard ends with tmux refresh-client -S via setBarVars; counting
-// those calls is the cleanest signal that the cascade ran (or didn't).
+// refreshDashboard ends with a refresh-client -S in setBarVars' batched
+// tmuxBatch call; counting those groups is the cleanest signal that the cascade
+// ran (or didn't).
 describe("handleClaudeHook — refresh skip on no-op transitions", () => {
   it("pretooluse on a non-working/non-idle worker skips the dashboard refresh", () => {
     seedWorker("garden", "bold-ash", { agentStatus: "ready" });
@@ -559,8 +561,8 @@ describe("handleClaudeHook — refresh skip on no-op transitions", () => {
 
     handleClaudeHook("pretooluse");
 
-    const refreshCalls = vi.mocked(tmux).mock.calls.filter(
-      c => c[0] === "refresh-client" && c[1] === "-S",
+    const refreshCalls = vi.mocked(tmuxBatch).mock.calls.flat().filter(
+      g => g[0] === "refresh-client" && g[1] === "-S",
     );
     expect(refreshCalls).toHaveLength(0);
   });
@@ -571,8 +573,8 @@ describe("handleClaudeHook — refresh skip on no-op transitions", () => {
 
     handleClaudeHook("posttooluse");
 
-    const refreshCalls = vi.mocked(tmux).mock.calls.filter(
-      c => c[0] === "refresh-client" && c[1] === "-S",
+    const refreshCalls = vi.mocked(tmuxBatch).mock.calls.flat().filter(
+      g => g[0] === "refresh-client" && g[1] === "-S",
     );
     expect(refreshCalls).toHaveLength(0);
   });
@@ -583,8 +585,8 @@ describe("handleClaudeHook — refresh skip on no-op transitions", () => {
 
     handleClaudeHook("pretooluse");
 
-    const refreshCalls = vi.mocked(tmux).mock.calls.filter(
-      c => c[0] === "refresh-client" && c[1] === "-S",
+    const refreshCalls = vi.mocked(tmuxBatch).mock.calls.flat().filter(
+      g => g[0] === "refresh-client" && g[1] === "-S",
     );
     expect(refreshCalls.length).toBeGreaterThan(0);
   });
@@ -595,8 +597,8 @@ describe("handleClaudeHook — refresh skip on no-op transitions", () => {
 
     handleClaudeHook("stop");
 
-    const refreshCalls = vi.mocked(tmux).mock.calls.filter(
-      c => c[0] === "refresh-client" && c[1] === "-S",
+    const refreshCalls = vi.mocked(tmuxBatch).mock.calls.flat().filter(
+      g => g[0] === "refresh-client" && g[1] === "-S",
     );
     expect(refreshCalls.length).toBeGreaterThan(0);
   });

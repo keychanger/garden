@@ -58,6 +58,31 @@ export function tmux(...args: string[]): void {
   }
 }
 
+// Run several tmux commands in ONE client connect. Each group is a full command
+// argv (e.g. ["set-option", "-t", target, ...]); they are joined with tmux's
+// `;` argv command separator so a single execFileSync pays one client-connect
+// instead of one per command — the server runs them in order. Measured: six
+// chained commands cost the same ~3ms as one, so batching a hot-path write
+// sequence is effectively free. Use ONLY for independent WRITE commands: no
+// group may depend on another's stdout (the connect discards it), and a failure
+// in any group aborts the rest, so don't batch across an operation that must
+// run even if an earlier one fails. Empty groups are skipped.
+export function tmuxBatch(...groups: string[][]): void {
+  if (!tmuxExecAllowed) return;
+  const argv: string[] = [];
+  for (const g of groups) {
+    if (g.length === 0) continue;
+    if (argv.length > 0) argv.push(";");
+    argv.push(...g);
+  }
+  if (argv.length === 0) return;
+  try {
+    execFileSync("tmux", argv, { stdio: ["ignore", "ignore", "pipe"] });
+  } catch (err) {
+    rethrowWithStderr(err, `tmux ${argv[0] ?? "batch"} failed`);
+  }
+}
+
 // Paste a message into a Claude pane and submit it. The 300ms gap between
 // the paste and `Enter` matters on cold-start panes (`claude --resume` after
 // a dashboard restart, fresh sessions for handoff/seed): claude's TUI
