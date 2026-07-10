@@ -267,8 +267,8 @@ function writePlotStripTemplate(template: string): void {
 // tmux variable helpers
 // ---------------------------------------------------------------------------
 
-// Skip the 5 sync tmux subprocesses (4 set-option + 1 refresh-client) when
-// both bars match the last-applied values. The format strings (status-left /
+// Skip the batched tmux client connect (one subprocess: 4 set-option +
+// 1 refresh-client) when both bars match the last-applied values. The format strings (status-left /
 // status-right pointing at @garden_left / @garden_right) only need to be set
 // once per dashboard process — they don't drift unless tmux is restarted —
 // so the entire block is safe to skip on identity match. Reset on dashboard
