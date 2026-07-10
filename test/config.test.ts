@@ -713,3 +713,86 @@ describe("config role subcommand", () => {
     expect(loadConfig().projects.garden.roles).toBeUndefined();
   });
 });
+
+// Project-default worker harness key — the axis-2 analog of `provider`. Drives
+// the setConfigKey validation branch in config(): accepts a registered
+// harness, clears on the empty/unset/null sentinels, and rejects an
+// unregistered one. Mirrors the holisticReview config() precedent above.
+describe("config harness key", () => {
+  async function setup() {
+    const { saveConfig, GARDEN_DIR, loadConfig } = await importConfig();
+    const { config } = await import("../src/commands/config.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
+    return { config, loadConfig };
+  }
+
+  it("isValidConfigKey accepts harness", async () => {
+    const { isValidConfigKey } = await importConfig();
+    expect(isValidConfigKey("harness")).toBe(true);
+  });
+
+  it("persists a registered harness", async () => {
+    const { config, loadConfig } = await setup();
+    await config(["garden", "harness", "codex"]);
+    expect(loadConfig().projects.garden.harness).toBe("codex");
+  });
+
+  it("clears the harness on the empty sentinel", async () => {
+    const { config, loadConfig } = await setup();
+    await config(["garden", "harness", "codex"]);
+    await config(["garden", "harness", ""]);
+    expect(loadConfig().projects.garden.harness).toBeUndefined();
+  });
+
+  it("rejects an unregistered harness", async () => {
+    const { config } = await setup();
+    await expect(config(["garden", "harness", "gpt4all"]))
+      .rejects.toThrow(/Unknown harness 'gpt4all'/);
+  });
+});
+
+// `garden config <p> crew [<name>]` — sugar that sets the worker harness plus
+// the three review-role harnesses in one word. Exercises handleCrewCommand's
+// three branches (no-name display, unknown-crew throw, apply) at the config()
+// seam; crew.test.ts covers the pure crew.ts resolution separately.
+describe("config crew subcommand", () => {
+  async function setup() {
+    const { saveConfig, GARDEN_DIR, loadConfig } = await importConfig();
+    const { config } = await import("../src/commands/config.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
+    return { config, loadConfig };
+  }
+
+  it("applies all-codex: worker + all three review roles become codex", async () => {
+    const { config, loadConfig } = await setup();
+    await config(["garden", "crew", "all-codex"]);
+    const p = loadConfig().projects.garden;
+    expect(p.harness).toBe("codex");
+    expect(p.roles?.reviewer?.harness).toBe("codex");
+    expect(p.roles?.resolver?.harness).toBe("codex");
+    expect(p.roles?.ciFix?.harness).toBe("codex");
+  });
+
+  it("switching to all-claude clears everything the crew manages", async () => {
+    const { config, loadConfig } = await setup();
+    await config(["garden", "crew", "codex-claude"]);
+    expect(loadConfig().projects.garden.harness).toBe("codex");
+    await config(["garden", "crew", "all-claude"]);
+    const p = loadConfig().projects.garden;
+    expect(p.harness).toBeUndefined();
+    expect(p.roles).toBeUndefined();
+  });
+
+  it("rejects an unknown crew name", async () => {
+    const { config } = await setup();
+    await expect(config(["garden", "crew", "nonsense"]))
+      .rejects.toThrow(/Unknown crew 'nonsense'/);
+  });
+
+  it("no-name form reports the current crew without throwing", async () => {
+    const { config } = await setup();
+    await expect(config(["garden", "crew"])).resolves.toBeUndefined();
+  });
+});

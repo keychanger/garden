@@ -135,9 +135,18 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
 
     // Worker harness selection (agent CLI in the pane): per-worker --harness,
     // else the project default (set directly or by a crew), else claude-code.
+    // The project default applies to the DEFAULT workflow ONLY — trellis/grow
+    // loop mechanics (per-iteration model resolution, cold-respawn session
+    // identity) are wired for claude-code, so a foreign harness worker is
+    // "default workflow only". This mirrors the CLI's explicit --harness guard
+    // (commands/workers.ts), which rejects `--harness` with a non-default
+    // workflow; without this gate a project defaulting to codex (via a crew or
+    // `config <p> harness`) would silently stamp codex onto a trellis/grow vine.
     // Validate against the registry so an unknown name fails loudly here rather
     // than silently falling back at launch.
-    const resolvedHarness = opts.harness ?? project.harness;
+    const workflowName = opts.workflow ?? "default";
+    const resolvedHarness =
+      opts.harness ?? (workflowName === "default" ? project.harness : undefined);
     if (resolvedHarness && !isRegisteredHarness(resolvedHarness)) {
       tmuxDisplay(`Unknown harness '${resolvedHarness}'. Known: ${harnessNames().join(", ")}.`);
       log.error("workers", "rejected newWorker: unknown harness", {
@@ -280,7 +289,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // Stamp the registry entry FIRST so model resolution (below) can read
     // it. If model resolution refuses (Sonnet exhausted + fallback
     // disabled), we roll back via removeWorker before any tmux/disk work.
-    const workflowName = opts.workflow ?? "default";
+    // (workflowName resolved above, alongside harness selection.)
     // Ultracode preset pins Opus (unless an explicit --model was also passed).
     // Trellis vines resolve their own model per iteration, so the preset's
     // model pin does not apply there — only its non-trellis workers get it.

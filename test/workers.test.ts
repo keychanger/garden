@@ -658,6 +658,65 @@ describe("newWorker", () => {
     // Default worker preserves the legacy 7-arg bootstrap arity (no opts object).
     expect(vi.mocked(buildWorktreeBootstrapScript).mock.calls[0]).toHaveLength(7);
   });
+
+  // ===== Project-default harness (config <p> harness / crew) =====
+  // A default worker inherits project.harness when no per-worker --harness is
+  // given. But the project default is DEFAULT-WORKFLOW ONLY — a trellis/grow
+  // plant (which passes no harness) must NOT inherit a codex project default,
+  // mirroring the CLI's explicit --harness guard. Otherwise a project set to
+  // `crew all-codex` would silently spawn an unsupported codex vine.
+
+  it("harness: a default worker inherits project.harness when no --harness is given", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", harness: "codex",
+    });
+    newWorker();
+    expect(vi.mocked(addWorker)).toHaveBeenCalledWith(
+      "myproject",
+      expect.objectContaining({ workflow: "default", harness: "codex" }),
+    );
+  });
+
+  it("harness: an explicit --harness overrides the project default", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", harness: "codex",
+    });
+    newWorker({ harness: "claude-code" });
+    expect(vi.mocked(addWorker)).toHaveBeenCalledWith(
+      "myproject",
+      expect.objectContaining({ harness: "claude-code" }),
+    );
+  });
+
+  it("harness: project.harness does NOT leak to a trellis vine (default-workflow only)", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", harness: "codex",
+    });
+    newWorker({
+      workflow: "trellis",
+      trellis: { name: "auth", path: "/repo/myproject/.garden/trellises/auth.md", maxIterations: 30 },
+    });
+    const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
+    expect(entry.workflow).toBe("trellis");
+    expect(entry.harness).toBeUndefined();
+  });
+
+  it("harness: project.harness does NOT leak to a grow worker (default-workflow only)", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", harness: "codex",
+    });
+    newWorker({
+      workflow: "grow",
+      grow: { seed: "harden auth flow", maxIterations: 5 },
+    });
+    const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
+    expect(entry.workflow).toBe("grow");
+    expect(entry.harness).toBeUndefined();
+  });
 });
 
 // =============================================================================

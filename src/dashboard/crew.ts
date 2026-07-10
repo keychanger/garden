@@ -82,8 +82,10 @@ function memberFor(harness: string, provider: string | undefined): CrewMember {
 }
 
 // The crew a project currently resolves to, or null when its role assignment
-// doesn't match a named crew (hand-tuned config — e.g. reviewer != resolver, or
-// a per-role model pinned). Read-only.
+// doesn't match a named crew (hand-tuned config — e.g. the reviewer/resolver/
+// ci-fix harnesses diverge). Only the role *harnesses* are compared: per-role
+// model pins are crew-orthogonal (applyCrew preserves them) and never force a
+// null result. Read-only.
 export function deriveCrew(project: ProjectConfig, _config: GardenConfig): string | null {
   const rev = project.roles?.reviewer?.harness ?? DEFAULT_HARNESS;
   const res = project.roles?.resolver?.harness ?? DEFAULT_HARNESS;

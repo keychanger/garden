@@ -87,8 +87,13 @@ all lifecycle hooks firing via `-c` injection). What landed:
 - **`deliverPrompt` draft-detection** for Codex: auto-continue works, but its
   unsent-draft guard keys on Claude's `❯` prompt marker, not Codex's `›`, so it
   can't yet detect a half-typed Codex message (minor; the paste still lands).
-- **Project-default harness** (`config <p> harness`) and `--harness` for
-  trellis/grow: deferred; `--harness codex` on the default workflow is v1.
+- **Harness selection for trellis/grow workers**: still default-workflow only.
+  The project-default `harness` key (`config <p> harness`) shipped in slice 6,
+  but — like the explicit `--harness codex` flag — it applies to the default
+  workflow only. A trellis/grow plant ignores a non-claude-code project default
+  (a vine's per-iteration model resolution and cold-respawn identity are not yet
+  exercised against a foreign harness). See `newWorker` in
+  `src/dashboard/workers.ts`.
 
 ## Thesis: a crew is not a workflow
 
