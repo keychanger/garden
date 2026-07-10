@@ -135,7 +135,13 @@ export async function whoami(args: string[]): Promise<void> {
 export function formatAutoContinueLine(ac: AutoContinueConfig, usageGateExempt = false): string {
   if (ac.enabled) return "\x1b[32mon\x1b[0m \x1b[2m(post-merge)\x1b[0m";
   if (ac.pausedReason) {
-    if (usageGateExempt) {
+    // Gate the exempt "on" on pausedUntil, matching the authoritative gate
+    // (autoContinueGateReason / gateHoldsProject key the usage-pause bypass on
+    // pausedUntil, not pausedReason). An exempt project only auto-continues
+    // through a pause carrying a real pausedUntil; a trip that persisted
+    // pausedUntil="" (malformed resets_at) reads globally-disabled there and
+    // holds every project, so this line must show OFF too, not green "on".
+    if (usageGateExempt && ac.pausedUntil) {
       return "\x1b[32mon\x1b[0m \x1b[2m(usage-paused globally; this project runs on a separate token pool)\x1b[0m";
     }
     const until = ac.pausedUntil ? ` until ${ac.pausedUntil}` : "";

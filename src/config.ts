@@ -366,13 +366,19 @@ export function anyAnthropicMeteredProject(config?: GardenConfig): boolean {
 // resolving to a config dir other than the default ~/.claude (a separate
 // Claude subscription). The auto-continue usage gate skips such projects —
 // pausing them on the default account's meters would strand work whose
-// tokens those meters never counted. Fails closed: an unknown project or an
-// unresolvable profile reference counts as metered, so the gate still applies.
+// tokens those meters never counted. This must mirror `workerEnvPrefix`
+// (claude-env.ts), which picks the pool the worker actually launches on.
+// Fails closed: an unknown project counts as metered; a configured-but-
+// unresolvable provider is NOT exempt on its own — like workerEnvPrefix it
+// falls back to the first-party path, so it falls through to the profile
+// check (default ~/.claude → metered); an unresolvable profile also counts
+// as metered. The gate then still applies unless the worker genuinely runs
+// on a non-default pool.
 export function projectUsageGateExempt(projectName: string, config?: GardenConfig): boolean {
   const cfg = config ?? loadConfig();
   const project = cfg.projects[projectName];
   if (!project) return false;
-  if (project.provider) return true;
+  if (project.provider && tryResolveProvider(project, cfg)) return true;
   if (!project.claudeProfile) return false;
   const profile = tryResolveClaudeProfile(project, cfg);
   if (!profile) return false;

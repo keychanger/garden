@@ -329,6 +329,10 @@ async function initPooledProjects() {
       deep: { path: "/tmp/deep", provider: "deepseek" },
       mainprof: { path: "/tmp/mainprof", claudeProfile: "main" },
       broken: { path: "/tmp/broken", claudeProfile: "ghost" },
+      // Configured-but-unresolvable provider: workerEnvPrefix falls back to
+      // the first-party path, so exemption must follow that fallback.
+      ghostprov: { path: "/tmp/ghostprov", provider: "gone" },
+      ghostprovimp: { path: "/tmp/ghostprovimp", provider: "gone", claudeProfile: "imp" },
     },
     claudeProfiles: {
       imp: { configDir: "~/.claude-imp" },
@@ -352,6 +356,12 @@ describe("projectUsageGateExempt", () => {
     // Fail closed: unknown project / unresolvable profile keep the gate.
     expect(projectUsageGateExempt("ghost-project")).toBe(false);
     expect(projectUsageGateExempt("broken")).toBe(false);
+    // A configured-but-unresolvable provider is NOT exempt on its own — the
+    // worker falls back to the metered first-party pool (workerEnvPrefix), so
+    // the gate must still apply. But if a non-default profile is also set, the
+    // fallback lands on that (exempt) pool.
+    expect(projectUsageGateExempt("ghostprov")).toBe(false);
+    expect(projectUsageGateExempt("ghostprovimp")).toBe(true);
   });
 });
 

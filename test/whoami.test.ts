@@ -191,4 +191,19 @@ describe("formatAutoContinueLine", () => {
     );
     expect(stripAnsi(out)).toBe("OFF (garden auto on to re-enable)");
   });
+
+  it("shows OFF for a usage-exempt project when the pause carries no pausedUntil", () => {
+    // A malformed usage trip can persist pausedReason with an empty-string
+    // pausedUntil (a blank resets_at). The authoritative gate treats that as
+    // globally-disabled and holds every project, so this line must not claim
+    // green "on" for an exempt project — it must agree with the gate and the
+    // status pane's "gate closed".
+    const out = formatAutoContinueLine(
+      { enabled: false, usageThreshold: 95, resumeAfterReset: false, pausedReason: "week at 99%", pausedUntil: "" },
+      true,
+    );
+    expect(stripAnsi(out)).not.toContain("separate token pool");
+    expect(stripAnsi(out).startsWith("OFF")).toBe(true);
+    expect(out).toContain("\x1b[33m"); // yellow
+  });
 });
