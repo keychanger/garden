@@ -15,6 +15,8 @@ import { listHiddenWorkerWindows, windowExists, getFirstPaneId, getPaneTitle } f
 import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/window-names.js";
 import { currentBranch } from "../dashboard/git.js";
 import { diaryHasContent } from "../diary.js";
+import { deriveCrew } from "../dashboard/crew.js";
+import type { GardenConfig, ProjectConfig } from "../config.js";
 
 // Display states from STATUS.md. These are the only values the renderer ever
 // emits. `loading`/`ready`/`working`/`idle`/`exited` come from agentStatus
@@ -512,6 +514,15 @@ function formatDiaryGlyph(projectName: string): string {
   return diaryHasContent(projectName) ? " \x1b[90m✎\x1b[0m" : "";
 }
 
+// Quiet grey crew badge on a project's header row — which harness/provider
+// pair builds and reviews this project's fleet. Same metadata-not-status
+// styling as the diary glyph. "custom" when the roles are hand-tuned past a
+// named crew. Read from the already-loaded config, so no extra IO per bake.
+function formatCrewBadge(project: ProjectConfig, config: GardenConfig): string {
+  const crew = deriveCrew(project, config) ?? "custom";
+  return ` \x1b[90m${crew}\x1b[0m`;
+}
+
 function colorizeIteration(iter: number, max: number): string {
   const ratio = max > 0 ? iter / max : 0;
   const text = `${iter}/${max}`;
@@ -697,7 +708,8 @@ export function renderQuickStatus(
     const marker = isActive ? " \u25C4" : "";
     const displayName = isActive ? `\x1b[1;32m${name}\x1b[0m` : name;
     const projectBranch = projectBranches[pi];
-    lines.push(`  ${pi + 1}. ${displayName}${formatDiaryGlyph(name)}${marker}`);
+    const crewBadge = config.projects[name] ? formatCrewBadge(config.projects[name], config) : "";
+    lines.push(`  ${pi + 1}. ${displayName}${crewBadge}${formatDiaryGlyph(name)}${marker}`);
 
     const workers = projectWorkers[pi];
     if (workers.length === 0) {

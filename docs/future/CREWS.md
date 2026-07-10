@@ -390,16 +390,20 @@ gate green — the same discipline the reviewer-first slices used.
    the adapter. Multi-phase auto-continue already worked (identical paste +
    harness-neutral transcript capture). Remaining: live-verify `codex resume`
    and Codex-aware draft detection.
-6. **Crews (config surface). DONE (2026-07-10).** `config <p> crew [<name>]`
-   (`crew.ts`) — member-based, generated from harnesses + providers (so
-   DeepSeek et al. compose for free), worker-only-provider safety asymmetry,
-   plus the project-default `harness` key. The `⌥⇧N` picker crew dimension is
-   the remaining UX polish (deferred — the config command is the functional
-   surface; a project-level crew doesn't map cleanly onto the per-spawn
-   workflow picker, so its shape is an open design question).
+6. **Crews (config surface + picker + badge). DONE (2026-07-10).** `config <p>
+   crew [<name>]` (`crew.ts`) — member-based, generated from harnesses +
+   providers (so DeepSeek et al. compose for free), worker-only-provider safety
+   asymmetry, plus the project-default `harness` key. Dashboard UI: a dedicated
+   **`⌥⇧C` crew picker** (`crew-picker.ts`, its own key rather than the
+   per-spawn `⌥⇧N` workflow picker — a crew reconfigures the whole project) and
+   a quiet crew badge on each project's status-pane header (`formatCrewBadge`,
+   `status.ts`).
 
 The full single- and multi-phase Codex worker experience landed 2026-07-06
-(slices 1–5); the crew config surface landed 2026-07-10 (slice 6).
+(slices 1–5); the crew surface — command, `⌥⇧C` picker, status badge — landed
+2026-07-10 (slice 6). This closes the CREWS design: Codex is a first-class
+citizen across every role, DeepSeek and future providers/harnesses compose as
+members, and the operator picks a fleet in one word.
 
 ## Operator surface
 

@@ -16,8 +16,13 @@ vi.mock("../src/config.js", async (orig) => {
   };
 });
 
+// header.js is heavy and tmux-bound; the picker only needs refreshDashboard
+// stubbed for the pure plan builder under test.
+vi.mock("../src/dashboard/header.js", () => ({ refreshDashboard: vi.fn() }));
+
 const { listMembers, reviewerMembers, listCrews, getCrew, deriveCrew, applyCrew } =
   await import("../src/dashboard/crew.js");
+const { buildCrewPickerPlan } = await import("../src/dashboard/crew-picker.js");
 
 function cfg(extra: Partial<GardenConfig> = {}): GardenConfig {
   return { projects: {}, ...extra } as GardenConfig;
@@ -113,5 +118,19 @@ describe("applyCrew", () => {
       applyCrew("garden", getCrew(name, store.value)!);
       expect(deriveCrew(store.value.projects.garden, store.value)).toBe(name);
     }
+  });
+});
+
+describe("buildCrewPickerPlan", () => {
+  it("renders one menu item per crew, marks the current, and dispatches _crew-set", () => {
+    const crews = listCrews(withDeepseek());
+    const plan = buildCrewPickerPlan("garden", "all-claude", crews, "garden");
+    expect(plan.title).toContain("garden");
+    expect(plan.title).toContain("all-claude");
+    expect(plan.items).toHaveLength(crews.length);
+    expect(plan.items[0].key).toBe("1");
+    expect(plan.items.find((i) => i.label.startsWith("all-claude"))?.label).toContain("✓");
+    expect(plan.items[0].command).toContain("dashboard _crew-set");
+    expect(plan.items.some((i) => i.command.includes("deepseek-claude"))).toBe(true);
   });
 });

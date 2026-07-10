@@ -42,6 +42,7 @@ export const DASHBOARD_HOTKEYS: DashboardHotkey[] = [
   { key: "p", command: "_cycle-plot next", category: "Projects", label: "Cycle to next focused plot" },
   { key: "P", command: "_cycle-plot prev", category: "Projects", label: "Cycle to previous focused plot" },
   { key: "o", command: "_cycle-plot prev", category: "Projects", label: "Cycle to previous focused plot (alias of ⌥⇧P)" },
+  { key: "C", command: "_crew-picker", category: "Projects", label: "Crew picker (set the focused project's crew: who builds / reviews)" },
 
   // Workers
   { key: "n", command: "_new-worker", category: "Workers", label: "New worker (Claude session)" },

@@ -21,6 +21,7 @@ import {
   runTrellisPicker, plantVineFromPicker, spawnTrellisAuthor, runReviveSubmenu,
   runWorkflowPicker, plantGrowFromPicker,
 } from "./trellis-picker.js";
+import { runCrewPicker, applyCrewFromPicker } from "./crew-picker.js";
 import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, focusHistory, focusDiary, cyclePane, cyclePlot } from "./navigate.js";
 import { diaryFilePath } from "../diary.js";
 import { openLogsFilterPrompt, applyLogsFilter } from "./logs-filter.js";
@@ -152,6 +153,15 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   }
   if (sub === "_workflow-picker") {
     runWorkflowPicker(args[1]);
+    return;
+  }
+  if (sub === "_crew-picker") {
+    runCrewPicker(args[1]);
+    return;
+  }
+  if (sub === "_crew-set") {
+    const [, projectName, crewName] = args;
+    if (projectName && crewName) applyCrewFromPicker(projectName, crewName);
     return;
   }
   if (sub === "_grow-plant") {
