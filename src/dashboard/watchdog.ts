@@ -28,12 +28,15 @@
 // poller's lifecycle: the window being killed (reset or exit) is the
 // termination signal — no signal file, no FIFO. Unlike the usage poller it
 // starts unconditionally; provider-only fleets still need liveness.
+import fs from "node:fs";
+import path from "node:path";
+import { SESSIONS_DIR } from "../config.js";
 import { newDashboardWindow, windowExists, killWindowSafe, listAllWindowNames } from "./tmux.js";
 import { watchdogWindowName, parseWorkerWindow } from "./window-names.js";
 import { readRegistry, mutateRegistry, PR_STATE_KIND, OPERATOR_ACTION_FAILING_REASONS, type WorkerEntry, type WorkerRegistry } from "./registry.js";
 import { triggerProjectPoll } from "./poller-fifo.js";
 import { addAlert } from "./alerts.js";
-import { log } from "./log.js";
+import { log, truncateLog } from "./log.js";
 
 export const WATCHDOG_TICK_MS = 60_000;
 export const WATCHDOG_THRESHOLD_MS = 5 * 60_000;
@@ -277,6 +280,59 @@ export function absorbSleep(gapMs: number): number {
   return slippage;
 }
 
+// How often the housekeeping sweep runs. Neither artifact it bounds grows fast
+// enough to need the 60s liveness cadence, and the bootstrap sweep stats a whole
+// directory — so it is throttled to hourly via the caller-owned timestamp.
+export const HOUSEKEEP_INTERVAL_MS = 60 * 60_000;
+
+// A spent bootstrap script older than this is safe to delete. The worker pane
+// runs `sh bootstrap-<project>-<branch>.sh` once, seconds after it is written,
+// and never touches it again (a bounce rewrites a fresh one); on Unix an
+// already-open sh keeps its fd alive across the unlink regardless. Hours of
+// slack puts the cut far past any real bootstrap (fetch + install + launch)
+// while still sweeping the per-worker orphans that accrue over months.
+export const BOOTSTRAP_MAX_AGE_MS = 6 * 60 * 60_000;
+
+// Delete spent worker bootstrap scripts from SESSIONS_DIR. buildWorktreeBootstrapScript
+// (create.ts) writes one `bootstrap-<project>-<branch>.sh` per worker launch and
+// nothing ever removed it, so one orphan accrued per worker ever created (1000+
+// over months). Match the naming contract from create.ts directly rather than
+// importing it — create.ts transitively imports this module (via poller.ts), so
+// a back-edge would close an init cycle. Returns the count removed (for tests).
+export function sweepBootstrapScripts(nowMs: number): number {
+  let names: string[];
+  try {
+    names = fs.readdirSync(SESSIONS_DIR);
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const name of names) {
+    if (!name.startsWith("bootstrap-") || !name.endsWith(".sh")) continue;
+    const file = path.join(SESSIONS_DIR, name);
+    try {
+      if (nowMs - fs.statSync(file).mtimeMs <= BOOTSTRAP_MAX_AGE_MS) continue;
+      fs.unlinkSync(file);
+      removed++;
+    } catch { /* raced with another sweep, or already gone */ }
+  }
+  if (removed > 0) {
+    log.info("watchdog", "swept spent bootstrap scripts", { data: { removed } });
+  }
+  return removed;
+}
+
+// Bound two on-disk artifacts the fleet accumulates unbounded. Called on the
+// hourly throttle (see the loop): (1) dashboard.log — truncateLog tail-trims it
+// past its 10MB cap, but was only ever invoked on fresh dashboard creation, so a
+// long-lived session's log grew unbounded between restarts; enforce the cap on a
+// recurring cadence instead. (2) spent bootstrap scripts (see above). Transitions
+// no state — pure disk housekeeping, consistent with the watchdog contract.
+export function housekeeping(nowMs: number): void {
+  truncateLog();
+  sweepBootstrapScripts(nowMs);
+}
+
 export async function runWatchdogLoop(): Promise<void> {
   log.info("watchdog", "started");
   // Imported dynamically to avoid a static cycle (poller.ts statically imports
@@ -295,6 +351,10 @@ export async function runWatchdogLoop(): Promise<void> {
   // resets on window respawn, which is fine — a respawn is itself a restart
   // event and one extra poke is harmless.
   const lastPokeAt = new Map<string, number>();
+  // Hourly disk-housekeeping throttle (see HOUSEKEEP_INTERVAL_MS). 0 forces a
+  // sweep on the first tick after (re)spawn, which clears any orphans that
+  // accrued while the watchdog was down.
+  let lastHousekeepAt = 0;
   // Timestamp the START of each iteration; the gap to the next start spans the
   // whole loop (tick body + the fixed sleep), so a suspend during EITHER is
   // measured — capturing only around the sleep would miss a suspend mid-body.
@@ -322,6 +382,18 @@ export async function runWatchdogLoop(): Promise<void> {
         refreshStatusElapsed();
       } catch (err) {
         log.warn("watchdog", "status elapsed refresh failed", { data: { error: String(err) } });
+      }
+      // Disk housekeeping on the hourly throttle — bounds dashboard.log and the
+      // spent-bootstrap-script pile. Wrapped separately so a sweep failure logs
+      // its own reason instead of aborting the liveness tick above.
+      const now = Date.now();
+      if (now - lastHousekeepAt >= HOUSEKEEP_INTERVAL_MS) {
+        lastHousekeepAt = now;
+        try {
+          housekeeping(now);
+        } catch (err) {
+          log.warn("watchdog", "housekeeping failed", { data: { error: String(err) } });
+        }
       }
     } catch (err) {
       log.warn("watchdog", "tick failed", { data: { error: String(err) } });
