@@ -615,3 +615,12 @@ export function shellEscape(s: string): string {
 export function tmuxDoubleQuote(s: string): string {
   return `"${s.replace(/[\\$"`]/g, "\\$&")}"`;
 }
+
+// Wrap a shell command so it is a valid COMMAND for a tmux `display-menu`
+// item or key binding. Those command slots are parsed by tmux as tmux
+// commands, NOT shell commands — a bare `<node> <cli.js> ...` fails with
+// "unknown command: <node>". `run-shell` hands the whole string to /bin/sh;
+// tmuxDoubleQuote keeps tmux from re-interpreting $/`/\/" before it gets there.
+export function menuRunShell(shellCommand: string): string {
+  return `run-shell ${tmuxDoubleQuote(shellCommand)}`;
+}

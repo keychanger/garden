@@ -124,7 +124,9 @@ describe("applyCrew", () => {
 describe("buildCrewPickerPlan", () => {
   it("renders one menu item per crew, marks the current, and dispatches _crew-set", () => {
     const crews = listCrews(withDeepseek());
-    const plan = buildCrewPickerPlan("garden", "all-claude", crews, "garden");
+    // A realistic runner (node + cli.js) — its first token is what tmux would
+    // reject if the command were not run-shell wrapped.
+    const plan = buildCrewPickerPlan("garden", "all-claude", crews, "/opt/homebrew/bin/node /g/dist/cli.js");
     expect(plan.title).toContain("garden");
     expect(plan.title).toContain("all-claude");
     expect(plan.items).toHaveLength(crews.length);
@@ -132,5 +134,18 @@ describe("buildCrewPickerPlan", () => {
     expect(plan.items.find((i) => i.label.startsWith("all-claude"))?.label).toContain("✓");
     expect(plan.items[0].command).toContain("dashboard _crew-set");
     expect(plan.items.some((i) => i.command.includes("deepseek-claude"))).toBe(true);
+  });
+
+  it("run-shell wraps every item command so tmux dispatches it (not parses it as a tmux command)", () => {
+    // The bug that shipped: a bare `<node> <cli.js> …` menu command makes tmux
+    // display-menu fail with "unknown command: <node>" and the crew never
+    // changes. Every item must be `run-shell "<cmd>"`.
+    const crews = listCrews(withDeepseek());
+    const plan = buildCrewPickerPlan("garden", "all-claude", crews, "/opt/homebrew/bin/node /g/dist/cli.js");
+    for (const item of plan.items) {
+      expect(item.command.startsWith("run-shell ")).toBe(true);
+      // The bare runner path must NOT be the first token of the tmux command.
+      expect(item.command.startsWith("/opt/homebrew/bin/node")).toBe(false);
+    }
   });
 });

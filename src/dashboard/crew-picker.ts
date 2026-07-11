@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { loadConfig, tryGetProject } from "../config.js";
 import { readDashState } from "./state.js";
 import { resolveGardenRunner } from "./runner.js";
-import { shellEscape, tmuxDisplay } from "./tmux.js";
+import { shellEscape, tmuxDisplay, menuRunShell } from "./tmux.js";
 import { refreshDashboard } from "./header.js";
 import { log } from "./log.js";
 import { listCrews, deriveCrew, getCrew, applyCrew, type CrewSpec } from "./crew.js";
@@ -23,8 +23,10 @@ export interface CrewPickerPlan {
 }
 
 // Pure: build the display-menu plan for a project's crews. No tmux/fs/registry
-// I/O, so tests drive it directly. The item command mirrors the workflow
-// picker's dispatch shape (bare runner + shell-escaped args).
+// I/O, so tests drive it directly. Each item's command MUST be run-shell
+// wrapped: tmux parses a menu item's command as a tmux command, so a bare
+// `<node> <cli.js> dashboard _crew-set …` fails with "unknown command: <node>"
+// and the crew silently does not change.
 export function buildCrewPickerPlan(
   projectName: string,
   current: string | null,
@@ -34,7 +36,7 @@ export function buildCrewPickerPlan(
   const items: CrewMenuItem[] = crews.map((crew, i) => ({
     label: crew.name === current ? `${crew.name}  ✓` : crew.name,
     key: i < 9 ? String(i + 1) : "",
-    command: `${runner} dashboard _crew-set ${shellEscape(projectName)} ${shellEscape(crew.name)}`,
+    command: menuRunShell(`${runner} dashboard _crew-set ${shellEscape(projectName)} ${shellEscape(crew.name)}`),
   }));
   return { title: `Crew: ${projectName}${current ? ` (${current})` : ""}`, items };
 }
