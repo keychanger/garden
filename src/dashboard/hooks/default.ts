@@ -31,6 +31,7 @@ import {
 } from "../registry.js";
 import { getPaneTitle } from "../tmux.js";
 import { maybeRefreshUsage } from "../usage.js";
+import { captureCodexUsage } from "../codex-usage.js";
 import { resolveGardenRunner } from "../runner.js";
 import type { HookContext, HookMethod, WorkflowHookHandlers } from "../workflows/types.js";
 
@@ -313,6 +314,13 @@ const onTurnEnded: HookMethod = (ctx) => {
   // entry) and invariant 4 (merged stickiness).
   routeStopHookEnd(ctx.workerInfo.project, ctx.workerInfo.name);
   maybeRefreshUsage(resolveGardenRunner());
+  // Codex worker: capture the rate_limits Codex wrote into its rollout this
+  // turn for the title-pane usage meter — no extra auth/poll, the data is
+  // already on disk at transcript_path (docs: codex-usage.ts).
+  if (ctx.workerInfo.entry.harness === "codex") {
+    const tp = ctx.input.transcript_path;
+    captureCodexUsage(typeof tp === "string" ? tp : undefined);
+  }
 };
 
 // Fed by both Notification and the PreToolUse matchers (AskUserQuestion /

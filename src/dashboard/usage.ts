@@ -15,6 +15,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { SESSIONS_DIR, anyAnthropicMeteredProject } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
+import { readCodexUsage, type CodexUsageData } from "./codex-usage.js";
 import {
   isAccessTokenExpired,
   persistCredential,
@@ -684,49 +685,118 @@ function computeMeterFit(paneWidth: number | undefined): { barWidth: number; sho
 // pane auto-resizes by one row when it appears) keeps transient errors from
 // dominating the visual top of the pane.
 export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number): string {
+  const claudeLines = buildClaudeLines(nowMs, paneWidth);
+
+  // A second meter for Codex, in the empty space to the right. It appears only
+  // once a Codex worker has reported rate_limits (captured at Stop-hook time —
+  // codex-usage.ts), so an all-Claude fleet's pane is unchanged. Claude keeps
+  // its full-width fit; Codex fills the remainder.
+  const codexSnap = readCodexUsage();
+  if (!codexSnap || codexSnap.data.windows.length === 0) {
+    return finalizePane(["", ...claudeLines]);
+  }
+
+  const leftWidth = Math.max(0, ...claudeLines.map(visibleWidth));
+  const rightAvail = paneWidth !== undefined ? paneWidth - leftWidth - COLUMN_GAP : undefined;
+  // Too narrow for a second column — stay single-column (data still captured,
+  // shows once the terminal is wide enough).
+  if (rightAvail !== undefined && rightAvail < CODEX_MIN_WIDTH) {
+    return finalizePane(["", ...claudeLines]);
+  }
+
+  const codexLines = renderCodexColumn(codexSnap.data, nowMs, computeMeterFit(rightAvail));
+  // Reuse the leading blank line as a two-column header (no extra pane row).
+  const gap = " ".repeat(COLUMN_GAP);
+  const header = `${padVisible(`${INDENT}${dim("claude")}`, leftWidth)}${gap}${dim("codex")}`;
+  const rows: string[] = [header];
+  const n = Math.max(claudeLines.length, codexLines.length);
+  for (let i = 0; i < n; i++) {
+    const left = claudeLines[i] ?? "";
+    const right = codexLines[i];
+    rows.push(right ? `${padVisible(left, leftWidth)}${gap}${right}` : left);
+  }
+  return finalizePane(rows);
+}
+
+// The Claude column: the meter rows (5h / week / sonnet) or a status message,
+// without the leading blank/header line. Extracted so the two-column path can
+// place it beside the Codex column.
+function buildClaudeLines(nowMs: number, paneWidth: number | undefined): string[] {
   // Provider-only fleet: the poller is gated off (startUsagePoller), so the
-  // snapshot would sit stale forever. Say why the meter is off instead of
-  // showing "loading…" indefinitely or bars describing nothing.
+  // snapshot would sit stale forever. Say why the meter is off.
   let metered = true;
   try { metered = anyAnthropicMeteredProject(); } catch { /* config unavailable: keep meter */ }
-  if (!metered) {
-    const lines = ["", `${INDENT}${dim("claude usage  off — every project uses a provider")}`];
-    return lines.map(l => l + "\x1b[K").join("\n");
-  }
+  if (!metered) return [`${INDENT}${dim("claude usage  off — every project uses a provider")}`];
 
   const snap = readUsageSnapshot();
+  if (!snap) return [`${INDENT}${dim("claude usage  loading…")}`];
+  if (!snap.data) return [`${INDENT}${dim(`claude usage  ${snap.error ?? "loading…"}`)}`];
 
-  if (!snap) {
-    const lines = ["", `${INDENT}${dim("claude usage  loading…")}`];
-    return lines.map(l => l + "\x1b[K").join("\n");
-  }
-
-  // No data ever fetched — show the error (or loading) instead of empty bars.
-  if (!snap.data) {
-    const msg = snap.error ?? "loading…";
-    const lines = ["", `${INDENT}${dim(`claude usage  ${msg}`)}`];
-    return lines.map(l => l + "\x1b[K").join("\n");
-  }
-
-  // Data present (possibly old). Stale check uses dataAt — the timestamp of
-  // the last *successful* fetch, not the last attempt. Snapshots written by
-  // older versions lack dataAt and fall back to fetchedAt (which equals dataAt
-  // on success in those snapshots, so the behavior matches).
   const tag = formatHealthTag(snap, nowMs);
   const d = snap.data;
   const fit = computeMeterFit(paneWidth);
-
-  const lines: string[] = [""];
+  const lines: string[] = [];
   lines.push(renderMeterLine("5h",     d.fiveHour, nowMs, FIVE_HOUR_MS, fit));
   lines.push(renderMeterLine("week",   d.weekly,   nowMs, SEVEN_DAY_MS, fit));
-  // A null seven_day_sonnet bucket renders "—" rather than a flat-zero bar — a 0% sliver
-  // next to the weekly bar reads as broken, and "no data" is the truer signal.
+  // A null seven_day_sonnet bucket renders "—" rather than a flat-zero bar.
   lines.push(renderMeterLine("sonnet", d.sonnet,   nowMs, SEVEN_DAY_MS, fit));
-  // Extra usage (pay-as-you-go credits) sits below the meters as a dim footnote
-  // and above the health tag — real data first, freshness annotation last.
   if (d.extraUsage) lines.push(formatExtraUsageLine(d.extraUsage, paneWidth));
   if (tag) lines.push(formatHealthLine(tag, paneWidth));
+  return lines;
+}
 
+// The Codex column: one bar per rolling window (already sorted smaller-first,
+// so a 5h window renders above the 30d), plus a credits line when the account
+// has pay-as-you-go credits. Mirrors renderMeterLine; resetsAt is epoch seconds.
+function renderCodexColumn(
+  data: CodexUsageData,
+  nowMs: number,
+  fit: { barWidth: number; showReset: boolean },
+): string[] {
+  const lines: string[] = [];
+  for (const w of data.windows) {
+    const label = codexWindowLabel(w.windowMinutes).padEnd(CODEX_LABEL_WIDTH);
+    const resetsAtMs = w.resetsAt * 1000;
+    // Window rolled over since capture — our pct describes the previous one.
+    if (resetsAtMs <= nowMs) { lines.push(`${label}  ${dim("—")}`); continue; }
+    const pct = Math.max(0, Math.min(100, w.usedPercent));
+    const windowMs = w.windowMinutes * 60_000;
+    const timePct = Math.max(0, Math.min(100, ((windowMs - (resetsAtMs - nowMs)) / windowMs) * 100));
+    const bar = renderBar(pct, fit.barWidth, timePct);
+    const pctText = `${pct.toFixed(0).padStart(3)}%`;
+    const resetPart = fit.showReset ? `  ${dim(`resets ${formatDuration(resetsAtMs - nowMs)}`)}` : "";
+    lines.push(`${label}  ${bar}  ${pctText}${resetPart}`);
+  }
+  if (typeof data.creditBalance === "number") {
+    lines.push(`${"credits".padEnd(CODEX_LABEL_WIDTH)}  ${dim(`$${data.creditBalance.toFixed(2)}`)}`);
+  } else if (data.creditsUnlimited) {
+    lines.push(`${"credits".padEnd(CODEX_LABEL_WIDTH)}  ${dim("unlimited")}`);
+  }
+  return lines;
+}
+
+// window_minutes -> a compact human label: 300 -> "5h", 10080 -> "7d",
+// 43200 -> "30d".
+function codexWindowLabel(minutes: number): string {
+  if (minutes % 1440 === 0) return `${minutes / 1440}d`;
+  if (minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${minutes}m`;
+}
+
+const COLUMN_GAP = 3;
+const CODEX_LABEL_WIDTH = 7; // "credits" is the longest codex label
+const CODEX_MIN_WIDTH = MIN_BAR_WIDTH + CODEX_LABEL_WIDTH + 8; // label + bar + "  NN%"
+
+// Visible width ignoring the SGR color codes garden applies (the only escapes
+// present in these lines), for aligning the two columns.
+function visibleWidth(s: string): number {
+  return s.replace(/\x1b\[[0-9;]*m/g, "").length;
+}
+function padVisible(s: string, width: number): string {
+  const w = visibleWidth(s);
+  return w >= width ? s : s + " ".repeat(width - w);
+}
+function finalizePane(lines: string[]): string {
   return lines.map(l => l + "\x1b[K").join("\n");
 }
 
