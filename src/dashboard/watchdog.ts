@@ -287,10 +287,11 @@ export const HOUSEKEEP_INTERVAL_MS = 60 * 60_000;
 
 // A spent bootstrap script older than this is safe to delete. The worker pane
 // runs `sh bootstrap-<project>-<branch>.sh` once, seconds after it is written,
-// and never touches it again (a bounce rewrites a fresh one); on Unix an
-// already-open sh keeps its fd alive across the unlink regardless. Hours of
-// slack puts the cut far past any real bootstrap (fetch + install + launch)
-// while still sweeping the per-worker orphans that accrue over months.
+// and never touches it again (bounce/resume relaunch via `claude --resume`,
+// not the script); on Unix an already-open sh keeps its fd alive across the
+// unlink regardless. Hours of slack puts the cut far past any real bootstrap
+// (fetch + install + launch) while still sweeping the per-worker orphans that
+// accrue over months.
 export const BOOTSTRAP_MAX_AGE_MS = 6 * 60 * 60_000;
 
 // Delete spent worker bootstrap scripts from SESSIONS_DIR. buildWorktreeBootstrapScript
