@@ -6,7 +6,7 @@
 // pgrep and does not read marker files. Before rendering, it refreshes
 // worker task summaries from live tmux pane titles so the registry stays
 // current between hook events.
-import { loadConfig, getFocusedProjectNames, allPlotProjectNames, tryGetProject, getAutoContinueConfig, projectUsageGateExempt, type AutoContinueConfig, type GardenConfig } from "../config.js";
+import { loadConfig, getFocusedProjectNames, allPlotProjectNames, tryGetProject, getAutoContinueConfig, projectUsageGateExempt, type AutoContinueConfig } from "../config.js";
 import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
