@@ -20,7 +20,7 @@ import { log } from "./log.js";
 import { newWorker } from "./workers.js";
 import { resolveGardenRunner } from "./runner.js";
 import { readDashState } from "./state.js";
-import { shellEscape, tmuxDisplay } from "./tmux.js";
+import { shellEscape, tmuxDisplay, menuRunShell } from "./tmux.js";
 import {
   findTrellisFiles, validateTrellisPlant,
   type TrellisFileInfo,
@@ -126,24 +126,29 @@ function formatMenuLabel(t: TrellisFileInfo): string {
 }
 
 // --- Shell commands the menu items invoke ---------------------------------
+//
+// A display-menu item's command is parsed by tmux as a TMUX command, not a
+// shell command — so a bare `${runner} …` fails with "unknown command:
+// <node>". menuRunShell wraps it in `run-shell`. The command-prompt helpers
+// (scaffold / grow) are already valid tmux commands and are not wrapped.
 
 function shellCmdPlant(runner: string, project: string, trellisName: string): string {
-  return `${runner} dashboard _trellis-plant ${shellEscape(project)} ${shellEscape(trellisName)}`;
+  return menuRunShell(`${runner} dashboard _trellis-plant ${shellEscape(project)} ${shellEscape(trellisName)}`);
 }
 
 function shellCmdAuthor(runner: string, project: string): string {
-  return `${runner} dashboard _trellis-plant-author ${shellEscape(project)}`;
+  return menuRunShell(`${runner} dashboard _trellis-plant-author ${shellEscape(project)}`);
 }
 
 function shellCmdScaffold(runner: string, project: string): string {
   // Use tmux command-prompt for the trellis name input, then dispatch
-  // garden trellis new.
+  // garden trellis new. command-prompt is a tmux command — no run-shell wrap.
   const inner = `${runner} trellis new ${shellEscape(project)} %%`;
   return `command-prompt -p "Trellis name: " "run-shell ${shellEscape(inner)}"`;
 }
 
 function shellCmdReviveSubmenu(runner: string, project: string): string {
-  return `${runner} dashboard _trellis-revive-submenu ${shellEscape(project)}`;
+  return menuRunShell(`${runner} dashboard _trellis-revive-submenu ${shellEscape(project)}`);
 }
 
 // --- Top-level picker entry point ----------------------------------------
@@ -264,7 +269,7 @@ export function runReviveSubmenu(projectName: string): void {
     menuArgs.push(
       `(${i < 9 ? i + 1 : ""}) ${t.name}`,
       i < 9 ? String(i + 1) : "",
-      `${runner} trellis revive ${shellEscape(projectName)} ${shellEscape(t.name)}`,
+      menuRunShell(`${runner} trellis revive ${shellEscape(projectName)} ${shellEscape(t.name)}`),
     );
   }
   try {
@@ -500,11 +505,11 @@ export function plantGrowFromPicker(projectName: string, seed: string): void {
 // --- Workflow-picker shell command builders ---------------------------------
 
 function shellCmdNewWorker(runner: string): string {
-  return `${runner} dashboard _new-worker`;
+  return menuRunShell(`${runner} dashboard _new-worker`);
 }
 
 function shellCmdTrellisPicker(runner: string, project: string): string {
-  return `${runner} dashboard _trellis-picker ${shellEscape(project)}`;
+  return menuRunShell(`${runner} dashboard _trellis-picker ${shellEscape(project)}`);
 }
 
 function shellCmdGrowPlant(runner: string, project: string): string {

@@ -30,6 +30,9 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   shellEscape: vi.fn((s: string) =>
     /^[a-zA-Z0-9_./:=-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`),
   tmuxDisplay: vi.fn(),
+  // Mirrors the real helper: a menu item command must be run-shell wrapped so
+  // tmux dispatches it to the shell instead of parsing it as a tmux command.
+  menuRunShell: vi.fn((s: string) => `run-shell "${s.replace(/[\\$"`]/g, "\\$&")}"`),
 }));
 
 import {
@@ -67,7 +70,12 @@ describe("buildWorkflowPickerPlan", () => {
     const def = plan.items[0];
     expect(def.label).toMatch(/default/i);
     expect(def.label).toMatch(/⌥n/);
-    expect(def.command).toBe(`${RUNNER} dashboard _new-worker`);
+    expect(def.command).toContain("dashboard _new-worker");
+    // tmux parses a menu item's command as a tmux command — the runner
+    // dispatch must be run-shell wrapped, not bare (which fails with "unknown
+    // command: <runner>").
+    expect(def.command.startsWith("run-shell ")).toBe(true);
+    expect(def.command.startsWith(RUNNER)).toBe(false);
   });
 
   it("trellis row dispatches the existing _trellis-picker submenu with the project arg", () => {
@@ -76,6 +84,7 @@ describe("buildWorkflowPickerPlan", () => {
     expect(trellis.label).toMatch(/trellis/i);
     expect(trellis.command).toContain("_trellis-picker");
     expect(trellis.command).toContain("proj");
+    expect(trellis.command.startsWith("run-shell ")).toBe(true);
   });
 
   it("grow row uses tmux command-prompt for the seed input with %% substitution", () => {

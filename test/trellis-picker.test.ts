@@ -85,6 +85,11 @@ describe("buildPickerPlan", () => {
     expect(plan.items[0].command).toContain("proj");
     expect(plan.items[0].command).toContain("alpha");
     expect(plan.items[1].command).toContain("beta");
+    // tmux parses a menu item's command as a tmux command, so the runner
+    // dispatch must be run-shell wrapped (not a bare `${runner} …`, which
+    // fails with "unknown command: <runner>").
+    expect(plan.items[0].command.startsWith("run-shell ")).toBe(true);
+    expect(plan.items[0].command.startsWith(RUNNER)).toBe(false);
   });
 
   it("menu items number 1..9 then drop the quick-key for the rest", () => {
