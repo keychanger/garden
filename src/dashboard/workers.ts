@@ -26,7 +26,7 @@ import {
   createShellWindow, trellisRelativePathForEntry,
 } from "./create.js";
 import { getHarness } from "./harness/index.js";
-import { isRegisteredHarness, harnessNames } from "./harness/core.js";
+import { isRegisteredHarness, harnessNames, canonicalHarnessName } from "./harness/core.js";
 import { resolveGardenRunner } from "./runner.js";
 import {
   worktreePath, resolveBaseBranch, branchExistsOnOrigin, tryPublishBranch,
@@ -145,8 +145,13 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // Validate against the registry so an unknown name fails loudly here rather
     // than silently falling back at launch.
     const workflowName = opts.workflow ?? "default";
-    const resolvedHarness =
+    const rawHarness =
       opts.harness ?? (workflowName === "default" ? project.harness : undefined);
+    // Canonicalize the operator-facing "claude" alias to the registry name.
+    // This is the chokepoint every worker-creation path funnels through (CLI
+    // --harness, the workflow picker, the project default), so the stamped
+    // entry.harness is always a registry name.
+    const resolvedHarness = rawHarness === undefined ? undefined : canonicalHarnessName(rawHarness);
     if (resolvedHarness && !isRegisteredHarness(resolvedHarness)) {
       tmuxDisplay(`Unknown harness '${resolvedHarness}'. Known: ${harnessNames().join(", ")}.`);
       log.error("workers", "rejected newWorker: unknown harness", {

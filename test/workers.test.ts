@@ -652,6 +652,15 @@ describe("newWorker", () => {
     );
   });
 
+  it("harness: canonicalizes the 'claude' alias to claude-code", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    expect(newWorker({ harness: "claude" })).toBe("bold-ash");
+    expect(vi.mocked(addWorker)).toHaveBeenCalledWith(
+      "myproject",
+      expect.objectContaining({ workflow: "default", harness: "claude-code" }),
+    );
+  });
+
   it("harness: threads harness into the bootstrap opts (8th arg)", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     newWorker({ harness: "codex" });

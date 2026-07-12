@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { tryGetProject, SESSIONS_DIR } from "../config.js";
 import { newWorker } from "../dashboard/workers.js";
-import { isRegisteredHarness, harnessNames } from "../dashboard/harness/core.js";
+import { isRegisteredHarness, harnessNames, canonicalHarnessName } from "../dashboard/harness/core.js";
 import { buildGrowIteration1Seed, GROW_GOAL_FILE_REL } from "../dashboard/grow-continue.js";
 import {
   readRegistry, findWorkerByName, updateWorkerFields,
@@ -85,7 +85,11 @@ async function newCommand(args: string[]): Promise<void> {
   // Worker harness (agent CLI). Default workflow only in v1 — trellis/grow
   // model resolution and cold-respawn identity are not yet exercised against a
   // foreign harness.
-  const harness = flags.get("harness");
+  // Accept the "claude" alias for the claude-code harness (the crew member
+  // name) and canonicalize at the boundary so this pre-check, the persisted
+  // entry, and the log line all use the registry name.
+  const rawHarness = flags.get("harness");
+  const harness = rawHarness === undefined ? undefined : canonicalHarnessName(rawHarness);
   if (harness && !isRegisteredHarness(harness)) {
     throw new Error(`--harness must be one of: ${harnessNames().join(", ")}, got '${harness}'`);
   }

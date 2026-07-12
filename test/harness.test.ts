@@ -61,6 +61,17 @@ describe("harness registries", () => {
     expect(full.buildAgentCommand).toBe(core.buildAgentCommand);
     expect(full.isTransientError).toBe(core.isTransientError);
   });
+
+  it("canonicalHarnessName maps the 'claude' alias to the registry name", async () => {
+    const { canonicalHarnessName } = await importCore();
+    // The crew member name for claude-code is "claude"; accept it as an alias.
+    expect(canonicalHarnessName("claude")).toBe("claude-code");
+    // Registry names and genuine unknowns pass through unchanged so validation
+    // still rejects a true unknown.
+    expect(canonicalHarnessName("claude-code")).toBe("claude-code");
+    expect(canonicalHarnessName("codex")).toBe("codex");
+    expect(canonicalHarnessName("bogus")).toBe("bogus");
+  });
 });
 
 describe("claude-code adapter dialect", () => {

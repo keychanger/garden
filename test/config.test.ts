@@ -698,6 +698,12 @@ describe("config role subcommand", () => {
       .rejects.toThrow(/Unknown harness 'gpt4all'/);
   });
 
+  it("accepts the 'claude' alias for a review role and persists claude-code", async () => {
+    const { config, loadConfig } = await setup();
+    await config(["garden", "role", "reviewer", "harness", "claude"]);
+    expect(loadConfig().projects.garden.roles?.reviewer?.harness).toBe("claude-code");
+  });
+
   it("rejects an unknown role and dimension", async () => {
     const { config } = await setup();
     await expect(config(["garden", "role", "worker", "harness", "codex"]))
@@ -743,6 +749,12 @@ describe("config harness key", () => {
     await config(["garden", "harness", "codex"]);
     await config(["garden", "harness", ""]);
     expect(loadConfig().projects.garden.harness).toBeUndefined();
+  });
+
+  it("accepts the 'claude' alias and persists the claude-code registry name", async () => {
+    const { config, loadConfig } = await setup();
+    await config(["garden", "harness", "claude"]);
+    expect(loadConfig().projects.garden.harness).toBe("claude-code");
   });
 
   it("rejects an unregistered harness", async () => {

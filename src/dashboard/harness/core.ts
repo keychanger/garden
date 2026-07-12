@@ -41,3 +41,17 @@ export function isRegisteredHarness(name: string): boolean {
 export function harnessNames(): string[] {
   return Object.keys(CORES);
 }
+
+// Operator-facing harness aliases. The claude-code harness is named "claude"
+// as a crew member (crew.ts) and reads better as "claude" wherever an operator
+// types a harness name (`--harness claude`, `config <p> harness claude`), so
+// accept it there. Canonicalize AT the input boundary — internal values stay
+// registry names.
+const HARNESS_ALIASES: Record<string, string> = { claude: DEFAULT_HARNESS };
+
+// Resolve an operator-entered harness name to its registry name, passing
+// through anything that is not a known alias so validation still rejects a
+// genuine unknown.
+export function canonicalHarnessName(name: string): string {
+  return HARNESS_ALIASES[name] ?? name;
+}

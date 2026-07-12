@@ -2,7 +2,7 @@
 import { loadConfig, saveConfig, resolveProject, isValidConfigKey, type ProjectConfig } from "../config.js";
 import { syncProviderTokenToSession } from "../dashboard/claude-env.js";
 import { resolveReviewRole, type ReviewRole } from "../dashboard/roles.js";
-import { isRegisteredHarness, harnessNames } from "../dashboard/harness/core.js";
+import { isRegisteredHarness, harnessNames, canonicalHarnessName } from "../dashboard/harness/core.js";
 import { listCrews, getCrew, applyCrew, deriveCrew } from "../dashboard/crew.js";
 import {
   ASSIGNABLE_LOG_COLOR_KEYS,
@@ -278,6 +278,7 @@ function setRoleDim(projectName: string, roleArg: string, roleKey: ReviewRole, d
   if (!project) throw new Error(`Unknown project: ${projectName}`);
 
   const clearing = value === "" || value === "unset" || value === "null";
+  if (dim === "harness" && !clearing) value = canonicalHarnessName(value);
   if (dim === "harness" && !clearing && !isRegisteredHarness(value)) {
     throw new Error(
       `Unknown harness '${value}'. Registered harnesses: ${harnessNames().join(", ")}.`,
@@ -365,6 +366,8 @@ function setConfigKey(projectName: string, key: SettableKey, value: string): voi
       }
     }
   } else if (key === "harness") {
+    // Canonicalize the "claude" alias (the sentinels pass through unchanged).
+    value = canonicalHarnessName(value);
     if (value === "" || value === "unset" || value === "null") {
       delete project.harness;
       console.log(`Cleared ${key} for ${projectName} (workers default to claude-code)`);
