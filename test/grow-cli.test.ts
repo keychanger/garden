@@ -947,6 +947,28 @@ describe("garden workers new --harness", () => {
     expect(out.join("\n")).toContain("harness=codex");
   });
 
+  it("canonicalizes the 'claude' alias to claude-code before threading + reporting", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    const out = await captureConsoleLog(() =>
+      workers(["new", "proj", "--harness", "claude"]),
+    );
+
+    // The CLI pre-check canonicalizes the operator-facing "claude" alias at the
+    // boundary (commands/workers.ts), so it clears the registry validation and
+    // both the threaded opt and the created line carry "claude-code", never the
+    // alias. This guards the load-bearing canonicalHarnessName call: without it
+    // the pre-check would reject "claude" before newWorker is ever reached.
+    expect(newWorker).toHaveBeenCalledWith(expect.objectContaining({
+      projectName: "proj",
+      workflow: "default",
+      harness: "claude-code",
+    }));
+    expect(out.join("\n")).toContain("harness=claude-code");
+  });
+
   it("omits the harness field for a plain default worker", async () => {
     await setupProject("proj");
     const { workers } = await importWorkersCmd();
