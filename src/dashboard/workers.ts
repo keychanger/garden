@@ -18,6 +18,11 @@ import {
   addWorker, removeWorker, findWorkerByName, getAllWorkerNames,
   updateWorkerFields, getWorkers, resolveResumeAgentStatus, type AgentStatus,
 } from "./registry.js";
+import { recordWorkerCreated, shortHash, type RoleSnapshot } from "./telemetry.js";
+import { deriveCrew } from "./crew.js";
+import { resolveReviewRole, type ReviewRole } from "./roles.js";
+import { buildRulesContext } from "../rules.js";
+import { GARDEN_VERSION } from "../version.js";
 import { log } from "./log.js";
 import { resolveAndApplyVineModel } from "./trellis-model.js";
 import { getWorkflow } from "./workflows/index.js";
@@ -306,6 +311,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // base advances as this and sibling workers merge, so it cannot be
     // reconstructed reliably afterward.
     const baseBranchSha = getRemoteTrackingSha(project.path, baseBranch) ?? undefined;
+    const createdAt = Date.now();
     addWorker(targetProject, {
       name: workerName,
       sessionId,
@@ -315,7 +321,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       baseBranch,
       ...(baseBranchSha ? { baseBranchSha } : {}),
       agentStatus: "loading",
-      createdAt: Date.now(),
+      createdAt,
       workflow: workflowName,
       // Harness adapter (agent CLI). Absent = claude-code; consumers read via
       // getHarness(entry.harness). Threaded into launch/resume/loop.
@@ -386,6 +392,42 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         }
         resolvedModel = m;
       }
+    }
+
+    // Ledger the launch with its full configuration snapshot — the experiment
+    // context every later analysis groups by. Config is mutable (a crew swap
+    // rewrites harness/roles), so it's frozen onto the event here rather than
+    // joined against live config at read time. Best-effort: the snapshot
+    // helpers (deriveCrew / resolveReviewRole / buildRulesContext) read files
+    // and config, so guard the whole block — a telemetry failure must never
+    // abort a worker launch.
+    try {
+      const cfg = loadConfig();
+      const roleSnapshot = (role: ReviewRole): RoleSnapshot => {
+        const r = resolveReviewRole(project, workflowName, role, cfg);
+        return { harness: r.harness, model: r.model };
+      };
+      recordWorkerCreated(targetProject, workerName, createdAt, {
+        workflow: workflowName,
+        harness: resolvedHarness ?? "claude-code",
+        provider: project.provider ?? null,
+        model: resolvedModel ?? null,
+        ultracode,
+        crew: deriveCrew(project, cfg),
+        roles: {
+          reviewer: roleSnapshot("reviewer"),
+          resolver: roleSnapshot("resolver"),
+          ciFix: roleSnapshot("ciFix"),
+        },
+        baseBranch,
+        rulesHash: shortHash(buildRulesContext(project.name, project.path)),
+        gardenVersion: GARDEN_VERSION,
+      });
+    } catch (err) {
+      log.warn("workers", "telemetry worker.created emit failed", {
+        worker: workerName,
+        data: { project: targetProject, error: String(err) },
+      });
     }
 
     // Write the bootstrap script that handles slow setup (git fetch, worktree

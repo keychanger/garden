@@ -296,6 +296,18 @@ Worker "needs operator input" events (AskUserQuestion, ExitPlanMode, auto-mode p
 - Each worktree's `.claude/settings.json` configures Claude's OS-level sandbox (Seatbelt on macOS, bubblewrap on Linux) — auto-allow mode approves sandboxed bash without prompts while blocking out-of-allowlist filesystem writes and network calls at the kernel. Workers and reviewers run without `--dangerously-skip-permissions` but remain autonomous inside the sandbox. Allowlist defaults (Anthropic, GitHub, npm, the project's git remote host, plus worktree + standard subprocess caches) are built in `src/dashboard/sandbox.ts` and extended per-project via the `sandboxDomains` config key. The config lives in `settings.json` (not `settings.local.json`) because Claude Code writes permission approvals to `settings.local.json` and can clobber our keys; keeping hooks/sandbox in `settings.json` isolates them from that churn.
 - The same `settings.json` sets `permissions.defaultMode: "auto"`, so every Claude process in the worktree (worker, reviewer, resolver, resume) starts in Anthropic's built-in auto mode. The classifier auto-approves low-risk tool calls and only prompts the operator for the rest. `permissions.allow` also pre-approves `Bash(tmux:*)` plus read-only tail utilities (`echo`, `head`, `tail`, `cat`, `grep`, `wc`) since workers routinely query pane/window state and pipe or chain the output — Claude Code checks each subcommand of a compound bash call against the allow list independently, so without the tails a command like `tmux list-keys -T root | head -40` still escalates. Garden wires a `PermissionRequest` hook (no matcher — all tools) that fires **only** when a prompt is actually being shown; it flips `agentStatus` to `asking`, which renders the worker row bold-yellow in the status pane. A catch-all `PostToolUse` hook (no matcher — all tools) flips `asking` back to `working` once the operator approves, regardless of which tool the classifier escalated
 
+### Telemetry ledger
+
+An append-only JSONL event ledger (`src/dashboard/telemetry.ts`) records worker lifecycle facts for cross-model / provider / harness / workflow / prompt-version analysis. It is the durable history garden otherwise lacks: `removeWorker` hard-deletes the registry entry and `dashboard.log` tail-trims at 10MB, so nothing else survives a worker's cleanup. One line per fact (never an aggregate), sharded monthly at `~/.garden/telemetry/events-YYYY-MM.jsonl` and **never truncated** — aggregation happens at read time, which keeps future questions answerable against past data.
+
+- **Design constraints.** Best-effort throughout (every write is wrapped and swallows — a telemetry failure must never break the poller or a launch, exactly like `log.ts`). The module is kept THIN (`fs`/`path`/`crypto`/`config` only) and its directory is resolved lazily inside the write, so it is safe to pull into any import graph — including the `dist/hook.js` closure that `registry.ts` reaches — without an import-time dependency. Callers construct the already-primitive payloads (harness/model/crew/`rulesHash` are resolved caller-side in CLI-only modules); the module only stamps `v`+`ts` and serializes. Every line carries a schema version `v` for read-time migration.
+- **Join key.** Worker names are randomly generated slugs that collide over months, so the durable identity is `workerId = project/name/createdAt`. Every event carries it; the lean lifecycle events join back to `worker.created` on it.
+- **Events (Phase 1).**
+  - `worker.created` — emitted from `newWorker` (`workers.ts`) with the full configuration snapshot frozen onto the event (config is mutable, so "what was configured when this ran" cannot be reconstructed later): `workflow`, `harness`, `provider`, `model`, `ultracode`, `crew` (`deriveCrew`), per-role `{harness, model}` for reviewer/resolver/ci-fix (`resolveReviewRole`), `baseBranch`, `rulesHash` (a short hash of the composed global+project rules — the prompt-version axis), and `gardenVersion` (the build axis).
+  - `state` — emitted from `transitionState` (`poller-state.ts`) on every genuine prState move (`from`/`to`/`workflow`). The lifecycle backbone: time-in-state (review/resolve/cycle durations) falls out of consecutive events' timestamps at read time.
+  - `merge` — emitted from `transitionToTerminal` (`poller-merge.ts`) with the counts the pure `state` event can't carry: `terminalState` (`done`/`merged`), the cumulative `mergeCount` ordinal, and this cycle's `changedFiles`. The terminal move thus appears as both a `state` line (machine trace) and a `merge` line (enrichment), distinguished by event type.
+- **Future phases** (not yet built): cycle enrichment (verdict/duration/reviewer-fix magnitude, autonomy signals), token/cost capture (the Codex stderr trailer and Claude transcript `usage` fields are discarded today), and a `garden stats` read surface. The ledger records the raw facts now so the history exists when those land.
+
 ## Worker Status Detection
 
 Each worker has two independent status axes:
@@ -447,6 +459,8 @@ All read commands detect whether stdout is a TTY:
     codex-usage.json          # Codex quota snapshot (rate_limits windows + credits), captured at Stop-hook time
   diary/
     <project>.md          # Per-project diary (operator notes; garden diary / ⌥d)
+  telemetry/
+    events-<YYYY-MM>.jsonl  # Append-only lifecycle event ledger, sharded monthly, never truncated
   worktrees/
     <project>/
       <worker-name>/      # Git worktree for each worker

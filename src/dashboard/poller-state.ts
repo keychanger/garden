@@ -18,6 +18,7 @@ import {
   type WorkerEntry, type PrState, type WorkerFieldsUpdate,
 } from "./registry.js";
 import { scheduleDelayedPoke } from "./poller-fifo.js";
+import { recordStateTransition } from "./telemetry.js";
 import { getValidTransitions } from "./workflows/types.js";
 import {
   maybeDispatchHolisticReview, evaluateHolisticGate, finalizeShadowHolistic,
@@ -56,6 +57,13 @@ export function transitionState(
   const stateFields: Omit<WorkerFieldsUpdate, "prState"> =
     toState !== fromState ? { ...extraFields, lastStateChangeAt: Date.now() } : { ...extraFields };
   updateWorkerFields(projectName, workerName, { ...stateFields, prState: toState });
+  // Ledger the move on a genuine transition only (same gate as the
+  // lastStateChangeAt stamp). `entry` guards against a name unknown to the
+  // registry — updateWorkerFields no-ops in that case, so recording would
+  // ledger a transition that never persisted.
+  if (entry && toState !== fromState) {
+    recordStateTransition(projectName, workerName, entry.createdAt, workflowName, fromState, toState);
+  }
   maybeFireHandoffCallback(projectName, workerName, toState);
 }
 

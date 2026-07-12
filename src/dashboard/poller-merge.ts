@@ -35,6 +35,7 @@ import { readUsageSnapshot, snapshotMeters } from "./usage.js";
 import { workerWindowName } from "./window-names.js";
 import { scheduleDelayedPoke, isWorkerClaudeWorking } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
+import { recordMerge } from "./telemetry.js";
 import { maybeDispatchHolisticReview } from "./poller-holistic-review.js";
 import { killReviewWindow } from "./poller-review.js";
 import { launchResolver } from "./poller-resolve.js";
@@ -729,6 +730,16 @@ function transitionToTerminal(
     pendingContinueChangedFiles: sync.changedFiles.length ? sync.changedFiles : undefined,
     pendingContinueSyncFailed: sync.syncFailed ? true : undefined,
   });
+
+  // Ledger the completed merge with the counts the pure `state` event (emitted
+  // by the transitionState above) can't carry: the cumulative merge ordinal and
+  // this cycle's changed-file count. The terminal move thus appears twice — as a
+  // `state` line (the machine trace) and a `merge` line (the enrichment) — which
+  // analysis distinguishes by event type.
+  recordMerge(
+    projectName, entry.name, entry.createdAt, entry.workflow ?? "default",
+    terminalState, mergeCount, preMergeChangedFiles.length,
+  );
 
   // STATUS.md invariant 4 race: a prompt hook that landed mid-merge can't
   // clear an active pipeline prState (which `merged`/`done` is at the moment

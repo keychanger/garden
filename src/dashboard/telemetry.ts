@@ -1,0 +1,166 @@
+// Telemetry: an append-only JSONL event ledger for analyzing garden's work
+// across models, providers, harnesses, workflows, and prompt versions.
+//
+// This is the durable flight recorder garden never had. The registry hard-
+// deletes a worker's entry on cleanup (removeWorker) and dashboard.log tail-
+// trims at 10MB, so no lasting record of a worker's lifecycle survives today.
+// The ledger records one line per lifecycle FACT (not an aggregate), sharded
+// monthly and NEVER truncated — aggregation happens at read time, which
+// preserves the ability to ask questions we haven't thought of yet.
+//
+// Design constraints:
+//   - Best-effort: a telemetry failure must never break the poller or a worker
+//     launch. Every write is wrapped and swallows, exactly like log.ts.
+//   - THIN: registry.ts (which reaches the dist/hook.js bundle) may import this,
+//     so the module's import closure stays fs/path/crypto/config only. Callers
+//     construct the already-primitive payloads (harness/model/crew/rulesHash are
+//     resolved caller-side, in CLI-only modules); this module only serializes.
+//   - Denormalized config: worker.created freezes the full configuration onto
+//     the event, because config is mutable and "what was configured when this
+//     ran" cannot be reconstructed by joining against the live config later.
+//     The lean lifecycle events (state/merge) carry only workerId + workflow;
+//     they join back to worker.created on workerId for the rest.
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { GARDEN_DIR } from "../config.js";
+
+// Resolved lazily (not a module-top const) so importing this module is pure —
+// it touches no filesystem path and reads GARDEN_DIR only when actually
+// recording, inside the best-effort try below. This keeps the module safe to
+// pull into any import graph without an import-time dependency on config.
+export function telemetryDir(): string {
+  return path.join(GARDEN_DIR, "telemetry");
+}
+
+// Bump when an event's shape changes incompatibly. Readers migrate on `v`,
+// exactly like readRegistry's legacy-shape migrations.
+const SCHEMA_VERSION = 1;
+
+// One review role's resolved selection, frozen onto worker.created.
+export interface RoleSnapshot {
+  harness: string;
+  model?: string;
+}
+
+// The full experiment context frozen at worker creation. Everything here is a
+// grouping axis for analysis: "clean-review rate by harness", "cost per merge
+// by provider", "did outcomes shift when rulesHash changed". Resolved by the
+// caller (workers.ts) from live config; this module never reads config itself.
+export interface WorkerCreatedSnapshot {
+  workflow: string;
+  harness: string;
+  provider: string | null;
+  model: string | null;
+  ultracode: boolean;
+  crew: string | null;
+  roles: { reviewer: RoleSnapshot; resolver: RoleSnapshot; ciFix: RoleSnapshot };
+  baseBranch?: string;
+  // Hash of the composed global + project rules the worker launches with — the
+  // prompt-version axis. A prompt edit is an experiment too, so outcomes must
+  // be sliceable by it. See shortHash.
+  rulesHash?: string;
+  // Build version (esbuild --define), the "what code shipped" axis.
+  gardenVersion: string;
+}
+
+// Durable identity for a worker across name reuse: worker names are randomly
+// generated slugs that collide over months, so the stable key is
+// project/name/createdAt. Every event carries it as the join key.
+export function telemetryWorkerId(
+  project: string,
+  worker: string,
+  createdAt?: number,
+): string {
+  return `${project}/${worker}/${createdAt ?? 0}`;
+}
+
+// Short, stable content hash for the rules-version axis. sha256 (node builtin,
+// no dependency) truncated to 12 hex chars — collision-irrelevant for a
+// human-scale set of prompt versions.
+export function shortHash(s: string): string {
+  return crypto.createHash("sha256").update(s).digest("hex").slice(0, 12);
+}
+
+// Current month's shard basename, e.g. events-2026-07.jsonl. Sharding keeps any
+// single file bounded without ever discarding history (each shard is closed
+// forever once the month rolls over) and makes a date-ranged read a filename
+// filter rather than a full scan.
+export function shardName(date: Date = new Date()): string {
+  return `events-${date.toISOString().slice(0, 7)}.jsonl`; // events-YYYY-MM.jsonl
+}
+
+function write(line: Record<string, unknown>): void {
+  try {
+    const dir = telemetryDir();
+    fs.mkdirSync(dir, { recursive: true });
+    const entry = { v: SCHEMA_VERSION, ts: new Date().toISOString(), ...line };
+    fs.appendFileSync(path.join(dir, shardName()), JSON.stringify(entry) + "\n");
+  } catch {
+    /* telemetry must never crash the app */
+  }
+}
+
+// worker.created — the experiment context. Emitted once per worker launch.
+export function recordWorkerCreated(
+  project: string,
+  worker: string,
+  createdAt: number,
+  snapshot: WorkerCreatedSnapshot,
+): void {
+  write({
+    event: "worker.created",
+    project,
+    worker,
+    workerId: telemetryWorkerId(project, worker, createdAt),
+    ...snapshot,
+  });
+}
+
+// state — one genuine prState move (from !== to). The lifecycle backbone: every
+// review/resolve/ci-fix/merge state change funnels through transitionState, and
+// time-in-state (review duration, resolve duration, cycle time) falls out of
+// consecutive events' timestamps at read time.
+export function recordStateTransition(
+  project: string,
+  worker: string,
+  createdAt: number | undefined,
+  workflow: string,
+  from: string,
+  to: string,
+): void {
+  write({
+    event: "state",
+    project,
+    worker,
+    workerId: telemetryWorkerId(project, worker, createdAt),
+    workflow,
+    from,
+    to,
+  });
+}
+
+// merge — a completed merge, with the counts the pure state event can't carry:
+// the cumulative merge ordinal (the multi-phase cycle number) and how many
+// files this cycle touched. terminalState is "done" (worker self-declared
+// finished via .garden-done) or "merged" (an intermediate phase).
+export function recordMerge(
+  project: string,
+  worker: string,
+  createdAt: number | undefined,
+  workflow: string,
+  terminalState: string,
+  mergeCount: number,
+  changedFiles: number,
+): void {
+  write({
+    event: "merge",
+    project,
+    worker,
+    workerId: telemetryWorkerId(project, worker, createdAt),
+    workflow,
+    terminalState,
+    mergeCount,
+    changedFiles,
+  });
+}
