@@ -120,7 +120,11 @@ describe("telemetry", () => {
       path.join(t.telemetryDir(), fs.readdirSync(t.telemetryDir())[0]),
       "utf-8",
     );
-    expect(raw).not.toContain('"model":null,"harness":"codex"');
+    // A model-less role snapshot must serialize WITHOUT a model key (JSON drops
+    // undefined), so the reviewer role must appear exactly as {"harness":"codex"}.
+    // The substring ends in the closing brace, so a regression that emitted
+    // "model":null would render {"harness":"codex","model":null} and fail to match.
+    expect(raw).toContain('"reviewer":{"harness":"codex"}');
     const e = readEvents(t.telemetryDir())[0];
     expect((e.roles as { reviewer: Record<string, unknown> }).reviewer).not.toHaveProperty("model");
   });

@@ -394,42 +394,6 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       }
     }
 
-    // Ledger the launch with its full configuration snapshot — the experiment
-    // context every later analysis groups by. Config is mutable (a crew swap
-    // rewrites harness/roles), so it's frozen onto the event here rather than
-    // joined against live config at read time. Best-effort: the snapshot
-    // helpers (deriveCrew / resolveReviewRole / buildRulesContext) read files
-    // and config, so guard the whole block — a telemetry failure must never
-    // abort a worker launch.
-    try {
-      const cfg = loadConfig();
-      const roleSnapshot = (role: ReviewRole): RoleSnapshot => {
-        const r = resolveReviewRole(project, workflowName, role, cfg);
-        return { harness: r.harness, model: r.model };
-      };
-      recordWorkerCreated(targetProject, workerName, createdAt, {
-        workflow: workflowName,
-        harness: resolvedHarness ?? "claude-code",
-        provider: project.provider ?? null,
-        model: resolvedModel ?? null,
-        ultracode,
-        crew: deriveCrew(project, cfg),
-        roles: {
-          reviewer: roleSnapshot("reviewer"),
-          resolver: roleSnapshot("resolver"),
-          ciFix: roleSnapshot("ciFix"),
-        },
-        baseBranch,
-        rulesHash: shortHash(buildRulesContext(project.name, project.path)),
-        gardenVersion: GARDEN_VERSION,
-      });
-    } catch (err) {
-      log.warn("workers", "telemetry worker.created emit failed", {
-        worker: workerName,
-        data: { project: targetProject, error: String(err) },
-      });
-    }
-
     // Write the bootstrap script that handles slow setup (git fetch, worktree
     // creation, npm install) inside the tmux pane so the window appears instantly
     // with progress output instead of blocking the hotkey handler. Default
@@ -513,6 +477,45 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       worker: workerName,
       data: { project: targetProject, branch: branchName, model: resolvedModel, background },
     });
+
+    // Ledger the launch now that the pane has actually spawned — emitting
+    // before the pane-creation try/catch above would leave a phantom
+    // worker.created in the append-only (never-truncated) ledger whenever that
+    // rollback fires (tmux spawn failure), over-counting launches in read-time
+    // aggregation. The full configuration snapshot is frozen onto the event
+    // because config is mutable (a crew swap rewrites harness/roles) and can't
+    // be reconstructed by joining against live config later. Best-effort: the
+    // snapshot helpers (deriveCrew / resolveReviewRole / buildRulesContext)
+    // read files and config, so guard the whole block — a telemetry failure
+    // must never abort a worker launch.
+    try {
+      const cfg = loadConfig();
+      const roleSnapshot = (role: ReviewRole): RoleSnapshot => {
+        const r = resolveReviewRole(project, workflowName, role, cfg);
+        return { harness: r.harness, model: r.model };
+      };
+      recordWorkerCreated(targetProject, workerName, createdAt, {
+        workflow: workflowName,
+        harness: resolvedHarness ?? "claude-code",
+        provider: project.provider ?? null,
+        model: resolvedModel ?? null,
+        ultracode,
+        crew: deriveCrew(project, cfg),
+        roles: {
+          reviewer: roleSnapshot("reviewer"),
+          resolver: roleSnapshot("resolver"),
+          ciFix: roleSnapshot("ciFix"),
+        },
+        baseBranch,
+        rulesHash: shortHash(buildRulesContext(project.name, project.path)),
+        gardenVersion: GARDEN_VERSION,
+      });
+    } catch (err) {
+      log.warn("workers", "telemetry worker.created emit failed", {
+        worker: workerName,
+        data: { project: targetProject, error: String(err) },
+      });
+    }
 
     ensureProjectPoller(targetProject, gardenRunner);
 
