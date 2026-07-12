@@ -45,8 +45,8 @@ export interface ScopedMeter extends UsageMeter {
 
 // Pay-as-you-go overflow credits beyond the plan quota. Surfaced only when the
 // account has extra usage turned on (is_enabled); a disabled bucket is dropped
-// so the pane stays at three bars. The numeric fields are optional because the
-// endpoint returns null limits for an uncapped account.
+// so the pane adds no extra-usage footer row. The numeric fields are optional
+// because the endpoint returns null limits for an uncapped account.
 export interface ExtraUsage {
   enabled: boolean;
   monthlyLimit?: number;
@@ -379,8 +379,8 @@ function pickScopedMeters(limits: unknown): ScopedMeter[] {
 }
 
 // The extra_usage bucket → ExtraUsage, but only when the account has it
-// enabled: a disabled or absent bucket returns undefined so the pane keeps
-// three bars. Numeric fields are parsed defensively (the endpoint returns null
+// enabled: a disabled or absent bucket returns undefined so the pane omits the
+// extra-usage footer row. Numeric fields are parsed defensively (the endpoint returns null
 // for an uncapped monthly_limit / utilization), so a partial bucket degrades
 // to the fields it does carry rather than throwing. Note: the "found any
 // buckets?" check in normalizeUsage keys on the three time buckets, not this
@@ -732,11 +732,12 @@ function computeMeterFit(paneWidth: number | undefined): { barWidth: number; sho
   };
 }
 
-// Leading blank for breathing room under the pane-border label, then three
-// meter rows, then an optional one-line health tag *underneath* the meters
-// when the snapshot is stale or in error. The tag is rendered once instead
+// Leading blank for breathing room under the pane-border label, then the
+// meter rows (two flat bars plus one per model-scoped meter), then an optional
+// one-line health tag *underneath* the meters when the snapshot is stale or in
+// error. The tag is rendered once instead
 // of repeated on every meter row — a long error like "refresh failed: network:
-// getaddrinfo ENOTFOUND platform.claude.com" repeated three times overflows
+// getaddrinfo ENOTFOUND platform.claude.com" repeated on every row overflows
 // the 112-col pane and wraps each meter row. Placing the tag below (and the
 // pane auto-resizes by one row when it appears) keeps transient errors from
 // dominating the visual top of the pane.
@@ -878,9 +879,9 @@ function formatHealthLine(tag: string, paneWidth: number | undefined): string {
 }
 
 // Dim credit footer for pay-as-you-go extra usage. Not a resetting time-window
-// bar — an absolute credit tally — so it renders as text under the three bars
+// bar — an absolute credit tally — so it renders as text under the meter bars
 // with a matching label column, dimmed so it reads as a footnote rather than a
-// fourth peer meter.
+// peer resetting-window meter.
 function formatExtraUsageLine(extra: ExtraUsage, paneWidth: number | undefined): string {
   const text = `${"extra".padEnd(LABEL_WIDTH)}  ${formatExtraUsageCredits(extra)}`;
   return dimFooterLine(text, paneWidth);

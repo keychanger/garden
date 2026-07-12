@@ -127,6 +127,21 @@ describe("resolveVineModel", () => {
     expect(r).toEqual({ model: "sonnet", fellBack: false });
   });
 
+  it("does not fall back when the scoped meter is present but not Sonnet (the 2026-07 reality)", () => {
+    // The endpoint now scopes the weekly model meter to Fable, not Sonnet, so
+    // findScopedMeter(data, "sonnet") misses even at 99% — the Sonnet fallback
+    // stays dormant rather than tripping on an unrelated model's exhaustion.
+    const fableExhausted: UsageSnapshot = {
+      fetchedAt: new Date().toISOString(),
+      data: { scoped: [{ label: "Fable", pct: 99, resetsAt: "2026-05-13T00:00:00Z" }] },
+    };
+    const r = resolveVineModel(
+      baseEntry, baseProject, trellisWorkflow as WorkflowDefinition,
+      fableExhausted, baseAutoContinue,
+    );
+    expect(r).toEqual({ model: "sonnet", fellBack: false });
+  });
+
   it("uses the project's usageThreshold via autoContinue.usageThreshold", () => {
     // 80 < 90 < 95 — at threshold 90, 92 should trigger fallback.
     const tighter: AutoContinueConfig = { ...baseAutoContinue, usageThreshold: 90 };

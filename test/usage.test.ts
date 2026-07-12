@@ -88,7 +88,7 @@ describe("normalizeUsage", () => {
 
   it("surfaces extra_usage only when enabled, defensively parsing partial buckets", () => {
     const base = { five_hour: { utilization: 5, resets_at: "2026-04-15T20:00:00Z" } };
-    // Disabled → dropped so the pane keeps three bars.
+    // Disabled → dropped so the pane adds no extra-usage footer row.
     expect(normalizeUsage({ ...base, extra_usage: { is_enabled: false, monthly_limit: 5000, used_credits: 0 } }).extraUsage)
       .toBeUndefined();
     // Enabled and fully populated.
@@ -352,6 +352,54 @@ describe("renderUsagePane", () => {
     expect(lines[1]).toContain("26%");
     expect(lines[2]).toContain("35%");
     expect(lines[3]).toContain(" 4%");
+  });
+
+  it("renders one row per model-scoped meter, in array order", async () => {
+    // The bar count is dynamic: two flat bars plus one per scoped meter. With
+    // two scoped models the pane is five lines (blank + 5h + week + two model
+    // bars), each labeled by its model in the response's array order.
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        fiveHour: { pct: 26, resetsAt: new Date(now + 2 * 60 * 60_000).toISOString() },
+        weekly:   { pct: 35, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
+        scoped: [
+          { label: "Fable", pct: 12, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
+          { label: "Haiku", pct:  7, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
+        ],
+      },
+    });
+    const render = await importRender();
+    const lines = render(now).split("\n");
+    expect(lines).toHaveLength(5); // blank + 5h + week + fable + haiku
+    expect(lines[3]).toContain("fable");
+    expect(lines[3]).toContain("12%");
+    expect(lines[4]).toContain("haiku");
+    expect(lines[4]).toContain(" 7%");
+  });
+
+  it("truncates a model-scoped label wider than the label column", async () => {
+    // The label is data-driven now, so a display_name longer than LABEL_WIDTH
+    // (6) must be truncated to keep the bar column aligned rather than pushing
+    // the bar right and overflowing the pane.
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        weekly: { pct: 35, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
+        scoped: [{ label: "ClaudeSonnet", pct: 8, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() }],
+      },
+    });
+    const render = await importRender();
+    const lines = render(now).split("\n");
+    const scopedLine = lines.find(l => l.includes("claude"));
+    expect(scopedLine).toBeDefined();
+    // Lowercased and truncated to the 6-char column — the full label never appears.
+    expect(scopedLine).toContain("claud");
+    expect(scopedLine).not.toContain("claudesonnet");
+    // Alignment is preserved: the week and scoped rows share the same bar start.
+    const weekLine = lines.find(l => l.includes("week"))!;
+    const strip = (s: string) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+    expect(strip(scopedLine!).indexOf("█")).toBe(strip(weekLine).indexOf("█"));
   });
 
   it("shows at least one filled cell for small non-zero percentages", async () => {
