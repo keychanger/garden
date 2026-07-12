@@ -855,6 +855,31 @@ describe("worker ordering helpers", () => {
   });
 });
 
+describe("resolveResumeAgentStatus", () => {
+  it("parks an interrupted (mid-turn) worker at the ready cold-start sentinel", async () => {
+    const { resolveResumeAgentStatus } = await importRegistry();
+    // agentStatus="working" at rebuild (tmux server crash, no pane-died) →
+    expect(resolveResumeAgentStatus({ agentStatus: "working" })).toBe("ready");
+    // pane-died recorded the interrupt flag but reset agentStatus to "exited" →
+    expect(resolveResumeAgentStatus({ agentStatus: "exited", interruptedWhileWorking: true })).toBe("ready");
+  });
+
+  it("preserves an operator hold and a pending question across the restart", async () => {
+    const { resolveResumeAgentStatus } = await importRegistry();
+    expect(resolveResumeAgentStatus({ agentStatus: "paused" })).toBe("paused");
+    expect(resolveResumeAgentStatus({ agentStatus: "asking" })).toBe("asking");
+  });
+
+  it("returns idle for every other worker — never the one-time ready", async () => {
+    const { resolveResumeAgentStatus } = await importRegistry();
+    // The bug this fixes: a resumed idle/done worker must not surface as "ready".
+    expect(resolveResumeAgentStatus({ agentStatus: "idle" })).toBe("idle");
+    expect(resolveResumeAgentStatus({ agentStatus: "exited" })).toBe("idle");
+    expect(resolveResumeAgentStatus({ agentStatus: "loading" })).toBe("idle");
+    expect(resolveResumeAgentStatus({})).toBe("idle");
+  });
+});
+
 describe("createdAt backfill on read", () => {
   function writeEntry(REGISTRY_FILE: string, entry: Record<string, unknown>): void {
     fs.writeFileSync(REGISTRY_FILE, JSON.stringify({ workers: { proj: [{ name: "w", sessionId: "s", task: "", ...entry }] } }));

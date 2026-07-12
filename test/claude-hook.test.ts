@@ -294,14 +294,18 @@ describe("handleClaudeHook — core events", () => {
     handleClaudeHook("sessionstart");
   }
 
-  // resume/compact: preserve working/asking, otherwise set ready.
-  // Any other source (or no source): always ready.
+  // resume/compact: preserve the existing agentStatus verbatim — the resume
+  // dispatcher (resolveResumeAgentStatus) is authoritative and a resumed worker
+  // never returns to the one-time "ready" (STATUS.md). Any other source (or no
+  // source): fresh session, set ready.
   const sessionstartTable: Array<[string | null, string, string]> = [
     [null,        "loading", "ready"],
     ["startup",   "loading", "ready"],
     ["resume",    "working", "working"],   // preserved
     ["resume",    "asking",  "asking"],    // preserved
-    ["resume",    "idle",    "ready"],     // not in preserve set
+    ["resume",    "idle",    "idle"],      // preserved (was the strand-at-ready bug)
+    ["resume",    "paused",  "paused"],    // preserved — operator hold survives a rebuild
+    ["compact",   "idle",    "idle"],      // preserved
     ["compact",   "working", "working"],   // preserved
     ["future-thing", "working", "ready"],  // unknown source falls through
   ];

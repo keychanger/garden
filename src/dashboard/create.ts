@@ -20,7 +20,7 @@ import {
   getFirstPaneId, shellEscape, tmuxDoubleQuote, newDashboardWindow,
   getPaneSize, resizeWindow, listSessionPanes, disablePaneInput,
 } from "./tmux.js";
-import { readRegistry, updateWorkerFields } from "./registry.js";
+import { readRegistry, updateWorkerFields, resolveResumeAgentStatus } from "./registry.js";
 import { log, truncateLog } from "./log.js";
 import { validateAndHeal } from "./validate.js";
 import { startProjectPoller, signalFifoPath, restartLongLivedPollers } from "./poller.js";
@@ -314,14 +314,17 @@ export function ensureDashboard(): void {
       // pane-died sets interruptedWhileWorking when agentStatus was "working"
       // at exit; if pane-died never fired (tmux server crash), agentStatus
       // itself will still be "working".
-      const wasInterrupted = entry.interruptedWhileWorking === true
-        || entry.agentStatus === "working";
-      // Claude Code does not fire SessionStart on --resume, so the SessionStart
-      // hook will not write agentStatus for resumed workers. Write "idle"
-      // directly: a resumed worker is at the prompt by definition, and the
-      // first user prompt will flip it to "working" via UserPromptSubmit.
+      // SessionStart DOES fire on --resume (source="resume"), but the hook now
+      // preserves whatever we write here rather than resetting it (see
+      // hooks/default.ts) — so this write is the authoritative post-resume
+      // status. resolveResumeAgentStatus parks an interrupted worker at the
+      // "ready" cold-start sentinel the continue-retry watches, keeps an
+      // operator hold / pending question across the rebuild, and returns
+      // everything else to "idle" at the prompt (never the one-time "ready").
       // prState is preserved as-is from the previous session.
-      updateWorkerFields(projectName, entry.name, { agentStatus: "idle" });
+      const resumeStatus = resolveResumeAgentStatus(entry);
+      const wasInterrupted = resumeStatus === "ready";
+      updateWorkerFields(projectName, entry.name, { agentStatus: resumeStatus });
       const workerCwd = entry.worktreePath ?? projectConfig.path;
       const trellisRelativePath = trellisRelativePathForEntry(entry, projectConfig.path);
       // entry.model: default/grow per-worker pin; trellis resolves per

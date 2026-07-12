@@ -561,13 +561,20 @@ Claude process and call `garden dashboard _claude-hook <event>`:
 
 - `SessionStart` → branches on the hook input's `source` field:
   - `startup` or `clear` → `agentStatus = "ready"` (fresh context).
-  - `resume` or `compact` → preserve `agentStatus` if it is currently
-    `working` or `asking`; otherwise set `ready`. Auto-compaction in
-    particular fires SessionStart mid-turn (Claude crosses the context
-    threshold and resets context while the operator's prompt is still
-    being answered) — overwriting `working` here would silently strand
-    the worker as "ready" in the dashboard until the next tool call or
-    Stop, which is what bug-stranded workers reported pre-fix.
+  - `resume` or `compact` → **preserve** the existing `agentStatus`; the
+    hook writes nothing (self-healing only a missing value to `idle`).
+    SessionStart *does* fire on `--resume` (source=`resume`), so this is
+    the load-bearing case: writing `ready` here would violate the
+    one-time-`ready` invariant and strand every resumed worker
+    (idle/paused/asking/done) in the "new" band on each dashboard
+    rebuild. On a rebuild or bounce the resume dispatcher (`create.ts` /
+    `bounceWorker`, via `resolveResumeAgentStatus`) has already written
+    the authoritative post-resume status — `idle` at the prompt, `ready`
+    only as the cold-start sentinel for an interrupted worker it is also
+    re-prompting, or a preserved `paused`/`asking`. Auto-compaction fires
+    SessionStart mid-turn (Claude crosses the context threshold while the
+    operator's prompt is still being answered); preserving `working`
+    there is what keeps it from being stranded as `ready`.
   - Missing/unknown `source` → `agentStatus = "ready"` (back-compat
     with older Claude Code builds that did not emit `source`).
 - `UserPromptSubmit` → `agentStatus = "working"`. Also clears `prState`

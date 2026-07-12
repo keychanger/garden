@@ -16,7 +16,7 @@ import {
 import { generateWorkerName } from "./names.js";
 import {
   addWorker, removeWorker, findWorkerByName, getAllWorkerNames,
-  updateWorkerFields, getWorkers, type AgentStatus,
+  updateWorkerFields, getWorkers, resolveResumeAgentStatus, type AgentStatus,
 } from "./registry.js";
 import { log } from "./log.js";
 import { resolveAndApplyVineModel } from "./trellis-model.js";
@@ -661,9 +661,12 @@ export function bounceWorker(projectName: string, workerName: string): void {
         entry.sessionId,
       );
 
-  // Capture pre-bounce status before we overwrite to "idle" — used to decide
-  // whether to auto-send a continue prompt below.
-  const wasWorking = entry.agentStatus === "working";
+  // Resolve the post-resume status from the pre-bounce entry, before we
+  // overwrite it. resolveResumeAgentStatus returns "ready" exactly for an
+  // interrupted (mid-turn) worker — which is both the cold-start sentinel the
+  // continue-retry watches and the signal to auto-send a continue below.
+  const resumeStatus = resolveResumeAgentStatus(entry);
+  const wasWorking = resumeStatus === "ready";
 
   const cwd = entry.worktreePath ?? projectInfo?.path;
   const respawnArgs = ["respawn-pane", "-k"];
@@ -671,9 +674,11 @@ export function bounceWorker(projectName: string, workerName: string): void {
   respawnArgs.push("-t", paneId, "sh", "-c", resumeCmd);
   tmux(...respawnArgs);
 
-  // --resume does not fire SessionStart, so write agentStatus directly.
-  // Mirrors the attach-time resume path in ensureDashboard().
-  updateWorkerFields(projectName, workerName, { agentStatus: "idle" });
+  // SessionStart fires on --resume (source="resume") but the hook now preserves
+  // the status we write here (see hooks/default.ts) instead of resetting it, so
+  // this write is authoritative. A bounced-while-working worker is parked at the
+  // "ready" cold-start sentinel; an already-idle worker never becomes "ready".
+  updateWorkerFields(projectName, workerName, { agentStatus: resumeStatus });
 
   if (wasWorking) {
     dispatchDelayedContinue(resolveGardenRunner(), projectName, workerName);

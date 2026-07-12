@@ -488,6 +488,31 @@ export function isWorkerStale(entry: WorkerEntry, now: number = Date.now()): boo
   return now - workerFreshness(entry) > WORKER_STALE_MS;
 }
 
+// The authoritative agentStatus for a worker being restored via `claude
+// --resume` (dashboard rebuild or bounce). SessionStart fires on --resume with
+// source="resume", but the hook now PRESERVES whatever the resume dispatcher
+// writes (see hooks/default.ts onSessionStart) instead of resetting it — so the
+// value returned here is durable. Per STATUS.md a worker that has already
+// received input never returns to the one-time "ready" state, with a single
+// exception: an interrupted worker is parked at the "ready" cold-start sentinel
+// that the auto-continue retry (continueWorkerIfStuck) watches to detect a
+// re-prompt paste that never landed — returning "ready" here is also the signal
+// the caller uses to dispatch that continue. An operator hold (`paused`) or a
+// pending question (`asking`) survives the restart; every other worker returns
+// to `idle` at the prompt (never the "new"-band "ready" that stranded resumed
+// idle/done workers).
+export function resolveResumeAgentStatus(
+  entry: Pick<WorkerEntry, "agentStatus" | "interruptedWhileWorking">,
+): AgentStatus {
+  if (entry.interruptedWhileWorking === true || entry.agentStatus === "working") {
+    return "ready";
+  }
+  if (entry.agentStatus === "paused" || entry.agentStatus === "asking") {
+    return entry.agentStatus;
+  }
+  return "idle";
+}
+
 export const REGISTRY_FILE = path.join(SESSIONS_DIR, "dashboard.registry.json");
 const LOCK_FILE = REGISTRY_FILE + ".lock";
 

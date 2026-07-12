@@ -275,12 +275,17 @@ function applyAndLog(
 const onSessionStart: HookMethod = (ctx) => {
   if (!ctx.workerInfo) return;
   const fields: FieldsDelta = {};
-  // resume/compact fire mid-turn (auto-compact in particular) and must not clobber working/asking; see STATUS.md.
   const source = typeof ctx.input.source === "string" ? ctx.input.source : "";
   if (source === "resume" || source === "compact") {
-    const cs = ctx.workerInfo.entry.agentStatus;
-    if (cs !== "working" && cs !== "asking") {
-      fields.agentStatus = "ready";
+    // A resumed or auto-compacted session has already received input, so per
+    // STATUS.md it must NEVER return to the one-time "ready" state. On a rebuild
+    // or bounce the resume dispatcher (create.ts / bounceWorker via
+    // resolveResumeAgentStatus) has already written this worker's authoritative
+    // post-resume status; auto-compaction fires mid-turn and carries the live
+    // status. Preserve it — writing "ready" here is what stranded resumed
+    // idle/done workers in the "new" band. Only self-heal a missing value.
+    if (ctx.workerInfo.entry.agentStatus === undefined) {
+      fields.agentStatus = "idle";
     }
   } else {
     fields.agentStatus = "ready";

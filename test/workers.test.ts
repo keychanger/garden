@@ -87,6 +87,14 @@ vi.mock("../src/dashboard/registry.js", () => ({
   getAllWorkerNames: vi.fn(() => []),
   getWorkers: vi.fn(() => []),
   updateWorkerFields: vi.fn(),
+  // Pure status helper — use the real logic so bounce's resume-status routing
+  // (working → "ready" sentinel, else "idle") is genuinely exercised.
+  resolveResumeAgentStatus: (entry: { agentStatus?: string; interruptedWhileWorking?: boolean }) =>
+    entry.interruptedWhileWorking === true || entry.agentStatus === "working"
+      ? "ready"
+      : entry.agentStatus === "paused" || entry.agentStatus === "asking"
+        ? entry.agentStatus
+        : "idle",
 }));
 
 vi.mock("../src/dashboard/log.js", () => ({
@@ -1040,7 +1048,10 @@ describe("bounceWorker", () => {
     ]));
   });
 
-  it("writes agentStatus=idle because --resume skips SessionStart", () => {
+  it("writes agentStatus=idle for a non-working worker (resume hook preserves it)", () => {
+    // Default mock worker has no agentStatus → resolveResumeAgentStatus → idle.
+    // SessionStart(resume) now preserves whatever bounce writes, so bounce is
+    // authoritative; an idle worker must not become the one-time "ready".
     bounceWorker("myproject", "swift-oak");
 
     expect(vi.mocked(updateWorkerFields)).toHaveBeenCalledWith(
@@ -1148,7 +1159,7 @@ describe("bounceWorker", () => {
     expect(continueCall).toBeUndefined();
   });
 
-  it("captures wasWorking before overwriting agentStatus to idle (call order)", () => {
+  it("parks a mid-turn worker at the ready sentinel and dispatches a continue", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "swift-oak", sessionId: "sess-abc", task: "",
       branchName: "swift-oak", worktreePath: "/wt/swift-oak",
@@ -1157,10 +1168,11 @@ describe("bounceWorker", () => {
 
     bounceWorker("myproject", "swift-oak");
 
-    // updateWorkerFields(...agentStatus: idle) is called; the dispatch must
-    // still see "working" because we snapshotted entry.agentStatus pre-write.
+    // A worker mid-turn at bounce resolves to the "ready" cold-start sentinel,
+    // which is what continueWorkerIfStuck watches to re-fire a lost re-prompt;
+    // the same condition dispatches the delayed continue below.
     expect(vi.mocked(updateWorkerFields)).toHaveBeenCalledWith(
-      "myproject", "swift-oak", { agentStatus: "idle" },
+      "myproject", "swift-oak", { agentStatus: "ready" },
     );
     const continueCall = vi.mocked(spawn).mock.calls.find(c =>
       Array.isArray(c[1]) && (c[1] as string[])[1]?.includes("_continue-worker"),
