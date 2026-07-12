@@ -920,6 +920,11 @@ describe("cleanPaneTitle", () => {
     expect(cleanPaneTitle("my-macbook.local")).toBeNull();
   });
 
+  it("returns null for the generic resume-session title, case-insensitively", () => {
+    expect(cleanPaneTitle("Continue previous coding session")).toBeNull();
+    expect(cleanPaneTitle("✱ continue previous coding session")).toBeNull();
+  });
+
   it("strips embedded terminal escape sequences", () => {
     // A title carrying a cursor-move / color escape must not reach the pane raw.
     expect(cleanPaneTitle("Building \x1b[2Jtests\x1b[0m")).toBe("Building tests");

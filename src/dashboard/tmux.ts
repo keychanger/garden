@@ -527,11 +527,17 @@ export function stripControlSequences(s: string): string {
 // (Claude prefixes with characters like "✱ ") and reject the default
 // "Claude Code" placeholder and system hostname (tmux defaults new panes
 // to the hostname, which would overwrite the persisted task on resume).
+// Also reject the generic title Claude Code emits when a session is
+// resumed (rate-limit cutoff, restart, etc.) before it has done any new
+// work — it carries no information about the worker's actual task, and
+// letting it through clobbers the last real summary with a placeholder
+// that never gets refreshed if the resumed turn is short.
 export function cleanPaneTitle(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const cleaned = stripControlSequences(raw).replace(/^[^a-zA-Z0-9]+/, "").trim();
   if (!cleaned || cleaned === "Claude Code") return null;
   if (cleaned === os.hostname()) return null;
+  if (cleaned.toLowerCase() === "continue previous coding session") return null;
   return cleaned;
 }
 
