@@ -501,14 +501,21 @@ export function isWorkerStale(entry: WorkerEntry, now: number = Date.now()): boo
 // pending question (`asking`) survives the restart; every other worker returns
 // to `idle` at the prompt (never the "new"-band "ready" that stranded resumed
 // idle/done workers).
+//
+// The hold/question check comes FIRST, ahead of the interrupt check: an owed
+// `interruptedWhileWorking` flag can linger on a worker the operator then held
+// (holdWorker doesn't clear it; the deferred continue skips a paused worker
+// without clearing it either). Resolving that combination to "ready" would let a
+// bounce/rebuild dispatch an auto-continue that silently defeats the hold, so the
+// operator's explicit, most-recent signal wins over the stale interrupt flag.
 export function resolveResumeAgentStatus(
   entry: Pick<WorkerEntry, "agentStatus" | "interruptedWhileWorking">,
 ): AgentStatus {
-  if (entry.interruptedWhileWorking === true || entry.agentStatus === "working") {
-    return "ready";
-  }
   if (entry.agentStatus === "paused" || entry.agentStatus === "asking") {
     return entry.agentStatus;
+  }
+  if (entry.interruptedWhileWorking === true || entry.agentStatus === "working") {
+    return "ready";
   }
   return "idle";
 }

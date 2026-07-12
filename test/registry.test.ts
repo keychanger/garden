@@ -870,6 +870,17 @@ describe("resolveResumeAgentStatus", () => {
     expect(resolveResumeAgentStatus({ agentStatus: "asking" })).toBe("asking");
   });
 
+  it("keeps a held/asking worker held even when an interrupt flag still lingers", async () => {
+    const { resolveResumeAgentStatus } = await importRegistry();
+    // Regression: an owed interruptedWhileWorking flag can outlive an operator
+    // hold (holdWorker doesn't clear it; the deferred continue skips a paused
+    // worker without clearing it). The hold is the most-recent explicit signal
+    // and must win — otherwise bounce/rebuild routes to "ready" and dispatches
+    // an auto-continue that defeats the hold.
+    expect(resolveResumeAgentStatus({ agentStatus: "paused", interruptedWhileWorking: true })).toBe("paused");
+    expect(resolveResumeAgentStatus({ agentStatus: "asking", interruptedWhileWorking: true })).toBe("asking");
+  });
+
   it("returns idle for every other worker — never the one-time ready", async () => {
     const { resolveResumeAgentStatus } = await importRegistry();
     // The bug this fixes: a resumed idle/done worker must not surface as "ready".

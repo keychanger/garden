@@ -88,12 +88,14 @@ vi.mock("../src/dashboard/registry.js", () => ({
   getWorkers: vi.fn(() => []),
   updateWorkerFields: vi.fn(),
   // Pure status helper — use the real logic so bounce's resume-status routing
-  // (working → "ready" sentinel, else "idle") is genuinely exercised.
+  // (working → "ready" sentinel, else "idle") is genuinely exercised. Mirrors
+  // registry.ts: the paused/asking hold check comes FIRST so an owed interrupt
+  // flag on a held worker can't route it to "ready" (and auto-continue).
   resolveResumeAgentStatus: (entry: { agentStatus?: string; interruptedWhileWorking?: boolean }) =>
-    entry.interruptedWhileWorking === true || entry.agentStatus === "working"
-      ? "ready"
-      : entry.agentStatus === "paused" || entry.agentStatus === "asking"
-        ? entry.agentStatus
+    entry.agentStatus === "paused" || entry.agentStatus === "asking"
+      ? entry.agentStatus
+      : entry.interruptedWhileWorking === true || entry.agentStatus === "working"
+        ? "ready"
         : "idle",
 }));
 
