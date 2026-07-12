@@ -18,16 +18,42 @@ import {
 import { useTmpHome } from "./helpers.js";
 
 describe("normalizeUsage", () => {
-  it("extracts all three meters from the observed api.anthropic.com shape", () => {
+  it("extracts the flat 5h/weekly meters and a scoped meter from the limits array", () => {
     const raw = {
       five_hour:        { utilization: 62, resets_at: "2026-04-15T20:00:00Z" },
       seven_day:        { utilization: 34, resets_at: "2026-04-19T04:00:00Z" },
-      seven_day_sonnet: { utilization: 4,  resets_at: "2026-04-20T15:00:00Z" },
+      seven_day_sonnet: null,
+      limits: [
+        { kind: "weekly_scoped", percent: 4, resets_at: "2026-04-20T15:00:00Z",
+          scope: { model: { id: null, display_name: "Fable" } } },
+      ],
     };
     const out = normalizeUsage(raw);
     expect(out.fiveHour).toEqual({ pct: 62, resetsAt: "2026-04-15T20:00:00Z" });
     expect(out.weekly).toEqual({ pct: 34, resetsAt: "2026-04-19T04:00:00Z" });
-    expect(out.sonnet).toEqual({ pct: 4, resetsAt: "2026-04-20T15:00:00Z" });
+    expect(out.scoped).toEqual([{ label: "Fable", pct: 4, resetsAt: "2026-04-20T15:00:00Z" }]);
+  });
+
+  it("parses multiple weekly_scoped limits and skips malformed / non-scoped entries", () => {
+    const raw = {
+      five_hour: { utilization: 5, resets_at: "2026-04-15T20:00:00Z" },
+      limits: [
+        { kind: "session", percent: 5, resets_at: "2026-04-15T20:00:00Z" }, // not scoped → ignored
+        { kind: "weekly_scoped", percent: 12, resets_at: "2026-04-20T15:00:00Z",
+          scope: { model: { id: null, display_name: "Fable" } } },
+        { kind: "weekly_scoped", percent: 7, resets_at: "2026-04-20T15:00:00Z",
+          scope: { model: { id: null, display_name: "Haiku" } } },
+        { kind: "weekly_scoped", percent: "9", resets_at: "2026-04-20T15:00:00Z",
+          scope: { model: { display_name: "BadPct" } } }, // wrong-typed pct → skipped
+        { kind: "weekly_scoped", percent: 3, resets_at: "2026-04-20T15:00:00Z",
+          scope: { model: {} } }, // no display_name → skipped
+      ],
+    };
+    const out = normalizeUsage(raw);
+    expect(out.scoped).toEqual([
+      { label: "Fable", pct: 12, resetsAt: "2026-04-20T15:00:00Z" },
+      { label: "Haiku", pct: 7, resetsAt: "2026-04-20T15:00:00Z" },
+    ]);
   });
 
   it("treats null buckets as absent", () => {
@@ -39,7 +65,7 @@ describe("normalizeUsage", () => {
     const out = normalizeUsage(raw);
     expect(out.fiveHour?.pct).toBe(4);
     expect(out.weekly?.pct).toBe(32);
-    expect(out.sonnet).toBeUndefined();
+    expect(out.scoped).toBeUndefined();
   });
 
   it("omits buckets with missing or wrong-typed fields instead of throwing", () => {
@@ -51,7 +77,7 @@ describe("normalizeUsage", () => {
     const out = normalizeUsage(raw);
     expect(out.fiveHour?.pct).toBe(10);
     expect(out.weekly).toBeUndefined();
-    expect(out.sonnet).toBeUndefined();
+    expect(out.scoped).toBeUndefined();
   });
 
   it("handles empty / non-object input gracefully", () => {
@@ -307,13 +333,13 @@ describe("renderUsagePane", () => {
     expect(out).toContain("rate-limited");
   });
 
-  it("renders three meter rows — 5h, week, sonnet", async () => {
+  it("renders 5h, week, and a scoped model bar", async () => {
     writeSnapshot({
       fetchedAt: new Date(now).toISOString(),
       data: {
         fiveHour: { pct: 26, resetsAt: new Date(now + 2 * 60 * 60_000).toISOString() },
         weekly:   { pct: 35, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
-        sonnet:   { pct: 4,  resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
+        scoped:   [{ label: "Fable", pct: 4, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() }],
       },
     });
     const render = await importRender();
@@ -322,7 +348,7 @@ describe("renderUsagePane", () => {
     expect(lines).toHaveLength(4);
     expect(lines[1]).toContain("5h");
     expect(lines[2]).toContain("week");
-    expect(lines[3]).toContain("sonnet");
+    expect(lines[3]).toContain("fable"); // model label, lowercased to match the column
     expect(lines[1]).toContain("26%");
     expect(lines[2]).toContain("35%");
     expect(lines[3]).toContain(" 4%");
@@ -334,14 +360,14 @@ describe("renderUsagePane", () => {
     writeSnapshot({
       fetchedAt: new Date(now).toISOString(),
       data: {
-        sonnet: { pct: 1, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
+        scoped: [{ label: "fable", pct: 1, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() }],
       },
     });
     const render = await importRender();
     const lines = render(now).split("\n");
-    const sonnetLine = lines.find(l => l.includes("sonnet"));
-    expect(sonnetLine).toBeDefined();
-    expect(sonnetLine).toMatch(/\u2588/);
+    const scopedLine = lines.find(l => l.includes("fable"));
+    expect(scopedLine).toBeDefined();
+    expect(scopedLine).toMatch(/\u2588/);
   });
 
   it("overlays marker on green background when they collide", async () => {
@@ -383,27 +409,44 @@ describe("renderUsagePane", () => {
     expect(markerPos).toBeGreaterThan(barStart);
   });
 
-  it("renders sonnet as an em-dash when the seven_day_sonnet bucket is null", async () => {
-    // /api/oauth/usage returns seven_day_sonnet: null when no Sonnet usage has
-    // accrued. A flat-zero bar next to a populated weekly bar reads as broken,
-    // so an em-dash is the truer signal — bar, percentage, and reset-text are
-    // all omitted.
+  it("renders a scoped meter as an em-dash when its window has already reset", async () => {
+    // A weekly_scoped entry whose resets_at is in the past describes a previous
+    // window; an em-dash is the truer "no current value" signal than a stale
+    // pct. Bar, percentage, and reset-text are all omitted.
     writeSnapshot({
       fetchedAt: new Date(now).toISOString(),
+      dataAt:    new Date(now - 2 * 60 * 60_000).toISOString(),
       data: {
         weekly: { pct: 35, resetsAt: new Date(now + 1 * 24 * 60 * 60_000).toISOString() },
-        // sonnet omitted (simulates seven_day_sonnet: null in API response)
+        scoped: [{ label: "fable", pct: 8, resetsAt: new Date(now - 60 * 60_000).toISOString() }],
       },
     });
     const render = await importRender();
     const lines = render(now).split("\n");
-    const sonnetLine = lines.find(l => l.includes("sonnet"));
-    expect(sonnetLine).toBeDefined();
-    expect(sonnetLine).toContain("\u2014");
-    expect(sonnetLine).not.toMatch(/\d+%/);
-    expect(sonnetLine).not.toContain("\u2588"); // no filled cells
-    expect(sonnetLine).not.toContain("\u2591"); // no dim cells
-    expect(sonnetLine).not.toContain("\u2502"); // no marker
+    const scopedLine = lines.find(l => l.includes("fable"));
+    expect(scopedLine).toBeDefined();
+    expect(scopedLine).toContain("\u2014");
+    expect(scopedLine).not.toMatch(/\d+%/);
+    expect(scopedLine).not.toContain("\u2588"); // no filled cells
+    expect(scopedLine).not.toContain("\u2591"); // no dim cells
+    expect(scopedLine).not.toContain("\u2502"); // no marker
+  });
+
+  it("renders no scoped row when there are no model-scoped meters", async () => {
+    // The endpoint returns no weekly_scoped entry when no scoped usage has
+    // accrued. There's simply no third bar then \u2014 the pane is two rows.
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        fiveHour: { pct: 26, resetsAt: new Date(now + 2 * 60 * 60_000).toISOString() },
+        weekly:   { pct: 35, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
+      },
+    });
+    const render = await importRender();
+    const lines = render(now).split("\n");
+    expect(lines).toHaveLength(3); // leading blank + 5h + week
+    expect(lines[1]).toContain("5h");
+    expect(lines[2]).toContain("week");
   });
 
   it("renders em-dash for a bucket whose resetsAt has already passed", async () => {
@@ -418,7 +461,6 @@ describe("renderUsagePane", () => {
       data: {
         fiveHour: { pct: 16, resetsAt: new Date(now - 60 * 60_000).toISOString() },
         weekly:   { pct: 42, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
-        sonnet:   { pct:  0, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
       },
     });
     const render = await importRender();
@@ -450,7 +492,7 @@ describe("renderUsagePane", () => {
       data: {
         fiveHour: { pct: 10, resetsAt: new Date(now + 60 * 60_000).toISOString() },
         weekly:   { pct: 20, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
-        sonnet:   { pct: 30, resetsAt: new Date(now + 3 * 24 * 60 * 60_000).toISOString() },
+        scoped:   [{ label: "fable", pct: 30, resetsAt: new Date(now + 3 * 24 * 60 * 60_000).toISOString() }],
       },
     });
     const render = await importRender();
@@ -489,12 +531,12 @@ describe("renderUsagePane", () => {
     expect(lines[1]).not.toContain("\u2502");
   });
 
-  it("shows an em-dash for missing meter buckets instead of crashing", async () => {
+  it("shows an em-dash for a missing flat meter bucket instead of crashing", async () => {
     writeSnapshot({
       fetchedAt: new Date(now).toISOString(),
       data: {
         fiveHour: { pct: 42, resetsAt: new Date(now + 60 * 60_000).toISOString() },
-        // weekly and sonnet omitted
+        // weekly omitted; no scoped meters
       },
     });
     const render = await importRender();
@@ -502,7 +544,8 @@ describe("renderUsagePane", () => {
     // lines[0] is the leading blank; meters start at index 1.
     expect(lines[1]).toContain("42%");
     expect(lines[2]).toContain("\u2014");
-    expect(lines[3]).toContain("\u2014");
+    // No scoped meters \u2192 no third row.
+    expect(lines).toHaveLength(3);
   });
 
   // Strips ANSI SGR + clear-to-EOL for display-width assertions.
@@ -516,7 +559,7 @@ describe("renderUsagePane", () => {
       data: {
         fiveHour: { pct: 26, resetsAt: new Date(now + 2 * 60 * 60_000).toISOString() },
         weekly:   { pct: 35, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
-        sonnet:   { pct: 4,  resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
+        scoped:   [{ label: "fable", pct: 4, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() }],
       },
     });
     const render = await importRender();
@@ -556,7 +599,7 @@ describe("renderUsagePane", () => {
       data: {
         fiveHour: { pct: 42, resetsAt: new Date(now + 2 * 60 * 60_000).toISOString() },
         weekly:   { pct: 35, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
-        sonnet:   { pct: 4,  resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
+        scoped:   [{ label: "fable", pct: 4, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() }],
       },
     });
     const render = await importRender();
@@ -584,8 +627,8 @@ describe("renderUsagePane", () => {
   it("renders the health tag once on its own line below the meters, not appended to meter rows", async () => {
     // Repeating the tag across all three meter rows overflows a long error
     // (e.g. a network DNS message) and wraps each row. The tag must occupy a
-    // single line *below* the sonnet meter, where transient errors don't
-    // dominate the visual top of the pane.
+    // single line *below* the meters, where transient errors don't dominate
+    // the visual top of the pane.
     writeSnapshot({
       fetchedAt: new Date(now).toISOString(),
       error: "rate-limited",
@@ -593,7 +636,7 @@ describe("renderUsagePane", () => {
       data: {
         fiveHour: { pct: 42, resetsAt: new Date(now + 60 * 60_000).toISOString() },
         weekly:   { pct: 35, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
-        sonnet:   { pct: 4,  resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
+        scoped:   [{ label: "fable", pct: 4, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() }],
       },
     });
     const render = await importRender();
@@ -615,7 +658,7 @@ describe("renderUsagePane", () => {
       data: {
         fiveHour: { pct: 26, resetsAt: new Date(now + 2 * 60 * 60_000).toISOString() },
         weekly:   { pct: 35, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
-        sonnet:   { pct: 4,  resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
+        scoped:   [{ label: "fable", pct: 4, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() }],
       },
     });
     const render = await importRender();
@@ -648,7 +691,7 @@ describe("renderUsagePane", () => {
       data: {
         fiveHour: { pct: 26, resetsAt: new Date(now + 2 * 60 * 60_000).toISOString() },
         weekly:   { pct: 35, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
-        sonnet:   { pct: 4,  resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
+        scoped:   [{ label: "fable", pct: 4, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() }],
         extraUsage: { enabled: true, monthlyLimit: 5000, usedCredits: 1234, utilization: 25 },
       },
     });
@@ -671,7 +714,7 @@ describe("renderUsagePane", () => {
       data: {
         fiveHour: { pct: 42, resetsAt: new Date(now + 60 * 60_000).toISOString() },
         weekly:   { pct: 35, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
-        sonnet:   { pct: 4,  resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() },
+        scoped:   [{ label: "fable", pct: 4, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() }],
         extraUsage: { enabled: true, monthlyLimit: 5000, usedCredits: 1234, utilization: 25 },
       },
     });

@@ -43,7 +43,7 @@ function snapshot(sonnetPct: number | null, resetsAt = "2026-05-13T00:00:00Z"): 
     fetchedAt: new Date().toISOString(),
     data: sonnetPct === null
       ? {}
-      : { sonnet: { pct: sonnetPct, resetsAt } },
+      : { scoped: [{ label: "Sonnet", pct: sonnetPct, resetsAt }] },
   };
 }
 

@@ -978,9 +978,10 @@ export function autoContinueGateReason(projectName?: string): string | null {
   return null;
 }
 
-// Sonnet is intentionally excluded — the operator runs Opus, sonnet quota is
-// unused. When multiple meters trip, pause until the latest reset so we don't
-// re-enable into a still-tripped meter.
+// Model-scoped meters are intentionally excluded — the operator runs Opus, so
+// a model-scoped weekly quota (e.g. Fable) is unused. When multiple meters
+// trip, pause until the latest reset so we don't re-enable into a still-
+// tripped meter.
 export function checkUsageThreshold(threshold: number): { pausedUntil: string; reason: string } | null {
   // Provider-only fleet: the Anthropic snapshot is no longer refreshed
   // (Phase 1 gating), so whatever is on disk is stale by construction —
@@ -989,7 +990,7 @@ export function checkUsageThreshold(threshold: number): { pausedUntil: string; r
   try { if (!anyAnthropicMeteredProject()) return null; } catch { /* config unavailable: keep gate */ }
   const snap = readUsageSnapshot();
   const now = Date.now();
-  const candidates = snapshotMeters(snap).filter(m => m.key !== "sonnet");
+  const candidates = snapshotMeters(snap).filter(m => m.key !== "scoped");
   // Skip a meter whose window has already reset (resets_at in the past): the
   // snapshot predates the reset and still shows the old window's exhaustion.
   // Tripping on it sets pausedUntil to a past instant, so a resumeAfterReset

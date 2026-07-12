@@ -88,11 +88,12 @@ original sketch:
 - The `Turn[]` transcript seam needed no new code: `resolveTranscriptPath`
   + `readConversation → Turn[]` in `conversation.ts` are already the
   typed, exported contract; Phase 3 makes them adapter-supplied.
-- The usage pane still renders Anthropic's three fixed meter rows; the
-  neutral `Meter[]` accessor (`snapshotMeters`) now feeds the
-  auto-continue gate, but the render path keeps its fixed layout until a
-  second meter source exists (the pane height is part of the layout
-  contract).
+- The usage pane renders the 5h and weekly rows plus one row per
+  model-scoped weekly meter (the `weekly_scoped` entries in the response's
+  `limits[]` array, `fable` on current plans); the neutral `Meter[]`
+  accessor (`snapshotMeters`) feeds the auto-continue gate. The row count
+  is dynamic — the pane auto-resizes to the meter set (zero model-scoped
+  meters → two rows).
 
 ## The two axes
 
@@ -200,7 +201,7 @@ semantics):
 | Hook/status engine | `buildSettingsJson` (`create.ts:48-104`) binds six Claude hook events; `hook-dispatcher.ts` routes garden's already-shortened event names (`stop`, `prompt`, `posttooluse`, ..., plus a seventh, `notification`); `agentStatus` written by the hook handlers for in-session transitions, by the tmux pane-died handler and `validate.ts` reconciliation for `exited`, and by the bounce/attach resume paths for `idle` (because `--resume` does not fire SessionStart) | **architectural** |
 | Headless agents | `launchHeadlessAgent` (`headless-agent.ts`) — already a single clean primitive, but hardcodes the `claude -p` contract and `"opus" \| "sonnet"` | adapter-method |
 | Transcript/history | `conversation.ts` parses Claude's JSONL envelope, content blocks, and tool-name vocabulary; the seam is two-part: `resolveTranscriptPath(entry)` (derives `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`) + `readConversation(path) → Turn[]` | adapter-method |
-| Credentials/usage | `credentials.ts` models every credential as a Claude OAuth blob (Keychain entry, refresh endpoint); `usage.ts` parses Anthropic's `five_hour`/`seven_day`/`seven_day_sonnet` buckets; consumed by the auto-continue gate (`poller-merge.ts checkUsageThreshold`) and trellis model fallback (`trellis-model.ts`); `usage-poller.ts` runs a dedicated hidden window polling Anthropic's usage endpoint | **architectural** |
+| Credentials/usage | `credentials.ts` models every credential as a Claude OAuth blob (Keychain entry, refresh endpoint); `usage.ts` parses Anthropic's flat `five_hour`/`seven_day` buckets plus the model-scoped `weekly_scoped` entries in the `limits[]` array; consumed by the auto-continue gate (`poller-merge.ts checkUsageThreshold`) and trellis model fallback (`trellis-model.ts` via `findScopedMeter`); `usage-poller.ts` runs a dedicated hidden window polling Anthropic's usage endpoint | **architectural** |
 | Sandbox/skills/rules | Sandbox config and `.claude/skills/` bundling are delivered through Claude's settings file; `*.anthropic.com` domains hardcoded in `sandbox.ts` `DEFAULT_DOMAINS` | adapter-method |
 | Config/registry | `claudeProfile` is the only provider knob; `"opus" \| "sonnet"` union leaks through `WorkflowDefinition`, `WorkerEntry`, `trellis-model.ts`, CLI flag parsing; `commands/workers.ts` rejects `--model` outside trellis | adapter-method |
 | Model policy | `trellis-model.ts` encodes Anthropic's plan economy end to end: Sonnet workhorse, Opus fallback, 7-day Sonnet meter | **architectural** |

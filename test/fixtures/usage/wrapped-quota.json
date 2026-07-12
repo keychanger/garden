@@ -3,8 +3,12 @@
   "quota": {
     "five_hour":        { "utilization": 62, "resets_at": "2026-04-15T20:00:00+00:00" },
     "seven_day":        { "utilization": 34, "resets_at": "2026-04-19T04:00:00+00:00" },
-    "seven_day_sonnet": { "utilization":  4, "resets_at": "2026-04-20T15:00:00+00:00" },
+    "seven_day_sonnet": null,
     "seven_day_opus":   null,
+    "limits": [
+      { "kind": "weekly_scoped", "group": "weekly", "percent": 4, "resets_at": "2026-04-20T15:00:00+00:00",
+        "scope": { "model": { "id": null, "display_name": "Fable" } } }
+    ],
     "extra_usage":      { "is_enabled": false, "monthly_limit": null, "used_credits": 0, "utilization": null }
   }
 }

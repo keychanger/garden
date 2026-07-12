@@ -111,13 +111,13 @@ describe("checkUsageThreshold", () => {
     expect(checkUsageThreshold(95)).toBeNull();
   });
 
-  it("ignores sonnet entirely", async () => {
+  it("ignores model-scoped meters entirely", async () => {
     mockGateDeps({
       fetchedAt: "2026-05-02T00:00:00Z",
       data: {
         fiveHour: { pct: 10, resetsAt: "2026-05-02T05:00:00Z" },
         weekly: { pct: 20, resetsAt: "2026-05-09T00:00:00Z" },
-        sonnet: { pct: 99, resetsAt: "2026-05-09T00:00:00Z" },
+        scoped: [{ label: "Fable", pct: 99, resetsAt: "2026-05-09T00:00:00Z" }],
       },
     });
     const { checkUsageThreshold } = await importGate();
@@ -296,14 +296,14 @@ describe("autoContinueGateReason", () => {
     expect(cfg.pausedUntil).toBe("2099-01-01T00:00:00Z");
   });
 
-  it("does NOT trip on sonnet alone", async () => {
+  it("does NOT trip on a model-scoped meter alone", async () => {
     await initEmptyConfig();
     mockGateDeps({
       fetchedAt: "2026-05-02T00:00:00Z",
       data: {
         fiveHour: { pct: 10, resetsAt: "2026-05-02T05:00:00Z" },
         weekly: { pct: 50, resetsAt: "2026-05-09T00:00:00Z" },
-        sonnet: { pct: 99, resetsAt: "2026-05-09T00:00:00Z" },
+        scoped: [{ label: "Fable", pct: 99, resetsAt: "2026-05-09T00:00:00Z" }],
       },
     });
     const { autoContinueGateReason } = await importGate();

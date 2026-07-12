@@ -67,8 +67,10 @@ function renderPretty(data: unknown): string {
   const rows = [
     `5h      ${meterRow(d.fiveHour)}`,
     `week    ${meterRow(d.weekly)}`,
-    `sonnet  ${meterRow(d.sonnet)}`,
   ];
+  for (const s of d.scoped ?? []) {
+    rows.push(`${s.label.toLowerCase().slice(0, 6).padEnd(6)}  ${meterRow(s)}`);
+  }
   if (d.extraUsage) rows.push(`extra   ${formatExtraUsageCredits(d.extraUsage)}`);
   rows.push(``, ageText);
   return rows.join("\n");

@@ -31,7 +31,19 @@ const cases: Case[] = [
     expected: {
       fiveHour: { pct: 62, resetsAt: "2026-04-15T20:00:00+00:00" },
       weekly:   { pct: 34, resetsAt: "2026-04-19T04:00:00+00:00" },
-      sonnet:   { pct:  4, resetsAt: "2026-04-20T15:00:00+00:00" },
+      scoped:   [{ label: "Fable", pct: 4, resetsAt: "2026-04-20T15:00:00+00:00" }],
+    },
+  },
+  {
+    // Multiple weekly_scoped entries → one scoped meter each, in array order.
+    fixture: "multi-scoped-limits.json",
+    expected: {
+      fiveHour: { pct: 50, resetsAt: "2026-04-15T20:00:00+00:00" },
+      weekly:   { pct: 30, resetsAt: "2026-04-19T04:00:00+00:00" },
+      scoped: [
+        { label: "Fable", pct: 12, resetsAt: "2026-04-20T15:00:00+00:00" },
+        { label: "Haiku", pct:  7, resetsAt: "2026-04-20T15:00:00+00:00" },
+      ],
     },
   },
   {
@@ -66,7 +78,6 @@ const cases: Case[] = [
     expected: {
       fiveHour: { pct: 80, resetsAt: "2026-04-15T20:00:00+00:00" },
       weekly:   { pct: 91, resetsAt: "2026-04-19T04:00:00+00:00" },
-      sonnet:   { pct: 12, resetsAt: "2026-04-20T15:00:00+00:00" },
       extraUsage: { enabled: true, monthlyLimit: 5000, usedCredits: 1234, utilization: 25 },
     },
   },
@@ -75,7 +86,7 @@ const cases: Case[] = [
     expected: {
       fiveHour: { pct: 62, resetsAt: "2026-04-15T20:00:00+00:00" },
       weekly:   { pct: 34, resetsAt: "2026-04-19T04:00:00+00:00" },
-      sonnet:   { pct:  4, resetsAt: "2026-04-20T15:00:00+00:00" },
+      scoped:   [{ label: "Fable", pct: 4, resetsAt: "2026-04-20T15:00:00+00:00" }],
     },
   },
   {

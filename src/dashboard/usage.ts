@@ -1,7 +1,7 @@
 // Claude usage meter: fetches the authenticated user's 5-hour, weekly, and
-// Sonnet-weekly quota from api.anthropic.com using the OAuth token that
+// model-scoped weekly quota from api.anthropic.com using the OAuth token that
 // Claude Code writes to the macOS Keychain. Persists a snapshot to
-// SESSIONS_DIR and renders a 3-bar header for the dashboard status pane.
+// SESSIONS_DIR and renders the header meters for the dashboard status pane.
 //
 // The endpoint (/api/oauth/usage) is undocumented and strictly rate-limited
 // (observed Retry-After of ~50 minutes after 3 rapid probes; sometimes the
@@ -34,6 +34,15 @@ export interface UsageMeter {
   resetsAt: string; // ISO 8601
 }
 
+// A model-scoped weekly meter (e.g. Fable). The endpoint moved these out of
+// the flat `seven_day_<model>` keys into the `limits[]` array, each tagged
+// with the model's display name — so the label is data, and the bar
+// auto-tracks whatever model Anthropic scopes next without a code change.
+// Zero or more per response.
+export interface ScopedMeter extends UsageMeter {
+  label: string;
+}
+
 // Pay-as-you-go overflow credits beyond the plan quota. Surfaced only when the
 // account has extra usage turned on (is_enabled); a disabled bucket is dropped
 // so the pane stays at three bars. The numeric fields are optional because the
@@ -48,7 +57,7 @@ export interface ExtraUsage {
 export interface UsageData {
   fiveHour?: UsageMeter;
   weekly?: UsageMeter;
-  sonnet?: UsageMeter;
+  scoped?: ScopedMeter[];
   extraUsage?: ExtraUsage;
 }
 
@@ -62,12 +71,12 @@ export interface UsageSnapshot {
 
 // Neutral read seam over the snapshot's named buckets: consumers (the
 // auto-continue gate, future meter sources) iterate a list instead of
-// reaching into Anthropic's bucket names. `key` is the source-specific
-// meter id — policy that cares about a specific meter (the gate's sonnet
-// exclusion, trellis's sonnet fallback) filters by it at the policy site.
-// See docs/MULTI-MODEL.md "Layer 2".
+// reaching into Anthropic's bucket names. `key` is the meter class — policy
+// that cares about the model-scoped meters (the gate's `scoped` exclusion,
+// trellis's Sonnet fallback via findScopedMeter) filters by it at the policy
+// site. See docs/MULTI-MODEL.md "Layer 2".
 export interface Meter {
-  key: "fiveHour" | "weekly" | "sonnet";
+  key: "fiveHour" | "weekly" | "scoped";
   label: string;
   pct: number;
   resetsAt: string;
@@ -79,8 +88,21 @@ export function snapshotMeters(snap: UsageSnapshot | null): Meter[] {
   const out: Meter[] = [];
   if (d.fiveHour) out.push({ key: "fiveHour", label: "5h", ...d.fiveHour });
   if (d.weekly) out.push({ key: "weekly", label: "week", ...d.weekly });
-  if (d.sonnet) out.push({ key: "sonnet", label: "sonnet", ...d.sonnet });
+  for (const s of d.scoped ?? []) {
+    out.push({ key: "scoped", label: s.label, pct: s.pct, resetsAt: s.resetsAt });
+  }
   return out;
+}
+
+// Look up a model-scoped weekly meter by model name (case-insensitive), for
+// policy that cares about one specific model's quota — e.g. trellis's
+// Sonnet-exhaustion fallback. Returns undefined when the endpoint isn't
+// exposing that model's meter, which since 2026-07 is the case for Sonnet:
+// the account's model-scoped weekly meter is now Fable.
+export function findScopedMeter(data: UsageData | undefined, model: string): ScopedMeter | undefined {
+  if (!data?.scoped) return undefined;
+  const target = model.toLowerCase();
+  return data.scoped.find((m) => m.label.toLowerCase() === target);
 }
 
 // -----------------------------------------------------------------------------
@@ -259,32 +281,37 @@ export function parseRetryAfter(header: unknown, nowMs: number = Date.now()): nu
 // Shape of /api/oauth/usage (observed against a Claude Max account):
 //   { five_hour:        { utilization, resets_at } | null,
 //     seven_day:        { utilization, resets_at } | null,
-//     seven_day_sonnet: { utilization, resets_at } | null,
-//     seven_day_opus:   { utilization, resets_at } | null,
-//     ... other buckets ...
+//     seven_day_sonnet: null,   // flat model buckets are all null since 2026-07
+//     seven_day_opus:   null,
+//     limits: [ { kind: "session",       group, percent, resets_at },
+//               { kind: "weekly_all",    group, percent, resets_at },
+//               { kind: "weekly_scoped", group, percent, resets_at,
+//                 scope: { model: { id, display_name } } }, ... ],
 //     extra_usage:      { is_enabled, monthly_limit, used_credits, utilization } | null }
 // As of 2026-05 some responses arrive wrapped in an envelope:
 //   { schema_version: 2, quota: { five_hour: ..., seven_day: ..., ... } }
 // — same bucket shape inside, just versioned. We unwrap when the flat parse
 // finds nothing so both shapes Just Work without coordinating with the
-// server's rollout. On Max plans seven_day_opus is typically null (Opus
-// usage is rolled into seven_day); seven_day_sonnet is the populated
-// model-specific bucket, so that's what the third bar shows. The extra_usage
-// bucket is surfaced as `extraUsage` only when is_enabled, rendered as a dim
-// credit footer under the three bars rather than a fourth resetting meter.
-// Fields are parsed defensively so any shape shift or null bucket degrades to
-// "—" rather than throwing.
+// server's rollout. The first two bars still read the flat five_hour/seven_day
+// keys (mirrors of the session/weekly_all limits). The model-scoped weekly
+// bar(s) moved out of the flat seven_day_<model> keys (now null) into the
+// `limits` array as `weekly_scoped` entries, each labeled by
+// scope.model.display_name — parsed by pickScopedMeters, one bar per entry.
+// The extra_usage bucket is surfaced as `extraUsage` only when is_enabled,
+// rendered as a dim credit footer under the bars rather than a resetting
+// meter. Fields are parsed defensively so any shape shift or null bucket
+// degrades to "—" (or a dropped bar) rather than throwing.
 export function normalizeUsage(raw: unknown): UsageData {
   if (!raw || typeof raw !== "object") return {};
   const r = raw as Record<string, unknown>;
   const top = pickBuckets(r);
-  if (top.fiveHour || top.weekly || top.sonnet) return top;
+  if (top.fiveHour || top.weekly || top.scoped) return top;
   // Envelope fallback: unwrap `quota` and re-parse. Same field names inside.
   const quota = r["quota"];
   const hasQuotaObject = quota !== null && typeof quota === "object" && !Array.isArray(quota);
   if (hasQuotaObject) {
     const inner = pickBuckets(quota as Record<string, unknown>);
-    if (inner.fiveHour || inner.weekly || inner.sonnet) return inner;
+    if (inner.fiveHour || inner.weekly || inner.scoped) return inner;
   }
   // Shape-shift detector: a non-empty response that yields zero recognized
   // meters is either an empty-bucket account (all keys present but null —
@@ -296,7 +323,7 @@ export function normalizeUsage(raw: unknown): UsageData {
   // `quota` (so a wrapped all-null account stays quiet) and point the
   // preview at the inner object so the rename inside `quota` is what gets
   // logged.
-  const expected = ["five_hour", "seven_day", "seven_day_sonnet"];
+  const expected = ["five_hour", "seven_day", "limits"];
   const expectedSource = hasQuotaObject ? (quota as Record<string, unknown>) : r;
   const anyExpectedKey = expected.some((k) => k in expectedSource);
   const isAllNullKnown = anyExpectedKey; // legit empty-bucket account — quiet
@@ -315,10 +342,39 @@ function pickBuckets(r: Record<string, unknown>): UsageData {
   if (m) out.fiveHour = m;
   const w = pickMeter(r["seven_day"]);
   if (w) out.weekly = w;
-  const s = pickMeter(r["seven_day_sonnet"]);
-  if (s) out.sonnet = s;
+  const scoped = pickScopedMeters(r["limits"]);
+  if (scoped.length) out.scoped = scoped;
   const x = pickExtraUsage(r["extra_usage"]);
   if (x) out.extraUsage = x;
+  return out;
+}
+
+// Model-scoped weekly meters live in the `limits` array as `weekly_scoped`
+// entries, each tagged with `scope.model.display_name`. Multiple scoped
+// models yield multiple bars. Parsed defensively: an entry missing a numeric
+// percent, a reset timestamp, or a usable label is skipped rather than
+// rendered as a mislabeled or empty bar.
+function pickScopedMeters(limits: unknown): ScopedMeter[] {
+  if (!Array.isArray(limits)) return [];
+  const out: ScopedMeter[] = [];
+  for (const entry of limits) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+    if (e["kind"] !== "weekly_scoped") continue;
+    const pct = e["percent"];
+    const reset = e["resets_at"];
+    const scope = e["scope"];
+    const model = scope && typeof scope === "object"
+      ? (scope as Record<string, unknown>)["model"]
+      : undefined;
+    const label = model && typeof model === "object"
+      ? (model as Record<string, unknown>)["display_name"]
+      : undefined;
+    if (typeof pct !== "number" || typeof reset !== "string" || typeof label !== "string" || !label) {
+      continue;
+    }
+    out.push({ pct, resetsAt: reset, label });
+  }
   return out;
 }
 
@@ -588,7 +644,7 @@ export async function refreshUsage(force = false): Promise<UsageSnapshot> {
           source: cred.source,
           fiveHour: data.fiveHour?.pct,
           weekly: data.weekly?.pct,
-          sonnet: data.sonnet?.pct,
+          scoped: data.scoped?.map((s) => `${s.label} ${s.pct}%`),
         },
       });
       return snap;
@@ -654,7 +710,7 @@ function writeUsageSnapshotLocked(snap: UsageSnapshot): void {
 
 const BAR_WIDTH = 24;
 const MIN_BAR_WIDTH = 6;
-const LABEL_WIDTH = 6; // "sonnet" is the longest label
+const LABEL_WIDTH = 6; // widest fixed label; dynamic model labels are truncated to fit
 const INDENT = "    ";  // 4-space indent mirrors worker rows in the status pane
 const STALE_AFTER_MS = 30 * 60 * 1000; // 30 min — long enough to survive the endpoint's long rate-limit windows
 
@@ -718,7 +774,7 @@ export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number):
   return finalizePane(rows);
 }
 
-// The Claude column: the meter rows (5h / week / sonnet) or a status message,
+// The Claude column: the meter rows (5h / week / model-scoped) or a status message,
 // without the leading blank/header line. Extracted so the two-column path can
 // place it beside the Codex column.
 function buildClaudeLines(nowMs: number, paneWidth: number | undefined): string[] {
@@ -736,10 +792,15 @@ function buildClaudeLines(nowMs: number, paneWidth: number | undefined): string[
   const d = snap.data;
   const fit = computeMeterFit(paneWidth);
   const lines: string[] = [];
-  lines.push(renderMeterLine("5h",     d.fiveHour, nowMs, FIVE_HOUR_MS, fit));
-  lines.push(renderMeterLine("week",   d.weekly,   nowMs, SEVEN_DAY_MS, fit));
-  // A null seven_day_sonnet bucket renders "—" rather than a flat-zero bar.
-  lines.push(renderMeterLine("sonnet", d.sonnet,   nowMs, SEVEN_DAY_MS, fit));
+  lines.push(renderMeterLine("5h",   d.fiveHour, nowMs, FIVE_HOUR_MS, fit));
+  lines.push(renderMeterLine("week", d.weekly,   nowMs, SEVEN_DAY_MS, fit));
+  // One bar per model-scoped weekly meter (Fable, etc.), labeled by the model.
+  // No scoped meters → no extra row; a rolled-over window renders "—" per entry.
+  for (const s of d.scoped ?? []) {
+    lines.push(renderMeterLine(s.label.toLowerCase(), s, nowMs, SEVEN_DAY_MS, fit));
+  }
+  // Extra usage (pay-as-you-go credits) sits below the meters as a dim footnote
+  // and above the health tag — real data first, freshness annotation last.
   if (d.extraUsage) lines.push(formatExtraUsageLine(d.extraUsage, paneWidth));
   if (tag) lines.push(formatHealthLine(tag, paneWidth));
   return lines;
@@ -866,7 +927,7 @@ function renderMeterLine(
   windowMs: number | undefined,
   fit: { barWidth: number; showReset: boolean },
 ): string {
-  const paddedLabel = label.padEnd(LABEL_WIDTH);
+  const paddedLabel = label.length > LABEL_WIDTH ? label.slice(0, LABEL_WIDTH) : label.padEnd(LABEL_WIDTH);
   if (!meter) return `${INDENT}${paddedLabel}  ${dim("—")}`;
   const resetsAt = Date.parse(meter.resetsAt);
   // The server-side window has rolled over since our cached pct was fetched —

@@ -416,7 +416,7 @@ DRIFT
     fs.mkdirSync(path.dirname(USAGE_FILE), { recursive: true });
     fs.writeFileSync(USAGE_FILE, JSON.stringify({
       fetchedAt: new Date().toISOString(),
-      data: { sonnet: { pct: 99, resetsAt: "2026-05-13T00:00:00Z" } },
+      data: { scoped: [{ label: "Sonnet", pct: 99, resetsAt: "2026-05-13T00:00:00Z" }] },
     }));
 
     // Mock paneExists / windowExists so resolveWorkerPaneId returns a pane.
@@ -468,7 +468,7 @@ DRIFT
     fs.mkdirSync(path.dirname(USAGE_FILE), { recursive: true });
     fs.writeFileSync(USAGE_FILE, JSON.stringify({
       fetchedAt: new Date().toISOString(),
-      data: { sonnet: { pct: 99, resetsAt: "2026-05-13T00:00:00Z" } },
+      data: { scoped: [{ label: "Sonnet", pct: 99, resetsAt: "2026-05-13T00:00:00Z" }] },
     }));
 
     const tmuxMod = await import("../../src/dashboard/tmux.js");

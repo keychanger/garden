@@ -28,7 +28,7 @@ import {
 import { addAlert } from "./alerts.js";
 import { log } from "./log.js";
 import { updateWorkerFields, type WorkerEntry } from "./registry.js";
-import { readUsageSnapshot, type UsageSnapshot } from "./usage.js";
+import { findScopedMeter, readUsageSnapshot, type UsageSnapshot } from "./usage.js";
 import type { WorkflowDefinition } from "./workflows/types.js";
 
 // Opaque model string (an Anthropic alias or any concrete model id). The
@@ -126,8 +126,8 @@ function sonnetExhaustion(
   snapshot: UsageSnapshot | null,
   threshold: number,
 ): SonnetExhaustion | null {
-  if (!snapshot?.data?.sonnet) return null;
-  const meter = snapshot.data.sonnet;
+  const meter = findScopedMeter(snapshot?.data, "sonnet");
+  if (!meter) return null;
   if (meter.pct < threshold) return null;
   return {
     label: "7d",
@@ -147,7 +147,7 @@ export function shouldFireFallbackAlert(
 ): boolean {
   const fallbackAt = entry.trellis?.modelFallbackAt;
   if (!fallbackAt) return true;
-  const resetsAt = snapshot?.data?.sonnet?.resetsAt;
+  const resetsAt = findScopedMeter(snapshot?.data, "sonnet")?.resetsAt;
   if (!resetsAt) return true; // no anchor — fire conservatively
   const resetMs = Date.parse(resetsAt);
   if (!Number.isFinite(resetMs)) return true;
