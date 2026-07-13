@@ -219,6 +219,18 @@ export interface WorkerEntry {
   // Clears wherever reviewRetryCount clears. See poller-review.ts
   // handleQuotaLimitReview.
   quotaRetryCount?: number;
+  // Unparseable-verdict retry state. Set by handleUnparseableReview when the
+  // reviewer ended its turn with no parseable verdict AND committed nothing
+  // (a benign one-off flake — the reviewer emitted prose instead of a
+  // CLEAN/FIXED/FAILED token). Budget MAX_UNPARSEABLE_REVIEW_RETRIES (2) on a
+  // short flat backoff (UNPARSEABLE_REVIEW_BACKOFF_MS); past it the worker
+  // parks in `failing` with failingReason="unparseable-verdict"
+  // (kick-recoverable). Reuses reviewRetryAt as the cause-agnostic relaunch
+  // gate, but keeps its own budget so a fast flake and the transient/quota
+  // waits can't conflate. Clears wherever reviewRetryCount clears. See
+  // poller-review.ts handleUnparseableReview. Distinct from unparseableReviewAt
+  // above, which is the one-shot marker for the reviewer-committed-work path.
+  unparseableRetryCount?: number;
   // Set by handlePaneDied when agentStatus was "working" at the moment the
   // pane died (dashboard kill, tmux server gone). Read by ensureDashboard's
   // resume loop to decide whether to auto-send a "continue" prompt after the

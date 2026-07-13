@@ -226,6 +226,13 @@ export const reviewVerdictFormatSection: PromptSection = {
     "",
     "Your LAST line must START with the bare token (CLEAN, FIXED, or FAILED).",
     "Trailing commentary on that line is fine, e.g. `CLEAN — ready to merge`.",
+    "",
+    "You are running headless: this single response IS the review. Do NOT defer",
+    "the verdict to a background task, async workflow, or a later message, and do",
+    "NOT end with a sentence like \"I'll wait for the result before rendering the",
+    "verdict.\" If you ran any sub-analysis, fold its result in and emit the verdict",
+    "token as the final line of THIS response. A response without the token is",
+    "treated as a failed review.",
   ].join("\n"),
 };
 

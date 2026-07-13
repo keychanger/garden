@@ -49,6 +49,17 @@ describe("parseLastLineVerdict", () => {
     expect(parseLastLineVerdict(output, REVIEW_VOCAB)).toBeNull();
   });
 
+  it("returns null when the reviewer defers the verdict with a filler sentence (the observed flake)", () => {
+    // The exact shape that stranded a worker in `failing`: an adversarial
+    // multi-agent reviewer kicked off async sub-work and ended its turn with
+    // prose instead of a verdict token. The parser correctly reports "no
+    // verdict" (null) — the recovery lives in poller-review's bounded retry,
+    // not in loosening this parser to guess a verdict from filler.
+    const output = "Ran 4 dimensions x independent skeptic verification.\n"
+      + "I'll wait for the workflow result before rendering the verdict.";
+    expect(parseLastLineVerdict(output, REVIEW_VOCAB)).toBeNull();
+  });
+
   it("walks back through the scan window to find a verdict", () => {
     const output = "Step 1 done.\nFIXED\nAdded a trailing summary that should be ignored.\nThe fix was small.";
     const result = parseLastLineVerdict(output, REVIEW_VOCAB);

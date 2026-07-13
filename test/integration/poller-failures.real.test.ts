@@ -166,7 +166,7 @@ describe("poller failure modes (real fs/git, mocked tmux/dashboard)", () => {
   });
 
   describe("reviewer exits with no verdict file", () => {
-    it("transitions to failing when the reviewer window is gone and no result was written", async () => {
+    it("transitions to failing when the reviewer window is gone, no result was written, and the retry budget is spent", async () => {
       const { createWorktree } = await import("../../src/dashboard/git.js");
       createWorktree(projectPath, worktreePath, WORKER);
 
@@ -189,7 +189,11 @@ describe("poller failure modes (real fs/git, mocked tmux/dashboard)", () => {
         reviewWindowName: `_${PROJECT}-review-${WORKER}`,
         reviewStartedAt: Date.now() - 60_000,
         lastSeenSha: headSha, // matches remote so no worker-pushed reset
-        preReviewSha: headSha, // no head advancement so no retry path
+        preReviewSha: headSha, // no head advancement so no reviewer-commit retry
+        // At the no-commit retry budget (MAX_UNPARSEABLE_REVIEW_RETRIES=2), so a
+        // persistently-absent result file escalates to failing instead of
+        // re-queuing another review. A fresh worker (count 0) would auto-retry.
+        unparseableRetryCount: 2,
       });
 
       const { poll } = await import("../../src/dashboard/poller.js");
@@ -199,6 +203,7 @@ describe("poller failure modes (real fs/git, mocked tmux/dashboard)", () => {
       const entry = findWorkerByName(PROJECT, WORKER);
       expect(entry?.prState).toBe("failing");
       expect(entry?.failCount).toBe(1);
+      expect(entry?.failingReason).toBe("unparseable-verdict");
       // Phase 2 fix: failingSha is now set so handleFailing's debounce gate
       // refuses to retry the same broken commit (test/poller.test.ts asserts
       // the same behavior with mocked git).

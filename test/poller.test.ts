@@ -1439,11 +1439,12 @@ describe("poll — reviewing state (async)", () => {
     );
   });
 
-  it("falls through to unparseable-verdict when output isn't transient", () => {
-    // Garbled reviewer output that doesn't match transient patterns must
-    // still go through the existing unparseable-verdict path (one retry if
-    // reviewer advanced head, else immediate failing). Here head didn't
-    // advance, so we expect immediate failing with reason unparseable-verdict.
+  it("routes non-transient unparseable output to the unparseable retry (not the transient path)", () => {
+    // Garbled reviewer output that doesn't match a transient API-error pattern
+    // must go through the unparseable-verdict path, NOT the transient one. With
+    // head unchanged and retry budget remaining, that path now auto-retries on a
+    // short backoff instead of failing immediately (a verdict-less reviewer that
+    // committed nothing is a benign flake, so give it a fresh run first).
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "reviewing",
@@ -1468,11 +1469,101 @@ describe("poll — reviewing state (async)", () => {
 
     poll("myproject");
 
+    expect(forcePushBranch).not.toHaveBeenCalled();
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({
-        prState: "failing",
-        failingReason: "unparseable-verdict",
+        prState: "working",
+        unparseableRetryCount: 1,
+        reviewRetryAt: expect.any(Number),
       }),
+    );
+    // Not misrouted to the transient path...
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ reviewRetryCount: 1 }),
+    );
+    // ...and not an immediate failing.
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "failing" }),
+    );
+  });
+
+  it("auto-retries a no-commit unparseable verdict on a bounded backoff (the observed reviewer flake)", () => {
+    // The concrete failure this path guards: a benign review where the reviewer
+    // ended its turn with a filler sentence ("I'll wait for the workflow result
+    // before rendering the verdict.") instead of a standalone CLEAN/FIXED/FAILED
+    // token, having committed nothing. The reviewed diff is fine; the reviewer
+    // just failed to verbalize. It must NOT drop straight to `failing` (which
+    // needs a manual `garden kick`) — it should re-review on a short backoff.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123",
+        preReviewSha: "pre456",
+      }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) {
+        return "Kicked off 4 dimensions x independent skeptic verification.\nI'll wait for the workflow result before rendering the verdict.";
+      }
+      return "{}";
+    });
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre456"); // reviewer committed nothing
+
+    poll("myproject");
+
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "working",
+        pendingReviewAt: expect.any(Number),
+        unparseableRetryCount: 1,
+        reviewRetryAt: expect.any(Number),
+        reviewWindowName: undefined,
+      }),
+    );
+    // Backoff scheduled, not immediate; worker is not in failing.
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 15_000);
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "failing" }),
+    );
+  });
+
+  it("a no-commit unparseable retry relaunch does NOT re-increment the trellis iteration counter", () => {
+    // Same guard as the transient/quota retries: an unparseable retry re-reviews
+    // the SAME commits (the reviewer emitted no verdict and did no work), so
+    // launchReview must not treat it as a fresh iteration. unparseableRetryCount
+    // marks the retry.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        name: "swift-vine",
+        prState: "working",
+        agentStatus: "idle",
+        workflow: "trellis",
+        pendingReviewAt: Date.now(),
+        unparseableRetryCount: 1,
+        reviewRetryAt: Date.now() - 1000, // backoff already elapsed
+        trellis: { name: "auth", path: "/tmp/auth.md", iteration: 20, maxIterations: 30 },
+      }),
+    ]);
+
+    poll("myproject");
+
+    // No iteration write of any value: the relaunch reviews iteration 20 again.
+    const iterWrite = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "swift-vine"
+        && (c[2] as { trellis?: { iteration?: number } }).trellis?.iteration !== undefined,
+    );
+    expect(iterWrite).toBeUndefined();
+    // The review still launches.
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "swift-vine",
+      expect.objectContaining({ prState: "reviewing" }),
     );
   });
 
@@ -1516,13 +1607,19 @@ describe("poll — reviewing state (async)", () => {
     );
   });
 
-  it("falls through to failing when verdict unparseable and reviewer made no commits", () => {
+  it("parks in failing/unparseable-verdict once the no-commit retry budget is exhausted (kick-recoverable)", () => {
+    // The reviewer made no commits (HEAD unchanged) and the auto-retry budget is
+    // already spent (unparseableRetryCount at MAX_UNPARSEABLE_REVIEW_RETRIES=2).
+    // Now it must escalate to `failing` with failingReason="unparseable-verdict"
+    // — the kick-recoverable reason (kick.ts REVIEW_SIDE_FAILING_REASONS) — and
+    // clear the counter so a `garden kick` starts a clean cycle.
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "reviewing",
         reviewWindowName: "_myproject-review-bold-ash",
         lastSeenSha: "abc123",
         preReviewSha: "pre456",
+        unparseableRetryCount: 2, // at budget
       }),
     ]);
     vi.mocked(windowExists).mockImplementation((name: string) =>
@@ -1545,13 +1642,20 @@ describe("poll — reviewing state (async)", () => {
       expect.objectContaining({
         prState: "failing",
         failCount: 1,
+        failingReason: "unparseable-verdict",
         // Pin failingSha so handleFailing's debounce gate refuses to retry.
         failingSha: "pre456",
+        // Counter cleared so a kick re-queue starts fresh.
+        unparseableRetryCount: undefined,
       }),
     );
   });
 
-  it("transitions to failing when review result is missing", () => {
+  it("auto-retries (then fails) when the review result file is missing entirely", () => {
+    // A missing result file means the reviewer process left no trace — it died
+    // or was killed before writing any output. That is a reviewer flake, not a
+    // code failure, so with retry budget remaining it re-queues on the backoff
+    // (rather than dropping the worker straight into failing as it used to).
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",
         lastSeenSha: "abc123" }),
@@ -1565,8 +1669,35 @@ describe("poll — reviewing state (async)", () => {
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({
+        prState: "working",
+        unparseableRetryCount: 1,
+        reviewRetryAt: expect.any(Number),
+        reviewWindowName: undefined,
+      }),
+    );
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 15_000);
+  });
+
+  it("transitions to failing when the review result file is missing and the retry budget is spent", () => {
+    // Budget-exhaustion companion to the missing-file retry above: once the
+    // no-commit retries are used up, a persistently-absent result file escalates
+    // to failing/unparseable-verdict (kick-recoverable).
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123", unparseableRetryCount: 2 }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
         prState: "failing",
         failCount: 1,
+        failingReason: "unparseable-verdict",
         reviewWindowName: undefined,
       }),
     );

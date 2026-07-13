@@ -76,6 +76,20 @@ export const TRANSIENT_REVIEW_BACKOFFS_MS: readonly number[] = [
 export const QUOTA_REVIEW_BACKOFF_MS = 15 * 60_000; // 15m
 export const MAX_QUOTA_REVIEW_RETRIES = 24;         // 24 × 15m ≈ 6h
 
+// Unparseable-verdict auto-retry budget (handleUnparseableReview). When the
+// reviewer ended its turn with no parseable verdict AND committed nothing —
+// e.g. it emitted a filler sentence ("I'll wait for the workflow result...")
+// instead of a standalone CLEAN/FIXED/FAILED token — the reviewed diff is
+// unchanged and usually fine; the reviewer just failed to verbalize the
+// verdict. That is a benign, non-deterministic flake, so re-run the review a
+// bounded number of times on a short backoff before escalating. Past the
+// budget → `failing` with failingReason="unparseable-verdict" (kick-recoverable).
+// A flat (not laddered) backoff: unlike a transient API outage there is nothing
+// external to wait out — a fresh reviewer run almost always emits the verdict —
+// so the delay just lets the old subprocess die and avoids a tight relaunch loop.
+export const MAX_UNPARSEABLE_REVIEW_RETRIES = 2;
+export const UNPARSEABLE_REVIEW_BACKOFF_MS = 15_000; // 15s
+
 // Threshold past which `agentStatus="working"` is treated as stale in
 // handleWorking — i.e. the worker's Claude is hung (sandbox-killed, network
 // died mid-stream, in-flight bug). Hooks fire on every tool use and on Stop,
@@ -404,6 +418,7 @@ function handleTransientReviewFailure(
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
       reviewRetryCount: undefined,
+      unparseableRetryCount: undefined,
       quotaRetryCount: undefined,
       reviewRetryAt: undefined,
     });
@@ -487,6 +502,7 @@ function handleQuotaLimitReview(
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
       reviewRetryCount: undefined,
+      unparseableRetryCount: undefined,
       reviewRetryAt: undefined,
       quotaRetryCount: undefined,
     });
@@ -535,17 +551,23 @@ function handleQuotaLimitReview(
 }
 
 // The reviewer exited but its output didn't emit a recognizable verdict.
-// Two recovery paths, in order:
+// Three recovery paths, in order:
 //
 //  1. The reviewer DID commit something (rebase, fixes) — head advanced past
 //     entry.preReviewSha — and we haven't already retried. Force-push the
 //     reviewer's work and re-queue one more review. The second reviewer
 //     usually sees a clean state and emits CLEAN.
 //
-//  2. Otherwise (no advance, or already retried once): transition to
-//     `failing` with reason "unparseable-verdict" and an operator alert.
-//     Capped at one retry per cycle so a reviewer that can't verbalize
-//     doesn't loop forever.
+//  2. The reviewer committed nothing (head unchanged) and the no-commit retry
+//     budget (MAX_UNPARSEABLE_REVIEW_RETRIES) remains: re-queue the review on a
+//     short backoff. This catches the benign flake where the reviewer ended its
+//     turn with prose instead of a verdict token — the diff is fine, the
+//     reviewer just failed to verbalize, and a fresh run almost always emits it.
+//
+//  3. Otherwise (head advanced but already retried once, or the no-commit budget
+//     is exhausted): transition to `failing` with reason "unparseable-verdict"
+//     and an operator alert. `garden kick` re-queues from there. The bounded
+//     budgets keep a reviewer that can't verbalize from looping forever.
 function handleUnparseableReview(
   projectName: string,
   projectPath: string,
@@ -577,6 +599,7 @@ function handleUnparseableReview(
         reviewWindowName: undefined,
         reviewStartedAt: undefined,
         reviewRetryCount: undefined,
+        unparseableRetryCount: undefined,
         quotaRetryCount: undefined,
         reviewRetryAt: undefined,
       });
@@ -596,6 +619,7 @@ function handleUnparseableReview(
       reviewStartedAt: undefined,
       preReviewSha: undefined,
       reviewRetryCount: undefined,
+      unparseableRetryCount: undefined,
       quotaRetryCount: undefined,
       reviewRetryAt: undefined,
     });
@@ -604,6 +628,50 @@ function handleUnparseableReview(
     return true;
   }
 
+  // No reviewer commits to capture and the diff is unchanged: the reviewer
+  // ended its turn with prose instead of a verdict token (e.g. it kicked off
+  // async sub-work and stopped before folding the result into a final
+  // CLEAN/FIXED/FAILED line). That is a benign, non-deterministic flake — the
+  // reviewed code is probably fine — not a code failure. Give it a bounded
+  // auto-retry on a short backoff before parking in `failing`, mirroring
+  // handleTransientReviewFailure: a fresh reviewer run almost always emits the
+  // verdict. Only the no-advance case is eligible — if the reviewer committed
+  // work, the head-advanced path above owns recovery (we must never relaunch a
+  // review on top of unpushed reviewer commits). reviewRetryAt is the shared
+  // cause-agnostic relaunch gate honored by handleWorking; unparseableRetryCount
+  // is this path's own budget so it can't conflate with the transient/quota
+  // ladders. Both clear on any parseable verdict, worker push, or timeout.
+  if (!headAdvanced) {
+    const prior = entry.unparseableRetryCount ?? 0;
+    const next = prior + 1;
+    if (next <= MAX_UNPARSEABLE_REVIEW_RETRIES) {
+      const nextAt = Date.now() + UNPARSEABLE_REVIEW_BACKOFF_MS;
+      log.info("poller", "unparseable verdict with no reviewer commits; scheduling retry", {
+        worker: entry.name,
+        data: {
+          project: projectName,
+          attempt: next,
+          maxAttempts: MAX_UNPARSEABLE_REVIEW_RETRIES,
+          backoffMs: UNPARSEABLE_REVIEW_BACKOFF_MS,
+        },
+      });
+      transitionState(projectName, entry.name, "working", {
+        pendingReviewAt: Date.now(),
+        unparseableRetryCount: next,
+        reviewRetryAt: nextAt,
+        reviewWindowName: undefined,
+        reviewStartedAt: undefined,
+        preReviewSha: undefined,
+      });
+      refreshDashboard();
+      scheduleDelayedPoke(projectName, UNPARSEABLE_REVIEW_BACKOFF_MS);
+      return true;
+    }
+  }
+
+  // Head advanced and the one-shot re-queue is already spent, OR the no-commit
+  // retry budget is exhausted: park in `failing` with reason
+  // "unparseable-verdict". Kick-recoverable (kick.ts REVIEW_SIDE_FAILING_REASONS).
   log.warn("poller", "review process failed, transitioning to failing", {
     worker: entry.name,
     data: { project: projectName },
@@ -629,6 +697,7 @@ function handleUnparseableReview(
     reviewWindowName: undefined,
     reviewStartedAt: undefined,
     reviewRetryCount: undefined,
+    unparseableRetryCount: undefined,
     quotaRetryCount: undefined,
     reviewRetryAt: undefined,
   });
@@ -740,6 +809,7 @@ function dispatchDefaultVerdict(
       reviewStartedAt: undefined,
       unparseableReviewAt: undefined,
       reviewRetryCount: undefined,
+      unparseableRetryCount: undefined,
       quotaRetryCount: undefined,
       reviewRetryAt: undefined,
     });
@@ -773,6 +843,7 @@ function dispatchDefaultVerdict(
     preReviewSha: undefined,
     unparseableReviewAt: undefined,
     reviewRetryCount: undefined,
+    unparseableRetryCount: undefined,
     quotaRetryCount: undefined,
     reviewRetryAt: undefined,
   });
@@ -836,6 +907,7 @@ function dispatchTrellisVerdict(
       reviewStartedAt: undefined,
       unparseableReviewAt: undefined,
       reviewRetryCount: undefined,
+      unparseableRetryCount: undefined,
       quotaRetryCount: undefined,
       reviewRetryAt: undefined,
       trellis: {
@@ -872,6 +944,7 @@ function dispatchTrellisVerdict(
       reviewStartedAt: undefined,
       unparseableReviewAt: undefined,
       reviewRetryCount: undefined,
+      unparseableRetryCount: undefined,
       quotaRetryCount: undefined,
       reviewRetryAt: undefined,
       trellis: {
@@ -916,6 +989,7 @@ function dispatchTrellisVerdict(
       preReviewSha: undefined,
       unparseableReviewAt: undefined,
       reviewRetryCount: undefined,
+      unparseableRetryCount: undefined,
       quotaRetryCount: undefined,
       reviewRetryAt: undefined,
       trellis: {
@@ -950,6 +1024,7 @@ function dispatchTrellisVerdict(
     preReviewSha: undefined,
     unparseableReviewAt: undefined,
     reviewRetryCount: undefined,
+    unparseableRetryCount: undefined,
     quotaRetryCount: undefined,
     reviewRetryAt: undefined,
     trellis: { lastVerdict: "FAILED" },
@@ -993,6 +1068,7 @@ export function resetToWorkingOnWorkerPush(
     // Worker pushed mid-review: this is a fresh cycle, reset transient retry
     // state so any prior in-flight backoff doesn't bleed into the new review.
     reviewRetryCount: undefined,
+    unparseableRetryCount: undefined,
     quotaRetryCount: undefined,
     reviewRetryAt: undefined,
     pendingReviewAt: hasCommits ? Date.now() : entry.pendingReviewAt,
@@ -1060,6 +1136,7 @@ export function handleReviewTimeout(
     reviewStartedAt: undefined,
     mergePendingAt: kind === "resolve" ? undefined : entry.mergePendingAt,
     reviewRetryCount: undefined,
+    unparseableRetryCount: undefined,
     quotaRetryCount: undefined,
     reviewRetryAt: undefined,
   });
@@ -1090,12 +1167,17 @@ function launchReview(
   // cap prematurely (parking in the non-kick-recoverable failing/"iteration-budget"
   // with amend/raise-budget advice instead of the kick-recoverable failing/"quota"
   // wait it actually is) and ending grow loops several passes early once the
-  // window resets and the review merges. reviewRetryCount / quotaRetryCount are
-  // set by handleTransientReviewFailure / handleQuotaLimitReview and cleared on
-  // any parseable verdict or worker push, so their presence uniquely marks a
-  // retry relaunch.
+  // window resets and the review merges. reviewRetryCount / quotaRetryCount /
+  // unparseableRetryCount are set by handleTransientReviewFailure /
+  // handleQuotaLimitReview / handleUnparseableReview and cleared on any
+  // parseable verdict or worker push, so their presence uniquely marks a retry
+  // relaunch. unparseableRetryCount belongs here too: a no-commit unparseable
+  // retry re-reviews the SAME commits (the reviewer emitted no verdict and did
+  // no work), so it must not consume a loop iteration either.
   const isRetryRelaunch =
-    (entry.reviewRetryCount ?? 0) > 0 || (entry.quotaRetryCount ?? 0) > 0;
+    (entry.reviewRetryCount ?? 0) > 0
+    || (entry.quotaRetryCount ?? 0) > 0
+    || (entry.unparseableRetryCount ?? 0) > 0;
 
   // Trellis workflow: increment iteration counter *before* the budget check
   // and *before* dispatch (WORKFLOWS.md "One iteration, in detail" / step 5).

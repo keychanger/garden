@@ -314,8 +314,16 @@ cannot be expressed as "wait for an event":
   actual suspend).
 - **Unparseable-verdict re-poke (0 s)** — re-arms the FIFO so the next
   poll cycle picks up the just-written `pendingReviewAt`. Logically a
-  hand-off, not a wait. Source: `poller-review.ts` after the retry
-  transition.
+  hand-off, not a wait. Source: `poller-review.ts` after the
+  reviewer-committed-work re-queue transition.
+- **Unparseable-verdict no-commit retry (15 s, budget 2)** — when the
+  reviewer ends its turn without a parseable verdict AND committed
+  nothing, the diff is unchanged and usually fine (a benign reviewer
+  flake), so `handleUnparseableReview` re-queues the review on a short
+  flat backoff before escalating to `failing`/"unparseable-verdict".
+  Tied to the reviewer-exit event, one poke per retry, bounded budget —
+  the same shape as the transient/quota ladders. Source:
+  `poller-review.ts` `MAX_UNPARSEABLE_REVIEW_RETRIES`.
 - **Auto-continue prompt delays (3 / 5 / 6 s)** — give Claude's TUI
   time to take over the pane's stdin before send-keys lands keystrokes.
   Source: `continue.ts` and `trellis-continue.ts` `dispatchDelayed*`.

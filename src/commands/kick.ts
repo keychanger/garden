@@ -91,6 +91,7 @@ export async function kick(args: string[]): Promise<void> {
       reviewRetryCount: undefined,
       reviewRetryAt: undefined,
       quotaRetryCount: undefined,
+      unparseableRetryCount: undefined,
     });
     triggerProjectPoll(project);
     console.log(`Kicked ${project}/${workerName} — recovered from failing (${failingReason}), review re-queued.`);
