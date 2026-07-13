@@ -75,6 +75,33 @@ describe("sumTranscriptUsage", () => {
     expect(sumTranscriptUsage(writeTranscript(content))!.model).toBe("claude-fable-5");
   });
 
+  it("keeps the last usage per id — a growing cumulative re-emit settles to the final", () => {
+    // The re-emissions of one message carry its cumulative usage as it settles,
+    // so the last line holds the true total. Last-wins (not first-wins) is the
+    // load-bearing detail; pin it with a growing sequence so a first-wins
+    // regression can't ship green.
+    const content = jsonl([
+      asstUsage("m1", { input_tokens: 5, output_tokens: 20 }),
+      asstUsage("m1", { input_tokens: 5, output_tokens: 60 }),
+      asstUsage("m1", { input_tokens: 5, output_tokens: 100 }),
+    ]);
+    const got = sumTranscriptUsage(writeTranscript(content))!;
+    expect(got.turns).toBe(1);
+    expect(got.outputTokens).toBe(100); // last emission, not 20 (first) or 180 (sum)
+    expect(got.inputTokens).toBe(5);
+  });
+
+  it("skips a bare `null` transcript line without throwing (best-effort)", () => {
+    // A partially-written transcript can hold a line that is exactly `null`:
+    // JSON.parse succeeds (returns null), so the parse guard doesn't catch it.
+    // Best-effort means skip it, never throw out of the function.
+    const content =
+      ["null", JSON.stringify(asstUsage("m1", { input_tokens: 1, output_tokens: 2 })), "null"].join("\n") + "\n";
+    const got = sumTranscriptUsage(writeTranscript(content))!;
+    expect(got.turns).toBe(1);
+    expect(got.outputTokens).toBe(2);
+  });
+
   it("returns null for a missing transcript or a null path", () => {
     expect(sumTranscriptUsage(null)).toBeNull();
     expect(sumTranscriptUsage("/no/such/transcript.jsonl")).toBeNull();
@@ -97,6 +124,9 @@ describe("sumTranscriptUsage", () => {
     const got = sumTranscriptUsage(writeTranscript(content))!;
     expect(got.turns).toBe(2);
     expect(got.outputTokens).toBe(14);
+    // absent cache sub-fields coerce to 0 via usageNum, never NaN
+    expect(got.cacheReadTokens).toBe(0);
+    expect(got.cacheCreationTokens).toBe(0);
   });
 });
 

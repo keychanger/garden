@@ -94,7 +94,7 @@ function usageNum(v: unknown): number {
 // CRITICAL — dedupe by message.id: Claude Code re-emits each assistant message
 // on every streaming update, so the transcript holds several lines per message
 // all sharing one id, and the usage on them is the message's cumulative usage
-// (not a per-chunk delta). Summing every line overcounts ~3x (measured 434,889
+// (not a per-chunk delta). Summing every line overcounts ~2.7x (measured 434,889
 // vs 159,573 deduped output tokens on a 3-phase worker). Keeping one usage per
 // id — last-wins, since the final emission carries the settled numbers — is what
 // makes the cost figure real. Id-less lines (rare) each count once.
@@ -117,6 +117,9 @@ export function sumTranscriptUsage(transcriptPath: string | null): TranscriptUsa
     } catch {
       continue;
     }
+    // JSON.parse("null") returns null (not a parse error), so guard before
+    // dereferencing — a bare `null` line must be skipped, not throw.
+    if (!obj || typeof obj !== "object") continue;
     if (obj.type !== "assistant") continue;
     const message = obj.message as
       | { role?: string; id?: string; model?: string; usage?: Record<string, unknown> }
