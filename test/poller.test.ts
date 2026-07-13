@@ -152,6 +152,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   fastForwardBase: vi.fn(() => ({ ok: true, advanced: "worktree" })),
   getChangedFiles: vi.fn(() => []),
   getChangedFilesBetween: vi.fn(() => []),
+  getDiffNumstat: vi.fn(() => ({ files: 0, insertions: 0, deletions: 0 })),
   getCommitSummary: vi.fn(() => "abc123 fix something"),
   hasCommitsAhead: vi.fn(() => true),
   getNewCommitSummary: vi.fn(() => "def456 address review feedback"),

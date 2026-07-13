@@ -89,6 +89,81 @@ describe("telemetry", () => {
     expect(e.changedFiles).toBe(7);
   });
 
+  it("records a review.verdict with duration and fix magnitude", async () => {
+    const t = await importTelemetry();
+    t.recordReviewVerdict("garden", "bold-ash", 1_000, "default", {
+      verdict: "fixed",
+      durationMs: 412_000,
+      fixFiles: 2,
+      fixInsertions: 11,
+      fixDeletions: 3,
+      preReviewSha: "aaa",
+      tipSha: "bbb",
+    });
+
+    const e = readEvents(t.telemetryDir())[0];
+    expect(e.event).toBe("review.verdict");
+    expect(e.verdict).toBe("fixed");
+    expect(e.durationMs).toBe(412_000);
+    expect(e.fixFiles).toBe(2);
+    expect(e.fixInsertions).toBe(11);
+    expect(e.fixDeletions).toBe(3);
+    expect(e.workerId).toBe("garden/bold-ash/1000");
+  });
+
+  it("records a review.verdict for CLEAN with zero fix magnitude", async () => {
+    const t = await importTelemetry();
+    t.recordReviewVerdict("garden", "w", 1, "default", {
+      verdict: "clean",
+      durationMs: 90_000,
+      fixFiles: 0,
+      fixInsertions: 0,
+      fixDeletions: 0,
+    });
+    const e = readEvents(t.telemetryDir())[0];
+    expect(e.verdict).toBe("clean");
+    expect(e.fixFiles).toBe(0);
+    // Omitted optional SHAs stay absent (undefined dropped by JSON).
+    expect(e).not.toHaveProperty("preReviewSha");
+  });
+
+  it("omits durationMs when the start stamp was missing", async () => {
+    const t = await importTelemetry();
+    t.recordReviewVerdict("garden", "w", 1, "default", {
+      verdict: "failed",
+      fixFiles: 0,
+      fixInsertions: 0,
+      fixDeletions: 0,
+    });
+    const e = readEvents(t.telemetryDir())[0];
+    expect(e).not.toHaveProperty("durationMs");
+  });
+
+  it("records resolve.outcome and cifix.outcome with verification + attempts", async () => {
+    const t = await importTelemetry();
+    t.recordResolveOutcome("garden", "w", 1, "default", {
+      verdict: "done",
+      verificationPassed: true,
+      attempts: 2,
+      durationMs: 30_000,
+    });
+    t.recordCiFixOutcome("garden", "w", 1, "default", {
+      verdict: "failed",
+      verificationPassed: false,
+      attempts: 3,
+    });
+
+    const events = readEvents(t.telemetryDir());
+    expect(events.map(e => e.event)).toEqual(["resolve.outcome", "cifix.outcome"]);
+    expect(events[0]).toMatchObject({
+      verdict: "done", verificationPassed: true, attempts: 2, durationMs: 30_000,
+    });
+    expect(events[1]).toMatchObject({
+      verdict: "failed", verificationPassed: false, attempts: 3,
+    });
+    expect(events[1]).not.toHaveProperty("durationMs");
+  });
+
   it("appends events rather than overwriting", async () => {
     const t = await importTelemetry();
     t.recordStateTransition("garden", "w", 1, "default", "working", "reviewing");

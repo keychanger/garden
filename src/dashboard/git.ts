@@ -530,6 +530,45 @@ export function getDiffStat(
   }
 }
 
+export interface DiffNumstat {
+  files: number;
+  insertions: number;
+  deletions: number;
+}
+
+// `git diff --numstat from..to` parsed to totals, for the telemetry ledger's
+// fix-magnitude signal (how much a reviewer/resolver actually changed). Each
+// line is "<added>\t<deleted>\t<path>"; a binary file renders "-\t-\t<path>" and
+// is counted as a touched file with zero line deltas. All-zero on a no-op range
+// (a CLEAN review, where the reviewer pushed nothing) or any git failure — the
+// same empty-on-failure contract as getDiffStat.
+export function getDiffNumstat(
+  wtPath: string,
+  fromSha: string,
+  toSha: string,
+): DiffNumstat {
+  const total: DiffNumstat = { files: 0, insertions: 0, deletions: 0 };
+  try {
+    const out = git(wtPath, "diff", "--numstat", `${fromSha}..${toSha}`).trim();
+    if (!out) return total;
+    for (const line of out.split("\n")) {
+      const parts = line.split("\t");
+      if (parts.length < 3) continue;
+      total.files += 1;
+      const added = parseInt(parts[0], 10);
+      const deleted = parseInt(parts[1], 10);
+      if (!Number.isNaN(added)) total.insertions += added;
+      if (!Number.isNaN(deleted)) total.deletions += deleted;
+    }
+    return total;
+  } catch (err) {
+    log.warn("git", "getDiffNumstat failed", {
+      data: { fromSha, toSha, error: String(err) },
+    });
+    return total;
+  }
+}
+
 // Commit log across an arbitrary SHA range, optionally scoped to a file set.
 // The whole-task rationale source for holistic review: unlike getCommitSummary
 // (origin/<base>..HEAD, which is empty once the worktree is synced to the

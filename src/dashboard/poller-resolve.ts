@@ -28,6 +28,7 @@ import {
   signalFifoPath, scheduleDelayedPoke, isWorkerClaudeWorking,
 } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
+import { recordResolveOutcome } from "./telemetry.js";
 import {
   cleanReviewFiles, handleReviewTimeout, isReviewTimedOut,
   resetToWorkingOnWorkerPush, reviewPromptPath, reviewResultPath,
@@ -244,6 +245,17 @@ export function handleResolving(
     headSha !== entry.preResolveSha;
 
   const verificationPassed = !verdictFailed && !rebaseStuck && rebased && madeProgress;
+
+  // Ledger the resolver outcome at the single point it's known, before the
+  // branch into retry / escalate / merge-pending. verificationPassed is the
+  // ground truth (the verdict text is advisory); attempts is the effort spent.
+  // reviewStartedAt is the resolver's launch stamp (reused field).
+  recordResolveOutcome(projectName, entry.name, entry.createdAt, entry.workflow ?? "default", {
+    verdict: resolveResult?.verdict ?? "missing",
+    verificationPassed,
+    attempts: entry.resolveAttempts ?? 0,
+    durationMs: entry.reviewStartedAt ? Date.now() - entry.reviewStartedAt : undefined,
+  });
 
   if (!verificationPassed) {
     log.warn("poller", "resolver verification failed", {

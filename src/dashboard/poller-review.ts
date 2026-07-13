@@ -15,7 +15,7 @@ import { getHarnessCore } from "./harness/core.js";
 import { setDoneSentinel } from "./continue.js";
 import {
   forcePushBranch, getBranchHeadSha, getCommitSummary, getRemoteTrackingSha,
-  hasCommitsAhead,
+  getDiffNumstat, hasCommitsAhead,
 } from "./git.js";
 import { refreshDashboard } from "./header.js";
 import { launchHeadlessAgent } from "./headless-agent.js";
@@ -38,6 +38,7 @@ import { parseLastLineVerdict } from "./verdict.js";
 import { reviewWindowName } from "./window-names.js";
 import { signalFifoPath, scheduleDelayedPoke } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
+import { recordReviewVerdict } from "./telemetry.js";
 
 // Wall-clock ceiling on a single reviewer or resolver run. If the tmux window
 // is still alive past this, the poller kills it and escalates to `failing`.
@@ -234,14 +235,33 @@ export function handleReviewing(
     // guard then discards it (the worker pushed mid-review, or the post-review
     // force-push failed); the next review overwrites the snapshot, so any such
     // staleness is transient and read-only.
+    const tipSha = getBranchHeadSha(wtPath) ?? undefined;
     updateWorkerFields(projectName, entry.name, {
       lastReview: {
         verdict: review.verdict,
         at: Date.now(),
         body: review.body.slice(-REVIEW_BODY_TAIL_CHARS),
         preReviewSha: entry.preReviewSha,
-        tipSha: getBranchHeadSha(wtPath) ?? undefined,
+        tipSha,
       },
+    });
+
+    // Ledger the verdict with the signal the `state` event can't carry: review
+    // duration and the reviewer's fix magnitude (numstat of preReviewSha..tipSha
+    // — zero on CLEAN, the edit size on FIXED). Emitted here at the single
+    // parseable-verdict point, alongside the lastReview snapshot, so it covers
+    // both workflows and every clean/fixed/failed outcome.
+    const fix = entry.preReviewSha && tipSha
+      ? getDiffNumstat(wtPath, entry.preReviewSha, tipSha)
+      : { files: 0, insertions: 0, deletions: 0 };
+    recordReviewVerdict(projectName, entry.name, entry.createdAt, entry.workflow ?? "default", {
+      verdict: review.verdict,
+      durationMs: entry.reviewStartedAt ? Date.now() - entry.reviewStartedAt : undefined,
+      fixFiles: fix.files,
+      fixInsertions: fix.insertions,
+      fixDeletions: fix.deletions,
+      preReviewSha: entry.preReviewSha,
+      tipSha,
     });
 
     if (isTrellis) {

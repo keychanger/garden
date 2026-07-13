@@ -140,6 +140,91 @@ export function recordStateTransition(
   });
 }
 
+// review.verdict — a reviewer produced a parseable verdict. Emitted at the
+// single point where the verdict is known for both default and trellis
+// (poller-review.ts), so it captures every clean/fixed/failed (and trellis
+// ALIGNED/DRIFT/FLAGGED) outcome. The signal the `state` event can't carry:
+// the verdict vocabulary, the review duration, and the reviewer's FIX MAGNITUDE
+// — the numstat of preReviewSha..tipSha, which is 0 on a CLEAN review and the
+// reviewer's edit size on a FIXED one (with the caveat that a mid-review rebase
+// onto a sibling merge also lands in that range). This is the headline quality
+// metric: a "cheaper" worker that a reviewer must rewrite 40 lines per merge to
+// land is not actually cheaper.
+export interface ReviewVerdictFields {
+  verdict: string;
+  durationMs?: number;
+  fixFiles: number;
+  fixInsertions: number;
+  fixDeletions: number;
+  preReviewSha?: string;
+  tipSha?: string;
+}
+
+export function recordReviewVerdict(
+  project: string,
+  worker: string,
+  createdAt: number | undefined,
+  workflow: string,
+  fields: ReviewVerdictFields,
+): void {
+  write({
+    event: "review.verdict",
+    project,
+    worker,
+    workerId: telemetryWorkerId(project, worker, createdAt),
+    workflow,
+    ...fields,
+  });
+}
+
+// resolve.outcome / cifix.outcome — a rebase-conflict resolver or a CI-fix agent
+// finished. The state stream already encodes success/failure via the following
+// transition (→ merge-pending vs → failing); these events add what it can't:
+// the ground-truth `verificationPassed` (the agent's verdict text is advisory —
+// only an actual verified push counts), the effort spent (`attempts` against the
+// per-cycle budget), and the duration. A config that needs three resolve
+// attempts per conflict is meaningfully worse than one that needs one.
+export interface AgentOutcomeFields {
+  verdict: string; // done|failed|fixed|missing (agent's advisory verdict)
+  verificationPassed: boolean;
+  attempts: number;
+  durationMs?: number;
+}
+
+export function recordResolveOutcome(
+  project: string,
+  worker: string,
+  createdAt: number | undefined,
+  workflow: string,
+  fields: AgentOutcomeFields,
+): void {
+  write({
+    event: "resolve.outcome",
+    project,
+    worker,
+    workerId: telemetryWorkerId(project, worker, createdAt),
+    workflow,
+    ...fields,
+  });
+}
+
+export function recordCiFixOutcome(
+  project: string,
+  worker: string,
+  createdAt: number | undefined,
+  workflow: string,
+  fields: AgentOutcomeFields,
+): void {
+  write({
+    event: "cifix.outcome",
+    project,
+    worker,
+    workerId: telemetryWorkerId(project, worker, createdAt),
+    workflow,
+    ...fields,
+  });
+}
+
 // merge — a completed merge, with the counts the pure state event can't carry:
 // the cumulative merge ordinal (the multi-phase cycle number) and how many
 // files this cycle touched. terminalState is "done" (worker self-declared

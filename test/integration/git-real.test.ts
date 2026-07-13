@@ -84,6 +84,45 @@ describe("getDiffAgainstBase (real git)", () => {
   });
 });
 
+describe("getDiffNumstat (real git)", () => {
+  it("totals files, insertions, and deletions across a SHA range", async () => {
+    const { createWorktree, getBranchHeadSha, getDiffNumstat } =
+      await import("../../src/dashboard/git.js");
+    const wt = path.join(env.home, "wt", "numstat");
+    createWorktree(env.repoPath, wt, "numstat-branch");
+    const from = getBranchHeadSha(wt)!;
+    fs.writeFileSync(path.join(wt, "a.txt"), "l1\nl2\nl3\n");
+    fs.writeFileSync(path.join(wt, "b.txt"), "x\n");
+    git(wt, "add", "a.txt", "b.txt");
+    git(wt, "commit", "-m", "two files");
+    const to = getBranchHeadSha(wt)!;
+
+    const stat = getDiffNumstat(wt, from, to);
+    expect(stat.files).toBe(2);
+    expect(stat.insertions).toBe(4); // 3 + 1
+    expect(stat.deletions).toBe(0);
+  });
+
+  it("returns all-zero on a no-op range (a CLEAN review)", async () => {
+    const { createWorktree, getBranchHeadSha, getDiffNumstat } =
+      await import("../../src/dashboard/git.js");
+    const wt = path.join(env.home, "wt", "numstat-clean");
+    createWorktree(env.repoPath, wt, "numstat-clean-branch");
+    const sha = getBranchHeadSha(wt)!;
+    expect(getDiffNumstat(wt, sha, sha)).toEqual({ files: 0, insertions: 0, deletions: 0 });
+  });
+
+  it("returns all-zero on a git failure (unknown SHA)", async () => {
+    const { createWorktree, getDiffNumstat } =
+      await import("../../src/dashboard/git.js");
+    const wt = path.join(env.home, "wt", "numstat-bad");
+    createWorktree(env.repoPath, wt, "numstat-bad-branch");
+    expect(getDiffNumstat(wt, "deadbeef", "cafebabe")).toEqual({
+      files: 0, insertions: 0, deletions: 0,
+    });
+  });
+});
+
 describe("getBranchHeadSha (real git)", () => {
   it("returns the HEAD sha of the worktree", async () => {
     const { createWorktree, getBranchHeadSha } =

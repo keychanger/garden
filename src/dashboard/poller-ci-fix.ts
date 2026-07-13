@@ -33,6 +33,7 @@ import {
   signalFifoPath, scheduleDelayedPoke, isWorkerClaudeWorking,
 } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
+import { recordCiFixOutcome } from "./telemetry.js";
 import {
   REVIEW_TIMEOUT_MS, scheduleReviewTimeoutPoke,
 } from "./poller-review.js";
@@ -290,6 +291,17 @@ export function handleCiFixing(
     headSha !== entry.preCiFixSha;
   const pushed = headSha !== null && remoteHeadSha === headSha;
   const verificationPassed = !verdictFailed && madeProgress && pushed;
+
+  // Ledger the ci-fix outcome at the single point it's known, before the branch
+  // into retry / escalate / merge-pending. Mirrors resolve.outcome: the ground-
+  // truth verificationPassed, the attempt count against the budget, and duration
+  // (reviewStartedAt is the agent's launch stamp — reused field).
+  recordCiFixOutcome(projectName, entry.name, entry.createdAt, entry.workflow ?? "default", {
+    verdict: result?.verdict ?? "missing",
+    verificationPassed,
+    attempts: entry.ciFixAttempts ?? 0,
+    durationMs: entry.reviewStartedAt ? Date.now() - entry.reviewStartedAt : undefined,
+  });
 
   if (!verificationPassed) {
     log.warn("poller", "ci-fix verification failed", {
