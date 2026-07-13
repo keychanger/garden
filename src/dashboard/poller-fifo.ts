@@ -55,15 +55,30 @@ export function triggerProjectPoll(projectName: string): void {
 // party); the byte is buffered, the bash exits cleanly. If no reader ever
 // arrives, the FIFO is eventually unlinked and the buffer reclaimed — no
 // orphan accumulation.
+//
+// Why the sleep is chunked with a FIFO-existence check rather than one
+// `sleep ${delaySec}`: the review-timeout poke schedules a full hour out, and
+// a single sleep lives that whole hour even after its FIFO is gone — every
+// integration-test run leaves several such orphans (the test's tmp HOME is
+// deleted at teardown seconds later), and they accumulated into hundreds of
+// lingering bash/sleep pairs. Checking `[ -p ]` between short chunks lets the
+// timer die within one chunk of the FIFO being unlinked (test teardown,
+// dashboard restart, project removal) while a live wait costs only a
+// negligible wakeup per chunk. The final `[ -p ]` guard also stops the poke
+// from creating a junk regular file at the unlinked path (`<>` is O_CREAT).
 export function scheduleDelayedPoke(projectName: string, delayMs: number): void {
   const fifo = signalFifoPath(projectName);
   const delaySec = Math.max(0, Math.ceil(delayMs / 1000));
+  const script =
+    `f=${shellEscape(fifo)}; t=${delaySec}; ` +
+    `while [ "$t" -gt 0 ]; do ` +
+    `[ -p "$f" ] || exit 0; ` +
+    `s=30; [ "$t" -lt 30 ] && s="$t"; ` +
+    `sleep "$s"; t=$((t - s)); ` +
+    `done; ` +
+    `[ -p "$f" ] && printf '\\n' 1<>"$f"`;
   try {
-    const child = spawn(
-      "bash",
-      ["-c", `sleep ${delaySec}; printf '\\n' 1<>${shellEscape(fifo)}`],
-      { detached: true, stdio: "ignore" },
-    );
+    const child = spawn("bash", ["-c", script], { detached: true, stdio: "ignore" });
     child.unref();
   } catch (err) {
     log.warn("poller", "scheduleDelayedPoke spawn failed", {

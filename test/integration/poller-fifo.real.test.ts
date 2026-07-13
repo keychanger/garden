@@ -86,4 +86,58 @@ describe("scheduleDelayedPoke (real FIFO, real child process)", () => {
       try { fs.closeSync(readFd); } catch { /* already closed */ }
     }
   });
+
+  it("delivers a delayed poke through the chunked-sleep loop", async () => {
+    const tsxBin = path.resolve(process.cwd(), "node_modules/.bin/tsx");
+    const fifoSrc = path.resolve(process.cwd(), "src/dashboard/poller-fifo.ts");
+    const readFd = fs.openSync(fifo, fs.constants.O_RDWR);
+
+    try {
+      // delayMs=1000 takes the while-loop path (delay 0 skips it entirely):
+      // one 1s chunk, then the guarded printf. The byte must still arrive.
+      const childCode = `
+        import { scheduleDelayedPoke } from ${JSON.stringify(fifoSrc)};
+        scheduleDelayedPoke(${JSON.stringify(PROJECT)}, 1000);
+        process.exit(0);
+      `;
+      const result = spawnSync(tsxBin, ["-e", childCode], {
+        env: { ...process.env, HOME: tmpHome },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      expect(result.status).toBe(0);
+
+      const got = await readFdWithTimeout(readFd, 10_000);
+      expect(got.length).toBeGreaterThan(0);
+    } finally {
+      try { fs.closeSync(readFd); } catch { /* already closed */ }
+    }
+  });
+
+  it("exits without poking or creating a junk file when the FIFO is gone", async () => {
+    // Regression for the orphaned-timer leak: the detached writer used to
+    // sleep its full delay (an hour for review-timeout pokes) no matter what,
+    // and its final `1<>` open is O_CREAT — after test teardown deleted the
+    // FIFO, the printf left a junk regular file at the path. The chunked loop
+    // checks the FIFO before each chunk and must exit at the first check.
+    const tsxBin = path.resolve(process.cwd(), "node_modules/.bin/tsx");
+    const fifoSrc = path.resolve(process.cwd(), "src/dashboard/poller-fifo.ts");
+
+    fs.unlinkSync(fifo);
+    const childCode = `
+      import { scheduleDelayedPoke } from ${JSON.stringify(fifoSrc)};
+      scheduleDelayedPoke(${JSON.stringify(PROJECT)}, 1000);
+      process.exit(0);
+    `;
+    const result = spawnSync(tsxBin, ["-e", childCode], {
+      env: { ...process.env, HOME: tmpHome },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    expect(result.status).toBe(0);
+
+    // Give the old implementation enough time to have slept the 1s delay and
+    // run its unguarded printf. Under the fixed implementation the detached
+    // bash exits at the first pre-chunk check and never touches the path.
+    await new Promise((r) => setTimeout(r, 2_500));
+    expect(fs.existsSync(fifo)).toBe(false);
+  });
 });
