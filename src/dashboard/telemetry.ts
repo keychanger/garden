@@ -64,6 +64,63 @@ export interface WorkerCreatedSnapshot {
   gardenVersion: string;
 }
 
+// A parsed ledger line. Every event shares this spine; event-specific fields
+// (verdict, tokens, kind, …) ride the index signature and readers narrow by
+// `event`. `readTelemetryEvents` is the sole read path — `garden stats` (the
+// analysis surface) aggregates over it.
+export interface LedgerEvent {
+  v: number;
+  ts: string;
+  event: string;
+  project: string;
+  worker: string;
+  workerId: string;
+  workflow?: string;
+  [key: string]: unknown;
+}
+
+// Read every event across all monthly shards, oldest first, tolerant of torn
+// lines (a crash mid-append loses at most the last line, not the file). The
+// `project` filter is applied here; time filtering is deliberately left to the
+// caller so it can build the workerId→config join from the full worker.created
+// history before windowing the metric events (a worker created before the
+// window still resolves its config). Best-effort: unreadable dir/shard → skip.
+export function readTelemetryEvents(opts: { project?: string } = {}): LedgerEvent[] {
+  const dir = telemetryDir();
+  let files: string[];
+  try {
+    files = fs.readdirSync(dir)
+      .filter(f => f.startsWith("events-") && f.endsWith(".jsonl"))
+      .sort();
+  } catch {
+    return [];
+  }
+  const events: LedgerEvent[] = [];
+  for (const f of files) {
+    let raw: string;
+    try {
+      raw = fs.readFileSync(path.join(dir, f), "utf-8");
+    } catch {
+      continue;
+    }
+    for (const line of raw.split("\n")) {
+      if (!line) continue;
+      let obj: unknown;
+      try {
+        obj = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (!obj || typeof obj !== "object") continue;
+      const e = obj as LedgerEvent;
+      if (typeof e.event !== "string" || typeof e.workerId !== "string") continue;
+      if (opts.project && e.project !== opts.project) continue;
+      events.push(e);
+    }
+  }
+  return events;
+}
+
 // Durable identity for a worker across name reuse: worker names are randomly
 // generated slugs that collide over months, so the stable key is
 // project/name/createdAt. Every event carries it as the join key.

@@ -32,6 +32,7 @@ import { auto } from "./auto.js";
 import { whoami } from "./whoami.js";
 import { review } from "./review.js";
 import { queue } from "./queue.js";
+import { stats } from "./stats.js";
 import { doctor } from "./doctor.js";
 import { handoff } from "./handoff.js";
 import { reply } from "./reply.js";
@@ -77,6 +78,7 @@ export const commands: Record<string, Command> = {
   whoami,
   review,
   queue,
+  stats,
   doctor,
   handoff,
   reply,
