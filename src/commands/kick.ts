@@ -1,6 +1,7 @@
 import { updateWorkerFields, type FailingReason } from "../dashboard/registry.js";
 import { triggerProjectPoll } from "../dashboard/poller.js";
 import { getCommitSummary, getWorkerBaseBranch } from "../dashboard/git.js";
+import { recordOperatorAction } from "../dashboard/telemetry.js";
 import { tryGetProject } from "../config.js";
 import { resolveWorkerArg } from "./resolve-worker.js";
 
@@ -72,6 +73,10 @@ export async function kick(args: string[]): Promise<void> {
       );
     }
   }
+
+  // Past every guard — the kick will take effect on one of the two branches
+  // below. Ledger the operator intervention once here so both paths are covered.
+  recordOperatorAction(project, workerName, entry.createdAt, entry.workflow ?? "default", "kick");
 
   if (isReviewSideFailure) {
     // Clear the failing pin and the retry state so handleWorking launches a

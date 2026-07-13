@@ -30,7 +30,13 @@ import {
 import { workerWindowName as workerWin } from "./window-names.js";
 import { log } from "./log.js";
 import { resolveGardenRunner } from "./runner.js";
+import { recordContinueDispatched } from "./telemetry.js";
 import { tryGetProject } from "../config.js";
+
+// Which garden-initiated paste this is — the `kind` on the continue.dispatched
+// telemetry event. Not operator prompts: those arrive via UserPromptSubmit and
+// are deliberately not recorded here.
+export type ContinueKind = "interrupt" | "post-merge" | "handoff-callback" | "seed";
 
 // The fenced [garden] prefix marks the message as system-injected so the
 // worker doesn't mistake it for human direction.
@@ -302,7 +308,7 @@ export function notifyHandoffCallback(opts: {
     + "you have already finished and moved on, you can ignore this and end "
     + "your turn.",
   );
-  continueWorker(opts.parentProject, opts.parentWorker, lines.join("\n"));
+  continueWorker(opts.parentProject, opts.parentWorker, lines.join("\n"), "handoff-callback");
 }
 
 // Send a continue prompt to a worker pane. Called via the _continue-worker
@@ -317,6 +323,7 @@ export function continueWorker(
   projectName: string,
   workerName: string,
   message?: string,
+  kind: ContinueKind = "interrupt",
 ): boolean {
   const entry = findWorkerByName(projectName, workerName);
   if (!entry) return false;
@@ -394,6 +401,11 @@ export function continueWorker(
     worker: workerName,
     data: { project: projectName },
   });
+  // Ledger the garden-initiated paste at the single success point (after
+  // pasteAndSubmit landed) so the autonomy read can subtract garden's prompts
+  // from the operator's. Only real deliveries count — the skip cases above
+  // returned false without pasting.
+  recordContinueDispatched(projectName, workerName, entry.createdAt, entry.workflow ?? "default", kind);
   return true;
 }
 
@@ -436,7 +448,7 @@ export function continueWorkerAfterMerge(projectName: string, workerName: string
     entry?.baseBranch,
     entry?.branchName ?? workerName,
   );
-  const delivered = continueWorker(projectName, workerName, message);
+  const delivered = continueWorker(projectName, workerName, message, "post-merge");
   // Clear the transient stale-files / sync-failed context only once the prompt
   // actually landed. If the first attempt was skipped (worker still mid-turn),
   // leave them set so the retry leg re-emits the same enriched prompt.
@@ -589,7 +601,7 @@ export function seedWorker(
       return;
     }
     if (entry.agentStatus !== "loading") {
-      continueWorker(projectName, workerName, message);
+      continueWorker(projectName, workerName, message, "seed");
       cleanup();
       return;
     }
@@ -598,7 +610,7 @@ export function seedWorker(
         worker: workerName,
         data: { project: projectName, agentStatus: entry.agentStatus },
       });
-      continueWorker(projectName, workerName, message);
+      continueWorker(projectName, workerName, message, "seed");
       cleanup();
       return;
     }

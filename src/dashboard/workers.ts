@@ -18,7 +18,7 @@ import {
   addWorker, removeWorker, findWorkerByName, getAllWorkerNames,
   updateWorkerFields, getWorkers, resolveResumeAgentStatus, type AgentStatus,
 } from "./registry.js";
-import { recordWorkerCreated, shortHash, type RoleSnapshot } from "./telemetry.js";
+import { recordWorkerCreated, recordOperatorAction, shortHash, type RoleSnapshot } from "./telemetry.js";
 import { deriveCrew } from "./crew.js";
 import { resolveReviewRole, type ReviewRole } from "./roles.js";
 import { buildRulesContext } from "../rules.js";
@@ -734,6 +734,7 @@ export function bounceWorker(projectName: string, workerName: string): void {
     dispatchDelayedContinue(resolveGardenRunner(), projectName, workerName);
   }
 
+  recordOperatorAction(projectName, workerName, entry.createdAt, entry.workflow ?? "default", "bounce");
   log.info("workers", "bounced", {
     worker: workerName,
     data: { project: projectName, sessionId: entry.sessionId, wasWorking },
@@ -814,6 +815,7 @@ export function holdWorker(project: string, worker: string): HoldDecision {
   }
   updateWorkerFields(project, worker, { agentStatus: "paused" });
   refreshDashboard();
+  recordOperatorAction(project, worker, entry?.createdAt, entry?.workflow ?? "default", "hold");
   return decision;
 }
 

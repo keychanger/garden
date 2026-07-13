@@ -164,6 +164,25 @@ describe("telemetry", () => {
     expect(events[1]).not.toHaveProperty("durationMs");
   });
 
+  it("records continue.dispatched with the paste kind", async () => {
+    const t = await importTelemetry();
+    t.recordContinueDispatched("garden", "bold-ash", 1_000, "default", "post-merge");
+    const e = readEvents(t.telemetryDir())[0];
+    expect(e.event).toBe("continue.dispatched");
+    expect(e.kind).toBe("post-merge");
+    expect(e.workflow).toBe("default");
+    expect(e.workerId).toBe("garden/bold-ash/1000");
+  });
+
+  it("records operator.action with the action name", async () => {
+    const t = await importTelemetry();
+    t.recordOperatorAction("garden", "w", 1, "grow", "bounce");
+    const e = readEvents(t.telemetryDir())[0];
+    expect(e.event).toBe("operator.action");
+    expect(e.action).toBe("bounce");
+    expect(e.workflow).toBe("grow");
+  });
+
   it("appends events rather than overwriting", async () => {
     const t = await importTelemetry();
     t.recordStateTransition("garden", "w", 1, "default", "working", "reviewing");

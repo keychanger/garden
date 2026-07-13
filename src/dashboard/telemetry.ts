@@ -225,6 +225,50 @@ export function recordCiFixOutcome(
   });
 }
 
+// continue.dispatched — garden pasted a prompt into a worker's pane (NOT the
+// operator). Emitted at the single paste-success point in continueWorker, so it
+// covers every garden-initiated prompt: post-merge auto-continue, interrupt
+// recovery, a handoff callback, and a seed. This is the subtrahend for the
+// autonomy metric: operator-initiated prompts = all prompts − garden's own, so
+// telling them apart requires marking garden's here. `kind` names which.
+export function recordContinueDispatched(
+  project: string,
+  worker: string,
+  createdAt: number | undefined,
+  workflow: string,
+  kind: string,
+): void {
+  write({
+    event: "continue.dispatched",
+    project,
+    worker,
+    workerId: telemetryWorkerId(project, worker, createdAt),
+    workflow,
+    kind,
+  });
+}
+
+// operator.action — the operator manually intervened on a worker (hold / kick /
+// bounce). The direct "this config needed hand-holding" signal: a config whose
+// workers the operator must bounce or kick to keep moving is less autonomous
+// than one that runs clean, independent of how its reviews score.
+export function recordOperatorAction(
+  project: string,
+  worker: string,
+  createdAt: number | undefined,
+  workflow: string,
+  action: string,
+): void {
+  write({
+    event: "operator.action",
+    project,
+    worker,
+    workerId: telemetryWorkerId(project, worker, createdAt),
+    workflow,
+    action,
+  });
+}
+
 // merge — a completed merge, with the counts the pure state event can't carry:
 // the cumulative merge ordinal (the multi-phase cycle number) and how many
 // files this cycle touched. terminalState is "done" (worker self-declared
