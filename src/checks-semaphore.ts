@@ -1,7 +1,7 @@
 // Machine-wide semaphore bounding concurrent checks-suite runs. Several
-// garden workers (plus reviewers and ci-fix agents) run a project's full
-// checks command around the same time when a merge wave lands, and each run
-// is a multi-core test suite — overlapping runs oversubscribe the operator's
+// garden workers (plus reviewers) run a project's full checks command around
+// the same time when a merge wave lands, and each run is a multi-core test
+// suite — overlapping runs oversubscribe the operator's
 // workstation into whole-machine sluggishness. The semaphore admits a
 // hardware-derived number of runs and queues the rest: clock time stretches,
 // the machine stays responsive.
@@ -46,33 +46,58 @@ function slotOwner(slotFile: string): number | null {
   }
 }
 
-// Claim any free slot in [0, slots). Returns the claimed slot index or null
-// when all slots are held by live processes. A slot file with a dead or
-// unparseable owner is deleted and immediately contested; losing that race
-// to another claimant is fine — the loop just moves on.
+// Atomically steal a slot whose owner is gone. Returns true when the slot was
+// freed for reuse. A naive unlink-then-create is racy: two claimants that both
+// read the same dead owner both unlink and both O_EXCL-create, and one claimant's
+// unlink can delete the other's freshly created file — admitting two holders on
+// one slot (the two-holder race dashboard/file-lock.ts documents and this mirrors
+// via reclaimStaleLock). renameSync is atomic, so exactly one claimant moves the
+// abandoned file to a private salvage name; the losers get ENOENT and fall through
+// to retry the create. Liveness is pid-only, with no age backstop: a checks slot
+// is legitimately held for the minutes a suite runs, so evicting on age (as
+// file-lock.ts does for its millisecond registry writes) would kill a live holder.
+function stealAbandonedSlot(slotFile: string): boolean {
+  const owner = slotOwner(slotFile);
+  if (owner !== null && processAlive(owner)) return false; // live holder — leave it
+  const salvage = `${slotFile}.reclaiming.${process.pid}`;
+  try {
+    fs.renameSync(slotFile, salvage);
+  } catch {
+    return false; // lost the atomic steal, or already gone — retry the open
+  }
+  try {
+    fs.unlinkSync(salvage);
+  } catch {
+    // Already gone.
+  }
+  return true;
+}
+
+// Claim any free slot in [0, slots). Returns the claimed slot index, or null
+// when every slot is held by a live process. A free slot is claimed with an
+// atomic O_EXCL create; a slot whose owner has died is stolen atomically (see
+// stealAbandonedSlot) and the create retried once. A slot with a live owner, or
+// one lost to a concurrent claimant, is skipped.
 export function tryAcquireChecksSlot(slots: number): number | null {
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
   for (let slot = 0; slot < slots; slot++) {
     const slotFile = checksSlotPath(slot);
-    const owner = slotOwner(slotFile);
-    if (owner !== null && processAlive(owner)) continue;
-    if (fs.existsSync(slotFile)) {
+    for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        fs.unlinkSync(slotFile);
-      } catch {
-        // A concurrent claimant already removed it.
+        const fd = fs.openSync(
+          slotFile,
+          fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
+        );
+        fs.writeSync(fd, `${process.pid}\n${new Date().toISOString()}\n`);
+        fs.closeSync(fd);
+        return slot;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "EEXIST") break; // odd fs error — next slot
+        // Occupied. Steal it only if the owner is dead, then retry the create
+        // once; a live owner or a lost steal race falls through to the next slot.
+        if (attempt === 0 && stealAbandonedSlot(slotFile)) continue;
+        break;
       }
-    }
-    try {
-      const fd = fs.openSync(
-        slotFile,
-        fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
-      );
-      fs.writeSync(fd, `${process.pid}\n${new Date().toISOString()}\n`);
-      fs.closeSync(fd);
-      return slot;
-    } catch {
-      continue; // lost the create race for this slot; try the next
     }
   }
   return null;

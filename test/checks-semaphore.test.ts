@@ -80,6 +80,19 @@ describe("tryAcquireChecksSlot / releaseChecksSlot", () => {
     expect(mod.tryAcquireChecksSlot(1)).toBe(0);
   });
 
+  it("leaves no salvage file behind after stealing a dead slot", async () => {
+    // The steal renames the abandoned file to a private `.reclaiming.<pid>`
+    // salvage name (atomic, so two racers can't both reclaim) and then unlinks
+    // it. A leaked salvage file would signal the atomic-steal path regressed.
+    const mod = await loadModule();
+    const dir = path.dirname(mod.checksSlotPath(0));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(mod.checksSlotPath(0), "99999999\n2026-01-01T00:00:00Z\n");
+    expect(mod.tryAcquireChecksSlot(1)).toBe(0);
+    const residue = fs.readdirSync(dir).filter((f) => f.includes(".reclaiming."));
+    expect(residue).toEqual([]);
+  });
+
   it("respects a slot held by a live process it does not own", async () => {
     const mod = await loadModule();
     fs.mkdirSync(path.dirname(mod.checksSlotPath(0)), { recursive: true });

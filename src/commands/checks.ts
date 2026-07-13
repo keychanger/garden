@@ -1,10 +1,9 @@
 // `garden checks [project]` — run the project's configured checks command
-// under the machine-wide checks semaphore. Workers, reviewers, and ci-fix
-// agents all route their pre-push suite through this so overlapping runs
-// queue instead of stampeding the operator's workstation; CI keeps running
-// the raw command on its own isolated runner. The child runs in the caller's
-// cwd (the worker's worktree), inherits stdio, and its exit code is the
-// command's exit code.
+// under the machine-wide checks semaphore. Workers and reviewers route their
+// pre-push suite through this so overlapping runs queue instead of stampeding
+// the operator's workstation; CI keeps running the raw command on its own
+// isolated runner. The child runs in the caller's cwd (the worker's worktree),
+// inherits stdio, and its exit code is the command's exit code.
 import { spawn } from "node:child_process";
 import { resolveProjectFromArgs } from "../config.js";
 import {
