@@ -183,6 +183,26 @@ describe("telemetry", () => {
     expect(e.workflow).toBe("grow");
   });
 
+  it("records worker.tokens with cumulative usage aligned to the merge cycle", async () => {
+    const t = await importTelemetry();
+    t.recordWorkerTokens("garden", "bold-ash", 1_000, "default", {
+      turns: 42,
+      inputTokens: 300,
+      outputTokens: 159_573,
+      cacheReadTokens: 8_000_000,
+      cacheCreationTokens: 120_000,
+      model: "claude-opus-4-8",
+      mergeCount: 3,
+    });
+    const e = readEvents(t.telemetryDir())[0];
+    expect(e.event).toBe("worker.tokens");
+    expect(e.outputTokens).toBe(159_573);
+    expect(e.cacheReadTokens).toBe(8_000_000);
+    expect(e.mergeCount).toBe(3);
+    expect(e.model).toBe("claude-opus-4-8");
+    expect(e.workerId).toBe("garden/bold-ash/1000");
+  });
+
   it("appends events rather than overwriting", async () => {
     const t = await importTelemetry();
     t.recordStateTransition("garden", "w", 1, "default", "working", "reviewing");

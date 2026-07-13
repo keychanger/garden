@@ -35,7 +35,8 @@ import { readUsageSnapshot, snapshotMeters } from "./usage.js";
 import { workerWindowName } from "./window-names.js";
 import { scheduleDelayedPoke, isWorkerClaudeWorking } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
-import { recordMerge } from "./telemetry.js";
+import { recordMerge, recordWorkerTokens } from "./telemetry.js";
+import { resolveTranscriptPath, sumTranscriptUsage } from "./conversation.js";
 import { maybeDispatchHolisticReview } from "./poller-holistic-review.js";
 import { killReviewWindow } from "./poller-review.js";
 import { launchResolver } from "./poller-resolve.js";
@@ -740,6 +741,20 @@ function transitionToTerminal(
     projectName, entry.name, entry.createdAt, entry.workflow ?? "default",
     terminalState, mergeCount, preMergeChangedFiles.length,
   );
+
+  // Ledger the worker's cumulative token cost at this merge (best-effort — the
+  // sum is null when the transcript can't be read, and never blocks the merge
+  // above). Cumulative because the transcript is one growing session across a
+  // default worker's phases; analysis diffs consecutive samples per workerId for
+  // per-cycle cost. This is the worker-model/provider cost axis (the review
+  // family is always Opus, so its cost is not the variable under study).
+  const usage = sumTranscriptUsage(resolveTranscriptPath(entry));
+  if (usage) {
+    recordWorkerTokens(projectName, entry.name, entry.createdAt, entry.workflow ?? "default", {
+      ...usage,
+      mergeCount,
+    });
+  }
 
   // STATUS.md invariant 4 race: a prompt hook that landed mid-merge can't
   // clear an active pipeline prState (which `merged`/`done` is at the moment

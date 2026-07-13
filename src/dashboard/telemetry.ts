@@ -225,6 +225,43 @@ export function recordCiFixOutcome(
   });
 }
 
+// worker.tokens — the worker's CUMULATIVE token usage, sampled at each merge
+// (from transitionToTerminal, summed over its Claude transcript). The core cost
+// signal: the worker's model/provider is the variable a cost comparison turns on
+// (the review family is always strong Opus), so tokens-per-merged-line by config
+// answers "is this cheap worker actually cheap." Cumulative-at-merge because the
+// transcript is one growing session across a default worker's phases, so per-
+// cycle cost is a read-time diff of consecutive samples for the same workerId;
+// `mergeCount` aligns each sample to its cycle. `model` is the transcript's
+// ground-truth model. Best-effort: absent entirely when the transcript can't be
+// read, so it never blocks the merge event.
+export interface WorkerTokensFields {
+  turns: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  model?: string;
+  mergeCount: number;
+}
+
+export function recordWorkerTokens(
+  project: string,
+  worker: string,
+  createdAt: number | undefined,
+  workflow: string,
+  fields: WorkerTokensFields,
+): void {
+  write({
+    event: "worker.tokens",
+    project,
+    worker,
+    workerId: telemetryWorkerId(project, worker, createdAt),
+    workflow,
+    ...fields,
+  });
+}
+
 // continue.dispatched — garden pasted a prompt into a worker's pane (NOT the
 // operator). Emitted at the single paste-success point in continueWorker, so it
 // covers every garden-initiated prompt: post-merge auto-continue, interrupt

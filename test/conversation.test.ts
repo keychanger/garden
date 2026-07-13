@@ -1,11 +1,13 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import {
   readConversation,
   classifyVerb,
   summarizeTurn,
   resolveTranscriptPath,
+  sumTranscriptUsage,
   formatConversationPane,
   gardenLabel,
   isInjectedSystemMessage,
@@ -25,6 +27,78 @@ function user(content: unknown, ts = "2026-05-30T17:00:00Z", extra: Record<strin
 function assistant(content: unknown, ts = "2026-05-30T17:00:01Z", extra: Record<string, unknown> = {}) {
   return { type: "assistant", message: { role: "assistant", content }, timestamp: ts, isSidechain: false, ...extra };
 }
+
+describe("sumTranscriptUsage", () => {
+  // Write a transcript to a throwaway file and return its path.
+  function writeTranscript(content: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "garden-usage-"));
+    const p = path.join(dir, "t.jsonl");
+    fs.writeFileSync(p, content);
+    return p;
+  }
+  function asstUsage(id: string, usage: Record<string, number>, model = "claude-opus-4-8") {
+    return {
+      type: "assistant",
+      message: { role: "assistant", id, model, usage, content: [{ type: "text", text: "hi" }] },
+      timestamp: "2026-07-13T00:00:00Z",
+    };
+  }
+
+  it("dedupes by message.id — streaming re-emits of one message count once", () => {
+    // m1 appears 3x, m2 appears 2x (Claude Code re-emits each on every stream
+    // update with the message's cumulative usage). A naive per-line sum would
+    // 3x/2x-overcount; the correct total sums one usage per unique id.
+    const u1 = { input_tokens: 10, output_tokens: 100, cache_read_input_tokens: 1000, cache_creation_input_tokens: 500 };
+    const u2 = { input_tokens: 20, output_tokens: 200, cache_read_input_tokens: 2000, cache_creation_input_tokens: 0 };
+    const content = jsonl([
+      user("go"),
+      asstUsage("m1", u1), asstUsage("m1", u1), asstUsage("m1", u1),
+      { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "no usage here" }] }, timestamp: "t" },
+      asstUsage("m2", u2), asstUsage("m2", u2),
+    ]);
+    const got = sumTranscriptUsage(writeTranscript(content));
+    expect(got).not.toBeNull();
+    expect(got!.turns).toBe(2);
+    expect(got!.inputTokens).toBe(30);      // 10 + 20, not 10*3 + 20*2
+    expect(got!.outputTokens).toBe(300);    // 100 + 200
+    expect(got!.cacheReadTokens).toBe(3000);
+    expect(got!.cacheCreationTokens).toBe(500);
+    expect(got!.model).toBe("claude-opus-4-8");
+  });
+
+  it("captures the last assistant message's model as ground truth", () => {
+    const u = { input_tokens: 1, output_tokens: 1 };
+    const content = jsonl([
+      asstUsage("a", u, "claude-sonnet-5"),
+      asstUsage("b", u, "claude-fable-5"),
+    ]);
+    expect(sumTranscriptUsage(writeTranscript(content))!.model).toBe("claude-fable-5");
+  });
+
+  it("returns null for a missing transcript or a null path", () => {
+    expect(sumTranscriptUsage(null)).toBeNull();
+    expect(sumTranscriptUsage("/no/such/transcript.jsonl")).toBeNull();
+  });
+
+  it("returns null when no assistant message carries usage", () => {
+    const content = jsonl([
+      user("hi"),
+      { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "no usage" }] }, timestamp: "t" },
+    ]);
+    expect(sumTranscriptUsage(writeTranscript(content))).toBeNull();
+  });
+
+  it("counts id-less usage-bearing messages once each", () => {
+    const u = { input_tokens: 5, output_tokens: 7 };
+    const content = jsonl([
+      { type: "assistant", message: { role: "assistant", model: "m", usage: u, content: [] }, timestamp: "t" },
+      { type: "assistant", message: { role: "assistant", model: "m", usage: u, content: [] }, timestamp: "t" },
+    ]);
+    const got = sumTranscriptUsage(writeTranscript(content))!;
+    expect(got.turns).toBe(2);
+    expect(got.outputTokens).toBe(14);
+  });
+});
 
 describe("classifyVerb", () => {
   it("worked when a mutating tool ran", () => {

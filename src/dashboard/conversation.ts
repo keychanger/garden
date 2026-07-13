@@ -70,6 +70,86 @@ function isReadable(p: string): boolean {
   }
 }
 
+// Cumulative token usage summed across a worker's whole Claude transcript, for
+// the telemetry cost signal. `turns` is the count of distinct assistant
+// messages; `model` is the ground-truth model of the last one (what actually
+// ran, vs the model configured on worker.created).
+export interface TranscriptUsage {
+  turns: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  model?: string;
+}
+
+function usageNum(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
+
+// Sum per-assistant-message `usage` across the ENTIRE transcript (not the tail
+// readConversation reads for the history view). Best-effort: null on any
+// read/parse failure or a transcript with no usage-bearing assistant message.
+//
+// CRITICAL — dedupe by message.id: Claude Code re-emits each assistant message
+// on every streaming update, so the transcript holds several lines per message
+// all sharing one id, and the usage on them is the message's cumulative usage
+// (not a per-chunk delta). Summing every line overcounts ~3x (measured 434,889
+// vs 159,573 deduped output tokens on a 3-phase worker). Keeping one usage per
+// id — last-wins, since the final emission carries the settled numbers — is what
+// makes the cost figure real. Id-less lines (rare) each count once.
+export function sumTranscriptUsage(transcriptPath: string | null): TranscriptUsage | null {
+  if (!transcriptPath) return null;
+  let raw: string;
+  try {
+    raw = fs.readFileSync(transcriptPath, "utf-8");
+  } catch {
+    return null;
+  }
+  const byId = new Map<string, { input: number; output: number; cacheRead: number; cacheCreation: number }>();
+  let lastModel: string | undefined;
+  let synthetic = 0;
+  for (const line of raw.split("\n")) {
+    if (!line) continue;
+    let obj: Record<string, unknown>;
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (obj.type !== "assistant") continue;
+    const message = obj.message as
+      | { role?: string; id?: string; model?: string; usage?: Record<string, unknown> }
+      | undefined;
+    if (message?.role !== "assistant" || !message.usage) continue;
+    const u = message.usage;
+    const key = typeof message.id === "string" && message.id ? message.id : `__no-id-${synthetic++}`;
+    byId.set(key, {
+      input: usageNum(u.input_tokens),
+      output: usageNum(u.output_tokens),
+      cacheRead: usageNum(u.cache_read_input_tokens),
+      cacheCreation: usageNum(u.cache_creation_input_tokens),
+    });
+    if (typeof message.model === "string") lastModel = message.model;
+  }
+  if (byId.size === 0) return null;
+  const total: TranscriptUsage = {
+    turns: byId.size,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    model: lastModel,
+  };
+  for (const t of byId.values()) {
+    total.inputTokens += t.input;
+    total.outputTokens += t.output;
+    total.cacheReadTokens += t.cacheRead;
+    total.cacheCreationTokens += t.cacheCreation;
+  }
+  return total;
+}
+
 // Read the tail of the transcript and return the last `maxTurns` turns in
 // chronological order (oldest first). Fails soft: any I/O or parse error, or a
 // schema we don't recognize, yields an empty array rather than throwing.
