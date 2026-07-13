@@ -30,10 +30,18 @@ vi.mock("../src/config.js", () => ({
   SESSIONS_DIR: "/tmp/fake-sessions",
 }));
 
+// Spy the one telemetry sink kick.ts reaches, so the operator.action counting
+// invariant (fires only past every guard, once the kick actually takes effect)
+// is asserted at the call site — mirroring test/poller.test.ts's spy.
+vi.mock("../src/dashboard/telemetry.js", () => ({
+  recordOperatorAction: vi.fn(),
+}));
+
 import { kick } from "../src/commands/kick.js";
 import { updateWorkerFields } from "../src/dashboard/registry.js";
 import { triggerProjectPoll } from "../src/dashboard/poller.js";
 import { getCommitSummary } from "../src/dashboard/git.js";
+import { recordOperatorAction } from "../src/dashboard/telemetry.js";
 import { tryGetProject } from "../src/config.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
@@ -300,5 +308,35 @@ describe("kick command", () => {
 
     await expect(kick(["bold-ash"])).rejects.toThrow(/trellis resume/);
     expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
+
+  // operator.action telemetry: kick ledgers the intervention only past every
+  // guard, once the kick actually takes effect. These lock the placement so a
+  // future guard added below the record call can't over-count, and a refused
+  // kick can't record a phantom intervention.
+  it("records operator.action=kick once the kick takes effect", async () => {
+    registryMock._setEntries("myproject", [makeWorker({ createdAt: 1_000 })]);
+
+    await captureConsoleLog(() => kick(["bold-ash"]));
+
+    expect(recordOperatorAction).toHaveBeenCalledTimes(1);
+    expect(recordOperatorAction).toHaveBeenCalledWith(
+      "myproject", "bold-ash", 1_000, "default", "kick",
+    );
+  });
+
+  it("does NOT record operator.action when the kick is refused (no commits ahead)", async () => {
+    registryMock._setEntries("myproject", [makeWorker()]);
+    vi.mocked(getCommitSummary).mockReturnValue("");
+
+    await expect(kick(["bold-ash"])).rejects.toThrow(/no commits ahead/);
+    expect(recordOperatorAction).not.toHaveBeenCalled();
+  });
+
+  it("does NOT record operator.action when the worker is in a non-kickable state", async () => {
+    registryMock._setEntries("myproject", [makeWorker({ prState: "reviewing" })]);
+
+    await expect(kick(["bold-ash"])).rejects.toThrow(/is in state 'reviewing'/);
+    expect(recordOperatorAction).not.toHaveBeenCalled();
   });
 });

@@ -59,6 +59,13 @@ vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+// Spy the one telemetry sink continue.ts reaches, so the caller-side counting
+// invariant (continue.dispatched fires once per real delivery, never on a skip)
+// is asserted here — mirroring test/poller.test.ts's recordCiFixOutcome spy.
+vi.mock("../src/dashboard/telemetry.js", () => ({
+  recordContinueDispatched: vi.fn(),
+}));
+
 import {
   continueWorker, continueWorkerAfterMerge, continueWorkerAfterMergeIfStuck,
   continueWorkerIfStuck,
@@ -70,6 +77,7 @@ import {
 import { readDashState } from "../src/dashboard/state.js";
 import { findWorkerByName, updateWorkerFields } from "../src/dashboard/registry.js";
 import { tmux, pasteAndSubmit, paneExists, windowExists, getFirstPaneId, capturePaneText, capturePaneCursor, paneRunningOnlyShell } from "../src/dashboard/tmux.js";
+import { recordContinueDispatched } from "../src/dashboard/telemetry.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { tryGetProject } from "../src/config.js";
@@ -345,6 +353,87 @@ describe("continueWorker", () => {
 
     expect(delivered).toBe(true);
     expect(pasteAndSubmit).toHaveBeenCalledWith("%9", expect.any(String));
+  });
+});
+
+// The autonomy metric (DESIGN.md: "operator work = all prompts − garden's")
+// depends on continue.dispatched firing ONLY on a real garden-initiated
+// delivery and never on continueWorker's skip paths. The record call sits at
+// the single success exit after pasteAndSubmit; these lock that placement so a
+// future refactor that hoists it above a guard — or a new skip path that fails
+// to return early — can't silently over-count. Mirrors the caller-side spy the
+// prior review commit added for recordCiFixOutcome in test/poller.test.ts.
+describe("continueWorker telemetry (continue.dispatched counting)", () => {
+  it("records continue.dispatched once on a real delivery, defaulting to the interrupt kind", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+
+    expect(continueWorker("myproject", "bold-ash")).toBe(true);
+
+    expect(recordContinueDispatched).toHaveBeenCalledTimes(1);
+    expect(recordContinueDispatched).toHaveBeenCalledWith(
+      "myproject", "bold-ash", undefined, "default", "interrupt",
+    );
+  });
+
+  it("threads the post-merge kind through continueWorkerAfterMerge", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
+      branchName: "bold-ash", baseBranch: "main",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+
+    continueWorkerAfterMerge("myproject", "bold-ash");
+
+    expect(recordContinueDispatched).toHaveBeenCalledTimes(1);
+    expect(recordContinueDispatched).toHaveBeenCalledWith(
+      "myproject", "bold-ash", undefined, "default", "post-merge",
+    );
+  });
+
+  it("does NOT record when the send is skipped because the worker is mid-turn", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "working",
+    });
+
+    expect(continueWorker("myproject", "bold-ash")).toBe(false);
+    expect(recordContinueDispatched).not.toHaveBeenCalled();
+  });
+
+  it("does NOT record when the send is skipped because the operator has an unsent draft", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+    vi.mocked(capturePaneText).mockReturnValue(DRAFT_BOX);
+
+    expect(continueWorker("myproject", "bold-ash")).toBe(false);
+    expect(recordContinueDispatched).not.toHaveBeenCalled();
+  });
+
+  it("does NOT record when the pane is a bare shell (agent exited)", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+    vi.mocked(paneRunningOnlyShell).mockReturnValue(true);
+
+    expect(continueWorker("myproject", "bold-ash")).toBe(false);
+    expect(recordContinueDispatched).not.toHaveBeenCalled();
   });
 });
 
