@@ -385,6 +385,9 @@ garden status [--all]              # Show worker status for the active plot (--a
 garden whoami [worker]             # Show the current worker's registry entry (uses $GARDEN_WORKER)
 garden review [worker]             # Show a worker's last review: verdict, review-window diff, notes (default: focused)
 garden queue [project]             # Show the merge pipeline: queue order, in-review, blocked, CI markers
+garden stats [--by <axis>] [--since Nd|Nh|Nm] [-p <project>]
+                                   # Aggregate the telemetry ledger by config (quality / cost / autonomy);
+                                   # --by config|model|provider|harness|workflow|crew|rules|version
 garden alerts                      # View dashboard alerts (unread/read split, level glyphs, relative age)
 garden alerts clear                # Dismiss all alerts
 garden doctor                      # Environment preflight (tmux / claude / gh / node / Option-key)

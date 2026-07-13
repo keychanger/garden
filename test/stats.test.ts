@@ -116,6 +116,52 @@ describe("garden stats", () => {
     expect(rows).toEqual([]);
   });
 
+  it("tolerates torn, blank, and malformed ledger lines", async () => {
+    // readTelemetryEvents promises torn-line tolerance: a crash mid-append (a
+    // line with no trailing newline yet) or a garbage line must not sink the
+    // read. Drive that guarantee end-to-end through the stats surface.
+    const dir = path.join(env.gardenDir, "telemetry");
+    fs.mkdirSync(dir, { recursive: true });
+    const created = JSON.stringify(ev("worker.created", "garden/w1/1", { harness: "codex", workflow: "default" }));
+    const merge = JSON.stringify(ev("merge", "garden/w1/1", { mergeCount: 1 }));
+    fs.writeFileSync(
+      path.join(dir, "events-2026-07.jsonl"),
+      [
+        created,
+        "",                                 // blank line -> skipped
+        "{not valid json",                  // unparseable -> JSON.parse catch
+        "42",                               // JSON scalar -> non-object guard
+        "null",                             // parses to null -> non-object guard
+        JSON.stringify({ v: 1, ts: NOW }),  // object missing event/workerId -> guard
+        merge,                              // valid, no trailing newline (torn append)
+      ].join("\n"),
+    );
+    const { rows } = await runStats([]);
+    // Only the two well-formed lines survive: the config join + the one merge.
+    const g = rows.find(r => String(r.group).startsWith("codex"))!;
+    expect(g.workers).toBe(1);
+    expect(g.merges).toBe(1);
+  });
+
+  it("reads and merges events across multiple monthly shards, oldest first", async () => {
+    const dir = path.join(env.gardenDir, "telemetry");
+    fs.mkdirSync(dir, { recursive: true });
+    // worker.created in an older shard, its merge in a newer one — the config
+    // join must span shards (filenames sort chronologically).
+    fs.writeFileSync(
+      path.join(dir, "events-2026-06.jsonl"),
+      JSON.stringify(ev("worker.created", "garden/w1/1", { harness: "codex", workflow: "default" }, "2026-06-01T00:00:00.000Z")) + "\n",
+    );
+    fs.writeFileSync(
+      path.join(dir, "events-2026-07.jsonl"),
+      JSON.stringify(ev("merge", "garden/w1/1", { mergeCount: 1 })) + "\n",
+    );
+    const { rows } = await runStats([]);
+    const g = rows.find(r => String(r.group).startsWith("codex"))!;
+    expect(g.workers).toBe(1);
+    expect(g.merges).toBe(1); // merge grouped by config resolved from the older shard
+  });
+
   it("rejects an unknown --by axis and a malformed --since", async () => {
     writeLedger([ev("worker.created", "garden/w1/1", { harness: "codex" })]);
     const stats = await importStats();
