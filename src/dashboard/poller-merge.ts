@@ -1022,7 +1022,7 @@ export function checkUsageThreshold(threshold: number): { pausedUntil: string; r
   // Tripping on it sets pausedUntil to a past instant, so a resumeAfterReset
   // gate immediately re-enables (now >= pausedUntil) and re-trips on the same
   // stale reading — a flip-flop that re-fires the alert every poll until the
-  // usage poller's next fetch (up to ~5 min later) lands the fresh window.
+  // usage poller's next fetch (up to ~10 min later) lands the fresh window.
   // Wait for that fresh reading instead. Unparseable resets_at is kept so a
   // malformed-but-high snapshot still pauses.
   const fresh = candidates.filter(m => {

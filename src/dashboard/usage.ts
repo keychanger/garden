@@ -1089,5 +1089,5 @@ export function maybeRefreshUsage(gardenRunner: string): void {
       detached: true,
       stdio: "ignore",
     }).unref();
-  } catch { /* background poller will catch up within 5 minutes */ }
+  } catch { /* background poller will catch up within 10 minutes */ }
 }
