@@ -15,6 +15,11 @@ export default defineConfig({
     include: ["test/**/*.test.ts"],
     exclude: ["node_modules/**", "dist/**"],
     testTimeout: 30000,
+    // Half the cores locally: several garden workers run this suite
+    // concurrently on the operator's workstation, and full-core pools
+    // stampede the machine when checks runs overlap. CI runners are
+    // isolated VMs — leave them uncapped.
+    maxWorkers: process.env.CI ? undefined : "50%",
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
