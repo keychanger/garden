@@ -716,8 +716,8 @@ const STALE_AFTER_MS = 30 * 60 * 1000; // 30 min — long enough to survive the 
 
 // Fixed parts of a meter line (no bar, no reset): INDENT + LABEL + 2gap + 2gap + pct.
 const FIXED_LINE_WIDTH = INDENT.length + LABEL_WIDTH + 2 + 2 + 4;
-// "resets in 10d 23h" is the longest reset phrase (2-space gap precedes it).
-const RESET_TEXT_WIDTH = 17;
+// "10d 23h" is the longest bare reset duration (2-space gap precedes it).
+const RESET_TEXT_WIDTH = 7;
 
 // Narrow zooms shrink the bar first, then drop the reset phrase when even MIN_BAR_WIDTH + reset won't fit.
 function computeMeterFit(paneWidth: number | undefined): { barWidth: number; showReset: boolean } {
@@ -826,7 +826,7 @@ function renderCodexColumn(
     const timePct = Math.max(0, Math.min(100, ((windowMs - (resetsAtMs - nowMs)) / windowMs) * 100));
     const bar = renderBar(pct, fit.barWidth, timePct);
     const pctText = `${pct.toFixed(0).padStart(3)}%`;
-    const resetPart = fit.showReset ? `  ${dim(`resets ${formatDuration(resetsAtMs - nowMs)}`)}` : "";
+    const resetPart = fit.showReset ? `  ${dim(formatDurationBare(resetsAtMs - nowMs))}` : "";
     lines.push(`${label}  ${bar}  ${pctText}${resetPart}`);
   }
   if (typeof data.creditBalance === "number") {
@@ -947,7 +947,7 @@ function renderMeterLine(
   const bar = renderBar(pct, fit.barWidth, timePct);
   const pctText = `${pct.toFixed(0).padStart(3)}%`;
   const resetText = fit.showReset && Number.isFinite(resetsAt)
-    ? `resets ${formatDuration(resetsAt - nowMs)}`
+    ? formatDurationBare(resetsAt - nowMs)
     : "";
   const resetPart = resetText ? `  ${dim(resetText)}` : "";
   return `${INDENT}${paddedLabel}  ${bar}  ${pctText}${resetPart}`;
@@ -997,14 +997,21 @@ function dim(s: string): string {
 }
 
 export function formatDuration(ms: number): string {
+  const bare = formatDurationBare(ms);
+  return bare === "now" ? bare : `in ${bare}`;
+}
+
+// Bare duration with no "in"/"resets" wording, for the usage-pane meter rows
+// where position (right after the pct) already reads as "time until reset".
+function formatDurationBare(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return "now";
   const totalMin = Math.floor(ms / 60000);
   const days = Math.floor(totalMin / (60 * 24));
   const hours = Math.floor((totalMin % (60 * 24)) / 60);
   const mins = totalMin % 60;
-  if (days > 0) return `in ${days}d ${hours}h`;
-  if (hours > 0) return `in ${hours}h ${mins}m`;
-  return `in ${mins}m`;
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
 }
 
 // -----------------------------------------------------------------------------

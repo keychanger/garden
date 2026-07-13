@@ -615,12 +615,12 @@ describe("renderUsagePane", () => {
     const lines = render(now, 32).split("\n");
     expect(lines).toHaveLength(4);
     for (const l of lines) expect(visibleLen(l)).toBeLessThanOrEqual(32);
-    // Reset phrase dropped at this width so the bar still has usable cells.
-    expect(lines[1]).not.toContain("resets");
-    expect(lines[1]).toContain("26%");
+    // Reset duration dropped at this width so the bar still has usable cells —
+    // the line ends right after the pct, with no trailing "2h 0m".
+    expect(lines[1].replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").trimEnd()).toMatch(/26%$/);
   });
 
-  it("keeps the reset phrase at a moderately narrow width", async () => {
+  it("keeps the reset duration at a moderately narrow width", async () => {
     writeSnapshot({
       fetchedAt: new Date(now).toISOString(),
       data: {
@@ -628,10 +628,10 @@ describe("renderUsagePane", () => {
       },
     });
     const render = await importRender();
-    // 48 cols has room for fixed(18) + minimum bar(6) + 2 + reset(17) = 43.
+    // 48 cols has room for fixed(18) + minimum bar(6) + 2 + reset(7) = 33.
     const lines = render(now, 48).split("\n");
     for (const l of lines) expect(visibleLen(l)).toBeLessThanOrEqual(48);
-    expect(lines[1]).toContain("resets");
+    expect(lines[1].replace(/\x1b\[[0-9;]*[A-Za-z]/g, "")).toContain("2h 0m");
   });
 
   it("renders preserved bars + error tag when data is fresh but last attempt failed", async () => {
