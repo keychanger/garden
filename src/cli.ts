@@ -116,6 +116,7 @@ Dashboard:
   whoami [worker]                Show the current worker's registry entry (uses $GARDEN_WORKER)
   review [worker]                Show a worker's last review: verdict, review-window diff, notes (default: focused)
   queue [project]                Show the merge pipeline: queue order, in-review, blocked, CI markers
+  checks [project]               Run the project's checks command under the machine-wide concurrency gate
   stats [options]                Aggregate the telemetry ledger by config (quality / cost / autonomy)
   stats --by <axis>              Group by config|model|provider|harness|workflow|crew|rules|version
   stats --since 7d -p <project>  Window by age (Nd/Nh/Nm) and/or scope to one project

@@ -98,7 +98,11 @@ export const reviewChecksStepSection: PromptSection = {
     return [
       `## Step ${step}: Run checks`,
       "",
-      `Run: \`${ctx.data.checksCommand}\``,
+      `Run: \`garden checks ${ctx.projectName}\``,
+      "",
+      `This executes the project's checks command (\`${ctx.data.checksCommand}\`) under`,
+      "a machine-wide concurrency gate — a \"waiting for a free checks slot\" line",
+      "means queued behind another suite, not hung.",
       "",
       "If checks fail, fix the issues and re-run until they pass.",
       "If you cannot fix them, report FAILED.",

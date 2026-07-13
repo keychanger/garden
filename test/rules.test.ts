@@ -168,6 +168,7 @@ describe("buildWorktreeRules", () => {
     });
     expect(result).toContain("Run checks before you push");
     expect(result).toContain("`npm run lint && npm run test:coverage`");
+    expect(result).toContain("`garden checks`");
     expect(result).toContain("reviewer");
     expect(result).toContain("CI");
   });

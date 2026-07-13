@@ -219,7 +219,11 @@ Run \`git rebase origin/main\` in the worktree. If there are conflicts:
 
 ## Step 2: Run checks
 
-Run: \`npm test\`
+Run: \`garden checks myproject\`
+
+This executes the project's checks command (\`npm test\`) under
+a machine-wide concurrency gate — a "waiting for a free checks slot" line
+means queued behind another suite, not hung.
 
 If checks fail, fix the issues and re-run until they pass.
 If you cannot fix them, report FAILED.

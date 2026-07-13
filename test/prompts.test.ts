@@ -87,6 +87,7 @@ describe("buildReviewPrompt — initial review", () => {
     vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject", checks: "npm test" } as ReturnType<typeof tryGetProject>);
     const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry());
     expect(result).toContain("npm test");
+    expect(result).toContain("garden checks myproject");
     expect(result).toContain("Run checks");
   });
 

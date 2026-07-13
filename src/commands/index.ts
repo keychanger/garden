@@ -39,6 +39,7 @@ import { reply } from "./reply.js";
 import { workers } from "./workers.js";
 import { trellis } from "./trellis.js";
 import { diag } from "./diag.js";
+import { checks } from "./checks.js";
 
 type Command = (args: string[]) => Promise<void>;
 
@@ -85,4 +86,5 @@ export const commands: Record<string, Command> = {
   workers,
   trellis,
   diag,
+  checks,
 };
