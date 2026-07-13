@@ -1,9 +1,9 @@
 // Background process that refreshes the Claude usage snapshot on a cadence.
 // Runs in a single hidden tmux window (_garden-usage-poller). The /api/oauth/usage
 // endpoint is strictly rate-limited so the poll cadence stays deliberately slow
-// (5 min on success) and honors server Retry-After on 429s. Cadence comes from
-// usage.ts:decideRefresh — same rule the Stop-hook opportunistic refresh uses,
-// so neither path can outpace the other.
+// (10 min on success) and honors server Retry-After on 429s with margin and
+// escalation. Cadence comes from usage.ts:decideRefresh — same rule the
+// Stop-hook backstop refresh uses, so neither path can outpace the other.
 import { newDashboardWindow, windowExists, killWindowSafe } from "./tmux.js";
 import { usagePollerWindowName } from "./window-names.js";
 import { decideRefresh, readUsageSnapshot, refreshUsage } from "./usage.js";
@@ -15,7 +15,7 @@ import { log } from "./log.js";
 export async function runUsagePollerLoop(): Promise<void> {
   log.info("usage-poller", "started");
   while (true) {
-    await refreshUsage();
+    await refreshUsage(false, "poller");
     // refreshDashboard() rewrites the pre-baked status file (so the SIGUSR1
     // trap path picks up new usage bars) and then signals the pane. A plain
     // refreshStatusPane() would only re-display the stale pre-baked content.

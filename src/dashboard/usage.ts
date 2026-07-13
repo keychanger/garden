@@ -3,12 +3,15 @@
 // Claude Code writes to the macOS Keychain. Persists a snapshot to
 // SESSIONS_DIR and renders the header meters for the dashboard status pane.
 //
-// The endpoint (/api/oauth/usage) is undocumented and strictly rate-limited
-// (observed Retry-After of ~50 minutes after 3 rapid probes; sometimes the
-// server returns Retry-After: 0 which is meaningless when the request itself
-// was a 429 — we self-floor in that case so we never trust the server to
-// pace us safely). Callers must honor retry-after and never poll faster
-// than every few minutes.
+// The endpoint (/api/oauth/usage) is undocumented and strictly rate-limited.
+// Its limiter has changed under us before: through 2026-06 it only throttled
+// bursts (Retry-After ~50 min after 3 rapid probes, sometimes a meaningless
+// Retry-After: 0 — we self-floor); around 2026-07-10 it tightened to a fixed
+// Retry-After: 3600 with a sustained budget observed near 10-12 requests/hour
+// — the old 5-min cadence sat exactly at it, and a single retry at the exact
+// Retry-After boundary was observed to 429 again. Callers must honor
+// retry-after with margin and keep total request volume well under that
+// budget.
 import fs from "node:fs";
 import https from "node:https";
 import path from "node:path";
@@ -66,7 +69,8 @@ export interface UsageSnapshot {
   data?: UsageData;        // last successfully fetched data; preserved across transient errors
   dataAt?: string;         // when `data` was actually fetched (defaults to fetchedAt for legacy snapshots)
   error?: string;          // present iff the last attempt failed
-  retryAfterMs?: number;   // server hint when known (only used as a lower bound for the snapshot's own next-attempt timing)
+  retryAfterMs?: number;   // effective backoff before the next attempt (server hint plus our margin/escalation on 429s)
+  rateLimitStreak?: number; // consecutive 429s ending at this snapshot; drives the escalating backoff
 }
 
 // Neutral read seam over the snapshot's named buckets: consumers (the
@@ -461,9 +465,11 @@ export function writeUsageSnapshot(snap: UsageSnapshot): void {
 // Refresh decision (single source of truth, used by both poller and hooks)
 // -----------------------------------------------------------------------------
 
-// Conservative floor against the endpoint's burst rate-limit. The poller's
-// "happy path" cadence — also the minimum spacing between any two fetches.
-export const POLL_OK_MS = 5 * 60 * 1000;
+// The poller's "happy path" cadence — also the minimum spacing between any
+// two fetches. Half the endpoint's observed post-2026-07 budget (~10-12
+// requests/hour), so the steady state has headroom instead of sitting at the
+// limit.
+export const POLL_OK_MS = 10 * 60 * 1000;
 
 // Generic non-429 error backoff (network blip, 5xx, unparseable body).
 export const POLL_ERR_MS = 10 * 60 * 1000;
@@ -478,13 +484,26 @@ export const POLL_MIN_MS = 60 * 1000;
 // hint when given.
 export const RATE_LIMIT_FLOOR_MS = POLL_OK_MS;
 
+// Margin added on top of the server's Retry-After before the next attempt.
+// Retrying at the exact boundary was observed to land while the limiter's
+// accounting window was still saturated (2026-07-12: one request, sent
+// Retry-After + 1s after a 429, got 429 again), chaining hour-long freezes.
+export const RATE_LIMIT_MARGIN_MS = 15 * 60 * 1000;
+
+// Ceiling on the escalating consecutive-429 backoff (rateLimitBackoff).
+export const RATE_LIMIT_MAX_BACKOFF_MS = 4 * 60 * 60 * 1000;
+
 // Poller backoff applied to 401/403. Not transient — waits for a login.
 export const AUTH_BACKOFF_MS = 30 * 60 * 1000;
 
-// Hook semantics: minimum age before a Stop hook may opportunistically refresh
-// a healthy snapshot. The poller refreshes every POLL_OK_MS; the hook lets
-// the meter update sooner when a turn ends near the cooldown boundary.
-export const HOOK_REFRESH_COOLDOWN_MS = 60 * 1000;
+// The hook path is a poller-liveness backstop, not a faster lane: it sits
+// above POLL_OK_MS so a live poller always fetches first, and a turn-end
+// only triggers a refresh when the poller has missed its window (window
+// killed, machine slept). Every fetch the hook path doesn't make is budget
+// left for the poller's own cadence.
+export const HOOK_REFRESH_COOLDOWN_MS = POLL_OK_MS + 2 * 60 * 1000;
+
+export type RefreshReason = "hook" | "poller";
 
 export interface RefreshDecision {
   // Hook semantics: should this caller fire a refresh now?
@@ -497,7 +516,7 @@ export interface RefreshDecision {
 export function decideRefresh(
   snap: UsageSnapshot | null,
   nowMs: number,
-  reason: "hook" | "poller",
+  reason: RefreshReason,
 ): RefreshDecision {
   // No snapshot or unparseable timestamp — fetch now, sleep one OK interval.
   if (!snap) return { shouldRefresh: true, nextAttemptInMs: POLL_OK_MS };
@@ -508,9 +527,9 @@ export function decideRefresh(
 
   const age = nowMs - fetchedAt;
   // Effective backoff between attempts depends on the most recent outcome.
-  // We unify the rule for both consumers so a `Retry-After: 0` cascade can't
-  // exploit the difference between poller cadence (10 min on err) and hook
-  // cadence (60s) to slam the API.
+  // Error backoffs apply to both consumers identically so neither path can
+  // outpace the other past a failure — a `Retry-After: 0` cascade once
+  // exploited the gap between the poller and hook cadences to slam the API.
   let requiredAge: number;
   if (snap.error === "rate-limited") {
     requiredAge = Math.max(snap.retryAfterMs ?? 0, RATE_LIMIT_FLOOR_MS);
@@ -531,6 +550,22 @@ export function decideRefresh(
   // any zero/negative computation.
   const nextAttemptInMs = Math.max(POLL_MIN_MS, remaining + 1000);
   return { shouldRefresh, nextAttemptInMs };
+}
+
+// Effective backoff to store after a 429. The server's Retry-After is a
+// lower bound, not a safe wait: add RATE_LIMIT_MARGIN_MS so the next attempt
+// lands after the limiter's window has actually drained, and double on
+// consecutive 429s (capped) so a saturated stretch costs one escalating wait
+// instead of an all-afternoon chain of hourly re-trips. Any non-429 outcome
+// in between resets the streak.
+export function rateLimitBackoff(
+  prior: UsageSnapshot | null | undefined,
+  serverRetryAfterMs: number | undefined,
+): { backoffMs: number; streak: number } {
+  const streak = (prior?.error === "rate-limited" ? (prior.rateLimitStreak ?? 1) : 0) + 1;
+  const base = Math.max(serverRetryAfterMs ?? 0, RATE_LIMIT_FLOOR_MS) + RATE_LIMIT_MARGIN_MS;
+  const backoffMs = Math.min(RATE_LIMIT_MAX_BACKOFF_MS, base * 2 ** (streak - 1));
+  return { backoffMs, streak };
 }
 
 // Back-compat thin wrapper. Existing callers / tests use this name.
@@ -562,12 +597,17 @@ export function shouldRefreshOnHook(nowMs: number = Date.now()): boolean {
 //   3. Re-acquire the lock to write the final snapshot. Brief, sync, atomic.
 //
 // On crash mid-fetch the bumped `fetchedAt` naturally expires after the
-// applicable backoff window (60s for hooks, 5min for poller), so a stuck
-// claim self-heals rather than wedging the meter.
-export async function refreshUsage(force = false): Promise<UsageSnapshot> {
+// applicable backoff window (POLL_OK_MS for the poller, slightly longer for
+// hooks), so a stuck claim self-heals rather than wedging the meter.
+//
+// `reason` is the caller's own cadence class and gates the healthy-snapshot
+// age check. The poller claims with "poller" so a freshly respawned poller
+// (dashboard restart) skips when the snapshot is inside POLL_OK_MS instead
+// of firing an immediate fetch under the hook cooldown.
+export async function refreshUsage(force = false, reason: RefreshReason = "hook"): Promise<UsageSnapshot> {
   const claim = withFileLock(USAGE_LOCK, () => {
     const prior = readUsageSnapshot();
-    const decision = decideRefresh(prior, Date.now(), "hook");
+    const decision = decideRefresh(prior, Date.now(), reason);
     // A forced refresh (manual `garden usage refresh`, post-login heal) bypasses
     // the auth and generic-error backoffs so a fresh login clears a stale "login
     // expired" snapshot immediately instead of echoing it for the next 30 min.
@@ -651,11 +691,15 @@ export async function refreshUsage(force = false): Promise<UsageSnapshot> {
     }
 
     if (res.status === 429) {
-      log.warn("usage", "rate-limited", { data: { retryAfterMs: res.retryAfterMs } });
+      const { backoffMs, streak } = rateLimitBackoff(prior, res.retryAfterMs);
+      log.warn("usage", "rate-limited", {
+        data: { retryAfterMs: res.retryAfterMs, backoffMs, streak },
+      });
       return finalizeSnapshot({
         fetchedAt,
         error: "rate-limited",
-        retryAfterMs: res.retryAfterMs,
+        retryAfterMs: backoffMs,
+        rateLimitStreak: streak,
       }, prior);
     }
 
@@ -893,12 +937,15 @@ const SEVEN_DAY_MS = 7 * 24 * 60 * 60 * 1000;
 // Trust signal for the operator: when bars are real-time we say nothing
 // (uncluttered). When data is unexpectedly old or the last fetch errored, the
 // renderer surfaces a one-line tag below the meters so the source of trouble
-// is obvious without digging through `garden logs`. Returns the inner text
-// (no parens, no ANSI) so the renderer can wrap, truncate, and dim. Examples:
+// is obvious without digging through `garden logs`. A rate-limited tag also
+// says when the next attempt fires (mirroring decideRefresh's required age),
+// so a frozen meter carries its own recovery time instead of sending the
+// operator to the Claude app. Returns the inner text (no parens, no ANSI) so
+// the renderer can wrap, truncate, and dim. Examples:
 //   no problems        → ""
 //   data 2h old        → "stale 2h"
-//   error after fresh  → "rate-limited"
-//   error + data old   → "stale 2h, rate-limited"
+//   error after fresh  → "rate-limited, retrying in 1h 10m"
+//   error + data old   → "stale 2h, rate-limited, retrying in 1h 10m"
 function formatHealthTag(snap: UsageSnapshot, nowMs: number): string {
   const dataAt = Date.parse(snap.dataAt ?? snap.fetchedAt);
   const ageMs = Number.isFinite(dataAt) ? nowMs - dataAt : Infinity;
@@ -907,6 +954,15 @@ function formatHealthTag(snap: UsageSnapshot, nowMs: number): string {
   const parts: string[] = [];
   if (stale) parts.push(`stale ${formatBriefAge(ageMs)}`);
   if (snap.error) parts.push(snap.error);
+  if (snap.error === "rate-limited") {
+    const fetchedAt = Date.parse(snap.fetchedAt);
+    const retryAt = Number.isFinite(fetchedAt)
+      ? fetchedAt + Math.max(snap.retryAfterMs ?? 0, RATE_LIMIT_FLOOR_MS)
+      : NaN;
+    if (Number.isFinite(retryAt) && retryAt > nowMs) {
+      parts.push(`retrying ${formatDuration(retryAt - nowMs)}`);
+    }
+  }
   return parts.join(", ");
 }
 

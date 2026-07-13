@@ -14,6 +14,9 @@ import {
   POLL_OK_MS,
   POLL_MIN_MS,
   RATE_LIMIT_FLOOR_MS,
+  RATE_LIMIT_MARGIN_MS,
+  RATE_LIMIT_MAX_BACKOFF_MS,
+  rateLimitBackoff,
 } from "../src/dashboard/usage.js";
 import { useTmpHome } from "./helpers.js";
 
@@ -653,7 +656,8 @@ describe("renderUsagePane", () => {
     const render = await importRender();
     const out = render(now);
     expect(out).toContain("42%");
-    expect(out).toContain("(rate-limited)");
+    // retryAfterMs: 0 → countdown falls back to the floor decideRefresh enforces.
+    expect(out).toContain("(rate-limited, retrying in 10m)");
     expect(out).not.toContain("stale"); // data within STALE_AFTER_MS — no stale prefix
   });
 
@@ -669,7 +673,41 @@ describe("renderUsagePane", () => {
     const render = await importRender();
     const out = render(now);
     expect(out).toContain("42%");
-    expect(out).toContain("(stale 2h, rate-limited)");
+    expect(out).toContain("(stale 2h, rate-limited, retrying in 10m)");
+  });
+
+  it("counts down to the next attempt from the stored rate-limit backoff", async () => {
+    writeSnapshot({
+      fetchedAt: new Date(now - 5 * 60_000).toISOString(),
+      error: "rate-limited",
+      retryAfterMs: 75 * 60_000,
+      rateLimitStreak: 1,
+      dataAt: new Date(now - 5 * 60_000).toISOString(),
+      data: {
+        fiveHour: { pct: 42, resetsAt: new Date(now + 60 * 60_000).toISOString() },
+      },
+    });
+    const render = await importRender();
+    expect(render(now)).toContain("(rate-limited, retrying in 1h 10m)");
+  });
+
+  it("omits the countdown once the backoff window has passed", async () => {
+    // Past-due means the next poller wake retries within a minute — a frozen
+    // "retrying now" would outlive its own promise if the poller is dead, so
+    // the tag reverts to the plain error.
+    writeSnapshot({
+      fetchedAt: new Date(now - 80 * 60_000).toISOString(),
+      error: "rate-limited",
+      retryAfterMs: 75 * 60_000,
+      dataAt: new Date(now - 80 * 60_000).toISOString(),
+      data: {
+        fiveHour: { pct: 42, resetsAt: new Date(now + 60 * 60_000).toISOString() },
+      },
+    });
+    const render = await importRender();
+    const out = render(now);
+    expect(out).toContain("stale 1h, rate-limited");
+    expect(out).not.toContain("retrying");
   });
 
   it("renders the health tag once on its own line below the meters, not appended to meter rows", async () => {
@@ -691,7 +729,7 @@ describe("renderUsagePane", () => {
     const lines = render(now).split("\n");
     // Leading blank + 3 meters + 1 tag = 5 lines when an error is present.
     expect(lines).toHaveLength(5);
-    expect(lines[4]).toContain("(stale 2h, rate-limited)");
+    expect(lines[4]).toContain("(stale 2h, rate-limited, retrying in 10m)");
     for (const l of lines.slice(0, 4)) {
       expect(l).not.toContain("stale");
       expect(l).not.toContain("rate-limited");
@@ -771,7 +809,7 @@ describe("renderUsagePane", () => {
     // Leading blank + 3 meters + extra footer + health tag = 6 lines.
     expect(lines).toHaveLength(6);
     expect(lines[4]).toContain("1234 / 5000 credits");
-    expect(lines[5]).toContain("(stale 2h, rate-limited)");
+    expect(lines[5]).toContain("(stale 2h, rate-limited, retrying in 10m)");
   });
 
   it("degrades an uncapped extra-usage bucket to the fields it carries", async () => {
@@ -912,6 +950,74 @@ describe("decideRefresh — rate-limit floor", () => {
     // Just-fetched snapshot: next attempt ~ POLL_OK_MS away (plus small buffer).
     expect(decision.nextAttemptInMs).toBeGreaterThanOrEqual(POLL_OK_MS);
     expect(decision.nextAttemptInMs).toBeLessThanOrEqual(POLL_OK_MS + 5000);
+  });
+});
+
+describe("decideRefresh — hook is a poller-liveness backstop", () => {
+  const now = Date.parse("2026-04-15T20:00:00Z");
+
+  // The ordering the whole budget math rests on: a live poller always fetches
+  // first, so turn-end hooks add zero traffic in steady state.
+  it("keeps the hook cooldown above the poller cadence", () => {
+    expect(HOOK_REFRESH_COOLDOWN_MS).toBeGreaterThan(POLL_OK_MS);
+  });
+
+  it("lets the poller refresh a snapshot the hook still considers fresh", () => {
+    const snap = { fetchedAt: new Date(now - POLL_OK_MS - 1000).toISOString(), data: {} };
+    expect(decideRefresh(snap, now, "poller").shouldRefresh).toBe(true);
+    expect(decideRefresh(snap, now, "hook").shouldRefresh).toBe(false);
+  });
+
+  it("lets the hook refresh once the poller has missed its window", () => {
+    const snap = { fetchedAt: new Date(now - HOOK_REFRESH_COOLDOWN_MS - 1000).toISOString(), data: {} };
+    expect(decideRefresh(snap, now, "hook").shouldRefresh).toBe(true);
+  });
+});
+
+describe("rateLimitBackoff — margin and escalation", () => {
+  const serverHour = 60 * 60_000; // the fixed Retry-After: 3600 observed since 2026-07
+
+  it("adds the margin to the server hint on a first 429", () => {
+    const out = rateLimitBackoff({ fetchedAt: "x" }, serverHour);
+    expect(out).toEqual({ backoffMs: serverHour + RATE_LIMIT_MARGIN_MS, streak: 1 });
+  });
+
+  it("starts at streak 1 with no prior snapshot", () => {
+    const out = rateLimitBackoff(null, serverHour);
+    expect(out.streak).toBe(1);
+  });
+
+  it("doubles on a consecutive 429 and caps at the maximum", () => {
+    const first = rateLimitBackoff({ fetchedAt: "x" }, serverHour);
+    const second = rateLimitBackoff(
+      { fetchedAt: "x", error: "rate-limited", rateLimitStreak: first.streak },
+      serverHour,
+    );
+    expect(second).toEqual({ backoffMs: 2 * (serverHour + RATE_LIMIT_MARGIN_MS), streak: 2 });
+    const third = rateLimitBackoff(
+      { fetchedAt: "x", error: "rate-limited", rateLimitStreak: second.streak },
+      serverHour,
+    );
+    // 4 × 75min = 300min exceeds the 4h ceiling.
+    expect(third).toEqual({ backoffMs: RATE_LIMIT_MAX_BACKOFF_MS, streak: 3 });
+  });
+
+  it("treats a legacy rate-limited snapshot without a streak field as streak 1", () => {
+    const out = rateLimitBackoff({ fetchedAt: "x", error: "rate-limited" }, serverHour);
+    expect(out.streak).toBe(2);
+  });
+
+  it("resets the streak when the prior attempt failed for a non-429 reason", () => {
+    const out = rateLimitBackoff(
+      { fetchedAt: "x", error: "getaddrinfo ENOTFOUND", rateLimitStreak: 3 },
+      serverHour,
+    );
+    expect(out.streak).toBe(1);
+  });
+
+  it("floors a missing/zero server hint before adding the margin", () => {
+    const out = rateLimitBackoff({ fetchedAt: "x" }, undefined);
+    expect(out.backoffMs).toBe(RATE_LIMIT_FLOOR_MS + RATE_LIMIT_MARGIN_MS);
   });
 });
 

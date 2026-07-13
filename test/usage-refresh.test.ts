@@ -242,3 +242,42 @@ describe("refreshUsage — force bypasses the auth backoff but not the rate limi
     expect(mockState.readPersonalCredential).not.toHaveBeenCalled();
   });
 });
+
+describe("refreshUsage — the claim honors the caller's cadence class", () => {
+  const env = useTmpHome();
+
+  beforeEach(() => {
+    vi.resetModules();
+    mockState.readPersonalCredential.mockReset();
+    mockState.refreshOAuthToken.mockReset();
+    mockState.persistCredential.mockReset();
+    delete process.env.GARDEN_CLAUDE_SESSION_KEY;
+  });
+
+  function seedSnapshot(snap: unknown): void {
+    fs.writeFileSync(path.join(env.sessionsDir, "claude-usage.json"), JSON.stringify(snap));
+  }
+
+  it("poller fetches a snapshot the hook path leaves alone", async () => {
+    const usage = await import("../src/dashboard/usage.js");
+    // Aged past the poller cadence but inside the hook backstop cooldown —
+    // the poller's own claim, so a healthy loop keeps its cadence while
+    // hook-spawned refreshes (and a respawned poller claiming as a hook
+    // would) stay out of the budget.
+    const age = (usage.POLL_OK_MS + usage.HOOK_REFRESH_COOLDOWN_MS) / 2;
+    const fetchedAt = new Date(Date.now() - age).toISOString();
+    seedSnapshot({ fetchedAt, data: {} });
+    // no_credentials short-circuits before any network call; the attempt is
+    // still observable via readPersonalCredential and the rewritten snapshot.
+    mockState.readPersonalCredential.mockReturnValue(null);
+
+    const hookSnap = await usage.refreshUsage();
+    expect(hookSnap.fetchedAt).toBe(fetchedAt);
+    expect(mockState.readPersonalCredential).not.toHaveBeenCalled();
+
+    const pollerSnap = await usage.refreshUsage(false, "poller");
+    expect(mockState.readPersonalCredential).toHaveBeenCalled();
+    expect(pollerSnap.fetchedAt).not.toBe(fetchedAt);
+    expect(pollerSnap.error).toBe("no Claude Code credentials found");
+  });
+});
