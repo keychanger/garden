@@ -157,6 +157,8 @@ describe("kick command", () => {
         failingReason: "unparseable-verdict",
         failingSha: "abc123",
         unparseableReviewAt: Date.now() - 1000,
+        // Reached failing via the no-commit retry ladder — budget spent.
+        unparseableRetryCount: 2,
       }),
     ]);
 
@@ -171,6 +173,7 @@ describe("kick command", () => {
         failingReason: undefined,
         failingSha: undefined,
         unparseableReviewAt: undefined,
+        unparseableRetryCount: undefined,
         reviewRetryCount: undefined,
         reviewRetryAt: undefined,
       }),

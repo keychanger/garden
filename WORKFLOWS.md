@@ -1585,13 +1585,16 @@ const result = parseLastLineVerdict<TrellisVerdict>(output, TRELLIS_VERDICTS);
 ```
 
 Vocabulary is declared `as const` so the result is narrowly typed. The
-parser primitive is unchanged. Unparseable verdicts re-queue once:
-`handleReviewing` flips back to `working` and immediately pokes the
-poller to re-launch the reviewer with the same diff. The retry budget
-is one — after a second consecutive unparseable verdict, the worker
+parser primitive is unchanged. Unparseable verdicts flow through the
+shared, workflow-agnostic `handleUnparseableReview`: if the reviewer
+committed work, its commits are force-pushed and the review re-queues
+once; if the reviewer committed nothing (a benign flake — prose instead
+of a verdict token), the review re-queues on a short flat backoff up to
+a bounded budget (`MAX_UNPARSEABLE_REVIEW_RETRIES`), then the worker
 transitions to `failing` with `failingReason = "unparseable-verdict"`
-and the operator must intervene. This matches the default workflow's
-behavior on unparseable output.
+(`garden kick`-recoverable). This matches the default workflow's
+behavior on unparseable output; see `docs/STATUS.md` for the exact
+backoff and budget.
 
 ### Model selection and budget
 

@@ -1535,6 +1535,51 @@ describe("poll — reviewing state (async)", () => {
     );
   });
 
+  it("auto-retries a SECOND no-commit unparseable verdict before failing (budget 2, not 1)", () => {
+    // Boundary guard for MAX_UNPARSEABLE_REVIEW_RETRIES=2: a worker that already
+    // spent one retry (unparseableRetryCount=1) must retry AGAIN (to 2), not park
+    // in failing. This prior-count is the only value that distinguishes a budget
+    // of 2 from a budget of 1 — without it, an off-by-one (`<=` -> `<`) that
+    // silently halves the advertised budget would pass every other test.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123",
+        preReviewSha: "pre456",
+        unparseableRetryCount: 1, // one retry already spent; one remains
+      }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) {
+        return "Still deliberating.\nI'll fold in the sub-agent results next turn.";
+      }
+      return "{}";
+    });
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre456"); // reviewer committed nothing
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "working",
+        unparseableRetryCount: 2,
+        reviewRetryAt: expect.any(Number),
+      }),
+    );
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 15_000);
+    // Still under budget — must NOT escalate to failing yet.
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "failing" }),
+    );
+  });
+
   it("a no-commit unparseable retry relaunch does NOT re-increment the trellis iteration counter", () => {
     // Same guard as the transient/quota retries: an unparseable retry re-reviews
     // the SAME commits (the reviewer emitted no verdict and did no work), so
