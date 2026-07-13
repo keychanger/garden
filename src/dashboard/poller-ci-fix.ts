@@ -292,16 +292,29 @@ export function handleCiFixing(
   const pushed = headSha !== null && remoteHeadSha === headSha;
   const verificationPassed = !verdictFailed && madeProgress && pushed;
 
-  // Ledger the ci-fix outcome at the single point it's known, before the branch
-  // into retry / escalate / merge-pending. Mirrors resolve.outcome: the ground-
-  // truth verificationPassed, the attempt count against the budget, and duration
-  // (reviewStartedAt is the agent's launch stamp — reused field).
-  recordCiFixOutcome(projectName, entry.name, entry.createdAt, entry.workflow ?? "default", {
-    verdict: result?.verdict ?? "missing",
-    verificationPassed,
-    attempts: entry.ciFixAttempts ?? 0,
-    durationMs: entry.reviewStartedAt ? Date.now() - entry.reviewStartedAt : undefined,
-  });
+  // A non-passing verification whose remote ref still advanced past the launch
+  // baseline is a worker-authored push during ci-fix (operator nudged the pane),
+  // not a genuine ci-fix failure. The resolver never pushes, so poller-resolve.ts
+  // detects this with an early return before its ledger write; the ci-fix agent
+  // DOES push, so the worker push is only distinguishable after verification.
+  // Compute it once so the ledger below and the reset branch below agree.
+  const workerPushInterruption = !verificationPassed
+    && !!remoteHeadSha && !!entry.lastSeenSha && remoteHeadSha !== entry.lastSeenSha;
+
+  // Ledger the ci-fix outcome at the single point a genuine outcome is known,
+  // before the branch into retry / escalate / merge-pending. Skipped on a worker-
+  // push interruption so an interruption isn't recorded as a cifix.outcome
+  // failure — mirroring resolve.outcome, which the resolver's early return omits
+  // in the same case. verificationPassed is the ground truth; attempts is the
+  // effort spent; reviewStartedAt is the agent's launch stamp (reused field).
+  if (!workerPushInterruption) {
+    recordCiFixOutcome(projectName, entry.name, entry.createdAt, entry.workflow ?? "default", {
+      verdict: result?.verdict ?? "missing",
+      verificationPassed,
+      attempts: entry.ciFixAttempts ?? 0,
+      durationMs: entry.reviewStartedAt ? Date.now() - entry.reviewStartedAt : undefined,
+    });
+  }
 
   if (!verificationPassed) {
     log.warn("poller", "ci-fix verification failed", {
@@ -314,11 +327,10 @@ export function handleCiFixing(
       },
     });
 
-    // Verification failed but the remote ref still advanced — that's a
-    // worker-authored push during ci-fix (operator nudged the worker pane
-    // mid-fix). Abort, reset budget, and let the normal working→reviewing
+    // Worker-authored push during ci-fix (operator nudged the worker pane
+    // mid-fix): abort, reset budget, and let the normal working→reviewing
     // flow re-enter from the new SHA.
-    if (remoteHeadSha && entry.lastSeenSha && remoteHeadSha !== entry.lastSeenSha) {
+    if (workerPushInterruption) {
       log.info("poller", "new commits during ci-fix, resetting to working", {
         worker: entry.name,
         data: { project: projectName },

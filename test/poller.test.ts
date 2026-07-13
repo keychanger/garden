@@ -52,6 +52,16 @@ vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+// Spy on the review-family telemetry writes so tests can assert an outcome is
+// (or is not) ledgered; the rest of the module stays real (writes swallow under
+// the fs mock, which has no appendFileSync — best-effort, exactly as in prod).
+vi.mock("../src/dashboard/telemetry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/dashboard/telemetry.js")>()),
+  recordReviewVerdict: vi.fn(),
+  recordResolveOutcome: vi.fn(),
+  recordCiFixOutcome: vi.fn(),
+}));
+
 vi.mock("../src/dashboard/header.js", () => ({
   refreshDashboard: vi.fn(),
   setupStatusBar: vi.fn(),
@@ -233,6 +243,7 @@ import { scheduleDelayedPoke } from "../src/dashboard/poller-fifo.js";
 import { getGitHubRepoSlug, checkCiStatus } from "../src/dashboard/poller-ci.js";
 import { sweepGhostEntries } from "../src/dashboard/validate.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
+import { recordCiFixOutcome } from "../src/dashboard/telemetry.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 const registryMock = await import("../src/dashboard/registry.js") as {
@@ -3316,6 +3327,8 @@ describe("poll — ci-fixing state", () => {
       level: "error",
       message: expect.stringContaining("exhausted"),
     }));
+    // A genuine failure (remote ref did not advance) IS ledgered.
+    expect(recordCiFixOutcome).toHaveBeenCalled();
   });
 
   it("escalates with the kick-recoverable transient-review reason when the ci-fix agent hit a transient API error", () => {
@@ -3374,6 +3387,9 @@ describe("poll — ci-fixing state", () => {
     expect(fields.ciFixAttempts).toBe(0);
     expect(fields.preCiFixSha).toBeUndefined();
     expect(fields.pendingReviewAt).toEqual(expect.any(Number));
+    // A worker-push interruption is NOT a ci-fix outcome — it must not be
+    // ledgered as a failure (mirrors the resolver, which omits it too).
+    expect(recordCiFixOutcome).not.toHaveBeenCalled();
   });
 });
 

@@ -121,6 +121,26 @@ describe("getDiffNumstat (real git)", () => {
       files: 0, insertions: 0, deletions: 0,
     });
   });
+
+  it("counts a binary file as one touched file with zero line deltas", async () => {
+    const { createWorktree, getBranchHeadSha, getDiffNumstat } =
+      await import("../../src/dashboard/git.js");
+    const wt = path.join(env.home, "wt", "numstat-binary");
+    createWorktree(env.repoPath, wt, "numstat-binary-branch");
+    const from = getBranchHeadSha(wt)!;
+    // A NUL byte makes git classify the file as binary, so `git diff --numstat`
+    // emits "-\t-\t<path>" for it. The DiffNumstat contract counts it as a
+    // touched file whose parseInt("-") -> NaN adds nothing to the line totals.
+    fs.writeFileSync(path.join(wt, "blob.bin"), Buffer.from([0x00, 0x01, 0x02, 0x00, 0xff]));
+    git(wt, "add", "blob.bin");
+    git(wt, "commit", "-m", "add a binary blob");
+    const to = getBranchHeadSha(wt)!;
+
+    const stat = getDiffNumstat(wt, from, to);
+    expect(stat.files).toBe(1);
+    expect(stat.insertions).toBe(0);
+    expect(stat.deletions).toBe(0);
+  });
 });
 
 describe("getBranchHeadSha (real git)", () => {
