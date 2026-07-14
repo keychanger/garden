@@ -17,6 +17,8 @@ import {
   RATE_LIMIT_MARGIN_MS,
   RATE_LIMIT_MAX_BACKOFF_MS,
   rateLimitBackoff,
+  classifyUsageErrorKind,
+  usageLogLevel,
 } from "../src/dashboard/usage.js";
 import { useTmpHome } from "./helpers.js";
 
@@ -1018,6 +1020,78 @@ describe("rateLimitBackoff — margin and escalation", () => {
   it("floors a missing/zero server hint before adding the margin", () => {
     const out = rateLimitBackoff({ fetchedAt: "x" }, undefined);
     expect(out.backoffMs).toBe(RATE_LIMIT_FLOOR_MS + RATE_LIMIT_MARGIN_MS);
+  });
+});
+
+describe("classifyUsageErrorKind — persisted error string → coarse kind", () => {
+  it("maps a successful (absent) error to ok", () => {
+    expect(classifyUsageErrorKind(undefined)).toBe("ok");
+    expect(classifyUsageErrorKind("")).toBe("ok");
+  });
+
+  it("maps the rate-limit sentinel to rate-limited", () => {
+    expect(classifyUsageErrorKind("rate-limited")).toBe("rate-limited");
+  });
+
+  it("maps actionable credential failures to auth", () => {
+    expect(classifyUsageErrorKind("login expired")).toBe("auth");
+    expect(classifyUsageErrorKind("no Claude Code credentials found")).toBe("auth");
+  });
+
+  it("maps a token-refresh network failure to transient, not auth", () => {
+    // The 'refresh failed: ...' bucket is a network reach to the OAuth host —
+    // self-healing offline noise, not an actionable re-login prompt.
+    expect(classifyUsageErrorKind("refresh failed: network: getaddrinfo ENOTFOUND platform.claude.com")).toBe("transient");
+  });
+
+  it("maps http-status and unparseable-body errors to server", () => {
+    expect(classifyUsageErrorKind("http 503")).toBe("server");
+    expect(classifyUsageErrorKind("http 529")).toBe("server");
+    expect(classifyUsageErrorKind("200 with unparseable body: SyntaxError")).toBe("server");
+  });
+
+  it("maps socket/DNS errors — and any unknown string — to transient", () => {
+    expect(classifyUsageErrorKind("getaddrinfo ENOTFOUND")).toBe("transient");
+    expect(classifyUsageErrorKind("timeout")).toBe("transient");
+    expect(classifyUsageErrorKind("read ECONNRESET")).toBe("transient");
+    expect(classifyUsageErrorKind("connect EHOSTUNREACH 160.79.104.10:443")).toBe("transient");
+    expect(classifyUsageErrorKind("some error we have never seen")).toBe("transient");
+  });
+});
+
+describe("usageLogLevel — transition-graded severity (log.ts's own contract)", () => {
+  it("a steady-state success is a debug heartbeat; recovery from an error is info", () => {
+    expect(usageLogLevel(undefined, "ok")).toBe("debug"); // ok → ok
+    expect(usageLogLevel("rate-limited", "ok")).toBe("info"); // recovery
+    expect(usageLogLevel("timeout", "ok")).toBe("info"); // recovery from offline
+  });
+
+  it("the first cycle of a self-healing episode is info; every repeat is debug", () => {
+    expect(usageLogLevel(undefined, "transient")).toBe("info"); // episode start
+    expect(usageLogLevel("timeout", "transient")).toBe("debug"); // repeat
+    expect(usageLogLevel(undefined, "rate-limited")).toBe("info"); // first 429
+    expect(usageLogLevel("rate-limited", "rate-limited")).toBe("debug"); // repeat 429
+    expect(usageLogLevel("http 500", "server")).toBe("debug"); // repeat 5xx
+  });
+
+  it("collapses roaming between different offline errno of the same kind to debug", () => {
+    // ENOTFOUND then ETIMEDOUT then ECONNRESET are all 'offline' — a laptop
+    // moving between networks must NOT re-warn on each distinct errno.
+    expect(usageLogLevel("getaddrinfo ENOTFOUND", "transient")).toBe("debug");
+    expect(usageLogLevel("read ECONNRESET", "transient")).toBe("debug");
+  });
+
+  it("keeps an actionable auth failure at warn even in the middle of an offline stretch", () => {
+    expect(usageLogLevel(undefined, "auth")).toBe("warn"); // first
+    expect(usageLogLevel("timeout", "auth")).toBe("warn"); // transient → auth: a new actionable condition
+    expect(usageLogLevel("login expired", "auth")).toBe("debug"); // repeat auth stays quiet
+    expect(usageLogLevel("no Claude Code credentials found", "auth")).toBe("debug"); // same kind
+  });
+
+  it("logs the transition into a new kind at that kind's level", () => {
+    expect(usageLogLevel("rate-limited", "transient")).toBe("info"); // 429 → offline
+    expect(usageLogLevel("timeout", "rate-limited")).toBe("info"); // offline → 429
+    expect(usageLogLevel("timeout", "server")).toBe("info"); // offline → 5xx
   });
 });
 

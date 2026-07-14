@@ -281,3 +281,81 @@ describe("refreshUsage — the claim honors the caller's cadence class", () => {
     expect(pollerSnap.error).toBe("no Claude Code credentials found");
   });
 });
+
+describe("refreshUsage — transition-graded logging collapses repeated failures", () => {
+  const env = useTmpHome();
+
+  beforeEach(() => {
+    vi.resetModules();
+    mockState.readPersonalCredential.mockReset();
+    mockState.refreshOAuthToken.mockReset();
+    mockState.persistCredential.mockReset();
+    delete process.env.GARDEN_CLAUDE_SESSION_KEY;
+    delete process.env.GARDEN_LOG_LEVEL; // keep the default (info) so debug lines stay suppressed
+  });
+
+  function seedSnapshot(snap: unknown): void {
+    fs.writeFileSync(path.join(env.sessionsDir, "claude-usage.json"), JSON.stringify(snap));
+  }
+
+  // The operator-visible surface: usage lines that reach the default info-level
+  // log. A downgraded (debug) repeat is absent from this list by construction.
+  function usageLogEntries(): { level: string; msg: string }[] {
+    const logFile = path.join(env.sessionsDir, "dashboard.log");
+    if (!fs.existsSync(logFile)) return [];
+    return fs.readFileSync(logFile, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l))
+      .filter((e) => e.src === "usage")
+      .map((e) => ({ level: e.level, msg: e.msg }));
+  }
+
+  // Drive resolveCredential to a deterministic transient (network) refresh
+  // failure — the 'offline' outcome, without touching the real network.
+  function mockTransientRefreshFailure(): void {
+    mockState.readPersonalCredential.mockReturnValue({
+      source: "file",
+      oauth: { accessToken: "stale", refreshToken: "rt", expiresAt: Date.now() - 1000 },
+    });
+    const err = new Error("timeout") as Error & { code: string };
+    err.code = "network";
+    mockState.refreshOAuthToken.mockRejectedValue(err);
+  }
+
+  it("logs only the first of three identical transient failures at info; the repeats drop to debug", async () => {
+    mockTransientRefreshFailure();
+    const { refreshUsage } = await import("../src/dashboard/usage.js");
+
+    // force bypasses the generic-error backoff so all three attempts actually run.
+    await refreshUsage(true);
+    await refreshUsage(true);
+    await refreshUsage(true);
+
+    // Three failures, one visible line — the overnight-offline collapse.
+    expect(usageLogEntries()).toEqual([{ level: "info", msg: "token refresh failed" }]);
+  });
+
+  it("keeps an actionable auth failure at warn even mid-offline-stretch", async () => {
+    // Prior snapshot is a stale offline (transient) error, aged past the generic backoff.
+    seedSnapshot({
+      fetchedAt: new Date(Date.now() - 30 * 60_000).toISOString(),
+      error: "getaddrinfo ENOTFOUND",
+    });
+    // This attempt fails with a revoked refresh token → actionable "login expired".
+    mockState.readPersonalCredential.mockReturnValue({
+      source: "file",
+      oauth: { accessToken: "stale", refreshToken: "revoked", expiresAt: Date.now() - 1000 },
+    });
+    const err = new Error("invalid_grant") as Error & { code: string };
+    err.code = "invalid_grant";
+    mockState.refreshOAuthToken.mockRejectedValue(err);
+
+    const { refreshUsage } = await import("../src/dashboard/usage.js");
+    await refreshUsage();
+
+    // transient → auth is a new, actionable condition: it surfaces at warn, not
+    // buried at debug like an offline repeat would be.
+    expect(usageLogEntries()).toContainEqual({ level: "warn", msg: "login expired" });
+  });
+});

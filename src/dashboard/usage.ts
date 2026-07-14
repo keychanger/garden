@@ -581,6 +581,62 @@ export function shouldRefreshOnHook(nowMs: number = Date.now()): boolean {
 }
 
 // -----------------------------------------------------------------------------
+// Log-severity grading (transition-based)
+// -----------------------------------------------------------------------------
+
+// Coarse class of a fetch outcome. The exact errno/message varies (ENOTFOUND vs
+// ETIMEDOUT vs ECONNRESET are all "the machine is offline"); grading keys on the
+// class so roaming between them doesn't re-log. `ok` is a successful fetch.
+export type UsageOutcomeKind = "ok" | "transient" | "rate-limited" | "auth" | "server";
+
+// Map a persisted snapshot.error string back to its outcome kind, so the
+// current attempt can tell whether it is a *new* episode or a repeat of the
+// prior one. Unknown strings default to "transient" — the self-healing,
+// non-actionable bucket — so an unrecognized error surfaces once (on the
+// transition) and then stays quiet rather than warning every cycle.
+export function classifyUsageErrorKind(error: string | undefined): UsageOutcomeKind {
+  if (!error) return "ok";
+  if (error === "rate-limited") return "rate-limited";
+  if (error === "login expired" || error === "no Claude Code credentials found") return "auth";
+  // A token-refresh failure is a network reach to the OAuth host — transient
+  // and self-healing, not an actionable auth problem. Only a revoked/absent
+  // refresh token lands as "login expired" (auth) above.
+  if (error.startsWith("refresh failed")) return "transient";
+  if (error.startsWith("http ") || error.startsWith("200 with unparseable body")) return "server";
+  return "transient";
+}
+
+// The severity contract in log.ts, applied to usage fetch outcomes:
+//   warn  — operator must act (auth expired/absent): actionable
+//   info  — a lifecycle transition: the first cycle of a new error episode, or
+//           recovery back to a good fetch
+//   debug — "poll cycles with no transition": a repeat of the same error kind
+//           (an offline laptop's 40th identical ENOTFOUND), suppressed from the
+//           default info-level log but still present under GARDEN_LOG_LEVEL=debug
+// This collapses an overnight-offline stretch from dozens of identical warnings
+// to one episode-start line and one recovery line.
+export function usageLogLevel(
+  priorError: string | undefined,
+  kind: UsageOutcomeKind,
+): "debug" | "info" | "warn" {
+  const priorKind = classifyUsageErrorKind(priorError);
+  if (kind === "ok") return priorKind === "ok" ? "debug" : "info"; // recovery vs steady heartbeat
+  if (kind === priorKind) return "debug"; // repeat of the same episode
+  return kind === "auth" ? "warn" : "info"; // episode start
+}
+
+// Emit a fetch-outcome line at the transition-graded level. `data` is omitted
+// from the entry when empty so a bare episode marker stays clean.
+function logUsageOutcome(
+  prior: UsageSnapshot | null | undefined,
+  kind: Exclude<UsageOutcomeKind, "ok">,
+  msg: string,
+  data?: Record<string, unknown>,
+): void {
+  log[usageLogLevel(prior?.error, kind)]("usage", msg, data ? { data } : undefined);
+}
+
+// -----------------------------------------------------------------------------
 // Fetch-and-store (used by the poller and by hook-driven opportunistic refresh)
 // -----------------------------------------------------------------------------
 
@@ -634,13 +690,14 @@ export async function refreshUsage(force = false, reason: RefreshReason = "hook"
   const resolved = await resolveCredential();
   if (!resolved.ok) {
     if (resolved.error === "no_credentials") {
+      logUsageOutcome(prior, "auth", "no credentials");
       return finalizeSnapshot({
         fetchedAt: new Date().toISOString(),
         error: "no Claude Code credentials found",
       }, prior);
     }
     if (resolved.error === "login_expired") {
-      log.warn("usage", "login expired", { data: { detail: resolved.detail } });
+      logUsageOutcome(prior, "auth", "login expired", { detail: resolved.detail });
       return finalizeSnapshot({
         fetchedAt: new Date().toISOString(),
         error: "login expired",
@@ -648,7 +705,7 @@ export async function refreshUsage(force = false, reason: RefreshReason = "hook"
       }, prior);
     }
     // refresh_failed: transient (network/5xx during token refresh). Generic backoff, retry sooner.
-    log.warn("usage", "token refresh failed", { data: { detail: resolved.detail } });
+    logUsageOutcome(prior, "transient", "token refresh failed", { detail: resolved.detail });
     return finalizeSnapshot({
       fetchedAt: new Date().toISOString(),
       error: `refresh failed: ${resolved.detail ?? "unknown"}`.slice(0, 200),
@@ -668,9 +725,7 @@ export async function refreshUsage(force = false, reason: RefreshReason = "hook"
         // 200 with an unparseable body — proxy interference, partial response,
         // or a server-side shape change. Keep last-good data so the bars don't
         // vanish; surface the error inline via the (stale) tag.
-        log.warn("usage", "200 with unparseable body", {
-          data: { bodyPrefix: res.body.slice(0, 200) },
-        });
+        logUsageOutcome(prior, "server", "200 with unparseable body", { bodyPrefix: res.body.slice(0, 200) });
         return finalizeSnapshot({
           fetchedAt,
           error: `200 with unparseable body: ${String(err).slice(0, 100)}`,
@@ -679,6 +734,13 @@ export async function refreshUsage(force = false, reason: RefreshReason = "hook"
       const data = normalizeUsage(parsed);
       const snap: UsageSnapshot = { fetchedAt, dataAt: fetchedAt, data };
       writeUsageSnapshotLocked(snap);
+      // Recovery from a prior error episode is a lifecycle transition (info); a
+      // steady-state success is a heartbeat (debug, suppressed at the default
+      // level). usageLogLevel(..., "ok") encodes exactly that split, so the log
+      // gains a positive counterpart that closes out each error cluster.
+      if (usageLogLevel(prior?.error, "ok") === "info") {
+        log.info("usage", "fetch recovered", { data: { from: classifyUsageErrorKind(prior?.error) } });
+      }
       log.debug("usage", "fetched", {
         data: {
           source: cred.source,
@@ -692,9 +754,7 @@ export async function refreshUsage(force = false, reason: RefreshReason = "hook"
 
     if (res.status === 429) {
       const { backoffMs, streak } = rateLimitBackoff(prior, res.retryAfterMs);
-      log.warn("usage", "rate-limited", {
-        data: { retryAfterMs: res.retryAfterMs, backoffMs, streak },
-      });
+      logUsageOutcome(prior, "rate-limited", "rate-limited", { retryAfterMs: res.retryAfterMs, backoffMs, streak });
       return finalizeSnapshot({
         fetchedAt,
         error: "rate-limited",
@@ -704,7 +764,7 @@ export async function refreshUsage(force = false, reason: RefreshReason = "hook"
     }
 
     if (res.status === 401 || res.status === 403) {
-      log.warn("usage", "auth failed", { data: { status: res.status } });
+      logUsageOutcome(prior, "auth", "auth failed", { status: res.status });
       // 401/403 isn't transient; back off AUTH_BACKOFF_MS so a dead token doesn't trigger the endpoint's 429 cascade (garden login overwrites the snapshot to heal early).
       return finalizeSnapshot({
         fetchedAt,
@@ -713,11 +773,11 @@ export async function refreshUsage(force = false, reason: RefreshReason = "hook"
       }, prior);
     }
 
-    log.warn("usage", "unexpected status", { data: { status: res.status, body: res.body.slice(0, 200) } });
+    logUsageOutcome(prior, "server", "unexpected status", { status: res.status, body: res.body.slice(0, 200) });
     return finalizeSnapshot({ fetchedAt, error: `http ${res.status}` }, prior);
   } catch (err) {
     const { summary, data } = describeFetchError(err);
-    log.warn("usage", "usage fetch failed", { data: { error: summary, ...data } });
+    logUsageOutcome(prior, "transient", "usage fetch failed", { error: summary, ...data });
     return finalizeSnapshot({
       fetchedAt: new Date().toISOString(),
       error: summary,
