@@ -1,9 +1,11 @@
 // Background process that refreshes the Claude usage snapshot on a cadence.
-// Runs in a single hidden tmux window (_garden-usage-poller). The /api/oauth/usage
-// endpoint is strictly rate-limited so the poll cadence stays deliberately slow
-// (10 min on success) and honors server Retry-After on 429s with margin and
-// escalation. Cadence comes from usage.ts:decideRefresh — same rule the
-// Stop-hook backstop refresh uses, so neither path can outpace the other.
+// Runs in a single hidden tmux window (_garden-usage-poller). Each poll reads
+// the primary 5h/weekly bars from cheap /v1/messages response headers and, at
+// most hourly, hits the throttled /api/oauth/usage endpoint for the model-
+// scoped bar (see usage.ts). The poll cadence (10 min on success) comes from
+// usage.ts:decideRefresh — the same rule the Stop-hook backstop refresh uses,
+// so neither path can outpace the other; a rare header 429 still honors server
+// Retry-After with margin and escalation.
 import { newDashboardWindow, windowExists, killWindowSafe } from "./tmux.js";
 import { usagePollerWindowName } from "./window-names.js";
 import { decideRefresh, readUsageSnapshot, refreshUsage } from "./usage.js";

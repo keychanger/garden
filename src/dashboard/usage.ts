@@ -1,17 +1,28 @@
 // Claude usage meter: fetches the authenticated user's 5-hour, weekly, and
-// model-scoped weekly quota from api.anthropic.com using the OAuth token that
-// Claude Code writes to the macOS Keychain. Persists a snapshot to
-// SESSIONS_DIR and renders the header meters for the dashboard status pane.
+// model-scoped weekly quota using the OAuth token that Claude Code writes to
+// the macOS Keychain. Persists a snapshot to SESSIONS_DIR and renders the
+// header meters for the dashboard status pane.
 //
-// The endpoint (/api/oauth/usage) is undocumented and strictly rate-limited.
-// Its limiter has changed under us before: through 2026-06 it only throttled
-// bursts (Retry-After ~50 min after 3 rapid probes, sometimes a meaningless
-// Retry-After: 0 — we self-floor); around 2026-07-10 it tightened to a fixed
-// Retry-After: 3600 with a sustained budget observed near 10-12 requests/hour
-// — the old 5-min cadence sat exactly at it, and a single retry at the exact
-// Retry-After boundary was observed to 429 again. Callers must honor
-// retry-after with margin and keep total request volume well under that
-// budget.
+// Two sources, split by cadence (this is what Claude Code itself does):
+//
+//   Primary (every poll) — the `anthropic-ratelimit-unified-{5h,7d}-*` response
+//   headers that ride *every* /v1/messages response. We read them off a
+//   1-token throwaway completion ("quota"). These carry the 5-hour and weekly
+//   bars, are documented/supported, and are governed by the generous messages
+//   limiter — not the usage endpoint's stingy one — so they essentially never
+//   throttle at our cadence.
+//
+//   Secondary (hourly) — GET /api/oauth/usage, the undocumented endpoint that
+//   is the *only* source of the model-scoped weekly bar (Fable). Its limiter
+//   tightened server-side around 2026-07-10 to a fixed Retry-After: 3600 with a
+//   budget near 10-12 requests/hour; hitting it once an hour (for the slow-
+//   moving 7-day scoped figure alone) sits far under that. A scoped 429 is
+//   silent — the primary bars are already live from headers, so the scoped bar
+//   just keeps its last value until the next hourly refresh.
+//
+// The migration off the endpoint's hot path is deliberate: the old design
+// polled it every 5-10 min for all three bars and chained hour-long freezes
+// whenever the fleet's activity pushed request volume past the budget.
 import fs from "node:fs";
 import https from "node:https";
 import path from "node:path";
@@ -67,10 +78,18 @@ export interface UsageData {
 export interface UsageSnapshot {
   fetchedAt: string;       // last fetch attempt (success or failure)
   data?: UsageData;        // last successfully fetched data; preserved across transient errors
-  dataAt?: string;         // when `data` was actually fetched (defaults to fetchedAt for legacy snapshots)
-  error?: string;          // present iff the last attempt failed
+  dataAt?: string;         // when the PRIMARY (5h/weekly header) bars were fetched; drives the stale tag. Defaults to fetchedAt for legacy snapshots.
+  error?: string;          // present iff the last PRIMARY (header) attempt failed
   retryAfterMs?: number;   // effective backoff before the next attempt (server hint plus our margin/escalation on 429s)
   rateLimitStreak?: number; // consecutive 429s ending at this snapshot; drives the escalating backoff
+  // The model-scoped bar comes from the throttled oauth endpoint on a slower
+  // (hourly) cadence than the primary bars, so its freshness is tracked
+  // separately. `scopedAt` is the last *successful* scoped fetch (bar
+  // freshness); `scopedAttemptedAt` is the last scoped *attempt* — success or
+  // failure — and is what spaces the hourly retries so a 429 doesn't re-fire
+  // every poll. Absent on all-header cycles and legacy snapshots.
+  scopedAt?: string;
+  scopedAttemptedAt?: string;
 }
 
 // Neutral read seam over the snapshot's named buckets: consumers (the
@@ -260,6 +279,59 @@ export function fetchUsageRaw(token: string): Promise<FetchResult> {
   });
 }
 
+// Cheapest tier for the throwaway quota completion. The unified rate-limit
+// headers describe the *account*, not the model, so any valid model returns
+// them — Haiku just minimizes the (already trivial) cost. If Anthropic retires
+// this id the call 404s: the header fetch reports `http 404`, the pane shows
+// the preserved bars plus that error, and this constant gets bumped.
+const QUOTA_PROBE_MODEL = "claude-haiku-4-5-20251001";
+
+export interface HeaderFetchResult {
+  status: number;
+  headers: Record<string, string | string[] | undefined>;
+  retryAfterMs?: number;
+}
+
+// The primary source: a 1-token /v1/messages completion whose response carries
+// the `anthropic-ratelimit-unified-*` headers. Mirrors Claude Code's own
+// `source: "quota_check"` call. The body is drained but discarded — only the
+// headers matter. Governed by the messages limiter (generous), not the usage
+// endpoint's, so it does not participate in the 429 cascade fetchUsageRaw does.
+export function fetchUsageHeaders(token: string): Promise<HeaderFetchResult> {
+  const body = JSON.stringify({
+    model: QUOTA_PROBE_MODEL,
+    max_tokens: 1,
+    messages: [{ role: "user", content: "quota" }],
+  });
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      host: "api.anthropic.com",
+      path: "/v1/messages",
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "anthropic-beta": "oauth-2025-04-20",
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+        "User-Agent": "garden-dashboard/1.0",
+        "Accept": "application/json",
+        "Content-Length": Buffer.byteLength(body).toString(),
+      },
+      timeout: 15000,
+    }, (res) => {
+      res.on("data", () => { /* drain: we only want the headers */ });
+      res.on("end", () => {
+        const retryAfterMs = parseRetryAfter(res.headers["retry-after"]);
+        resolve({ status: res.statusCode ?? 0, headers: res.headers, retryAfterMs });
+      });
+    });
+    req.on("timeout", () => { req.destroy(new Error("timeout")); });
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
 // RFC 9110 allows Retry-After in two forms: a delta-seconds integer or an
 // HTTP-date. We accept both. Returns undefined for missing/unparseable values
 // (which the decision layer treats as "server provided no hint" — falls back
@@ -338,6 +410,48 @@ export function normalizeUsage(raw: unknown): UsageData {
     });
   }
   return top;
+}
+
+// The primary path: the account's 5-hour and 7-day (weekly) utilization off
+// the `anthropic-ratelimit-unified-{5h,7d}-*` response headers. Utilization is
+// a 0..1 fraction (scaled to percent); the reset is unix epoch *seconds* (→
+// ISO). This mirrors Claude Code's own header reader. The headers carry NO
+// per-model bucket — the model-scoped weekly bar (Fable) still comes only from
+// the oauth endpoint's `limits[]` array (pickScopedMeters), so this returns
+// just fiveHour/weekly and the merge layers the scoped bar on top.
+export function parseUnifiedHeaders(
+  headers: Record<string, string | string[] | undefined>,
+): UsageData {
+  const out: UsageData = {};
+  const fiveHour = headerMeter(headers, "5h");
+  if (fiveHour) out.fiveHour = fiveHour;
+  const weekly = headerMeter(headers, "7d");
+  if (weekly) out.weekly = weekly;
+  return out;
+}
+
+function headerMeter(
+  headers: Record<string, string | string[] | undefined>,
+  window: string,
+): UsageMeter | undefined {
+  const util = headerValue(headers, `anthropic-ratelimit-unified-${window}-utilization`);
+  const reset = headerValue(headers, `anthropic-ratelimit-unified-${window}-reset`);
+  if (util === undefined || reset === undefined) return undefined;
+  const pct = Number(util);
+  const resetSec = Number(reset);
+  if (!Number.isFinite(pct) || !Number.isFinite(resetSec)) return undefined;
+  return { pct: pct * 100, resetsAt: new Date(resetSec * 1000).toISOString() };
+}
+
+// Node lowercases response header names and collapses duplicates to the first;
+// this normalizes the union type Node's headers bag exposes to a plain string.
+function headerValue(
+  headers: Record<string, string | string[] | undefined>,
+  name: string,
+): string | undefined {
+  const v = headers[name];
+  if (Array.isArray(v)) return v[0];
+  return typeof v === "string" ? v : undefined;
 }
 
 function pickBuckets(r: Record<string, unknown>): UsageData {
@@ -503,6 +617,14 @@ export const AUTH_BACKOFF_MS = 30 * 60 * 1000;
 // left for the poller's own cadence.
 export const HOOK_REFRESH_COOLDOWN_MS = POLL_OK_MS + 2 * 60 * 1000;
 
+// Cadence for the secondary (oauth-endpoint) fetch that supplies the model-
+// scoped weekly bar. The primary 5h/weekly bars refresh every poll from cheap
+// response headers; the scoped bar is a slow-moving 7-day figure the endpoint
+// alone carries, so we hit that throttled endpoint at most once an hour —
+// roughly one request/hour, far under its ~10-12/hour budget. Gates on the last
+// scoped *attempt* (see scopedFetchDue), not the poll cadence.
+export const SCOPED_POLL_MS = 60 * 60 * 1000;
+
 export type RefreshReason = "hook" | "poller";
 
 export interface RefreshDecision {
@@ -566,6 +688,85 @@ export function rateLimitBackoff(
   const base = Math.max(serverRetryAfterMs ?? 0, RATE_LIMIT_FLOOR_MS) + RATE_LIMIT_MARGIN_MS;
   const backoffMs = Math.min(RATE_LIMIT_MAX_BACKOFF_MS, base * 2 ** (streak - 1));
   return { backoffMs, streak };
+}
+
+// Whether the secondary (oauth-endpoint) scoped fetch is due. Keys on the last
+// scoped *attempt* (success or failure), so a 429'd attempt still waits a full
+// SCOPED_POLL_MS before the next try instead of re-firing every poll. A
+// snapshot that never attempted it (fresh install, legacy shape) is due.
+export function scopedFetchDue(snap: UsageSnapshot | null | undefined, nowMs: number): boolean {
+  const attempted = snap?.scopedAttemptedAt ? Date.parse(snap.scopedAttemptedAt) : NaN;
+  if (!Number.isFinite(attempted)) return true;
+  return nowMs - attempted >= SCOPED_POLL_MS;
+}
+
+// Assemble the snapshot's data from its two independent sources, each falling
+// back to the prior snapshot when it wasn't fetched this cycle (scoped between
+// hourly refreshes) or its fetch failed (a network blip), so a partial refresh
+// never blanks a live bar. A `scoped` source object that was fetched but
+// carries no meters is authoritative — it drops a since-removed bar; `undefined`
+// means "not fetched this cycle — keep prior".
+export function mergeUsageData(
+  primary: UsageData | undefined,
+  scoped: { scoped?: ScopedMeter[]; extraUsage?: ExtraUsage } | undefined,
+  prior: UsageData | undefined,
+): UsageData {
+  const out: UsageData = {};
+  const fiveHour = primary?.fiveHour ?? prior?.fiveHour;
+  if (fiveHour) out.fiveHour = fiveHour;
+  const weekly = primary?.weekly ?? prior?.weekly;
+  if (weekly) out.weekly = weekly;
+  const scopedMeters = scoped ? scoped.scoped : prior?.scoped;
+  if (scopedMeters && scopedMeters.length) out.scoped = scopedMeters;
+  const extra = scoped ? scoped.extraUsage : prior?.extraUsage;
+  if (extra) out.extraUsage = extra;
+  return out;
+}
+
+// Outcome of the primary (header) fetch. `data` present ⇒ the call returned
+// (possibly empty headers); `error` present ⇒ the primary bars stay preserved
+// and the health tag surfaces the reason. Both can be set: a 200 that carried
+// no unified headers yields empty data plus a soft error.
+export interface PrimaryOutcome {
+  data?: UsageData;
+  error?: { error: string; retryAfterMs?: number; rateLimitStreak?: number };
+}
+
+// Outcome of the secondary (scoped/oauth) fetch. `fetched` ⇒ we attempted the
+// endpoint this cycle (advances scopedAttemptedAt, spacing retries); `data`
+// present ⇒ a 200 parsed (advances scopedAt, the bar's freshness).
+export interface ScopedOutcome {
+  fetched: boolean;
+  data?: { scoped?: ScopedMeter[]; extraUsage?: ExtraUsage };
+}
+
+// The pure core of a refresh: fold the two fetch outcomes and the prior
+// snapshot into the next snapshot. Kept separate from the IO in refreshUsage so
+// the merge, freshness-timestamp, and scoped-cadence bookkeeping are unit-
+// testable without a network. dataAt tracks only the PRIMARY bars — the scoped
+// bar is intentionally up to an hour old and must not trip the stale tag — so
+// it advances only when a header bar actually arrived.
+export function assembleSnapshot(
+  fetchedAt: string,
+  primary: PrimaryOutcome,
+  scoped: ScopedOutcome,
+  prior: UsageSnapshot | null | undefined,
+): UsageSnapshot {
+  const data = mergeUsageData(primary.data, scoped.data, prior?.data);
+  const gotPrimaryBar = !!(primary.data && (primary.data.fiveHour || primary.data.weekly));
+  const snap: UsageSnapshot = { fetchedAt, data };
+  const dataAt = gotPrimaryBar ? fetchedAt : (prior?.dataAt ?? prior?.fetchedAt);
+  if (dataAt !== undefined) snap.dataAt = dataAt;
+  if (primary.error) {
+    snap.error = primary.error.error;
+    if (primary.error.retryAfterMs !== undefined) snap.retryAfterMs = primary.error.retryAfterMs;
+    if (primary.error.rateLimitStreak !== undefined) snap.rateLimitStreak = primary.error.rateLimitStreak;
+  }
+  const scopedAt = scoped.data ? fetchedAt : prior?.scopedAt;
+  if (scopedAt !== undefined) snap.scopedAt = scopedAt;
+  const scopedAttemptedAt = scoped.fetched ? fetchedAt : prior?.scopedAttemptedAt;
+  if (scopedAttemptedAt !== undefined) snap.scopedAttemptedAt = scopedAttemptedAt;
+  return snap;
 }
 
 // Back-compat thin wrapper. Existing callers / tests use this name.
@@ -679,6 +880,8 @@ export async function refreshUsage(force = false, reason: RefreshReason = "hook"
       fetchedAt: new Date().toISOString(),
       ...(prior?.data ? { data: prior.data } : {}),
       ...(prior?.dataAt ? { dataAt: prior.dataAt } : (prior?.fetchedAt && prior.data ? { dataAt: prior.fetchedAt } : {})),
+      ...(prior?.scopedAt ? { scopedAt: prior.scopedAt } : {}),
+      ...(prior?.scopedAttemptedAt ? { scopedAttemptedAt: prior.scopedAttemptedAt } : {}),
     };
     writeUsageSnapshot(claimSnap);
     return { fetched: true as const, prior };
@@ -713,75 +916,111 @@ export async function refreshUsage(force = false, reason: RefreshReason = "hook"
   }
   const cred = resolved.cred;
 
+  // Primary bars from response headers (every cycle); scoped bar from the
+  // throttled oauth endpoint only when due (hourly) and only if the primary
+  // token actually worked. assembleSnapshot folds both into the snapshot.
+  const primary = await fetchPrimary(cred.token, prior);
+  const scoped = await fetchScopedIfDue(cred.token, prior, force, primary);
+  const fetchedAt = new Date().toISOString();
+  const snap = assembleSnapshot(fetchedAt, primary, scoped, prior);
+  writeUsageSnapshotLocked(snap);
+
+  // Recovery from a prior error episode is a lifecycle transition (info); a
+  // steady-state success is a heartbeat (debug, suppressed at the default
+  // level). usageLogLevel(..., "ok") encodes exactly that split, so the log
+  // gains a positive counterpart that closes out each error cluster.
+  if (!primary.error && usageLogLevel(prior?.error, "ok") === "info") {
+    log.info("usage", "fetch recovered", { data: { from: classifyUsageErrorKind(prior?.error) } });
+  }
+  if (!primary.error) {
+    log.debug("usage", "fetched", {
+      data: {
+        source: cred.source,
+        fiveHour: snap.data?.fiveHour?.pct,
+        weekly: snap.data?.weekly?.pct,
+        scoped: snap.data?.scoped?.map((s) => `${s.label} ${s.pct}%`),
+        scopedFetched: scoped.fetched,
+      },
+    });
+  }
+  return snap;
+}
+
+// The primary fetch: unified rate-limit headers off a 1-token /v1/messages
+// call. Governed by the generous messages limiter, so a 429 here means the
+// account itself is at its cap (rare at our cadence) — we still honor it with
+// the escalating backoff so we don't hammer. A 200 that somehow carries no
+// unified headers is a soft failure: preserve the prior bars, surface a short
+// error, and let the stale tag accrue rather than advancing dataAt onto empty
+// data (which would silently freeze the meter). All outcomes preserve prior
+// bars via assembleSnapshot; this only classifies + logs.
+async function fetchPrimary(
+  token: string,
+  prior: UsageSnapshot | null | undefined,
+): Promise<PrimaryOutcome> {
   try {
-    const res = await fetchUsageRaw(cred.token);
-    const fetchedAt = new Date().toISOString();
-
+    const res = await fetchUsageHeaders(token);
     if (res.status === 200) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(res.body);
-      } catch (err) {
-        // 200 with an unparseable body — proxy interference, partial response,
-        // or a server-side shape change. Keep last-good data so the bars don't
-        // vanish; surface the error inline via the (stale) tag.
-        logUsageOutcome(prior, "server", "200 with unparseable body", { bodyPrefix: res.body.slice(0, 200) });
-        return finalizeSnapshot({
-          fetchedAt,
-          error: `200 with unparseable body: ${String(err).slice(0, 100)}`,
-        }, prior);
+      const data = parseUnifiedHeaders(res.headers);
+      if (!data.fiveHour && !data.weekly) {
+        logUsageOutcome(prior, "transient", "200 without unified rate-limit headers");
+        return { data, error: { error: "no rate-limit headers" } };
       }
-      const data = normalizeUsage(parsed);
-      const snap: UsageSnapshot = { fetchedAt, dataAt: fetchedAt, data };
-      writeUsageSnapshotLocked(snap);
-      // Recovery from a prior error episode is a lifecycle transition (info); a
-      // steady-state success is a heartbeat (debug, suppressed at the default
-      // level). usageLogLevel(..., "ok") encodes exactly that split, so the log
-      // gains a positive counterpart that closes out each error cluster.
-      if (usageLogLevel(prior?.error, "ok") === "info") {
-        log.info("usage", "fetch recovered", { data: { from: classifyUsageErrorKind(prior?.error) } });
-      }
-      log.debug("usage", "fetched", {
-        data: {
-          source: cred.source,
-          fiveHour: data.fiveHour?.pct,
-          weekly: data.weekly?.pct,
-          scoped: data.scoped?.map((s) => `${s.label} ${s.pct}%`),
-        },
-      });
-      return snap;
+      return { data };
     }
-
     if (res.status === 429) {
       const { backoffMs, streak } = rateLimitBackoff(prior, res.retryAfterMs);
       logUsageOutcome(prior, "rate-limited", "rate-limited", { retryAfterMs: res.retryAfterMs, backoffMs, streak });
-      return finalizeSnapshot({
-        fetchedAt,
-        error: "rate-limited",
-        retryAfterMs: backoffMs,
-        rateLimitStreak: streak,
-      }, prior);
+      return { error: { error: "rate-limited", retryAfterMs: backoffMs, rateLimitStreak: streak } };
     }
-
     if (res.status === 401 || res.status === 403) {
       logUsageOutcome(prior, "auth", "auth failed", { status: res.status });
-      // 401/403 isn't transient; back off AUTH_BACKOFF_MS so a dead token doesn't trigger the endpoint's 429 cascade (garden login overwrites the snapshot to heal early).
-      return finalizeSnapshot({
-        fetchedAt,
-        error: "login expired",
-        retryAfterMs: AUTH_BACKOFF_MS,
-      }, prior);
+      // 401/403 isn't transient; back off AUTH_BACKOFF_MS so a dead token doesn't hammer (garden login overwrites the snapshot to heal early).
+      return { error: { error: "login expired", retryAfterMs: AUTH_BACKOFF_MS } };
     }
-
-    logUsageOutcome(prior, "server", "unexpected status", { status: res.status, body: res.body.slice(0, 200) });
-    return finalizeSnapshot({ fetchedAt, error: `http ${res.status}` }, prior);
+    logUsageOutcome(prior, "server", "unexpected status", { status: res.status });
+    return { error: { error: `http ${res.status}` } };
   } catch (err) {
     const { summary, data } = describeFetchError(err);
     logUsageOutcome(prior, "transient", "usage fetch failed", { error: summary, ...data });
-    return finalizeSnapshot({
-      fetchedAt: new Date().toISOString(),
-      error: summary,
-    }, prior);
+    return { error: { error: summary } };
+  }
+}
+
+// The secondary fetch: the model-scoped weekly bar (and extra-usage credits)
+// from the throttled oauth endpoint. Skipped entirely unless the primary token
+// worked (no point pinging the stricter endpoint with a dead/rate-limited
+// token) and the hourly cadence is due (or a forced refresh). Every failure is
+// silent at debug — the primary bars already reflect live quota, so a scoped
+// miss just leaves the last scoped value in place until the next hourly try.
+async function fetchScopedIfDue(
+  token: string,
+  prior: UsageSnapshot | null | undefined,
+  force: boolean,
+  primary: PrimaryOutcome,
+): Promise<ScopedOutcome> {
+  if (primary.error) return { fetched: false };
+  if (!force && !scopedFetchDue(prior, Date.now())) return { fetched: false };
+  try {
+    const res = await fetchUsageRaw(token);
+    if (res.status === 200) {
+      try {
+        const d = normalizeUsage(JSON.parse(res.body));
+        return { fetched: true, data: { scoped: d.scoped, extraUsage: d.extraUsage } };
+      } catch {
+        log.debug("usage", "scoped fetch: unparseable body");
+        return { fetched: true };
+      }
+    }
+    if (res.status === 429) {
+      log.debug("usage", "scoped fetch rate-limited", { data: { retryAfterMs: res.retryAfterMs } });
+      return { fetched: true };
+    }
+    log.debug("usage", "scoped fetch: unexpected status", { data: { status: res.status } });
+    return { fetched: true };
+  } catch (err) {
+    log.debug("usage", "scoped fetch failed", { data: { error: describeFetchError(err).summary } });
+    return { fetched: true };
   }
 }
 
@@ -796,6 +1035,13 @@ function finalizeSnapshot(
   if (prior?.data && !merged.data) {
     merged.data = prior.data;
     merged.dataAt = prior.dataAt ?? prior.fetchedAt;
+  }
+  // These credential-failure paths never reach either fetch, so carry the
+  // scoped-cadence bookkeeping forward — otherwise a credential blip would drop
+  // scopedAttemptedAt and force an off-cadence scoped refetch on recovery.
+  if (prior?.scopedAt && merged.scopedAt === undefined) merged.scopedAt = prior.scopedAt;
+  if (prior?.scopedAttemptedAt && merged.scopedAttemptedAt === undefined) {
+    merged.scopedAttemptedAt = prior.scopedAttemptedAt;
   }
   writeUsageSnapshotLocked(merged);
   return merged;

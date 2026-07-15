@@ -3,6 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   normalizeUsage,
+  parseUnifiedHeaders,
+  scopedFetchDue,
+  mergeUsageData,
+  assembleSnapshot,
   formatDuration,
   formatExtraUsageCredits,
   formatBriefAge,
@@ -13,12 +17,16 @@ import {
   HOOK_REFRESH_COOLDOWN_MS,
   POLL_OK_MS,
   POLL_MIN_MS,
+  SCOPED_POLL_MS,
   RATE_LIMIT_FLOOR_MS,
   RATE_LIMIT_MARGIN_MS,
   RATE_LIMIT_MAX_BACKOFF_MS,
   rateLimitBackoff,
   classifyUsageErrorKind,
   usageLogLevel,
+  type UsageSnapshot,
+  type PrimaryOutcome,
+  type ScopedOutcome,
 } from "../src/dashboard/usage.js";
 import { useTmpHome } from "./helpers.js";
 
@@ -102,6 +110,178 @@ describe("normalizeUsage", () => {
     // Enabled but uncapped (null limit / utilization) → keeps only the fields it carries.
     expect(normalizeUsage({ ...base, extra_usage: { is_enabled: true, monthly_limit: null, used_credits: 1234, utilization: null } }).extraUsage)
       .toEqual({ enabled: true, usedCredits: 1234 });
+  });
+});
+
+describe("parseUnifiedHeaders — primary bars from /v1/messages response headers", () => {
+  // Real header values captured from a live probe: utilization is a 0..1
+  // fraction, reset is unix epoch seconds.
+  const live = {
+    "anthropic-ratelimit-unified-5h-utilization": "0.62",
+    "anthropic-ratelimit-unified-5h-reset": "1784145600",
+    "anthropic-ratelimit-unified-7d-utilization": "0.61",
+    "anthropic-ratelimit-unified-7d-reset": "1784458800",
+    "anthropic-ratelimit-unified-5h-status": "allowed",
+  };
+
+  it("scales the 0..1 fraction to percent and converts epoch-seconds reset to ISO", () => {
+    const out = parseUnifiedHeaders(live);
+    expect(out.fiveHour).toEqual({ pct: 62, resetsAt: new Date(1784145600 * 1000).toISOString() });
+    expect(out.weekly).toEqual({ pct: 61, resetsAt: new Date(1784458800 * 1000).toISOString() });
+    // The headers carry no per-model bucket — the scoped bar never comes from here.
+    expect(out.scoped).toBeUndefined();
+  });
+
+  it("omits a window whose utilization or reset header is missing", () => {
+    const out = parseUnifiedHeaders({
+      "anthropic-ratelimit-unified-5h-utilization": "0.5",
+      // no 5h-reset → 5h dropped; no 7d headers at all → weekly dropped
+    });
+    expect(out.fiveHour).toBeUndefined();
+    expect(out.weekly).toBeUndefined();
+  });
+
+  it("omits a window with a non-numeric header rather than emitting NaN", () => {
+    const out = parseUnifiedHeaders({
+      "anthropic-ratelimit-unified-5h-utilization": "n/a",
+      "anthropic-ratelimit-unified-5h-reset": "1784145600",
+    });
+    expect(out.fiveHour).toBeUndefined();
+  });
+
+  it("returns an empty object when no unified headers are present", () => {
+    expect(parseUnifiedHeaders({ "content-type": "application/json" })).toEqual({});
+  });
+
+  it("reads the first value when a header arrives as an array", () => {
+    const out = parseUnifiedHeaders({
+      "anthropic-ratelimit-unified-5h-utilization": ["0.4", "0.9"],
+      "anthropic-ratelimit-unified-5h-reset": ["1784145600"],
+    });
+    expect(out.fiveHour?.pct).toBe(40);
+  });
+});
+
+describe("scopedFetchDue — hourly cadence for the throttled scoped fetch", () => {
+  const now = Date.now();
+  it("is due when the snapshot never attempted a scoped fetch", () => {
+    expect(scopedFetchDue(null, now)).toBe(true);
+    expect(scopedFetchDue({ fetchedAt: new Date(now).toISOString() }, now)).toBe(true);
+  });
+  it("is not due within SCOPED_POLL_MS of the last attempt", () => {
+    const snap = { fetchedAt: "", scopedAttemptedAt: new Date(now - SCOPED_POLL_MS / 2).toISOString() };
+    expect(scopedFetchDue(snap, now)).toBe(false);
+  });
+  it("becomes due once SCOPED_POLL_MS has elapsed since the last attempt", () => {
+    const snap = { fetchedAt: "", scopedAttemptedAt: new Date(now - SCOPED_POLL_MS - 1000).toISOString() };
+    expect(scopedFetchDue(snap, now)).toBe(true);
+  });
+  it("gates on the last attempt, not the last success — a 429'd attempt still waits", () => {
+    // scopedAt (success) is old, but scopedAttemptedAt (the 429) is recent.
+    const snap = {
+      fetchedAt: "",
+      scopedAt: new Date(now - 3 * SCOPED_POLL_MS).toISOString(),
+      scopedAttemptedAt: new Date(now - 60_000).toISOString(),
+    };
+    expect(scopedFetchDue(snap, now)).toBe(false);
+  });
+});
+
+describe("mergeUsageData — layering the two sources over prior data", () => {
+  const fh = { pct: 62, resetsAt: "2026-07-15T20:00:00Z" };
+  const wk = { pct: 61, resetsAt: "2026-07-19T11:00:00Z" };
+  const scopedFable = [{ pct: 41, resetsAt: "2026-07-19T11:00:00Z", label: "Fable" }];
+
+  it("takes primary bars fresh and preserves prior scoped when scoped wasn't fetched", () => {
+    const out = mergeUsageData({ fiveHour: fh, weekly: wk }, undefined, { scoped: scopedFable });
+    expect(out.fiveHour).toEqual(fh);
+    expect(out.weekly).toEqual(wk);
+    expect(out.scoped).toEqual(scopedFable); // preserved from prior
+  });
+
+  it("preserves prior primary bars when the header fetch returned nothing", () => {
+    const out = mergeUsageData(undefined, undefined, { fiveHour: fh, weekly: wk, scoped: scopedFable });
+    expect(out.fiveHour).toEqual(fh);
+    expect(out.weekly).toEqual(wk);
+    expect(out.scoped).toEqual(scopedFable);
+  });
+
+  it("a fetched-but-empty scoped source is authoritative and drops a since-removed bar", () => {
+    const out = mergeUsageData({ fiveHour: fh }, { scoped: undefined, extraUsage: undefined }, { scoped: scopedFable });
+    expect(out.scoped).toBeUndefined(); // fresh scoped fetch says there is none
+  });
+
+  it("layers a freshly fetched scoped bar over primary header bars", () => {
+    const out = mergeUsageData({ fiveHour: fh, weekly: wk }, { scoped: scopedFable }, undefined);
+    expect(out.scoped).toEqual(scopedFable);
+  });
+});
+
+describe("assembleSnapshot — folding fetch outcomes into the next snapshot", () => {
+  const fetchedAt = "2026-07-15T17:00:00.000Z";
+  const fh = { pct: 62, resetsAt: "2026-07-15T20:00:00Z" };
+  const wk = { pct: 61, resetsAt: "2026-07-19T11:00:00Z" };
+  const scopedFable = [{ pct: 41, resetsAt: "2026-07-19T11:00:00Z", label: "Fable" }];
+  const prior: UsageSnapshot = {
+    fetchedAt: "2026-07-15T16:50:00.000Z",
+    dataAt: "2026-07-15T16:50:00.000Z",
+    data: { fiveHour: { pct: 50, resetsAt: fh.resetsAt }, weekly: { pct: 55, resetsAt: wk.resetsAt }, scoped: scopedFable },
+    scopedAt: "2026-07-15T16:20:00.000Z",
+    scopedAttemptedAt: "2026-07-15T16:20:00.000Z",
+  };
+
+  it("advances dataAt only when a primary bar actually arrived", () => {
+    const primary: PrimaryOutcome = { data: { fiveHour: fh, weekly: wk } };
+    const scoped: ScopedOutcome = { fetched: false };
+    const snap = assembleSnapshot(fetchedAt, primary, scoped, prior);
+    expect(snap.dataAt).toBe(fetchedAt);
+    expect(snap.data?.fiveHour).toEqual(fh);
+    // scoped not fetched this cycle → prior bar + prior scoped timestamps preserved.
+    expect(snap.data?.scoped).toEqual(scopedFable);
+    expect(snap.scopedAt).toBe(prior.scopedAt);
+    expect(snap.scopedAttemptedAt).toBe(prior.scopedAttemptedAt);
+  });
+
+  it("holds dataAt at the prior value when the header fetch failed (bars stay, stale accrues)", () => {
+    const primary: PrimaryOutcome = { error: { error: "rate-limited", retryAfterMs: 90 * 60_000, rateLimitStreak: 1 } };
+    const snap = assembleSnapshot(fetchedAt, primary, { fetched: false }, prior);
+    expect(snap.dataAt).toBe(prior.dataAt); // not advanced onto missing data
+    expect(snap.error).toBe("rate-limited");
+    expect(snap.retryAfterMs).toBe(90 * 60_000);
+    expect(snap.data?.fiveHour).toEqual(prior.data?.fiveHour); // preserved
+  });
+
+  it("does not advance dataAt for a 200 that carried no unified headers", () => {
+    const primary: PrimaryOutcome = { data: {}, error: { error: "no rate-limit headers" } };
+    const snap = assembleSnapshot(fetchedAt, primary, { fetched: false }, prior);
+    expect(snap.dataAt).toBe(prior.dataAt);
+    expect(snap.error).toBe("no rate-limit headers");
+    expect(snap.data?.fiveHour).toEqual(prior.data?.fiveHour); // preserved bars
+  });
+
+  it("updates scopedAt and scopedAttemptedAt on a successful scoped fetch", () => {
+    const primary: PrimaryOutcome = { data: { fiveHour: fh, weekly: wk } };
+    const scoped: ScopedOutcome = { fetched: true, data: { scoped: scopedFable } };
+    const snap = assembleSnapshot(fetchedAt, primary, scoped, prior);
+    expect(snap.scopedAt).toBe(fetchedAt);
+    expect(snap.scopedAttemptedAt).toBe(fetchedAt);
+    expect(snap.data?.scoped).toEqual(scopedFable);
+  });
+
+  it("advances scopedAttemptedAt but NOT scopedAt when the scoped fetch failed", () => {
+    const primary: PrimaryOutcome = { data: { fiveHour: fh, weekly: wk } };
+    const scoped: ScopedOutcome = { fetched: true }; // attempted, no data (429/error)
+    const snap = assembleSnapshot(fetchedAt, primary, scoped, prior);
+    expect(snap.scopedAttemptedAt).toBe(fetchedAt); // spaces the next retry an hour out
+    expect(snap.scopedAt).toBe(prior.scopedAt);     // bar freshness unchanged
+    expect(snap.data?.scoped).toEqual(scopedFable); // last-good bar preserved
+  });
+
+  it("carries no scoped timestamps when none were ever set and none fetched", () => {
+    const snap = assembleSnapshot(fetchedAt, { data: { fiveHour: fh } }, { fetched: false }, null);
+    expect(snap.scopedAt).toBeUndefined();
+    expect(snap.scopedAttemptedAt).toBeUndefined();
+    expect(snap.dataAt).toBe(fetchedAt);
   });
 });
 
@@ -1056,6 +1236,9 @@ describe("classifyUsageErrorKind — persisted error string → coarse kind", ()
     expect(classifyUsageErrorKind("read ECONNRESET")).toBe("transient");
     expect(classifyUsageErrorKind("connect EHOSTUNREACH 160.79.104.10:443")).toBe("transient");
     expect(classifyUsageErrorKind("some error we have never seen")).toBe("transient");
+    // The header-source soft failure classifies as transient so a header outage
+    // collapses to one info line + debug repeats, not a warn every poll.
+    expect(classifyUsageErrorKind("no rate-limit headers")).toBe("transient");
   });
 });
 
