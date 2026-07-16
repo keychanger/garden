@@ -260,6 +260,51 @@ describe("lifecycle state display (prState takes priority)", () => {
   });
 });
 
+describe("render parity (status() TTY vs renderQuickStatus() baked)", () => {
+  // The anti-drift guard for the one-renderer refactor: both paths build rows
+  // through the same collectSegments/renderWorkerRow/renderProjectHeader, so a
+  // fixed fleet must render byte-identical bodies. The baked path appends a
+  // clear-to-EOL (\x1b[K) to every line and (with a paneWidth) width-caps; the
+  // TTY path does neither. Strip the \x1b[K and pass no paneWidth, and the two
+  // must match line-for-line — header (crew badge included) and worker rows.
+  it("both paths emit identical header and worker-row bodies", async () => {
+    const parityState = {
+      activeProject: "garden",
+      statusPaneId: "%0",
+      gardenShellPaneId: "%1",
+      activePaneId: "%2",
+      activePaneType: "worker" as const,
+      activeWindowName: "_garden-worker-bold-ash",
+    };
+    vi.mocked(readDashState).mockReturnValue(parityState);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([
+      "_garden-worker-bold-ash",
+      "_garden-worker-calm-fen",
+    ]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "fix auth", agentStatus: "working" },
+      { name: "calm-fen", sessionId: "b", task: "review pass", prState: "reviewing" },
+    ]);
+
+    const ttyLines = await captureConsoleLog(() => status([]));
+    const bakedLines = renderQuickStatus(parityState)
+      .split("\n")
+      .map(l => l.replace(/\x1b\[K$/, ""));
+
+    expect(bakedLines).toEqual(ttyLines);
+  });
+
+  it("garden status (CLI) now shows the crew badge, matching the dashboard pane", async () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle" },
+    ]);
+    const lines = await captureConsoleLog(() => status([]));
+    // Previously only the baked pane rendered the badge; the CLI header omitted
+    // it. The shared renderProjectHeader fixes that drift.
+    expect(lines.join("\n")).toContain("\x1b[90mall-claude\x1b[0m");
+  });
+});
+
 describe("renderQuickStatus", () => {
   const state = {
     activeProject: "garden",

@@ -113,6 +113,76 @@ function iconFor(worker: WorkerInfo): string {
   return STATUS_ICONS[worker.status];
 }
 
+// The per-render context a worker row needs beyond the worker itself. Both
+// render paths build one of these per project: the TTY path sets activityMax
+// (so formatRowTail truncates the activity substring to fit); the baked path
+// leaves it undefined and hard-caps the whole line by visible width later.
+interface RowRenderCtx {
+  now: number;
+  gateClosed: boolean;
+  projectBranch: string | null | undefined;
+  showAllBranches: boolean;
+  activityMax?: number;
+}
+
+// The pieces of a worker row, assembled once by collectSegments and laid out
+// by renderWorkerRow. Splitting collection from layout is what lets the TTY
+// and baked paths share one row definition instead of two drifting loops.
+interface RowSegments {
+  focus: string;
+  icon: string;
+  name: string;   // unpadded; renderWorkerRow pads to the column width
+  state: string;  // formatStatus output, unpadded
+  detail: string; // formatRowTail: trellis/CI bracket + activity + base hint
+  flags: string;  // end-of-row status suffixes (elapsed, gate)
+  status: WorkerStatus;
+  stale: boolean;
+}
+
+// Build the row segments for one worker. Pure over (worker, ctx) — no I/O — so
+// both paths call it and stay byte-identical by construction.
+function collectSegments(worker: WorkerInfo, ctx: RowRenderCtx): RowSegments {
+  const baseHint = formatBranchHint(worker.baseBranch, ctx.projectBranch, ctx.showAllBranches);
+  const elapsed = formatTimeInState(worker.status, worker.lastStateChangeAt, ctx.now);
+  const gate = formatGateSuffix(worker.status, ctx.gateClosed);
+  return {
+    focus: worker.active ? "●" : "○",
+    icon: iconFor(worker),
+    name: worker.name,
+    state: formatStatus(worker),
+    detail: formatRowTail(worker, baseHint, ctx.activityMax),
+    flags: `${elapsed}${gate}`,
+    status: worker.status,
+    stale: worker.stale,
+  };
+}
+
+// Lay out a worker row from its segments. The single place row column order,
+// coloring, and staleness dimming are decided — shared by both render paths.
+function renderWorkerRow(seg: RowSegments, dims: { nameWidth: number; stateWidth: number }): string {
+  const wname = seg.name.padEnd(dims.nameWidth);
+  const wstatus = seg.state.padEnd(dims.stateWidth);
+  const line = `    ${seg.focus} ${seg.icon} ${wname}  ${wstatus}${seg.detail}${seg.flags}`;
+  const colored = colorizeRow(seg.status, line);
+  return seg.stale ? dimRow(colored) : colored;
+}
+
+// Render a project header row. Shared by both paths — the CLI path previously
+// omitted the crew badge (the drift this unification fixes), so a project's
+// crew now shows in `garden status` exactly as it does in the dashboard pane.
+function renderProjectHeader(h: {
+  index: number;
+  name: string;
+  isActive: boolean;
+  projectConfig: ProjectConfig | undefined;
+  config: GardenConfig;
+}): string {
+  const marker = h.isActive ? " ◄" : "";
+  const displayName = h.isActive ? `\x1b[1;32m${h.name}\x1b[0m` : h.name;
+  const crewBadge = h.projectConfig ? formatCrewBadge(h.projectConfig, h.config) : "";
+  return `  ${h.index}. ${displayName}${crewBadge}${formatDiaryGlyph(h.name)}${marker}`;
+}
+
 // Refresh all workers' task fields from their live tmux pane titles. Called
 // before rendering so the registry has current data even if no hook has fired
 // recently (e.g. workers in the middle of a long work session). This keeps
@@ -191,25 +261,26 @@ export async function status(args: string[]): Promise<void> {
     if (pi > 0) console.log("");
     const project = statuses[pi];
     const gateClosed = gateHoldsProject(acConfig, project.name, config);
-    const marker = project.isActive ? " \u25C4" : "";
-    const name = project.isActive ? `\x1b[1;32m${project.name}\x1b[0m` : project.name;
-    console.log(`  ${project.index}. ${name}${formatDiaryGlyph(project.name)}${marker}`);
+    console.log(renderProjectHeader({
+      index: project.index,
+      name: project.name,
+      isActive: project.isActive,
+      projectConfig: config.projects[project.name],
+      config,
+    }));
 
     if (project.workers.length === 0) {
       console.log("    (no workers)");
     } else {
-      const showAllBranches = projectHasBranchDivergence(project.workers, project.projectBranch);
+      const ctx: RowRenderCtx = {
+        now,
+        gateClosed,
+        projectBranch: project.projectBranch,
+        showAllBranches: projectHasBranchDivergence(project.workers, project.projectBranch),
+        activityMax,
+      };
       for (const worker of project.workers) {
-        const focus = worker.active ? "\u25CF" : "\u25CB";
-        const icon = iconFor(worker);
-        const wname = worker.name.padEnd(nameWidth);
-        const wstatus = formatStatus(worker).padEnd(statusWidth);
-        const baseHint = formatBranchHint(worker.baseBranch, project.projectBranch, showAllBranches);
-        const elapsed = formatTimeInState(worker.status, worker.lastStateChangeAt, now);
-        const gate = formatGateSuffix(worker.status, gateClosed);
-        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${formatRowTail(worker, baseHint, activityMax)}${elapsed}${gate}`;
-        const colored = colorizeRow(worker.status, line);
-        console.log(worker.stale ? dimRow(colored) : colored);
+        console.log(renderWorkerRow(collectSegments(worker, ctx), { nameWidth, stateWidth: statusWidth }));
       }
     }
   }
@@ -724,29 +795,28 @@ export function renderQuickStatus(
     if (pi > 0) lines.push("");
     const name = names[pi];
     const gateClosed = gateHoldsProject(acConfig, name, config);
-    const isActive = state.activeProject === name;
-    const marker = isActive ? " \u25C4" : "";
-    const displayName = isActive ? `\x1b[1;32m${name}\x1b[0m` : name;
     const projectBranch = projectBranches[pi];
-    const crewBadge = config.projects[name] ? formatCrewBadge(config.projects[name], config) : "";
-    lines.push(`  ${pi + 1}. ${displayName}${crewBadge}${formatDiaryGlyph(name)}${marker}`);
+    lines.push(renderProjectHeader({
+      index: pi + 1,
+      name,
+      isActive: state.activeProject === name,
+      projectConfig: config.projects[name],
+      config,
+    }));
 
     const workers = projectWorkers[pi];
     if (workers.length === 0) {
       lines.push("    (no workers)");
     } else {
-      const showAllBranches = projectHasBranchDivergence(workers, projectBranch);
+      const ctx: RowRenderCtx = {
+        now,
+        gateClosed,
+        projectBranch,
+        showAllBranches: projectHasBranchDivergence(workers, projectBranch),
+        activityMax: undefined,
+      };
       for (const worker of workers) {
-        const focus = worker.active ? "\u25CF" : "\u25CB";
-        const icon = iconFor(worker);
-        const wname = worker.name.padEnd(nameWidth);
-        const wstatus = formatStatus(worker).padEnd(statusWidth);
-        const baseHint = formatBranchHint(worker.baseBranch, projectBranch, showAllBranches);
-        const elapsed = formatTimeInState(worker.status, worker.lastStateChangeAt, now);
-        const gate = formatGateSuffix(worker.status, gateClosed);
-        const line = `    ${focus} ${icon} ${wname}  ${wstatus}${formatRowTail(worker, baseHint)}${elapsed}${gate}`;
-        const colored = colorizeRow(worker.status, line);
-        lines.push(worker.stale ? dimRow(colored) : colored);
+        lines.push(renderWorkerRow(collectSegments(worker, ctx), { nameWidth, stateWidth: statusWidth }));
       }
     }
   }
