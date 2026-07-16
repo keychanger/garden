@@ -2096,6 +2096,105 @@ describe("poll — reviewing state (async)", () => {
   });
 });
 
+describe("poll — holistic final review (interposed whole-task review)", () => {
+  // The interposed final review (poller-holistic-review.ts) reuses the
+  // `reviewing` state with holisticFinalActive set. handleReviewing branches to
+  // handleHolisticFinalReview, whose disposition differs from a per-phase verdict:
+  // shadow surfaces findings and finalizes done, a fix rides the merge gate,
+  // FAILED parks in failing, and any no-commit outcome finalizes done.
+  function setHolistic(over: Partial<WorkerEntry>): void {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        holisticFinalActive: true,
+        reviewStartedAt: Date.now(),
+        mergeCount: 3,
+        lastSeenSha: "abc123",
+        ...over,
+      }),
+    ]);
+    // Review window gone (reviewer finished its turn); everything else exists.
+    vi.mocked(windowExists).mockImplementation((name: string) => !name.includes("-review-"));
+  }
+  function reviewResult(body: string): void {
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) => String(p).includes("review-result"));
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result") ? body : "{}");
+  }
+
+  it("stays in reviewing while the reviewer window is still alive", () => {
+    setHolistic({ holisticReviewMode: "fix" });
+    vi.mocked(windowExists).mockReturnValue(true); // review window still exists
+    poll("myproject");
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(registryMock.findWorkerByName("myproject", "bold-ash")!.prState).toBe("reviewing");
+  });
+
+  it("shadow mode: surfaces findings as an alert and finalizes done (never merges)", () => {
+    setHolistic({ holisticReviewMode: "shadow" });
+    reviewResult("Phase 1 added X; phase 3 orphaned it.\nFAILED");
+    poll("myproject");
+    // Shadow is analysis-only: no push, no merge, and the FAILED verdict does
+    // not fail the worker — it just reports.
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(mergeToBase).not.toHaveBeenCalled();
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining("Holistic review FINDINGS"),
+    }));
+    const after = registryMock.findWorkerByName("myproject", "bold-ash")!;
+    expect(after.prState).toBe("done");
+    expect(after.holisticFinalActive).toBeUndefined();
+    expect(after.holisticReviewedThroughMergeCount).toBe(3);
+  });
+
+  it("fix mode CLEAN (no commit): finalizes done without merging", () => {
+    // preReviewSha == the mocked head SHA ("abc123") → the reviewer committed
+    // nothing, so a CLEAN verdict just finalizes the worker.
+    setHolistic({ holisticReviewMode: "fix", preReviewSha: "abc123" });
+    reviewResult("No cross-phase defects.\nCLEAN");
+    poll("myproject");
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(mergeToBase).not.toHaveBeenCalled();
+    const after = registryMock.findWorkerByName("myproject", "bold-ash")!;
+    expect(after.prState).toBe("done");
+    expect(after.holisticFinalActive).toBeUndefined();
+    expect(after.holisticReviewedThroughMergeCount).toBe(3);
+  });
+
+  it("fix mode FIXED with a commit: force-pushes, rides the merge gate, marker persists", () => {
+    // preReviewSha differs from the mocked head SHA ("abc123") → a fix landed.
+    setHolistic({ holisticReviewMode: "fix", preReviewSha: "pre0000" });
+    reviewResult("Removed dead code a later phase orphaned.\nFIXED");
+    poll("myproject");
+    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
+    const call = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "merge-pending",
+    );
+    expect(call).toBeDefined();
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 0);
+    // holisticFinalActive rides merge-pending so transitionToTerminal finalizes
+    // the fix merge straight to done (guard bumped, no auto-continue).
+    expect(registryMock.findWorkerByName("myproject", "bold-ash")!.holisticFinalActive).toBe(true);
+  });
+
+  it("FAILED verdict (fix mode): parks in failing on an unfixable cross-phase defect", () => {
+    setHolistic({ holisticReviewMode: "fix", preReviewSha: "abc123" });
+    reviewResult("Phase 2 broke a contract phase 4 relies on.\nFAILED");
+    poll("myproject");
+    expect(mergeToBase).not.toHaveBeenCalled();
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      level: "error",
+      message: expect.stringContaining("could not fix a cross-phase defect"),
+    }));
+    const after = registryMock.findWorkerByName("myproject", "bold-ash")!;
+    expect(after.prState).toBe("failing");
+    expect(after.failingReason).toBe("code");
+    expect(after.holisticFinalActive).toBeUndefined();
+    expect(after.holisticReviewedThroughMergeCount).toBe(3);
+  });
+});
+
 describe("poll — merge-pending state", () => {
   it("merges when rebase is clean", () => {
     registryMock._setEntries("myproject", [
@@ -2212,6 +2311,44 @@ describe("poll — merge-pending state", () => {
         worker: "bold-ash",
         data: expect.objectContaining({ reason: "done-sentinel" }),
       }),
+    );
+  });
+
+  it("holistic fix merge: finalizes straight to done, skips auto-continue, bumps the guard", () => {
+    // The interposed whole-task review pushed a cross-phase fix (holisticFinalActive
+    // rode merge-pending). transitionToTerminal must finalize it to `done` (not the
+    // transient `merged` beat), clear the markers, advance the high-water guard past
+    // this mergeCount so it never re-fires, and NOT auto-continue (the worker is done).
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        agentStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        holisticFinalActive: true,
+        holisticReviewMode: "fix",
+        mergeCount: 3,
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true, advanced: "worktree" });
+    vi.mocked(isDoneSet).mockReturnValue(false); // no sentinel; the marker drives `done`
+
+    poll("myproject");
+
+    const doneCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "done",
+    );
+    expect(doneCall).toBeDefined();
+    const fields = doneCall![2] as Record<string, unknown>;
+    expect(fields.holisticFinalActive).toBeUndefined();
+    expect(fields.holisticReviewMode).toBeUndefined();
+    // mergeCount incremented 3 -> 4; the guard advances past it so it never re-fires.
+    expect(fields.holisticReviewedThroughMergeCount).toBe(4);
+    // A done holistic pass never continues and never re-dispatches.
+    expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      "poller", "holistic review fix merged; worker done",
+      expect.objectContaining({ worker: "bold-ash" }),
     );
   });
 

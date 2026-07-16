@@ -114,6 +114,7 @@ stateDiagram-v2
     reviewing --> merge_pending : reviewer Stop (passes)
     reviewing --> failing : reviewer Stop (fails)
     reviewing --> working : worker push (stale review)
+    reviewing --> done : holistic final review (CLEAN / shadow / no-commit)
 
     merge_pending --> merged : queue: ff merge
     merge_pending --> resolving : queue: rebase conflict
@@ -134,6 +135,7 @@ stateDiagram-v2
     merge_pending --> done : queue: ff merge with .garden-done present
     idle --> done : Stop hook + .garden-done present
     done --> working : UserPromptSubmit (operator nudged)
+    done --> reviewing : holistic interposition (multi-phase default, >=2 merges)
 
     failing --> working : worker push + 30s debounce
 
@@ -177,6 +179,7 @@ a terminal state — it returns to `working` when the operator responds
 | paused        | working       | Worker `UserPromptSubmit` (operator's redirect)      |
 | paused        | idle          | Operator release (`⌥e` toggle on a held worker)      |
 | reviewing     | merge-pending | Reviewer `Stop` with verdict CLEAN or FIXED          |
+| reviewing     | done          | Holistic final review `Stop`: CLEAN / shadow / no-commit (interposed whole-task pass) |
 | reviewing     | failing       | Reviewer `Stop` with verdict FAILED                  |
 | reviewing     | working       | Worker push event (commits during review, aborted)   |
 | merge-pending | merged        | Merge queue: ff merge succeeds (no sentinel)         |
@@ -195,6 +198,7 @@ a terminal state — it returns to `working` when the operator responds
 | merged        | working       | Worker `UserPromptSubmit` (transient cleared)        |
 | merged        | done          | Worker `Stop` with no commits ahead AND `.garden-done` present |
 | done          | working       | Worker `UserPromptSubmit` (operator nudged)          |
+| done          | reviewing     | Holistic interposition: multi-phase default worker (≥2 merges) — poller launches whole-task review |
 | failing       | working       | Worker push event + 30s debounce                     |
 | any           | exited        | tmux `pane-died` hook                                |
 
