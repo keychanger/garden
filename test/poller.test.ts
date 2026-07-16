@@ -185,6 +185,14 @@ vi.mock("../src/rules.js", () => ({
   buildRulesContext: vi.fn(() => "test rules"),
 }));
 
+// The Haiku verdict-extraction fallback runs (default workflow) before the
+// unparseable-verdict re-review paths. Default it to "no verdict recovered" so
+// the existing unparseable-path tests exercise the fall-through; individual
+// tests override the return to cover the recovery path.
+vi.mock("../src/dashboard/verdict-extract.js", () => ({
+  extractReviewVerdict: vi.fn(() => null),
+}));
+
 vi.mock("../src/dashboard/poller-ci.js", () => ({
   // Default: no github remote → gate is a pass-through. Individual tests
   // override these to exercise the success/pending/failed/unavailable paths.
@@ -244,6 +252,7 @@ import { getGitHubRepoSlug, checkCiStatus } from "../src/dashboard/poller-ci.js"
 import { sweepGhostEntries } from "../src/dashboard/validate.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
 import { recordCiFixOutcome } from "../src/dashboard/telemetry.js";
+import { extractReviewVerdict } from "../src/dashboard/verdict-extract.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 const registryMock = await import("../src/dashboard/registry.js") as {
@@ -284,6 +293,10 @@ beforeEach(() => {
     !String(descendant).startsWith("origin/"));
   vi.mocked(getUnmergedFiles).mockReturnValue([]);
   vi.mocked(fs.existsSync).mockReturnValue(false);
+  // Default the Haiku verdict-extraction fallback to "no verdict recovered"
+  // (resetAllMocks wiped the factory impl to undefined). The unparseable-path
+  // tests rely on this; the recovery test overrides it.
+  vi.mocked(extractReviewVerdict).mockReturnValue(null);
 });
 
 // In the new model, review is launched when pendingReviewAt is set on the
@@ -1685,6 +1698,58 @@ describe("poll — reviewing state (async)", () => {
     // ...and not an immediate failing.
     expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "failing" }),
+    );
+  });
+
+  it("recovers an unparseable verdict via the Haiku fallback and dispatches instead of re-reviewing", () => {
+    // The reviewer reached a conclusion but didn't format the token (the
+    // operator's screenshot: a prose tail). parseLastLineVerdict returns null,
+    // but before re-reviewing, the Haiku classifier reads the reviewer's output
+    // and recovers CLEAN — so the worker dispatches to merge-pending (force-push
+    // + merge), NOT the unparseable re-review/backoff.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123",
+        preReviewSha: "pre456",
+      }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) {
+        return "Reviewed the diff and reran the suite.\n"
+          + "Final suite is green (2609 unit + 103 integration, lint clean).";
+      }
+      return "{}";
+    });
+    // CLEAN dispatch's stale-verdict guard compares remote vs lastSeenSha; keep
+    // them equal so it doesn't reset to working on a phantom worker push.
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("abc123");
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre456");
+    vi.mocked(extractReviewVerdict).mockReturnValue("CLEAN");
+
+    poll("myproject");
+
+    expect(extractReviewVerdict).toHaveBeenCalledOnce();
+    // Recovered verdict dispatched through the normal CLEAN path.
+    expect(forcePushBranch).toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        lastReview: expect.objectContaining({ verdict: "clean" }),
+      }),
+    );
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merge-pending" }),
+    );
+    // Not the unparseable re-review path.
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ unparseableRetryCount: expect.any(Number) }),
     );
   });
 

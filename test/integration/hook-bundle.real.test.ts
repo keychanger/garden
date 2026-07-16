@@ -16,7 +16,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-// Ceiling above today's ~221kb minified production bundle (minify +
+// Ceiling above today's ~225kb minified production bundle (minify +
 // keep-names): trips on the ~28kb step a retained adapter/skills closure adds,
 // not on routine drift. The precise detector for that regression is
 // SKILLS_BYTES_CEILING below (it reads skills.ts's bytesInOutput straight from
@@ -30,10 +30,13 @@ import path from "node:path";
 // holistic whole-task final review: its aggregated-diff prompt sections
 // (prompts.ts) and verdict handler (poller-review.ts) are import-reachable from
 // the hook graph via the existing review path — legitimate feature code, not a
-// retained closure (skills stayed fully shaken out, SKILLS_BYTES_CEILING=0). The
-// ~28kb regression this guard exists for is still caught by SKILLS_BYTES_CEILING
-// and by the remaining ~3kb of coarse headroom.
-const HOOK_BUNDLE_CEILING_BYTES = 224 * 1024;
+// retained closure (skills stayed fully shaken out, SKILLS_BYTES_CEILING=0).
+// Bumped 224->228kb for the Haiku verdict-extraction fallback (verdict-extract.ts,
+// ~1.9kb): poller-review.ts is import-reachable from the hook graph, so its new
+// dependency rides in — again legitimate review-recovery code, not a retained
+// closure. The ~28kb regression this guard exists for is still caught by
+// SKILLS_BYTES_CEILING and by the remaining ~3kb of coarse headroom.
+const HOOK_BUNDLE_CEILING_BYTES = 228 * 1024;
 // skills.ts contributes only a tree-shaken sliver today (<100 bytes); a
 // retained skills bundle is ~28kb. The threshold sits well between.
 const SKILLS_BYTES_CEILING = 2 * 1024;

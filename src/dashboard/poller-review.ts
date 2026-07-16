@@ -11,7 +11,8 @@ import { tryGetProject, SESSIONS_DIR } from "../config.js";
 import { addAlert } from "./alerts.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { resolveReviewRole, SAFE_REVIEW_MODEL } from "./roles.js";
-import { reviewerEnvPrefix } from "./claude-env.js";
+import { reviewerEnvPrefix, reviewerEnvObject } from "./claude-env.js";
+import { extractReviewVerdict } from "./verdict-extract.js";
 import { codexStderrSidecar } from "./harness/codex-core.js";
 import { getHarnessCore } from "./harness/core.js";
 import { setDoneSentinel } from "./continue.js";
@@ -252,51 +253,8 @@ export function handleReviewing(
       worker: entry.name,
       data: { project: projectName, verdict: review.verdict },
     });
-
-    // Record the durable last-review snapshot before dispatch, at the single
-    // point where a parseable verdict is known for both default and trellis.
-    // preReviewSha is still on the entry here (the failing/merge resets that
-    // clear it run inside the dispatch below); tipSha is the reviewed HEAD.
-    // This records the parsed verdict even in the uncommon case a downstream
-    // guard then discards it (the worker pushed mid-review, or the post-review
-    // force-push failed); the next review overwrites the snapshot, so any such
-    // staleness is transient and read-only.
-    const tipSha = getBranchHeadSha(wtPath) ?? undefined;
-    updateWorkerFields(projectName, entry.name, {
-      lastReview: {
-        verdict: review.verdict,
-        at: Date.now(),
-        body: review.body.slice(-REVIEW_BODY_TAIL_CHARS),
-        preReviewSha: entry.preReviewSha,
-        tipSha,
-      },
-    });
-
-    // Ledger the verdict with the signal the `state` event can't carry: review
-    // duration and the reviewer's fix magnitude (numstat of preReviewSha..tipSha
-    // — zero on CLEAN, the edit size on FIXED). Emitted here at the single
-    // parseable-verdict point, alongside the lastReview snapshot, so it covers
-    // both workflows and every clean/fixed/failed outcome.
-    const fix = entry.preReviewSha && tipSha
-      ? getDiffNumstat(wtPath, entry.preReviewSha, tipSha)
-      : { files: 0, insertions: 0, deletions: 0 };
-    recordReviewVerdict(projectName, entry.name, entry.createdAt, entry.workflow ?? "default", {
-      verdict: review.verdict,
-      durationMs: entry.reviewStartedAt ? Date.now() - entry.reviewStartedAt : undefined,
-      fixFiles: fix.files,
-      fixInsertions: fix.insertions,
-      fixDeletions: fix.deletions,
-      preReviewSha: entry.preReviewSha,
-      tipSha,
-    });
-
-    if (isTrellis) {
-      return dispatchTrellisVerdict(
-        projectName, projectPath, entry, review as TrellisVerdictResult,
-      );
-    }
-    return dispatchDefaultVerdict(
-      projectName, projectPath, baseBranch, entry, review as ReviewResult,
+    return recordAndDispatchReview(
+      projectName, projectPath, baseBranch, entry, review, isTrellis, wtPath,
     );
   }
 
@@ -382,6 +340,34 @@ export function handleReviewing(
     && !reviewerAdvanced
   ) {
     return handleTransientReviewFailure(projectName, projectPath, entry, transientSource);
+  }
+
+  // The reviewer produced a genuine conclusion but no parseable verdict token,
+  // and it is not a transient/quota error (those returned above). Rather than
+  // re-run the whole review, ask a cheap Haiku to read the reviewer's own output
+  // and classify its verdict — the reviewer already decided, it just failed to
+  // format the final line. Default workflow only: the trellis DRIFT verdict
+  // carries a structured drift list a one-word extraction can't reconstruct, so
+  // trellis keeps re-reviewing (falls straight through to handleUnparseableReview).
+  if (!isTrellis && rawOutput && rawOutput.trim()) {
+    const project = tryGetProject(projectName) ?? {};
+    const extracted = extractReviewVerdict(rawOutput, {
+      env: { ...process.env, ...reviewerEnvObject(project) },
+    });
+    if (extracted !== null) {
+      log.info("poller", "recovered review verdict via haiku extraction", {
+        worker: entry.name,
+        data: { project: projectName, verdict: extracted },
+      });
+      const recovered: ReviewResult = { verdict: extracted.toLowerCase() as ReviewResult["verdict"], body: rawOutput.trim() };
+      return recordAndDispatchReview(
+        projectName, projectPath, baseBranch, entry, recovered, false, wtPath,
+      );
+    }
+    log.info("poller", "haiku extraction did not recover a verdict; falling through to re-review", {
+      worker: entry.name,
+      data: { project: projectName },
+    });
   }
   return handleUnparseableReview(projectName, projectPath, entry);
 }
@@ -536,6 +522,61 @@ function handleHolisticFinalReview(
   }
   finalizeDone();
   return true;
+}
+
+// Record the durable last-review snapshot + telemetry for a parsed (or
+// Haiku-recovered) verdict, then hand off to the workflow's verdict dispatcher.
+// Shared by the normal parse path and the Haiku-extraction fallback so both
+// record identically. preReviewSha is still on the entry here (the failing/merge
+// resets that clear it run inside dispatch); tipSha is the reviewed HEAD. The
+// snapshot is recorded even in the uncommon case a downstream guard then
+// discards the verdict (the worker pushed mid-review, or the post-review
+// force-push failed); the next review overwrites it, so any staleness is
+// transient and read-only.
+function recordAndDispatchReview(
+  projectName: string,
+  projectPath: string,
+  baseBranch: string,
+  entry: WorkerEntry,
+  review: ReviewResult | TrellisVerdictResult,
+  isTrellis: boolean,
+  wtPath: string,
+): boolean {
+  const tipSha = getBranchHeadSha(wtPath) ?? undefined;
+  updateWorkerFields(projectName, entry.name, {
+    lastReview: {
+      verdict: review.verdict,
+      at: Date.now(),
+      body: review.body.slice(-REVIEW_BODY_TAIL_CHARS),
+      preReviewSha: entry.preReviewSha,
+      tipSha,
+    },
+  });
+
+  // Ledger the verdict with the signal the `state` event can't carry: review
+  // duration and the reviewer's fix magnitude (numstat of preReviewSha..tipSha
+  // — zero on CLEAN, the edit size on FIXED).
+  const fix = entry.preReviewSha && tipSha
+    ? getDiffNumstat(wtPath, entry.preReviewSha, tipSha)
+    : { files: 0, insertions: 0, deletions: 0 };
+  recordReviewVerdict(projectName, entry.name, entry.createdAt, entry.workflow ?? "default", {
+    verdict: review.verdict,
+    durationMs: entry.reviewStartedAt ? Date.now() - entry.reviewStartedAt : undefined,
+    fixFiles: fix.files,
+    fixInsertions: fix.insertions,
+    fixDeletions: fix.deletions,
+    preReviewSha: entry.preReviewSha,
+    tipSha,
+  });
+
+  if (isTrellis) {
+    return dispatchTrellisVerdict(
+      projectName, projectPath, entry, review as TrellisVerdictResult,
+    );
+  }
+  return dispatchDefaultVerdict(
+    projectName, projectPath, baseBranch, entry, review as ReviewResult,
+  );
 }
 
 // Did the reviewer's run move HEAD past the SHA captured at launch? The

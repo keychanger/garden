@@ -1596,6 +1596,14 @@ transitions to `failing` with `failingReason = "unparseable-verdict"`
 behavior on unparseable output; see `docs/STATUS.md` for the exact
 backoff and budget.
 
+The **default** workflow adds one step ahead of `handleUnparseableReview`:
+a Haiku verdict-extraction fallback (`verdict-extract.ts`) that reads the
+reviewer's own output and recovers the verdict when it was present but
+unparseable, sparing a full re-review. Trellis deliberately does **not**
+use it — the `DRIFT` verdict carries a structured drift list that a
+one-word classification cannot reconstruct, so an unparseable trellis
+review always re-reviews.
+
 ### Model selection and budget
 
 Trellis differs from the default workflow in defaulting workers to a

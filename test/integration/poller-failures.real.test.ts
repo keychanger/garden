@@ -56,6 +56,13 @@ vi.mock("../../src/dashboard/usage-poller.js", () => ({
   stopUsagePoller: vi.fn(),
 }));
 
+// The Haiku verdict-extraction fallback shells out to `claude -p`, which is
+// neither available nor authed in CI. Mock it so each test controls whether the
+// classifier "recovers" a verdict; a live call would just fail to null anyway.
+vi.mock("../../src/dashboard/verdict-extract.js", () => ({
+  extractReviewVerdict: vi.fn(() => null),
+}));
+
 function git(cwd: string, ...args: string[]): string {
   const r = spawnSync("git", args, { cwd, encoding: "utf8" });
   if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
@@ -211,6 +218,95 @@ describe("poller failure modes (real fs/git, mocked tmux/dashboard)", () => {
 
       const messages = await readAlertsForWorker();
       expect(messages.find(m => m.includes("Claude unavailable or unparseable output"))).toBeDefined();
+    });
+  });
+
+  describe("reviewer reached a verdict but didn't format the token (Haiku fallback)", () => {
+    it("recovers the verdict via Haiku extraction and dispatches to merge-pending instead of re-reviewing", async () => {
+      const { createWorktree } = await import("../../src/dashboard/git.js");
+      createWorktree(projectPath, worktreePath, WORKER);
+
+      fs.writeFileSync(path.join(worktreePath, "feature.txt"), "feature\n");
+      git(worktreePath, "add", "feature.txt");
+      git(worktreePath, "commit", "-m", "feature");
+      git(worktreePath, "push", "origin", WORKER);
+      const headSha = git(worktreePath, "rev-parse", "HEAD");
+
+      // The reviewer wrote a real conclusion but trailed off in prose — the
+      // exact shape from the operator's screenshot — so parseLastLineVerdict
+      // returns null even though the review clearly passed.
+      const { reviewResultPath } = await import("../../src/dashboard/poller-review.js");
+      fs.writeFileSync(
+        reviewResultPath(PROJECT, WORKER),
+        "Reviewed the diff and reran the suite.\n"
+          + "Final suite is green (2609 unit + 103 integration, lint clean).\n",
+      );
+
+      // Haiku reads that output and classifies it FIXED.
+      const { extractReviewVerdict } = await import("../../src/dashboard/verdict-extract.js");
+      vi.mocked(extractReviewVerdict).mockReturnValue("FIXED");
+
+      await makeWorker({
+        prState: "reviewing",
+        reviewWindowName: `_${PROJECT}-review-${WORKER}`,
+        reviewStartedAt: Date.now() - 60_000,
+        lastSeenSha: headSha,   // remote matches: not a worker-pushed reset
+        preReviewSha: headSha,  // no head advancement
+      });
+
+      const { poll } = await import("../../src/dashboard/poller.js");
+      poll(PROJECT);
+
+      const { findWorkerByName } = await import("../../src/dashboard/registry.js");
+      const entry = findWorkerByName(PROJECT, WORKER);
+      expect(vi.mocked(extractReviewVerdict)).toHaveBeenCalledOnce();
+      // Dispatched as a real FIXED verdict: merge-pending, not failing/re-review.
+      expect(entry?.prState).toBe("merge-pending");
+      expect(entry?.failingReason).toBeUndefined();
+      // The durable snapshot records the recovered verdict and the reviewer's
+      // own prose as the body.
+      expect(entry?.lastReview?.verdict).toBe("fixed");
+      expect(entry?.lastReview?.body).toContain("Final suite is green");
+    });
+
+    it("falls through to the existing re-review recovery when Haiku cannot recover a verdict", async () => {
+      const { createWorktree } = await import("../../src/dashboard/git.js");
+      createWorktree(projectPath, worktreePath, WORKER);
+
+      fs.writeFileSync(path.join(worktreePath, "feature.txt"), "feature\n");
+      git(worktreePath, "add", "feature.txt");
+      git(worktreePath, "commit", "-m", "feature");
+      git(worktreePath, "push", "origin", WORKER);
+      const headSha = git(worktreePath, "rev-parse", "HEAD");
+
+      const { reviewResultPath } = await import("../../src/dashboard/poller-review.js");
+      fs.writeFileSync(
+        reviewResultPath(PROJECT, WORKER),
+        "I kicked off an async sub-analysis and will report back later.\n",
+      );
+
+      // Haiku also can't tell — returns null (the mock's default).
+      const { extractReviewVerdict } = await import("../../src/dashboard/verdict-extract.js");
+      vi.mocked(extractReviewVerdict).mockReturnValue(null);
+
+      await makeWorker({
+        prState: "reviewing",
+        reviewWindowName: `_${PROJECT}-review-${WORKER}`,
+        reviewStartedAt: Date.now() - 60_000,
+        lastSeenSha: headSha,
+        preReviewSha: headSha,
+        // At the no-commit retry budget so the fall-through escalates to failing.
+        unparseableRetryCount: 2,
+      });
+
+      const { poll } = await import("../../src/dashboard/poller.js");
+      poll(PROJECT);
+
+      const { findWorkerByName } = await import("../../src/dashboard/registry.js");
+      const entry = findWorkerByName(PROJECT, WORKER);
+      expect(vi.mocked(extractReviewVerdict)).toHaveBeenCalledOnce();
+      expect(entry?.prState).toBe("failing");
+      expect(entry?.failingReason).toBe("unparseable-verdict");
     });
   });
 

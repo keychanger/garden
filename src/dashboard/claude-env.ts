@@ -77,6 +77,25 @@ export function reviewerEnvPrefix(
   return neutralize + claudeEnvPrefix(project, config);
 }
 
+// Object form of reviewerEnvPrefix, for a direct process spawn (spawnSync)
+// rather than a shell command. Returns only the OVERRIDES — the neutralized
+// provider vars (empty string, which Claude Code treats as unset) plus the
+// claudeProfile CLAUDE_CONFIG_DIR — for the caller to merge over process.env.
+export function reviewerEnvObject(
+  project: Pick<ProjectConfig, "claudeProfile" | "provider">,
+  config?: GardenConfig,
+): Record<string, string> {
+  const onProvider = tryResolveProvider(project, config) !== null;
+  const neutralize: Record<string, string> = onProvider
+    ? {
+        ANTHROPIC_BASE_URL: "", ANTHROPIC_AUTH_TOKEN: "", ANTHROPIC_API_KEY: "",
+        ANTHROPIC_DEFAULT_OPUS_MODEL: "", ANTHROPIC_DEFAULT_SONNET_MODEL: "",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "",
+      }
+    : {};
+  return { ...neutralize, ...claudeEnvObject(project, config) };
+}
+
 // Inline env assignments that point a Claude Code session at a provider's
 // Anthropic-compatible endpoint. The auth token is referenced as
 // `"$<name>"` — unexpanded in the generated command, expanded by the pane

@@ -327,7 +327,13 @@ cannot be expressed as "wait for an event":
   flat backoff before escalating to `failing`/"unparseable-verdict".
   Tied to the reviewer-exit event, one poke per retry, bounded budget —
   the same shape as the transient/quota ladders. Source:
-  `poller-review.ts` `MAX_UNPARSEABLE_REVIEW_RETRIES`.
+  `poller-review.ts` `MAX_UNPARSEABLE_REVIEW_RETRIES`. Before this
+  re-review runs (default workflow only), a synchronous **Haiku
+  verdict-extraction** step (`extractReviewVerdict`, `verdict-extract.ts`,
+  45 s hard timeout) reads the reviewer's own output and recovers the
+  verdict when it was present but unparseable; a recovered verdict
+  dispatches normally, so the re-review here fires only when the
+  classifier also can't determine one.
 - **Auto-continue prompt delays (3 / 5 / 6 s)** — give Claude's TUI
   time to take over the pane's stdin before send-keys lands keystrokes.
   Source: `continue.ts` and `trellis-continue.ts` `dispatchDelayed*`.
