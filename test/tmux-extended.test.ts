@@ -55,6 +55,7 @@ import {
   killWindowSafe,
   getPanePid,
   paneRunningOnlyShell,
+  paneRunningEditor,
   getPaneLabel,
   getPaneTitle,
   listAllWindowNames,
@@ -724,6 +725,66 @@ describe("paneRunningOnlyShell", () => {
     wire("", "-zsh\n");
     expect(paneRunningOnlyShell("%9")).toBe(false);
     // The ps probe is never reached once the tty resolves empty.
+    expect(mockExecFileSync).not.toHaveBeenCalledWith("ps", expect.anything(), expect.anything());
+  });
+});
+
+// ===========================================================================
+// paneRunningEditor — positive probe: is a nano/pico editor live on the tty?
+// Gates the diary-follow key injection so ^O/^X never hit a shell (the chirp).
+// ===========================================================================
+
+describe("paneRunningEditor", () => {
+  function wire(tty: string, ps: string | (() => never)): void {
+    mockExecFileSync.mockImplementation((cmd: string) => {
+      if (cmd === "tmux") return `${tty}\n`;
+      if (cmd === "ps") return typeof ps === "function" ? ps() : ps;
+      return "";
+    });
+  }
+
+  it("returns true when a nano process is on the tty (loop's sh + editor)", () => {
+    // The diary-view loop's sh carries the editor as a child; both share the tty.
+    wire("/dev/ttys003", "bash\nnano\n");
+    expect(paneRunningEditor("%9")).toBe(true);
+  });
+
+  it("recognizes pico (path form) as the editor", () => {
+    wire("/dev/ttys003", "/usr/bin/pico\n-zsh\n");
+    expect(paneRunningEditor("%9")).toBe(true);
+  });
+
+  it("returns false when the pane carries only a shell (editor exited → chirp risk)", () => {
+    wire("/dev/ttys003", "-zsh\n");
+    expect(paneRunningEditor("%9")).toBe(false);
+  });
+
+  it("returns false when a non-editor pane (a worker's claude/node) was swapped in", () => {
+    wire("/dev/ttys003", "node\n-zsh\n");
+    expect(paneRunningEditor("%9")).toBe(false);
+  });
+
+  it("returns false for a different editor (vim) — only nano/pico are drivable", () => {
+    wire("/dev/ttys003", "vim\n-zsh\n");
+    expect(paneRunningEditor("%9")).toBe(false);
+  });
+
+  it("fails closed (false) when the tty probe throws", () => {
+    mockExecFileSync.mockImplementation((cmd: string) => {
+      if (cmd === "tmux") throw new Error("no such pane");
+      return "";
+    });
+    expect(paneRunningEditor("%9")).toBe(false);
+  });
+
+  it("fails closed (false) when ps throws", () => {
+    wire("/dev/ttys003", () => { throw new Error("ps failed"); });
+    expect(paneRunningEditor("%9")).toBe(false);
+  });
+
+  it("fails closed (false) when pane_tty is blank", () => {
+    wire("", "nano\n");
+    expect(paneRunningEditor("%9")).toBe(false);
     expect(mockExecFileSync).not.toHaveBeenCalledWith("ps", expect.anything(), expect.anything());
   });
 });

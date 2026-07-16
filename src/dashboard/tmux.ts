@@ -485,6 +485,46 @@ export function paneRunningOnlyShell(paneId: string): boolean {
   return comms.every(c => SHELL_COMMANDS.has(c));
 }
 
+const DIARY_EDITOR_COMMANDS = new Set(["nano", "pico", "rnano"]);
+
+// Is a nano/pico editor live on the pane's tty? The diary-follow drive
+// (reloadDiaryEditor) makes the diary follow the focused project by injecting
+// the editor's own save+exit keys (^O ^X). It must send those ONLY when the
+// editor is actually running: `#{pane_current_command}` reports `bash` whether
+// the diary-view loop is editing (nano is a child of the loop's sh) or sitting
+// at a shell between reopens, so it cannot tell them apart — this tty probe
+// can. When the pane instead carries a shell (loop between reopens / its editor
+// exited / a non-editor pane swapped into the slot), ^O/^X hit that shell's
+// line editor and ring the terminal bell (^O unbound, ^X an incomplete prefix):
+// the macOS "chirp". A POSITIVE check (not paneRunningOnlyShell's negative one)
+// so a swapped-in worker `claude` or a `vim` is skipped too, not just shells.
+// Fails CLOSED (skip the drive) on any probe error: a missed follow is harmless
+// (the loop reopens on the focused project on its own) while a spurious key
+// injection is the bug being fixed.
+export function paneRunningEditor(paneId: string): boolean {
+  let tty: string;
+  try {
+    tty = tmuxOutput("display-message", "-t", paneId, "-p", "#{pane_tty}").trim();
+  } catch {
+    return false;
+  }
+  const ttyName = tty.replace(/^\/dev\//, "");
+  if (!ttyName) return false;
+  let out: string;
+  try {
+    out = execFileSync("ps", ["-t", ttyName, "-o", "comm="], {
+      encoding: "utf-8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return false;
+  }
+  return out.split("\n")
+    .map(l => l.trim().replace(/^.*\//, "").replace(/^-/, "").toLowerCase())
+    .some(c => DIARY_EDITOR_COMMANDS.has(c));
+}
+
 // `select-pane -d` blocks tmux from forwarding keystrokes to the pane's pty —
 // the chars never reach the terminal driver, so no echo, no buffering. Used on
 // the status/usage panes which run a passive sleep loop with nothing to read

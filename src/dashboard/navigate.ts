@@ -1,7 +1,5 @@
 // Pane navigation: project switching, worker/shell focus, cycling.
-import fs from "node:fs";
-import path from "node:path";
-import { loadConfig, getProject, getFocusedProjectNames, plotsMap, isPlotFocused, SESSIONS_DIR } from "../config.js";
+import { loadConfig, getProject, getFocusedProjectNames, plotsMap, isPlotFocused } from "../config.js";
 import { readDashState, writeDashState, withStateLock, type DashboardState } from "./state.js";
 import { swapToHidden, swapDirect } from "./layout.js";
 import { gardenSwapToHidden } from "./layout.js";
@@ -14,13 +12,13 @@ import {
   listHiddenWorkerWindows,
   setPaneLabel,
   setPaneVar,
+  paneRunningEditor,
 } from "./tmux.js";
 import { findWorkerByName, getWorkers, compareWorkerFreshness } from "./registry.js";
 import { acknowledgeAlerts } from "./alerts.js";
 import { log } from "./log.js";
 import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow, createGardenHistoryWindow, createGardenDiaryWindow } from "./create.js";
 import { formatLogsPaneLabel } from "../commands/logs.js";
-import { editorIsNano } from "../diary.js";
 import { resolveGardenRunner } from "./runner.js";
 import { parkingWindowName, shellWindowName as shellWin, gardenWindowName, parseWorkerSuffix, isWorkerWindow, type GardenView } from "./window-names.js";
 import { DASHBOARD_SESSION } from "../session.js";
@@ -105,20 +103,12 @@ export function swapVisibleToProject(
   state.activeProject = projectName;
 }
 
-const DIARY_RELOAD_COALESCE_MS = 250;
-
-function diaryReloadStampPath(): string {
-  return path.join(SESSIONS_DIR, "diary-reload.stamp");
-}
-
 // When a project switch happens, the diary editor must re-point at the
 // now-focused project's diary. A live modal editor can only be re-targeted by
 // restarting it — which would discard unsaved notes — so we drive the editor's
 // own save+exit and let diary-view.sh's loop reopen on the new project. Only
 // nano/pico (the shipped default) have a key sequence we can drive blindly: ^O
-// Enter writes the buffer to its current file, ^X then exits cleanly (the buffer
-// is no longer modified, so there is no exit prompt). A custom $EDITOR is left
-// untouched; it still reopens on the operator's own exit.
+// Enter writes the buffer to its current file, ^X then exits cleanly.
 //
 // The editor may be live in the visible garden slot (diary is the active view)
 // or parked in the hidden _garden-diary window (the operator switched the garden
@@ -130,21 +120,20 @@ function reloadDiaryEditor(state: DashboardState): void {
     ? state.gardenShellPaneId
     : getFirstPaneId(`${DASHBOARD_SESSION}:${gardenWindowName("diary")}`);
   if (!pane || !paneExists(pane)) return;
-  if (!editorIsNano(process.env.EDITOR || "nano")) return;
 
-  const stamp = diaryReloadStampPath();
-  try {
-    if (Date.now() - fs.statSync(stamp).mtimeMs < DIARY_RELOAD_COALESCE_MS) return;
-    fs.unlinkSync(stamp);
-  } catch { /* A missing stamp can be claimed below. */ }
-  try {
-    const fd = fs.openSync(stamp, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
-    fs.closeSync(fd);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") return;
-  }
+  // Send the editor keys ONLY when a nano/pico editor is actually live on the
+  // pane. If the diary-view loop is between reopens, its editor has exited to a
+  // shell, or a non-editor pane (a worker's `claude`, an operator shell) was
+  // swapped into the slot, ^O/^X would hit that shell's line editor and ring the
+  // terminal bell (^O unbound, ^X an incomplete prefix): the macOS "chirp" this
+  // guards against. A skipped drive is harmless — the loop reopens on the
+  // focused project on its own — so at worst the diary follows one switch later.
+  if (!paneRunningEditor(pane)) return;
 
-  tmux("send-keys", "-t", pane, "C-o", "Enter", "C-x");
+  // ^C first clears any editor prompt a prior partial drive may have wedged
+  // (e.g. a "Save modified buffer?") — harmless at the edit screen, where it
+  // only reports the cursor position — so the save+exit always starts clean.
+  tmux("send-keys", "-t", pane, "C-c", "C-o", "Enter", "C-x");
 }
 
 export function switchProject(indexArg: string): void {

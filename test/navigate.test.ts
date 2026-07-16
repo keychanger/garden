@@ -7,7 +7,6 @@ vi.mock("node:fs", () => ({
     openSync: vi.fn(() => 3),
     closeSync: vi.fn(),
     unlinkSync: vi.fn(),
-    statSync: vi.fn(() => { throw new Error("ENOENT"); }),
     constants: { O_CREAT: 0x100, O_EXCL: 0x200, O_WRONLY: 0x1 },
   },
 }));
@@ -60,6 +59,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   listHiddenWorkerWindows: vi.fn(() => []),
   setPaneLabel: vi.fn(),
   setPaneVar: vi.fn(),
+  paneRunningEditor: vi.fn(() => true),
 }));
 
 vi.mock("../src/dashboard/registry.js", () => ({
@@ -103,7 +103,6 @@ vi.mock("../src/dashboard/window-names.js", async () => {
 
 // --- Imports ---
 
-import fs from "node:fs";
 import {
   switchProject,
   focusWorker,
@@ -123,7 +122,7 @@ import { refreshDashboard, refreshDashboardPlotCycle, setPaneProjectColor } from
 import {
   tmux, tmuxDisplay, paneExists, windowExists, getFirstPaneId,
   listAllWindowNames, listHiddenWorkerWindows,
-  setPaneLabel, setPaneVar,
+  setPaneLabel, setPaneVar, paneRunningEditor,
 } from "../src/dashboard/tmux.js";
 import { findWorkerByName } from "../src/dashboard/registry.js";
 import { plotsMap, getFocusedProjectNames } from "../src/config.js";
@@ -1119,28 +1118,22 @@ describe("cyclePlot", () => {
 
 describe("diary follows project switches", () => {
   // diary-view.sh reopens the focused project's diary whenever the editor
-  // exits. When the diary editor is alive — live in the visible garden slot or
-  // parked in the hidden _garden-diary window after the operator switched the
-  // garden pane to another view — a project switch drives nano's save+exit
-  // (^O Enter ^X) so the loop reopens on the now-focused project without losing
-  // unsaved notes. See reloadDiaryEditor in navigate.ts.
-  const originalEditor = process.env.EDITOR;
-
+  // exits. When a nano/pico editor is actually live on the diary pane — the
+  // visible garden slot or the parked _garden-diary window — a project switch
+  // drives its save+exit (^C ^O Enter ^X) so the loop reopens on the now-focused
+  // project without losing unsaved notes. The ^C first clears any wedged editor
+  // prompt. paneRunningEditor gates the drive so the keys never hit a shell (the
+  // chirp). See reloadDiaryEditor in navigate.ts.
   function sentSaveExit(pane = "%1"): boolean {
-    const expected = ["send-keys", "-t", pane, "C-o", "Enter", "C-x"];
+    const expected = ["send-keys", "-t", pane, "C-c", "C-o", "Enter", "C-x"];
     return vi.mocked(tmux).mock.calls.some(
       (call) => JSON.stringify(call) === JSON.stringify(expected),
     );
   }
 
   beforeEach(() => {
-    delete process.env.EDITOR; // unset -> nano default
     vi.mocked(getFirstPaneId).mockReturnValue(null);
-  });
-
-  afterEach(() => {
-    if (originalEditor === undefined) delete process.env.EDITOR;
-    else process.env.EDITOR = originalEditor;
+    vi.mocked(paneRunningEditor).mockReturnValue(true); // editor live by default
   });
 
   it("drives nano save+exit when switching projects with the diary pane active", () => {
@@ -1195,8 +1188,11 @@ describe("diary follows project switches", () => {
     expect(sentSaveExit("%1")).toBe(false); // not the logs pane
   });
 
-  it("leaves a custom $EDITOR untouched (cannot drive its save keys blindly)", () => {
-    process.env.EDITOR = "vim";
+  it("does NOT send keys when the diary pane is not running the editor (the chirp guard)", () => {
+    // The diary-view loop is between reopens, its editor exited to a shell, or a
+    // non-editor pane was swapped into the slot. Injecting ^O/^X would ring the
+    // terminal bell against a shell — so the drive is skipped entirely.
+    vi.mocked(paneRunningEditor).mockReturnValue(false);
     const state = makeState({
       activeProject: "garden",
       gardenPaneType: "diary",
@@ -1207,22 +1203,8 @@ describe("diary follows project switches", () => {
 
     switchProject("2");
 
-    expect(sentSaveExit()).toBe(false);
-  });
-
-  it("matches nano even when $EDITOR carries a path and flags", () => {
-    process.env.EDITOR = "/opt/homebrew/bin/nano -w";
-    const state = makeState({
-      activeProject: "garden",
-      gardenPaneType: "diary",
-      gardenShellPaneId: "%1",
-    });
-    vi.mocked(readDashState).mockReturnValue(state);
-    vi.mocked(listAllWindowNames).mockReturnValue(["_other-shell"]);
-
-    switchProject("2");
-
-    expect(sentSaveExit()).toBe(true);
+    expect(state.activeProject).toBe("other"); // the switch itself still happens
+    expect(sentSaveExit()).toBe(false); // but no editor keys are injected
   });
 
   it("reloads the diary on cyclePlot when the project changes", () => {
@@ -1265,42 +1247,6 @@ describe("diary follows project switches", () => {
 
     expect(state.activePlot).toBe("b");
     expect(state.activeProject).toBe("garden");
-    expect(sentSaveExit()).toBe(false);
-  });
-
-  it("coalesces a second rapid switch within the window (no bell-tripping re-drive)", () => {
-    // A fresh stamp (mtime = now) stands in for a reload that just fired on the
-    // previous ⌥O/⌥P. The next switch must NOT re-inject the editor keys, so a
-    // second `^O` can't land on nano/pico's open WriteOut prompt and beep.
-    vi.mocked(fs.statSync).mockReturnValue({ mtimeMs: Date.now() } as fs.Stats);
-    const state = makeState({
-      activeProject: "garden",
-      gardenPaneType: "diary",
-      gardenShellPaneId: "%1",
-    });
-    vi.mocked(readDashState).mockReturnValue(state);
-    vi.mocked(listAllWindowNames).mockReturnValue(["_other-shell"]);
-
-    switchProject("2");
-
-    expect(state.activeProject).toBe("other"); // switch itself still happens
-    expect(sentSaveExit()).toBe(false); // the editor drive is coalesced away
-  });
-
-  it("does not re-drive when another handler claims a missing stamp first", () => {
-    const exists = Object.assign(new Error("EEXIST"), { code: "EEXIST" });
-    vi.mocked(fs.openSync).mockImplementation(() => { throw exists; });
-    const state = makeState({
-      activeProject: "garden",
-      gardenPaneType: "diary",
-      gardenShellPaneId: "%1",
-    });
-    vi.mocked(readDashState).mockReturnValue(state);
-    vi.mocked(listAllWindowNames).mockReturnValue(["_other-shell"]);
-
-    switchProject("2");
-
-    expect(state.activeProject).toBe("other");
     expect(sentSaveExit()).toBe(false);
   });
 });
