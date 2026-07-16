@@ -339,14 +339,14 @@ cannot be expressed as "wait for an event":
   `pausedUntil`. `garden auto on` / `garden auto resume-on-reset on`
   fire the same poke directly. Source: `usage-poller.ts`
   `pokeOnGateReset`, `commands/auto.ts` `wakePollers`.
-- **Holistic-review dispatch (one-shot, terminal-tied)** — when a
+- **Holistic-review interposition (one-shot, terminal-tied)** — when a
   multi-phase default worker reaches `done` with `mergeCount >= 2` and the
-  project's `holisticReview` is `shadow`/`fix`, the poller spawns one
-  `holistic-review` worker (a detached `garden dashboard
-  _spawn-holistic-worker` subprocess, so workers.ts stays out of the hook
-  bundle). Fired on the merge/done terminal event, made once-per-completion
-  by the `holisticReviewedThroughMergeCount` high-water guard. When deferred
-  (per-project concurrency cap hit or the shared usage gate closed), the
+  project's `holisticReview` is `shadow`/`fix`, the poller interposes one
+  whole-task review by re-opening `done` → `reviewing` on the worker itself
+  (reusing the headless reviewer flow — NOT a spawned worker). Fired on the
+  merge/done terminal event, made once-per-completion by the
+  `holisticReviewedThroughMergeCount` high-water guard. When deferred (the
+  worker's own Claude still working, or the shared usage gate closed), the
   guard is left UNSET so the dispatch re-attempts on the next merged/done
   sweep poke (including `pokeOnGateReset`) — no new wake-up, it rides the
   existing event. Source: `poller-holistic-review.ts`
@@ -653,17 +653,19 @@ only other writer of `done` (the post-auto-continue path).
 **The tmux `pane-died` handler** writes `agentStatus = "exited"` when
 a worker pane process exits.
 
-**The holistic-review dispatcher** (`poller-holistic-review.ts`) writes only
-per-worker *bookkeeping* fields on the ORIGINAL worker's entry — `mergeCount`,
+**The holistic-review dispatcher** (`poller-holistic-review.ts`) writes the
+per-worker holistic *bookkeeping* fields on the worker's entry — `mergeCount`,
 `baseBranchSha`, `holisticTouchedFiles`, `holisticReviewedThroughMergeCount`,
-`holisticRationale` — never `agentStatus`/`prState`. When it spawns a
-`holistic-review` worker, that worker is an ordinary worker: its
-`agentStatus`/`prState` are written by the standard machinery above, and it
-walks the normal `working → reviewing → merge-pending → done` lifecycle (it is
-excluded from triggering its OWN holistic review by the gate's `workflow ===
-"default"` clause). A SHADOW holistic worker that reaches quiescent `done` has
-its findings surfaced and consumed by `finalizeShadowHolistic` (called from
-`handleDone`) — a side effect, not a state write.
+`holisticRationale` — and, when it launches the interposed final review,
+transitions the worker `done` → `reviewing` (via `transitionState`) with the
+transient markers `holisticFinalActive` / `holisticReviewMode`. It is NOT a
+separate worker: the same entry rides one headless reviewer pass in its
+`_<project>-review-<worker>` window. `handleHolisticFinalReview`
+(`poller-review.ts`) then drives the verdict — `reviewing` → `done` (CLEAN /
+shadow findings surfaced as an alert), → `merge-pending` (a fix, which
+`transitionToTerminal` finalizes to `done`), or → `failing` (an unfixable
+cross-phase defect). The `done` → `reviewing` and `reviewing` → `done` edges
+exist only for this interposition (see `workflows/types.ts`).
 
 **The operator `hold` action** writes `agentStatus = "paused"` (and, on
 release, `idle`). This is the only operator-initiated writer of either field;

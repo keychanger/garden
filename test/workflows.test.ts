@@ -8,7 +8,6 @@ import {
   defaultWorkflow,
   growWorkflow,
   trellisWorkflow,
-  holisticReviewWorkflow,
   getWorkflow,
   registerWorkflow,
   _resetUnknownWarnDedup,
@@ -40,15 +39,19 @@ function stubStateHandlers(): Record<PrState, StateHandler> {
 // test so the deep-equal assertion can't pass via self-comparison. If this
 // test fails after a refactor, either the production table changed
 // (intentional — update this copy) or the refactor mutated it (bug).
+// The default state machine. reviewing→done and done→reviewing are the holistic
+// whole-task final-review edges (poller-holistic-review.ts): a multi-phase worker
+// that reaches done gets one interposed aggregated review, which finalizes back
+// to done (CLEAN) or re-opens done→reviewing to run.
 const PRE_REFACTOR_VALID_TRANSITIONS: Record<PrState, PrState[]> = {
   working:         ["reviewing"],
-  reviewing:       ["merge-pending", "working", "failing"],
+  reviewing:       ["merge-pending", "working", "failing", "done"],
   "merge-pending": ["merged", "done", "resolving", "ci-fixing", "working", "failing"],
   resolving:       ["merge-pending", "working", "failing"],
   "ci-fixing":     ["merge-pending", "working", "failing"],
   failing:         ["working"],
   merged:          ["working", "done"],
-  done:            ["working"],
+  done:            ["working", "reviewing"],
 };
 
 // Every value in the PrState union. Driven by registry.ts; if a new state
@@ -257,38 +260,6 @@ describe("growWorkflow", () => {
     // pinned at the workflow level.
     expect(growWorkflow.workerModel).toBeUndefined();
     expect(growWorkflow.reviewerModel).toBeUndefined();
-  });
-});
-
-describe("holisticReviewWorkflow", () => {
-  // Holistic-review workers walk the default lifecycle; the divergence is
-  // external (poller-spawned, opus-pinned, excluded from triggering itself).
-
-  it("is registered under name 'holistic-review'", () => {
-    expect(getWorkflow("holistic-review")).toBe(holisticReviewWorkflow);
-  });
-
-  it("validTransitions deep-equal default's (same state machine)", () => {
-    expect(holisticReviewWorkflow.validTransitions).toEqual(PRE_REFACTOR_VALID_TRANSITIONS);
-  });
-
-  it("has a registered handler for every PrState (exhaustiveness)", () => {
-    for (const state of ALL_PR_STATES) {
-      expect(
-        holisticReviewWorkflow.stateHandlers[state],
-        `holistic-review workflow missing handler for state ${state}`,
-      ).toBeDefined();
-    }
-  });
-
-  it("reuses default's hookHandlers verbatim", () => {
-    expect(holisticReviewWorkflow.hookHandlers).toBe(defaultWorkflow.hookHandlers);
-  });
-
-  it("pins reviewerModel to opus (the fix's independent review is the fix-and-push safety net)", () => {
-    expect(holisticReviewWorkflow.reviewerModel).toBe("opus");
-    // The holistic worker's own model is pinned per-worker at spawn, not here.
-    expect(holisticReviewWorkflow.workerModel).toBeUndefined();
   });
 });
 

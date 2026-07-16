@@ -109,30 +109,6 @@ describe("buildReviewPrompt — initial review", () => {
 
 });
 
-describe("buildReviewPrompt — holistic deliberate-decision interlock", () => {
-  it("injects the interlock + rationale when reviewing a holistic-review fix branch", () => {
-    const entry = makeEntry({
-      workflow: "holistic-review",
-      holisticRationale: "abc123 keep MYPY_BASELINE at 670 (do not ratchet)",
-    });
-    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", entry)!;
-    expect(result).toContain("deliberate-decision interlock");
-    expect(result).toContain("return FAILED");
-    expect(result).toContain("keep MYPY_BASELINE at 670");
-  });
-
-  it("omits the interlock for a normal (default) worker", () => {
-    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry())!;
-    expect(result).not.toContain("deliberate-decision interlock");
-  });
-
-  it("omits the interlock for a holistic-review worker with no rationale", () => {
-    const entry = makeEntry({ workflow: "holistic-review" });
-    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", entry)!;
-    expect(result).not.toContain("deliberate-decision interlock");
-  });
-});
-
 describe("buildResolvePrompt", () => {
   it("frames the task as resolving, not reviewing", () => {
     const result = buildResolvePrompt("myproject", "/repo/myproject", "main", makeEntry());

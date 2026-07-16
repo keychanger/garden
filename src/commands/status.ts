@@ -81,6 +81,11 @@ interface WorkerInfo {
     aligned: boolean;
     failingReason?: string;
   };
+  // True while the worker sits in `reviewing` for its interposed whole-task
+  // final review (entry.holisticFinalActive) — NOT a per-phase review. The
+  // renderer tags the row so the operator sees the final coherence pass is in
+  // flight before the worker truly finishes.
+  holisticFinal?: boolean;
   // CI-fix decoration fields. Populated when the worker is currently in
   // `ci-fixing` (auto-fix in flight) or `failing` with reason `ci` (auto-fix
   // ran out of attempts). The renderer surfaces this so the operator sees
@@ -207,13 +212,19 @@ function collectSegments(worker: WorkerInfo, ctx: RowRenderCtx): RowSegments {
   const decor = workflowRowDecor(worker);
   const workflowBadge = decor.badge ? greyBadge(decor.badge) : "";
   const badges = [baseBadge, crewBadge, memberBadge, workflowBadge].filter(b => b !== "");
+  // The interposed whole-task final review reuses the `reviewing` state; tag it
+  // in the detail column so it reads as the final coherence pass, not a normal
+  // per-phase review. Takes the elastic slot ahead of the workflow decor/activity.
+  const holisticDetail = worker.holisticFinal && worker.status === "reviewing"
+    ? "holistic review"
+    : undefined;
   return {
     focus: worker.active ? "●" : "○",
     icon: iconFor(worker),
     name: worker.name,
     state: stateCell(worker, ctx.now),
     badges,
-    detail: decor.detail ?? (worker.activity ?? ""),
+    detail: holisticDetail ?? decor.detail ?? (worker.activity ?? ""),
     // Model rides at the END of the row, after the detail column, not in the
     // leading badge column: a pinned model (often a long id) otherwise widened
     // the fixed identity column and pushed the description far right, leaving
@@ -992,6 +1003,7 @@ function collectWorkers(
       crew: entry?.crew,
       grow: growInfoFor(entry),
       trellis: trellisInfoFor(entry),
+      holisticFinal: entry?.holisticFinalActive,
       ci: ciInfoFor(entry),
     });
   }
@@ -1016,6 +1028,7 @@ function collectWorkers(
       crew: entry?.crew,
       grow: growInfoFor(entry),
       trellis: trellisInfoFor(entry),
+      holisticFinal: entry?.holisticFinalActive,
       ci: ciInfoFor(entry),
     });
   }

@@ -1,15 +1,16 @@
 import { describe, it, expect, vi } from "vitest";
-import fs from "node:fs";
-import path from "node:path";
 import { useTmpHome } from "./helpers.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
-// Keep the detached spawn (the holistic worker launch) from forking a real
-// process in the spawn-path test; everything else in child_process stays real
-// (git.ts execFileSync runs and fails harmlessly on the non-repo path).
-vi.mock("node:child_process", async (orig) => ({
-  ...(await orig<typeof import("node:child_process")>()),
-  spawn: vi.fn(() => ({ unref: vi.fn() })),
+// The interposed final review launches via launchHeadlessAgent (a hidden tmux
+// window) — stub it so the dispatcher's state work runs without a tmux server.
+// refreshDashboard also touches tmux; override just that export, keeping the
+// rest of header.js real for the other modules that import it.
+const launchHeadlessAgent = vi.fn(() => ({ windowName: "w", launchedAt: 0 }));
+vi.mock("../src/dashboard/headless-agent.js", () => ({ launchHeadlessAgent }));
+vi.mock("../src/dashboard/header.js", async (orig) => ({
+  ...(await orig<typeof import("../src/dashboard/header.js")>()),
+  refreshDashboard: vi.fn(),
 }));
 
 const env = useTmpHome();
@@ -72,6 +73,8 @@ describe("maybeDispatchHolisticReview (real config + registry)", () => {
     const entry = reg.findWorkerByName("proj", "multi-phase")!;
     hol.maybeDispatchHolisticReview("proj", "/tmp/proj", "main", entry, "transitionToTerminal");
     expect(reg.findWorkerByName("proj", "multi-phase")!.holisticReviewedThroughMergeCount).toBe(3);
+    // off mode never launches a review — the worker stays done.
+    expect(reg.findWorkerByName("proj", "multi-phase")!.prState).toBe("done");
   });
 });
 
@@ -86,7 +89,7 @@ describe("handleDone wires the trail-off holistic trigger", () => {
     const ps = await import("../src/dashboard/poller-state.js");
     const entry = reg.findWorkerByName("proj", "multi-phase")!;
     const resumed = ps.handleDone("proj", "/tmp/proj", "main", entry);
-    expect(resumed).toBe(false); // quiescent: no commits ahead, stays done
+    expect(resumed).toBe(false); // quiescent: no commits ahead
     expect(reg.findWorkerByName("proj", "multi-phase")!.holisticReviewedThroughMergeCount).toBe(3);
   });
 
@@ -99,28 +102,55 @@ describe("handleDone wires the trail-off holistic trigger", () => {
   });
 });
 
-describe("shadow spawn path (touched files present)", () => {
-  it("writes the shadow seed and dispatches the launch", async () => {
+describe("interposed final review launch (touched files present)", () => {
+  it("re-opens done → reviewing, marks the final pass, and launches the reviewer", async () => {
+    launchHeadlessAgent.mockClear();
     const { reg, hol } = await setup("shadow", { holisticTouchedFiles: ["src/a.ts", "src/b.ts"] });
-    const cfg = await import("../src/config.js");
     const entry = reg.findWorkerByName("proj", "multi-phase")!;
     hol.maybeDispatchHolisticReview("proj", env.gardenDir, "main", entry, "transitionToTerminal");
-    // Guard set (we got past the no-diff-inputs short-circuit into the real path).
-    expect(reg.findWorkerByName("proj", "multi-phase")!.holisticReviewedThroughMergeCount).toBe(3);
-    const seedPath = path.join(cfg.SESSIONS_DIR, "holistic-seed-proj-multi-phase.txt");
-    const seed = fs.readFileSync(seedPath, "utf-8");
-    expect(seed).toContain("SHADOW (ANALYSIS-ONLY)");
-    expect(seed).toContain(".holistic-findings.md");
-    // The rationale file is written for the spawn subprocess to stamp onto the
-    // child (the per-branch reviewer's deliberate-decision interlock).
-    expect(fs.existsSync(path.join(cfg.SESSIONS_DIR, "holistic-rationale-proj-multi-phase.txt"))).toBe(true);
+
+    const after = reg.findWorkerByName("proj", "multi-phase")!;
+    expect(after.prState).toBe("reviewing");
+    expect(after.holisticFinalActive).toBe(true);
+    expect(after.holisticReviewMode).toBe("shadow");
+    expect(after.holisticReviewedThroughMergeCount).toBe(3);
+    expect(after.reviewWindowName).toBeTruthy();
+    // The reviewer ran headless, marked GARDEN_REVIEWER, on the review harness.
+    expect(launchHeadlessAgent).toHaveBeenCalledTimes(1);
+    const opts = launchHeadlessAgent.mock.calls[0][0] as { envVars?: Record<string, string>; harness?: string };
+    expect(opts.envVars).toMatchObject({ GARDEN_REVIEWER: "1" });
+  });
+
+  it("resolves the reviewer through resolveReviewRole so a Codex reviewer is honored", async () => {
+    launchHeadlessAgent.mockClear();
+    const cfg = await import("../src/config.js");
+    // Configure the reviewer role to Codex — the interposed pass must honor it.
+    cfg.saveConfig({
+      projects: {
+        proj: { path: "/tmp/proj", holisticReview: "fix", roles: { reviewer: { harness: "codex" } } },
+      },
+    });
+    const reg = await import("../src/dashboard/registry.js");
+    reg.addWorker("proj", {
+      name: "codex-reviewed", sessionId: "s", task: "t", prState: "done",
+      workflow: "default", mergeCount: 2, baseBranchSha: "basesha",
+      holisticTouchedFiles: ["src/a.ts"],
+    });
+    const hol = await import("../src/dashboard/poller-holistic-review.js");
+    const entry = reg.findWorkerByName("proj", "codex-reviewed")!;
+    hol.maybeDispatchHolisticReview("proj", env.gardenDir, "main", entry, "transitionToTerminal");
+
+    expect(launchHeadlessAgent).toHaveBeenCalledTimes(1);
+    const opts = launchHeadlessAgent.mock.calls[0][0] as { harness?: string };
+    expect(opts.harness).toBe("codex");
+    expect(reg.findWorkerByName("proj", "codex-reviewed")!.holisticReviewMode).toBe("fix");
   });
 });
 
 describe("default holisticReview mode (unset project)", () => {
-  it("defaults to fix — an unset project dispatches (a seed is written) in fix, not shadow, not off", async () => {
+  it("defaults to fix — an unset project launches the review in fix mode, not off", async () => {
+    launchHeadlessAgent.mockClear();
     const cfg = await import("../src/config.js");
-    // No holisticReview key — the DEFAULT_HOLISTIC_REVIEW ("fix") applies.
     cfg.saveConfig({ projects: { proj: { path: "/tmp/proj" } } });
     expect(cfg.DEFAULT_HOLISTIC_REVIEW).toBe("fix");
     const reg = await import("../src/dashboard/registry.js");
@@ -132,58 +162,23 @@ describe("default holisticReview mode (unset project)", () => {
     const hol = await import("../src/dashboard/poller-holistic-review.js");
     const entry = reg.findWorkerByName("proj", "multi-phase")!;
     hol.maybeDispatchHolisticReview("proj", env.gardenDir, "main", entry, "transitionToTerminal");
-
-    // A seed exists → it did NOT take the "off" short-circuit (which writes none)...
-    const seedPath = path.join(cfg.SESSIONS_DIR, "holistic-seed-proj-multi-phase.txt");
-    expect(fs.existsSync(seedPath)).toBe(true);
-    // ...and it is a FIX seed, not the shadow analysis-only one.
-    expect(fs.readFileSync(seedPath, "utf-8")).not.toContain("SHADOW (ANALYSIS-ONLY)");
+    // It launched (not the off short-circuit) and in fix mode (the default).
+    expect(launchHeadlessAgent).toHaveBeenCalledTimes(1);
+    expect(reg.findWorkerByName("proj", "multi-phase")!.holisticReviewMode).toBe("fix");
   });
 });
 
-describe("dispatch deferral (cap hit leaves the guard unset → retries next poke)", () => {
-  it("does not set the high-water guard when a holistic worker is already in flight", async () => {
-    const { reg, hol } = await setup("shadow", { holisticTouchedFiles: ["src/a.ts"] });
-    // An active holistic-review worker saturates the per-project cap
-    // (HOLISTIC_CONCURRENCY_CAP = 1), so this eligible completion must defer.
-    reg.addWorker("proj", {
-      name: "holistic-1", sessionId: "h", task: "t",
-      workflow: "holistic-review", prState: "working",
+describe("dispatch deferral (leaves the guard unset → retries next poke)", () => {
+  it("defers while the worker's own Claude is still working", async () => {
+    launchHeadlessAgent.mockClear();
+    const { reg, hol } = await setup("shadow", {
+      holisticTouchedFiles: ["src/a.ts"], agentStatus: "working",
     });
     const entry = reg.findWorkerByName("proj", "multi-phase")!;
     hol.maybeDispatchHolisticReview("proj", env.gardenDir, "main", entry, "transitionToTerminal");
-    // Guard NOT set — the next merged/done sweep poke (or pokeOnGateReset) retries.
+    // Guard NOT set — the next merged/done sweep poke retries once Claude is idle.
     expect(reg.findWorkerByName("proj", "multi-phase")!.holisticReviewedThroughMergeCount).toBeUndefined();
-  });
-});
-
-describe("finalizeShadowHolistic (surface findings + consume)", () => {
-  async function finalizeSetup(findings: string) {
-    const { reg, hol } = await setup("shadow", { workflow: "holistic-review" });
-    const wt = path.join(env.gardenDir, "wt-holistic");
-    fs.mkdirSync(wt, { recursive: true });
-    fs.writeFileSync(path.join(wt, ".holistic-findings.md"), findings);
-    reg.updateWorkerFields("proj", "multi-phase", { worktreePath: wt });
-    const alerts = await import("../src/dashboard/alerts.js");
-    return { hol, wt, alerts };
-  }
-
-  it("raises a FINDINGS alert, writes a durable copy, and consumes the worktree file", async () => {
-    const { hol, wt, alerts } = await finalizeSetup("Phase 1 added X; phase 3 orphaned it.");
-    const entry = (await import("../src/dashboard/registry.js")).findWorkerByName("proj", "multi-phase")!;
-    hol.finalizeShadowHolistic("proj", entry);
-    const msgs = alerts.readAlerts().alerts.map((a) => a.message);
-    expect(msgs.some((m) => m.includes("Holistic review FINDINGS"))).toBe(true);
-    expect(fs.existsSync(path.join(wt, ".holistic-findings.md"))).toBe(false); // consumed
-    // Idempotent: second call finds nothing, no second alert.
-    hol.finalizeShadowHolistic("proj", entry);
-    expect(alerts.readAlerts().alerts.filter((a) => a.message.includes("Holistic review")).length).toBe(1);
-  });
-
-  it("classifies a CLEAN result distinctly", async () => {
-    const { hol, alerts } = await finalizeSetup("CLEAN — no cross-phase defects");
-    const entry = (await import("../src/dashboard/registry.js")).findWorkerByName("proj", "multi-phase")!;
-    hol.finalizeShadowHolistic("proj", entry);
-    expect(alerts.readAlerts().alerts.some((a) => a.message.includes("Holistic review CLEAN"))).toBe(true);
+    expect(reg.findWorkerByName("proj", "multi-phase")!.prState).toBe("done");
+    expect(launchHeadlessAgent).not.toHaveBeenCalled();
   });
 });

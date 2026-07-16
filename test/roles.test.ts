@@ -80,9 +80,9 @@ describe("resolveReviewRole", () => {
 
   it("does not leak the workflow's reviewerModel to an unpinned Codex reviewer", async () => {
     const { resolveReviewRole } = await importRoles();
-    // trellis (and holistic-review) pin reviewerModel=opus, an Anthropic alias
-    // meaningless to Codex. An unpinned Codex reviewer must get NO model so
-    // codex uses its own default — the workflow model is a claude-code-only term.
+    // trellis pins reviewerModel=opus, an Anthropic alias meaningless to Codex.
+    // An unpinned Codex reviewer must get NO model so codex uses its own default
+    // — the workflow model is a claude-code-only term.
     const r = resolveReviewRole(
       project({ roles: { reviewer: { harness: "codex" } } }), "trellis", "reviewer");
     expect(r.harness).toBe("codex");

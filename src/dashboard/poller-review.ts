@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { tryGetProject, SESSIONS_DIR } from "../config.js";
 import { addAlert } from "./alerts.js";
+import { atomicWriteFile } from "./atomic-write.js";
 import { resolveReviewRole, SAFE_REVIEW_MODEL } from "./roles.js";
 import { reviewerEnvPrefix } from "./claude-env.js";
 import { codexStderrSidecar } from "./harness/codex-core.js";
@@ -196,6 +197,13 @@ export function handleReviewing(
   baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
+  // The interposed whole-task final review (poller-holistic-review.ts) runs in
+  // the same reviewing window but is dispatched differently — no per-phase diff,
+  // no 2nd review, CLEAN finalizes to done, a fix rides the merge gate. It owns
+  // its own timeout + window-wait, so branch before the per-phase machinery.
+  if (entry.holisticFinalActive) {
+    return handleHolisticFinalReview(projectName, projectPath, baseBranch, entry);
+  }
   if (isReviewTimedOut(entry)) {
     return handleReviewTimeout(projectName, projectPath, entry, "review");
   }
@@ -376,6 +384,158 @@ export function handleReviewing(
     return handleTransientReviewFailure(projectName, projectPath, entry, transientSource);
   }
   return handleUnparseableReview(projectName, projectPath, entry);
+}
+
+// Verdict handler for the interposed whole-task final review (holisticFinalActive).
+// Reuses the per-phase read/parse/timeout helpers but its own disposition:
+//   fix   → FIXED-with-commits rides the CI + merge gate (marker persists so the
+//           merge finalizes straight to done); CLEAN / no-commit finalizes done;
+//           FAILED parks in failing.
+//   shadow → reports findings as an alert, then finalizes done (never merges).
+// A best-effort pass: an unparseable/transient outcome with no commit finalizes
+// done rather than failing a task whose work already merged and passed per-phase
+// review. Only an explicit FAILED verdict fails the worker. Harness-agnostic: a
+// codex reviewer writes its verdict to the result file (stdout) like claude does.
+function handleHolisticFinalReview(
+  projectName: string,
+  projectPath: string,
+  baseBranch: string,
+  entry: WorkerEntry,
+): boolean {
+  if (isReviewTimedOut(entry)) {
+    return handleReviewTimeout(projectName, projectPath, entry, "review");
+  }
+  const revWindow = entry.reviewWindowName;
+  if (revWindow && windowExists(revWindow)) return false; // still in-flight
+
+  const wtPath = entry.worktreePath ?? projectPath;
+  const branchName = entry.branchName ?? entry.name;
+  const mode = entry.holisticReviewMode ?? "fix";
+  const mergeCount = entry.mergeCount ?? 0;
+
+  const rawOutput = readReviewOutputRaw(projectName, entry);
+  const review = rawOutput === null ? null : parseReviewResult(rawOutput, entry.name, projectName);
+  cleanReviewFiles(projectName, entry.name);
+
+  // Finalize the worker back to `done`, clearing the final-review markers and
+  // bumping the high-water guard past this mergeCount so it never re-fires.
+  const finalizeDone = (): void => {
+    transitionState(projectName, entry.name, "done", {
+      holisticReviewedThroughMergeCount: mergeCount,
+      holisticFinalActive: undefined,
+      holisticReviewMode: undefined,
+      reviewWindowName: undefined,
+      reviewStartedAt: undefined,
+      preReviewSha: undefined,
+      lastReviewBody: undefined,
+    });
+    refreshDashboard();
+  };
+
+  if (mode === "shadow") {
+    // Analysis-only: surface findings, never merge. A durable copy lands in
+    // SESSIONS_DIR so the operator can read the full report past the alert cap.
+    const findings = (review?.body ?? rawOutput ?? "").trim();
+    const coherent = review?.verdict === "clean";
+    const durable = path.join(SESSIONS_DIR, `holistic-findings-${projectName}-${entry.name}.md`);
+    try { atomicWriteFile(durable, findings || "CLEAN — no cross-phase defects."); } catch { /* best effort */ }
+    addAlert({
+      level: "warn",
+      source: "poller",
+      project: projectName,
+      worker: entry.name,
+      message: coherent
+        ? `Holistic review CLEAN (${entry.name}): no cross-phase defects. ${durable}`
+        : `Holistic review FINDINGS (${entry.name}): ${findings.slice(0, 160).replace(/\s+/g, " ")} … ${durable}`,
+      dedupKey: `holistic-findings:${projectName}:${entry.name}`,
+    });
+    log.info("poller", "holistic shadow review complete", {
+      worker: entry.name, data: { project: projectName, coherent },
+    });
+    finalizeDone();
+    return true;
+  }
+
+  const headSha = getBranchHeadSha(wtPath);
+  const committed = headSha !== null && entry.preReviewSha !== undefined
+    && headSha !== entry.preReviewSha;
+
+  // FAILED — the reviewer found a cross-phase defect it could not fix.
+  if (review?.verdict === "failed") {
+    addAlert({
+      level: "error",
+      source: "review",
+      project: projectName,
+      worker: entry.name,
+      message: `Holistic review could not fix a cross-phase defect for ${entry.name}: ${review.body.slice(0, 300)}`,
+      dedupKey: `holistic-failed:${projectName}:${entry.name}`,
+    });
+    transitionState(projectName, entry.name, "failing", {
+      failCount: (entry.failCount ?? 0) + 1,
+      failingReason: "code",
+      failingSha: headSha ?? undefined,
+      lastSeenSha: headSha ?? undefined,
+      lastShaChangeAt: new Date().toISOString(),
+      reviewWindowName: undefined,
+      reviewStartedAt: undefined,
+      preReviewSha: undefined,
+      holisticReviewedThroughMergeCount: mergeCount,
+      holisticFinalActive: undefined,
+      holisticReviewMode: undefined,
+    });
+    refreshDashboard();
+    return true;
+  }
+
+  // A fix was committed (FIXED, or an unparseable verdict that nonetheless left
+  // commits): force-push and ride the normal CI + merge gate. holisticFinalActive
+  // rides merge-pending so transitionToTerminal finalizes the fix merge to done.
+  if (committed && (review === null || review.verdict === "fixed")) {
+    try {
+      forcePushBranch(wtPath, branchName);
+    } catch (err) {
+      log.error("poller", "holistic fix force-push failed; finalizing done without the fix", {
+        worker: entry.name, data: { project: projectName, error: String(err) },
+      });
+      addAlert({
+        level: "warn",
+        source: "poller",
+        project: projectName,
+        worker: entry.name,
+        message: `Holistic review fixed a defect for ${entry.name} but the push failed; the fix was not merged. ${String(err).slice(0, 150)}`,
+        dedupKey: `holistic-push-failed:${projectName}:${entry.name}`,
+      });
+      finalizeDone();
+      return true;
+    }
+    log.info("poller", "holistic review fixed a cross-phase defect; merging", {
+      worker: entry.name, data: { project: projectName },
+    });
+    transitionState(projectName, entry.name, "merge-pending", {
+      mergePendingAt: new Date().toISOString(),
+      lastReviewBody: review?.body,
+      reviewWindowName: undefined,
+      reviewStartedAt: undefined,
+      // holisticFinalActive + holisticReviewMode persist for the merge finalizer.
+    });
+    refreshDashboard();
+    scheduleDelayedPoke(projectName, 0);
+    return true;
+  }
+
+  // CLEAN, FIXED-without-commits, or a best-effort skip (unparseable / transient
+  // with no commit): nothing to merge — the whole-task review is complete.
+  if (review === null) {
+    log.warn("poller", "holistic review verdict unparseable; finalizing done (best-effort pass)", {
+      worker: entry.name, data: { project: projectName },
+    });
+  } else {
+    log.info("poller", "holistic review complete", {
+      worker: entry.name, data: { project: projectName, verdict: review.verdict },
+    });
+  }
+  finalizeDone();
+  return true;
 }
 
 // Did the reviewer's run move HEAD past the SHA captured at launch? The

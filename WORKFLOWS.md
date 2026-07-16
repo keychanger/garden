@@ -2686,18 +2686,22 @@ abstraction an early phase introduced that a later phase obsoleted, dead code a
 later phase orphaned, a shared-registry collision "resolved" by keeping every
 entry, a contract a later phase silently broke.
 
-The holistic-review workflow closes that gap. When a multi-phase **default**
-worker reaches `done`, the poller spawns ONE `holistic-review` worker to review
-the whole-task cumulative diff and (in `fix` mode) fix genuine cross-phase
-defects through the normal review/CI/merge gate.
+The holistic review closes that gap. When a multi-phase **default** worker reaches
+`done`, the poller interposes ONE final review of the whole-task cumulative diff
+before the worker truly finishes. This is NOT a separate spawned worker: it reuses
+the **headless reviewer flow** (`launchHeadlessAgent` + `resolveReviewRole`) on the
+original worker's own branch, exactly like a per-phase review — so a Codex reviewer
+(configured via `role reviewer harness codex` or a crew) runs the whole-task pass
+too. The reviewer reviews the aggregated diff for cross-phase coherence defects and,
+in `fix` mode, fixes them directly; the fix rides the normal CI + merge gate.
 
 ### Gate (`evaluateHolisticGate`, `poller-holistic-review.ts`)
 
 Dispatch fires iff:
 - `prState === "done"`, AND
-- `(workflow ?? "default") === "default"` — **load-bearing**: excludes grow,
-  trellis, AND the holistic child (recursion safety) in one clause; all three
-  legitimately reach `mergeCount >= 2`, and only this gate keeps them out, AND
+- `(workflow ?? "default") === "default"` — **load-bearing**: excludes grow and
+  trellis in one clause. Both legitimately reach `mergeCount >= 2` via normal
+  merges; only this gate keeps the whole-task review to default workers, AND
 - `mergeCount >= 2` — a one-shot worker's whole-task diff equals the single
   delta the per-phase reviewer already saw, so it is skipped, AND
 - `(holisticReviewedThroughMergeCount ?? 0) < mergeCount` — the high-water guard.
@@ -2707,18 +2711,18 @@ Dispatch fires iff:
 Two trigger sites cover both paths into `done` (see `docs/STATUS.md` invariant 4):
 `transitionToTerminal` (the sentinel-on-last-phase merge-driven path) and
 `handleDone` (the trail-off path, where the Stop hook wrote `done` without a
-final merge and pokes the poller).
+final merge and pokes the poller). Both re-open `done` → `reviewing` for the
+interposed pass; when it resolves, the worker settles back to `done`.
 
 ### Modes (per-project `holisticReview` config: `off` | `shadow` | `fix`)
 
-- **`off`** — evaluate the gate, emit the decision trace, never spawn.
-- **`shadow`** — spawn an analysis-only worker that writes findings to
-  `.holistic-findings.md` and never commits. `finalizeShadowHolistic` (from
-  `handleDone`) surfaces the findings as a `warn` alert, copies them to a durable
-  sessions path, and consumes the worktree file (idempotency without a reap).
-- **`fix`** (default, `DEFAULT_HOLISTIC_REVIEW` in `config.ts`) — spawn a worker
-  that fixes genuine defects, commits, and rides the normal per-branch review +
-  CI + merge gate.
+- **`off`** — evaluate the gate, emit the decision trace, never launch.
+- **`shadow`** — launch a report-only pass (the prompt forbids edits/commits).
+  `handleHolisticFinalReview` surfaces the findings as a `warn` alert, copies them
+  to a durable sessions path, and finalizes the worker to `done` (never merges).
+- **`fix`** (default, `DEFAULT_HOLISTIC_REVIEW` in `config.ts`) — the reviewer
+  fixes genuine cross-phase defects directly and force-pushes; the fix rides the
+  normal CI + merge gate, then the worker finalizes to `done`.
 
 Operator decision (2026-07-16): the default is `fix` — every multi-phase task
 gets an auto-fixing whole-task coherence review at `done`. A project that wants
@@ -2726,58 +2730,72 @@ the older conservative behavior opts *out* with an explicit `off` (no review) or
 `shadow` (report-only). The config is live-read, so it doubles as a no-restart
 kill switch.
 
-### Dispatch and spawn
+### Dispatch and launch
 
-The dispatcher captures the cross-phase rationale (`getCommitLogRange` over
-`baseBranchSha..origin/<base>`, scoped to `holisticTouchedFiles`), builds the
-seed (`buildHolisticSeed`, mode-specific disposition), and launches the worker
-via a detached `garden dashboard _spawn-holistic-worker` subprocess — NOT an
-in-process `newWorker` import: esbuild inlines dynamic imports into the
-single-file hook bundle, and `workers.ts` (→ `create.ts`/`skills.ts`) would
-bloat `dist/hook.js` by ~75kb. Safety: a per-project concurrency cap
-(`HOLISTIC_CONCURRENCY_CAP = 1`) and the shared usage gate
-(`autoContinueGateReason(projectName)` — project-scoped, so a usage-triggered
-closure does not defer a project on a separate token pool via `provider` or a
-non-default `claudeProfile`; an explicit `garden auto off` defers everyone)
-**defer without setting the guard**, so a deferred dispatch retries on the
-next merged/done sweep poke.
+The dispatcher (`maybeDispatchHolisticReview`) captures the cross-phase rationale
+(`getCommitLogRange` over `baseBranchSha..origin/<base>`, scoped to
+`holisticTouchedFiles`), advances the worker's already-merged branch to the base
+tip (`syncWorktreeToBase`, ff-only — so a reviewer fix lands as a single clean
+delta), builds the aggregated-diff prompt (`buildHolisticFinalReviewPrompt`,
+`prompts.ts`), and launches the reviewer via `launchHeadlessAgent` in the worker's
+`_<project>-review-<worker>` window — the same primitive per-phase reviews and the
+resolver use. The reviewer role (harness/model/env) comes from
+`resolveReviewRole(project, "default", "reviewer", …)`, so it honors `project.roles`
+and any crew (Codex-capable), independent of the worker's own harness. The worker
+transitions `done` → `reviewing` with `holisticFinalActive = true`.
+
+Deferral (leaves the guard **unset** so a later poke retries): the worker's own
+Claude still working (`isWorkerClaudeWorking`, shared worktree), or the shared usage
+gate closed (`autoContinueGateReason(projectName)` — project-scoped, so a
+usage-triggered closure does not defer a project on a separate token pool via
+`provider` or a non-default `claudeProfile`; an explicit `garden auto off` defers
+everyone).
 
 Launch is a routine lifecycle beat — `holisticReview` defaults to `fix`, so a
-holistic worker spawns on nearly every multi-phase `done`. The dispatch is
-logged (`garden logs`, source `poller`) but does NOT raise an operator alert;
-only the shadow-mode findings (`finalizeShadowHolistic`) and budget/error
-conditions warrant one.
+review fires on nearly every multi-phase `done`. It is logged (`garden logs`,
+source `poller`) but does NOT raise an operator alert; only the shadow-mode
+findings and a `FAILED` verdict (an unfixable cross-phase defect → `failing`)
+warrant one.
 
-The workflow definition (`workflows/holistic-review.ts`) reuses the default
-state handlers and hook handlers verbatim and pins `reviewerModel: "opus"`. A
-holistic worker walks the normal `working → reviewing → merge-pending → done`
-lifecycle; the only divergences are external (poller-spawned, opus-pinned,
-self-excluded by the workflow gate).
+### Verdict handling (`handleHolisticFinalReview`, `poller-review.ts`)
 
-### Fix-mode reviewer interlock (`reviewHolisticInterlockSection`, `prompts.ts`)
+`handleReviewing` early-returns to this handler on `holisticFinalActive`. It reuses
+the per-phase read/parse/timeout helpers (harness-aware: a Codex reviewer writes its
+verdict to the result file like claude does), then:
+- **shadow** → surface findings as a `warn` alert + durable copy, finalize `done`.
+- **fix / FIXED with commits** (or an unparseable verdict that still left a commit)
+  → force-push, `merge-pending`. `holisticFinalActive` persists through the merge
+  pipeline; `transitionToTerminal` finalizes the fix merge straight to `done`
+  (guard advanced past `mergeCount`, no auto-continue, no re-dispatch).
+- **fix / CLEAN** (or FIXED-with-no-commits) → finalize `done` (nothing to merge).
+- **FAILED** → `failing` (reason `code`) — the reviewer found a cross-phase defect
+  it could not fix, surfaced to the operator.
 
-A holistic worker lacks the original worker's full context, so it can mistake a
-deliberate decision for a bug. When its fix branch is reviewed, the per-branch
-reviewer is handed the original task's cross-phase commit history (threaded onto
-the child entry as `holisticRationale` at spawn) plus a HARD GATE: return
-`FAILED` for any change that reverts a deliberate decision (un-ratcheting a
-baseline, deleting a deliberately-kept entry, touching an off-limits file). This
-is separate from the spec-warning (`findSpecFiles`), which covers only marked
-spec files, not arbitrary deliberate decisions. The interlock plus the
-independent review + CI gate is the safety the fix-and-push decision rests on.
+It is a **best-effort** pass: a transient/unparseable outcome with no commit finalizes
+`done` rather than failing a task whose work already merged and passed per-phase
+review. Only an explicit `FAILED` verdict fails the worker.
+
+The deliberate-decision guardrail is folded into the prompt itself
+(`holisticRationaleSection`): the reviewer gets the cross-phase commit history and a
+directive not to revert an intentional choice (un-ratcheting a baseline, deleting a
+deliberately-kept entry, loosening a tightened contract). There is no separate
+second reviewer — the single headless pass is the reviewer, matching the
+no-bounceback contract that per-phase reviewers fix directly.
 
 ### Registry fields (all flat, optional, no migration)
 
 `mergeCount`, `baseBranchSha`, `holisticTouchedFiles`,
-`holisticReviewedThroughMergeCount` (the high-water guard), and
-`holisticRationale`. The dispatcher writes only these bookkeeping fields on the
-original entry — never `agentStatus`/`prState`. See `docs/STATUS.md` Writers.
+`holisticReviewedThroughMergeCount` (the high-water guard), and `holisticRationale`
+are the persistent bookkeeping. Two transient markers drive an in-flight pass and
+clear when it resolves: `holisticFinalActive` (the worker is in its interposed
+final review) and `holisticReviewMode` (`fix` | `shadow`). See `docs/STATUS.md`
+Writers.
 
 ### Validation harness
 
 `garden dashboard _holistic-backtest <project> <worker>` replays the production
-review against a PAST completed worker (read-only, zero risk) by reconstructing
-the diff endpoints from the dashboard log + the base-branch reflog and running
-the same `resolveHolisticDiff`/`buildHolisticSeed` code. The decision trace
-(`msg: "holistic-review gate"`) validates trigger correctness on live traffic
-with dispatch in `off`.
+prompt against a PAST completed worker (read-only, zero risk) by reconstructing the
+diff endpoints from the dashboard log + the base-branch reflog and running the same
+`resolveHolisticDiff` + `buildHolisticFinalReviewPrompt` (shadow mode) code. The
+decision trace (`msg: "holistic-review gate"`) validates trigger correctness on live
+traffic with dispatch in `off`.

@@ -691,11 +691,18 @@ function transitionToTerminal(
   sync: SyncOutcome,
   preMergeChangedFiles: string[],
 ): void {
+  // A holistic final-review FIX merge (the interposed whole-task review pushed a
+  // cross-phase fix, poller-holistic-review.ts): it always finalizes straight to
+  // `done` — the worker had already reached done and this fix is the last thing
+  // gating it. It also skips the auto-continue and re-dispatch below, and bumps
+  // the high-water guard so the review never re-fires.
+  const holisticFinal = entry.holisticFinalActive === true;
+
   // Per STATUS.md invariant 4: pick `done` when the worker wrote .garden-done
   // before its final push (skip the transient `merged` beat and go straight
   // to the operator-actionable cleanup signal). Otherwise set `merged` —
   // auto-continue clears it on the next prompt.
-  const terminalState: PrState = sentinelPresent ? "done" : "merged";
+  const terminalState: PrState = (sentinelPresent || holisticFinal) ? "done" : "merged";
   // Holistic-review bookkeeping (folded into the same terminal write so it is
   // atomic with the prState change). mergeCount counts every completed merge
   // — both `merged` (intermediate phase) and `done` (final) outcomes; the
@@ -728,8 +735,19 @@ function transitionToTerminal(
     preReviewSha: undefined,
     mergeCount,
     holisticTouchedFiles,
-    pendingContinueChangedFiles: sync.changedFiles.length ? sync.changedFiles : undefined,
-    pendingContinueSyncFailed: sync.syncFailed ? true : undefined,
+    // A holistic fix merge finalizes the whole-task review: clear the markers
+    // and advance the guard past this mergeCount so it never re-fires. Suppress
+    // the auto-continue payload — a done holistic pass never continues.
+    ...(holisticFinal
+      ? {
+          holisticFinalActive: undefined,
+          holisticReviewMode: undefined,
+          holisticReviewedThroughMergeCount: mergeCount,
+        }
+      : {
+          pendingContinueChangedFiles: sync.changedFiles.length ? sync.changedFiles : undefined,
+          pendingContinueSyncFailed: sync.syncFailed ? true : undefined,
+        }),
   });
 
   // Ledger the completed merge with the counts the pure `state` event (emitted
@@ -770,6 +788,16 @@ function transitionToTerminal(
       mergedAt: undefined,
       lastSeenSha: undefined,
     });
+  }
+
+  // A holistic final-review fix merge finalizes the whole-task review itself:
+  // it never auto-continues (the worker is done) and never re-dispatches (the
+  // guard was just advanced past this mergeCount). Skip both.
+  if (holisticFinal) {
+    log.info("poller", "holistic review fix merged; worker done", {
+      worker: entry.name, data: { project: projectName, mergeCount },
+    });
+    return;
   }
 
   maybeAutoContinue(projectName, branchName, fresh ?? entry);

@@ -1,8 +1,7 @@
 import { describe, it, expect } from "vitest";
-import {
-  evaluateHolisticGate,
-  buildHolisticSeed,
-} from "../src/dashboard/poller-holistic-review.js";
+import { evaluateHolisticGate } from "../src/dashboard/poller-holistic-review.js";
+import { holisticReviewSections } from "../src/dashboard/prompts.js";
+import { composePrompt, makeContext, type PromptData } from "../src/dashboard/prompt-compose.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 // Minimal WorkerEntry factory — only the fields the gate reads matter.
@@ -36,11 +35,6 @@ describe("evaluateHolisticGate", () => {
     expect(evaluateHolisticGate(entry({ mergeCount: 1 })).eligible).toBe(false);
   });
 
-  it("excludes the holistic-review child (recursion safety)", () => {
-    expect(evaluateHolisticGate(entry({ workflow: "holistic-review", mergeCount: 3 })))
-      .toEqual({ eligible: false, reason: "workflow" });
-  });
-
   it("excludes grow workers despite mergeCount>=2", () => {
     expect(evaluateHolisticGate(entry({ workflow: "grow", mergeCount: 5 })))
       .toEqual({ eligible: false, reason: "workflow" });
@@ -71,44 +65,75 @@ describe("evaluateHolisticGate", () => {
   });
 });
 
-describe("buildHolisticSeed", () => {
-  const base = {
-    originalName: "brown-blunt-flock",
-    baseBranch: "main",
+// The aggregated final-review prompt is composed from holisticReviewSections
+// against a PromptContext. Testing the sections directly (vs the file-I/O
+// builder) keeps these pure — the mode-dependent disposition + verdict format
+// and the deliberate-decision guardrail are the interesting logic.
+function holisticPrompt(mode: "fix" | "shadow", over: Partial<WorkerEntry> = {}): string {
+  const e = entry({
+    name: "brown-blunt-flock",
     baseBranchSha: "4276499c",
     mergeCount: 3,
-    touchedFiles: ["src/routing.ts", "src/factory.ts"],
-    transcriptPath: "/x/transcript.jsonl",
-    rationale: "abc123 phase 1: add helper\ndef456 phase 3: replace uses",
+    holisticTouchedFiles: ["src/routing.ts", "src/factory.ts"],
+    holisticRationale: "abc123 phase 1: add helper\ndef456 phase 3: replace uses",
+    holisticReviewMode: mode,
+    ...over,
+  });
+  const data: PromptData = {
+    diff: "diff --git a/src/routing.ts b/src/routing.ts\n@@ cross-phase change @@",
+    commitSummary: "",
+    branchName: "brown-blunt-flock",
+    rules: "RULES",
+    checksCommand: "npm test",
+    changedFiles: ["src/routing.ts", "src/factory.ts"],
+    docSections: [],
+    testSections: [],
+    specFiles: [],
   };
-  const fixSeed = buildHolisticSeed({ ...base, mode: "fix" });
-  const shadowSeed = buildHolisticSeed({ ...base, mode: "shadow" });
+  return composePrompt(holisticReviewSections, makeContext("proj", "/tmp/proj", "main", e, data));
+}
 
-  it("carries the scoped diff command with the base SHA and the touched-file list", () => {
-    expect(fixSeed).toContain("git diff 4276499c..origin/main -- src/routing.ts src/factory.ts");
-  });
+describe("holistic final-review prompt", () => {
+  const fix = holisticPrompt("fix");
+  const shadow = holisticPrompt("shadow");
 
-  it("includes the original worker name and the rationale", () => {
-    expect(fixSeed).toContain("brown-blunt-flock");
-    expect(fixSeed).toContain("phase 3: replace uses");
-  });
-
-  it("states the scoped-diff limitation (not a fence) and recursion safety in both modes", () => {
-    for (const s of [fixSeed, shadowSeed]) {
-      expect(s).toContain("not a fence");
-      expect(s).toContain("never spawn another");
+  it("frames a whole-task review of the assembled multi-phase result", () => {
+    for (const s of [fix, shadow]) {
+      expect(s).toContain("brown-blunt-flock");
+      expect(s).toContain("ASSEMBLED WHOLE");
+      expect(s).toContain("3 merges");
     }
   });
 
-  it("fix mode tells the worker to fix + commit through the normal gate", () => {
-    expect(fixSeed).toContain("change NOTHING");
-    expect(fixSeed).toContain("commit naming the cross-phase defect");
-    expect(fixSeed).not.toContain(".holistic-findings.md");
+  it("embeds the assembled whole-task diff scoped to the base SHA", () => {
+    expect(fix).toContain("4276499c..origin/main");
+    expect(fix).toContain("cross-phase change");
   });
 
-  it("shadow mode is analysis-only: write findings to the findings file, no commit", () => {
-    expect(shadowSeed).toContain("SHADOW (ANALYSIS-ONLY)");
-    expect(shadowSeed).toContain(".holistic-findings.md");
-    expect(shadowSeed).toContain("Do NOT edit code or commit");
+  it("carries the deliberate-decision guardrail with the cross-phase rationale", () => {
+    for (const s of [fix, shadow]) {
+      expect(s).toContain("DO NOT UNDO INTENTIONAL CHOICES");
+      expect(s).toContain("phase 3: replace uses");
+    }
+  });
+
+  it("states the scoped-diff limitation (not a fence) in both modes", () => {
+    for (const s of [fix, shadow]) {
+      expect(s).toContain("not a fence");
+    }
+  });
+
+  it("fix mode: fix + commit, CLEAN/FIXED/FAILED verdict, references garden checks", () => {
+    expect(fix).toContain('commit with a message prefixed "review: "');
+    expect(fix).toContain("garden checks proj");
+    expect(fix).toContain("`FIXED`");
+    expect(fix).not.toContain("ANALYSIS-ONLY");
+  });
+
+  it("shadow mode: analysis-only, never FIXED, no commit", () => {
+    expect(shadow).toContain("ANALYSIS-ONLY");
+    expect(shadow).toContain("make NO code edits and NO commits");
+    expect(shadow).toContain("Never emit FIXED");
+    expect(shadow).not.toContain('commit with a message prefixed "review: "');
   });
 });

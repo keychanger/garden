@@ -9,9 +9,12 @@
 // are shared.
 import {
   composePrompt, gatherPromptContext, makeContext,
+  findSpecFiles, readDocSections, readTestSections,
   type PromptContext, type PromptData, type PromptSection,
 } from "./prompt-compose.js";
-import { getCommitSummary } from "./git.js";
+import { tryGetProject } from "../config.js";
+import { buildRulesContext } from "../rules.js";
+import { getCommitSummary, resolveHolisticDiff } from "./git.js";
 import { log } from "./log.js";
 import type { WorkerEntry } from "./registry.js";
 
@@ -34,44 +37,6 @@ export const reviewSpecWarningSection: PromptSection = {
   render(ctx) {
     if (ctx.data.specFiles.length === 0) return null;
     return buildSpecWarning(ctx.data.specFiles).join("\n").replace(/\n+$/, "");
-  },
-};
-
-// Deliberate-decision interlock for a holistic FIX branch. The holistic worker
-// reviewed a completed multi-phase task's whole-task diff and is fixing a
-// cross-phase coherence defect — but it lacks the original worker's full
-// context, so it can mistake a deliberate decision for a bug. This hands the
-// reviewer the original task's cross-phase commit history and a hard gate:
-// FAIL any change that reverts a deliberate decision. The existing spec-warning
-// (findSpecFiles) does not cover non-spec decisions like an un-ratcheted
-// baseline or a deliberately-kept registry entry, so this is a separate gate.
-// Renders only for a holistic-review worker carrying its rationale (fix-mode
-// branches; shadow workers never commit and so are never reviewed).
-export const reviewHolisticInterlockSection: PromptSection = {
-  name: "holistic-interlock",
-  render(ctx) {
-    if ((ctx.entry.workflow ?? "default") !== "holistic-review") return null;
-    const rationale = ctx.entry.holisticRationale?.trim();
-    if (!rationale) return null;
-    return [
-      "## Holistic fix — deliberate-decision interlock",
-      "",
-      "This branch is a HOLISTIC FIX of a completed multi-phase task: a fresh worker reviewed",
-      "the whole assembled task and is fixing a cross-phase coherence defect. It does NOT carry",
-      "the original worker's full context, so it can mistake a deliberate decision for a bug.",
-      "",
-      "HARD GATE: if ANY change in this diff reverts or weakens a decision the original task made",
-      "on purpose — un-ratcheting a baseline, deleting a deliberately-kept registry/config entry,",
-      "touching a file the task treated as off-limits, loosening a contract a phase tightened —",
-      "return FAILED and name the decision it undoes. A genuine cross-phase fix (removing dead",
-      "code a later phase orphaned, reconciling a real collision) is fine.",
-      "",
-      "Original task's cross-phase commit history (the deliberate decisions are here):",
-      "",
-      "```",
-      rationale,
-      "```",
-    ].join("\n");
   },
 };
 
@@ -243,7 +208,6 @@ export const reviewVerdictFormatSection: PromptSection = {
 export const reviewSections: readonly PromptSection[] = [
   reviewIntroSection,
   reviewSpecWarningSection,
-  reviewHolisticInterlockSection,
   reviewRebaseStepSection,
   reviewChecksStepSection,
   reviewCodeReviewStepSection,
@@ -499,6 +463,161 @@ export const ciFixSections: readonly PromptSection[] = [
   ciFixVerdictFormatSection,
 ];
 
+// --- Holistic (whole-task final review) sections ---
+//
+// The holistic review is one interposed reviewer pass on the ORIGINAL worker's
+// branch, fired before it settles into terminal `done`. It reuses the headless
+// reviewer flow (launchHeadlessAgent + resolveReviewRole), so a Codex reviewer
+// works exactly as for a per-phase review. What differs is the material: the
+// prompt reviews the ASSEMBLED whole-task diff (baseBranchSha..origin/<base>
+// scoped to touched files) for cross-phase coherence defects no single per-phase
+// review could see. `holisticReviewMode` picks fix (commit fixes) vs shadow
+// (report only). The deliberate-decision guardrail folds the former separate
+// reviewer interlock into this single pass.
+
+export const holisticIntroSection: PromptSection = {
+  name: "holistic-intro",
+  render(ctx) {
+    const mergeCount = ctx.entry.mergeCount ?? 2;
+    return [
+      `You are performing a ONE-TIME holistic (whole-task) review of a multi-phase task that`,
+      `worker \`${ctx.entry.name}\` completed across ${mergeCount} merges into \`${ctx.baseBranch}\`.`,
+      ``,
+      `WHY THIS REVIEW EXISTS — each phase was independently reviewed, but ONLY as a single delta`,
+      `against the then-current base. Nobody reviewed the ASSEMBLED WHOLE. Find cross-phase coherence`,
+      `defects: an abstraction an early phase introduced that a later phase made obsolete; dead code`,
+      `a later phase orphaned; a shared-registry/config collision "resolved" by keeping every entry;`,
+      `a contract an early phase set that a later phase silently broke.`,
+    ].join("\n");
+  },
+};
+
+export const holisticRationaleSection: PromptSection = {
+  name: "holistic-rationale",
+  render(ctx) {
+    const rationale = ctx.entry.holisticRationale?.trim();
+    const lines = [
+      `## Deliberate-decision guardrail — DO NOT UNDO INTENTIONAL CHOICES`,
+      ``,
+      `You do NOT carry the original worker's full context, so a choice that looks "wrong" may be a`,
+      `deliberate, documented decision (not ratcheting a baseline, deliberately keeping every`,
+      `registry/config entry, a stub left for a follow-up). If a change matches such a decision it is`,
+      `OUT OF SCOPE — do not revert or weaken it (un-ratcheting a baseline, deleting a deliberately-`,
+      `kept entry, loosening a contract a phase tightened).`,
+    ];
+    if (rationale) {
+      lines.push(
+        ``,
+        `Cross-phase commit history (the deliberate decisions are here):`,
+        ``,
+        "```",
+        rationale,
+        "```",
+      );
+    }
+    return lines.join("\n");
+  },
+};
+
+export const holisticActionSection: PromptSection = {
+  name: "holistic-action",
+  render(ctx) {
+    const mode = ctx.entry.holisticReviewMode ?? "fix";
+    const lines = [
+      `## What to do`,
+      ``,
+      `SCOPING — the diff below is scoped to the files this task touched. A real defect can ripple`,
+      `into a file it never edited (dead code orphaned elsewhere, a caller now broken); the scoped`,
+      `diff won't show those. Treat the file list as a starting point, not a fence — if your reading`,
+      `implies a problem outside it, investigate anyway.`,
+      ``,
+      `Only flag GENUINE cross-phase coherence defects. Do NOT re-litigate per-phase review, apply`,
+      `stylistic edits, "improve" working code, or extend scope. A finding must be a concrete defect`,
+      `in how the phases COMBINE, with a one-line note on which phases conflict and why.`,
+    ];
+    if (mode === "shadow") {
+      lines.push(
+        ``,
+        `THIS IS AN ANALYSIS-ONLY PASS — make NO code edits and NO commits. If you find defects, list`,
+        `each one above (naming which phases conflict and why). Never fix anything in this pass.`,
+      );
+    } else {
+      lines.push(
+        ``,
+        `If you find a genuine defect, fix it MINIMALLY and commit with a message prefixed "review: "`,
+        `naming the cross-phase defect. If the assembled task is coherent (the common outcome), change`,
+        `NOTHING and do not commit.`,
+      );
+      if (ctx.data.checksCommand) {
+        lines.push(
+          ``,
+          `If you commit a fix, run \`garden checks ${ctx.projectName}\` and make it pass before you`,
+          `finish (it runs \`${ctx.data.checksCommand}\` under a machine-wide slot gate). If checks`,
+          `cannot be made to pass, report FAILED.`,
+        );
+      }
+    }
+    return lines.join("\n");
+  },
+};
+
+export const holisticDiffSection: PromptSection = {
+  name: "holistic-diff",
+  render(ctx) {
+    const diff = ctx.data.diff.trim();
+    const body = diff || "(scoped range is empty — inspect the worktree directly)";
+    const from = ctx.entry.baseBranchSha ?? "base";
+    return `## Assembled whole-task diff (\`${from}..origin/${ctx.baseBranch}\`, scoped to touched files)\n\n\`\`\`diff\n${body}\n\`\`\``;
+  },
+};
+
+export const holisticVerdictFormatSection: PromptSection = {
+  name: "holistic-verdict-format",
+  render(ctx) {
+    const mode = ctx.entry.holisticReviewMode ?? "fix";
+    if (mode === "shadow") {
+      return [
+        "## Output Format",
+        "",
+        "Write your findings above, then end with the verdict on its own final line:",
+        "",
+        "- `CLEAN` — the assembled task is coherent; no cross-phase defects.",
+        "- `FAILED` — you found cross-phase defects (listed above). Analysis-only: you did NOT fix them.",
+        "",
+        "Never emit FIXED — this pass makes no edits. Your LAST line must START with the bare token.",
+        "You are running headless: this single response IS the review. Do NOT defer the verdict to a",
+        "background task or a later message.",
+      ].join("\n");
+    }
+    return [
+      "## Output Format",
+      "",
+      "Write your reasoning above, then end with the verdict on its own final line:",
+      "",
+      "- `CLEAN` — the assembled task is coherent; nothing to change.",
+      "- `FIXED` — you found and fixed cross-phase defects in the worktree.",
+      "- `FAILED` — you found defects but could not fix them (explain above).",
+      "",
+      "Your LAST line must START with the bare token (CLEAN, FIXED, or FAILED).",
+      "You are running headless: this single response IS the review. Do NOT defer the verdict to a",
+      "background task or a later message.",
+    ].join("\n");
+  },
+};
+
+export const holisticReviewSections: readonly PromptSection[] = [
+  holisticIntroSection,
+  reviewSpecWarningSection,
+  holisticRationaleSection,
+  holisticActionSection,
+  reviewBranchInfoSection,
+  holisticDiffSection,
+  reviewRulesSection,
+  reviewDocumentationSection,
+  reviewTestFilesSection,
+  holisticVerdictFormatSection,
+];
+
 // --- Builders ---
 
 export function buildReviewPrompt(
@@ -538,6 +657,43 @@ export function buildResolvePrompt(
 ): string | null {
   const ctx = makeResolveContext(projectName, projectPath, baseBranch, entry);
   return composePrompt(resolveSections, ctx);
+}
+
+// Holistic final-review context: the diff is the ASSEMBLED whole-task range
+// (baseBranchSha..origin/<base>) scoped to the files this worker touched — NOT
+// the branch delta (the branch was advanced to the base tip, so its own delta is
+// empty). docs/tests/spec-files are derived from the touched-file list so the
+// reviewer sees the relevant test + doc context. Returns null when the from-SHA
+// is missing (a pre-Phase-0 straggler with no reconstructable whole-task range).
+export function buildHolisticFinalReviewPrompt(
+  projectName: string,
+  projectPath: string,
+  baseBranch: string,
+  entry: WorkerEntry,
+  // The `to` endpoint of the whole-task range. Production leaves this at the
+  // live base tip; the offline backtest passes a reconstructed historical ref.
+  toRef: string = `origin/${baseBranch}`,
+): string | null {
+  const wtPath = entry.worktreePath ?? projectPath;
+  const fromSha = entry.baseBranchSha;
+  if (!fromSha) return null;
+  const files = entry.holisticTouchedFiles ?? [];
+  const aggregatedDiff = resolveHolisticDiff(wtPath, fromSha, toRef, files);
+  const project = tryGetProject(projectName);
+  const data: PromptData = {
+    diff: aggregatedDiff,
+    // The cross-phase commit log rides holisticRationale (rendered by the
+    // rationale section), so the branch commit-summary field stays empty.
+    commitSummary: "",
+    branchName: entry.branchName ?? entry.name,
+    rules: buildRulesContext(projectName, projectPath),
+    checksCommand: project?.checks,
+    changedFiles: files,
+    docSections: readDocSections(wtPath),
+    testSections: readTestSections(wtPath, files),
+    specFiles: findSpecFiles(wtPath, files),
+  };
+  return composePrompt(holisticReviewSections, makeContext(projectName, projectPath, baseBranch, entry, data));
 }
 
 function makeResolveContext(

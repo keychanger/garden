@@ -7,9 +7,9 @@
 // log (merge events → mergeCount + timestamps) joined to the project repo's
 // base-branch reflog (timestamp → base SHA before/after the worker's merges).
 // It then runs the SAME production functions (resolveHolisticDiff, getCommitLogRange,
-// buildHolisticSeed) so the backtest exercises real code paths, and writes the
-// seed + scoped diff to $TMPDIR for review. With --run it pipes them through
-// `claude -p` (opus) and saves the findings.
+// buildHolisticFinalReviewPrompt) so the backtest exercises real code paths, and
+// writes the prompt + scoped diff to $TMPDIR for review. With --run it pipes the
+// prompt through `claude -p` (opus) and saves the findings.
 //
 // Reflog recovery is fragile (90-day expiry, operator-machine-local, fast-forward
 // merges leave no per-cycle SHA in the log). When it can't reconstruct, pass
@@ -19,11 +19,11 @@ import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
 import { SESSIONS_DIR, tryGetProject } from "../config.js";
-import { findWorkerByName } from "./registry.js";
+import { findWorkerByName, type WorkerEntry } from "./registry.js";
 import {
   getChangedFilesBetween, getCommitLogRange, resolveHolisticDiff,
 } from "./git.js";
-import { buildHolisticSeed } from "./poller-holistic-review.js";
+import { buildHolisticFinalReviewPrompt } from "./prompts.js";
 
 const LOG_FILE = path.join(SESSIONS_DIR, "dashboard.log");
 
@@ -139,37 +139,47 @@ export async function runHolisticBacktest(args: string[]): Promise<void> {
   }
   const scopedDiff = resolveHolisticDiff(repoPath, fromSha, toRef, touchedFiles);
   const rationale = getCommitLogRange(repoPath, fromSha, toRef, touchedFiles);
-  const seed = buildHolisticSeed({
-    originalName: worker,
+
+  // Reconstruct a synthetic entry so the backtest exercises the SAME prompt
+  // builder production uses (buildHolisticFinalReviewPrompt), in shadow mode
+  // (analysis-only — no worktree to edit). toRef is the reconstructed historical
+  // base tip, not the live one.
+  const syntheticEntry: WorkerEntry = {
+    ...(entry ?? ({} as WorkerEntry)),
+    name: worker,
+    branchName: entry?.branchName ?? worker,
     baseBranch,
+    worktreePath: repoPath,
     baseBranchSha: fromSha,
+    holisticTouchedFiles: touchedFiles,
     mergeCount: mergeCount || 2,
-    touchedFiles,
-    transcriptPath: entry?.transcriptPath,
-    rationale,
-    mode: "shadow", // backtest is analysis-only
-  });
-
-  const tmp = process.env.TMPDIR ?? os.tmpdir();
-  const seedPath = path.join(tmp, `holistic-backtest-${worker}.seed.txt`);
-  const diffPath = path.join(tmp, `holistic-backtest-${worker}.diff.txt`);
-  fs.writeFileSync(seedPath, seed);
-  fs.writeFileSync(diffPath, scopedDiff);
-  console.log(`\nBacktest target: ${project}/${worker}`);
-  console.log(`  merges: ${mergeCount}  files: ${touchedFiles.length}  diff: ${scopedDiff.length} bytes`);
-  console.log(`  seed:   ${seedPath}`);
-  console.log(`  diff:   ${diffPath}`);
-
-  if (!flags.run) {
-    console.log(`\nReview the seed + diff, or re-run with --run to pipe them through claude -p (opus).`);
+    holisticRationale: rationale,
+    holisticReviewMode: "shadow",
+  };
+  const prompt = buildHolisticFinalReviewPrompt(project, repoPath, baseBranch, syntheticEntry, toRef);
+  if (!prompt) {
+    console.error(`Could not build holistic review prompt for ${worker} (missing base SHA).`);
     return;
   }
 
-  // --run: feed the production seed + the assembled diff to a report-only
-  // reviewer and save its findings. Read-only — the reviewer is told to report,
-  // not edit (no worktree exists to edit).
-  const prompt = `${seed}\n\n--- ASSEMBLED DIFF (already computed for you; do NOT run git) ---\n${scopedDiff}\n\n`
-    + `This is an OFFLINE BACKTEST: report findings only, make no edits. End with a one-line verdict CLEAN or FINDINGS.`;
+  const tmp = process.env.TMPDIR ?? os.tmpdir();
+  const promptPath = path.join(tmp, `holistic-backtest-${worker}.prompt.txt`);
+  const diffPath = path.join(tmp, `holistic-backtest-${worker}.diff.txt`);
+  fs.writeFileSync(promptPath, prompt);
+  fs.writeFileSync(diffPath, scopedDiff);
+  console.log(`\nBacktest target: ${project}/${worker}`);
+  console.log(`  merges: ${mergeCount}  files: ${touchedFiles.length}  diff: ${scopedDiff.length} bytes`);
+  console.log(`  prompt: ${promptPath}`);
+  console.log(`  diff:   ${diffPath}`);
+
+  if (!flags.run) {
+    console.log(`\nReview the prompt + diff, or re-run with --run to pipe the prompt through claude -p (opus).`);
+    return;
+  }
+
+  // --run: feed the production shadow-mode prompt to claude -p and save its
+  // findings. The prompt is analysis-only (shadow), so the reviewer reports
+  // rather than edits — matching the read-only intent of a backtest.
   const findingsPath = path.join(tmp, `holistic-backtest-${worker}.findings.txt`);
   console.log(`\nRunning claude -p (opus) — this may take a minute...`);
   try {

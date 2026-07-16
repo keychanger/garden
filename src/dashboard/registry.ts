@@ -282,13 +282,27 @@ export interface WorkerEntry {
   //    when mergeCount>=2 && (reviewedThrough ?? 0) < mergeCount, so it is
   //    idempotent against a replayed `done` at the same count yet re-arms if a
   //    re-opened worker adds more phases.
-  //  - holisticRationale: cross-phase commit log captured at dispatch; seeds both
-  //    the holistic worker's brief and its fix branch's reviewer interlock.
+  //  - holisticRationale: cross-phase commit log captured at dispatch; seeds the
+  //    aggregated final-review prompt (the deliberate-decision guardrails).
+  //
+  // The final holistic review is NOT a separate spawned worker: the dispatcher
+  // interposes one aggregated review pass on THIS worker's own branch (reusing
+  // the headless reviewer flow) before it settles into terminal `done`. Two
+  // transient markers drive that pass; both are cleared when it resolves:
+  //  - holisticFinalActive: true while the worker sits in `reviewing` for its
+  //    interposed final pass (not a per-phase review). handleReviewing early-
+  //    returns to the holistic verdict handler on it; transitionToTerminal routes
+  //    a resulting fix merge straight to `done` (guard bumped, no auto-continue).
+  //  - holisticReviewMode: "fix" (reviewer fixes cross-phase defects directly) or
+  //    "shadow" (reports findings only, never commits) — the active mode for the
+  //    in-flight pass, read by the prompt and the verdict handler.
   mergeCount?: number;
   baseBranchSha?: string;
   holisticTouchedFiles?: string[];
   holisticReviewedThroughMergeCount?: number;
   holisticRationale?: string;
+  holisticFinalActive?: boolean;
+  holisticReviewMode?: "fix" | "shadow";
   role?: string;
   // Handoff lineage. `parentWorker` + `parentProject` are set by newWorker on
   // workers created via `garden handoff` so the child knows where it came

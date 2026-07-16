@@ -92,7 +92,10 @@ export interface WorkflowDefinition {
 // leaf module pre-empts the next regression.
 export const defaultValidTransitions: Record<PrState, PrState[]> = {
   working:         ["reviewing"],
-  reviewing:       ["merge-pending", "working", "failing"],
+  // reviewing → done is the holistic final-review CLEAN path: the interposed
+  // whole-task review found nothing to change, so the worker finalizes without
+  // a merge (see poller-holistic-review.ts).
+  reviewing:       ["merge-pending", "working", "failing", "done"],
   "merge-pending": ["merged", "done", "resolving", "ci-fixing", "working", "failing"],
   resolving:       ["merge-pending", "working", "failing"],
   // ci-fixing: agent pushed FIXED → merge-pending re-runs the CI gate on the
@@ -102,7 +105,11 @@ export const defaultValidTransitions: Record<PrState, PrState[]> = {
   "ci-fixing":     ["merge-pending", "working", "failing"],
   failing:         ["working"],
   merged:          ["working", "done"],
-  done:            ["working"],
+  // done → reviewing is the holistic final-review interposition: a multi-phase
+  // worker that reached `done` gets one aggregated whole-task review before it
+  // truly finishes (see poller-holistic-review.ts). done → working is the
+  // re-open-on-new-commits path.
+  done:            ["working", "reviewing"],
 };
 
 // Trellis presently uses the same table as default. Kept as a separate
@@ -115,16 +122,8 @@ export const trellisValidTransitions: Record<PrState, PrState[]> = defaultValidT
 // state) without fighting the type system or callers.
 export const growValidTransitions: Record<PrState, PrState[]> = defaultValidTransitions;
 
-// Holistic-review workers walk the default lifecycle (working → reviewing →
-// merge-pending → done). Their branch is reviewed and merged exactly like any
-// worker's; the only divergence from default is how they are spawned (by the
-// poller, seeded with the whole-task diff) and that they never themselves
-// trigger another holistic review (excluded by the workflow !== "default" gate).
-export const holisticReviewValidTransitions: Record<PrState, PrState[]> = defaultValidTransitions;
-
 export function getValidTransitions(workflowName: string): Record<PrState, PrState[]> {
   if (workflowName === "trellis") return trellisValidTransitions;
   if (workflowName === "grow") return growValidTransitions;
-  if (workflowName === "holistic-review") return holisticReviewValidTransitions;
   return defaultValidTransitions;
 }
