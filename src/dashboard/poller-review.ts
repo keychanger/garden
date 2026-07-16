@@ -320,7 +320,7 @@ export function handleReviewing(
   // the sidecar, so keying off rawOutput would skip the retry in exactly that
   // case. transientSource collapses to null when neither stream has content.
   const reviewerHarness = resolveReviewRole(
-    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "reviewer",
+    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "reviewer", undefined, entry,
   ).harness;
   const transientSource = (reviewerHarness === "claude-code"
     ? rawOutput
@@ -1272,7 +1272,7 @@ function launchReview(
   // harness codex`) flows through the same path with its own auth and no
   // Anthropic env. See docs/MULTI-MODEL.md "Phase 4".
   const reviewer = resolveReviewRole(
-    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "reviewer",
+    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "reviewer", undefined, entry,
   );
   const revWindow = reviewWindowName(projectName, entry.name);
   launchHeadlessAgent({

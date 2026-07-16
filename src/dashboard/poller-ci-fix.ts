@@ -124,7 +124,7 @@ export function launchCiFix(
   // first-party Anthropic + Opus default, overridable via `garden config <p>
   // role ci-fix ...`. See docs/MULTI-MODEL.md "Phase 4".
   const ciFix = resolveReviewRole(
-    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "ciFix",
+    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "ciFix", undefined, entry,
   );
   const cfWindow = ciFixWindowName(projectName, entry.name);
   launchHeadlessAgent({
@@ -180,7 +180,7 @@ export function launchCiFix(
 // cleanCiFixFiles removes the result/sidecar.
 function ciFixOutputWasTransient(projectName: string, entry: WorkerEntry): boolean {
   const harness = resolveReviewRole(
-    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "ciFix",
+    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "ciFix", undefined, entry,
   ).harness;
   const resultFile = ciFixResultPath(projectName, entry.name);
   let rawOutput = "";

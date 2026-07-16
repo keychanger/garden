@@ -1,9 +1,10 @@
 // `garden workers <subcommand>` — worker lifecycle CLI.
 import fs from "node:fs";
 import path from "node:path";
-import { tryGetProject, SESSIONS_DIR } from "../config.js";
+import { tryGetProject, SESSIONS_DIR, loadConfig } from "../config.js";
 import { newWorker } from "../dashboard/workers.js";
 import { isRegisteredHarness, harnessNames, canonicalHarnessName } from "../dashboard/harness/core.js";
+import { getCrew, listCrews } from "../dashboard/crew.js";
 import { buildGrowIteration1Seed, GROW_GOAL_FILE_REL } from "../dashboard/grow-continue.js";
 import {
   readRegistry, findWorkerByName, updateWorkerFields,
@@ -105,6 +106,29 @@ async function newCommand(args: string[]): Promise<void> {
     throw new Error("--base requires a non-empty branch name");
   }
 
+  // Per-worker crew (default workflow only, mutually exclusive with --harness):
+  // sets the build harness (its worker member) + the live review family.
+  const crew = flags.get("crew");
+  if (crew !== undefined) {
+    const cfg = loadConfig();
+    const spec = getCrew(crew, cfg);
+    if (!spec) {
+      throw new Error(`--crew must be one of: ${listCrews(cfg).map(c => c.name).join(", ")}, got '${crew}'`);
+    }
+    if (spec.worker.provider) {
+      throw new Error(
+        `--crew '${crew}' has a provider-backed worker member (${spec.worker.name}); per-worker provider is not supported. `
+        + `Set the provider at project level (garden config <p> provider) or pick an all-harness crew.`,
+      );
+    }
+    if (harness) {
+      throw new Error("--crew and --harness are mutually exclusive (a crew already selects the worker harness).");
+    }
+    if (workflow !== "default") {
+      throw new Error(`--crew is only supported with --workflow default (got '${workflow}').`);
+    }
+  }
+
   if (workflow === "default") {
     if (flags.has("trellis")) {
       throw new Error("--trellis can only be used with --workflow trellis");
@@ -116,13 +140,13 @@ async function newCommand(args: string[]): Promise<void> {
       throw new Error("--max-iterations can only be used with --workflow trellis or grow");
     }
     const model = flags.has("model") ? requireModelValue(flags.get("model")!) : undefined;
-    const newName = newWorker({ projectName, workflow, model, ...(harness ? { harness } : {}), ...(base ? { base } : {}) });
+    const newName = newWorker({ projectName, workflow, model, ...(harness ? { harness } : {}), ...(base ? { base } : {}), ...(crew ? { crew } : {}) });
     if (!newName) {
       throw new Error(
         `Failed to spawn worker on '${projectName}'. Is the dashboard running? Check 'garden health'.`,
       );
     }
-    const suffix = [model ? `model=${model}` : "", harness ? `harness=${harness}` : "", base ? `base=${base}` : ""].filter(Boolean).join(", ");
+    const suffix = [model ? `model=${model}` : "", harness ? `harness=${harness}` : "", base ? `base=${base}` : "", crew ? `crew=${crew}` : ""].filter(Boolean).join(", ");
     console.log(`Created worker ${projectName}/${newName}${suffix ? ` (${suffix})` : ""}.`);
     return;
   }

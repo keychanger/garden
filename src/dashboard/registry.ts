@@ -315,6 +315,14 @@ export interface WorkerEntry {
   // vines use `trellis.workerModel` instead (iteration-resolved with the
   // Sonnet-exhaustion fallback). See docs/MULTI-MODEL.md "Layer 2".
   model?: string;
+  // Per-worker crew (`workers new --crew`, or the ⌥i worker menu). Names a crew
+  // (see crew.ts). Its BUILD half is resolved into entry.harness/provider at
+  // spawn; its REVIEW half is applied live by resolveReviewRole (roles.ts),
+  // which layers the crew's review harness ahead of project.roles — so changing
+  // entry.crew re-targets the next review/resolve/ci-fix. Absent on legacy
+  // entries and workers spawned without --crew; no readRegistry migration
+  // needed (a top-level scalar rides Object.assign; consumers read `?? …`).
+  crew?: string;
   // Ultracode preset flag, set via `garden handoff --ultracode`. When true,
   // the worker launches in Claude Code's ultracode mode: `--effort max` plus
   // `ultracodeKeywordTrigger: on` (the dynamic-workflow standing opt-in),

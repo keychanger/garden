@@ -663,6 +663,23 @@ describe("newWorker", () => {
     );
   });
 
+  it("crew: derives the build harness from the crew's worker member and stamps entry.crew", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    expect(newWorker({ crew: "all-codex" })).toBe("bold-ash");
+    expect(vi.mocked(addWorker)).toHaveBeenCalledWith(
+      "myproject",
+      expect.objectContaining({ harness: "codex", crew: "all-codex" }),
+    );
+  });
+
+  it("crew: a claude-worker crew (claude-codex) stamps entry.crew but leaves the build harness default", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ crew: "claude-codex" });
+    const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.crew).toBe("claude-codex");
+    expect(entry.harness).toBeUndefined();
+  });
+
   it("harness: canonicalizes the 'claude' alias to claude-code", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     expect(newWorker({ harness: "claude" })).toBe("bold-ash");

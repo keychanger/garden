@@ -19,7 +19,7 @@ import {
   updateWorkerFields, getWorkers, resolveResumeAgentStatus, type AgentStatus,
 } from "./registry.js";
 import { recordWorkerCreated, recordOperatorAction, shortHash, type RoleSnapshot } from "./telemetry.js";
-import { deriveCrew } from "./crew.js";
+import { deriveCrew, getCrew } from "./crew.js";
 import { resolveReviewRole, type ReviewRole } from "./roles.js";
 import { buildRulesContext } from "../rules.js";
 import { GARDEN_VERSION } from "../version.js";
@@ -82,6 +82,12 @@ export interface NewWorkerOptions {
   // branchExistsOnOrigin / tryPublishBranch chain as any resolved base, then
   // pinned to entry.baseBranch.
   base?: string;
+  // Per-worker crew (`workers new --crew`). Sets BOTH halves at spawn: the
+  // build harness (the crew's worker member — mutually exclusive with
+  // --harness) and the review family (stamped on entry.crew, applied live by
+  // resolveReviewRole). A provider-backed worker member is rejected upstream
+  // (no per-worker provider). Default workflow only, like --harness.
+  crew?: string;
   // Workflow that drives the new worker's lifecycle. Defaults to "default".
   // Trellis vines pass "trellis" along with the trellis.name/trellis.path
   // pair below; see WORKFLOWS.md "Spawning a trellis vine".
@@ -156,8 +162,20 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // Validate against the registry so an unknown name fails loudly here rather
     // than silently falling back at launch.
     const workflowName = opts.workflow ?? "default";
+    // A per-worker crew selects the build harness (its worker member); the CLI
+    // guard makes --crew and --harness mutually exclusive, and rejects a
+    // provider-backed worker member (no per-worker provider), so here we only
+    // adopt a non-claude-code harness member. The crew's REVIEW half rides
+    // entry.crew (stamped below) and is applied live by resolveReviewRole.
+    let crewHarness: string | undefined;
+    if (opts.crew) {
+      const spec = getCrew(opts.crew, loadConfig());
+      if (spec && !spec.worker.provider && spec.worker.harness !== "claude-code") {
+        crewHarness = spec.worker.harness;
+      }
+    }
     const rawHarness =
-      opts.harness ?? (workflowName === "default" ? project.harness : undefined);
+      opts.harness ?? crewHarness ?? (workflowName === "default" ? project.harness : undefined);
     // Canonicalize the operator-facing "claude" alias to the registry name.
     // This is the chokepoint every worker-creation path funnels through (CLI
     // --harness, the workflow picker, the project default), so the stamped
@@ -332,6 +350,9 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       // Harness adapter (agent CLI). Absent = claude-code; consumers read via
       // getHarness(entry.harness). Threaded into launch/resume/loop.
       ...(resolvedHarness ? { harness: resolvedHarness } : {}),
+      // Per-worker crew — its review half, applied live by resolveReviewRole
+      // (the build half is already folded into resolvedHarness above).
+      ...(opts.crew ? { crew: opts.crew } : {}),
       // Per-worker model pin for default/grow workers (trellis resolves
       // per iteration via trellis.workerModel below). Ultracode folds its
       // Opus pin into effectiveModel above.

@@ -3,7 +3,7 @@
 // strong first-party Anthropic reviewer, and Codex-as-reviewer is selected by
 // a per-role harness override without disturbing the other roles.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { ProjectConfig } from "../src/config.js";
+import type { ProjectConfig, GardenConfig } from "../src/config.js";
 
 vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -124,5 +124,45 @@ describe("resolveReviewRole", () => {
     } as unknown as Parameters<typeof resolveReviewRole>[3];
     const r = resolveReviewRole(p, "default", "reviewer", config);
     expect(r.envPrefix).toBe("");
+  });
+
+  // Per-worker crew (entry.crew) — the live-changeable review dimension.
+  const emptyConfig = { projects: {} } as GardenConfig;
+
+  it("a per-worker crew flips every review role's harness", async () => {
+    const { resolveReviewRole } = await importRoles();
+    for (const role of ["reviewer", "resolver", "ciFix"] as const) {
+      const r = resolveReviewRole(project(), "default", role, emptyConfig, { crew: "all-codex" });
+      expect(r.harness).toBe("codex");
+    }
+  });
+
+  it("entry.crew wins over a conflicting project.roles harness (layered ahead)", async () => {
+    const { resolveReviewRole } = await importRoles();
+    const r = resolveReviewRole(
+      project({ roles: { reviewer: { harness: "claude-code" } } }),
+      "default", "reviewer", emptyConfig, { crew: "all-codex" });
+    expect(r.harness).toBe("codex");
+  });
+
+  it("an all-claude crew keeps the default claude-code reviewer", async () => {
+    const { resolveReviewRole } = await importRoles();
+    const r = resolveReviewRole(project(), "default", "reviewer", emptyConfig, { crew: "all-claude" });
+    expect(r.harness).toBe("claude-code");
+    expect(r.model).toBe("opus");
+  });
+
+  it("is byte-identical to before when entry / entry.crew is unset (backward compat)", async () => {
+    const { resolveReviewRole } = await importRoles();
+    const without = resolveReviewRole(project(), "default", "reviewer", emptyConfig);
+    const withEmpty = resolveReviewRole(project(), "default", "reviewer", emptyConfig, {});
+    expect(withEmpty).toEqual(without);
+    expect(without.harness).toBe("claude-code");
+  });
+
+  it("a non-existent crew falls through to the project/default harness (fail-safe)", async () => {
+    const { resolveReviewRole } = await importRoles();
+    const r = resolveReviewRole(project(), "default", "reviewer", emptyConfig, { crew: "no-such-crew" });
+    expect(r.harness).toBe("claude-code");
   });
 });

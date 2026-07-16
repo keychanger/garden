@@ -153,7 +153,7 @@ Dashboard:
   rebuild                        Rebuild garden and relaunch dashboard
 
 Workers:
-  workers new <project> [--workflow default|trellis|grow] [--model <alias-or-id>] [--harness codex]
+  workers new <project> [--workflow default|trellis|grow] [--model <alias-or-id>] [--harness codex] [--crew <name>]
                         [--base <branch>] [--trellis <name>] [--seed <text> | --seed-file <path>] [--max-iterations N]
                                  Spawn a new worker. default plants an interactive worker;
                                  trellis plants a vine bound to the named trellis (--trellis);

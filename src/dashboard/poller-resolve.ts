@@ -48,7 +48,7 @@ const RESOLVE_VERDICT_VOCAB = ["DONE", "FAILED"] as const;
 // before cleanReviewFiles deletes the result/sidecar.
 function resolverOutputWasTransient(projectName: string, entry: WorkerEntry): boolean {
   const harness = resolveReviewRole(
-    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "resolver",
+    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "resolver", undefined, entry,
   ).harness;
   const resultFile = reviewResultPath(projectName, entry.name);
   let rawOutput = "";
@@ -98,7 +98,7 @@ export function launchResolver(
   // same strong first-party Anthropic + Opus safety net, overridable via
   // `garden config <p> role resolver ...`. See docs/MULTI-MODEL.md "Phase 4".
   const resolver = resolveReviewRole(
-    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "resolver",
+    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "resolver", undefined, entry,
   );
   const revWindow = reviewWindowName(projectName, entry.name);
   launchHeadlessAgent({

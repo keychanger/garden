@@ -8,9 +8,11 @@
 // worker harness selection lands in the worker-path slice. Kept separate on
 // purpose: roles are INDEPENDENTLY knobbed, never a shared model setting.
 // See docs/MULTI-MODEL.md "Phase 4".
-import type { GardenConfig, ProjectConfig } from "../config.js";
+import { loadConfig, type GardenConfig, type ProjectConfig } from "../config.js";
 import { reviewerEnvPrefix } from "./claude-env.js";
 import { getWorkflow } from "./workflows/index.js";
+import { getCrew } from "./crew.js";
+import type { WorkerEntry } from "./registry.js";
 
 export type ReviewRole = "reviewer" | "resolver" | "ciFix";
 
@@ -39,14 +41,27 @@ export const SAFE_REVIEW_MODEL = "opus";
 //   env:     claude-code -> the neutralizing first-party prefix (so a provider
 //            worker's backend can't bleed into review); foreign harness -> ""
 //            (it authenticates itself, e.g. Codex via ~/.codex/auth.json).
+//
+// A per-worker crew (entry.crew) overrides the role HARNESS for the whole review
+// family, layered ahead of project.roles — the live-changeable review dimension
+// (change entry.crew and the next review/resolve/ci-fix uses the new reviewer).
+// Crews are harness-only (a provider never reaches review, by construction), so
+// this only flips the harness; per-role models still resolve below. Backward-
+// compatible: an absent entry (or entry.crew) is byte-identical to before.
 export function resolveReviewRole(
   project: Pick<ProjectConfig, "roles" | "claudeProfile" | "provider">,
   workflow: string,
   role: ReviewRole,
   config?: GardenConfig,
+  entry?: Pick<WorkerEntry, "crew">,
 ): ReviewRoleResolution {
   const target = project.roles?.[role] ?? {};
-  const harness = target.harness ?? "claude-code";
+  let crewReviewHarness: string | undefined;
+  if (entry?.crew) {
+    const spec = getCrew(entry.crew, config ?? loadConfig());
+    if (spec) crewReviewHarness = spec.review.harness;
+  }
+  const harness = crewReviewHarness ?? target.harness ?? "claude-code";
   // The reviewer inherits its workflow's reviewerModel (trellis pins "opus"
   // per WORKFLOWS.md Invariant 10); resolver/ci-fix have no workflow source.
   const workflowModel = role === "reviewer" ? getWorkflow(workflow).reviewerModel : undefined;
