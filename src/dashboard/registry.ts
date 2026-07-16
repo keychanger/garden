@@ -265,7 +265,7 @@ export interface WorkerEntry {
   pendingContinueSyncFailed?: boolean;
   // Holistic post-merge review plumbing. A multi-phase default worker that
   // reaches `done` having merged >=2 times gets one whole-task coherence
-  // review (see docs/STATUS.md and the holistic-review workflow). All five
+  // review (see docs/STATUS.md and poller-holistic-review.ts). All five
   // fields are flat (cross-workflow scalars, not per-workflow sub-objects) and
   // optional — absent on legacy entries; no readRegistry migration is needed
   // (gates read `?? 0` / `?? "default"`).

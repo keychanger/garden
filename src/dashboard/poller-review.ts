@@ -1586,6 +1586,18 @@ function launchReview(
     pendingReviewAt: undefined,
     mergePendingAt: entry.mergePendingAt,
     preReviewSha,
+    // Defensively clear any leaked holistic final-review markers. A per-phase
+    // review launched here is NEVER the interposed whole-task pass (that runs
+    // via launchHolisticFinalReview, which sets the markers itself and never
+    // routes through launchReview). If a prior holistic FIX reached
+    // merge-pending and then failed to merge (resolver/ci-fix budget exhausted,
+    // wedged merge), the markers persist into `failing`; without this clear a
+    // later failing -> working -> reviewing recovery would misroute this fresh
+    // review to handleHolisticFinalReview (which finalizes CLEAN to `done`
+    // without merging the recovery commits). STATUS.md: the markers clear when
+    // the pass resolves — this is the resolution point for that merge-failed leg.
+    holisticFinalActive: undefined,
+    holisticReviewMode: undefined,
   });
   refreshDashboard();
 

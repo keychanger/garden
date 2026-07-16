@@ -318,6 +318,37 @@ describe("poll — working state", () => {
     );
   });
 
+  it("clears a leaked holistic final-review marker on a fresh per-phase review launch", () => {
+    // A prior holistic FIX that reached merge-pending but then failed to merge
+    // (resolver/ci-fix budget exhausted, wedged merge) parks the worker in
+    // `failing` with holisticFinalActive still set — none of those merge-side
+    // failing transitions clear it, and failing -> working doesn't either. When
+    // the worker recovers and a fresh per-phase review launches here, the marker
+    // must be cleared: otherwise handleReviewing would misroute this review to
+    // handleHolisticFinalReview, which finalizes a CLEAN verdict to `done`
+    // WITHOUT merging the recovery commits (they'd strand unmerged under a
+    // false green done). A per-phase review launched via launchReview is never
+    // the interposed holistic pass, so clearing the markers is always correct.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(),
+        holisticFinalActive: true, holisticReviewMode: "fix",
+      }),
+    ]);
+
+    poll("myproject");
+
+    const call = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).prState === "reviewing",
+    );
+    expect(call).toBeDefined();
+    const fields = call![2] as Record<string, unknown>;
+    // The key must be present-and-undefined (an explicit clear), not merely absent.
+    expect("holisticFinalActive" in fields).toBe(true);
+    expect(fields.holisticFinalActive).toBeUndefined();
+    expect(fields.holisticReviewMode).toBeUndefined();
+  });
+
   it("does NOT review an idle worker without pendingReviewAt (the regression)", () => {
     // This is the spec invariant 2 case: a worker may be idle with stale
     // commits ahead of base for any reason — Q&A session, abandoned branch,
