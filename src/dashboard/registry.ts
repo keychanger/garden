@@ -315,7 +315,7 @@ export interface WorkerEntry {
   // vines use `trellis.workerModel` instead (iteration-resolved with the
   // Sonnet-exhaustion fallback). See docs/MULTI-MODEL.md "Layer 2".
   model?: string;
-  // Per-worker crew (`workers new --crew`, or the ⌥i worker menu). Names a crew
+  // Per-worker crew (`workers new --crew`). Names a crew
   // (see crew.ts). Its BUILD half is resolved into entry.harness/provider at
   // spawn; its REVIEW half is applied live by resolveReviewRole (roles.ts),
   // which layers the crew's review harness ahead of project.roles — so changing

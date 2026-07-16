@@ -517,8 +517,14 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // must never abort a worker launch.
     try {
       const cfg = loadConfig();
+      // A per-worker crew (opts.crew) overrides the review family live, so the
+      // frozen snapshot must record what actually applies to THIS worker, not
+      // the project's crew — mirroring how resolvedHarness already folds in the
+      // crew's build half. Thread it into both the role snapshot (review
+      // harness) and the crew field (garden stats --by crew groups on it).
+      const crewEntry = opts.crew ? { crew: opts.crew } : undefined;
       const roleSnapshot = (role: ReviewRole): RoleSnapshot => {
-        const r = resolveReviewRole(project, workflowName, role, cfg);
+        const r = resolveReviewRole(project, workflowName, role, cfg, crewEntry);
         return { harness: r.harness, model: r.model };
       };
       recordWorkerCreated(targetProject, workerName, createdAt, {
@@ -527,7 +533,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         provider: project.provider ?? null,
         model: resolvedModel ?? null,
         ultracode,
-        crew: deriveCrew(project, cfg),
+        crew: opts.crew ?? deriveCrew(project, cfg),
         roles: {
           reviewer: roleSnapshot("reviewer"),
           resolver: roleSnapshot("resolver"),

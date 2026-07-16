@@ -146,6 +146,20 @@ vi.mock("../src/dashboard/poller.js", () => ({
   stopProjectPoller: vi.fn(),
 }));
 
+// Capture the worker.created snapshot payload; the real telemetry writes JSONL
+// to disk (best-effort), which we don't want in unit tests.
+vi.mock("../src/dashboard/telemetry.js", () => ({
+  recordWorkerCreated: vi.fn(),
+  recordOperatorAction: vi.fn(),
+  shortHash: vi.fn(() => "rulesHash"),
+}));
+
+// buildRulesContext reads global+project rules off disk; stub it so the
+// snapshot block doesn't throw under the mocked fs (which ENOENTs every read).
+vi.mock("../src/rules.js", () => ({
+  buildRulesContext: vi.fn(() => "rules"),
+}));
+
 // --- Imports (after mocks) ---
 
 import {
@@ -177,6 +191,7 @@ import {
   gardenDoneTrackedInHead,
 } from "../src/dashboard/git.js";
 import { addAlert } from "../src/dashboard/alerts.js";
+import { recordWorkerCreated } from "../src/dashboard/telemetry.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "../src/dashboard/poller.js";
 import { workerWindowName as workerWin, shellWindowName as shellWin, parseWorkerSuffix } from "../src/dashboard/window-names.js";
 import { getProject, tryGetProject } from "../src/config.js";
@@ -678,6 +693,23 @@ describe("newWorker", () => {
     const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
     expect(entry.crew).toBe("claude-codex");
     expect(entry.harness).toBeUndefined();
+  });
+
+  it("crew: the worker.created snapshot records the per-worker crew, not the project crew", () => {
+    // Regression: the live review sites thread entry.crew, but the frozen
+    // telemetry snapshot must too — else `garden stats --by crew` buckets a
+    // per-worker-crew worker under the project's crew and its review harness
+    // reads claude-code when the crew's reviewer is actually codex.
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ crew: "all-codex" });
+    const snapshot = vi.mocked(recordWorkerCreated).mock.calls.at(-1)![3] as {
+      crew?: string | null;
+      roles: { reviewer: { harness: string }; resolver: { harness: string }; ciFix: { harness: string } };
+    };
+    expect(snapshot.crew).toBe("all-codex");
+    expect(snapshot.roles.reviewer.harness).toBe("codex");
+    expect(snapshot.roles.resolver.harness).toBe("codex");
+    expect(snapshot.roles.ciFix.harness).toBe("codex");
   });
 
   it("harness: canonicalizes the 'claude' alias to claude-code", () => {
