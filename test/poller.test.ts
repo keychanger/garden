@@ -1532,6 +1532,43 @@ describe("poll — reviewing state (async)", () => {
     expect(msg).toContain("3:40pm (America/Denver)");
   });
 
+  it("launchReview pins the fallback review to claude-code/Opus, ignoring the quota-blocked Codex reviewer", () => {
+    // The load-bearing half of the fallback: once handleQuotaFallbackReview has
+    // stamped reviewFallbackHarness, the NEXT launchReview must pin this cycle
+    // to the first-party Opus safety net (claude-code + opus), regardless of the
+    // configured foreign reviewer (codex) that is still quota-blocked. Without
+    // the override, resolveReviewRole would relaunch on codex and re-hit quota.
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject",
+      roles: { reviewer: { harness: "codex" } },
+    } as ReturnType<typeof tryGetProject>);
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "working",
+        agentStatus: "idle",
+        pendingReviewAt: Date.now(),
+        reviewFallbackHarness: "claude-code",
+      }),
+    ]);
+
+    poll("myproject");
+
+    const reviewLaunch = vi.mocked(newDashboardWindow).mock.calls.find(
+      c => String(c[0]).includes("review"),
+    );
+    expect(reviewLaunch).toBeDefined();
+    // claude-code/Opus, NOT a `codex exec` launch for the configured reviewer.
+    const cmd = String(reviewLaunch![5]);
+    expect(cmd).toContain("--model opus");
+    expect(cmd).not.toContain("codex");
+    // The relaunch re-reviews the same commits — the transition to reviewing
+    // still fires (isRetryRelaunch keys off reviewFallbackHarness, so a
+    // trellis/grow iteration counter would not advance here).
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "reviewing" }),
+    );
+  });
+
   it("transitions to failing with reason transient-review after the budget is exhausted", () => {
     // Three prior attempts already burned; this is attempt #4 and it should
     // escalate to failing with failingReason="transient-review" instead of
