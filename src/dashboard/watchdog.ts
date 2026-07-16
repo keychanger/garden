@@ -37,6 +37,7 @@ import { readRegistry, mutateRegistry, PR_STATE_KIND, OPERATOR_ACTION_FAILING_RE
 import { triggerProjectPoll } from "./poller-fifo.js";
 import { addAlert } from "./alerts.js";
 import { log, truncateLog } from "./log.js";
+import { sweepSpawnDrafts } from "./spawn-draft.js";
 
 export const WATCHDOG_TICK_MS = 60_000;
 export const WATCHDOG_THRESHOLD_MS = 5 * 60_000;
@@ -332,6 +333,7 @@ export function sweepBootstrapScripts(nowMs: number): number {
 export function housekeeping(nowMs: number): void {
   truncateLog();
   sweepBootstrapScripts(nowMs);
+  sweepSpawnDrafts(nowMs);
 }
 
 export async function runWatchdogLoop(): Promise<void> {

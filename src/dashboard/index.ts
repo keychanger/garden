@@ -20,6 +20,7 @@ import { trellisAutoContinueAfterMerge } from "./trellis-continue.js";
 import {
   runTrellisPicker, plantVineFromPicker, spawnTrellisAuthor, runReviveSubmenu,
   runWorkflowPicker, plantGrowFromPicker,
+  runComposeBaseSubmenu, runComposeCrewSubmenu, stageSpawnDraft, composeDefaultFromPicker,
 } from "./trellis-picker.js";
 import { runCrewPicker, applyCrewFromPicker } from "./crew-picker.js";
 import {
@@ -162,6 +163,24 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   }
   if (sub === "_workflow-picker") {
     runWorkflowPicker(args[1]);
+    return;
+  }
+  if (sub === "_compose-default") {
+    if (args[1]) composeDefaultFromPicker(args[1]);
+    return;
+  }
+  if (sub === "_compose-base-submenu") {
+    if (args[1]) runComposeBaseSubmenu(args[1]);
+    return;
+  }
+  if (sub === "_compose-crew-submenu") {
+    if (args[1]) runComposeCrewSubmenu(args[1]);
+    return;
+  }
+  if (sub === "_spawn-draft") {
+    // _spawn-draft <project> <field> <value>; value may be empty (clear).
+    const [, projectName, field] = args;
+    if (projectName && field) stageSpawnDraft(projectName, field, args.slice(3).join(" "));
     return;
   }
   if (sub === "_crew-picker") {

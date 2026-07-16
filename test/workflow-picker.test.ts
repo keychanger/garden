@@ -52,57 +52,52 @@ beforeEach(() => {
 // ─── buildWorkflowPickerPlan ──────────────────────────────────────────────
 
 describe("buildWorkflowPickerPlan", () => {
-  it("returns three rows in d/t/g order", () => {
-    const plan = buildWorkflowPickerPlan("proj", RUNNER);
-    expect(plan.items).toHaveLength(3);
-    expect(plan.items[0].key).toBe("d");
-    expect(plan.items[1].key).toBe("t");
-    expect(plan.items[2].key).toBe("g");
+  it("returns the d/t/g workflow rows, a separator, then the b/c composer rows", () => {
+    const rows = buildWorkflowPickerPlan("proj", RUNNER).rows;
+    expect(rows[0].key).toBe("d");
+    expect(rows[1].key).toBe("t");
+    expect(rows[2].key).toBe("g");
+    expect(rows[3].sep).toBe(true);
+    expect(rows[4].key).toBe("b");
+    expect(rows[5].key).toBe("c");
   });
 
   it("includes the project name in the title", () => {
-    const plan = buildWorkflowPickerPlan("myproject", RUNNER);
-    expect(plan.title).toContain("myproject");
+    expect(buildWorkflowPickerPlan("myproject", RUNNER).title).toContain("myproject");
   });
 
-  it("default row dispatches the existing _new-worker subcommand", () => {
-    const plan = buildWorkflowPickerPlan("proj", RUNNER);
-    const def = plan.items[0];
+  it("the default row consumes the draft via _compose-default (NOT the draft-free _new-worker)", () => {
+    const def = buildWorkflowPickerPlan("proj", RUNNER).rows[0];
     expect(def.label).toMatch(/default/i);
-    expect(def.label).toMatch(/⌥n/);
-    expect(def.command).toContain("dashboard _new-worker");
-    // tmux parses a menu item's command as a tmux command — the runner
-    // dispatch must be run-shell wrapped, not bare (which fails with "unknown
-    // command: <runner>").
-    expect(def.command.startsWith("run-shell ")).toBe(true);
-    expect(def.command.startsWith(RUNNER)).toBe(false);
+    expect(def.run).toContain("dashboard _compose-default");
+    expect(def.run).toContain("proj");
   });
 
-  it("trellis row dispatches the existing _trellis-picker submenu with the project arg", () => {
-    const plan = buildWorkflowPickerPlan("proj", RUNNER);
-    const trellis = plan.items[1];
-    expect(trellis.label).toMatch(/trellis/i);
-    expect(trellis.command).toContain("_trellis-picker");
-    expect(trellis.command).toContain("proj");
-    expect(trellis.command.startsWith("run-shell ")).toBe(true);
+  it("trellis + grow rows are pre-wrapped tmux commands (_trellis-picker, _grow-plant %%)", () => {
+    const rows = buildWorkflowPickerPlan("proj", RUNNER).rows;
+    expect(rows[1].tmux).toContain("_trellis-picker");
+    expect(rows[1].tmux!.startsWith("run-shell ")).toBe(true);
+    expect(rows[2].tmux).toContain("command-prompt");
+    expect(rows[2].tmux).toContain("_grow-plant");
+    expect(rows[2].tmux).toContain("%%");
   });
 
-  it("grow row uses tmux command-prompt for the seed input with %% substitution", () => {
-    const plan = buildWorkflowPickerPlan("proj", RUNNER);
-    const grow = plan.items[2];
-    expect(grow.label).toMatch(/grow/i);
-    expect(grow.command).toContain("command-prompt");
-    expect(grow.command).toContain("Task description");
-    expect(grow.command).toContain("_grow-plant");
-    expect(grow.command).toContain("%%");
+  it("the composer rows dispatch the base/crew submenus and show the staged draft", () => {
+    const rows = buildWorkflowPickerPlan("proj", RUNNER, { base: "v2-api", crew: "all-codex" }).rows;
+    expect(rows[4].run).toContain("_compose-base-submenu");
+    expect(rows[4].label).toContain("v2-api");
+    expect(rows[5].run).toContain("_compose-crew-submenu");
+    expect(rows[5].label).toContain("all-codex");
+  });
+
+  it("reflects a staged draft in the title bracket", () => {
+    const plan = buildWorkflowPickerPlan("proj", RUNNER, { base: "v2-api" });
+    expect(plan.title).toContain("base v2-api");
   });
 
   it("shell-escapes the project name when it contains unsafe characters", () => {
-    const plan = buildWorkflowPickerPlan("proj with space", RUNNER);
-    // shellEscape wraps in single quotes when characters would otherwise
-    // break the shell command.
-    const trellis = plan.items[1];
-    expect(trellis.command).toContain("'proj with space'");
+    const rows = buildWorkflowPickerPlan("proj with space", RUNNER).rows;
+    expect(rows[1].tmux).toContain("'proj with space'");
   });
 });
 

@@ -105,7 +105,7 @@ Requires terminal setup: iTerm2 → Profiles → Keys → Left Option key → "E
 | `⌥1` – `⌥9` | Switch to project by index within the active plot |
 | `⌥p` / `⌥P` | Cycle to next/previous focused plot (`⌥o` also cycles previous) |
 | `⌥n` | New worker (Claude session) |
-| `⌥⇧N` | Workflow picker — choose default / trellis / grow for the new worker |
+| `⌥⇧N` | Workflow picker / spawn composer — choose default / trellis / grow, and optionally stage a `base branch` / `crew` override (a short-lived spawn draft) for the new worker |
 | `⌥⇧C` | Crew picker — set the focused project's crew (who builds / who reviews) |
 | `⌥,` | Project config menu — inspect + set the focused project's config (base / crew / roles / CI gate / holistic / profile / provider / log color; config.yml editor for the rest) |
 | `⌥w` | Jump to first worker |

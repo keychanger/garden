@@ -20,7 +20,11 @@ import { newWorker } from "./workers.js";
 import { resolveGardenRunner } from "./runner.js";
 import { readDashState } from "./state.js";
 import { shellEscape, tmuxDisplay, menuRunShell } from "./tmux.js";
-import { runMenu } from "./menu.js";
+import { runMenu, type MenuSpec, type MenuRow } from "./menu.js";
+import { loadConfig } from "../config.js";
+import { listCrews } from "./crew.js";
+import { listBranches } from "./git.js";
+import { readSpawnDraft, writeSpawnDraft, consumeSpawnDraft, type SpawnDraftPatch } from "./spawn-draft.js";
 import {
   findTrellisFiles, validateTrellisPlant,
   type TrellisFileInfo,
@@ -285,6 +289,9 @@ export function plantVineFromPicker(projectName: string, trellisName: string): v
   );
   fs.writeFileSync(seedFile, seed);
 
+  // A staged base override applies to any workflow (crew is default-only, so a
+  // vine consumes the draft but ignores its crew half).
+  const draft = consumeSpawnDraft(projectName);
   const newName = newWorker({
     projectName,
     workflow: "trellis",
@@ -294,6 +301,7 @@ export function plantVineFromPicker(projectName: string, trellisName: string): v
       maxIterations: maxIter,
     },
     seedMessageFile: seedFile,
+    ...(draft.base ? { base: draft.base } : {}),
   });
   if (!newName) {
     try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
@@ -352,37 +360,59 @@ function buildIteration1Seed(
 // multi-line or special-character seeds use the CLI:
 // `garden workers new --workflow grow --seed-file <path>`.
 
-export interface WorkflowPickerPlan {
-  title: string;
-  items: MenuItem[];
+// The base/crew override bracket for the composer title.
+function draftBracket(draft: SpawnDraftPatch): string {
+  const parts: string[] = [];
+  if (draft.base) parts.push(`base ${draft.base}`);
+  if (draft.crew) parts.push(`crew ${draft.crew}`);
+  return parts.length ? ` (${parts.join(" · ")})` : "";
 }
 
-// Build the 3-row workflow picker plan for a project. Pure: no tmux I/O,
-// no fs, no registry. Tests drive this directly.
+// Build the workflow picker / spawn composer plan: the three workflow rows, then
+// the base/crew override rows. The `default` row dispatches _compose-default
+// (consumes the staged draft) — NOT _new-worker, which ⌥n keeps as the
+// draft-free fast path. Pure: the draft is read by the caller and passed in.
 export function buildWorkflowPickerPlan(
   projectName: string,
   runner: string,
-): WorkflowPickerPlan {
-  return {
-    title: `New worker on ${projectName}`,
-    items: [
-      {
-        label: "(d) default — fast worker (same as ⌥n)",
-        key: "d",
-        command: shellCmdNewWorker(runner),
-      },
-      {
-        label: "(t) trellis — pick a frozen design doc",
-        key: "t",
-        command: shellCmdTrellisPicker(runner, projectName),
-      },
-      {
-        label: "(g) grow — bounded iteration loop",
-        key: "g",
-        command: shellCmdGrowPlant(runner, projectName),
-      },
-    ],
-  };
+  draft: SpawnDraftPatch = {},
+): MenuSpec {
+  const p = shellEscape(projectName);
+  const rows: MenuRow[] = [
+    { label: "(d) default — fast worker", key: "d", run: `${runner} dashboard _compose-default ${p}` },
+    { label: "(t) trellis — pick a frozen design doc", key: "t", tmux: shellCmdTrellisPicker(runner, projectName) },
+    { label: "(g) grow — bounded iteration loop", key: "g", tmux: shellCmdGrowPlant(runner, projectName) },
+    { sep: true, label: "" },
+    { label: `(b) base branch…   [${draft.base ?? "default"}]`, key: "b", run: `${runner} dashboard _compose-base-submenu ${p}` },
+    { label: `(c) crew…          [${draft.crew ?? "default"}]`, key: "c", run: `${runner} dashboard _compose-crew-submenu ${p}` },
+  ];
+  return { title: `New worker on ${projectName}${draftBracket(draft)}`, rows };
+}
+
+// Compose base/crew submenus: pick a value, stage it in the draft, re-open the
+// composer. Pure builders (tests assert them). The crew list is filtered to
+// all-harness worker members — a per-worker spawn has no provider path, so a
+// provider-backed worker member (deepseek-*) is not offered.
+export function buildComposeBaseSubmenuPlan(project: string, branches: string[], current: string | undefined, runner: string): MenuSpec {
+  const p = shellEscape(project);
+  const rows: MenuRow[] = branches.map((b, i) => ({
+    label: b === current ? `${b}  ✓` : b,
+    key: i < 9 ? String(i + 1) : "",
+    run: `${runner} dashboard _spawn-draft ${p} base ${shellEscape(b)}`,
+  }));
+  rows.push({ label: "(0) clear — project default", key: "0", run: `${runner} dashboard _spawn-draft ${p} base ${shellEscape("")}` });
+  return { title: `Base branch for the new worker on ${project}`, rows };
+}
+
+export function buildComposeCrewSubmenuPlan(project: string, crews: string[], current: string | undefined, runner: string): MenuSpec {
+  const p = shellEscape(project);
+  const rows: MenuRow[] = crews.map((c, i) => ({
+    label: c === current ? `${c}  ✓` : c,
+    key: i < 9 ? String(i + 1) : "",
+    run: `${runner} dashboard _spawn-draft ${p} crew ${shellEscape(c)}`,
+  }));
+  rows.push({ label: "(0) clear — project default crew", key: "0", run: `${runner} dashboard _spawn-draft ${p} crew ${shellEscape("")}` });
+  return { title: `Crew for the new worker on ${project}`, rows };
 }
 
 // Spawned by the ⌥⇧N hotkey. Resolves the active project, builds the
@@ -404,8 +434,44 @@ export function runWorkflowPicker(explicitProject?: string): void {
   }
 
   const runner = resolveGardenRunner();
-  const plan = buildWorkflowPickerPlan(projectName, runner);
-  runMenu({ title: plan.title, rows: plan.items.map(i => ({ label: i.label, key: i.key, tmux: i.command })) });
+  runMenu(buildWorkflowPickerPlan(projectName, runner, readSpawnDraft(projectName)));
+}
+
+// _compose-base-submenu / _compose-crew-submenu: stage a base/crew override.
+export function runComposeBaseSubmenu(projectName: string): void {
+  const project = tryGetProject(projectName);
+  if (!project) { tmuxDisplay(`Unknown project '${projectName}'.`); return; }
+  runMenu(buildComposeBaseSubmenuPlan(projectName, listBranches(project.path), readSpawnDraft(projectName).base, resolveGardenRunner()));
+}
+
+export function runComposeCrewSubmenu(projectName: string): void {
+  if (!tryGetProject(projectName)) { tmuxDisplay(`Unknown project '${projectName}'.`); return; }
+  // Only all-harness worker members — a per-worker spawn has no provider path.
+  const crews = listCrews(loadConfig()).filter(c => !c.worker.provider).map(c => c.name);
+  runMenu(buildComposeCrewSubmenuPlan(projectName, crews, readSpawnDraft(projectName).crew, resolveGardenRunner()));
+}
+
+// _spawn-draft <project> <field> <value>: stage a base/crew override and re-open
+// the composer (form feel). Empty value clears the field.
+export function stageSpawnDraft(projectName: string, field: string, value: string): void {
+  if (field !== "base" && field !== "crew") { tmuxDisplay(`Unknown draft field '${field}'.`); return; }
+  writeSpawnDraft(projectName, { [field]: value });
+  runWorkflowPicker(projectName);
+}
+
+// _compose-default <project>: consume the staged draft and spawn a default
+// worker with its base/crew overrides. Distinct from ⌥n's _new-worker.
+export function composeDefaultFromPicker(projectName: string): void {
+  if (!tryGetProject(projectName)) { tmuxDisplay(`Unknown project '${projectName}'.`); return; }
+  const draft = consumeSpawnDraft(projectName);
+  const newName = newWorker({
+    projectName,
+    ...(draft.base ? { base: draft.base } : {}),
+    ...(draft.crew ? { crew: draft.crew } : {}),
+  });
+  if (!newName) {
+    tmuxDisplay(`Failed to spawn worker on '${projectName}'. Is the dashboard running?`);
+  }
 }
 
 // Invoked by `_grow-plant <project> <seed>` (the grow row of the workflow
@@ -434,11 +500,13 @@ export function plantGrowFromPicker(projectName: string, seed: string): void {
   );
   fs.writeFileSync(seedFile, buildGrowIteration1Seed(trimmed, maxIter));
 
+  const draft = consumeSpawnDraft(projectName);
   const newName = newWorker({
     projectName,
     workflow: "grow",
     grow: { seed: trimmed, maxIterations: maxIter },
     seedMessageFile: seedFile,
+    ...(draft.base ? { base: draft.base } : {}),
   });
   if (!newName) {
     try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
@@ -453,10 +521,6 @@ export function plantGrowFromPicker(projectName: string, seed: string): void {
 }
 
 // --- Workflow-picker shell command builders ---------------------------------
-
-function shellCmdNewWorker(runner: string): string {
-  return menuRunShell(`${runner} dashboard _new-worker`);
-}
 
 function shellCmdTrellisPicker(runner: string, project: string): string {
   return menuRunShell(`${runner} dashboard _trellis-picker ${shellEscape(project)}`);
