@@ -201,16 +201,12 @@ export function maybeDispatchHolisticReview(
     const cmd = `${runner} dashboard _spawn-holistic-worker ${shellEscape(projectName)} ${shellEscape(seedFile)} ${shellEscape(rationaleFile)} 2>/dev/null`;
     const child = spawn("sh", ["-c", cmd], { detached: true, stdio: "ignore" });
     child.unref();
+    // Launching a holistic review is routine default behavior (holisticReview
+    // defaults to `fix`), so it is a log entry, not an operator alert. Only the
+    // shadow-mode findings (finalizeShadowHolistic) and budget/error conditions
+    // warrant an alert.
     log.info("poller", "holistic-review worker spawn dispatched", {
-      worker: entry.name, data: { project: projectName, mode },
-    });
-    addAlert({
-      level: "warn",
-      source: "poller",
-      project: projectName,
-      worker: entry.name,
-      message: `Holistic review (${mode}) launched for ${entry.name} (${entry.mergeCount} merges).`,
-      dedupKey: `holistic-launch:${projectName}:${entry.name}:${entry.mergeCount}`,
+      worker: entry.name, data: { project: projectName, mode, mergeCount: entry.mergeCount },
     });
   } catch (err) {
     log.warn("poller", "holistic-review spawn failed", {

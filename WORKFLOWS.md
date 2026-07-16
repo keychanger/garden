@@ -2742,6 +2742,12 @@ non-default `claudeProfile`; an explicit `garden auto off` defers everyone)
 **defer without setting the guard**, so a deferred dispatch retries on the
 next merged/done sweep poke.
 
+Launch is a routine lifecycle beat — `holisticReview` defaults to `fix`, so a
+holistic worker spawns on nearly every multi-phase `done`. The dispatch is
+logged (`garden logs`, source `poller`) but does NOT raise an operator alert;
+only the shadow-mode findings (`finalizeShadowHolistic`) and budget/error
+conditions warrant one.
+
 The workflow definition (`workflows/holistic-review.ts`) reuses the default
 state handlers and hook handlers verbatim and pins `reviewerModel: "opus"`. A
 holistic worker walks the normal `working → reviewing → merge-pending → done`
