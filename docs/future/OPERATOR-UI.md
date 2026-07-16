@@ -446,7 +446,7 @@ and become entry points into the same submenus.
 ## Phasing
 
 Each phase is independently mergeable and leaves the pane fully working.
-Phases 1–3 shipped 2026-07-15; 4–6 deferred pending operator review.
+Phases 1–3 shipped 2026-07-15; 4–6 shipped 2026-07-15/16 — all six have landed.
 
 1. **One renderer.** [SHIPPED] Extract the shared segment assembler; both
    paths render through it. Behavior change limited to fixing the
