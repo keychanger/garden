@@ -1,0 +1,249 @@
+// Project-config mutators, shared by the `garden config` CLI (commands/config.ts)
+// and the ⌥, project config menu (project-menu.ts). They live here — a dashboard
+// module — rather than in the leaf config.ts because they reach into the
+// dashboard graph (provider token sync, harness registry, branch existence);
+// the crew mutator (applyCrew in crew.ts) set the same precedent.
+//
+// They return a MutateResult (a primary `message` + optional `notes`) instead
+// of writing to stdout, so each surface presents the outcome its own way — the
+// CLI prints them, the menu shows the primary via tmuxDisplay. Validation
+// `throw`s stay here so both surfaces share them. Behavior is byte-identical to
+// the pre-extraction CLI (guarded by a config-output test).
+import { loadConfig, saveConfig } from "../config.js";
+import { syncProviderTokenToSession } from "./claude-env.js";
+import { isRegisteredHarness, harnessNames, canonicalHarnessName } from "./harness/core.js";
+import { branchExistsOnOrigin } from "./git.js";
+import type { ReviewRole } from "./roles.js";
+import {
+  ASSIGNABLE_LOG_COLOR_KEYS,
+  RESERVED_LOG_COLOR_KEY,
+  RESERVED_LOG_COLOR_PROJECT,
+  isValidLogColorKey,
+} from "../log-palette.js";
+
+// The flat, single-value config keys settable via `garden config <p> <key>
+// <value>` and the project menu. `path` is deliberately excluded (set via
+// `garden add`); crew and the review roles have their own subcommands.
+export const SETTABLE_KEYS = [
+  "baseBranch", "checks", "postMerge", "sandboxDomains", "claudeProfile", "provider",
+  "harness", "logColor", "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
+  "maxGrowIterations", "requireCiSuccess", "holisticReview",
+] as const;
+export type SettableKey = typeof SETTABLE_KEYS[number];
+
+// CLI role name -> config sub-object key. The review family only; the worker
+// role selects its harness/model via `workers new`, not this config surface.
+export const REVIEW_ROLE_KEYS: Record<string, ReviewRole> = {
+  reviewer: "reviewer",
+  resolver: "resolver",
+  "ci-fix": "ciFix",
+};
+export const ROLE_DIMS = ["harness", "model"] as const;
+export type RoleDim = typeof ROLE_DIMS[number];
+
+// A mutation outcome: the primary confirmation line, plus any secondary notes
+// (e.g. the provider token-env reminder). Presented by the caller.
+export interface MutateResult {
+  message: string;
+  notes?: string[];
+}
+
+function result(message: string, notes: string[]): MutateResult {
+  return notes.length > 0 ? { message, notes } : { message };
+}
+
+export function setProjectConfigKey(projectName: string, key: SettableKey, value: string): MutateResult {
+  const cfg = loadConfig();
+  const project = cfg.projects[projectName];
+  if (!project) throw new Error(`Unknown project: ${projectName}`);
+  const notes: string[] = [];
+  let message: string;
+
+  if (key === "sandboxDomains") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.sandboxDomains;
+      message = `Cleared ${key} for ${projectName}`;
+    } else {
+      const domains = value.split(",").map((d) => d.trim()).filter(Boolean);
+      project.sandboxDomains = domains;
+      message = `Set ${key} = ${domains.join(", ")} for ${projectName}`;
+    }
+  } else if (key === "logColor") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.logColor;
+      message = `Cleared ${key} for ${projectName} (will be reassigned on next 'garden logs')`;
+    } else if (projectName === RESERVED_LOG_COLOR_PROJECT) {
+      throw new Error(
+        `'${RESERVED_LOG_COLOR_PROJECT}' is pinned to ${RESERVED_LOG_COLOR_KEY}; logColor cannot be set explicitly.`,
+      );
+    } else if (!isValidLogColorKey(value) || value === RESERVED_LOG_COLOR_KEY) {
+      throw new Error(
+        `Unknown logColor '${value}'. Valid keys: ${ASSIGNABLE_LOG_COLOR_KEYS.join(", ")} ` +
+        `('${RESERVED_LOG_COLOR_KEY}' is reserved for ${RESERVED_LOG_COLOR_PROJECT}).`,
+      );
+    } else {
+      project.logColor = value;
+      message = `Set ${key} = ${value} for ${projectName}`;
+    }
+  } else if (key === "claudeProfile") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.claudeProfile;
+      message = `Cleared ${key} for ${projectName} (default: personal Max plan)`;
+    } else {
+      if (!cfg.claudeProfiles?.[value]) {
+        throw new Error(
+          `Unknown claude profile '${value}'. Register it first with 'garden claude-profile add ${value}'.`,
+        );
+      }
+      project.claudeProfile = value;
+      message = `Set ${key} = ${value} for ${projectName}`;
+    }
+  } else if (key === "provider") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.provider;
+      message = `Cleared ${key} for ${projectName} (workers back on the first-party Anthropic path)`;
+    } else {
+      const providerEntry = cfg.providers?.[value];
+      if (!providerEntry) {
+        throw new Error(
+          `Unknown provider '${value}'. Register it first with 'garden provider add ${value}'.`,
+        );
+      }
+      project.provider = value;
+      syncProviderTokenToSession({ ...providerEntry, name: value, label: providerEntry.label ?? value });
+      message = `Set ${key} = ${value} for ${projectName} (applies to newly created or bounced workers; reviewers stay on Anthropic)`;
+      if (!process.env[providerEntry.authTokenEnv]) {
+        notes.push(`  note: ${providerEntry.authTokenEnv} is not set in this shell — export it, then run 'garden auth status' to sync and verify.`);
+      }
+    }
+  } else if (key === "harness") {
+    // Canonicalize the "claude" alias (the sentinels pass through unchanged).
+    value = canonicalHarnessName(value);
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.harness;
+      message = `Cleared ${key} for ${projectName} (workers default to claude-code)`;
+    } else if (!isRegisteredHarness(value)) {
+      throw new Error(
+        `Unknown harness '${value}'. Registered harnesses: ${harnessNames().join(", ")}.`,
+      );
+    } else {
+      project.harness = value;
+      message = `Set ${key} = ${value} for ${projectName} (applies to newly created or bounced workers; review family selects its own harness under 'role')`;
+    }
+  } else if (key === "maxTrellisIterations") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.maxTrellisIterations;
+      message = `Cleared ${key} for ${projectName} (default: 30)`;
+    } else {
+      const n = Number.parseInt(value, 10);
+      if (!Number.isFinite(n) || n < 1) {
+        throw new Error(`maxTrellisIterations must be a positive integer, got '${value}'`);
+      }
+      project.maxTrellisIterations = n;
+      message = `Set ${key} = ${n} for ${projectName}`;
+    }
+  } else if (key === "trellisOpusFallback") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.trellisOpusFallback;
+      message = `Cleared ${key} for ${projectName} (default: true)`;
+    } else if (value === "true" || value === "false") {
+      project.trellisOpusFallback = value === "true";
+      message = `Set ${key} = ${value} for ${projectName}`;
+    } else {
+      throw new Error(`trellisOpusFallback must be 'true' or 'false', got '${value}'`);
+    }
+  } else if (key === "maxGrowIterations") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.maxGrowIterations;
+      message = `Cleared ${key} for ${projectName} (default: 5)`;
+    } else {
+      const n = Number.parseInt(value, 10);
+      if (!Number.isFinite(n) || n < 1) {
+        throw new Error(`maxGrowIterations must be a positive integer, got '${value}'`);
+      }
+      project.maxGrowIterations = n;
+      message = `Set ${key} = ${n} for ${projectName}`;
+    }
+  } else if (key === "requireCiSuccess") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.requireCiSuccess;
+      message = `Cleared ${key} for ${projectName} (default: true)`;
+    } else if (value === "true" || value === "false") {
+      project.requireCiSuccess = value === "true";
+      message = `Set ${key} = ${value} for ${projectName}`;
+    } else {
+      throw new Error(`requireCiSuccess must be 'true' or 'false', got '${value}'`);
+    }
+  } else if (key === "holisticReview") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.holisticReview;
+      message = `Cleared ${key} for ${projectName} (default: off)`;
+    } else if (value === "off" || value === "shadow" || value === "fix") {
+      project.holisticReview = value;
+      message = `Set ${key} = ${value} for ${projectName}`;
+    } else {
+      throw new Error(`holisticReview must be 'off', 'shadow', or 'fix', got '${value}'`);
+    }
+  } else if (key === "baseBranch") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.baseBranch;
+      message = `Cleared ${key} for ${projectName} (workers follow the project checkout at spawn)`;
+    } else if (!value.trim()) {
+      throw new Error("baseBranch requires a non-empty branch name");
+    } else {
+      const branch = value.trim();
+      project.baseBranch = branch;
+      message = `Set ${key} = ${branch} for ${projectName} (applies to newly created workers; existing workers keep their pinned base)`;
+      // Soft warning only. Keep `garden config` network-free and allow
+      // configuring a base that doesn't exist on origin yet; the spawn path
+      // (branchExistsOnOrigin + tryPublishBranch in newWorker) does the hard
+      // validation and publishes it when the first worker is created.
+      if (!branchExistsOnOrigin(project.path, branch)) {
+        notes.push(`  note: '${branch}' is not on origin yet; it will be published when the first worker spawns.`);
+      }
+    }
+  } else if (value === "" || value === "unset" || value === "null") {
+    delete project[key];
+    message = `Cleared ${key} for ${projectName}`;
+  } else {
+    project[key] = value;
+    message = `Set ${key} = ${value} for ${projectName}`;
+  }
+
+  saveConfig(cfg);
+  return result(message, notes);
+}
+
+export function setProjectRoleDim(projectName: string, roleArg: string, roleKey: ReviewRole, dim: RoleDim, value: string): MutateResult {
+  const cfg = loadConfig();
+  const project = cfg.projects[projectName];
+  if (!project) throw new Error(`Unknown project: ${projectName}`);
+  const notes: string[] = [];
+  let message: string;
+
+  const clearing = value === "" || value === "unset" || value === "null";
+  if (dim === "harness" && !clearing) value = canonicalHarnessName(value);
+  if (dim === "harness" && !clearing && !isRegisteredHarness(value)) {
+    throw new Error(
+      `Unknown harness '${value}'. Registered harnesses: ${harnessNames().join(", ")}.`,
+    );
+  }
+
+  const roles = project.roles ?? (project.roles = {});
+  const target = roles[roleKey] ?? (roles[roleKey] = {});
+  if (clearing) {
+    delete target[dim];
+    // Prune empty objects so config.yml stays tidy.
+    if (Object.keys(target).length === 0) delete roles[roleKey];
+    if (Object.keys(roles).length === 0) delete project.roles;
+    message = `Cleared ${roleArg} ${dim} for ${projectName} (using default)`;
+  } else {
+    target[dim] = value;
+    message = `Set ${roleArg} ${dim} = ${value} for ${projectName}`;
+    if (dim === "harness" && value !== "claude-code") {
+      notes.push(`  note: ${value} authenticates itself — the Anthropic provider/model neutralization does not apply to this role.`);
+    }
+  }
+  saveConfig(cfg);
+  return result(message, notes);
+}

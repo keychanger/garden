@@ -1,24 +1,14 @@
-// View or set project configuration values.
-import { loadConfig, saveConfig, resolveProject, isValidConfigKey, type ProjectConfig } from "../config.js";
-import { syncProviderTokenToSession } from "../dashboard/claude-env.js";
+// View or set project configuration values. The flat-key and role mutators live
+// in dashboard/project-config-mutate.ts (shared with the ⌥, project menu); this
+// file is their CLI presenter plus the read (`show*`) and crew/role dispatch.
+import { loadConfig, resolveProject, isValidConfigKey, type ProjectConfig } from "../config.js";
 import { resolveReviewRole, type ReviewRole } from "../dashboard/roles.js";
-import { isRegisteredHarness, harnessNames, canonicalHarnessName } from "../dashboard/harness/core.js";
-import { branchExistsOnOrigin } from "../dashboard/git.js";
 import { listCrews, getCrew, applyCrew, deriveCrew } from "../dashboard/crew.js";
 import {
-  ASSIGNABLE_LOG_COLOR_KEYS,
-  RESERVED_LOG_COLOR_KEY,
-  RESERVED_LOG_COLOR_PROJECT,
-  isValidLogColorKey,
-} from "../log-palette.js";
+  setProjectConfigKey, setProjectRoleDim,
+  SETTABLE_KEYS, type SettableKey, REVIEW_ROLE_KEYS, ROLE_DIMS, type RoleDim,
+} from "../dashboard/project-config-mutate.js";
 import { output } from "../output.js";
-
-const SETTABLE_KEYS = [
-  "baseBranch", "checks", "postMerge", "sandboxDomains", "claudeProfile", "provider",
-  "harness", "logColor", "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
-  "maxGrowIterations", "requireCiSuccess", "holisticReview",
-] as const;
-type SettableKey = typeof SETTABLE_KEYS[number];
 
 export async function config(args: string[]): Promise<void> {
   const project = resolveProject(args[0]);
@@ -172,17 +162,6 @@ function showConfigKey(project: ProjectConfig & { name: string }, key: SettableK
   }
 }
 
-// CLI role name -> config sub-object key. The review family only; the worker
-// role selects its harness/model via `workers new --model` (and --harness in
-// the worker-path slice), not this config surface.
-const REVIEW_ROLE_KEYS: Record<string, ReviewRole> = {
-  reviewer: "reviewer",
-  resolver: "resolver",
-  "ci-fix": "ciFix",
-};
-const ROLE_DIMS = ["harness", "model"] as const;
-type RoleDim = typeof ROLE_DIMS[number];
-
 function handleCrewCommand(
   project: ProjectConfig & { name: string },
   name: string | undefined,
@@ -273,192 +252,16 @@ function showRoleDim(project: ProjectConfig & { name: string }, roleArg: string,
   else output({ [dim]: null }, () => `(not set — using default)`);
 }
 
+// Thin CLI presenter over the shared mutator.
 function setRoleDim(projectName: string, roleArg: string, roleKey: ReviewRole, dim: RoleDim, value: string): void {
-  const cfg = loadConfig();
-  const project = cfg.projects[projectName];
-  if (!project) throw new Error(`Unknown project: ${projectName}`);
-
-  const clearing = value === "" || value === "unset" || value === "null";
-  if (dim === "harness" && !clearing) value = canonicalHarnessName(value);
-  if (dim === "harness" && !clearing && !isRegisteredHarness(value)) {
-    throw new Error(
-      `Unknown harness '${value}'. Registered harnesses: ${harnessNames().join(", ")}.`,
-    );
-  }
-
-  const roles = project.roles ?? (project.roles = {});
-  const target = roles[roleKey] ?? (roles[roleKey] = {});
-  if (clearing) {
-    delete target[dim];
-    // Prune empty objects so config.yml stays tidy.
-    if (Object.keys(target).length === 0) delete roles[roleKey];
-    if (Object.keys(roles).length === 0) delete project.roles;
-    console.log(`Cleared ${roleArg} ${dim} for ${projectName} (using default)`);
-  } else {
-    target[dim] = value;
-    console.log(`Set ${roleArg} ${dim} = ${value} for ${projectName}`);
-    if (dim === "harness" && value !== "claude-code") {
-      console.log(`  note: ${value} authenticates itself — the Anthropic provider/model neutralization does not apply to this role.`);
-    }
-  }
-  saveConfig(cfg);
+  const r = setProjectRoleDim(projectName, roleArg, roleKey, dim, value);
+  console.log(r.message);
+  r.notes?.forEach((n) => console.log(n));
 }
 
+// Thin CLI presenter over the shared mutator.
 function setConfigKey(projectName: string, key: SettableKey, value: string): void {
-  const cfg = loadConfig();
-  const project = cfg.projects[projectName];
-  if (!project) throw new Error(`Unknown project: ${projectName}`);
-
-  if (key === "sandboxDomains") {
-    if (value === "" || value === "unset" || value === "null") {
-      delete project.sandboxDomains;
-      console.log(`Cleared ${key} for ${projectName}`);
-    } else {
-      const domains = value.split(",").map((d) => d.trim()).filter(Boolean);
-      project.sandboxDomains = domains;
-      console.log(`Set ${key} = ${domains.join(", ")} for ${projectName}`);
-    }
-  } else if (key === "logColor") {
-    if (value === "" || value === "unset" || value === "null") {
-      delete project.logColor;
-      console.log(`Cleared ${key} for ${projectName} (will be reassigned on next 'garden logs')`);
-    } else if (projectName === RESERVED_LOG_COLOR_PROJECT) {
-      throw new Error(
-        `'${RESERVED_LOG_COLOR_PROJECT}' is pinned to ${RESERVED_LOG_COLOR_KEY}; logColor cannot be set explicitly.`,
-      );
-    } else if (!isValidLogColorKey(value) || value === RESERVED_LOG_COLOR_KEY) {
-      throw new Error(
-        `Unknown logColor '${value}'. Valid keys: ${ASSIGNABLE_LOG_COLOR_KEYS.join(", ")} ` +
-        `('${RESERVED_LOG_COLOR_KEY}' is reserved for ${RESERVED_LOG_COLOR_PROJECT}).`,
-      );
-    } else {
-      project.logColor = value;
-      console.log(`Set ${key} = ${value} for ${projectName}`);
-    }
-  } else if (key === "claudeProfile") {
-    if (value === "" || value === "unset" || value === "null") {
-      delete project.claudeProfile;
-      console.log(`Cleared ${key} for ${projectName} (default: personal Max plan)`);
-    } else {
-      if (!cfg.claudeProfiles?.[value]) {
-        throw new Error(
-          `Unknown claude profile '${value}'. Register it first with 'garden claude-profile add ${value}'.`,
-        );
-      }
-      project.claudeProfile = value;
-      console.log(`Set ${key} = ${value} for ${projectName}`);
-    }
-  } else if (key === "provider") {
-    if (value === "" || value === "unset" || value === "null") {
-      delete project.provider;
-      console.log(`Cleared ${key} for ${projectName} (workers back on the first-party Anthropic path)`);
-    } else {
-      const providerEntry = cfg.providers?.[value];
-      if (!providerEntry) {
-        throw new Error(
-          `Unknown provider '${value}'. Register it first with 'garden provider add ${value}'.`,
-        );
-      }
-      project.provider = value;
-      syncProviderTokenToSession({ ...providerEntry, name: value, label: providerEntry.label ?? value });
-      console.log(`Set ${key} = ${value} for ${projectName} (applies to newly created or bounced workers; reviewers stay on Anthropic)`);
-      if (!process.env[providerEntry.authTokenEnv]) {
-        console.log(`  note: ${providerEntry.authTokenEnv} is not set in this shell — export it, then run 'garden auth status' to sync and verify.`);
-      }
-    }
-  } else if (key === "harness") {
-    // Canonicalize the "claude" alias (the sentinels pass through unchanged).
-    value = canonicalHarnessName(value);
-    if (value === "" || value === "unset" || value === "null") {
-      delete project.harness;
-      console.log(`Cleared ${key} for ${projectName} (workers default to claude-code)`);
-    } else if (!isRegisteredHarness(value)) {
-      throw new Error(
-        `Unknown harness '${value}'. Registered harnesses: ${harnessNames().join(", ")}.`,
-      );
-    } else {
-      project.harness = value;
-      console.log(`Set ${key} = ${value} for ${projectName} (applies to newly created or bounced workers; review family selects its own harness under 'role')`);
-    }
-  } else if (key === "maxTrellisIterations") {
-    if (value === "" || value === "unset" || value === "null") {
-      delete project.maxTrellisIterations;
-      console.log(`Cleared ${key} for ${projectName} (default: 30)`);
-    } else {
-      const n = Number.parseInt(value, 10);
-      if (!Number.isFinite(n) || n < 1) {
-        throw new Error(`maxTrellisIterations must be a positive integer, got '${value}'`);
-      }
-      project.maxTrellisIterations = n;
-      console.log(`Set ${key} = ${n} for ${projectName}`);
-    }
-  } else if (key === "trellisOpusFallback") {
-    if (value === "" || value === "unset" || value === "null") {
-      delete project.trellisOpusFallback;
-      console.log(`Cleared ${key} for ${projectName} (default: true)`);
-    } else if (value === "true" || value === "false") {
-      project.trellisOpusFallback = value === "true";
-      console.log(`Set ${key} = ${value} for ${projectName}`);
-    } else {
-      throw new Error(`trellisOpusFallback must be 'true' or 'false', got '${value}'`);
-    }
-  } else if (key === "maxGrowIterations") {
-    if (value === "" || value === "unset" || value === "null") {
-      delete project.maxGrowIterations;
-      console.log(`Cleared ${key} for ${projectName} (default: 5)`);
-    } else {
-      const n = Number.parseInt(value, 10);
-      if (!Number.isFinite(n) || n < 1) {
-        throw new Error(`maxGrowIterations must be a positive integer, got '${value}'`);
-      }
-      project.maxGrowIterations = n;
-      console.log(`Set ${key} = ${n} for ${projectName}`);
-    }
-  } else if (key === "requireCiSuccess") {
-    if (value === "" || value === "unset" || value === "null") {
-      delete project.requireCiSuccess;
-      console.log(`Cleared ${key} for ${projectName} (default: true)`);
-    } else if (value === "true" || value === "false") {
-      project.requireCiSuccess = value === "true";
-      console.log(`Set ${key} = ${value} for ${projectName}`);
-    } else {
-      throw new Error(`requireCiSuccess must be 'true' or 'false', got '${value}'`);
-    }
-  } else if (key === "holisticReview") {
-    if (value === "" || value === "unset" || value === "null") {
-      delete project.holisticReview;
-      console.log(`Cleared ${key} for ${projectName} (default: off)`);
-    } else if (value === "off" || value === "shadow" || value === "fix") {
-      project.holisticReview = value;
-      console.log(`Set ${key} = ${value} for ${projectName}`);
-    } else {
-      throw new Error(`holisticReview must be 'off', 'shadow', or 'fix', got '${value}'`);
-    }
-  } else if (key === "baseBranch") {
-    if (value === "" || value === "unset" || value === "null") {
-      delete project.baseBranch;
-      console.log(`Cleared ${key} for ${projectName} (workers follow the project checkout at spawn)`);
-    } else if (!value.trim()) {
-      throw new Error("baseBranch requires a non-empty branch name");
-    } else {
-      const branch = value.trim();
-      project.baseBranch = branch;
-      console.log(`Set ${key} = ${branch} for ${projectName} (applies to newly created workers; existing workers keep their pinned base)`);
-      // Soft warning only. Keep `garden config` network-free and allow
-      // configuring a base that doesn't exist on origin yet; the spawn path
-      // (branchExistsOnOrigin + tryPublishBranch in newWorker) does the hard
-      // validation and publishes it when the first worker is created.
-      if (!branchExistsOnOrigin(project.path, branch)) {
-        console.log(`  note: '${branch}' is not on origin yet; it will be published when the first worker spawns.`);
-      }
-    }
-  } else if (value === "" || value === "unset" || value === "null") {
-    delete project[key];
-    console.log(`Cleared ${key} for ${projectName}`);
-  } else {
-    project[key] = value;
-    console.log(`Set ${key} = ${value} for ${projectName}`);
-  }
-
-  saveConfig(cfg);
+  const r = setProjectConfigKey(projectName, key, value);
+  console.log(r.message);
+  r.notes?.forEach((n) => console.log(n));
 }
