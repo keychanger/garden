@@ -11,7 +11,6 @@
 // <project> <name>` via the resolved garden runner. Action items
 // shell out to similar internal subcommands. tmux display-menu is
 // fire-and-forget; the spawned commands handle the actual work.
-import { execFileSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
 import { tryGetProject, SESSIONS_DIR } from "../config.js";
@@ -21,6 +20,7 @@ import { newWorker } from "./workers.js";
 import { resolveGardenRunner } from "./runner.js";
 import { readDashState } from "./state.js";
 import { shellEscape, tmuxDisplay, menuRunShell } from "./tmux.js";
+import { runMenu } from "./menu.js";
 import {
   findTrellisFiles, validateTrellisPlant,
   type TrellisFileInfo,
@@ -182,26 +182,7 @@ export function runTrellisPicker(explicitProject?: string): void {
     return;
   }
 
-  // Render the menu via tmux display-menu. -O closes the menu when its
-  // quick-key matches; -T sets the title; positional args pair name+command.
-  // -x C / -y C centers the popup on the active client.
-  const menuArgs: string[] = [
-    "display-menu",
-    "-O",
-    "-T", plan.title,
-    "-x", "C",
-    "-y", "C",
-  ];
-  for (const item of plan.items) {
-    menuArgs.push(item.label, item.key, item.command);
-  }
-  try {
-    execFileSync("tmux", menuArgs, { stdio: "ignore" });
-  } catch (err) {
-    log.warn("trellis-picker", "display-menu failed", {
-      data: { error: String(err), project: projectName },
-    });
-  }
+  runMenu({ title: plan.title, rows: plan.items.map(i => ({ label: i.label, key: i.key, tmux: i.command })) });
 }
 
 // Invoked by the [a] author empty-state action. Spawns a fresh
@@ -257,28 +238,14 @@ export function runReviveSubmenu(projectName: string): void {
     return;
   }
   const runner = resolveGardenRunner();
-  const menuArgs: string[] = [
-    "display-menu",
-    "-O",
-    "-T", `Revive a retired trellis (${projectName})`,
-    "-x", "C",
-    "-y", "C",
-  ];
-  for (let i = 0; i < retired.length; i++) {
-    const t = retired[i];
-    menuArgs.push(
-      `(${i < 9 ? i + 1 : ""}) ${t.name}`,
-      i < 9 ? String(i + 1) : "",
-      menuRunShell(`${runner} trellis revive ${shellEscape(projectName)} ${shellEscape(t.name)}`),
-    );
-  }
-  try {
-    execFileSync("tmux", menuArgs, { stdio: "ignore" });
-  } catch (err) {
-    log.warn("trellis-picker", "revive submenu display-menu failed", {
-      data: { error: String(err), project: projectName },
-    });
-  }
+  runMenu({
+    title: `Revive a retired trellis (${projectName})`,
+    rows: retired.map((t, i) => ({
+      label: `(${i < 9 ? i + 1 : ""}) ${t.name}`,
+      key: i < 9 ? String(i + 1) : "",
+      tmux: menuRunShell(`${runner} trellis revive ${shellEscape(projectName)} ${shellEscape(t.name)}`),
+    })),
+  });
 }
 
 // --- Plant action --------------------------------------------------------
@@ -438,24 +405,7 @@ export function runWorkflowPicker(explicitProject?: string): void {
 
   const runner = resolveGardenRunner();
   const plan = buildWorkflowPickerPlan(projectName, runner);
-
-  const menuArgs: string[] = [
-    "display-menu",
-    "-O",
-    "-T", plan.title,
-    "-x", "C",
-    "-y", "C",
-  ];
-  for (const item of plan.items) {
-    menuArgs.push(item.label, item.key, item.command);
-  }
-  try {
-    execFileSync("tmux", menuArgs, { stdio: "ignore" });
-  } catch (err) {
-    log.warn("workflow-picker", "display-menu failed", {
-      data: { error: String(err), project: projectName },
-    });
-  }
+  runMenu({ title: plan.title, rows: plan.items.map(i => ({ label: i.label, key: i.key, tmux: i.command })) });
 }
 
 // Invoked by `_grow-plant <project> <seed>` (the grow row of the workflow

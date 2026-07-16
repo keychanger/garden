@@ -3,11 +3,11 @@
 // the chosen one to project config. A crew is project-level — it sets the
 // worker default + the review roles — so this reconfigures the project's fleet
 // rather than spawning a worker. Distinct from the ⌥⇧N workflow picker.
-import { execFileSync } from "node:child_process";
 import { loadConfig, tryGetProject } from "../config.js";
 import { readDashState } from "./state.js";
 import { resolveGardenRunner } from "./runner.js";
 import { shellEscape, tmuxDisplay, menuRunShell } from "./tmux.js";
+import { runMenu } from "./menu.js";
 import { refreshDashboard } from "./header.js";
 import { log } from "./log.js";
 import { listCrews, deriveCrew, getCrew, applyCrew, type CrewSpec } from "./crew.js";
@@ -67,15 +67,7 @@ export function runCrewPicker(explicitProject?: string): void {
     resolveGardenRunner(),
   );
 
-  const menuArgs: string[] = ["display-menu", "-O", "-T", plan.title, "-x", "C", "-y", "C"];
-  for (const item of plan.items) menuArgs.push(item.label, item.key, item.command);
-  try {
-    execFileSync("tmux", menuArgs, { stdio: "ignore" });
-  } catch (err) {
-    log.warn("crew-picker", "display-menu failed", {
-      data: { error: String(err), project: projectName },
-    });
-  }
+  runMenu({ title: plan.title, rows: plan.items.map(i => ({ label: i.label, key: i.key, tmux: i.command })) });
 }
 
 // _crew-set <project> <crew>: apply the chosen crew and re-bake the status pane
