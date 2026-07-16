@@ -2,11 +2,24 @@
 
 ## Status
 
-Speculative design, 2026-07-12. No code exists for anything below. This
-doc proposes (1) a coherent visual grammar for the status pane to replace
-the accreted one-off decorations, and (2) a keybinding-driven menu system
-for configuring projects and workers — the everyday sibling of the setup
-wizard sketched in [PROJECT-CUSTOMIZATION.md](PROJECT-CUSTOMIZATION.md).
+Proposed 2026-07-12. **Phases 1–3 (the status-pane grammar) shipped
+2026-07-15**; the authoritative description now lives in DESIGN.md
+("Worker row grammar", "Base-branch divergence indicator", "Time-in-state
+suffix") and CLAUDE.md. **Phases 4–6 (the menu system) remain speculative
+— no code yet**, deferred pending operator review of the shipped pane.
+This doc proposes (1) a coherent visual grammar for the status pane to
+replace the accreted one-off decorations [SHIPPED], and (2) a
+keybinding-driven menu system for configuring projects and workers
+[not yet built] — the everyday sibling of the setup wizard sketched in
+[PROJECT-CUSTOMIZATION.md](PROJECT-CUSTOMIZATION.md).
+
+One deviation from the design below, discovered in implementation: the
+per-workflow row decoration is a pure `workflowRowDecor` leaf switch on
+`entry.workflow` (`src/commands/status.ts`), NOT a
+`WorkflowDefinition.renderRow` method — a method would drag the poller
+graph into `status.ts`'s import closure (and the `dist/hook.js` bundle),
+crossing a boundary the codebase deliberately maintains. Part 1's intent
+holds; only the mechanism changed.
 
 Cross-references, so this doc composes with its neighbors instead of
 duplicating them:
@@ -432,26 +445,29 @@ and become entry points into the same submenus.
 ## Phasing
 
 Each phase is independently mergeable and leaves the pane fully working.
+Phases 1–3 shipped 2026-07-15; 4–6 deferred pending operator review.
 
-1. **One renderer.** Extract the shared segment assembler; both paths
-   render through it. Behavior change limited to fixing the crew-badge
-   drift on the CLI path. Mostly a refactor with golden-output tests —
+1. **One renderer.** [SHIPPED] Extract the shared segment assembler; both
+   paths render through it. Behavior change limited to fixing the
+   crew-badge drift on the CLI path. Mostly a refactor with a parity test —
    this is what makes phases 2–3 cheap and safe.
-2. **Explicit base.** `baseBranch` config key, `workers new --base`,
-   spawn resolution order, new divergence semantics (grey badge /
-   fault-only yellow) on configured projects, `⋅base` header token.
-   Unset projects byte-identical.
-3. **The re-skin.** Identity badges (member/model), `renderRow` hook with
-   grow-bracket parity, state+elapsed column merge, truncation
-   priorities, `⚠n` alert token, `all-claude` badge hiding. The one
-   deliberately visible phase — worth a screenshot review before merge.
-4. **Menu primitive + project menu.** `menu.ts`, mutator extraction out
+2. **Explicit base.** [SHIPPED] `baseBranch` config key, `workers new
+   --base`, spawn resolution order (`resolveSpawnBase`), new divergence
+   semantics (grey badge / fault-only yellow) on configured projects,
+   `⋅base` header token. Unset projects byte-identical.
+3. **The re-skin.** [SHIPPED] Identity badges (member/model), the
+   `workflowRowDecor` leaf switch (NOT a `renderRow` method — see Status)
+   with grow-bracket parity, state+elapsed column merge, truncation
+   priorities, `⚠n` alert token, `all-claude` badge hiding.
+4. **Menu primitive + project menu.** [not yet built] `menu.ts`, mutator extraction out
    of `commands/config.ts`, `⌥,`, `_config-set` dispatch, re-open
    chaining. Existing pickers migrate opportunistically.
-5. **Worker menu.** `⌥i`, info rows, action rows, registry-field config
-   rows (base/model), `show last review` view plumbing.
-6. **Spawn composer + per-worker crew.** Draft files, `--base`/`--crew`
-   CLI parity, `entry.crew` + `resolveReviewRole` entry layer.
+5. **Worker menu.** [not yet built] `⌥i`, info rows, action rows,
+   registry-field config rows (base/model), `show last review` view
+   plumbing.
+6. **Spawn composer + per-worker crew.** [not yet built] Draft files,
+   `--base`/`--crew` CLI parity, `entry.crew` + `resolveReviewRole` entry
+   layer.
 
 ## Rejected and deferred
 
