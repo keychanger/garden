@@ -881,7 +881,7 @@ describe("identity badges + grammar (Phase 3)", () => {
 
   it("rides the model AFTER the detail and does not dead-space a model-less sibling", () => {
     // calm-bay renders alongside via a hidden window, so two workers share the
-    // one project (and thus the one badge column).
+    // one project.
     vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_garden-worker-calm-bay"]);
     const workers = [
       { name: "bold-ash", sessionId: "a", task: "wiring the auth flow", agentStatus: "working" as const },
@@ -907,6 +907,23 @@ describe("identity badges + grammar (Phase 3)", () => {
     // a long model id no longer inflates the shared badge column and pushes
     // every model-less description to the right.
     expect(sibling).toBe(baseSibling);
+  });
+
+  it("trails the base and member badges AFTER the description (nothing before detail)", () => {
+    // Operator call 2026-07-16: the description is the row's primary content and
+    // must read first — every grey identity badge (base, member, ...) trails it,
+    // like the model tag, so nothing sits between the state and the description.
+    vi.mocked(currentBranchFast).mockReturnValue("main");
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "wiring the auth flow", agentStatus: "working",
+        harness: "codex", baseBranch: "feature-x" },
+    ]);
+    const line = lineFor(renderQuickStatus(state), "bold-ash");
+    const detailAt = line.indexOf("wiring the auth flow");
+    expect(detailAt).toBeGreaterThan(-1);
+    // Both the base hint and the member badge come after the description.
+    expect(line.indexOf("feature-x")).toBeGreaterThan(detailAt);
+    expect(line.indexOf("codex")).toBeGreaterThan(detailAt);
   });
 
   it("sizes the state column to the widest state on screen (no fixed 13-wide padding)", () => {

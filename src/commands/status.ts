@@ -167,18 +167,20 @@ interface RowRenderCtx {
 
 // The pieces of a worker row, assembled by collectSegments and laid out by
 // renderWorkerRow. Splitting collection from layout is what lets the TTY and
-// baked paths share one row definition. The grammar (OPERATOR-UI.md Part 1):
-// core (focus/icon/name/state) and flags are status-class and never drop;
-// badges are grey identity, override-only, and drop as a unit before detail is
-// lost; detail is the elastic column that truncates first.
+// baked paths share one row definition. The grammar (OPERATOR-UI.md Part 1),
+// left to right: core (focus/icon/name/state), then the elastic detail
+// (description) — nothing sits between the state and the description — then the
+// grey identity cluster (badges + model) trailing, then the status-class flags.
+// core and flags never drop; the identity cluster is override-only and drops as
+// a unit before detail is lost; detail is the elastic column that truncates first.
 interface RowSegments {
   focus: string;
   icon: string;
   name: string;    // unpadded; renderWorkerRow pads to the column width
   state: string;   // formatStatus + the elapsed-in-state suffix, folded in
-  badges: string[]; // grey identity cluster (base, member, crew, workflow)
-  detail: string;  // activity or the workflow bracket — the elastic column
-  model: string;   // grey model badge, rendered AFTER detail as a trailing tag ("" when unpinned)
+  badges: string[]; // grey identity (base, crew, member, workflow), trailing after detail
+  detail: string;  // activity or the workflow bracket — the elastic column, first after state
+  model: string;   // grey model badge, trails with the badge cluster ("" when unpinned)
   flags: string;   // status-class end-of-row (gate, CI bracket)
   status: WorkerStatus;
   stale: boolean;
@@ -225,11 +227,8 @@ function collectSegments(worker: WorkerInfo, ctx: RowRenderCtx): RowSegments {
     state: stateCell(worker, ctx.now),
     badges,
     detail: holisticDetail ?? decor.detail ?? (worker.activity ?? ""),
-    // Model rides at the END of the row, after the detail column, not in the
-    // leading badge column: a pinned model (often a long id) otherwise widened
-    // the fixed identity column and pushed the description far right, leaving
-    // dead space on every model-less row in the project (operator call,
-    // 2026-07-16). As a trailing tag it costs width only on the row that has it.
+    // The pinned model is grey identity like the badges above; renderWorkerRow
+    // trails the whole cluster after the detail (see there for why).
     model: worker.model ? greyBadge(worker.model) : "",
     flags: `${formatGateSuffix(worker.status, ctx.gateClosed)}${formatCiBracket(worker.ci)}`,
     status: worker.status,
@@ -240,31 +239,33 @@ function collectSegments(worker: WorkerInfo, ctx: RowRenderCtx): RowSegments {
 // Lay out a worker row from its segments. The single place row column order,
 // truncation priority, coloring, and staleness dimming are decided — shared by
 // both render paths. `cap` (baked) enforces the truncation grammar; `detailMax`
-// (TTY) is a soft detail bound; badgeWidth is the shared identity-column width.
+// (TTY) is a soft detail bound.
 function renderWorkerRow(
   seg: RowSegments,
-  dims: { nameWidth: number; stateWidth: number; badgeWidth: number; cap?: number; detailMax?: number },
+  dims: { nameWidth: number; stateWidth: number; cap?: number; detailMax?: number },
 ): string {
   const core = `    ${seg.focus} ${seg.icon} ${padEndVisible(seg.name, dims.nameWidth)}  ${padEndVisible(seg.state, dims.stateWidth)}`;
-  let badgeCell = dims.badgeWidth > 0 ? `  ${padEndVisible(seg.badges.join("  "), dims.badgeWidth)}` : "";
-  // The model tag trails the detail column (not the leading badge column) so a
-  // long model id never dead-spaces the model-less rows. It is still identity,
-  // so it drops together with the badge cluster when the pane is too narrow to
-  // keep the detail readable.
-  let modelCell = seg.model ? `  ${seg.model}` : "";
+  // The whole grey identity cluster — base/crew/member/workflow badges plus the
+  // pinned model — trails the detail column so nothing sits between the state
+  // and the description: the description is the row's primary content and must
+  // read first (operator call, 2026-07-16). Ragged-right, not a shared padded
+  // column, so it costs width only on the rows that carry it rather than pushing
+  // every plain row's description to the right; it drops as a unit when the pane
+  // is too narrow to keep the detail readable.
+  const identity = [...seg.badges, seg.model].filter(t => t !== "");
+  let identityCell = identity.length > 0 ? `  ${identity.join("  ")}` : "";
   let detail = seg.detail;
 
   // Detail budget: baked (cap) derives it so core + flags never drop and the
-  // identity cells (badges + trailing model) drop as a unit before detail is
-  // lost; TTY uses detailMax as a soft bound.
+  // trailing identity cluster drops as a unit before detail is lost; TTY uses
+  // detailMax as a soft bound.
   let budget = dims.detailMax;
   if (dims.cap !== undefined) {
     const fixed = visibleWidth(core) + visibleWidth(seg.flags);
-    const identityWidth = (dims.badgeWidth > 0 ? dims.badgeWidth + 2 : 0) + visibleWidth(modelCell);
+    const identityWidth = visibleWidth(identityCell);
     budget = dims.cap - fixed - identityWidth - (detail ? 2 : 0);
     if (budget < DETAIL_MIN_WIDTH && identityWidth > 0) {
-      badgeCell = "";
-      modelCell = "";
+      identityCell = "";
       budget = dims.cap - fixed - (detail ? 2 : 0);
     }
   }
@@ -273,21 +274,9 @@ function renderWorkerRow(
   }
 
   const detailCell = detail ? `  ${detail}` : "";
-  const line = `${core}${badgeCell}${detailCell}${modelCell}${seg.flags}`;
+  const line = `${core}${detailCell}${identityCell}${seg.flags}`;
   const colored = colorizeRow(seg.status, line);
   return seg.stale ? dimRow(colored) : colored;
-}
-
-// The identity-badge column width for a project: the widest joined badge
-// cluster over its rendered rows (0 when no worker overrides anything, so a
-// default project has no badge column at all — default is invisible).
-function badgeColumnWidth(segments: RowSegments[]): number {
-  let max = 0;
-  for (const s of segments) {
-    const w = visibleWidth(s.badges.join("  "));
-    if (w > max) max = w;
-  }
-  return max;
 }
 
 // Render a project header row. Shared by both paths. Layout (OPERATOR-UI.md
@@ -424,9 +413,8 @@ export async function status(args: string[]): Promise<void> {
         projectCrew: projectConfig ? (deriveCrew(projectConfig, config) ?? "custom") : "custom",
       };
       const segments = project.workers.map(w => collectSegments(w, ctx));
-      const badgeWidth = badgeColumnWidth(segments);
       for (const seg of segments) {
-        console.log(renderWorkerRow(seg, { nameWidth, stateWidth: statusWidth, badgeWidth, detailMax }));
+        console.log(renderWorkerRow(seg, { nameWidth, stateWidth: statusWidth, detailMax }));
       }
     }
   }
@@ -1130,9 +1118,8 @@ export function renderQuickStatus(
         projectCrew: projectConfig ? (deriveCrew(projectConfig, config) ?? "custom") : "custom",
       };
       const segments = workers.map(w => collectSegments(w, ctx));
-      const badgeWidth = badgeColumnWidth(segments);
       for (const seg of segments) {
-        lines.push(renderWorkerRow(seg, { nameWidth, stateWidth: statusWidth, badgeWidth, cap }));
+        lines.push(renderWorkerRow(seg, { nameWidth, stateWidth: statusWidth, cap }));
       }
     }
   }
