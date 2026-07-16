@@ -687,12 +687,40 @@ describe("newWorker", () => {
     );
   });
 
-  it("crew: a claude-worker crew (claude-codex) stamps entry.crew but leaves the build harness default", () => {
+  it("crew: a claude-worker crew (claude-codex) pins the build harness to claude-code", () => {
+    // The crew's worker member is authoritative — claude-codex builds with claude,
+    // stamped explicitly (mirroring `--harness claude`) so the badge and the launch
+    // agree, and so the project default can't override it below.
     vi.mocked(readDashState).mockReturnValue(makeState());
     newWorker({ crew: "claude-codex" });
     const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
     expect(entry.crew).toBe("claude-codex");
-    expect(entry.harness).toBeUndefined();
+    expect(entry.harness).toBe("claude-code");
+  });
+
+  it("crew: a claude-worker crew builds with claude even on a project defaulting to codex", () => {
+    // Regression: a crew is authoritative over the build harness, so `--crew
+    // claude-codex` on a codex-default project must build with CLAUDE. The old
+    // code skipped a claude-code crew member and fell through to project.harness,
+    // silently launching codex — the operator asked for claude and got codex, and
+    // the status pane then advertised a claude crew on a codex-building worker.
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", harness: "codex",
+    } as ReturnType<typeof tryGetProject>);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ crew: "claude-codex" });
+    const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.crew).toBe("claude-codex");
+    expect(entry.harness).toBe("claude-code");
+  });
+
+  it("crew: a codex-worker crew builds with codex even on a claude-default project", () => {
+    // The mirror case — the crew wins over the (claude) project default too.
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ crew: "codex-claude" });
+    const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.crew).toBe("codex-claude");
+    expect(entry.harness).toBe("codex");
   });
 
   it("crew: the worker.created snapshot records the per-worker crew, not the project crew", () => {

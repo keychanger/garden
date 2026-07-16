@@ -162,20 +162,31 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // Validate against the registry so an unknown name fails loudly here rather
     // than silently falling back at launch.
     const workflowName = opts.workflow ?? "default";
-    // A per-worker crew selects the build harness (its worker member); the CLI
-    // guard makes --crew and --harness mutually exclusive, and rejects a
-    // provider-backed worker member (no per-worker provider), so here we only
-    // adopt a non-claude-code harness member. The crew's REVIEW half rides
-    // entry.crew (stamped below) and is applied live by resolveReviewRole.
-    let crewHarness: string | undefined;
-    if (opts.crew) {
+    // Worker harness resolution. A per-worker crew is AUTHORITATIVE over the
+    // build harness (its worker member) — project.harness is not consulted when a
+    // crew is given, so a claude-worker crew (claude-codex / all-claude) builds
+    // with claude even on a project defaulting to a foreign harness, and a
+    // codex-worker crew builds with codex. The claude-code member is pinned
+    // explicitly (mirroring `--harness claude`) rather than left to fall through:
+    // stamping undefined here would drop to project.harness at this line and
+    // silently launch the project's default harness for a worker the operator
+    // explicitly asked to build with claude. The CLI guard makes --crew and
+    // --harness mutually exclusive and rejects a provider-backed worker member (no
+    // per-worker provider); the !provider fall-through here is defense-in-depth for
+    // other newWorker callers — an unsupported provider member drops to the project
+    // default. The crew's REVIEW half rides entry.crew (stamped below) and is
+    // applied live by resolveReviewRole.
+    let rawHarness: string | undefined;
+    if (opts.harness) {
+      rawHarness = opts.harness;
+    } else if (opts.crew) {
       const spec = getCrew(opts.crew, loadConfig());
-      if (spec && !spec.worker.provider && spec.worker.harness !== "claude-code") {
-        crewHarness = spec.worker.harness;
-      }
+      rawHarness = spec && !spec.worker.provider
+        ? spec.worker.harness
+        : (workflowName === "default" ? project.harness : undefined);
+    } else {
+      rawHarness = workflowName === "default" ? project.harness : undefined;
     }
-    const rawHarness =
-      opts.harness ?? crewHarness ?? (workflowName === "default" ? project.harness : undefined);
     // Canonicalize the operator-facing "claude" alias to the registry name.
     // This is the chokepoint every worker-creation path funnels through (CLI
     // --harness, the workflow picker, the project default), so the stamped
