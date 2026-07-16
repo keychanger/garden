@@ -28,9 +28,8 @@ import {
   runWorkerKillConfirm, applyWorkerSet, applyWorkerSetBounce,
 } from "./worker-menu.js";
 import {
-  runProjectMenu, runProjectBranchSubmenu, runRoleSubmenu, runRoleHarnessSubmenu,
-  runHolisticSubmenu, runProfileSubmenu, runProviderSubmenu, runColorSubmenu,
-  openConfigEditor, applyConfigSetFromMenu, applyRoleSetFromMenu,
+  runProjectMenu, runProjectBranchSubmenu, runHolisticSubmenu, runColorSubmenu,
+  applyConfigSetFromMenu,
 } from "./project-menu.js";
 import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, focusHistory, focusDiary, cyclePane, cyclePlot } from "./navigate.js";
 import { diaryFilePath } from "../diary.js";
@@ -237,37 +236,12 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     if (args[1]) runProjectBranchSubmenu(args[1]);
     return;
   }
-  if (sub === "_config-role-submenu") {
-    if (args[1]) runRoleSubmenu(args[1]);
-    return;
-  }
-  if (sub === "_config-role-harness") {
-    if (args[1] && args[2]) runRoleHarnessSubmenu(args[1], args[2]);
-    return;
-  }
-  if (sub === "_config-role-set") {
-    const [, projectName, roleArg] = args;
-    if (projectName && roleArg) applyRoleSetFromMenu(projectName, roleArg, args.slice(3).join(" "));
-    return;
-  }
   if (sub === "_config-holistic-submenu") {
     if (args[1]) runHolisticSubmenu(args[1]);
     return;
   }
-  if (sub === "_config-profile-submenu") {
-    if (args[1]) runProfileSubmenu(args[1]);
-    return;
-  }
-  if (sub === "_config-provider-submenu") {
-    if (args[1]) runProviderSubmenu(args[1]);
-    return;
-  }
   if (sub === "_config-color-submenu") {
     if (args[1]) runColorSubmenu(args[1]);
-    return;
-  }
-  if (sub === "_config-edit") {
-    openConfigEditor();
     return;
   }
   if (sub === "_grow-plant") {

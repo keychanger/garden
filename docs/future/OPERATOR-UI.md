@@ -463,10 +463,13 @@ Phases 1–3 shipped 2026-07-15; 4–6 shipped 2026-07-15/16 — all six have la
 4. **Menu primitive + project menu.** [SHIPPED] `menu.ts` (the shared
    `runMenu` + pure `buildMenuArgv`; the three pickers migrated onto it),
    the mutator extraction into `project-config-mutate.ts` (byte-identical
-   CLI), `⌥,`, `_config-set` dispatch, re-open chaining. As-built: free-form
-   values (checks, post-merge) go through the `(e) config.yml editor` rather
-   than a `command-prompt`, since tmux `%%` can't safely carry a `&&`-laden
-   command.
+   CLI), `⌥,`, `_config-set` dispatch, re-open chaining. As-built (after
+   operator review): the menu is narrowed to the everyday knobs — base
+   branch (shows the effective base), crew, CI gate, holistic, log color.
+   The power-user surfaces (per-role review harness, claude profile,
+   provider) and free-form values (checks, post-merge, sandbox, iteration
+   caps) stay on the `garden config` CLI; there is no config.yml editor row
+   (the operator asked not to expose raw YAML editing here).
 5. **Worker menu.** [SHIPPED] `⌥i`, identity in the title, action rows, live
    config rows (base / reviewer / model set+bounce), `show last review` via
    a `display-popup`.

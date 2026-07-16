@@ -5,14 +5,12 @@ import { describe, it, expect, vi } from "vitest";
 vi.mock("../src/dashboard/header.js", () => ({ refreshDashboard: vi.fn() }));
 
 const {
-  buildProjectMenuPlan, buildEnumSubmenuPlan, buildProjectBranchSubmenuPlan,
-  buildRoleSubmenuPlan, buildRoleHarnessSubmenuPlan, buildHolisticSubmenuPlan,
+  buildProjectMenuPlan, buildEnumSubmenuPlan, buildProjectBranchSubmenuPlan, buildHolisticSubmenuPlan,
 } = await import("../src/dashboard/project-menu.js");
 
 const view = {
   project: "lex", runner: "garden",
-  base: "v2-api", crew: "all-codex", reviewer: "codex", resolver: "claude-code", ciFix: "claude-code",
-  ciGate: true, holistic: "shadow", profile: "imp", provider: "(not set)", logColor: "auto",
+  base: "v2-api", crew: "all-codex", ciGate: true, holistic: "shadow", logColor: "auto",
   checks: "npm test", postMerge: "npm run build",
 };
 
@@ -24,15 +22,27 @@ describe("buildProjectMenuPlan", () => {
     expect(t).toContain("npm run build");
   });
 
+  it("is narrowed to the everyday knobs — no roles / profile / provider / yaml-editor rows", () => {
+    const labels = buildProjectMenuPlan(view).rows.map(r => r.label).join(" | ");
+    expect(labels).toContain("base branch");
+    expect(labels).toContain("crew");
+    expect(labels).toContain("CI gate");
+    expect(labels).toContain("holistic review");
+    expect(labels).toContain("log color");
+    expect(labels).not.toMatch(/roles/i);
+    expect(labels).not.toMatch(/claude profile/i);
+    expect(labels).not.toMatch(/provider/i);
+    expect(labels).not.toMatch(/config\.yml/i);
+  });
+
   it("shows each knob's current value and routes to its submenu", () => {
     const rows = buildProjectMenuPlan(view).rows;
     const label = (n: string) => rows.find(r => r.label.includes(n))!;
     expect(label("base branch").label).toContain("v2-api");
     expect(label("base branch").run).toBe("garden dashboard _config-branch-submenu lex");
     expect(label("crew").run).toBe("garden dashboard _crew-picker lex");
-    expect(label("roles").label).toContain("reviewer=codex");
     expect(label("holistic review").label).toContain("shadow");
-    expect(label("edit config.yml").run).toBe("garden dashboard _config-edit");
+    expect(label("log color").run).toBe("garden dashboard _config-color-submenu lex");
   });
 
   it("the CI gate row toggles the current value", () => {
@@ -59,22 +69,6 @@ describe("buildProjectBranchSubmenuPlan", () => {
     const plan = buildProjectBranchSubmenuPlan("lex", ["v2-api", "main"], "v2-api", "garden");
     expect(plan.rows[0].run).toBe("garden dashboard _config-set lex baseBranch v2-api");
     expect(plan.rows.at(-1)!.run).toBe("garden dashboard _config-set lex baseBranch ''");
-  });
-});
-
-describe("buildRoleSubmenuPlan + buildRoleHarnessSubmenuPlan", () => {
-  it("the role submenu opens a per-role harness submenu", () => {
-    const plan = buildRoleSubmenuPlan("lex", { reviewer: "codex", resolver: "claude-code", ciFix: "claude-code" }, "garden");
-    const rev = plan.rows.find(r => r.label.includes("reviewer"))!;
-    expect(rev.label).toContain("codex");
-    expect(rev.run).toBe("garden dashboard _config-role-harness lex reviewer");
-  });
-
-  it("the harness submenu dispatches _config-role-set with the chosen harness + unset", () => {
-    const plan = buildRoleHarnessSubmenuPlan("lex", "reviewer", ["claude-code", "codex"], "codex", "garden");
-    expect(plan.rows.find(r => r.label.startsWith("codex"))!.label).toContain("✓");
-    expect(plan.rows.find(r => r.label.startsWith("claude-code"))!.run).toBe("garden dashboard _config-role-set lex reviewer claude-code");
-    expect(plan.rows.at(-1)!.run).toBe("garden dashboard _config-role-set lex reviewer ''");
   });
 });
 

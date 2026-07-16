@@ -107,7 +107,7 @@ Requires terminal setup: iTerm2 → Profiles → Keys → Left Option key → "E
 | `⌥n` | New worker (Claude session) |
 | `⌥⇧N` | Workflow picker / spawn composer — choose default / trellis / grow, and optionally stage a `base branch` / `crew` override (a short-lived spawn draft) for the new worker |
 | `⌥⇧C` | Crew picker — set the focused project's crew (who builds / who reviews) |
-| `⌥,` | Project config menu — inspect + set the focused project's config (base / crew / roles / CI gate / holistic / profile / provider / log color; config.yml editor for the rest) |
+| `⌥,` | Project config menu — inspect + set the focused project's everyday config (base branch / crew / CI gate / holistic / log color); rarer knobs (roles, profile, provider, checks/post-merge) stay on the `garden config` CLI |
 | `⌥w` | Jump to first worker |
 | `⌥s` | Jump to project shell |
 | `⌥]` / `⌥[` | Cycle workers and shell |
