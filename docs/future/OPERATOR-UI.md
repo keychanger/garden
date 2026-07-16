@@ -2,15 +2,16 @@
 
 ## Status
 
-Proposed 2026-07-12. **Phases 1–3 (the status-pane grammar) shipped
-2026-07-15**; the authoritative description now lives in DESIGN.md
-("Worker row grammar", "Base-branch divergence indicator", "Time-in-state
-suffix") and CLAUDE.md. **Phases 4–6 (the menu system) remain speculative
-— no code yet**, deferred pending operator review of the shipped pane.
-This doc proposes (1) a coherent visual grammar for the status pane to
-replace the accreted one-off decorations [SHIPPED], and (2) a
-keybinding-driven menu system for configuring projects and workers
-[not yet built] — the everyday sibling of the setup wizard sketched in
+Proposed 2026-07-12. **Fully shipped 2026-07-15/16.** Phases 1–3 (the
+status-pane grammar) and Phases 4–6 (the keybinding-driven menu system)
+have all landed; the authoritative description now lives in DESIGN.md
+(hotkey table + "Worker row grammar", "Base-branch divergence indicator",
+"Time-in-state suffix", crew section) and CLAUDE.md (the menu-modules
+source-layout entry). This doc proposes (1) a coherent visual grammar for
+the status pane to replace the accreted one-off decorations [SHIPPED], and
+(2) a keybinding-driven menu system for configuring projects (`⌥,`) and
+workers (`⌥i`) plus a spawn composer (`⌥⇧N`) [SHIPPED] — the everyday
+sibling of the setup wizard sketched in
 [PROJECT-CUSTOMIZATION.md](PROJECT-CUSTOMIZATION.md).
 
 One deviation from the design below, discovered in implementation: the
@@ -459,15 +460,23 @@ Phases 1–3 shipped 2026-07-15; 4–6 deferred pending operator review.
    `workflowRowDecor` leaf switch (NOT a `renderRow` method — see Status)
    with grow-bracket parity, state+elapsed column merge, truncation
    priorities, `⚠n` alert token, `all-claude` badge hiding.
-4. **Menu primitive + project menu.** [not yet built] `menu.ts`, mutator extraction out
-   of `commands/config.ts`, `⌥,`, `_config-set` dispatch, re-open
-   chaining. Existing pickers migrate opportunistically.
-5. **Worker menu.** [not yet built] `⌥i`, info rows, action rows,
-   registry-field config rows (base/model), `show last review` view
-   plumbing.
-6. **Spawn composer + per-worker crew.** [not yet built] Draft files,
-   `--base`/`--crew` CLI parity, `entry.crew` + `resolveReviewRole` entry
-   layer.
+4. **Menu primitive + project menu.** [SHIPPED] `menu.ts` (the shared
+   `runMenu` + pure `buildMenuArgv`; the three pickers migrated onto it),
+   the mutator extraction into `project-config-mutate.ts` (byte-identical
+   CLI), `⌥,`, `_config-set` dispatch, re-open chaining. As-built: free-form
+   values (checks, post-merge) go through the `(e) config.yml editor` rather
+   than a `command-prompt`, since tmux `%%` can't safely carry a `&&`-laden
+   command.
+5. **Worker menu.** [SHIPPED] `⌥i`, identity in the title, action rows, live
+   config rows (base / reviewer / model set+bounce), `show last review` via
+   a `display-popup`.
+6. **Spawn composer + per-worker crew.** [SHIPPED] `spawn-draft.ts` draft
+   files (5-min TTL, watchdog-swept), `--base`/`--crew` CLI parity,
+   `entry.crew` + the `resolveReviewRole` entry layer. As-built: the
+   composer's `crew` override is default-workflow only (the submenu omits
+   provider-backed worker members), matching the `--crew` CLI guard; `base`
+   applies to any workflow. Per-worker crew's review half is live; its build
+   half is spawn-time only (an agent pins its harness at launch).
 
 ## Rejected and deferred
 
@@ -489,16 +498,18 @@ Phases 1–3 shipped 2026-07-15; 4–6 deferred pending operator review.
   vocabulary, but the state *word* sits right next to the icon on every
   row; a legend documents a problem better solved by the grammar.
 
-## Open questions
+## Open questions (all resolved at implementation, kept as record)
 
-1. **Hide the `all-claude` crew badge?** "Default is invisible" says yes;
-   it is also a visible change to a badge that shipped two days ago. The
-   alternative — keep it always-on — costs one grey word per header and
-   one asterisk on the grammar rule.
-2. **`⌥,` vs `⌥m`.** Comma is the convention; `m` is the mnemonic. Needs
-   a one-minute test that the operator's terminal delivers `M-,` as
-   Meta+comma.
-3. **Elapsed placement.** Merging elapsed into the state column widens
-   every row by 4 columns even when no elapsed is showing. If narrow
-   panes bite, the fallback is keeping elapsed end-of-row but adopting
-   the rest of the grammar unchanged.
+1. **Hide the `all-claude` crew badge?** RESOLVED: hidden (operator chose
+   "default is invisible"). "Default is invisible" says yes; it is also a
+   visible change to a badge that shipped two days ago. The alternative —
+   keep it always-on — costs one grey word per header and one asterisk on
+   the grammar rule.
+2. **`⌥,` vs `⌥m`.** RESOLVED: `⌥,` (the operator's iTerm2 delivers `M-,`).
+   Comma is the convention; `m` is the mnemonic. Needs a one-minute test
+   that the operator's terminal delivers `M-,` as Meta+comma.
+3. **Elapsed placement.** RESOLVED: merged into the state column (operator
+   chose it). Merging elapsed into the state column widens every row by 4
+   columns even when no elapsed is showing. If narrow panes bite, the
+   fallback is keeping elapsed end-of-row but adopting the rest of the
+   grammar unchanged.
