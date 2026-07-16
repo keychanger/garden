@@ -36,7 +36,8 @@ vi.mock("../src/dashboard/tmux.js", () => ({
 }));
 
 import {
-  buildWorkflowPickerPlan, plantGrowFromPicker,
+  buildWorkflowPickerPlan, buildComposeBaseSubmenuPlan,
+  buildComposeCrewSubmenuPlan, plantGrowFromPicker,
 } from "../src/dashboard/trellis-picker.js";
 import { newWorker } from "../src/dashboard/workers.js";
 import { tryGetProject } from "../src/config.js";
@@ -98,6 +99,86 @@ describe("buildWorkflowPickerPlan", () => {
   it("shell-escapes the project name when it contains unsafe characters", () => {
     const rows = buildWorkflowPickerPlan("proj with space", RUNNER).rows;
     expect(rows[1].tmux).toContain("'proj with space'");
+  });
+});
+
+// ─── buildComposeBaseSubmenuPlan ──────────────────────────────────────────
+
+describe("buildComposeBaseSubmenuPlan", () => {
+  it("renders one row per branch plus a trailing clear row", () => {
+    const rows = buildComposeBaseSubmenuPlan("proj", ["main", "v2-api"], undefined, RUNNER).rows;
+    expect(rows).toHaveLength(3); // 2 branches + clear
+    expect(rows[0].label).toBe("main");
+    expect(rows[1].label).toBe("v2-api");
+    expect(rows[2].label).toMatch(/clear/i);
+    expect(rows[2].key).toBe("0");
+  });
+
+  it("stages the chosen branch via _spawn-draft <project> base <branch>", () => {
+    const rows = buildComposeBaseSubmenuPlan("proj", ["v2-api"], undefined, RUNNER).rows;
+    expect(rows[0].run).toContain("_spawn-draft");
+    expect(rows[0].run).toContain("proj");
+    expect(rows[0].run).toContain("base");
+    expect(rows[0].run).toContain("v2-api");
+  });
+
+  it("marks the current branch with a check and leaves others unmarked", () => {
+    const rows = buildComposeBaseSubmenuPlan("proj", ["main", "v2-api"], "v2-api", RUNNER).rows;
+    expect(rows[0].label).toBe("main");
+    expect(rows[1].label).toContain("✓");
+  });
+
+  it("numbers the first nine rows 1..9 then drops the quick-key", () => {
+    const branches = Array.from({ length: 11 }, (_, i) => `b${i + 1}`);
+    const rows = buildComposeBaseSubmenuPlan("proj", branches, undefined, RUNNER).rows;
+    expect(rows[0].key).toBe("1");
+    expect(rows[8].key).toBe("9");
+    expect(rows[9].key).toBe("");
+    expect(rows[10].key).toBe("");
+    // Clear row still keeps its own 0 key.
+    expect(rows.at(-1)!.key).toBe("0");
+  });
+
+  it("the clear row stages an empty value to reset to the project default", () => {
+    const rows = buildComposeBaseSubmenuPlan("proj", [], undefined, RUNNER).rows;
+    expect(rows).toHaveLength(1);
+    const clear = rows[0];
+    expect(clear.key).toBe("0");
+    expect(clear.run).toContain("_spawn-draft");
+    expect(clear.run).toContain("base");
+    // shellEscape("") renders an empty single-quoted literal.
+    expect(clear.run).toMatch(/base\s+''\s*$/);
+  });
+
+  it("names the project in the title", () => {
+    expect(buildComposeBaseSubmenuPlan("proj", [], undefined, RUNNER).title).toContain("proj");
+  });
+});
+
+// ─── buildComposeCrewSubmenuPlan ──────────────────────────────────────────
+
+describe("buildComposeCrewSubmenuPlan", () => {
+  it("renders one row per crew plus a trailing clear row that mentions the crew default", () => {
+    const rows = buildComposeCrewSubmenuPlan("proj", ["all-claude", "all-codex"], undefined, RUNNER).rows;
+    expect(rows).toHaveLength(3);
+    expect(rows[0].label).toBe("all-claude");
+    expect(rows[1].label).toBe("all-codex");
+    expect(rows[2].label).toMatch(/clear/i);
+    expect(rows[2].label).toMatch(/crew/i);
+    expect(rows[2].key).toBe("0");
+  });
+
+  it("stages the chosen crew via _spawn-draft <project> crew <crew>", () => {
+    const rows = buildComposeCrewSubmenuPlan("proj", ["all-codex"], undefined, RUNNER).rows;
+    expect(rows[0].run).toContain("_spawn-draft");
+    expect(rows[0].run).toContain("crew");
+    expect(rows[0].run).toContain("all-codex");
+  });
+
+  it("marks the current crew with a check", () => {
+    const rows = buildComposeCrewSubmenuPlan("proj", ["all-claude", "all-codex"], "all-codex", RUNNER).rows;
+    expect(rows[0].label).toBe("all-claude");
+    expect(rows[1].label).toContain("✓");
   });
 });
 
