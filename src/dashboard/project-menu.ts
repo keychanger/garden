@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import { loadConfig, tryGetProject, CONFIG_PATH, type GardenConfig, type ProjectConfig } from "../config.js";
 import { readDashState } from "./state.js";
 import { resolveGardenRunner } from "./runner.js";
-import { shellEscape, tmuxDisplay, tmuxDoubleQuote } from "./tmux.js";
+import { shellEscape, tmuxDisplay } from "./tmux.js";
 import { runMenu, type MenuSpec, type MenuRow } from "./menu.js";
 import { refreshDashboard } from "./header.js";
 import { deriveCrew } from "./crew.js";
