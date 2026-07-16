@@ -7,11 +7,7 @@ vi.mock("node:fs", () => ({
     openSync: vi.fn(() => 3),
     closeSync: vi.fn(),
     unlinkSync: vi.fn(),
-    // Diary-reload coalesce stamp. statSync throws by default (no stamp yet ->
-    // reload fires), so every existing diary test is unaffected; the coalesce
-    // test overrides it to a recent mtime to exercise the skip path.
     statSync: vi.fn(() => { throw new Error("ENOENT"); }),
-    writeFileSync: vi.fn(),
     constants: { O_CREAT: 0x100, O_EXCL: 0x200, O_WRONLY: 0x1 },
   },
 }));
@@ -1289,5 +1285,22 @@ describe("diary follows project switches", () => {
 
     expect(state.activeProject).toBe("other"); // switch itself still happens
     expect(sentSaveExit()).toBe(false); // the editor drive is coalesced away
+  });
+
+  it("does not re-drive when another handler claims a missing stamp first", () => {
+    const exists = Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+    vi.mocked(fs.openSync).mockImplementation(() => { throw exists; });
+    const state = makeState({
+      activeProject: "garden",
+      gardenPaneType: "diary",
+      gardenShellPaneId: "%1",
+    });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(listAllWindowNames).mockReturnValue(["_other-shell"]);
+
+    switchProject("2");
+
+    expect(state.activeProject).toBe("other");
+    expect(sentSaveExit()).toBe(false);
   });
 });

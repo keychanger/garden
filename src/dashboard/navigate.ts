@@ -105,16 +105,6 @@ export function swapVisibleToProject(
   state.activeProject = projectName;
 }
 
-// Coalesce window for the reload below. Nav hotkeys run backgrounded and
-// concurrently (`run-shell -b`, hotkeys.ts), so tapping ⌥O/⌥P to cycle injects
-// overlapping `C-o Enter C-x` bursts into the editor pane. When a second `^O`
-// lands on nano/pico's still-open "File Name to write" prompt, the editor rings
-// the terminal bell — surfacing as the macOS "chirp" (tmux passes the BEL
-// through; there is no visual-bell surface in fullscreen). The reload is
-// idempotent to drop: diary-view.sh re-resolves the focused project on every
-// reopen, and the reopen's node cold start outlasts this window, so the
-// in-flight reload still lands on the final project. 250ms comfortably covers a
-// human double-tap while staying under the reopen delay (no staleness).
 const DIARY_RELOAD_COALESCE_MS = 250;
 
 function diaryReloadStampPath(): string {
@@ -142,15 +132,17 @@ function reloadDiaryEditor(state: DashboardState): void {
   if (!pane || !paneExists(pane)) return;
   if (!editorIsNano(process.env.EDITOR || "nano")) return;
 
-  // Skip a reload that fires within COALESCE_MS of the previous one. The stamp
-  // is cross-process (each backgrounded handler is its own node invocation), so
-  // its mtime is the only shared record of the last drive. Best-effort: a
-  // missing stamp or fs error falls through to fire.
   const stamp = diaryReloadStampPath();
   try {
     if (Date.now() - fs.statSync(stamp).mtimeMs < DIARY_RELOAD_COALESCE_MS) return;
-  } catch { /* no stamp yet -> fire */ }
-  try { fs.writeFileSync(stamp, ""); } catch { /* best effort; still fire */ }
+    fs.unlinkSync(stamp);
+  } catch { /* A missing stamp can be claimed below. */ }
+  try {
+    const fd = fs.openSync(stamp, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
+    fs.closeSync(fd);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return;
+  }
 
   tmux("send-keys", "-t", pane, "C-o", "Enter", "C-x");
 }
