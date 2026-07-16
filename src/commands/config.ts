@@ -3,6 +3,7 @@ import { loadConfig, saveConfig, resolveProject, isValidConfigKey, type ProjectC
 import { syncProviderTokenToSession } from "../dashboard/claude-env.js";
 import { resolveReviewRole, type ReviewRole } from "../dashboard/roles.js";
 import { isRegisteredHarness, harnessNames, canonicalHarnessName } from "../dashboard/harness/core.js";
+import { branchExistsOnOrigin } from "../dashboard/git.js";
 import { listCrews, getCrew, applyCrew, deriveCrew } from "../dashboard/crew.js";
 import {
   ASSIGNABLE_LOG_COLOR_KEYS,
@@ -13,7 +14,7 @@ import {
 import { output } from "../output.js";
 
 const SETTABLE_KEYS = [
-  "checks", "postMerge", "sandboxDomains", "claudeProfile", "provider",
+  "baseBranch", "checks", "postMerge", "sandboxDomains", "claudeProfile", "provider",
   "harness", "logColor", "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
   "maxGrowIterations", "requireCiSuccess", "holisticReview",
 ] as const;
@@ -432,6 +433,24 @@ function setConfigKey(projectName: string, key: SettableKey, value: string): voi
       console.log(`Set ${key} = ${value} for ${projectName}`);
     } else {
       throw new Error(`holisticReview must be 'off', 'shadow', or 'fix', got '${value}'`);
+    }
+  } else if (key === "baseBranch") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.baseBranch;
+      console.log(`Cleared ${key} for ${projectName} (workers follow the project checkout at spawn)`);
+    } else if (!value.trim()) {
+      throw new Error("baseBranch requires a non-empty branch name");
+    } else {
+      const branch = value.trim();
+      project.baseBranch = branch;
+      console.log(`Set ${key} = ${branch} for ${projectName} (applies to newly created workers; existing workers keep their pinned base)`);
+      // Soft warning only. Keep `garden config` network-free and allow
+      // configuring a base that doesn't exist on origin yet; the spawn path
+      // (branchExistsOnOrigin + tryPublishBranch in newWorker) does the hard
+      // validation and publishes it when the first worker is created.
+      if (!branchExistsOnOrigin(project.path, branch)) {
+        console.log(`  note: '${branch}' is not on origin yet; it will be published when the first worker spawns.`);
+      }
     }
   } else if (value === "" || value === "unset" || value === "null") {
     delete project[key];

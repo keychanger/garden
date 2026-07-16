@@ -28,7 +28,7 @@ export async function workers(args: string[]): Promise<void> {
   }
   throw new Error(
     `Usage:\n`
-    + `  garden workers new <project> [--workflow trellis|grow] [--trellis <name>] `
+    + `  garden workers new <project> [--workflow trellis|grow] [--base <branch>] [--trellis <name>] `
     + `[--seed <text> | --seed-file <path>] [--model <alias-or-id>] [--max-iterations N]\n`
     + `  garden workers grow [<worker>] [--seed <text> | --seed-file <path> | --goal-file <path>] `
     + `[--max-iterations N]`,
@@ -97,6 +97,14 @@ async function newCommand(args: string[]): Promise<void> {
     throw new Error(`--harness is only supported with --workflow default (got '${workflow}').`);
   }
 
+  // Per-worker base-branch override (all workflows). Precedence over the
+  // project's configured baseBranch; validated/published at spawn via the
+  // newWorker branchExistsOnOrigin + tryPublishBranch chain.
+  const base = flags.get("base");
+  if (base !== undefined && !base.trim()) {
+    throw new Error("--base requires a non-empty branch name");
+  }
+
   if (workflow === "default") {
     if (flags.has("trellis")) {
       throw new Error("--trellis can only be used with --workflow trellis");
@@ -108,13 +116,13 @@ async function newCommand(args: string[]): Promise<void> {
       throw new Error("--max-iterations can only be used with --workflow trellis or grow");
     }
     const model = flags.has("model") ? requireModelValue(flags.get("model")!) : undefined;
-    const newName = newWorker({ projectName, workflow, model, ...(harness ? { harness } : {}) });
+    const newName = newWorker({ projectName, workflow, model, ...(harness ? { harness } : {}), ...(base ? { base } : {}) });
     if (!newName) {
       throw new Error(
         `Failed to spawn worker on '${projectName}'. Is the dashboard running? Check 'garden health'.`,
       );
     }
-    const suffix = [model ? `model=${model}` : "", harness ? `harness=${harness}` : ""].filter(Boolean).join(", ");
+    const suffix = [model ? `model=${model}` : "", harness ? `harness=${harness}` : "", base ? `base=${base}` : ""].filter(Boolean).join(", ");
     console.log(`Created worker ${projectName}/${newName}${suffix ? ` (${suffix})` : ""}.`);
     return;
   }
@@ -177,6 +185,7 @@ async function newCommand(args: string[]): Promise<void> {
       model,
       grow: { seed, maxIterations: maxIter },
       seedMessageFile: seedFile,
+      ...(base ? { base } : {}),
     });
     if (!newName) {
       try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
@@ -248,6 +257,7 @@ async function newCommand(args: string[]): Promise<void> {
       workerModel,
     },
     seedMessageFile: seedFile,
+    ...(base ? { base } : {}),
   });
   if (!newName) {
     try { fs.unlinkSync(seedFile); } catch { /* ignore */ }

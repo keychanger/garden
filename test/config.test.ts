@@ -764,6 +764,46 @@ describe("config harness key", () => {
   });
 });
 
+// Project-level baseBranch key — the authoritative merge target for new
+// workers (Phase 2 of the OPERATOR-UI work). Drives the setConfigKey branch in
+// config(): persists a trimmed branch name, clears on the sentinels, and
+// rejects a whitespace-only value. Validation of existence-on-origin is a soft
+// warning at set time (the spawn path does the hard check), so a name that
+// isn't on origin still persists.
+describe("config baseBranch key", () => {
+  async function setup() {
+    const { saveConfig, GARDEN_DIR, loadConfig } = await importConfig();
+    const { config } = await import("../src/commands/config.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
+    return { config, loadConfig };
+  }
+
+  it("isValidConfigKey accepts baseBranch", async () => {
+    const { isValidConfigKey } = await importConfig();
+    expect(isValidConfigKey("baseBranch")).toBe(true);
+  });
+
+  it("persists a branch name, trimming surrounding whitespace", async () => {
+    const { config, loadConfig } = await setup();
+    await config(["garden", "baseBranch", "  v2-api  "]);
+    expect(loadConfig().projects.garden.baseBranch).toBe("v2-api");
+  });
+
+  it("clears the base on the empty/unset sentinels", async () => {
+    const { config, loadConfig } = await setup();
+    await config(["garden", "baseBranch", "v2-api"]);
+    await config(["garden", "baseBranch", "unset"]);
+    expect(loadConfig().projects.garden.baseBranch).toBeUndefined();
+  });
+
+  it("rejects a whitespace-only branch name", async () => {
+    const { config } = await setup();
+    await expect(config(["garden", "baseBranch", "   "]))
+      .rejects.toThrow(/non-empty branch name/);
+  });
+});
+
 // `garden config <p> crew [<name>]` — sugar that sets the worker harness plus
 // the three review-role harnesses in one word. Exercises handleCrewCommand's
 // three branches (no-name display, unknown-crew throw, apply) at the config()

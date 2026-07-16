@@ -154,7 +154,7 @@ Dashboard:
 
 Workers:
   workers new <project> [--workflow default|trellis|grow] [--model <alias-or-id>] [--harness codex]
-                        [--trellis <name>] [--seed <text> | --seed-file <path>] [--max-iterations N]
+                        [--base <branch>] [--trellis <name>] [--seed <text> | --seed-file <path>] [--max-iterations N]
                                  Spawn a new worker. default plants an interactive worker;
                                  trellis plants a vine bound to the named trellis (--trellis);
                                  grow plants a bounded hardening loop from a --seed / --seed-file

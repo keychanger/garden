@@ -34,7 +34,7 @@ import { getHarness } from "./harness/index.js";
 import { isRegisteredHarness, harnessNames, canonicalHarnessName } from "./harness/core.js";
 import { resolveGardenRunner } from "./runner.js";
 import {
-  worktreePath, resolveBaseBranch, branchExistsOnOrigin, tryPublishBranch,
+  worktreePath, resolveBaseBranch, resolveSpawnBase, branchExistsOnOrigin, tryPublishBranch,
   gardenDoneTrackedInHead, getRemoteTrackingSha,
 } from "./git.js";
 import { addAlert } from "./alerts.js";
@@ -76,6 +76,12 @@ export interface NewWorkerOptions {
   // harness is refused. Persisted on entry.harness and threaded through
   // launch/resume/loop.
   harness?: string;
+  // Per-worker base-branch override (`workers new --base`). Takes precedence
+  // over the project's configured baseBranch and the checkout-follows default
+  // (see resolveSpawnBase). Validated + published through the same
+  // branchExistsOnOrigin / tryPublishBranch chain as any resolved base, then
+  // pinned to entry.baseBranch.
+  base?: string;
   // Workflow that drives the new worker's lifecycle. Defaults to "default".
   // Trellis vines pass "trellis" along with the trellis.name/trellis.path
   // pair below; see WORKFLOWS.md "Spawning a trellis vine".
@@ -240,7 +246,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     const wtPath = worktreePath(targetProject, workerName);
     const gardenRunner = resolveGardenRunner();
 
-    const baseBranch = resolveBaseBranch(project.path);
+    const baseBranch = resolveSpawnBase(project, opts.base);
 
     // A worker whose base branch isn't on origin breaks silently: every
     // `origin/<base>..HEAD` check in the Stop hook and poller fails, so the

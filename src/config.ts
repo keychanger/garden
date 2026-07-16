@@ -27,6 +27,15 @@ export const DEFAULT_PLOT = "all";
 
 export interface ProjectConfig {
   path: string;
+  // Branch this project's workers merge into. When set, it is the
+  // authoritative base for every new worker (see resolveSpawnBase in
+  // dashboard/git.ts) — `workers new --base` overrides per worker, and the
+  // status pane treats a worker whose pinned base differs from this as a
+  // deliberate override (a grey badge) rather than the "checkout drifted"
+  // warning. Unset (the legacy default) means workers follow whatever branch
+  // the project checkout is on at spawn time. See docs/future/OPERATOR-UI.md
+  // Part 2 + PROJECT-CUSTOMIZATION.md A1.3.
+  baseBranch?: string;
   checks?: string;
   postMerge?: string;
   sandboxDomains?: string[];
@@ -104,7 +113,7 @@ export interface RoleTarget {
 }
 
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
-  "path", "checks", "postMerge", "sandboxDomains", "claudeProfile", "provider",
+  "path", "baseBranch", "checks", "postMerge", "sandboxDomains", "claudeProfile", "provider",
   "harness", "logColor", "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
   "maxGrowIterations", "requireCiSuccess", "holisticReview",
 ]);

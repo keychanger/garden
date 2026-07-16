@@ -63,6 +63,7 @@ vi.mock("../src/config.js", () => {
 vi.mock("../src/dashboard/git.js", () => ({
   currentBranch: vi.fn(() => null),
   currentBranchFast: vi.fn(() => null),
+  branchExistsOnOrigin: vi.fn(() => true),
 }));
 
 vi.mock("../src/diary.js", () => ({
@@ -76,7 +77,7 @@ vi.mock("../src/output.js", () => ({
 
 import { status, renderQuickStatus, resolveWorkerStatus, dimRow, truncateToVisibleWidth, formatTimeInState, formatGateSuffix, _resetStatusBranchCacheForTest } from "../src/commands/status.js";
 import { getAutoContinueConfig, projectUsageGateExempt } from "../src/config.js";
-import { currentBranchFast } from "../src/dashboard/git.js";
+import { currentBranchFast, branchExistsOnOrigin } from "../src/dashboard/git.js";
 import { diaryHasContent } from "../src/diary.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { getWorkers } from "../src/dashboard/registry.js";
@@ -700,6 +701,82 @@ describe("branch hint", () => {
     // The on-base worker now shows its base too, but in grey so it doesn't read
     // as a warning — answering "what does this one target?" unambiguously.
     expect(lineFor(result, "bold-ash")).toContain(`${GREY}→ main${RESET}`);
+  });
+});
+
+// Phase 2: with an explicit baseBranch config key, the row uses per-worker
+// override semantics (grey = deliberate override, yellow = base gone from
+// origin) with NO project-wide sibling toggle, and the header carries a grey
+// ⋅base token. Configured via the cachedConfig arg to renderQuickStatus.
+describe("explicit baseBranch (configured project)", () => {
+  const YELLOW = "\x1b[33m";
+  const GREY = "\x1b[90m";
+  const RESET = "\x1b[0m";
+  const state = {
+    activeProject: "garden",
+    statusPaneId: "%0",
+    gardenShellPaneId: "%1",
+    activePaneId: "%2",
+    activePaneType: "worker" as const,
+    activeWindowName: "_garden-worker-bold-ash",
+  };
+  const cfg = { projects: { garden: { path: "/tmp/garden", baseBranch: "v2-api" } } };
+  const lineFor = (result: string, name: string): string =>
+    result.split("\n").find(l => l.includes(name)) ?? "";
+
+  beforeEach(() => {
+    vi.mocked(branchExistsOnOrigin).mockReturnValue(true);
+  });
+
+  it("shows no hint when the worker base matches the configured base", () => {
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "", agentStatus: "working", baseBranch: "v2-api" },
+    ]);
+    const result = renderQuickStatus(state, undefined, cfg);
+    expect(lineFor(result, "bold-ash")).not.toContain("→");
+  });
+
+  it("marks a per-worker override grey (not the yellow checkout warning)", () => {
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "", agentStatus: "working", baseBranch: "main" },
+    ]);
+    const result = renderQuickStatus(state, undefined, cfg);
+    expect(lineFor(result, "bold-ash")).toContain(`${GREY}→ main${RESET}`);
+  });
+
+  it("marks a base missing from origin yellow (a genuine merge-will-fail fault)", () => {
+    vi.mocked(branchExistsOnOrigin).mockImplementation((_p, b) => b !== "gone");
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "", agentStatus: "working", baseBranch: "gone" },
+    ]);
+    const result = renderQuickStatus(state, undefined, cfg);
+    expect(lineFor(result, "bold-ash")).toContain(`${YELLOW}→ gone${RESET}`);
+  });
+
+  it("renders a grey ⋅base token on the project header", () => {
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "", agentStatus: "working", baseBranch: "v2-api" },
+    ]);
+    const result = renderQuickStatus(state, undefined, cfg);
+    expect(lineFor(result, "garden")).toContain(`${GREY}⋅v2-api${RESET}`);
+  });
+
+  it("does NOT toggle siblings on: a matching sibling stays hint-free when another diverges", () => {
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_garden-worker-calm-bay"]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "", agentStatus: "working", baseBranch: "v2-api" },
+      { name: "calm-bay", sessionId: "b", task: "", agentStatus: "working", baseBranch: "main" },
+    ]);
+    const result = renderQuickStatus(state, undefined, cfg);
+    // The diverging worker shows a grey override...
+    expect(lineFor(result, "calm-bay")).toContain(`${GREY}→ main${RESET}`);
+    // ...but the matching sibling shows NOTHING (the legacy sibling-toggle is
+    // gone on configured projects — each row depends only on its own base).
+    expect(lineFor(result, "bold-ash")).not.toContain("→");
   });
 });
 

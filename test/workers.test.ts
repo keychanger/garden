@@ -129,6 +129,7 @@ vi.mock("../src/dashboard/runner.js", () => ({
 vi.mock("../src/dashboard/git.js", () => ({
   worktreePath: vi.fn(() => "/home/user/.garden/worktrees/myproject/bold-ash"),
   resolveBaseBranch: vi.fn(() => "main"),
+  resolveSpawnBase: vi.fn((_project: unknown, override?: string) => override ?? "main"),
   branchExistsOnOrigin: vi.fn(() => true),
   tryPublishBranch: vi.fn(() => ({ ok: true })),
   gardenDoneTrackedInHead: vi.fn(() => false),
@@ -172,7 +173,7 @@ import {
 import { getHarness } from "../src/dashboard/harness/index.js";
 import { resolveGardenRunner } from "../src/dashboard/runner.js";
 import {
-  worktreePath, resolveBaseBranch, branchExistsOnOrigin, tryPublishBranch,
+  worktreePath, resolveBaseBranch, resolveSpawnBase, branchExistsOnOrigin, tryPublishBranch,
   gardenDoneTrackedInHead,
 } from "../src/dashboard/git.js";
 import { addAlert } from "../src/dashboard/alerts.js";
@@ -336,6 +337,16 @@ describe("newWorker", () => {
       createdAt: expect.any(Number),
       workflow: "default",
     });
+  });
+
+  it("pins a --base override onto entry.baseBranch via resolveSpawnBase", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ base: "release" });
+    expect(vi.mocked(resolveSpawnBase)).toHaveBeenCalledWith(expect.anything(), "release");
+    expect(vi.mocked(addWorker)).toHaveBeenCalledWith(
+      "myproject",
+      expect.objectContaining({ baseBranch: "release" }),
+    );
   });
 
   it("raises a project-scoped alert when .garden-done is tracked in HEAD", () => {

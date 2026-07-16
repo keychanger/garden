@@ -13,7 +13,7 @@ import { readDashState, type DashboardState } from "../dashboard/state.js";
 import { getWorkers, readRegistry, batchUpdateWorkerFields, compareWorkerFreshness, isWorkerStale, type WorkerRegistry } from "../dashboard/registry.js";
 import { listHiddenWorkerWindows, windowExists, getFirstPaneId, getPaneTitle } from "../dashboard/tmux.js";
 import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/window-names.js";
-import { currentBranchFast } from "../dashboard/git.js";
+import { currentBranchFast, branchExistsOnOrigin } from "../dashboard/git.js";
 import { diaryHasContent } from "../diary.js";
 import { deriveCrew } from "../dashboard/crew.js";
 import type { GardenConfig, ProjectConfig } from "../config.js";
@@ -123,6 +123,14 @@ interface RowRenderCtx {
   projectBranch: string | null | undefined;
   showAllBranches: boolean;
   activityMax?: number;
+  // Phase 2 — explicit baseBranch. When the project has a configured base,
+  // the row uses the per-worker override semantics (grey = deliberate
+  // override, yellow = base missing from origin) and ignores showAllBranches;
+  // missingBases holds the worker bases that no longer exist on origin.
+  // Undefined configuredBase keeps the legacy checkout-divergence path
+  // (formatBranchHint + showAllBranches) byte-identical.
+  configuredBase?: string;
+  missingBases?: ReadonlySet<string>;
 }
 
 // The pieces of a worker row, assembled once by collectSegments and laid out
@@ -142,7 +150,9 @@ interface RowSegments {
 // Build the row segments for one worker. Pure over (worker, ctx) — no I/O — so
 // both paths call it and stay byte-identical by construction.
 function collectSegments(worker: WorkerInfo, ctx: RowRenderCtx): RowSegments {
-  const baseHint = formatBranchHint(worker.baseBranch, ctx.projectBranch, ctx.showAllBranches);
+  const baseHint = ctx.configuredBase !== undefined
+    ? formatConfiguredBaseHint(worker.baseBranch, ctx.configuredBase, ctx.missingBases)
+    : formatBranchHint(worker.baseBranch, ctx.projectBranch, ctx.showAllBranches);
   const elapsed = formatTimeInState(worker.status, worker.lastStateChangeAt, ctx.now);
   const gate = formatGateSuffix(worker.status, ctx.gateClosed);
   return {
@@ -179,8 +189,9 @@ function renderProjectHeader(h: {
 }): string {
   const marker = h.isActive ? " ◄" : "";
   const displayName = h.isActive ? `\x1b[1;32m${h.name}\x1b[0m` : h.name;
+  const baseToken = formatConfiguredBaseToken(h.projectConfig);
   const crewBadge = h.projectConfig ? formatCrewBadge(h.projectConfig, h.config) : "";
-  return `  ${h.index}. ${displayName}${crewBadge}${formatDiaryGlyph(h.name)}${marker}`;
+  return `  ${h.index}. ${displayName}${baseToken}${crewBadge}${formatDiaryGlyph(h.name)}${marker}`;
 }
 
 // Refresh all workers' task fields from their live tmux pane titles. Called
@@ -272,12 +283,20 @@ export async function status(args: string[]): Promise<void> {
     if (project.workers.length === 0) {
       console.log("    (no workers)");
     } else {
+      const projectConfig = config.projects[project.name];
+      const configuredBase = projectConfig?.baseBranch;
       const ctx: RowRenderCtx = {
         now,
         gateClosed,
         projectBranch: project.projectBranch,
-        showAllBranches: projectHasBranchDivergence(project.workers, project.projectBranch),
+        showAllBranches: configuredBase === undefined
+          ? projectHasBranchDivergence(project.workers, project.projectBranch)
+          : false,
         activityMax,
+        configuredBase,
+        missingBases: configuredBase === undefined
+          ? undefined
+          : collectMissingBases(project.name, projectConfig?.path, definedBases(project.workers)),
       };
       for (const worker of project.workers) {
         console.log(renderWorkerRow(collectSegments(worker, ctx), { nameWidth, stateWidth: statusWidth }));
@@ -526,9 +545,38 @@ function formatRowTail(worker: WorkerInfo, baseHint: string, activityMax?: numbe
 const PROJECT_BRANCH_TTL_MS = 5_000;
 const projectBranchCache = new Map<string, { branch: string | null; at: number }>();
 
-/** Test-only: clear the project-branch TTL cache between cases. */
+// Per-project TTL cache of the worker bases missing from origin, for projects
+// with an explicit baseBranch. branchExistsOnOrigin forks `git show-ref`, and
+// the status pane re-bakes on every state transition, so — like
+// projectBranchCache — this bounds the git cost to one batch per project per
+// TTL. Only configured projects populate it; unset projects never call in.
+const missingBaseCache = new Map<string, { missing: ReadonlySet<string>; at: number }>();
+
+/** Test-only: clear the status-pane TTL caches between cases. */
 export function _resetStatusBranchCacheForTest(): void {
   projectBranchCache.clear();
+  missingBaseCache.clear();
+}
+
+// The subset of `workerBases` that no longer exists on origin for a configured
+// project — a merge into a vanished base will fail, so the row flags it yellow.
+// TTL-cached per project (see missingBaseCache); empty when repoPath is unknown.
+function collectMissingBases(
+  projectName: string,
+  repoPath: string | undefined,
+  workerBases: Iterable<string>,
+): ReadonlySet<string> {
+  const cached = missingBaseCache.get(projectName);
+  const now = Date.now();
+  if (cached && now - cached.at < PROJECT_BRANCH_TTL_MS) return cached.missing;
+  const missing = new Set<string>();
+  if (repoPath) {
+    for (const base of new Set(workerBases)) {
+      if (!branchExistsOnOrigin(repoPath, base)) missing.add(base);
+    }
+  }
+  missingBaseCache.set(projectName, { missing, at: now });
+  return missing;
 }
 
 function resolveProjectBranch(
@@ -583,6 +631,37 @@ function projectHasBranchDivergence(
 ): boolean {
   if (!projectBranch) return false;
   return workers.some(w => w.baseBranch !== undefined && w.baseBranch !== projectBranch);
+}
+
+// Base-branch hint for a project with an explicit baseBranch config key. Unlike
+// formatBranchHint, it depends only on the worker's OWN base — there is no
+// project-wide sibling toggle (the jitter the explicit key retires). Grey
+// "→ base" marks a deliberate per-worker override; yellow marks a genuine fault
+// (the base is gone from origin, so the merge will fail); a base matching the
+// configured base shows nothing.
+function formatConfiguredBaseHint(
+  workerBase: string | undefined,
+  configuredBase: string,
+  missingBases: ReadonlySet<string> | undefined,
+): string {
+  if (!workerBase) return "";
+  if (missingBases?.has(workerBase)) return ` \x1b[33m→ ${workerBase}\x1b[0m`;
+  if (workerBase !== configuredBase) return ` \x1b[90m→ ${workerBase}\x1b[0m`;
+  return "";
+}
+
+// Grey "⋅<base>" token on a project header when baseBranch is explicitly
+// configured — answers "what do this project's workers merge into?" at a
+// glance. Nothing on unset (checkout-follows) projects, so an un-migrated
+// project's header row is byte-unchanged.
+function formatConfiguredBaseToken(project: ProjectConfig | undefined): string {
+  return project?.baseBranch ? ` \x1b[90m⋅${project.baseBranch}\x1b[0m` : "";
+}
+
+// The distinct set of worker bases actually pinned on rows (drops legacy
+// entries with no baseBranch), fed to collectMissingBases.
+function definedBases(workers: WorkerInfo[]): string[] {
+  return workers.map(w => w.baseBranch).filter((b): b is string => b !== undefined);
 }
 
 // Dimmed pencil appended to a project's header row when its diary holds
@@ -808,12 +887,20 @@ export function renderQuickStatus(
     if (workers.length === 0) {
       lines.push("    (no workers)");
     } else {
+      const projectConfig = config.projects[name];
+      const configuredBase = projectConfig?.baseBranch;
       const ctx: RowRenderCtx = {
         now,
         gateClosed,
         projectBranch,
-        showAllBranches: projectHasBranchDivergence(workers, projectBranch),
+        showAllBranches: configuredBase === undefined
+          ? projectHasBranchDivergence(workers, projectBranch)
+          : false,
         activityMax: undefined,
+        configuredBase,
+        missingBases: configuredBase === undefined
+          ? undefined
+          : collectMissingBases(name, projectConfig?.path, definedBases(workers)),
       };
       for (const worker of workers) {
         lines.push(renderWorkerRow(collectSegments(worker, ctx), { nameWidth, stateWidth: statusWidth }));

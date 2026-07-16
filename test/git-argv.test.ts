@@ -47,6 +47,7 @@ import {
   getCommitSummary,
   pruneWorktrees,
   resolveBaseBranch,
+  resolveSpawnBase,
   currentBranch,
   getRemoteHost,
   branchExistsOnOrigin,
@@ -60,6 +61,38 @@ const mockFs = vi.mocked(fs);
 beforeEach(() => {
   vi.clearAllMocks();
   mockExec.mockReturnValue("");
+});
+
+describe("resolveSpawnBase", () => {
+  it("prefers an explicit override over the configured base (no git)", () => {
+    const result = resolveSpawnBase({ path: "/repo", baseBranch: "v2-api" }, "release");
+    expect(result).toBe("release");
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
+  it("uses the configured baseBranch when no override (no git)", () => {
+    const result = resolveSpawnBase({ path: "/repo", baseBranch: "v2-api" });
+    expect(result).toBe("v2-api");
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
+  it("ignores a whitespace-only override and falls to the configured base", () => {
+    const result = resolveSpawnBase({ path: "/repo", baseBranch: "v2-api" }, "   ");
+    expect(result).toBe("v2-api");
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
+  it("falls back to resolveBaseBranch (checkout) when neither is set", () => {
+    mockExec.mockReturnValue("feature-x");
+    const result = resolveSpawnBase({ path: "/repo" });
+    expect(result).toBe("feature-x");
+    // Delegated to resolveBaseBranch -> currentBranch (git rev-parse).
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["rev-parse", "--abbrev-ref", "HEAD"],
+      expect.objectContaining({ cwd: "/repo" }),
+    );
+  });
 });
 
 describe("worktreePath", () => {

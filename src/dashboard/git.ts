@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
 import { SESSIONS_DIR } from "../config.js";
+import type { ProjectConfig } from "../config.js";
 import type { WorkerEntry } from "./registry.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { log } from "./log.js";
@@ -26,6 +27,23 @@ export function resolveBaseBranch(repoPath: string): string {
     // origin/HEAD not set — common for --single-branch clones
   }
   return "main";
+}
+
+// Resolve the base branch for a NEW worker, in precedence order:
+//   1. an explicit per-worker override (`workers new --base`)
+//   2. the project's configured baseBranch (the authoritative pin)
+//   3. resolveBaseBranch — the legacy checkout-follows behavior (current
+//      branch → origin/HEAD → "main")
+// The result still flows through the branchExistsOnOrigin / tryPublishBranch /
+// getRemoteTrackingSha chain in newWorker, so a resolved base is validated and
+// (if needed) published regardless of which source it came from.
+export function resolveSpawnBase(
+  project: Pick<ProjectConfig, "path" | "baseBranch">,
+  override?: string,
+): string {
+  const chosen = override?.trim() || project.baseBranch;
+  if (chosen) return chosen;
+  return resolveBaseBranch(project.path);
 }
 
 // Returns true if the named branch is known on origin per local refs. Used
