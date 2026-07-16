@@ -174,9 +174,12 @@ export function launchCiFix(
 }
 
 // The ci-fix analog of resolverOutputWasTransient: was the ci-fix agent's run a
-// transient backend error (5xx / 429 / overloaded) rather than a genuine
-// couldn't-fix? An outage should escalate recoverably instead of parking in the
-// `ci` reason that tells the operator to push a fix. Harness-aware; read before
+// transient backend error (5xx / 429 / overloaded) or a usage/quota cutoff —
+// rather than a genuine couldn't-fix? An outage OR quota block should escalate
+// recoverably instead of parking in the `ci` reason that tells the operator to
+// push a fix. A foreign harness's subscription usage-limit surfaces only through
+// quotaLimitResetHint, NOT isTransientError (the reviewer's quota fallback keys
+// off the same split), so both are checked. Harness-aware; read before
 // cleanCiFixFiles removes the result/sidecar.
 function ciFixOutputWasTransient(projectName: string, entry: WorkerEntry): boolean {
   const harness = resolveReviewRole(
@@ -192,7 +195,9 @@ function ciFixOutputWasTransient(projectName: string, entry: WorkerEntry): boole
   const source = (harness === "claude-code"
     ? rawOutput
     : [rawOutput, sidecar].filter(Boolean).join("\n")) || null;
-  return source !== null && getHarnessCore(harness).isTransientError(source);
+  if (source === null) return false;
+  const core = getHarnessCore(harness);
+  return core.isTransientError(source) || core.quotaLimitResetHint(source) !== null;
 }
 
 function escalateCiFixBudget(

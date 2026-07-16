@@ -3525,6 +3525,41 @@ describe("poll — resolving state", () => {
     expect((failingCall![2] as Record<string, unknown>).resolveAttempts).toBe(0);
   });
 
+  it("escalates recoverably (transient-review) when a Codex resolver hits its usage/quota limit", () => {
+    // Cross-phase guard: the crew phase made the resolver foreign-capable, but a
+    // Codex subscription usage-limit line carries no 429/5xx — isTransientError
+    // misses it; only quotaLimitResetHint catches it (the same split the
+    // reviewer's quota fallback keys off). Without checking both, a foreign
+    // resolver's quota block mis-escalates to the kick-refused `code` reason. It
+    // must park in kick-recoverable transient-review, matching the reviewer.
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject",
+      roles: { resolver: { harness: "codex" } },
+    } as ReturnType<typeof tryGetProject>);
+    setupResolver({ resolveAttempts: 2 }); // at budget
+    vi.mocked(isAncestor).mockReturnValue(false); // verification fails
+    vi.mocked(getBranchHeadSha).mockReturnValue("post-sha");
+    // Codex sends the verdict to stdout (empty — it errored out) and the
+    // usage-limit to the stderr sidecar. Real captured Codex stderr.
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      const s = String(p);
+      if (s.endsWith(".stderr")) {
+        return "ERROR: You've hit your usage limit. Upgrade to Plus to continue using Codex "
+          + "(https://chatgpt.com/explore/plus), or try again at Jul 31st, 2026 11:43 AM.";
+      }
+      if (s.includes("review-result")) return "";
+      return "{}";
+    });
+
+    poll("myproject");
+
+    const failingCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "failing",
+    );
+    expect(failingCall).toBeDefined();
+    expect((failingCall![2] as Record<string, unknown>).failingReason).toBe("transient-review");
+  });
+
   it("stores resolver body when it parses even if verification fails", () => {
     setupResolver();
     vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
@@ -3682,6 +3717,35 @@ describe("poll — ci-fixing state", () => {
     vi.mocked(fs.readFileSync).mockImplementation((p: unknown) =>
       String(p).includes("ci-fix-result") ? "API Error: 503 Service Unavailable" : "{}",
     );
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre-fix-sha");
+
+    poll("myproject");
+
+    const failingCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "failing",
+    );
+    expect(failingCall).toBeDefined();
+    expect((failingCall![2] as Record<string, unknown>).failingReason).toBe("transient-review");
+  });
+
+  it("escalates recoverably (transient-review) when a Codex ci-fix agent hits its usage/quota limit", () => {
+    // Same cross-phase guard as the resolver: a foreign ci-fix agent's Codex
+    // usage-limit surfaces only through quotaLimitResetHint, not isTransientError,
+    // so it must NOT mis-escalate to the kick-refused `ci` reason.
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject",
+      roles: { ciFix: { harness: "codex" } },
+    } as ReturnType<typeof tryGetProject>);
+    setupCiFix({ ciFixAttempts: 3 });
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      const s = String(p);
+      if (s.endsWith(".stderr")) {
+        return "ERROR: You've hit your usage limit. Upgrade to Plus to continue using Codex "
+          + "(https://chatgpt.com/explore/plus), or try again at Jul 31st, 2026 11:43 AM.";
+      }
+      if (s.includes("ci-fix-result")) return "";
+      return "{}";
+    });
     vi.mocked(getBranchHeadSha).mockReturnValue("pre-fix-sha");
 
     poll("myproject");

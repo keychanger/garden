@@ -40,12 +40,16 @@ export const RESOLVE_BUDGET = 2;
 const RESOLVE_VERDICT_VOCAB = ["DONE", "FAILED"] as const;
 
 // Was the resolver's run a transient backend error (5xx / 429 / overloaded /
-// rate-limit) rather than a genuine "could not resolve"? An Anthropic (or codex)
-// outage during a rebase-conflict resolve should not park the worker in the
-// unrecoverable `code` failing reason that `garden kick` refuses. Harness-aware,
-// mirroring handleReviewing: claude-code merges stderr into the result via 2>&1;
-// codex sends the verdict to stdout and errors to a stderr sidecar. Must be read
-// before cleanReviewFiles deletes the result/sidecar.
+// rate-limit) or a usage/quota cutoff — rather than a genuine "could not
+// resolve"? An Anthropic (or codex) outage OR quota block during a rebase-
+// conflict resolve should not park the worker in the unrecoverable `code`
+// failing reason that `garden kick` refuses. A foreign harness's subscription
+// usage-limit surfaces only through quotaLimitResetHint, NOT isTransientError
+// (the same split the reviewer's quota fallback keys off — a plain "usage limit"
+// line carries no 429/5xx for isTransientError to match), so both are checked.
+// Harness-aware, mirroring handleReviewing: claude-code merges stderr into the
+// result via 2>&1; codex sends the verdict to stdout and errors to a stderr
+// sidecar. Must be read before cleanReviewFiles deletes the result/sidecar.
 function resolverOutputWasTransient(projectName: string, entry: WorkerEntry): boolean {
   const harness = resolveReviewRole(
     tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "resolver", undefined, entry,
@@ -60,7 +64,9 @@ function resolverOutputWasTransient(projectName: string, entry: WorkerEntry): bo
   const source = (harness === "claude-code"
     ? rawOutput
     : [rawOutput, sidecar].filter(Boolean).join("\n")) || null;
-  return source !== null && getHarnessCore(harness).isTransientError(source);
+  if (source === null) return false;
+  const core = getHarnessCore(harness);
+  return core.isTransientError(source) || core.quotaLimitResetHint(source) !== null;
 }
 
 interface ResolveResult {
