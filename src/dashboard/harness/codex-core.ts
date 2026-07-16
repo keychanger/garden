@@ -131,9 +131,18 @@ function isTransientError(output: string): boolean {
 // claudeCodeCore.quotaLimitResetHint: null = not quota; non-null string = quota
 // hit, string is the reset hint. The caller runs this BEFORE isTransientError,
 // so a "429 ... insufficient_quota" is treated as a quota wait rather than the
-// seconds-scale transient retry its bare 429 would otherwise trip. Provisional
-// pending a captured real Codex quota sample (like isTransientError above);
-// anchored to error-shaped, line-start phrasing so a verdict body can't trip it.
+// seconds-scale transient retry its bare 429 would otherwise trip.
+//
+// The subscription usage-limit line is VALIDATED against a real capture (codex
+// exec 0.144.5, 2026-07-16 — a ChatGPT-subscription account out of quota, with
+// stdout empty and this on stderr):
+//   ERROR: You've hit your usage limit. Upgrade to Plus to continue using Codex
+//   (https://chatgpt.com/explore/plus), or try again at Jul 31st, 2026 11:43 AM.
+// Codex phrases the reset as "try again at <date>" / "try again in <duration>"
+// (NOT "resets …" as claude-code does), so the extraction tries both. The
+// insufficient_quota JSON shape (API-key hard billing) is still inferred from the
+// documented OpenAI error, not a capture. All patterns are error-shaped and
+// line-start / structured so a verdict body discussing a "usage limit" can't trip.
 function quotaLimitResetHint(output: string): string | null {
   const lines = output.split("\n");
   const tail: string[] = [];
@@ -144,7 +153,12 @@ function quotaLimitResetHint(output: string): string | null {
   for (const line of tail) {
     if (/"(?:type|code)"\s*:\s*"insufficient_quota"/.test(line)) return "";
     if (/^(?:ERROR|error):?.*\b(?:usage|quota)\s+limit\b/i.test(line)) {
-      const reset = line.match(/reset[a-z]*\s+(?:at\s+|in\s+)?(.+?)\s*$/i);
+      // Codex names the reset as "try again at <date>" / "try again in <dur>";
+      // also accept a "reset(s) at/in <x>" phrasing defensively. A trailing "."
+      // (Codex ends the sentence with one) is stripped from the hint.
+      const reset =
+        line.match(/reset(?:s|ting)?\s+(?:at\s+|in\s+)?(.+?)[.\s]*$/i)
+        ?? line.match(/try\s+again\s+(?:at|in)\s+(.+?)[.\s]*$/i);
       return reset ? reset[1].trim() : "";
     }
   }

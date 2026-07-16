@@ -9,7 +9,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { tryGetProject, SESSIONS_DIR } from "../config.js";
 import { addAlert } from "./alerts.js";
-import { resolveReviewRole } from "./roles.js";
+import { resolveReviewRole, SAFE_REVIEW_MODEL } from "./roles.js";
+import { reviewerEnvPrefix } from "./claude-env.js";
 import { codexStderrSidecar } from "./harness/codex-core.js";
 import { getHarnessCore } from "./harness/core.js";
 import { setDoneSentinel } from "./continue.js";
@@ -67,12 +68,15 @@ export const TRANSIENT_REVIEW_BACKOFFS_MS: readonly number[] = [
   300_000,   // 5m
 ];
 
-// Session/usage-quota retry schedule (handleQuotaLimitReview). A quota cutoff
-// is the operator's rolling window, which resets on an hours scale — so unlike
-// the transient ladder this is a FLAT ~15-min cadence over a ~6h ceiling
-// (24 retries), landing a relaunch within 15 min of the true reset regardless
-// of when in the window it was hit. Past the budget → `failing`/"quota"
-// (kick-recoverable).
+// Session/usage-quota retry schedule (handleQuotaLimitReview). Only a
+// claude-code reviewer reaches this ladder: a FOREIGN reviewer (codex) that
+// hits its quota falls back to the first-party Opus reviewer immediately
+// (handleQuotaFallbackReview) rather than waiting out a multi-day subscription
+// window. A claude-code quota IS the operator's own rolling window, which resets
+// on an hours scale — so unlike the transient ladder this is a FLAT ~15-min
+// cadence over a ~6h ceiling (24 retries), landing a relaunch within 15 min of
+// the true reset regardless of when in the window it was hit. Past the budget →
+// `failing`/"quota" (kick-recoverable).
 export const QUOTA_REVIEW_BACKOFF_MS = 15 * 60_000; // 15m
 export const MAX_QUOTA_REVIEW_RETRIES = 24;         // 24 × 15m ≈ 6h
 
@@ -322,11 +326,18 @@ export function handleReviewing(
   const reviewerHarness = resolveReviewRole(
     tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "reviewer", undefined, entry,
   ).harness;
-  const transientSource = (reviewerHarness === "claude-code"
+  // If a prior quota fallback is active, THIS review ran on the fallback harness
+  // (claude-code/Opus), not the configured one — launchReview overrode it. So
+  // classify against the harness the review ACTUALLY used: output-stream
+  // assembly (sidecar vs merged stdout), core selection, the further-fallback
+  // guard, and the alert naming would all key off the wrong (foreign) harness
+  // otherwise. Cleared on the next fresh cycle, so the configured reviewer resumes.
+  const effectiveReviewerHarness = entry.reviewFallbackHarness ?? reviewerHarness;
+  const transientSource = (effectiveReviewerHarness === "claude-code"
     ? rawOutput
     : [rawOutput, rawStderrSidecar].filter(Boolean).join("\n")
   ) || null;
-  const core = getHarnessCore(reviewerHarness);
+  const core = getHarnessCore(effectiveReviewerHarness);
   // Whether the reviewer committed work before its output ran out. If so we
   // never relaunch on top of it (a quota or transient retry would) — it falls
   // through to handleUnparseableReview's force-push + re-queue recovery.
@@ -341,7 +352,20 @@ export function handleReviewing(
   if (transientSource !== null && !reviewerAdvanced) {
     const resetHint = core.quotaLimitResetHint(transientSource);
     if (resetHint !== null) {
-      return handleQuotaLimitReview(projectName, projectPath, entry, resetHint);
+      // A FOREIGN reviewer's quota is a multi-day subscription window — waiting
+      // it out would wedge the whole project's merge pipeline. Fall back to the
+      // first-party Opus safety net immediately (operator decision 2026-07-16).
+      // A claude-code reviewer (the configured default, or a fallback that ALSO
+      // hit quota) has no stronger fallback: wait out the operator's own rolling
+      // window on the flat 15-min ladder.
+      if (effectiveReviewerHarness !== "claude-code") {
+        return handleQuotaFallbackReview(
+          projectName, projectPath, entry, effectiveReviewerHarness, resetHint,
+        );
+      }
+      return handleQuotaLimitReview(
+        projectName, projectPath, entry, resetHint, effectiveReviewerHarness,
+      );
     }
   }
   if (
@@ -420,6 +444,7 @@ function handleTransientReviewFailure(
       reviewRetryCount: undefined,
       unparseableRetryCount: undefined,
       quotaRetryCount: undefined,
+      reviewFallbackHarness: undefined,
       reviewRetryAt: undefined,
     });
     refreshDashboard();
@@ -455,32 +480,44 @@ function handleTransientReviewFailure(
   return true;
 }
 
-// The reviewer hit the Claude session/usage QUOTA cutoff (the operator's
-// rolling window) with no parseable verdict and no committed work. Unlike a
-// transient API blip, a quota window resets on an hours scale — so auto-retry
-// on a FLAT ~15-min cadence until it clears, up to MAX_QUOTA_REVIEW_RETRIES
-// (~6h), then park in `failing`/"quota" (kick-recoverable). The reviewer runs
-// on the operator's own account, so its session limit *is* the operator's
-// window; a 15-min relaunch lands within 15 min of the reset with no operator
-// action. Reuses reviewRetryAt as the cause-agnostic relaunch gate
+// Human label for a reviewer harness in operator-facing alerts. "Claude" reads
+// better than the internal "claude-code" id; a foreign harness is title-cased
+// (codex -> Codex).
+function harnessDisplayName(harness: string): string {
+  if (harness === "claude-code") return "Claude";
+  return harness.charAt(0).toUpperCase() + harness.slice(1);
+}
+
+// The reviewer hit its session/usage QUOTA cutoff with no parseable verdict and
+// no committed work. Only a claude-code reviewer reaches here — a foreign
+// reviewer (codex) falls back to the first-party Opus reviewer instead of
+// waiting out its multi-day window (handleQuotaFallbackReview) — so the wait is
+// the operator's own rolling Claude window: unlike a transient API blip it
+// resets on an hours scale, so auto-retry on a FLAT ~15-min cadence until it
+// clears, up to MAX_QUOTA_REVIEW_RETRIES (~6h), then park in `failing`/"quota"
+// (kick-recoverable). A 15-min relaunch lands within 15 min of the reset with no
+// operator action. Reuses reviewRetryAt as the cause-agnostic relaunch gate
 // (handleWorking) but keeps its own quotaRetryCount budget so a fast transient
-// blip and this hours-scale wait can't conflate.
+// blip and this hours-scale wait can't conflate. reviewerHarness names the
+// blocked harness in the alert (and the reset time when known).
 function handleQuotaLimitReview(
   projectName: string,
   projectPath: string,
   entry: WorkerEntry,
   resetHint: string,
+  reviewerHarness: string,
 ): boolean {
   const wtPath = entry.worktreePath ?? projectPath;
   const headSha = getBranchHeadSha(wtPath);
   const prior = entry.quotaRetryCount ?? 0;
   const next = prior + 1;
   const resetSuffix = resetHint ? ` (resets ${resetHint})` : "";
+  const label = harnessDisplayName(reviewerHarness);
 
   if (next > MAX_QUOTA_REVIEW_RETRIES) {
     log.warn("poller", "quota review retries exhausted, transitioning to failing", {
       worker: entry.name,
-      data: { project: projectName, attempts: prior },
+      data: { project: projectName, attempts: prior, harness: reviewerHarness },
     });
     addAlert({
       level: "error",
@@ -488,9 +525,9 @@ function handleQuotaLimitReview(
       project: projectName,
       worker: entry.name,
       message:
-        `Review for worker ${entry.name} is still blocked by the Claude ` +
-        `session/usage limit${resetSuffix} after ${prior} auto-retries. Run ` +
-        `\`garden kick ${entry.name}\` once your Claude window has reset.`,
+        `Review for worker ${entry.name} is still blocked by the ${label} ` +
+        `usage/session limit${resetSuffix} after ${prior} auto-retries. Run ` +
+        `\`garden kick ${entry.name}\` once its window has reset.`,
       dedupKey: `quota-review-exhausted:${projectName}:${entry.name}`,
     });
     transitionState(projectName, entry.name, "failing", {
@@ -505,6 +542,7 @@ function handleQuotaLimitReview(
       unparseableRetryCount: undefined,
       reviewRetryAt: undefined,
       quotaRetryCount: undefined,
+      reviewFallbackHarness: undefined,
     });
     refreshDashboard();
     return true;
@@ -519,9 +557,9 @@ function handleQuotaLimitReview(
       project: projectName,
       worker: entry.name,
       message:
-        `Review for worker ${entry.name} paused: the reviewer hit the Claude ` +
-        `session/usage limit${resetSuffix}. Auto-retrying every 15 min until ` +
-        `your window resets; run \`garden kick ${entry.name}\` to retry now.`,
+        `Review for worker ${entry.name} paused: the ${label} reviewer hit its ` +
+        `usage/session limit${resetSuffix}. Auto-retrying every 15 min until the ` +
+        `window resets; run \`garden kick ${entry.name}\` to retry now.`,
       dedupKey: `quota-review:${projectName}:${entry.name}`,
     });
   }
@@ -547,6 +585,55 @@ function handleQuotaLimitReview(
   });
   refreshDashboard();
   scheduleDelayedPoke(projectName, QUOTA_REVIEW_BACKOFF_MS);
+  return true;
+}
+
+// A project-configured FOREIGN reviewer (e.g. codex) hit its usage/quota cutoff.
+// Unlike a claude-code reviewer's rolling window (hours), a foreign subscription
+// window resets on a multi-day scale — so retrying it would wedge the whole
+// project's merge pipeline for days. Operator decision (2026-07-16): fall back
+// to the first-party Opus safety net immediately. Re-queue THIS review at once
+// (no backoff) with reviewFallbackHarness set, which (a) makes launchReview pin
+// the review to claude-code/Opus regardless of project.roles, and (b) marks the
+// relaunch as a retry so the loop iteration counter is not re-incremented. The
+// flag persists across the fallback review's own retries and clears on the next
+// fresh cycle, so the configured reviewer is retried automatically once its
+// window resets. The override is surfaced with a warn alert (deduped per worker/
+// hour) so garden stepping in for the operator's explicit reviewer choice is
+// visible without spamming across a multi-day window.
+function handleQuotaFallbackReview(
+  projectName: string,
+  projectPath: string,
+  entry: WorkerEntry,
+  blockedHarness: string,
+  resetHint: string,
+): boolean {
+  const label = harnessDisplayName(blockedHarness);
+  const resetSuffix = resetHint ? ` (resets ${resetHint})` : "";
+  log.info("poller", "reviewer quota; falling back to first-party Opus", {
+    worker: entry.name,
+    data: { project: projectName, blockedHarness, resetHint },
+  });
+  addAlert({
+    level: "warn",
+    source: "review",
+    project: projectName,
+    worker: entry.name,
+    message:
+      `Review for worker ${entry.name}: the ${label} reviewer is quota-blocked` +
+      `${resetSuffix} — falling back to the first-party Opus reviewer for this ` +
+      `review. ${label} resumes automatically once its window resets.`,
+    dedupKey: `quota-fallback:${projectName}:${entry.name}`,
+  });
+  transitionState(projectName, entry.name, "working", {
+    pendingReviewAt: Date.now(),
+    reviewFallbackHarness: "claude-code",
+    reviewWindowName: undefined,
+    reviewStartedAt: undefined,
+    preReviewSha: undefined,
+  });
+  refreshDashboard();
+  scheduleDelayedPoke(projectName, 0);
   return true;
 }
 
@@ -601,6 +688,7 @@ function handleUnparseableReview(
         reviewRetryCount: undefined,
         unparseableRetryCount: undefined,
         quotaRetryCount: undefined,
+        reviewFallbackHarness: undefined,
         reviewRetryAt: undefined,
       });
       refreshDashboard();
@@ -621,6 +709,7 @@ function handleUnparseableReview(
       reviewRetryCount: undefined,
       unparseableRetryCount: undefined,
       quotaRetryCount: undefined,
+      reviewFallbackHarness: undefined,
       reviewRetryAt: undefined,
     });
     refreshDashboard();
@@ -699,6 +788,7 @@ function handleUnparseableReview(
     reviewRetryCount: undefined,
     unparseableRetryCount: undefined,
     quotaRetryCount: undefined,
+    reviewFallbackHarness: undefined,
     reviewRetryAt: undefined,
   });
   refreshDashboard();
@@ -811,6 +901,7 @@ function dispatchDefaultVerdict(
       reviewRetryCount: undefined,
       unparseableRetryCount: undefined,
       quotaRetryCount: undefined,
+      reviewFallbackHarness: undefined,
       reviewRetryAt: undefined,
     });
     refreshDashboard();
@@ -845,6 +936,7 @@ function dispatchDefaultVerdict(
     reviewRetryCount: undefined,
     unparseableRetryCount: undefined,
     quotaRetryCount: undefined,
+    reviewFallbackHarness: undefined,
     reviewRetryAt: undefined,
   });
   refreshDashboard();
@@ -909,6 +1001,7 @@ function dispatchTrellisVerdict(
       reviewRetryCount: undefined,
       unparseableRetryCount: undefined,
       quotaRetryCount: undefined,
+      reviewFallbackHarness: undefined,
       reviewRetryAt: undefined,
       trellis: {
         lastVerdict: "ALIGNED",
@@ -946,6 +1039,7 @@ function dispatchTrellisVerdict(
       reviewRetryCount: undefined,
       unparseableRetryCount: undefined,
       quotaRetryCount: undefined,
+      reviewFallbackHarness: undefined,
       reviewRetryAt: undefined,
       trellis: {
         lastVerdict: "DRIFT",
@@ -991,6 +1085,7 @@ function dispatchTrellisVerdict(
       reviewRetryCount: undefined,
       unparseableRetryCount: undefined,
       quotaRetryCount: undefined,
+      reviewFallbackHarness: undefined,
       reviewRetryAt: undefined,
       trellis: {
         lastVerdict: "FLAGGED",
@@ -1026,6 +1121,7 @@ function dispatchTrellisVerdict(
     reviewRetryCount: undefined,
     unparseableRetryCount: undefined,
     quotaRetryCount: undefined,
+    reviewFallbackHarness: undefined,
     reviewRetryAt: undefined,
     trellis: { lastVerdict: "FAILED" },
   });
@@ -1070,6 +1166,7 @@ export function resetToWorkingOnWorkerPush(
     reviewRetryCount: undefined,
     unparseableRetryCount: undefined,
     quotaRetryCount: undefined,
+    reviewFallbackHarness: undefined,
     reviewRetryAt: undefined,
     pendingReviewAt: hasCommits ? Date.now() : entry.pendingReviewAt,
   });
@@ -1138,6 +1235,7 @@ export function handleReviewTimeout(
     reviewRetryCount: undefined,
     unparseableRetryCount: undefined,
     quotaRetryCount: undefined,
+    reviewFallbackHarness: undefined,
     reviewRetryAt: undefined,
   });
   refreshDashboard();
@@ -1173,11 +1271,14 @@ function launchReview(
   // parseable verdict or worker push, so their presence uniquely marks a retry
   // relaunch. unparseableRetryCount belongs here too: a no-commit unparseable
   // retry re-reviews the SAME commits (the reviewer emitted no verdict and did
-  // no work), so it must not consume a loop iteration either.
+  // no work), so it must not consume a loop iteration either. reviewFallbackHarness
+  // likewise marks a relaunch: a quota fallback re-reviews the SAME commits on the
+  // Opus safety net, so it must not re-increment the loop counter.
   const isRetryRelaunch =
     (entry.reviewRetryCount ?? 0) > 0
     || (entry.quotaRetryCount ?? 0) > 0
-    || (entry.unparseableRetryCount ?? 0) > 0;
+    || (entry.unparseableRetryCount ?? 0) > 0
+    || entry.reviewFallbackHarness !== undefined;
 
   // Trellis workflow: increment iteration counter *before* the budget check
   // and *before* dispatch (WORKFLOWS.md "One iteration, in detail" / step 5).
@@ -1271,9 +1372,23 @@ function launchReview(
   // worker's backend. Codex-as-reviewer (`garden config <p> role reviewer
   // harness codex`) flows through the same path with its own auth and no
   // Anthropic env. See docs/MULTI-MODEL.md "Phase 4".
-  const reviewer = resolveReviewRole(
-    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "reviewer", undefined, entry,
-  );
+  //
+  // Quota fallback override: when the configured (foreign) reviewer is
+  // quota-blocked, entry.reviewFallbackHarness pins THIS cycle to the pure
+  // first-party Opus safety net — the fallback harness, the Opus model, and the
+  // neutralizing reviewer env prefix — regardless of project.roles, so a
+  // multi-day foreign-subscription window can't wedge the merge pipeline. The
+  // model is SAFE_REVIEW_MODEL for every workflow (trellis's reviewerModel is
+  // also "opus"). Cleared on the next fresh cycle, so the configured reviewer
+  // resumes automatically (see handleQuotaFallbackReview).
+  const projectCfg = tryGetProject(projectName) ?? {};
+  const reviewer = entry.reviewFallbackHarness
+    ? {
+        harness: entry.reviewFallbackHarness,
+        model: SAFE_REVIEW_MODEL,
+        envPrefix: reviewerEnvPrefix(projectCfg),
+      }
+    : resolveReviewRole(projectCfg, entry.workflow ?? "default", "reviewer", undefined, entry);
   const revWindow = reviewWindowName(projectName, entry.name);
   launchHeadlessAgent({
     cwd: wtPath,

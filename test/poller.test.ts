@@ -1164,6 +1164,15 @@ describe("poll — reviewing state (async)", () => {
     expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "failing" }),
     );
+    // The alert names the reviewer's harness (Claude for the claude-code path)
+    // and the extracted reset time, not a hardcoded "Claude ... window".
+    const quotaAlert = vi.mocked(addAlert).mock.calls.find(
+      c => String((c[0] as { dedupKey?: string }).dedupKey).startsWith("quota-review:"),
+    );
+    expect(quotaAlert).toBeDefined();
+    const quotaMsg = String((quotaAlert![0] as { message: string }).message);
+    expect(quotaMsg).toContain("Claude");
+    expect(quotaMsg).toContain("3:40pm (America/Denver)");
   });
 
   it("parks in failing/quota after the quota retry budget is exhausted", () => {
@@ -1397,6 +1406,130 @@ describe("poll — reviewing state (async)", () => {
     expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "failing" }),
     );
+  });
+
+  it("falls back to the first-party Opus reviewer immediately when a Codex reviewer is quota-blocked", () => {
+    // A foreign reviewer's quota is a multi-day subscription window; waiting it
+    // out (the claude-code 15-min ladder) would wedge the whole merge pipeline
+    // for days. Operator decision 2026-07-16: fall back to Opus at once. Driven
+    // by the real captured Codex stderr — usage limit, "try again at <date>",
+    // stdout empty (the quota line lands only in the sidecar).
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject",
+      roles: { reviewer: { harness: "codex" } },
+    } as ReturnType<typeof tryGetProject>);
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123",
+        preReviewSha: "pre456",
+      }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) => !name.includes("-review-"));
+    const deleted = new Set<string>();
+    vi.mocked(fs.unlinkSync).mockImplementation((p: unknown) => { deleted.add(String(p)); });
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) => {
+      const s = String(p);
+      if (deleted.has(s)) return false;
+      return s.endsWith(".stderr"); // only the sidecar exists; stdout is empty
+    });
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      const s = String(p);
+      if (deleted.has(s)) return "";
+      if (s.endsWith(".stderr")) {
+        return "ERROR: You've hit your usage limit. Upgrade to Plus to continue using Codex "
+          + "(https://chatgpt.com/explore/plus), or try again at Jul 31st, 2026 11:43 AM.";
+      }
+      return "{}";
+    });
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre456");   // HEAD not advanced
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("abc123"); // remote not advanced
+
+    poll("myproject");
+
+    // Re-queued immediately on the fallback harness, NOT the 15-min quota ladder.
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    const fallbackCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash"
+        && (c[2] as Record<string, unknown>).reviewFallbackHarness === "claude-code",
+    );
+    expect(fallbackCall).toBeDefined();
+    const fields = fallbackCall![2] as Record<string, unknown>;
+    expect(fields.prState).toBe("working");
+    expect(fields.pendingReviewAt).toEqual(expect.any(Number));
+    expect(fields.quotaRetryCount).toBeUndefined(); // not the wait-it-out path
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 0);
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "failing" }),
+    );
+    // Warn alert names the quota-blocked harness (Codex) + the reset, deduped,
+    // and says it fell back to Opus.
+    const alert = vi.mocked(addAlert).mock.calls.find(
+      c => String((c[0] as { dedupKey?: string }).dedupKey).startsWith("quota-fallback:"),
+    );
+    expect(alert).toBeDefined();
+    const spec = alert![0] as { level: string; message: string };
+    expect(spec.level).toBe("warn");
+    expect(spec.message).toContain("Codex");
+    expect(spec.message).toContain("Jul 31st, 2026 11:43 AM");
+    expect(spec.message).toContain("Opus");
+  });
+
+  it("waits out the 15-min ladder (naming Claude) when the Opus fallback ALSO hits quota", () => {
+    // The configured reviewer is codex, but a prior quota fallback is active
+    // (reviewFallbackHarness set), so THIS review already ran on claude-code/Opus.
+    // If the operator's own Claude window is ALSO exhausted there is no stronger
+    // fallback — wait it out on the flat 15-min ladder, and name Claude (the
+    // harness that actually hit quota), not codex.
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject",
+      roles: { reviewer: { harness: "codex" } },
+    } as ReturnType<typeof tryGetProject>);
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123",
+        preReviewSha: "pre456",
+        reviewFallbackHarness: "claude-code",
+      }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) => !name.includes("-review-"));
+    // claude-code merges stderr into the result file (2>&1) — quota line on stdout.
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) => String(p).includes("review-result"));
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result")
+        ? "Reviewing…\nYou've hit your session limit · resets 3:40pm (America/Denver)"
+        : "{}");
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre456");
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("abc123");
+
+    poll("myproject");
+
+    // The 15-min quota ladder, NOT another fallback (already fell back once).
+    const quotaCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => c[1] === "bold-ash" && (c[2] as Record<string, unknown>).quotaRetryCount === 1,
+    );
+    expect(quotaCall).toBeDefined();
+    expect((quotaCall![2] as Record<string, unknown>).prState).toBe("working");
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 900_000);
+    // The working-retry transition does NOT clear the fallback flag: it persists
+    // on the entry so each quota retry re-uses the Opus fallback.
+    expect((quotaCall![2] as Record<string, unknown>).reviewFallbackHarness).toBeUndefined();
+    // No second fallback alert — this is the wait, not another downgrade.
+    expect(vi.mocked(addAlert).mock.calls.some(
+      c => String((c[0] as { dedupKey?: string }).dedupKey).startsWith("quota-fallback:"),
+    )).toBe(false);
+    // Alert names Claude (the fallback that hit quota), not codex.
+    const alert = vi.mocked(addAlert).mock.calls.find(
+      c => String((c[0] as { dedupKey?: string }).dedupKey).startsWith("quota-review:"),
+    );
+    expect(alert).toBeDefined();
+    const msg = String((alert![0] as { message: string }).message);
+    expect(msg).toContain("Claude");
+    expect(msg).not.toContain("Codex");
+    expect(msg).toContain("3:40pm (America/Denver)");
   });
 
   it("transitions to failing with reason transient-review after the budget is exhausted", () => {

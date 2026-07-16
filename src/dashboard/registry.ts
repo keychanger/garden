@@ -231,6 +231,19 @@ export interface WorkerEntry {
   // poller-review.ts handleUnparseableReview. Distinct from unparseableReviewAt
   // above, which is the one-shot marker for the reviewer-committed-work path.
   unparseableRetryCount?: number;
+  // Reviewer quota fallback. Set to the fallback harness ("claude-code") by
+  // handleQuotaFallbackReview when the project's configured FOREIGN reviewer
+  // (e.g. codex) is quota-blocked: a foreign subscription window resets on a
+  // multi-day scale, so waiting it out would wedge the whole merge pipeline.
+  // While set, launchReview pins this review cycle to the first-party Opus
+  // safety net (harness + neutralizing env + Opus) regardless of project.roles,
+  // and it marks the relaunch as a retry so the loop iteration counter is not
+  // re-incremented. Persists across the fallback review's own transient/quota
+  // retries; clears wherever reviewRetryCount clears (any parseable verdict,
+  // worker push, or terminal). The next fresh cycle re-tries the configured
+  // reviewer, so codex resumes automatically once its window resets. See
+  // poller-review.ts handleQuotaFallbackReview / launchReview.
+  reviewFallbackHarness?: string;
   // Set by handlePaneDied when agentStatus was "working" at the moment the
   // pane died (dashboard kill, tmux server gone). Read by ensureDashboard's
   // resume loop to decide whether to auto-send a "continue" prompt after the

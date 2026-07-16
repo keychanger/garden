@@ -8,6 +8,14 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
+// Real captured `codex exec` stderr (codex 0.144.5, 2026-07-16) — a
+// ChatGPT-subscription account out of quota. stdout was empty; this line
+// appeared on stderr (twice). The reset is a concrete far-future date phrased
+// as "try again at <date>", NOT the "resets …" phrasing claude-code uses.
+const REAL_CODEX_QUOTA_STDERR =
+  "ERROR: You've hit your usage limit. Upgrade to Plus to continue using Codex " +
+  "(https://chatgpt.com/explore/plus), or try again at Jul 31st, 2026 11:43 AM.";
+
 vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -264,6 +272,9 @@ describe("codex adapter dialect", () => {
     expect(t("some progress\nERROR: 429 rate limit exceeded")).toBe(true);
     expect(t('done\n{"type":"server_error","message":"x"}')).toBe(true);
     expect(t("Reviewed the diff.\nFIXED")).toBe(false);
+    // The real usage-quota cutoff is NOT transient — it needs an hours/days
+    // wait for the window to reset, not a seconds-scale retry.
+    expect(t(REAL_CODEX_QUOTA_STDERR)).toBe(false);
   });
 
   it("claude quotaLimitResetHint detects a session-limit cutoff, not a verdict body", async () => {
@@ -285,6 +296,10 @@ describe("codex adapter dialect", () => {
     const q = getHarnessCore("codex").quotaLimitResetHint;
     expect(q('stream\nERROR: 429 {"type":"insufficient_quota"}')).toBe("");
     expect(q("error: usage limit reached, resets in 2h")).toBe("2h");
+    // Real captured cutoff: "try again at <date>" phrasing, trailing "." stripped.
+    expect(q(REAL_CODEX_QUOTA_STDERR)).toBe("Jul 31st, 2026 11:43 AM");
+    // The "try again in <duration>" variant.
+    expect(q("ERROR: You've hit your usage limit. Try again in 2h30m.")).toBe("2h30m");
     // A bare 429 rate-limit is transient, not a quota cutoff -> null.
     expect(q("some progress\nERROR: 429 rate limit exceeded")).toBeNull();
     expect(q("Reviewed the diff.\nFIXED")).toBeNull();
