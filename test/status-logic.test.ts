@@ -824,6 +824,37 @@ describe("identity badges + grammar (Phase 3)", () => {
     expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}codex${RESET}`);
   });
 
+  it("badges a worker's per-worker crew, superseding the build-member badge", () => {
+    // A --crew all-codex worker on a default (all-claude) project: the crew name
+    // shows (it encodes the reviewer), and the standalone member badge does not.
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", harness: "codex", crew: "all-codex" },
+    ]);
+    const line = lineFor(renderQuickStatus(state), "bold-ash");
+    expect(line).toContain(`${GREY}all-codex${RESET}`);      // crew badge shown
+    expect(line).not.toContain(`${GREY}codex${RESET}`);      // member badge suppressed
+  });
+
+  it("shows a per-worker crew badge even when the build harness matches the project (reviewer-only override)", () => {
+    // ⌥i reviewer→codex on a claude worker: entry.crew=claude-codex, harness stays claude.
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", crew: "claude-codex" },
+    ]);
+    expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}claude-codex${RESET}`);
+  });
+
+  it("shows the crew badge only on the FOCUSED project's header", () => {
+    const cfg = { projects: {
+      garden: { path: "/tmp/garden", harness: "codex" },   // active project, non-default crew
+      other: { path: "/tmp/other", harness: "codex" },     // inactive project, non-default crew
+    } };
+    vi.mocked(getWorkers).mockReturnValue([]);
+    const result = renderQuickStatus(state, undefined, cfg);   // state.activeProject === "garden"
+    const header = (name: string) => result.split("\n").find(l => l.includes(name) && l.includes(".")) ?? "";
+    expect(header("garden")).toContain("codex-claude");    // focused → shown
+    expect(header("other")).not.toContain("codex-claude"); // not focused → hidden
+  });
+
   it("omits any identity badge for a plain default worker (default is invisible)", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle" },

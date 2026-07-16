@@ -60,6 +60,11 @@ interface WorkerInfo {
   harness?: string;
   model?: string;
   workflow?: string;
+  // Per-worker crew override (entry.crew). When set and differing from the
+  // project's default crew, the row shows a grey crew badge (which encodes the
+  // reviewer) IN PLACE OF the build-member badge — so a worker with a
+  // non-default reviewer is visible at a glance, not just in the ⌥i menu.
+  crew?: string;
   // Grow loop counter for the workflow-row decoration (grow N/M), the parity
   // fix for trellis's iteration bracket. Undefined for non-grow workers.
   grow?: { iteration: number; maxIterations: number };
@@ -148,6 +153,9 @@ interface RowRenderCtx {
   // provider). A worker whose member differs gets a grey badge.
   projectMember: string;
   projectProvider?: string;
+  // The project's default crew — the baseline a per-worker crew override
+  // (entry.crew) is compared against for the row's crew badge.
+  projectCrew: string;
 }
 
 // The pieces of a worker row, assembled by collectSegments and laid out by
@@ -185,12 +193,18 @@ function collectSegments(worker: WorkerInfo, ctx: RowRenderCtx): RowSegments {
   const baseBadge = ctx.configuredBase !== undefined
     ? formatConfiguredBaseHint(worker.baseBranch, ctx.configuredBase, ctx.missingBases)
     : formatBranchHint(worker.baseBranch, ctx.projectBranch, ctx.showAllBranches);
+  // A per-worker crew override shows the crew name (it encodes both build +
+  // reviewer) and SUPERSEDES the build-member badge, since --crew sets
+  // entry.harness consistently with the crew's worker member — so the member
+  // badge would be redundant. A bare --harness override (no crew) still shows
+  // the member badge.
+  const crewBadge = (worker.crew && worker.crew !== ctx.projectCrew) ? greyBadge(worker.crew) : "";
   const workerMember = workerMemberName(worker.harness, ctx.projectProvider);
-  const memberBadge = workerMember !== ctx.projectMember ? greyBadge(workerMember) : "";
+  const memberBadge = (!crewBadge && workerMember !== ctx.projectMember) ? greyBadge(workerMember) : "";
   const modelBadge = worker.model ? greyBadge(worker.model) : "";
   const decor = workflowRowDecor(worker);
   const workflowBadge = decor.badge ? greyBadge(decor.badge) : "";
-  const badges = [baseBadge, memberBadge, modelBadge, workflowBadge].filter(b => b !== "");
+  const badges = [baseBadge, crewBadge, memberBadge, modelBadge, workflowBadge].filter(b => b !== "");
   const elapsed = formatTimeInState(worker.status, worker.lastStateChangeAt, ctx.now);
   return {
     focus: worker.active ? "●" : "○",
@@ -264,7 +278,10 @@ function renderProjectHeader(h: {
   const marker = h.isActive ? " ◄" : "";
   const displayName = h.isActive ? `\x1b[1;32m${h.name}\x1b[0m` : h.name;
   const baseToken = formatConfiguredBaseToken(h.projectConfig);
-  const crewBadge = h.projectConfig ? formatCrewBadge(h.projectConfig, h.config) : "";
+  // Crew badge only on the FOCUSED project's header — it's context for the
+  // project you're working in, not standing grey across the whole list
+  // (operator call, 2026-07-16). Still hidden for the default all-claude.
+  const crewBadge = (h.isActive && h.projectConfig) ? formatCrewBadge(h.projectConfig, h.config) : "";
   const alert = h.alertCount > 0 ? ` \x1b[33m⚠${h.alertCount}\x1b[0m` : "";
   return `  ${h.index}. ${displayName}${baseToken}${crewBadge}${formatDiaryGlyph(h.name)}${alert}${marker}`;
 }
@@ -376,6 +393,7 @@ export async function status(args: string[]): Promise<void> {
           : collectMissingBases(project.name, projectConfig?.path, definedBases(project.workers)),
         projectMember: projectConfig ? projectWorkerMemberName(projectConfig) : "claude",
         projectProvider: projectConfig?.provider,
+        projectCrew: projectConfig ? (deriveCrew(projectConfig, config) ?? "custom") : "custom",
       };
       const segments = project.workers.map(w => collectSegments(w, ctx));
       const badgeWidth = badgeColumnWidth(segments);
@@ -926,6 +944,7 @@ function collectWorkers(
       harness: entry?.harness,
       model: entry?.model ?? entry?.trellis?.workerModel,
       workflow: entry?.workflow,
+      crew: entry?.crew,
       grow: growInfoFor(entry),
       trellis: trellisInfoFor(entry),
       ci: ciInfoFor(entry),
@@ -949,6 +968,7 @@ function collectWorkers(
       harness: entry?.harness,
       model: entry?.model ?? entry?.trellis?.workerModel,
       workflow: entry?.workflow,
+      crew: entry?.crew,
       grow: growInfoFor(entry),
       trellis: trellisInfoFor(entry),
       ci: ciInfoFor(entry),
@@ -1048,6 +1068,7 @@ export function renderQuickStatus(
           : collectMissingBases(name, projectConfig?.path, definedBases(workers)),
         projectMember: projectConfig ? projectWorkerMemberName(projectConfig) : "claude",
         projectProvider: projectConfig?.provider,
+        projectCrew: projectConfig ? (deriveCrew(projectConfig, config) ?? "custom") : "custom",
       };
       const segments = workers.map(w => collectSegments(w, ctx));
       const badgeWidth = badgeColumnWidth(segments);
