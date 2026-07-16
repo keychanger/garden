@@ -909,6 +909,30 @@ describe("identity badges + grammar (Phase 3)", () => {
     expect(sibling).toBe(baseSibling);
   });
 
+  it("sizes the state column to the widest state on screen (no fixed 13-wide padding)", () => {
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_garden-worker-calm-bay"]);
+    // Two short-state rows: the state cell should hug "idle" (2-space separator
+    // to the detail), not reserve the 13 columns only "reviewing 12m" needs.
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "wiring auth", agentStatus: "idle" },
+      { name: "calm-bay", sessionId: "b", task: "serving data", agentStatus: "idle" },
+    ]);
+    const compact = lineFor(renderQuickStatus(state), "bold-ash");
+    expect(compact).toContain("idle  wiring auth");
+
+    // Put one worker in a long elapsed-bearing state. The column widens for the
+    // whole project (it's shared, so the detail column stays aligned), pushing
+    // the still-idle worker's detail right — the tradeoff for the compact case.
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "wiring auth", agentStatus: "idle" },
+      { name: "calm-bay", sessionId: "b", task: "serving data", prState: "reviewing",
+        lastStateChangeAt: Date.now() - 12 * 60_000 },
+    ]);
+    const widened = lineFor(renderQuickStatus(state), "bold-ash");
+    expect(widened).not.toContain("idle  wiring auth");
+    expect(widened.indexOf("wiring auth")).toBeGreaterThan(compact.indexOf("wiring auth"));
+  });
+
   it("renders grow N/M in the detail column (parity with the trellis counter)", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "a", task: "polishing", agentStatus: "working",

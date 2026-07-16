@@ -207,12 +207,11 @@ function collectSegments(worker: WorkerInfo, ctx: RowRenderCtx): RowSegments {
   const decor = workflowRowDecor(worker);
   const workflowBadge = decor.badge ? greyBadge(decor.badge) : "";
   const badges = [baseBadge, crewBadge, memberBadge, workflowBadge].filter(b => b !== "");
-  const elapsed = formatTimeInState(worker.status, worker.lastStateChangeAt, ctx.now);
   return {
     focus: worker.active ? "●" : "○",
     icon: iconFor(worker),
     name: worker.name,
-    state: `${formatStatus(worker)}${elapsed}`,
+    state: stateCell(worker, ctx.now),
     badges,
     detail: decor.detail ?? (worker.activity ?? ""),
     // Model rides at the END of the row, after the detail column, not in the
@@ -366,15 +365,16 @@ export async function status(args: string[]): Promise<void> {
     return;
   }
 
+  // One clock read per render so every row's elapsed suffix — and the state
+  // column width derived from it — is consistent, and one alert-store read so
+  // every header's ⚠n count is consistent.
+  const now = Date.now();
   const allWorkers = statuses.flatMap(p => p.workers);
   const nameWidth = Math.max(10, ...allWorkers.map(w => w.name.length));
-  const statusWidth = STATUS_WIDTH;
+  const statusWidth = computeStatusWidth(allWorkers, now);
   const cols = process.stdout.columns || 120;
   const detailMax = Math.max(20, cols - (8 + nameWidth + 2 + statusWidth + 2));
 
-  // One clock read per render so every row's elapsed suffix is consistent, and
-  // one alert-store read so every header's ⚠n count is consistent.
-  const now = Date.now();
   const acConfig = getAutoContinueConfig(config);
   const alertCounts = unreadAlertCountsByProject();
 
@@ -422,13 +422,41 @@ export async function status(args: string[]): Promise<void> {
   console.log("");
 }
 
-// Wide enough for the widest state word ("resolving", 9) plus a folded-in
-// elapsed suffix (" 12m" / " 47m", 4) — "reviewing 12m" is 13 columns.
-const STATUS_WIDTH = 13;
+// Floor for the state column so an empty (or all-tiny) fleet still has a sane
+// width — "done"/"idle" is 4. The column otherwise sizes to the widest state
+// cell actually on screen (see computeStatusWidth), rather than reserving the
+// 13 columns only the longest transient state ("reviewing 12m") ever needs.
+const STATUS_MIN_WIDTH = 4;
 
 function formatStatus(worker: WorkerInfo): string {
   if (worker.status === "merge-pending") return "merging";
   return worker.status;
+}
+
+// The state cell: the state word plus the folded-in dim elapsed-in-state suffix
+// (e.g. "reviewing 12m"). Shared by collectSegments (which renders it) and
+// computeStatusWidth (which measures it) so the measured width and the rendered
+// text can never drift.
+function stateCell(worker: WorkerInfo, now: number): string {
+  return `${formatStatus(worker)}${formatTimeInState(worker.status, worker.lastStateChangeAt, now)}`;
+}
+
+// Width of the state column: the widest state cell across ALL workers on screen,
+// floored. Sized like the name column (max over the workers actually shown, not
+// a worst-case constant) so a fleet of short `done`/`idle` rows doesn't reserve
+// the 13 columns only "reviewing 12m" needs — that reserved-but-unused width was
+// the dead space between the state and the description. Global (every project's
+// workers) so the detail column stays aligned across projects, matching how
+// nameWidth is computed. ANSI-aware via visibleWidth (the elapsed suffix is
+// colored). Recomputed each bake, so as the sole long state clears the column
+// tightens on the next refresh (the watchdog's 60s re-bake, or any transition).
+function computeStatusWidth(workers: WorkerInfo[], now: number): number {
+  let max = STATUS_MIN_WIDTH;
+  for (const w of workers) {
+    const width = visibleWidth(stateCell(w, now));
+    if (width > max) max = width;
+  }
+  return max;
 }
 
 function colorizeRow(status: WorkerStatus, line: string): string {
@@ -1031,13 +1059,14 @@ export function renderQuickStatus(
     return workers;
   });
 
+  // One clock read per bake so every row's elapsed suffix — and the state
+  // column width derived from it — is consistent.
+  const now = Date.now();
   const nameWidth = Math.max(10, ...allWorkers.map(w => w.name.length));
-  const statusWidth = STATUS_WIDTH;
+  const statusWidth = computeStatusWidth(allWorkers, now);
 
   const projectBranches = names.map(n => resolveProjectBranch(n, config));
 
-  // One clock read per bake so every row's elapsed suffix is consistent.
-  const now = Date.now();
   // Global auto-continue gate — read once (from the already-loaded config, no
   // extra IO) so `merged` rows can flag when the gate is holding them parked.
   const acConfig = getAutoContinueConfig(config);
