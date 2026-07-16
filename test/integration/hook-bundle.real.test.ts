@@ -16,7 +16,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-// Ceiling above today's ~200kb minified production bundle (minify +
+// Ceiling above today's ~216kb minified production bundle (minify +
 // keep-names): trips on the ~28kb step a retained adapter/skills closure adds,
 // not on routine drift. The precise detector for that regression is
 // SKILLS_BYTES_CEILING below (it reads skills.ts's bytesInOutput straight from
@@ -24,8 +24,12 @@ import path from "node:path";
 // large retained closure. renderQuickStatus and its row-render helpers are
 // import-reachable from the hook graph via header.ts, so incremental status-pane
 // work lands here — a future extraction of the render path out of the commands
-// layer would shrink this back down.
-const HOOK_BUNDLE_CEILING_BYTES = 216 * 1024;
+// layer would shrink this back down. Bumped 216->220kb for the OPERATOR-UI
+// status-pane grammar (Phase 3: identity badges, ANSI-aware width helpers,
+// workflow row decoration, per-project alert counts) — legitimate render code,
+// not a retained closure. The ~28kb regression this guard exists for is still
+// caught by SKILLS_BYTES_CEILING and by the remaining ~3.5kb of coarse headroom.
+const HOOK_BUNDLE_CEILING_BYTES = 220 * 1024;
 // skills.ts contributes only a tree-shaken sliver today (<100 bytes); a
 // retained skills bundle is ~28kb. The threshold sits well between.
 const SKILLS_BYTES_CEILING = 2 * 1024;

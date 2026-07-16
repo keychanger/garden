@@ -15,7 +15,8 @@ import { listHiddenWorkerWindows, windowExists, getFirstPaneId, getPaneTitle } f
 import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/window-names.js";
 import { currentBranchFast, branchExistsOnOrigin } from "../dashboard/git.js";
 import { diaryHasContent } from "../diary.js";
-import { deriveCrew } from "../dashboard/crew.js";
+import { deriveCrew, workerMemberName, projectWorkerMemberName } from "../dashboard/crew.js";
+import { unreadAlertCountsByProject } from "../dashboard/alerts.js";
 import type { GardenConfig, ProjectConfig } from "../config.js";
 
 // Display states from STATUS.md. These are the only values the renderer ever
@@ -50,6 +51,18 @@ interface WorkerInfo {
   // they diverge — that mismatch is the leading indicator of the
   // "did not fast-forward after merge" alert pattern.
   baseBranch?: string;
+  // Identity fields for the grey override-only badge cluster. The worker's
+  // harness (a member badge shows when it differs from the project's default
+  // member), the pinned model (default/grow use entry.model, vines use
+  // trellis.workerModel), and the workflow (drives workflowRowDecor). All
+  // undefined for a plain default-workflow worker on the account default, in
+  // which case no badge renders — default is invisible.
+  harness?: string;
+  model?: string;
+  workflow?: string;
+  // Grow loop counter for the workflow-row decoration (grow N/M), the parity
+  // fix for trellis's iteration bracket. Undefined for non-grow workers.
+  grow?: { iteration: number; maxIterations: number };
   // Trellis-specific decoration fields. Populated only when
   // entry.workflow === "trellis"; default workers leave them undefined
   // and the renderer omits the bracket.
@@ -114,15 +127,15 @@ function iconFor(worker: WorkerInfo): string {
 }
 
 // The per-render context a worker row needs beyond the worker itself. Both
-// render paths build one of these per project: the TTY path sets activityMax
-// (so formatRowTail truncates the activity substring to fit); the baked path
-// leaves it undefined and hard-caps the whole line by visible width later.
+// render paths build one of these per project. `detailMax` (TTY) and `cap`
+// (baked) bound the row width; `projectMember`/`projectProvider` are the
+// baseline the per-worker member badge is compared against (both computed once
+// per project).
 interface RowRenderCtx {
   now: number;
   gateClosed: boolean;
   projectBranch: string | null | undefined;
   showAllBranches: boolean;
-  activityMax?: number;
   // Phase 2 — explicit baseBranch. When the project has a configured base,
   // the row uses the per-worker override semantics (grey = deliberate
   // override, yellow = base missing from origin) and ignores showAllBranches;
@@ -131,67 +144,129 @@ interface RowRenderCtx {
   // (formatBranchHint + showAllBranches) byte-identical.
   configuredBase?: string;
   missingBases?: ReadonlySet<string>;
+  // Phase 3 — the member the project's default worker resolves to (harness +
+  // provider). A worker whose member differs gets a grey badge.
+  projectMember: string;
+  projectProvider?: string;
 }
 
-// The pieces of a worker row, assembled once by collectSegments and laid out
-// by renderWorkerRow. Splitting collection from layout is what lets the TTY
-// and baked paths share one row definition instead of two drifting loops.
+// The pieces of a worker row, assembled by collectSegments and laid out by
+// renderWorkerRow. Splitting collection from layout is what lets the TTY and
+// baked paths share one row definition. The grammar (OPERATOR-UI.md Part 1):
+// core (focus/icon/name/state) and flags are status-class and never drop;
+// badges are grey identity, override-only, and drop as a unit before detail is
+// lost; detail is the elastic column that truncates first.
 interface RowSegments {
   focus: string;
   icon: string;
-  name: string;   // unpadded; renderWorkerRow pads to the column width
-  state: string;  // formatStatus output, unpadded
-  detail: string; // formatRowTail: trellis/CI bracket + activity + base hint
-  flags: string;  // end-of-row status suffixes (elapsed, gate)
+  name: string;    // unpadded; renderWorkerRow pads to the column width
+  state: string;   // formatStatus + the elapsed-in-state suffix, folded in
+  badges: string[]; // grey identity cluster (base, member, model, workflow)
+  detail: string;  // activity or the workflow bracket — the elastic column
+  flags: string;   // status-class end-of-row (gate, CI bracket)
   status: WorkerStatus;
   stale: boolean;
 }
 
+// A grey (metadata) identity badge. Base badges are pre-styled by the branch-
+// hint helpers (grey or yellow); member/model wear this uniform grey.
+function greyBadge(text: string): string {
+  return `\x1b[90m${text}\x1b[0m`;
+}
+
+// Below this many columns of detail budget, drop the badge cluster as a unit so
+// the detail (what the worker is doing) isn't squeezed to nothing on a narrow
+// pane — the "badges drop before detail is lost" half of the truncation rule.
+const DETAIL_MIN_WIDTH = 12;
+
 // Build the row segments for one worker. Pure over (worker, ctx) — no I/O — so
-// both paths call it and stay byte-identical by construction.
+// both paths call it and stay identical by construction.
 function collectSegments(worker: WorkerInfo, ctx: RowRenderCtx): RowSegments {
-  const baseHint = ctx.configuredBase !== undefined
+  const baseBadge = ctx.configuredBase !== undefined
     ? formatConfiguredBaseHint(worker.baseBranch, ctx.configuredBase, ctx.missingBases)
     : formatBranchHint(worker.baseBranch, ctx.projectBranch, ctx.showAllBranches);
+  const workerMember = workerMemberName(worker.harness, ctx.projectProvider);
+  const memberBadge = workerMember !== ctx.projectMember ? greyBadge(workerMember) : "";
+  const modelBadge = worker.model ? greyBadge(worker.model) : "";
+  const decor = workflowRowDecor(worker);
+  const workflowBadge = decor.badge ? greyBadge(decor.badge) : "";
+  const badges = [baseBadge, memberBadge, modelBadge, workflowBadge].filter(b => b !== "");
   const elapsed = formatTimeInState(worker.status, worker.lastStateChangeAt, ctx.now);
-  const gate = formatGateSuffix(worker.status, ctx.gateClosed);
   return {
     focus: worker.active ? "●" : "○",
     icon: iconFor(worker),
     name: worker.name,
-    state: formatStatus(worker),
-    detail: formatRowTail(worker, baseHint, ctx.activityMax),
-    flags: `${elapsed}${gate}`,
+    state: `${formatStatus(worker)}${elapsed}`,
+    badges,
+    detail: decor.detail ?? (worker.activity ?? ""),
+    flags: `${formatGateSuffix(worker.status, ctx.gateClosed)}${formatCiBracket(worker.ci)}`,
     status: worker.status,
     stale: worker.stale,
   };
 }
 
 // Lay out a worker row from its segments. The single place row column order,
-// coloring, and staleness dimming are decided — shared by both render paths.
-function renderWorkerRow(seg: RowSegments, dims: { nameWidth: number; stateWidth: number }): string {
-  const wname = seg.name.padEnd(dims.nameWidth);
-  const wstatus = seg.state.padEnd(dims.stateWidth);
-  const line = `    ${seg.focus} ${seg.icon} ${wname}  ${wstatus}${seg.detail}${seg.flags}`;
+// truncation priority, coloring, and staleness dimming are decided — shared by
+// both render paths. `cap` (baked) enforces the truncation grammar; `detailMax`
+// (TTY) is a soft detail bound; badgeWidth is the shared identity-column width.
+function renderWorkerRow(
+  seg: RowSegments,
+  dims: { nameWidth: number; stateWidth: number; badgeWidth: number; cap?: number; detailMax?: number },
+): string {
+  const core = `    ${seg.focus} ${seg.icon} ${padEndVisible(seg.name, dims.nameWidth)}  ${padEndVisible(seg.state, dims.stateWidth)}`;
+  let badgeCell = dims.badgeWidth > 0 ? `  ${padEndVisible(seg.badges.join("  "), dims.badgeWidth)}` : "";
+  let detail = seg.detail;
+
+  // Detail budget: baked (cap) derives it so core + flags never drop and badges
+  // drop as a unit before detail is lost; TTY uses detailMax as a soft bound.
+  let budget = dims.detailMax;
+  if (dims.cap !== undefined) {
+    const fixed = visibleWidth(core) + visibleWidth(seg.flags);
+    budget = dims.cap - fixed - (dims.badgeWidth > 0 ? dims.badgeWidth + 2 : 0) - (detail ? 2 : 0);
+    if (budget < DETAIL_MIN_WIDTH && dims.badgeWidth > 0) {
+      badgeCell = "";
+      budget = dims.cap - fixed - (detail ? 2 : 0);
+    }
+  }
+  if (budget !== undefined && detail && visibleWidth(detail) > budget) {
+    detail = truncateToVisibleWidth(detail, Math.max(0, budget));
+  }
+
+  const detailCell = detail ? `  ${detail}` : "";
+  const line = `${core}${badgeCell}${detailCell}${seg.flags}`;
   const colored = colorizeRow(seg.status, line);
   return seg.stale ? dimRow(colored) : colored;
 }
 
-// Render a project header row. Shared by both paths — the CLI path previously
-// omitted the crew badge (the drift this unification fixes), so a project's
-// crew now shows in `garden status` exactly as it does in the dashboard pane.
+// The identity-badge column width for a project: the widest joined badge
+// cluster over its rendered rows (0 when no worker overrides anything, so a
+// default project has no badge column at all — default is invisible).
+function badgeColumnWidth(segments: RowSegments[]): number {
+  let max = 0;
+  for (const s of segments) {
+    const w = visibleWidth(s.badges.join("  "));
+    if (w > max) max = w;
+  }
+  return max;
+}
+
+// Render a project header row. Shared by both paths. Layout (OPERATOR-UI.md
+// Part 1): `<n>. <name> <⋅base> <crew> ✎ ⚠n ◄` — grey identity tokens, then
+// the yellow unread-alert count, then the active marker.
 function renderProjectHeader(h: {
   index: number;
   name: string;
   isActive: boolean;
   projectConfig: ProjectConfig | undefined;
   config: GardenConfig;
+  alertCount: number;
 }): string {
   const marker = h.isActive ? " ◄" : "";
   const displayName = h.isActive ? `\x1b[1;32m${h.name}\x1b[0m` : h.name;
   const baseToken = formatConfiguredBaseToken(h.projectConfig);
   const crewBadge = h.projectConfig ? formatCrewBadge(h.projectConfig, h.config) : "";
-  return `  ${h.index}. ${displayName}${baseToken}${crewBadge}${formatDiaryGlyph(h.name)}${marker}`;
+  const alert = h.alertCount > 0 ? ` \x1b[33m⚠${h.alertCount}\x1b[0m` : "";
+  return `  ${h.index}. ${displayName}${baseToken}${crewBadge}${formatDiaryGlyph(h.name)}${alert}${marker}`;
 }
 
 // Refresh all workers' task fields from their live tmux pane titles. Called
@@ -261,29 +336,32 @@ export async function status(args: string[]): Promise<void> {
   const nameWidth = Math.max(10, ...allWorkers.map(w => w.name.length));
   const statusWidth = STATUS_WIDTH;
   const cols = process.stdout.columns || 120;
-  const activityMax = Math.max(20, cols - (8 + nameWidth + 2 + statusWidth + 2));
+  const detailMax = Math.max(20, cols - (8 + nameWidth + 2 + statusWidth + 2));
 
-  // One clock read per render so every row's elapsed suffix is consistent.
+  // One clock read per render so every row's elapsed suffix is consistent, and
+  // one alert-store read so every header's ⚠n count is consistent.
   const now = Date.now();
   const acConfig = getAutoContinueConfig(config);
+  const alertCounts = unreadAlertCountsByProject();
 
   console.log("");
   for (let pi = 0; pi < statuses.length; pi++) {
     if (pi > 0) console.log("");
     const project = statuses[pi];
+    const projectConfig = config.projects[project.name];
     const gateClosed = gateHoldsProject(acConfig, project.name, config);
     console.log(renderProjectHeader({
       index: project.index,
       name: project.name,
       isActive: project.isActive,
-      projectConfig: config.projects[project.name],
+      projectConfig,
       config,
+      alertCount: alertCounts.get(project.name) ?? 0,
     }));
 
     if (project.workers.length === 0) {
       console.log("    (no workers)");
     } else {
-      const projectConfig = config.projects[project.name];
       const configuredBase = projectConfig?.baseBranch;
       const ctx: RowRenderCtx = {
         now,
@@ -292,26 +370,26 @@ export async function status(args: string[]): Promise<void> {
         showAllBranches: configuredBase === undefined
           ? projectHasBranchDivergence(project.workers, project.projectBranch)
           : false,
-        activityMax,
         configuredBase,
         missingBases: configuredBase === undefined
           ? undefined
           : collectMissingBases(project.name, projectConfig?.path, definedBases(project.workers)),
+        projectMember: projectConfig ? projectWorkerMemberName(projectConfig) : "claude",
+        projectProvider: projectConfig?.provider,
       };
-      for (const worker of project.workers) {
-        console.log(renderWorkerRow(collectSegments(worker, ctx), { nameWidth, stateWidth: statusWidth }));
+      const segments = project.workers.map(w => collectSegments(w, ctx));
+      const badgeWidth = badgeColumnWidth(segments);
+      for (const seg of segments) {
+        console.log(renderWorkerRow(seg, { nameWidth, stateWidth: statusWidth, badgeWidth, detailMax }));
       }
     }
   }
   console.log("");
 }
 
-function truncateActivity(text: string, maxLen: number): string {
-  if (text.length <= maxLen) return text;
-  return text.slice(0, maxLen - 1) + "\u2026";
-}
-
-const STATUS_WIDTH = 9; // "resolving" / "reviewing" are the widest
+// Wide enough for the widest state word ("resolving", 9) plus a folded-in
+// elapsed suffix (" 12m" / " 47m", 4) — "reviewing 12m" is 13 columns.
+const STATUS_WIDTH = 13;
 
 function formatStatus(worker: WorkerInfo): string {
   if (worker.status === "merge-pending") return "merging";
@@ -372,15 +450,18 @@ function codePointWidth(cp: number): number {
 // second terminal line, which desyncs the in-place repaint (the rendered line
 // count no longer matches the displayed height) and corrupts the pane on the
 // next refresh.
+// A single CSI escape sequence anchored at the string start — shared by the two
+// ANSI-aware width scanners below (status rows carry only CSI color codes).
+const CSI_SEQ = /^\x1b\[[0-9;?]*[ -/]*[@-~]/;
+
 export function truncateToVisibleWidth(s: string, maxWidth: number): string {
-  const CSI = /^\x1b\[[0-9;?]*[ -/]*[@-~]/;
   let out = "";
   let visible = 0;
   let sawEscape = false;
   let i = 0;
   while (i < s.length) {
     if (s[i] === "\x1b") {
-      const m = CSI.exec(s.slice(i));
+      const m = CSI_SEQ.exec(s.slice(i));
       if (m) { out += m[0]; sawEscape = true; i += m[0].length; continue; }
     }
     const cp = s.codePointAt(i)!;
@@ -391,6 +472,34 @@ export function truncateToVisibleWidth(s: string, maxWidth: number): string {
     i += cp > 0xffff ? 2 : 1;
   }
   return out;
+}
+
+// Visible column width of a string, ignoring CSI escape sequences (they render
+// zero-width). The width-aware analog of `String.length` for padding rows that
+// carry ANSI — `String.padEnd` counts escape bytes and over-pads, so once a
+// column holds colored content (the elapsed suffix, the identity badges) plain
+// padEnd misaligns every following column.
+export function visibleWidth(s: string): number {
+  let width = 0;
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] === "\x1b") {
+      const m = CSI_SEQ.exec(s.slice(i));
+      if (m) { i += m[0].length; continue; }
+    }
+    const cp = s.codePointAt(i)!;
+    width += codePointWidth(cp);
+    i += cp > 0xffff ? 2 : 1;
+  }
+  return width;
+}
+
+// Right-pad `s` with spaces to `width` visible columns (no-op if already at
+// least that wide). ANSI-aware via visibleWidth so a colored cell lands in a
+// fixed column.
+function padEndVisible(s: string, width: number): string {
+  const pad = width - visibleWidth(s);
+  return pad > 0 ? s + " ".repeat(pad) : s;
 }
 
 // Combine agentStatus and prState into a single display state.
@@ -454,6 +563,16 @@ function trellisInfoFor(entry?: { workflow?: string; trellis?: { name: string; i
   };
 }
 
+// Distill the grow loop counter off a registry entry. Returns undefined for
+// non-grow workers — the parity counterpart of trellisInfoFor.
+function growInfoFor(entry?: { workflow?: string; grow?: { iteration?: number; maxIterations?: number } }): WorkerInfo["grow"] {
+  if (!entry || entry.workflow !== "grow") return undefined;
+  return {
+    iteration: entry.grow?.iteration ?? 0,
+    maxIterations: entry.grow?.maxIterations ?? 0,
+  };
+}
+
 // Format the CI bracket for a default-workflow row when the worker is in
 // `ci-fixing` (auto-fix in flight) or `failing` with reason `ci` (auto-fix
 // exhausted). Trellis vines route through formatTrellisBracket above and
@@ -509,21 +628,25 @@ export function formatTrellisBracket(t: WorkerInfo["trellis"]): string {
   return `[trellis: ${t.name} | ${iterStr}${driftSeg}]`;
 }
 
-// Compose the row segment that trails the status column. Trellis vines show
-// only their bracket — placed in the activity slot (two spaces after the
-// status, matching the activity column) so its "[" lines up with the
-// description text on sibling rows — and drop the live activity, which
-// restates the trellis name. A branch hint still trails the bracket when the
-// worker's pinned base diverges from the checkout (a real warning, not
-// redundant). Default/grow rows keep the CI bracket + activity.
-function formatRowTail(worker: WorkerInfo, baseHint: string, activityMax?: number): string {
-  const trellis = formatTrellisBracket(worker.trellis);
-  if (trellis) return `  ${trellis}${baseHint}`;
-  const ciBracket = formatCiBracket(worker.ci);
-  const text = worker.activity
-    ? `  ${activityMax !== undefined ? truncateActivity(worker.activity, activityMax) : worker.activity}`
-    : "";
-  return `${ciBracket}${text}${baseHint}`;
+// Per-workflow row decoration, keyed on entry.workflow — the leaf-function form
+// of the WorkflowDefinition.renderRow primitive named in WORKFLOWS.md "Worker
+// row". It reads only WorkerInfo data and MUST NOT reach into
+// src/dashboard/workflows/: a `getWorkflow(...).renderRow` call would drag the
+// full poller graph into status.ts's import closure (used by `garden status`,
+// plot-status.ts, and the dist/hook.js bundle) — the exact boundary
+// CI_FIX_BUDGET_DISPLAY is inlined to preserve. `detail` fills the elastic
+// detail column; a vine shows its bracket, a grow loop its "grow N/M" counter
+// (the parity fix — trellis had a counter, grow had nothing). `badge` (unused
+// today; trellis/grow self-identify in detail) would join the grey cluster.
+function workflowRowDecor(worker: WorkerInfo): { badge?: string; detail?: string } {
+  switch (worker.workflow) {
+    case "trellis":
+      return { detail: formatTrellisBracket(worker.trellis) };
+    case "grow":
+      return { detail: `grow ${worker.grow?.iteration ?? 0}/${worker.grow?.maxIterations ?? 0}` };
+    default:
+      return {};
+  }
 }
 
 // Look up the project's currently checked-out branch. Returns null if the
@@ -616,8 +739,8 @@ function formatBranchHint(
   showMatching: boolean,
 ): string {
   if (!workerBase || !projectBranch) return "";
-  if (workerBase !== projectBranch) return ` \x1b[33m→ ${workerBase}\x1b[0m`;
-  if (showMatching) return ` \x1b[90m→ ${workerBase}\x1b[0m`;
+  if (workerBase !== projectBranch) return `\x1b[33m→ ${workerBase}\x1b[0m`;
+  if (showMatching) return `\x1b[90m→ ${workerBase}\x1b[0m`;
   return "";
 }
 
@@ -645,8 +768,8 @@ function formatConfiguredBaseHint(
   missingBases: ReadonlySet<string> | undefined,
 ): string {
   if (!workerBase) return "";
-  if (missingBases?.has(workerBase)) return ` \x1b[33m→ ${workerBase}\x1b[0m`;
-  if (workerBase !== configuredBase) return ` \x1b[90m→ ${workerBase}\x1b[0m`;
+  if (missingBases?.has(workerBase)) return `\x1b[33m→ ${workerBase}\x1b[0m`;
+  if (workerBase !== configuredBase) return `\x1b[90m→ ${workerBase}\x1b[0m`;
   return "";
 }
 
@@ -675,10 +798,14 @@ function formatDiaryGlyph(projectName: string): string {
 // Quiet grey crew badge on a project's header row — which harness/provider
 // pair builds and reviews this project's fleet. Same metadata-not-status
 // styling as the diary glyph. "custom" when the roles are hand-tuned past a
-// named crew. Read from the already-loaded config, so no extra IO per bake.
+// named crew. The default `all-claude` crew is HIDDEN (identity default is
+// invisible, per OPERATOR-UI.md Part 1) so an all-Claude fleet's headers stay
+// quiet; every other crew — including "custom" — shows. Read from the
+// already-loaded config, so no extra IO per bake.
 function formatCrewBadge(project: ProjectConfig, config: GardenConfig): string {
-  const crew = deriveCrew(project, config) ?? "custom";
-  return ` \x1b[90m${crew}\x1b[0m`;
+  const crew = deriveCrew(project, config);
+  if (crew === "all-claude") return "";
+  return ` \x1b[90m${crew ?? "custom"}\x1b[0m`;
 }
 
 function colorizeIteration(iter: number, max: number): string {
@@ -795,6 +922,10 @@ function collectWorkers(
       stale: entry ? isWorkerStale(entry) : false,
       failCount: entry?.failCount ?? 0,
       baseBranch: entry?.baseBranch,
+      harness: entry?.harness,
+      model: entry?.model ?? entry?.trellis?.workerModel,
+      workflow: entry?.workflow,
+      grow: growInfoFor(entry),
       trellis: trellisInfoFor(entry),
       ci: ciInfoFor(entry),
     });
@@ -814,6 +945,10 @@ function collectWorkers(
       stale: entry ? isWorkerStale(entry) : false,
       failCount: entry?.failCount ?? 0,
       baseBranch: entry?.baseBranch,
+      harness: entry?.harness,
+      model: entry?.model ?? entry?.trellis?.workerModel,
+      workflow: entry?.workflow,
+      grow: growInfoFor(entry),
       trellis: trellisInfoFor(entry),
       ci: ciInfoFor(entry),
     });
@@ -868,26 +1003,36 @@ export function renderQuickStatus(
   // Global auto-continue gate — read once (from the already-loaded config, no
   // extra IO) so `merged` rows can flag when the gate is holding them parked.
   const acConfig = getAutoContinueConfig(config);
+  // One alert-store read per bake so every header's ⚠n count is consistent.
+  const alertCounts = unreadAlertCountsByProject();
+  // Per-row width cap (a 2-column margin for terminals that render the
+  // ambiguous-width focus/icon glyphs double-wide). Threaded into renderWorkerRow
+  // so the truncation grammar (drop detail, then badges; keep core + flags) runs
+  // per row; the trailing .map() cap is the backstop for headers + any overflow.
+  // Undefined without paneWidth (the height-only create.ts callers) — rows stay
+  // uncapped, and the line COUNT is identical either way.
+  const cap = paneWidth && paneWidth > 0 ? Math.max(1, paneWidth - 2) : undefined;
 
   lines.push("");
   for (let pi = 0; pi < names.length; pi++) {
     if (pi > 0) lines.push("");
     const name = names[pi];
+    const projectConfig = config.projects[name];
     const gateClosed = gateHoldsProject(acConfig, name, config);
     const projectBranch = projectBranches[pi];
     lines.push(renderProjectHeader({
       index: pi + 1,
       name,
       isActive: state.activeProject === name,
-      projectConfig: config.projects[name],
+      projectConfig,
       config,
+      alertCount: alertCounts.get(name) ?? 0,
     }));
 
     const workers = projectWorkers[pi];
     if (workers.length === 0) {
       lines.push("    (no workers)");
     } else {
-      const projectConfig = config.projects[name];
       const configuredBase = projectConfig?.baseBranch;
       const ctx: RowRenderCtx = {
         now,
@@ -896,26 +1041,26 @@ export function renderQuickStatus(
         showAllBranches: configuredBase === undefined
           ? projectHasBranchDivergence(workers, projectBranch)
           : false,
-        activityMax: undefined,
         configuredBase,
         missingBases: configuredBase === undefined
           ? undefined
           : collectMissingBases(name, projectConfig?.path, definedBases(workers)),
+        projectMember: projectConfig ? projectWorkerMemberName(projectConfig) : "claude",
+        projectProvider: projectConfig?.provider,
       };
-      for (const worker of workers) {
-        lines.push(renderWorkerRow(collectSegments(worker, ctx), { nameWidth, stateWidth: statusWidth }));
+      const segments = workers.map(w => collectSegments(w, ctx));
+      const badgeWidth = badgeColumnWidth(segments);
+      for (const seg of segments) {
+        lines.push(renderWorkerRow(seg, { nameWidth, stateWidth: statusWidth, badgeWidth, cap }));
       }
     }
   }
   lines.push("");
 
-  // Hard-cap each line to the pane width (with a 2-column margin for terminals
-  // that render the ambiguous-width focus/icon glyphs double-wide) so no row
-  // wraps, then append clear-to-end-of-line so the status pane can overwrite in
-  // place without full screen clears (avoids flashing). Without paneWidth (the
-  // height-only callers in create.ts) rows are left uncapped — the line COUNT
-  // is identical either way, so their height math is unaffected.
-  const cap = paneWidth && paneWidth > 0 ? Math.max(1, paneWidth - 2) : undefined;
+  // Backstop cap on every line (headers included) + clear-to-end-of-line so the
+  // pane can overwrite in place without a full clear (avoids flashing). Worker
+  // rows already fit within `cap` via renderWorkerRow, so this only trims a
+  // header that ran long.
   return lines
     .map(l => (cap !== undefined ? truncateToVisibleWidth(l, cap) : l) + "\x1b[K")
     .join("\n");

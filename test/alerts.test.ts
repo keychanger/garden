@@ -47,7 +47,7 @@ vi.mock("node:crypto", () => ({
 import fs from "node:fs";
 import {
   readAlerts, addAlert, clearAlerts, alertCount,
-  unreadAlertCount, acknowledgeAlerts, formatRightBar,
+  unreadAlertCount, unreadAlertCountsByProject, acknowledgeAlerts, formatRightBar,
 } from "../src/dashboard/alerts.js";
 import { log } from "../src/dashboard/log.js";
 import { withFileLock } from "../src/dashboard/file-lock.js";
@@ -348,6 +348,34 @@ describe("unreadAlertCount", () => {
     };
     vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(data));
     expect(unreadAlertCount()).toBe(1);
+  });
+});
+
+describe("unreadAlertCountsByProject", () => {
+  it("buckets unread alerts by project, respecting the global lastSeenAt", () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    const data = {
+      alerts: [
+        { id: "1", ts: "2026-01-01T00:00:00Z", level: "warn", source: "s", project: "lex", message: "m" },  // read
+        { id: "2", ts: "2026-01-03T00:00:00Z", level: "warn", source: "s", project: "lex", message: "m" },   // unread
+        { id: "3", ts: "2026-01-04T00:00:00Z", level: "error", source: "s", project: "lex", message: "m" },  // unread
+        { id: "4", ts: "2026-01-03T00:00:00Z", level: "warn", source: "s", project: "web", message: "m" },   // unread
+      ],
+      lastSeenAt: "2026-01-02T00:00:00Z",
+    };
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(data));
+    const counts = unreadAlertCountsByProject();
+    expect(counts.get("lex")).toBe(2);
+    expect(counts.get("web")).toBe(1);
+  });
+
+  it("is empty when every alert predates lastSeenAt", () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      alerts: [{ id: "1", ts: "2026-01-01T00:00:00Z", level: "warn", source: "s", project: "lex", message: "m" }],
+      lastSeenAt: "2026-06-01T00:00:00Z",
+    }));
+    expect(unreadAlertCountsByProject().size).toBe(0);
   });
 });
 

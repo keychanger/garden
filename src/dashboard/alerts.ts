@@ -198,6 +198,21 @@ export function unreadAlertCount(): number {
   return store.alerts.filter(a => a.ts > store.lastSeenAt!).length;
 }
 
+// Per-project counts of unread alerts (added since the last ⌥l ack), so the
+// status pane can badge "⚠n" on each project header. The store is read once;
+// the ack (lastSeenAt) is global, so ⌥l clears every project's badge at once
+// (a documented limitation — there is no per-project seen-state).
+export function unreadAlertCountsByProject(): Map<string, number> {
+  const store = readAlerts();
+  const since = store.lastSeenAt;
+  const counts = new Map<string, number>();
+  for (const a of store.alerts) {
+    if (since && a.ts <= since) continue;
+    counts.set(a.project, (counts.get(a.project) ?? 0) + 1);
+  }
+  return counts;
+}
+
 // Marks all current alerts as seen. Called exclusively from focusLogs (⌥l).
 // Intentionally not auto-triggered by "logs already focused when alert fires" —
 // garden often runs autonomously while the user is away, and a silent ack

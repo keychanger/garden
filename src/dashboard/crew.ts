@@ -81,6 +81,21 @@ function memberFor(harness: string, provider: string | undefined): CrewMember {
   return provider ? { name: provider, harness, provider } : { name: harnessMemberName(harness), harness };
 }
 
+// The operator-facing member name for a WORKER with the given harness, under a
+// project's provider. Provider only applies to the claude-code harness (it is
+// an Anthropic-compatible env swap); a foreign harness (codex) ignores it. Used
+// by the status pane to badge a worker whose member differs from the project's.
+export function workerMemberName(harness: string | undefined, provider: string | undefined): string {
+  const h = harness ?? DEFAULT_HARNESS;
+  return memberFor(h, h === DEFAULT_HARNESS ? provider : undefined).name;
+}
+
+// The member name a project's default worker resolves to (its harness + its
+// provider) — the baseline the per-worker badge is compared against.
+export function projectWorkerMemberName(project: Pick<ProjectConfig, "harness" | "provider">): string {
+  return workerMemberName(project.harness, project.provider);
+}
+
 // The crew a project currently resolves to, or null when its role assignment
 // doesn't match a named crew (hand-tuned config — e.g. the reviewer/resolver/
 // ci-fix harnesses diverge). Only the role *harnesses* are compared: per-role

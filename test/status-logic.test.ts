@@ -66,6 +66,10 @@ vi.mock("../src/dashboard/git.js", () => ({
   branchExistsOnOrigin: vi.fn(() => true),
 }));
 
+vi.mock("../src/dashboard/alerts.js", () => ({
+  unreadAlertCountsByProject: vi.fn(() => new Map<string, number>()),
+}));
+
 vi.mock("../src/diary.js", () => ({
   diaryHasContent: vi.fn(() => false),
 }));
@@ -75,9 +79,10 @@ vi.mock("../src/output.js", () => ({
   isTTY: true,
 }));
 
-import { status, renderQuickStatus, resolveWorkerStatus, dimRow, truncateToVisibleWidth, formatTimeInState, formatGateSuffix, _resetStatusBranchCacheForTest } from "../src/commands/status.js";
+import { status, renderQuickStatus, resolveWorkerStatus, dimRow, truncateToVisibleWidth, visibleWidth, formatTimeInState, formatGateSuffix, _resetStatusBranchCacheForTest } from "../src/commands/status.js";
 import { getAutoContinueConfig, projectUsageGateExempt } from "../src/config.js";
 import { currentBranchFast, branchExistsOnOrigin } from "../src/dashboard/git.js";
+import { unreadAlertCountsByProject } from "../src/dashboard/alerts.js";
 import { diaryHasContent } from "../src/diary.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { getWorkers } from "../src/dashboard/registry.js";
@@ -295,14 +300,25 @@ describe("render parity (status() TTY vs renderQuickStatus() baked)", () => {
     expect(bakedLines).toEqual(ttyLines);
   });
 
-  it("garden status (CLI) now shows the crew badge, matching the dashboard pane", async () => {
+  it("hides the default all-claude crew badge (identity default is invisible)", async () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle" },
     ]);
     const lines = await captureConsoleLog(() => status([]));
-    // Previously only the baked pane rendered the badge; the CLI header omitted
-    // it. The shared renderProjectHeader fixes that drift.
-    expect(lines.join("\n")).toContain("\x1b[90mall-claude\x1b[0m");
+    expect(lines.join("\n")).not.toContain("all-claude");
+  });
+
+  it("garden status (CLI) shows a non-default crew badge, matching the dashboard pane", async () => {
+    // The Phase 1 drift fix: the CLI header renders the crew badge the baked
+    // pane always did. all-claude is hidden, so assert with a non-default crew.
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: { garden: { path: "/tmp/garden", harness: "codex" } },
+    });
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", harness: "codex" },
+    ]);
+    const lines = await captureConsoleLog(() => status([]));
+    expect(lines.join("\n")).toContain("\x1b[90mcodex-claude\x1b[0m");
   });
 });
 
@@ -777,6 +793,123 @@ describe("explicit baseBranch (configured project)", () => {
     // ...but the matching sibling shows NOTHING (the legacy sibling-toggle is
     // gone on configured projects — each row depends only on its own base).
     expect(lineFor(result, "bold-ash")).not.toContain("→");
+  });
+});
+
+// Phase 3: the identity-vs-status grammar. Grey override-only badges
+// (member/model), grow N/M parity, the elapsed folded into the state cell,
+// truncation priority, and the ⚠n header token.
+describe("identity badges + grammar (Phase 3)", () => {
+  const GREY = "\x1b[90m";
+  const RESET = "\x1b[0m";
+  const state = {
+    activeProject: "garden",
+    statusPaneId: "%0",
+    gardenShellPaneId: "%1",
+    activePaneId: "%2",
+    activePaneType: "worker" as const,
+    activeWindowName: "_garden-worker-bold-ash",
+  };
+  const lineFor = (result: string, name: string): string =>
+    result.split("\n").find(l => l.includes(name)) ?? "";
+
+  beforeEach(() => {
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+  });
+
+  it("badges a worker whose member (harness) differs from the project default", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", harness: "codex" },
+    ]);
+    expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}codex${RESET}`);
+  });
+
+  it("omits any identity badge for a plain default worker (default is invisible)", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle" },
+    ]);
+    // No grey identity token anywhere on the row (no base/member/model badge).
+    expect(lineFor(renderQuickStatus(state), "bold-ash")).not.toContain(GREY);
+  });
+
+  it("badges a pinned worker model, and a trellis vine's workerModel", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", model: "sonnet" },
+    ]);
+    expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}sonnet${RESET}`);
+
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", workflow: "trellis",
+        trellis: { name: "auth", iteration: 2, maxIterations: 30, workerModel: "opus" } },
+    ]);
+    expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}opus${RESET}`);
+  });
+
+  it("renders grow N/M in the detail column (parity with the trellis counter)", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "polishing", agentStatus: "working",
+        workflow: "grow", grow: { seed: "harden", iteration: 2, maxIterations: 5 } },
+    ]);
+    const line = lineFor(renderQuickStatus(state), "bold-ash");
+    expect(line).toContain("grow 2/5");
+    // The counter replaces the live activity, just as the trellis bracket does.
+    expect(line).not.toContain("polishing");
+  });
+
+  it("folds the elapsed time into the state cell (reviewing 12m, adjacent)", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", prState: "reviewing",
+        lastStateChangeAt: Date.now() - 12 * 60_000 },
+    ]);
+    // "reviewing" immediately followed by the elapsed suffix — one cell, one fact.
+    expect(lineFor(renderQuickStatus(state), "bold-ash")).toMatch(/reviewing \x1b\[33m12m\x1b\[0m/);
+  });
+
+  it("renders a yellow ⚠n unread-alert count on the project header, cleared when zero", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle" },
+    ]);
+    vi.mocked(unreadAlertCountsByProject).mockReturnValue(new Map([["garden", 2]]));
+    expect(lineFor(renderQuickStatus(state), "garden")).toContain("\x1b[33m⚠2\x1b[0m");
+
+    vi.mocked(unreadAlertCountsByProject).mockReturnValue(new Map());
+    expect(lineFor(renderQuickStatus(state), "garden")).not.toContain("⚠");
+  });
+
+  it("truncates detail first and keeps the flags (gate closed) on a narrow pane", () => {
+    vi.mocked(getAutoContinueConfig).mockReturnValue({ enabled: false, usageThreshold: 95, resumeAfterReset: false });
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "a-very-long-activity-string-that-cannot-fit", prState: "merged" },
+    ]);
+    const line = lineFor(renderQuickStatus(state, undefined, undefined, undefined, 60), "bold-ash");
+    // The status-class flag survives at the end of the row...
+    expect(line).toContain("gate closed");
+    // ...while the elastic detail is truncated (the full string does not fit).
+    expect(line).not.toContain("a-very-long-activity-string-that-cannot-fit");
+  });
+
+  it("drops the badge cluster before the core on a narrow pane", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "short", agentStatus: "idle", harness: "codex", model: "sonnet" },
+    ]);
+    // Wide: the badges render.
+    expect(lineFor(renderQuickStatus(state, undefined, undefined, undefined, 200), "bold-ash"))
+      .toContain(`${GREY}codex${RESET}`);
+    // Narrow: badges drop as a unit, but the name and state (the core) survive.
+    const line = lineFor(renderQuickStatus(state, undefined, undefined, undefined, 40), "bold-ash");
+    expect(line).toContain("bold-ash");
+    expect(line).toContain("idle");
+    expect(line).not.toContain("codex");
+  });
+});
+
+describe("visibleWidth", () => {
+  it("ignores CSI escape sequences (colored text measures by its glyphs)", () => {
+    expect(visibleWidth("\x1b[90mhi\x1b[0m")).toBe(2);
+    expect(visibleWidth("reviewing \x1b[33m12m\x1b[0m")).toBe(13);
+  });
+  it("counts plain glyphs", () => {
+    expect(visibleWidth("bold-ash")).toBe(8);
   });
 });
 

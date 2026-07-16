@@ -20,7 +20,8 @@ vi.mock("../src/config.js", async (orig) => {
 // stubbed for the pure plan builder under test.
 vi.mock("../src/dashboard/header.js", () => ({ refreshDashboard: vi.fn() }));
 
-const { listMembers, reviewerMembers, listCrews, getCrew, deriveCrew, applyCrew } =
+const { listMembers, reviewerMembers, listCrews, getCrew, deriveCrew, applyCrew,
+  workerMemberName, projectWorkerMemberName } =
   await import("../src/dashboard/crew.js");
 const { buildCrewPickerPlan } = await import("../src/dashboard/crew-picker.js");
 
@@ -68,6 +69,31 @@ describe("deriveCrew", () => {
   });
   it("null when review roles diverge (hand-tuned config)", () => {
     expect(deriveCrew(P({ roles: { reviewer: { harness: "codex" } } }), cfg())).toBeNull();
+  });
+});
+
+describe("worker member name (status-pane identity badge source)", () => {
+  it("maps the default/claude-code harness to 'claude'", () => {
+    expect(workerMemberName(undefined, undefined)).toBe("claude");
+    expect(workerMemberName("claude-code", undefined)).toBe("claude");
+  });
+
+  it("uses the harness name for a foreign harness", () => {
+    expect(workerMemberName("codex", undefined)).toBe("codex");
+  });
+
+  it("applies a provider ONLY to the claude-code harness (a foreign harness ignores it)", () => {
+    // claude-code against a provider IS that provider member...
+    expect(workerMemberName("claude-code", "deepseek")).toBe("deepseek");
+    expect(workerMemberName(undefined, "deepseek")).toBe("deepseek");
+    // ...but codex doesn't run through the Anthropic env swap, so it stays codex.
+    expect(workerMemberName("codex", "deepseek")).toBe("codex");
+  });
+
+  it("reports the project's default member (harness + provider)", () => {
+    expect(projectWorkerMemberName({ path: "/p" })).toBe("claude");
+    expect(projectWorkerMemberName({ path: "/p", harness: "codex" })).toBe("codex");
+    expect(projectWorkerMemberName({ path: "/p", provider: "deepseek" })).toBe("deepseek");
   });
 });
 
