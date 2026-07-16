@@ -7,6 +7,11 @@ vi.mock("node:fs", () => ({
     openSync: vi.fn(() => 3),
     closeSync: vi.fn(),
     unlinkSync: vi.fn(),
+    // Diary-reload coalesce stamp. statSync throws by default (no stamp yet ->
+    // reload fires), so every existing diary test is unaffected; the coalesce
+    // test overrides it to a recent mtime to exercise the skip path.
+    statSync: vi.fn(() => { throw new Error("ENOENT"); }),
+    writeFileSync: vi.fn(),
     constants: { O_CREAT: 0x100, O_EXCL: 0x200, O_WRONLY: 0x1 },
   },
 }));
@@ -102,6 +107,7 @@ vi.mock("../src/dashboard/window-names.js", async () => {
 
 // --- Imports ---
 
+import fs from "node:fs";
 import {
   switchProject,
   focusWorker,
@@ -1264,5 +1270,24 @@ describe("diary follows project switches", () => {
     expect(state.activePlot).toBe("b");
     expect(state.activeProject).toBe("garden");
     expect(sentSaveExit()).toBe(false);
+  });
+
+  it("coalesces a second rapid switch within the window (no bell-tripping re-drive)", () => {
+    // A fresh stamp (mtime = now) stands in for a reload that just fired on the
+    // previous ⌥O/⌥P. The next switch must NOT re-inject the editor keys, so a
+    // second `^O` can't land on nano/pico's open WriteOut prompt and beep.
+    vi.mocked(fs.statSync).mockReturnValue({ mtimeMs: Date.now() } as fs.Stats);
+    const state = makeState({
+      activeProject: "garden",
+      gardenPaneType: "diary",
+      gardenShellPaneId: "%1",
+    });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(listAllWindowNames).mockReturnValue(["_other-shell"]);
+
+    switchProject("2");
+
+    expect(state.activeProject).toBe("other"); // switch itself still happens
+    expect(sentSaveExit()).toBe(false); // the editor drive is coalesced away
   });
 });

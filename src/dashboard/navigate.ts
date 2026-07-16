@@ -1,5 +1,7 @@
 // Pane navigation: project switching, worker/shell focus, cycling.
-import { loadConfig, getProject, getFocusedProjectNames, plotsMap, isPlotFocused } from "../config.js";
+import fs from "node:fs";
+import path from "node:path";
+import { loadConfig, getProject, getFocusedProjectNames, plotsMap, isPlotFocused, SESSIONS_DIR } from "../config.js";
 import { readDashState, writeDashState, withStateLock, type DashboardState } from "./state.js";
 import { swapToHidden, swapDirect } from "./layout.js";
 import { gardenSwapToHidden } from "./layout.js";
@@ -103,6 +105,22 @@ export function swapVisibleToProject(
   state.activeProject = projectName;
 }
 
+// Coalesce window for the reload below. Nav hotkeys run backgrounded and
+// concurrently (`run-shell -b`, hotkeys.ts), so tapping ⌥O/⌥P to cycle injects
+// overlapping `C-o Enter C-x` bursts into the editor pane. When a second `^O`
+// lands on nano/pico's still-open "File Name to write" prompt, the editor rings
+// the terminal bell — surfacing as the macOS "chirp" (tmux passes the BEL
+// through; there is no visual-bell surface in fullscreen). The reload is
+// idempotent to drop: diary-view.sh re-resolves the focused project on every
+// reopen, and the reopen's node cold start outlasts this window, so the
+// in-flight reload still lands on the final project. 250ms comfortably covers a
+// human double-tap while staying under the reopen delay (no staleness).
+const DIARY_RELOAD_COALESCE_MS = 250;
+
+function diaryReloadStampPath(): string {
+  return path.join(SESSIONS_DIR, "diary-reload.stamp");
+}
+
 // When a project switch happens, the diary editor must re-point at the
 // now-focused project's diary. A live modal editor can only be re-targeted by
 // restarting it — which would discard unsaved notes — so we drive the editor's
@@ -123,6 +141,17 @@ function reloadDiaryEditor(state: DashboardState): void {
     : getFirstPaneId(`${DASHBOARD_SESSION}:${gardenWindowName("diary")}`);
   if (!pane || !paneExists(pane)) return;
   if (!editorIsNano(process.env.EDITOR || "nano")) return;
+
+  // Skip a reload that fires within COALESCE_MS of the previous one. The stamp
+  // is cross-process (each backgrounded handler is its own node invocation), so
+  // its mtime is the only shared record of the last drive. Best-effort: a
+  // missing stamp or fs error falls through to fire.
+  const stamp = diaryReloadStampPath();
+  try {
+    if (Date.now() - fs.statSync(stamp).mtimeMs < DIARY_RELOAD_COALESCE_MS) return;
+  } catch { /* no stamp yet -> fire */ }
+  try { fs.writeFileSync(stamp, ""); } catch { /* best effort; still fire */ }
+
   tmux("send-keys", "-t", pane, "C-o", "Enter", "C-x");
 }
 
