@@ -113,6 +113,7 @@ Requires terminal setup: iTerm2 → Profiles → Keys → Left Option key → "E
 | `⌥x` | Kill current worker (shell is protected) |
 | `⌥b` | Bounce current worker (restart Claude via `--resume`, preserve history) |
 | `⌥e` | Hold/release current worker — interrupt its turn (sends Escape) and mark it `paused`; toggles back to `idle` when already held |
+| `⌥i` | Worker menu — inspect the focused worker and act on it (hold / bounce / kick / pause / kill / show last review) or change its base branch, reviewer, or model |
 | `⌥g` | Focus growhouse (lower-left) |
 | `⌥r` | Focus root shell (lower-left) |
 | `⌥l` | Focus logs view (lower-left); also acknowledges the alert badge |

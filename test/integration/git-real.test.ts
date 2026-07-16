@@ -331,3 +331,32 @@ describe("tryPublishBranch (real git)", () => {
     }
   });
 });
+
+describe("listBranches (real git)", () => {
+  it("de-dupes local + origin branches, strips origin/, drops HEAD, and caps", async () => {
+    const { listBranches } = await import("../../src/dashboard/git.js");
+    // origin already has main (beforeEach pushes it). feature-a lives both
+    // locally and on origin (must collapse to one); local-only is local-only.
+    git(env.repoPath, "checkout", "-b", "feature-a");
+    fs.writeFileSync(path.join(env.repoPath, "a.txt"), "a");
+    git(env.repoPath, "add", "a.txt");
+    git(env.repoPath, "commit", "-m", "feature a");
+    git(env.repoPath, "push", "origin", "feature-a");
+    git(env.repoPath, "checkout", "-b", "local-only");
+    git(env.repoPath, "fetch", "origin");
+    git(env.repoPath, "remote", "set-head", "origin", "main"); // creates refs/remotes/origin/HEAD
+
+    const branches = listBranches(env.repoPath);
+    expect(new Set(branches)).toEqual(new Set(["main", "feature-a", "local-only"]));
+    expect(branches.filter((b) => b === "feature-a")).toHaveLength(1); // de-duped local+origin
+    expect(branches.some((b) => b.startsWith("origin/"))).toBe(false); // prefix stripped
+    expect(branches).not.toContain("HEAD"); // origin/HEAD sentinel dropped
+    expect(branches).not.toContain("origin");
+    expect(listBranches(env.repoPath, 2)).toHaveLength(2); // cap honored
+  });
+
+  it("returns [] on a path that is not a git repo (best-effort)", async () => {
+    const { listBranches } = await import("../../src/dashboard/git.js");
+    expect(listBranches(path.join(env.home, "not-a-repo"))).toEqual([]);
+  });
+});
