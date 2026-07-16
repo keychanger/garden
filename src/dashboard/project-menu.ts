@@ -14,7 +14,7 @@
 //
 // Plan builders are pure (a view/data object -> MenuSpec) and tested; each
 // mutating handler re-opens the menu (form feel) after refreshing the pane.
-import { loadConfig, tryGetProject, type GardenConfig, type ProjectConfig } from "../config.js";
+import { loadConfig, tryGetProject, DEFAULT_HOLISTIC_REVIEW, type GardenConfig, type ProjectConfig } from "../config.js";
 import { readDashState } from "./state.js";
 import { resolveGardenRunner } from "./runner.js";
 import { shellEscape, tmuxDisplay } from "./tmux.js";
@@ -80,7 +80,7 @@ export function buildProjectBranchSubmenuPlan(project: string, branches: string[
 }
 
 export function buildHolisticSubmenuPlan(project: string, current: string, runner: string): MenuSpec {
-  return buildEnumSubmenuPlan(project, "holisticReview", `Holistic review for ${project}`, ["off", "shadow", "fix"], current, runner, "unset — default (off)");
+  return buildEnumSubmenuPlan(project, "holisticReview", `Holistic review for ${project}`, ["off", "shadow", "fix"], current, runner, `unset — default (${DEFAULT_HOLISTIC_REVIEW})`);
 }
 
 // ---- runners (resolve data, drive tmux) ----------------------------------
@@ -117,7 +117,7 @@ function projectMenuView(name: string, project: ProjectConfig, config: GardenCon
     base: project.baseBranch ?? `${resolveBaseBranch(project.path)} (default)`,
     crew: deriveCrew(project, config) ?? "custom",
     ciGate: project.requireCiSuccess ?? true,
-    holistic: project.holisticReview ?? "off",
+    holistic: project.holisticReview ?? `${DEFAULT_HOLISTIC_REVIEW} (default)`,
     logColor: project.logColor ?? "auto",
     checks: project.checks ?? NOT_SET,
     postMerge: project.postMerge ?? NOT_SET,
@@ -133,7 +133,7 @@ export function runProjectBranchSubmenu(project: string): void {
 export function runHolisticSubmenu(project: string): void {
   const proj = tryGetProject(project);
   if (!proj) { tmuxDisplay(`Unknown project '${project}'.`); return; }
-  runMenu(buildHolisticSubmenuPlan(project, proj.holisticReview ?? "off", resolveGardenRunner()));
+  runMenu(buildHolisticSubmenuPlan(project, proj.holisticReview ?? DEFAULT_HOLISTIC_REVIEW, resolveGardenRunner()));
 }
 
 export function runColorSubmenu(project: string): void {

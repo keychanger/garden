@@ -2711,17 +2711,20 @@ final merge and pokes the poller).
 
 ### Modes (per-project `holisticReview` config: `off` | `shadow` | `fix`)
 
-- **`off`** (default) — evaluate the gate, emit the decision trace, never spawn.
+- **`off`** — evaluate the gate, emit the decision trace, never spawn.
 - **`shadow`** — spawn an analysis-only worker that writes findings to
   `.holistic-findings.md` and never commits. `finalizeShadowHolistic` (from
   `handleDone`) surfaces the findings as a `warn` alert, copies them to a durable
   sessions path, and consumes the worktree file (idempotency without a reap).
-- **`fix`** — spawn a worker that fixes genuine defects, commits, and rides the
-  normal per-branch review + CI + merge gate.
+- **`fix`** (default, `DEFAULT_HOLISTIC_REVIEW` in `config.ts`) — spawn a worker
+  that fixes genuine defects, commits, and rides the normal per-branch review +
+  CI + merge gate.
 
-Graduate a project `off → shadow → fix` only as the validation gate holds
-(precision, spec-violation rate, yield — see the plan's validation ladder). The
-config is live-read, so it doubles as a no-restart kill switch.
+Operator decision (2026-07-16): the default is `fix` — every multi-phase task
+gets an auto-fixing whole-task coherence review at `done`. A project that wants
+the older conservative behavior opts *out* with an explicit `off` (no review) or
+`shadow` (report-only). The config is live-read, so it doubles as a no-restart
+kill switch.
 
 ### Dispatch and spawn
 

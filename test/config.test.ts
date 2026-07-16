@@ -640,11 +640,13 @@ describe("holisticReview project config key", () => {
     expect(cfg.projects.garden.holisticReview).toBe("shadow");
   });
 
-  it("treats holisticReview as optional (absence means off)", async () => {
+  it("treats holisticReview as optional (absent from config; the effective default is applied at the gate)", async () => {
     const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
     fs.mkdirSync(GARDEN_DIR, { recursive: true });
     saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
     const cfg = loadConfig();
+    // config stores nothing when unset; DEFAULT_HOLISTIC_REVIEW ("fix") is
+    // resolved by the poller gate / menu, not at config-load time.
     expect(cfg.projects.garden.holisticReview).toBeUndefined();
   });
 

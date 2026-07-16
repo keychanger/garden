@@ -117,6 +117,30 @@ describe("shadow spawn path (touched files present)", () => {
   });
 });
 
+describe("default holisticReview mode (unset project)", () => {
+  it("defaults to fix — an unset project dispatches (a seed is written) in fix, not shadow, not off", async () => {
+    const cfg = await import("../src/config.js");
+    // No holisticReview key — the DEFAULT_HOLISTIC_REVIEW ("fix") applies.
+    cfg.saveConfig({ projects: { proj: { path: "/tmp/proj" } } });
+    expect(cfg.DEFAULT_HOLISTIC_REVIEW).toBe("fix");
+    const reg = await import("../src/dashboard/registry.js");
+    reg.addWorker("proj", {
+      name: "multi-phase", sessionId: "s", task: "t", prState: "done",
+      workflow: "default", mergeCount: 3, baseBranchSha: "basesha",
+      holisticTouchedFiles: ["src/a.ts"],
+    });
+    const hol = await import("../src/dashboard/poller-holistic-review.js");
+    const entry = reg.findWorkerByName("proj", "multi-phase")!;
+    hol.maybeDispatchHolisticReview("proj", env.gardenDir, "main", entry, "transitionToTerminal");
+
+    // A seed exists → it did NOT take the "off" short-circuit (which writes none)...
+    const seedPath = path.join(cfg.SESSIONS_DIR, "holistic-seed-proj-multi-phase.txt");
+    expect(fs.existsSync(seedPath)).toBe(true);
+    // ...and it is a FIX seed, not the shadow analysis-only one.
+    expect(fs.readFileSync(seedPath, "utf-8")).not.toContain("SHADOW (ANALYSIS-ONLY)");
+  });
+});
+
 describe("dispatch deferral (cap hit leaves the guard unset → retries next poke)", () => {
   it("does not set the high-water guard when a holistic worker is already in flight", async () => {
     const { reg, hol } = await setup("shadow", { holisticTouchedFiles: ["src/a.ts"] });

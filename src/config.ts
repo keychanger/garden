@@ -82,14 +82,14 @@ export interface ProjectConfig {
   // Holistic post-merge review mode for this project. When a multi-phase
   // default worker (>=2 merges) reaches `done`, the poller may dispatch one
   // whole-task coherence review:
-  //   "off"    (default) — evaluate the gate and log the decision, never spawn.
+  //   "off"    — evaluate the gate and log the decision, never spawn.
   //   "shadow" — spawn an analyze-only reviewer that writes findings + a warn
   //              alert and pushes nothing.
-  //   "fix"    — spawn a reviewer that fixes genuine cross-phase defects and
-  //              pushes through the normal review/CI/merge gate.
-  // Read live per poll, so it doubles as a no-restart kill switch. Graduate a
-  // project off -> shadow -> fix only when the validation gate holds (see the
-  // holistic-review workflow docs).
+  //   "fix"    (default, DEFAULT_HOLISTIC_REVIEW) — spawn a reviewer that fixes
+  //              genuine cross-phase defects and pushes through the normal
+  //              review/CI/merge gate.
+  // Read live per poll, so it doubles as a no-restart kill switch: a project
+  // that wants the older opt-in behavior sets "off" or "shadow" explicitly.
   holisticReview?: "off" | "shadow" | "fix";
   // Per-role overrides for the review family (reviewer / resolver / ci-fix).
   // Each role independently resolves its harness + model; unset falls back to
@@ -111,6 +111,12 @@ export interface RoleTarget {
   harness?: string;
   model?: string;
 }
+
+// The effective holisticReview mode for a project that hasn't set the key.
+// Operator decision (2026-07-16): every multi-phase task gets an auto-fixing
+// whole-task coherence review by default; a project opts out with an explicit
+// "off"/"shadow". Single source of truth for the poller gate + the ⌥, menu.
+export const DEFAULT_HOLISTIC_REVIEW = "fix";
 
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "path", "baseBranch", "checks", "postMerge", "sandboxDomains", "claudeProfile", "provider",

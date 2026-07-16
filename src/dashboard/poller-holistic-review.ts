@@ -24,7 +24,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { SESSIONS_DIR, tryGetProject } from "../config.js";
+import { SESSIONS_DIR, tryGetProject, DEFAULT_HOLISTIC_REVIEW } from "../config.js";
 import { log } from "./log.js";
 import { addAlert } from "./alerts.js";
 import { atomicWriteFile } from "./atomic-write.js";
@@ -90,7 +90,7 @@ export function maybeDispatchHolisticReview(
   entryPath: HolisticEntryPath,
 ): void {
   const { eligible, reason } = evaluateHolisticGate(entry);
-  const mode = tryGetProject(projectName)?.holisticReview ?? "off";
+  const mode = tryGetProject(projectName)?.holisticReview ?? DEFAULT_HOLISTIC_REVIEW;
   const traceData = {
     project: projectName,
     decision: eligible ? "dispatch" : "skip",
