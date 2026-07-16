@@ -300,17 +300,20 @@ describe("render parity (status() TTY vs renderQuickStatus() baked)", () => {
     expect(bakedLines).toEqual(ttyLines);
   });
 
-  it("hides the default all-claude crew badge (identity default is invisible)", async () => {
+  it("shows the default all-claude crew badge on the focused project (operator: always visible when highlighted)", async () => {
+    // The focused project's crew is always shown now, including the default
+    // all-claude — the badge rides only the highlighted header, so it reads as
+    // context for the project you're in, not list-wide noise.
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle" },
     ]);
     const lines = await captureConsoleLog(() => status([]));
-    expect(lines.join("\n")).not.toContain("all-claude");
+    expect(lines.join("\n")).toContain("\x1b[90mall-claude\x1b[0m");
   });
 
   it("garden status (CLI) shows a non-default crew badge, matching the dashboard pane", async () => {
     // The Phase 1 drift fix: the CLI header renders the crew badge the baked
-    // pane always did. all-claude is hidden, so assert with a non-default crew.
+    // pane always did. Asserted with a non-default crew for a distinct value.
     vi.mocked(loadConfig).mockReturnValue({
       projects: { garden: { path: "/tmp/garden", harness: "codex" } },
     });

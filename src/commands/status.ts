@@ -280,7 +280,8 @@ function renderProjectHeader(h: {
   const baseToken = formatConfiguredBaseToken(h.projectConfig);
   // Crew badge only on the FOCUSED project's header — it's context for the
   // project you're working in, not standing grey across the whole list
-  // (operator call, 2026-07-16). Still hidden for the default all-claude.
+  // (operator call, 2026-07-16). Shown for every crew, including the default
+  // all-claude, so the focused project's crew is always visible.
   const crewBadge = (h.isActive && h.projectConfig) ? formatCrewBadge(h.projectConfig, h.config) : "";
   const alert = h.alertCount > 0 ? ` \x1b[33m⚠${h.alertCount}\x1b[0m` : "";
   return `  ${h.index}. ${displayName}${baseToken}${crewBadge}${formatDiaryGlyph(h.name)}${alert}${marker}`;
@@ -814,17 +815,17 @@ function formatDiaryGlyph(projectName: string): string {
   return diaryHasContent(projectName) ? " \x1b[90m✎\x1b[0m" : "";
 }
 
-// Quiet grey crew badge on a project's header row — which harness/provider
-// pair builds and reviews this project's fleet. Same metadata-not-status
-// styling as the diary glyph. "custom" when the roles are hand-tuned past a
-// named crew. The default `all-claude` crew is HIDDEN (identity default is
-// invisible, per OPERATOR-UI.md Part 1) so an all-Claude fleet's headers stay
-// quiet; every other crew — including "custom" — shows. Read from the
-// already-loaded config, so no extra IO per bake.
+// Quiet grey crew badge on the FOCUSED project's header row — which harness/
+// provider pair builds and reviews this project's fleet. Same metadata-not-
+// status styling as the diary glyph. "custom" when the roles are hand-tuned
+// past a named crew. Shown for EVERY crew, including the default `all-claude`
+// (operator call, 2026-07-16): the badge rides only the highlighted project
+// (renderProjectHeader gates on isActive), so it reads as context for the
+// project you're in rather than standing noise across the list — and the
+// operator wants the focused project's crew always visible, default or not.
+// Read from the already-loaded config, so no extra IO per bake.
 function formatCrewBadge(project: ProjectConfig, config: GardenConfig): string {
-  const crew = deriveCrew(project, config);
-  if (crew === "all-claude") return "";
-  return ` \x1b[90m${crew ?? "custom"}\x1b[0m`;
+  return ` \x1b[90m${deriveCrew(project, config) ?? "custom"}\x1b[0m`;
 }
 
 function colorizeIteration(iter: number, max: number): string {
