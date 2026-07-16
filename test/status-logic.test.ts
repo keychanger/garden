@@ -879,6 +879,36 @@ describe("identity badges + grammar (Phase 3)", () => {
     expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}opus${RESET}`);
   });
 
+  it("rides the model AFTER the detail and does not dead-space a model-less sibling", () => {
+    // calm-bay renders alongside via a hidden window, so two workers share the
+    // one project (and thus the one badge column).
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_garden-worker-calm-bay"]);
+    const workers = [
+      { name: "bold-ash", sessionId: "a", task: "wiring the auth flow", agentStatus: "working" as const },
+      { name: "calm-bay", sessionId: "b", task: "serving quant data", agentStatus: "working" as const },
+    ];
+    // Baseline: neither worker pins a model.
+    vi.mocked(getWorkers).mockReturnValue(workers);
+    const baseSibling = lineFor(renderQuickStatus(state), "calm-bay");
+
+    // Pin a long model id on bold-ash — the worst case for the old leading
+    // badge column, which would have widened by ~len("claude-opus-4-8")+2.
+    vi.mocked(getWorkers).mockReturnValue([
+      { ...workers[0], model: "claude-opus-4-8" },
+      workers[1],
+    ]);
+    const result = renderQuickStatus(state);
+    const pinned = lineFor(result, "bold-ash");
+    const sibling = lineFor(result, "calm-bay");
+
+    // The model is a trailing tag: it renders AFTER the detail text, not before.
+    expect(pinned.indexOf("claude-opus-4-8")).toBeGreaterThan(pinned.indexOf("wiring the auth flow"));
+    // The model-less sibling's row is byte-identical with or without the pin —
+    // a long model id no longer inflates the shared badge column and pushes
+    // every model-less description to the right.
+    expect(sibling).toBe(baseSibling);
+  });
+
   it("renders grow N/M in the detail column (parity with the trellis counter)", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "a", task: "polishing", agentStatus: "working",

@@ -51,12 +51,14 @@ interface WorkerInfo {
   // they diverge — that mismatch is the leading indicator of the
   // "did not fast-forward after merge" alert pattern.
   baseBranch?: string;
-  // Identity fields for the grey override-only badge cluster. The worker's
-  // harness (a member badge shows when it differs from the project's default
-  // member), the pinned model (default/grow use entry.model, vines use
-  // trellis.workerModel), and the workflow (drives workflowRowDecor). All
+  // Identity fields, rendered grey and override-only. The worker's harness (a
+  // member badge shows when it differs from the project's default member) and
+  // the workflow (drives workflowRowDecor) join the leading badge cluster; the
+  // pinned model (default/grow use entry.model, vines use trellis.workerModel)
+  // renders as a trailing tag AFTER the detail column instead, so a long model
+  // id doesn't widen the badge column and dead-space every model-less row. All
   // undefined for a plain default-workflow worker on the account default, in
-  // which case no badge renders — default is invisible.
+  // which case nothing renders — default is invisible.
   harness?: string;
   model?: string;
   workflow?: string;
@@ -169,8 +171,9 @@ interface RowSegments {
   icon: string;
   name: string;    // unpadded; renderWorkerRow pads to the column width
   state: string;   // formatStatus + the elapsed-in-state suffix, folded in
-  badges: string[]; // grey identity cluster (base, member, model, workflow)
+  badges: string[]; // grey identity cluster (base, member, crew, workflow)
   detail: string;  // activity or the workflow bracket — the elastic column
+  model: string;   // grey model badge, rendered AFTER detail as a trailing tag ("" when unpinned)
   flags: string;   // status-class end-of-row (gate, CI bracket)
   status: WorkerStatus;
   stale: boolean;
@@ -201,10 +204,9 @@ function collectSegments(worker: WorkerInfo, ctx: RowRenderCtx): RowSegments {
   const crewBadge = (worker.crew && worker.crew !== ctx.projectCrew) ? greyBadge(worker.crew) : "";
   const workerMember = workerMemberName(worker.harness, ctx.projectProvider);
   const memberBadge = (!crewBadge && workerMember !== ctx.projectMember) ? greyBadge(workerMember) : "";
-  const modelBadge = worker.model ? greyBadge(worker.model) : "";
   const decor = workflowRowDecor(worker);
   const workflowBadge = decor.badge ? greyBadge(decor.badge) : "";
-  const badges = [baseBadge, crewBadge, memberBadge, modelBadge, workflowBadge].filter(b => b !== "");
+  const badges = [baseBadge, crewBadge, memberBadge, workflowBadge].filter(b => b !== "");
   const elapsed = formatTimeInState(worker.status, worker.lastStateChangeAt, ctx.now);
   return {
     focus: worker.active ? "●" : "○",
@@ -213,6 +215,12 @@ function collectSegments(worker: WorkerInfo, ctx: RowRenderCtx): RowSegments {
     state: `${formatStatus(worker)}${elapsed}`,
     badges,
     detail: decor.detail ?? (worker.activity ?? ""),
+    // Model rides at the END of the row, after the detail column, not in the
+    // leading badge column: a pinned model (often a long id) otherwise widened
+    // the fixed identity column and pushed the description far right, leaving
+    // dead space on every model-less row in the project (operator call,
+    // 2026-07-16). As a trailing tag it costs width only on the row that has it.
+    model: worker.model ? greyBadge(worker.model) : "",
     flags: `${formatGateSuffix(worker.status, ctx.gateClosed)}${formatCiBracket(worker.ci)}`,
     status: worker.status,
     stale: worker.stale,
@@ -229,16 +237,24 @@ function renderWorkerRow(
 ): string {
   const core = `    ${seg.focus} ${seg.icon} ${padEndVisible(seg.name, dims.nameWidth)}  ${padEndVisible(seg.state, dims.stateWidth)}`;
   let badgeCell = dims.badgeWidth > 0 ? `  ${padEndVisible(seg.badges.join("  "), dims.badgeWidth)}` : "";
+  // The model tag trails the detail column (not the leading badge column) so a
+  // long model id never dead-spaces the model-less rows. It is still identity,
+  // so it drops together with the badge cluster when the pane is too narrow to
+  // keep the detail readable.
+  let modelCell = seg.model ? `  ${seg.model}` : "";
   let detail = seg.detail;
 
-  // Detail budget: baked (cap) derives it so core + flags never drop and badges
-  // drop as a unit before detail is lost; TTY uses detailMax as a soft bound.
+  // Detail budget: baked (cap) derives it so core + flags never drop and the
+  // identity cells (badges + trailing model) drop as a unit before detail is
+  // lost; TTY uses detailMax as a soft bound.
   let budget = dims.detailMax;
   if (dims.cap !== undefined) {
     const fixed = visibleWidth(core) + visibleWidth(seg.flags);
-    budget = dims.cap - fixed - (dims.badgeWidth > 0 ? dims.badgeWidth + 2 : 0) - (detail ? 2 : 0);
-    if (budget < DETAIL_MIN_WIDTH && dims.badgeWidth > 0) {
+    const identityWidth = (dims.badgeWidth > 0 ? dims.badgeWidth + 2 : 0) + visibleWidth(modelCell);
+    budget = dims.cap - fixed - identityWidth - (detail ? 2 : 0);
+    if (budget < DETAIL_MIN_WIDTH && identityWidth > 0) {
       badgeCell = "";
+      modelCell = "";
       budget = dims.cap - fixed - (detail ? 2 : 0);
     }
   }
@@ -247,7 +263,7 @@ function renderWorkerRow(
   }
 
   const detailCell = detail ? `  ${detail}` : "";
-  const line = `${core}${badgeCell}${detailCell}${seg.flags}`;
+  const line = `${core}${badgeCell}${detailCell}${modelCell}${seg.flags}`;
   const colored = colorizeRow(seg.status, line);
   return seg.stale ? dimRow(colored) : colored;
 }
