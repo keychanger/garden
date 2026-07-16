@@ -45,6 +45,13 @@ describe("buildProjectMenuPlan", () => {
     expect(label("log color").run).toBe("garden dashboard _config-color-submenu lex");
   });
 
+  it("renders an unpinned effective base as a default rather than not set", () => {
+    const row = buildProjectMenuPlan({ ...view, base: "main (default)" }).rows
+      .find(r => r.label.includes("base branch"))!;
+    expect(row.label).toContain("main (default)");
+    expect(row.label).not.toContain("(not set)");
+  });
+
   it("the CI gate row toggles the current value", () => {
     const on = buildProjectMenuPlan(view).rows.find(r => r.label.includes("CI gate"))!;
     expect(on.label).toContain("on");
