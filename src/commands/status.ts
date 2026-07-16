@@ -576,9 +576,10 @@ function growInfoFor(entry?: { workflow?: string; grow?: { iteration?: number; m
 // Format the CI bracket for a default-workflow row when the worker is in
 // `ci-fixing` (auto-fix in flight) or `failing` with reason `ci` (auto-fix
 // exhausted). Trellis vines route through formatTrellisBracket above and
-// don't reach here. The bracket keeps a single leading space, so it sits one
-// column left of the activity slot the trellis bracket now aligns to (see
-// formatRowTail) — default CI rows are otherwise unchanged.
+// don't reach here. The bracket is a status-class flag: collectSegments folds
+// it into `seg.flags`, placed at the end of the row after the detail column
+// and never truncated. Its single leading space separates it from the
+// preceding column.
 export function formatCiBracket(ci: WorkerInfo["ci"]): string {
   if (!ci) return "";
   if (ci.fixing) {
@@ -601,9 +602,9 @@ export function formatCiBracket(ci: WorkerInfo["ci"]): string {
 //   Budget exhausted:        [trellis: auth-rewrite | budget exhausted]
 //   Stagnated (v1.5):        [trellis: auth-rewrite | stagnated]
 // Iteration counter color: white normally, yellow at ≥80% of cap,
-// red at ≥95%. The bracket is returned without a leading separator; the
-// row renderer (formatRowTail) places it in the activity slot so its "["
-// aligns with the activity column of sibling rows.
+// red at ≥95%. The bracket is returned without a leading separator;
+// workflowRowDecor places it in the detail column (the elastic slot) so its
+// "[" aligns with the detail column of sibling rows.
 export function formatTrellisBracket(t: WorkerInfo["trellis"]): string {
   if (!t) return "";
   // Failed states: prefer the failure reason over the iteration counter.
