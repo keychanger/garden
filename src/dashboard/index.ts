@@ -22,6 +22,10 @@ import {
   runWorkflowPicker, plantGrowFromPicker,
 } from "./trellis-picker.js";
 import { runCrewPicker, applyCrewFromPicker } from "./crew-picker.js";
+import {
+  runWorkerMenu, runWorkerBranchSubmenu, runWorkerCrewSubmenu, runWorkerModelSubmenu,
+  runWorkerKillConfirm, applyWorkerSet, applyWorkerSetBounce,
+} from "./worker-menu.js";
 import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, focusHistory, focusDiary, cyclePane, cyclePlot } from "./navigate.js";
 import { diaryFilePath } from "../diary.js";
 import { openLogsFilterPrompt, applyLogsFilter } from "./logs-filter.js";
@@ -162,6 +166,37 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   if (sub === "_crew-set") {
     const [, projectName, crewName] = args;
     if (projectName && crewName) applyCrewFromPicker(projectName, crewName);
+    return;
+  }
+  if (sub === "_worker-menu") {
+    runWorkerMenu(args[1], args[2]);
+    return;
+  }
+  if (sub === "_worker-branch-submenu") {
+    if (args[1] && args[2]) runWorkerBranchSubmenu(args[1], args[2]);
+    return;
+  }
+  if (sub === "_worker-crew-submenu") {
+    if (args[1] && args[2]) runWorkerCrewSubmenu(args[1], args[2]);
+    return;
+  }
+  if (sub === "_worker-model-submenu") {
+    if (args[1] && args[2]) runWorkerModelSubmenu(args[1], args[2]);
+    return;
+  }
+  if (sub === "_worker-kill-confirm") {
+    if (args[1] && args[2]) runWorkerKillConfirm(args[1], args[2]);
+    return;
+  }
+  if (sub === "_worker-set") {
+    // _worker-set <project> <worker> <field> <value>; value may be empty (clear).
+    const [, projectName, workerName, field] = args;
+    if (projectName && workerName && field) applyWorkerSet(projectName, workerName, field, args.slice(4).join(" "));
+    return;
+  }
+  if (sub === "_worker-set-bounce") {
+    const [, projectName, workerName, field] = args;
+    if (projectName && workerName && field) applyWorkerSetBounce(projectName, workerName, field, args.slice(4).join(" "));
     return;
   }
   if (sub === "_grow-plant") {

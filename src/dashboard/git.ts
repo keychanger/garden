@@ -46,6 +46,34 @@ export function resolveSpawnBase(
   return resolveBaseBranch(project.path);
 }
 
+// Local + origin branch names for a repo, most-recently-committed first, capped.
+// Feeds the base-branch submenus (worker + project config menus). Origin refs
+// are stripped of the "origin/" prefix and de-duped against local names (a
+// branch both checked out and on origin appears once); HEAD / origin/HEAD are
+// dropped. Best-effort — an empty list on any git error.
+export function listBranches(repoPath: string, limit = 12): string[] {
+  try {
+    const out = git(
+      repoPath, "for-each-ref", "--sort=-committerdate",
+      "--format=%(refname:short)", "refs/heads", "refs/remotes/origin",
+    );
+    const seen = new Set<string>();
+    const names: string[] = [];
+    for (const raw of out.split("\n")) {
+      let name = raw.trim();
+      if (!name || name === "origin" || name.endsWith("/HEAD")) continue;
+      if (name.startsWith("origin/")) name = name.slice("origin/".length);
+      if (name === "HEAD" || seen.has(name)) continue;
+      seen.add(name);
+      names.push(name);
+      if (names.length >= limit) break;
+    }
+    return names;
+  } catch {
+    return [];
+  }
+}
+
 // Returns true if the named branch is known on origin per local refs. Used
 // to validate a candidate base branch at worker creation — a worker targeting
 // a local-only branch breaks silently. Local-only (no `ls-remote`) so the ⌥n

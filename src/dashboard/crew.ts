@@ -96,6 +96,23 @@ export function projectWorkerMemberName(project: Pick<ProjectConfig, "harness" |
   return workerMemberName(project.harness, project.provider);
 }
 
+// The crew name pairing a worker's CURRENT build member (its fixed harness +
+// provider) with a chosen REVIEW harness. Used by the worker menu to set a live
+// worker's reviewer via entry.crew without disturbing its build half: the
+// resulting crew's worker member matches what the worker already is, and its
+// review member is the newly chosen reviewer (resolveReviewRole reads only the
+// review half). getCrew resolves the returned name (it is a member × reviewer
+// pairing).
+export function crewNameFor(
+  workerHarness: string | undefined,
+  workerProvider: string | undefined,
+  reviewHarness: string,
+): string {
+  const worker = memberFor(workerHarness ?? DEFAULT_HARNESS, workerProvider);
+  const review = memberFor(reviewHarness, undefined);
+  return crewName(worker, review);
+}
+
 // The crew a project currently resolves to, or null when its role assignment
 // doesn't match a named crew (hand-tuned config — e.g. the reviewer/resolver/
 // ci-fix harnesses diverge). Only the role *harnesses* are compared: per-role
