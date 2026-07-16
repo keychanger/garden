@@ -20,9 +20,9 @@ import { stripControlSequences } from "./tmux.js";
 export type Verb = "worked" | "planned" | "answered";
 
 export interface Turn {
-  // "garden" marks a garden-injected continuation prompt (post-merge auto-
-  // continue, handoff callback, trellis/grow iteration) — rendered as a compact
-  // labeled marker, not the multi-paragraph text.
+  // "garden" marks a garden-injected prompt (post-merge auto-continue, handoff
+  // callback, trellis/grow iteration, or a handoff seed briefing) — rendered as
+  // a compact labeled marker, not the multi-paragraph text.
   role: "user" | "assistant" | "garden";
   text: string;
   verb?: Verb; // assistant turns only
@@ -245,6 +245,18 @@ export function readConversation(
           seenUser = true;
           continue;
         }
+        // A handoff seed is the briefing garden pastes into a freshly spawned
+        // worker as its first prompt (`[handoff from <project>/<worker>]`). Like
+        // a [garden] continuation it's garden-injected and multi-paragraph, so
+        // collapse it to a compact source-labeled marker and keep the response
+        // (the worker's actual work on the handed-off task).
+        const handoff = handoffSeedLabel(text);
+        if (handoff) {
+          turns.push({ role: "garden", text: handoff, ts });
+          pending = { tools: [], firstText: "", ts };
+          seenUser = true;
+          continue;
+        }
         turns.push({ role: "user", text, ts, ...(image ? { image: true } : {}) });
         pending = { tools: [], firstText: "", ts };
         seenUser = true;
@@ -315,6 +327,17 @@ export function gardenLabel(text: string): string {
   if (/interrupted by a restart/i.test(text)) return "resumed after interrupt";
   if (/reviewed and merged/i.test(text)) return "continue after merge";
   return "autocontinue";
+}
+
+// Map a handoff seed prompt to a compact source-labeled marker, or null when the
+// text is not a handoff seed. The seed opens with a bracketed identity line
+// (`[handoff from <project>/<worker>]`, optionally `— callback requested`, or a
+// bare `[handoff]` from a non-worker) built in commands/handoff.ts; the marker
+// is that bracket's contents, e.g. "handoff from garden/plush-faint-dusk". Kept
+// in sync with the seed prefix there.
+export function handoffSeedLabel(text: string): string | null {
+  const m = text.match(/^\[(handoff\b[^\]]*)\]/);
+  return m ? collapse(m[1]) : null;
 }
 
 // Summarize an assistant turn by what it DID, not what it said last. The closing

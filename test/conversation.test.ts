@@ -10,6 +10,7 @@ import {
   sumTranscriptUsage,
   formatConversationPane,
   gardenLabel,
+  handoffSeedLabel,
   isInjectedSystemMessage,
   type Turn,
 } from "../src/dashboard/conversation.js";
@@ -308,6 +309,26 @@ describe("readConversation", () => {
     ]);
   });
 
+  it("renders a handoff seed as a compact source-labeled marker and keeps its response", () => {
+    const p = writeTranscript([
+      // A handed-off worker's first prompt: the briefing garden pastes in,
+      // prefixed with the source identity. Reads as a typed prompt.
+      user("[handoff from garden/plush-faint-dusk]\n\nFix the Codex reviewer quota path. "
+        + "x".repeat(4000), "2026-05-30T17:00:00Z", { promptSource: "typed" }),
+      assistant([{ type: "tool_use", name: "Edit", input: { file_path: "codex-core.ts" } }], "2026-05-30T17:00:01Z"),
+      assistant([{ type: "tool_use", name: "Bash", input: { command: "git push" } }], "2026-05-30T17:00:02Z"),
+      user("now double-check the reset extraction", "2026-05-30T17:06:00Z"),
+      assistant([{ type: "text", text: "Looks right." }], "2026-05-30T17:06:01Z"),
+    ]);
+    expect(readConversation(p)).toEqual([
+      { role: "garden", text: "handoff from garden/plush-faint-dusk", ts: "2026-05-30T17:00:00Z" },
+      // tool-only turn: ts inherited from the seed marker that seeded it (no text block to restamp).
+      { role: "assistant", text: "edited codex-core.ts · pushed", verb: "worked", ts: "2026-05-30T17:00:00Z" },
+      { role: "user", text: "now double-check the reset extraction", ts: "2026-05-30T17:06:00Z" },
+      { role: "assistant", text: "Looks right.", verb: "answered", ts: "2026-05-30T17:06:01Z" },
+    ]);
+  });
+
   it("skips a system-injected task-notification so its turn folds into one summary", () => {
     const p = writeTranscript([
       user("kick off the research"),
@@ -513,6 +534,22 @@ describe("gardenLabel", () => {
   });
   it("falls back to a generic autocontinue label", () => {
     expect(gardenLabel("[garden] Something new we don't recognize yet")).toBe("autocontinue");
+  });
+});
+
+describe("handoffSeedLabel", () => {
+  it("extracts the bracketed identity of a handoff seed", () => {
+    expect(handoffSeedLabel("[handoff from garden/plush-faint-dusk] Fix the thing"))
+      .toBe("handoff from garden/plush-faint-dusk");
+    expect(handoffSeedLabel("[handoff from garden/plush-faint-dusk — callback requested] Fix the thing"))
+      .toBe("handoff from garden/plush-faint-dusk — callback requested");
+    expect(handoffSeedLabel("[handoff] Fix the thing")).toBe("handoff");
+  });
+  it("returns null for a non-handoff prompt", () => {
+    expect(handoffSeedLabel("just a normal prompt")).toBe(null);
+    expect(handoffSeedLabel("[garden] a continuation")).toBe(null);
+    // a genuine prompt that merely mentions the word handoff mid-sentence
+    expect(handoffSeedLabel("please handoff this later")).toBe(null);
   });
 });
 
