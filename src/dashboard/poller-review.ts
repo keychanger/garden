@@ -1397,6 +1397,13 @@ export function handleReviewTimeout(
     quotaRetryCount: undefined,
     reviewFallbackHarness: undefined,
     reviewRetryAt: undefined,
+    // A timed-out holistic final review resolves to `failing` here; clear its
+    // in-flight markers so a later re-open (failing -> working -> reviewing) is
+    // routed to the per-phase reviewer, not misrouted back to
+    // handleHolisticFinalReview. Undefined for a per-phase review, so this is a
+    // no-op there (STATUS.md: the markers clear when the pass resolves).
+    holisticFinalActive: undefined,
+    holisticReviewMode: undefined,
   });
   refreshDashboard();
   return true;

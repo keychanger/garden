@@ -2193,6 +2193,24 @@ describe("poll — holistic final review (interposed whole-task review)", () => 
     expect(after.holisticFinalActive).toBeUndefined();
     expect(after.holisticReviewedThroughMergeCount).toBe(3);
   });
+
+  it("timeout: parks in failing and clears the holistic markers (no misroute on re-open)", () => {
+    // Reviewer window still alive past the 60-min cap → handleReviewTimeout.
+    // The shared timeout path must clear holisticFinalActive/holisticReviewMode
+    // so a later failing → working → reviewing re-open is routed to the
+    // per-phase reviewer, not misrouted back to handleHolisticFinalReview.
+    setHolistic({
+      holisticReviewMode: "fix",
+      reviewStartedAt: Date.now() - 60 * 60 * 1000 - 60_000,
+    });
+    vi.mocked(windowExists).mockReturnValue(true); // window alive = timeout, not completion
+    poll("myproject");
+    expect(killWindowSafe).toHaveBeenCalledWith("_myproject-review-bold-ash");
+    const after = registryMock.findWorkerByName("myproject", "bold-ash")!;
+    expect(after.prState).toBe("failing");
+    expect(after.holisticFinalActive).toBeUndefined();
+    expect(after.holisticReviewMode).toBeUndefined();
+  });
 });
 
 describe("poll — merge-pending state", () => {
