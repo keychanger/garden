@@ -46,6 +46,7 @@ vi.mock("../src/dashboard/header.js", () => ({
   refreshDashboard: vi.fn(),
   refreshDashboardCycle: vi.fn(),
   refreshDashboardPlotCycle: vi.fn(),
+  refreshStatusElapsed: vi.fn(),
   setPaneProjectColor: vi.fn(),
 }));
 
@@ -118,7 +119,7 @@ import {
 
 import { readDashState, writeDashState } from "../src/dashboard/state.js";
 import { parkToHidden, restoreFromHidden, swapToHidden, swapDirect, gardenSwapToHidden } from "../src/dashboard/layout.js";
-import { refreshDashboard, refreshDashboardPlotCycle, setPaneProjectColor } from "../src/dashboard/header.js";
+import { refreshDashboard, refreshDashboardPlotCycle, refreshStatusElapsed, setPaneProjectColor } from "../src/dashboard/header.js";
 import {
   tmux, tmuxDisplay, paneExists, windowExists, getFirstPaneId,
   listAllWindowNames, listHiddenWorkerWindows,
@@ -527,6 +528,27 @@ describe("focusGrowhouse / focusRoot / focusLogs (switchGardenTo)", () => {
     );
     focusLogs();
     expect(acknowledgeAlerts).toHaveBeenCalled();
+  });
+
+  it("focusLogs re-bakes the status pane so ⚠ badges clear on the already-on-logs path", () => {
+    vi.mocked(readDashState).mockReturnValue(
+      makeState({ gardenPaneType: "logs", gardenShellPaneId: "%1" }),
+    );
+    focusLogs();
+    // switchGardenTo early-returns when already on logs, so the status-pane
+    // re-bake that drops the now-acked per-project badges is the explicit one.
+    expect(refreshStatusElapsed).toHaveBeenCalled();
+  });
+
+  it("focusLogs acknowledges alerts before repainting so the pane bakes cleared counts", () => {
+    vi.mocked(readDashState).mockReturnValue(
+      makeState({ gardenPaneType: "growhouse", gardenWindowName: "_garden-growhouse" }),
+    );
+    const order: string[] = [];
+    vi.mocked(acknowledgeAlerts).mockImplementationOnce(() => { order.push("ack"); });
+    vi.mocked(refreshDashboard).mockImplementationOnce(() => { order.push("refresh"); });
+    focusLogs();
+    expect(order).toEqual(["ack", "refresh"]);
   });
 
   it("creates growhouse window if missing and switches to it", () => {

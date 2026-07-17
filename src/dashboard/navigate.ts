@@ -3,7 +3,7 @@ import { loadConfig, getProject, getFocusedProjectNames, plotsMap, isPlotFocused
 import { readDashState, writeDashState, withStateLock, type DashboardState } from "./state.js";
 import { swapToHidden, swapDirect } from "./layout.js";
 import { gardenSwapToHidden } from "./layout.js";
-import { refreshDashboard, refreshDashboardCycle, refreshDashboardPlotCycle, setPaneProjectColor } from "./header.js";
+import { refreshDashboard, refreshDashboardCycle, refreshDashboardPlotCycle, refreshStatusElapsed, setPaneProjectColor } from "./header.js";
 import {
   tmux, tmuxDisplay,
   paneExists, windowExists,
@@ -313,8 +313,15 @@ export function focusRoot(): void {
 }
 
 export function focusLogs(): void {
-  switchGardenTo("logs");
+  // Ack before the pane repaints so the per-project ⚠ badges clear in the same
+  // paint. acknowledgeAlerts only refreshes the bottom-bar badge (@garden_right),
+  // not the status pane's pre-baked per-project counts — so re-bake the status
+  // pane here. On the normal path switchGardenTo's refreshDashboard already
+  // reflects the cleared counts (ack ran first); refreshStatusElapsed covers the
+  // already-on-logs early-return path and is a deduped no-op otherwise.
   acknowledgeAlerts();
+  switchGardenTo("logs");
+  refreshStatusElapsed();
 }
 
 export function focusHistory(): void {
