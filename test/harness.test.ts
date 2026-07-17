@@ -128,6 +128,30 @@ describe("claude-code adapter dialect", () => {
     expect(cmd).not.toContain("--settings");
   });
 
+  it("renders --effort for a plain effort rung, after --model", async () => {
+    const { getHarnessCore } = await importCore();
+    const cmd = getHarnessCore().buildAgentCommand({
+      sessionId: "abc-123", resume: false, contextFile: "/tmp/ctx.md",
+      model: "sonnet", effort: "xhigh", envPrefix: "",
+    });
+    expect(cmd).toBe(
+      "claude --rc --model sonnet --effort xhigh "
+      + "--session-id abc-123 --append-system-prompt-file /tmp/ctx.md",
+    );
+  });
+
+  it("suppresses effort when ultracode is set (ultracode already fixes max effort)", async () => {
+    const { getHarnessCore } = await importCore();
+    const cmd = getHarnessCore().buildAgentCommand({
+      sessionId: "abc-123", resume: false, contextFile: "/tmp/ctx.md",
+      effort: "high", ultracode: true, envPrefix: "",
+    });
+    // Exactly one --effort (max), no duplicate from the effort rung.
+    expect(cmd.match(/--effort/g)).toHaveLength(1);
+    expect(cmd).toContain("--effort max");
+    expect(cmd).not.toContain("--effort high");
+  });
+
   it("builds the headless command core", async () => {
     const { getHarnessCore } = await importCore();
     const cmd = getHarnessCore().buildHeadlessCommand({

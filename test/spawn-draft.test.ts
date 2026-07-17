@@ -31,10 +31,23 @@ describe("spawn draft", () => {
     expect(readSpawnDraft("lex")).toEqual({ base: "v2-api", crew: "all-codex" });
   });
 
+  it("merges model and effort alongside base/crew, preserving all four", () => {
+    writeSpawnDraft("lex", { model: "sonnet" });
+    writeSpawnDraft("lex", { effort: "xhigh" });
+    writeSpawnDraft("lex", { crew: "all-claude" });
+    expect(readSpawnDraft("lex")).toEqual({ model: "sonnet", effort: "xhigh", crew: "all-claude" });
+  });
+
   it("an empty-string value clears that field", () => {
     writeSpawnDraft("lex", { base: "v2-api", crew: "all-codex" });
     writeSpawnDraft("lex", { base: "" });
     expect(readSpawnDraft("lex")).toEqual({ crew: "all-codex" });
+  });
+
+  it("an empty-string value clears model/effort independently", () => {
+    writeSpawnDraft("lex", { model: "fable", effort: "ultra" });
+    writeSpawnDraft("lex", { model: "" });
+    expect(readSpawnDraft("lex")).toEqual({ effort: "ultra" });
   });
 
   it("consume returns the draft AND deletes it (one-shot)", () => {

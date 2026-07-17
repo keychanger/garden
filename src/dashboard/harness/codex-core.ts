@@ -208,6 +208,9 @@ export const codexCore: HarnessCore = {
   // reviewer is short-lived and garden owns its trust boundary. A looping
   // worker running unbounded model-generated commands must stay confined.
   buildAgentCommand(opts: AgentCommandOptions): string {
+    // opts.ultracode / opts.effort are claude-code dials and are ignored here,
+    // same as the pre-existing ultracode no-op — a codex effort mapping
+    // (model_reasoning_effort) can be added when a codex worker needs it.
     const modelFlag = opts.model ? ` -m ${shellEscape(opts.model)}` : "";
     const trust = "--dangerously-bypass-hook-trust";
     const sandbox = codexSandboxFlags(opts.worktreeGitDir);

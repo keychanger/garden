@@ -104,10 +104,15 @@ export const claudeCodeCore: HarnessCore = {
     const ultracodeFlags = opts.ultracode
       ? ` --effort max --settings ${shellEscape(ULTRACODE_SETTINGS_JSON)}`
       : "";
+    // General reasoning-effort rung (low/medium/high/xhigh). Ultracode already
+    // fixes `--effort max`, so it wins and effort is suppressed to avoid a
+    // duplicate flag. Absent effort renders nothing — byte-identical to the
+    // pre-effort launch command for every existing worker.
+    const effortFlag = opts.effort && !opts.ultracode ? ` --effort ${shellEscape(opts.effort)}` : "";
     const sessionFlag = opts.resume
       ? `--resume ${shellEscape(opts.sessionId)}`
       : `--session-id ${shellEscape(opts.sessionId)}`;
-    return `${opts.envPrefix}claude --rc${modelFlag}${ultracodeFlags} ${sessionFlag} `
+    return `${opts.envPrefix}claude --rc${modelFlag}${effortFlag}${ultracodeFlags} ${sessionFlag} `
       + `--append-system-prompt-file ${shellEscape(opts.contextFile)}`;
   },
 

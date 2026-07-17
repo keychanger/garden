@@ -103,6 +103,11 @@ export interface NewWorkerOptions {
   // entry.ultracode + entry.model and threaded into every launch/resume/bounce.
   // Ignored for trellis vines (they resolve their own model per iteration).
   ultracode?: boolean;
+  // Per-worker reasoning effort (one of WORKER_EFFORT_LEVELS: low/medium/high/
+  // xhigh) for default/grow workers. Persisted to entry.effort and rendered as
+  // `--effort <level>`. The "ultra" rung is expressed via `ultracode`, not
+  // here; a caller must not set both. Ignored for trellis vines.
+  effort?: string;
   // Trellis-specific options, ignored unless workflow === "trellis".
   trellis?: {
     name: string;
@@ -340,6 +345,11 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // model pin does not apply there — only its non-trellis workers get it.
     const ultracode = opts.ultracode === true && workflowName !== "trellis";
     const effectiveModel = ultracode ? (opts.model ?? ULTRACODE_MODEL) : opts.model;
+    // Per-worker effort rung for default/grow. Suppressed for trellis (own
+    // model resolution) and when ultracode is set (that preset already fixes
+    // max effort — the composer/CLI keep them mutually exclusive, this is
+    // defense-in-depth so a caller passing both never double-sets effort).
+    const effectiveEffort = !ultracode && workflowName !== "trellis" ? opts.effort : undefined;
     // origin/<baseBranch> tip at creation — the `from` endpoint of the
     // whole-task cumulative diff a later holistic review computes. Captured
     // here (after the publish gesture guarantees the ref exists) because the
@@ -371,6 +381,9 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       // Ultracode launch mode (max effort + dynamic-workflow trigger),
       // threaded into every launch/resume/bounce.
       ...(ultracode ? { ultracode: true } : {}),
+      // Per-worker effort rung (default/grow), threaded like model. Never set
+      // alongside ultracode (effectiveEffort is undefined then).
+      ...(effectiveEffort ? { effort: effectiveEffort } : {}),
       // Trellis vine data — populated only when workflow === "trellis".
       // iteration starts at 0; launchReview increments to 1 before the
       // first review fires. See WORKFLOWS.md "Worker entry additions".
@@ -437,12 +450,13 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // with progress output instead of blocking the hotkey handler. Default
     // workers omit the options argument entirely (preserves arity for existing
     // callers and tests).
-    const bootstrapOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; harness?: string } = {};
+    const bootstrapOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string } = {};
     if (trellisRelativePath) bootstrapOpts.trellisRelativePath = trellisRelativePath;
     if (resolvedModel) bootstrapOpts.model = resolvedModel;
     if (ultracode) bootstrapOpts.ultracode = true;
+    if (effectiveEffort) bootstrapOpts.effort = effectiveEffort;
     if (resolvedHarness) bootstrapOpts.harness = resolvedHarness;
-    const scriptFile = (bootstrapOpts.trellisRelativePath || bootstrapOpts.model || bootstrapOpts.ultracode || bootstrapOpts.harness)
+    const scriptFile = (bootstrapOpts.trellisRelativePath || bootstrapOpts.model || bootstrapOpts.ultracode || bootstrapOpts.effort || bootstrapOpts.harness)
       ? buildWorktreeBootstrapScript(
           project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
           bootstrapOpts,
@@ -765,13 +779,14 @@ export function bounceWorker(projectName: string, workerName: string): void {
   // resolve their model per iteration, not on bounce. Plain workers omit
   // the options arg so existing tests (which assert exact argument arity)
   // still pass.
-  const resumeOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; harness?: string } = {};
+  const resumeOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string } = {};
   if (trellisRelativePath) resumeOpts.trellisRelativePath = trellisRelativePath;
   if (entry.model) resumeOpts.model = entry.model;
   if (entry.ultracode) resumeOpts.ultracode = true;
+  if (entry.effort) resumeOpts.effort = entry.effort;
   if (entry.harness) resumeOpts.harness = entry.harness;
   const resumeCmd = entry.worktreePath && entry.branchName && projectInfo
-    ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.ultracode || resumeOpts.harness
+    ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.ultracode || resumeOpts.effort || resumeOpts.harness
         ? buildWorktreeResumeCommand(
             projectName, projectInfo.path, entry.name, entry.branchName,
             entry.sessionId, baseBranch, resumeOpts,

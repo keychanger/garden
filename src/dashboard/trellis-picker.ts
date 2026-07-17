@@ -24,6 +24,7 @@ import { runMenu, type MenuSpec, type MenuRow } from "./menu.js";
 import { loadConfig } from "../config.js";
 import { listCrews } from "./crew.js";
 import { listBranches } from "./git.js";
+import { WORKER_EFFORT_LEVELS } from "./create.js";
 import { readSpawnDraft, writeSpawnDraft, consumeSpawnDraft, type SpawnDraftPatch } from "./spawn-draft.js";
 import {
   findTrellisFiles, validateTrellisPlant,
@@ -360,11 +361,36 @@ function buildIteration1Seed(
 // multi-line or special-character seeds use the CLI:
 // `garden workers new --workflow grow --seed-file <path>`.
 
-// The base/crew override bracket for the composer title.
+// Suggested models for the composer's model dim — the everyday Anthropic
+// aliases (fable included, per the "fable ultracode" ergonomic). Opaque
+// strings passed to `--model`; the CLI `workers new --model <id>` covers any
+// exotic id, exactly as base/crew keep their fixed lists.
+const COMPOSER_MODELS = ["opus", "sonnet", "haiku", "fable"];
+
+// The composer's effort rungs: the four claude-code `--effort` levels plus
+// "ultra" — the top rung the consumer maps to the ultracode preset.
+const COMPOSER_EFFORTS = [...WORKER_EFFORT_LEVELS, "ultra"];
+
+// Map a consumed draft's model/effort onto newWorker options. "ultra" is the
+// ultracode preset (max effort + workflows), so it becomes `ultracode: true`
+// rather than an effort value; the other rungs pass through as `effort`. Used
+// by both the default and grow consume paths so the mapping lives in one place.
+export function draftLaunchOpts(draft: SpawnDraftPatch): { model?: string; effort?: string; ultracode?: boolean } {
+  const opts: { model?: string; effort?: string; ultracode?: boolean } = {};
+  if (draft.model) opts.model = draft.model;
+  if (draft.effort === "ultra") opts.ultracode = true;
+  else if (draft.effort) opts.effort = draft.effort;
+  return opts;
+}
+
+// The override bracket for the composer title — reads like the spoken recipe:
+// model and effort bare (sonnet · xhigh), crew and base labeled.
 function draftBracket(draft: SpawnDraftPatch): string {
   const parts: string[] = [];
-  if (draft.base) parts.push(`base ${draft.base}`);
+  if (draft.model) parts.push(draft.model);
+  if (draft.effort) parts.push(draft.effort);
   if (draft.crew) parts.push(`crew ${draft.crew}`);
+  if (draft.base) parts.push(`base ${draft.base}`);
   return parts.length ? ` (${parts.join(" · ")})` : "";
 }
 
@@ -383,8 +409,10 @@ export function buildWorkflowPickerPlan(
     { label: "(t) trellis — pick a frozen design doc", key: "t", tmux: shellCmdTrellisPicker(runner, projectName) },
     { label: "(g) grow — bounded iteration loop", key: "g", tmux: shellCmdGrowPlant(runner, projectName) },
     { sep: true, label: "" },
-    { label: `(b) base branch…   [${draft.base ?? "default"}]`, key: "b", run: `${runner} dashboard _compose-base-submenu ${p}` },
+    { label: `(m) model…         [${draft.model ?? "default"}]`, key: "m", run: `${runner} dashboard _compose-model-submenu ${p}` },
+    { label: `(e) effort…        [${draft.effort ?? "default"}]`, key: "e", run: `${runner} dashboard _compose-effort-submenu ${p}` },
     { label: `(c) crew…          [${draft.crew ?? "default"}]`, key: "c", run: `${runner} dashboard _compose-crew-submenu ${p}` },
+    { label: `(b) base branch…   [${draft.base ?? "default"}]`, key: "b", run: `${runner} dashboard _compose-base-submenu ${p}` },
   ];
   return { title: `New worker on ${projectName}${draftBracket(draft)}`, rows };
 }
@@ -413,6 +441,36 @@ export function buildComposeCrewSubmenuPlan(project: string, crews: string[], cu
   }));
   rows.push({ label: "(0) clear — project default crew", key: "0", run: `${runner} dashboard _spawn-draft ${p} crew ${shellEscape("")}` });
   return { title: `Crew for the new worker on ${project}`, rows };
+}
+
+// Model dim (default/grow workers; trellis resolves its own). Fixed alias list
+// — the CLI covers exotic ids.
+export function buildComposeModelSubmenuPlan(project: string, models: string[], current: string | undefined, runner: string): MenuSpec {
+  const p = shellEscape(project);
+  const rows: MenuRow[] = models.map((m, i) => ({
+    label: m === current ? `${m}  ✓` : m,
+    key: i < 9 ? String(i + 1) : "",
+    run: `${runner} dashboard _spawn-draft ${p} model ${shellEscape(m)}`,
+  }));
+  rows.push({ label: "(0) clear — account default", key: "0", run: `${runner} dashboard _spawn-draft ${p} model ${shellEscape("")}` });
+  return { title: `Model for the new worker on ${project}`, rows };
+}
+
+// Effort dim (default/grow workers). The four `--effort` rungs plus "ultra" —
+// the sentinel the consumer maps to the ultracode preset (max effort + dynamic
+// workflows). "ultra" carries its own descriptive suffix.
+export function buildComposeEffortSubmenuPlan(project: string, efforts: string[], current: string | undefined, runner: string): MenuSpec {
+  const p = shellEscape(project);
+  const rows: MenuRow[] = efforts.map((e, i) => {
+    const name = e === "ultra" ? "ultra — max effort + dynamic workflows" : e;
+    return {
+      label: e === current ? `${name}  ✓` : name,
+      key: i < 9 ? String(i + 1) : "",
+      run: `${runner} dashboard _spawn-draft ${p} effort ${shellEscape(e)}`,
+    };
+  });
+  rows.push({ label: "(0) clear — account default", key: "0", run: `${runner} dashboard _spawn-draft ${p} effort ${shellEscape("")}` });
+  return { title: `Effort for the new worker on ${project}`, rows };
 }
 
 // Spawned by the ⌥⇧N hotkey. Resolves the active project, builds the
@@ -451,10 +509,22 @@ export function runComposeCrewSubmenu(projectName: string): void {
   runMenu(buildComposeCrewSubmenuPlan(projectName, crews, readSpawnDraft(projectName).crew, resolveGardenRunner()));
 }
 
-// _spawn-draft <project> <field> <value>: stage a base/crew override and re-open
-// the composer (form feel). Empty value clears the field.
+export function runComposeModelSubmenu(projectName: string): void {
+  if (!tryGetProject(projectName)) { tmuxDisplay(`Unknown project '${projectName}'.`); return; }
+  runMenu(buildComposeModelSubmenuPlan(projectName, COMPOSER_MODELS, readSpawnDraft(projectName).model, resolveGardenRunner()));
+}
+
+export function runComposeEffortSubmenu(projectName: string): void {
+  if (!tryGetProject(projectName)) { tmuxDisplay(`Unknown project '${projectName}'.`); return; }
+  runMenu(buildComposeEffortSubmenuPlan(projectName, COMPOSER_EFFORTS, readSpawnDraft(projectName).effort, resolveGardenRunner()));
+}
+
+// _spawn-draft <project> <field> <value>: stage a base/crew/model/effort
+// override and re-open the composer (form feel). Empty value clears the field.
 export function stageSpawnDraft(projectName: string, field: string, value: string): void {
-  if (field !== "base" && field !== "crew") { tmuxDisplay(`Unknown draft field '${field}'.`); return; }
+  if (field !== "base" && field !== "crew" && field !== "model" && field !== "effort") {
+    tmuxDisplay(`Unknown draft field '${field}'.`); return;
+  }
   writeSpawnDraft(projectName, { [field]: value });
   runWorkflowPicker(projectName);
 }
@@ -468,6 +538,7 @@ export function composeDefaultFromPicker(projectName: string): void {
     projectName,
     ...(draft.base ? { base: draft.base } : {}),
     ...(draft.crew ? { crew: draft.crew } : {}),
+    ...draftLaunchOpts(draft),
   });
   if (!newName) {
     tmuxDisplay(`Failed to spawn worker on '${projectName}'. Is the dashboard running?`);
@@ -507,6 +578,9 @@ export function plantGrowFromPicker(projectName: string, seed: string): void {
     grow: { seed: trimmed, maxIterations: maxIter },
     seedMessageFile: seedFile,
     ...(draft.base ? { base: draft.base } : {}),
+    // Grow honors the model/effort dims (default-adjacent — entry.model +
+    // ultracode apply); crew is default-only and not consumed here.
+    ...draftLaunchOpts(draft),
   });
   if (!newName) {
     try { fs.unlinkSync(seedFile); } catch { /* ignore */ }

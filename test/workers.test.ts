@@ -642,6 +642,45 @@ describe("newWorker", () => {
     const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
     expect(entry.ultracode).toBeUndefined();
     expect(entry.model).toBeUndefined();
+    expect(entry.effort).toBeUndefined();
+  });
+
+  // ===== Effort rung (composer effort dim / workers new --effort) =====
+
+  it("effort: stamps entry.effort alongside a model pin on a default worker", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ model: "sonnet", effort: "xhigh" });
+    expect(vi.mocked(addWorker)).toHaveBeenCalledWith(
+      "myproject",
+      expect.objectContaining({ model: "sonnet", effort: "xhigh" }),
+    );
+  });
+
+  it("effort: stamped on a grow worker (default-adjacent)", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ workflow: "grow", grow: { seed: "harden", maxIterations: 3 }, effort: "high" });
+    const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
+    expect(entry.effort).toBe("high");
+  });
+
+  it("effort: suppressed when ultracode is set (ultracode already fixes max effort)", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ ultracode: true, effort: "high" });
+    const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
+    expect(entry.ultracode).toBe(true);
+    expect(entry.effort).toBeUndefined();
+  });
+
+  it("effort: ignored for trellis vines (they resolve their own model per iteration)", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({
+      workflow: "trellis",
+      trellis: { name: "auth", path: "/repo/myproject/.garden/trellises/auth.md", maxIterations: 30 },
+      effort: "xhigh",
+    });
+    const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
+    expect(entry.workflow).toBe("trellis");
+    expect(entry.effort).toBeUndefined();
   });
 
   it("ultracode: ignored for trellis vines (they resolve their own model per iteration)", () => {

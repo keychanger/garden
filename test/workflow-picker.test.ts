@@ -37,7 +37,8 @@ vi.mock("../src/dashboard/tmux.js", () => ({
 
 import {
   buildWorkflowPickerPlan, buildComposeBaseSubmenuPlan,
-  buildComposeCrewSubmenuPlan, plantGrowFromPicker,
+  buildComposeCrewSubmenuPlan, buildComposeModelSubmenuPlan,
+  buildComposeEffortSubmenuPlan, draftLaunchOpts, plantGrowFromPicker,
 } from "../src/dashboard/trellis-picker.js";
 import { newWorker } from "../src/dashboard/workers.js";
 import { tryGetProject } from "../src/config.js";
@@ -53,14 +54,16 @@ beforeEach(() => {
 // ─── buildWorkflowPickerPlan ──────────────────────────────────────────────
 
 describe("buildWorkflowPickerPlan", () => {
-  it("returns the d/t/g workflow rows, a separator, then the b/c composer rows", () => {
+  it("returns the d/t/g workflow rows, a separator, then the m/e/c/b composer rows", () => {
     const rows = buildWorkflowPickerPlan("proj", RUNNER).rows;
     expect(rows[0].key).toBe("d");
     expect(rows[1].key).toBe("t");
     expect(rows[2].key).toBe("g");
     expect(rows[3].sep).toBe(true);
-    expect(rows[4].key).toBe("b");
-    expect(rows[5].key).toBe("c");
+    expect(rows[4].key).toBe("m");
+    expect(rows[5].key).toBe("e");
+    expect(rows[6].key).toBe("c");
+    expect(rows[7].key).toBe("b");
   });
 
   it("includes the project name in the title", () => {
@@ -83,22 +86,96 @@ describe("buildWorkflowPickerPlan", () => {
     expect(rows[2].tmux).toContain("%%");
   });
 
-  it("the composer rows dispatch the base/crew submenus and show the staged draft", () => {
-    const rows = buildWorkflowPickerPlan("proj", RUNNER, { base: "v2-api", crew: "all-codex" }).rows;
-    expect(rows[4].run).toContain("_compose-base-submenu");
-    expect(rows[4].label).toContain("v2-api");
-    expect(rows[5].run).toContain("_compose-crew-submenu");
-    expect(rows[5].label).toContain("all-codex");
+  it("the composer rows dispatch the model/effort/crew/base submenus and show the staged draft", () => {
+    const rows = buildWorkflowPickerPlan("proj", RUNNER, {
+      model: "sonnet", effort: "xhigh", crew: "all-codex", base: "v2-api",
+    }).rows;
+    expect(rows[4].run).toContain("_compose-model-submenu");
+    expect(rows[4].label).toContain("sonnet");
+    expect(rows[5].run).toContain("_compose-effort-submenu");
+    expect(rows[5].label).toContain("xhigh");
+    expect(rows[6].run).toContain("_compose-crew-submenu");
+    expect(rows[6].label).toContain("all-codex");
+    expect(rows[7].run).toContain("_compose-base-submenu");
+    expect(rows[7].label).toContain("v2-api");
   });
 
-  it("reflects a staged draft in the title bracket", () => {
-    const plan = buildWorkflowPickerPlan("proj", RUNNER, { base: "v2-api" });
-    expect(plan.title).toContain("base v2-api");
+  it("reflects a staged draft in the title bracket, reading like the spoken recipe", () => {
+    const plan = buildWorkflowPickerPlan("proj", RUNNER, { model: "sonnet", effort: "xhigh", crew: "all-claude" });
+    // model and effort bare (sonnet · xhigh), crew labeled.
+    expect(plan.title).toContain("sonnet · xhigh · crew all-claude");
   });
 
   it("shell-escapes the project name when it contains unsafe characters", () => {
     const rows = buildWorkflowPickerPlan("proj with space", RUNNER).rows;
     expect(rows[1].tmux).toContain("'proj with space'");
+  });
+});
+
+// ─── buildComposeModelSubmenuPlan ─────────────────────────────────────────
+
+describe("buildComposeModelSubmenuPlan", () => {
+  it("renders one row per model plus a trailing clear row", () => {
+    const rows = buildComposeModelSubmenuPlan("proj", ["opus", "sonnet", "fable"], undefined, RUNNER).rows;
+    expect(rows).toHaveLength(4);
+    expect(rows[0].label).toBe("opus");
+    expect(rows[2].label).toBe("fable");
+    expect(rows.at(-1)!.label).toMatch(/clear/i);
+    expect(rows.at(-1)!.key).toBe("0");
+  });
+
+  it("stages the chosen model via _spawn-draft <project> model <model>", () => {
+    const rows = buildComposeModelSubmenuPlan("proj", ["fable"], undefined, RUNNER).rows;
+    expect(rows[0].run).toContain("_spawn-draft");
+    expect(rows[0].run).toContain("model");
+    expect(rows[0].run).toContain("fable");
+  });
+
+  it("marks the current model with a check", () => {
+    const rows = buildComposeModelSubmenuPlan("proj", ["opus", "sonnet"], "sonnet", RUNNER).rows;
+    expect(rows[0].label).toBe("opus");
+    expect(rows[1].label).toContain("✓");
+  });
+});
+
+// ─── buildComposeEffortSubmenuPlan ────────────────────────────────────────
+
+describe("buildComposeEffortSubmenuPlan", () => {
+  it("renders the rungs plus a clear row, with ultra carrying a descriptive suffix", () => {
+    const rows = buildComposeEffortSubmenuPlan("proj", ["low", "high", "xhigh", "ultra"], undefined, RUNNER).rows;
+    expect(rows).toHaveLength(5);
+    expect(rows[0].label).toBe("low");
+    expect(rows.at(-2)!.label).toMatch(/^ultra — max effort/);
+    expect(rows.at(-1)!.label).toMatch(/clear/i);
+  });
+
+  it("stages the chosen effort via _spawn-draft <project> effort <level>", () => {
+    const rows = buildComposeEffortSubmenuPlan("proj", ["xhigh"], undefined, RUNNER).rows;
+    expect(rows[0].run).toContain("_spawn-draft");
+    expect(rows[0].run).toContain("effort");
+    expect(rows[0].run).toContain("xhigh");
+  });
+
+  it("stages the ultra sentinel (mapped to ultracode by the consumer)", () => {
+    const rows = buildComposeEffortSubmenuPlan("proj", ["ultra"], undefined, RUNNER).rows;
+    expect(rows[0].run).toContain("effort");
+    expect(rows[0].run).toContain("ultra");
+  });
+});
+
+// ─── draftLaunchOpts ──────────────────────────────────────────────────────
+
+describe("draftLaunchOpts", () => {
+  it("passes a plain effort rung through as effort", () => {
+    expect(draftLaunchOpts({ model: "sonnet", effort: "xhigh" })).toEqual({ model: "sonnet", effort: "xhigh" });
+  });
+
+  it("maps the ultra rung to ultracode (never a bare effort value)", () => {
+    expect(draftLaunchOpts({ model: "fable", effort: "ultra" })).toEqual({ model: "fable", ultracode: true });
+  });
+
+  it("returns an empty object for a draft with no model/effort", () => {
+    expect(draftLaunchOpts({ base: "v2-api" })).toEqual({});
   });
 });
 

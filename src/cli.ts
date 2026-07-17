@@ -153,15 +153,17 @@ Dashboard:
   rebuild                        Rebuild garden and relaunch dashboard
 
 Workers:
-  workers new <project> [--workflow default|trellis|grow] [--model <alias-or-id>] [--harness codex] [--crew <name>]
-                        [--base <branch>] [--trellis <name>] [--seed <text> | --seed-file <path>] [--max-iterations N]
+  workers new <project> [--workflow default|trellis|grow] [--model <alias-or-id>] [--effort low|medium|high|xhigh|ultra]
+                        [--harness codex] [--crew <name>] [--base <branch>] [--trellis <name>]
+                        [--seed <text> | --seed-file <path>] [--max-iterations N]
                                  Spawn a new worker. default plants an interactive worker;
                                  trellis plants a vine bound to the named trellis (--trellis);
                                  grow plants a bounded hardening loop from a --seed / --seed-file
                                  (--max-iterations caps the passes, default 5). --model overrides
-                                 the workflow's default worker model. --harness picks the agent CLI
-                                 (default claude-code; codex = a sandboxed Codex worker, default
-                                 workflow only).
+                                 the workflow's default worker model. --effort sets the reasoning
+                                 rung (ultra = max effort + dynamic workflows; default/grow only).
+                                 --harness picks the agent CLI (default claude-code; codex = a
+                                 sandboxed Codex worker, default workflow only).
   workers grow [<worker>] --seed <text> | --seed-file <path> | --goal-file <path>
                                  Convert an active default worker into a grow loop after its
                                  current work merges (self-resolves via $GARDEN_WORKER). The durable

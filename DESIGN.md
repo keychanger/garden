@@ -105,7 +105,7 @@ Requires terminal setup: iTerm2 → Profiles → Keys → Left Option key → "E
 | `⌥1` – `⌥9` | Switch to project by index within the active plot |
 | `⌥p` / `⌥P` | Cycle to next/previous focused plot (`⌥o` also cycles previous) |
 | `⌥n` | New worker (Claude session) |
-| `⌥⇧N` | Workflow picker / spawn composer — choose default / trellis / grow, and optionally stage a `base branch` / `crew` override (a short-lived spawn draft) for the new worker |
+| `⌥⇧N` | Workflow picker / spawn composer — choose default / trellis / grow, and optionally stage `model` / `effort` / `crew` / `base branch` overrides (a short-lived spawn draft) for the new worker. Effort rungs are low/medium/high/xhigh plus `ultra` (the ultracode preset); model + effort apply to default/grow only |
 | `⌥⇧C` | Crew picker — set the focused project's crew (who builds / who reviews) |
 | `⌥,` | Project config menu — inspect + set the focused project's everyday config (base branch / crew / CI gate / holistic / log color); rarer knobs (roles, profile, provider, checks/post-merge) stay on the `garden config` CLI |
 | `⌥w` | Jump to first worker |
@@ -478,7 +478,7 @@ All read commands detect whether stdout is a TTY:
     growhouse-init.zsh            # Garden growhouse init (custom prompt + auto-dispatch)
     diary-view.sh                 # Diary view editor loop (⌥d)
     bootstrap-<project>-<branch>.sh       # Transient worktree bootstrap script (swept >6h old by the watchdog)
-    spawn-draft-<project>.json            # Transient ⌥⇧N spawn-composer base/crew override (5-min TTL, swept by the watchdog)
+    spawn-draft-<project>.json            # Transient ⌥⇧N spawn-composer model/effort/crew/base override (5-min TTL, swept by the watchdog)
     <project>-<worker>-review-prompt.txt  # Transient review prompt
     <project>-<worker>-review-result.txt  # Transient review output
     status.rendered           # Pre-rendered status snapshot for instant display

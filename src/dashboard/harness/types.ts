@@ -29,6 +29,11 @@ export interface AgentCommandOptions {
    *  the dynamic-workflow keyword trigger). Absent/false = normal launch.
    *  The paired Opus model pin is threaded separately via `model`. */
   ultracode?: boolean;
+  /** Reasoning-effort rung (one of WORKER_EFFORT_LEVELS) — claude-code
+   *  renders `--effort <level>`. Independent of `model`. Mutually exclusive
+   *  with `ultracode` (which already fixes max effort); if both are set the
+   *  adapter lets ultracode win. A harness without an effort dial ignores it. */
+  effort?: string;
   /** Pre-composed env-assignments prefix (provider/profile env from
    *  claude-env.ts). Already shell-safe; prepended verbatim. */
   envPrefix: string;

@@ -357,6 +357,14 @@ export interface WorkerEntry {
   // `model` above (stamped at creation). Threaded into every launch, resume,
   // and bounce so the mode survives the worker's lifetime.
   ultracode?: boolean;
+  // Per-worker reasoning effort (one of WORKER_EFFORT_LEVELS: low/medium/high/
+  // xhigh), set via the ⌥⇧N composer's effort dim or `workers new --effort`.
+  // Rendered by the harness buildAgentCommand as `--effort <level>`; threaded
+  // into every launch/resume/bounce like `model`. The top rung (max effort +
+  // dynamic workflows) is the `ultracode` flag above, not an effort value, so
+  // the two never co-occur. Default/grow only (trellis resolves its own model
+  // and does not carry effort). A top-level scalar — no readRegistry migration.
+  effort?: string;
   // Reason the worker is in `failing`. See FailingReason above and
   // WORKFLOWS.md "Equilibrium and termination". Default workflow sets "code"
   // (Q8 retrofit) or "unparseable-verdict" (Q9 retrofit, phase 2).

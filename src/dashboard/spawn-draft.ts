@@ -1,10 +1,11 @@
-// Spawn-composer draft: the base/crew overrides the operator stages in the ⌥⇧N
-// workflow picker before choosing a workflow. Persisted per project so the
-// picker (a fire-and-forget menu) can carry state across its re-opens, then
-// consumed (read + deleted) when a workflow is chosen and threaded into
-// newWorker. A draft older than MAX_AGE_MS is ignored on read AND swept by the
-// watchdog — so a stale draft from last week can never silently apply to next
-// week's spawn. ⌥n (the zero-question fast path) never reads a draft.
+// Spawn-composer draft: the base/crew/model/effort overrides the operator
+// stages in the ⌥⇧N workflow picker before choosing a workflow. Persisted per
+// project so the picker (a fire-and-forget menu) can carry state across its
+// re-opens, then consumed (read + deleted) when a workflow is chosen and
+// threaded into newWorker. A draft older than MAX_AGE_MS is ignored on read AND
+// swept by the watchdog — so a stale draft from last week can never silently
+// apply to next week's spawn. ⌥n (the zero-question fast path) never reads a
+// draft.
 import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR } from "../config.js";
@@ -16,6 +17,14 @@ export const SPAWN_DRAFT_MAX_AGE_MS = 5 * 60_000;
 export interface SpawnDraftPatch {
   base?: string;
   crew?: string;
+  // Per-worker model alias/id (opaque string; opus/sonnet/haiku/fable or a
+  // concrete id) — threaded into newWorker as `model`. Default/grow only.
+  model?: string;
+  // Per-worker effort rung. The four claude-code `--effort` levels
+  // (low/medium/high/xhigh), or the sentinel "ultra" — the top rung the
+  // consumer maps to the ultracode preset (max effort + dynamic workflows),
+  // reusing that fully-plumbed path rather than a second effort value.
+  effort?: string;
 }
 
 function draftPath(project: string): string {
@@ -28,11 +37,13 @@ function draftPath(project: string): string {
 // The current draft for a project, or {} when absent or stale (> MAX_AGE_MS).
 export function readSpawnDraft(project: string): SpawnDraftPatch {
   try {
-    const parsed = JSON.parse(fs.readFileSync(draftPath(project), "utf-8")) as { base?: string; crew?: string; ts?: number };
+    const parsed = JSON.parse(fs.readFileSync(draftPath(project), "utf-8")) as { base?: string; crew?: string; model?: string; effort?: string; ts?: number };
     if (typeof parsed.ts !== "number" || Date.now() - parsed.ts > SPAWN_DRAFT_MAX_AGE_MS) return {};
     return {
       ...(parsed.base ? { base: parsed.base } : {}),
       ...(parsed.crew ? { crew: parsed.crew } : {}),
+      ...(parsed.model ? { model: parsed.model } : {}),
+      ...(parsed.effort ? { effort: parsed.effort } : {}),
     };
   } catch {
     return {};
@@ -46,6 +57,8 @@ export function writeSpawnDraft(project: string, patch: SpawnDraftPatch): void {
   const merged: SpawnDraftPatch = { ...current };
   if (patch.base !== undefined) { if (patch.base) merged.base = patch.base; else delete merged.base; }
   if (patch.crew !== undefined) { if (patch.crew) merged.crew = patch.crew; else delete merged.crew; }
+  if (patch.model !== undefined) { if (patch.model) merged.model = patch.model; else delete merged.model; }
+  if (patch.effort !== undefined) { if (patch.effort) merged.effort = patch.effort; else delete merged.effort; }
   try {
     atomicWriteFile(draftPath(project), JSON.stringify({ ...merged, ts: Date.now() }));
   } catch (err) {

@@ -329,13 +329,14 @@ export function ensureDashboard(): void {
       const trellisRelativePath = trellisRelativePathForEntry(entry, projectConfig.path);
       // entry.model: default/grow per-worker pin; trellis resolves per
       // iteration, so vines never carry it.
-      const resumeOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; harness?: string } = {};
+      const resumeOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string } = {};
       if (trellisRelativePath) resumeOpts.trellisRelativePath = trellisRelativePath;
       if (entry.model) resumeOpts.model = entry.model;
       if (entry.ultracode) resumeOpts.ultracode = true;
+      if (entry.effort) resumeOpts.effort = entry.effort;
       if (entry.harness) resumeOpts.harness = entry.harness;
       const resumeCmd = entry.worktreePath && entry.branchName
-        ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.ultracode || resumeOpts.harness
+        ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.ultracode || resumeOpts.effort || resumeOpts.harness
             ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch, resumeOpts)
             : buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch))
         : buildResumeCommand(projectName, projectConfig.path, entry.sessionId);
@@ -564,6 +565,19 @@ export function buildResumeCommand(projectName: string, projectPath: string, ses
   return `${agentCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
 }
 
+// The selectable reasoning-effort rungs below the ultracode preset. These are
+// claude-code's `--effort` levels; the top rung (max effort + dynamic
+// workflows) is the ultracode preset, offered in the composer as "ultra" and
+// carried by `WorkerEntry.ultracode`, not an effort value here. The composer
+// effort submenu and the `--effort` CLI flag build their choices from this
+// list plus the "ultra" sentinel.
+export const WORKER_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
+export type WorkerEffort = (typeof WORKER_EFFORT_LEVELS)[number];
+
+export function isWorkerEffort(value: string): value is WorkerEffort {
+  return (WORKER_EFFORT_LEVELS as readonly string[]).includes(value);
+}
+
 export interface WorktreeCommandOptions {
   /** Worktree-relative path to the trellis file. When set,
    *  buildWorktreeRules appends the three trellis paragraphs to the
@@ -593,6 +607,14 @@ export interface WorktreeCommandOptions {
    *  survives the worker's lifetime. The paired Opus pin travels via
    *  `model`. */
   ultracode?: boolean;
+  /** Per-worker reasoning effort (`WorkerEntry.effort`), one of
+   *  WORKER_EFFORT_LEVELS — rendered as claude-code's `--effort <level>`.
+   *  Independent of `model`: "extra-high sonnet" is `model: sonnet` +
+   *  `effort: xhigh`. The top rung (max effort + dynamic workflows) is the
+   *  `ultracode` preset, not an effort value, so effort and ultracode never
+   *  co-occur; buildAgentCommand lets ultracode win if both are somehow set.
+   *  A foreign harness (codex) ignores it, mirroring ultracode. */
+  effort?: string;
   /** Harness adapter name (`WorkerEntry.harness`). Absent = the default
    *  claude-code adapter. Threaded by resume/bounce/loop callers from the
    *  entry; spawn-time selection arrives with the second adapter. */
@@ -615,7 +637,7 @@ export function buildWorktreeWorkerCommand(
   const project = resolveProjectForHooks(projectName, projectPath);
   const agentCmd = getHarness(opts?.harness).buildAgentCommand({
     sessionId, resume: false, contextFile, model: opts?.model,
-    ultracode: opts?.ultracode, envPrefix: workerEnvPrefix(project),
+    ultracode: opts?.ultracode, effort: opts?.effort, envPrefix: workerEnvPrefix(project),
     worktreeGitDir: codexWorktreeGitDir(opts?.harness, projectPath),
   });
   return `${agentCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
@@ -733,7 +755,7 @@ export function buildWorktreeBootstrapScript(
   const growSkillFilenameLit = shellEscape(GROW_SKILL_FILENAME);
   const agentCmd = getHarness(opts?.harness).buildAgentCommand({
     sessionId, resume: false, contextFile, model: opts?.model,
-    ultracode: opts?.ultracode, envPrefix: workerEnvPrefix(project),
+    ultracode: opts?.ultracode, effort: opts?.effort, envPrefix: workerEnvPrefix(project),
     worktreeGitDir: codexWorktreeGitDir(opts?.harness, projectPath),
   });
 
@@ -959,7 +981,7 @@ export function buildWorktreeResumeCommand(
   const identityExports = workerEnvExports(projectName, workerName, branchName, baseBranch);
   const claudeCmd = getHarness(opts?.harness).buildAgentCommand({
     sessionId, resume: true, contextFile, model: opts?.model,
-    ultracode: opts?.ultracode, envPrefix: workerEnvPrefix(project),
+    ultracode: opts?.ultracode, effort: opts?.effort, envPrefix: workerEnvPrefix(project),
     worktreeGitDir: codexWorktreeGitDir(opts?.harness, projectPath),
   });
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;

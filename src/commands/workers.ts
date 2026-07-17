@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { tryGetProject, SESSIONS_DIR, loadConfig } from "../config.js";
 import { newWorker } from "../dashboard/workers.js";
+import { WORKER_EFFORT_LEVELS, isWorkerEffort } from "../dashboard/create.js";
 import { isRegisteredHarness, harnessNames, canonicalHarnessName } from "../dashboard/harness/core.js";
 import { getCrew, listCrews } from "../dashboard/crew.js";
 import { buildGrowIteration1Seed, GROW_GOAL_FILE_REL } from "../dashboard/grow-continue.js";
@@ -30,7 +31,7 @@ export async function workers(args: string[]): Promise<void> {
   throw new Error(
     `Usage:\n`
     + `  garden workers new <project> [--workflow trellis|grow] [--base <branch>] [--trellis <name>] `
-    + `[--seed <text> | --seed-file <path>] [--model <alias-or-id>] [--max-iterations N]\n`
+    + `[--seed <text> | --seed-file <path>] [--model <alias-or-id>] [--effort low|medium|high|xhigh|ultra] [--max-iterations N]\n`
     + `  garden workers grow [<worker>] [--seed <text> | --seed-file <path> | --goal-file <path>] `
     + `[--max-iterations N]`,
   );
@@ -45,6 +46,17 @@ function requireModelValue(raw: string): string {
   const model = raw.trim();
   if (!model) throw new Error("--model requires a non-empty value");
   return model;
+}
+
+// --effort accepts the four reasoning rungs or "ultra" (the ultracode preset:
+// max effort + dynamic workflows). Maps to newWorker's effort/ultracode fields
+// — the two are mutually exclusive, so exactly one is returned. Default/grow
+// only; trellis resolves its own model and carries no effort.
+function parseEffortFlag(raw: string): { effort?: string; ultracode?: boolean } {
+  const value = raw.trim();
+  if (value === "ultra") return { ultracode: true };
+  if (isWorkerEffort(value)) return { effort: value };
+  throw new Error(`--effort must be one of: ${[...WORKER_EFFORT_LEVELS, "ultra"].join(", ")}, got '${raw}'`);
 }
 
 async function newCommand(args: string[]): Promise<void> {
@@ -140,13 +152,15 @@ async function newCommand(args: string[]): Promise<void> {
       throw new Error("--max-iterations can only be used with --workflow trellis or grow");
     }
     const model = flags.has("model") ? requireModelValue(flags.get("model")!) : undefined;
-    const newName = newWorker({ projectName, workflow, model, ...(harness ? { harness } : {}), ...(base ? { base } : {}), ...(crew ? { crew } : {}) });
+    const effortOpts = flags.has("effort") ? parseEffortFlag(flags.get("effort")!) : {};
+    const newName = newWorker({ projectName, workflow, model, ...effortOpts, ...(harness ? { harness } : {}), ...(base ? { base } : {}), ...(crew ? { crew } : {}) });
     if (!newName) {
       throw new Error(
         `Failed to spawn worker on '${projectName}'. Is the dashboard running? Check 'garden health'.`,
       );
     }
-    const suffix = [model ? `model=${model}` : "", harness ? `harness=${harness}` : "", base ? `base=${base}` : "", crew ? `crew=${crew}` : ""].filter(Boolean).join(", ");
+    const effortLabel = effortOpts.ultracode ? "effort=ultra" : effortOpts.effort ? `effort=${effortOpts.effort}` : "";
+    const suffix = [model ? `model=${model}` : "", effortLabel, harness ? `harness=${harness}` : "", base ? `base=${base}` : "", crew ? `crew=${crew}` : ""].filter(Boolean).join(", ");
     console.log(`Created worker ${projectName}/${newName}${suffix ? ` (${suffix})` : ""}.`);
     return;
   }
@@ -203,10 +217,12 @@ async function newCommand(args: string[]): Promise<void> {
     fs.writeFileSync(seedFile, buildGrowIteration1Seed(seed, maxIter));
 
     const model = flags.has("model") ? requireModelValue(flags.get("model")!) : undefined;
+    const effortOpts = flags.has("effort") ? parseEffortFlag(flags.get("effort")!) : {};
     const newName = newWorker({
       projectName,
       workflow: "grow",
       model,
+      ...effortOpts,
       grow: { seed, maxIterations: maxIter },
       seedMessageFile: seedFile,
       ...(base ? { base } : {}),
@@ -218,13 +234,17 @@ async function newCommand(args: string[]): Promise<void> {
         + `Is the dashboard running? Check 'garden health'.`,
       );
     }
+    const effortLabel = effortOpts.ultracode ? ", effort=ultra" : effortOpts.effort ? `, effort=${effortOpts.effort}` : "";
     console.log(
-      `Started grow loop ${projectName}/${newName} (up to ${maxIter} iterations${model ? `, model=${model}` : ""}).`,
+      `Started grow loop ${projectName}/${newName} (up to ${maxIter} iterations${model ? `, model=${model}` : ""}${effortLabel}).`,
     );
     return;
   }
 
   // workflow === "trellis"
+  if (flags.has("effort")) {
+    throw new Error("--effort is only supported with --workflow default or grow (trellis resolves its own model).");
+  }
   const trellisName = flags.get("trellis");
   if (!trellisName) {
     throw new Error("--workflow trellis requires --trellis <name>");
