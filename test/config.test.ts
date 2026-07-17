@@ -511,6 +511,55 @@ describe("logs mode", () => {
   });
 });
 
+// Garden-level machine-wide resource budgets (config.ts LimitsConfig). These
+// are not per-project — they govern how much of the single shared workstation
+// the whole fleet may use. Cover the getters' defaults + coercion and the
+// lock-protected setter's round-trip / clear-on-empty behavior.
+describe("limits (garden-level resource budgets)", () => {
+  it("getMaxConcurrentReviews defaults to 0 (unlimited) when unset", async () => {
+    const { getMaxConcurrentReviews, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: {} });
+    expect(getMaxConcurrentReviews()).toBe(0);
+  });
+
+  it("getChecksSlotsOverride returns undefined when unset (caller uses the hardware default)", async () => {
+    const { getChecksSlotsOverride, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: {} });
+    expect(getChecksSlotsOverride()).toBeUndefined();
+  });
+
+  it("setLimit round-trips both keys and getters read them back", async () => {
+    const { setLimit, getMaxConcurrentReviews, getChecksSlotsOverride, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: {} });
+    setLimit("maxConcurrentReviews", 3);
+    setLimit("checksSlots", 2);
+    expect(getMaxConcurrentReviews()).toBe(3);
+    expect(getChecksSlotsOverride()).toBe(2);
+  });
+
+  it("setLimit(key, undefined) clears the key and prunes an empty limits block", async () => {
+    const { setLimit, loadConfig, getMaxConcurrentReviews, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: {} });
+    setLimit("maxConcurrentReviews", 5);
+    setLimit("maxConcurrentReviews", undefined);
+    expect(getMaxConcurrentReviews()).toBe(0);
+    expect(loadConfig().limits).toBeUndefined();
+  });
+
+  it("getters coerce out-of-range/garbage stored values to the safe default", async () => {
+    const { getMaxConcurrentReviews, getChecksSlotsOverride, GARDEN_DIR, CONFIG_PATH } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    // maxConcurrentReviews: 0 and negative → unlimited; checksSlots < 1 → default.
+    fs.writeFileSync(CONFIG_PATH, "projects: {}\nlimits:\n  maxConcurrentReviews: -2\n  checksSlots: 0\n");
+    expect(getMaxConcurrentReviews()).toBe(0);
+    expect(getChecksSlotsOverride()).toBeUndefined();
+  });
+});
+
 // Trellis workflow adds three optional ProjectConfig keys. Round-trip them
 // through saveConfig → loadConfig and confirm isValidConfigKey accepts them.
 // See WORKFLOWS.md "Project config".

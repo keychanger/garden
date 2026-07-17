@@ -5,7 +5,7 @@
 // isolated runner. The child runs in the caller's cwd (the worker's worktree),
 // inherits stdio, and its exit code is the command's exit code.
 import { spawn } from "node:child_process";
-import { resolveProjectFromArgs } from "../config.js";
+import { resolveProjectFromArgs, getChecksSlotsOverride } from "../config.js";
 import {
   acquireChecksSlot,
   defaultChecksSlots,
@@ -22,7 +22,9 @@ export async function checks(args: string[]): Promise<void> {
     );
   }
 
-  const slots = defaultChecksSlots();
+  // Garden-level override (garden limits checks-slots N) wins over the
+  // hardware-derived default.
+  const slots = getChecksSlotsOverride() ?? defaultChecksSlots();
   let announced = 0;
   const slot = await acquireChecksSlot(slots, {
     onWait: (elapsedMs) => {

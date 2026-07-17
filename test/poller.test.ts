@@ -34,6 +34,7 @@ vi.mock("../src/config.js", () => ({
   loadConfig: vi.fn(() => ({ projects: { myproject: { path: "/repo/myproject" } } })),
   SESSIONS_DIR: "/tmp/fake-sessions",
   GARDEN_DIR: "/tmp/fake-garden",
+  getMaxConcurrentReviews: vi.fn(() => 0),
   getAutoContinueConfig: vi.fn(() => ({
     enabled: true, usageThreshold: 95, resumeAfterReset: false,
   })),
@@ -82,6 +83,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   getFirstPaneId: vi.fn(() => "%5"),
   windowExists: vi.fn(() => true),
   windowIndices: vi.fn(() => [1]),
+  listAllWindowNames: vi.fn(() => []),
   killWindowSafe: vi.fn(),
   killWindowsByName: vi.fn(),
   dedupeWindows: vi.fn(() => 0),
@@ -232,7 +234,7 @@ vi.mock("../src/dashboard/poller-fifo.js", async () => {
 import fs from "node:fs";
 import { poll, postPush, restartLongLivedPollers, startProjectPoller } from "../src/dashboard/poller.js";
 import { __resetFfStateForTest, _resetGateBlockThrottleForTest } from "../src/dashboard/poller-merge.js";
-import { tryGetProject, getAutoContinueConfig } from "../src/config.js";
+import { tryGetProject, getAutoContinueConfig, getMaxConcurrentReviews } from "../src/config.js";
 import { updateWorkerFields, findWorkerByName } from "../src/dashboard/registry.js";
 import {
   getBranchHeadSha, getRemoteTrackingSha, deleteRemoteBranch,
@@ -243,7 +245,7 @@ import {
   syncWorktreeToRemote,
   ensureNoRebaseInProgress, hasRebaseInProgress, isAncestor, getUnmergedFiles,
 } from "../src/dashboard/git.js";
-import { tmux, newDashboardWindow, pasteAndSubmit, windowExists, windowIndices, dedupeWindows, getFirstPaneId, killWindowSafe, killWindowsByName } from "../src/dashboard/tmux.js";
+import { tmux, newDashboardWindow, pasteAndSubmit, windowExists, windowIndices, dedupeWindows, getFirstPaneId, killWindowSafe, killWindowsByName, listAllWindowNames } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { log } from "../src/dashboard/log.js";
 import { dispatchDelayedAutoContinue, isDoneSet, setDoneSentinel } from "../src/dashboard/continue.js";
@@ -277,6 +279,10 @@ beforeEach(() => {
   __resetFfStateForTest();
   // Re-establish factory defaults after reset
   vi.mocked(windowExists).mockReturnValue(true);
+  // Review cap defaults to unlimited with no live reviewer windows, so the
+  // fleet-wide gate is inert unless a test opts in.
+  vi.mocked(getMaxConcurrentReviews).mockReturnValue(0);
+  vi.mocked(listAllWindowNames).mockReturnValue([]);
   vi.mocked(getFirstPaneId).mockReturnValue("%5");
   vi.mocked(getChangedFiles).mockReturnValue([]);
   vi.mocked(getDiffAgainstBase).mockReturnValue("diff --git a/file.ts b/file.ts");
@@ -585,6 +591,48 @@ describe("poll — working state", () => {
     // reviewer never got pinged, the worker wedged in `reviewing`, the merge
     // never happened, and post-merge auto-continue never fired.
     expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 60 * 60 * 1000);
+  });
+
+  // Fleet-wide review concurrency cap (garden-level limits.maxConcurrentReviews).
+  // When the number of live `-review-` windows across the session already meets
+  // the cap, handleWorking defers the launch: no `reviewing` transition, a
+  // re-poke is scheduled, and pendingReviewAt is left set so the next poll (or a
+  // sibling event freeing a slot) re-drives the launch.
+  it("defers a review launch when the fleet review cap is already met", () => {
+    vi.mocked(getMaxConcurrentReviews).mockReturnValue(2);
+    // Two reviewers already running elsewhere in the fleet — cap reached. The
+    // worker window is excluded by the -worker- filter, so it does not count.
+    vi.mocked(listAllWindowNames).mockReturnValue([
+      "_other-review-calm-bay",
+      "_third-review-swift-oak",
+      "_myproject-worker-bold-ash",
+    ]);
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
+    ]);
+
+    poll("myproject");
+
+    const launched = vi.mocked(updateWorkerFields).mock.calls.some(
+      c => (c[2] as Record<string, unknown>).prState === "reviewing",
+    );
+    expect(launched).toBe(false);
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 20_000);
+  });
+
+  it("launches under the cap when a review slot is free", () => {
+    vi.mocked(getMaxConcurrentReviews).mockReturnValue(2);
+    vi.mocked(listAllWindowNames).mockReturnValue(["_other-review-calm-bay"]); // 1 < 2
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
+    ]);
+
+    poll("myproject");
+
+    const launched = vi.mocked(updateWorkerFields).mock.calls.some(
+      c => (c[2] as Record<string, unknown>).prState === "reviewing",
+    );
+    expect(launched).toBe(true);
   });
 
   // The review family defaults to explicit strong Anthropic Opus on the

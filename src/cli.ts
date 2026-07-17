@@ -151,6 +151,9 @@ Dashboard:
   auto [on|off|status]           Toggle the global auto-continue gate
   auto threshold <N>             Set the usage-threshold percent (auto-disable above this)
   auto resume-on-reset on|off    Re-enable automatically after the usage window resets
+  limits [status]                Show machine-wide resource budgets (garden-level)
+  limits checks-slots <N|unset>  Cap concurrent checks-suite runs (default: cores/8)
+  limits max-reviews <N|unset>   Cap simultaneous headless reviewers fleet-wide (default: unlimited)
   reset                          Clear the worker registry
   rebuild                        Rebuild garden and relaunch dashboard
 

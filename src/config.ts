@@ -263,6 +263,27 @@ export const AUTO_CONTINUE_DEFAULTS: AutoContinueConfig = {
   resumeAfterReset: false,
 };
 
+// Machine-wide (garden-level, not per-project) resource budgets. The
+// workstation garden runs on is a single shared resource, so these knobs
+// belong here rather than on any one project: no project would sensibly want a
+// different value for "how much of MY machine may the fleet use". Both are
+// optional overrides of a safe default — an absent `limits` block is the shipped
+// behavior. See `garden limits` (commands/limits.ts).
+export interface LimitsConfig {
+  // Concurrent checks-suite runs admitted by the machine-wide checks
+  // semaphore (src/checks-semaphore.ts). Overrides the hardware-derived
+  // default (defaultChecksSlots() = max(1, cores/8)). >= 1.
+  checksSlots?: number;
+  // Fleet-wide cap on simultaneously running headless reviewers (live
+  // `_<project>-review-<worker>` windows across all projects). When the cap is
+  // reached, a project poller defers launching the next per-phase review
+  // (re-poking so it retries) rather than oversubscribing the machine with
+  // parallel reviewer inference. Resolvers and ci-fix agents are deliberately
+  // uncapped — they unblock already-in-flight merges, so capping them could
+  // deadlock the pipeline. 0 or unset = unlimited (the shipped behavior).
+  maxConcurrentReviews?: number;
+}
+
 export interface GardenConfig {
   projects: Record<string, ProjectConfig>;
   plots?: Record<string, PlotConfig>;
@@ -270,6 +291,38 @@ export interface GardenConfig {
   providers?: Record<string, ProviderProfile>;
   logs?: LogsConfig;
   autoContinue?: Partial<AutoContinueConfig>;
+  limits?: LimitsConfig;
+}
+
+// The effective review cap: 0 means unlimited. Read by the poller's
+// review-launch gate (handleWorking).
+export function getMaxConcurrentReviews(config?: GardenConfig): number {
+  const cfg = config ?? loadConfig();
+  const n = cfg.limits?.maxConcurrentReviews;
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+// The configured checks-slot override, or undefined to use the hardware
+// default. Read by `garden checks` (commands/checks.ts).
+export function getChecksSlotsOverride(config?: GardenConfig): number | undefined {
+  const cfg = config ?? loadConfig();
+  const n = cfg.limits?.checksSlots;
+  return typeof n === "number" && Number.isFinite(n) && n >= 1 ? Math.floor(n) : undefined;
+}
+
+// Lock-protected R/M/W of a single limits key. Passing undefined clears it.
+// Returns the merged LimitsConfig.
+export function setLimit(key: keyof LimitsConfig, value: number | undefined): LimitsConfig {
+  return withConfigLock(() => {
+    const cfg = loadConfig();
+    const limits: LimitsConfig = { ...(cfg.limits ?? {}) };
+    if (value === undefined) delete limits[key];
+    else limits[key] = value;
+    if (Object.keys(limits).length === 0) delete cfg.limits;
+    else cfg.limits = limits;
+    saveConfig(cfg);
+    return limits;
+  });
 }
 
 export function getAutoContinueConfig(config?: GardenConfig): AutoContinueConfig {

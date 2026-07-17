@@ -7,7 +7,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { tryGetProject, SESSIONS_DIR } from "../config.js";
+import { tryGetProject, SESSIONS_DIR, getMaxConcurrentReviews } from "../config.js";
 import { addAlert } from "./alerts.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { resolveReviewRole, SAFE_REVIEW_MODEL } from "./roles.js";
@@ -29,7 +29,7 @@ import {
   findWorkerByName, updateWorkerFields,
   type WorkerEntry,
 } from "./registry.js";
-import { windowExists, killWindowSafe } from "./tmux.js";
+import { windowExists, killWindowSafe, listAllWindowNames } from "./tmux.js";
 import { growLoopHooks } from "./grow-continue.js";
 import { trellisLoopHooks } from "./trellis-continue.js";
 import { buildTrellisReviewPrompt } from "./trellis-prompts.js";
@@ -186,6 +186,23 @@ export function handleWorking(
     // Stop hook said commits existed; they no longer do (force-pushed away,
     // base advanced past us, etc.). Clear the flag — nothing to review.
     updateWorkerFields(projectName, entry.name, { pendingReviewAt: undefined });
+    return false;
+  }
+
+  // Fleet-wide review concurrency cap (garden-level limits.maxConcurrentReviews).
+  // Reviews are the pipeline's entry point; when the machine is already running
+  // the configured number of reviewers, defer this launch rather than
+  // oversubscribing. pendingReviewAt stays set, so the re-poke (or any sibling
+  // FIFO event, e.g. a review finishing and freeing a slot) re-drives this
+  // handler and the launch proceeds once a slot opens. 0 = unlimited (default),
+  // in which case the count is not even taken.
+  const reviewCap = getMaxConcurrentReviews();
+  if (reviewCap > 0 && countActiveReviewWindows() >= reviewCap) {
+    log.debug("poller", "review deferred: fleet review cap reached", {
+      worker: entry.name,
+      data: { project: projectName, cap: reviewCap },
+    });
+    scheduleDelayedPoke(projectName, REVIEW_CAP_RETRY_MS);
     return false;
   }
 
@@ -1449,6 +1466,24 @@ export function handleReviewTimeout(
   refreshDashboard();
   return true;
 }
+
+// Count live headless-reviewer windows across the whole dashboard session
+// (every project's `_<project>-review-<worker>`, including holistic passes).
+// Tmux is the source of truth for window existence, so this is derived fresh
+// each call — no acquire/release bookkeeping to leak across the fire-and-forget
+// reviewer launches. The `-worker-`/`-ci-fix-` exclusions guard the (unlikely)
+// case of a project whose name ends in "review". Resolvers/ci-fix are excluded
+// by design: the cap throttles the pipeline's inflow, not its drain.
+export function countActiveReviewWindows(): number {
+  return listAllWindowNames().filter(
+    (n) => n.includes("-review-") && !n.includes("-worker-") && !n.includes("-ci-fix-"),
+  ).length;
+}
+
+// Re-poke cadence when a review launch is deferred by the fleet-wide review
+// cap. Short enough that a freed slot is picked up promptly, long enough not to
+// spin — the poll is also woken by any sibling FIFO event (a review finishing).
+const REVIEW_CAP_RETRY_MS = 20_000;
 
 function launchReview(
   projectName: string,
