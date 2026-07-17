@@ -44,7 +44,7 @@ model — pick who fills it per run.**
   They stay siblings (see "Relationship to plan and crews").
 - **From [`CREWS.md`](CREWS.md) (shipped 2026-07-10):** the load-bearing thesis
   that *who runs each role* is an axis orthogonal to *which lifecycle runs* —
-  and the crew infrastructure (`resolveRole`, member-based crews, the
+  and the crew infrastructure (`resolveReviewRole`, member-based crews, the
   reviewer-strong safety invariant) that this design reuses rather than
   reinvents. CREWS explicitly named "a real plan/design role" as a deliberately
   unbuilt future, with the warning that "a crew selector must not be designed
@@ -110,13 +110,16 @@ A botanist run therefore has **three seats**, and each resolves independently:
   is the shipped safety invariant (`CREWS.md`): a cheap or experimental builder
   is only safe because a strong first-party reviewer gates its output.
 
-Crucially, **"design is a role" means adding it costs no new fork.** CREWS
-already generalized role resolution to `resolveRole(project, workflow, role)`;
-the botanist worker is simply the `designer` role resolving its harness/model
-the same way the `worker` role does today. And like the worker role — but
-unlike any review role — the designer is **worker-class**: any member (including
-a provider-backed one) may design, because a design is checked downstream twice
-(by the operator at the gate, and by a strong reviewer of the builder's code).
+Crucially, **"design is a role" needs no new resolution mechanism — only the
+small generalization CREWS already scoped.** CREWS shipped
+`resolveReviewRole(project, workflow, role)` for the review family and named the
+follow-on — a role-agnostic `resolveRole` that resolves the worker/designer seat
+too — as its own next step; the botanist worker is simply a `designer` role
+resolving its harness/model through that generalized path. And like the worker
+role — but unlike any review role — the designer is **worker-class**: any member
+(including a provider-backed one) may design, because a design is checked
+downstream twice (by the operator at the gate, and by a strong reviewer of the
+builder's code).
 Only review roles are member-restricted.
 
 The practical consequence, and the answer to "flip it around easily": the two
@@ -229,9 +232,10 @@ on the botanist spawn), because:
   build/review.
 
 Promote to the triple only if the operator finds themselves setting a standing
-designer default project-wide — at which point it is *data*, not a fork
-(`resolveRole` already resolves an arbitrary `designer` role; a triple crew just
-fills that slot). Named here so the door stays open.
+designer default project-wide — at which point it is *data*, not a fork (once
+the review-family `resolveReviewRole` is generalized to the role-agnostic
+`resolveRole` CREWS scoped, an arbitrary `designer` role is a slot a triple crew
+just fills). Named here so the door stays open.
 
 ### Cross-harness diversity as a correctness multiplier
 
@@ -500,12 +504,16 @@ crew). It lives at `src/dashboard/skills/botanist/SKILL.md` and is copied into
   decomposes the artifact into beads → default/trellis/grow workers (each on
   their chosen crew) execute. Botanist does not produce beads; if it wants to,
   that is plan's job, invoked at handoff.
-- **Crews are shipped; botanist consumes them.** The crew axis, `resolveRole`,
-  the member model, the reviewer-strong invariant, and the `⌥⇧C` picker all
-  exist today. Botanist adds the `designer` seat (worker-class) and the
-  `--handoff-crew` propagation; it invents no new resolution mechanism. The one
-  open crew *extension* — a designer member in the crew name (the triple) — is
-  deferred (see "Why not fold the designer into the crew name yet").
+- **Crews are shipped; botanist consumes them.** The crew axis,
+  `resolveReviewRole`, the member model, the reviewer-strong invariant, and the
+  `⌥⇧C` picker all exist today. Botanist's Phase 1/2 seats reuse them directly —
+  the designer seat is the worker's own model/harness (worker-path resolution)
+  and `--handoff-crew` writes `entry.crew`, resolved live by `resolveReviewRole`
+  — so it invents no new resolution mechanism. The one open crew *extension* — a
+  designer member in the crew name (the triple) — is deferred, and it is the one
+  piece that needs `resolveReviewRole` generalized to the role-agnostic
+  `resolveRole` CREWS scoped (see "Why not fold the designer into the crew name
+  yet").
 
 ## Phased delivery (forward-looking)
 
@@ -565,8 +573,9 @@ handoff command.
 ### Phase 3 — design-role-in-crew + optional design review (out of scope, later)
 
 - **Designer member in the crew name** (the triple), once a standing
-  project-wide designer default is wanted. `resolveRole` already supports it;
-  the work is the crew parser + picker.
+  project-wide designer default is wanted. The work is generalizing the
+  review-family `resolveReviewRole` to the role-agnostic `resolveRole` CREWS
+  scoped, plus the crew parser + picker.
 - **Optional design-review fan-out** (the PLAN pattern, scaled to design): a
   cheap `garden botanist review <artifact>` pass that surfaces ambiguity / gaps
   / scope-creep *before* the operator reads the questions, sharpening the human
