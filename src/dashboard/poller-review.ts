@@ -1472,8 +1472,14 @@ export function handleReviewTimeout(
 // Tmux is the source of truth for window existence, so this is derived fresh
 // each call — no acquire/release bookkeeping to leak across the fire-and-forget
 // reviewer launches. The `-worker-`/`-ci-fix-` exclusions guard the (unlikely)
-// case of a project whose name ends in "review". Resolvers/ci-fix are excluded
-// by design: the cap throttles the pipeline's inflow, not its drain.
+// case of a project whose name ends in "review". ci-fix agents run in a
+// name-distinct `-ci-fix-` window and are excluded here — the cap throttles
+// the pipeline's inflow, not its drain. Resolvers reuse the review window name
+// (`reviewWindowName` in poller-resolve.ts), so a running resolver DOES count;
+// that is benign because resolver launches are never gated by this cap (the
+// gate lives only in handleWorking), so a deferred review simply waits for the
+// resolver to drain and free the slot — it can never deadlock — and resolvers
+// (rebase-conflict only) are rare.
 export function countActiveReviewWindows(): number {
   return listAllWindowNames().filter(
     (n) => n.includes("-review-") && !n.includes("-worker-") && !n.includes("-ci-fix-"),
