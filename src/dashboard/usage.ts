@@ -39,6 +39,7 @@ import {
 } from "./credentials.js";
 import { withFileLock } from "./file-lock.js";
 import { log } from "./log.js";
+import { readRegistry, type WorkerEntry } from "./registry.js";
 
 export const USAGE_FILE = path.join(SESSIONS_DIR, "claude-usage.json");
 const USAGE_LOCK = path.join(SESSIONS_DIR, "claude-usage.lock");
@@ -90,6 +91,13 @@ export interface UsageSnapshot {
   // every poll. Absent on all-header cycles and legacy snapshots.
   scopedAt?: string;
   scopedAttemptedAt?: string;
+  // Error from the most recent *surfaced* scoped (oauth-endpoint) fetch attempt,
+  // or absent when it succeeded / was not surfaced. Only set when a scoped-model
+  // (Fable) worker was actively running at fetch time — a scoped miss during the
+  // idle keepalive is left silent, since that bar isn't consequential then. Never
+  // freezes the primary bars (that is `error`'s job); it renders as a dim note on
+  // the model-scoped row's health tag so a Fable-meter rate-limit is explicit.
+  scopedError?: string;
 }
 
 // Neutral read seam over the snapshot's named buckets: consumers (the
@@ -625,6 +633,25 @@ export const HOOK_REFRESH_COOLDOWN_MS = POLL_OK_MS + 2 * 60 * 1000;
 // scoped *attempt* (see scopedFetchDue), not the poll cadence.
 export const SCOPED_POLL_MS = 60 * 60 * 1000;
 
+// Cadence when NO worker is actively running a scoped model (e.g. no Fable
+// worker is going). The scoped weekly quota only moves while a scoped-model
+// worker runs, so when none is live the bar is a near-static 7-day figure —
+// polling it hourly just spends the throttled endpoint's tiny budget on a value
+// that isn't changing. We drop to a slow keepalive (twice a day) that keeps the
+// bar from rotting and refreshes the scoped labels. This is the "only fetch
+// Fable when a Fable worker is going" gate: it removes ~22 of every 24 daily
+// oauth calls on an idle fleet, cutting the shared per-token budget pressure
+// that can collaterally rate-limit the primary /v1/messages probe.
+export const SCOPED_IDLE_POLL_MS = 12 * 60 * 60 * 1000;
+
+// A worker counts as "actively using" a scoped model when it fired a Claude
+// hook within this window — its session is live and consuming quota now (the
+// 10s heartbeat keeps lastEventAt fresh while a worker runs; it goes stale
+// within minutes once the session ends). Sized to the hourly scoped cadence so
+// exactly one extra fetch fires just after a Fable worker goes quiet, capturing
+// its final quota consumption before the bar drops to the idle keepalive.
+export const SCOPED_ACTIVE_MS = SCOPED_POLL_MS;
+
 export type RefreshReason = "hook" | "poller";
 
 export interface RefreshDecision {
@@ -692,12 +719,58 @@ export function rateLimitBackoff(
 
 // Whether the secondary (oauth-endpoint) scoped fetch is due. Keys on the last
 // scoped *attempt* (success or failure), so a 429'd attempt still waits a full
-// SCOPED_POLL_MS before the next try instead of re-firing every poll. A
-// snapshot that never attempted it (fresh install, legacy shape) is due.
-export function scopedFetchDue(snap: UsageSnapshot | null | undefined, nowMs: number): boolean {
+// interval before the next try instead of re-firing every poll. The interval
+// depends on whether a scoped-model worker is actively running: hourly while
+// one is (`active`), the slow idle keepalive otherwise. A snapshot that never
+// attempted it (fresh install, legacy shape) is always due — the first fetch
+// also bootstraps the scoped labels the `active` check relies on.
+export function scopedFetchDue(
+  snap: UsageSnapshot | null | undefined,
+  nowMs: number,
+  active: boolean,
+): boolean {
   const attempted = snap?.scopedAttemptedAt ? Date.parse(snap.scopedAttemptedAt) : NaN;
   if (!Number.isFinite(attempted)) return true;
-  return nowMs - attempted >= SCOPED_POLL_MS;
+  return nowMs - attempted >= (active ? SCOPED_POLL_MS : SCOPED_IDLE_POLL_MS);
+}
+
+// Whether any worker in the fleet is actively running a model whose weekly
+// quota is the scoped bar (Fable today). "Actively" = the worker's effective
+// model — its pinned `model`, or a trellis vine's `workerModel` — matches a
+// scoped label case-insensitively AND it fired a hook within SCOPED_ACTIVE_MS
+// (a live, quota-consuming session). Labels come from the last snapshot's scoped
+// meters, so the gate auto-tracks whatever model Anthropic scopes next; before
+// the first successful scoped fetch there are none, so we fall back to "fable"
+// (the current scoped model, and the substring in its "claude-fable-5" ids).
+// Pure over an explicit worker list for testability.
+export function scopedModelInUse(
+  scopedLabels: string[],
+  nowMs: number,
+  workers: WorkerEntry[],
+): boolean {
+  const labels = (scopedLabels.length ? scopedLabels : ["fable"]).map((l) => l.toLowerCase());
+  for (const w of workers) {
+    const model = (w.model ?? w.trellis?.workerModel ?? "").toLowerCase();
+    if (!model || !labels.some((l) => model.includes(l))) continue;
+    if (nowMs - (w.lastEventAt ?? 0) <= SCOPED_ACTIVE_MS) return true;
+  }
+  return false;
+}
+
+// IO wrapper over scopedModelInUse: reads every project's workers from the
+// registry. A read failure degrades to "not in use" (the idle keepalive
+// cadence) — the safe direction for the throttled endpoint's tiny budget.
+function anyScopedModelWorkerActive(
+  prior: UsageSnapshot | null | undefined,
+  nowMs: number,
+): boolean {
+  try {
+    const labels = (prior?.data?.scoped ?? []).map((s) => s.label);
+    const workers = Object.values(readRegistry().workers).flat();
+    return scopedModelInUse(labels, nowMs, workers);
+  } catch {
+    return false;
+  }
 }
 
 // Assemble the snapshot's data from its two independent sources, each falling
@@ -738,6 +811,10 @@ export interface PrimaryOutcome {
 export interface ScopedOutcome {
   fetched: boolean;
   data?: { scoped?: ScopedMeter[]; extraUsage?: ExtraUsage };
+  // Set when the scoped attempt failed AND was worth surfacing (a scoped-model
+  // worker was active, or the operator forced the refresh). Rendered on the
+  // scoped row's health tag; never freezes the primary bars.
+  error?: string;
 }
 
 // The pure core of a refresh: fold the two fetch outcomes and the prior
@@ -766,6 +843,10 @@ export function assembleSnapshot(
   if (scopedAt !== undefined) snap.scopedAt = scopedAt;
   const scopedAttemptedAt = scoped.fetched ? fetchedAt : prior?.scopedAttemptedAt;
   if (scopedAttemptedAt !== undefined) snap.scopedAttemptedAt = scopedAttemptedAt;
+  // Attempted this cycle → this attempt's error is authoritative (undefined on
+  // success clears a prior note). Not attempted → carry the prior note forward.
+  const scopedError = scoped.fetched ? scoped.error : prior?.scopedError;
+  if (scopedError !== undefined) snap.scopedError = scopedError;
   return snap;
 }
 
@@ -970,7 +1051,12 @@ async function fetchPrimary(
     }
     if (res.status === 429) {
       const { backoffMs, streak } = rateLimitBackoff(prior, res.retryAfterMs);
-      logUsageOutcome(prior, "rate-limited", "rate-limited", { retryAfterMs: res.retryAfterMs, backoffMs, streak });
+      // Attribute to the primary /v1/messages probe (the account 5h/weekly
+      // meter) so the log distinguishes this — which freezes the bars — from a
+      // scoped (Fable) endpoint 429, which does not. Both authenticate with the
+      // same OAuth token, so the throttled scoped endpoint can burn shared
+      // budget that lands here; scopedFetchDue's active-worker gate curbs that.
+      logUsageOutcome(prior, "rate-limited", "account meter probe rate-limited", { retryAfterMs: res.retryAfterMs, backoffMs, streak });
       return { error: { error: "rate-limited", retryAfterMs: backoffMs, rateLimitStreak: streak } };
     }
     if (res.status === 401 || res.status === 403) {
@@ -990,9 +1076,13 @@ async function fetchPrimary(
 // The secondary fetch: the model-scoped weekly bar (and extra-usage credits)
 // from the throttled oauth endpoint. Skipped entirely unless the primary token
 // worked (no point pinging the stricter endpoint with a dead/rate-limited
-// token) and the hourly cadence is due (or a forced refresh). Every failure is
-// silent at debug — the primary bars already reflect live quota, so a scoped
-// miss just leaves the last scoped value in place until the next hourly try.
+// token) and the cadence is due — hourly while a scoped-model (Fable) worker is
+// actively running, else the slow idle keepalive (or a forced refresh). Every
+// failure stays quiet at debug and never touches the primary bars; the scoped
+// bar just keeps its last value. The failure is *surfaced* (onto the scoped
+// row) only when a Fable worker was active or the operator forced it — i.e.
+// when the bar is actually consequential — so an idle-keepalive miss stays fully
+// silent.
 async function fetchScopedIfDue(
   token: string,
   prior: UsageSnapshot | null | undefined,
@@ -1000,7 +1090,10 @@ async function fetchScopedIfDue(
   primary: PrimaryOutcome,
 ): Promise<ScopedOutcome> {
   if (primary.error) return { fetched: false };
-  if (!force && !scopedFetchDue(prior, Date.now())) return { fetched: false };
+  const active = anyScopedModelWorkerActive(prior, Date.now());
+  if (!force && !scopedFetchDue(prior, Date.now(), active)) return { fetched: false };
+  // A failure is only worth showing when the bar matters right now.
+  const surface = (err: string): string | undefined => (active || force ? err : undefined);
   try {
     const res = await fetchUsageRaw(token);
     if (res.status === 200) {
@@ -1008,19 +1101,20 @@ async function fetchScopedIfDue(
         const d = normalizeUsage(JSON.parse(res.body));
         return { fetched: true, data: { scoped: d.scoped, extraUsage: d.extraUsage } };
       } catch {
-        log.debug("usage", "scoped fetch: unparseable body");
-        return { fetched: true };
+        log.debug("usage", "scoped (Fable) fetch: unparseable body");
+        return { fetched: true, error: surface("unparseable") };
       }
     }
     if (res.status === 429) {
-      log.debug("usage", "scoped fetch rate-limited", { data: { retryAfterMs: res.retryAfterMs } });
-      return { fetched: true };
+      log.debug("usage", "scoped (Fable) fetch rate-limited — scoped bar keeps last value", { data: { retryAfterMs: res.retryAfterMs, active } });
+      return { fetched: true, error: surface("rate-limited") };
     }
-    log.debug("usage", "scoped fetch: unexpected status", { data: { status: res.status } });
-    return { fetched: true };
+    log.debug("usage", "scoped (Fable) fetch: unexpected status", { data: { status: res.status } });
+    return { fetched: true, error: surface(`http ${res.status}`) };
   } catch (err) {
-    log.debug("usage", "scoped fetch failed", { data: { error: describeFetchError(err).summary } });
-    return { fetched: true };
+    const { summary } = describeFetchError(err);
+    log.debug("usage", "scoped (Fable) fetch failed", { data: { error: summary } });
+    return { fetched: true, error: surface(summary) };
   }
 }
 
@@ -1256,10 +1350,14 @@ function formatHealthTag(snap: UsageSnapshot, nowMs: number): string {
   const dataAt = Date.parse(snap.dataAt ?? snap.fetchedAt);
   const ageMs = Number.isFinite(dataAt) ? nowMs - dataAt : Infinity;
   const stale = ageMs > STALE_AFTER_MS;
-  if (!snap.error && !stale) return "";
+  if (!snap.error && !stale && !snap.scopedError) return "";
   const parts: string[] = [];
   if (stale) parts.push(`stale ${formatBriefAge(ageMs)}`);
-  if (snap.error) parts.push(snap.error);
+  // The primary error freezes the whole meter; name it as the account 5h/weekly
+  // probe so it can't be mistaken for the model-scoped (Fable) fetch, which
+  // never freezes the bars.
+  if (snap.error === "rate-limited") parts.push("account meter rate-limited");
+  else if (snap.error) parts.push(snap.error);
   if (snap.error === "rate-limited") {
     const fetchedAt = Date.parse(snap.fetchedAt);
     const retryAt = Number.isFinite(fetchedAt)
@@ -1268,6 +1366,13 @@ function formatHealthTag(snap: UsageSnapshot, nowMs: number): string {
     if (Number.isFinite(retryAt) && retryAt > nowMs) {
       parts.push(`retrying ${formatDuration(retryAt - nowMs)}`);
     }
+  }
+  // A scoped (Fable) fetch failure holds that one bar at its last value — the
+  // primary bars are still live. Surfaced (only when a Fable worker was active,
+  // per fetchScopedIfDue) so the rate-limit is explicit on the bar it affects.
+  if (snap.scopedError) {
+    const label = snap.data?.scoped?.[0]?.label ?? "scoped";
+    parts.push(`${label} meter ${snap.scopedError}`);
   }
   return parts.join(", ");
 }

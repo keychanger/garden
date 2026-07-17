@@ -72,6 +72,12 @@ function renderPretty(data: unknown): string {
     rows.push(`${s.label.toLowerCase().slice(0, 6).padEnd(6)}  ${meterRow(s)}`);
   }
   if (d.extraUsage) rows.push(`extra   ${formatExtraUsageCredits(d.extraUsage)}`);
+  // A scoped (Fable) fetch failure doesn't freeze the primary bars — note it so
+  // a held-value scoped bar is explained rather than looking silently stuck.
+  if (snap.scopedError) {
+    const label = d.scoped?.[0]?.label ?? "scoped";
+    rows.push(`  ⚠ ${label} meter ${snap.scopedError} — bar holds last value`);
+  }
   rows.push(``, ageText);
   return rows.join("\n");
 }

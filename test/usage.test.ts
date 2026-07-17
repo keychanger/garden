@@ -5,6 +5,7 @@ import {
   normalizeUsage,
   parseUnifiedHeaders,
   scopedFetchDue,
+  scopedModelInUse,
   mergeUsageData,
   assembleSnapshot,
   formatDuration,
@@ -18,6 +19,8 @@ import {
   POLL_OK_MS,
   POLL_MIN_MS,
   SCOPED_POLL_MS,
+  SCOPED_IDLE_POLL_MS,
+  SCOPED_ACTIVE_MS,
   RATE_LIMIT_FLOOR_MS,
   RATE_LIMIT_MARGIN_MS,
   RATE_LIMIT_MAX_BACKOFF_MS,
@@ -162,19 +165,27 @@ describe("parseUnifiedHeaders — primary bars from /v1/messages response header
   });
 });
 
-describe("scopedFetchDue — hourly cadence for the throttled scoped fetch", () => {
+describe("scopedFetchDue — cadence for the throttled scoped fetch", () => {
   const now = Date.now();
-  it("is due when the snapshot never attempted a scoped fetch", () => {
-    expect(scopedFetchDue(null, now)).toBe(true);
-    expect(scopedFetchDue({ fetchedAt: new Date(now).toISOString() }, now)).toBe(true);
+  it("is due when the snapshot never attempted a scoped fetch (either cadence)", () => {
+    expect(scopedFetchDue(null, now, true)).toBe(true);
+    expect(scopedFetchDue(null, now, false)).toBe(true);
+    expect(scopedFetchDue({ fetchedAt: new Date(now).toISOString() }, now, false)).toBe(true);
   });
-  it("is not due within SCOPED_POLL_MS of the last attempt", () => {
+  it("is not due within SCOPED_POLL_MS of the last attempt while a scoped worker is active", () => {
     const snap = { fetchedAt: "", scopedAttemptedAt: new Date(now - SCOPED_POLL_MS / 2).toISOString() };
-    expect(scopedFetchDue(snap, now)).toBe(false);
+    expect(scopedFetchDue(snap, now, true)).toBe(false);
   });
-  it("becomes due once SCOPED_POLL_MS has elapsed since the last attempt", () => {
+  it("becomes due once SCOPED_POLL_MS has elapsed while a scoped worker is active", () => {
     const snap = { fetchedAt: "", scopedAttemptedAt: new Date(now - SCOPED_POLL_MS - 1000).toISOString() };
-    expect(scopedFetchDue(snap, now)).toBe(true);
+    expect(scopedFetchDue(snap, now, true)).toBe(true);
+  });
+  it("holds the slow idle keepalive cadence when no scoped worker is active", () => {
+    // An hour past the last attempt: due if active, but not on the idle cadence.
+    const snap = { fetchedAt: "", scopedAttemptedAt: new Date(now - SCOPED_POLL_MS - 1000).toISOString() };
+    expect(scopedFetchDue(snap, now, false)).toBe(false);
+    const stale = { fetchedAt: "", scopedAttemptedAt: new Date(now - SCOPED_IDLE_POLL_MS - 1000).toISOString() };
+    expect(scopedFetchDue(stale, now, false)).toBe(true);
   });
   it("gates on the last attempt, not the last success — a 429'd attempt still waits", () => {
     // scopedAt (success) is old, but scopedAttemptedAt (the 429) is recent.
@@ -183,7 +194,36 @@ describe("scopedFetchDue — hourly cadence for the throttled scoped fetch", () 
       scopedAt: new Date(now - 3 * SCOPED_POLL_MS).toISOString(),
       scopedAttemptedAt: new Date(now - 60_000).toISOString(),
     };
-    expect(scopedFetchDue(snap, now)).toBe(false);
+    expect(scopedFetchDue(snap, now, true)).toBe(false);
+  });
+});
+
+describe("scopedModelInUse — gate the Fable fetch on an active Fable worker", () => {
+  const now = Date.now();
+  const fresh = { lastEventAt: now - 60_000 };       // fired a hook a minute ago
+  const stale = { lastEventAt: now - SCOPED_ACTIVE_MS - 60_000 }; // quiet for over an hour
+  it("is true when a live worker's pinned model matches a scoped label", () => {
+    const workers = [{ name: "w", model: "claude-fable-5", ...fresh }] as never;
+    expect(scopedModelInUse(["Fable"], now, workers)).toBe(true);
+  });
+  it("falls back to matching 'fable' before any scoped label has been learned", () => {
+    const workers = [{ name: "w", model: "claude-fable-5", ...fresh }] as never;
+    expect(scopedModelInUse([], now, workers)).toBe(true);
+  });
+  it("matches a trellis vine's workerModel", () => {
+    const workers = [{ name: "v", trellis: { name: "t", path: "/t", workerModel: "claude-fable-5" }, ...fresh }] as never;
+    expect(scopedModelInUse(["Fable"], now, workers)).toBe(true);
+  });
+  it("is false when the matching worker has been quiet past the active window", () => {
+    const workers = [{ name: "w", model: "claude-fable-5", ...stale }] as never;
+    expect(scopedModelInUse(["Fable"], now, workers)).toBe(false);
+  });
+  it("is false when no live worker runs a scoped model", () => {
+    const workers = [
+      { name: "a", model: "claude-opus-4-8", ...fresh },
+      { name: "b", ...fresh }, // account-default model, no pin
+    ] as never;
+    expect(scopedModelInUse(["Fable"], now, workers)).toBe(false);
   });
 });
 
@@ -282,6 +322,26 @@ describe("assembleSnapshot — folding fetch outcomes into the next snapshot", (
     expect(snap.scopedAt).toBeUndefined();
     expect(snap.scopedAttemptedAt).toBeUndefined();
     expect(snap.dataAt).toBe(fetchedAt);
+  });
+
+  it("records a surfaced scoped error, preserves it across a not-fetched cycle, and clears it on success", () => {
+    const primary: PrimaryOutcome = { data: { fiveHour: fh, weekly: wk } };
+    // A surfaced scoped failure (Fable worker was active) → scopedError set.
+    const failed = assembleSnapshot(fetchedAt, primary, { fetched: true, error: "rate-limited" }, prior);
+    expect(failed.scopedError).toBe("rate-limited");
+    // Next cycle, scoped not due → note carried forward with the held bar.
+    const held = assembleSnapshot(fetchedAt, primary, { fetched: false }, failed);
+    expect(held.scopedError).toBe("rate-limited");
+    // A later successful scoped fetch clears the note.
+    const ok = assembleSnapshot(fetchedAt, primary, { fetched: true, data: { scoped: scopedFable } }, held);
+    expect(ok.scopedError).toBeUndefined();
+  });
+
+  it("leaves scopedError unset when a scoped miss was not surfaced (idle keepalive)", () => {
+    const primary: PrimaryOutcome = { data: { fiveHour: fh, weekly: wk } };
+    // fetched but no error field → an unsurfaced idle-keepalive miss stays quiet.
+    const snap = assembleSnapshot(fetchedAt, primary, { fetched: true }, prior);
+    expect(snap.scopedError).toBeUndefined();
   });
 });
 
@@ -839,7 +899,9 @@ describe("renderUsagePane", () => {
     const out = render(now);
     expect(out).toContain("42%");
     // retryAfterMs: 0 → countdown falls back to the floor decideRefresh enforces.
-    expect(out).toContain("(rate-limited, retrying in 10m)");
+    // The primary rate-limit is labeled as the account meter (5h/weekly) probe,
+    // distinct from a scoped (Fable) fetch miss.
+    expect(out).toContain("(account meter rate-limited, retrying in 10m)");
     expect(out).not.toContain("stale"); // data within STALE_AFTER_MS — no stale prefix
   });
 
@@ -855,7 +917,7 @@ describe("renderUsagePane", () => {
     const render = await importRender();
     const out = render(now);
     expect(out).toContain("42%");
-    expect(out).toContain("(stale 2h, rate-limited, retrying in 10m)");
+    expect(out).toContain("(stale 2h, account meter rate-limited, retrying in 10m)");
   });
 
   it("counts down to the next attempt from the stored rate-limit backoff", async () => {
@@ -870,7 +932,7 @@ describe("renderUsagePane", () => {
       },
     });
     const render = await importRender();
-    expect(render(now)).toContain("(rate-limited, retrying in 1h 10m)");
+    expect(render(now)).toContain("(account meter rate-limited, retrying in 1h 10m)");
   });
 
   it("omits the countdown once the backoff window has passed", async () => {
@@ -888,7 +950,7 @@ describe("renderUsagePane", () => {
     });
     const render = await importRender();
     const out = render(now);
-    expect(out).toContain("stale 1h, rate-limited");
+    expect(out).toContain("stale 1h, account meter rate-limited");
     expect(out).not.toContain("retrying");
   });
 
@@ -911,7 +973,7 @@ describe("renderUsagePane", () => {
     const lines = render(now).split("\n");
     // Leading blank + 3 meters + 1 tag = 5 lines when an error is present.
     expect(lines).toHaveLength(5);
-    expect(lines[4]).toContain("(stale 2h, rate-limited, retrying in 10m)");
+    expect(lines[4]).toContain("(stale 2h, account meter rate-limited, retrying in 10m)");
     for (const l of lines.slice(0, 4)) {
       expect(l).not.toContain("stale");
       expect(l).not.toContain("rate-limited");
@@ -932,6 +994,29 @@ describe("renderUsagePane", () => {
     const render = await importRender();
     const lines = render(now).split("\n");
     expect(lines).toHaveLength(4);
+  });
+
+  it("surfaces a scoped (Fable) fetch error as a health tag without freezing the primary bars", async () => {
+    // scopedError set (a Fable worker was active when the scoped fetch 429'd),
+    // but no primary error and data fresh → the primary bars render normally and
+    // the tag names the Fable meter specifically, on its own line below.
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      dataAt: new Date(now).toISOString(),
+      scopedError: "rate-limited",
+      data: {
+        fiveHour: { pct: 26, resetsAt: new Date(now + 2 * 60 * 60_000).toISOString() },
+        weekly:   { pct: 35, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
+        scoped:   [{ label: "Fable", pct: 4, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() }],
+      },
+    });
+    const render = await importRender();
+    const lines = render(now).split("\n");
+    // Leading blank + 3 meters + 1 scoped-error tag = 5 lines.
+    expect(lines).toHaveLength(5);
+    expect(lines[1]).toContain("26%"); // primary bar still live
+    expect(lines[4]).toContain("(Fable meter rate-limited)");
+    expect(lines[4]).not.toContain("account meter"); // not the freezing primary error
   });
 
   it("truncates a long health tag with an ellipsis to fit paneWidth", async () => {
@@ -991,7 +1076,7 @@ describe("renderUsagePane", () => {
     // Leading blank + 3 meters + extra footer + health tag = 6 lines.
     expect(lines).toHaveLength(6);
     expect(lines[4]).toContain("1234 / 5000 credits");
-    expect(lines[5]).toContain("(stale 2h, rate-limited, retrying in 10m)");
+    expect(lines[5]).toContain("(stale 2h, account meter rate-limited, retrying in 10m)");
   });
 
   it("degrades an uncapped extra-usage bucket to the fields it carries", async () => {
