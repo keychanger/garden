@@ -136,7 +136,7 @@ Each project's workers and shell live in hidden tmux windows when not active. Wh
 This preserves both the layout tree (the right pane slot is never destroyed) and all worker state across switches.
 
 ### Hidden Window Naming
-Hidden windows follow the convention: `_<project>-worker-<N>`, `_<project>-shell`, `_<project>-poller`, `_<project>-review-<worker>`, `_garden-growhouse`, `_garden-root`, `_garden-logs`, `_garden-history`, `_garden-diary`, `_garden-usage-poller`, and `_garden-watchdog`. When switching projects, the visible pane is parked as `_<project>-active`. The underscore prefix marks them as managed by garden — not user-facing.
+Hidden windows follow the convention: `_<project>-worker-<N>`, `_<project>-shell`, `_<project>-poller`, `_<project>-review-<worker>`, `_garden-growhouse`, `_garden-root`, `_garden-logs`, `_garden-history`, `_garden-diary`, `_garden-alerts`, `_garden-usage-poller`, and `_garden-watchdog`. When switching projects, the visible pane is parked as `_<project>-active`. The underscore prefix marks them as managed by garden — not user-facing.
 
 ### Worker Lifecycle
 1. `⌥n` creates a git worktree at `~/.garden/worktrees/<project>/<worker-name>/`, with a branch named after the worker that points at `origin/<base>` directly. Worker freshness does not depend on the main checkout being clean or fast-forwarded — a stale main checkout raises an alert but does not infect the worker
@@ -491,6 +491,7 @@ All read commands detect whether stdout is a TTY:
     status.rendered           # Pre-rendered status snapshot for instant display
     usage.rendered            # Pre-rendered usage meter snapshot for the usage pane
     history.rendered          # Pre-rendered conversation snapshot for the ⌥h history pane
+    alerts.rendered           # Pre-rendered alert-list snapshot for the ⌥a alerts pane
     claude-usage.json         # Claude quota snapshot (5h / weekly / model-scoped)
     codex-usage.json          # Codex quota snapshot (rate_limits windows + credits), captured at Stop-hook time
   diary/
