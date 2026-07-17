@@ -11,7 +11,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   tmuxDoubleQuote: (s: string) => `"${s.replace(/[\\$"`]/g, "\\$&")}"`,
 }));
 
-import { setupKeybindings } from "../src/dashboard/hotkeys.js";
+import { setupKeybindings, tmuxKeyName } from "../src/dashboard/hotkeys.js";
 import { DASHBOARD_HOTKEYS } from "../src/dashboard/keybindings.js";
 
 beforeEach(() => {
@@ -200,7 +200,9 @@ describe("setupKeybindings", () => {
       .filter(argv =>
         Array.isArray(argv) && argv[0] === "bind-key" && argv[1] === "-n" && argv[2]?.startsWith("M-"));
     for (const b of DASHBOARD_HOTKEYS) {
-      const bind = rootBinds.find(argv => argv[2] === `M-${b.key}`);
+      // The bind target escapes tmux-special keys (`;` → `\;`), so mirror the
+      // code's transform rather than the raw table key.
+      const bind = rootBinds.find(argv => argv[2] === `M-${tmuxKeyName(b.key)}`);
       expect(bind, `⌥${b.key} should be bound on the root table`).toBeDefined();
       // The guarded run-shell body carries the dashboard subcommand, or the
       // literal command when the row is `raw`.

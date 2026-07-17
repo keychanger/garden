@@ -99,17 +99,28 @@ export function setupKeybindings(gardenRunner: string): void {
 // three tables bindMeta installs into). Each unbind is best-effort: tmux errors
 // when the key isn't bound, which is fine.
 function unbindMeta(key: string): void {
+  const metaKey = `M-${tmuxKeyName(key)}`;
   const argv: string[][] = [
-    ["unbind-key", "-n", `M-${key}`],
-    ["unbind-key", "-T", "copy-mode", `M-${key}`],
-    ["unbind-key", "-T", "copy-mode-vi", `M-${key}`],
+    ["unbind-key", "-n", metaKey],
+    ["unbind-key", "-T", "copy-mode", metaKey],
+    ["unbind-key", "-T", "copy-mode-vi", metaKey],
   ];
   for (const args of argv) {
     try { execFileSync("tmux", args, { stdio: "ignore" }); } catch { /* not bound */ }
   }
 }
 
+// tmux's key-name parser treats a bare `;` as the command separator, so a
+// `M-;` bind target is rejected with "unknown key: M-". The key name must be
+// escaped as `M-\;`. This is a binding-layer quirk only — the shared table
+// keeps the clean semantic key `;` so `garden keys` / hotkeyDisplay render it
+// as ⌥; (comma is not special and needs no escape, so it's the sole case).
+export function tmuxKeyName(key: string): string {
+  return key === ";" ? "\\;" : key;
+}
+
 function bindMeta(key: string, command: string): void {
+  const metaKey = `M-${tmuxKeyName(key)}`;
   const guarded = `if [ "$(tmux display-message -p '##{session_name}')" = "${DASHBOARD_SESSION}" ]; then ${command} >/dev/null 2>&1; fi`;
   // `-b` runs the handler in the background so it does NOT block tmux's command
   // queue: without it, run-shell holds the queue until the handler process
@@ -119,7 +130,7 @@ function bindMeta(key: string, command: string): void {
   // tmux-queue block is removed.
   try {
     execFileSync("tmux", [
-      "bind-key", "-n", `M-${key}`, "run-shell", "-b", guarded
+      "bind-key", "-n", metaKey, "run-shell", "-b", guarded
     ], { stdio: "ignore" });
   } catch { /* ignore */ }
 
@@ -140,7 +151,7 @@ function bindMeta(key: string, command: string): void {
   for (const table of ["copy-mode", "copy-mode-vi"]) {
     try {
       execFileSync("tmux", [
-        "bind-key", "-T", table, `M-${key}`, body
+        "bind-key", "-T", table, metaKey, body
       ], { stdio: "ignore" });
     } catch { /* ignore */ }
   }

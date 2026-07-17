@@ -29,6 +29,14 @@ import { log } from "./log.js";
 const NOT_SET = "(not set)";
 const trunc = (s: string, n = 28): string => (s.length <= n ? s : s.slice(0, n - 1) + "…");
 
+// Model/effort choice lists for the submenus. These mirror the ⌥⇧N composer's
+// COMPOSER_MODELS / COMPOSER_EFFORTS (trellis-picker.ts) so the project-default
+// picker and the per-spawn picker agree; kept as local literals here so this
+// menu module does not pull in create.ts's / trellis-picker's heavier graph.
+// The CLI (`garden config <p> model <id>`) covers exotic model ids.
+const PROJECT_MODEL_CHOICES = ["opus", "sonnet", "haiku", "fable"];
+const PROJECT_EFFORT_CHOICES = ["low", "medium", "high", "xhigh", "ultra"];
+
 // ---- pure plan builders --------------------------------------------------
 
 export interface ProjectMenuView {
@@ -39,6 +47,8 @@ export interface ProjectMenuView {
   ciGate: boolean;
   holistic: string;
   logColor: string;
+  model: string;
+  effort: string;
   checks: string;
   postMerge: string;
 }
@@ -47,12 +57,16 @@ export function buildProjectMenuPlan(v: ProjectMenuView): MenuSpec {
   const p = shellEscape(v.project);
   const g = v.runner;
   const sub = (name: string) => `${g} dashboard ${name} ${p}`;
+  // crew (harness/backend + reviewer) and model/effort are independent axes —
+  // neither overrides the other. They sit adjacent so that reads visually.
   const rows: MenuRow[] = [
     { label: `(1) base branch      ${v.base}`, key: "1", run: sub("_config-branch-submenu") },
     { label: `(2) crew             ${v.crew}`, key: "2", run: `${g} dashboard _crew-picker ${p}` },
-    { label: `(3) CI gate          ${v.ciGate ? "on" : "off"}`, key: "3", run: `${g} dashboard _config-set ${p} requireCiSuccess ${v.ciGate ? "false" : "true"}` },
-    { label: `(4) holistic review  ${v.holistic}`, key: "4", run: sub("_config-holistic-submenu") },
-    { label: `(5) log color        ${v.logColor}`, key: "5", run: sub("_config-color-submenu") },
+    { label: `(3) model            ${v.model}`, key: "3", run: sub("_config-model-submenu") },
+    { label: `(4) effort           ${v.effort}`, key: "4", run: sub("_config-effort-submenu") },
+    { label: `(5) CI gate          ${v.ciGate ? "on" : "off"}`, key: "5", run: `${g} dashboard _config-set ${p} requireCiSuccess ${v.ciGate ? "false" : "true"}` },
+    { label: `(6) holistic review  ${v.holistic}`, key: "6", run: sub("_config-holistic-submenu") },
+    { label: `(7) log color        ${v.logColor}`, key: "7", run: sub("_config-color-submenu") },
   ];
   return {
     title: `Project ${v.project} · checks: ${trunc(v.checks, 30)} · post-merge: ${trunc(v.postMerge, 24)}`,
@@ -81,6 +95,20 @@ export function buildProjectBranchSubmenuPlan(project: string, branches: string[
 
 export function buildHolisticSubmenuPlan(project: string, current: string, runner: string): MenuSpec {
   return buildEnumSubmenuPlan(project, "holisticReview", `Holistic review for ${project}`, ["off", "shadow", "fix"], current, runner, `unset — default (${DEFAULT_HOLISTIC_REVIEW})`);
+}
+
+// Default worker model (default + grow workers; trellis resolves its own per
+// iteration). Independent of crew — crew picks the harness/backend, this picks
+// the model within it.
+export function buildProjectModelSubmenuPlan(project: string, current: string | undefined, runner: string): MenuSpec {
+  return buildEnumSubmenuPlan(project, "model", `Default model for ${project} (default+grow workers)`, PROJECT_MODEL_CHOICES, current, runner, "unset — account/provider default");
+}
+
+// Default reasoning effort (default + grow workers). "ultra" is the ultracode
+// preset (max effort + dynamic workflows), not a plain rung — it only affects
+// claude-code workers (a codex worker ignores effort).
+export function buildProjectEffortSubmenuPlan(project: string, current: string | undefined, runner: string): MenuSpec {
+  return buildEnumSubmenuPlan(project, "effort", `Default effort for ${project} (ultra = ultracode preset)`, PROJECT_EFFORT_CHOICES, current, runner, "unset — no effort passed");
 }
 
 // ---- runners (resolve data, drive tmux) ----------------------------------
@@ -119,6 +147,8 @@ function projectMenuView(name: string, project: ProjectConfig, config: GardenCon
     ciGate: project.requireCiSuccess ?? true,
     holistic: project.holisticReview ?? `${DEFAULT_HOLISTIC_REVIEW} (default)`,
     logColor: project.logColor ?? "auto",
+    model: project.model ?? "account default",
+    effort: project.effort ?? "default",
     checks: project.checks ?? NOT_SET,
     postMerge: project.postMerge ?? NOT_SET,
   };
@@ -140,6 +170,18 @@ export function runColorSubmenu(project: string): void {
   const proj = tryGetProject(project);
   if (!proj) { tmuxDisplay(`Unknown project '${project}'.`); return; }
   runMenu(buildEnumSubmenuPlan(project, "logColor", `Log color for ${project}`, [...ASSIGNABLE_LOG_COLOR_KEYS], proj.logColor, resolveGardenRunner(), "unset — auto-assign"));
+}
+
+export function runProjectModelSubmenu(project: string): void {
+  const proj = tryGetProject(project);
+  if (!proj) { tmuxDisplay(`Unknown project '${project}'.`); return; }
+  runMenu(buildProjectModelSubmenuPlan(project, proj.model, resolveGardenRunner()));
+}
+
+export function runProjectEffortSubmenu(project: string): void {
+  const proj = tryGetProject(project);
+  if (!proj) { tmuxDisplay(`Unknown project '${project}'.`); return; }
+  runMenu(buildProjectEffortSubmenuPlan(project, proj.effort, resolveGardenRunner()));
 }
 
 // ---- mutating dispatch (set -> present -> refresh -> re-open) -------------

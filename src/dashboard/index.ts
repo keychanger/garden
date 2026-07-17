@@ -30,8 +30,12 @@ import {
 } from "./worker-menu.js";
 import {
   runProjectMenu, runProjectBranchSubmenu, runHolisticSubmenu, runColorSubmenu,
+  runProjectModelSubmenu, runProjectEffortSubmenu,
   applyConfigSetFromMenu,
 } from "./project-menu.js";
+import {
+  runGardenMenu, runChecksSlotsSubmenu, runMaxReviewsSubmenu, applyGardenLimitFromMenu,
+} from "./garden-menu.js";
 import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, focusHistory, focusDiary, focusAlerts, cyclePane, cyclePlot } from "./navigate.js";
 import { diaryFilePath } from "../diary.js";
 import { openLogsFilterPrompt, applyLogsFilter } from "./logs-filter.js";
@@ -252,6 +256,32 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   }
   if (sub === "_config-color-submenu") {
     if (args[1]) runColorSubmenu(args[1]);
+    return;
+  }
+  if (sub === "_config-model-submenu") {
+    if (args[1]) runProjectModelSubmenu(args[1]);
+    return;
+  }
+  if (sub === "_config-effort-submenu") {
+    if (args[1]) runProjectEffortSubmenu(args[1]);
+    return;
+  }
+  if (sub === "_garden-menu") {
+    runGardenMenu();
+    return;
+  }
+  if (sub === "_garden-checks-submenu") {
+    runChecksSlotsSubmenu();
+    return;
+  }
+  if (sub === "_garden-reviews-submenu") {
+    runMaxReviewsSubmenu();
+    return;
+  }
+  if (sub === "_garden-limit-set") {
+    // _garden-limit-set <key> <value>; value "unset" clears the override.
+    const [, key] = args;
+    if (key) applyGardenLimitFromMenu(key, args.slice(2).join(" "));
     return;
   }
   if (sub === "_grow-plant") {
