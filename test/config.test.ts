@@ -673,6 +673,62 @@ describe("holisticReview project config key", () => {
   });
 });
 
+// Project-level worker model/effort defaults (config.ts ProjectConfig.model /
+// .effort). They are the project-level analog of `workers new --model/--effort`
+// and layer beneath the per-spawn opts in newWorker; here we cover the config
+// surface (validity, round-trip, the config() validation branches).
+describe("model / effort project config keys", () => {
+  it("isValidConfigKey accepts model and effort", async () => {
+    const { isValidConfigKey } = await importConfig();
+    expect(isValidConfigKey("model")).toBe(true);
+    expect(isValidConfigKey("effort")).toBe(true);
+  });
+
+  it("round-trips model + effort through saveConfig + loadConfig", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({
+      projects: { garden: { path: "/tmp/garden", model: "sonnet", effort: "high" } },
+    });
+    const cfg = loadConfig();
+    expect(cfg.projects.garden.model).toBe("sonnet");
+    expect(cfg.projects.garden.effort).toBe("high");
+  });
+
+  it("config() sets model (opaque) and clears on empty", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    const { config } = await import("../src/commands/config.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
+    await config(["garden", "model", "claude-sonnet-5"]);
+    expect(loadConfig().projects.garden.model).toBe("claude-sonnet-5");
+    await config(["garden", "model", "unset"]);
+    expect(loadConfig().projects.garden.model).toBeUndefined();
+  });
+
+  it("config() accepts each effort rung plus ultra, clears on empty", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    const { config } = await import("../src/commands/config.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
+    for (const rung of ["low", "medium", "high", "xhigh", "ultra"] as const) {
+      await config(["garden", "effort", rung]);
+      expect(loadConfig().projects.garden.effort).toBe(rung);
+    }
+    await config(["garden", "effort", ""]);
+    expect(loadConfig().projects.garden.effort).toBeUndefined();
+  });
+
+  it("config() rejects an invalid effort value", async () => {
+    const { saveConfig, GARDEN_DIR } = await importConfig();
+    const { config } = await import("../src/commands/config.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
+    await expect(config(["garden", "effort", "max"]))
+      .rejects.toThrow(/effort must be one of/);
+  });
+});
+
 describe("config role subcommand", () => {
   async function setup() {
     const { saveConfig, GARDEN_DIR, loadConfig } = await importConfig();

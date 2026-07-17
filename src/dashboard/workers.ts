@@ -343,13 +343,37 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // Ultracode preset pins Opus (unless an explicit --model was also passed).
     // Trellis vines resolve their own model per iteration, so the preset's
     // model pin does not apply there — only its non-trellis workers get it.
-    const ultracode = opts.ultracode === true && workflowName !== "trellis";
-    const effectiveModel = ultracode ? (opts.model ?? ULTRACODE_MODEL) : opts.model;
+    // Project-level model/effort defaults (config.ts ProjectConfig.model /
+    // .effort) sit one layer beneath the per-spawn opts, exactly as
+    // resolveSpawnBase layers project.baseBranch beneath --base: per-spawn
+    // opts win, the project default fills the gap, the account/provider default
+    // is the floor. They apply to default+grow only — trellis resolves its own
+    // model per iteration and carries no effort, so it never consults them.
+    const projectDefaultsApply = workflowName === "default" || workflowName === "grow";
+    // The project effort default may itself be "ultra" (the ultracode preset).
+    // A per-spawn effort/ultracode gesture wins; otherwise the project default
+    // fills in, and "ultra" there means the preset just as `--effort ultra`
+    // does at the CLI.
+    let reqUltracode = opts.ultracode === true;
+    let reqEffort = opts.effort;
+    if (!reqUltracode && reqEffort === undefined && projectDefaultsApply && project.effort) {
+      if (project.effort === "ultra") reqUltracode = true;
+      else reqEffort = project.effort;
+    }
+    const projectModel = projectDefaultsApply ? project.model : undefined;
+
+    const ultracode = reqUltracode && workflowName !== "trellis";
+    // Model precedence: per-spawn --model > the ultracode preset's Opus pin
+    // (an explicit per-spawn gesture, more specific than a project default) >
+    // project.model > account/provider default.
+    const effectiveModel = ultracode
+      ? (opts.model ?? ULTRACODE_MODEL)
+      : (opts.model ?? projectModel);
     // Per-worker effort rung for default/grow. Suppressed for trellis (own
     // model resolution) and when ultracode is set (that preset already fixes
     // max effort — the composer/CLI keep them mutually exclusive, this is
     // defense-in-depth so a caller passing both never double-sets effort).
-    const effectiveEffort = !ultracode && workflowName !== "trellis" ? opts.effort : undefined;
+    const effectiveEffort = !ultracode && workflowName !== "trellis" ? reqEffort : undefined;
     // origin/<baseBranch> tip at creation — the `from` endpoint of the
     // whole-task cumulative diff a later holistic review computes. Captured
     // here (after the publish gesture guarantees the ref exists) because the

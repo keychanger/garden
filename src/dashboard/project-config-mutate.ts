@@ -26,13 +26,19 @@ import {
 // `garden add`); crew and the review roles have their own subcommands.
 export const SETTABLE_KEYS = [
   "baseBranch", "checks", "postMerge", "sandboxDomains", "claudeProfile", "provider",
-  "harness", "logColor", "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
-  "maxGrowIterations", "requireCiSuccess", "holisticReview",
+  "harness", "model", "effort", "logColor", "trellisDir", "maxTrellisIterations",
+  "trellisOpusFallback", "maxGrowIterations", "requireCiSuccess", "holisticReview",
 ] as const;
 export type SettableKey = typeof SETTABLE_KEYS[number];
 
 // CLI role name -> config sub-object key. The review family only; the worker
 // role selects its harness/model via `workers new`, not this config surface.
+// Valid values for the project-default `effort` key: the four claude-code
+// reasoning rungs (mirrors WORKER_EFFORT_LEVELS in dashboard/create.ts) plus
+// "ultra", the ultracode preset. Kept as a local literal so this leaf mutator
+// does not import create.ts's heavy module graph.
+const PROJECT_EFFORT_VALUES = ["low", "medium", "high", "xhigh", "ultra"] as const;
+
 export const REVIEW_ROLE_KEYS: Record<string, ReviewRole> = {
   reviewer: "reviewer",
   resolver: "resolver",
@@ -129,6 +135,27 @@ export function setProjectConfigKey(projectName: string, key: SettableKey, value
     } else {
       project.harness = value;
       message = `Set ${key} = ${value} for ${projectName} (applies to newly created or bounced workers; review family selects its own harness under 'role')`;
+    }
+  } else if (key === "model") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.model;
+      message = `Cleared ${key} for ${projectName} (workers use the account/provider default)`;
+    } else {
+      project.model = value.trim();
+      message = `Set ${key} = ${project.model} for ${projectName} (default/grow workers; per-spawn --model and the ultracode preset override it; trellis and the review family ignore it)`;
+    }
+  } else if (key === "effort") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.effort;
+      message = `Cleared ${key} for ${projectName} (no effort passed)`;
+    } else if ((PROJECT_EFFORT_VALUES as readonly string[]).includes(value)) {
+      project.effort = value;
+      const suffix = value === "ultra"
+        ? " (ultracode preset: max effort + dynamic workflows)"
+        : "";
+      message = `Set ${key} = ${value} for ${projectName}${suffix} (default/grow workers; per-spawn --effort overrides it; trellis ignores it)`;
+    } else {
+      throw new Error(`effort must be one of: ${PROJECT_EFFORT_VALUES.join(", ")}, got '${value}'`);
     }
   } else if (key === "maxTrellisIterations") {
     if (value === "" || value === "unset" || value === "null") {

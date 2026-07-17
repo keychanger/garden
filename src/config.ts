@@ -53,6 +53,23 @@ export interface ProjectConfig {
   // harness under `roles` (a provider never reaches review — the safety net).
   // See crew.ts + docs/future/CREWS.md.
   harness?: string;
+  // Default worker model for this project's DEFAULT and GROW workers — the
+  // project-level analog of `workers new --model` (which overrides it per
+  // spawn), resolved beneath it in newWorker (per-spawn > project > account
+  // default), exactly as `baseBranch` sits beneath `--base`. Opaque string:
+  // an Anthropic alias resolved through the provider modelMap on a
+  // provider-backed project, or a concrete model id. Ignored by trellis
+  // (resolves its own model per iteration) and by the review family (stays on
+  // the strong first-party default). The ultracode preset's Opus pin still
+  // wins over this (it is the more specific per-spawn gesture).
+  model?: string;
+  // Default reasoning effort for this project's DEFAULT and GROW workers — the
+  // project-level analog of `workers new --effort`, resolved beneath it in
+  // newWorker. One of WORKER_EFFORT_LEVELS (low/medium/high/xhigh) rendered as
+  // `--effort <level>`, or "ultra" for the ultracode preset (max effort +
+  // dynamic workflows). Ignored by trellis and suppressed when a spawn resolves
+  // to ultracode. See WORKER_EFFORT_LEVELS (dashboard/create.ts).
+  effort?: string;
   logColor?: string;
   // Trellis workflow keys. See WORKFLOWS.md "Project config".
   // Directory containing trellis files. Resolved relative to the project
@@ -120,8 +137,8 @@ export const DEFAULT_HOLISTIC_REVIEW = "fix";
 
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "path", "baseBranch", "checks", "postMerge", "sandboxDomains", "claudeProfile", "provider",
-  "harness", "logColor", "trellisDir", "maxTrellisIterations", "trellisOpusFallback",
-  "maxGrowIterations", "requireCiSuccess", "holisticReview",
+  "harness", "model", "effort", "logColor", "trellisDir", "maxTrellisIterations",
+  "trellisOpusFallback", "maxGrowIterations", "requireCiSuccess", "holisticReview",
 ]);
 
 export function isValidConfigKey(key: string): boolean {

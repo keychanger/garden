@@ -700,6 +700,69 @@ describe("newWorker", () => {
     expect(entry.trellis).toBeDefined();
   });
 
+  // ===== Project-level model/effort defaults (ProjectConfig.model/.effort) =====
+  // These layer beneath the per-spawn opts in newWorker (per-spawn > project >
+  // account default), exactly as resolveSpawnBase layers project.baseBranch
+  // beneath --base. Applied to default+grow only; trellis and ultracode
+  // interact per the precedence comment in newWorker.
+
+  it("project model default: stamped when no per-spawn --model", () => {
+    vi.mocked(tryGetProject).mockReturnValueOnce({ name: "myproject", path: "/repo/myproject", model: "sonnet" });
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker();
+    const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
+    expect(entry.model).toBe("sonnet");
+  });
+
+  it("per-spawn --model wins over the project model default", () => {
+    vi.mocked(tryGetProject).mockReturnValueOnce({ name: "myproject", path: "/repo/myproject", model: "sonnet" });
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ model: "opus" });
+    const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
+    expect(entry.model).toBe("opus");
+  });
+
+  it("project effort default: stamped when no per-spawn --effort", () => {
+    vi.mocked(tryGetProject).mockReturnValueOnce({ name: "myproject", path: "/repo/myproject", effort: "high" });
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker();
+    const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
+    expect(entry.effort).toBe("high");
+  });
+
+  it("per-spawn --effort wins over the project effort default", () => {
+    vi.mocked(tryGetProject).mockReturnValueOnce({ name: "myproject", path: "/repo/myproject", effort: "low" });
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ effort: "xhigh" });
+    const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
+    expect(entry.effort).toBe("xhigh");
+  });
+
+  it("project effort default 'ultra' resolves to the ultracode preset", () => {
+    vi.mocked(tryGetProject).mockReturnValueOnce({ name: "myproject", path: "/repo/myproject", effort: "ultra" });
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker();
+    const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
+    expect(entry.ultracode).toBe(true);
+    expect(entry.model).toBe("opus[1m]"); // ULTRACODE_MODEL pin
+    expect(entry.effort).toBeUndefined();
+  });
+
+  it("project model/effort defaults are ignored for a trellis vine", () => {
+    vi.mocked(tryGetProject).mockReturnValueOnce({ name: "myproject", path: "/repo/myproject", model: "sonnet", effort: "high" });
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({
+      workflow: "trellis",
+      trellis: { name: "auth", path: "/repo/myproject/.garden/trellises/auth.md", maxIterations: 30 },
+    });
+    const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
+    expect(entry.workflow).toBe("trellis");
+    // trellis vines resolve their own model per iteration (trellis.workerModel),
+    // never entry.model; effort never applies.
+    expect(entry.model).toBeUndefined();
+    expect(entry.effort).toBeUndefined();
+  });
+
   // ===== Harness selection (workers new --harness codex) =====
   // opts.harness is validated against the real registry (harness/core.js is
   // NOT mocked here, so isRegisteredHarness/harnessNames are real), stamped
