@@ -980,3 +980,75 @@ describe("garden workers new --harness", () => {
     expect(opts.harness).toBeUndefined();
   });
 });
+
+describe("garden workers new --effort", () => {
+  it("threads a plain effort rung into newWorker and reports it on a default worker", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    const out = await captureConsoleLog(() =>
+      workers(["new", "proj", "--model", "sonnet", "--effort", "xhigh"]),
+    );
+
+    expect(newWorker).toHaveBeenCalledWith(expect.objectContaining({
+      projectName: "proj",
+      workflow: "default",
+      model: "sonnet",
+      effort: "xhigh",
+    }));
+    expect(out.join("\n")).toContain("effort=xhigh");
+  });
+
+  it("maps --effort ultra to the ultracode preset (never a bare effort value)", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    const out = await captureConsoleLog(() =>
+      workers(["new", "proj", "--effort", "ultra"]),
+    );
+
+    const opts = vi.mocked(newWorker).mock.calls[0][0] as Record<string, unknown>;
+    expect(opts.ultracode).toBe(true);
+    expect(opts.effort).toBeUndefined();
+    expect(out.join("\n")).toContain("effort=ultra");
+  });
+
+  it("threads --effort onto a grow worker", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    await captureConsoleLog(() =>
+      workers(["new", "proj", "--workflow", "grow", "--seed", "x", "--effort", "high"]),
+    );
+
+    expect(newWorker).toHaveBeenCalledWith(expect.objectContaining({
+      workflow: "grow",
+      effort: "high",
+    }));
+  });
+
+  it("rejects an invalid --effort value before spawning", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    await expect(
+      workers(["new", "proj", "--effort", "bogus"]),
+    ).rejects.toThrow(/--effort must be one of/);
+    expect(newWorker).not.toHaveBeenCalled();
+  });
+
+  it("rejects --effort on a trellis worker", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    await expect(
+      workers(["new", "proj", "--workflow", "trellis", "--effort", "xhigh"]),
+    ).rejects.toThrow(/--effort is only supported with --workflow default or grow/);
+    expect(newWorker).not.toHaveBeenCalled();
+  });
+});

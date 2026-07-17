@@ -426,7 +426,8 @@ garden rebuild                     # Rebuild garden and relaunch dashboard
 garden workers new <project> [--workflow trellis|grow]
                              [--trellis <name>]
                              [--seed <text> | --seed-file <path>]
-                             [--model <alias-or-id>] [--max-iterations N]
+                             [--model <alias-or-id>] [--effort low|medium|high|xhigh|ultra]
+                             [--max-iterations N]
                                    # Spawn a worker. Default workflow plants an interactive worker;
                                    # trellis plants a vine bound to the named trellis (--model
                                    # overrides the Sonnet default); grow plants a bounded
@@ -434,6 +435,8 @@ garden workers new <project> [--workflow trellis|grow]
                                    # worker model on any workflow: an Anthropic alias or any
                                    # concrete model id the backend accepts, persisted so the pin
                                    # survives bounce/resume/respawn (account default when absent).
+                                   # --effort sets the reasoning rung (default/grow only; ultra =
+                                   # the ultracode preset: max effort + dynamic workflows).
                                    # --max-iterations defaults to project.maxGrowIterations or 5.
 garden workers grow [<worker>] [--seed <text> | --seed-file <path> | --goal-file <path>]
                              [--max-iterations N]
