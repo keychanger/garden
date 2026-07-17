@@ -80,24 +80,31 @@ vi.mock("../src/dashboard/names.js", () => ({
   generateWorkerName: vi.fn(() => "bold-ash"),
 }));
 
-vi.mock("../src/dashboard/registry.js", () => ({
-  addWorker: vi.fn(),
-  removeWorker: vi.fn(),
-  findWorkerByName: vi.fn(() => null),
-  getAllWorkerNames: vi.fn(() => []),
-  getWorkers: vi.fn(() => []),
-  updateWorkerFields: vi.fn(),
-  // Pure status helper — use the real logic so bounce's resume-status routing
-  // (working → "ready" sentinel, else "idle") is genuinely exercised. Mirrors
-  // registry.ts: the paused/asking hold check comes FIRST so an owed interrupt
-  // flag on a held worker can't route it to "ready" (and auto-continue).
-  resolveResumeAgentStatus: (entry: { agentStatus?: string; interruptedWhileWorking?: boolean }) =>
-    entry.agentStatus === "paused" || entry.agentStatus === "asking"
-      ? entry.agentStatus
-      : entry.interruptedWhileWorking === true || entry.agentStatus === "working"
-        ? "ready"
-        : "idle",
-}));
+vi.mock("../src/dashboard/registry.js", async (importActual) => {
+  // Spread the real module so pure sort helpers (compareWorkerFreshness et al.,
+  // used by killPane's replacement-window selection) stay live; only the
+  // stateful accessors below are faked.
+  const actual = await importActual<typeof import("../src/dashboard/registry.js")>();
+  return {
+    ...actual,
+    addWorker: vi.fn(),
+    removeWorker: vi.fn(),
+    findWorkerByName: vi.fn(() => null),
+    getAllWorkerNames: vi.fn(() => []),
+    getWorkers: vi.fn(() => []),
+    updateWorkerFields: vi.fn(),
+    // Pure status helper — use the real logic so bounce's resume-status routing
+    // (working → "ready" sentinel, else "idle") is genuinely exercised. Mirrors
+    // registry.ts: the paused/asking hold check comes FIRST so an owed interrupt
+    // flag on a held worker can't route it to "ready" (and auto-continue).
+    resolveResumeAgentStatus: (entry: { agentStatus?: string; interruptedWhileWorking?: boolean }) =>
+      entry.agentStatus === "paused" || entry.agentStatus === "asking"
+        ? entry.agentStatus
+        : entry.interruptedWhileWorking === true || entry.agentStatus === "working"
+          ? "ready"
+          : "idle",
+  };
+});
 
 vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -890,6 +897,60 @@ describe("killPane", () => {
     const written = vi.mocked(writeDashState).mock.calls[0][0];
     expect(written.activePaneType).toBe("worker");
     expect(written.activeWindowName).toBe("_myproject-worker-next-one");
+  });
+
+  it("swaps in the worker that now occupies the killed worker's status-pane row, not tmux window order", () => {
+    // Four workers, freshest to stalest: alpha, bravo, charlie (killed/visible),
+    // delta. In the status-pane's freshness order charlie sits directly above
+    // delta, so closing charlie should promote delta into charlie's row — like
+    // closing a browser tab hands focus to its neighbor, not to whichever tab
+    // tmux happens to have created first.
+    const state = makeState({ activeWindowName: "_myproject-worker-charlie" });
+    vi.mocked(readDashState).mockReturnValue(state);
+    // Deliberately NOT in freshness order, to prove selection ignores tmux's
+    // raw window-list order.
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([
+      "_myproject-worker-delta",
+      "_myproject-worker-alpha",
+      "_myproject-worker-bravo",
+    ]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "alpha", sessionId: "s1", task: "", lastStateChangeAt: 400_000 },
+      { name: "bravo", sessionId: "s2", task: "", lastStateChangeAt: 300_000 },
+      { name: "charlie", sessionId: "s3", task: "", lastStateChangeAt: 200_000 },
+      { name: "delta", sessionId: "s4", task: "", lastStateChangeAt: 100_000 },
+    ]);
+    vi.mocked(getFirstPaneId).mockReturnValue("%30");
+
+    killPane();
+
+    expect(vi.mocked(tmux)).toHaveBeenCalledWith(
+      "swap-pane", "-s", "%2", "-t", "%30",
+    );
+    expect(vi.mocked(killWindowSafe)).toHaveBeenCalledWith("_myproject-worker-delta");
+    const written = vi.mocked(writeDashState).mock.calls[0][0];
+    expect(written.activeWindowName).toBe("_myproject-worker-delta");
+  });
+
+  it("promotes the next-freshest worker when the killed worker held the top status-pane row", () => {
+    const state = makeState({ activeWindowName: "_myproject-worker-alpha" });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([
+      "_myproject-worker-delta",
+      "_myproject-worker-bravo",
+    ]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "alpha", sessionId: "s1", task: "", lastStateChangeAt: 300_000 },
+      { name: "bravo", sessionId: "s2", task: "", lastStateChangeAt: 200_000 },
+      { name: "delta", sessionId: "s4", task: "", lastStateChangeAt: 100_000 },
+    ]);
+    vi.mocked(getFirstPaneId).mockReturnValue("%30");
+
+    killPane();
+
+    expect(vi.mocked(killWindowSafe)).toHaveBeenCalledWith("_myproject-worker-bravo");
+    const written = vi.mocked(writeDashState).mock.calls[0][0];
+    expect(written.activeWindowName).toBe("_myproject-worker-bravo");
   });
 
   it("pre-sizes next worker window before swap", () => {

@@ -16,7 +16,7 @@ import {
 import { generateWorkerName } from "./names.js";
 import {
   addWorker, removeWorker, findWorkerByName, getAllWorkerNames,
-  updateWorkerFields, getWorkers, resolveResumeAgentStatus, type AgentStatus,
+  updateWorkerFields, getWorkers, resolveResumeAgentStatus, compareWorkerFreshness, type AgentStatus,
 } from "./registry.js";
 import { recordWorkerCreated, recordOperatorAction, shortHash, type RoleSnapshot } from "./telemetry.js";
 import { deriveCrew, getCrew } from "./crew.js";
@@ -580,6 +580,37 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   return createdName;
 }
 
+// Pick which hidden worker takes over the visible slot when the current one
+// is killed. Sorts the killed worker in among its still-live siblings by the
+// same freshness order the status pane and ⌥]/⌥[ use, finds the row position
+// it held, and hands focus to whichever worker now occupies that position —
+// mirrors closing a browser tab, rather than jumping to tmux's arbitrary
+// window-creation order (workerWindows[0]), which is what made the prior
+// focus target feel random.
+function pickReplacementWorkerWindow(
+  project: string,
+  killedWindowName: string | null,
+  hiddenWorkerWindows: string[],
+): string {
+  if (!killedWindowName) return hiddenWorkerWindows[0];
+
+  const entryByLabel = new Map(getWorkers(project).map(e => [e.name, e]));
+  const labelOf = (w: string): string => parseWorkerSuffix(w) ?? w;
+  const byFreshness = (wa: string, wb: string): number => {
+    const ea = entryByLabel.get(labelOf(wa));
+    const eb = entryByLabel.get(labelOf(wb));
+    if (ea && eb) return compareWorkerFreshness(ea, eb);
+    if (ea) return -1;
+    if (eb) return 1;
+    return labelOf(wa).localeCompare(labelOf(wb));
+  };
+
+  const withKilled = [...hiddenWorkerWindows, killedWindowName].sort(byFreshness);
+  const killedIdx = withKilled.indexOf(killedWindowName);
+  const remaining = [...hiddenWorkerWindows].sort(byFreshness);
+  return remaining[Math.min(killedIdx, remaining.length - 1)];
+}
+
 export function killPane(): void {
   // Declare cleanup vars outside the lock so backgroundGitCleanup can run
   // after the lock is released — it only spawns a child process and does not
@@ -611,7 +642,7 @@ export function killPane(): void {
     const project = getProject(state.activeProject);
 
     if (workerWindows.length > 0) {
-      const targetWindow = workerWindows[0];
+      const targetWindow = pickReplacementWorkerWindow(state.activeProject, killedWindowName, workerWindows);
       const targetPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${targetWindow}`);
       if (targetPaneId) {
         const visibleSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
