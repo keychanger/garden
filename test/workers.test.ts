@@ -953,6 +953,30 @@ describe("killPane", () => {
     expect(written.activeWindowName).toBe("_myproject-worker-bravo");
   });
 
+  it("promotes the worker directly above when the killed worker held the bottom status-pane row", () => {
+    // charlie is the stalest, so it sits at the bottom of the freshness order.
+    // Closing the bottom tab hands focus upward to its neighbor (bravo) — the
+    // row-position clamp (killedIdx exceeds the shortened list's last index).
+    const state = makeState({ activeWindowName: "_myproject-worker-charlie" });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([
+      "_myproject-worker-bravo",
+      "_myproject-worker-alpha",
+    ]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "alpha", sessionId: "s1", task: "", lastStateChangeAt: 300_000 },
+      { name: "bravo", sessionId: "s2", task: "", lastStateChangeAt: 200_000 },
+      { name: "charlie", sessionId: "s3", task: "", lastStateChangeAt: 100_000 },
+    ]);
+    vi.mocked(getFirstPaneId).mockReturnValue("%30");
+
+    killPane();
+
+    expect(vi.mocked(killWindowSafe)).toHaveBeenCalledWith("_myproject-worker-bravo");
+    const written = vi.mocked(writeDashState).mock.calls[0][0];
+    expect(written.activeWindowName).toBe("_myproject-worker-bravo");
+  });
+
   it("pre-sizes next worker window before swap", () => {
     const state = makeState();
     vi.mocked(readDashState).mockReturnValue(state);
