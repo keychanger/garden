@@ -670,7 +670,6 @@ describe("renderQuickStatus", () => {
 });
 
 describe("branch hint", () => {
-  const YELLOW = "\x1b[33m";
   const GREY = "\x1b[90m";
   const RESET = "\x1b[0m";
   const state = {
@@ -685,14 +684,14 @@ describe("branch hint", () => {
   const lineFor = (result: string, name: string): string =>
     result.split("\n").find(l => l.includes(name)) ?? "";
 
-  it("flags a worker whose pinned base diverges from the checkout in yellow", () => {
+  it("marks a worker whose pinned base diverges from the checkout in grey (informational, not a warning)", () => {
     vi.mocked(currentBranchFast).mockReturnValue("main");
     vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "working", baseBranch: "feature-x" },
     ]);
     const result = renderQuickStatus(state);
-    expect(lineFor(result, "bold-ash")).toContain(`${YELLOW}→ feature-x${RESET}`);
+    expect(lineFor(result, "bold-ash")).toContain(`${GREY}→ feature-x${RESET}`);
   });
 
   it("omits the hint when a lone worker's base matches the checkout", () => {
@@ -705,7 +704,7 @@ describe("branch hint", () => {
     expect(result).not.toContain("→");
   });
 
-  it("shows every worker's base when any one diverges — diverging yellow, matching grey", () => {
+  it("shows every worker's base in grey when any one diverges", () => {
     vi.mocked(currentBranchFast).mockReturnValue("main");
     // calm-bay is also surfaced via a hidden window so two workers render under
     // the one project; the comparator mock orders them alphabetically.
@@ -715,10 +714,10 @@ describe("branch hint", () => {
       { name: "calm-bay", sessionId: "def", task: "", agentStatus: "working", baseBranch: "feature-x" },
     ]);
     const result = renderQuickStatus(state);
-    // The off-base worker keeps the yellow warning.
-    expect(lineFor(result, "calm-bay")).toContain(`${YELLOW}→ feature-x${RESET}`);
-    // The on-base worker now shows its base too, but in grey so it doesn't read
-    // as a warning — answering "what does this one target?" unambiguously.
+    // Both the off-base worker's target and the on-base sibling's target render
+    // grey — informational, not a warning — so the operator sees per row what
+    // each targets without any row reading as an alert.
+    expect(lineFor(result, "calm-bay")).toContain(`${GREY}→ feature-x${RESET}`);
     expect(lineFor(result, "bold-ash")).toContain(`${GREY}→ main${RESET}`);
   });
 });
@@ -1030,12 +1029,12 @@ describe("dimRow", () => {
     // A row with an embedded colored segment (the base-divergence hint) whose
     // own reset would otherwise cancel the faint attribute and half-brighten
     // the rest of the line.
-    const line = `worker  \x1b[33m→ main${RESET}`;
+    const line = `worker  \x1b[90m→ main${RESET}`;
     const dimmed = dimRow(line);
     expect(dimmed).toContain(`${RESET}${FAINT}`);          // faint re-armed after the inner reset
     expect(dimmed.startsWith(FAINT)).toBe(true);
     expect(dimmed.endsWith(RESET)).toBe(true);
-    expect(dimmed).toBe(`${FAINT}worker  \x1b[33m→ main${RESET}${FAINT}${RESET}`);
+    expect(dimmed).toBe(`${FAINT}worker  \x1b[90m→ main${RESET}${FAINT}${RESET}`);
   });
 });
 
@@ -1067,7 +1066,7 @@ describe("truncateToVisibleWidth", () => {
   });
 
   it("caps a dimRow-wrapped line to the visible width and stays balanced", () => {
-    const row = dimRow("worker  \x1b[33m→ main\x1b[0m");
+    const row = dimRow("worker  \x1b[90m→ main\x1b[0m");
     const out = truncateToVisibleWidth(row, 4);
     expect(visible(out)).toBe(4);      // "work"
     expect(out.endsWith("\x1b[0m")).toBe(true);

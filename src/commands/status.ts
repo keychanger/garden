@@ -783,27 +783,27 @@ function resolveProjectBranch(
   return branch;
 }
 
-// Branch hint appended to a worker row. The yellow "→ <base>" flags a worker
-// whose pinned base diverges from the project's current checkout — the leading
-// indicator of the "did not fast-forward after merge" alert pattern (the
-// operator switched checkouts after creating the worker, and the worker still
-// merges to its pinned base). Showing it in yellow makes the divergence obvious
-// without requiring a registry inspection.
+// Branch hint appended to a worker row: a grey "→ <base>" naming the base a
+// worker merges into when it differs from the project's current checkout. This
+// is informational, not a warning — merging into a non-checked-out base is a
+// fully supported workflow (the post-merge step advances that base's ref on its
+// own), so it wears the same quiet grey as the row's other identity badges
+// rather than a yellow alert color (operator call, 2026-07-16). The one genuine
+// fault — a base gone from origin, where the merge WILL fail — is yellow, but
+// only the configured-base path (formatConfiguredBaseHint) can detect it.
 //
 // When ANY worker in the project diverges (showMatching), the workers whose
-// base *matches* the checkout also render their base — in grey, not yellow — so
-// the operator sees, per row, what each worker targets. Without this, a mixed
-// project would show "→ feature" on one row and nothing on the others, leaving
-// it ambiguous whether the silent rows target the checkout or just aren't
-// flagged. Grey keeps the yellow reserved for the actual divergence warning.
+// base *matches* the checkout render their base too, so the operator sees per
+// row what each worker targets. Without this, a mixed project would show
+// "→ feature" on one row and nothing on the others, leaving it ambiguous whether
+// the silent rows target the checkout or just aren't flagged.
 function formatBranchHint(
   workerBase: string | undefined,
   projectBranch: string | null | undefined,
   showMatching: boolean,
 ): string {
   if (!workerBase || !projectBranch) return "";
-  if (workerBase !== projectBranch) return `\x1b[33m→ ${workerBase}\x1b[0m`;
-  if (showMatching) return `\x1b[90m→ ${workerBase}\x1b[0m`;
+  if (workerBase !== projectBranch || showMatching) return `\x1b[90m→ ${workerBase}\x1b[0m`;
   return "";
 }
 
