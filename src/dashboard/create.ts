@@ -12,7 +12,7 @@ import { buildRulesContext, buildWorktreeRules } from "../rules.js";
 import { type DashboardState, readDashState, writeDashState, withStateLock, STATE_FILE } from "./state.js";
 import { restoreFromHidden } from "./layout.js";
 import { setupKeybindings } from "./hotkeys.js";
-import { setupStatusBar, buildStatusCommand, buildUsageCommand, buildHistoryCommand, updateHeaderVar, installInputGuard, setPaneProjectColor } from "./header.js";
+import { setupStatusBar, buildStatusCommand, buildUsageCommand, buildHistoryCommand, buildAlertsCommand, updateHeaderVar, installInputGuard, setPaneProjectColor } from "./header.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { formatLogsPaneLabel } from "../commands/logs.js";
 import {
@@ -276,6 +276,7 @@ export function ensureDashboard(): void {
     gardenShellPaneId: gardenShellId,
     gardenPaneType: "growhouse",
     gardenWindowName: gardenWindowName("growhouse"),
+    alertsSeenMark: null,
     activePaneId: rightPaneId,
     activePaneType: firstProject ? "shell" : null,
     activeWindowName: firstProject ? shellWin(firstProject) : null,
@@ -475,6 +476,20 @@ export function createGardenHistoryWindow(gardenRunner: string): void {
   if (paneId) {
     setPaneLabel(paneId, "history");
     setPaneTitle(paneId, "history");
+    disablePaneInput(paneId);
+  }
+}
+
+// Alerts view (⌥a): a passive SIGUSR1 repaint pane, same shape as the history
+// pane. writeAlertsRendered fills alerts.rendered with the unread/read alert
+// list. Focusing this view is also what marks alerts read (see focusAlerts).
+export function createGardenAlertsWindow(gardenRunner: string): void {
+  const windowName = gardenWindowName("alerts");
+  newDashboardWindow(windowName, "sh", "-c", buildAlertsCommand(gardenRunner));
+  const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
+  if (paneId) {
+    setPaneLabel(paneId, "alerts");
+    setPaneTitle(paneId, "alerts");
     disablePaneInput(paneId);
   }
 }

@@ -11,7 +11,7 @@ import { workerWindowPrefix } from "./window-names.js";
 // as part of its checks. A test that exercises addAlert / refreshAlertBadge /
 // poller / hook flows WITHOUT mocking this module would otherwise shell out to
 // the operator's live session and mutate it. The observed symptom: a fake
-// "⚠ 1 alert — ⌥l to clear" badge (rendered "garden dev", the unbuilt version
+// "⚠ 1 alert — ⌥a to clear" badge (rendered "garden dev", the unbuilt version
 // string) flashing onto the real status bar with no matching real alert — a
 // test's refreshAlertBadge writing @garden_right on the live session, then
 // wiped by the dashboard's next legitimate refresh.

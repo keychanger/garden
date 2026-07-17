@@ -47,6 +47,7 @@ vi.mock("../src/dashboard/header.js", () => ({
   refreshDashboardCycle: vi.fn(),
   refreshDashboardPlotCycle: vi.fn(),
   refreshStatusElapsed: vi.fn(),
+  writeAlertsRendered: vi.fn(),
   setPaneProjectColor: vi.fn(),
 }));
 
@@ -78,6 +79,7 @@ vi.mock("../src/dashboard/log.js", () => ({
 
 vi.mock("../src/dashboard/alerts.js", () => ({
   acknowledgeAlerts: vi.fn(),
+  readAlerts: vi.fn(() => ({ alerts: [], lastSeenAt: undefined })),
 }));
 
 vi.mock("../src/dashboard/create.js", () => ({
@@ -87,6 +89,7 @@ vi.mock("../src/dashboard/create.js", () => ({
   createGardenGrowhouseWindow: vi.fn(),
   createGardenHistoryWindow: vi.fn(),
   createGardenDiaryWindow: vi.fn(),
+  createGardenAlertsWindow: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/runner.js", () => ({
@@ -113,6 +116,7 @@ import {
   focusLogs,
   focusHistory,
   focusDiary,
+  focusAlerts,
   cyclePane,
   cyclePlot,
 } from "../src/dashboard/navigate.js";
@@ -127,8 +131,8 @@ import {
 } from "../src/dashboard/tmux.js";
 import { findWorkerByName } from "../src/dashboard/registry.js";
 import { plotsMap, getFocusedProjectNames } from "../src/config.js";
-import { acknowledgeAlerts } from "../src/dashboard/alerts.js";
-import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow, createGardenHistoryWindow, createGardenDiaryWindow } from "../src/dashboard/create.js";
+import { acknowledgeAlerts, readAlerts } from "../src/dashboard/alerts.js";
+import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow, createGardenHistoryWindow, createGardenDiaryWindow, createGardenAlertsWindow } from "../src/dashboard/create.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 
 // --- Helpers ---
@@ -140,6 +144,7 @@ function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
     gardenShellPaneId: "%1",
     gardenPaneType: "growhouse",
     gardenWindowName: "_garden-growhouse",
+    alertsSeenMark: null,
     activePaneId: "%2",
     activePaneType: "worker",
     activeWindowName: "_garden-worker-bold-ash",
@@ -522,33 +527,86 @@ describe("focusGrowhouse / focusRoot / focusLogs (switchGardenTo)", () => {
     expect(writeDashState).not.toHaveBeenCalled();
   });
 
-  it("focusLogs always acknowledges alerts even when already on logs", () => {
+  it("focusLogs no longer acknowledges alerts — that moved to focusAlerts (⌥a)", () => {
     vi.mocked(readDashState).mockReturnValue(
-      makeState({ gardenPaneType: "logs", gardenShellPaneId: "%1" }),
+      makeState({ gardenPaneType: "growhouse", gardenWindowName: "_garden-growhouse" }),
     );
     focusLogs();
+    expect(acknowledgeAlerts).not.toHaveBeenCalled();
+  });
+
+  it("focusAlerts always acknowledges alerts even when already on alerts", () => {
+    vi.mocked(readDashState).mockReturnValue(
+      makeState({ gardenPaneType: "alerts", gardenShellPaneId: "%1" }),
+    );
+    focusAlerts();
     expect(acknowledgeAlerts).toHaveBeenCalled();
   });
 
-  it("focusLogs re-bakes the status pane so ⚠ badges clear on the already-on-logs path", () => {
+  it("focusAlerts re-bakes the status pane so ⚠ badges clear on the already-on-alerts path", () => {
     vi.mocked(readDashState).mockReturnValue(
-      makeState({ gardenPaneType: "logs", gardenShellPaneId: "%1" }),
+      makeState({ gardenPaneType: "alerts", gardenShellPaneId: "%1" }),
     );
-    focusLogs();
-    // switchGardenTo early-returns when already on logs, so the status-pane
+    focusAlerts();
+    // switchGardenTo early-returns when already on alerts, so the status-pane
     // re-bake that drops the now-acked per-project badges is the explicit one.
     expect(refreshStatusElapsed).toHaveBeenCalled();
   });
 
-  it("focusLogs acknowledges alerts before repainting so the pane bakes cleared counts", () => {
-    vi.mocked(readDashState).mockReturnValue(
-      makeState({ gardenPaneType: "growhouse", gardenWindowName: "_garden-growhouse" }),
-    );
+  it("focusAlerts snapshots the pre-ack seen mark so the view still shows what was unread", () => {
+    const state = makeState({ gardenPaneType: "growhouse", gardenWindowName: "_garden-growhouse" });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(readAlerts).mockReturnValue({ alerts: [], lastSeenAt: "2026-07-17T10:00:00.000Z" });
     const order: string[] = [];
     vi.mocked(acknowledgeAlerts).mockImplementationOnce(() => { order.push("ack"); });
-    vi.mocked(refreshDashboard).mockImplementationOnce(() => { order.push("refresh"); });
+
+    focusAlerts();
+
+    // The mark is the seen-time from BEFORE the ack: acking clears the badge,
+    // but alerts newer than this still render as unread in the pane.
+    expect(state.alertsSeenMark).toBe("2026-07-17T10:00:00.000Z");
+    expect(order).toEqual(["ack"]);
+  });
+
+  it("focusAlerts with no prior ack marks every alert unread", () => {
+    const state = makeState({ gardenPaneType: "growhouse", gardenWindowName: "_garden-growhouse" });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(readAlerts).mockReturnValue({ alerts: [], lastSeenAt: undefined });
+    focusAlerts();
+    expect(state.alertsSeenMark).toBeNull();
+  });
+
+  it("leaving the alerts view drops the sticky unread mark", () => {
+    const state = makeState({
+      gardenPaneType: "alerts",
+      gardenWindowName: "_garden-alerts",
+      alertsSeenMark: "2026-07-17T10:00:00.000Z",
+    });
+    vi.mocked(readDashState).mockReturnValue(state);
+
     focusLogs();
-    expect(order).toEqual(["ack", "refresh"]);
+
+    // Next visit folds the alerts this view highlighted into read — they were
+    // acked on entry.
+    expect(state.alertsSeenMark).toBeNull();
+  });
+
+  it("creates alerts window if missing when switching to alerts", () => {
+    const state = makeState({
+      gardenPaneType: "growhouse",
+      gardenWindowName: "_garden-growhouse",
+    });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(windowExists).mockReturnValue(false);
+
+    focusAlerts();
+
+    expect(createGardenAlertsWindow).toHaveBeenCalledWith("/usr/bin/garden");
+    expect(gardenSwapToHidden).toHaveBeenCalledWith(
+      "_garden-growhouse", "_garden-alerts", state,
+    );
+    expect(state.gardenPaneType).toBe("alerts");
+    expect(state.gardenWindowName).toBe("_garden-alerts");
   });
 
   it("creates growhouse window if missing and switches to it", () => {

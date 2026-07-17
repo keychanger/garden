@@ -30,6 +30,7 @@ export const DASHBOARD_HOTKEYS: DashboardHotkey[] = [
   { key: "r", command: "_focus-root", category: "Navigation", label: "Focus root shell" },
   { key: "l", command: "_focus-logs", category: "Navigation", label: "Focus logs" },
   { key: "h", command: "_focus-history", category: "Navigation", label: "Focus history (focused worker's prompt history)" },
+  { key: "a", command: "_focus-alerts", category: "Navigation", label: "Focus alerts (marks them read; press again to clear the unread mark)" },
   { key: "d", command: "_focus-diary", category: "Navigation", label: "Focus diary (focused project's diary in $EDITOR)" },
   { key: "w", command: "_focus-worker", category: "Navigation", label: "Jump to first worker" },
   { key: "s", command: "_focus-shell", category: "Navigation", label: "Jump to project shell" },

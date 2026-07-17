@@ -32,7 +32,7 @@ import {
   runProjectMenu, runProjectBranchSubmenu, runHolisticSubmenu, runColorSubmenu,
   applyConfigSetFromMenu,
 } from "./project-menu.js";
-import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, focusHistory, focusDiary, cyclePane, cyclePlot } from "./navigate.js";
+import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, focusHistory, focusDiary, focusAlerts, cyclePane, cyclePlot } from "./navigate.js";
 import { diaryFilePath } from "../diary.js";
 import { openLogsFilterPrompt, applyLogsFilter } from "./logs-filter.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
@@ -108,6 +108,7 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   if (sub === "_focus-logs") return focusLogs();
   if (sub === "_focus-history") return focusHistory();
   if (sub === "_focus-diary") return focusDiary();
+  if (sub === "_focus-alerts") return focusAlerts();
   if (sub === "_diary-path") {
     // Consumed by the diary view's editor loop (diary-view.sh): prints the
     // focused project's diary file path, or nothing when no project is focused.
@@ -513,6 +514,7 @@ Hotkeys (⌥ = Option/Alt, no prefix needed):
   ⌥g           Focus growhouse (garden> prompt with auto-dispatch)
   ⌥r           Focus root shell
   ⌥l           Focus logs
+  ⌥a           Focus alerts (marks them read)
   ⌥d           Focus diary (focused project's diary in $EDITOR)
   ⌥/           Edit sticky logs filter (key:value or fuzzy; empty clears)
   ⌥.           Clear sticky logs filter immediately

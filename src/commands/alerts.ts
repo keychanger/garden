@@ -1,8 +1,11 @@
 // Command: garden alerts — view and manage dashboard alerts. Splits alerts into
-// unread (added since the last ⌥l acknowledgement) and read, with honest
-// level glyphs and relative timestamps.
+// unread (added since the last ⌥a acknowledgement) and read, with honest
+// level glyphs and relative timestamps. renderAlertsPane serves the dashboard's
+// ⌥a view from the same data and formatter (the status-pane precedent:
+// renderQuickStatus in status.ts).
 import { readAlerts, clearAlerts, type Alert } from "../dashboard/alerts.js";
 import { output, isTTY } from "../output.js";
+import { wrapDetail } from "./logs.js";
 
 export async function alerts(args: string[]): Promise<void> {
   if (args[0] === "clear") {
@@ -23,10 +26,8 @@ export async function alerts(args: string[]): Promise<void> {
     return;
   }
 
-  const seen = store.lastSeenAt ? Date.parse(store.lastSeenAt) : 0;
   const now = Date.now();
-  const unread = store.alerts.filter(a => Date.parse(a.ts) > seen);
-  const read = store.alerts.filter(a => Date.parse(a.ts) <= seen);
+  const { unread, read } = splitBySeen(store.alerts, store.lastSeenAt ?? null);
 
   console.log("");
   if (unread.length > 0) {
@@ -39,8 +40,61 @@ export async function alerts(args: string[]): Promise<void> {
     for (const a of read) console.log(formatAlertRow(a, now, true));
     console.log("");
   }
-  console.log("  \x1b[2m⌥l in the dashboard marks alerts read; 'garden alerts clear' removes them\x1b[0m");
+  console.log("  \x1b[2m⌥a in the dashboard marks alerts read; 'garden alerts clear' removes them\x1b[0m");
   console.log("");
+}
+
+// An alert is unread when it landed after the seen-mark. Shared so the CLI and
+// the ⌥a pane can't drift on where the line falls.
+function splitBySeen(all: Alert[], seenAt: string | null): { unread: Alert[]; read: Alert[] } {
+  const seen = seenAt ? Date.parse(seenAt) : 0;
+  return {
+    unread: all.filter(a => Date.parse(a.ts) > seen),
+    read: all.filter(a => Date.parse(a.ts) <= seen),
+  };
+}
+
+// The ⌥a view. Same split and glyph vocabulary as the CLI, but laid out for the
+// narrow lower-left pane: newest first (an alert list is a scan, and the pane
+// shows its top), and each alert is a location header line plus its message
+// wrapped underneath, rather than the CLI's wide single-line row. The pane
+// prints every alert and lets tmux hold the overflow in scrollback.
+export function renderAlertsPane(width: number, seenAt: string | null, now: number): string {
+  const store = readAlerts();
+  if (store.alerts.length === 0) return " \x1b[2mno alerts\x1b[0m";
+
+  const { unread, read } = splitBySeen(store.alerts, seenAt);
+  const lines: string[] = [];
+  const section = (label: string, group: Alert[], dim: boolean) => {
+    if (group.length === 0) return;
+    if (lines.length > 0) lines.push("");
+    const style = dim ? "\x1b[2m" : "\x1b[1m";
+    lines.push(` ${style}${label} (${group.length})\x1b[0m`);
+    for (const a of [...group].reverse()) lines.push(...formatPaneRows(a, now, dim, width));
+  };
+  section("unread", unread, false);
+  section("read", read, true);
+  return lines.join("\n");
+}
+
+// Message column starts under the glyph+age gutter (" ✖ 12m  " = 8 cols).
+const PANE_GUTTER = 8;
+const PANE_MAX_MESSAGE_LINES = 4;
+
+function formatPaneRows(a: Alert, now: number, read: boolean, width: number): string[] {
+  const ago = formatAgo(now - Date.parse(a.ts)).padStart(3);
+  const loc = a.worker ? `${a.project}/${a.worker}` : a.project;
+  const glyph = a.level === "error" ? "✖" : "⚠";
+  const head = read
+    ? ` \x1b[90m${glyph} ${ago}  ${loc}\x1b[0m`
+    : ` ${a.level === "error" ? "\x1b[1;31m" : "\x1b[1;33m"}${glyph}\x1b[0m \x1b[2m${ago}\x1b[0m  \x1b[1m${loc}\x1b[0m`;
+
+  // An unread alert's message is the information the operator came for, so it
+  // renders plain (as it does in the CLI); only a read alert's recedes to grey.
+  const textWidth = Math.max(10, width - PANE_GUTTER - 1);
+  const body = wrapDetail(a.message, textWidth, textWidth, PANE_MAX_MESSAGE_LINES)
+    .map(line => `${" ".repeat(PANE_GUTTER)}${read ? `\x1b[90m${line}\x1b[0m` : line}`);
+  return [head, ...body];
 }
 
 function formatAlertRow(a: Alert, now: number, read: boolean): string {

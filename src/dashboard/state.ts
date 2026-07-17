@@ -23,8 +23,14 @@ export interface DashboardState {
   statusPaneId: string | null;
   usagePaneId: string | null;
   gardenShellPaneId: string | null; // current pane ID in the growhouse slot (lower-left)
-  gardenPaneType: "growhouse" | "root" | "logs" | "history" | "diary" | null;
+  gardenPaneType: "growhouse" | "root" | "logs" | "history" | "diary" | "alerts" | null;
   gardenWindowName: string | null; // logical name for parking, e.g. "_garden-growhouse" or "_garden-logs"
+  // Sticky unread mark for the alerts view (⌥a). Entering the view acks (clears
+  // the badge) but the pane must keep showing WHICH alerts were new — so the
+  // pre-ack lastSeenAt is snapshotted here and drives the unread/read split for
+  // as long as the view is open. Cleared on leaving the view, so the next visit
+  // folds them into read. Null means "use the store's live lastSeenAt".
+  alertsSeenMark: string | null;
   // Right side — activePaneId is the pane currently in the right slot
   activePaneId: string | null;
   activePaneType: "worker" | "shell" | null;
@@ -46,6 +52,7 @@ const DEFAULT_STATE: DashboardState = {
   gardenShellPaneId: null,
   gardenPaneType: null,
   gardenWindowName: null,
+  alertsSeenMark: null,
   activePaneId: null,
   activePaneType: null,
   activeWindowName: null,
@@ -74,6 +81,7 @@ function isDashboardState(x: unknown): x is DashboardState {
     isStrOrNull(r.gardenShellPaneId) &&
     isStrOrNull(r.gardenPaneType) &&
     isStrOrNull(r.gardenWindowName) &&
+    isStrOrNull(r.alertsSeenMark) &&
     isStrOrNull(r.activePaneId) &&
     isStrOrNull(r.activePaneType) &&
     isStrOrNull(r.activeWindowName) &&
@@ -117,6 +125,7 @@ export function readDashState(): DashboardState {
     if (raw.gardenPaneType === "pad") raw.gardenPaneType = "diary";
     if (raw.gardenWindowName === "_garden-pad") raw.gardenWindowName = "_garden-diary";
     if (raw.gardenWindowName === undefined) raw.gardenWindowName = null;
+    if (raw.alertsSeenMark === undefined) raw.alertsSeenMark = null;
     if (raw.usagePaneId === undefined) raw.usagePaneId = null;
     if (raw.activePlot === undefined) raw.activePlot = null;
     if (!raw.lastActiveWorker) raw.lastActiveWorker = {};

@@ -198,9 +198,9 @@ export function unreadAlertCount(): number {
   return store.alerts.filter(a => a.ts > store.lastSeenAt!).length;
 }
 
-// Per-project counts of unread alerts (added since the last ⌥l ack), so the
+// Per-project counts of unread alerts (added since the last ⌥a ack), so the
 // status pane can badge "⚠n" on each project header. The store is read once;
-// the ack (lastSeenAt) is global, so ⌥l clears every project's badge at once
+// the ack (lastSeenAt) is global, so ⌥a clears every project's badge at once
 // (a documented limitation — there is no per-project seen-state).
 export function unreadAlertCountsByProject(): Map<string, number> {
   const store = readAlerts();
@@ -213,8 +213,8 @@ export function unreadAlertCountsByProject(): Map<string, number> {
   return counts;
 }
 
-// Marks all current alerts as seen. Called exclusively from focusLogs (⌥l).
-// Intentionally not auto-triggered by "logs already focused when alert fires" —
+// Marks all current alerts as seen. Called exclusively from focusAlerts (⌥a).
+// Intentionally not auto-triggered by "alerts already focused when alert fires" —
 // garden often runs autonomously while the user is away, and a silent ack
 // would defeat the whole point of the bar badge.
 export function acknowledgeAlerts(): void {
@@ -234,7 +234,7 @@ export function formatRightBar(unread: number): string {
   const version = `garden ${GARDEN_VERSION} `;
   if (unread <= 0) return version;
   const word = unread === 1 ? "alert" : "alerts";
-  return `#[bg=red,fg=white,bold] ⚠ ${unread} ${word} — ⌥l to clear #[default] ${version}`;
+  return `#[bg=red,fg=white,bold] ⚠ ${unread} ${word} — ⌥a to clear #[default] ${version}`;
 }
 
 // Set @garden_right and kick the status client so the badge appears/clears

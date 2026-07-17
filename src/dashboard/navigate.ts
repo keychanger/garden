@@ -3,7 +3,7 @@ import { loadConfig, getProject, getFocusedProjectNames, plotsMap, isPlotFocused
 import { readDashState, writeDashState, withStateLock, type DashboardState } from "./state.js";
 import { swapToHidden, swapDirect } from "./layout.js";
 import { gardenSwapToHidden } from "./layout.js";
-import { refreshDashboard, refreshDashboardCycle, refreshDashboardPlotCycle, refreshStatusElapsed, setPaneProjectColor } from "./header.js";
+import { refreshDashboard, refreshDashboardCycle, refreshDashboardPlotCycle, refreshStatusElapsed, writeAlertsRendered, setPaneProjectColor } from "./header.js";
 import {
   tmux, tmuxDisplay,
   paneExists, windowExists,
@@ -15,9 +15,9 @@ import {
   paneRunningEditor,
 } from "./tmux.js";
 import { findWorkerByName, getWorkers, compareWorkerFreshness } from "./registry.js";
-import { acknowledgeAlerts } from "./alerts.js";
+import { acknowledgeAlerts, readAlerts } from "./alerts.js";
 import { log } from "./log.js";
-import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow, createGardenHistoryWindow, createGardenDiaryWindow } from "./create.js";
+import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow, createGardenHistoryWindow, createGardenDiaryWindow, createGardenAlertsWindow } from "./create.js";
 import { formatLogsPaneLabel } from "../commands/logs.js";
 import { resolveGardenRunner } from "./runner.js";
 import { parkingWindowName, shellWindowName as shellWin, gardenWindowName, parseWorkerSuffix, isWorkerWindow, type GardenView } from "./window-names.js";
@@ -269,6 +269,7 @@ function ensureGardenView(view: GardenView): void {
   else if (view === "logs") createLogsWindow();
   else if (view === "history") createGardenHistoryWindow(resolveGardenRunner());
   else if (view === "diary") createGardenDiaryWindow(resolveGardenRunner());
+  else if (view === "alerts") createGardenAlertsWindow(resolveGardenRunner());
 }
 
 function switchGardenTo(view: GardenView): void {
@@ -287,6 +288,9 @@ function switchGardenTo(view: GardenView): void {
     const parkName = state.gardenWindowName ?? gardenWindowName("growhouse");
     ensureGardenView(view);
     gardenSwapToHidden(parkName, gardenWindowName(view), state);
+    // Leaving the alerts view drops its sticky unread mark, so the next visit
+    // shows the alerts it highlighted as read (they were acked on entry).
+    if (state.gardenPaneType === "alerts") state.alertsSeenMark = null;
     state.gardenPaneType = view;
     state.gardenWindowName = gardenWindowName(view);
     if (state.gardenShellPaneId) {
@@ -313,14 +317,29 @@ export function focusRoot(): void {
 }
 
 export function focusLogs(): void {
-  // Ack before the pane repaints so the per-project ⚠ badges clear in the same
-  // paint. acknowledgeAlerts only refreshes the bottom-bar badge (@garden_right),
-  // not the status pane's pre-baked per-project counts — so re-bake the status
-  // pane here. On the normal path switchGardenTo's refreshDashboard already
-  // reflects the cleared counts (ack ran first); refreshStatusElapsed covers the
-  // already-on-logs early-return path and is a deduped no-op otherwise.
-  acknowledgeAlerts();
   switchGardenTo("logs");
+}
+
+// ⌥a: the alerts view, and the one place alerts are marked read.
+//
+// The mark is snapshotted BEFORE the ack, so the pane the operator just opened
+// still shows which alerts were new — acking only clears the badges. Pressing
+// ⌥a again re-snapshots (now the entry ack), folding those into read: the
+// second press is "I'm done with these", which is why an already-focused view
+// still does this work rather than early-returning.
+//
+// acknowledgeAlerts only refreshes the bottom-bar badge (@garden_right), not
+// the status pane's pre-baked per-project ⚠ counts — hence refreshStatusElapsed
+// (a deduped no-op when nothing changed).
+export function focusAlerts(): void {
+  withStateLock(() => {
+    const state = readDashState();
+    state.alertsSeenMark = readAlerts().lastSeenAt ?? null;
+    writeDashState(state);
+  });
+  acknowledgeAlerts();
+  switchGardenTo("alerts");
+  writeAlertsRendered();
   refreshStatusElapsed();
 }
 

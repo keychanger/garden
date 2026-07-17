@@ -16,7 +16,7 @@ vi.mock("../src/dashboard/alerts.js", () => ({
   clearAlerts: vi.fn(),
 }));
 
-import { alerts } from "../src/commands/alerts.js";
+import { alerts, renderAlertsPane } from "../src/commands/alerts.js";
 import { output } from "../src/output.js";
 import { clearAlerts } from "../src/dashboard/alerts.js";
 
@@ -105,5 +105,96 @@ describe("garden alerts", () => {
     expect(output).toHaveBeenCalledWith({
       alerts: h.store.alerts, lastSeenAt: "2026-01-01T12:00:00Z",
     });
+  });
+});
+
+// The ⌥a dashboard view. Rendered from the same store and split as the CLI, but
+// laid out for the narrow lower-left pane and driven by an explicit seen-mark
+// (the sticky pre-ack snapshot focusAlerts takes) rather than the live
+// lastSeenAt.
+describe("renderAlertsPane", () => {
+  const NOW = Date.parse("2026-07-17T12:00:00Z");
+  const at = (iso: string, over: Partial<Alert> = {}) => a({ ts: iso, ...over });
+
+  it("says so when there are no alerts", () => {
+    expect(strip(renderAlertsPane(60, null, NOW))).toContain("no alerts");
+  });
+
+  it("splits unread from read on the passed seen-mark, not the store's lastSeenAt", () => {
+    // The store has been acked (lastSeenAt is NOW) but the caller passes the
+    // pre-ack mark — the view must still show the newer alert as unread.
+    h.store = {
+      lastSeenAt: "2026-07-17T12:00:00Z",
+      alerts: [
+        at("2026-07-17T09:00:00Z", { message: "old one" }),
+        at("2026-07-17T11:00:00Z", { message: "new one" }),
+      ],
+    };
+    const out = strip(renderAlertsPane(60, "2026-07-17T10:00:00Z", NOW));
+    expect(out).toContain("unread (1)");
+    // Leading space anchors the read header — "unread (1)" contains "read (1)".
+    const readHeader = out.indexOf(" read (1)");
+    expect(readHeader).toBeGreaterThan(-1);
+    expect(out.indexOf("new one")).toBeLessThan(readHeader);
+    expect(out.indexOf("old one")).toBeGreaterThan(readHeader);
+  });
+
+  it("folds everything into read once the seen-mark catches up (the second ⌥a)", () => {
+    h.store = {
+      lastSeenAt: "2026-07-17T12:00:00Z",
+      alerts: [at("2026-07-17T11:00:00Z", { message: "seen now" })],
+    };
+    const out = strip(renderAlertsPane(60, "2026-07-17T12:00:00Z", NOW));
+    expect(out).toContain(" read (1)");
+    expect(out).not.toContain("unread");
+  });
+
+  it("treats every alert as unread when never acknowledged", () => {
+    h.store = { lastSeenAt: undefined, alerts: [at("2026-07-17T11:00:00Z")] };
+    expect(strip(renderAlertsPane(60, null, NOW))).toContain("unread (1)");
+  });
+
+  it("lists newest first within a section", () => {
+    h.store = {
+      lastSeenAt: undefined,
+      alerts: [
+        at("2026-07-17T09:00:00Z", { message: "older" }),
+        at("2026-07-17T11:00:00Z", { message: "newer" }),
+      ],
+    };
+    const out = strip(renderAlertsPane(60, null, NOW));
+    expect(out.indexOf("newer")).toBeLessThan(out.indexOf("older"));
+  });
+
+  it("heads each alert with its glyph, age and location, message wrapped under", () => {
+    h.store = {
+      lastSeenAt: undefined,
+      alerts: [at("2026-07-17T11:00:00Z", {
+        level: "error", project: "garden", worker: "bold-ash", message: "ci budget exhausted",
+      })],
+    };
+    const lines = strip(renderAlertsPane(60, null, NOW)).split("\n");
+    expect(lines[1]).toContain("✖");
+    expect(lines[1]).toContain("1h");
+    expect(lines[1]).toContain("garden/bold-ash");
+    expect(lines[2]).toContain("ci budget exhausted");
+  });
+
+  it("omits the worker from the location when the alert is project-level", () => {
+    h.store = {
+      lastSeenAt: undefined,
+      alerts: [at("2026-07-17T11:00:00Z", { project: "garden", worker: undefined })],
+    };
+    expect(strip(renderAlertsPane(60, null, NOW))).toContain("garden");
+  });
+
+  it("wraps a long message to the pane width instead of overflowing it", () => {
+    h.store = {
+      lastSeenAt: undefined,
+      alerts: [at("2026-07-17T11:00:00Z", { message: "word ".repeat(40).trim() })],
+    };
+    const lines = strip(renderAlertsPane(40, null, NOW)).split("\n");
+    expect(lines.length).toBeGreaterThan(2);
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(40);
   });
 });

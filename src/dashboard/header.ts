@@ -20,6 +20,7 @@ import { currentBranchFast, worktreeExists } from "./git.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { log } from "./log.js";
 import { unreadAlertCount, formatRightBar } from "./alerts.js";
+import { renderAlertsPane } from "../commands/alerts.js";
 import { workerWindowName as workerWin, parseWorkerWindow, parseWorkerSuffix } from "./window-names.js";
 import { renderUsagePane } from "./usage.js";
 import { formatConversationPane } from "./conversation.js";
@@ -31,6 +32,7 @@ export const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
 export const STATUS_CUR_DUMP_FILE = path.join(SESSIONS_DIR, "status.cur.dump");
 const USAGE_RENDERED_FILE = path.join(SESSIONS_DIR, "usage.rendered");
 const HISTORY_RENDERED_FILE = path.join(SESSIONS_DIR, "history.rendered");
+const ALERTS_RENDERED_FILE = path.join(SESSIONS_DIR, "alerts.rendered");
 const PLOT_STRIP_TEMPLATE_FILE = path.join(SESSIONS_DIR, "plot-strip.template");
 // Sentinel in the plot-strip template file; the status pane's animation loop
 // substitutes it with the current spinner frame each tick.
@@ -625,6 +627,21 @@ export function buildHistoryCommand(_gardenRunner: string): string {
   ].join("\n");
 }
 
+// Alerts pane (⌥a): same passive SIGUSR1 repaint shape as the history pane —
+// full clear + full print, so a shorter list can't leave a longer one's tail on
+// screen and an overflowing list scrolls into tmux scrollback.
+export function buildAlertsCommand(_gardenRunner: string): string {
+  const af = ALERTS_RENDERED_FILE;
+  return [
+    `printf '\\033[H\\033[2J\\033[3J'`,
+    `af='${af}'`,
+    `render() { _t=$(cat "$af" 2>/dev/null); printf '\\033[H\\033[2J\\033[3J%s' "$_t"; }`,
+    `trap 'render' USR1`,
+    `render`,
+    `while true; do sleep 86400 & _sp=$!; wait $_sp 2>/dev/null; kill $_sp 2>/dev/null; wait $_sp 2>/dev/null; done`,
+  ].join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Refresh helpers
 // ---------------------------------------------------------------------------
@@ -692,12 +709,19 @@ export function refreshDashboardCycle(opts?: RefreshOptions): void {
 // (`reviewing 12m` -> `13m`) actually repaints on a given tick; a fleet with
 // nothing time-tracked stays fully deduped.
 export function refreshStatusElapsed(): void {
-  writeQuickStatus({
+  const shared: RefreshOptions = {
     state: readDashState(),
     windowNames: listAllWindowNames(),
     config: loadConfig(),
     registry: readRegistry(),
-  });
+  };
+  writeQuickStatus(shared);
+  // The alerts view (⌥a) has the same problem the status pane's time-in-state
+  // suffixes do: its rows age ("4m" → "5m"), and an alert raised by a poller
+  // reaches the store with no dashboard refresh behind it. This tick is the one
+  // recurring driver, so it re-bakes here too — a no-op unless alerts is the
+  // active view, and content-deduped even then.
+  writeAlertsRendered(shared);
 }
 
 // Reset module-level write/idempotency caches. Intended for tests that
@@ -709,6 +733,7 @@ export function _resetHeaderCachesForTest(): void {
   lastWrittenQuickStatus = null;
   lastWrittenUsageRendered = null;
   lastWrittenHistory = null;
+  lastWrittenAlerts = null;
   lastBarLeft = null;
   lastBarRight = null;
   cachedStatusWidth = null;
@@ -881,6 +906,7 @@ function writeQuickStatus(opts?: RefreshOptions): void {
 }
 
 let lastWrittenHistory: string | null = null;
+let lastWrittenAlerts: string | null = null;
 
 // Repaint the history pane (bottom-left ⌥h mode) for the worker currently
 // focused in the right slot. A cheap no-op unless history is the active garden
@@ -901,6 +927,37 @@ export function writeHistoryRendered(opts?: RefreshOptions): void {
     }
     atomicWriteFile(HISTORY_RENDERED_FILE, rendered, { durable: false });
     lastWrittenHistory = rendered;
+    signalPane(state.gardenShellPaneId);
+  } catch { /* best effort */ }
+}
+
+// Bakes the ⌥a alerts view. Unread/read is split on state.alertsSeenMark — the
+// pre-ack mark snapshotted on entry — so the view the operator is reading keeps
+// showing what was new even though focusAlerts already cleared the badge.
+//
+// Deliberately NOT called from refreshDashboard, unlike its writeHistoryRendered
+// sibling. refreshDashboard is in dist/hook.js's import closure, so a call here
+// pulls renderAlertsPane (and commands/logs.ts, for wrapDetail) into the lean
+// hook bundle — measured at +2.8KB on every hook fire's cold start, versus +260
+// bytes when esbuild can tree-shake it out. The two callers that actually
+// matter live in the CLI bundle: focusAlerts (entry) and refreshStatusElapsed
+// (the watchdog's 60s tick, for ages and ambient poller-raised alerts). That
+// leaves ambient alerts up to a tick late in the pane — the same latency the
+// status pane's per-project ⚠ counts already have, and the bar badge is
+// instant regardless.
+export function writeAlertsRendered(opts?: RefreshOptions): void {
+  try {
+    const state = opts?.state ?? readDashState();
+    if (state.gardenPaneType !== "alerts" || !state.gardenShellPaneId) return;
+    const width = getPaneSize(state.gardenShellPaneId)?.width ?? 60;
+    const rendered = renderAlertsPane(width, state.alertsSeenMark, Date.now());
+    if (rendered === lastWrittenAlerts) return;
+    if (renderedFileUnchanged(ALERTS_RENDERED_FILE, rendered)) {
+      lastWrittenAlerts = rendered;
+      return;
+    }
+    atomicWriteFile(ALERTS_RENDERED_FILE, rendered, { durable: false });
+    lastWrittenAlerts = rendered;
     signalPane(state.gardenShellPaneId);
   } catch { /* best effort */ }
 }

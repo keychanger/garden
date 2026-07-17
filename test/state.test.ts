@@ -21,6 +21,7 @@ describe("readDashState", () => {
       gardenShellPaneId: null,
       gardenPaneType: null,
       gardenWindowName: null,
+      alertsSeenMark: null,
       activePaneId: null,
       activePaneType: null,
       activeWindowName: null,
@@ -80,6 +81,7 @@ describe("writeDashState / readDashState", () => {
       gardenShellPaneId: "%2",
       gardenPaneType: "growhouse" as const,
       gardenWindowName: null,
+      alertsSeenMark: null,
       activePaneId: "%3",
       activePaneType: "worker" as const,
       activeWindowName: "_myproject-worker-bold-ash",
@@ -161,6 +163,26 @@ describe("writeDashState / readDashState", () => {
     const loaded = readDashState();
     expect(loaded.gardenPaneType).toBe("diary");
     expect(loaded.gardenWindowName).toBe("_garden-diary");
+  });
+
+  it("backfills alertsSeenMark for state files written before the alerts view", async () => {
+    const { readDashState, STATE_FILE } = await importState();
+    const oldState = {
+      activeProject: "myproject",
+      statusPaneId: "%1",
+      gardenShellPaneId: "%2",
+      gardenPaneType: "logs",
+      gardenWindowName: "_garden-logs",
+      activePaneId: "%3",
+      activePaneType: "worker",
+      activeWindowName: "_myproject-worker-bold-ash",
+    };
+    fs.writeFileSync(STATE_FILE, JSON.stringify(oldState));
+    const loaded = readDashState();
+    // Without the backfill the shape guard rejects the file and the whole state
+    // resets to defaults — losing the operator's active project and panes.
+    expect(loaded.alertsSeenMark).toBeNull();
+    expect(loaded.activeProject).toBe("myproject");
   });
 
   it("backfills lastActiveWorker for old state files", async () => {

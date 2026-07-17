@@ -406,7 +406,7 @@ describe("formatRightBar", () => {
   it("prefixes singular badge when unread is 1", () => {
     const out = formatRightBar(1);
     expect(out).toContain("⚠ 1 alert");
-    expect(out).toContain("⌥l to clear");
+    expect(out).toContain("⌥a to clear");
     expect(out).toContain("garden test");
   });
 
