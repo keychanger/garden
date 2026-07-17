@@ -20,6 +20,21 @@ import { execFileSync, spawnSync } from "node:child_process";
 
 const PROJECT = "fifoprobe";
 
+// Run a throwaway child that imports scheduleDelayedPoke and exits. We invoke
+// node with `--import tsx/esm` rather than the `tsx` CLI: the CLI stands up a
+// unix-domain IPC server, and an OS sandbox — garden's own workers and
+// reviewers run `garden checks` inside one — denies that socket's listen(2)
+// with EPERM, killing the child before it reaches scheduleDelayedPoke. The
+// loader-import path needs no socket and runs the same code identically.
+// `--input-type=module` lets the `-e` body use an `import` statement.
+function runPokeChild(childCode: string, tmpHome: string) {
+  return spawnSync(
+    process.execPath,
+    ["--import", "tsx/esm", "--input-type=module", "-e", childCode],
+    { env: { ...process.env, HOME: tmpHome }, stdio: ["ignore", "pipe", "pipe"] },
+  );
+}
+
 let tmpHome: string;
 let fifo: string;
 
@@ -53,7 +68,6 @@ async function readFdWithTimeout(fd: number, timeoutMs: number): Promise<string>
 
 describe("scheduleDelayedPoke (real FIFO, real child process)", () => {
   it("delivers the poke even when the calling process exits before any in-process timer would fire", async () => {
-    const tsxBin = path.resolve(process.cwd(), "node_modules/.bin/tsx");
     const fifoSrc = path.resolve(process.cwd(), "src/dashboard/poller-fifo.ts");
 
     // Pre-open the FIFO for read+write so a reader is present when the
@@ -74,10 +88,7 @@ describe("scheduleDelayedPoke (real FIFO, real child process)", () => {
         scheduleDelayedPoke(${JSON.stringify(PROJECT)}, 0);
         process.exit(0);
       `;
-      const result = spawnSync(tsxBin, ["-e", childCode], {
-        env: { ...process.env, HOME: tmpHome },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      const result = runPokeChild(childCode, tmpHome);
       expect(result.status).toBe(0);
 
       const got = await readFdWithTimeout(readFd, 5_000);
@@ -88,7 +99,6 @@ describe("scheduleDelayedPoke (real FIFO, real child process)", () => {
   });
 
   it("delivers a delayed poke through the chunked-sleep loop", async () => {
-    const tsxBin = path.resolve(process.cwd(), "node_modules/.bin/tsx");
     const fifoSrc = path.resolve(process.cwd(), "src/dashboard/poller-fifo.ts");
     const readFd = fs.openSync(fifo, fs.constants.O_RDWR);
 
@@ -100,10 +110,7 @@ describe("scheduleDelayedPoke (real FIFO, real child process)", () => {
         scheduleDelayedPoke(${JSON.stringify(PROJECT)}, 1000);
         process.exit(0);
       `;
-      const result = spawnSync(tsxBin, ["-e", childCode], {
-        env: { ...process.env, HOME: tmpHome },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      const result = runPokeChild(childCode, tmpHome);
       expect(result.status).toBe(0);
 
       const got = await readFdWithTimeout(readFd, 10_000);
@@ -119,7 +126,6 @@ describe("scheduleDelayedPoke (real FIFO, real child process)", () => {
     // and its final `1<>` open is O_CREAT — after test teardown deleted the
     // FIFO, the printf left a junk regular file at the path. The chunked loop
     // checks the FIFO before each chunk and must exit at the first check.
-    const tsxBin = path.resolve(process.cwd(), "node_modules/.bin/tsx");
     const fifoSrc = path.resolve(process.cwd(), "src/dashboard/poller-fifo.ts");
 
     fs.unlinkSync(fifo);
@@ -128,10 +134,7 @@ describe("scheduleDelayedPoke (real FIFO, real child process)", () => {
       scheduleDelayedPoke(${JSON.stringify(PROJECT)}, 1000);
       process.exit(0);
     `;
-    const result = spawnSync(tsxBin, ["-e", childCode], {
-      env: { ...process.env, HOME: tmpHome },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const result = runPokeChild(childCode, tmpHome);
     expect(result.status).toBe(0);
 
     // Give the old implementation enough time to have slept the 1s delay and

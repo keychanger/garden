@@ -17,9 +17,23 @@ import { menuRunShell } from "../../src/dashboard/tmux.js";
 const SOCK = `garden-menu-dispatch-${process.pid}`;
 const tmux = (...args: string[]) => spawnSync("tmux", ["-L", SOCK, ...args], { encoding: "utf8" });
 
+// A tmux server needs to bind an AF_UNIX socket, which an OS sandbox (garden's
+// workers and reviewers run `garden checks` inside one) denies at the syscall
+// level — new-session fails with "error creating <socket> (Operation not
+// permitted)". There is no server-less way to exercise tmux's real command
+// parser, so skip this test when a server can't start rather than hard-fail the
+// whole check run; CI and any unsandboxed shell still run it.
+function tmuxServerAvailable(): boolean {
+  const probeSock = `garden-menu-probe-${process.pid}`;
+  const probe = spawnSync("tmux", ["-L", probeSock, "new-session", "-d", "-x", "80", "-y", "24"], { encoding: "utf8" });
+  const ok = spawnSync("tmux", ["-L", probeSock, "list-sessions"], { encoding: "utf8" }).status === 0;
+  spawnSync("tmux", ["-L", probeSock, "kill-server"], { encoding: "utf8" });
+  return probe.status === 0 && ok;
+}
+
 afterAll(() => { tmux("kill-server"); });
 
-describe("tmux menu command dispatch (real tmux)", () => {
+describe.skipIf(!tmuxServerAvailable())("tmux menu command dispatch (real tmux)", () => {
   it("rejects a bare command (the bug) but runs a menuRunShell-wrapped one", () => {
     tmux("new-session", "-d", "-x", "80", "-y", "24");
 
