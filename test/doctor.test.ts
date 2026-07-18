@@ -3,6 +3,7 @@ import { captureConsoleLog } from "./helpers.js";
 
 const h = vi.hoisted(() => ({
   isTTY: true,
+  configExists: true,
   // Map of `${bin} ${args[0]}` -> { status, stdout } for spawnSync.
   responses: {} as Record<string, { status: number; stdout: string; error?: boolean }>,
 }));
@@ -18,6 +19,10 @@ vi.mock("node:child_process", () => ({
     return r.error ? { error: new Error("fail"), status: null, stdout: "" } : { status: r.status, stdout: r.stdout };
   },
 }));
+vi.mock("node:fs", async (orig) => {
+  const actual = await orig<typeof import("node:fs")>();
+  return { ...actual, existsSync: () => h.configExists };
+});
 
 import { doctor } from "../src/commands/doctor.js";
 import { output } from "../src/output.js";
@@ -27,6 +32,7 @@ const ok = (stdout: string) => ({ status: 0, stdout });
 
 beforeEach(() => {
   h.isTTY = true;
+  h.configExists = true;
   h.responses = {};
   vi.clearAllMocks();
 });
@@ -72,6 +78,25 @@ describe("garden doctor", () => {
     const ghLine = lines.find(l => /^\s*[⚠✔✖]\s+gh\b/.test(l));
     expect(ghLine).toMatch(/⚠/);
     expect(lines.join("\n")).not.toContain("Some required tools are missing");
+  });
+
+  it("warns when garden is not initialized", async () => {
+    h.configExists = false;
+    h.responses = { "tmux -V": ok("tmux 3.4"), "claude --version": ok("2.1.0") };
+    const lines = (await captureConsoleLog(() => doctor())).map(strip);
+    const configLine = lines.find(l => /^\s*[⚠✔✖]\s+config\b/.test(l));
+    expect(configLine).toMatch(/⚠/);
+    expect(configLine).toContain("garden init");
+    // Missing config is a warn, not a fail — it's expected on first run.
+    expect(lines.join("\n")).not.toContain("Some required tools are missing");
+  });
+
+  it("shows config ok when initialized", async () => {
+    h.configExists = true;
+    h.responses = { "tmux -V": ok("tmux 3.4"), "claude --version": ok("2.1.0") };
+    const lines = (await captureConsoleLog(() => doctor())).map(strip);
+    const configLine = lines.find(l => /^\s*[⚠✔✖]\s+config\b/.test(l));
+    expect(configLine).toMatch(/✔/);
   });
 
   it("emits JSON when not a TTY", async () => {

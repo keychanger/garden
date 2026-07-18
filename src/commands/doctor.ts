@@ -1,10 +1,19 @@
 // Command: garden doctor — environment preflight. Checks the external tools
-// garden depends on (tmux, claude, gh) and surfaces the one prerequisite it
-// can't verify programmatically (the Option-as-Meta terminal setting). A
-// first-run operator on a fresh box runs this to find out what's missing before
-// hitting a cryptic mid-workflow failure.
+// garden depends on (tmux, claude, gh), the node version floor, whether garden
+// is initialized, and surfaces the one prerequisite it can't verify
+// programmatically (the Option-as-Meta terminal setting). A first-run operator
+// on a fresh box runs this to find out what's missing before hitting a cryptic
+// mid-workflow failure.
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { output, isTTY } from "../output.js";
+import { CONFIG_PATH } from "../config.js";
+
+// Node 22.1 is the floor: the worker hook commands set NODE_COMPILE_CACHE
+// (added in 22.1) to reuse cached V8 bytecode across cold starts. Older node
+// still runs but silently loses that optimization.
+const MIN_NODE_MAJOR = 22;
+const MIN_NODE_MINOR = 1;
 
 type CheckStatus = "ok" | "warn" | "fail";
 
@@ -56,7 +65,23 @@ function checkGh(): Check {
 }
 
 function checkNode(): Check {
-  return { name: "node", status: "ok", detail: process.version };
+  const m = process.version.match(/^v(\d+)\.(\d+)/);
+  const major = m ? Number(m[1]) : 0;
+  const minor = m ? Number(m[2]) : 0;
+  const meetsFloor = major > MIN_NODE_MAJOR || (major === MIN_NODE_MAJOR && minor >= MIN_NODE_MINOR);
+  return meetsFloor
+    ? { name: "node", status: "ok", detail: process.version }
+    : {
+        name: "node",
+        status: "warn",
+        detail: `${process.version} — garden needs Node >= ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} for the worker hook compile-cache; upgrade node`,
+      };
+}
+
+function checkConfig(): Check {
+  return existsSync(CONFIG_PATH)
+    ? { name: "config", status: "ok", detail: CONFIG_PATH }
+    : { name: "config", status: "warn", detail: "not initialized — run 'garden init'" };
 }
 
 function checkOptionKey(): Check {
@@ -75,6 +100,7 @@ export async function doctor(): Promise<void> {
     checkClaude(),
     checkGh(),
     checkNode(),
+    checkConfig(),
     checkOptionKey(),
   ];
 

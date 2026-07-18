@@ -6,6 +6,9 @@
   "bin": {
     "garden": "./dist/cli.js"
   },
+  "engines": {
+    "node": ">=22.1"
+  },
   "scripts": {
     "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --minify --keep-names --outfile=dist/cli.js --banner:js='#!/usr/bin/env node' --define:__GARDEN_VERSION__='\"'$(git rev-parse --short HEAD)'\"' && esbuild src/hook-entry.ts --bundle --platform=node --format=esm --minify --keep-names --outfile=dist/hook.js --banner:js='#!/usr/bin/env node' --define:__GARDEN_VERSION__='\"'$(git rev-parse --short HEAD)'\"'",
     "rebuild": "tmux kill-server 2>/dev/null; npm run build",
