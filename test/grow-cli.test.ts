@@ -294,6 +294,79 @@ describe("garden workers new --workflow grow", () => {
   });
 });
 
+describe("garden workers new --workflow botanist", () => {
+  it("plants a botanist with --seed, workflow botanist, and a botanist seed file", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    await captureConsoleLog(() =>
+      workers(["new", "proj", "--workflow", "botanist", "--seed", "rethink error surfacing"]),
+    );
+
+    expect(newWorker).toHaveBeenCalledWith(expect.objectContaining({
+      projectName: "proj",
+      workflow: "botanist",
+      seedMessageFile: expect.stringMatching(/botanist-seed-proj-\d+\.txt$/),
+    }));
+    // A botanist does not loop, so its seed is not stored on the entry (no grow
+    // sub-object). The Opus/xhigh designer default is applied in newWorker (not
+    // the CLI), so the CLI passes model/effort undefined here.
+    const call = (newWorker as unknown as { mock: { calls: Array<[Record<string, unknown>]> } }).mock.calls.at(-1)![0];
+    expect(call.grow).toBeUndefined();
+    expect(call.model).toBeUndefined();
+  });
+
+  it("writes the botanist framing into the seed file", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    await captureConsoleLog(() =>
+      workers(["new", "proj", "--workflow", "botanist", "--seed", "notification levels"]),
+    );
+
+    const call = (newWorker as unknown as { mock: { calls: Array<[Record<string, unknown>]> } }).mock.calls.at(-1)![0];
+    const seedFile = call.seedMessageFile as string;
+    const contents = fs.readFileSync(seedFile, "utf-8");
+    expect(contents).toContain("botanist");
+    expect(contents).toContain("notification levels");
+    expect(contents).toContain(".garden/botanist/framing.md");
+    expect(contents).toContain("END YOUR TURN");
+  });
+
+  it("requires a seed (rejects when neither --seed nor --seed-file is given)", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["new", "proj", "--workflow", "botanist"]),
+    ).rejects.toThrow(/--workflow botanist requires a seed/);
+  });
+
+  it("allows --harness (the designer harness) unlike grow/trellis", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    await captureConsoleLog(() =>
+      workers(["new", "proj", "--workflow", "botanist", "--seed", "x", "--harness", "codex"]),
+    );
+
+    expect(newWorker).toHaveBeenCalledWith(expect.objectContaining({
+      workflow: "botanist",
+      harness: "codex",
+    }));
+  });
+
+  it("rejects --crew (default-only; a botanist runs no reviewer, the builder crew is chosen at handoff)", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["new", "proj", "--workflow", "botanist", "--seed", "x", "--crew", "all-codex"]),
+    ).rejects.toThrow(/--crew is only supported with --workflow default/);
+  });
+});
+
 describe("garden workers new --workflow default — grow flag rejection", () => {
   it("rejects --seed on default workflow", async () => {
     await setupProject("proj");
@@ -326,7 +399,7 @@ describe("--workflow whitelist", () => {
     const { workers } = await importWorkersCmd();
     await expect(
       workers(["new", "proj", "--workflow", "loop"]),
-    ).rejects.toThrow(/--workflow must be 'default', 'trellis', or 'grow'/);
+    ).rejects.toThrow(/--workflow must be 'default', 'trellis', 'grow', or 'botanist'/);
   });
 });
 
@@ -1048,7 +1121,7 @@ describe("garden workers new --effort", () => {
 
     await expect(
       workers(["new", "proj", "--workflow", "trellis", "--effort", "xhigh"]),
-    ).rejects.toThrow(/--effort is only supported with --workflow default or grow/);
+    ).rejects.toThrow(/--effort is only supported with --workflow default, grow, or botanist/);
     expect(newWorker).not.toHaveBeenCalled();
   });
 });

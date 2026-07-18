@@ -8,12 +8,14 @@ import {
   defaultWorkflow,
   growWorkflow,
   trellisWorkflow,
+  botanistWorkflow,
   getWorkflow,
   registerWorkflow,
   _resetUnknownWarnDedup,
   type WorkflowDefinition,
   type StateHandler,
 } from "../src/dashboard/workflows/index.js";
+import { getValidTransitions } from "../src/dashboard/workflows/types.js";
 import { log } from "../src/dashboard/log.js";
 import type { PrState } from "../src/dashboard/registry.js";
 
@@ -260,6 +262,45 @@ describe("growWorkflow", () => {
     // pinned at the workflow level.
     expect(growWorkflow.workerModel).toBeUndefined();
     expect(growWorkflow.reviewerModel).toBeUndefined();
+  });
+});
+
+describe("botanistWorkflow", () => {
+  // Phase 2 skeleton: reuses default's handlers (a botanist's design phases
+  // produce no tracked commit, so handleWorking never launches a review — the
+  // worker idles at the human gate). The skip-review merge divergence is Phase 3.
+
+  it("is registered under name 'botanist'", () => {
+    expect(getWorkflow("botanist")).toBe(botanistWorkflow);
+  });
+
+  it("validTransitions deep-equal default's (Phase 2 uses the same state machine)", () => {
+    expect(botanistWorkflow.validTransitions).toEqual(PRE_REFACTOR_VALID_TRANSITIONS);
+  });
+
+  it("getValidTransitions('botanist') returns the botanist table", () => {
+    expect(getValidTransitions("botanist")).toEqual(PRE_REFACTOR_VALID_TRANSITIONS);
+  });
+
+  it("has a registered handler for every PrState (exhaustiveness)", () => {
+    for (const state of ALL_PR_STATES) {
+      expect(
+        botanistWorkflow.stateHandlers[state],
+        `botanist workflow missing handler for state ${state}`,
+      ).toBeDefined();
+    }
+  });
+
+  it("reuses default's hookHandlers verbatim", () => {
+    expect(botanistWorkflow.hookHandlers).toBe(defaultWorkflow.hookHandlers);
+  });
+
+  it("declares the designer seat: workerModel 'opus', workerEffort 'xhigh', no reviewerModel", () => {
+    // Design is judgment-heavy, so the designer defaults to Opus at max effort.
+    // No reviewerModel — a botanist branch runs no reviewer.
+    expect(botanistWorkflow.workerModel).toBe("opus");
+    expect(botanistWorkflow.workerEffort).toBe("xhigh");
+    expect(botanistWorkflow.reviewerModel).toBeUndefined();
   });
 });
 

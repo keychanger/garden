@@ -361,19 +361,31 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       else reqEffort = project.effort;
     }
     const projectModel = projectDefaultsApply ? project.model : undefined;
+    // Workflow-level model/effort defaults (the botanist designer seat → Opus /
+    // xhigh) sit one layer beneath the per-spawn and project defaults, mirroring
+    // how trellis reads workflow.workerModel per iteration. Not applied for
+    // trellis, which resolves its own model per iteration and carries no effort.
+    const workflowDef = getWorkflow(workflowName);
+    const workflowModelDefault = workflowName !== "trellis" ? workflowDef.workerModel : undefined;
+    const workflowEffortDefault = workflowName !== "trellis" ? workflowDef.workerEffort : undefined;
 
     const ultracode = reqUltracode && workflowName !== "trellis";
     // Model precedence: per-spawn --model > the ultracode preset's Opus pin
     // (an explicit per-spawn gesture, more specific than a project default) >
-    // project.model > account/provider default.
+    // project.model > the workflow's own default (botanist Opus) > account/
+    // provider default.
     const effectiveModel = ultracode
       ? (opts.model ?? ULTRACODE_MODEL)
-      : (opts.model ?? projectModel);
-    // Per-worker effort rung for default/grow. Suppressed for trellis (own
-    // model resolution) and when ultracode is set (that preset already fixes
-    // max effort — the composer/CLI keep them mutually exclusive, this is
-    // defense-in-depth so a caller passing both never double-sets effort).
-    const effectiveEffort = !ultracode && workflowName !== "trellis" ? reqEffort : undefined;
+      : (opts.model ?? projectModel ?? workflowModelDefault);
+    // Per-worker effort rung for default/grow/botanist. Suppressed for trellis
+    // (own model resolution) and when ultracode is set (that preset already
+    // fixes max effort — the composer/CLI keep them mutually exclusive, this is
+    // defense-in-depth so a caller passing both never double-sets effort). The
+    // workflow default (botanist xhigh) fills in when no per-spawn/project rung
+    // was requested.
+    const effectiveEffort = !ultracode && workflowName !== "trellis"
+      ? (reqEffort ?? workflowEffortDefault)
+      : undefined;
     // origin/<baseBranch> tip at creation — the `from` endpoint of the
     // whole-task cumulative diff a later holistic review computes. Captured
     // here (after the publish gesture guarantees the ref exists) because the
@@ -474,13 +486,14 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // with progress output instead of blocking the hotkey handler. Default
     // workers omit the options argument entirely (preserves arity for existing
     // callers and tests).
-    const bootstrapOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string } = {};
+    const bootstrapOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string; botanist?: boolean } = {};
     if (trellisRelativePath) bootstrapOpts.trellisRelativePath = trellisRelativePath;
     if (resolvedModel) bootstrapOpts.model = resolvedModel;
     if (ultracode) bootstrapOpts.ultracode = true;
     if (effectiveEffort) bootstrapOpts.effort = effectiveEffort;
     if (resolvedHarness) bootstrapOpts.harness = resolvedHarness;
-    const scriptFile = (bootstrapOpts.trellisRelativePath || bootstrapOpts.model || bootstrapOpts.ultracode || bootstrapOpts.effort || bootstrapOpts.harness)
+    if (workflowName === "botanist") bootstrapOpts.botanist = true;
+    const scriptFile = (bootstrapOpts.trellisRelativePath || bootstrapOpts.model || bootstrapOpts.ultracode || bootstrapOpts.effort || bootstrapOpts.harness || bootstrapOpts.botanist)
       ? buildWorktreeBootstrapScript(
           project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
           bootstrapOpts,

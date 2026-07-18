@@ -605,6 +605,38 @@ describe("newWorker", () => {
     );
   });
 
+  // ===== Botanist designer seat (workflow-level model/effort default) =====
+  // The botanist workflow declares workerModel: "opus" + workerEffort: "xhigh".
+  // newWorker layers those beneath a per-spawn --model/--effort, exactly as it
+  // layers project.model/effort for default/grow. This is the seam that makes
+  // the workflow-level default load-bearing (it was inert before Phase 2).
+
+  it("botanist: stamps the Opus/xhigh designer default from the workflow definition", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ workflow: "botanist" });
+    expect(vi.mocked(addWorker)).toHaveBeenCalledWith(
+      "myproject",
+      expect.objectContaining({
+        workflow: "botanist",
+        model: "opus",
+        effort: "xhigh",
+      }),
+    );
+  });
+
+  it("botanist: an explicit --model / --effort overrides the workflow default", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ workflow: "botanist", model: "sonnet", effort: "high" });
+    expect(vi.mocked(addWorker)).toHaveBeenCalledWith(
+      "myproject",
+      expect.objectContaining({
+        workflow: "botanist",
+        model: "sonnet",
+        effort: "high",
+      }),
+    );
+  });
+
   // ===== Ultracode preset (garden handoff --ultracode) =====
   // newWorker translates opts.ultracode into two stamped fields: entry.model
   // pinned to Opus and entry.ultracode. These branches are the seam between

@@ -77,6 +77,14 @@ export interface WorkflowDefinition {
    *  quality is non-negotiable"). When unset, no `--model` flag is
    *  passed and claude uses the account default. */
   reviewerModel?: string;
+  /** Default reasoning effort for the worker seat (one of
+   *  WORKER_EFFORT_LEVELS — rendered as claude-code's `--effort <level>`).
+   *  Sits one layer beneath a per-spawn `--effort`, exactly as `workerModel`
+   *  sits beneath `--model` (per-spawn > project > this workflow default >
+   *  account default). Consumed by newWorker's effort resolution. When unset
+   *  (default/grow/trellis), no workflow-level effort default applies.
+   *  Botanist sets "xhigh": design is judgment-heavy. */
+  workerEffort?: string;
 }
 
 // Per-workflow valid-transitions tables. Lives at this layer (not on the
@@ -122,8 +130,15 @@ export const trellisValidTransitions: Record<PrState, PrState[]> = defaultValidT
 // state) without fighting the type system or callers.
 export const growValidTransitions: Record<PrState, PrState[]> = defaultValidTransitions;
 
+// Botanist presently uses the same table as default. Kept as its own constant
+// so Phase 3's skip-review divergence (a botanist goes working → merge-pending
+// directly, never reviewing) can add the `working: ["merge-pending", ...]` edge
+// here without fighting the type system or callers.
+export const botanistValidTransitions: Record<PrState, PrState[]> = defaultValidTransitions;
+
 export function getValidTransitions(workflowName: string): Record<PrState, PrState[]> {
   if (workflowName === "trellis") return trellisValidTransitions;
   if (workflowName === "grow") return growValidTransitions;
+  if (workflowName === "botanist") return botanistValidTransitions;
   return defaultValidTransitions;
 }

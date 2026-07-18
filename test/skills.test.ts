@@ -24,6 +24,9 @@ import {
   GROW_SKILL_DIRNAME,
   GROW_SKILL_FILENAME,
   GROW_SKILL_CONTENT,
+  BOTANIST_SKILL_DIRNAME,
+  BOTANIST_SKILL_FILENAME,
+  BOTANIST_SKILL_CONTENT,
   installClaudeSkills,
 } from "../src/dashboard/skills.js";
 
@@ -80,6 +83,26 @@ describe("installClaudeSkills", () => {
     // would over-couple to the implementation; just check that the call
     // count doubled.
     expect(vi.mocked(fs.writeFileSync).mock.calls.length).toBe(firstWriteCalls * 2);
+  });
+
+  it("writes the botanist skill alongside the others", () => {
+    installClaudeSkills("/Users/x/.garden/worktrees/myproject/bold-ash");
+    expect(fs.mkdirSync).toHaveBeenCalledWith(
+      "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/botanist",
+      { recursive: true },
+    );
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining("/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/botanist/SKILL.md."),
+      BOTANIST_SKILL_CONTENT,
+    );
+  });
+
+  it("botanist skill declares its name in frontmatter and forbids editing code", () => {
+    expect(BOTANIST_SKILL_CONTENT).toMatch(/^---\nname: botanist\n/);
+    expect(BOTANIST_SKILL_DIRNAME).toBe("botanist");
+    expect(BOTANIST_SKILL_FILENAME).toBe("SKILL.md");
+    expect(BOTANIST_SKILL_CONTENT).toContain("design artifact");
+    expect(BOTANIST_SKILL_CONTENT).toContain("Do not edit");
   });
 
   it("writes the handoff skill alongside done so workers can invoke it", () => {

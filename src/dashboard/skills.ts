@@ -399,6 +399,56 @@ After this skill returns, the worker is on the grow workflow and behaves like an
 If the operator wants to refine the goal between iterations, they edit \`.garden/grow-goal.md\` directly. The next iteration's continue prompt re-reads the file at dispatch time, so the amendment takes effect on iter K+1 without any garden command. Convert is one-shot; amend is unbounded.
 `;
 
+export const BOTANIST_SKILL_DIRNAME = "botanist";
+export const BOTANIST_SKILL_FILENAME = "SKILL.md";
+
+// Bundled with every worker but only relevant to a botanist (design) worker —
+// its frontmatter description gates it at planning time so build workers ignore
+// it. Teaches the four-phase design pipeline: frame the problem, sketch options
+// + ask questions (then pause for the operator), converge on an approach, and
+// publish the approved artifact to a tracked docs/ path.
+export const BOTANIST_SKILL_CONTENT = `---
+name: botanist
+description: The method for a garden botanist (design) worker. Use when you are on the botanist workflow (garden whoami shows workflow: botanist) to run the four-phase design pipeline — frame, options, converge, publish — whose deliverable is a design artifact (a document), not code. Covers where to write artifacts, how to format options and questions, how to pause at the human gate, and how to publish once the operator approves. Do NOT edit src/, tests, or configs.
+---
+
+# Botanist: design, don't build
+
+You are a botanist. Your job is to think out loud with the operator, propose alternatives, surface tradeoffs, ask clarifying questions, and produce a **design artifact** the operator reads, edits, and approves. When they approve, you publish the artifact and hand off to a builder. You do NOT write production code — editing \`src/\`, tests, configs, or build files is out of scope.
+
+Your working memory is the git-excluded directory \`.garden/botanist/\` at your worktree root. It is intentionally uncommitted (it survives across turns because your worktree persists on disk). Detect which phase you are in by which files exist there.
+
+## The four phases
+
+### 1. Frame
+Read the seed and scan the repo. Write \`.garden/botanist/framing.md\`: what is the operator actually trying to accomplish, what constraints exist (existing architecture, invariants, prior art), and what is explicitly out of scope. Keep it tight. Then continue straight into phase 2 (do not end your turn yet).
+
+### 2. Options — then pause
+Write \`.garden/botanist/options.md\`: **2–3 distinct approaches**, each a short narrative sketch of how it would work end to end — NOT a pros/cons list. For each, call out the load-bearing decision and the tradeoff that distinguishes it from the others.
+
+Write \`.garden/botanist/questions.md\`: a **numbered** list of specific clarifying questions, each naming the decision it affects (e.g. "3. Should X live in the poller or the hook? — decides whether Y is synchronous."). Ask only what genuinely changes the design; do not pad.
+
+Then present a brief summary of the options and questions in your pane and **END YOUR TURN**. You are now at the human gate: the operator answers in chat. You are not stuck and not done — you are waiting.
+
+### 3. Converge — loops
+When the operator responds, capture their answers to \`.garden/botanist/answers.md\` (so later turns read them deterministically even if the conversation compacts). Incorporate the answers, pick an approach (or let the operator pick), and draft the artifact at \`.garden/botanist/artifact.md\`.
+
+This phase **loops**: if the operator says "explore another option" or "try again," return to phase-2-style options, then re-converge. Re-enter the gate (end your turn) each time you need direction. Keep going until the operator approves.
+
+### 4. Publish
+Only when the operator **explicitly approves** ("approve", "ship it", "publish"):
+1. Move the finished artifact from \`.garden/botanist/artifact.md\` to a **tracked** path under \`docs/future/<name>.md\` (a memo), or the location the operator names. Do NOT publish to \`.garden/\` — it is git-excluded and would never merge.
+2. Commit that single document and push. It merges into history with no reviewer (the operator already reviewed the prose at the gate).
+3. Write a short handoff note at the end of the artifact (or in your pane): the suggested \`garden workers new <project> --workflow <trellis|default> ...\` command a builder would run to implement it, including the crew the operator wants.
+
+## What NOT to do
+- Do not edit \`src/\`, tests, or configs. If you catch yourself writing code, stop — that is the builder's job.
+- Do not \`git add\`/\`commit\`/\`push\` during phases 1–3. Your artifacts are uncommitted working notes until publish.
+- Do not run project checks.
+- Do not publish without explicit operator approval. The gate is the whole point.
+- Do not invent scope. The framing's "out of scope" section bounds your design.
+`;
+
 export function installClaudeSkills(targetDir: string): void {
   const skillsRoot = path.join(targetDir, ".claude", "skills");
   // Heal the legacy flat-file layout so refreshes/bounces of pre-fix workers stop shadowing the new directory layout.
@@ -407,6 +457,7 @@ export function installClaudeSkills(targetDir: string): void {
   writeSkill(skillsRoot, HANDOFF_SKILL_DIRNAME, HANDOFF_SKILL_FILENAME, HANDOFF_SKILL_CONTENT);
   writeSkill(skillsRoot, TRELLIS_AUTHOR_SKILL_DIRNAME, TRELLIS_AUTHOR_SKILL_FILENAME, TRELLIS_AUTHOR_SKILL_CONTENT);
   writeSkill(skillsRoot, GROW_SKILL_DIRNAME, GROW_SKILL_FILENAME, GROW_SKILL_CONTENT);
+  writeSkill(skillsRoot, BOTANIST_SKILL_DIRNAME, BOTANIST_SKILL_FILENAME, BOTANIST_SKILL_CONTENT);
 }
 
 function writeSkill(skillsRoot: string, dirname: string, filename: string, content: string): void {

@@ -35,6 +35,7 @@ import {
   HANDOFF_SKILL_CONTENT, HANDOFF_SKILL_DIRNAME, HANDOFF_SKILL_FILENAME,
   TRELLIS_AUTHOR_SKILL_CONTENT, TRELLIS_AUTHOR_SKILL_DIRNAME, TRELLIS_AUTHOR_SKILL_FILENAME,
   GROW_SKILL_CONTENT, GROW_SKILL_DIRNAME, GROW_SKILL_FILENAME,
+  BOTANIST_SKILL_CONTENT, BOTANIST_SKILL_DIRNAME, BOTANIST_SKILL_FILENAME,
 } from "./skills.js";
 import { workerEnvPrefix, syncAllProviderTokens } from "./claude-env.js";
 import { getHarness } from "./harness/index.js";
@@ -330,14 +331,15 @@ export function ensureDashboard(): void {
       const trellisRelativePath = trellisRelativePathForEntry(entry, projectConfig.path);
       // entry.model: default/grow per-worker pin; trellis resolves per
       // iteration, so vines never carry it.
-      const resumeOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string } = {};
+      const resumeOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string; botanist?: boolean } = {};
       if (trellisRelativePath) resumeOpts.trellisRelativePath = trellisRelativePath;
       if (entry.model) resumeOpts.model = entry.model;
       if (entry.ultracode) resumeOpts.ultracode = true;
       if (entry.effort) resumeOpts.effort = entry.effort;
       if (entry.harness) resumeOpts.harness = entry.harness;
+      if (entry.workflow === "botanist") resumeOpts.botanist = true;
       const resumeCmd = entry.worktreePath && entry.branchName
-        ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.ultracode || resumeOpts.effort || resumeOpts.harness
+        ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.ultracode || resumeOpts.effort || resumeOpts.harness || resumeOpts.botanist
             ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch, resumeOpts)
             : buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch))
         : buildResumeCommand(projectName, projectConfig.path, entry.sessionId);
@@ -634,6 +636,12 @@ export interface WorktreeCommandOptions {
    *  claude-code adapter. Threaded by resume/bounce/loop callers from the
    *  entry; spawn-time selection arrives with the second adapter. */
   harness?: string;
+  /** When set, buildWorktreeRules inverts the worktree posture for a botanist
+   *  (design) worker and suppresses the checks paragraph. Threaded from the
+   *  spawn (workflow === "botanist") and re-derived on resume/bounce from
+   *  `entry.workflow` so the inversion survives the worker's lifetime.
+   *  Mutually exclusive with `trellisRelativePath` / `grow`. */
+  botanist?: boolean;
 }
 
 export function buildWorktreeWorkerCommand(
@@ -647,7 +655,7 @@ export function buildWorktreeWorkerCommand(
 ): string {
   const contextFile = writeWorktreeContextFile(
     projectName, projectPath, branchName, baseBranch,
-    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow },
+    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow, botanist: opts?.botanist },
   );
   const project = resolveProjectForHooks(projectName, projectPath);
   const agentCmd = getHarness(opts?.harness).buildAgentCommand({
@@ -715,7 +723,7 @@ export function buildWorktreeBootstrapScript(
   // Write the context file eagerly (fast, just file I/O)
   const contextFile = writeWorktreeContextFile(
     projectName, projectPath, branchName, baseBranch,
-    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow },
+    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow, botanist: opts?.botanist },
   );
 
   const fifoLit = shellEscape(signalFifoPath(projectName));
@@ -768,6 +776,9 @@ export function buildWorktreeBootstrapScript(
   const growSkillLit = shellEscape(GROW_SKILL_CONTENT);
   const growSkillDirnameLit = shellEscape(GROW_SKILL_DIRNAME);
   const growSkillFilenameLit = shellEscape(GROW_SKILL_FILENAME);
+  const botanistSkillLit = shellEscape(BOTANIST_SKILL_CONTENT);
+  const botanistSkillDirnameLit = shellEscape(BOTANIST_SKILL_DIRNAME);
+  const botanistSkillFilenameLit = shellEscape(BOTANIST_SKILL_FILENAME);
   const agentCmd = getHarness(opts?.harness).buildAgentCommand({
     sessionId, resume: false, contextFile, model: opts?.model,
     ultracode: opts?.ultracode, effort: opts?.effort, envPrefix: workerEnvPrefix(project),
@@ -948,6 +959,8 @@ mkdir -p ${wtPathLit}/.claude/skills/${trellisAuthorSkillDirnameLit}
 printf '%s' ${trellisAuthorSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${trellisAuthorSkillDirnameLit}/${trellisAuthorSkillFilenameLit}
 mkdir -p ${wtPathLit}/.claude/skills/${growSkillDirnameLit}
 printf '%s' ${growSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${growSkillDirnameLit}/${growSkillFilenameLit}
+mkdir -p ${wtPathLit}/.claude/skills/${botanistSkillDirnameLit}
+printf '%s' ${botanistSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${botanistSkillDirnameLit}/${botanistSkillFilenameLit}
 
 # Ensure garden-managed dirs are excluded from git status.
 # Writing to the common info/exclude covers all worktrees and never gets committed.
@@ -991,7 +1004,7 @@ export function buildWorktreeResumeCommand(
 ): string {
   const contextFile = writeWorktreeContextFile(
     projectName, projectPath, branchName, baseBranch,
-    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow },
+    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow, botanist: opts?.botanist },
   );
   const gardenRunner = resolveGardenRunner();
   const project = resolveProjectForHooks(projectName, projectPath);
@@ -1044,6 +1057,7 @@ function writeWorktreeContextFile(
   opts?: {
     trellisRelativePath?: string;
     grow?: { iteration: number; maxIterations: number };
+    botanist?: boolean;
   },
 ): string {
   const base = buildRulesContext(projectName, projectPath);
@@ -1056,6 +1070,7 @@ function writeWorktreeContextFile(
         ? { trellis: { relativePath: opts.trellisRelativePath } }
         : {}),
       ...(opts?.grow ? { grow: opts.grow } : {}),
+      ...(opts?.botanist ? { botanist: true } : {}),
       ...(checksCommand ? { checksCommand } : {}),
     },
   );
