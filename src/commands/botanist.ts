@@ -91,7 +91,7 @@ async function publishCommand(args: string[]): Promise<void> {
     throw new Error(`Worker '${workerName}' has no worktreePath in the registry.`);
   }
 
-  const result = publishBotanistArtifact(entry.worktreePath, to, { dryRun });
+  const result = publishBotanistArtifact(entry.worktreePath, to, { dryRun, project: projectName });
   if (!result.ok) {
     throw new Error(result.message);
   }

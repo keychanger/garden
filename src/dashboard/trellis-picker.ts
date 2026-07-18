@@ -15,6 +15,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { tryGetProject, SESSIONS_DIR } from "../config.js";
 import { buildGrowIteration1Seed } from "./grow-continue.js";
+import { buildBotanistSeed } from "./botanist-prompts.js";
 import { log } from "./log.js";
 import { newWorker } from "./workers.js";
 import { resolveGardenRunner } from "./runner.js";
@@ -408,6 +409,7 @@ export function buildWorkflowPickerPlan(
     { label: "(d) default — fast worker", key: "d", run: `${runner} dashboard _compose-default ${p}` },
     { label: "(t) trellis — pick a frozen design doc", key: "t", tmux: shellCmdTrellisPicker(runner, projectName) },
     { label: "(g) grow — bounded iteration loop", key: "g", tmux: shellCmdGrowPlant(runner, projectName) },
+    { label: "(o) botanist — design a doc, then hand off", key: "o", tmux: shellCmdBotanistPlant(runner, projectName) },
     { sep: true, label: "" },
     { label: `(m) model…         [${draft.model ?? "default"}]`, key: "m", run: `${runner} dashboard _compose-model-submenu ${p}` },
     { label: `(e) effort…        [${draft.effort ?? "default"}]`, key: "e", run: `${runner} dashboard _compose-effort-submenu ${p}` },
@@ -594,6 +596,48 @@ export function plantGrowFromPicker(projectName: string, seed: string): void {
   });
 }
 
+// Invoked by `_botanist-plant <project> <seed>` (the botanist row of the
+// workflow picker). Validates project + non-empty seed, writes the plant-time
+// framing seed, and spawns the botanist via newWorker. Mirrors
+// plantGrowFromPicker; the designer model/effort default (Opus/xhigh) is applied
+// in newWorker, and the composer's model/effort/base dims still layer on top.
+export function plantBotanistFromPicker(projectName: string, seed: string): void {
+  const project = tryGetProject(projectName);
+  if (!project) {
+    tmuxDisplay(`Unknown project '${projectName}'.`);
+    return;
+  }
+  const trimmed = seed.trim();
+  if (!trimmed) {
+    tmuxDisplay("Botanist plant aborted: design prompt must be non-empty.");
+    return;
+  }
+
+  const seedsDir = path.join(SESSIONS_DIR, "seeds");
+  fs.mkdirSync(seedsDir, { recursive: true });
+  const seedFile = path.join(seedsDir, `botanist-seed-${projectName}-${Date.now()}.txt`);
+  fs.writeFileSync(seedFile, buildBotanistSeed(trimmed));
+
+  const draft = consumeSpawnDraft(projectName);
+  const newName = newWorker({
+    projectName,
+    workflow: "botanist",
+    seedMessageFile: seedFile,
+    ...(draft.base ? { base: draft.base } : {}),
+    // Model/effort dims layer over the workflow's Opus/xhigh default; crew is
+    // default-only and not consumed (draftLaunchOpts excludes it).
+    ...draftLaunchOpts(draft),
+  });
+  if (!newName) {
+    try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
+    tmuxDisplay(`Failed to plant botanist on '${projectName}'. Is the dashboard running?`);
+    return;
+  }
+  log.info("workflow-picker", "planted botanist", {
+    worker: newName, data: { project: projectName },
+  });
+}
+
 // --- Workflow-picker shell command builders ---------------------------------
 
 function shellCmdTrellisPicker(runner: string, project: string): string {
@@ -606,4 +650,11 @@ function shellCmdGrowPlant(runner: string, project: string): string {
   // the dispatch. Operators with complex seeds use the CLI plant path.
   const inner = `${runner} dashboard _grow-plant ${shellEscape(project)} %%`;
   return `command-prompt -p "Task description: " "run-shell ${shellEscape(inner)}"`;
+}
+
+function shellCmdBotanistPlant(runner: string, project: string): string {
+  // Single-line seed only (tmux %% substitution). Multi-line / metacharacter
+  // seeds use the CLI plant path (garden workers new --workflow botanist).
+  const inner = `${runner} dashboard _botanist-plant ${shellEscape(project)} %%`;
+  return `command-prompt -p "Design prompt: " "run-shell ${shellEscape(inner)}"`;
 }

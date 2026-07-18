@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { captureConsoleLog } from "./helpers.js";
 
 // The new status system is registry-driven: agentStatus and prState are
@@ -460,6 +463,26 @@ describe("renderQuickStatus", () => {
     // Grey-wrapped pencil (U+270E) on the project header row.
     expect(result).toContain("\x1b[90m✎\x1b[0m");
     expect(vi.mocked(diaryHasContent)).toHaveBeenCalledWith("garden");
+  });
+
+  it("renders a yellow ? for a worker holding the .garden-awaiting-input sentinel", () => {
+    // Real sentinel file drives the real isAwaitingInput (node:fs is not mocked).
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), "botanist-glyph-"));
+    fs.writeFileSync(path.join(wt, ".garden-awaiting-input"), "");
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "designing", agentStatus: "idle", prState: "working", workflow: "botanist", worktreePath: wt } as ReturnType<typeof getWorkers>[number],
+    ]);
+    const result = renderQuickStatus(state);
+    expect(result).toContain("\x1b[33m?\x1b[0m");
+  });
+
+  it("omits the ? when no sentinel is present", () => {
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), "botanist-glyph-"));
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "designing", agentStatus: "idle", prState: "working", workflow: "botanist", worktreePath: wt } as ReturnType<typeof getWorkers>[number],
+    ]);
+    const result = renderQuickStatus(state);
+    expect(result).not.toContain("\x1b[33m?\x1b[0m");
   });
 
   it("omits the diary glyph when the diary is empty", () => {

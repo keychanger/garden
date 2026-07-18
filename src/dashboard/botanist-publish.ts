@@ -31,7 +31,7 @@ export interface PublishResult {
 export function publishBotanistArtifact(
   worktreePath: string,
   toRelPath: string,
-  opts: { dryRun?: boolean } = {},
+  opts: { dryRun?: boolean; project?: string } = {},
 ): PublishResult {
   if (!isPublishablePath(toRelPath)) {
     return {
@@ -86,9 +86,13 @@ export function publishBotanistArtifact(
     data: { worktree: worktreePath, target: toRelPath },
   });
 
+  const proj = opts.project ?? "<project>";
   return {
     ok: true,
-    message: `Published '${toRelPath}' (committed, marked done). The poller will merge it — no reviewer runs. Hand off to a builder with e.g. `
-      + `\`garden workers new <project> --workflow trellis --trellis <path> --crew <name>\`.`,
+    message: `Published '${toRelPath}' (committed, marked done). The poller will merge it — no reviewer runs.\n`
+      + `Hand off to a builder seeded from the doc, e.g.:\n`
+      + `  garden workers new ${proj} --workflow trellis --trellis ${toRelPath}\n`
+      + `For a non-default builder crew, set it on the project first (garden config ${proj} crew <name>) — `
+      + `per-spawn --crew is default-workflow only today.`,
   };
 }

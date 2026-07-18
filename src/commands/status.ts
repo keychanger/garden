@@ -15,6 +15,7 @@ import { listHiddenWorkerWindows, windowExists, getFirstPaneId, getPaneTitle } f
 import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/window-names.js";
 import { currentBranchFast, branchExistsOnOrigin } from "../dashboard/git.js";
 import { diaryHasContent } from "../diary.js";
+import { isAwaitingInput } from "../dashboard/continue.js";
 import { deriveCrew, workerMemberName, projectWorkerMemberName } from "../dashboard/crew.js";
 import { unreadAlertCountsByProject } from "../dashboard/alerts.js";
 import type { GardenConfig, ProjectConfig } from "../config.js";
@@ -44,6 +45,12 @@ interface WorkerInfo {
   // it in over WORKER_STALE_MS — the renderer dims the row. Other tiers
   // (blocked, new, in-flight, done) are never stale-dimmed.
   stale: boolean;
+  // True when the worker holds the `.garden-awaiting-input` sentinel — a
+  // botanist (or future plan worker) paused at the human gate, waiting on the
+  // operator. Distinct from the mid-turn `asking` state (a first-class status):
+  // the worker is still in poller state `working`, it just wrote the sentinel
+  // and ended its turn. Renders a `?` in the row flags.
+  awaitingInput: boolean;
   failCount: number;
   // The branch this worker is pinned to merge into. Undefined for legacy
   // entries written before the field existed. The renderer compares it
@@ -230,7 +237,7 @@ function collectSegments(worker: WorkerInfo, ctx: RowRenderCtx): RowSegments {
     // The pinned model is grey identity like the badges above; renderWorkerRow
     // trails the whole cluster after the detail (see there for why).
     model: worker.model ? greyBadge(worker.model) : "",
-    flags: `${formatGateSuffix(worker.status, ctx.gateClosed)}${formatCiBracket(worker.ci)}`,
+    flags: `${formatAwaitingInputGlyph(worker)}${formatGateSuffix(worker.status, ctx.gateClosed)}${formatCiBracket(worker.ci)}`,
     status: worker.status,
     stale: worker.stale,
   };
@@ -854,6 +861,13 @@ function definedBases(workers: WorkerInfo[]): string[] {
 // non-whitespace content — answers "did I leave notes here?", which nothing
 // else on the row shows. Intentionally quiet (grey) so it reads as metadata,
 // not as a worker-status glyph; placed before the active-project marker.
+// A dim-yellow `?` for a worker paused at the human gate (`.garden-awaiting-input`
+// present). A status-class flag folded into seg.flags so it never truncates —
+// "waiting on you", read at the end of the row like the gate/CI markers.
+function formatAwaitingInputGlyph(worker: WorkerInfo): string {
+  return worker.awaitingInput ? " \x1b[33m?\x1b[0m" : "";
+}
+
 function formatDiaryGlyph(projectName: string): string {
   return diaryHasContent(projectName) ? " \x1b[90m✎\x1b[0m" : "";
 }
@@ -983,6 +997,7 @@ function collectWorkers(
       active: true,
       lastStateChangeAt: entry?.lastStateChangeAt,
       stale: entry ? isWorkerStale(entry) : false,
+      awaitingInput: isAwaitingInput(entry?.worktreePath),
       failCount: entry?.failCount ?? 0,
       baseBranch: entry?.baseBranch,
       harness: entry?.harness,
@@ -1008,6 +1023,7 @@ function collectWorkers(
       active: false,
       lastStateChangeAt: entry?.lastStateChangeAt,
       stale: entry ? isWorkerStale(entry) : false,
+      awaitingInput: isAwaitingInput(entry?.worktreePath),
       failCount: entry?.failCount ?? 0,
       baseBranch: entry?.baseBranch,
       harness: entry?.harness,

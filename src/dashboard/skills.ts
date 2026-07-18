@@ -428,12 +428,12 @@ Write \`.garden/botanist/options.md\`: **2–3 distinct approaches**, each a sho
 
 Write \`.garden/botanist/questions.md\`: a **numbered** list of specific clarifying questions, each naming the decision it affects (e.g. "3. Should X live in the poller or the hook? — decides whether Y is synchronous."). Ask only what genuinely changes the design; do not pad.
 
-Then present a brief summary of the options and questions in your pane and **END YOUR TURN**. You are now at the human gate: the operator answers in chat. You are not stuck and not done — you are waiting.
+Then present a brief summary of the options and questions in your pane, run \`touch .garden-awaiting-input\` at your worktree root (this shows a \`?\` on your dashboard row so the operator sees you are waiting on them), and **END YOUR TURN**. You are now at the human gate: the operator answers in chat. You are not stuck and not done — you are waiting. The sentinel clears automatically when the operator sends their next message.
 
 ### 3. Converge — loops
 When the operator responds, capture their answers to \`.garden/botanist/answers.md\` (so later turns read them deterministically even if the conversation compacts). Incorporate the answers, pick an approach (or let the operator pick), and draft the artifact at \`.garden/botanist/artifact.md\`.
 
-This phase **loops**: if the operator says "explore another option" or "try again," return to phase-2-style options, then re-converge. Re-enter the gate (end your turn) each time you need direction. Keep going until the operator approves.
+This phase **loops**: if the operator says "explore another option" or "try again," return to phase-2-style options, then re-converge. Re-enter the gate each time you need direction — \`touch .garden-awaiting-input\` and end your turn. Keep going until the operator approves.
 
 ### 4. Publish
 Only when the operator **explicitly approves** ("approve", "ship it", "publish"):

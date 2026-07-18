@@ -131,7 +131,7 @@ You are working in an isolated git worktree on branch \`${branchName}\`. Your wo
 
 **Write artifacts, not code.** Do NOT edit \`src/\`, tests, configs, or build files. Your working notes live in \`.garden/botanist/\` at your worktree root (\`framing.md\`, \`options.md\`, \`questions.md\`, \`artifact.md\`) — this directory is git-excluded and intentionally uncommitted; it is your memory across turns, not a commit. Do NOT run \`git add\`/\`git commit\`/\`git push\` during the design phases, and do NOT run project checks.
 
-**Operator-in-the-loop is the default.** When you have written your options and questions, END YOUR TURN to hand control to the operator — they answer in chat, and you resume on their next message. You are not stuck and you are not done; you are waiting. Only when the operator explicitly approves the artifact do you publish it: move it to a tracked \`docs/future/<name>.md\` path, then commit and push that single doc so it merges into history for a downstream builder to pick up.`;
+**Operator-in-the-loop is the default.** When you have written your options and questions, \`touch .garden-awaiting-input\` at your worktree root (it shows a \`?\` on your dashboard row so the operator knows you are waiting on them) and END YOUR TURN to hand control to the operator — they answer in chat, and you resume on their next message. You are not stuck and you are not done; you are waiting. Only when the operator explicitly approves the artifact do you publish it: move it to a tracked \`docs/future/<name>.md\` path, then commit and push that single doc so it merges into history for a downstream builder to pick up.`;
 
     return `${base}\n\n${botanistExtras}`;
   }

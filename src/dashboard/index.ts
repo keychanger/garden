@@ -19,7 +19,7 @@ import { growAutoContinueAfterMerge } from "./grow-continue.js";
 import { trellisAutoContinueAfterMerge } from "./trellis-continue.js";
 import {
   runTrellisPicker, plantVineFromPicker, spawnTrellisAuthor, runReviveSubmenu,
-  runWorkflowPicker, plantGrowFromPicker,
+  runWorkflowPicker, plantGrowFromPicker, plantBotanistFromPicker,
   runComposeBaseSubmenu, runComposeCrewSubmenu, runComposeModelSubmenu, runComposeEffortSubmenu,
   stageSpawnDraft, composeDefaultFromPicker,
 } from "./trellis-picker.js";
@@ -290,6 +290,10 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     // single-token substitution by default, but operators can pass a
     // pre-quoted seed via the CLI subcommand directly.
     if (args[1]) plantGrowFromPicker(args[1], args.slice(2).join(" "));
+    return;
+  }
+  if (sub === "_botanist-plant") {
+    if (args[1]) plantBotanistFromPicker(args[1], args.slice(2).join(" "));
     return;
   }
   if (sub === "_trellis-plant") {

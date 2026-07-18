@@ -35,7 +35,7 @@ describe("garden botanist publish", () => {
     expect(publishBotanistArtifact).toHaveBeenCalledWith(
       "/tmp/wt/proj/bold-ash",
       "docs/future/design.md",
-      { dryRun: false },
+      { dryRun: false, project: "proj" },
     );
     log.mockRestore();
   });
@@ -47,7 +47,7 @@ describe("garden botanist publish", () => {
     expect(publishBotanistArtifact).toHaveBeenCalledWith(
       "/tmp/wt/proj/bold-ash",
       "docs/future/design.md",
-      { dryRun: true },
+      { dryRun: true, project: "proj" },
     );
   });
 
