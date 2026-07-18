@@ -438,7 +438,7 @@ garden rebuild                     # Rebuild garden and relaunch dashboard
 
 ### Workers and trellises
 ```
-garden workers new <project> [--workflow trellis|grow]
+garden workers new <project> [--workflow trellis|grow|botanist]
                              [--trellis <name>]
                              [--seed <text> | --seed-file <path>]
                              [--model <alias-or-id>] [--effort low|medium|high|xhigh|ultra]
@@ -446,11 +446,13 @@ garden workers new <project> [--workflow trellis|grow]
                                    # Spawn a worker. Default workflow plants an interactive worker;
                                    # trellis plants a vine bound to the named trellis (--model
                                    # overrides the Sonnet default); grow plants a bounded
-                                   # hardening loop seeded by --seed/--seed-file. --model pins the
-                                   # worker model on any workflow: an Anthropic alias or any
-                                   # concrete model id the backend accepts, persisted so the pin
-                                   # survives bounce/resume/respawn (account default when absent).
-                                   # --effort sets the reasoning rung (default/grow only; ultra =
+                                   # hardening loop seeded by --seed/--seed-file; botanist plants a
+                                   # design worker (deliverable is a doc, not code) seeded by
+                                   # --seed/--seed-file, defaulting to an Opus/xhigh designer seat.
+                                   # --model pins the worker model on any workflow: an Anthropic
+                                   # alias or any concrete model id the backend accepts, persisted so
+                                   # the pin survives bounce/resume/respawn (account default when absent).
+                                   # --effort sets the reasoning rung (default/grow/botanist; ultra =
                                    # the ultracode preset: max effort + dynamic workflows).
                                    # --max-iterations defaults to project.maxGrowIterations or 5.
 garden workers grow [<worker>] [--seed <text> | --seed-file <path> | --goal-file <path>]
