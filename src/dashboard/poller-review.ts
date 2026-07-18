@@ -18,8 +18,10 @@ import { getHarnessCore } from "./harness/core.js";
 import { setDoneSentinel } from "./continue.js";
 import {
   forcePushBranch, getBranchHeadSha, getCommitSummary, getRemoteTrackingSha,
-  getDiffNumstat, hasCommitsAhead,
+  getDiffNumstat, hasCommitsAhead, getChangedFiles,
 } from "./git.js";
+import { getWorkflow } from "./workflows/index.js";
+import { isPublishablePath } from "./botanist-paths.js";
 import { refreshDashboard } from "./header.js";
 import { launchHeadlessAgent } from "./headless-agent.js";
 import { log } from "./log.js";
@@ -189,6 +191,14 @@ export function handleWorking(
     return false;
   }
 
+  // Skip-review workflows (botanist): the branch carries a design artifact the
+  // operator already reviewed at the human gate, not code — so no reviewer runs.
+  // Route working -> merge-pending directly, after enforcing that the committed
+  // diff touches only publishable docs/ paths.
+  if (getWorkflow(entry.workflow ?? "default").skipsReviewMerge) {
+    return handleSkipReviewMerge(projectName, entry, wtPath, baseBranch);
+  }
+
   // Fleet-wide review concurrency cap (garden-level limits.maxConcurrentReviews).
   // Reviews are the pipeline's entry point; when the machine is already running
   // the configured number of reviewers, defer this launch rather than
@@ -207,6 +217,58 @@ export function handleWorking(
   }
 
   return launchReview(projectName, projectPath, baseBranch, entry);
+}
+
+// A skip-review (botanist) worker with commits ahead of base. Enforce the
+// writeable-path boundary, then transition straight to merge-pending — no
+// reviewer, since the operator already reviewed the artifact at the gate. A
+// committed file outside docs/ (a botanist that drifted into building code)
+// parks the worker in `failing` with an operator alert; removing the offending
+// files and re-pushing auto-retries the publish (see handleFailing).
+function handleSkipReviewMerge(
+  projectName: string,
+  entry: WorkerEntry,
+  wtPath: string,
+  baseBranch: string,
+): boolean {
+  const offending = getChangedFiles(wtPath, baseBranch).filter(f => !isPublishablePath(f));
+  if (offending.length > 0) {
+    const shown = offending.slice(0, 5).join(", ");
+    const more = offending.length > 5 ? ` (+${offending.length - 5} more)` : "";
+    const headSha = getBranchHeadSha(wtPath) ?? undefined;
+    log.warn("poller", "botanist committed files outside docs/; parking in failing", {
+      worker: entry.name, data: { project: projectName, offending },
+    });
+    addAlert({
+      level: "error",
+      source: "poller",
+      project: projectName,
+      worker: entry.name,
+      message: `Botanist ${entry.name} committed files outside docs/ — refusing to merge: ${shown}${more}. `
+        + `A botanist publishes design docs, not code. Remove the non-doc files and re-push to retry.`,
+      dedupKey: `botanist-scope:${projectName}:${entry.name}`,
+    });
+    transitionState(projectName, entry.name, "failing", {
+      pendingReviewAt: undefined,
+      failingReason: "botanist-scope",
+      // Park until a NEW commit (the fix) lands: handleFailing re-arms on a sha
+      // change, so setting failingSha stops the debounce-timeout retry loop.
+      failingSha: headSha,
+      lastSeenSha: headSha,
+    });
+    refreshDashboard();
+    return true;
+  }
+  log.info("poller", "botanist publish: skipping review, merging directly", {
+    worker: entry.name, data: { project: projectName },
+  });
+  transitionState(projectName, entry.name, "merge-pending", {
+    mergePendingAt: new Date().toISOString(),
+    pendingReviewAt: undefined,
+  });
+  refreshDashboard();
+  scheduleDelayedPoke(projectName, 0);
+  return true;
 }
 
 export function handleReviewing(

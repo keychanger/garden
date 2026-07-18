@@ -45,6 +45,11 @@ describe("evaluateHolisticGate", () => {
       .toEqual({ eligible: false, reason: "workflow" });
   });
 
+  it("excludes botanist workers (a docs-only design worker runs no reviewer; a holistic pass would defeat skip-review)", () => {
+    expect(evaluateHolisticGate(entry({ workflow: "botanist", mergeCount: 3 })))
+      .toEqual({ eligible: false, reason: "workflow" });
+  });
+
   it("treats a legacy entry with no workflow as default", () => {
     expect(evaluateHolisticGate(entry({ workflow: undefined, mergeCount: 2 })).eligible).toBe(true);
   });

@@ -36,7 +36,13 @@ import path from "node:path";
 // dependency rides in — again legitimate review-recovery code, not a retained
 // closure. The ~28kb regression this guard exists for is still caught by
 // SKILLS_BYTES_CEILING and by the remaining ~3kb of coarse headroom.
-const HOOK_BUNDLE_CEILING_BYTES = 228 * 1024;
+// Bumped 228->230kb for the botanist skip-review handler (poller-review.ts
+// handleSkipReviewMerge, ~0.5kb): same shape — legitimate state-handler feature
+// code reachable via the workflow-def stateHandlers the hook graph already
+// carries. The heavy publish logic (git commit/move) is deliberately kept out
+// via the botanist-paths.ts leaf (only isPublishablePath rides in), verified by
+// the metafile below and by publishBotanistArtifact being absent from the bundle.
+const HOOK_BUNDLE_CEILING_BYTES = 230 * 1024;
 // skills.ts contributes only a tree-shaken sliver today (<100 bytes); a
 // retained skills bundle is ~28kb. The threshold sits well between.
 const SKILLS_BYTES_CEILING = 2 * 1024;

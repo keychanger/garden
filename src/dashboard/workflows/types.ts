@@ -85,6 +85,14 @@ export interface WorkflowDefinition {
    *  (default/grow/trellis), no workflow-level effort default applies.
    *  Botanist sets "xhigh": design is judgment-heavy. */
   workerEffort?: string;
+  /** When true, the worker's branch merges WITHOUT a reviewer. handleWorking
+   *  routes working → merge-pending directly (never launching a review) once
+   *  commits are ahead of base, after enforcing that the committed diff touches
+   *  only publishable paths. Used by botanist: its artifact is prose the
+   *  operator already reviewed at the human gate, so there is no code to
+   *  critique. The merge/CI gate still applies. When unset (default/grow/
+   *  trellis), the normal review-then-merge lifecycle runs. */
+  skipsReviewMerge?: boolean;
 }
 
 // Per-workflow valid-transitions tables. Lives at this layer (not on the
@@ -130,11 +138,16 @@ export const trellisValidTransitions: Record<PrState, PrState[]> = defaultValidT
 // state) without fighting the type system or callers.
 export const growValidTransitions: Record<PrState, PrState[]> = defaultValidTransitions;
 
-// Botanist presently uses the same table as default. Kept as its own constant
-// so Phase 3's skip-review divergence (a botanist goes working → merge-pending
-// directly, never reviewing) can add the `working: ["merge-pending", ...]` edge
-// here without fighting the type system or callers.
-export const botanistValidTransitions: Record<PrState, PrState[]> = defaultValidTransitions;
+// Botanist skips review: a botanist goes working → merge-pending directly (no
+// reviewer — its artifact is prose the operator reviewed at the gate), or
+// working → failing on a writeable-path violation (it committed code, not just
+// docs). It never enters `reviewing`. Every other state reuses default's edges
+// (a docs branch can still hit a rebase conflict → resolving, red CI →
+// ci-fixing). `done → reviewing` stays reachable-in-table but unused.
+export const botanistValidTransitions: Record<PrState, PrState[]> = {
+  ...defaultValidTransitions,
+  working: ["merge-pending", "failing", "done"],
+};
 
 export function getValidTransitions(workflowName: string): Record<PrState, PrState[]> {
   if (workflowName === "trellis") return trellisValidTransitions;

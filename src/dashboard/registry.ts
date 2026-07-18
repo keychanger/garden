@@ -83,7 +83,13 @@ export type FailingReason =
   // any failed/cancelled/timed-out check-run on the worker's branch HEAD.
   // The merge is held until the operator pushes a new commit that turns
   // the check green; the poller does not auto-retry.
-  | "ci";
+  | "ci"
+  // Set by handleWorking's skip-review path (poller-review.ts) when a botanist
+  // (skipsReviewMerge) branch committed files outside the publishable docs/
+  // boundary — a botanist that drifted into building code. NOT an operator-
+  // action reason: removing the offending files and re-pushing auto-retries the
+  // publish after the failing debounce.
+  | "botanist-scope";
 
 // Failing reasons that park the worker until the operator runs a specific
 // command (a trellis disposition) — pushing new commits does NOT auto-resume

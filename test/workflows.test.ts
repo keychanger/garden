@@ -274,12 +274,20 @@ describe("botanistWorkflow", () => {
     expect(getWorkflow("botanist")).toBe(botanistWorkflow);
   });
 
-  it("validTransitions deep-equal default's (Phase 2 uses the same state machine)", () => {
-    expect(botanistWorkflow.validTransitions).toEqual(PRE_REFACTOR_VALID_TRANSITIONS);
+  it("diverges from default only on `working`: skip-review goes to merge-pending/failing, never reviewing", () => {
+    // Every other state reuses default's edges (a docs branch can still hit a
+    // rebase conflict -> resolving, red CI -> ci-fixing).
+    expect(botanistWorkflow.validTransitions.working).toEqual(["merge-pending", "failing", "done"]);
+    expect(botanistWorkflow.validTransitions.working).not.toContain("reviewing");
+    for (const state of ALL_PR_STATES) {
+      if (state === "working") continue;
+      expect(botanistWorkflow.validTransitions[state]).toEqual(PRE_REFACTOR_VALID_TRANSITIONS[state]);
+    }
   });
 
-  it("getValidTransitions('botanist') returns the botanist table", () => {
-    expect(getValidTransitions("botanist")).toEqual(PRE_REFACTOR_VALID_TRANSITIONS);
+  it("getValidTransitions('botanist') returns the botanist table (live path, not the dead field)", () => {
+    expect(getValidTransitions("botanist")).toBe(botanistWorkflow.validTransitions);
+    expect(getValidTransitions("botanist").working).toEqual(["merge-pending", "failing", "done"]);
   });
 
   it("has a registered handler for every PrState (exhaustiveness)", () => {
@@ -301,6 +309,13 @@ describe("botanistWorkflow", () => {
     expect(botanistWorkflow.workerModel).toBe("opus");
     expect(botanistWorkflow.workerEffort).toBe("xhigh");
     expect(botanistWorkflow.reviewerModel).toBeUndefined();
+  });
+
+  it("skipsReviewMerge is true (its artifact is prose the operator reviewed at the gate)", () => {
+    expect(botanistWorkflow.skipsReviewMerge).toBe(true);
+    // Other workflows do not skip review.
+    expect(defaultWorkflow.skipsReviewMerge).toBeUndefined();
+    expect(growWorkflow.skipsReviewMerge).toBeUndefined();
   });
 });
 

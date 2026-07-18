@@ -519,6 +519,46 @@ describe("poll — working state", () => {
     );
   });
 
+  it("botanist (skipsReviewMerge) with a docs-only diff goes straight to merge-pending, no reviewer", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(), workflow: "botanist" }),
+    ]);
+    vi.mocked(getChangedFiles).mockReturnValue(["docs/future/notification-levels.md"]);
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merge-pending", pendingReviewAt: undefined }),
+    );
+    // No reviewer window is ever opened for a skip-review worker.
+    expect(newDashboardWindow).not.toHaveBeenCalledWith(
+      "_myproject-review-bold-ash",
+      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
+    );
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "reviewing" }),
+    );
+  });
+
+  it("botanist committing a file outside docs/ parks in failing with an operator alert", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(), workflow: "botanist" }),
+    ]);
+    vi.mocked(getChangedFiles).mockReturnValue(["docs/future/ok.md", "src/dashboard/sneaky.ts"]);
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "failing", failingReason: "botanist-scope" }),
+    );
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merge-pending" }),
+    );
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ level: "error", worker: "bold-ash" }),
+    );
+  });
+
   it("does NOT clear pendingReviewAt when the commit check errors (transient git failure)", () => {
     // hasCommitsAhead returns null when the git call itself failed. Treating
     // that as "no commits" would silently cancel a review that should still
