@@ -211,6 +211,9 @@ vi.mock("../src/dashboard/continue.js", () => ({
   donePath: vi.fn((wt: string) => `${wt}/.garden-done`),
   clearDoneSentinel: vi.fn(),
   setDoneSentinel: vi.fn(),
+  isAwaitingInput: vi.fn(() => false),
+  awaitingInputPath: vi.fn((wt: string) => `${wt}/.garden-awaiting-input`),
+  clearAwaitingInput: vi.fn(),
 }));
 
 // Stub scheduleDelayedPoke (detached `bash -c "sleep N; printf … 1<>FIFO"`)

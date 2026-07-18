@@ -166,6 +166,27 @@ export function setDoneSentinel(worktreePath: string | undefined): void {
   try { fs.writeFileSync(donePath(worktreePath), ""); } catch { /* worktree gone */ }
 }
 
+// Sentinel suppressing auto-continue while a worker is mid-task but waiting on
+// operator input (the human gate shared with the botanist/plan workflows). Like
+// .garden-done it lives at the worktree root and its mere presence is the
+// signal, but the semantics differ: .garden-done means "finished, do not
+// continue me"; .garden-awaiting-input means "paused for the operator, resume
+// on their next prompt". The worker writes it (skill-driven) and the next
+// UserPromptSubmit clears it. Auto-continue skips on either sentinel.
+export function awaitingInputPath(worktreePath: string): string {
+  return path.join(worktreePath, ".garden-awaiting-input");
+}
+
+export function isAwaitingInput(worktreePath: string | undefined): boolean {
+  if (!worktreePath) return false;
+  return fs.existsSync(awaitingInputPath(worktreePath));
+}
+
+export function clearAwaitingInput(worktreePath: string | undefined): void {
+  if (!worktreePath) return;
+  try { fs.unlinkSync(awaitingInputPath(worktreePath)); } catch { /* not present */ }
+}
+
 function resolveWorkerPaneId(project: string, worker: string): string | null {
   const windowName = workerWin(project, worker);
   const state = readDashState();

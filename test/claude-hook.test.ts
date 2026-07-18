@@ -344,7 +344,7 @@ describe("handleClaudeHook — core events", () => {
     expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/wt/garden/bold-ash/.garden-done");
   });
 
-  it("prompt does NOT touch the sentinel when prState was not merged/done", async () => {
+  it("prompt does NOT touch the .garden-done sentinel when prState was not merged/done", async () => {
     seedWorker("garden", "bold-ash", {
       agentStatus: "idle",
       worktreePath: "/tmp/wt/garden/bold-ash",
@@ -356,7 +356,26 @@ describe("handleClaudeHook — core events", () => {
 
     const entry = entries.garden.find(e => e.name === "bold-ash")!;
     expect(entry.agentStatus).toBe("working");
-    expect(fs.unlinkSync).not.toHaveBeenCalled();
+    expect(fs.unlinkSync).not.toHaveBeenCalledWith("/tmp/wt/garden/bold-ash/.garden-done");
+  });
+
+  it("prompt clears the .garden-awaiting-input sentinel unconditionally (even mid-task, prState still working)", async () => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "idle",
+      prState: "working",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+    });
+    setCwd("garden", "bold-ash");
+
+    const fs = (await import("node:fs")).default;
+    handleClaudeHook("prompt");
+
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(entry.agentStatus).toBe("working");
+    // The human-gate sentinel clears on the operator's next prompt regardless of
+    // prState — unlike .garden-done, which only clears from a terminal state.
+    expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/wt/garden/bold-ash/.garden-awaiting-input");
+    expect(fs.unlinkSync).not.toHaveBeenCalledWith("/tmp/wt/garden/bold-ash/.garden-done");
   });
 
   it("stop sets idle from any prior state", () => {

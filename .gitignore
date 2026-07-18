@@ -5,4 +5,5 @@ dist/
 .claude/
 config.yml
 .garden-done
+.garden-awaiting-input
 coverage/

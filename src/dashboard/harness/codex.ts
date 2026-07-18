@@ -158,7 +158,7 @@ function ensureWorktreeExcludes(targetDir: string): void {
   // Excluded so the untracked garden file never shows in the worker's git
   // status; harmless when the repo tracks its own AGENTS.md (info/exclude never
   // ignores a tracked path — that case is handled via skip-worktree instead).
-  const patterns = [".codex/", ".garden-hooks/", ".garden/", ".garden-done", "AGENTS.md"];
+  const patterns = [".codex/", ".garden-hooks/", ".garden/", ".garden-done", ".garden-awaiting-input", "AGENTS.md"];
   let commonDir: string;
   try {
     commonDir = execFileSync("git", ["-C", targetDir, "rev-parse", "--git-common-dir"], {

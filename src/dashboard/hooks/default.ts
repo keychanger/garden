@@ -17,7 +17,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { tryGetProject } from "../../config.js";
 import { addAlert, readAlerts } from "../alerts.js";
-import { clearDoneSentinel, isDoneSet } from "../continue.js";
+import { clearAwaitingInput, clearDoneSentinel, isDoneSet } from "../continue.js";
 import { getWorkerBaseBranch } from "../git.js";
 import { findWorkerPaneId, refreshDashboard } from "../header.js";
 import { log } from "../log.js";
@@ -308,6 +308,11 @@ const onPromptSubmitted: HookMethod = (ctx) => {
     fields.prState = undefined;
     clearDoneSentinel(ctx.workerInfo.entry.worktreePath);
   }
+  // Clear the human-gate sentinel unconditionally: a worker paused for operator
+  // input (botanist/plan) holds it while prState is still `working`, so unlike
+  // the done-sentinel its clear is not gated on a terminal prState. The
+  // operator's prompt is the resume signal.
+  clearAwaitingInput(ctx.workerInfo.entry.worktreePath);
   applyAndLog(ctx, fields);
 };
 

@@ -136,7 +136,7 @@ function ensureWorktreeExcludes(targetDir: string): void {
   // log files needed to be hidden from git status; .garden-done is the
   // auto-continue suppression sentinel (so an accidental `git add -A` won't
   // start tracking it the way it did on wolf's main).
-  const patterns = [".claude/", ".garden-hooks/", ".garden/", ".garden-done"];
+  const patterns = [".claude/", ".garden-hooks/", ".garden/", ".garden-done", ".garden-awaiting-input"];
   let commonDir: string;
   try {
     commonDir = execFileSync("git", ["-C", targetDir, "rev-parse", "--git-common-dir"], {

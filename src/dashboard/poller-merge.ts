@@ -12,7 +12,7 @@ import {
 } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { addAlert } from "./alerts.js";
-import { dispatchDelayedAutoContinue, isDoneSet, setDoneSentinel } from "./continue.js";
+import { dispatchDelayedAutoContinue, isAwaitingInput, isDoneSet, setDoneSentinel } from "./continue.js";
 import { dispatchDelayedGrowContinue } from "./grow-continue.js";
 import { dispatchDelayedTrellisContinue } from "./trellis-continue.js";
 import { resolveGardenRunner } from "./runner.js";
@@ -954,6 +954,9 @@ function autoContinueSkipReason(
   trigger: "merge" | "sweep",
 ): string | null {
   if (isDoneSet(entry.worktreePath)) return "done-sentinel";
+  // Mid-task worker paused at a human gate (botanist/plan): resume is the
+  // operator's next prompt, not an auto-continue paste.
+  if (isAwaitingInput(entry.worktreePath)) return "awaiting-input";
   if (entry.agentStatus === "working" || entry.agentStatus === "asking") {
     return `claude-${entry.agentStatus}`;
   }

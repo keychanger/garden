@@ -955,8 +955,10 @@ printf '%s' ${growSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${growSki
 # trellis-lessons.md) — none of these belong in version control. .garden-done
 # is the auto-continue suppression sentinel; the done skill description
 # advertises this exclusion as the reason workers should not \`git add\` it.
+# .garden-awaiting-input is the human-gate sentinel (botanist/plan), excluded
+# for the same reason.
 EXCLUDE_FILE="$(git -C ${wtPathLit} rev-parse --git-common-dir)/info/exclude"
-for pattern in .claude/ .garden-hooks/ .garden/ .garden-done; do
+for pattern in .claude/ .garden-hooks/ .garden/ .garden-done .garden-awaiting-input; do
   grep -qxF "$pattern" "$EXCLUDE_FILE" 2>/dev/null || printf '%s\\n' "$pattern" >> "$EXCLUDE_FILE"
 done
 ${codexRuntimeInstall}

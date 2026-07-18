@@ -337,7 +337,7 @@ describe("claude-code adapter installRuntimeConfig", () => {
       "/repo/myproject/.git\n" as unknown as Buffer,
     );
     vi.mocked(fs.readFileSync).mockReturnValueOnce(
-      ".claude/\n.garden-hooks/\n.garden/\n.garden-done\n",
+      ".claude/\n.garden-hooks/\n.garden/\n.garden-done\n.garden-awaiting-input\n",
     );
 
     claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
@@ -677,7 +677,7 @@ describe("buildWorktreeBootstrapScript", () => {
     );
     expect(call).toBeDefined();
     const script = call![1] as string;
-    expect(script).toMatch(/for pattern in .claude\/ .garden-hooks\/ .garden\/ .garden-done; do/);
+    expect(script).toMatch(/for pattern in .claude\/ .garden-hooks\/ .garden\/ .garden-done .garden-awaiting-input; do/);
   });
 
   // Regression: lex 2026-05-12 — operator merged a PR and deleted the branch
