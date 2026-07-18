@@ -857,10 +857,6 @@ function definedBases(workers: WorkerInfo[]): string[] {
   return workers.map(w => w.baseBranch).filter((b): b is string => b !== undefined);
 }
 
-// Dimmed pencil appended to a project's header row when its diary holds
-// non-whitespace content — answers "did I leave notes here?", which nothing
-// else on the row shows. Intentionally quiet (grey) so it reads as metadata,
-// not as a worker-status glyph; placed before the active-project marker.
 // A dim-yellow `?` for a worker paused at the human gate (`.garden-awaiting-input`
 // present). A status-class flag folded into seg.flags so it never truncates —
 // "waiting on you", read at the end of the row like the gate/CI markers.
@@ -868,6 +864,10 @@ function formatAwaitingInputGlyph(worker: WorkerInfo): string {
   return worker.awaitingInput ? " \x1b[33m?\x1b[0m" : "";
 }
 
+// Dimmed pencil appended to a project's header row when its diary holds
+// non-whitespace content — answers "did I leave notes here?", which nothing
+// else on the row shows. Intentionally quiet (grey) so it reads as metadata,
+// not as a worker-status glyph; placed before the active-project marker.
 function formatDiaryGlyph(projectName: string): string {
   return diaryHasContent(projectName) ? " \x1b[90m✎\x1b[0m" : "";
 }

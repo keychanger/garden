@@ -439,7 +439,7 @@ This phase **loops**: if the operator says "explore another option" or "try agai
 Only when the operator **explicitly approves** ("approve", "ship it", "publish"):
 1. Make sure your finished artifact is at \`.garden/botanist/artifact.md\`.
 2. Run \`garden botanist publish --to docs/future/<name>.md\` (pick a descriptive \`<name>\`). This moves the artifact to that tracked path, commits it, and marks you done — the poller then merges it with **no reviewer** (the operator already reviewed the prose at the gate). Pass \`--dry-run\` first to preview. The target MUST be under \`docs/\` — a botanist publishes docs, not code, and the merge refuses anything else. Do NOT publish to \`.garden/\` (git-excluded, would never merge). Do NOT hand-commit code files: committing anything outside \`docs/\` parks you in \`failing\`.
-3. In your pane, give the operator the suggested handoff command for a builder — e.g. \`garden workers new <project> --workflow trellis --trellis docs/future/<name>.md --crew <name>\` — with the crew they want.
+3. In your pane, give the operator the suggested handoff command for a builder — e.g. \`garden workers new <project> --workflow trellis --trellis docs/future/<name>.md\`. For a non-default builder crew, they set it on the project first (\`garden config <project> crew <name>\`) — per-spawn \`--crew\` is default-workflow only today, so it cannot ride the trellis plant.
 
 ## What NOT to do
 - Do not edit \`src/\`, tests, or configs. If you catch yourself writing code, stop — that is the builder's job.
