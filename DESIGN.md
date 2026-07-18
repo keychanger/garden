@@ -416,7 +416,7 @@ garden stats [--by <axis>] [--since Nd|Nh|Nm] [-p <project>]
                                    # --by config|model|provider|harness|workflow|crew|rules|version
 garden alerts                      # View dashboard alerts (unread/read split, level glyphs, relative age)
 garden alerts clear                # Dismiss all alerts
-garden doctor                      # Environment preflight (tmux / claude / gh / node / Option-key)
+garden doctor                      # Environment preflight (tmux / claude / gh / node / config / Option-key)
 garden logs [options]              # View dashboard logs (pretty-printed)
 garden logs filter [<expr>]        # Show / set the sticky filter (also via ⌥/ in dashboard)
 garden logs filter --clear         # Remove the sticky filter

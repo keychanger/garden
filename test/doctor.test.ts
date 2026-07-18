@@ -24,7 +24,7 @@ vi.mock("node:fs", async (orig) => {
   return { ...actual, existsSync: () => h.configExists };
 });
 
-import { doctor } from "../src/commands/doctor.js";
+import { doctor, nodeMeetsFloor } from "../src/commands/doctor.js";
 import { output } from "../src/output.js";
 
 const strip = (s: string) => s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
@@ -97,6 +97,17 @@ describe("garden doctor", () => {
     const lines = (await captureConsoleLog(() => doctor())).map(strip);
     const configLine = lines.find(l => /^\s*[⚠✔✖]\s+config\b/.test(l));
     expect(configLine).toMatch(/✔/);
+  });
+
+  it("node floor accepts 22.1 and above, rejects below", () => {
+    // Boundary: 22.1 is the floor (NODE_COMPILE_CACHE landed there).
+    expect(nodeMeetsFloor("v22.1.0")).toBe(true);
+    expect(nodeMeetsFloor("v22.14.0")).toBe(true);
+    expect(nodeMeetsFloor("v24.0.0")).toBe(true);
+    expect(nodeMeetsFloor("v22.0.0")).toBe(false);
+    expect(nodeMeetsFloor("v20.11.0")).toBe(false);
+    // Unparseable input fails closed (warn), never falsely passes.
+    expect(nodeMeetsFloor("garbage")).toBe(false);
   });
 
   it("emits JSON when not a TTY", async () => {

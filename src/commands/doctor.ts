@@ -64,12 +64,18 @@ function checkGh(): Check {
   };
 }
 
-function checkNode(): Check {
-  const m = process.version.match(/^v(\d+)\.(\d+)/);
+// Parse a `vMAJOR.MINOR…` string and test it against the floor. Unparseable
+// input fails closed (warn) rather than falsely passing. Exported for testing
+// since process.version can't be mocked.
+export function nodeMeetsFloor(version: string): boolean {
+  const m = version.match(/^v(\d+)\.(\d+)/);
   const major = m ? Number(m[1]) : 0;
   const minor = m ? Number(m[2]) : 0;
-  const meetsFloor = major > MIN_NODE_MAJOR || (major === MIN_NODE_MAJOR && minor >= MIN_NODE_MINOR);
-  return meetsFloor
+  return major > MIN_NODE_MAJOR || (major === MIN_NODE_MAJOR && minor >= MIN_NODE_MINOR);
+}
+
+function checkNode(): Check {
+  return nodeMeetsFloor(process.version)
     ? { name: "node", status: "ok", detail: process.version }
     : {
         name: "node",

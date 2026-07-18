@@ -138,7 +138,7 @@ Dashboard:
   logs filter [<expr>]           Show / set sticky filter (also via ⌥/ in dashboard)
   logs filter --clear            Remove the sticky filter
   health                         Check dashboard state consistency
-  doctor                         Environment preflight (tmux / claude / gh / Option-key)
+  doctor                         Environment preflight (tmux / claude / gh / node / config / Option-key)
   kick <worker>                  Re-arm a stranded 'working' worker for review
   bounce <worker>                Restart a worker's Claude process (preserves session history)
   hold <worker>                  Interrupt a working worker and mark it 'paused' (sends Escape; ⌥e in the dashboard toggles this on the focused worker; the next prompt resumes it)
