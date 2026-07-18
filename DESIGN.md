@@ -246,6 +246,7 @@ The sentinel lives at the worktree root because that is the only path satisfying
 
 Skip conditions (logged at `debug`):
 - The `.garden-done` sentinel exists for this worker.
+- The `.garden-awaiting-input` sentinel exists — a mid-task worker paused at a human gate (the botanist/plan workflows). Unlike `.garden-done` this does not mean "finished"; the resume is the operator's next prompt, which clears the sentinel via `UserPromptSubmit`.
 - `agentStatus` is `working` or `asking` — the operator is already typing, same guard the interrupt-recovery path uses.
 - `lastAutoContinueAt` is within the idempotency window — 10 seconds for the merge-time dispatch (guard against merge-event replay), 60 seconds for the gate-reopen sweep (guard against double-pasting a delivery still in flight).
 

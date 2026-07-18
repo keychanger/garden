@@ -251,7 +251,7 @@ import {
 import { tmux, newDashboardWindow, pasteAndSubmit, windowExists, windowIndices, dedupeWindows, getFirstPaneId, killWindowSafe, killWindowsByName, listAllWindowNames } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { log } from "../src/dashboard/log.js";
-import { dispatchDelayedAutoContinue, isDoneSet, setDoneSentinel } from "../src/dashboard/continue.js";
+import { dispatchDelayedAutoContinue, isAwaitingInput, isDoneSet, setDoneSentinel } from "../src/dashboard/continue.js";
 import { scheduleDelayedPoke } from "../src/dashboard/poller-fifo.js";
 import { getGitHubRepoSlug, checkCiStatus } from "../src/dashboard/poller-ci.js";
 import { sweepGhostEntries } from "../src/dashboard/validate.js";
@@ -2475,6 +2475,41 @@ describe("poll — merge-pending state", () => {
       expect.objectContaining({
         worker: "bold-ash",
         data: expect.objectContaining({ reason: "done-sentinel" }),
+      }),
+    );
+  });
+
+  it("merges to `merged` (not done) but skips auto-continue when .garden-awaiting-input is set (human gate)", () => {
+    // A mid-task worker paused at a human gate (botanist/plan) wrote
+    // .garden-awaiting-input, not .garden-done: the merge still finalizes to the
+    // transient `merged` beat, but the post-merge auto-continue is suppressed —
+    // the operator's next prompt is the resume, not a garden paste.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        agentStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true, advanced: "worktree" });
+    vi.mocked(isDoneSet).mockReturnValue(false);
+    vi.mocked(isAwaitingInput).mockReturnValue(true);
+
+    poll("myproject");
+
+    const calls = vi.mocked(updateWorkerFields).mock.calls.filter(c => c[1] === "bold-ash");
+    const mergedCall = calls.find(c => (c[2] as Record<string, unknown>).prState === "merged");
+    const doneCall = calls.find(c => (c[2] as Record<string, unknown>).prState === "done");
+    expect(mergedCall).toBeDefined();
+    expect(doneCall).toBeUndefined();
+
+    expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalledWith(
+      "poller", "auto-continue skipped",
+      expect.objectContaining({
+        worker: "bold-ash",
+        data: expect.objectContaining({ reason: "awaiting-input" }),
       }),
     );
   });
