@@ -18,6 +18,8 @@ Interactive Claude Code sessions running inside the dashboard. Each project can 
 ### Workflows
 A **workflow** is a `WorkflowDefinition` (state machine + state handlers + hook handlers) that drives a worker's lifecycle. Each worker has a `workflow` field on its registry entry; the poller dispatcher and the Claude Code hook dispatcher route through `getWorkflow(name)` rather than hard-coded switches. The `default` workflow reproduces the standard "review and merge" pipeline. Alternate workflows are introduced as data, not as forks of the dispatcher. Architectural rationale: `WORKFLOWS.md`. Author guide: `CLAUDE.md` § "Adding a new workflow".
 
+A `WorkflowDefinition` can also set `skipsReviewMerge: true` (the **botanist** design workflow): once its branch has commits ahead of base, the shared `handleWorking` routes it `working → merge-pending` directly, never launching a reviewer — its deliverable is a design document the operator already reviewed at the human gate, not code to critique. Before the transition it enforces that the committed diff touches only the publishable `docs/` boundary (`isPublishablePath`); a botanist that committed code parks in `failing` with `failingReason: "botanist-scope"` and an operator alert, and re-publishes automatically once the non-doc files are removed and re-pushed. The CI/merge gate still applies. See `src/dashboard/poller-review.ts` `handleSkipReviewMerge` and the `garden botanist publish` command.
+
 ### Rules System
 Claude sessions are configured with layered rules files injected via `--append-system-prompt-file`:
 
@@ -462,6 +464,13 @@ garden workers grow [<worker>] [--seed <text> | --seed-file <path> | --goal-file
                                    # Writes the seed to <worktree>/.garden/grow-goal.md (the durable,
                                    # operator-editable goal anchor) and flips entry.workflow to grow.
                                    # Re-conversion of an already-grow or trellis worker is rejected.
+garden botanist publish [<worker>] --to docs/<name>.md [--dry-run]
+                                   # Publish an approved botanist design artifact. Self-resolves the
+                                   # worker via $GARDEN_WORKER when no positional arg is given. Moves
+                                   # .garden/botanist/artifact.md to the tracked --to path (must be
+                                   # under docs/ and end in .md), commits it, and marks the worker
+                                   # done; the poller then merges it with no reviewer (skipsReviewMerge).
+                                   # --dry-run previews without changing anything.
 garden trellis new <project> <name>
                                    # Scaffold a trellis at <project>/.garden/trellises/<name>.md
                                    # (see WORKFLOWS.md § "Trellis workflow" for the workflow spec)
