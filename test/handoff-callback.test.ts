@@ -1,6 +1,7 @@
-// transitionState fires a one-shot handoff callback prompt at the parent
-// pane the first time a child reaches a terminal prState. These tests
-// exercise the chokepoint in poller-state.ts with a real registry on disk;
+// A one-shot handoff callback prompt fires at the parent pane the first time
+// a child reaches a terminal prState — from transitionState (the chokepoint)
+// or from handleDone (the Stop hook's trail-off done bypasses transitionState).
+// These tests exercise both sites in poller-state.ts with a real registry on disk;
 // continue.notifyHandoffCallback is mocked since the dispatch tests live in
 // continue.test.ts.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -224,6 +225,26 @@ describe("handleDone trail-off callback (no-merge completion)", () => {
         replyNote: "nothing to change",
       }),
     );
+  });
+
+  it("fires once across repeated pokes (handleDone runs on every poke of a quiescent done worker)", async () => {
+    await seedChild({
+      expectCallback: true,
+      parentProject: "fox",
+      parentWorker: "calm-bay",
+      worktreePath: "/wt/wolf/bold-ash",
+    });
+    const { handleDone } = await import("../src/dashboard/poller-state.js");
+    const { notifyHandoffCallback } = await import("../src/dashboard/continue.js");
+    const { findWorkerByName } = await import("../src/dashboard/registry.js");
+
+    handleDone("wolf", "/repo/wolf", "main", findWorkerByName("wolf", "bold-ash")!);
+    // Re-read the entry: the second poke sees the handoffCallbackFiredAt the
+    // first one persisted, which is what makes the dispatch one-shot.
+    handleDone("wolf", "/repo/wolf", "main", findWorkerByName("wolf", "bold-ash")!);
+    await new Promise(r => setImmediate(r));
+
+    expect(notifyHandoffCallback).toHaveBeenCalledTimes(1);
   });
 
   it("does not fire in handleDone for a plain child without the callback flag", async () => {
