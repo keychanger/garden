@@ -1258,7 +1258,8 @@ function buildClaudeLines(nowMs: number, paneWidth: number | undefined): string[
 
 // The Codex column: one bar per rolling window (already sorted smaller-first,
 // so a 5h window renders above the 30d), plus a credits line when the account
-// has pay-as-you-go credits. Mirrors renderMeterLine; resetsAt is epoch seconds.
+// has a nonzero pay-as-you-go balance. Mirrors renderMeterLine; resetsAt is
+// epoch seconds.
 function renderCodexColumn(
   data: CodexUsageData,
   nowMs: number,
@@ -1278,7 +1279,10 @@ function renderCodexColumn(
     const resetPart = fit.showReset ? `  ${dim(formatDurationBare(resetsAtMs - nowMs))}` : "";
     lines.push(`${label}  ${bar}  ${pctText}${resetPart}`);
   }
-  if (typeof data.creditBalance === "number") {
+  // A zero balance is the steady state for a subscription account with no
+  // pay-as-you-go credits — a permanent "$0.00" row carries no information, so
+  // the footer only appears once there is a balance to watch.
+  if (typeof data.creditBalance === "number" && data.creditBalance > 0) {
     lines.push(`${"credits".padEnd(CODEX_LABEL_WIDTH)}  ${dim(`$${data.creditBalance.toFixed(2)}`)}`);
   } else if (data.creditsUnlimited) {
     lines.push(`${"credits".padEnd(CODEX_LABEL_WIDTH)}  ${dim("unlimited")}`);
