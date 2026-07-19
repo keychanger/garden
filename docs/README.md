@@ -30,6 +30,7 @@ and the original may be deleted or kept as historical record. When a
 | Doc | Kind | Subject |
 |---|---|---|
 | [STATUS.md](STATUS.md) | spec | Worker status state machine — display states, detection machinery, transition invariants |
+| [SANDBOX-THREAT-MODEL.md](SANDBOX-THREAT-MODEL.md) | reference | Worker-sandbox security posture — trust boundaries, what the sandbox enforces (write confinement, egress allowlist, git-hook isolation, opt-in credential read-deny, registry guard), and the residual risks (Codex confinement, credential-deny verification, registry writability) |
 | [MULTI-MODEL.md](MULTI-MODEL.md) | design | Multi-model / multi-harness architecture. Phase 1 (provider layer: `garden provider`, worker env swap, reviewer pinning) shipped; harness adapters (Phases 2-5) are design targets. |
 | [TRACKS.md](TRACKS.md) | spec (design target) | Multi-track projects and the promotion pipeline. No code yet. |
 | [TRELLIS-PLAN.md](TRELLIS-PLAN.md) | design | Phased implementation plan for the trellis workflow. The trellis spec itself lives in `WORKFLOWS.md` § "Trellis workflow"; this doc is the plan that produced it. |
