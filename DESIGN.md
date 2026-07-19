@@ -441,7 +441,8 @@ garden reply [-m ...]              # Stage a freeform note from a handoff child 
 garden auto [on|off|status]        # Toggle the global auto-continue gate
 garden auto threshold <N>          # Set the usage-threshold percent (auto-disable above this)
 garden auto resume-on-reset on|off # Re-enable automatically after the usage window resets
-garden rebuild                     # Rebuild garden and relaunch dashboard
+garden rebuild                     # Rebuild garden and relaunch dashboard (macOS + iTerm only)
+garden version                     # Print the build version (also --version / -v)
 ```
 
 ### Workers and trellises

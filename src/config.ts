@@ -486,6 +486,17 @@ export function loadConfig(): GardenConfig {
       `${err instanceof Error ? err.message : String(err)}`,
     );
   }
+  // An empty file parses to null/undefined — that is a fresh config, not a
+  // fault. Anything else non-object (a bare scalar from a truncated or garbled
+  // write) is a corrupt file: assigning `.projects` onto it throws an opaque
+  // TypeError under ESM strict mode, so reject it with the same clear message
+  // as a syntax error.
+  if (loaded !== null && loaded !== undefined && typeof loaded !== "object") {
+    throw new Error(
+      `Failed to parse garden config at ${CONFIG_PATH}: ` +
+      `expected a YAML mapping, got ${typeof loaded}`,
+    );
+  }
   const parsed = (loaded as GardenConfig | null) ?? { projects: {} };
   if (!parsed.projects) parsed.projects = {};
   let dirty = false;

@@ -35,6 +35,31 @@ describe("loadConfig", () => {
     const config = loadConfig();
     expect(config.projects).toEqual({});
   });
+
+  // A corrupt config file must name itself in the error. Before this, a YAML
+  // syntax error surfaced as a raw js-yaml stack and a bare scalar as an
+  // opaque "Cannot create property 'projects' on string" TypeError — neither
+  // told the operator which file to fix.
+  it("throws a config-naming error on malformed YAML", async () => {
+    const { loadConfig, GARDEN_DIR, CONFIG_PATH } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, "projects:\n  a:\n   path: /a\n  - broken: [\n");
+    expect(() => loadConfig()).toThrow(/Failed to parse garden config at .*config\.yml/);
+  });
+
+  it("throws a config-naming error when the file is a bare scalar", async () => {
+    const { loadConfig, GARDEN_DIR, CONFIG_PATH } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, "just a garbled string\n");
+    expect(() => loadConfig()).toThrow(/expected a YAML mapping, got string/);
+  });
+
+  it("treats an empty config file as a fresh config, not a fault", async () => {
+    const { loadConfig, GARDEN_DIR, CONFIG_PATH } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, "");
+    expect(loadConfig().projects).toEqual({});
+  });
 });
 
 describe("getProject", () => {
