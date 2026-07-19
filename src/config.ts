@@ -477,7 +477,16 @@ export function loadConfig(): GardenConfig {
     );
   }
   const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
-  const parsed = (yaml.load(raw) as GardenConfig | null) ?? { projects: {} };
+  let loaded: unknown;
+  try {
+    loaded = yaml.load(raw);
+  } catch (err) {
+    throw new Error(
+      `Failed to parse garden config at ${CONFIG_PATH}: ` +
+      `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const parsed = (loaded as GardenConfig | null) ?? { projects: {} };
   if (!parsed.projects) parsed.projects = {};
   let dirty = false;
   if (migratePlots(parsed)) dirty = true;

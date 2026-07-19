@@ -6,6 +6,17 @@ import fs from "node:fs";
 import { shellEscape } from "../dashboard/tmux.js";
 
 export async function rebuild(_args: string[]): Promise<void> {
+  // This command drives iTerm and tmux via osascript to quit, rebuild, and
+  // relaunch the dashboard. It is macOS + iTerm specific; on any other platform
+  // it would kill the tmux session and never bring the dashboard back. Fail
+  // loudly with the manual steps instead.
+  if (process.platform !== "darwin") {
+    throw new Error(
+      "garden rebuild automates iTerm and tmux on macOS. On this platform, rebuild " +
+      "manually: run `git pull && npm run build`, then relaunch the dashboard.",
+    );
+  }
+
   const gardenRoot = findGardenRoot();
   if (!gardenRoot) {
     throw new Error("Could not find garden project root (no package.json found).");

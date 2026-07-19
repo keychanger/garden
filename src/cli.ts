@@ -1,5 +1,6 @@
 // CLI entry point: parses args, dispatches commands, and prints help.
 import { commands } from "./commands/index.js";
+import { GARDEN_VERSION } from "./version.js";
 
 const args = process.argv.slice(2);
 let commandName = args[0];
@@ -14,6 +15,11 @@ if (commandName === "_dashboard-claude") {
 
 if (!commandName || commandName === "help" || commandName === "--help") {
   printHelp();
+  process.exit(0);
+}
+
+if (commandName === "version" || commandName === "--version" || commandName === "-v") {
+  console.log(GARDEN_VERSION);
   process.exit(0);
 }
 

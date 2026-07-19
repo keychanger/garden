@@ -38,8 +38,9 @@ export async function kick(args: string[]): Promise<void> {
       ? ` (failingReason='${failingReason ?? "code"}'). Kick only auto-recovers ` +
         `review-side failures (${[...REVIEW_SIDE_FAILING_REASONS].join(", ")}); ` +
         `for code failures push a new commit, for trellis-flagged run ` +
-        `'garden trellis resume', for iteration-budget run ` +
-        `'garden trellis budget'.`
+        `'garden trellis resume', for an exhausted iteration budget inspect and ` +
+        `amend the trellis, then re-spawn the vine with a higher --max-iterations ` +
+        `(or kill it).`
       : `. Kick only re-arms workers stranded in working or review-side failing — ` +
         `for other states, investigate the poller log or the alerts panel.`;
     throw new Error(

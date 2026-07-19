@@ -15,7 +15,8 @@ export async function reset(_args: string[]): Promise<void> {
   }
 
   const projectCount = Object.keys(registry.workers).length;
-  console.log(`This will clear ${totalWorkers} worker(s) across ${projectCount} project(s).`);
+  console.log(`This will clear ${totalWorkers} worker(s) across ${projectCount} project(s)`);
+  console.log("and delete each worker's remote branch on origin.");
   console.log("Resumed sessions will no longer be available.");
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
