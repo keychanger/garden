@@ -19,10 +19,12 @@ Garden is not defending against a malicious operator, nor against a compromised 
 
 Two trust levels matter:
 
-- **Sandboxed** — worker agents (and headless reviewers/resolvers/ci-fix) run inside the
-  OS sandbox Claude Code configures from the worktree's `.claude/settings.json`
-  (Seatbelt on macOS, bubblewrap on Linux). A Codex worker runs inside Codex's own
-  `workspace-write` sandbox.
+- **Sandboxed** — worker agents, and the headless reviewer/resolver/ci-fix agents on the
+  claude-code path, run inside the OS sandbox Claude Code configures from the worktree's
+  `.claude/settings.json` (Seatbelt on macOS, bubblewrap on Linux) — the headless
+  `claude -p` runs in the worktree and inherits that config. A Codex worker runs inside
+  Codex's own `workspace-write` sandbox. The Codex *review family* is the exception and
+  is not in this tier — see residuals.
 - **Unsandboxed** — the poller, watchdog, and the operator's own shell run with the
   operator's full privileges. They read the worker registry and the operator's git
   checkout, and they execute git operations that fire git hooks.
@@ -83,8 +85,18 @@ reads or runs.
     via `config`. Narrowing the grant to exclude `hooks/`/`config` is pending validation
     that Codex's `writable_roots` supports the required granularity and that commit/push
     still work — until then, treat Codex workers as **do not run on untrusted repo
-    content**. Codex-as-reviewer is unaffected (it is pinned to a strong first-party
-    model and runs unsandboxed by design over already-committed diffs).
+    content**.
+- **A Codex reviewer runs with no sandbox at all.** `buildHeadlessCommand`
+  (`src/dashboard/harness/codex-core.ts`) invokes `codex exec
+  --dangerously-bypass-approvals-and-sandbox`, so a Codex reviewer/resolver/ci-fix agent
+  runs with the operator's full privileges — unlike the claude-code review family, whose
+  headless `claude -p` inherits the worktree sandbox. This is the sharpest residual in
+  the model: the reviewer's whole job is to read a diff and repo content a possibly
+  prompt-injected worker just wrote, and it does so unconfined. Selecting a Codex
+  reviewer (`role reviewer harness codex`, or a `*-codex` crew) is therefore a
+  trust decision about the repo content under review, not only about review quality.
+  Confining it is pending the same `writable_roots` validation as the worker case, plus
+  confirming `codex exec` can complete a review under a non-bypass sandbox.
 - **The registry is writable by workers.** The type guard is defense-in-depth; a worker
   with a valid-looking forged entry can still manipulate fleet state (e.g. retarget its
   own merge base). The principled fix — moving the registry out of the worker-writable
