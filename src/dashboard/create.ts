@@ -936,11 +936,19 @@ if [ -f ${wtPathLit}/pyproject.toml ] && grep -q '\\[tool.poetry\\]' ${wtPathLit
   (cd ${wtPathLit} && poetry install --no-interaction) 2>/dev/null || true
 fi
 
-# Install poll trigger hook
+# Install poll trigger hook. Scope core.hooksPath to THIS worktree only:
+# a plain --local write leaks into the shared .git/config, so the main checkout
+# would run this sandbox-writable hook unsandboxed and the operator's own hooks
+# go dormant (see scopeHooksPathToWorktree in git.ts). Enable worktree config,
+# clear a garden-owned leak in the shared config (operator values untouched),
+# then write in --worktree scope.
 mkdir -p ${hooksDirLit}
 printf '${hookContent}\\n' | atomic_write ${hookPathLit}
 chmod 755 ${hookPathLit}
-git -C ${wtPathLit} config --local core.hooksPath ${hooksDirLit}
+git -C ${wtPathLit} config extensions.worktreeConfig true
+_gh_leaked=$(git -C ${wtPathLit} config --local --get core.hooksPath 2>/dev/null || true)
+case "$_gh_leaked" in *.garden-hooks) git -C ${wtPathLit} config --local --unset core.hooksPath 2>/dev/null || true ;; esac
+git -C ${wtPathLit} config --worktree core.hooksPath ${hooksDirLit}
 
 # Install Claude Code hooks — settings.json (not .local.json, which Claude Code auto-edits and would clobber).
 # chmod 444: defense-in-depth so an agent can't trivially edit its own

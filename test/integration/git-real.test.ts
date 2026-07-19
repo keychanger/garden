@@ -360,3 +360,72 @@ describe("listBranches (real git)", () => {
     expect(listBranches(path.join(env.home, "not-a-repo"))).toEqual([]);
   });
 });
+
+describe("scopeHooksPathToWorktree / installPollTriggerHook (real git)", () => {
+  it("scopes hooksPath to the worktree without leaking into shared config", async () => {
+    const { createWorktree, scopeHooksPathToWorktree } =
+      await import("../../src/dashboard/git.js");
+    const wt = path.join(env.home, "wt", "scoped");
+    createWorktree(env.repoPath, wt, "scoped-branch");
+    const hooksDir = path.join(wt, ".garden-hooks");
+
+    scopeHooksPathToWorktree(wt, hooksDir);
+
+    // Applies to the worktree...
+    expect(git(wt, "config", "--worktree", "--get", "core.hooksPath")).toBe(hooksDir);
+    // ...but NOT to the shared config (the leak this fix exists to prevent):
+    // the main checkout must fall back to its own .git/hooks.
+    const sharedGet = spawnSync("git", ["config", "--local", "--get", "core.hooksPath"], {
+      cwd: env.repoPath, encoding: "utf8",
+    });
+    expect(sharedGet.status).not.toBe(0); // unset in shared config
+    expect(git(env.repoPath, "rev-parse", "--git-path", "hooks")).toMatch(/\.git\/hooks$/);
+  });
+
+  it("migrates a garden-owned leak already in the shared config", async () => {
+    const { createWorktree, scopeHooksPathToWorktree } =
+      await import("../../src/dashboard/git.js");
+    const wt = path.join(env.home, "wt", "leaked");
+    createWorktree(env.repoPath, wt, "leaked-branch");
+    // Simulate the old --local leak from a prior worker.
+    git(env.repoPath, "config", "--local", "core.hooksPath", "/somewhere/.garden-hooks");
+    expect(git(env.repoPath, "config", "--get", "core.hooksPath")).toBe("/somewhere/.garden-hooks");
+
+    scopeHooksPathToWorktree(wt, path.join(wt, ".garden-hooks"));
+
+    const sharedGet = spawnSync("git", ["config", "--local", "--get", "core.hooksPath"], {
+      cwd: env.repoPath, encoding: "utf8",
+    });
+    expect(sharedGet.status).not.toBe(0); // garden leak cleared
+  });
+
+  it("preserves an operator's own (non-garden) shared hooksPath", async () => {
+    const { createWorktree, scopeHooksPathToWorktree } =
+      await import("../../src/dashboard/git.js");
+    const wt = path.join(env.home, "wt", "operator");
+    createWorktree(env.repoPath, wt, "operator-branch");
+    git(env.repoPath, "config", "--local", "core.hooksPath", "/opt/company/githooks");
+
+    scopeHooksPathToWorktree(wt, path.join(wt, ".garden-hooks"));
+
+    // The operator's deliberate repo-wide hooksPath is left alone.
+    expect(git(env.repoPath, "config", "--local", "--get", "core.hooksPath")).toBe("/opt/company/githooks");
+  });
+
+  it("installPollTriggerHook writes the pre-push hook and scopes it per worktree", async () => {
+    const { createWorktree, installPollTriggerHook } =
+      await import("../../src/dashboard/git.js");
+    const wt = path.join(env.home, "wt", "poll");
+    createWorktree(env.repoPath, wt, "poll-branch");
+
+    installPollTriggerHook(wt, "garden", "myproject");
+
+    const hookPath = path.join(wt, ".garden-hooks", "pre-push");
+    expect(fs.existsSync(hookPath)).toBe(true);
+    expect(git(wt, "config", "--worktree", "--get", "core.hooksPath")).toBe(path.join(wt, ".garden-hooks"));
+    const sharedGet = spawnSync("git", ["config", "--local", "--get", "core.hooksPath"], {
+      cwd: env.repoPath, encoding: "utf8",
+    });
+    expect(sharedGet.status).not.toBe(0);
+  });
+});

@@ -680,6 +680,27 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(script).toMatch(/for pattern in .claude\/ .garden-hooks\/ .garden\/ .garden-done .garden-awaiting-input; do/);
   });
 
+  // The poll-trigger hooksPath must be worktree-scoped, never a plain --local
+  // write (which leaks into the shared .git/config and makes the operator's
+  // main checkout run this sandbox-writable hook unsandboxed).
+  it("scopes the poll-trigger hooksPath to the worktree, not the shared config", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "main",
+    );
+    const call = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    );
+    const script = call![1] as string;
+    expect(script).toContain("config extensions.worktreeConfig true");
+    expect(script).toContain("config --worktree core.hooksPath");
+    // The shell migration var must survive as shell (not JS-interpolated away).
+    expect(script).toContain("$_gh_leaked");
+    // The leak-prone form must be gone.
+    expect(script).not.toMatch(/config --local core\.hooksPath \S*\.garden-hooks/);
+  });
+
   // Regression: lex 2026-05-12 — operator merged a PR and deleted the branch
   // on origin while the main checkout was still parked on that branch. The
   // existing local refs/remotes/origin/<base> ref let branchExistsOnOrigin

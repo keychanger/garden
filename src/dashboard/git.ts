@@ -844,8 +844,31 @@ export function installPollTriggerHook(wtPath: string, _gardenRunner: string, pr
   // creation, before the worker has anything to push) but the cost is
   // a single function swap.
   atomicWriteFile(hookPath, hookScript, { mode: 0o755 });
-  git(wtPath, "config", "--local", "core.hooksPath", hooksDir);
+  scopeHooksPathToWorktree(wtPath, hooksDir);
   log.info("git", "installed poll trigger hook");
+}
+
+// Point core.hooksPath at this worktree's .garden-hooks WITHOUT leaking to the
+// shared repo config. Plain `git config --local core.hooksPath` writes to the
+// shared `.git/config`, so the MAIN checkout and every sibling worktree inherit
+// it: the operator's next commit in the main checkout would then run whichever
+// worker installed last — a sandbox-writable hook executing UNSANDBOXED in the
+// operator's tree — and the operator's own `.git/hooks/*` (e.g. a block-push
+// guard) go dormant. Enable worktree-scoped config, clear any garden-owned
+// value that already leaked into the shared config (an operator's own value is
+// left alone), then write this worktree's hooksPath in worktree scope so it
+// applies here only and the main checkout falls back to its default .git/hooks.
+// Idempotent: safe to re-run on every worker create / refresh / bounce.
+export function scopeHooksPathToWorktree(wtPath: string, hooksDir: string): void {
+  git(wtPath, "config", "extensions.worktreeConfig", "true");
+  let sharedHooksPath: string | null = null;
+  try {
+    sharedHooksPath = git(wtPath, "config", "--local", "--get", "core.hooksPath");
+  } catch { /* unset in shared config — nothing leaked */ }
+  if (sharedHooksPath && sharedHooksPath.endsWith(".garden-hooks")) {
+    try { git(wtPath, "config", "--local", "--unset", "core.hooksPath"); } catch { /* already clear */ }
+  }
+  git(wtPath, "config", "--worktree", "core.hooksPath", hooksDir);
 }
 
 function installDeps(wtPath: string): void {
