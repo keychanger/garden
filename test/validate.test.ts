@@ -92,7 +92,7 @@ import fs from "node:fs";
 import { validateAndHeal, sweepGhostEntries, healStatusPane, cleanContextFiles, cleanOrphanedReviewWindows } from "../src/dashboard/validate.js";
 import { readDashState, writeDashState, withStateLock } from "../src/dashboard/state.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, tmuxSplit } from "../src/dashboard/tmux.js";
-import { readRegistry, writeRegistry } from "../src/dashboard/registry.js";
+import { readRegistry, writeRegistry, mutateRegistry } from "../src/dashboard/registry.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 
 import { setPaneTitle, setPaneLabel, disablePaneInput } from "../src/dashboard/tmux.js";
@@ -637,6 +637,10 @@ describe("cleanOrphanedReviewWindows", () => {
     cleanOrphanedReviewWindows({
       workers: { p: [{ name: "w", sessionId: "s", task: "", reviewWindowName: "_p-review-w" }] },
     });
+    // The early return is the point: with nothing stale, the registry lock is
+    // never taken at all. Asserting on writeRegistry alone would also pass if
+    // the lock HAD been taken and the mutation merely reported no change.
+    expect(vi.mocked(mutateRegistry)).not.toHaveBeenCalled();
     expect(vi.mocked(writeRegistry)).not.toHaveBeenCalled();
   });
 });
