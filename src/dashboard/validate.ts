@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import { SESSIONS_DIR, loadConfig } from "../config.js";
 import { type DashboardState, readDashState, writeDashState, withStateLock } from "./state.js";
-import { mutateRegistry, readRegistry, updateWorkerFields, type WorkerRegistry } from "./registry.js";
+import { mutateRegistry, readRegistry, type WorkerRegistry } from "./registry.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, killWindowSafe, tmuxSplit, setPaneTitle, setPaneLabel, tmux, disablePaneInput, renameWindow } from "./tmux.js";
 import { log } from "./log.js";
 import { worktreeExists, removeWorktree, pruneWorktrees } from "./git.js";
@@ -462,17 +462,40 @@ export function cleanContextFiles(): void {
   } catch { /* sessions dir might not exist */ }
 }
 
-function cleanOrphanedReviewWindows(registry: WorkerRegistry): void {
-  // Clear reviewWindowName from entries whose windows no longer exist
+export function cleanOrphanedReviewWindows(registry: WorkerRegistry): void {
+  // Decide which review windows are dead OUTSIDE the registry lock: windowExists
+  // is a tmux fork, and holding the lock across a per-entry fork would stall
+  // concurrent hook writes. Record the exact window name we observed dead.
+  const stale: { project: string; worker: string; windowName: string }[] = [];
   for (const [projectName, entries] of Object.entries(registry.workers)) {
     for (const entry of entries) {
       if (entry.reviewWindowName && !windowExists(entry.reviewWindowName)) {
-        updateWorkerFields(projectName, entry.name, { reviewWindowName: undefined });
-        log.info("validate", "cleared stale reviewWindowName", {
-          worker: entry.name,
-          data: { project: projectName },
-        });
+        stale.push({ project: projectName, worker: entry.name, windowName: entry.reviewWindowName });
       }
     }
   }
+  if (stale.length === 0) return;
+
+  // Apply as a compare-and-clear against FRESH state. The snapshot above may be
+  // seconds old (validate probes panes/worktrees between reading it and here),
+  // and a new review can launch in that gap and set a NEW reviewWindowName.
+  // Clear only if the current value still equals the dead window we observed —
+  // a blind clear would wipe the live review's fresh window name, after which
+  // handleReviewing finds no window, re-runs the review, and kills the one still
+  // running (wasted paid work, and two aligned races park the worker failing).
+  mutateRegistry((reg) => {
+    let changed = false;
+    for (const { project, worker, windowName } of stale) {
+      const entry = reg.workers[project]?.find((e) => e.name === worker);
+      if (entry && entry.reviewWindowName === windowName) {
+        entry.reviewWindowName = undefined;
+        changed = true;
+        log.info("validate", "cleared stale reviewWindowName", {
+          worker,
+          data: { project },
+        });
+      }
+    }
+    return changed;
+  });
 }

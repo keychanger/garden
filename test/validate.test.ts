@@ -89,7 +89,7 @@ vi.mock("../src/dashboard/alerts.js", () => ({
 }));
 
 import fs from "node:fs";
-import { validateAndHeal, sweepGhostEntries, healStatusPane, cleanContextFiles } from "../src/dashboard/validate.js";
+import { validateAndHeal, sweepGhostEntries, healStatusPane, cleanContextFiles, cleanOrphanedReviewWindows } from "../src/dashboard/validate.js";
 import { readDashState, writeDashState, withStateLock } from "../src/dashboard/state.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, tmuxSplit } from "../src/dashboard/tmux.js";
 import { readRegistry, writeRegistry } from "../src/dashboard/registry.js";
@@ -573,5 +573,48 @@ describe("cleanContextFiles", () => {
     cleanContextFiles();
 
     expect(unlink).toHaveBeenCalledWith(`${DIR}/myproject-gone-worker-review-result.txt`);
+  });
+});
+
+describe("cleanOrphanedReviewWindows", () => {
+  it("clears reviewWindowName when the window is gone and still matches the snapshot", () => {
+    vi.mocked(windowExists).mockReturnValue(false); // the review window has died
+    const fresh = {
+      workers: { p: [{ name: "w", sessionId: "s", task: "", reviewWindowName: "_p-review-w" }] },
+    };
+    vi.mocked(readRegistry).mockReturnValue(fresh);
+
+    cleanOrphanedReviewWindows({
+      workers: { p: [{ name: "w", sessionId: "s", task: "", reviewWindowName: "_p-review-w" }] },
+    });
+
+    expect(vi.mocked(writeRegistry)).toHaveBeenCalled();
+    expect(fresh.workers.p[0].reviewWindowName).toBeUndefined();
+  });
+
+  it("does NOT clear a reviewWindowName that a new review set after the snapshot (compare-and-clear)", () => {
+    // The snapshot observed the OLD window dead, but by the time we write, a new
+    // review has relaunched and set a NEW window name. A blind clear would blind
+    // that live review; the compare-and-clear must leave it alone.
+    vi.mocked(windowExists).mockReturnValue(false);
+    const fresh = {
+      workers: { p: [{ name: "w", sessionId: "s", task: "", reviewWindowName: "_p-review-w-NEW" }] },
+    };
+    vi.mocked(readRegistry).mockReturnValue(fresh);
+
+    cleanOrphanedReviewWindows({
+      workers: { p: [{ name: "w", sessionId: "s", task: "", reviewWindowName: "_p-review-w-OLD" }] },
+    });
+
+    expect(vi.mocked(writeRegistry)).not.toHaveBeenCalled();
+    expect(fresh.workers.p[0].reviewWindowName).toBe("_p-review-w-NEW");
+  });
+
+  it("does nothing when no review windows are orphaned (no lock taken)", () => {
+    vi.mocked(windowExists).mockReturnValue(true); // window still alive
+    cleanOrphanedReviewWindows({
+      workers: { p: [{ name: "w", sessionId: "s", task: "", reviewWindowName: "_p-review-w" }] },
+    });
+    expect(vi.mocked(writeRegistry)).not.toHaveBeenCalled();
   });
 });
