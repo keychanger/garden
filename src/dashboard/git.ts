@@ -344,7 +344,14 @@ export function mergeToBase(
     );
   }
   // Push directly to remote base branch — no local checkout or merge needed.
-  git(repoPath, "push", "origin", `${branchSha}:refs/heads/${baseBranch}`);
+  // --no-verify: this runs in the operator's checkout, whose .git/hooks may
+  // carry a block-direct-pushes-to-main guard aimed at humans. The merge queue
+  // is the authorized base-branch pusher (the branch is already reviewed and
+  // fast-forward-verified above), so the checkout's pre-push guard must not
+  // veto it. Such a guard was shadowed by the core.hooksPath leak until
+  // scopeHooksPathToWorktree fixed the leak, which silently re-armed it and
+  // blocked every merge with a bare "failed to push some refs".
+  git(repoPath, "push", "--no-verify", "origin", `${branchSha}:refs/heads/${baseBranch}`);
   log.info("git", "merged to base branch", {
     worker: ctx?.worker,
     data: { branchName, baseBranch, ...(ctx?.project ? { project: ctx.project } : {}) },

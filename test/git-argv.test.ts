@@ -275,7 +275,7 @@ describe("mergeToBase", () => {
     expect(calls[1]).toEqual(["git", ["rev-parse", "origin/swift-oak"], expect.objectContaining({ cwd: "/repo" })]);
     expect(calls[2]).toEqual(["git", ["rev-parse", "origin/main"], expect.objectContaining({ cwd: "/repo" })]);
     expect(calls[3]).toEqual(["git", ["merge-base", "--is-ancestor", "def456", "abc123"], expect.objectContaining({ cwd: "/repo" })]);
-    expect(calls[4]).toEqual(["git", ["push", "origin", "abc123:refs/heads/main"], expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[4]).toEqual(["git", ["push", "--no-verify", "origin", "abc123:refs/heads/main"], expect.objectContaining({ cwd: "/repo" })]);
   });
 
   it("uses the specified base branch", () => {
@@ -288,7 +288,7 @@ describe("mergeToBase", () => {
     mergeToBase("/repo", "swift-oak", "develop");
     const calls = mockExec.mock.calls;
     expect(calls[2]).toEqual(["git", ["rev-parse", "origin/develop"], expect.objectContaining({ cwd: "/repo" })]);
-    expect(calls[4]).toEqual(["git", ["push", "origin", "abc123:refs/heads/develop"], expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[4]).toEqual(["git", ["push", "--no-verify", "origin", "abc123:refs/heads/develop"], expect.objectContaining({ cwd: "/repo" })]);
   });
 
   it("throws when not a fast-forward", () => {

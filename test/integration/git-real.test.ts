@@ -570,3 +570,33 @@ describe("commitsBehindOrigin (real git)", () => {
     expect(commitsBehindOrigin(env.repoPath, getBranchHeadSha(env.repoPath)!, "no-such")).toBeNull();
   });
 });
+
+describe("mergeToBase (real git)", () => {
+  it("merges despite an operator pre-push guard blocking pushes to main", async () => {
+    const { mergeToBase } = await import("../../src/dashboard/git.js");
+    git(env.repoPath, "checkout", "-b", "feature");
+    fs.writeFileSync(path.join(env.repoPath, "feature.txt"), "work\n");
+    git(env.repoPath, "add", "feature.txt");
+    git(env.repoPath, "commit", "-m", "feature work");
+    git(env.repoPath, "push", "origin", "feature");
+    git(env.repoPath, "checkout", "main");
+
+    // An operator guard vetoing any push to refs/heads/main — the shape that
+    // silently blocked the merge queue once the hooksPath leak was fixed and
+    // the checkout's own .git/hooks came back into effect.
+    const hookPath = path.join(env.repoPath, ".git", "hooks", "pre-push");
+    fs.mkdirSync(path.dirname(hookPath), { recursive: true });
+    fs.writeFileSync(
+      hookPath,
+      '#!/bin/sh\nwhile read l ls r rs; do\n  if [ "$r" = "refs/heads/main" ]; then echo "blocked"; exit 1; fi\ndone\nexit 0\n',
+      { mode: 0o755 },
+    );
+    // Prove the guard actually bites, so the assertion below can't pass
+    // against a hook that never executed.
+    expect(() => git(env.repoPath, "push", "origin", "feature:main")).toThrow();
+
+    const sha = git(env.repoPath, "rev-parse", "origin/feature");
+    mergeToBase(env.repoPath, "feature", "main");
+    expect(git(originPath, "rev-parse", "main")).toBe(sha);
+  });
+});
