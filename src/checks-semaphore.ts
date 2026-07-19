@@ -53,9 +53,17 @@ function slotOwner(slotFile: string): number | null {
 // one slot (the two-holder race dashboard/file-lock.ts documents and this mirrors
 // via reclaimStaleLock). renameSync is atomic, so exactly one claimant moves the
 // abandoned file to a private salvage name; the losers get ENOENT and fall through
-// to retry the create. Liveness is pid-only, with no age backstop: a checks slot
-// is legitimately held for the minutes a suite runs, so evicting on age (as
-// file-lock.ts does for its millisecond registry writes) would kill a live holder.
+// to retry the create.
+//
+// But the owner read and the rename are not atomic together: between them another
+// claimant can fully reclaim the slot and O_EXCL-create it with a LIVE pid, and our
+// rename would then move THAT live holder's file. So re-inspect the salvaged file
+// (mirroring reclaimStaleLock): free the slot only if its owner is still dead; if a
+// live pid reappeared, restore the file (when the slot is free again, so we never
+// clobber a newer holder) and back off rather than admit two holders on one slot.
+// Liveness is pid-only, with no age backstop: a checks slot is legitimately held for
+// the minutes a suite runs, so evicting on age (as file-lock.ts does for its
+// millisecond registry writes) would kill a live holder.
 function stealAbandonedSlot(slotFile: string): boolean {
   const owner = slotOwner(slotFile);
   if (owner !== null && processAlive(owner)) return false; // live holder — leave it
@@ -65,12 +73,18 @@ function stealAbandonedSlot(slotFile: string): boolean {
   } catch {
     return false; // lost the atomic steal, or already gone — retry the open
   }
-  try {
-    fs.unlinkSync(salvage);
-  } catch {
-    // Already gone.
+  const salvagedOwner = slotOwner(salvage);
+  if (salvagedOwner === null || !processAlive(salvagedOwner)) {
+    try { fs.unlinkSync(salvage); } catch { /* already gone */ }
+    return true;
   }
-  return true;
+  // Renamed away a slot a live holder had reclaimed — restore it best-effort
+  // (only if still free) and retry without stealing.
+  try {
+    if (!fs.existsSync(slotFile)) fs.renameSync(salvage, slotFile);
+    else fs.unlinkSync(salvage);
+  } catch { /* ignore */ }
+  return false;
 }
 
 // Claim any free slot in [0, slots). Returns the claimed slot index, or null

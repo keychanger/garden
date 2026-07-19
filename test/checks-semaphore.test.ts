@@ -93,6 +93,31 @@ describe("tryAcquireChecksSlot / releaseChecksSlot", () => {
     expect(residue).toEqual([]);
   });
 
+  it("does not steal a slot a live holder reclaimed between the owner-read and the rename", async () => {
+    const mod = await loadModule();
+    const slotFile = mod.checksSlotPath(0);
+    fs.mkdirSync(path.dirname(slotFile), { recursive: true });
+    // Dead owner, so the initial owner check clears the steal.
+    fs.writeFileSync(slotFile, "99999999\n2026-01-01T00:00:00Z\n");
+    // Model the race: our rename moves the file, but a live holder had already
+    // reclaimed it in the gap — make the salvaged file show THIS (live) pid the
+    // instant after the rename lands.
+    const realRename = fs.renameSync.bind(fs);
+    const spy = vi.spyOn(fs, "renameSync").mockImplementation((from: fs.PathLike, to: fs.PathLike) => {
+      realRename(from, to);
+      if (String(to).includes(".reclaiming.")) fs.writeFileSync(to, String(process.pid));
+    });
+
+    // The only slot now "belongs" to a live holder, so it must not be stolen.
+    expect(mod.tryAcquireChecksSlot(1)).toBe(null);
+    spy.mockRestore();
+
+    // Restored, not left dangling as a salvage file.
+    const residue = fs.readdirSync(path.dirname(slotFile)).filter((f) => f.includes(".reclaiming."));
+    expect(residue).toEqual([]);
+    expect(fs.existsSync(slotFile)).toBe(true);
+  });
+
   it("respects a slot held by a live process it does not own", async () => {
     const mod = await loadModule();
     fs.mkdirSync(path.dirname(mod.checksSlotPath(0)), { recursive: true });
