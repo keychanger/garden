@@ -30,14 +30,16 @@ export async function alerts(args: string[]): Promise<void> {
   const { unread, read } = splitBySeen(store.alerts, store.lastSeenAt ?? null);
 
   console.log("");
-  if (unread.length > 0) {
-    console.log(`  \x1b[1munread (${unread.length})\x1b[0m`);
-    for (const a of unread) console.log(formatAlertRow(a, now, false));
-    console.log("");
-  }
+  // Oldest first, read before unread: time runs down the screen, so the newest
+  // alert is the last thing printed and stays on screen when the list overflows.
   if (read.length > 0) {
     console.log(`  \x1b[2mread (${read.length})\x1b[0m`);
     for (const a of read) console.log(formatAlertRow(a, now, true));
+    console.log("");
+  }
+  if (unread.length > 0) {
+    console.log(`  \x1b[1munread (${unread.length})\x1b[0m`);
+    for (const a of unread) console.log(formatAlertRow(a, now, false));
     console.log("");
   }
   console.log("  \x1b[2m⌥a in the dashboard marks alerts read; 'garden alerts clear' removes them\x1b[0m");
@@ -55,10 +57,13 @@ function splitBySeen(all: Alert[], seenAt: string | null): { unread: Alert[]; re
 }
 
 // The ⌥a view. Same split and glyph vocabulary as the CLI, but laid out for the
-// narrow lower-left pane: newest first (an alert list is a scan, and the pane
-// shows its top), and each alert is a location header line plus its message
+// narrow lower-left pane: each alert is a location header line plus its message
 // wrapped underneath, rather than the CLI's wide single-line row. The pane
-// prints every alert and lets tmux hold the overflow in scrollback.
+// prints every alert and lets tmux hold the overflow in scrollback — the render
+// prints from the top, so an overflowing list scrolls the oldest alerts off the
+// top and leaves the newest on screen. That only reads correctly in
+// chronological order, so sections run read-then-unread and each section runs
+// oldest-first: the newest alert is the last line printed.
 export function renderAlertsPane(width: number, seenAt: string | null, now: number): string {
   const store = readAlerts();
   if (store.alerts.length === 0) return " \x1b[2mno alerts\x1b[0m";
@@ -70,10 +75,10 @@ export function renderAlertsPane(width: number, seenAt: string | null, now: numb
     if (lines.length > 0) lines.push("");
     const style = dim ? "\x1b[2m" : "\x1b[1m";
     lines.push(` ${style}${label} (${group.length})\x1b[0m`);
-    for (const a of [...group].reverse()) lines.push(...formatPaneRows(a, now, dim, width));
+    for (const a of group) lines.push(...formatPaneRows(a, now, dim, width));
   };
-  section("unread", unread, false);
   section("read", read, true);
+  section("unread", unread, false);
   return lines.join("\n");
 }
 

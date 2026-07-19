@@ -73,9 +73,9 @@ describe("garden alerts", () => {
     const text = (await captureConsoleLog(() => alerts([]))).map(strip).join("\n");
     expect(text).toMatch(/unread \(1\)/);
     expect(text).toMatch(/\bread \(1\)/);
-    // The read block prints after the unread block, so the boundary alert
-    // (classified read) appears after the "read (1)" header.
-    expect(text.indexOf("boundary")).toBeGreaterThan(text.search(/\bread \(1\)/));
+    // The read block prints before the unread block (chronological down the
+    // screen), so the boundary alert (classified read) precedes the unread one.
+    expect(text.indexOf("boundary")).toBeLessThan(text.indexOf("later"));
   });
 
   it("treats every alert as unread when never acknowledged", async () => {
@@ -131,12 +131,14 @@ describe("renderAlertsPane", () => {
       ],
     };
     const out = strip(renderAlertsPane(60, "2026-07-17T10:00:00Z", NOW));
-    expect(out).toContain("unread (1)");
     // Leading space anchors the read header — "unread (1)" contains "read (1)".
     const readHeader = out.indexOf(" read (1)");
+    const unreadHeader = out.indexOf("unread (1)");
     expect(readHeader).toBeGreaterThan(-1);
-    expect(out.indexOf("new one")).toBeLessThan(readHeader);
-    expect(out.indexOf("old one")).toBeGreaterThan(readHeader);
+    expect(unreadHeader).toBeGreaterThan(readHeader);
+    // Read (older) above unread (newer): time runs down the screen.
+    expect(out.indexOf("old one")).toBeLessThan(unreadHeader);
+    expect(out.indexOf("new one")).toBeGreaterThan(unreadHeader);
   });
 
   it("folds everything into read once the seen-mark catches up (the second ⌥a)", () => {
@@ -154,7 +156,7 @@ describe("renderAlertsPane", () => {
     expect(strip(renderAlertsPane(60, null, NOW))).toContain("unread (1)");
   });
 
-  it("lists newest first within a section", () => {
+  it("lists oldest first within a section, so the newest is the last line", () => {
     h.store = {
       lastSeenAt: undefined,
       alerts: [
@@ -163,7 +165,7 @@ describe("renderAlertsPane", () => {
       ],
     };
     const out = strip(renderAlertsPane(60, null, NOW));
-    expect(out.indexOf("newer")).toBeLessThan(out.indexOf("older"));
+    expect(out.indexOf("older")).toBeLessThan(out.indexOf("newer"));
   });
 
   it("heads each alert with its glyph, age and location, message wrapped under", () => {
