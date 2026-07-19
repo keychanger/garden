@@ -42,7 +42,13 @@ import path from "node:path";
 // carries. The heavy publish logic (git commit/move) is deliberately kept out
 // via the botanist-paths.ts leaf (only isPublishablePath rides in), verified by
 // the metafile below and by publishBotanistArtifact being absent from the bundle.
-const HOOK_BUNDLE_CEILING_BYTES = 230 * 1024;
+// Bumped 230->236kb for two client-readiness security changes: the js-yaml
+// 4.1.1->4.3.0 advisory upgrade (js-yaml rides in via config.ts's loadConfig,
+// which the hook graph carries) is the bulk, plus the reviewer-race
+// clean-worktree gate in poller-review.ts handleWorking (~0.3kb). Both are
+// legitimate reachable code, not a retained closure; SKILLS_BYTES_CEILING still
+// guards the skills-content regression this backstop was built for.
+const HOOK_BUNDLE_CEILING_BYTES = 236 * 1024;
 // skills.ts contributes only a tree-shaken sliver today (<100 bytes); a
 // retained skills bundle is ~28kb. The threshold sits well between.
 const SKILLS_BYTES_CEILING = 2 * 1024;
