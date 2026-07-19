@@ -36,7 +36,20 @@ function showUsage(): void {
 }
 
 async function refreshAndShow(): Promise<void> {
-  if (!meteredOrExplain()) return;
+  // Codex first, and OUTSIDE meteredOrExplain: the Codex meter is a separate
+  // quota pool, so a provider-only fleet (no Anthropic meter) still has one to
+  // refresh. Ungated by staleness — unlike the ambient watchdog/hook callers,
+  // this is the operator explicitly asking, which is worth one probe. Without
+  // it `garden usage refresh` left the Codex column showing whatever the last
+  // Codex run happened to report, with no way to move it.
+  try {
+    const { codexInFleet, probeCodexUsage } = await import("../dashboard/codex-usage.js");
+    if (codexInFleet()) probeCodexUsage();
+  } catch { /* best effort — never block the Claude half */ }
+  if (!meteredOrExplain()) {
+    try { refreshDashboard(); } catch { /* no dashboard running or pane gone */ }
+    return;
+  }
   // Explicit operator command: force past the auth/error backoff so a refresh
   // right after `garden login` re-hits the API instead of echoing a stale error.
   const snap = await refreshUsage(true);

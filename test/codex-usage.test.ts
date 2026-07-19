@@ -355,6 +355,52 @@ describe("codex usage meter", () => {
     });
   });
 
+  // probeCodexUsageIfStale is the gate every AMBIENT caller (watchdog tick, the
+  // Stop-hook usage backstop) must go through. Both fire on cadences garden does
+  // not control, so a miss here spends real Codex quota per firing.
+  describe("probeCodexUsageIfStale", () => {
+    function writeCodexProject(): void {
+      fs.mkdirSync(path.join(home, ".garden"), { recursive: true });
+      fs.writeFileSync(
+        path.join(home, ".garden", "config.yml"),
+        "projects:\n  p:\n    path: /tmp/p\n    harness: codex\n",
+      );
+    }
+
+    it("does not probe when the cached reading is younger than the interval", async () => {
+      writeCodexProject();
+      const mod = await import("../src/dashboard/codex-usage.js");
+      mod.writeCodexUsage({ windows: [{ windowMinutes: 43200, usedPercent: 12, resetsAt: 9_999_999_999 }] });
+      // A fresh snapshot must short-circuit before codexInFleet or any exec.
+      expect(mod.probeCodexUsageIfStale(Date.now())).toBe(false);
+    });
+
+    it("does not probe an all-Claude fleet even when the reading is ancient", async () => {
+      fs.mkdirSync(path.join(home, ".garden"), { recursive: true });
+      fs.writeFileSync(
+        path.join(home, ".garden", "config.yml"),
+        "projects:\n  garden:\n    path: /tmp/garden\n",
+      );
+      const mod = await import("../src/dashboard/codex-usage.js");
+      mod.writeCodexUsage({ windows: [{ windowMinutes: 43200, usedPercent: 12, resetsAt: 9_999_999_999 }] });
+      const future = Date.now() + 10 * mod.CODEX_PROBE_INTERVAL_MS;
+      expect(mod.probeCodexUsageIfStale(future)).toBe(false);
+    });
+
+    it("treats an absent snapshot as infinitely stale (age gate passes, fleet gate decides)", async () => {
+      fs.mkdirSync(path.join(home, ".garden"), { recursive: true });
+      fs.writeFileSync(
+        path.join(home, ".garden", "config.yml"),
+        "projects:\n  garden:\n    path: /tmp/garden\n",
+      );
+      const mod = await import("../src/dashboard/codex-usage.js");
+      // No codex-usage.json at all. The age gate must not swallow this case —
+      // it is the fleet gate that stops it, which this all-Claude config proves.
+      expect(mod.readCodexUsage()).toBeNull();
+      expect(mod.probeCodexUsageIfStale(Date.now())).toBe(false);
+    });
+  });
+
   it("coerces a string credit balance (Codex reports it as \"0\", not 0)", async () => {
     const { parseCodexRateLimits } = await import("../src/dashboard/codex-usage.js");
     const roll = path.join(home, "credits.jsonl");
@@ -369,6 +415,39 @@ describe("codex usage meter", () => {
       },
     }) + "\n");
     expect(parseCodexRateLimits(roll)!.creditBalance).toBe(12.5);
+  });
+
+  it("keeps a \"0\" string balance as 0, not as an absent reading", async () => {
+    // The exact shape the coercion was written for, and the one a truthiness
+    // test would drop: "0" must survive as the number 0 so the credits footer
+    // renders "$0.00" instead of vanishing.
+    const { parseCodexRateLimits } = await import("../src/dashboard/codex-usage.js");
+    const roll = path.join(home, "zero-credits.jsonl");
+    fs.writeFileSync(roll, JSON.stringify({
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        rate_limits: {
+          primary: { used_percent: 5, window_minutes: 10080, resets_at: 9_999_999_999 },
+          credits: { has_credits: false, unlimited: false, balance: "0" },
+        },
+      },
+    }) + "\n");
+    expect(parseCodexRateLimits(roll)!.creditBalance).toBe(0);
+  });
+
+  it("treats a non-numeric balance string as no balance", async () => {
+    const { parseCodexRateLimits } = await import("../src/dashboard/codex-usage.js");
+    const roll = path.join(home, "junk-credits.jsonl");
+    fs.writeFileSync(roll, JSON.stringify({
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        rate_limits: { primary: null, secondary: null, credits: { unlimited: false, balance: "n/a" } },
+      },
+    }) + "\n");
+    // No windows and no usable balance => not a reading at all.
+    expect(parseCodexRateLimits(roll)).toBeNull();
   });
 
   // captureCodexUsageLatest is the role-agnostic feed: it reads whatever rollout
