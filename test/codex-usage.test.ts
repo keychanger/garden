@@ -201,9 +201,8 @@ describe("codex usage meter", () => {
     expect(out).toContain("28%");       // Claude meter still renders
   });
 
-  it("captureCodexUsage parses a rollout and writes a snapshot readCodexUsage returns", async () => {
-    const now = Date.now();
-    const nowS = Math.floor(now / 1000);
+  it("parses a credit balance alongside the window", async () => {
+    const nowS = Math.floor(Date.now() / 1000);
     const roll = path.join(home, "capture.jsonl");
     fs.writeFileSync(roll, JSON.stringify({
       type: "event_msg",
@@ -215,22 +214,15 @@ describe("codex usage meter", () => {
         },
       },
     }) + "\n");
-    const { captureCodexUsage, readCodexUsage } = await import("../src/dashboard/codex-usage.js");
-    captureCodexUsage(roll);
-    const snap = readCodexUsage();
-    expect(snap).not.toBeNull();
-    expect(snap!.data.windows[0].usedPercent).toBe(42);
-    expect(snap!.data.creditBalance).toBe(5);
+    const { parseCodexRateLimits } = await import("../src/dashboard/codex-usage.js");
+    const data = parseCodexRateLimits(roll)!;
+    expect(data.windows[0].usedPercent).toBe(42);
+    expect(data.creditBalance).toBe(5);
   });
 
-  it("captureCodexUsage is a no-op on a missing path (prior snapshot preserved)", async () => {
-    const nowS = Math.floor(Date.now() / 1000);
-    const { writeCodexUsage, captureCodexUsage, readCodexUsage } = await import("../src/dashboard/codex-usage.js");
-    writeCodexUsage({ windows: [{ windowMinutes: 43200, usedPercent: 9, resetsAt: nowS + 1000 }] });
-    captureCodexUsage(undefined);
-    captureCodexUsage(path.join(home, "does-not-exist.jsonl"));
-    const snap = readCodexUsage();
-    expect(snap!.data.windows[0].usedPercent).toBe(9); // untouched
+  it("returns null for an unreadable rollout path", async () => {
+    const { parseCodexRateLimits } = await import("../src/dashboard/codex-usage.js");
+    expect(parseCodexRateLimits(path.join(home, "does-not-exist.jsonl"))).toBeNull();
   });
 
   // Captured verbatim from a real rollout (codex 0.144.5): Codex emits
@@ -265,18 +257,6 @@ describe("codex usage meter", () => {
       JSON.stringify({ type: "event_msg", payload: { type: "token_count", rate_limits: EMPTY_RATE_LIMITS } }),
     ].join("\n") + "\n");
     expect(parseCodexRateLimits(roll)!.windows[0].usedPercent).toBe(61);
-  });
-
-  it("an all-null tail does not clobber a good prior snapshot", async () => {
-    const nowS = Math.floor(Date.now() / 1000);
-    const roll = path.join(home, "alldull.jsonl");
-    fs.writeFileSync(roll, JSON.stringify({
-      type: "event_msg", payload: { type: "token_count", rate_limits: EMPTY_RATE_LIMITS },
-    }) + "\n");
-    const { writeCodexUsage, captureCodexUsage, readCodexUsage } = await import("../src/dashboard/codex-usage.js");
-    writeCodexUsage({ windows: [{ windowMinutes: 43200, usedPercent: 12, resetsAt: nowS + 1000 }] });
-    captureCodexUsage(roll);
-    expect(readCodexUsage()!.data.windows[0].usedPercent).toBe(12);
   });
 
   // captureCodexUsageLatest is the role-agnostic feed: it reads whatever rollout
@@ -347,6 +327,40 @@ describe("codex usage meter", () => {
       const { captureCodexUsageLatest, readCodexUsage } = await import("../src/dashboard/codex-usage.js");
       expect(captureCodexUsageLatest()).toBe(true);
       expect(readCodexUsage()!.data.windows[0].usedPercent).toBe(77);
+    });
+
+    // Write a rollout whose rate_limits never populate — a short run that ended
+    // before Codex filled the object in.
+    function writeBareRollout(day: string, name: string, mtimeMs: number): void {
+      const dir = path.join(home, ".codex", "sessions", ...day.split("-"));
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `rollout-${name}.jsonl`);
+      fs.writeFileSync(file, JSON.stringify({
+        type: "event_msg", payload: { type: "token_count", rate_limits: EMPTY_RATE_LIMITS },
+      }) + "\n");
+      fs.utimesSync(file, mtimeMs / 1000, mtimeMs / 1000);
+    }
+
+    it("leaves a good prior snapshot alone when no rollout has a populated reading", async () => {
+      const nowS = Math.floor(Date.now() / 1000);
+      writeBareRollout("2026-07-19", "2026-07-19T12-00-00-bare", Date.now());
+      const { captureCodexUsageLatest, writeCodexUsage, readCodexUsage } =
+        await import("../src/dashboard/codex-usage.js");
+      writeCodexUsage({ windows: [{ windowMinutes: 43200, usedPercent: 12, resetsAt: nowS + 1000 }] });
+      expect(captureCodexUsageLatest()).toBe(false);
+      expect(readCodexUsage()!.data.windows[0].usedPercent).toBe(12); // untouched
+    });
+
+    it("gives up after MAX_ROLLOUTS_TRIED bare rollouts rather than walking the whole day", async () => {
+      // Six bare rollouts newer than the one real reading: the 5-deep cap stops
+      // before reaching it, so the capture reports no move. This pins the bound
+      // that keeps each watchdog tick to a few tail reads.
+      const now = Date.now();
+      for (let i = 0; i < 6; i++) writeBareRollout("2026-07-19", `bare-${i}`, now - i * 1000);
+      writeRollout("2026-07-19", "real", 88, now - 60_000);
+      const { captureCodexUsageLatest, readCodexUsage } = await import("../src/dashboard/codex-usage.js");
+      expect(captureCodexUsageLatest()).toBe(false);
+      expect(readCodexUsage()).toBeNull();
     });
 
     it("skips the write when the reading is unchanged (idle fleet never churns)", async () => {

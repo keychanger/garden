@@ -27,8 +27,8 @@ import { SESSIONS_DIR } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
 
 const CODEX_USAGE_FILE = path.join(SESSIONS_DIR, "codex-usage.json");
-// rate_limits rides recent response events; the tail is plenty and keeps the
-// Stop-hook read cheap even as a rollout grows.
+// rate_limits rides recent response events; the tail is plenty and keeps each
+// watchdog-tick read cheap even as a rollout grows.
 const TAIL_BYTES = 256 * 1024;
 
 export interface CodexUsageWindow {
@@ -151,14 +151,6 @@ export function writeCodexUsage(data: CodexUsageData): void {
   } catch {
     /* best effort — a missed capture just leaves the prior snapshot */
   }
-}
-
-// Capture from one known rollout path. Best-effort: a missing rollout or
-// absent rate_limits leaves the prior snapshot in place.
-export function captureCodexUsage(rolloutPath: string | undefined): void {
-  if (!rolloutPath) return;
-  const data = parseCodexRateLimits(rolloutPath);
-  if (data) writeCodexUsage(data);
 }
 
 // Codex's rollout root. Deliberately duplicated from the harness adapter's
