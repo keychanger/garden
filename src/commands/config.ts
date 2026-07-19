@@ -158,6 +158,12 @@ function showConfigKey(project: ProjectConfig & { name: string }, key: SettableK
     else output({ [key]: null }, () => `(not set)`);
     return;
   }
+  if (key === "sandboxDenyCredentials") {
+    const v = project.sandboxDenyCredentials;
+    if (v !== undefined) output({ [key]: v }, () => String(v));
+    else output({ [key]: null }, () => `(not set)`);
+    return;
+  }
   const value = project[key];
   if (value) {
     output({ [key]: value }, () => String(value));

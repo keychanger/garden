@@ -692,6 +692,60 @@ describe("requireCiSuccess project config key", () => {
   });
 });
 
+// Opt-in credential read-deny for the worker sandbox (config.ts
+// ProjectConfig.sandboxDenyCredentials; consumed by buildSandboxConfig).
+// Boolean key, default off — so the read-back path must distinguish an
+// explicit `false` from an unset key, which the truthy fallthrough in
+// showConfigKey would not.
+describe("sandboxDenyCredentials project config key", () => {
+  async function setup() {
+    const { saveConfig, GARDEN_DIR, loadConfig } = await importConfig();
+    const { config } = await import("../src/commands/config.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
+    return { config, loadConfig };
+  }
+
+  it("isValidConfigKey accepts sandboxDenyCredentials", async () => {
+    const { isValidConfigKey } = await importConfig();
+    expect(isValidConfigKey("sandboxDenyCredentials")).toBe(true);
+  });
+
+  it("config() persists true/false and clears on the unset sentinel", async () => {
+    const { config, loadConfig } = await setup();
+    await config(["garden", "sandboxDenyCredentials", "true"]);
+    expect(loadConfig().projects.garden.sandboxDenyCredentials).toBe(true);
+    await config(["garden", "sandboxDenyCredentials", "false"]);
+    expect(loadConfig().projects.garden.sandboxDenyCredentials).toBe(false);
+    await config(["garden", "sandboxDenyCredentials", "unset"]);
+    expect(loadConfig().projects.garden.sandboxDenyCredentials).toBeUndefined();
+  });
+
+  it("config() rejects a non-boolean value", async () => {
+    const { config } = await setup();
+    await expect(config(["garden", "sandboxDenyCredentials", "yes"]))
+      .rejects.toThrow(/sandboxDenyCredentials must be 'true' or 'false'/);
+  });
+
+  // An explicitly-persisted `false` must read back as false, not "(not set)".
+  // It is a security toggle: the read-back is how an operator confirms the
+  // deny is off deliberately rather than never configured.
+  it("reads back an explicit false as false, not as unset", async () => {
+    const { config } = await setup();
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((m?: unknown) => { lines.push(String(m)); });
+    try {
+      await config(["garden", "sandboxDenyCredentials", "false"]);
+      lines.length = 0;
+      await config(["garden", "sandboxDenyCredentials"]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(lines.join("\n")).toContain("false");
+    expect(lines.join("\n")).not.toContain("not set");
+  });
+});
+
 // Holistic post-merge review mode — a three-value enum config key
 // ("off" | "shadow" | "fix"; see src/config.ts and the dispatcher in
 // src/dashboard/poller-holistic-review.ts). Beyond the sibling-key pattern
