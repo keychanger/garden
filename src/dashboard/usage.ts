@@ -1188,10 +1188,11 @@ function computeMeterFit(paneWidth: number | undefined): { barWidth: number; sho
 export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number): string {
   const claudeLines = buildClaudeLines(nowMs, paneWidth);
 
-  // A second meter for Codex, in the empty space to the right. It appears only
-  // once a Codex worker has reported rate_limits (captured at Stop-hook time —
-  // codex-usage.ts), so an all-Claude fleet's pane is unchanged. Claude keeps
-  // its full-width fit; Codex fills the remainder.
+  // A second meter for Codex, in the empty space to the right. It appears once
+  // any Codex process has reported rate_limits (read role-agnostically from the
+  // newest rollout on the watchdog tick — codex-usage.ts), so a fleet that has
+  // never run Codex leaves the pane unchanged. Claude keeps its full-width fit;
+  // Codex fills the remainder.
   const codexSnap = readCodexUsage();
   if (!codexSnap || codexSnap.data.windows.length === 0) {
     return finalizePane(["", ...claudeLines]);
