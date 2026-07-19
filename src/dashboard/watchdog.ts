@@ -38,7 +38,9 @@ import { triggerProjectPoll } from "./poller-fifo.js";
 import { addAlert } from "./alerts.js";
 import { log, truncateLog } from "./log.js";
 import { sweepSpawnDrafts } from "./spawn-draft.js";
-import { captureCodexUsageLatest, codexInFleet, probeCodexUsage, readCodexUsage } from "./codex-usage.js";
+import {
+  captureCodexUsageLatest, probeCodexUsageIfStale, CODEX_PROBE_INTERVAL_MS,
+} from "./codex-usage.js";
 
 export const WATCHDOG_TICK_MS = 60_000;
 export const WATCHDOG_THRESHOLD_MS = 5 * 60_000;
@@ -287,11 +289,6 @@ export function absorbSleep(gapMs: number): number {
 // directory — so it is throttled to hourly via the caller-owned timestamp.
 export const HOUSEKEEP_INTERVAL_MS = 60 * 60_000;
 
-// How stale the Codex snapshot may get before the watchdog spends a probe on
-// it. The windows this meters are 7d/30d, so this is about not showing a
-// reading from a previous billing plan — not about resolution.
-export const CODEX_PROBE_INTERVAL_MS = 6 * 60 * 60_000;
-
 // A spent bootstrap script older than this is safe to delete. The worker pane
 // runs `sh bootstrap-<project>-<branch>.sh` once, seconds after it is written,
 // and never touches it again (bounce/resume relaunch via `claude --resume`,
@@ -417,14 +414,17 @@ export async function runWatchdogLoop(): Promise<void> {
       // and never probes).
       const probeNow = Date.now();
       if (probeNow - lastCodexProbeAt >= CODEX_PROBE_INTERVAL_MS) {
+        // Advance unconditionally, before the attempt: the decision is re-made
+        // at most once per interval whatever its outcome. A probe that fired but
+        // captured nothing (codex offline, out of quota) must not be retried on
+        // the next 60s tick — that would spend quota per minute, not per plan
+        // change — and a decision that declined to probe need not be re-derived
+        // (two file reads) every tick until the next one does.
+        lastCodexProbeAt = probeNow;
         try {
-          const snapshotAge = probeNow - (readCodexUsage()?.capturedAt ?? 0);
-          if (snapshotAge >= CODEX_PROBE_INTERVAL_MS && codexInFleet()) {
-            lastCodexProbeAt = probeNow;
-            if (probeCodexUsage()) refreshDashboard();
-          }
+          // probeCodexUsageIfStale carries the snapshot-age + codexInFleet gates.
+          if (probeCodexUsageIfStale(probeNow)) refreshDashboard();
         } catch (err) {
-          lastCodexProbeAt = probeNow; // don't retry a hard failure every tick
           log.warn("watchdog", "codex usage probe failed", { data: { error: String(err) } });
         }
       }

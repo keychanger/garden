@@ -175,8 +175,8 @@ export function writeCodexUsage(data: CodexUsageData): void {
 }
 
 // Codex's rollout root. Deliberately duplicated from the harness adapter's
-// codexHome() rather than imported: this module is a leaf (fs + JSON only) and
-// importing codex-core.ts would drag its tmux/runner closure into every caller.
+// codexHome() rather than imported: importing codex-core.ts would drag its
+// tmux/runner closure into every caller of this module.
 function codexSessionsDir(): string {
   const home = process.env.CODEX_HOME || path.join(process.env.HOME || os.homedir(), ".codex");
   return path.join(home, "sessions");
@@ -268,8 +268,13 @@ export function codexInFleet(): boolean {
 }
 
 // A probe must not outlive a poll cycle; codex exec on a trivial prompt is a
-// few seconds (measured ~4s), so this is a hang guard, not a budget.
-const PROBE_TIMEOUT_MS = 60_000;
+// few seconds (measured ~4s), so this is a hang guard, not a budget. Kept well
+// under the watchdog's SLEEP_SLACK_MS (60s): probeCodexUsage runs synchronously
+// inside the watchdog loop body, and that loop reads its own iteration overrun
+// as machine-suspend time (absorbSleep). A probe allowed to block for a full
+// slack window would be misread as a suspend and silently discount a minute
+// from every live review's timeout.
+const PROBE_TIMEOUT_MS = 30_000;
 
 // Make Codex report its current quota. Callers MUST gate on codexInFleet().
 //
@@ -291,4 +296,22 @@ export function probeCodexUsage(): boolean {
     );
   } catch { /* see above — capture anything the attempt wrote */ }
   return captureCodexUsageLatest();
+}
+
+// How stale the cached reading may get before a probe is worth its quota. The
+// windows this meters are 7d/30d, so this is about not showing a reading from a
+// previous billing plan — not about resolution.
+export const CODEX_PROBE_INTERVAL_MS = 6 * 60 * 60_000;
+
+// The gated probe: every AMBIENT caller must use this rather than
+// probeCodexUsage directly. Both ambient call sites fire on a cadence garden
+// does not control — the watchdog's 60s tick and the Claude Code Stop hook's
+// usage-refresh backstop, which re-fires on every hook while the usage poller is
+// down — so an ungated probe there would spend real Codex quota per firing
+// instead of per plan-change. Only the operator's explicit `garden usage
+// refresh` bypasses this: that gesture IS the ask, and it is worth one probe.
+export function probeCodexUsageIfStale(nowMs: number = Date.now()): boolean {
+  if (nowMs - (readCodexUsage()?.capturedAt ?? 0) < CODEX_PROBE_INTERVAL_MS) return false;
+  if (!codexInFleet()) return false;
+  return probeCodexUsage();
 }

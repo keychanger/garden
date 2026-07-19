@@ -1206,10 +1206,14 @@ export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number):
   }
 
   const codexLines = renderCodexColumn(codexSnap.data, nowMs, computeMeterFit(rightAvail));
-  // Reuse the leading blank line as a two-column header (no extra pane row).
-  const gap = " ".repeat(COLUMN_GAP);
+  const codexWidth = Math.max(0, ...codexLines.map(visibleWidth));
+  const gap = " ".repeat(computeColumnGap(paneWidth, leftWidth, codexWidth));
+  // Keep the leading blank line: the two-column path used to spend it on the
+  // header row, which put the column labels hard against the pane border and
+  // read as cramped. The pane auto-sizes to its content, so the extra row costs
+  // nothing but the space it is there to provide.
   const header = `${padVisible(`${INDENT}${dim("claude")}`, leftWidth)}${gap}${dim("codex")}`;
-  const rows: string[] = [header];
+  const rows: string[] = ["", header];
   const n = Math.max(claudeLines.length, codexLines.length);
   for (let i = 0; i < n; i++) {
     const left = claudeLines[i] ?? "";
@@ -1289,9 +1293,33 @@ function codexWindowLabel(minutes: number): string {
   return `${minutes}m`;
 }
 
+// Minimum separation between the two columns — also what the fit check budgets
+// for, so the Codex column is always measured against its tightest layout.
 const COLUMN_GAP = 3;
+// Ceiling on the widened gap. Past this the columns stop reading as a pair and
+// start reading as two unrelated things at opposite edges, so extra slack is
+// left on the right instead of being poured into the gap.
+const MAX_COLUMN_GAP = 16;
+// Right margin held back when widening, mirroring INDENT on the left so the
+// content sits inside symmetric margins rather than running to the pane edge.
+const RIGHT_MARGIN = INDENT.length;
 const CODEX_LABEL_WIDTH = 7; // "credits" is the longest codex label
 const CODEX_MIN_WIDTH = MIN_BAR_WIDTH + CODEX_LABEL_WIDTH + 8; // label + bar + "  NN%"
+
+// Spread the two columns into the dead space on the right rather than leaving
+// them bunched at the left with a ragged empty margin. The Codex column is
+// rendered first at the minimum gap (so it is measured with the most room it
+// could have), then pushed right by whatever slack is left over — which is why
+// this can only ever consume existing emptiness, never overflow the pane.
+function computeColumnGap(
+  paneWidth: number | undefined,
+  leftWidth: number,
+  codexWidth: number,
+): number {
+  if (paneWidth === undefined) return COLUMN_GAP;
+  const slack = paneWidth - leftWidth - codexWidth - RIGHT_MARGIN;
+  return Math.max(COLUMN_GAP, Math.min(MAX_COLUMN_GAP, slack));
+}
 
 // Visible width ignoring the SGR color codes garden applies (the only escapes
 // present in these lines), for aligning the two columns.

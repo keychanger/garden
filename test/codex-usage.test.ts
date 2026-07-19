@@ -259,6 +259,59 @@ describe("codex usage meter", () => {
     expect(parseCodexRateLimits(roll)!.windows[0].usedPercent).toBe(61);
   });
 
+  describe("two-column spacing", () => {
+    const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "").replace(/\x1b\[K/g, "");
+    const widths = (out: string) => out.split("\n").map((l) => strip(l).length);
+
+    function seedBoth(now: number) {
+      seedClaude(now);
+      seedCodex({ windows: [{ windowMinutes: 10080, usedPercent: 0, resetsAt: Math.floor(now / 1000) + 600_000 }] }, now);
+    }
+
+    it("opens with a blank line so the column headers clear the pane border", async () => {
+      const now = Date.now();
+      seedBoth(now);
+      const { renderUsagePane } = await import("../src/dashboard/usage.js");
+      const lines = renderUsagePane(now, 112).split("\n");
+      expect(strip(lines[0]).trim()).toBe("");
+      expect(strip(lines[1])).toContain("claude");
+      expect(strip(lines[1])).toContain("codex");
+    });
+
+    it("spreads the columns into the right-hand slack instead of bunching them left", async () => {
+      const now = Date.now();
+      seedBoth(now);
+      const { renderUsagePane } = await import("../src/dashboard/usage.js");
+      const out = renderUsagePane(now, 112);
+      const header = out.split("\n").map(strip).find((l) => l.includes("codex"))!;
+      // The old fixed 3-col gap put "codex" immediately after the Claude column;
+      // widening pushes it right, consuming the dead space that was on the right.
+      expect(header.indexOf("codex")).toBeGreaterThan(55);
+    });
+
+    it("never overflows the pane, and holds a right margin", async () => {
+      const now = Date.now();
+      seedBoth(now);
+      const { renderUsagePane } = await import("../src/dashboard/usage.js");
+      for (const w of [90, 112, 140, 200]) {
+        const max = Math.max(...widths(renderUsagePane(now, w)));
+        expect(max).toBeLessThanOrEqual(w);
+      }
+      // At the operator's width the content sits inside symmetric margins:
+      // 4-space INDENT on the left, the same held back on the right.
+      expect(Math.max(...widths(renderUsagePane(now, 112)))).toBe(108);
+    });
+
+    it("caps the gap so a very wide pane does not strand the columns at opposite edges", async () => {
+      const now = Date.now();
+      seedBoth(now);
+      const { renderUsagePane } = await import("../src/dashboard/usage.js");
+      const at140 = Math.max(...widths(renderUsagePane(now, 140)));
+      const at200 = Math.max(...widths(renderUsagePane(now, 200)));
+      expect(at200).toBe(at140); // gap capped; extra slack stays on the right
+    });
+  });
+
   // The probe spends real Codex quota, so this gate is what stands between an
   // all-Claude garden and a pointless billed API call every 6h.
   describe("codexInFleet", () => {

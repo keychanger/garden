@@ -349,13 +349,17 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   if (sub === "_usage-refresh") {
     const { refreshUsage } = await import("./usage.js");
     const { refreshDashboard } = await import("./header.js");
-    const { codexInFleet, probeCodexUsage } = await import("./codex-usage.js");
+    const { probeCodexUsageIfStale } = await import("./codex-usage.js");
     await refreshUsage();
     // The Codex meter has no passive refresh path — reading the rollout only
-    // re-reports the last time Codex ran. Without this the command silently did
-    // nothing for the Codex column, which is exactly what it looked like.
+    // re-reports the last time Codex ran, so refresh the active half here too.
+    // Gated on staleness, NOT probed outright: this route is the Claude Code
+    // Stop hook's usage backstop (maybeRefreshUsage), which re-fires on every
+    // hook while the usage poller is down — an ungated probe would spend Codex
+    // quota per hook. The operator's explicit `garden usage refresh` is the
+    // ungated path.
     try {
-      if (codexInFleet()) probeCodexUsage();
+      probeCodexUsageIfStale();
     } catch { /* best effort — the Claude half already refreshed */ }
     try { refreshDashboard(); } catch { /* pane gone, not running, etc. */ }
     return;
