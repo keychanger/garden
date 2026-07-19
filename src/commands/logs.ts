@@ -335,11 +335,13 @@ export function wrapDetail(text: string, firstWidth: number, contWidth: number, 
       remaining = "";
       break;
     }
-    // Prefer a whitespace break within the last quarter of the window;
-    // otherwise hard-break so we don't leave a giant unbroken token.
-    const minBreak = Math.floor(w * 0.75);
+    // Greedy word wrap: break at the last space that fits, and hard-break only
+    // when the leading token alone overruns the window. This previously
+    // required the space to fall in the last quarter of the line, which meant
+    // any long unbreakable token — a filesystem path, the usual case in an
+    // alert — was cut mid-word rather than pushed to a line of its own.
     const ws = remaining.lastIndexOf(" ", w);
-    const breakAt = ws >= minBreak ? ws : w;
+    const breakAt = ws > 0 ? ws : w;
     lines.push(remaining.slice(0, breakAt).trimEnd());
     remaining = remaining.slice(breakAt).replace(/^\s+/, "");
   }

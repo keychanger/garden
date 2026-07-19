@@ -98,6 +98,16 @@ describe("garden alerts", () => {
     expect(raw).toMatch(/\x1b\[1;33m⚠/);
   });
 
+  it("keeps a multi-line message on a single row", async () => {
+    h.store = { lastSeenAt: undefined, alerts: [
+      a({ message: "ff-merge failed:\nAborting\nUpdating 9540d5a" }),
+    ] };
+    const lines = (await captureConsoleLog(() => alerts([]))).map(strip);
+    const row = lines.find(l => l.includes("ff-merge failed"))!;
+    expect(row).toContain("ff-merge failed: Aborting Updating 9540d5a");
+    expect(row).not.toContain("\n");
+  });
+
   it("emits the full store as JSON when not a TTY", async () => {
     h.store = { lastSeenAt: "2026-01-01T12:00:00Z", alerts: [a({ message: "z" })] };
     h.isTTY = false;
@@ -198,5 +208,56 @@ describe("renderAlertsPane", () => {
     const lines = strip(renderAlertsPane(40, null, NOW)).split("\n");
     expect(lines.length).toBeGreaterThan(2);
     for (const line of lines) expect(line.length).toBeLessThanOrEqual(40);
+  });
+
+  // Alert messages carry raw git stderr and raw agent markdown. Their embedded
+  // newlines used to render at column 0, escaping the gutter and visually
+  // running one alert into the next.
+  it("keeps a multi-line message inside the gutter", () => {
+    h.store = {
+      lastSeenAt: undefined,
+      alerts: [at("2026-07-17T11:00:00Z", {
+        message: "ff-merge failed:\npackage-lock.json\nAborting\nUpdating 9540d5a..65d6600",
+      })],
+    };
+    const lines = strip(renderAlertsPane(78, null, NOW)).split("\n");
+    // Line 0 is the section header, line 1 the alert header; the rest is body.
+    for (const line of lines.slice(2)) {
+      expect(line).toMatch(/^ {8}\S/); // indented into the message column
+    }
+    expect(lines.join("\n")).toContain("Aborting Updating");
+  });
+
+  it("strips markdown syntax out of an agent-authored message", () => {
+    h.store = {
+      lastSeenAt: undefined,
+      alerts: [at("2026-07-17T11:00:00Z", {
+        message: "Reviewer failed:\n\n## Review outcome\n\n**Step 1:** `git rebase` was clean.",
+      })],
+    };
+    const out = strip(renderAlertsPane(78, null, NOW));
+    expect(out).toContain("Review outcome Step 1: git rebase was clean.");
+    expect(out).not.toMatch(/[#*`]/);
+  });
+
+  it("caps an overlong message so one alert cannot dominate the pane", () => {
+    h.store = {
+      lastSeenAt: undefined,
+      alerts: [at("2026-07-17T11:00:00Z", { message: "word ".repeat(400).trim() })],
+    };
+    const lines = strip(renderAlertsPane(78, null, NOW)).split("\n");
+    expect(lines.slice(2)).toHaveLength(3); // section header + alert header + 3 body lines
+    expect(lines[lines.length - 1].endsWith("…")).toBe(true);
+  });
+
+  it("renders a read alert's message plainly, dimming only its gutter", () => {
+    h.store = {
+      lastSeenAt: "2026-07-17T12:00:00Z",
+      alerts: [at("2026-07-17T11:00:00Z", { message: "the actual problem" })],
+    };
+    const lines = renderAlertsPane(78, "2026-07-17T12:00:00Z", NOW).split("\n");
+    const body = lines[lines.length - 1];
+    expect(body).toContain("the actual problem");
+    expect(body).not.toMatch(/\x1b\[/); // no styling on the message itself
   });
 });

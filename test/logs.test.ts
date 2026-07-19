@@ -514,16 +514,25 @@ describe("wrapDetail", () => {
     expect(wrapDetail("hello", 20, 20, 4)).toEqual(["hello"]);
   });
 
-  it("breaks at whitespace within the last quarter of the window", () => {
+  it("breaks at the last whitespace that fits", () => {
     // width 20, "the quick brown fox jumps over" — lastIndexOf(" ", 20) is the
-    // space at index 19 (after "fox"), past the 75% threshold (= 15). Break
-    // preferred there; leading whitespace on the next line is consumed.
+    // space at index 19 (after "fox"). Leading whitespace on the next line is
+    // consumed.
     const result = wrapDetail("the quick brown fox jumps over", 20, 20, 4);
     expect(result[0]).toBe("the quick brown fox");
     expect(result[1]).toBe("jumps over");
   });
 
-  it("hard-breaks when no whitespace falls in the preferred range", () => {
+  it("pushes a long unbreakable token to its own line rather than cutting it", () => {
+    // A filesystem path is the common case in an alert message. The space
+    // before it falls early in the window, but breaking there keeps the path
+    // whole — a mid-path cut is far harder to read than a short line.
+    const result = wrapDetail("see /Users/joshua/code/keychange/garden now", 24, 24, 4);
+    expect(result[0]).toBe("see");
+    expect(result[1]).toBe("/Users/joshua/code/keych"); // longer than the window; hard-broken
+  });
+
+  it("hard-breaks when no whitespace falls in the window at all", () => {
     // No spaces at all — single token longer than the window.
     const result = wrapDetail("aaaaaaaaaabbbbbbbbbbcccc", 10, 10, 4);
     expect(result[0]).toBe("aaaaaaaaaa");

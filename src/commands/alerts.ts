@@ -58,7 +58,8 @@ function splitBySeen(all: Alert[], seenAt: string | null): { unread: Alert[]; re
 
 // The ⌥a view. Same split and glyph vocabulary as the CLI, but laid out for the
 // narrow lower-left pane: each alert is a location header line plus its message
-// wrapped underneath, rather than the CLI's wide single-line row. The pane
+// wrapped underneath (condensed to prose first — see condenseMessage), rather
+// than the CLI's wide single-line row. The pane
 // prints every alert and lets tmux hold the overflow in scrollback — the render
 // prints from the top, so an overflowing list scrolls the oldest alerts off the
 // top and leaves the newest on screen. That only reads correctly in
@@ -84,37 +85,56 @@ export function renderAlertsPane(width: number, seenAt: string | null, now: numb
 
 // Message column starts under the glyph+age gutter (" ✖ 12m  " = 8 cols).
 const PANE_GUTTER = 8;
-const PANE_MAX_MESSAGE_LINES = 4;
+const PANE_MAX_MESSAGE_LINES = 3;
+
+// Alert messages are not authored for display: they embed raw git stderr
+// (multi-line, "Aborting\nUpdating …") and raw agent markdown (the reviewer
+// alert splices in 300 chars of a model's reply, headings and bold markers
+// intact). wrapDetail measures columns but does not touch newlines, so those
+// embedded breaks escaped the gutter and rendered at column 0, and the markdown
+// syntax read as litter. Flatten to a single prose line here, at the display
+// layer — the store and `garden logs` keep the message verbatim.
+export function condenseMessage(message: string): string {
+  return message
+    .replace(/```[\s\S]*?```/g, " ")     // fenced code blocks carry no gist
+    .replace(/^\s*#{1,6}\s+/gm, "")      // markdown headings
+    .replace(/\*\*|__|`/g, "")           // bold/code emphasis markers
+    .replace(/^\s*[-*]\s+/gm, "· ")      // list bullets survive as a mid-line marker
+    .replace(/\s+/g, " ")                // every remaining break becomes a space
+    .trim();
+}
 
 function formatPaneRows(a: Alert, now: number, read: boolean, width: number): string[] {
   const ago = formatAgo(now - Date.parse(a.ts)).padStart(3);
   const loc = a.worker ? `${a.project}/${a.worker}` : a.project;
   const glyph = a.level === "error" ? "✖" : "⚠";
+  // Read alerts recede in the gutter only. The message is the whole reason the
+  // operator opened the view — greying it out made an already-noisy pane harder
+  // to skim, and the section header plus the dim gutter already say "seen".
   const head = read
-    ? ` \x1b[90m${glyph} ${ago}  ${loc}\x1b[0m`
+    ? ` \x1b[2m${glyph} ${ago}  ${loc}\x1b[0m`
     : ` ${a.level === "error" ? "\x1b[1;31m" : "\x1b[1;33m"}${glyph}\x1b[0m \x1b[2m${ago}\x1b[0m  \x1b[1m${loc}\x1b[0m`;
 
-  // An unread alert's message is the information the operator came for, so it
-  // renders plain (as it does in the CLI); only a read alert's recedes to grey.
   const textWidth = Math.max(10, width - PANE_GUTTER - 1);
-  const body = wrapDetail(a.message, textWidth, textWidth, PANE_MAX_MESSAGE_LINES)
-    .map(line => `${" ".repeat(PANE_GUTTER)}${read ? `\x1b[90m${line}\x1b[0m` : line}`);
+  const body = wrapDetail(condenseMessage(a.message), textWidth, textWidth, PANE_MAX_MESSAGE_LINES)
+    .map(line => `${" ".repeat(PANE_GUTTER)}${line}`);
   return [head, ...body];
 }
 
 function formatAlertRow(a: Alert, now: number, read: boolean): string {
   const ago = formatAgo(now - Date.parse(a.ts)).padStart(4);
   const loc = a.worker ? `${a.project}/${a.worker}` : a.project;
+  // Single-line row, so an un-condensed message would break the row apart at
+  // its own newlines — same reason as the pane.
+  const message = condenseMessage(a.message);
   if (read) {
-    // Fully dimmed — the level is still legible from the glyph, but read alerts
-    // recede so the unread block draws the eye.
     const glyph = a.level === "error" ? "✖" : "⚠";
-    return `    \x1b[90m${glyph} ${ago}  ${loc}  ${a.message}\x1b[0m`;
+    return `    \x1b[2m${glyph} ${ago}  ${loc}\x1b[0m  ${message}`;
   }
   // Unread: colored glyph by level (heavy-x for error, warning sign for warn),
   // dim relative age, bold location.
   const glyph = a.level === "error" ? "\x1b[1;31m✖\x1b[0m" : "\x1b[1;33m⚠\x1b[0m";
-  return `    ${glyph} \x1b[2m${ago}\x1b[0m  \x1b[1m${loc}\x1b[0m  ${a.message}`;
+  return `    ${glyph} \x1b[2m${ago}\x1b[0m  \x1b[1m${loc}\x1b[0m  ${message}`;
 }
 
 // Compact relative age: seconds under a minute, then minutes/hours/days. Bounded
