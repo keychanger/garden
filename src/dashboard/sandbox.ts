@@ -5,9 +5,17 @@ export interface SandboxConfig {
   autoAllowBashIfSandboxed: true;
   filesystem: {
     allowWrite: string[];
+    // OS-enforced read-deny for sandboxed subprocesses. Emitted only when the
+    // project sets sandboxDenyCredentials (default off). See config.ts.
+    denyRead?: string[];
   };
   network: {
     allowedDomains: string[];
+  };
+  // Claude Code's purpose-built credential guard (mode "deny" is honored in a
+  // repo's .claude/settings.json; "mask" is not, so it is never emitted here).
+  credentials?: {
+    files: { path: string; mode: "deny" }[];
   };
 }
 
@@ -49,6 +57,20 @@ const DEFAULT_ALLOW_WRITE: readonly string[] = [
   "/tmp",
 ];
 
+// Operator credential paths a sandboxed subprocess is denied from reading when
+// a project opts into sandboxDenyCredentials. Read-deny is OS-enforced and,
+// per Claude Code's docs, applies to sandboxed Bash subprocesses only — the
+// parent claude/reviewer authenticates before the sandbox boundary, so its own
+// Anthropic auth is unaffected. Kept deliberately narrow: credential material,
+// not general home-dir reads (which many build tools need).
+const DENIED_CREDENTIAL_PATHS: readonly string[] = [
+  "~/.claude",
+  "~/.ssh",
+  "~/.aws/credentials",
+  "~/.config/gcloud",
+  "~/.azure",
+];
+
 export function buildSandboxConfig(opts: {
   worktreePath: string;
   project: ProjectConfig;
@@ -74,7 +96,7 @@ export function buildSandboxConfig(opts: {
   const allowWrite = new Set<string>(DEFAULT_ALLOW_WRITE);
   allowWrite.add(opts.worktreePath);
 
-  return {
+  const sandbox: SandboxConfig = {
     enabled: true,
     autoAllowBashIfSandboxed: true,
     filesystem: {
@@ -84,4 +106,16 @@ export function buildSandboxConfig(opts: {
       allowedDomains: Array.from(domains),
     },
   };
+
+  // Opt-in credential read-deny (default off; see ProjectConfig.sandboxDenyCredentials).
+  // Emit both the purpose-built credentials guard and filesystem.denyRead so the
+  // block holds across Claude Code versions.
+  if (opts.project.sandboxDenyCredentials) {
+    sandbox.filesystem.denyRead = [...DENIED_CREDENTIAL_PATHS];
+    sandbox.credentials = {
+      files: DENIED_CREDENTIAL_PATHS.map(path => ({ path, mode: "deny" as const })),
+    };
+  }
+
+  return sandbox;
 }

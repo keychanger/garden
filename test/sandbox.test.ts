@@ -122,4 +122,31 @@ describe("buildSandboxConfig", () => {
     const occurrences = cfg.filesystem.allowWrite.filter((p) => p === "/tmp").length;
     expect(occurrences).toBe(1);
   });
+
+  it("emits no credential read-deny by default (opt-in, must not change existing fleets)", () => {
+    const cfg = buildSandboxConfig({
+      worktreePath: "/wt/alpha",
+      project: { path: "/repo" },
+      remoteHost: null,
+    });
+    expect(cfg.credentials).toBeUndefined();
+    expect(cfg.filesystem.denyRead).toBeUndefined();
+  });
+
+  it("denies read of operator credentials when sandboxDenyCredentials is set", () => {
+    const cfg = buildSandboxConfig({
+      worktreePath: "/wt/alpha",
+      project: { path: "/repo", sandboxDenyCredentials: true },
+      remoteHost: null,
+    });
+    // Purpose-built credentials guard, deny mode only (mask is ignored in repo
+    // settings, so never emitted).
+    expect(cfg.credentials?.files).toEqual(
+      expect.arrayContaining([{ path: "~/.claude", mode: "deny" }, { path: "~/.ssh", mode: "deny" }]),
+    );
+    expect(cfg.credentials?.files.every((f) => f.mode === "deny")).toBe(true);
+    // Plus the OS-level read-deny for the same paths.
+    expect(cfg.filesystem.denyRead).toContain("~/.claude");
+    expect(cfg.filesystem.denyRead).toContain("~/.ssh");
+  });
 });

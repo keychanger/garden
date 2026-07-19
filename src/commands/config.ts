@@ -91,6 +91,10 @@ function showProjectConfig(project: ProjectConfig & { name: string }): void {
       if (project.requireCiSuccess !== undefined) {
         data.requireCiSuccess = String(project.requireCiSuccess);
       }
+    } else if (key === "sandboxDenyCredentials") {
+      if (project.sandboxDenyCredentials !== undefined) {
+        data.sandboxDenyCredentials = String(project.sandboxDenyCredentials);
+      }
     } else if (project[key]) {
       data[key] = project[key]!;
     }

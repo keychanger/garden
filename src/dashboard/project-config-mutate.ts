@@ -25,7 +25,8 @@ import {
 // <value>` and the project menu. `path` is deliberately excluded (set via
 // `garden add`); crew and the review roles have their own subcommands.
 export const SETTABLE_KEYS = [
-  "baseBranch", "checks", "postMerge", "sandboxDomains", "claudeProfile", "provider",
+  "baseBranch", "checks", "postMerge", "sandboxDomains", "sandboxDenyCredentials",
+  "claudeProfile", "provider",
   "harness", "model", "effort", "logColor", "trellisDir", "maxTrellisIterations",
   "trellisOpusFallback", "maxGrowIterations", "requireCiSuccess", "holisticReview",
 ] as const;
@@ -200,6 +201,16 @@ export function setProjectConfigKey(projectName: string, key: SettableKey, value
       message = `Set ${key} = ${value} for ${projectName}`;
     } else {
       throw new Error(`requireCiSuccess must be 'true' or 'false', got '${value}'`);
+    }
+  } else if (key === "sandboxDenyCredentials") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.sandboxDenyCredentials;
+      message = `Cleared ${key} for ${projectName} (default: false)`;
+    } else if (value === "true" || value === "false") {
+      project.sandboxDenyCredentials = value === "true";
+      message = `Set ${key} = ${value} for ${projectName}`;
+    } else {
+      throw new Error(`sandboxDenyCredentials must be 'true' or 'false', got '${value}'`);
     }
   } else if (key === "holisticReview") {
     if (value === "" || value === "unset" || value === "null") {

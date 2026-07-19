@@ -39,6 +39,17 @@ export interface ProjectConfig {
   checks?: string;
   postMerge?: string;
   sandboxDomains?: string[];
+  // When true, the worker sandbox additionally DENIES READ of the operator's
+  // credential paths (~/.claude, ~/.ssh, cloud creds) via Claude Code's
+  // sandbox.credentials (mode deny) + filesystem.denyRead. Those are
+  // OS-enforced (Seatbelt/bubblewrap) and, per the docs, apply to sandboxed
+  // Bash SUBPROCESSES only — not the parent claude/reviewer, which authenticate
+  // before the sandbox boundary. That parent-auth timing is not doc-guaranteed,
+  // and getting it wrong would break reviewer auth fleet-wide, so this defaults
+  // OFF: enable per project only after verifying a headless `claude -p` still
+  // authenticates in a sandboxed worktree carrying this config. Requires Claude
+  // Code >= 2.1.187. claude-code workers only (Codex has no per-path read-deny).
+  sandboxDenyCredentials?: boolean;
   claudeProfile?: string;
   // Model provider for this project's WORKERS (see docs/MULTI-MODEL.md
   // "Layer 1"). Names an entry in GardenConfig.providers. Reviewer,
@@ -136,7 +147,8 @@ export interface RoleTarget {
 export const DEFAULT_HOLISTIC_REVIEW = "fix";
 
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
-  "path", "baseBranch", "checks", "postMerge", "sandboxDomains", "claudeProfile", "provider",
+  "path", "baseBranch", "checks", "postMerge", "sandboxDomains", "sandboxDenyCredentials",
+  "claudeProfile", "provider",
   "harness", "model", "effort", "logColor", "trellisDir", "maxTrellisIterations",
   "trellisOpusFallback", "maxGrowIterations", "requireCiSuccess", "holisticReview",
 ]);
