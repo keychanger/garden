@@ -167,6 +167,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   getDiffNumstat: vi.fn(() => ({ files: 0, insertions: 0, deletions: 0 })),
   getCommitSummary: vi.fn(() => "abc123 fix something"),
   hasCommitsAhead: vi.fn(() => true),
+  isWorktreeDirty: vi.fn(() => false),
   getNewCommitSummary: vi.fn(() => "def456 address review feedback"),
   resolveBaseBranch: vi.fn(() => "main"),
   getWorkerBaseBranch: vi.fn((entry: { baseBranch?: string }) => entry.baseBranch ?? "main"),
@@ -245,6 +246,7 @@ import {
   fastForwardBase,
   getChangedFiles, getChangedFilesBetween,
   getCommitSummary, hasCommitsAhead, getNewCommitSummary, getDiffAgainstBase,
+  isWorktreeDirty,
   syncWorktreeToRemote,
   ensureNoRebaseInProgress, hasRebaseInProgress, isAncestor, getUnmergedFiles,
 } from "../src/dashboard/git.js";
@@ -291,6 +293,7 @@ beforeEach(() => {
   vi.mocked(getDiffAgainstBase).mockReturnValue("diff --git a/file.ts b/file.ts");
   vi.mocked(getCommitSummary).mockReturnValue("abc123 fix something");
   vi.mocked(hasCommitsAhead).mockReturnValue(true);
+  vi.mocked(isWorktreeDirty).mockReturnValue(false);
   vi.mocked(getNewCommitSummary).mockReturnValue("def456 address review feedback");
   vi.mocked(sweepGhostEntries).mockReturnValue(false);
   vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject", checks: undefined } as ReturnType<typeof tryGetProject>);
@@ -422,16 +425,18 @@ describe("poll — working state", () => {
     );
   });
 
-  it("proceeds with review launch when agentStatus=working is stale (>15min lastEventAt)", () => {
+  it("proceeds with review launch when agentStatus=working is stale and the worktree is clean", () => {
     // Hung-Claude case: status is pinned to "working" but no hook has fired
-    // in over 15 minutes. Without this escape hatch, `garden kick` on a
-    // failing worker whose Claude hung would never actually start the review.
+    // in over an hour. Without this escape hatch, `garden kick` on a failing
+    // worker whose Claude hung would never actually start the review. Only
+    // proceeds because the worktree is clean (default mock) — nothing to clobber.
+    vi.mocked(isWorktreeDirty).mockReturnValue(false);
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "working",
         agentStatus: "working",
         pendingReviewAt: Date.now(),
-        lastEventAt: Date.now() - 20 * 60 * 1000, // 20min ago: stale
+        lastEventAt: Date.now() - 70 * 60 * 1000, // 70min ago: past the 60min ceiling
       }),
     ]);
 
@@ -444,6 +449,53 @@ describe("poll — working state", () => {
     );
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "reviewing" }),
+    );
+  });
+
+  it("defers review launch when agentStatus=working is stale but the worktree is dirty", () => {
+    // A worker silently running `garden checks` looks identical to a hung one
+    // (a single Bash call fires no hook for up to the semaphore wait ceiling).
+    // The reviewer force-pushes in this same worktree, so uncommitted edits
+    // must never be clobbered: defer even though the status looks stale.
+    vi.mocked(isWorktreeDirty).mockReturnValue(true);
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "working",
+        agentStatus: "working",
+        pendingReviewAt: Date.now(),
+        lastEventAt: Date.now() - 70 * 60 * 1000, // stale
+      }),
+    ]);
+
+    poll("myproject");
+
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(newDashboardWindow).not.toHaveBeenCalledWith(
+      expect.stringContaining("review"),
+      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
+    );
+  });
+
+  it("defers review launch when agentStatus=working is stale but worktree dirtiness is indeterminate", () => {
+    // isWorktreeDirty returns null when the git call itself failed. Treat that
+    // as "not provably clean" and defer, rather than risk a force-push over
+    // live edits we couldn't rule out.
+    vi.mocked(isWorktreeDirty).mockReturnValue(null);
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "working",
+        agentStatus: "working",
+        pendingReviewAt: Date.now(),
+        lastEventAt: Date.now() - 70 * 60 * 1000, // stale
+      }),
+    ]);
+
+    poll("myproject");
+
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(newDashboardWindow).not.toHaveBeenCalledWith(
+      expect.stringContaining("review"),
+      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
     );
   });
 

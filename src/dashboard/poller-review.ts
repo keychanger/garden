@@ -18,7 +18,7 @@ import { getHarnessCore } from "./harness/core.js";
 import { setDoneSentinel } from "./continue.js";
 import {
   forcePushBranch, getBranchHeadSha, getCommitSummary, getRemoteTrackingSha,
-  getDiffNumstat, hasCommitsAhead, getChangedFiles,
+  getDiffNumstat, hasCommitsAhead, getChangedFiles, isWorktreeDirty,
 } from "./git.js";
 import { getWorkflow } from "./workflows/index.js";
 import { isPublishablePath } from "./botanist-paths.js";
@@ -103,8 +103,15 @@ export const UNPARSEABLE_REVIEW_BACKOFF_MS = 15_000; // 15s
 // died mid-stream, in-flight bug). Hooks fire on every tool use and on Stop,
 // so a healthy working Claude emits something well inside this window;
 // silence past the threshold means the status is no longer accurate.
-// Tuned conservative enough that a slow think-then-act turn won't trip it.
-export const STALE_AGENT_STATUS_MS = 15 * 60 * 1000;
+//
+// Must exceed the longest legitimate hook-silent stretch: a single Bash call
+// emits no hook until it completes, and a worker running `garden checks` can
+// sit in one such call for the checks-semaphore wait ceiling
+// (DEFAULT_MAX_WAIT_MS = 45m, checks-semaphore.ts) plus the suite runtime. At
+// the old 15m this fired mid-suite and launched a reviewer into the live
+// worktree. Set well above that ceiling; the clean-worktree gate in
+// handleWorking is the real protection against clobbering live edits.
+export const STALE_AGENT_STATUS_MS = 60 * 60 * 1000;
 
 const REVIEW_VERDICT_VOCAB = ["CLEAN", "FIXED", "FAILED"] as const;
 
@@ -150,10 +157,25 @@ export function handleWorking(
   // failing worker whose Claude is stuck would re-arm pendingReviewAt but
   // the review would still never launch — exactly the wedged state the
   // operator hit. We log a warn so the staleness is visible.
+  const wtPath = entry.worktreePath ?? projectPath;
+
   if (entry.agentStatus === "working") {
     const stale = entry.lastEventAt !== undefined
       && Date.now() - entry.lastEventAt >= STALE_AGENT_STATUS_MS;
     if (!stale) return false;
+    // Stale status does not prove the worker is dead — a long hook-silent
+    // `garden checks` call looks identical. launchReview rebases and
+    // force-pushes in this same worktree (cwd: wtPath), so never proceed while
+    // the worktree has uncommitted changes: that would clobber a live worker's
+    // edits. Defer unless the tree is provably clean (an indeterminate git
+    // result is treated as dirty).
+    if (isWorktreeDirty(wtPath) !== false) {
+      log.debug("poller", "stale-working review deferred: worktree not provably clean", {
+        worker: entry.name,
+        data: { project: projectName },
+      });
+      return false;
+    }
     log.warn("poller", "agentStatus=working is stale; proceeding with review launch", {
       worker: entry.name,
       data: {
@@ -175,7 +197,6 @@ export function handleWorking(
     return false;
   }
 
-  const wtPath = entry.worktreePath ?? projectPath;
   const ahead = hasCommitsAhead(wtPath, baseBranch);
   if (ahead === null) {
     // The git call failed (transient error/timeout), NOT "no commits". Clearing
