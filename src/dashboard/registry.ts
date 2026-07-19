@@ -599,6 +599,15 @@ function withRegistryLock<T>(fn: () => T): T {
 // versions don't carry baseBranch, workflow, etc.). A failed check signals
 // hand-edit corruption or a half-write that escaped atomic-rename; fall
 // back to empty rather than feed junk into the poller.
+// WorkerEntry fields consumed without re-validation to build filesystem paths,
+// git targets, resume identity, and lifecycle dispatch. isWorkerRegistry
+// type-checks each WHEN PRESENT — a forged wrong-typed value would otherwise
+// flow straight into those consumers (the registry lives in a sandbox-writable
+// dir). Absence stays legal so legacy entries are never quarantined.
+const GUARDED_STRING_FIELDS = [
+  "prState", "agentStatus", "baseBranch", "branchName", "worktreePath", "sessionId",
+] as const;
+
 function isWorkerRegistry(x: unknown): x is WorkerRegistry {
   if (!x || typeof x !== "object") return false;
   const r = x as Record<string, unknown>;
@@ -609,6 +618,18 @@ function isWorkerRegistry(x: unknown): x is WorkerRegistry {
       if (!e || typeof e !== "object") return false;
       const entry = e as Record<string, unknown>;
       if (typeof entry.name !== "string") return false;
+      // Defense-in-depth: the registry lives in a sandbox-writable dir, and
+      // these fields are consumed WITHOUT re-validation to build filesystem
+      // paths (worktreePath), git targets (baseBranch/branchName), resume
+      // identity (sessionId), and lifecycle dispatch (prState/agentStatus). A
+      // forged wrong-typed value (number/object where a string belongs) would
+      // flow straight into those consumers. Reject it. Only guard type WHEN
+      // PRESENT — absence is legal (legacy entries predate several of these;
+      // the readRegistry migrations backfill them AFTER this guard runs), so a
+      // presence requirement here would quarantine valid old registries.
+      for (const field of GUARDED_STRING_FIELDS) {
+        if (entry[field] !== undefined && typeof entry[field] !== "string") return false;
+      }
     }
   }
   return true;

@@ -58,6 +58,33 @@ describe("readRegistry", () => {
     expect(reg.workers.proj).toHaveLength(1);
     expect(reg.workers.proj[0].name).toBe("legacy-worker");
   });
+
+  it("rejects an entry whose trusted field is present with the wrong type (forgery guard)", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    // The registry sits in a sandbox-writable dir; these fields are consumed
+    // without re-validation to build paths / git targets / dispatch. A forged
+    // wrong-typed value must be rejected (quarantined to empty), not trusted.
+    for (const bad of [
+      { name: "w", worktreePath: { evil: "../../etc" } },
+      { name: "w", baseBranch: 42 },
+      { name: "w", prState: ["reviewing"] },
+      { name: "w", sessionId: 7 },
+    ]) {
+      fs.writeFileSync(REGISTRY_FILE, JSON.stringify({ workers: { proj: [bad] } }));
+      expect(readRegistry()).toEqual({ workers: {} });
+    }
+  });
+
+  it("accepts an entry whose trusted fields are present with the right type", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    fs.writeFileSync(REGISTRY_FILE, JSON.stringify({
+      workers: { proj: [{
+        name: "ok", prState: "reviewing", baseBranch: "main",
+        worktreePath: "/wt/proj/ok", sessionId: "abc",
+      }] },
+    }));
+    expect(readRegistry().workers.proj[0].name).toBe("ok");
+  });
 });
 
 describe("registry durability", () => {
