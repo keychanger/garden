@@ -2,6 +2,13 @@
   "name": "garden",
   "version": "0.1.0",
   "description": "A minimal CLI orchestrator for managing Claude Code sessions across multiple projects.",
+  "license": "UNLICENSED",
+  "private": true,
+  "author": "Keychange",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/keychanger/garden.git"
+  },
   "type": "module",
   "bin": {
     "garden": "./dist/cli.js"
@@ -11,7 +18,7 @@
   },
   "scripts": {
     "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --minify --keep-names --outfile=dist/cli.js --banner:js='#!/usr/bin/env node' --define:__GARDEN_VERSION__='\"'$(git rev-parse --short HEAD)'\"' && esbuild src/hook-entry.ts --bundle --platform=node --format=esm --minify --keep-names --outfile=dist/hook.js --banner:js='#!/usr/bin/env node' --define:__GARDEN_VERSION__='\"'$(git rev-parse --short HEAD)'\"'",
-    "rebuild": "tmux kill-server 2>/dev/null; npm run build",
+    "rebuild": "tmux kill-session -t garden-dashboard 2>/dev/null; npm run build",
     "dev": "tsx src/cli.ts",
     "lint": "tsc --noEmit",
     "test": "vitest run",

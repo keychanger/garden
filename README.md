@@ -105,3 +105,9 @@ Before pushing, run the checks the reviewer and CI also run:
 ```bash
 npm run lint && npm run build && npm run test:coverage && npm run test:integration
 ```
+
+## License
+
+Proprietary and confidential. Copyright (c) 2026 Keychange. All rights reserved.
+Use is permitted only under a separate written agreement with Keychange; see
+[`LICENSE`](LICENSE).
