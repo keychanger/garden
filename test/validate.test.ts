@@ -592,22 +592,44 @@ describe("cleanOrphanedReviewWindows", () => {
     expect(fresh.workers.p[0].reviewWindowName).toBeUndefined();
   });
 
-  it("does NOT clear a reviewWindowName that a new review set after the snapshot (compare-and-clear)", () => {
-    // The snapshot observed the OLD window dead, but by the time we write, a new
-    // review has relaunched and set a NEW window name. A blind clear would blind
-    // that live review; the compare-and-clear must leave it alone.
+  it("does NOT clear when a different agent kind claimed the field after the snapshot", () => {
+    // The snapshot observed the review window dead, but by the time we write, a
+    // ci-fix agent has launched and stored ITS window in the same field. Clearing
+    // would blind that live agent, so the name comparison must leave it alone.
     vi.mocked(windowExists).mockReturnValue(false);
     const fresh = {
-      workers: { p: [{ name: "w", sessionId: "s", task: "", reviewWindowName: "_p-review-w-NEW" }] },
+      workers: { p: [{ name: "w", sessionId: "s", task: "", reviewWindowName: "_p-ci-fix-w" }] },
     };
     vi.mocked(readRegistry).mockReturnValue(fresh);
 
     cleanOrphanedReviewWindows({
-      workers: { p: [{ name: "w", sessionId: "s", task: "", reviewWindowName: "_p-review-w-OLD" }] },
+      workers: { p: [{ name: "w", sessionId: "s", task: "", reviewWindowName: "_p-review-w" }] },
     });
 
     expect(vi.mocked(writeRegistry)).not.toHaveBeenCalled();
-    expect(fresh.workers.p[0].reviewWindowName).toBe("_p-review-w-NEW");
+    expect(fresh.workers.p[0].reviewWindowName).toBe("_p-ci-fix-w");
+  });
+
+  it("does NOT clear when a new review relaunched under the SAME window name", () => {
+    // reviewWindowName is a pure function of (project, worker), so a review that
+    // relaunches in the probe->write gap stores the IDENTICAL string. Comparing
+    // names alone cannot see that, and clearing it makes handleReviewing find no
+    // window, relaunch, and kill the review that is still running. The liveness
+    // re-probe under the lock is what distinguishes the two.
+    const snapshot = {
+      workers: { p: [{ name: "w", sessionId: "s", task: "", reviewWindowName: "_p-review-w" }] },
+    };
+    const fresh = {
+      workers: { p: [{ name: "w", sessionId: "s", task: "", reviewWindowName: "_p-review-w" }] },
+    };
+    vi.mocked(readRegistry).mockReturnValue(fresh);
+    // Dead during detection, alive again by the time we hold the lock.
+    vi.mocked(windowExists).mockReturnValueOnce(false).mockReturnValue(true);
+
+    cleanOrphanedReviewWindows(snapshot);
+
+    expect(vi.mocked(writeRegistry)).not.toHaveBeenCalled();
+    expect(fresh.workers.p[0].reviewWindowName).toBe("_p-review-w");
   });
 
   it("does nothing when no review windows are orphaned (no lock taken)", () => {

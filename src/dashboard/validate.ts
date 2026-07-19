@@ -476,18 +476,26 @@ export function cleanOrphanedReviewWindows(registry: WorkerRegistry): void {
   }
   if (stale.length === 0) return;
 
-  // Apply as a compare-and-clear against FRESH state. The snapshot above may be
-  // seconds old (validate probes panes/worktrees between reading it and here),
-  // and a new review can launch in that gap and set a NEW reviewWindowName.
-  // Clear only if the current value still equals the dead window we observed —
-  // a blind clear would wipe the live review's fresh window name, after which
-  // handleReviewing finds no window, re-runs the review, and kills the one still
-  // running (wasted paid work, and two aligned races park the worker failing).
+  // Apply against FRESH state under the lock. The snapshot above may be seconds
+  // old (validate probes panes/worktrees between reading it and here), and a new
+  // review can launch in that gap. A blind clear would wipe the live review's
+  // window name, after which handleReviewing finds no window, re-runs the
+  // review, and kills the one still running (wasted paid work, and two aligned
+  // races park the worker failing).
+  //
+  // Comparing the stored NAME is not enough to detect that: reviewWindowName is
+  // a pure function of (project, worker), so a relaunched review for the same
+  // worker stores the identical string. Only a fresh liveness probe separates
+  // "still the dead window I observed" from "a new window that reuses the name",
+  // so re-probe here and clear only what is still dead. The probe is a tmux fork
+  // under the lock, but it runs only for entries already observed stale (usually
+  // none — the early return above skips the lock entirely), not per registry
+  // entry, and this is the attach-time path rather than the hot poll loop.
   mutateRegistry((reg) => {
     let changed = false;
     for (const { project, worker, windowName } of stale) {
       const entry = reg.workers[project]?.find((e) => e.name === worker);
-      if (entry && entry.reviewWindowName === windowName) {
+      if (entry && entry.reviewWindowName === windowName && !windowExists(windowName)) {
         entry.reviewWindowName = undefined;
         changed = true;
         log.info("validate", "cleared stale reviewWindowName", {
