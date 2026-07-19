@@ -297,7 +297,8 @@ export interface LimitsConfig {
 }
 
 // How the running garden build measures its own freshness. Garden-level (the
-// install is machine-wide, not per-project) — see `garden build` / the ⌥; menu.
+// install is machine-wide, not per-project) — set from the ⌥; garden settings
+// menu's build-branch row.
 export interface BuildConfig {
   // Branch the running build's commit is compared against, e.g. "main" or
   // "dev". Compared using the LOCAL origin/<branch> ref — never a network

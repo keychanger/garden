@@ -8,6 +8,7 @@ const {
   buildGardenMenuPlan, buildChecksSlotsSubmenuPlan, buildMaxReviewsSubmenuPlan,
   buildBranchSubmenuPlan,
 } = await import("../src/dashboard/garden-menu.js");
+const { buildMenuArgv } = await import("../src/dashboard/menu.js");
 
 describe("buildGardenMenuPlan", () => {
   it("shows each setting and routes it to its submenu", () => {
@@ -26,6 +27,22 @@ describe("buildGardenMenuPlan", () => {
     expect(row("max reviews").run).toBe("garden dashboard _garden-reviews-submenu");
     expect(row("build branch").label).toContain("main");
     expect(row("build branch").run).toBe("garden dashboard _garden-branch-submenu");
+  });
+
+  it("encodes the limits/build divider as a real separator row", () => {
+    // tmux consumes a separator as a SINGLE empty argv token but a normal row
+    // as a label/key/command triple — so a row spelled `{label:"",key:"",run:""}`
+    // pushes three empty tokens and renders three horizontal rules instead of
+    // one. Only `sep: true` produces the single divider.
+    const plan = buildGardenMenuPlan({
+      runner: "garden",
+      checksSlots: "4 (hardware default; unset)",
+      maxReviews: "3",
+      buildBranch: "main",
+    });
+    const seps = plan.rows.filter(r => r.sep);
+    expect(seps).toHaveLength(1);
+    expect(buildMenuArgv(plan).filter(t => t === "")).toHaveLength(1);
   });
 });
 

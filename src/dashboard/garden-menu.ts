@@ -47,7 +47,7 @@ export function buildGardenMenuPlan(v: GardenMenuView): MenuSpec {
   const rows: MenuRow[] = [
     { label: `(1) checks slots     ${v.checksSlots}`, key: "1", run: `${g} dashboard _garden-checks-submenu` },
     { label: `(2) max reviews      ${v.maxReviews}`, key: "2", run: `${g} dashboard _garden-reviews-submenu` },
-    { label: "", key: "", run: "" },
+    { sep: true, label: "" },
     { label: `(3) build branch     ${v.buildBranch}`, key: "3", run: `${g} dashboard _garden-branch-submenu` },
   ];
   // No longer only limits: the build branch is a garden-level setting that is

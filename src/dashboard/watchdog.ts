@@ -438,14 +438,6 @@ export async function runWatchdogLoop(): Promise<void> {
       } catch (err) {
         log.warn("watchdog", "codex usage capture failed", { data: { error: String(err) } });
       }
-      // The passive capture above only re-reports the last time Codex ran, so a
-      // fleet that runs Codex occasionally would sit on a reading captured days
-      // ago — and a plan change in between makes that reading a percentage of a
-      // quota that no longer exists. Probe on a slow throttle to bound it. This
-      // spends real Codex quota, hence both gates: only when Codex is in the
-      // fleet at all, and only when the snapshot is already older than the
-      // interval (a fleet actively running Codex is fed for free by the capture
-      // and never probes).
       // Recount how stale the running build is, on its own slow throttle, and
       // repaint only when the number moves — so a current build never touches
       // tmux for this.
@@ -457,6 +449,14 @@ export async function runWatchdogLoop(): Promise<void> {
           log.warn("watchdog", "build staleness refresh failed", { data: { error: String(err) } });
         }
       }
+      // The passive capture above only re-reports the last time Codex ran, so a
+      // fleet that runs Codex occasionally would sit on a reading captured days
+      // ago — and a plan change in between makes that reading a percentage of a
+      // quota that no longer exists. Probe on a slow throttle to bound it. This
+      // spends real Codex quota, hence both gates: only when Codex is in the
+      // fleet at all, and only when the snapshot is already older than the
+      // interval (a fleet actively running Codex is fed for free by the capture
+      // and never probes).
       const probeNow = Date.now();
       if (probeNow - lastCodexProbeAt >= CODEX_PROBE_INTERVAL_MS) {
         // Advance unconditionally, before the attempt: the decision is re-made
