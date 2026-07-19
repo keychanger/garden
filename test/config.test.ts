@@ -585,6 +585,55 @@ describe("limits (garden-level resource budgets)", () => {
   });
 });
 
+// Garden-level build-staleness target (config.ts BuildConfig). Sibling of
+// `limits` above: machine-wide, not per-project, because the install the
+// running binary was compiled from is machine-wide. Cover the getter's default
+// + coercion and the lock-protected setter's round-trip / clear behavior.
+describe("build.branch (garden-level staleness target)", () => {
+  it("getBuildBranch defaults to main when unset", async () => {
+    const { getBuildBranch, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: {} });
+    expect(getBuildBranch()).toBe("main");
+  });
+
+  it("setBuildBranch round-trips and trims surrounding whitespace", async () => {
+    const { setBuildBranch, getBuildBranch, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: {} });
+    expect(setBuildBranch("  dev  ")).toBe("dev");
+    expect(getBuildBranch()).toBe("dev");
+  });
+
+  it("setBuildBranch(undefined) clears the key and prunes the empty build block", async () => {
+    const { setBuildBranch, getBuildBranch, loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: {} });
+    setBuildBranch("dev");
+    expect(setBuildBranch(undefined)).toBe("main");
+    expect(getBuildBranch()).toBe("main");
+    expect(loadConfig().build).toBeUndefined();
+  });
+
+  it("treats a whitespace-only branch as a clear, not as a branch named '   '", async () => {
+    // A blank submenu dispatch must not pin the build to an unresolvable ref,
+    // which would make commitsBehindOrigin return null forever (bar stuck green).
+    const { setBuildBranch, getBuildBranch, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: {} });
+    setBuildBranch("dev");
+    expect(setBuildBranch("   ")).toBe("main");
+    expect(getBuildBranch()).toBe("main");
+  });
+
+  it("falls back to main when the stored value is a non-string or blank", async () => {
+    const { getBuildBranch, GARDEN_DIR, CONFIG_PATH } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, "projects: {}\nbuild:\n  branch: 42\n");
+    expect(getBuildBranch()).toBe("main");
+  });
+});
+
 // Trellis workflow adds three optional ProjectConfig keys. Round-trip them
 // through saveConfig → loadConfig and confirm isValidConfigKey accepts them.
 // See WORKFLOWS.md "Project config".

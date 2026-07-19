@@ -504,6 +504,38 @@ describe("postMerge churn revert (real git)", () => {
     expect(fs.readFileSync(path.join(env.repoPath, "README.md"), "utf8"))
       .toBe("landed upstream\n");
   });
+
+  // The `behind` count on the dirty result is what the operator alert turns
+  // into "N commits behind origin/main" — the signal that separates a
+  // one-merge blip from a checkout frozen for a dozen merges. The poller test
+  // proves the wording given a number; only this proves the number is real.
+  it("reports how far a dirty checkout has fallen behind origin", async () => {
+    const { fastForwardBase } = await import("../../src/dashboard/git.js");
+    const other = path.join(env.home, "drift-clone");
+    git(env.home, "clone", originPath, other);
+    for (const n of [1, 2, 3]) {
+      fs.writeFileSync(path.join(other, "README.md"), `upstream ${n}\n`);
+      git(other, "add", "-A");
+      git(other, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", `up${n}`);
+    }
+    git(other, "push", "origin", "main");
+
+    // Dirty the same file the incoming commits touch, so ff-only refuses.
+    fs.writeFileSync(path.join(env.repoPath, "README.md"), "churned\n");
+    const result = fastForwardBase(env.repoPath, "main");
+
+    expect(result).toMatchObject({ ok: false, reason: "dirty", behind: 3 });
+  });
+
+  it("reports behind: 0 for a dirty checkout that is level with origin", async () => {
+    const { fastForwardBase } = await import("../../src/dashboard/git.js");
+    // No upstream movement: ff-only is a no-op, so the checkout advances even
+    // though it is dirty. The drift clause must not fire on this shape.
+    fs.writeFileSync(path.join(env.repoPath, "README.md"), "churned\n");
+    const result = fastForwardBase(env.repoPath, "main");
+    if (!result.ok && result.reason === "dirty") expect(result.behind).toBe(0);
+    else expect(result.ok).toBe(true);
+  });
 });
 
 // Feeds the status-bar staleness indicator: how far the running build's commit
