@@ -433,8 +433,10 @@ describe("codex usage meter", () => {
 
   it("keeps a \"0\" string balance as 0, not as an absent reading", async () => {
     // The exact shape the coercion was written for, and the one a truthiness
-    // test would drop: "0" must survive as the number 0 so the credits footer
-    // renders "$0.00" instead of vanishing.
+    // test would drop: "0" must survive as the number 0 rather than collapsing
+    // to null, since `hasCredits` keys on `balance !== null` to tell a genuine
+    // reading from an unpopulated entry. (The render hides a zero balance —
+    // that is a display choice downstream of this parse.)
     const { parseCodexRateLimits } = await import("../src/dashboard/codex-usage.js");
     const roll = path.join(home, "zero-credits.jsonl");
     fs.writeFileSync(roll, JSON.stringify({
