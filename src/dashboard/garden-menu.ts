@@ -18,7 +18,7 @@ import {
 import { gardenInstallRepo, listBranches } from "./git.js";
 import { defaultChecksSlots } from "../checks-semaphore.js";
 import { resolveGardenRunner } from "./runner.js";
-import { tmuxDisplay } from "./tmux.js";
+import { shellEscape, tmuxDisplay } from "./tmux.js";
 import { runMenu, type MenuSpec, type MenuRow } from "./menu.js";
 import { log } from "./log.js";
 
@@ -110,7 +110,7 @@ export function buildBranchSubmenuPlan(
   const rows: MenuRow[] = choices.map((b, i) => ({
     label: b === current ? `${b}  ✓` : b,
     key: i < 9 ? String(i + 1) : "",
-    run: `${runner} dashboard _garden-branch-set ${b}`,
+    run: `${runner} dashboard _garden-branch-set ${shellEscape(b)}`,
   }));
   return { title: "Branch the running build is compared against", rows };
 }
@@ -140,13 +140,17 @@ export function runBuildBranchSubmenu(): void {
 export function applyBuildBranch(branch: string): void {
   const next = setBuildBranch(branch);
   log.info("garden-menu", "build branch set", { data: { branch: next } });
-  try {
-    // Local import: watchdog.ts pulls the poller graph, and this path is only
-    // reached from an interactive menu selection.
-    void import("./watchdog.js").then(async (m) => {
+  // Local import: watchdog.ts pulls the poller graph, and this path is only
+  // reached from an interactive menu selection. The .catch is load-bearing, not
+  // decorative: refreshBuildStaleness takes the state lock, which throws when
+  // the watchdog holds it, and an unhandled rejection is fatal under Node's
+  // default — so a lock contention would kill the menu dispatch rather than
+  // fall through to the watchdog's own recount within 5 min.
+  void import("./watchdog.js")
+    .then(async (m) => {
       if (m.refreshBuildStaleness()) (await import("./header.js")).refreshDashboard();
-    });
-  } catch { /* best effort — the watchdog recounts within 5 min regardless */ }
+    })
+    .catch(() => { /* best effort — the watchdog recounts within 5 min regardless */ });
   tmuxDisplay(`build branch: ${next}`);
   runGardenMenu();
 }

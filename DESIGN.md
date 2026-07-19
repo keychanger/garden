@@ -110,7 +110,7 @@ Requires terminal setup: iTerm2 → Profiles → Keys → Left Option key → "E
 | `⌥⇧N` | Workflow picker / spawn composer — choose default / trellis / grow, and optionally stage `model` / `effort` / `crew` / `base branch` overrides (a short-lived spawn draft) for the new worker. Effort rungs are low/medium/high/xhigh plus `ultra` (the ultracode preset); model + effort apply to default/grow only |
 | `⌥⇧C` | Crew picker — set the focused project's crew (who builds / who reviews) |
 | `⌥,` | Project config menu — inspect + set the focused project's everyday config (base branch / crew / model / effort / CI gate / holistic / log color); rarer knobs (roles, profile, provider, checks/post-merge) stay on the `garden config` CLI |
-| `⌥;` | Garden settings menu — inspect + set the machine-wide `limits` (checks slots / max reviews); `⌥,` configures one project, `⌥;` the whole garden |
+| `⌥;` | Garden settings menu — inspect + set the garden-level settings: the machine-wide `limits` (checks slots / max reviews) and the build-staleness branch; `⌥,` configures one project, `⌥;` the whole garden |
 | `⌥w` | Jump to first worker |
 | `⌥s` | Jump to project shell |
 | `⌥]` / `⌥[` | Cycle workers and shell |

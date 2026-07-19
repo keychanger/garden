@@ -41,6 +41,14 @@ describe("buildBranchSubmenuPlan", () => {
     const plan = buildBranchSubmenuPlan([], "main", "garden");
     expect(plan.rows.map(r => r.label)).toEqual(["main  ✓", "dev"]);
   });
+
+  it("shell-escapes the branch in the dispatch, like every sibling branch submenu", () => {
+    // git permits `$`, backticks, `;` and `&` in a refname, and the run string
+    // is handed to a shell by tmux — so an unescaped name would execute rather
+    // than be selected.
+    const plan = buildBranchSubmenuPlan(["fix-$(whoami);id"], "main", "garden");
+    expect(plan.rows[0].run).toBe("garden dashboard _garden-branch-set 'fix-$(whoami);id'");
+  });
 });
 
 describe("buildChecksSlotsSubmenuPlan", () => {

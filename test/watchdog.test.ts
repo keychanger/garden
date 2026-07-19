@@ -52,11 +52,38 @@ vi.mock("../src/dashboard/poller-fifo.js", () => ({
   triggerProjectPoll: vi.fn(),
 }));
 
+// refreshBuildStaleness's collaborators. SESSIONS_DIR rides along because
+// housekeeping reads it from the same module.
+vi.mock("../src/dashboard/git.js", () => ({
+  commitsBehindOrigin: vi.fn(() => 0),
+  gardenInstallRepo: vi.fn(() => "/install/garden"),
+}));
+
+vi.mock("../src/config.js", () => ({
+  SESSIONS_DIR: "/tmp/fake-sessions",
+  getBuildBranch: vi.fn(() => "main"),
+}));
+
+vi.mock("../src/version.js", () => ({ GARDEN_VERSION: "abc1234" }));
+
+vi.mock("../src/dashboard/state.js", () => {
+  let state: { buildBehind: number | null } = { buildBehind: null };
+  return {
+    readDashState: vi.fn(() => ({ ...state })),
+    writeDashState: vi.fn((s: { buildBehind: number | null }) => { state = { ...s }; }),
+    withStateLock: vi.fn((fn: () => void) => fn()),
+    _setBuildBehind: (n: number | null) => { state = { buildBehind: n }; },
+  };
+});
+
 import {
   latestActivityMs, isWatchedState, isWorkerStale, hasLiveWork, tick,
   healProjectPollers, alertOrphanedWindows, WATCHDOG_THRESHOLD_MS,
   absorbSleep, WATCHDOG_TICK_MS, SLEEP_SLACK_MS, startWatchdog,
+  refreshBuildStaleness,
 } from "../src/dashboard/watchdog.js";
+import { commitsBehindOrigin, gardenInstallRepo } from "../src/dashboard/git.js";
+import { writeDashState } from "../src/dashboard/state.js";
 import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
 import { newDashboardWindow, windowExists, listAllWindowNames } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
@@ -68,6 +95,10 @@ const registryMock = await import("../src/dashboard/registry.js") as unknown as 
   _setEntries: (project: string, list: WorkerEntry[]) => void;
   _setOnMutate: (cb: (() => void) | undefined) => void;
   _clear: () => void;
+};
+
+const stateMock = await import("../src/dashboard/state.js") as unknown as {
+  _setBuildBehind: (n: number | null) => void;
 };
 
 const NOW = Date.parse("2026-06-04T12:00:00Z");
@@ -540,5 +571,45 @@ describe("startWatchdog", () => {
     windowExistsMock.mockReturnValue(true);
     startWatchdog("node /usr/local/bin/garden");
     expect(newDashboardWindowMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("refreshBuildStaleness", () => {
+  beforeEach(() => {
+    stateMock._setBuildBehind(null);
+    vi.mocked(gardenInstallRepo).mockReturnValue("/install/garden");
+    vi.mocked(commitsBehindOrigin).mockReturnValue(0);
+  });
+
+  it("caches a newly-measured count and reports the change", () => {
+    vi.mocked(commitsBehindOrigin).mockReturnValue(14);
+    expect(refreshBuildStaleness()).toBe(true);
+    expect(vi.mocked(writeDashState).mock.calls.at(-1)![0].buildBehind).toBe(14);
+  });
+
+  it("reports no change when the count is unmoved, so an idle fleet never repaints", () => {
+    // The return value is the watchdog's sole repaint gate — a always-true
+    // refresh would push tmux a status-bar write every 5 min forever.
+    vi.mocked(commitsBehindOrigin).mockReturnValue(3);
+    expect(refreshBuildStaleness()).toBe(true);
+    vi.mocked(writeDashState).mockClear();
+    expect(refreshBuildStaleness()).toBe(false);
+    expect(writeDashState).not.toHaveBeenCalled();
+  });
+
+  it("does not measure an install that is not running out of a checkout", () => {
+    vi.mocked(gardenInstallRepo).mockReturnValue(null);
+    expect(refreshBuildStaleness()).toBe(false);
+    expect(commitsBehindOrigin).not.toHaveBeenCalled();
+    expect(writeDashState).not.toHaveBeenCalled();
+  });
+
+  it("caches null when the count is unmeasurable, leaving the bar green", () => {
+    // commitsBehindOrigin returns null for an unknown ref/branch; that must
+    // persist as null (unknown), never coerce to 0 (which reads as "current").
+    vi.mocked(commitsBehindOrigin).mockReturnValue(null);
+    stateMock._setBuildBehind(5);
+    expect(refreshBuildStaleness()).toBe(true);
+    expect(vi.mocked(writeDashState).mock.calls.at(-1)![0].buildBehind).toBeNull();
   });
 });
