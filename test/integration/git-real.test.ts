@@ -379,7 +379,12 @@ describe("scopeHooksPathToWorktree / installPollTriggerHook (real git)", () => {
       cwd: env.repoPath, encoding: "utf8",
     });
     expect(sharedGet.status).not.toBe(0); // unset in shared config
-    expect(git(env.repoPath, "rev-parse", "--git-path", "hooks")).toMatch(/\.git\/hooks$/);
+    // Unset in EVERY scope the main checkout resolves, not just --local, so a
+    // leak through any other scope would still fail this.
+    const effective = spawnSync("git", ["config", "--get", "core.hooksPath"], {
+      cwd: env.repoPath, encoding: "utf8",
+    });
+    expect(effective.status).not.toBe(0);
   });
 
   it("migrates a garden-owned leak already in the shared config", async () => {
@@ -410,6 +415,12 @@ describe("scopeHooksPathToWorktree / installPollTriggerHook (real git)", () => {
 
     // The operator's deliberate repo-wide hooksPath is left alone.
     expect(git(env.repoPath, "config", "--local", "--get", "core.hooksPath")).toBe("/opt/company/githooks");
+    // ...and the worker still gets its own hooks: worktree scope outranks the
+    // preserved --local value, so preserving it can't silently disable the
+    // poll-trigger hook. Without this, a future "bail out when an operator
+    // value exists" shortcut would keep the assertion above green while the
+    // worker's pre-push signal stopped firing.
+    expect(git(wt, "config", "--get", "core.hooksPath")).toBe(path.join(wt, ".garden-hooks"));
   });
 
   it("installPollTriggerHook writes the pre-push hook and scopes it per worktree", async () => {
