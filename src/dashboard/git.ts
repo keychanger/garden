@@ -764,7 +764,13 @@ export function revertChurn(repoPath: string, before: ReadonlySet<string>): stri
   try {
     git(repoPath, "checkout", "--", ...churn);
     return churn;
-  } catch {
+  } catch (err) {
+    // A failed revert leaves the churn in place, which is exactly the state
+    // that wedges the next merge — so it must not be silent, or the trap
+    // re-arms with nothing in the log to explain it.
+    log.warn("git", "could not revert working-tree churn", {
+      data: { files: churn.length, paths: churn.slice(0, 5).join(", "), error: gitErrText(err) },
+    });
     return [];
   }
 }

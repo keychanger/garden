@@ -249,6 +249,7 @@ import {
   getChangedFiles, getChangedFilesBetween,
   getCommitSummary, hasCommitsAhead, getNewCommitSummary, getDiffAgainstBase,
   isWorktreeDirty,
+  listModifiedTrackedFiles, revertChurn,
   syncWorktreeToRemote,
   ensureNoRebaseInProgress, hasRebaseInProgress, isAncestor, getUnmergedFiles,
 } from "../src/dashboard/git.js";
@@ -2966,6 +2967,90 @@ describe("poll — merge-pending state", () => {
     // local rebuild was deferred.
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "merged" }),
+    );
+  });
+
+  it("names the drift when a dirty checkout has fallen behind origin", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject", checks: undefined, postMerge: "npm run build",
+    } as ReturnType<typeof tryGetProject>);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue({
+      ok: false, reason: "dirty", currentBranch: "main", error: "dirty", behind: 14,
+    });
+
+    poll("myproject");
+
+    // "has uncommitted changes" alone reads as a one-merge blip; the count is
+    // what distinguishes that from a checkout stalled for a dozen merges while
+    // every merge still reported success.
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("14 commits behind origin/main"),
+      }),
+    );
+    // With a postMerge configured, the stale binary is the consequence worth naming.
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("anything built from it is that stale"),
+      }),
+    );
+  });
+
+  it("omits the drift clause when a dirty checkout is level with origin", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject", checks: undefined, postMerge: "npm run build",
+    } as ReturnType<typeof tryGetProject>);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue({
+      ok: false, reason: "dirty", currentBranch: "main", error: "dirty", behind: 0,
+    });
+
+    poll("myproject");
+
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.not.stringContaining("behind origin/main"),
+      }),
+    );
+  });
+
+  it("reverts postMerge churn against the pre-hook snapshot even when the hook fails", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject", checks: undefined, postMerge: "npm run build",
+    } as ReturnType<typeof tryGetProject>);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true, advanced: "worktree" });
+    // The operator already had this file open and edited before the hook ran.
+    vi.mocked(listModifiedTrackedFiles).mockReturnValue(["src/in-flight.ts"]);
+    vi.mocked(execSync).mockImplementation(() => { throw new Error("build failed"); });
+
+    poll("myproject");
+
+    // A hook that dies partway dirties the tree just as readily as one that
+    // succeeds, and that dirt is what wedges the NEXT merge — so the revert
+    // runs on the failure path too, carrying the operator's in-flight edit.
+    expect(revertChurn).toHaveBeenCalledWith(
+      "/repo/myproject",
+      new Set(["src/in-flight.ts"]),
     );
   });
 
