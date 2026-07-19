@@ -187,8 +187,9 @@ function applyAndLog(
   if (!ctx.workerInfo) return;
 
   // Throttle heartbeat-only hooks. Safe because the only consumers of
-  // lastEventAt are 15-minute staleness checks (STALE_AGENT_STATUS_MS in
-  // poller-review, STALE_EVENT_MS in health) and the task title is
+  // lastEventAt are coarse staleness checks measured in tens of minutes
+  // (STALE_AGENT_STATUS_MS in poller-review, 60 min; STALE_EVENT_MS in
+  // health, 15 min) — both far above this throttle — and the task title is
   // independently refreshed by the status render path (refreshWorkerTasks).
   // Every real transition sets agentStatus or prState, so it counts as a
   // state change and always takes the full path below — the STATUS.md state
