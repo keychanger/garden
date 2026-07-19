@@ -14,17 +14,26 @@
 // lifecycle hook. Reading whatever rollout is newest covers every role, plus
 // any added later, from one call site.
 //
-// Windows are sorted smaller-first (a 5h window above the 30d window) to match
-// the Claude meter's 5h-over-week ordering. In practice Codex reports only the
-// 30d (window_minutes=43200) window for a subscription account; `secondary`
-// (the shorter window) populates when relevant.
+// Reading the rollout is PASSIVE — it can only ever be as fresh as the last
+// time Codex actually ran. probeCodexUsage is the active half: a minimal
+// `codex exec` made purely to make Codex report its quota, the direct analog of
+// the Claude meter's 1-token /v1/messages completion. Without it a fleet that
+// runs Codex occasionally shows a reading captured days ago, and a plan change
+// in between makes that reading not merely stale but arithmetic against a quota
+// that no longer exists (observed: a plan upgrade moved limit_id premium->codex
+// AND the window from 43200 to 10080 minutes, so the old percentage was against
+// a different denominator entirely).
 //
-// Light module (fs + JSON only): reachable from the hook bundle.
+// Windows are sorted smaller-first (a 5h window above the 30d window) to match
+// the Claude meter's 5h-over-week ordering; which windows populate depends on
+// the plan (`window_minutes` 10080 = 7d on Plus, 43200 = 30d elsewhere).
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { SESSIONS_DIR } from "../config.js";
+import { SESSIONS_DIR, loadConfig } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
+import { readRegistry } from "./registry.js";
 
 const CODEX_USAGE_FILE = path.join(SESSIONS_DIR, "codex-usage.json");
 // rate_limits rides recent response events; the tail is plenty and keeps each
@@ -120,16 +129,28 @@ function fromRateLimits(rl: Record<string, unknown>): CodexUsageData | null {
   // that renders as nothing AND overwrote a good prior one. Requiring a real
   // reading also makes parseCodexRateLimits's backward scan skip the all-null
   // tail and find the last genuinely populated entry.
-  const hasCredits = credits !== null
-    && (typeof credits.balance === "number" || credits.unlimited === true);
+  // Codex reports `balance` as a STRING ("0"), not a number — observed on a
+  // real Plus account. Coerce rather than type-test, or a genuine balance is
+  // silently dropped and the credits footer never renders.
+  const balance = toBalance(credits?.balance);
+  const hasCredits = credits !== null && (balance !== null || credits.unlimited === true);
   if (windows.length === 0 && !hasCredits) return null;
   windows.sort((a, b) => a.windowMinutes - b.windowMinutes);
   const data: CodexUsageData = { windows };
   if (hasCredits) {
-    data.creditBalance = typeof credits!.balance === "number" ? credits!.balance : null;
+    data.creditBalance = balance;
     data.creditsUnlimited = credits!.unlimited === true;
   }
   return data;
+}
+
+function toBalance(raw: unknown): number | null {
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
 }
 
 export function readCodexUsage(): CodexUsageSnapshot | null {
@@ -219,4 +240,55 @@ export function captureCodexUsageLatest(): boolean {
     return true;
   }
   return false;
+}
+
+// Is Codex actually in this fleet? probeCodexUsage spends real Codex quota, so
+// it must never fire on an all-Claude garden. True when any project selects the
+// codex harness for its worker or any review role, or any registered worker was
+// spawned on it (including via a per-worker crew, whose name encodes both
+// halves — `claude-codex` is a Codex reviewer).
+export function codexInFleet(): boolean {
+  try {
+    for (const p of Object.values(loadConfig().projects)) {
+      if (p.harness === "codex") return true;
+      for (const role of [p.roles?.reviewer, p.roles?.resolver, p.roles?.ciFix]) {
+        if (role?.harness === "codex") return true;
+      }
+    }
+  } catch { /* config unreadable — fall through to the registry */ }
+  try {
+    for (const entries of Object.values(readRegistry().workers)) {
+      for (const e of entries) {
+        if (e.harness === "codex") return true;
+        if (typeof e.crew === "string" && e.crew.includes("codex")) return true;
+      }
+    }
+  } catch { /* registry unreadable */ }
+  return false;
+}
+
+// A probe must not outlive a poll cycle; codex exec on a trivial prompt is a
+// few seconds (measured ~4s), so this is a hang guard, not a budget.
+const PROBE_TIMEOUT_MS = 60_000;
+
+// Make Codex report its current quota. Callers MUST gate on codexInFleet().
+//
+// `-s read-only` plus a temp cwd so the probe can never touch a worktree;
+// --skip-git-repo-check because that cwd is not a repo; stdin closed so
+// `codex exec` cannot block waiting for piped instructions (it reads stdin when
+// the prompt argument is absent, and would hang forever on an inherited tty).
+//
+// Returns true when the snapshot moved. A failure is deliberately not fatal:
+// offline, codex-not-installed, and out-of-quota all land here, and the
+// out-of-quota case still writes a rollout on its way down — so capture
+// whatever landed rather than discarding the run.
+export function probeCodexUsage(): boolean {
+  try {
+    execFileSync(
+      "codex",
+      ["exec", "-s", "read-only", "--skip-git-repo-check", "Reply with the single word: ok"],
+      { cwd: os.tmpdir(), stdio: "ignore", timeout: PROBE_TIMEOUT_MS },
+    );
+  } catch { /* see above — capture anything the attempt wrote */ }
+  return captureCodexUsageLatest();
 }

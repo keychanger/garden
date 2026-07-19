@@ -259,6 +259,65 @@ describe("codex usage meter", () => {
     expect(parseCodexRateLimits(roll)!.windows[0].usedPercent).toBe(61);
   });
 
+  // The probe spends real Codex quota, so this gate is what stands between an
+  // all-Claude garden and a pointless billed API call every 6h.
+  describe("codexInFleet", () => {
+    function writeConfig(projects: string): void {
+      fs.mkdirSync(path.join(home, ".garden"), { recursive: true });
+      fs.writeFileSync(path.join(home, ".garden", "config.yml"), `projects:\n${projects}`);
+    }
+
+    it("is false for an all-Claude fleet", async () => {
+      writeConfig("  garden:\n    path: /tmp/garden\n");
+      const { codexInFleet } = await import("../src/dashboard/codex-usage.js");
+      expect(codexInFleet()).toBe(false);
+    });
+
+    it("is true when a review role uses codex (the claude-codex crew shape)", async () => {
+      // Exactly the on-disk shape `garden config <p> crew claude-codex` writes:
+      // no worker harness, codex on the three review roles.
+      writeConfig(
+        "  wolf:\n    path: /tmp/wolf\n    roles:\n" +
+        "      reviewer:\n        harness: codex\n" +
+        "      resolver:\n        harness: codex\n" +
+        "      ciFix:\n        harness: codex\n",
+      );
+      const { codexInFleet } = await import("../src/dashboard/codex-usage.js");
+      expect(codexInFleet()).toBe(true);
+    });
+
+    it("is true when a project's worker harness is codex", async () => {
+      writeConfig("  p:\n    path: /tmp/p\n    harness: codex\n");
+      const { codexInFleet } = await import("../src/dashboard/codex-usage.js");
+      expect(codexInFleet()).toBe(true);
+    });
+
+    it("is true when a registered worker carries a codex crew", async () => {
+      writeConfig("  p:\n    path: /tmp/p\n");
+      fs.writeFileSync(path.join(sessions, "dashboard.registry.json"), JSON.stringify({
+        workers: { p: [{ name: "w", project: "p", crew: "claude-codex" }] },
+      }));
+      const { codexInFleet } = await import("../src/dashboard/codex-usage.js");
+      expect(codexInFleet()).toBe(true);
+    });
+  });
+
+  it("coerces a string credit balance (Codex reports it as \"0\", not 0)", async () => {
+    const { parseCodexRateLimits } = await import("../src/dashboard/codex-usage.js");
+    const roll = path.join(home, "credits.jsonl");
+    fs.writeFileSync(roll, JSON.stringify({
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        rate_limits: {
+          primary: { used_percent: 5, window_minutes: 10080, resets_at: 9_999_999_999 },
+          credits: { has_credits: true, unlimited: false, balance: "12.5" },
+        },
+      },
+    }) + "\n");
+    expect(parseCodexRateLimits(roll)!.creditBalance).toBe(12.5);
+  });
+
   // captureCodexUsageLatest is the role-agnostic feed: it reads whatever rollout
   // is newest under $CODEX_HOME/sessions, so a headless reviewer/resolver/ci-fix
   // run (which fires no lifecycle hook) meters exactly like a worker turn.

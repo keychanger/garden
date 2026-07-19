@@ -38,7 +38,7 @@ import { triggerProjectPoll } from "./poller-fifo.js";
 import { addAlert } from "./alerts.js";
 import { log, truncateLog } from "./log.js";
 import { sweepSpawnDrafts } from "./spawn-draft.js";
-import { captureCodexUsageLatest } from "./codex-usage.js";
+import { captureCodexUsageLatest, codexInFleet, probeCodexUsage, readCodexUsage } from "./codex-usage.js";
 
 export const WATCHDOG_TICK_MS = 60_000;
 export const WATCHDOG_THRESHOLD_MS = 5 * 60_000;
@@ -287,6 +287,11 @@ export function absorbSleep(gapMs: number): number {
 // directory — so it is throttled to hourly via the caller-owned timestamp.
 export const HOUSEKEEP_INTERVAL_MS = 60 * 60_000;
 
+// How stale the Codex snapshot may get before the watchdog spends a probe on
+// it. The windows this meters are 7d/30d, so this is about not showing a
+// reading from a previous billing plan — not about resolution.
+export const CODEX_PROBE_INTERVAL_MS = 6 * 60 * 60_000;
+
 // A spent bootstrap script older than this is safe to delete. The worker pane
 // runs `sh bootstrap-<project>-<branch>.sh` once, seconds after it is written,
 // and never touches it again (bounce/resume relaunch via `claude --resume`,
@@ -359,6 +364,10 @@ export async function runWatchdogLoop(): Promise<void> {
   // sweep on the first tick after (re)spawn, which clears any orphans that
   // accrued while the watchdog was down.
   let lastHousekeepAt = 0;
+  // Codex-probe throttle. Seeded to now (unlike lastHousekeepAt, which is 0 to
+  // force a first-tick sweep): the probe costs quota, so a watchdog respawn must
+  // not be a way to trigger one — the snapshot-age gate decides when it is due.
+  let lastCodexProbeAt = Date.now();
   // Timestamp the START of each iteration; the gap to the next start spans the
   // whole loop (tick body + the fixed sleep), so a suspend during EITHER is
   // measured — capturing only around the sleep would miss a suspend mid-body.
@@ -397,6 +406,27 @@ export async function runWatchdogLoop(): Promise<void> {
         if (captureCodexUsageLatest()) refreshDashboard();
       } catch (err) {
         log.warn("watchdog", "codex usage capture failed", { data: { error: String(err) } });
+      }
+      // The passive capture above only re-reports the last time Codex ran, so a
+      // fleet that runs Codex occasionally would sit on a reading captured days
+      // ago — and a plan change in between makes that reading a percentage of a
+      // quota that no longer exists. Probe on a slow throttle to bound it. This
+      // spends real Codex quota, hence both gates: only when Codex is in the
+      // fleet at all, and only when the snapshot is already older than the
+      // interval (a fleet actively running Codex is fed for free by the capture
+      // and never probes).
+      const probeNow = Date.now();
+      if (probeNow - lastCodexProbeAt >= CODEX_PROBE_INTERVAL_MS) {
+        try {
+          const snapshotAge = probeNow - (readCodexUsage()?.capturedAt ?? 0);
+          if (snapshotAge >= CODEX_PROBE_INTERVAL_MS && codexInFleet()) {
+            lastCodexProbeAt = probeNow;
+            if (probeCodexUsage()) refreshDashboard();
+          }
+        } catch (err) {
+          lastCodexProbeAt = probeNow; // don't retry a hard failure every tick
+          log.warn("watchdog", "codex usage probe failed", { data: { error: String(err) } });
+        }
       }
       // Disk housekeeping on the hourly throttle — bounds dashboard.log and the
       // spent-bootstrap-script pile. Wrapped separately so a sweep failure logs

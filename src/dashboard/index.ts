@@ -349,7 +349,14 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   if (sub === "_usage-refresh") {
     const { refreshUsage } = await import("./usage.js");
     const { refreshDashboard } = await import("./header.js");
+    const { codexInFleet, probeCodexUsage } = await import("./codex-usage.js");
     await refreshUsage();
+    // The Codex meter has no passive refresh path — reading the rollout only
+    // re-reports the last time Codex ran. Without this the command silently did
+    // nothing for the Codex column, which is exactly what it looked like.
+    try {
+      if (codexInFleet()) probeCodexUsage();
+    } catch { /* best effort — the Claude half already refreshed */ }
     try { refreshDashboard(); } catch { /* pane gone, not running, etc. */ }
     return;
   }
