@@ -359,7 +359,11 @@ export type FastForwardResult =
   | { ok: true; advanced: "worktree" | "ref" }
   | { ok: false; reason: "diverged"; currentBranch: string | null; ahead: number; behind: number }
   | { ok: false; reason: "checked-out-elsewhere"; currentBranch: string | null; checkedOutAt: string | null }
-  | { ok: false; reason: "dirty"; currentBranch: string | null; error: string }
+  // `behind`: how far the stalled checkout has fallen behind origin. A dirty
+  // checkout stays dirty, so this is the number that says whether it is a
+  // moment's inconvenience or months of drift (and, when a postMerge builds
+  // from it, how stale the built binary is).
+  | { ok: false; reason: "dirty"; currentBranch: string | null; error: string; behind: number }
   | { ok: false; reason: "stuck"; error: string };
 
 // Advance the project's local base branch to the freshly-merged origin tip.
@@ -429,11 +433,12 @@ export function fastForwardBase(
       }
       // Dirty (or status unknowable): uncommitted local changes collide with the
       // merge. Leave the checkout untouched rather than clobber operator edits.
+      const { behind } = aheadBehind(repoPath, baseBranch, `origin/${baseBranch}`);
       log.debug("git", "local base checkout dirty, not fast-forwarded (postMerge skipped)", {
         worker,
-        data: { ...baseData, error },
+        data: { ...baseData, error, behind },
       });
-      return { ok: false, reason: "dirty", currentBranch: current, error };
+      return { ok: false, reason: "dirty", currentBranch: current, error, behind };
     }
   }
   // Off-base: refresh the tracking ref (so divergence math below is accurate),
@@ -734,6 +739,33 @@ export function isWorktreeDirty(wtPath: string): boolean | null {
     return git(wtPath, "status", "--porcelain").length > 0;
   } catch {
     return null;
+  }
+}
+
+// Tracked files with UNSTAGED modifications. Deliberately narrower than
+// isWorktreeDirty: it excludes untracked files (nothing here should ever delete
+// an operator's new file) and staged changes (a deliberate act). This is the
+// exact class a build/install hook churns — see revertPostMergeChurn.
+export function listModifiedTrackedFiles(repoPath: string): string[] {
+  try {
+    return git(repoPath, "diff", "--name-only").split("\n").map(l => l.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+// Restore tracked files that a command dirtied, leaving anything the operator
+// had already modified alone. `before` is the listModifiedTrackedFiles snapshot
+// taken immediately prior; only paths absent from it are reverted, so an
+// operator edit in flight is never discarded. Returns the reverted paths.
+export function revertChurn(repoPath: string, before: ReadonlySet<string>): string[] {
+  const churn = listModifiedTrackedFiles(repoPath).filter(p => !before.has(p));
+  if (churn.length === 0) return [];
+  try {
+    git(repoPath, "checkout", "--", ...churn);
+    return churn;
+  } catch {
+    return [];
   }
 }
 

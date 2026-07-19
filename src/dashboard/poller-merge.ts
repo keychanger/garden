@@ -19,8 +19,8 @@ import { resolveGardenRunner } from "./runner.js";
 import {
   abortRebase, cleanWorktree, deleteRemoteBranch, ensureNoRebaseInProgress,
   fastForwardBase, forcePushBranch, getBranchHeadSha, getChangedFiles,
-  getChangedFilesBetween, getCommitSummary, isAncestor, mergeToBase, rebaseBranch,
-  syncWorktreeToRemote,
+  getChangedFilesBetween, getCommitSummary, isAncestor, listModifiedTrackedFiles,
+  mergeToBase, rebaseBranch, revertChurn, syncWorktreeToRemote,
 } from "./git.js";
 import { refreshDashboard, setupStatusBar } from "./header.js";
 import { setupKeybindings } from "./hotkeys.js";
@@ -656,7 +656,15 @@ function notifyPostMerge(
     message = `Worker ${entry.name} merged to origin/${baseBranch}, but ${baseBranch} is checked out in another worktree${where}, so its local ref was left untouched. Run \`git pull --ff-only\` in that worktree to pick up the merged work.${postMergeNote}`;
   } else if (ffResult.reason === "dirty") {
     level = "warn";
-    message = `Worker ${entry.name} merged to origin/${baseBranch}, but the local ${baseBranch} checkout at ${projectPath} has uncommitted changes, so it was left untouched. origin/${baseBranch} holds the merged work; commit, stash, or discard the local changes to let it fast-forward.${postMergeNote}`;
+    // Name the drift. "has uncommitted changes" reads as a one-merge blip; the
+    // failure this guards against is a checkout stalled for dozens of merges
+    // while every merge still reports success, so the count is the signal.
+    const drift = ffResult.behind > 0
+      ? ` It is now ${ffResult.behind} commit${ffResult.behind === 1 ? "" : "s"} behind origin/${baseBranch}`
+        + (tryGetProject(projectName)?.postMerge ? `, so anything built from it is that stale` : "")
+        + "."
+      : "";
+    message = `Worker ${entry.name} merged to origin/${baseBranch}, but the local ${baseBranch} checkout at ${projectPath} has uncommitted changes, so it was left untouched.${drift} origin/${baseBranch} holds the merged work; commit, stash, or discard the local changes to let it fast-forward.${postMergeNote}`;
   } else {
     level = "error";
     message = `Worker ${entry.name} merged to origin/${baseBranch}, but the local ${baseBranch} checkout at ${projectPath} could not be advanced (fetch failed or the checkout is wedged).${postMergeNote} origin/${baseBranch} holds the merged work; resolve the checkout so it stays current.`;
@@ -1074,6 +1082,10 @@ function runPostMerge(projectName: string, projectPath: string): void {
 
   const commit = getBranchHeadSha(projectPath)?.slice(0, 7) ?? "unknown";
 
+  // Snapshot what the operator already had modified, so the churn revert below
+  // can tell their edits from the hook's. See revertPostMergeChurn.
+  const dirtyBefore = new Set(listModifiedTrackedFiles(projectPath));
+
   try {
     execSync(project.postMerge, {
       cwd: projectPath,
@@ -1114,6 +1126,57 @@ function runPostMerge(projectName: string, projectPath: string): void {
       // key, repeating postMerge failures collapse to one alert per project
       // per dedup window.
       dedupKey: `postMerge-failed:${projectName}`,
+    });
+  } finally {
+    revertPostMergeChurn(projectName, projectPath, dirtyBefore);
+  }
+}
+
+// Undo working-tree churn the postMerge hook itself created.
+//
+// This closes a self-sustaining trap. postMerge runs in the operator's base
+// checkout, and the common hook (`npm install && npm run build`) rewrites
+// package-lock.json as a side effect, leaving the checkout dirty. It sits
+// harmlessly until some merged commit also touches that file — `merge --ff-only`
+// tolerates a dirty file the merge does not touch, and refuses only on a
+// collision. A dependency bump supplies one soon enough. From then on the
+// refusal makes fastForwardBase return `dirty`, which skips postMerge, which
+// means nothing ever cleans the file: the checkout and the binary built from it
+// freeze permanently. Observed in the field at 14 merges of drift, the whole
+// fleet on a stale `garden`, every merge still reporting success.
+//
+// Garden made the mess, so garden cleans it: revert only tracked files that
+// were clean before the hook ran. Anything the operator had already modified is
+// in `dirtyBefore` and is left strictly alone, as are untracked and staged
+// changes. The refusal in fastForwardBase stays exactly as it is — protecting
+// real operator edits is correct; the bug was garden manufacturing fake ones.
+//
+// Runs in a `finally`: a hook that fails partway can dirty the tree just as
+// easily as one that succeeds, and that failure must not also wedge the merge.
+//
+// Note this means postMerge cannot be used to leave generated files sitting in
+// the checkout. That was never durable anyway (garden does not commit them),
+// and it is exactly what breaks the next merge — generated artifacts that
+// matter belong in a worker's commit.
+function revertPostMergeChurn(
+  projectName: string,
+  projectPath: string,
+  dirtyBefore: ReadonlySet<string>,
+): void {
+  try {
+    const reverted = revertChurn(projectPath, dirtyBefore);
+    if (reverted.length === 0) return;
+    log.info("poller", "reverted postMerge working-tree churn", {
+      data: {
+        project: projectName,
+        files: reverted.length,
+        paths: reverted.slice(0, 5).join(", "),
+      },
+    });
+  } catch (err) {
+    // Never let cleanup mask the hook's own outcome.
+    log.warn("poller", "could not revert postMerge churn", {
+      data: { project: projectName, error: String(err) },
     });
   }
 }

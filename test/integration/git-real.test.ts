@@ -440,3 +440,68 @@ describe("scopeHooksPathToWorktree / installPollTriggerHook (real git)", () => {
     expect(sharedGet.status).not.toBe(0);
   });
 });
+
+// The trap this guards against: postMerge (`npm install && npm run build`)
+// rewrites a tracked file in the operator's base checkout, the resulting dirty
+// tree makes the NEXT merge's `merge --ff-only` refuse, and the refusal skips
+// postMerge — so one hook run can freeze the checkout, and the binary built
+// from it, indefinitely.
+describe("postMerge churn revert (real git)", () => {
+  it("reverts a tracked file the hook dirtied", async () => {
+    const { listModifiedTrackedFiles, revertChurn } = await import("../../src/dashboard/git.js");
+    const before = new Set(listModifiedTrackedFiles(env.repoPath));
+    // Stand in for `npm install` rewriting package-lock.json.
+    fs.writeFileSync(path.join(env.repoPath, "README.md"), "churned by the hook\n");
+    expect(listModifiedTrackedFiles(env.repoPath)).toContain("README.md");
+
+    expect(revertChurn(env.repoPath, before)).toEqual(["README.md"]);
+    expect(listModifiedTrackedFiles(env.repoPath)).toEqual([]);
+  });
+
+  it("leaves an operator edit that predates the hook strictly alone", async () => {
+    const { listModifiedTrackedFiles, revertChurn } = await import("../../src/dashboard/git.js");
+    fs.writeFileSync(path.join(env.repoPath, "README.md"), "operator work in progress\n");
+    const before = new Set(listModifiedTrackedFiles(env.repoPath));
+
+    expect(revertChurn(env.repoPath, before)).toEqual([]);
+    expect(fs.readFileSync(path.join(env.repoPath, "README.md"), "utf8"))
+      .toBe("operator work in progress\n");
+  });
+
+  it("never touches untracked files", async () => {
+    const { listModifiedTrackedFiles, revertChurn } = await import("../../src/dashboard/git.js");
+    const before = new Set(listModifiedTrackedFiles(env.repoPath));
+    const stray = path.join(env.repoPath, "build-output.txt");
+    fs.writeFileSync(stray, "generated\n");
+
+    expect(revertChurn(env.repoPath, before)).toEqual([]);
+    expect(fs.existsSync(stray)).toBe(true);
+  });
+
+  it("a reverted checkout fast-forwards again — the trap does not re-arm", async () => {
+    const { listModifiedTrackedFiles, revertChurn, fastForwardBase } =
+      await import("../../src/dashboard/git.js");
+    // Advance origin/main with a commit that touches the SAME file the hook
+    // churns. The collision is what arms the trap: `merge --ff-only` tolerates
+    // a dirty file the merge does not touch, and refuses only when the incoming
+    // commits would overwrite it. That is the real shape — a lockfile churned
+    // by `npm install`, then a merged dependency bump touching that lockfile.
+    const other = path.join(env.home, "clone");
+    git(env.home, "clone", originPath, other);
+    fs.writeFileSync(path.join(other, "README.md"), "landed upstream\n");
+    git(other, "add", "-A");
+    git(other, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "land");
+    git(other, "push", "origin", "main");
+
+    // The hook dirties the base checkout; without the revert this ff refuses.
+    const before = new Set(listModifiedTrackedFiles(env.repoPath));
+    fs.writeFileSync(path.join(env.repoPath, "README.md"), "churned\n");
+    expect(fastForwardBase(env.repoPath, "main").ok).toBe(false);
+
+    revertChurn(env.repoPath, before);
+    const result = fastForwardBase(env.repoPath, "main");
+    expect(result.ok).toBe(true);
+    expect(fs.readFileSync(path.join(env.repoPath, "README.md"), "utf8"))
+      .toBe("landed upstream\n");
+  });
+});
