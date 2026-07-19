@@ -24,6 +24,12 @@ vi.mock("../src/dashboard/git.js", () => ({
   getCommitSummary: vi.fn(() => null),
   getNewCommitSummary: vi.fn(() => null),
 }));
+// handleDone consults the holistic gate; keep it ineligible so the callback
+// assertion is isolated from the holistic-review dispatch.
+vi.mock("../src/dashboard/poller-holistic-review.js", () => ({
+  evaluateHolisticGate: vi.fn(() => ({ eligible: false })),
+  maybeDispatchHolisticReview: vi.fn(),
+}));
 
 useTmpHome();
 
@@ -33,6 +39,7 @@ async function seedChild(opts: {
   parentWorker?: string;
   alreadyFired?: boolean;
   replyNote?: string;
+  worktreePath?: string;
 } = {}): Promise<void> {
   const { addWorker } = await import("../src/dashboard/registry.js");
   addWorker("wolf", {
@@ -40,6 +47,7 @@ async function seedChild(opts: {
     sessionId: "s",
     task: "",
     branchName: "bold-ash",
+    worktreePath: opts.worktreePath,
     prState: "merge-pending",
     handoffCallbackExpected: opts.expectCallback,
     parentProject: opts.parentProject,
@@ -175,5 +183,63 @@ describe("transitionState handoff callback chokepoint", () => {
 
     const after = findWorkerByName("wolf", "bold-ash");
     expect(typeof after?.handoffCallbackFiredAt).toBe("number");
+  });
+});
+
+describe("handleDone trail-off callback (no-merge completion)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    vi.resetModules();
+  });
+
+  it("fires the callback for a --expect-callback child that trailed off to done without merging", async () => {
+    // The M3 case: a child spawned with --expect-callback investigates, finds
+    // nothing to commit, writes .garden-done, and its Stop hook lands it in
+    // `done` directly (bypassing transitionState). handleDone is the guaranteed
+    // poller-context landing, so the callback must fire there.
+    await seedChild({
+      expectCallback: true,
+      parentProject: "fox",
+      parentWorker: "calm-bay",
+      worktreePath: "/wt/wolf/bold-ash",
+      replyNote: "nothing to change",
+    });
+    const { handleDone } = await import("../src/dashboard/poller-state.js");
+    const { notifyHandoffCallback } = await import("../src/dashboard/continue.js");
+    const { findWorkerByName } = await import("../src/dashboard/registry.js");
+    const entry = findWorkerByName("wolf", "bold-ash")!;
+
+    handleDone("wolf", "/repo/wolf", "main", entry);
+    await new Promise(r => setImmediate(r));
+
+    expect(notifyHandoffCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childProject: "wolf",
+        childWorker: "bold-ash",
+        terminalState: "done",
+        parentProject: "fox",
+        parentWorker: "calm-bay",
+        replyNote: "nothing to change",
+      }),
+    );
+  });
+
+  it("does not fire in handleDone for a plain child without the callback flag", async () => {
+    await seedChild({
+      parentProject: "fox",
+      parentWorker: "calm-bay",
+      worktreePath: "/wt/wolf/bold-ash",
+    });
+    const { handleDone } = await import("../src/dashboard/poller-state.js");
+    const { notifyHandoffCallback } = await import("../src/dashboard/continue.js");
+    const { findWorkerByName } = await import("../src/dashboard/registry.js");
+    const entry = findWorkerByName("wolf", "bold-ash")!;
+
+    handleDone("wolf", "/repo/wolf", "main", entry);
+    await new Promise(r => setImmediate(r));
+
+    expect(notifyHandoffCallback).not.toHaveBeenCalled();
   });
 });

@@ -217,6 +217,16 @@ export function handleDone(
   if (!wtPath) return false;
   const commitSummary = getCommitSummary(wtPath, baseBranch);
   if (!commitSummary) {
+    // A --expect-callback handoff child that trailed off to `done` WITHOUT ever
+    // merging reached this terminal state via the Stop-hook done-write
+    // (hooks/default.ts), which bypasses transitionState — so its parent's
+    // one-shot callback (normally fired from transitionState) was never
+    // dispatched, leaving the parent waiting on a signal that never comes. Fire
+    // it here, the poller-side sibling of that dispatch: this handler is the
+    // guaranteed poller-context landing for a trail-off done (the Stop hook
+    // pokes it), and maybeFireHandoffCallback is idempotent so a re-poke or a
+    // child that already fired at merge is a safe no-op.
+    maybeFireHandoffCallback(projectName, entry.name, "done");
     // Quiescent done. This is the trail-off holistic trigger site: a worker
     // that finished a multi-phase task WITHOUT a final merge reached `done` via
     // the Stop hook (hooks/default.ts), bypassing transitionToTerminal — so
