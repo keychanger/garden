@@ -16,7 +16,7 @@ vi.mock("../src/dashboard/alerts.js", () => ({
   clearAlerts: vi.fn(),
 }));
 
-import { alerts, renderAlertsPane } from "../src/commands/alerts.js";
+import { alerts, renderAlertsPane, condenseMessage } from "../src/commands/alerts.js";
 import { output } from "../src/output.js";
 import { clearAlerts } from "../src/dashboard/alerts.js";
 
@@ -106,6 +106,17 @@ describe("garden alerts", () => {
     const row = lines.find(l => l.includes("ff-merge failed"))!;
     expect(row).toContain("ff-merge failed: Aborting Updating 9540d5a");
     expect(row).not.toContain("\n");
+  });
+
+  it("leaves a read alert's message undimmed, styling only its gutter", async () => {
+    h.store = {
+      lastSeenAt: "2026-01-01T12:00:00Z",
+      alerts: [a({ message: "the actual problem", ts: "2026-01-01T11:00:00Z" })],
+    };
+    const raw = (await captureConsoleLog(() => alerts([]))).join("\n");
+    const row = raw.split("\n").find(l => l.includes("the actual problem"))!;
+    // Gutter dimmed and closed before the message, so the message renders plain.
+    expect(row).toMatch(/\x1b\[2m⚠.*\x1b\[0m {2}the actual problem$/);
   });
 
   it("emits the full store as JSON when not a TTY", async () => {
@@ -259,5 +270,30 @@ describe("renderAlertsPane", () => {
     const body = lines[lines.length - 1];
     expect(body).toContain("the actual problem");
     expect(body).not.toMatch(/\x1b\[/); // no styling on the message itself
+  });
+});
+
+// The two surfaces share this, and DESIGN.md documents each transformation, so
+// pin the branches the pane/CLI tests above don't reach through a message.
+describe("condenseMessage", () => {
+  it("drops a fenced code block, which carries no gist at alert width", () => {
+    expect(condenseMessage("Reviewer failed:\n\n```ts\nconst x = 1;\n```\n\nSee above."))
+      .toBe("Reviewer failed: See above.");
+  });
+
+  it("strips an unclosed fence rather than leaving the backticks in", () => {
+    // A truncated agent reply (the reviewer alert splices in 300 chars) routinely
+    // cuts mid-fence, so there is no closing token for the block regex to match.
+    expect(condenseMessage("open ```fence never closed\nwith text"))
+      .toBe("open fence never closed with text");
+  });
+
+  it("keeps list bullets legible as a mid-line marker", () => {
+    expect(condenseMessage("Unmerged files:\n- src/a.ts\n- src/b.ts"))
+      .toBe("Unmerged files: · src/a.ts · src/b.ts");
+  });
+
+  it("leaves an ordinary single-line message untouched", () => {
+    expect(condenseMessage("Reviewer could not fix issues")).toBe("Reviewer could not fix issues");
   });
 });

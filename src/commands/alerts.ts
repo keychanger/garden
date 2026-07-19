@@ -59,8 +59,8 @@ function splitBySeen(all: Alert[], seenAt: string | null): { unread: Alert[]; re
 // The ⌥a view. Same split and glyph vocabulary as the CLI, but laid out for the
 // narrow lower-left pane: each alert is a location header line plus its message
 // wrapped underneath (condensed to prose first — see condenseMessage), rather
-// than the CLI's wide single-line row. The pane
-// prints every alert and lets tmux hold the overflow in scrollback — the render
+// than the CLI's wide single-line row. The pane prints every alert and lets tmux
+// hold the overflow in scrollback — the render
 // prints from the top, so an overflowing list scrolls the oldest alerts off the
 // top and leaves the newest on screen. That only reads correctly in
 // chronological order, so sections run read-then-unread and each section runs
