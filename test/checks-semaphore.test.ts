@@ -22,6 +22,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // The reclaim-race test spies on fs.renameSync. An assertion that throws
+  // before its mockRestore would otherwise leak the mock into every later
+  // test in this file, burying the real failure under unrelated ones.
+  vi.restoreAllMocks();
   process.env.HOME = originalHome;
   fs.rmSync(tmpHome, { recursive: true, force: true });
 });
@@ -112,10 +116,14 @@ describe("tryAcquireChecksSlot / releaseChecksSlot", () => {
     expect(mod.tryAcquireChecksSlot(1)).toBe(null);
     spy.mockRestore();
 
-    // Restored, not left dangling as a salvage file.
+    // Restored, not left dangling as a salvage file — and restored with the
+    // LIVE holder's pid. Mere existence is not enough: a slot file bearing the
+    // dead pid would be stolen by the very next claimant, so the live holder
+    // would still end up sharing its slot.
     const residue = fs.readdirSync(path.dirname(slotFile)).filter((f) => f.includes(".reclaiming."));
     expect(residue).toEqual([]);
     expect(fs.existsSync(slotFile)).toBe(true);
+    expect(fs.readFileSync(slotFile, "utf8").split("\n")[0]).toBe(String(process.pid));
   });
 
   it("respects a slot held by a live process it does not own", async () => {
