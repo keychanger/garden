@@ -1,9 +1,18 @@
 // Codex usage meter. Codex writes a `rate_limits` object into its rollout
 // JSONL on every turn (an event_msg whose payload carries primary/secondary
 // rolling windows + a credits balance) — the same shape as Anthropic's quota
-// meter. Garden needs no new auth, endpoint, or poller: the data is already on
-// disk in the worker's rollout, so it is captured at Stop-hook time (when the
-// hook already has transcript_path) and cached for the title-pane meter.
+// meter. Garden needs no new auth or endpoint: the data is already on disk in
+// each Codex process's rollout, so it is read from there and cached for the
+// title-pane meter.
+//
+// Capture is ROLE-AGNOSTIC. Every Codex process spends the same quota, so the
+// meter reads the newest rollout on the fleet (captureCodexUsageLatest) rather
+// than one known worker's transcript. This was previously a Stop-hook capture
+// keyed on the WORKER's transcript_path, which meant a project whose crew put
+// Codex only on the reviewer seat (`claude-codex`) burned Codex quota and
+// showed no meter at all — the headless reviewer/resolver/ci-fix roles fire no
+// lifecycle hook. Reading whatever rollout is newest covers every role, plus
+// any added later, from one call site.
 //
 // Windows are sorted smaller-first (a 5h window above the 30d window) to match
 // the Claude meter's 5h-over-week ordering. In practice Codex reports only the
@@ -12,6 +21,7 @@
 //
 // Light module (fs + JSON only): reachable from the hook bundle.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { SESSIONS_DIR } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
@@ -101,12 +111,23 @@ function fromRateLimits(rl: Record<string, unknown>): CodexUsageData | null {
   const credits = rl.credits && typeof rl.credits === "object"
     ? (rl.credits as { balance?: unknown; unlimited?: unknown })
     : null;
-  if (windows.length === 0 && !credits) return null;
+  // A `credits` object alone is not a reading. Verified against real rollouts
+  // (codex 0.144.5): Codex emits rate_limits on EVERY turn but populates it only
+  // periodically — the common shape is
+  //   { primary: null, secondary: null, credits: { balance: null, unlimited: false } }
+  // whose truthy-but-empty credits object used to satisfy the old
+  // `windows.length === 0 && !credits` guard. That produced a windows-[] snapshot
+  // that renders as nothing AND overwrote a good prior one. Requiring a real
+  // reading also makes parseCodexRateLimits's backward scan skip the all-null
+  // tail and find the last genuinely populated entry.
+  const hasCredits = credits !== null
+    && (typeof credits.balance === "number" || credits.unlimited === true);
+  if (windows.length === 0 && !hasCredits) return null;
   windows.sort((a, b) => a.windowMinutes - b.windowMinutes);
   const data: CodexUsageData = { windows };
-  if (credits) {
-    data.creditBalance = typeof credits.balance === "number" ? credits.balance : null;
-    data.creditsUnlimited = Boolean(credits.unlimited);
+  if (hasCredits) {
+    data.creditBalance = typeof credits!.balance === "number" ? credits!.balance : null;
+    data.creditsUnlimited = credits!.unlimited === true;
   }
   return data;
 }
@@ -132,10 +153,78 @@ export function writeCodexUsage(data: CodexUsageData): void {
   }
 }
 
-// Capture from a Codex worker's rollout at Stop-hook time. Best-effort: a
-// missing rollout or absent rate_limits leaves the prior snapshot in place.
+// Capture from one known rollout path. Best-effort: a missing rollout or
+// absent rate_limits leaves the prior snapshot in place.
 export function captureCodexUsage(rolloutPath: string | undefined): void {
   if (!rolloutPath) return;
   const data = parseCodexRateLimits(rolloutPath);
   if (data) writeCodexUsage(data);
+}
+
+// Codex's rollout root. Deliberately duplicated from the harness adapter's
+// codexHome() rather than imported: this module is a leaf (fs + JSON only) and
+// importing codex-core.ts would drag its tmux/runner closure into every caller.
+function codexSessionsDir(): string {
+  const home = process.env.CODEX_HOME || path.join(process.env.HOME || os.homedir(), ".codex");
+  return path.join(home, "sessions");
+}
+
+// How many rollouts back to try before giving up. Codex populates rate_limits
+// only periodically, so the single newest rollout is routinely all-null for its
+// whole life (a short reviewer run can end without ever getting one) while a
+// sibling from the same day holds dozens of real readings. Trying a handful
+// back finds the reading; the cap bounds the work at a few tail reads.
+const MAX_ROLLOUTS_TRIED = 5;
+
+// The newest rollouts under $CODEX_HOME/sessions/YYYY/MM/DD, mtime-descending.
+// Descends by taking the lexicographically largest entry at each level and
+// backtracking when a branch holds no rollout files — so an empty day dir just
+// after midnight, or a pruned month, falls through to the previous real one
+// without walking the whole (year-deep) tree. Within the winning day dir files
+// are ranked by mtime, not name: a long-running worker's rollout keeps being
+// appended, so it can carry a fresher reading than a newer-named short run.
+function findNewestRollouts(limit: number): string[] {
+  const descend = (dir: string, depth: number): string[] => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    if (depth === 3) {
+      const files: Array<{ path: string; mtime: number }> = [];
+      for (const e of entries) {
+        if (!e.isFile() || !e.name.startsWith("rollout-") || !e.name.endsWith(".jsonl")) continue;
+        const full = path.join(dir, e.name);
+        try {
+          files.push({ path: full, mtime: fs.statSync(full).mtimeMs });
+        } catch { /* raced with a prune */ }
+      }
+      return files.sort((a, b) => b.mtime - a.mtime).slice(0, limit).map((f) => f.path);
+    }
+    const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name).sort().reverse();
+    for (const name of dirs) {
+      const hit = descend(path.join(dir, name), depth + 1);
+      if (hit.length > 0) return hit;
+    }
+    return [];
+  };
+  return descend(codexSessionsDir(), 0);
+}
+
+// Role-agnostic capture: read the newest rollout any Codex process wrote, from
+// any role. Returns true when the snapshot actually changed, so the caller can
+// repaint the title pane only on a real move. No-ops on a fleet that has never
+// run Codex (the sessions dir is absent) and skips the write when the reading
+// is identical, so an idle fleet never churns the file.
+export function captureCodexUsageLatest(): boolean {
+  for (const rollout of findNewestRollouts(MAX_ROLLOUTS_TRIED)) {
+    const data = parseCodexRateLimits(rollout);
+    if (!data) continue; // no populated reading in this one — try the next newest
+    const prior = readCodexUsage();
+    if (prior && JSON.stringify(prior.data) === JSON.stringify(data)) return false;
+    writeCodexUsage(data);
+    return true;
+  }
+  return false;
 }

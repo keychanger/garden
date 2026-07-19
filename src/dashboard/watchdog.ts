@@ -38,6 +38,7 @@ import { triggerProjectPoll } from "./poller-fifo.js";
 import { addAlert } from "./alerts.js";
 import { log, truncateLog } from "./log.js";
 import { sweepSpawnDrafts } from "./spawn-draft.js";
+import { captureCodexUsageLatest } from "./codex-usage.js";
 
 export const WATCHDOG_TICK_MS = 60_000;
 export const WATCHDOG_THRESHOLD_MS = 5 * 60_000;
@@ -348,7 +349,7 @@ export async function runWatchdogLoop(): Promise<void> {
   // Dynamic-imported (like the poller above) to keep watchdog.ts's static import
   // surface minimal; header.ts is heavy and this module is start/stop-imported by
   // poller.ts. Re-bakes the status pane each tick so time-in-state suffixes tick.
-  const { refreshStatusElapsed } = await import("./header.js");
+  const { refreshStatusElapsed, refreshDashboard } = await import("./header.js");
   const gardenRunner = resolveGardenRunner();
   // Damping state lives in the loop closure: it persists across ticks and
   // resets on window respawn, which is fine — a respawn is itself a restart
@@ -385,6 +386,17 @@ export async function runWatchdogLoop(): Promise<void> {
         refreshStatusElapsed();
       } catch (err) {
         log.warn("watchdog", "status elapsed refresh failed", { data: { error: String(err) } });
+      }
+      // Codex usage meter: pick up whatever rate_limits any Codex process wrote
+      // since the last tick. The watchdog owns this because it is the fleet's
+      // one unconditional recurring tick — the Anthropic usage poller is gated
+      // on anyAnthropicMeteredProject(), so hanging the capture there would
+      // leave an all-Codex fleet with no meter at all. Repaints only when the
+      // reading moved (writes are rare; the steady state is a bounded dir walk).
+      try {
+        if (captureCodexUsageLatest()) refreshDashboard();
+      } catch (err) {
+        log.warn("watchdog", "codex usage capture failed", { data: { error: String(err) } });
       }
       // Disk housekeeping on the hourly throttle — bounds dashboard.log and the
       // spent-bootstrap-script pile. Wrapped separately so a sweep failure logs
