@@ -283,6 +283,8 @@ export function ensureDashboard(): void {
     activeWindowName: firstProject ? shellWin(firstProject) : null,
     lastActiveWorker: {},
     lastActiveProjectByPlot: {},
+    // Computed by the watchdog's first staleness tick.
+    buildBehind: null,
   };
 
   writeDashState(state);

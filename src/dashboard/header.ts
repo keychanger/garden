@@ -19,7 +19,7 @@ import { atomicWriteFile } from "./atomic-write.js";
 import { currentBranchFast, worktreeExists } from "./git.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { log } from "./log.js";
-import { unreadAlertCount, formatRightBar } from "./alerts.js";
+import { unreadAlertCount, formatRightBar, statusBarStyle } from "./alerts.js";
 import { renderAlertsPane } from "../commands/alerts.js";
 import { workerWindowName as workerWin, parseWorkerWindow, parseWorkerSuffix } from "./window-names.js";
 import { renderUsagePane } from "./usage.js";
@@ -158,8 +158,8 @@ function formatTrellisSummary(projectName: string): string {
 // Right side: alert badge (when unread) + garden build version
 // ---------------------------------------------------------------------------
 
-function formatRight(): string {
-  return formatRightBar(unreadAlertCount());
+function formatRight(opts?: RefreshOptions): string {
+  return formatRightBar(unreadAlertCount(), (opts?.state ?? readDashState()).buildBehind);
 }
 
 // ---------------------------------------------------------------------------
@@ -186,8 +186,8 @@ export function updateHeaderVar(opts?: RefreshOptions): void {
   }
 
   const left = formatLeft(state.activeProject, state.activePlot, config);
-  const right = formatRight();
-  setBarVars(left, right);
+  const right = formatRight({ state });
+  setBarVars(left, right, statusBarStyle(state.buildBehind));
 }
 
 const PLOT_ICONS: Record<Exclude<PlotState, "idle">, string> = {
@@ -277,9 +277,10 @@ function writePlotStripTemplate(template: string): void {
 // process restart.
 let lastBarLeft: string | null = null;
 let lastBarRight: string | null = null;
+let lastBarStyle: string | null = null;
 
-function setBarVars(left: string, right: string): void {
-  if (left === lastBarLeft && right === lastBarRight) return;
+function setBarVars(left: string, right: string, style: string): void {
+  if (left === lastBarLeft && right === lastBarRight && style === lastBarStyle) return;
   try {
     const t = DASHBOARD_SESSION;
     // Ensure format strings point to the correct variables. Idempotent and
@@ -291,10 +292,14 @@ function setBarVars(left: string, right: string): void {
       ["set-option", "-t", t, "status-right", "#{@garden_right}"],
       ["set-option", "-t", t, "@garden_left", left],
       ["set-option", "-t", t, "@garden_right", right],
+      // Whole-bar color carries the build-staleness signal (statusBarStyle).
+      // Batched with the rest so it costs no extra client connect.
+      ["set-option", "-t", t, "status-style", style],
       ["refresh-client", "-S"],
     );
     lastBarLeft = left;
     lastBarRight = right;
+    lastBarStyle = style;
   } catch { /* no client attached or session gone */ }
 }
 

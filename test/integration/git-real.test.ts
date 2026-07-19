@@ -505,3 +505,36 @@ describe("postMerge churn revert (real git)", () => {
       .toBe("landed upstream\n");
   });
 });
+
+// Feeds the status-bar staleness indicator: how far the running build's commit
+// trails the branch it is compared against.
+describe("commitsBehindOrigin (real git)", () => {
+  it("counts commits the build's ref trails origin/<branch> by", async () => {
+    const { commitsBehindOrigin, getBranchHeadSha } = await import("../../src/dashboard/git.js");
+    const built = getBranchHeadSha(env.repoPath)!;
+    expect(commitsBehindOrigin(env.repoPath, built, "main")).toBe(0);
+
+    // Land two commits upstream without moving the local checkout.
+    const other = path.join(env.home, "behind-clone");
+    git(env.home, "clone", originPath, other);
+    for (const n of [1, 2]) {
+      fs.writeFileSync(path.join(other, `c${n}.txt`), `${n}\n`);
+      git(other, "add", "-A");
+      git(other, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", `c${n}`);
+    }
+    git(other, "push", "origin", "main");
+    // The local origin/main ref only moves on fetch — deliberately no network
+    // call at render time, so the count reflects the last fetch.
+    expect(commitsBehindOrigin(env.repoPath, built, "main")).toBe(0);
+    git(env.repoPath, "fetch", "origin");
+    expect(commitsBehindOrigin(env.repoPath, built, "main")).toBe(2);
+  });
+
+  it("returns null rather than 0 for an unknown ref or branch", async () => {
+    const { commitsBehindOrigin, getBranchHeadSha } = await import("../../src/dashboard/git.js");
+    // null, not 0: an unmeasurable build must leave the bar alone, and 0 would
+    // read as "current".
+    expect(commitsBehindOrigin(env.repoPath, "deadbeef", "main")).toBeNull();
+    expect(commitsBehindOrigin(env.repoPath, getBranchHeadSha(env.repoPath)!, "no-such")).toBeNull();
+  });
+});

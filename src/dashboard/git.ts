@@ -742,6 +742,41 @@ export function isWorktreeDirty(wtPath: string): boolean | null {
   }
 }
 
+// The git repo the RUNNING garden build was compiled from, or null when the
+// binary is not running out of a checkout. Resolved from argv[1] rather than
+// the registered "garden" project: the install is what went stale, and it is
+// reachable whether or not the operator registered it as a project.
+// realpathSync resolves the npm-link symlink (bin/garden -> <repo>/dist/cli.js)
+// to the real file, so dirname twice lands on the repo root.
+export function gardenInstallRepo(): string | null {
+  try {
+    const bin = fs.realpathSync(process.argv[1] ?? "");
+    const root = path.dirname(path.dirname(bin));
+    return fs.existsSync(path.join(root, ".git")) ? root : null;
+  } catch {
+    return null;
+  }
+}
+
+// How many commits `ref` is behind `origin/<branch>`, or null when it cannot be
+// determined (unknown ref, no such branch, not a repo). Reads the LOCAL
+// origin/<branch> ref — deliberately no fetch, since this feeds the status bar
+// and must never touch the network; the ref is advanced by fastForwardBase's
+// fetch on every merge, which is the same cadence the answer changes on.
+export function commitsBehindOrigin(
+  repoPath: string,
+  ref: string,
+  branch: string,
+): number | null {
+  try {
+    const out = git(repoPath, "rev-list", "--count", `${ref}..origin/${branch}`);
+    const n = Number(out.trim());
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 // Tracked files with UNSTAGED modifications. Deliberately narrower than
 // isWorktreeDirty: it excludes untracked files (nothing here should ever delete
 // an operator's new file) and staged changes (a deliberate act). This is the

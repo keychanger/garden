@@ -9,6 +9,9 @@ import { atomicWriteFile } from "./atomic-write.js";
 import { withFileLock } from "./file-lock.js";
 import { log } from "./log.js";
 import { GARDEN_VERSION } from "../version.js";
+// state.ts is a leaf (fs/path/config/atomic-write/file-lock/log) — no cycle
+// back to alerts.ts, and nothing heavy added to the hook bundle's closure.
+import { readDashState } from "./state.js";
 
 export interface Alert {
   id: string;
@@ -230,19 +233,38 @@ export function acknowledgeAlerts(): void {
 // header.ts (called on every dashboard refresh) and refreshAlertBadge() here
 // (called on alert write/ack). Keeping the logic in one place keeps the two
 // paths in sync.
-export function formatRightBar(unread: number): string {
-  const version = `garden ${GARDEN_VERSION} `;
+// `behind` is DashboardState.buildBehind: commits the running build trails its
+// configured branch by. Rendered next to the version because that is the thing
+// it qualifies — `garden 0038f10` looks equally authoritative whether the build
+// is current or three weeks stale, and the whole point is telling those apart.
+export function formatRightBar(unread: number, behind?: number | null): string {
+  // Sits to the LEFT of the version so the bar's right edge stays exactly as it
+  // was; a current build renders byte-identically to before this existed.
+  const drift = behind && behind > 0 ? `⚠ ${behind} behind  ` : "";
+  const version = `${drift}garden ${GARDEN_VERSION} `;
   if (unread <= 0) return version;
   const word = unread === 1 ? "alert" : "alerts";
   return `#[bg=red,fg=white,bold] ⚠ ${unread} ${word} — ⌥a to clear #[default] ${version}`;
+}
+
+// tmux status-style for the bottom bar. Yellow means the running build trails
+// its branch; the default green means current. The color is the at-a-glance
+// signal (the whole bar changes, so it reads without looking at the text) and
+// the count next to the version is the detail. Deliberately not a third state
+// for "unknown" — a dev build or an install outside a checkout simply keeps the
+// normal bar rather than nagging about something it cannot measure.
+export function statusBarStyle(behind?: number | null): string {
+  return behind && behind > 0 ? "bg=yellow,fg=black" : "bg=green,fg=black";
 }
 
 // Set @garden_right and kick the status client so the badge appears/clears
 // immediately. Safe to call when tmux isn't running — errors are swallowed.
 export function refreshAlertBadge(): void {
   try {
-    const right = formatRightBar(unreadAlertCount());
+    const behind = readDashState().buildBehind;
+    const right = formatRightBar(unreadAlertCount(), behind);
     tmux("set-option", "-t", DASHBOARD_SESSION, "@garden_right", right);
+    tmux("set-option", "-t", DASHBOARD_SESSION, "status-style", statusBarStyle(behind));
     tmux("refresh-client", "-S");
   } catch {
     // dashboard session not running, or tmux unavailable

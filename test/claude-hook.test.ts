@@ -114,6 +114,7 @@ vi.mock("../src/dashboard/alerts.js", () => ({
   readAlerts: vi.fn(() => ({ alerts: [] })),
   unreadAlertCount: vi.fn(() => 0),
   formatRightBar: vi.fn(() => ""),
+  statusBarStyle: vi.fn(() => "bg=green,fg=black"),
   refreshAlertBadge: vi.fn(),
 }));
 

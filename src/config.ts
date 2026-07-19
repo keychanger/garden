@@ -296,6 +296,15 @@ export interface LimitsConfig {
   maxConcurrentReviews?: number;
 }
 
+// How the running garden build measures its own freshness. Garden-level (the
+// install is machine-wide, not per-project) — see `garden build` / the ⌥; menu.
+export interface BuildConfig {
+  // Branch the running build's commit is compared against, e.g. "main" or
+  // "dev". Compared using the LOCAL origin/<branch> ref — never a network
+  // fetch, since this feeds the status bar. Unset = DEFAULT_BUILD_BRANCH.
+  branch?: string;
+}
+
 export interface GardenConfig {
   projects: Record<string, ProjectConfig>;
   plots?: Record<string, PlotConfig>;
@@ -304,6 +313,16 @@ export interface GardenConfig {
   logs?: LogsConfig;
   autoContinue?: Partial<AutoContinueConfig>;
   limits?: LimitsConfig;
+  build?: BuildConfig;
+}
+
+export const DEFAULT_BUILD_BRANCH = "main";
+
+// The branch the running build compares itself against.
+export function getBuildBranch(config?: GardenConfig): string {
+  const cfg = config ?? loadConfig();
+  const b = cfg.build?.branch;
+  return typeof b === "string" && b.trim() ? b.trim() : DEFAULT_BUILD_BRANCH;
 }
 
 // The effective review cap: 0 means unlimited. Read by the poller's
@@ -334,6 +353,19 @@ export function setLimit(key: keyof LimitsConfig, value: number | undefined): Li
     else cfg.limits = limits;
     saveConfig(cfg);
     return limits;
+  });
+}
+
+// Set (or clear, with undefined) the branch the running build compares itself
+// against. Same lock-protected R/M/W shape as setLimit.
+export function setBuildBranch(branch: string | undefined): string {
+  return withConfigLock(() => {
+    const cfg = loadConfig();
+    const trimmed = branch?.trim();
+    if (!trimmed) delete cfg.build;
+    else cfg.build = { ...(cfg.build ?? {}), branch: trimmed };
+    saveConfig(cfg);
+    return getBuildBranch(cfg);
   });
 }
 

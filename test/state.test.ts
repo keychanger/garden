@@ -27,6 +27,7 @@ describe("readDashState", () => {
       activeWindowName: null,
       lastActiveWorker: {},
       lastActiveProjectByPlot: {},
+      buildBehind: null,
     });
   });
 
@@ -87,6 +88,7 @@ describe("writeDashState / readDashState", () => {
       activeWindowName: "_myproject-worker-bold-ash",
       lastActiveWorker: {},
       lastActiveProjectByPlot: {},
+      buildBehind: 3,
     };
     writeDashState(original);
     const loaded = readDashState();

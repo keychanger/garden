@@ -35,6 +35,7 @@ import {
 } from "./project-menu.js";
 import {
   runGardenMenu, runChecksSlotsSubmenu, runMaxReviewsSubmenu, applyGardenLimitFromMenu,
+  runBuildBranchSubmenu, applyBuildBranch,
 } from "./garden-menu.js";
 import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, focusHistory, focusDiary, focusAlerts, cyclePane, cyclePlot } from "./navigate.js";
 import { diaryFilePath } from "../diary.js";
@@ -276,6 +277,17 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   }
   if (sub === "_garden-reviews-submenu") {
     runMaxReviewsSubmenu();
+    return;
+  }
+  if (sub === "_garden-branch-submenu") {
+    runBuildBranchSubmenu();
+    return;
+  }
+  if (sub === "_garden-branch-set") {
+    // Branch names never contain spaces, but join defensively like the sibling
+    // routes rather than silently truncating an odd ref.
+    const branch = args.slice(1).join(" ").trim();
+    if (branch) applyBuildBranch(branch);
     return;
   }
   if (sub === "_garden-limit-set") {

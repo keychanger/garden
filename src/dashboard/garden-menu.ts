@@ -8,11 +8,14 @@
 // `garden limits` CLI uses), then re-opens the menu (form feel). Plan builders
 // are pure and tested; the runners resolve config and drive tmux.
 import {
+  getBuildBranch,
   getChecksSlotsOverride,
   getMaxConcurrentReviews,
+  setBuildBranch,
   setLimit,
   type LimitsConfig,
 } from "../config.js";
+import { gardenInstallRepo, listBranches } from "./git.js";
 import { defaultChecksSlots } from "../checks-semaphore.js";
 import { resolveGardenRunner } from "./runner.js";
 import { tmuxDisplay } from "./tmux.js";
@@ -36,6 +39,7 @@ export interface GardenMenuView {
   runner: string;
   checksSlots: string; // "N" or "N (hardware default; unset)"
   maxReviews: string;  // "N" or "unlimited (unset)"
+  buildBranch: string; // branch the running build is measured against
 }
 
 export function buildGardenMenuPlan(v: GardenMenuView): MenuSpec {
@@ -43,8 +47,12 @@ export function buildGardenMenuPlan(v: GardenMenuView): MenuSpec {
   const rows: MenuRow[] = [
     { label: `(1) checks slots     ${v.checksSlots}`, key: "1", run: `${g} dashboard _garden-checks-submenu` },
     { label: `(2) max reviews      ${v.maxReviews}`, key: "2", run: `${g} dashboard _garden-reviews-submenu` },
+    { label: "", key: "", run: "" },
+    { label: `(3) build branch     ${v.buildBranch}`, key: "3", run: `${g} dashboard _garden-branch-submenu` },
   ];
-  return { title: "Garden settings · machine-wide limits", rows };
+  // No longer only limits: the build branch is a garden-level setting that is
+  // not a resource budget.
+  return { title: "Garden settings", rows };
 }
 
 // A numeric-limit submenu: one row per preset (current marked), each dispatching
@@ -88,7 +96,23 @@ function gardenMenuView(): GardenMenuView {
     runner: resolveGardenRunner(),
     checksSlots: override !== undefined ? String(override) : `${hw} (hardware default; unset)`,
     maxReviews: maxReviews > 0 ? String(maxReviews) : "unlimited (unset)",
+    buildBranch: getBuildBranch(),
   };
+}
+
+// Branch choices come from the install repo itself rather than a hardcoded
+// main/dev pair, so a garden tracking any branch can select it. Falls back to
+// the conventional two when the install is not in a checkout (packaged build).
+export function buildBranchSubmenuPlan(
+  branches: string[], current: string, runner: string,
+): MenuSpec {
+  const choices = branches.length > 0 ? branches : ["main", "dev"];
+  const rows: MenuRow[] = choices.map((b, i) => ({
+    label: b === current ? `${b}  ✓` : b,
+    key: i < 9 ? String(i + 1) : "",
+    run: `${runner} dashboard _garden-branch-set ${b}`,
+  }));
+  return { title: "Branch the running build is compared against", rows };
 }
 
 export function runGardenMenu(): void {
@@ -101,6 +125,30 @@ export function runChecksSlotsSubmenu(): void {
 
 export function runMaxReviewsSubmenu(): void {
   runMenu(buildMaxReviewsSubmenuPlan(getMaxConcurrentReviews(), resolveGardenRunner()));
+}
+
+export function runBuildBranchSubmenu(): void {
+  const repo = gardenInstallRepo();
+  runMenu(buildBranchSubmenuPlan(
+    repo ? listBranches(repo, 8) : [], getBuildBranch(), resolveGardenRunner(),
+  ));
+}
+
+// _garden-branch-set <branch>: rewrite the compared-against branch, recount
+// immediately (so the bar reflects the choice without waiting for the watchdog
+// tick), then re-open the menu.
+export function applyBuildBranch(branch: string): void {
+  const next = setBuildBranch(branch);
+  log.info("garden-menu", "build branch set", { data: { branch: next } });
+  try {
+    // Local import: watchdog.ts pulls the poller graph, and this path is only
+    // reached from an interactive menu selection.
+    void import("./watchdog.js").then(async (m) => {
+      if (m.refreshBuildStaleness()) (await import("./header.js")).refreshDashboard();
+    });
+  } catch { /* best effort — the watchdog recounts within 5 min regardless */ }
+  tmuxDisplay(`build branch: ${next}`);
+  runGardenMenu();
 }
 
 // ---- mutating dispatch (set -> present -> re-open) ------------------------

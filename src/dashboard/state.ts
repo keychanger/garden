@@ -40,6 +40,13 @@ export interface DashboardState {
   // Per-plot last-active project — lets ⌥p restore the prior selection when
   // cycling back to a plot, rather than always clamping to the first project.
   lastActiveProjectByPlot: Record<string, string>;
+  // How many commits the RUNNING garden build is behind its configured branch,
+  // or null when unknown (dev build, install not in a checkout, git failure).
+  // Computed on the watchdog's slow throttle and cached HERE rather than at
+  // render time: formatRightBar runs on the hook firehose, so a `git rev-list`
+  // per call would spawn a subprocess per tool use. State is already read on
+  // every refresh, so carrying it costs nothing.
+  buildBehind: number | null;
 }
 
 export const STATE_FILE = path.join(SESSIONS_DIR, "dashboard.state.json");
@@ -58,6 +65,7 @@ const DEFAULT_STATE: DashboardState = {
   activeWindowName: null,
   lastActiveWorker: {},
   lastActiveProjectByPlot: {},
+  buildBehind: null,
 };
 
 // Shape guard for parsed state. Runs AFTER the migration patches so legacy
@@ -86,7 +94,10 @@ function isDashboardState(x: unknown): x is DashboardState {
     isStrOrNull(r.activePaneType) &&
     isStrOrNull(r.activeWindowName) &&
     isRecord(r.lastActiveWorker) &&
-    isRecord(r.lastActiveProjectByPlot)
+    isRecord(r.lastActiveProjectByPlot) &&
+    // Tolerate absence: state files written before this field existed are
+    // valid, and readDashState fills the default.
+    (r.buildBehind === undefined || r.buildBehind === null || typeof r.buildBehind === "number")
   );
 }
 
@@ -127,6 +138,7 @@ export function readDashState(): DashboardState {
     if (raw.gardenWindowName === undefined) raw.gardenWindowName = null;
     if (raw.alertsSeenMark === undefined) raw.alertsSeenMark = null;
     if (raw.usagePaneId === undefined) raw.usagePaneId = null;
+    if (raw.buildBehind === undefined) raw.buildBehind = null;
     if (raw.activePlot === undefined) raw.activePlot = null;
     if (!raw.lastActiveWorker) raw.lastActiveWorker = {};
     if (!raw.lastActiveProjectByPlot) raw.lastActiveProjectByPlot = {};

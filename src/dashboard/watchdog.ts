@@ -41,6 +41,10 @@ import { sweepSpawnDrafts } from "./spawn-draft.js";
 import {
   captureCodexUsageLatest, probeCodexUsageIfStale, CODEX_PROBE_INTERVAL_MS,
 } from "./codex-usage.js";
+import { commitsBehindOrigin, gardenInstallRepo } from "./git.js";
+import { readDashState, writeDashState, withStateLock } from "./state.js";
+import { getBuildBranch } from "../config.js";
+import { GARDEN_VERSION } from "../version.js";
 
 export const WATCHDOG_TICK_MS = 60_000;
 export const WATCHDOG_THRESHOLD_MS = 5 * 60_000;
@@ -289,6 +293,33 @@ export function absorbSleep(gapMs: number): number {
 // directory — so it is throttled to hourly via the caller-owned timestamp.
 export const HOUSEKEEP_INTERVAL_MS = 60 * 60_000;
 
+// How often the running build's staleness is recounted. The answer only moves
+// when something merges, and the point is spotting drift measured in days — so
+// this is deliberately slow. It is a local `rev-list --count` with no fetch,
+// kept off the render path because formatRightBar runs on the hook firehose.
+export const BUILD_STALENESS_INTERVAL_MS = 5 * 60_000;
+
+// Recount how far the running build trails its configured branch and cache it
+// in dashboard state for the status bar. Returns true when the number changed,
+// so the caller repaints only on a real move. No-ops on a dev build or an
+// install not running out of a git checkout — nothing to measure there, and the
+// bar stays normal rather than nagging about something unknowable.
+export function refreshBuildStaleness(): boolean {
+  if (GARDEN_VERSION === "dev") return false;
+  const repo = gardenInstallRepo();
+  if (!repo) return false;
+  const behind = commitsBehindOrigin(repo, GARDEN_VERSION, getBuildBranch());
+  let changed = false;
+  withStateLock(() => {
+    const state = readDashState();
+    if (state.buildBehind === behind) return;
+    state.buildBehind = behind;
+    writeDashState(state);
+    changed = true;
+  });
+  return changed;
+}
+
 // A spent bootstrap script older than this is safe to delete. The worker pane
 // runs `sh bootstrap-<project>-<branch>.sh` once, seconds after it is written,
 // and never touches it again (bounce/resume relaunch via `claude --resume`,
@@ -365,6 +396,9 @@ export async function runWatchdogLoop(): Promise<void> {
   // force a first-tick sweep): the probe costs quota, so a watchdog respawn must
   // not be a way to trigger one — the snapshot-age gate decides when it is due.
   let lastCodexProbeAt = Date.now();
+  // 0, unlike the codex probe: a dashboard restart is exactly when a rebuild
+  // may have just landed, and recounting costs one local git call.
+  let lastStalenessAt = 0;
   // Timestamp the START of each iteration; the gap to the next start spans the
   // whole loop (tick body + the fixed sleep), so a suspend during EITHER is
   // measured — capturing only around the sleep would miss a suspend mid-body.
@@ -412,6 +446,17 @@ export async function runWatchdogLoop(): Promise<void> {
       // fleet at all, and only when the snapshot is already older than the
       // interval (a fleet actively running Codex is fed for free by the capture
       // and never probes).
+      // Recount how stale the running build is, on its own slow throttle, and
+      // repaint only when the number moves — so a current build never touches
+      // tmux for this.
+      if (Date.now() - lastStalenessAt >= BUILD_STALENESS_INTERVAL_MS) {
+        lastStalenessAt = Date.now();
+        try {
+          if (refreshBuildStaleness()) refreshDashboard();
+        } catch (err) {
+          log.warn("watchdog", "build staleness refresh failed", { data: { error: String(err) } });
+        }
+      }
       const probeNow = Date.now();
       if (probeNow - lastCodexProbeAt >= CODEX_PROBE_INTERVAL_MS) {
         // Advance unconditionally, before the attempt: the decision is re-made

@@ -40,6 +40,13 @@ vi.mock("../src/version.js", () => ({
   GARDEN_VERSION: "test",
 }));
 
+// refreshAlertBadge reads the cached build-staleness count to colour the bar.
+// These tests are about alert logic, so stub it flat rather than standing up a
+// state file on the mocked fs.
+vi.mock("../src/dashboard/state.js", () => ({
+  readDashState: vi.fn(() => ({ buildBehind: null })),
+}));
+
 vi.mock("node:crypto", () => ({
   default: { randomUUID: vi.fn(() => "test-uuid-1") },
 }));
@@ -48,6 +55,7 @@ import fs from "node:fs";
 import {
   readAlerts, addAlert, clearAlerts, alertCount,
   unreadAlertCount, unreadAlertCountsByProject, acknowledgeAlerts, formatRightBar,
+  statusBarStyle,
 } from "../src/dashboard/alerts.js";
 import { log } from "../src/dashboard/log.js";
 import { withFileLock } from "../src/dashboard/file-lock.js";
@@ -410,7 +418,40 @@ describe("formatRightBar", () => {
     expect(out).toContain("garden test");
   });
 
+  it("renders identically to a pre-staleness build when the build is current", () => {
+    // The indicator must cost nothing visually until it has something to say.
+    expect(formatRightBar(0, 0)).toBe("garden test ");
+    expect(formatRightBar(0, null)).toBe("garden test ");
+    expect(formatRightBar(0, undefined)).toBe("garden test ");
+  });
+
+  it("shows the drift count to the left of the version when behind", () => {
+    const out = formatRightBar(0, 14);
+    expect(out).toBe("⚠ 14 behind  garden test ");
+  });
+
+  it("keeps both the alert badge and the drift count when they coincide", () => {
+    const out = formatRightBar(2, 3);
+    expect(out).toContain("⚠ 2 alerts");
+    expect(out).toContain("⚠ 3 behind");
+    expect(out).toContain("garden test");
+  });
+
   it("pluralizes when unread > 1", () => {
     expect(formatRightBar(3)).toContain("⚠ 3 alerts");
+  });
+});
+
+describe("statusBarStyle", () => {
+  it("is yellow only when the build actually trails its branch", () => {
+    expect(statusBarStyle(4)).toBe("bg=yellow,fg=black");
+    expect(statusBarStyle(0)).toBe("bg=green,fg=black");
+  });
+
+  it("stays green when staleness is unknown, rather than inventing a warning", () => {
+    // A dev build or an install outside a checkout cannot be measured; the bar
+    // must not imply drift it never established.
+    expect(statusBarStyle(null)).toBe("bg=green,fg=black");
+    expect(statusBarStyle(undefined)).toBe("bg=green,fg=black");
   });
 });
