@@ -310,13 +310,34 @@ describe("codex usage meter", () => {
       expect(strip(lines[1])).toContain("codex");
     });
 
-    it("separates the column headers from the meters with a blank line", async () => {
+    it("heads each column with a bold name and an underline instead of a blank row", async () => {
       const now = Date.now();
       seedBoth(now);
       const { renderUsagePane } = await import("../src/dashboard/usage.js");
       const lines = renderUsagePane(now, 112).split("\n");
-      expect(strip(lines[2]).trim()).toBe("");
-      expect(strip(lines[3])).toContain("5h");
+      expect(lines[1]).toContain("\x1b[1;4mclaude");
+      expect(lines[1]).toContain("\x1b[1;4mcodex");
+      // The meters follow immediately — the rule is the separation.
+      expect(strip(lines[2])).toContain("5h");
+    });
+
+    it("carries each header's underline across the full width of its column", async () => {
+      const now = Date.now();
+      seedBoth(now);
+      const { renderUsagePane } = await import("../src/dashboard/usage.js");
+      const out = renderUsagePane(now, 112);
+      const lines = out.split("\n");
+      // Underlined runs (bold name + dim rule) measured against the widths of
+      // the meter rows they head: the rule spans the column, not just the word.
+      const runs = [...lines[1].matchAll(/\x1b\[[12];4m([^\x1b]*)\x1b\[0m/g)].map((m) => m[1]);
+      const claudeRule = runs[0].length + runs[1].length; // "claude" + trailing rule
+      const codexRule = runs[2].length + runs[3].length;  // "codex" + trailing rule
+      const meterRows = lines.slice(2).map(strip).filter((l) => l.trim());
+      const claudeWidth = Math.max(...meterRows.map((l) => l.trimEnd().length));
+      expect(claudeRule).toBeGreaterThan("claude".length);
+      // Claude column is measured without its 4-space indent.
+      expect(claudeRule).toBeLessThanOrEqual(claudeWidth);
+      expect(codexRule).toBeGreaterThan("codex".length);
     });
 
     it("spreads the columns into the right-hand slack instead of bunching them left", async () => {

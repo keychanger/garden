@@ -1213,10 +1213,15 @@ export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number):
   // header row, which put the column labels hard against the pane border and
   // read as cramped. The pane auto-sizes to its content, so the extra row costs
   // nothing but the space it is there to provide.
-  const header = `${padVisible(`${INDENT}${dim("claude")}`, leftWidth)}${gap}${dim("codex")}`;
-  // Blank line under the header so the provider labels read as headings for the
-  // meters below rather than as a first meter row crowded against them.
-  const rows: string[] = ["", header, ""];
+  // The labels are underlined rather than followed by a blank line: the rule
+  // rides the label's own row, so it separates the heading from the meters
+  // without spending a row on emptiness (a blank one read as too airy). The
+  // rule runs the full width of the column it heads, so it reads as a divider
+  // for the meters beneath rather than as decoration on the word.
+  const header =
+    `${padVisible(`${INDENT}${columnHeader("claude", leftWidth - INDENT.length)}`, leftWidth)}` +
+    `${gap}${columnHeader("codex", codexWidth)}`;
+  const rows: string[] = ["", header];
   const n = Math.max(claudeLines.length, codexLines.length);
   for (let i = 0; i < n; i++) {
     const left = claudeLines[i] ?? "";
@@ -1496,6 +1501,15 @@ function colorForPct(pct: number): string {
 
 function dim(s: string): string {
   return `\x1b[2m${s}\x1b[0m`;
+}
+
+// A column heading: the provider name in bold, then the underline carried on
+// dim across the rest of the column so the rule spans the meters it heads.
+// Bold and dim are contradictory SGR attributes, so the name and the rule are
+// emitted as separate runs rather than one combined style.
+function columnHeader(name: string, width: number): string {
+  const rule = " ".repeat(Math.max(0, width - name.length));
+  return `\x1b[1;4m${name}\x1b[0m` + (rule ? `\x1b[2;4m${rule}\x1b[0m` : "");
 }
 
 export function formatDuration(ms: number): string {
