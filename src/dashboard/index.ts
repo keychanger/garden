@@ -23,7 +23,11 @@ import {
   runComposeBaseSubmenu, runComposeCrewSubmenu, runComposeModelSubmenu, runComposeEffortSubmenu,
   stageSpawnDraft, composeDefaultFromPicker,
 } from "./trellis-picker.js";
-import { runCrewPicker, applyCrewFromPicker } from "./crew-picker.js";
+import {
+  runCrewPicker, applyCrewFromPicker, runCrewComposer, runStoredCrewPicker,
+  runCrewDimSubmenu, setCrewDimFromPicker, saveCrewFromPicker, runCrewEdit,
+  deleteCrewFromPicker, cancelCrewComposer,
+} from "./crew-picker.js";
 import {
   runWorkerMenu, runWorkerBranchSubmenu, runWorkerCrewSubmenu, runWorkerModelSubmenu,
   runWorkerKillConfirm, applyWorkerSet, applyWorkerSetBounce,
@@ -204,6 +208,46 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   if (sub === "_crew-set") {
     const [, projectName, crewName] = args;
     if (projectName && crewName) applyCrewFromPicker(projectName, crewName);
+    return;
+  }
+  // Crew composer (create / edit / delete a stored crew definition).
+  if (sub === "_crew-compose") {
+    if (args[1]) runCrewComposer(args[1], args[2]);
+    return;
+  }
+  if (sub === "_crew-pick-stored") {
+    const [, projectName, action] = args;
+    if (projectName && action) runStoredCrewPicker(projectName, action);
+    return;
+  }
+  if (sub === "_crew-dim") {
+    const [, projectName, field] = args;
+    if (projectName && field) runCrewDimSubmenu(projectName, field);
+    return;
+  }
+  if (sub === "_crew-dim-set") {
+    // Value may be empty (the "clear" rows).
+    const [, projectName, field] = args;
+    if (projectName && field) setCrewDimFromPicker(projectName, field, args.slice(3).join(" "));
+    return;
+  }
+  if (sub === "_crew-save") {
+    const [, projectName] = args;
+    if (projectName) saveCrewFromPicker(projectName, args.slice(2).join(" "));
+    return;
+  }
+  if (sub === "_crew-edit") {
+    const [, projectName, crewName] = args;
+    if (projectName && crewName) runCrewEdit(projectName, crewName);
+    return;
+  }
+  if (sub === "_crew-delete") {
+    const [, projectName, crewName] = args;
+    if (projectName && crewName) deleteCrewFromPicker(projectName, crewName);
+    return;
+  }
+  if (sub === "_crew-cancel") {
+    if (args[1]) cancelCrewComposer(args[1]);
     return;
   }
   if (sub === "_worker-menu") {

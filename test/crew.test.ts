@@ -25,7 +25,8 @@ const { listMembers, reviewerMembers, listCrews, getCrew, deriveCrew, applyCrew,
   resolveProjectCrew, crewOverridden, clearCrew, saveCrew, deleteCrew,
   isBuiltinCrew, validateCrewDef } =
   await import("../src/dashboard/crew.js");
-const { buildCrewPickerPlan } = await import("../src/dashboard/crew-picker.js");
+const { buildCrewPickerPlan, buildCrewComposerPlan, buildCrewDimSubmenuPlan, buildStoredCrewPickerPlan } =
+  await import("../src/dashboard/crew-picker.js");
 
 function cfg(extra: Partial<GardenConfig> = {}): GardenConfig {
   return { projects: {}, ...extra } as GardenConfig;
@@ -326,23 +327,105 @@ describe("buildCrewPickerPlan", () => {
     const plan = buildCrewPickerPlan("garden", "all-claude", crews, "/opt/homebrew/bin/node /g/dist/cli.js");
     expect(plan.title).toContain("garden");
     expect(plan.title).toContain("all-claude");
-    expect(plan.items).toHaveLength(crews.length);
+    // One row per crew, then a separator and the management rows.
+    expect(plan.items.filter((i) => !i.sep && i.command.includes("_crew-set"))).toHaveLength(crews.length);
     expect(plan.items[0].key).toBe("1");
     expect(plan.items.find((i) => i.label.startsWith("all-claude"))?.label).toContain("✓");
     expect(plan.items[0].command).toContain("dashboard _crew-set");
     expect(plan.items.some((i) => i.command.includes("deepseek-claude"))).toBe(true);
   });
 
+  it("offers 'new crew' always, but edit/delete only once a stored crew exists", () => {
+    const runner = "/n /cli.js";
+    const builtinOnly = buildCrewPickerPlan("garden", null, listCrews(cfg()), runner);
+    const labels = (p: typeof builtinOnly) => p.items.map((i) => i.label);
+    expect(labels(builtinOnly)).toContain("new crew…");
+    // Builtins are generated — there is nothing to edit and nothing to delete.
+    expect(labels(builtinOnly)).not.toContain("edit crew…");
+    expect(labels(builtinOnly)).not.toContain("delete crew…");
+
+    const withStored = buildCrewPickerPlan("garden", null, [
+      { name: "heavy", worker: { name: "claude", harness: "claude-code", model: "opus" }, review: { name: "claude", harness: "claude-code" }, builtin: false },
+      ...listCrews(cfg()),
+    ], runner);
+    expect(labels(withStored)).toContain("edit crew…");
+    expect(labels(withStored)).toContain("delete crew…");
+    // A stored crew shows its recipe; a builtin's name already IS its recipe.
+    expect(labels(withStored).find((l) => l.startsWith("heavy"))).toContain("claude opus → claude");
+    expect(labels(withStored).find((l) => l.startsWith("all-codex"))).toBe("all-codex");
+  });
+
   it("run-shell wraps every item command so tmux dispatches it (not parses it as a tmux command)", () => {
     // The bug that shipped: a bare `<node> <cli.js> …` menu command makes tmux
     // display-menu fail with "unknown command: <node>" and the crew never
-    // changes. Every item must be `run-shell "<cmd>"`.
+    // changes. Every selectable item must be `run-shell "<cmd>"`.
     const crews = listCrews(withDeepseek());
     const plan = buildCrewPickerPlan("garden", "all-claude", crews, "/opt/homebrew/bin/node /g/dist/cli.js");
-    for (const item of plan.items) {
+    for (const item of plan.items.filter((i) => !i.sep)) {
       expect(item.command.startsWith("run-shell ")).toBe(true);
       // The bare runner path must NOT be the first token of the tmux command.
       expect(item.command.startsWith("/opt/homebrew/bin/node")).toBe(false);
     }
+  });
+});
+
+describe("crew composer plans", () => {
+  const runner = "/n /cli.js";
+
+  it("reads the recipe back in the title and offers every dimension", () => {
+    const plan = buildCrewComposerPlan("garden", {
+      worker: "claude", workerModel: "opus", workerEffort: "xhigh", review: "codex",
+    }, runner);
+    expect(plan.title).toBe("New crew (claude opus/xhigh → codex)");
+    const labels = plan.items.map((i) => i.label);
+    expect(labels).toContain("worker: claude");
+    expect(labels).toContain("model: opus");
+    expect(labels).toContain("effort: xhigh");
+    expect(labels).toContain("reviewer: codex");
+    expect(labels).toContain("review-model: (safe default)");
+  });
+
+  it("withholds save until both halves are named", () => {
+    const partial = buildCrewComposerPlan("garden", { worker: "claude" }, runner);
+    expect(partial.items.some((i) => i.label.startsWith("save"))).toBe(false);
+    const complete = buildCrewComposerPlan("garden", { worker: "claude", review: "claude" }, runner);
+    expect(complete.items.some((i) => i.label === "save as…")).toBe(true);
+  });
+
+  it("prompts for a name when creating, but saves straight to the name when editing", () => {
+    const creating = buildCrewComposerPlan("garden", { worker: "claude", review: "claude" }, runner);
+    const save = creating.items.find((i) => i.label === "save as…")!;
+    // command-prompt is already a tmux command — it must NOT be run-shell wrapped
+    // at the top level (the inner dispatch is).
+    expect(save.command.startsWith("command-prompt ")).toBe(true);
+    expect(save.command).toContain("_crew-save");
+
+    const editing = buildCrewComposerPlan("garden", { editing: "heavy", worker: "claude", review: "claude" }, runner);
+    expect(editing.title).toContain("Edit crew 'heavy'");
+    const editSave = editing.items.find((i) => i.label === "save 'heavy'")!;
+    expect(editSave.command.startsWith("run-shell ")).toBe(true);
+    expect(editSave.command).toContain("heavy");
+  });
+
+  it("a dimension submenu offers a clear row only for optional dimensions", () => {
+    const optional = buildCrewDimSubmenuPlan("garden", "model", ["opus"], "opus", "inherit", runner);
+    expect(optional.items.some((i) => i.sep)).toBe(true);
+    expect(optional.items.at(-1)!.label).toBe("inherit");
+    expect(optional.items.at(-1)!.command).toContain("_crew-dim-set");
+    expect(optional.items[0].label).toContain("✓");
+
+    const required = buildCrewDimSubmenuPlan("garden", "worker", ["claude"], undefined, null, runner);
+    expect(required.items.some((i) => i.sep)).toBe(false);
+  });
+
+  it("the stored-crew chooser lists only stored crews and targets the action", () => {
+    const crews = [
+      { name: "heavy", worker: { name: "claude", harness: "claude-code" }, review: { name: "claude", harness: "claude-code" }, builtin: false },
+      ...listCrews(cfg()),
+    ];
+    const plan = buildStoredCrewPickerPlan("garden", "delete", crews, runner);
+    expect(plan.items).toHaveLength(1);
+    expect(plan.items[0].command).toContain("_crew-delete");
+    expect(plan.items[0].command).toContain("heavy");
   });
 });
