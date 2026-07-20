@@ -54,10 +54,11 @@ import {
   buildComposeCrewSubmenuPlan, buildComposeModelSubmenuPlan,
   buildComposeEffortSubmenuPlan, buildComposeMemberSubmenuPlan, draftLaunchOpts,
   composerModels, composerEfforts, effectiveBuildMember, claudeOnlyLaunchOpts,
+  providerModelAliases, memberProvider,
   plantGrowFromPicker, plantBotanistFromPicker, stageSpawnDraft,
 } from "../src/dashboard/trellis-picker.js";
 import { newWorker } from "../src/dashboard/workers.js";
-import { tryGetProject } from "../src/config.js";
+import { tryGetProject, loadConfig } from "../src/config.js";
 import { tmuxDisplay } from "../src/dashboard/tmux.js";
 import { readSpawnDraft, writeSpawnDraft } from "../src/dashboard/spawn-draft.js";
 import fs from "node:fs";
@@ -251,6 +252,53 @@ describe("composerModels / composerEfforts", () => {
   it("offers Codex's own reasoning rungs — which include max — for codex", () => {
     expect(composerEfforts("codex")).toContain("max");
   });
+
+  it("offers a provider's mapped aliases — not the full Anthropic list — for a provider member", () => {
+    // A provider serves only what its modelMap names. Offering `fable` to a
+    // backend that never mapped it would send an alias it cannot resolve.
+    expect(composerModels("claude-code", ["opus", "haiku"])).toEqual(["opus", "haiku"]);
+  });
+
+  it("falls back to the Anthropic aliases when a provider maps nothing", () => {
+    // An empty map means the endpoint serves its own default, so the standard
+    // alias list is the honest offer rather than an empty submenu.
+    expect(composerModels("claude-code", [])).toEqual(["opus", "sonnet", "haiku", "fable"]);
+  });
+});
+
+// ─── providerModelAliases ─────────────────────────────────────────────────
+
+describe("providerModelAliases", () => {
+  const config = {
+    providers: {
+      deepseek: { modelMap: { opus: "deepseek-v4-pro", haiku: "deepseek-v4-flash" } },
+      bare: {},
+    },
+  } as never;
+
+  it("returns the aliases the provider actually maps", () => {
+    expect(providerModelAliases("deepseek", config)).toEqual(["opus", "haiku"]);
+  });
+
+  it("returns nothing for a provider with no modelMap, or an unknown one", () => {
+    expect(providerModelAliases("bare", config)).toEqual([]);
+    expect(providerModelAliases("ghost", config)).toEqual([]);
+  });
+});
+
+// ─── memberProvider ───────────────────────────────────────────────────────
+
+describe("memberProvider", () => {
+  const config = { projects: {}, providers: { deepseek: {} } } as never;
+
+  it("names the backend a provider member builds against", () => {
+    expect(memberProvider("deepseek", config)).toBe("deepseek");
+  });
+
+  it("returns nothing for a harness member — those run first-party", () => {
+    expect(memberProvider("claude", config)).toBeUndefined();
+    expect(memberProvider("codex", config)).toBeUndefined();
+  });
 });
 
 // ─── effectiveBuildMember ─────────────────────────────────────────────────
@@ -340,6 +388,21 @@ describe("stageSpawnDraft", () => {
     vi.mocked(readSpawnDraft).mockReturnValue({ member: "claude", model: "sonnet", effort: "xhigh" });
     stageSpawnDraft("proj", "member", "");
     expect(vi.mocked(writeSpawnDraft)).toHaveBeenCalledWith("proj", { member: "" });
+  });
+
+  // A provider member shares the claude-code HARNESS but not its model
+  // vocabulary — each backend serves only the aliases its own modelMap names.
+  // Keying the clear on harness alone would carry a DeepSeek-only alias onto
+  // first-party claude, or onto a second provider that never mapped it.
+  it("clears model/effort when the member changes provider under one harness", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: {}, providers: { deepseek: {} },
+    } as unknown as ReturnType<typeof loadConfig>);
+    vi.mocked(readSpawnDraft).mockReturnValue({ member: "deepseek", model: "haiku" });
+    stageSpawnDraft("proj", "member", "claude");
+    expect(vi.mocked(writeSpawnDraft)).toHaveBeenCalledWith(
+      "proj", { member: "claude", model: "", effort: "" },
+    );
   });
 
   // A crew supplies the build member when none is staged, so switching crews

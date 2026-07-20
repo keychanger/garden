@@ -8,7 +8,7 @@
 import { execSync, execFileSync, spawn } from "node:child_process";
 import {
   tryGetProject, getAutoContinueConfig, setAutoContinueConfig,
-  anyAnthropicMeteredProject, projectUsageGateExempt,
+  anyAnthropicMeteredProject, projectUsageGateExempt, tryResolveProvider,
 } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { addAlert } from "./alerts.js";
@@ -896,7 +896,7 @@ function maybeAutoContinue(
     });
     return false;
   }
-  const gateReason = autoContinueGateReason(projectName);
+  const gateReason = autoContinueGateReason(projectName, entry.provider);
   if (gateReason) {
     // The sweep replays this on every poke for each stranded worker, so a raw
     // info line would flood. Throttle to once per worker per hour (mirrors
@@ -994,7 +994,7 @@ function autoContinueSkipReason(
 // `garden auto off` (enabled=false with no pausedUntil) still blocks every
 // project: that closure is operator intent, not a meter reading. Callers
 // that have no project context omit the argument and get the strict gate.
-export function autoContinueGateReason(projectName?: string): string | null {
+export function autoContinueGateReason(projectName?: string, workerProvider?: string): string | null {
   let cfg = getAutoContinueConfig();
 
   if (!cfg.enabled && cfg.pausedUntil && cfg.resumeAfterReset) {
@@ -1009,8 +1009,18 @@ export function autoContinueGateReason(projectName?: string): string | null {
     }
   }
 
+  // A worker with its OWN provider spends that backend's pool whatever its
+  // project is configured for, so it is exempt on exactly the reasoning a
+  // provider-backed project is: the Claude meters describe none of its tokens.
+  // Only the exempting direction is per-worker — a first-party worker on a
+  // provider-backed project still falls through to the project check and stays
+  // exempt. Tightening that case would be the unsafe direction to guess at, and
+  // costs nothing to leave: an over-exempt continue is one prompt, not spend.
   let usageExempt = false;
-  if (projectName) {
+  if (workerProvider) {
+    try { usageExempt = tryResolveProvider({ provider: workerProvider }) !== null; } catch { /* keep gate */ }
+  }
+  if (!usageExempt && projectName) {
     try { usageExempt = projectUsageGateExempt(projectName); } catch { /* config unavailable: keep gate */ }
   }
 

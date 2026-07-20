@@ -858,6 +858,65 @@ describe("newWorker", () => {
     expect(entry.harness).toBe("claude-code");
   });
 
+  // ===== Provider selection (the build member's axis-1 half) =====
+  // A member is a (harness, provider) PAIR, so naming one answers both halves.
+  // The project's provider key remains the default for any worker that names no
+  // member at all.
+
+  it("provider: stamps entry.provider for a provider-backed build member", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: {}, plots: {}, providers: { deepseek: {} },
+    } as unknown as ReturnType<typeof loadConfig>);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    expect(newWorker({ harness: "claude", provider: "deepseek" })).toBe("bold-ash");
+    const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.provider).toBe("deepseek");
+    expect(entry.harness).toBe("claude-code");
+  });
+
+  it("provider: rejects an unconfigured provider without creating a worker", () => {
+    // Loudly at creation, rather than silently falling back to the first-party
+    // path at launch — the operator asked for a backend and would otherwise get
+    // billed to the wrong pool with no signal.
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    expect(newWorker({ harness: "claude", provider: "nope" })).toBeNull();
+    expect(vi.mocked(addWorker)).not.toHaveBeenCalled();
+    const msgs = vi.mocked(tmuxDisplay).mock.calls.map((c) => c[0] as string);
+    expect(msgs.some((m) => m.includes("Unknown provider 'nope'"))).toBe(true);
+  });
+
+  it("provider: an explicit member means first-party even on a provider-backed project", () => {
+    // The pair semantics that keep the composer honest: naming `claude` must
+    // build first-party, not inherit the project's backend. Without this there
+    // is no way to spell "first-party" on such a project, and the build dim
+    // would display a member the worker is not.
+    //
+    // Recorded as the EMPTY string, not omitted. Omission means "inherit the
+    // project" to every reader downstream, so a bare omission here would hand
+    // this worker the deepseek backend at launch — the exact bug the pair rule
+    // exists to prevent. workerProject (create.ts) decodes "" back to
+    // first-party.
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", provider: "deepseek",
+    } as ReturnType<typeof tryGetProject>);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ harness: "claude" });
+    const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.provider).toBe("");
+  });
+
+  it("provider: a worker naming no member inherits the project's provider (unstamped)", () => {
+    // The default path is untouched: the project key still applies, and nothing
+    // is written to the entry because there is no per-worker override.
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", provider: "deepseek",
+    } as ReturnType<typeof tryGetProject>);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({});
+    const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.provider).toBeUndefined();
+  });
+
   it("crew: a codex-worker crew builds with codex even on a claude-default project", () => {
     // The mirror case — the crew wins over the (claude) project default too.
     vi.mocked(readDashState).mockReturnValue(makeState());

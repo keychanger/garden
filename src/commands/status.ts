@@ -67,6 +67,11 @@ interface WorkerInfo {
   // undefined for a plain default-workflow worker on the account default, in
   // which case nothing renders — default is invisible.
   harness?: string;
+  // Per-worker provider backend (entry.provider). Pairs with `harness` to name
+  // the worker's build member — a worker on a different backend than its
+  // project badges that member, so a `deepseek` builder on a first-party
+  // project reads as one.
+  provider?: string;
   model?: string;
   workflow?: string;
   // Per-worker crew override (entry.crew). When set and differing from the
@@ -216,7 +221,10 @@ function collectSegments(worker: WorkerInfo, ctx: RowRenderCtx): RowSegments {
   // badge would be redundant. A bare --harness override (no crew) still shows
   // the member badge.
   const crewBadge = (worker.crew && worker.crew !== ctx.projectCrew) ? greyBadge(worker.crew) : "";
-  const workerMember = workerMemberName(worker.harness, ctx.projectProvider);
+  // The worker's OWN backend when it carries one, else the project's — so the
+  // badge names the member this worker actually is, not the one its project
+  // defaults to.
+  const workerMember = workerMemberName(worker.harness, worker.provider ?? ctx.projectProvider);
   const memberBadge = (!crewBadge && workerMember !== ctx.projectMember) ? greyBadge(workerMember) : "";
   const decor = workflowRowDecor(worker);
   const workflowBadge = decor.badge ? greyBadge(decor.badge) : "";
@@ -1001,6 +1009,7 @@ function collectWorkers(
       failCount: entry?.failCount ?? 0,
       baseBranch: entry?.baseBranch,
       harness: entry?.harness,
+      provider: entry?.provider,
       model: entry?.model ?? entry?.trellis?.workerModel,
       workflow: entry?.workflow,
       crew: entry?.crew,
@@ -1027,6 +1036,7 @@ function collectWorkers(
       failCount: entry?.failCount ?? 0,
       baseBranch: entry?.baseBranch,
       harness: entry?.harness,
+      provider: entry?.provider,
       model: entry?.model ?? entry?.trellis?.workerModel,
       workflow: entry?.workflow,
       crew: entry?.crew,

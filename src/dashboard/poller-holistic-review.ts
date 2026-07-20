@@ -137,7 +137,7 @@ export function maybeDispatchHolisticReview(
     });
     return;
   }
-  const gateReason = autoContinueGateReason(projectName);
+  const gateReason = autoContinueGateReason(projectName, entry.provider);
   if (gateReason) {
     log.debug("poller", "holistic-review deferred: usage gate closed", {
       worker: entry.name, data: { project: projectName, gateReason },

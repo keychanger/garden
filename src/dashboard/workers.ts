@@ -76,6 +76,15 @@ export interface NewWorkerOptions {
   // harness is refused. Persisted on entry.harness and threaded through
   // launch/resume/loop.
   harness?: string;
+  // Per-worker provider backend, the axis-1 half of a build member (the
+  // `harness` sibling). Set when the chosen member carries a provider
+  // (`deepseek` → claude-code against that endpoint). Naming a member is a
+  // statement about BOTH halves, so passing `harness` with no `provider` means
+  // first-party — it does not inherit the project's provider. Absent entirely
+  // (no member named) keeps the project key. Validated against the configured
+  // providers and persisted to entry.provider. Default workflow only, like
+  // `harness`.
+  provider?: string;
   // Per-worker base-branch override (`workers new --base`). Takes precedence
   // over the project's configured baseBranch and the checkout-follows default
   // (see resolveSpawnBase). Validated + published through the same
@@ -83,10 +92,9 @@ export interface NewWorkerOptions {
   // pinned to entry.baseBranch.
   base?: string;
   // Per-worker crew (`workers new --crew`). Sets BOTH halves at spawn: the
-  // build harness (the crew's worker member — mutually exclusive with
-  // --harness) and the review family (stamped on entry.crew, applied live by
-  // resolveReviewRole). A provider-backed worker member is rejected upstream
-  // (no per-worker provider). Default workflow only, like --harness.
+  // build member — harness AND provider, mutually exclusive with --harness —
+  // and the review family (stamped on entry.crew, applied live by
+  // resolveReviewRole). Default workflow only, like --harness.
   crew?: string;
   // Workflow that drives the new worker's lifecycle. Defaults to "default".
   // Trellis vines pass "trellis" along with the trellis.name/trellis.path
@@ -205,9 +213,59 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     if (opts.harness) {
       rawHarness = opts.harness;
     } else if (opts.crew) {
-      rawHarness = workerCrew && !workerCrew.worker.provider ? workerCrew.worker.harness : projectHarness;
+      rawHarness = workerCrew?.worker.harness ?? projectHarness;
     } else {
       rawHarness = projectHarness;
+    }
+
+    // Worker PROVIDER resolution (axis 1), the sibling of the harness block
+    // above. A build member is a (harness, provider) PAIR, so naming one is a
+    // statement about both halves: `--harness claude` on a provider-backed
+    // project means first-party claude, and staging the `deepseek` member means
+    // claude-code against that backend. Without the pair semantics the composer
+    // would have to lie — it would show `[claude]` for a worker that in fact
+    // launches against the project's provider, and there would be no way to
+    // spell "first-party" on such a project at all.
+    //
+    // Precedence therefore mirrors harness exactly: an explicit per-worker
+    // member (opts.provider alongside opts.harness) > the per-worker crew's
+    // worker half > the project key > the project's bound crew. The one
+    // asymmetry is the default-workflow gate: harness is default-only, and a
+    // provider rides with it, so a trellis/grow vine keeps the project's
+    // provider whatever member was named.
+    const projectProvider = project.provider ?? projectCrew?.worker.provider;
+    // Was a build member named for THIS worker at all? Only then does the pair
+    // rule apply; otherwise the project key answers, exactly as before.
+    const memberNamed = workflowName === "default"
+      && Boolean(opts.harness || opts.provider || (opts.crew && workerCrew));
+    const namedProvider = opts.harness || opts.provider
+      ? opts.provider
+      : workerCrew?.worker.provider;
+    // The provider this worker actually launches against.
+    const rawProvider = memberNamed ? namedProvider : projectProvider;
+    // What gets PERSISTED. A named member is recorded even when its provider is
+    // absent, because "explicitly first-party" is a real answer that must
+    // survive to launch: entry.provider absent means "inherit the project", so
+    // a bare omission here would silently hand a provider-backed project's
+    // backend to a worker whose member said claude. The empty string is that
+    // explicit-first-party marker (the same clear-by-empty idiom the spawn
+    // draft uses); workerProject in create.ts is the one reader that decodes it.
+    const providerStamp = memberNamed ? (namedProvider ?? "") : undefined;
+    // Validate a per-worker override before stamping: the operator named a
+    // backend, so a name that resolves to nothing must fail loudly here rather
+    // than silently launching first-party and billing the wrong pool. Scoped to
+    // the named member deliberately — an inherited project provider keeps its
+    // existing contract (validated at `garden config` set time, with
+    // workerEnvPrefix's warn-and-fall-back for a hand-broken config), so a
+    // config the operator has not touched can never be made unspawnable here.
+    const providerOverride = memberNamed ? namedProvider : undefined;
+    if (providerOverride && !gardenConfig.providers?.[providerOverride]) {
+      const known = Object.keys(gardenConfig.providers ?? {});
+      tmuxDisplay(`Unknown provider '${providerOverride}'.${known.length ? ` Known: ${known.join(", ")}.` : " None configured."}`);
+      log.error("workers", "rejected newWorker: unknown provider", {
+        data: { project: targetProject, provider: providerOverride },
+      });
+      return;
     }
     // Canonicalize the operator-facing "claude" alias to the registry name.
     // This is the chokepoint every worker-creation path funnels through (CLI
@@ -228,7 +286,10 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // invocation path) and refuse to spawn a worker that would launch with
     // an empty token; an unauthenticated worker fails opaquely at first
     // inference, far from the cause.
-    const workerProvider = tryResolveProvider(project);
+    // Resolved against the worker's OWN provider (which may differ from the
+    // project's, or be absent where the project has one), so the token check
+    // describes the endpoint this worker will actually reach.
+    const workerProvider = tryResolveProvider({ provider: rawProvider }, gardenConfig);
     if (workerProvider) {
       syncProviderTokenToSession(workerProvider);
       const presence = providerTokenPresence(workerProvider);
@@ -433,6 +494,9 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       // Harness adapter (agent CLI). Absent = claude-code; consumers read via
       // getHarness(entry.harness). Threaded into launch/resume/loop.
       ...(resolvedHarness ? { harness: resolvedHarness } : {}),
+      // Per-worker provider backend (the member's axis-1 half). Absent = the
+      // project key applies, so only a genuine per-worker override is stamped.
+      ...(providerStamp !== undefined ? { provider: providerStamp } : {}),
       // Per-worker crew — its review half, applied live by resolveReviewRole
       // (the build half is already folded into resolvedHarness above).
       ...(opts.crew ? { crew: opts.crew } : {}),
@@ -512,14 +576,17 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // with progress output instead of blocking the hotkey handler. Default
     // workers omit the options argument entirely (preserves arity for existing
     // callers and tests).
-    const bootstrapOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string; botanist?: boolean } = {};
+    const bootstrapOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string; provider?: string; botanist?: boolean } = {};
     if (trellisRelativePath) bootstrapOpts.trellisRelativePath = trellisRelativePath;
     if (resolvedModel) bootstrapOpts.model = resolvedModel;
     if (ultracode) bootstrapOpts.ultracode = true;
     if (effectiveEffort) bootstrapOpts.effort = effectiveEffort;
     if (resolvedHarness) bootstrapOpts.harness = resolvedHarness;
+    // Only a per-worker override needs threading — the project key is read
+    // from config by the launch builders themselves.
+    if (providerStamp !== undefined) bootstrapOpts.provider = providerStamp;
     if (workflowName === "botanist") bootstrapOpts.botanist = true;
-    const scriptFile = (bootstrapOpts.trellisRelativePath || bootstrapOpts.model || bootstrapOpts.ultracode || bootstrapOpts.effort || bootstrapOpts.harness || bootstrapOpts.botanist)
+    const scriptFile = (bootstrapOpts.trellisRelativePath || bootstrapOpts.model || bootstrapOpts.ultracode || bootstrapOpts.effort || bootstrapOpts.harness || bootstrapOpts.provider || bootstrapOpts.botanist)
       ? buildWorktreeBootstrapScript(
           project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
           bootstrapOpts,
@@ -618,7 +685,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       recordWorkerCreated(targetProject, workerName, createdAt, {
         workflow: workflowName,
         harness: resolvedHarness ?? "claude-code",
-        provider: project.provider ?? null,
+        provider: rawProvider ?? null,
         model: resolvedModel ?? null,
         ultracode,
         crew: opts.crew ?? deriveCrew(project, cfg),
@@ -842,14 +909,17 @@ export function bounceWorker(projectName: string, workerName: string): void {
   // resolve their model per iteration, not on bounce. Plain workers omit
   // the options arg so existing tests (which assert exact argument arity)
   // still pass.
-  const resumeOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string } = {};
+  const resumeOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string; provider?: string } = {};
   if (trellisRelativePath) resumeOpts.trellisRelativePath = trellisRelativePath;
   if (entry.model) resumeOpts.model = entry.model;
   if (entry.ultracode) resumeOpts.ultracode = true;
   if (entry.effort) resumeOpts.effort = entry.effort;
   if (entry.harness) resumeOpts.harness = entry.harness;
+  // `!== undefined`, not truthy: the empty string is the explicit-first-party
+  // marker and must survive a bounce exactly like a named backend does.
+  if (entry.provider !== undefined) resumeOpts.provider = entry.provider;
   const resumeCmd = entry.worktreePath && entry.branchName && projectInfo
-    ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.ultracode || resumeOpts.effort || resumeOpts.harness
+    ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.ultracode || resumeOpts.effort || resumeOpts.harness || resumeOpts.provider !== undefined
         ? buildWorktreeResumeCommand(
             projectName, projectInfo.path, entry.name, entry.branchName,
             entry.sessionId, baseBranch, resumeOpts,

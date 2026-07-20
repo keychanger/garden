@@ -83,7 +83,11 @@ original sketch:
   bounce, loop respawn, and the reviewer pin together with
   `WorkerEntry.harness`, and a half-threaded override that silently
   reverts to the project provider on respawn would be worse than
-  project-level-only. Model intent tiers (workhorse/quality) likewise
+  project-level-only. **Shipped since**, as the axis-1 half of the spawn
+  composer's build-member dim rather than a bare flag: `WorkerEntry.provider`
+  is threaded through launch/resume/bounce/loop respawn, and the reviewer pin
+  needs nothing because the review family never reads it (first-party by
+  construction). See DESIGN.md "Spawn composer". Model intent tiers (workhorse/quality) likewise
   wait for the adapter interface they parameterize.
 - The `Turn[]` transcript seam needed no new code: `resolveTranscriptPath`
   + `readConversation → Turn[]` in `conversation.ts` are already the

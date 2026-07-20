@@ -191,7 +191,13 @@ export function loopAutoContinueAfterMerge(
     // The respawn must build with the same harness whose allocateSessionId
     // and installRuntimeConfig ran above — thread the entry's adapter
     // unless the hooks caller already pinned one.
-    { ...workerCommandOpts, harness: workerCommandOpts.harness ?? entry.harness },
+    {
+      ...workerCommandOpts,
+      harness: workerCommandOpts.harness ?? entry.harness,
+      // Same reasoning for the backend: a respawn must reach the same endpoint
+      // the worker has been building against, not the project default.
+      provider: workerCommandOpts.provider ?? entry.provider,  // "" = explicit first-party, preserved by ??
+    },
   );
   updateWorkerFields(projectName, workerName, {
     sessionId: newSessionId,

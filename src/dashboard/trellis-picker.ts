@@ -403,12 +403,34 @@ export function memberHarness(member: string, config: GardenConfig): string {
   return findMember(member, config)?.harness ?? DEFAULT_MEMBER_HARNESS;
 }
 
-// Model / effort vocabularies are per-harness, not universal: Codex names
-// concrete slugs (gpt-5.6-sol) where Anthropic names aliases (opus), and Codex's
-// reasoning rungs are its own `model_reasoning_effort` values. Offering one
-// harness's vocabulary while the other builds is the bug this fixes.
-export function composerModels(harness: string): string[] {
-  return harness === CODEX_HARNESS ? codexModels() : COMPOSER_MODELS;
+// The provider backend a member builds against, if any. A harness member
+// (claude / codex) carries none — it runs first-party.
+export function memberProvider(member: string, config: GardenConfig): string | undefined {
+  return findMember(member, config)?.provider;
+}
+
+// The model aliases a provider actually serves — the keys of its `modelMap`,
+// which is the whole set of names that resolve to a real backend model for it.
+// Offering the full Anthropic list would be wrong in both directions: an
+// unmapped alias reaches the provider as a literal it does not know, and the
+// provider may map only a subset (`haiku` alone). An empty/absent map means the
+// provider serves whatever its endpoint defaults to, so the caller falls back.
+export function providerModelAliases(provider: string, config: GardenConfig): string[] {
+  const map = config.providers?.[provider]?.modelMap ?? {};
+  return Object.entries(map).filter(([, v]) => v).map(([k]) => k);
+}
+
+// Model / effort vocabularies belong to the build MEMBER, not to garden: Codex
+// names concrete slugs (gpt-5.6-sol) where Anthropic names aliases (opus), a
+// provider serves only the aliases its modelMap defines, and Codex's reasoning
+// rungs are its own `model_reasoning_effort` values. Offering one member's
+// vocabulary while another builds is the bug this fixes.
+export function composerModels(harness: string, providerAliases?: string[]): string[] {
+  if (harness === CODEX_HARNESS) return codexModels();
+  // A provider is reached through claude-code, so it shares the harness but
+  // NOT the model vocabulary.
+  if (providerAliases && providerAliases.length > 0) return providerAliases;
+  return COMPOSER_MODELS;
 }
 
 export function composerEfforts(harness: string): string[] {
@@ -493,12 +515,11 @@ export function buildComposeBaseSubmenuPlan(project: string, branches: string[],
   return { title: `Base branch for the new worker on ${project}`, rows };
 }
 
-// Build member dim — who builds (claude / codex / any other registered
-// harness). Staged as `member` and consumed as newWorker's `harness`, which
-// outranks a staged crew's worker half, so picking a builder here and a crew
-// there means "this builder, that reviewer". Provider members are absent for
-// the same reason the crew submenu filters them: a per-worker spawn has no
-// provider path yet (the worker's backend comes from the project).
+// Build member dim — who builds: `claude`, `codex`, any other registered
+// harness, plus one row per configured provider (`deepseek` → claude-code
+// against that backend). Staged as `member` and consumed as newWorker's
+// harness+provider PAIR, which outranks a staged crew's worker half, so picking
+// a builder here and a crew there means "this builder, that reviewer".
 export function buildComposeMemberSubmenuPlan(project: string, members: string[], current: string | undefined, runner: string): MenuSpec {
   const p = shellEscape(project);
   const rows: MenuRow[] = members.map((m, i) => ({
@@ -589,8 +610,9 @@ export function runComposeCrewSubmenu(projectName: string): void {
 
 export function runComposeMemberSubmenu(projectName: string): void {
   if (!tryGetProject(projectName)) { tmuxDisplay(`Unknown project '${projectName}'.`); return; }
-  // Harness members only — see buildComposeMemberSubmenuPlan.
-  const members = listMembers(loadConfig()).filter(m => !m.provider).map(m => m.name);
+  // Every member, provider-backed ones included — see
+  // buildComposeMemberSubmenuPlan.
+  const members = listMembers(loadConfig()).map(m => m.name);
   runMenu(buildComposeMemberSubmenuPlan(projectName, members, readSpawnDraft(projectName).member, resolveGardenRunner()));
 }
 
@@ -600,7 +622,13 @@ export function runComposeModelSubmenu(projectName: string): void {
   const project = tryGetProject(projectName);
   if (!project) { tmuxDisplay(`Unknown project '${projectName}'.`); return; }
   const draft = readSpawnDraft(projectName);
-  const models = composerModels(draftBuildHarness(project, draft));
+  const config = loadConfig();
+  const member = effectiveBuildMember(project, draft, config);
+  const provider = memberProvider(member, config);
+  const models = composerModels(
+    memberHarness(member, config),
+    provider ? providerModelAliases(provider, config) : undefined,
+  );
   runMenu(buildComposeModelSubmenuPlan(projectName, models, draft.model, resolveGardenRunner()));
 }
 
@@ -635,6 +663,21 @@ function draftBuildHarness(
   return memberHarness(effectiveBuildMember(project, draft, config), config);
 }
 
+// The (harness, provider) pair a draft will build with, as a comparable string.
+// The staged model/effort are cleared when this changes rather than when the
+// harness alone does: two provider members share the claude-code harness but
+// not their model vocabularies (each serves only its own modelMap aliases), so
+// keying the clear on harness would carry a DeepSeek-only alias onto a
+// different backend that never mapped it.
+function draftBuildPair(
+  project: Pick<ProjectConfig, "harness" | "provider" | "crew">,
+  draft: SpawnDraftPatch,
+): string {
+  const config = loadConfig();
+  const member = effectiveBuildMember(project, draft, config);
+  return `${memberHarness(member, config)}/${memberProvider(member, config) ?? ""}`;
+}
+
 // _spawn-draft <project> <field> <value>: stage a base/crew/member/model/effort
 // override and re-open the composer (form feel). Empty value clears the field.
 //
@@ -653,8 +696,8 @@ export function stageSpawnDraft(projectName: string, field: string, value: strin
     const project = tryGetProject(projectName);
     if (project) {
       const draft = readSpawnDraft(projectName);
-      const before = draftBuildHarness(project, draft);
-      const after = draftBuildHarness(project, { ...draft, [field]: value });
+      const before = draftBuildPair(project, draft);
+      const after = draftBuildPair(project, { ...draft, [field]: value });
       if (before !== after) { patch.model = ""; patch.effort = ""; }
     }
   }
@@ -672,12 +715,23 @@ export function composeDefaultFromPicker(projectName: string): void {
   // The staged member becomes `harness`, which newWorker treats as authoritative
   // over a crew's worker half — so staging both spawns this builder reviewed by
   // that crew's reviewer. The model/effort dialect follows the same harness.
-  const harness = memberHarness(effectiveBuildMember(project, draft, config), config);
+  const member = effectiveBuildMember(project, draft, config);
+  const harness = memberHarness(member, config);
+  // A staged member is passed as its full pair: the harness AND the provider it
+  // builds against. Passing only the harness would let the project's provider
+  // leak back in, which is exactly the lie the build dim exists to prevent —
+  // choosing `claude` on a provider-backed project must mean first-party.
+  const memberOpts = draft.member
+    ? {
+        harness: memberHarness(draft.member, config),
+        ...(memberProvider(draft.member, config) ? { provider: memberProvider(draft.member, config) } : {}),
+      }
+    : {};
   const newName = newWorker({
     projectName,
     ...(draft.base ? { base: draft.base } : {}),
     ...(draft.crew ? { crew: draft.crew } : {}),
-    ...(draft.member ? { harness: draft.member } : {}),
+    ...memberOpts,
     ...draftLaunchOpts(draft, harness),
   });
   if (!newName) {

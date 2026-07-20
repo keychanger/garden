@@ -333,15 +333,17 @@ export function ensureDashboard(): void {
       const trellisRelativePath = trellisRelativePathForEntry(entry, projectConfig.path);
       // entry.model: default/grow per-worker pin; trellis resolves per
       // iteration, so vines never carry it.
-      const resumeOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string; botanist?: boolean } = {};
+      const resumeOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string; provider?: string; botanist?: boolean } = {};
       if (trellisRelativePath) resumeOpts.trellisRelativePath = trellisRelativePath;
       if (entry.model) resumeOpts.model = entry.model;
       if (entry.ultracode) resumeOpts.ultracode = true;
       if (entry.effort) resumeOpts.effort = entry.effort;
       if (entry.harness) resumeOpts.harness = entry.harness;
+      // `!== undefined`: the empty string is the explicit-first-party marker.
+      if (entry.provider !== undefined) resumeOpts.provider = entry.provider;
       if (entry.workflow === "botanist") resumeOpts.botanist = true;
       const resumeCmd = entry.worktreePath && entry.branchName
-        ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.ultracode || resumeOpts.effort || resumeOpts.harness || resumeOpts.botanist
+        ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.ultracode || resumeOpts.effort || resumeOpts.harness || resumeOpts.provider !== undefined || resumeOpts.botanist
             ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch, resumeOpts)
             : buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch))
         : buildResumeCommand(projectName, projectConfig.path, entry.sessionId);
@@ -639,6 +641,13 @@ export interface WorktreeCommandOptions {
    *  ignores that flag — but its own "ultra" reasoning level is a plain effort
    *  value that passes straight through. */
   effort?: string;
+  /** Per-worker provider backend (`WorkerEntry.provider`) — the axis-1 half
+   *  of the build member, overriding the project's `provider` key for this
+   *  worker's launch env. Absent = the project key applies, so the common case
+   *  threads nothing; the empty string means explicitly first-party (see
+   *  workerProject). Threaded by resume/bounce/loop callers from the entry so
+   *  the backend survives the worker's lifetime, exactly like `model`. */
+  provider?: string;
   /** Harness adapter name (`WorkerEntry.harness`). Absent = the default
    *  claude-code adapter. Threaded by resume/bounce/loop callers from the
    *  entry; spawn-time selection arrives with the second adapter. */
@@ -667,7 +676,7 @@ export function buildWorktreeWorkerCommand(
   const project = resolveProjectForHooks(projectName, projectPath);
   const agentCmd = getHarness(opts?.harness).buildAgentCommand({
     sessionId, resume: false, contextFile, model: opts?.model,
-    ultracode: opts?.ultracode, effort: opts?.effort, envPrefix: workerEnvPrefix(project),
+    ultracode: opts?.ultracode, effort: opts?.effort, envPrefix: workerEnvPrefix(workerProject(project, opts?.provider)),
     worktreeGitDir: codexWorktreeGitDir(opts?.harness, projectPath),
   });
   return `${agentCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
@@ -678,6 +687,23 @@ export function buildWorktreeWorkerCommand(
 // .worktreeGitDir). Resolved from the project's main checkout so it works
 // before the worktree exists; only for the codex harness (skips the git spawn
 // on the hot claude-code path). Other harnesses ignore the field.
+// The project view a WORKER's launch env is built from: the real project with
+// its provider replaced by the worker's own, when that worker carries a
+// per-worker override (its build member named a backend). Absent override =
+// the project unchanged, so every pre-existing launch path is byte-identical.
+// Only the worker role consults this — reviewerEnvPrefix deliberately reads the
+// project, since the review family stays first-party by construction.
+function workerProject<T extends { provider?: string }>(project: T, provider: string | undefined): T {
+  // undefined = no per-worker answer, inherit the project (the pre-existing
+  // path, byte-identical). A non-empty string = this worker's backend. The
+  // EMPTY string is the explicit-first-party marker newWorker stamps for a
+  // member that named no provider — it must clear the project's, not fall
+  // through to it, or "claude" on a provider-backed project would silently
+  // launch against the provider anyway.
+  if (provider === undefined) return project;
+  return { ...project, provider: provider || undefined };
+}
+
 function codexWorktreeGitDir(harness: string | undefined, projectPath: string): string | undefined {
   return harness === "codex" ? (getGitCommonDir(projectPath) ?? undefined) : undefined;
 }
@@ -788,7 +814,7 @@ export function buildWorktreeBootstrapScript(
   const botanistSkillFilenameLit = shellEscape(BOTANIST_SKILL_FILENAME);
   const agentCmd = getHarness(opts?.harness).buildAgentCommand({
     sessionId, resume: false, contextFile, model: opts?.model,
-    ultracode: opts?.ultracode, effort: opts?.effort, envPrefix: workerEnvPrefix(project),
+    ultracode: opts?.ultracode, effort: opts?.effort, envPrefix: workerEnvPrefix(workerProject(project, opts?.provider)),
     worktreeGitDir: codexWorktreeGitDir(opts?.harness, projectPath),
   });
 
@@ -1026,7 +1052,7 @@ export function buildWorktreeResumeCommand(
   const identityExports = workerEnvExports(projectName, workerName, branchName, baseBranch);
   const claudeCmd = getHarness(opts?.harness).buildAgentCommand({
     sessionId, resume: true, contextFile, model: opts?.model,
-    ultracode: opts?.ultracode, effort: opts?.effort, envPrefix: workerEnvPrefix(project),
+    ultracode: opts?.ultracode, effort: opts?.effort, envPrefix: workerEnvPrefix(workerProject(project, opts?.provider)),
     worktreeGitDir: codexWorktreeGitDir(opts?.harness, projectPath),
   });
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;

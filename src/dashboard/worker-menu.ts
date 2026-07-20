@@ -194,7 +194,9 @@ export function runWorkerCrewSubmenu(project: string, worker: string): void {
     ? resolveReviewRole(proj, t.entry.workflow ?? "default", "reviewer", config, t.entry).harness
     : "claude-code";
   runMenu(buildWorkerCrewSubmenuPlan(
-    project, worker, reviewerMembers(config), t.entry.harness, proj?.provider, reviewer, resolveGardenRunner(),
+    // The worker's own backend when it has one — the crew name must pair the
+    // member this worker IS with the chosen reviewer, not the project's member.
+    project, worker, reviewerMembers(config), t.entry.harness, t.entry.provider ?? proj?.provider, reviewer, resolveGardenRunner(),
   ));
 }
 

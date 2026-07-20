@@ -348,6 +348,23 @@ export interface WorkerEntry {
   // resume/bounce/loop paths thread it from day one.
   // See docs/MULTI-MODEL.md "Layer 3".
   harness?: string;
+  // Per-worker provider backend (axis 1, the `harness` analog for axis 2) —
+  // the Anthropic-Messages-compatible endpoint this worker's claude-code
+  // session runs against, set when its build member carries one (`deepseek`).
+  // Absent = the project's `provider` key, which remains the default for every
+  // worker that did not name a member. The EMPTY string is distinct from
+  // absent: it means the worker's member named no provider — explicitly
+  // first-party — and must CLEAR a provider-backed project's key rather than
+  // inherit it, or `claude` on such a project would launch against the
+  // provider anyway (see `workerProject` in create.ts, the one decoder).
+  // Read by the launch/resume/bounce env
+  // builders (`workerEnvPrefix`) and by the usage gate, both of which resolve
+  // it through the same `resolveProvider` the project key uses — a worker on a
+  // provider spends a token pool the Claude meters do not describe, exactly
+  // like a provider-backed project. NEVER consulted for the review family:
+  // reviewer/resolver/ci-fix stay first-party by construction (a provider on
+  // review defeats the safety net). See docs/MULTI-MODEL.md "Layer 1".
+  provider?: string;
   // Per-worker model, set via `--model` at creation for default and grow
   // workers. Opaque string: an Anthropic alias ("opus"/"sonnet" — resolved
   // through the provider's modelMap on provider-backed projects) or any

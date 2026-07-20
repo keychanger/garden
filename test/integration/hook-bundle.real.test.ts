@@ -48,7 +48,16 @@ import path from "node:path";
 // clean-worktree gate in poller-review.ts handleWorking (~0.3kb). Both are
 // legitimate reachable code, not a retained closure; SKILLS_BYTES_CEILING still
 // guards the skills-content regression this backstop was built for.
-const HOOK_BUNDLE_CEILING_BYTES = 236 * 1024;
+// Bumped 236->238kb for the per-worker provider (the build member's axis-1
+// half): the auto-continue usage gate in poller-merge.ts now resolves a
+// worker's own backend before the project's, and the status row carries
+// WorkerInfo.provider into workerMemberName (commands/status.ts, already
+// reachable via header.ts). ~35 bytes over the old ceiling — verified against
+// the metafile as those two files growing, with skillsBytes still 0 and the
+// composer's own modules (trellis-picker.ts, harness/codex-models.ts) absent
+// from the bundle entirely, which is what keeps the Codex catalog read off the
+// per-tool-call path.
+const HOOK_BUNDLE_CEILING_BYTES = 238 * 1024;
 // skills.ts contributes only a tree-shaken sliver today (<100 bytes); a
 // retained skills bundle is ~28kb. The threshold sits well between.
 const SKILLS_BYTES_CEILING = 2 * 1024;

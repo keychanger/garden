@@ -120,19 +120,16 @@ async function newCommand(args: string[]): Promise<void> {
   }
 
   // Per-worker crew (default workflow only, mutually exclusive with --harness):
-  // sets the build harness (its worker member) + the live review family.
+  // sets the build member — harness AND provider — plus the live review family.
+  // A provider-backed worker member is accepted: entry.provider carries the
+  // backend for this worker alone, so `--crew deepseek-claude` is a cheap
+  // builder with a first-party reviewer.
   const crew = flags.get("crew");
   if (crew !== undefined) {
     const cfg = loadConfig();
     const spec = getCrew(crew, cfg);
     if (!spec) {
       throw new Error(`--crew must be one of: ${listCrews(cfg).map(c => c.name).join(", ")}, got '${crew}'`);
-    }
-    if (spec.worker.provider) {
-      throw new Error(
-        `--crew '${crew}' has a provider-backed worker member (${spec.worker.name}); per-worker provider is not supported. `
-        + `Set the provider at project level (garden config <p> provider) or pick an all-harness crew.`,
-      );
     }
     if (harness) {
       throw new Error("--crew and --harness are mutually exclusive (a crew already selects the worker harness).");

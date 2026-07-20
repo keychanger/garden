@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 
 vi.mock("node:fs", () => ({
   default: {
@@ -414,6 +414,59 @@ describe("buildWorktreeWorkerCommand", () => {
   it("includes --rc so worker surfaces in Claude app remote sessions", () => {
     const cmd = buildWorktreeWorkerCommand("myproject", "/repo/myproject", "bold-ash", "bold-ash", "session-123");
     expect(cmd).toContain("--rc");
+  });
+
+  // The per-worker backend (the build member's axis-1 half). These three cases
+  // are the whole contract of WorkerEntry.provider's encoding, checked where it
+  // actually matters: the env the worker launches with.
+  describe("per-worker provider", () => {
+    // Resolve against whatever project view the builder passes, so the test
+    // observes the override rather than a fixed mock answer.
+    const byProject = async () => {
+      const { tryResolveProvider } = await import("../src/config.js");
+      vi.mocked(tryResolveProvider).mockImplementation((p: { provider?: string }) =>
+        p?.provider
+          ? {
+              name: p.provider, label: p.provider,
+              baseUrl: `https://api.${p.provider}.com/anthropic`,
+              authTokenEnv: "TOKEN_ENV",
+            }
+          : null);
+    };
+    const project = { name: "myproject", path: "/repo/myproject", provider: "deepseek" };
+
+    beforeEach(async () => {
+      await byProject();
+      const { tryGetProject } = await import("../src/config.js");
+      vi.mocked(tryGetProject).mockReturnValue(project as ReturnType<typeof tryGetProject>);
+    });
+
+    afterEach(async () => {
+      const { tryResolveProvider } = await import("../src/config.js");
+      vi.mocked(tryResolveProvider).mockReturnValue(null);
+    });
+
+    it("no per-worker answer inherits the project's provider", () => {
+      const cmd = buildWorktreeWorkerCommand("myproject", "/repo/myproject", "bold-ash", "bold-ash", "s1");
+      expect(cmd).toContain("https://api.deepseek.com/anthropic");
+    });
+
+    it("a named backend overrides the project's", () => {
+      const cmd = buildWorktreeWorkerCommand("myproject", "/repo/myproject", "bold-ash", "bold-ash", "s1",
+        undefined, { provider: "othervendor" });
+      expect(cmd).toContain("https://api.othervendor.com/anthropic");
+      expect(cmd).not.toContain("deepseek");
+    });
+
+    it("the empty-string marker clears the project's provider (explicitly first-party)", () => {
+      // The load-bearing case. Absent and "" must NOT behave alike: a member
+      // that named no backend means first-party, so this worker has to launch
+      // with no provider env even though its project has one.
+      const cmd = buildWorktreeWorkerCommand("myproject", "/repo/myproject", "bold-ash", "bold-ash", "s1",
+        undefined, { provider: "" });
+      expect(cmd).not.toContain("ANTHROPIC_BASE_URL=");
+      expect(cmd).not.toContain("deepseek");
+    });
   });
 });
 
