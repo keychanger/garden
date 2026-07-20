@@ -41,7 +41,7 @@ import { maybeDispatchHolisticReview } from "./poller-holistic-review.js";
 import { killReviewWindow } from "./poller-review.js";
 import { launchResolver } from "./poller-resolve.js";
 import { launchCiFix } from "./poller-ci-fix.js";
-import { checkCiStatus, getGitHubRepoSlug, type CiStatus } from "./poller-ci.js";
+import { checkCiStatus, getGitHubRepoSlug, projectDefinesCi, type CiStatus } from "./poller-ci.js";
 
 const AUTO_CONTINUE_DEBOUNCE_MS = 10_000;
 // Last fast-forward outcome per `${project}:${base}`, so the post-merge alert
@@ -327,13 +327,18 @@ function gateCiStatus(
       return true;
 
     case "no-ci": {
-      // On a project known to have CI, zero check-runs means they haven't
+      // On a project that has CI, zero check-runs means they haven't
       // materialized yet (we may have queried within seconds of a reviewer-fix
       // / ci-fix force-push). Defer so the freshly-amended commit is actually
       // gated — up to a grace ceiling, after which we accept there are none.
-      // Projects that genuinely have no CI (never saw a check-run) pass through
-      // immediately, so a no-CI merge is never delayed.
-      if (projectHasCi.get(projectName) === true) {
+      // Projects that genuinely have no CI pass through immediately, so a
+      // no-CI merge is never delayed.
+      //
+      // "Has CI" reads the workflow files on disk FIRST: the learned flag alone
+      // could never be set, because setting it required observing a check-run
+      // that this same race hides (see projectDefinesCi). The flag remains as an
+      // OR for CI that has no workflow file in the repo.
+      if (projectDefinesCi(projectPath) || projectHasCi.get(projectName) === true) {
         const key = `${projectName}:${sha}`;
         let since = ciNoRunsSince.get(key);
         if (since === undefined) { since = Date.now(); ciNoRunsSince.set(key, since); }

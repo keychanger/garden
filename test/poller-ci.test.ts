@@ -1,5 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(() => ""),
@@ -10,7 +13,7 @@ vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { getGitHubRepoSlug, checkCiStatus } from "../src/dashboard/poller-ci.js";
+import { getGitHubRepoSlug, checkCiStatus, projectDefinesCi } from "../src/dashboard/poller-ci.js";
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -161,5 +164,45 @@ describe("checkCiStatus", () => {
       ].join("\n"),
     });
     expect(checkCiStatus("owner/repo", "deadbeef").kind).toBe("success");
+  });
+});
+
+describe("projectDefinesCi", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "garden-ci-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("detects a .yml workflow", () => {
+    fs.mkdirSync(path.join(dir, ".github", "workflows"), { recursive: true });
+    fs.writeFileSync(path.join(dir, ".github", "workflows", "test.yml"), "on: push\n");
+    expect(projectDefinesCi(dir)).toBe(true);
+  });
+
+  it("detects a .yaml workflow", () => {
+    fs.mkdirSync(path.join(dir, ".github", "workflows"), { recursive: true });
+    fs.writeFileSync(path.join(dir, ".github", "workflows", "test.yaml"), "on: push\n");
+    expect(projectDefinesCi(dir)).toBe(true);
+  });
+
+  it("is false with no .github directory at all", () => {
+    expect(projectDefinesCi(dir)).toBe(false);
+  });
+
+  it("is false when the workflows directory holds no yaml", () => {
+    // A README-only workflows dir is not CI — this is the case that must keep
+    // passing straight through rather than eating the 3-minute grace window.
+    fs.mkdirSync(path.join(dir, ".github", "workflows"), { recursive: true });
+    fs.writeFileSync(path.join(dir, ".github", "workflows", "README.md"), "notes\n");
+    expect(projectDefinesCi(dir)).toBe(false);
+  });
+
+  it("is false on an unreadable path rather than throwing", () => {
+    expect(projectDefinesCi(path.join(dir, "does-not-exist"))).toBe(false);
   });
 });

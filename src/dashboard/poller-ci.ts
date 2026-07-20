@@ -9,16 +9,19 @@
 //
 // Contract for handleMergePending (poller-merge.ts):
 //   - "success" / "unavailable" → proceed with merge
-//   - "no-ci" → proceed, UNLESS the caller has observed this project run CI
-//     before, in which case zero check-runs is treated as "not yet
-//     materialized" and the merge defers within a bounded grace window before
-//     passing through (the disambiguation lives in gateCiStatus, poller-merge.ts)
+//   - "no-ci" → proceed, UNLESS the project has CI (workflow files on disk, or
+//     a check-run observed earlier this poller's life), in which case zero
+//     check-runs is treated as "not yet materialized" and the merge defers
+//     within a bounded grace window before passing through (the disambiguation
+//     lives in gateCiStatus, poller-merge.ts)
 //   - "pending" → defer (caller stays in merge-pending, schedules a re-poke)
 //   - "failed" → caller transitions worker to `failing` with reason "ci"
 //
 // "unavailable" (gh missing, not a github remote, or API error) always passes
 // through — failing closed there would block legitimate non-GitHub projects.
 import { execFileSync, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { log } from "./log.js";
 
 export type CiStatus =
@@ -51,6 +54,32 @@ export function getGitHubRepoSlug(projectPath: string): string | null {
   const httpsMatch = url.match(/^https?:\/\/(?:[^@]+@)?github\.com\/([^/]+\/[^/]+?)(?:\.git)?\/?$/);
   if (httpsMatch) return httpsMatch[1];
   return null;
+}
+
+// Does this project define GitHub Actions workflows on disk?
+//
+// This answers the question zero check-runs is ambiguous about: "not created
+// YET" (defer) vs "this project has no CI" (pass through). The poller used to
+// answer it only from a learned in-memory flag, set the first time a query
+// observed any check-run — but the poller queries within seconds of the
+// reviewer's force-push, while GitHub takes ~5-12s to create the runs. So the
+// query returned zero runs, the flag stayed unset, and the flag's only setter
+// was the very observation the race prevented: after a poller restart the gate
+// passed everything through silently. A red main merged that way on 2026-07-20.
+//
+// The checkout on disk is the durable answer — it survives a restart and needs
+// no network. Kept as an OR with the learned flag, which still covers CI that
+// has no workflow file in the repo (CodeQL default setup, third-party apps).
+export function projectDefinesCi(projectPath: string): boolean {
+  try {
+    return fs
+      .readdirSync(path.join(projectPath, ".github", "workflows"))
+      .some((f) => f.endsWith(".yml") || f.endsWith(".yaml"));
+  } catch {
+    // No .github/workflows directory (or unreadable) — not a CI project as far
+    // as the repo is concerned.
+    return false;
+  }
 }
 
 // Query GitHub Actions check-runs for a commit and reduce to a single

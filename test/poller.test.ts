@@ -203,6 +203,9 @@ vi.mock("../src/dashboard/poller-ci.js", () => ({
   // override these to exercise the success/pending/failed/unavailable paths.
   getGitHubRepoSlug: vi.fn(() => null),
   checkCiStatus: vi.fn(() => ({ kind: "success" })),
+  // Default: no workflow files on disk, so zero check-runs reads as "this
+  // project has no CI" and passes through.
+  projectDefinesCi: vi.fn(() => false),
 }));
 
 vi.mock("../src/dashboard/continue.js", () => ({
@@ -258,7 +261,7 @@ import { addAlert } from "../src/dashboard/alerts.js";
 import { log } from "../src/dashboard/log.js";
 import { dispatchDelayedAutoContinue, isAwaitingInput, isDoneSet, setDoneSentinel } from "../src/dashboard/continue.js";
 import { scheduleDelayedPoke } from "../src/dashboard/poller-fifo.js";
-import { getGitHubRepoSlug, checkCiStatus } from "../src/dashboard/poller-ci.js";
+import { getGitHubRepoSlug, checkCiStatus, projectDefinesCi } from "../src/dashboard/poller-ci.js";
 import { sweepGhostEntries } from "../src/dashboard/validate.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
 import { recordCiFixOutcome } from "../src/dashboard/telemetry.js";
@@ -3890,6 +3893,23 @@ describe("poll — merge-pending CI gate", () => {
     // this as "no CI" and merge un-gated; it defers within the grace window.
     vi.mocked(checkCiStatus).mockReturnValue({ kind: "no-ci" });
     poll("myproject");
+    expect(mergeToBase).not.toHaveBeenCalled();
+  });
+
+  it("defers a no-ci SHA on a project with workflow files, having observed no check-run", () => {
+    // The post-poller-restart case. projectHasCi is empty (beforeEach resets
+    // it), and it can never fill: the poller queries within seconds of the
+    // reviewer's force-push, so every query returns zero check-runs, and only a
+    // non-zero observation sets the flag. Gating the grace window on that flag
+    // alone made the gate pass everything through silently after a restart —
+    // how a red main merged on 2026-07-20. Workflow files on disk answer it
+    // without needing an observation that the race hides.
+    vi.mocked(projectDefinesCi).mockReturnValue(true);
+    vi.mocked(checkCiStatus).mockReturnValue({ kind: "no-ci" });
+    registryMock._setEntries("myproject", [pending()]);
+
+    poll("myproject");
+
     expect(mergeToBase).not.toHaveBeenCalled();
   });
 
