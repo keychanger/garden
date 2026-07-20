@@ -335,12 +335,28 @@ describe("garden workers new --workflow botanist", () => {
     expect(contents).toContain("END YOUR TURN");
   });
 
-  it("requires a seed (rejects when neither --seed nor --seed-file is given)", async () => {
+  it("plants without a seed: the seed file is the greeting prompt (wait for the brief in the pane)", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    await captureConsoleLog(() =>
+      workers(["new", "proj", "--workflow", "botanist"]),
+    );
+
+    const call = (newWorker as unknown as { mock: { calls: Array<[Record<string, unknown>]> } }).mock.calls.at(-1)![0];
+    const contents = fs.readFileSync(call.seedMessageFile as string, "utf-8");
+    expect(contents).toContain("botanist");
+    expect(contents).toContain(".garden-awaiting-input");
+    expect(contents).toContain("has not given you a design brief yet");
+  });
+
+  it("rejects an explicitly empty seed", async () => {
     await setupProject("proj");
     const { workers } = await importWorkersCmd();
     await expect(
-      workers(["new", "proj", "--workflow", "botanist"]),
-    ).rejects.toThrow(/--workflow botanist requires a seed/);
+      workers(["new", "proj", "--workflow", "botanist", "--seed", "   "]),
+    ).rejects.toThrow(/empty/);
   });
 
   it("allows --harness (the designer harness) unlike grow/trellis", async () => {

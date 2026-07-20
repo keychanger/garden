@@ -86,16 +86,20 @@ describe("buildWorkflowPickerPlan", () => {
     expect(def.run).toContain("proj");
   });
 
-  it("botanist + trellis + hoop rows are pre-wrapped tmux commands", () => {
+  it("trellis + hoop rows are pre-wrapped tmux commands", () => {
     const rows = buildWorkflowPickerPlan("proj", RUNNER).rows;
-    expect(rows[1].tmux).toContain("command-prompt");
-    expect(rows[1].tmux).toContain("_botanist-plant");
-    expect(rows[1].tmux).toContain("%%");
     expect(rows[2].tmux).toContain("_trellis-picker");
     expect(rows[2].tmux!.startsWith("run-shell ")).toBe(true);
     expect(rows[3].tmux).toContain("command-prompt");
     expect(rows[3].tmux).toContain("_grow-plant");
     expect(rows[3].tmux).toContain("%%");
+  });
+
+  it("the botanist row spawns instantly — no command-prompt for a design brief", () => {
+    const row = buildWorkflowPickerPlan("proj", RUNNER).rows[1];
+    expect(row.run).toContain("dashboard _botanist-plant");
+    expect(row.run).toContain("proj");
+    expect(row.tmux).toBeUndefined();
   });
 
   it("the composer rows dispatch the model/effort/crew/base submenus and show the staged draft", () => {
@@ -120,7 +124,7 @@ describe("buildWorkflowPickerPlan", () => {
 
   it("shell-escapes the project name when it contains unsafe characters", () => {
     const rows = buildWorkflowPickerPlan("proj with space", RUNNER).rows;
-    expect(rows[1].tmux).toContain("'proj with space'");
+    expect(rows[1].run).toContain("'proj with space'");
   });
 });
 
@@ -357,21 +361,14 @@ describe("plantGrowFromPicker", () => {
 describe("plantBotanistFromPicker", () => {
   it("rejects when the project is unknown", () => {
     vi.mocked(tryGetProject).mockReturnValue(undefined);
-    plantBotanistFromPicker("ghost", "design notification levels");
+    plantBotanistFromPicker("ghost");
     expect(tmuxDisplay).toHaveBeenCalledWith(expect.stringContaining("Unknown project"));
-    expect(newWorker).not.toHaveBeenCalled();
-  });
-
-  it("rejects an empty seed", () => {
-    vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/proj" });
-    plantBotanistFromPicker("proj", "   ");
-    expect(tmuxDisplay).toHaveBeenCalledWith(expect.stringContaining("non-empty"));
     expect(newWorker).not.toHaveBeenCalled();
   });
 
   it("plants a botanist with the botanist workflow and a botanist seed file", () => {
     vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/proj" });
-    plantBotanistFromPicker("proj", "design notification levels");
+    plantBotanistFromPicker("proj");
     expect(newWorker).toHaveBeenCalledWith(expect.objectContaining({
       projectName: "proj",
       workflow: "botanist",
@@ -382,13 +379,13 @@ describe("plantBotanistFromPicker", () => {
     expect(call.grow).toBeUndefined();
   });
 
-  it("writes the botanist framing seed and cleans it up when newWorker fails", () => {
+  it("writes the greeting seed (wait for the brief) and cleans it up when newWorker fails", () => {
     vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/proj" });
     vi.mocked(newWorker).mockReturnValueOnce(null);
-    plantBotanistFromPicker("proj", "design X");
+    plantBotanistFromPicker("proj");
     expect(fs.writeFileSync).toHaveBeenCalledWith(
       expect.stringMatching(/botanist-seed-proj-\d+\.txt$/),
-      expect.stringContaining("botanist"),
+      expect.stringContaining(".garden-awaiting-input"),
     );
     expect(fs.unlinkSync).toHaveBeenCalledWith(
       expect.stringMatching(/botanist-seed-proj-\d+\.txt$/),

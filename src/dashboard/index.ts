@@ -349,7 +349,7 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     return;
   }
   if (sub === "_botanist-plant") {
-    if (args[1]) plantBotanistFromPicker(args[1], args.slice(2).join(" "));
+    if (args[1]) plantBotanistFromPicker(args[1]);
     return;
   }
   if (sub === "_trellis-plant") {

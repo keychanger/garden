@@ -482,8 +482,10 @@ garden workers new <project> [--workflow trellis|grow|botanist]
                                    # trellis plants a vine bound to the named trellis (--model
                                    # overrides the Sonnet default); grow plants a bounded
                                    # hardening loop seeded by --seed/--seed-file; botanist plants a
-                                   # design worker (deliverable is a doc, not code) seeded by
-                                   # --seed/--seed-file, defaulting to an Opus/xhigh designer seat.
+                                   # design worker (deliverable is a doc, not code) on an Opus/xhigh
+                                   # designer seat — --seed/--seed-file optionally inlines the design
+                                   # brief; without one the botanist greets and waits for the brief
+                                   # as the operator's first message in its pane.
                                    # --model pins the worker model on any workflow: an Anthropic
                                    # alias or any concrete model id the backend accepts, persisted so
                                    # the pin survives bounce/resume/respawn (account default when absent).

@@ -255,6 +255,10 @@ async function newCommand(args: string[]): Promise<void> {
     if (flags.has("seed") && flags.has("seed-file")) {
       throw new Error("--seed and --seed-file are mutually exclusive; pass exactly one.");
     }
+    // The seed is optional: with one, the ask is inlined and the worker starts
+    // framing immediately (the scripted-plant path); without one, the worker
+    // greets and waits for the brief as the operator's first message in its
+    // pane — the same instant-spawn behavior as the workflow picker's row.
     let seed: string | undefined;
     if (flags.has("seed")) {
       seed = flags.get("seed")!;
@@ -265,19 +269,17 @@ async function newCommand(args: string[]): Promise<void> {
       } catch (err) {
         throw new Error(`--seed-file '${seedFilePath}' could not be read: ${String(err)}`);
       }
-    } else {
-      throw new Error(
-        "--workflow botanist requires a seed: pass --seed <text> or --seed-file <path>.",
-      );
     }
-    seed = seed.trim();
-    if (!seed) {
-      throw new Error("--workflow botanist requires a non-empty seed prompt.");
+    if (seed !== undefined) {
+      seed = seed.trim();
+      if (!seed) {
+        throw new Error("--seed / --seed-file was given but empty; omit it to have the botanist wait for the brief in its pane.");
+      }
     }
 
-    // Plant-time framing prompt, delivered via seedMessageFile (like grow's
-    // iter-1 seed). A botanist does not loop, so the seed is not stored on the
-    // entry; it only kicks off the frame → options pipeline.
+    // Plant-time prompt, delivered via seedMessageFile (like grow's iter-1
+    // seed). A botanist does not loop, so the seed is not stored on the
+    // entry; it only kicks off (or stages) the frame → options pipeline.
     const seedFile = path.join(
       SESSIONS_DIR, "seeds",
       `botanist-seed-${projectName}-${Date.now()}.txt`,

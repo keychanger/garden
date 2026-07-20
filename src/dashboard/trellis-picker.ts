@@ -407,7 +407,7 @@ export function buildWorkflowPickerPlan(
   const p = shellEscape(projectName);
   const rows: MenuRow[] = [
     { label: "(d) default — fast worker", key: "d", run: `${runner} dashboard _compose-default ${p}` },
-    { label: "(o) botanist — design a doc, then hand off", key: "o", tmux: shellCmdBotanistPlant(runner, projectName) },
+    { label: "(o) botanist — design a doc, then hand off", key: "o", run: `${runner} dashboard _botanist-plant ${p}` },
     { label: "(t) trellis — pick a frozen design doc", key: "t", tmux: shellCmdTrellisPicker(runner, projectName) },
     { label: "(h) hoop — bounded iteration loop", key: "h", tmux: shellCmdGrowPlant(runner, projectName) },
     { sep: true, label: "" },
@@ -596,27 +596,25 @@ export function plantGrowFromPicker(projectName: string, seed: string): void {
   });
 }
 
-// Invoked by `_botanist-plant <project> <seed>` (the botanist row of the
-// workflow picker). Validates project + non-empty seed, writes the plant-time
-// framing seed, and spawns the botanist via newWorker. Mirrors
-// plantGrowFromPicker; the designer model/effort default (Opus/xhigh) is applied
-// in newWorker, and the composer's model/effort/base dims still layer on top.
-export function plantBotanistFromPicker(projectName: string, seed: string): void {
+// Invoked by `_botanist-plant <project>` (the botanist row of the workflow
+// picker). Spawns the botanist immediately — no design prompt is collected
+// here. The plant-time seed is the greeting form of buildBotanistSeed: the
+// worker introduces itself and waits for the operator's brief as the first
+// message in its pane (a better channel than tmux command-prompt: multi-line,
+// no shell-metacharacter fragility). The designer model/effort default
+// (Opus/xhigh) is applied in newWorker, and the composer's model/effort/base
+// dims still layer on top.
+export function plantBotanistFromPicker(projectName: string): void {
   const project = tryGetProject(projectName);
   if (!project) {
     tmuxDisplay(`Unknown project '${projectName}'.`);
-    return;
-  }
-  const trimmed = seed.trim();
-  if (!trimmed) {
-    tmuxDisplay("Botanist plant aborted: design prompt must be non-empty.");
     return;
   }
 
   const seedsDir = path.join(SESSIONS_DIR, "seeds");
   fs.mkdirSync(seedsDir, { recursive: true });
   const seedFile = path.join(seedsDir, `botanist-seed-${projectName}-${Date.now()}.txt`);
-  fs.writeFileSync(seedFile, buildBotanistSeed(trimmed));
+  fs.writeFileSync(seedFile, buildBotanistSeed());
 
   const draft = consumeSpawnDraft(projectName);
   const newName = newWorker({
@@ -652,9 +650,3 @@ function shellCmdGrowPlant(runner: string, project: string): string {
   return `command-prompt -p "Task description: " "run-shell ${shellEscape(inner)}"`;
 }
 
-function shellCmdBotanistPlant(runner: string, project: string): string {
-  // Single-line seed only (tmux %% substitution). Multi-line / metacharacter
-  // seeds use the CLI plant path (garden workers new --workflow botanist).
-  const inner = `${runner} dashboard _botanist-plant ${shellEscape(project)} %%`;
-  return `command-prompt -p "Design prompt: " "run-shell ${shellEscape(inner)}"`;
-}
