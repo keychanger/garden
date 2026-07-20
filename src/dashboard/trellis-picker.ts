@@ -407,9 +407,9 @@ export function buildWorkflowPickerPlan(
   const p = shellEscape(projectName);
   const rows: MenuRow[] = [
     { label: "(d) default — fast worker", key: "d", run: `${runner} dashboard _compose-default ${p}` },
-    { label: "(t) trellis — pick a frozen design doc", key: "t", tmux: shellCmdTrellisPicker(runner, projectName) },
-    { label: "(g) grow — bounded iteration loop", key: "g", tmux: shellCmdGrowPlant(runner, projectName) },
     { label: "(o) botanist — design a doc, then hand off", key: "o", tmux: shellCmdBotanistPlant(runner, projectName) },
+    { label: "(t) trellis — pick a frozen design doc", key: "t", tmux: shellCmdTrellisPicker(runner, projectName) },
+    { label: "(h) hoop — bounded iteration loop", key: "h", tmux: shellCmdGrowPlant(runner, projectName) },
     { sep: true, label: "" },
     { label: `(m) model…         [${draft.model ?? "default"}]`, key: "m", run: `${runner} dashboard _compose-model-submenu ${p}` },
     { label: `(e) effort…        [${draft.effort ?? "default"}]`, key: "e", run: `${runner} dashboard _compose-effort-submenu ${p}` },

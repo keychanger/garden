@@ -49,7 +49,7 @@ export const DASHBOARD_HOTKEYS: DashboardHotkey[] = [
 
   // Workers
   { key: "n", command: "_new-worker", category: "Workers", label: "New worker (Claude session)" },
-  { key: "N", command: "_workflow-picker", category: "Workers", label: "Workflow picker (default / trellis / grow)" },
+  { key: "N", command: "_workflow-picker", category: "Workers", label: "Workflow picker (default / botanist / trellis / hoop)" },
   { key: "i", command: "_worker-menu", category: "Workers", label: "Worker menu (inspect + act on focused worker: base / reviewer / model / verbs)" },
   { key: "e", command: "_hold-worker", category: "Workers", label: "Hold/resume the focused worker (tracked interrupt → paused)" },
   { key: "x", command: "_kill-pane", category: "Workers", label: "Kill current worker (shell protected)" },

@@ -54,12 +54,12 @@ beforeEach(() => {
 // ─── buildWorkflowPickerPlan ──────────────────────────────────────────────
 
 describe("buildWorkflowPickerPlan", () => {
-  it("returns the d/t/g/o workflow rows, a separator, then the m/e/c/b composer rows", () => {
+  it("returns the d/o/t/h workflow rows, a separator, then the m/e/c/b composer rows", () => {
     const rows = buildWorkflowPickerPlan("proj", RUNNER).rows;
     expect(rows[0].key).toBe("d");
-    expect(rows[1].key).toBe("t");
-    expect(rows[2].key).toBe("g");
-    expect(rows[3].key).toBe("o"); // botanist ('b' is the base-branch composer row)
+    expect(rows[1].key).toBe("o"); // botanist ('b' is the base-branch composer row)
+    expect(rows[2].key).toBe("t");
+    expect(rows[3].key).toBe("h"); // hoop — the grow workflow's operator-facing name
     expect(rows[4].sep).toBe(true);
     expect(rows[5].key).toBe("m");
     expect(rows[6].key).toBe("e");
@@ -78,15 +78,15 @@ describe("buildWorkflowPickerPlan", () => {
     expect(def.run).toContain("proj");
   });
 
-  it("trellis + grow + botanist rows are pre-wrapped tmux commands", () => {
+  it("botanist + trellis + hoop rows are pre-wrapped tmux commands", () => {
     const rows = buildWorkflowPickerPlan("proj", RUNNER).rows;
-    expect(rows[1].tmux).toContain("_trellis-picker");
-    expect(rows[1].tmux!.startsWith("run-shell ")).toBe(true);
-    expect(rows[2].tmux).toContain("command-prompt");
-    expect(rows[2].tmux).toContain("_grow-plant");
-    expect(rows[2].tmux).toContain("%%");
+    expect(rows[1].tmux).toContain("command-prompt");
+    expect(rows[1].tmux).toContain("_botanist-plant");
+    expect(rows[1].tmux).toContain("%%");
+    expect(rows[2].tmux).toContain("_trellis-picker");
+    expect(rows[2].tmux!.startsWith("run-shell ")).toBe(true);
     expect(rows[3].tmux).toContain("command-prompt");
-    expect(rows[3].tmux).toContain("_botanist-plant");
+    expect(rows[3].tmux).toContain("_grow-plant");
     expect(rows[3].tmux).toContain("%%");
   });
 

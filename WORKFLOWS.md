@@ -2591,7 +2591,9 @@ the account default). `--max-iterations` overrides
 the goal artifact via the iter-1 seed prompt instructing the worker to
 write `<seed verbatim>` to `.garden/grow-goal.md`.
 
-The `⌥⇧N` workflow picker offers a `(g) grow` row that opens a tmux
+The `⌥⇧N` workflow picker offers a `(h) hoop` row — `hoop` is this
+workflow's operator-facing name in the picker only; the workflow, the
+CLI (`--workflow grow`), and every on-disk field stay `grow`. It opens a tmux
 `command-prompt` for a single-line task description. Seeds with quotes
 or shell metacharacters break tmux substitution; for those, operators
 use the CLI plant path with `--seed-file`.
