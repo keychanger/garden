@@ -1005,6 +1005,25 @@ describe("poll — reviewing state (async)", () => {
     expect(mergeToBase).not.toHaveBeenCalled();
   });
 
+  it("does not re-arm the review on cancel when nothing is ahead of base", () => {
+    // The cancelled pass had commits, but by the time the poller runs the
+    // branch holds none (the worker's mid-review edit was a revert, or it
+    // reset onto base). Re-arming pendingReviewAt here would send handleWorking
+    // looking for a review with no diff to review.
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",
+        agentStatus: "working", reviewInterruptedAt: Date.now(), lastSeenSha: "abc123" }),
+    ]);
+    vi.mocked(windowExists).mockReturnValue(true);
+    vi.mocked(getCommitSummary).mockReturnValue("");
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "working", pendingReviewAt: undefined }),
+    );
+  });
+
   it("discards an already-written verdict when the worker edited mid-review", () => {
     // The reviewer finished (window gone, CLEAN result on disk) but the marker
     // says the tree was rewritten during the pass — the verdict certifies a

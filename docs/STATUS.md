@@ -658,6 +658,14 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   `idle` behind). The practical risk — a stray PostToolUse flipping a
   genuinely-ended turn back to `working` — is a brief flicker; the
   next `Stop` re-idles within one tool round.
+  This hook is also the one place a hook writes a field other than
+  `agentStatus`: when the tool was a *mutating* one (`Edit` / `MultiEdit`
+  / `Write` / `NotebookEdit` — `Bash` is deliberately exempt, so a
+  read-only Q&A turn costs nothing) and the worker's `prState` is
+  `reviewing`, it stamps `reviewInterruptedAt` and pokes the poller. It
+  still does not write `prState`: the cancel is the poller's, in
+  `handleReviewing`. The marker is stamped once per pass and cleared by
+  the cancel and by every review launch.
 
 **The poller** writes `prState` in response to the events documented in
 "How transitions are detected." The poller is the only writer of
