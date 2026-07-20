@@ -65,9 +65,13 @@ export function resolveReviewRole(
   entry?: Pick<WorkerEntry, "crew">,
 ): ReviewRoleResolution {
   const target = project.roles?.[role] ?? {};
-  const cfg = config ?? loadConfig();
-  const entryCrew = entry?.crew ? getCrew(entry.crew, cfg) : null;
-  const projectCrew = resolveProjectCrew(project, cfg);
+  // Read the config file only when a crew name actually needs resolving. The
+  // crew-free chain is pure — requiring an initialized garden for it made this
+  // function throw wherever no config exists (a bare CI runner), even though
+  // nothing on that path reads one.
+  const cfg = config ?? (entry?.crew || project.crew ? loadConfig() : undefined);
+  const entryCrew = entry?.crew && cfg ? getCrew(entry.crew, cfg) : null;
+  const projectCrew = cfg ? resolveProjectCrew(project, cfg) : null;
   const harness = entryCrew?.review.harness ?? target.harness ?? projectCrew?.review.harness ?? "claude-code";
   // The reviewer inherits its workflow's reviewerModel (trellis pins "opus"
   // per WORKFLOWS.md Invariant 10); resolver/ci-fix have no workflow source.

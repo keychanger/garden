@@ -15,6 +15,10 @@ export default defineConfig({
     include: ["test/**/*.test.ts"],
     exclude: ["node_modules/**", "dist/**"],
     testTimeout: 30000,
+    // Pin HOME to a throwaway dir so no test can read the operator's real
+    // ~/.garden — that is what let a config-reading regression pass locally
+    // and fail on CI. See test/setup-home.ts.
+    setupFiles: ["test/setup-home.ts"],
     // Half the cores locally: several garden workers run this suite
     // concurrently on the operator's workstation, and full-core pools
     // stampede the machine when checks runs overlap. CI runners are
