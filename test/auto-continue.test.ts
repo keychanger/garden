@@ -404,6 +404,31 @@ describe("autoContinueGateReason per-project exemption", () => {
     expect(addAlertMock).toHaveBeenCalledOnce();
   });
 
+  it("exempts a worker on its OWN provider, even on a metered project", async () => {
+    // A per-worker build member can name a backend the project does not use.
+    // That worker spends a pool the Claude meters describe none of, so it is
+    // exempt on exactly the reasoning a provider-backed project is.
+    await initPooledProjects();
+    const { setAutoContinueConfig } = await importConfig();
+    setAutoContinueConfig({
+      enabled: false,
+      pausedUntil: "2099-01-01T00:00:00Z",
+      pausedReason: "5h at 99%",
+    });
+    mockGateDeps(null);
+    const { autoContinueGateReason } = await importGate();
+    expect(autoContinueGateReason("plain", "deepseek")).toBeNull();
+    // An unresolvable worker provider is not a free pass — it falls through to
+    // the project check and the metered project stays gated (fail closed).
+    expect(autoContinueGateReason("plain", "gone")).toBe("usage-paused");
+    // No per-worker answer, or the explicit-first-party marker, both defer to
+    // the project exactly as before.
+    expect(autoContinueGateReason("plain", "")).toBe("usage-paused");
+    expect(autoContinueGateReason("plain")).toBe("usage-paused");
+    // The project-level exemption is unchanged by the new argument.
+    expect(autoContinueGateReason("deep", "")).toBeNull();
+  });
+
   it("still blocks exempt projects on an explicit garden auto off", async () => {
     await initPooledProjects();
     const { setAutoContinueConfig } = await importConfig();

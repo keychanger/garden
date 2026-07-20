@@ -28,7 +28,7 @@ import { resolveAndApplyVineModel } from "./trellis-model.js";
 import { getWorkflow } from "./workflows/index.js";
 import {
   buildWorktreeBootstrapScript, buildWorktreeResumeCommand, buildResumeCommand,
-  createShellWindow, trellisRelativePathForEntry,
+  createShellWindow, trellisRelativePathForEntry, workerProject,
 } from "./create.js";
 import { getHarness } from "./harness/index.js";
 import { isRegisteredHarness, harnessNames, canonicalHarnessName } from "./harness/core.js";
@@ -190,11 +190,10 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // stamping undefined here would drop to project.harness at this line and
     // silently launch the project's default harness for a worker the operator
     // explicitly asked to build with claude. The CLI guard makes --crew and
-    // --harness mutually exclusive and rejects a provider-backed worker member (no
-    // per-worker provider); the !provider fall-through here is defense-in-depth for
-    // other newWorker callers — an unsupported provider member drops to the project
-    // default. The crew's REVIEW half rides entry.crew (stamped below) and is
-    // applied live by resolveReviewRole.
+    // --harness mutually exclusive; a provider-backed worker member is accepted,
+    // its backend riding entry.provider (see the provider block below). The
+    // crew's REVIEW half rides entry.crew (stamped below) and is applied live by
+    // resolveReviewRole.
     //
     // Beneath all of that sits the PROJECT's bound crew (project.crew), read by
     // reference so editing the definition re-targets the project: flat
@@ -898,8 +897,13 @@ export function bounceWorker(projectName: string, workerName: string): void {
   // changes from a rebuilt garden. buildWorktreeResumeCommand doesn't do
   // this on its own (unlike buildResumeCommand); the attach-time resume
   // path in ensureDashboard() calls it for the same reason.
+  // The worker's own backend, so a bounce cannot rewrite the sandbox's egress
+  // allowlist back to the project's provider under a worker launching at
+  // another (`""` = explicitly first-party — see workerProject).
   if (entry.worktreePath && projectInfo) {
-    getHarness(entry.harness).installRuntimeConfig(entry.worktreePath, projectInfo);
+    getHarness(entry.harness).installRuntimeConfig(
+      entry.worktreePath, workerProject(projectInfo, entry.provider),
+    );
   }
 
   const trellisRelativePath = projectInfo

@@ -53,6 +53,10 @@ vi.mock("../src/dashboard/log.js", () => ({
 
 vi.mock("../src/dashboard/create.js", () => ({
   buildWorktreeWorkerCommand: vi.fn(() => "claude --resume sess-mock"),
+  // Pure helper — real semantics ("" clears the project's provider, absent
+  // inherits it), so the respawn's runtime-config view is genuinely exercised.
+  workerProject: (project: { provider?: string }, provider: string | undefined) =>
+    provider === undefined ? project : { ...project, provider: provider || undefined },
 }));
 
 vi.mock("../src/dashboard/continue.js", () => ({

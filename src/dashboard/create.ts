@@ -131,7 +131,9 @@ export function ensureDashboard(): void {
         for (const entry of entries) {
           if (!entry.worktreePath || !wtExists(entry.worktreePath)) continue;
           installPollTriggerHook(entry.worktreePath, resolveGardenRunner(), pname);
-          getHarness(entry.harness).installRuntimeConfig(entry.worktreePath, proj);
+          getHarness(entry.harness).installRuntimeConfig(
+            entry.worktreePath, workerProject(proj, entry.provider),
+          );
         }
       }
     } catch { /* best effort — initial-create path will catch up next restart */ }
@@ -312,7 +314,9 @@ export function ensureDashboard(): void {
       const baseBranch = getWorkerBaseBranch(entry, projectConfig.path);
       if (entry.worktreePath && wtExists(entry.worktreePath)) {
         installPollTriggerHook(entry.worktreePath, gardenRunner, projectName);
-        getHarness(entry.harness).installRuntimeConfig(entry.worktreePath, projectConfig);
+        getHarness(entry.harness).installRuntimeConfig(
+          entry.worktreePath, workerProject(projectConfig, entry.provider),
+        );
       }
       // Capture mid-turn interruption before we overwrite agentStatus below.
       // pane-died sets interruptedWhileWorking when agentStatus was "working"
@@ -682,18 +686,17 @@ export function buildWorktreeWorkerCommand(
   return `${agentCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }
 
-// The worktree git common dir a Codex worker's sandbox must be able to write
-// (its git store sits outside the worktree cwd — see AgentCommandOptions
-// .worktreeGitDir). Resolved from the project's main checkout so it works
-// before the worktree exists; only for the codex harness (skips the git spawn
-// on the hot claude-code path). Other harnesses ignore the field.
-// The project view a WORKER's launch env is built from: the real project with
-// its provider replaced by the worker's own, when that worker carries a
-// per-worker override (its build member named a backend). Absent override =
-// the project unchanged, so every pre-existing launch path is byte-identical.
-// Only the worker role consults this — reviewerEnvPrefix deliberately reads the
-// project, since the review family stays first-party by construction.
-function workerProject<T extends { provider?: string }>(project: T, provider: string | undefined): T {
+// The project view a WORKER's runtime is built from: the real project with its
+// provider replaced by the worker's own, when that worker carries a per-worker
+// override (its build member named a backend). Absent override = the project
+// unchanged, so every pre-existing launch path is byte-identical.
+// Both halves of the worker's runtime read through this — the launch env
+// (workerEnvPrefix) and the sandbox egress allowlist (buildSandboxConfig, which
+// admits the provider's inference host) — so a worker cannot end up pointed at
+// one backend while its sandbox admits another. Only the worker role consults
+// it: reviewerEnvPrefix deliberately reads the project, since the review family
+// stays first-party by construction.
+export function workerProject<T extends { provider?: string }>(project: T, provider: string | undefined): T {
   // undefined = no per-worker answer, inherit the project (the pre-existing
   // path, byte-identical). A non-empty string = this worker's backend. The
   // EMPTY string is the explicit-first-party marker newWorker stamps for a
@@ -704,6 +707,11 @@ function workerProject<T extends { provider?: string }>(project: T, provider: st
   return { ...project, provider: provider || undefined };
 }
 
+// The worktree git common dir a Codex worker's sandbox must be able to write
+// (its git store sits outside the worktree cwd — see AgentCommandOptions
+// .worktreeGitDir). Resolved from the project's main checkout so it works
+// before the worktree exists; only for the codex harness (skips the git spawn
+// on the hot claude-code path). Other harnesses ignore the field.
 function codexWorktreeGitDir(harness: string | undefined, projectPath: string): string | undefined {
   return harness === "codex" ? (getGitCommonDir(projectPath) ?? undefined) : undefined;
 }
@@ -791,9 +799,12 @@ export function buildWorktreeBootstrapScript(
   // claude-code dialect today. A second harness adds an adapter method
   // that renders its own bootstrap config section (docs/MULTI-MODEL.md
   // "Layer 3"); until then the adapter's internals are imported directly.
+  // Same project view the launch env below is built from: a worker whose build
+  // member named a backend must get that backend's inference host in its egress
+  // allowlist, not the project's.
   const settingsJson = buildSettingsJson(resolveHookRunner(), buildSandboxConfig({
     worktreePath: wtPath,
-    project,
+    project: workerProject(project, opts?.provider),
     remoteHost: getRemoteHost(project.path),
   }));
   const settingsJsonLit = shellEscape(settingsJson);

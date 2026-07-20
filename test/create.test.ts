@@ -651,6 +651,40 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(call![1] as string).toContain("claude --rc --session-id session-123");
   });
 
+  // The launch env and the sandbox egress allowlist must name the SAME backend.
+  // A worker whose build member named a provider the project does not use would
+  // otherwise launch at that endpoint with only the project's host allowlisted.
+  it("allowlists the per-worker provider's inference host in the sandbox, not the project's", async () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    const { tryResolveProvider, tryGetProject } = await import("../src/config.js");
+    vi.mocked(tryGetProject).mockReturnValue({
+      name: "myproject", path: "/repo/myproject", provider: "deepseek",
+    } as ReturnType<typeof tryGetProject>);
+    vi.mocked(tryResolveProvider).mockImplementation((p: { provider?: string }) =>
+      p?.provider
+        ? {
+            name: p.provider, label: p.provider,
+            baseUrl: `https://api.${p.provider}.com/anthropic`,
+            authTokenEnv: "TOKEN_ENV",
+          }
+        : null);
+    try {
+      buildWorktreeBootstrapScript(
+        "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+        "session-123", "/wt/myproject/bold-ash", "main", { provider: "othervendor" },
+      );
+      const call = vi.mocked(fs.writeFileSync).mock.calls.find(
+        c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+      );
+      const script = call![1] as string;
+      expect(script).toContain("api.othervendor.com");
+      expect(script).not.toContain("api.deepseek.com");
+    } finally {
+      vi.mocked(tryResolveProvider).mockReturnValue(null);
+      vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject" } as ReturnType<typeof tryGetProject>);
+    }
+  });
+
   it("uses origin/<base> for the worktree branch when baseBranch has a slash in the name", () => {
     process.argv[1] = "/usr/local/bin/garden";
     buildWorktreeBootstrapScript(

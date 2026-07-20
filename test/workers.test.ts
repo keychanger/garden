@@ -116,6 +116,10 @@ vi.mock("../src/dashboard/create.js", () => ({
   buildResumeCommand: vi.fn(() => "claude --resume FAKE-ID-NW"),
   createShellWindow: vi.fn(),
   trellisRelativePathForEntry: vi.fn(() => undefined),
+  // Pure helper — use the real semantics so the provider view bounce installs
+  // its runtime config under is genuinely exercised ("" clears, absent inherits).
+  workerProject: (project: { provider?: string }, provider: string | undefined) =>
+    provider === undefined ? project : { ...project, provider: provider || undefined },
 }));
 
 vi.mock("../src/dashboard/harness/index.js", () => {

@@ -26,6 +26,7 @@ import { tryGetProject, SESSIONS_DIR } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import {
   buildWorktreeWorkerCommand,
+  workerProject,
   type WorktreeCommandOptions,
 } from "./create.js";
 import { getHarness } from "./harness/index.js";
@@ -175,7 +176,12 @@ export function loopAutoContinueAfterMerge(
 
   // Refresh hook config so a rebuilt garden's settings.json takes effect on
   // the cold respawn (mirrors bounceWorker's installRuntimeConfig call).
-  getHarness(entry.harness).installRuntimeConfig(wtPath, project);
+  // Under the worker's own backend, matching the respawn env below — a refresh
+  // that reverted the sandbox to the project's provider would leave the loop's
+  // next iteration pointed at one endpoint with another allowlisted.
+  getHarness(entry.harness).installRuntimeConfig(
+    wtPath, workerProject(project, entry.provider),
+  );
 
   // Regenerate sessionId per iteration — Claude cold-starts in the pane with
   // no prior conversation history. Persist BEFORE the respawn so concurrent
