@@ -24,6 +24,7 @@ import { hold } from "./hold.js";
 import { pause } from "./pause.js";
 import { resume } from "./resume.js";
 import { claudeProfile } from "./claude-profile.js";
+import { crew } from "./crew.js";
 import { provider } from "./provider.js";
 import { login } from "./login.js";
 import { auth } from "./auth.js";
@@ -72,6 +73,7 @@ export const commands: Record<string, Command> = {
   pause,
   resume,
   "claude-profile": claudeProfile,
+  crew,
   provider,
   login,
   auth,

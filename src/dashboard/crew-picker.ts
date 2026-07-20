@@ -10,7 +10,7 @@ import { shellEscape, tmuxDisplay, menuRunShell } from "./tmux.js";
 import { runMenu } from "./menu.js";
 import { refreshDashboard } from "./header.js";
 import { log } from "./log.js";
-import { listCrews, deriveCrew, getCrew, applyCrew, type CrewSpec } from "./crew.js";
+import { listCrews, deriveCrew, getCrew, applyCrew, formatRecipe, type CrewSpec } from "./crew.js";
 
 export interface CrewMenuItem {
   label: string;
@@ -33,11 +33,19 @@ export function buildCrewPickerPlan(
   crews: CrewSpec[],
   runner: string,
 ): CrewPickerPlan {
-  const items: CrewMenuItem[] = crews.map((crew, i) => ({
-    label: crew.name === current ? `${crew.name}  ✓` : crew.name,
-    key: i < 9 ? String(i + 1) : "",
-    command: menuRunShell(`${runner} dashboard _crew-set ${shellEscape(projectName)} ${shellEscape(crew.name)}`),
-  }));
+  // A stored crew's recipe is the whole point of naming it — `heavy` says
+  // nothing without `claude opus/xhigh → claude opus` beside it. Builtins are
+  // self-describing (the name IS the pairing), so they stay bare.
+  const width = Math.max(...crews.map((c) => c.name.length), 0);
+  const items: CrewMenuItem[] = crews.map((crew, i) => {
+    const recipe = crew.builtin ? "" : `  ${formatRecipe(crew)}`;
+    const name = recipe ? crew.name.padEnd(width) : crew.name;
+    return {
+      label: `${name}${recipe}${crew.name === current ? "  ✓" : ""}`,
+      key: i < 9 ? String(i + 1) : "",
+      command: menuRunShell(`${runner} dashboard _crew-set ${shellEscape(projectName)} ${shellEscape(crew.name)}`),
+    };
+  });
   return { title: `Crew: ${projectName}${current ? ` (${current})` : ""}`, items };
 }
 

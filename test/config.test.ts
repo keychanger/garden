@@ -1052,24 +1052,41 @@ describe("config crew subcommand", () => {
     return { config, loadConfig };
   }
 
-  it("applies all-codex: worker + all three review roles become codex", async () => {
+  // The crew binds by reference, so the observable effect is what the review
+  // roles RESOLVE to, not which config keys got written.
+  it("applies all-codex: all three review roles resolve to codex", async () => {
     const { config, loadConfig } = await setup();
+    const { resolveReviewRole } = await import("../src/dashboard/roles.js");
     await config(["garden", "crew", "all-codex"]);
-    const p = loadConfig().projects.garden;
-    expect(p.harness).toBe("codex");
-    expect(p.roles?.reviewer?.harness).toBe("codex");
-    expect(p.roles?.resolver?.harness).toBe("codex");
-    expect(p.roles?.ciFix?.harness).toBe("codex");
+    const cfg = loadConfig();
+    const p = cfg.projects.garden;
+    expect(p.crew).toBe("all-codex");
+    for (const role of ["reviewer", "resolver", "ciFix"] as const) {
+      expect(resolveReviewRole(p, "default", role, cfg).harness).toBe("codex");
+    }
   });
 
-  it("switching to all-claude clears everything the crew manages", async () => {
+  it("switching to all-claude re-resolves every role back to claude-code", async () => {
     const { config, loadConfig } = await setup();
+    const { resolveReviewRole } = await import("../src/dashboard/roles.js");
     await config(["garden", "crew", "codex-claude"]);
-    expect(loadConfig().projects.garden.harness).toBe("codex");
     await config(["garden", "crew", "all-claude"]);
-    const p = loadConfig().projects.garden;
+    const cfg = loadConfig();
+    const p = cfg.projects.garden;
+    expect(p.crew).toBe("all-claude");
     expect(p.harness).toBeUndefined();
     expect(p.roles).toBeUndefined();
+    for (const role of ["reviewer", "resolver", "ciFix"] as const) {
+      expect(resolveReviewRole(p, "default", role, cfg).harness).toBe("claude-code");
+    }
+  });
+
+  it("'none' unbinds without disturbing the project's own keys", async () => {
+    const { config, loadConfig } = await setup();
+    await config(["garden", "crew", "all-codex"]);
+    await config(["garden", "crew", "none"]);
+    const p = loadConfig().projects.garden;
+    expect(p.crew).toBeUndefined();
   });
 
   it("rejects an unknown crew name", async () => {

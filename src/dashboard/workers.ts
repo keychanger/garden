@@ -19,7 +19,7 @@ import {
   updateWorkerFields, getWorkers, resolveResumeAgentStatus, compareWorkerFreshness, type AgentStatus,
 } from "./registry.js";
 import { recordWorkerCreated, recordOperatorAction, shortHash, type RoleSnapshot } from "./telemetry.js";
-import { deriveCrew, getCrew } from "./crew.js";
+import { deriveCrew, getCrew, resolveProjectCrew } from "./crew.js";
 import { resolveReviewRole, type ReviewRole } from "./roles.js";
 import { buildRulesContext } from "../rules.js";
 import { GARDEN_VERSION } from "../version.js";
@@ -181,16 +181,27 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // other newWorker callers — an unsupported provider member drops to the project
     // default. The crew's REVIEW half rides entry.crew (stamped below) and is
     // applied live by resolveReviewRole.
+    //
+    // Beneath all of that sits the PROJECT's bound crew (project.crew), read by
+    // reference so editing the definition re-targets the project: flat
+    // project.harness still wins over it (the override layer), and it applies
+    // on the default workflow only, exactly like project.harness.
+    // Each crew dimension is gated exactly like the flat project key it sits
+    // beneath: harness is default-workflow-only (like project.harness), while
+    // model/effort follow project.model/effort (default+grow).
+    const gardenConfig = loadConfig();
+    const projectCrew = resolveProjectCrew(project, gardenConfig);
+    const workerCrew = opts.crew ? getCrew(opts.crew, gardenConfig) : null;
+    const projectHarness = workflowName === "default"
+      ? (project.harness ?? projectCrew?.worker.harness)
+      : undefined;
     let rawHarness: string | undefined;
     if (opts.harness) {
       rawHarness = opts.harness;
     } else if (opts.crew) {
-      const spec = getCrew(opts.crew, loadConfig());
-      rawHarness = spec && !spec.worker.provider
-        ? spec.worker.harness
-        : (workflowName === "default" ? project.harness : undefined);
+      rawHarness = workerCrew && !workerCrew.worker.provider ? workerCrew.worker.harness : projectHarness;
     } else {
-      rawHarness = workflowName === "default" ? project.harness : undefined;
+      rawHarness = projectHarness;
     }
     // Canonicalize the operator-facing "claude" alias to the registry name.
     // This is the chokepoint every worker-creation path funnels through (CLI
@@ -354,13 +365,22 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // A per-spawn effort/ultracode gesture wins; otherwise the project default
     // fills in, and "ultra" there means the preset just as `--effort ultra`
     // does at the CLI.
+    //
+    // A crew's worker half supplies both dims one layer down from the flat
+    // project key: per-worker crew (--crew) above the project key, the
+    // project's bound crew below it.
+    const crewEffort = projectDefaultsApply
+      ? (workerCrew?.worker.effort ?? project.effort ?? projectCrew?.worker.effort)
+      : undefined;
     let reqUltracode = opts.ultracode === true;
     let reqEffort = opts.effort;
-    if (!reqUltracode && reqEffort === undefined && projectDefaultsApply && project.effort) {
-      if (project.effort === "ultra") reqUltracode = true;
-      else reqEffort = project.effort;
+    if (!reqUltracode && reqEffort === undefined && crewEffort) {
+      if (crewEffort === "ultra") reqUltracode = true;
+      else reqEffort = crewEffort;
     }
-    const projectModel = projectDefaultsApply ? project.model : undefined;
+    const projectModel = projectDefaultsApply
+      ? (workerCrew?.worker.model ?? project.model ?? projectCrew?.worker.model)
+      : undefined;
     // Workflow-level model/effort defaults (the botanist designer seat → Opus /
     // xhigh) sit one layer beneath the per-spawn and project defaults, mirroring
     // how trellis reads workflow.workerModel per iteration. Not applied for

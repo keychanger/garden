@@ -131,6 +131,16 @@ export interface ProjectConfig {
     resolver?: RoleTarget;
     ciFix?: RoleTarget;
   };
+  // Named crew this project is bound to (a key of GardenConfig.crews, or one
+  // of the generated builtin names). A REFERENCE, not an expansion: the crew's
+  // members resolve at spawn/review time, so editing the crew definition
+  // propagates to every project bound to it. The flat keys above
+  // (harness/provider/model/effort) and `roles` are the OVERRIDE layer — they
+  // win over the crew, so a project can adopt a crew and still tweak one
+  // dimension. Absent = no crew binding, in which case the legacy derivation
+  // (deriveCrew) reports whatever the flat keys happen to spell. See crew.ts +
+  // docs/future/CREWS.md.
+  crew?: string;
 }
 
 // One review role's harness/model selection. Both optional — an absent
@@ -138,6 +148,29 @@ export interface ProjectConfig {
 export interface RoleTarget {
   harness?: string;
   model?: string;
+}
+
+// One half of a stored crew: which member runs the role, and how strong.
+// `member` is the operator-facing member name (claude / codex / <provider>),
+// resolved against listMembers. `model` is an opaque string (Anthropic alias
+// or concrete id). `effort` is worker-only — the review family has no effort
+// analog — and takes WORKER_EFFORT_LEVELS or "ultra".
+export interface CrewRole {
+  member: string;
+  model?: string;
+  effort?: string;
+}
+
+// A stored, operator-named crew. Shipped v1 crews were GENERATED (the cross
+// product of members x reviewer-members), which is why they could only carry a
+// harness: a generated namespace cannot express a model dim without exploding
+// into names like `sonnet-xhigh-claude-opus-claude`. Storing them puts the name
+// in the operator's hands, so `heavy` / `cheap` / `nightly` carry the recipe.
+// The generated set survives as builtins (listCrews merges both); a stored crew
+// wins on name collision.
+export interface StoredCrew {
+  worker: CrewRole;
+  review: CrewRole;
 }
 
 // The effective holisticReview mode for a project that hasn't set the key.
@@ -315,6 +348,10 @@ export interface GardenConfig {
   autoContinue?: Partial<AutoContinueConfig>;
   limits?: LimitsConfig;
   build?: BuildConfig;
+  // Operator-defined crews, keyed by name. Garden-level because a crew is a
+  // shared resource definition projects reference by name — the same shape as
+  // `providers` and `claudeProfiles`. Absent = builtin (generated) crews only.
+  crews?: Record<string, StoredCrew>;
 }
 
 export const DEFAULT_BUILD_BRANCH = "main";

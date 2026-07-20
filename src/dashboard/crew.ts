@@ -13,7 +13,22 @@
 // harness members may REVIEW. A provider on a review role defeats the safety
 // net (a cheap/experimental worker must be reviewed by a strong first-party
 // model), so provider members are worker-only. See docs/future/CREWS.md.
-import { loadConfig, saveConfig, type GardenConfig, type ProjectConfig } from "../config.js";
+//
+// Crews are BOUND BY REFERENCE: a project stores `crew: <name>` and the members
+// resolve at spawn/review time, so editing a definition propagates to every
+// project on it. The flat project keys (harness/provider/model/effort, roles.*)
+// are the override layer above the crew. Operator-defined crews live under
+// `crews` in ~/.garden/config.yml; the original generated set survives as
+// BUILTINS so every existing config, doc reference, and test keeps resolving
+// with no migration.
+import {
+  loadConfig,
+  saveConfig,
+  type CrewRole,
+  type GardenConfig,
+  type ProjectConfig,
+  type StoredCrew,
+} from "../config.js";
 import { harnessNames } from "./harness/core.js";
 
 const DEFAULT_HARNESS = "claude-code";
@@ -27,6 +42,10 @@ export interface CrewMember {
   harness: string;
   /** Provider backend (worker-only; a reviewer member never carries one). */
   provider?: string;
+  /** Model pin for this half. Opaque string; absent = resolve down the chain. */
+  model?: string;
+  /** Reasoning effort. Worker half only — the review family has no analog. */
+  effort?: string;
 }
 
 export interface CrewSpec {
@@ -34,6 +53,8 @@ export interface CrewSpec {
   worker: CrewMember;
   /** Applies uniformly to reviewer / resolver / ci-fix in v1. */
   review: CrewMember;
+  /** True for the generated cross-product crews (not editable/deletable). */
+  builtin: boolean;
 }
 
 function harnessMemberName(harness: string): string {
@@ -62,19 +83,83 @@ function crewName(worker: CrewMember, review: CrewMember): string {
   return `${worker.name}-${review.name}`;
 }
 
-// The generated set of valid crews: (every member) x (every reviewer member).
-export function listCrews(config: GardenConfig): CrewSpec[] {
-  const workers = listMembers(config);
-  const reviews = reviewerMembers(config);
+// One-line recipe: `claude opus/xhigh → claude opus`. The arrow reads
+// build-then-review, matching the `<worker>-<reviewer>` builtin naming. Shared
+// by `garden crew list/show` and the ⌥⇧C picker.
+export function formatRecipe(spec: CrewSpec): string {
+  const half = (m: CrewMember): string => {
+    const dims = [m.model, m.effort].filter(Boolean).join("/");
+    return dims ? `${m.name} ${dims}` : m.name;
+  };
+  return `${half(spec.worker)} → ${half(spec.review)}`;
+}
+
+// Look up a member by its operator-facing name.
+export function findMember(name: string, config: GardenConfig): CrewMember | null {
+  return listMembers(config).find((m) => m.name === name) ?? null;
+}
+
+// The generated builtin crews: (every member) x (every reviewer member). These
+// carry no model/effort — that is exactly what a generated namespace cannot
+// express, and the reason stored crews exist.
+export function builtinCrews(config: GardenConfig): CrewSpec[] {
   const crews: CrewSpec[] = [];
-  for (const w of workers) {
-    for (const r of reviews) crews.push({ name: crewName(w, r), worker: w, review: r });
+  for (const w of listMembers(config)) {
+    for (const r of reviewerMembers(config)) {
+      crews.push({ name: crewName(w, r), worker: w, review: r, builtin: true });
+    }
   }
   return crews;
 }
 
+// Resolve one half of a stored crew against the member registry. Returns null
+// when the member no longer exists (a removed provider), which makes the whole
+// crew unresolvable — callers already treat an unknown crew as "fall through to
+// the layer beneath" rather than failing the spawn.
+function resolveRole(role: CrewRole, config: GardenConfig, allowProvider: boolean): CrewMember | null {
+  const member = findMember(role.member, config);
+  if (!member) return null;
+  if (member.provider && !allowProvider) return null;
+  return {
+    ...member,
+    ...(role.model ? { model: role.model } : {}),
+    ...(allowProvider && role.effort ? { effort: role.effort } : {}),
+  };
+}
+
+// The operator-defined crews, in config order.
+export function storedCrews(config: GardenConfig): CrewSpec[] {
+  const crews: CrewSpec[] = [];
+  for (const [name, def] of Object.entries(config.crews ?? {})) {
+    const worker = resolveRole(def.worker, config, true);
+    const review = resolveRole(def.review, config, false);
+    if (worker && review) crews.push({ name, worker, review, builtin: false });
+  }
+  return crews;
+}
+
+// Every crew available: stored first, then the builtins a stored name has not
+// shadowed. A stored crew wins on collision, so an operator can redefine
+// `all-codex` without losing the name.
+export function listCrews(config: GardenConfig): CrewSpec[] {
+  const stored = storedCrews(config);
+  const taken = new Set(stored.map((c) => c.name));
+  return [...stored, ...builtinCrews(config).filter((c) => !taken.has(c.name))];
+}
+
 export function getCrew(name: string, config: GardenConfig): CrewSpec | null {
   return listCrews(config).find((c) => c.name === name) ?? null;
+}
+
+// The crew a project is BOUND to (its `crew` key), or null when unbound or the
+// bound name no longer resolves. This is the read every resolution path uses;
+// it is deliberately not the same question as deriveCrew (which also reports a
+// name for legacy configs that only spell out flat keys).
+export function resolveProjectCrew(
+  project: Pick<ProjectConfig, "crew">,
+  config: GardenConfig,
+): CrewSpec | null {
+  return project.crew ? getCrew(project.crew, config) : null;
 }
 
 function memberFor(harness: string, provider: string | undefined): CrewMember {
@@ -113,12 +198,13 @@ export function crewNameFor(
   return crewName(worker, review);
 }
 
-// The crew a project currently resolves to, or null when its role assignment
-// doesn't match a named crew (hand-tuned config — e.g. the reviewer/resolver/
-// ci-fix harnesses diverge). Only the role *harnesses* are compared: per-role
-// model pins are crew-orthogonal (applyCrew preserves them) and never force a
-// null result. Read-only.
-export function deriveCrew(project: ProjectConfig, _config: GardenConfig): string | null {
+// The crew name to SHOW for a project. Prefers the explicit binding; falls back
+// to reverse-mapping the flat keys so a config written before crews were stored
+// (or hand-tuned since) still reports a name. Returns null when the flat keys
+// spell no named crew — the reviewer/resolver/ci-fix harnesses diverge, or a
+// bound name no longer resolves. Read-only.
+export function deriveCrew(project: ProjectConfig, config: GardenConfig): string | null {
+  if (project.crew) return getCrew(project.crew, config) ? project.crew : null;
   const rev = project.roles?.reviewer?.harness ?? DEFAULT_HARNESS;
   const res = project.roles?.resolver?.harness ?? DEFAULT_HARNESS;
   const ci = project.roles?.ciFix?.harness ?? DEFAULT_HARNESS;
@@ -128,31 +214,123 @@ export function deriveCrew(project: ProjectConfig, _config: GardenConfig): strin
   return crewName(worker, review);
 }
 
-// Apply a crew to a project's config. Authoritative over the worker harness +
-// provider and the three review-role harnesses: it sets the crew's values and
-// clears everything it manages back to default otherwise, so switching crews
-// never strands a stale assignment. Per-role models and non-crew keys are left
-// untouched.
+// True when a project's flat keys override a dimension its bound crew also
+// sets — the "adopted a crew, then tweaked it" state. Drives the `*` suffix on
+// the status-pane badge so an override is never invisible. `provider` is not an
+// override dimension: it is crew-managed by write-through (see applyCrew), so
+// it is always already in sync.
+export function crewOverridden(project: ProjectConfig, config: GardenConfig): boolean {
+  const spec = resolveProjectCrew(project, config);
+  if (!spec) return false;
+  if (project.harness !== undefined) return true;
+  if (spec.worker.model && project.model !== undefined) return true;
+  if (spec.worker.effort && project.effort !== undefined) return true;
+  return (["reviewer", "resolver", "ciFix"] as const).some((r) => {
+    const t = project.roles?.[r];
+    return t?.harness !== undefined || (spec.review.model !== undefined && t?.model !== undefined);
+  });
+}
+
+// Bind a project to a crew. Under reference binding this records the NAME and
+// clears the flat keys the crew now owns — the inverse of the shipped
+// write-through behavior. Clearing is what makes the binding live: a stale flat
+// `harness` left behind would sit in the override layer and permanently shadow
+// the crew, so editing the crew later would appear to do nothing.
+//
+// Deliberately narrow: it clears only the dimensions the crew actually sets. A
+// crew with no worker model leaves `project.model` alone, because that key is
+// then answering a question the crew never asked.
+//
+// PROVIDER IS THE ONE EXCEPTION — it is written through to the flat key rather
+// than bound by reference. Its readers (resolveProvider, projectUsageGateExempt
+// in config.ts, reviewerEnvPrefix in claude-env.ts, `garden provider list`) sit
+// below crew.ts in the import graph and cannot consult a crew without a cycle,
+// and docs/future/CREWS.md rules that worker-provider stays the flat key to
+// avoid split-brain. So the crew owns the value, but the value lives in
+// `project.provider` where every reader already looks.
 export function applyCrew(projectName: string, spec: CrewSpec): void {
   const config = loadConfig();
   const project = config.projects[projectName];
   if (!project) throw new Error(`Unknown project: ${projectName}`);
 
-  if (spec.worker.harness === DEFAULT_HARNESS) delete project.harness;
-  else project.harness = spec.worker.harness;
+  project.crew = spec.name;
+  delete project.harness;
   if (spec.worker.provider) project.provider = spec.worker.provider;
   else delete project.provider;
+  if (spec.worker.model) delete project.model;
+  if (spec.worker.effort) delete project.effort;
 
   const roles = project.roles ?? {};
   for (const role of ["reviewer", "resolver", "ciFix"] as const) {
-    const target = roles[role] ?? {};
-    if (spec.review.harness === DEFAULT_HARNESS) delete target.harness;
-    else target.harness = spec.review.harness;
+    const target = roles[role];
+    if (!target) continue;
+    delete target.harness;
+    if (spec.review.model) delete target.model;
     if (Object.keys(target).length === 0) delete roles[role];
-    else roles[role] = target;
   }
   if (Object.keys(roles).length === 0) delete project.roles;
   else project.roles = roles;
 
   saveConfig(config);
+}
+
+// Unbind a project from its crew, leaving the flat keys as-is. The project
+// keeps whatever it currently resolves to, now spelled out rather than named.
+export function clearCrew(projectName: string): void {
+  const config = loadConfig();
+  const project = config.projects[projectName];
+  if (!project) throw new Error(`Unknown project: ${projectName}`);
+  delete project.crew;
+  saveConfig(config);
+}
+
+// --- CRUD over stored definitions -------------------------------------------
+
+export function isBuiltinCrew(name: string, config: GardenConfig): boolean {
+  return !config.crews?.[name] && builtinCrews(config).some((c) => c.name === name);
+}
+
+// Validate a definition against the member registry and the review asymmetry.
+// Throws with an operator-readable message; callers surface it verbatim.
+export function validateCrewDef(def: StoredCrew, config: GardenConfig): void {
+  const names = listMembers(config).map((m) => m.name);
+  if (!findMember(def.worker.member, config)) {
+    throw new Error(`Unknown member '${def.worker.member}'. Available: ${names.join(", ")}`);
+  }
+  const review = findMember(def.review.member, config);
+  if (!review) {
+    throw new Error(`Unknown member '${def.review.member}'. Available: ${names.join(", ")}`);
+  }
+  // The load-bearing asymmetry: a provider on a review role defeats the safety
+  // net that a cheap/experimental worker is checked by a strong first-party
+  // model. Enforced here so it cannot be smuggled in via a stored definition.
+  if (review.provider) {
+    const ok = reviewerMembers(config).map((m) => m.name).join(", ");
+    throw new Error(
+      `Member '${def.review.member}' is provider-backed and cannot review. Reviewer members: ${ok}`,
+    );
+  }
+  if (def.review.effort) throw new Error("Review roles take no effort — it has no analog outside the worker.");
+}
+
+export function saveCrew(name: string, def: StoredCrew): void {
+  const config = loadConfig();
+  validateCrewDef(def, config);
+  config.crews = { ...(config.crews ?? {}), [name]: def };
+  saveConfig(config);
+}
+
+// Remove a stored definition. Projects bound to it fall back to their flat keys
+// (deriveCrew reports null, resolution skips the crew layer) rather than
+// breaking — the binding is a reference, and a dangling one is inert.
+export function deleteCrew(name: string): string[] {
+  const config = loadConfig();
+  if (!config.crews?.[name]) throw new Error(`No stored crew '${name}'.`);
+  delete config.crews[name];
+  if (Object.keys(config.crews).length === 0) delete config.crews;
+  const bound = Object.entries(config.projects)
+    .filter(([, p]) => p.crew === name)
+    .map(([n]) => n);
+  saveConfig(config);
+  return bound;
 }

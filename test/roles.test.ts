@@ -165,4 +165,54 @@ describe("resolveReviewRole", () => {
     const r = resolveReviewRole(project(), "default", "reviewer", emptyConfig, { crew: "no-such-crew" });
     expect(r.harness).toBe("claude-code");
   });
+
+  // The project's bound crew (project.crew), resolved by reference. It sits
+  // BELOW an explicit project.roles key and below a per-worker crew.
+  const withCrews = (crews: GardenConfig["crews"]): GardenConfig =>
+    ({ projects: {}, crews } as GardenConfig);
+
+  it("a project's bound crew supplies the review harness and model", async () => {
+    const { resolveReviewRole } = await importRoles();
+    const config = withCrews({ heavy: { worker: { member: "claude" }, review: { member: "codex", model: "gpt-5" } } });
+    for (const role of ["reviewer", "resolver", "ciFix"] as const) {
+      const r = resolveReviewRole(project({ crew: "heavy" }), "default", role, config);
+      expect(r.harness).toBe("codex");
+      expect(r.model).toBe("gpt-5");
+    }
+  });
+
+  it("an explicit project.roles key overrides the project's crew", async () => {
+    const { resolveReviewRole } = await importRoles();
+    const config = withCrews({ heavy: { worker: { member: "claude" }, review: { member: "codex" } } });
+    const r = resolveReviewRole(
+      project({ crew: "heavy", roles: { reviewer: { harness: "claude-code" } } }),
+      "default", "reviewer", config);
+    expect(r.harness).toBe("claude-code");
+    // Only the reviewer was overridden; the other roles still follow the crew.
+    expect(resolveReviewRole(project({ crew: "heavy" }), "default", "resolver", config).harness).toBe("codex");
+  });
+
+  it("a per-worker crew outranks the project's crew", async () => {
+    const { resolveReviewRole } = await importRoles();
+    const config = withCrews({ heavy: { worker: { member: "claude" }, review: { member: "codex" } } });
+    const r = resolveReviewRole(project({ crew: "heavy" }), "default", "reviewer", config, { crew: "all-claude" });
+    expect(r.harness).toBe("claude-code");
+  });
+
+  it("a crew review model reaches a foreign harness that would otherwise go unpinned", async () => {
+    const { resolveReviewRole } = await importRoles();
+    const unpinned = resolveReviewRole(project({ crew: "c" }), "default", "reviewer",
+      withCrews({ c: { worker: { member: "claude" }, review: { member: "codex" } } }));
+    expect(unpinned.model).toBeUndefined();
+    const pinned = resolveReviewRole(project({ crew: "c" }), "default", "reviewer",
+      withCrews({ c: { worker: { member: "claude" }, review: { member: "codex", model: "gpt-5" } } }));
+    expect(pinned.model).toBe("gpt-5");
+  });
+
+  it("a bound crew that no longer exists falls back to the safe default", async () => {
+    const { resolveReviewRole } = await importRoles();
+    const r = resolveReviewRole(project({ crew: "deleted" }), "default", "reviewer", emptyConfig);
+    expect(r.harness).toBe("claude-code");
+    expect(r.model).toBe("opus");
+  });
 });

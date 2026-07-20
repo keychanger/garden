@@ -3,7 +3,7 @@
 // file is their CLI presenter plus the read (`show*`) and crew/role dispatch.
 import { loadConfig, resolveProject, isValidConfigKey, type ProjectConfig } from "../config.js";
 import { resolveReviewRole, type ReviewRole } from "../dashboard/roles.js";
-import { listCrews, getCrew, applyCrew, deriveCrew } from "../dashboard/crew.js";
+import { listCrews, getCrew, applyCrew, clearCrew, crewOverridden, deriveCrew } from "../dashboard/crew.js";
 import {
   setProjectConfigKey, setProjectRoleDim,
   SETTABLE_KEYS, type SettableKey, REVIEW_ROLE_KEYS, ROLE_DIMS, type RoleDim,
@@ -172,22 +172,18 @@ function showConfigKey(project: ProjectConfig & { name: string }, key: SettableK
   }
 }
 
-function handleCrewCommand(
+// Bind a project to a named crew. Shared by `garden config <p> crew <name>`
+// and `garden crew apply <name> [project]` so there is one writer.
+export function applyCrewToProject(
   project: ProjectConfig & { name: string },
-  name: string | undefined,
+  name: string,
 ): void {
   const config = loadConfig();
-  if (!name) {
-    const current = deriveCrew(project, config);
-    const available = listCrews(config).map((c) => c.name);
-    output(
-      { crew: current, available },
-      () =>
-        [
-          `  crew: ${current ?? "(custom — hand-tuned roles)"}`,
-          `  available: ${available.join(", ")}`,
-        ].join("\n"),
-    );
+  // Unbinding leaves the flat keys standing: the project keeps resolving to
+  // whatever it does today, just spelled out rather than named.
+  if (name === "none") {
+    clearCrew(project.name);
+    console.log(`Cleared the crew binding for ${project.name} (its own config keys still apply).`);
     return;
   }
   const spec = getCrew(name, config);
@@ -200,7 +196,36 @@ function handleCrewCommand(
   const workerDesc = spec.worker.provider
     ? `${spec.worker.name} (claude-code via provider ${spec.worker.provider})`
     : spec.worker.name;
-  console.log(`Set crew '${name}' for ${project.name}: worker=${workerDesc}, review=${spec.review.name}.`);
+  const dims = [
+    spec.worker.model ? `model=${spec.worker.model}` : "",
+    spec.worker.effort ? `effort=${spec.worker.effort}` : "",
+  ].filter(Boolean).join(" ");
+  console.log(
+    `Set crew '${name}' for ${project.name}: worker=${workerDesc}${dims ? ` ${dims}` : ""}`
+    + `, review=${spec.review.name}${spec.review.model ? ` model=${spec.review.model}` : ""}.`,
+  );
+}
+
+function handleCrewCommand(
+  project: ProjectConfig & { name: string },
+  name: string | undefined,
+): void {
+  const config = loadConfig();
+  if (!name) {
+    const current = deriveCrew(project, config);
+    const overridden = crewOverridden(project, config);
+    const available = listCrews(config).map((c) => c.name);
+    output(
+      { crew: current, bound: project.crew ?? null, overridden, available },
+      () =>
+        [
+          `  crew: ${current ?? "(custom — hand-tuned roles)"}${overridden ? " (with local overrides)" : ""}`,
+          `  available: ${available.join(", ")}`,
+        ].join("\n"),
+    );
+    return;
+  }
+  applyCrewToProject(project, name);
 }
 
 function handleRoleCommand(

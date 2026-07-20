@@ -21,7 +21,9 @@ vi.mock("../src/config.js", async (orig) => {
 vi.mock("../src/dashboard/header.js", () => ({ refreshDashboard: vi.fn() }));
 
 const { listMembers, reviewerMembers, listCrews, getCrew, deriveCrew, applyCrew,
-  workerMemberName, projectWorkerMemberName } =
+  workerMemberName, projectWorkerMemberName, builtinCrews, storedCrews,
+  resolveProjectCrew, crewOverridden, clearCrew, saveCrew, deleteCrew,
+  isBuiltinCrew, validateCrewDef } =
   await import("../src/dashboard/crew.js");
 const { buildCrewPickerPlan } = await import("../src/dashboard/crew-picker.js");
 
@@ -102,21 +104,27 @@ describe("applyCrew", () => {
     store.value = { projects: { garden: { path: "/p" } }, providers: { deepseek: { baseUrl: "x", authTokenEnv: "DEEPSEEK_API_KEY" } } } as GardenConfig;
   });
 
-  it("all-codex sets worker + review harness to codex and clears provider", () => {
+  // Binding is BY REFERENCE: applyCrew records the name and clears the flat
+  // keys the crew now owns, rather than expanding into them. Clearing is what
+  // keeps the binding live — a stale flat key would sit in the override layer
+  // and permanently shadow the crew.
+  it("all-codex records the binding and clears the flat harness + provider", () => {
     store.value.projects.garden.provider = "deepseek";
     applyCrew("garden", getCrew("all-codex", store.value)!);
     const p = store.value.projects.garden;
-    expect(p.harness).toBe("codex");
-    expect(p.roles?.reviewer?.harness).toBe("codex");
-    expect(p.roles?.resolver?.harness).toBe("codex");
-    expect(p.roles?.ciFix?.harness).toBe("codex");
+    expect(p.crew).toBe("all-codex");
+    expect(p.harness).toBeUndefined();
+    expect(p.roles).toBeUndefined();
     expect(p.provider).toBeUndefined();
   });
 
-  it("deepseek-claude sets provider, leaves worker harness default, clears review", () => {
+  // Provider is the one write-through dimension: its readers sit below crew.ts
+  // in the import graph and cannot consult a crew without a cycle.
+  it("deepseek-claude writes provider through while binding by reference", () => {
     store.value.projects.garden.harness = "codex";
     applyCrew("garden", getCrew("deepseek-claude", store.value)!);
     const p = store.value.projects.garden;
+    expect(p.crew).toBe("deepseek-claude");
     expect(p.provider).toBe("deepseek");
     expect(p.harness).toBeUndefined();
     expect(p.roles).toBeUndefined();
@@ -126,6 +134,7 @@ describe("applyCrew", () => {
     store.value.projects.garden = { path: "/p", harness: "codex", provider: "deepseek", roles: { reviewer: { harness: "codex" } } } as ProjectConfig;
     applyCrew("garden", getCrew("all-claude", store.value)!);
     const p = store.value.projects.garden;
+    expect(p.crew).toBe("all-claude");
     expect(p.harness).toBeUndefined();
     expect(p.provider).toBeUndefined();
     expect(p.roles).toBeUndefined();
@@ -144,6 +153,144 @@ describe("applyCrew", () => {
       applyCrew("garden", getCrew(name, store.value)!);
       expect(deriveCrew(store.value.projects.garden, store.value)).toBe(name);
     }
+  });
+});
+
+describe("stored crews", () => {
+  beforeEach(() => {
+    store.value = { projects: { garden: { path: "/p" } } } as GardenConfig;
+  });
+
+  it("a stored crew carries model + effort the generated names cannot express", () => {
+    saveCrew("heavy", {
+      worker: { member: "claude", model: "opus", effort: "xhigh" },
+      review: { member: "claude", model: "opus" },
+    });
+    const spec = getCrew("heavy", store.value)!;
+    expect(spec.builtin).toBe(false);
+    expect(spec.worker.model).toBe("opus");
+    expect(spec.worker.effort).toBe("xhigh");
+    expect(spec.review.model).toBe("opus");
+  });
+
+  it("listCrews returns stored first, then unshadowed builtins", () => {
+    saveCrew("heavy", { worker: { member: "claude" }, review: { member: "claude" } });
+    const names = listCrews(store.value).map((c) => c.name);
+    expect(names[0]).toBe("heavy");
+    expect(names).toContain("all-codex");
+  });
+
+  it("a stored crew shadows a builtin of the same name", () => {
+    saveCrew("all-claude", {
+      worker: { member: "claude", model: "sonnet" },
+      review: { member: "claude" },
+    });
+    const spec = getCrew("all-claude", store.value)!;
+    expect(spec.builtin).toBe(false);
+    expect(spec.worker.model).toBe("sonnet");
+    expect(listCrews(store.value).filter((c) => c.name === "all-claude")).toHaveLength(1);
+    expect(isBuiltinCrew("all-claude", store.value)).toBe(false);
+  });
+
+  it("rejects a provider-backed reviewer — the safety-net asymmetry", () => {
+    store.value.providers = { deepseek: { baseUrl: "x", authTokenEnv: "K" } } as GardenConfig["providers"];
+    expect(() => saveCrew("bad", { worker: { member: "claude" }, review: { member: "deepseek" } }))
+      .toThrow(/cannot review/);
+    // ...but a provider may BUILD.
+    expect(() => saveCrew("ok", { worker: { member: "deepseek" }, review: { member: "claude" } }))
+      .not.toThrow();
+  });
+
+  it("rejects an unknown member and a review-side effort", () => {
+    expect(() => validateCrewDef({ worker: { member: "nope" }, review: { member: "claude" } }, store.value))
+      .toThrow(/Unknown member 'nope'/);
+    expect(() => validateCrewDef(
+      { worker: { member: "claude" }, review: { member: "claude", effort: "high" } },
+      store.value,
+    )).toThrow(/no effort/);
+  });
+
+  it("drops a crew whose member no longer resolves rather than throwing", () => {
+    store.value.providers = { deepseek: { baseUrl: "x", authTokenEnv: "K" } } as GardenConfig["providers"];
+    saveCrew("cheap", { worker: { member: "deepseek" }, review: { member: "claude" } });
+    expect(getCrew("cheap", store.value)).not.toBeNull();
+    delete store.value.providers;
+    expect(getCrew("cheap", store.value)).toBeNull();
+    expect(storedCrews(store.value)).toHaveLength(0);
+  });
+
+  it("builtins never carry model or effort", () => {
+    for (const c of builtinCrews(store.value)) {
+      expect(c.worker.model).toBeUndefined();
+      expect(c.worker.effort).toBeUndefined();
+      expect(c.review.model).toBeUndefined();
+      expect(c.builtin).toBe(true);
+    }
+  });
+
+  it("deleting a crew reports its bound projects and leaves the reference inert", () => {
+    saveCrew("heavy", { worker: { member: "claude" }, review: { member: "claude" } });
+    applyCrew("garden", getCrew("heavy", store.value)!);
+    expect(deleteCrew("heavy")).toEqual(["garden"]);
+    // Dangling reference: resolution skips the crew layer rather than breaking.
+    expect(store.value.projects.garden.crew).toBe("heavy");
+    expect(resolveProjectCrew(store.value.projects.garden, store.value)).toBeNull();
+    expect(deriveCrew(store.value.projects.garden, store.value)).toBeNull();
+  });
+});
+
+describe("crew binding by reference", () => {
+  beforeEach(() => {
+    store.value = { projects: { garden: { path: "/p" } } } as GardenConfig;
+    saveCrew("heavy", {
+      worker: { member: "claude", model: "opus", effort: "xhigh" },
+      review: { member: "claude", model: "opus" },
+    });
+  });
+
+  it("editing a crew re-targets a bound project with no re-apply", () => {
+    applyCrew("garden", getCrew("heavy", store.value)!);
+    expect(resolveProjectCrew(store.value.projects.garden, store.value)!.worker.model).toBe("opus");
+    saveCrew("heavy", { worker: { member: "claude", model: "sonnet" }, review: { member: "claude" } });
+    expect(resolveProjectCrew(store.value.projects.garden, store.value)!.worker.model).toBe("sonnet");
+  });
+
+  it("applying a crew clears the flat keys it owns so they cannot shadow it", () => {
+    store.value.projects.garden.model = "haiku";
+    store.value.projects.garden.effort = "low";
+    applyCrew("garden", getCrew("heavy", store.value)!);
+    const p = store.value.projects.garden;
+    expect(p.model).toBeUndefined();
+    expect(p.effort).toBeUndefined();
+    expect(crewOverridden(p, store.value)).toBe(false);
+  });
+
+  it("leaves a flat key the crew does not set, and flags a later override", () => {
+    saveCrew("harness-only", { worker: { member: "claude" }, review: { member: "claude" } });
+    store.value.projects.garden.model = "haiku";
+    applyCrew("garden", getCrew("harness-only", store.value)!);
+    // The crew asks no model question, so the project's answer stands.
+    expect(store.value.projects.garden.model).toBe("haiku");
+    expect(crewOverridden(store.value.projects.garden, store.value)).toBe(false);
+
+    applyCrew("garden", getCrew("heavy", store.value)!);
+    store.value.projects.garden.model = "haiku";
+    expect(crewOverridden(store.value.projects.garden, store.value)).toBe(true);
+  });
+
+  it("clearCrew unbinds without touching the remaining keys", () => {
+    applyCrew("garden", getCrew("heavy", store.value)!);
+    store.value.projects.garden.checks = "npm test";
+    clearCrew("garden");
+    expect(store.value.projects.garden.crew).toBeUndefined();
+    expect(store.value.projects.garden.checks).toBe("npm test");
+  });
+
+  it("deriveCrew prefers the binding but still reads legacy flat keys", () => {
+    expect(deriveCrew({ path: "/p", crew: "heavy" } as ProjectConfig, store.value)).toBe("heavy");
+    // A config written before crews were stored spells out its harness only:
+    // a codex worker whose review roles are still the default claude-code.
+    expect(deriveCrew({ path: "/p", harness: "codex" } as ProjectConfig, store.value)).toBe("codex-claude");
   });
 });
 

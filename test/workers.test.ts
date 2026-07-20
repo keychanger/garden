@@ -201,7 +201,7 @@ import { addAlert } from "../src/dashboard/alerts.js";
 import { recordWorkerCreated } from "../src/dashboard/telemetry.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "../src/dashboard/poller.js";
 import { workerWindowName as workerWin, shellWindowName as shellWin, parseWorkerSuffix } from "../src/dashboard/window-names.js";
-import { getProject, tryGetProject } from "../src/config.js";
+import { getProject, tryGetProject, loadConfig } from "../src/config.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import crypto from "node:crypto";
@@ -235,6 +235,9 @@ beforeEach(() => {
   vi.mocked(findWorkerByName).mockReturnValue(null);
   vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 50 });
   vi.mocked(fs.readFileSync).mockImplementation(() => { throw new Error("ENOENT"); });
+  // clearAllMocks clears calls but not implementations, so a test that stubs a
+  // stored-crew config would otherwise leak it into every later test.
+  vi.mocked(loadConfig).mockReturnValue({ projects: {}, plots: {} } as ReturnType<typeof loadConfig>);
 });
 
 // =============================================================================
@@ -862,6 +865,63 @@ describe("newWorker", () => {
     const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
     expect(entry.crew).toBe("codex-claude");
     expect(entry.harness).toBe("codex");
+  });
+
+  // Stored crews carry model + effort — the dims a generated crew namespace
+  // cannot express. Each resolves in the layer beneath its flat project key.
+  const HEAVY = {
+    projects: {}, plots: {},
+    crews: { heavy: { worker: { member: "claude", model: "opus", effort: "xhigh" }, review: { member: "claude" } } },
+  };
+
+  it("crew model/effort: a per-worker crew supplies both dims", () => {
+    vi.mocked(loadConfig).mockReturnValue(HEAVY as ReturnType<typeof loadConfig>);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ crew: "heavy" });
+    const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.model).toBe("opus");
+    expect(entry.effort).toBe("xhigh");
+  });
+
+  it("crew model/effort: a per-spawn --model/--effort still wins", () => {
+    vi.mocked(loadConfig).mockReturnValue(HEAVY as ReturnType<typeof loadConfig>);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ crew: "heavy", model: "sonnet", effort: "low" });
+    const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.model).toBe("sonnet");
+    expect(entry.effort).toBe("low");
+  });
+
+  it("crew model/effort: a project's bound crew applies, and its flat keys override it", () => {
+    vi.mocked(loadConfig).mockReturnValue(HEAVY as ReturnType<typeof loadConfig>);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", crew: "heavy",
+    } as ReturnType<typeof tryGetProject>);
+    newWorker({});
+    let entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.model).toBe("opus");
+    expect(entry.effort).toBe("xhigh");
+
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", crew: "heavy", model: "haiku",
+    } as ReturnType<typeof tryGetProject>);
+    newWorker({});
+    entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.model).toBe("haiku");
+    expect(entry.effort).toBe("xhigh");
+  });
+
+  it("crew effort 'ultra' promotes to the ultracode preset, as at the CLI", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: {}, plots: {},
+      crews: { max: { worker: { member: "claude", effort: "ultra" }, review: { member: "claude" } } },
+    } as ReturnType<typeof loadConfig>);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ crew: "max" });
+    const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.ultracode).toBe(true);
+    expect(entry.effort).toBeUndefined();
   });
 
   it("crew: the worker.created snapshot records the per-worker crew, not the project crew", () => {

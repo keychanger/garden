@@ -83,11 +83,22 @@ Projects:
   config <project> role [<role> [harness|model] [value]]
                                  Per-role review harness/model (role: reviewer|resolver|ci-fix)
                                  e.g. 'config <p> role reviewer harness codex' for a Codex reviewer
-  config <project> crew [<name>] View/set the crew: who builds and who reviews, in one word.
-                                 Names are <worker>-<reviewer> (all-X sugar): all-claude,
+  config <project> crew [<name>] Bind the project to a crew ('none' unbinds). See 'garden crew'.
+  crew [list|show|add|edit|remove|apply]
+                                 Manage crews: who builds and who reviews, and how strong.
+                                 Builtin names are <worker>-<reviewer> (all-X sugar): all-claude,
                                  all-codex, codex-claude, claude-codex, plus <provider>-claude /
                                  <provider>-codex per configured provider (e.g. deepseek-claude).
                                  A provider can build but never reviews (safety net).
+                                 Builtins carry a harness pairing only; define your own to pin
+                                 model and effort too:
+                                   crew add heavy --worker claude --model opus --effort xhigh \
+                                     --review claude --review-model opus
+                                   crew add cheap --from all-claude --model sonnet --effort medium
+                                   crew apply heavy myproject
+                                 Projects bind by REFERENCE, so 'crew edit' re-targets every
+                                 project on that crew at its next spawn/review. A project's own
+                                 config keys override the crew.
   diary [project] [--path]       Open the project's diary in $EDITOR (--path prints the file path)
   claude-profile [list|add|remove|login]
                                  Manage alternate Claude config dirs (per-project plan)

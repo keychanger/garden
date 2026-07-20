@@ -14,7 +14,8 @@ doc is the detailed worker-path-and-selection design that
 [`AUTONOMY-PROGRAM.md`](AUTONOMY-PROGRAM.md) §4a point at — it does not
 replace them. `MULTI-MODEL.md` owns the harness-adapter architecture and the
 per-role resolution matrix; this doc owns (a) the **crew** concept — the
-operator-facing bundle of role→harness/model assignments — and (b) the
+operator-facing bundle of role→harness/model/effort assignments, shipped and
+extended to stored, operator-named crews on 2026-07-19 — and (b) the
 remaining **Codex worker path**. Nothing here is a behavioral contract yet;
 workers must not act on it (see `rules.md` § Specifications and documentation
 and `docs/README.md` on `docs/future/`).
@@ -145,13 +146,11 @@ genuinely good future (see Futures) and is exactly the territory of
 [`PLAN-WORKFLOW.md`](PLAN-WORKFLOW.md) — but it does not exist in the pipeline
 yet, and a crew selector must not be designed around a role that isn't wired.
 
-## The crew model — SHIPPED (2026-07-10, `src/dashboard/crew.ts`)
+## The crew model — SHIPPED (2026-07-10; stored crews 2026-07-19, `src/dashboard/crew.ts`)
 
-A **crew** is a pair of **members** — `<worker>-<reviewer>`, with `all-X` sugar
-when one harness both builds and reviews. `garden config <p> crew <name>` is
-sugar that sets the worker harness/provider *and* the three review-role
-harnesses together; it introduces no new resolution mechanism (it writes the
-existing `harness`/`provider`/`roles.*` keys).
+A **crew** names *who runs each role and how strong*. `garden crew
+[list|show|add|edit|remove|apply]` manages them; `garden config <p> crew <name>`
+(or `⌥⇧C`) binds a project to one.
 
 A **member** is *data*, not code: the registered harnesses (`claude`, `codex`)
 plus one per configured provider (`deepseek` → claude-code against that
@@ -164,13 +163,15 @@ composes over both under one operator-facing name.
 members may REVIEW. A provider on a review role defeats the safety net (a
 cheap/experimental worker must be reviewed by a strong first-party model), so
 provider members are worker-only. Hence `deepseek-claude` / `deepseek-codex`
-are valid crews but there is no `*-deepseek` — a DeepSeek worker is always
-reviewed by strong Claude or Codex.
+are valid crews but there is no `*-deepseek`. Enforced structurally in
+`validateCrewDef`, so it cannot be smuggled in via a stored definition.
 
-### The crews (generated from members)
+### Two kinds of crew
 
-For members `{claude, codex}` + a configured `deepseek` provider, `listCrews`
-generates:
+**Builtin (generated).** `builtinCrews` is the cross product of members ×
+reviewer-members, named `<worker>-<reviewer>` with `all-X` sugar when one
+harness both builds and reviews. For members `{claude, codex}` + a configured
+`deepseek` provider:
 
 | Crew | worker | reviewer (+ resolver + ci-fix) |
 |---|---|---|
@@ -181,11 +182,72 @@ generates:
 | `deepseek-claude` | claude-code + deepseek provider | claude-code |
 | `deepseek-codex` | claude-code + deepseek provider | codex |
 
-`deriveCrew` reports a project's current crew (null when hand-tuned, e.g.
-reviewer ≠ resolver); `applyCrew` is authoritative over the worker
-harness/provider + the three review harnesses, clearing to default what the
-crew doesn't set. The naming (worker-first `<worker>-<reviewer>`) generalizes:
-a new provider `foo` yields `foo-claude`/`foo-codex` automatically.
+Builtins carry a **harness pairing only**. That is not an oversight — it is the
+structural limit of a generated namespace. Adding a model dim to a generated
+set means names like `sonnet-xhigh-claude-opus-claude`, and 2 harnesses × 4
+model aliases × 5 effort rungs × 2 reviewers = 80 of them. This limit is why
+the 2026-07-16 composer decision put model/effort *outside* crews.
+
+**Stored (operator-named).** `crews` in `~/.garden/config.yml` — garden-level,
+like `providers` and `claudeProfiles`, since a crew is a shared resource
+projects reference by name. Because the operator picks the name, the
+combinatorial objection dissolves and a crew can carry **model** and **effort**
+as well:
+
+```yaml
+crews:
+  heavy:
+    worker: { member: claude, model: opus, effort: xhigh }
+    review: { member: claude, model: opus }
+  cheap:
+    worker: { member: deepseek, model: sonnet, effort: medium }
+    review: { member: claude }          # unpinned -> SAFE_REVIEW_MODEL
+```
+
+The naming also gets *better*: `heavy` / `cheap` / `nightly` say more on a
+status-pane badge than `all-claude`. `listCrews` returns stored ∪ builtin, a
+stored name shadowing a builtin — so redefining `all-codex` is allowed and no
+existing config, doc reference, or test needed migrating.
+
+Effort is worker-only (the review family has no analog) and takes the four
+`--effort` rungs plus `ultra`, which promotes to the ultracode preset exactly
+as `--effort ultra` does at the CLI.
+
+### Binding is by reference
+
+A project stores `crew: <name>`; the members resolve at spawn/review time.
+`garden crew edit heavy --model opus` therefore re-targets every project bound
+to `heavy` at its next spawn or review — the property that makes crew
+definitions worth editing, and the reason a create/edit/delete surface is
+coherent at all. (Under the original write-through model, editing a crew did
+nothing to projects already using it.)
+
+`applyCrew` records the name and **clears** the flat keys the crew now owns. The
+clearing is load-bearing: the flat project keys are the *override layer* above
+the crew, so a stale `harness` left behind would permanently shadow the crew and
+make edits appear to do nothing. It clears narrowly — a crew with no worker
+model leaves `project.model` alone, because that key is then answering a
+question the crew never asked. `crewOverridden` reports the adopted-then-tweaked
+state; `config <p> crew none` unbinds, leaving the flat keys standing.
+
+A deleted crew leaves an **inert dangling reference**: resolution skips the crew
+layer and the project falls back to its own keys. `garden crew remove` reports
+which projects referenced it.
+
+**`provider` is the one write-through dimension.** Its readers
+(`resolveProvider` / `projectUsageGateExempt` in `config.ts`,
+`reviewerEnvPrefix` in `claude-env.ts`, `garden provider list`) sit below
+`crew.ts` in the import graph and cannot consult a crew without a cycle — and
+this doc's own Phase 4 ruling keeps worker-provider on the flat key to avoid
+split-brain. So the crew owns the value but writes it to `project.provider`,
+where every reader already looks.
+
+### What a crew deliberately does NOT absorb
+
+Base branch, workflow, checks, iteration caps. A crew answers *who runs each
+role and how strong*; a workflow answers *what loop*. Folding spawn fields in
+would make the crew an undisciplined profile shadowing the project config layer
+— the same instinct that rejected a `defaults:` block.
 
 ### Resolution semantics
 
@@ -211,11 +273,19 @@ Generalize the shipped `resolveReviewRole(project, workflow, role)` into the
   rejects a higher-precedence `roles.worker.provider` to avoid split-brain.
   `roles.worker` carries `harness` and `model` only.
 
-A crew is then a preset that fills those slots. `crew all-codex` expands to
-`roles.worker.harness=codex, roles.reviewer.harness=codex,
-roles.resolver.harness=codex, roles.ciFix.harness=codex`. Setting a crew and
-setting individual role keys are the same underlying write; the crew is a
-convenience, and the granular keys remain the escape hatch.
+A crew supplies those slots as a **layer**, not a write. Per dimension the
+chain is: **per-worker crew (`entry.crew`) → explicit key (`roles.<role>` /
+flat project key) → project's bound crew (`project.crew`) → default**. So a
+crew is never "the same underlying write" as setting the granular keys — the
+granular keys sit *above* it as the override layer, and remain the escape
+hatch. The one exception is `provider`, which the crew writes through to the
+flat key (see "Binding is by reference").
+
+The worker half additionally gates each dimension exactly like the flat project
+key it sits beneath: harness applies to the **default workflow only** (like
+`project.harness`), model and effort to **default + grow** (like
+`project.model` / `project.effort`). Trellis consults none of them — it
+resolves its own model per iteration and carries no effort.
 
 ## The worker-path gaps, ranked
 
