@@ -67,6 +67,14 @@ describe("buildWorkflowPickerPlan", () => {
     expect(rows[8].key).toBe("b");
   });
 
+  it("binds every quick-key at most once", () => {
+    // tmux display-menu silently gives a repeated key to the first row that
+    // claims it, so a collision makes a row unreachable rather than erroring.
+    const keys = buildWorkflowPickerPlan("proj", RUNNER).rows
+      .filter(r => !r.sep).map(r => r.key);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
   it("includes the project name in the title", () => {
     expect(buildWorkflowPickerPlan("myproject", RUNNER).title).toContain("myproject");
   });
