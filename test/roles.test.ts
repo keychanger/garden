@@ -3,7 +3,10 @@
 // strong first-party Anthropic reviewer, and Codex-as-reviewer is selected by
 // a per-role harness override without disturbing the other roles.
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import type { ProjectConfig, GardenConfig } from "../src/config.js";
+import { useTmpHome } from "./helpers.js";
 
 vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -250,5 +253,34 @@ describe("resolveReviewRole", () => {
     const r = resolveReviewRole(project({ crew: "deleted" }), "default", "reviewer", emptyConfig);
     expect(r.harness).toBe("claude-code");
     expect(r.model).toBe("opus");
+  });
+});
+
+// When to read config.yml at all. The crew-free chain consults nothing from
+// the file, so it must not require an initialized garden — reading it there is
+// what made every roles case fail on a bare CI runner while passing on the
+// operator's workstation. A crew name is the one thing that does need the file,
+// and a caller that passes no config must still resolve it from disk.
+describe("resolveReviewRole config reads", () => {
+  const tmp = useTmpHome();
+
+  it("resolves without an initialized garden when no crew is involved", async () => {
+    vi.resetModules();
+    const { resolveReviewRole } = await importRoles();
+    fs.rmSync(path.join(tmp.gardenDir, "config.yml"), { force: true });
+    const r = resolveReviewRole(project(), "default", "reviewer");
+    expect(r.harness).toBe("claude-code");
+    expect(r.model).toBe("opus");
+  });
+
+  it("loads the on-disk config to resolve a bound crew when none is passed", async () => {
+    fs.writeFileSync(
+      path.join(tmp.gardenDir, "config.yml"),
+      "projects: {}\ncrews:\n  heavy:\n    worker:\n      member: claude\n    review:\n      member: codex\n",
+    );
+    vi.resetModules();
+    const { resolveReviewRole } = await importRoles();
+    const r = resolveReviewRole(project({ crew: "heavy" }), "default", "reviewer");
+    expect(r.harness).toBe("codex");
   });
 });

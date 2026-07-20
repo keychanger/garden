@@ -8,7 +8,8 @@
 //
 // Per-test isolation still belongs to useTmpHome() in helpers.ts — that gives a
 // test its own writable garden. This only guarantees the floor is never the
-// operator's own. Keyed on pid so each run starts clean and workers share one.
+// operator's own. Keyed on pid so each run starts clean; under vitest's forks
+// pool that is one dir per worker process, which is isolation, not a leak.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
