@@ -335,7 +335,7 @@ describe("garden workers new --workflow botanist", () => {
     expect(contents).toContain("END YOUR TURN");
   });
 
-  it("plants without a seed: the seed file is the greeting prompt (wait for the brief in the pane)", async () => {
+  it("plants without a seed: no plant-time message at all (the brief arrives in the pane)", async () => {
     await setupProject("proj");
     const { workers } = await importWorkersCmd();
     const { newWorker } = await importDashboardWorkers();
@@ -345,10 +345,8 @@ describe("garden workers new --workflow botanist", () => {
     );
 
     const call = (newWorker as unknown as { mock: { calls: Array<[Record<string, unknown>]> } }).mock.calls.at(-1)![0];
-    const contents = fs.readFileSync(call.seedMessageFile as string, "utf-8");
-    expect(contents).toContain("botanist");
-    expect(contents).toContain(".garden-awaiting-input");
-    expect(contents).toContain("has not given you a design brief yet");
+    expect(call.workflow).toBe("botanist");
+    expect(call.seedMessageFile).toBeUndefined();
   });
 
   it("rejects an explicitly empty seed", async () => {

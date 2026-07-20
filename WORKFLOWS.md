@@ -2794,13 +2794,14 @@ garden workers new <project> --workflow botanist --harness codex     # a Codex d
 
 The `⌥⇧N` workflow picker's `(o)` row plants a botanist instantly (`(b)` is the
 base-branch composer row) — no design prompt is collected in the tmux UI. The
-seed is optional everywhere: without one, the plant-time seed message has the
-botanist introduce itself, raise `.garden-awaiting-input`, and wait for the
-operator's design brief as the first message in its pane (multi-line,
-conversational, no shell-escaping constraints); with `--seed`/`--seed-file` (the
-scripted-plant path) the brief is inlined and framing starts immediately.
-`--crew` is rejected for a botanist (it runs no reviewer; the builder crew is
-chosen at handoff).
+seed is optional everywhere: without one, no plant-time message is sent at all —
+the design posture is baked into the worker's system prompt (the `rules.ts`
+botanist branch + the bundled skill) and the operator's design brief arrives as
+the first message in its pane (multi-line, conversational, no shell-escaping
+constraints); with `--seed`/`--seed-file` (the scripted-plant path) the brief is
+inlined via the seed message and framing starts immediately. `--crew` is
+rejected for a botanist (it runs no reviewer; the builder crew is chosen at
+handoff).
 
 ### Code layout
 
@@ -2810,8 +2811,8 @@ chosen at handoff).
   lean `dist/hook.js` closure via `poller-review.ts`).
 - `botanist-publish.ts` — `publishBotanistArtifact` (move + commit + `.garden-done`;
   no push — the poller merge pushes).
-- `botanist-prompts.ts` — `buildBotanistSeed` (plant-time framing with the
-  operator's seed inlined, or the greeting/wait-for-brief form when seedless).
+- `botanist-prompts.ts` — `buildBotanistSeed` (plant-time framing; only used
+  when `--seed`/`--seed-file` inlines a brief — seedless plants send no message).
 - `commands/botanist.ts` — `garden botanist publish [<worker>] --to <path> [--dry-run]`.
 - The rules inversion (`rules.ts` botanist branch), the bundled `botanist` skill
   (`skills.ts`), the picker row (`trellis-picker.ts`), and the `?` glyph

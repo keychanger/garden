@@ -714,14 +714,19 @@ export function formatTrellisBracket(t: WorkerInfo["trellis"]): string {
 // plot-status.ts, and the dist/hook.js bundle) — the exact boundary
 // CI_FIX_BUDGET_DISPLAY is inlined to preserve. `detail` fills the elastic
 // detail column; a vine shows its bracket, a grow loop its "grow N/M" counter
-// (the parity fix — trellis had a counter, grow had nothing). `badge` (unused
-// today; trellis/grow self-identify in detail) would join the grey cluster.
+// (the parity fix — trellis had a counter, grow had nothing). `badge` joins
+// the grey trailing identity cluster — the botanist tag lives there.
 function workflowRowDecor(worker: WorkerInfo): { badge?: string; detail?: string } {
   switch (worker.workflow) {
     case "trellis":
       return { detail: formatTrellisBracket(worker.trellis) };
     case "grow":
       return { detail: `grow ${worker.grow?.iteration ?? 0}/${worker.grow?.maxIterations ?? 0}` };
+    case "botanist":
+      // Identity, not activity: the badge joins the grey trailing cluster so
+      // the live activity text keeps the detail slot (a static detail here
+      // would clobber it).
+      return { badge: "botanist" };
     default:
       return {};
   }

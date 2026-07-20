@@ -421,7 +421,7 @@ Your working memory is the git-excluded directory \`.garden/botanist/\` at your 
 ## The four phases
 
 ### 1. Frame
-Read the operator's design brief — it arrives either inlined in your plant-time seed message or, when you were planted without one, as the operator's first message in your pane (your seed will have told you to introduce yourself and wait for it). Then scan the repo and write \`.garden/botanist/framing.md\`: what is the operator actually trying to accomplish, what constraints exist (existing architecture, invariants, prior art), and what is explicitly out of scope. Keep it tight. Then continue straight into phase 2 (do not end your turn yet).
+Read the operator's design brief — it arrives either inlined in your plant-time seed message or, when you were planted without one, as the operator's first message in your pane. Then scan the repo and write \`.garden/botanist/framing.md\`: what is the operator actually trying to accomplish, what constraints exist (existing architecture, invariants, prior art), and what is explicitly out of scope. Keep it tight. Then continue straight into phase 2 (do not end your turn yet).
 
 ### 2. Options — then pause
 Write \`.garden/botanist/options.md\`: **2–3 distinct approaches**, each a short narrative sketch of how it would work end to end — NOT a pros/cons list. For each, call out the load-bearing decision and the tradeoff that distinguishes it from the others.

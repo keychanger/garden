@@ -15,7 +15,6 @@ import path from "node:path";
 import fs from "node:fs";
 import { tryGetProject, SESSIONS_DIR } from "../config.js";
 import { buildGrowIteration1Seed } from "./grow-continue.js";
-import { buildBotanistSeed } from "./botanist-prompts.js";
 import { log } from "./log.js";
 import { newWorker } from "./workers.js";
 import { resolveGardenRunner } from "./runner.js";
@@ -791,13 +790,13 @@ export function plantGrowFromPicker(projectName: string, seed: string): void {
 }
 
 // Invoked by `_botanist-plant <project>` (the botanist row of the workflow
-// picker). Spawns the botanist immediately — no design prompt is collected
-// here. The plant-time seed is the greeting form of buildBotanistSeed: the
-// worker introduces itself and waits for the operator's brief as the first
-// message in its pane (a better channel than tmux command-prompt: multi-line,
-// no shell-metacharacter fragility). The designer model/effort default
-// (Opus/xhigh) is applied in newWorker, and the composer's model/effort/base
-// dims still layer on top.
+// picker). Spawns the botanist immediately with no seed message at all — the
+// design posture is baked into the worker's system prompt (rules.ts botanist
+// branch + the bundled skill), and the operator's design brief arrives as
+// their first message in the pane (a better channel than tmux command-prompt:
+// multi-line, no shell-metacharacter fragility). The designer model/effort
+// default (Opus/xhigh) is applied in newWorker, and the composer's
+// model/effort/base dims still layer on top.
 export function plantBotanistFromPicker(projectName: string): void {
   const project = tryGetProject(projectName);
   if (!project) {
@@ -805,16 +804,10 @@ export function plantBotanistFromPicker(projectName: string): void {
     return;
   }
 
-  const seedsDir = path.join(SESSIONS_DIR, "seeds");
-  fs.mkdirSync(seedsDir, { recursive: true });
-  const seedFile = path.join(seedsDir, `botanist-seed-${projectName}-${Date.now()}.txt`);
-  fs.writeFileSync(seedFile, buildBotanistSeed());
-
   const draft = consumeSpawnDraft(projectName);
   const newName = newWorker({
     projectName,
     workflow: "botanist",
-    seedMessageFile: seedFile,
     ...(draft.base ? { base: draft.base } : {}),
     // Model/effort dims layer over the workflow's Opus/xhigh default; crew and
     // build member are default-only and not consumed, so a foreign-harness
@@ -822,7 +815,6 @@ export function plantBotanistFromPicker(projectName: string): void {
     ...claudeOnlyLaunchOpts(project, draft),
   });
   if (!newName) {
-    try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
     tmuxDisplay(`Failed to plant botanist on '${projectName}'. Is the dashboard running?`);
     return;
   }

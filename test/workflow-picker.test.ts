@@ -628,30 +628,24 @@ describe("plantBotanistFromPicker", () => {
     expect(newWorker).not.toHaveBeenCalled();
   });
 
-  it("plants a botanist with the botanist workflow and a botanist seed file", () => {
+  it("plants a botanist with no seed message — the brief arrives in the pane", () => {
     vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/proj" });
     plantBotanistFromPicker("proj");
     expect(newWorker).toHaveBeenCalledWith(expect.objectContaining({
       projectName: "proj",
       workflow: "botanist",
-      seedMessageFile: expect.stringMatching(/botanist-seed-proj-\d+\.txt$/),
     }));
-    // A botanist does not loop — no grow sub-object.
+    // No plant-time message (the system prompt carries the design posture),
+    // and a botanist does not loop — no grow sub-object.
     const call = vi.mocked(newWorker).mock.calls.at(-1)![0] as Record<string, unknown>;
+    expect(call.seedMessageFile).toBeUndefined();
     expect(call.grow).toBeUndefined();
   });
 
-  it("writes the greeting seed (wait for the brief) and cleans it up when newWorker fails", () => {
+  it("reports the failure when newWorker fails", () => {
     vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/proj" });
     vi.mocked(newWorker).mockReturnValueOnce(null);
     plantBotanistFromPicker("proj");
-    expect(fs.writeFileSync).toHaveBeenCalledWith(
-      expect.stringMatching(/botanist-seed-proj-\d+\.txt$/),
-      expect.stringContaining(".garden-awaiting-input"),
-    );
-    expect(fs.unlinkSync).toHaveBeenCalledWith(
-      expect.stringMatching(/botanist-seed-proj-\d+\.txt$/),
-    );
     expect(tmuxDisplay).toHaveBeenCalledWith(expect.stringContaining("Failed to plant botanist"));
   });
 });

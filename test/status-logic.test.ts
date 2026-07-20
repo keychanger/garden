@@ -972,6 +972,17 @@ describe("identity badges + grammar (Phase 3)", () => {
     expect(widened.indexOf("wiring auth")).toBeGreaterThan(compact.indexOf("wiring auth"));
   });
 
+  it("renders a botanist badge in the identity cluster without clobbering activity", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "framing options", agentStatus: "working",
+        workflow: "botanist" },
+    ]);
+    const line = lineFor(renderQuickStatus(state), "bold-ash");
+    expect(line).toContain("botanist");
+    // Identity rides the badge cluster, so the live activity keeps the detail slot.
+    expect(line).toContain("framing options");
+  });
+
   it("renders grow N/M in the detail column (parity with the trellis counter)", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "a", task: "polishing", agentStatus: "working",

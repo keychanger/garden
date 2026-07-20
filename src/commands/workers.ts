@@ -253,9 +253,11 @@ async function newCommand(args: string[]): Promise<void> {
       throw new Error("--seed and --seed-file are mutually exclusive; pass exactly one.");
     }
     // The seed is optional: with one, the ask is inlined and the worker starts
-    // framing immediately (the scripted-plant path); without one, the worker
-    // greets and waits for the brief as the operator's first message in its
-    // pane — the same instant-spawn behavior as the workflow picker's row.
+    // framing immediately (the scripted-plant path); without one, no message
+    // is sent at all — the design posture is baked into the system prompt
+    // (rules.ts botanist branch + the bundled skill) and the brief arrives as
+    // the operator's first message in the pane, the same instant-spawn
+    // behavior as the workflow picker's row.
     let seed: string | undefined;
     if (flags.has("seed")) {
       seed = flags.get("seed")!;
@@ -276,13 +278,16 @@ async function newCommand(args: string[]): Promise<void> {
 
     // Plant-time prompt, delivered via seedMessageFile (like grow's iter-1
     // seed). A botanist does not loop, so the seed is not stored on the
-    // entry; it only kicks off (or stages) the frame → options pipeline.
-    const seedFile = path.join(
-      SESSIONS_DIR, "seeds",
-      `botanist-seed-${projectName}-${Date.now()}.txt`,
-    );
-    fs.mkdirSync(path.dirname(seedFile), { recursive: true });
-    fs.writeFileSync(seedFile, buildBotanistSeed(seed));
+    // entry; it only kicks off the frame → options pipeline.
+    let seedFile: string | undefined;
+    if (seed !== undefined) {
+      seedFile = path.join(
+        SESSIONS_DIR, "seeds",
+        `botanist-seed-${projectName}-${Date.now()}.txt`,
+      );
+      fs.mkdirSync(path.dirname(seedFile), { recursive: true });
+      fs.writeFileSync(seedFile, buildBotanistSeed(seed));
+    }
 
     // Designer model/effort default to Opus / xhigh via the workflow definition
     // (newWorker resolution); --model / --effort override per run.
@@ -295,10 +300,10 @@ async function newCommand(args: string[]): Promise<void> {
       ...effortOpts,
       ...(harness ? { harness } : {}),
       ...(base ? { base } : {}),
-      seedMessageFile: seedFile,
+      ...(seedFile ? { seedMessageFile: seedFile } : {}),
     });
     if (!newName) {
-      try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
+      if (seedFile) { try { fs.unlinkSync(seedFile); } catch { /* ignore */ } }
       throw new Error(
         `Failed to spawn botanist on '${projectName}'. Is the dashboard running? Check 'garden health'.`,
       );

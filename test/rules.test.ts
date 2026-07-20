@@ -286,6 +286,9 @@ describe("buildWorktreeRules — botanist workflow", () => {
     // Explicitly overrides the base's build-worker guidance.
     expect(result).toContain("that guidance is for build workers");
     expect(result).toContain("END YOUR TURN");
+    // A seedless plant sends no message — the prompt itself must say where
+    // the brief comes from.
+    expect(result).toContain("design brief arrives as their first message");
   });
 
   it("suppresses the checks paragraph even when a checksCommand is configured", async () => {
