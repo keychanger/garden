@@ -37,6 +37,12 @@ and still calls the Codex adapter "zero code." That is stale — see below.
   envPrefix}` independently. Live-verified against codex 0.142.5: `codex exec`
   performs full agentic review and emits a clean verdict on the last line of
   stdout, so `parseLastLineVerdict` holds.
+- **Crews**, both kinds: the generated builtins (`builtinCrews`) and stored,
+  operator-named crews carrying model + effort (`crews` in
+  `~/.garden/config.yml`), bound to a project by reference (`project.crew`).
+  Managed from the CLI (`garden crew [list|show|add|edit|remove|apply]`) and
+  from the `⌥⇧C` picker, which doubles as a composer for creating, editing,
+  and deleting a definition. See "The crew model" below.
 - The **plumbing** the worker path needs: `WorkerEntry.harness`, the launch
   builders (`buildWorktreeWorkerCommand` / `buildWorktreeBootstrapScript` /
   `buildWorktreeResumeCommand`) all accept `opts.harness` and route through
