@@ -229,6 +229,9 @@ export const codexCore: HarnessCore = {
   // own. --dangerously-bypass-approvals-and-sandbox lets the reviewer edit,
   // commit, and push under garden's trust boundary (garden owns the sandbox).
   buildHeadlessCommand(opts: HeadlessCommandOptions): string {
+    // opts.effort is a claude-code dial and is ignored here, mirroring the
+    // worker builder's treatment of effort/ultracode. A codex mapping
+    // (model_reasoning_effort) can be added when a codex reviewer needs one.
     const modelFlag = opts.model ? ` -m ${shellEscape(opts.model)}` : "";
     const err = shellEscape(codexStderrSidecar(opts.resultFile));
     return `${opts.inlineEnv}${opts.envPrefix}codex exec --dangerously-bypass-approvals-and-sandbox${modelFlag}`

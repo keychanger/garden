@@ -23,7 +23,7 @@ vi.mock("../src/dashboard/header.js", () => ({ refreshDashboard: vi.fn() }));
 const { listMembers, reviewerMembers, listCrews, getCrew, deriveCrew, applyCrew,
   workerMemberName, projectWorkerMemberName, builtinCrews, storedCrews,
   resolveProjectCrew, crewOverridden, clearCrew, saveCrew, deleteCrew,
-  isBuiltinCrew, validateCrewDef } =
+  isBuiltinCrew, validateCrewDef, formatRecipe } =
   await import("../src/dashboard/crew.js");
 const { buildCrewPickerPlan, buildCrewComposerPlan, buildCrewDimSubmenuPlan, buildStoredCrewPickerPlan } =
   await import("../src/dashboard/crew-picker.js");
@@ -214,13 +214,41 @@ describe("stored crews", () => {
       .not.toThrow();
   });
 
-  it("rejects an unknown member and a review-side effort", () => {
+  it("rejects an unknown member", () => {
     expect(() => validateCrewDef({ worker: { member: "nope" }, review: { member: "claude" } }, store.value))
       .toThrow(/Unknown member 'nope'/);
+  });
+
+  it("accepts a review effort, but only from the review ladder", () => {
+    // This was once rejected outright on the claim that effort had "no analog
+    // outside the worker". That was wrong: `--effort` is a top-level claude
+    // flag and composes with `-p`, so a headless reviewer takes one fine.
     expect(() => validateCrewDef(
       { worker: { member: "claude" }, review: { member: "claude", effort: "high" } },
       store.value,
-    )).toThrow(/no effort/);
+    )).not.toThrow();
+    // "ultra" names the ultracode PRESET, not an effort value — a headless
+    // reviewer has no preset to enable, so its ceiling is "max".
+    expect(() => validateCrewDef(
+      { worker: { member: "claude" }, review: { member: "claude", effort: "ultra" } },
+      store.value,
+    )).toThrow(/Unknown review effort 'ultra'/);
+    expect(() => validateCrewDef(
+      { worker: { member: "claude" }, review: { member: "claude", effort: "max" } },
+      store.value,
+    )).not.toThrow();
+  });
+
+  it("carries a review effort through storage and back", () => {
+    saveCrew("thorough", {
+      worker: { member: "claude", effort: "low" },
+      review: { member: "claude", effort: "max" },
+    });
+    const spec = getCrew("thorough", store.value)!;
+    expect(spec.worker.effort).toBe("low");
+    expect(spec.review.effort).toBe("max");
+    // Both halves render their dims, so the asymmetry is visible at a glance.
+    expect(formatRecipe(spec)).toBe("claude low → claude max");
   });
 
   it("rejects a worker effort outside the rungs, like the flat effort key does", () => {

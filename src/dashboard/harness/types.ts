@@ -53,6 +53,15 @@ export interface HeadlessCommandOptions {
   /** Where the agent's stdout+stderr land for verdict parsing. */
   resultFile: string;
   model?: string;
+  /** Reasoning effort for this headless run. Verified against claude 2.1.215:
+   *  `--effort` is a top-level flag, so `claude -p --effort <level>` is valid —
+   *  the review family is not structurally barred from an effort dial the way
+   *  it once claimed. Levels are low/medium/high/xhigh/max; unlike the worker's
+   *  rungs there is no "ultra", since ultracode is a worker preset (settings
+   *  file + dynamic workflows) rather than an effort value — a headless
+   *  reviewer that wants the ceiling asks for `max` literally. A harness
+   *  without an effort dial ignores it. */
+  effort?: string;
   /** Pre-composed provider/profile env prefix. */
   envPrefix: string;
   /** Inline env assignments (e.g. `GARDEN_REVIEWER=1 `), pre-escaped. */

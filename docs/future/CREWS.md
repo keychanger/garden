@@ -215,9 +215,28 @@ status-pane badge than `all-claude`. `listCrews` returns stored ∪ builtin, a
 stored name shadowing a builtin — so redefining `all-codex` is allowed and no
 existing config, doc reference, or test needed migrating.
 
-Effort is worker-only (the review family has no analog) and takes the four
-`--effort` rungs plus `ultra`, which promotes to the ultracode preset exactly
-as `--effort ultra` does at the CLI.
+Both halves take an **effort**, from different ladders. The worker's is the four
+`--effort` rungs plus `ultra`, which promotes to the ultracode preset exactly as
+`--effort ultra` does at the CLI. The reviewer's is those four rungs plus `max`
+— a literal effort level, because ultracode is a worker *preset* (settings file
++ dynamic workflows) with nothing for a headless run to enable, so a reviewer
+that wants the ceiling asks for it directly.
+
+This corrects an earlier claim that effort was worker-only "because the review
+family has no analog". That was an assumption, not a finding: `--effort` is a
+top-level claude flag and composes with `-p` exactly as with the interactive
+launch (verified against claude 2.1.215). It had hardened into a runtime throw
+in `validateCrewDef` plus statements in four docs before anyone checked.
+
+Review effort resolves on the same chain as the review model, with two
+deliberate differences: it has **no default floor** (the model chain bottoms out
+at `SAFE_REVIEW_MODEL` — the safety net that a cheap worker still gets a strong
+review — whereas an unset effort just means the account default, i.e. every
+review's behavior before the dial existed), and it is **claude-code only** (a
+foreign harness has no `--effort` to render, so `resolveReviewRole` withholds
+it rather than passing something meaningless). Note the safety net covers model,
+not effort: a review effort can be dialled *down*, which is the operator's call
+to make — garden does not police it.
 
 ### Binding is by reference
 

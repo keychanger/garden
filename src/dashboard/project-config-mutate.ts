@@ -9,7 +9,7 @@
 // CLI prints them, the menu shows the primary via tmuxDisplay. Validation
 // `throw`s stay here so both surfaces share them. Behavior is byte-identical to
 // the pre-extraction CLI (guarded by a config-output test).
-import { loadConfig, saveConfig, DEFAULT_HOLISTIC_REVIEW } from "../config.js";
+import { loadConfig, saveConfig, DEFAULT_HOLISTIC_REVIEW, REVIEW_EFFORT_LEVELS, isValidReviewEffort } from "../config.js";
 import { syncProviderTokenToSession } from "./claude-env.js";
 import { isRegisteredHarness, harnessNames, canonicalHarnessName } from "./harness/core.js";
 import { branchExistsOnOrigin } from "./git.js";
@@ -45,7 +45,7 @@ export const REVIEW_ROLE_KEYS: Record<string, ReviewRole> = {
   resolver: "resolver",
   "ci-fix": "ciFix",
 };
-export const ROLE_DIMS = ["harness", "model"] as const;
+export const ROLE_DIMS = ["harness", "model", "effort"] as const;
 export type RoleDim = typeof ROLE_DIMS[number];
 
 // A mutation outcome: the primary confirmation line, plus any secondary notes
@@ -264,6 +264,13 @@ export function setProjectRoleDim(projectName: string, roleArg: string, roleKey:
   if (dim === "harness" && !clearing && !isRegisteredHarness(value)) {
     throw new Error(
       `Unknown harness '${value}'. Registered harnesses: ${harnessNames().join(", ")}.`,
+    );
+  }
+  // Effort is a closed set the harness renders verbatim, so an unknown rung
+  // would reach the CLI and fail the whole review rather than degrade.
+  if (dim === "effort" && !clearing && !isValidReviewEffort(value)) {
+    throw new Error(
+      `Unknown effort '${value}'. Levels: ${REVIEW_EFFORT_LEVELS.join(", ")}.`,
     );
   }
 

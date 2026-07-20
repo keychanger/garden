@@ -163,6 +163,28 @@ describe("claude-code adapter dialect", () => {
     );
   });
 
+  it("renders --effort on the headless command when the role resolves one", async () => {
+    // `--effort` is a TOP-LEVEL claude flag, so it composes with `-p` exactly
+    // as with the interactive launch — verified against claude 2.1.215, which
+    // is what makes a review-effort dial possible at all.
+    const { getHarnessCore } = await importCore();
+    const cmd = getHarnessCore().buildHeadlessCommand({
+      promptFile: "/tmp/p.txt", resultFile: "/tmp/r.txt",
+      model: "opus", effort: "max", envPrefix: "", inlineEnv: "",
+    });
+    expect(cmd).toBe("claude -p --model opus --effort max < /tmp/p.txt > /tmp/r.txt 2>&1");
+  });
+
+  it("omits --effort entirely when unset, keeping the pre-dial command byte-identical", async () => {
+    const { getHarnessCore } = await importCore();
+    const cmd = getHarnessCore().buildHeadlessCommand({
+      promptFile: "/tmp/p.txt", resultFile: "/tmp/r.txt",
+      envPrefix: "", inlineEnv: "",
+    });
+    expect(cmd).toBe("claude -p < /tmp/p.txt > /tmp/r.txt 2>&1");
+    expect(cmd).not.toContain("--effort");
+  });
+
   it("mints UUID session ids", async () => {
     const { getHarnessCore } = await importCore();
     expect(getHarnessCore().allocateSessionId()).toMatch(
@@ -204,8 +226,10 @@ describe("codex adapter dialect", () => {
     const { getHarnessCore } = await importCore();
     const cmd = getHarnessCore("codex").buildHeadlessCommand({
       promptFile: "/tmp/p.txt", resultFile: "/tmp/r.txt",
-      model: "gpt-5-codex", envPrefix: "", inlineEnv: "GARDEN_REVIEWER=1 ",
+      model: "gpt-5-codex", effort: "max", envPrefix: "", inlineEnv: "GARDEN_REVIEWER=1 ",
     });
+    // effort is a claude-code dial — codex renders no equivalent, mirroring how
+    // its worker builder drops effort/ultracode.
     // The verdict is stdout's last line; the token trailer is stderr, so the
     // result file is stdout-only (not 2>&1) with stderr to a sidecar.
     expect(cmd).toBe(

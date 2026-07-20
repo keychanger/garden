@@ -26,9 +26,10 @@ export interface CrewDraft {
   workerEffort?: string;
   review?: string;
   reviewModel?: string;
+  reviewEffort?: string;
 }
 
-const DRAFT_FIELDS = ["editing", "worker", "workerModel", "workerEffort", "review", "reviewModel"] as const;
+const DRAFT_FIELDS = ["editing", "worker", "workerModel", "workerEffort", "review", "reviewModel", "reviewEffort"] as const;
 
 function draftPath(): string {
   return path.join(SESSIONS_DIR, "crew-draft.json");

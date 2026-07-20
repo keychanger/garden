@@ -25,6 +25,8 @@ import {
   loadConfig,
   saveConfig,
   type CrewRole,
+  REVIEW_EFFORT_LEVELS,
+  isValidReviewEffort,
   type GardenConfig,
   type ProjectConfig,
   type StoredCrew,
@@ -51,7 +53,9 @@ export interface CrewMember {
   provider?: string;
   /** Model pin for this half. Opaque string; absent = resolve down the chain. */
   model?: string;
-  /** Reasoning effort. Worker half only — the review family has no analog. */
+  /** Reasoning effort. Both halves carry one, from different ladders: the
+   *  worker's rungs plus "ultra" (the ultracode preset), the reviewer's plus
+   *  "max" (a literal effort level — a headless run has no preset to enable). */
   effort?: string;
 }
 
@@ -130,7 +134,7 @@ function resolveRole(role: CrewRole, config: GardenConfig, allowProvider: boolea
   return {
     ...member,
     ...(role.model ? { model: role.model } : {}),
-    ...(allowProvider && role.effort ? { effort: role.effort } : {}),
+    ...(role.effort ? { effort: role.effort } : {}),
   };
 }
 
@@ -318,13 +322,17 @@ export function validateCrewDef(def: StoredCrew, config: GardenConfig): void {
   // The load-bearing asymmetry: a provider on a review role defeats the safety
   // net that a cheap/experimental worker is checked by a strong first-party
   // model. Enforced here so it cannot be smuggled in via a stored definition.
+  if (def.review.effort && !isValidReviewEffort(def.review.effort)) {
+    throw new Error(
+      `Unknown review effort '${def.review.effort}'. Levels: ${REVIEW_EFFORT_LEVELS.join(", ")}.`,
+    );
+  }
   if (review.provider) {
     const ok = reviewerMembers(config).map((m) => m.name).join(", ");
     throw new Error(
       `Member '${def.review.member}' is provider-backed and cannot review. Reviewer members: ${ok}`,
     );
   }
-  if (def.review.effort) throw new Error("Review roles take no effort — it has no analog outside the worker.");
   if (def.worker.effort && !(CREW_EFFORT_VALUES as readonly string[]).includes(def.worker.effort)) {
     throw new Error(`effort must be one of: ${CREW_EFFORT_VALUES.join(", ")}, got '${def.worker.effort}'`);
   }

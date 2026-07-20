@@ -33,6 +33,10 @@ export interface CrewPickerPlan {
 // add --model <id>`) remains the escape hatch for exotic model ids.
 const CREW_MODEL_CHOICES = ["opus", "sonnet", "haiku", "fable"];
 const CREW_EFFORT_CHOICES = ["low", "medium", "high", "xhigh", "ultra"];
+// The review ladder ends in "max" rather than "ultra": ultracode is a worker
+// preset (settings file + dynamic workflows), and a headless reviewer has no
+// preset to enable — it asks for the effort ceiling literally.
+const CREW_REVIEW_EFFORT_CHOICES = ["low", "medium", "high", "xhigh", "max"];
 
 // Pure: build the display-menu plan for a project's crews. No tmux/fs/registry
 // I/O, so tests drive it directly. Each item's command MUST be run-shell
@@ -110,6 +114,7 @@ export function buildCrewComposerPlan(
     d("effort", "e", draft.workerEffort, "(inherit)"),
     d("reviewer", "r", draft.review, "(required)"),
     d("review-model", "v", draft.reviewModel, "(safe default)"),
+    d("review-effort", "x", draft.reviewEffort, "(inherit)"),
     { label: "", key: "", command: "", sep: true },
   ];
   // Save is offered only once both halves are named — a crew without them
@@ -134,7 +139,7 @@ export function buildCrewComposerPlan(
   });
 
   const recipe = `${draft.worker ?? "?"}${dims(draft.workerModel, draft.workerEffort)}`
-    + ` → ${draft.review ?? "?"}${dims(draft.reviewModel, undefined)}`;
+    + ` → ${draft.review ?? "?"}${dims(draft.reviewModel, draft.reviewEffort)}`;
   const verb = draft.editing ? `Edit crew '${draft.editing}'` : "New crew";
   return { title: `${verb} (${recipe})`, items };
 }
@@ -320,6 +325,7 @@ export function runCrewEdit(projectName: string, crewName: string): void {
     ...(spec.worker.effort ? { workerEffort: spec.worker.effort } : {}),
     review: spec.review.name,
     ...(spec.review.model ? { reviewModel: spec.review.model } : {}),
+    ...(spec.review.effort ? { reviewEffort: spec.review.effort } : {}),
   });
   runCrewComposer(projectName);
 }
@@ -343,6 +349,8 @@ export function runCrewDimSubmenu(projectName: string, field: string): void {
         return buildCrewDimSubmenuPlan(projectName, field, CREW_EFFORT_CHOICES, draft.workerEffort, "inherit — no effort pinned", runner);
       case "review-model":
         return buildCrewDimSubmenuPlan(projectName, field, CREW_MODEL_CHOICES, draft.reviewModel, "safe default — Opus on claude-code", runner);
+      case "review-effort":
+        return buildCrewDimSubmenuPlan(projectName, field, CREW_REVIEW_EFFORT_CHOICES, draft.reviewEffort, "inherit — no effort pinned", runner);
       default:
         return null;
     }
@@ -364,6 +372,7 @@ export function setCrewDimFromPicker(projectName: string, field: string, value: 
     case "model": patch.workerModel = value; break;
     case "effort": patch.workerEffort = value; break;
     case "review-model": patch.reviewModel = value; break;
+    case "review-effort": patch.reviewEffort = value; break;
     default:
       tmuxDisplay(`Unknown crew dimension '${field}'.`);
       return;
@@ -400,7 +409,11 @@ export function saveCrewFromPicker(projectName: string, crewName: string): void 
         ...(draft.workerModel ? { model: draft.workerModel } : {}),
         ...(draft.workerEffort ? { effort: draft.workerEffort } : {}),
       },
-      review: { member: draft.review, ...(draft.reviewModel ? { model: draft.reviewModel } : {}) },
+      review: {
+        member: draft.review,
+        ...(draft.reviewModel ? { model: draft.reviewModel } : {}),
+        ...(draft.reviewEffort ? { effort: draft.reviewEffort } : {}),
+      },
     });
   } catch (err) {
     tmuxDisplay(String(err instanceof Error ? err.message : err));

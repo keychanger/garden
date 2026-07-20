@@ -1792,6 +1792,7 @@ function launchReview(
     signalFifo: signalFifoPath(projectName),
     onLaunched: () => scheduleReviewTimeoutPoke(projectName),
     model: reviewer.model,
+    effort: reviewer.effort,
     harness: reviewer.harness,
   });
 

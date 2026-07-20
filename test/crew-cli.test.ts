@@ -60,6 +60,26 @@ describe("garden crew add/edit", () => {
     });
   });
 
+  it("--review-effort pins the reviewer's rung, and --from carries it", async () => {
+    const { crew, loadConfig } = await setup();
+    await crew(["add", "thorough", "--worker", "claude", "--effort", "low",
+      "--review", "claude", "--review-effort", "max"]);
+    expect(loadConfig().crews?.thorough).toEqual({
+      worker: { member: "claude", effort: "low" },
+      review: { member: "claude", effort: "max" },
+    });
+    await crew(["add", "clone", "--from", "thorough"]);
+    expect(loadConfig().crews?.clone.review.effort).toBe("max");
+  });
+
+  it("rejects a review effort from the worker ladder", async () => {
+    // "ultra" is the ultracode PRESET, not an effort value — meaningless to a
+    // headless reviewer, which asks for "max" instead.
+    const { crew } = await setup();
+    await expect(crew(["add", "bad", "--worker", "claude", "--review", "claude", "--review-effort", "ultra"]))
+      .rejects.toThrow(/Unknown review effort 'ultra'/);
+  });
+
   it("'none' clears a pinned dimension", async () => {
     const { crew, loadConfig } = await setup();
     await crew(["add", "heavy", "--worker", "claude", "--model", "opus", "--effort", "xhigh", "--review", "claude"]);

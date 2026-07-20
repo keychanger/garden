@@ -45,6 +45,12 @@ export interface HeadlessAgentLaunchOptions {
    *  WORKFLOWS.md Invariant 10 — reviewer quality is non-negotiable, so
    *  the model is pinned regardless of the worker's model or quota state. */
   model?: string;
+  /** Reasoning effort for this run, rendered by the harness (claude-code:
+   *  `--effort <level>`, valid alongside `-p`; a harness without the dial
+   *  ignores it). Levels low/medium/high/xhigh/max — no "ultra", since
+   *  ultracode is a worker-only preset rather than an effort value. Absent =
+   *  the harness/account default, which is the shipped behavior. */
+  effort?: string;
   /** Harness adapter running this headless agent. Absent = claude-code.
    *  This is the AGENT's harness (reviewer/resolver/ci-fix), independent
    *  of the worker's — see docs/MULTI-MODEL.md "Mixed fleets". */
@@ -79,6 +85,7 @@ export function launchHeadlessAgent(
     promptFile: opts.promptFile,
     resultFile: opts.resultFile,
     model: opts.model,
+    effort: opts.effort,
     envPrefix: opts.envPrefix,
     inlineEnv,
   });

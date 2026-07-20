@@ -148,16 +148,37 @@ export interface ProjectConfig {
 export interface RoleTarget {
   harness?: string;
   model?: string;
+  /** Reasoning effort for this role's headless run (claude-code renders
+   *  `--effort <level>`; a foreign harness ignores it). One of
+   *  REVIEW_EFFORT_LEVELS. Absent = the harness/account default. */
+  effort?: string;
+}
+
+// Effort rungs a REVIEW role accepts. The four worker rungs plus "max" — and
+// deliberately NOT the worker's "ultra", which names the ultracode preset
+// (settings file + dynamic workflows + Opus pin) rather than an effort value.
+// A headless reviewer has no preset to enable, so it asks for the ceiling
+// literally. Verified against claude 2.1.215: `--effort` is a top-level flag
+// taking low|medium|high|xhigh|max, valid alongside `-p`.
+export const REVIEW_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+
+export function isValidReviewEffort(value: string): boolean {
+  return (REVIEW_EFFORT_LEVELS as readonly string[]).includes(value);
 }
 
 // One half of a stored crew: which member runs the role, and how strong.
 // `member` is the operator-facing member name (claude / codex / <provider>),
 // resolved against listMembers. `model` is an opaque string (Anthropic alias
-// or concrete id). `effort` is worker-only — the review family has no effort
-// analog — and takes WORKER_EFFORT_LEVELS or "ultra".
+// or concrete id). Both halves accept an `effort`, from different ladders (see
+// the field doc) — an earlier claim that effort was worker-only was wrong:
+// `--effort` is a top-level claude flag and composes with `-p` fine.
 export interface CrewRole {
   member: string;
   model?: string;
+  /** Reasoning effort. Both halves accept one, but from different ladders:
+   *  the worker takes WORKER_EFFORT_LEVELS plus "ultra" (the ultracode
+   *  preset), the reviewer takes REVIEW_EFFORT_LEVELS (…/"max") since it has
+   *  no preset to enable. */
   effort?: string;
 }
 

@@ -209,6 +209,42 @@ describe("resolveReviewRole", () => {
     expect(pinned.model).toBe("gpt-5");
   });
 
+  // Effort: same resolution chain as model, but with no default floor and
+  // claude-code only.
+  it("resolves review effort from the crew, and lets an explicit role key override it", async () => {
+    const { resolveReviewRole } = await importRoles();
+    const config = withCrews({ thorough: { worker: { member: "claude" }, review: { member: "claude", effort: "max" } } });
+    expect(resolveReviewRole(project({ crew: "thorough" }), "default", "reviewer", config).effort).toBe("max");
+    expect(resolveReviewRole(
+      project({ crew: "thorough", roles: { reviewer: { effort: "low" } } }),
+      "default", "reviewer", config).effort).toBe("low");
+    // A per-worker crew outranks both, like every other dimension.
+    const perWorker = withCrews({
+      thorough: { worker: { member: "claude" }, review: { member: "claude", effort: "max" } },
+      quick: { worker: { member: "claude" }, review: { member: "claude", effort: "low" } },
+    });
+    expect(resolveReviewRole(
+      project({ crew: "thorough" }), "default", "reviewer", perWorker, { crew: "quick" }).effort).toBe("low");
+  });
+
+  it("leaves effort unset by default — there is no floor, unlike the model", async () => {
+    const { resolveReviewRole } = await importRoles();
+    const r = resolveReviewRole(project(), "default", "reviewer", emptyConfig);
+    // The model DOES have a floor (SAFE_REVIEW_MODEL, the safety net); effort
+    // deliberately does not, since unset means "account default" — exactly the
+    // behavior every review had before this dial existed.
+    expect(r.model).toBe("opus");
+    expect(r.effort).toBeUndefined();
+  });
+
+  it("never sends effort to a foreign harness, which has no --effort to render", async () => {
+    const { resolveReviewRole } = await importRoles();
+    const config = withCrews({ c: { worker: { member: "claude" }, review: { member: "codex", effort: "max" } } });
+    const r = resolveReviewRole(project({ crew: "c" }), "default", "reviewer", config);
+    expect(r.harness).toBe("codex");
+    expect(r.effort).toBeUndefined();
+  });
+
   it("a bound crew that no longer exists falls back to the safe default", async () => {
     const { resolveReviewRole } = await importRoles();
     const r = resolveReviewRole(project({ crew: "deleted" }), "default", "reviewer", emptyConfig);

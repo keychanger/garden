@@ -120,7 +120,10 @@ export const claudeCodeCore: HarnessCore = {
   // tail isTransientError inspects) on the redirected stdout+stderr.
   buildHeadlessCommand(opts: HeadlessCommandOptions): string {
     const modelFlag = opts.model ? ` --model ${shellEscape(opts.model)}` : "";
-    return `${opts.inlineEnv}${opts.envPrefix}claude -p${modelFlag}`
+    // `--effort` is a top-level claude flag, so it composes with `-p` exactly
+    // as it does with the interactive launch (verified against 2.1.215).
+    const effortFlag = opts.effort ? ` --effort ${shellEscape(opts.effort)}` : "";
+    return `${opts.inlineEnv}${opts.envPrefix}claude -p${modelFlag}${effortFlag}`
       + ` < ${shellEscape(opts.promptFile)} > ${shellEscape(opts.resultFile)} 2>&1`;
   },
 

@@ -114,6 +114,31 @@ describe("composing and saving a crew from the menu", () => {
   });
 });
 
+describe("review effort in the composer", () => {
+  it("stages and saves a reviewer effort alongside the worker's", () => {
+    setCrewDimFromPicker("garden", "worker", "claude");
+    setCrewDimFromPicker("garden", "effort", "low");
+    setCrewDimFromPicker("garden", "reviewer", "claude");
+    setCrewDimFromPicker("garden", "review-effort", "max");
+    expect(readCrewDraft()).toMatchObject({ workerEffort: "low", reviewEffort: "max" });
+    saveCrewFromPicker("garden", "thorough");
+    expect(store.value.crews?.thorough).toEqual({
+      worker: { member: "claude", effort: "low" },
+      review: { member: "claude", effort: "max" },
+    });
+  });
+
+  it("round-trips through edit, so an existing review effort is not silently dropped", () => {
+    saveCrew("thorough", {
+      worker: { member: "claude" }, review: { member: "claude", effort: "max" },
+    });
+    runCrewEdit("garden", "thorough");
+    expect(readCrewDraft().reviewEffort).toBe("max");
+    saveCrewFromPicker("garden", "thorough");
+    expect(store.value.crews?.thorough.review.effort).toBe("max");
+  });
+});
+
 describe("the edit/delete chooser with nothing stored", () => {
   // DELETE is the only action that can come up empty: a builtin is generated,
   // so there is nothing to remove. It must explain that and point at the fix —

@@ -118,6 +118,7 @@ export function launchResolver(
     signalFifo: signalFifoPath(projectName),
     onLaunched: () => scheduleReviewTimeoutPoke(projectName),
     model: resolver.model,
+    effort: resolver.effort,
     harness: resolver.harness,
   });
 

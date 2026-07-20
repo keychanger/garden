@@ -21,6 +21,11 @@ export interface ReviewRoleResolution {
   harness: string;
   /** Model to pass the harness, or undefined for its own default. */
   model?: string;
+  /** Reasoning effort, or undefined for the harness default. Resolved on the
+   *  same chain as model; there is no safe-default floor (unlike
+   *  SAFE_REVIEW_MODEL) because an unset effort already means "whatever the
+   *  account does by default", which is the shipped behavior. */
+  effort?: string;
   /** Env-assignment prefix for the launch (harness-aware). */
   envPrefix: string;
 }
@@ -75,6 +80,15 @@ export function resolveReviewRole(
     ?? target.model
     ?? projectCrew?.review.model
     ?? (harness === "claude-code" ? (workflowModel ?? SAFE_REVIEW_MODEL) : undefined);
+  // Effort resolves on the same chain as model, but has NO default floor: the
+  // model chain falls back to Opus (the safety net that a cheap worker still
+  // gets a strong review), whereas an unset effort simply means the account
+  // default — the behavior every review had before this dial existed. It is
+  // also claude-code-only, like the model aliases: a foreign harness has no
+  // `--effort` to render, so passing one would be silently meaningless.
+  const effort = harness === "claude-code"
+    ? (entryCrew?.review.effort ?? target.effort ?? projectCrew?.review.effort)
+    : undefined;
   const envPrefix = harness === "claude-code" ? reviewerEnvPrefix(project, config) : "";
-  return { harness, model, envPrefix };
+  return { harness, model, effort, envPrefix };
 }

@@ -80,8 +80,9 @@ Projects:
   config <project> [key] [value] View or set project config
                                  keys incl. model / effort (default+grow worker
                                  defaults; per-spawn --model/--effort override)
-  config <project> role [<role> [harness|model] [value]]
-                                 Per-role review harness/model (role: reviewer|resolver|ci-fix)
+  config <project> role [<role> [harness|model|effort] [value]]
+                                 Per-role review harness/model/effort (role: reviewer|resolver|ci-fix)
+                                 effort is claude-code-only: low|medium|high|xhigh|max
                                  e.g. 'config <p> role reviewer harness codex' for a Codex reviewer
   config <project> crew [<name>] Bind the project to a crew ('none' unbinds). See 'garden crew'.
   crew [list|show|add|edit|remove|apply]
@@ -93,7 +94,7 @@ Projects:
                                  Builtins carry a harness pairing only; define your own to pin
                                  model and effort too:
                                    crew add heavy --worker claude --model opus --effort xhigh \\
-                                     --review claude --review-model opus
+                                     --review claude --review-model opus --review-effort max
                                    crew add cheap --from all-claude --model sonnet --effort medium
                                    crew apply heavy myproject
                                  Projects bind by REFERENCE, so 'crew edit' re-targets every

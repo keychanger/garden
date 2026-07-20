@@ -53,6 +53,7 @@ function crewData(spec: CrewSpec, config: GardenConfig): Record<string, unknown>
       member: spec.review.name,
       harness: spec.review.harness,
       ...(spec.review.model ? { model: spec.review.model } : {}),
+      ...(spec.review.effort ? { effort: spec.review.effort } : {}),
     },
     projects: Object.entries(config.projects)
       .filter(([, p]) => p.crew === spec.name)
@@ -119,6 +120,7 @@ interface WriteFlags {
   effort?: string;
   review?: string;
   reviewModel?: string;
+  reviewEffort?: string;
   from?: string;
 }
 
@@ -130,6 +132,7 @@ function parseWriteFlags(args: string[]): WriteFlags {
     "--effort": "effort",
     "--review": "review",
     "--review-model": "reviewModel",
+    "--review-effort": "reviewEffort",
     "--from": "from",
   };
   for (let i = 0; i < args.length; i++) {
@@ -145,7 +148,7 @@ function parseWriteFlags(args: string[]): WriteFlags {
 function handleWrite(args: string[], mode: "add" | "edit"): void {
   const name = args[0];
   if (!name || name.startsWith("--")) {
-    throw new Error(`Usage: garden crew ${mode} <name> [--from <crew>] [--worker <member>] [--model <m>] [--effort <e>] [--review <member>] [--review-model <m>]`);
+    throw new Error(`Usage: garden crew ${mode} <name> [--from <crew>] [--worker <member>] [--model <m>] [--effort <e>] [--review <member>] [--review-model <m>] [--review-effort <e>]`);
   }
   const flags = parseWriteFlags(args.slice(1));
   const config = loadConfig();
@@ -171,7 +174,11 @@ function handleWrite(args: string[], mode: "add" | "edit"): void {
       ...(src.worker.model ? { model: src.worker.model } : {}),
       ...(src.worker.effort ? { effort: src.worker.effort } : {}),
     },
-    review: { member: src.review.name, ...(src.review.model ? { model: src.review.model } : {}) },
+    review: {
+      member: src.review.name,
+      ...(src.review.model ? { model: src.review.model } : {}),
+      ...(src.review.effort ? { effort: src.review.effort } : {}),
+    },
   });
 
   let base: StoredCrew;
@@ -199,6 +206,7 @@ function handleWrite(args: string[], mode: "add" | "edit"): void {
   applyDim(base.worker, "model", flags.model);
   applyDim(base.worker, "effort", flags.effort);
   applyDim(base.review, "model", flags.reviewModel);
+  applyDim(base.review, "effort", flags.reviewEffort);
 
   saveCrew(name, base);
   const spec = getCrew(name, loadConfig());

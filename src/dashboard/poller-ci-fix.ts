@@ -138,6 +138,7 @@ export function launchCiFix(
     signalFifo: signalFifoPath(projectName),
     onLaunched: () => scheduleReviewTimeoutPoke(projectName),
     model: ciFix.model,
+    effort: ciFix.effort,
     harness: ciFix.harness,
   });
 
