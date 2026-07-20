@@ -353,6 +353,9 @@ describe("buildCrewPickerPlan", () => {
     // A stored crew shows its recipe; a builtin's name already IS its recipe.
     expect(labels(withStored).find((l) => l.startsWith("heavy"))).toContain("claude opus → claude");
     expect(labels(withStored).find((l) => l.startsWith("all-codex"))).toBe("all-codex");
+    // Exactly one rule divides the pick list from the management rows — the
+    // runner must map `sep` rows through, or each becomes three blank items.
+    expect(withStored.items.filter((i) => i.sep)).toHaveLength(1);
   });
 
   it("run-shell wraps every item command so tmux dispatches it (not parses it as a tmux command)", () => {
@@ -390,6 +393,15 @@ describe("crew composer plans", () => {
     expect(partial.items.some((i) => i.label.startsWith("save"))).toBe(false);
     const complete = buildCrewComposerPlan("garden", { worker: "claude", review: "claude" }, runner);
     expect(complete.items.some((i) => i.label === "save as…")).toBe(true);
+  });
+
+  it("gives every row a distinct quick-key (tmux binds only the first duplicate)", () => {
+    // `reviewer` and `review-model` both start with `r`, so a key derived from
+    // the field name leaves one row unreachable.
+    const plan = buildCrewComposerPlan("garden", { editing: "heavy", worker: "claude", review: "claude" }, runner);
+    const keys = plan.items.filter((i) => !i.sep).map((i) => i.key);
+    expect(keys.every(Boolean)).toBe(true);
+    expect(new Set(keys).size).toBe(keys.length);
   });
 
   it("prompts for a name when creating, but saves straight to the name when editing", () => {

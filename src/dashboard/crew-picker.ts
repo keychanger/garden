@@ -91,17 +91,20 @@ export function buildCrewComposerPlan(
   draft: CrewDraft,
   runner: string,
 ): CrewPickerPlan {
-  const d = (field: string, value: string | undefined, fallback: string): CrewMenuItem => ({
+  // Quick-keys are explicit, not derived from the field name: `reviewer` and
+  // `review-model` both start with `r`, and tmux binds only the first of a
+  // duplicate pair — the second row would be unreachable by key.
+  const d = (field: string, key: string, value: string | undefined, fallback: string): CrewMenuItem => ({
     label: `${field}: ${value ?? fallback}`,
-    key: field[0],
+    key,
     command: menuRunShell(`${runner} dashboard _crew-dim ${shellEscape(projectName)} ${shellEscape(field)}`),
   });
   const items: CrewMenuItem[] = [
-    d("worker", draft.worker, "(required)"),
-    d("model", draft.workerModel, "(inherit)"),
-    d("effort", draft.workerEffort, "(inherit)"),
-    d("reviewer", draft.review, "(required)"),
-    d("review-model", draft.reviewModel, "(safe default)"),
+    d("worker", "w", draft.worker, "(required)"),
+    d("model", "m", draft.workerModel, "(inherit)"),
+    d("effort", "e", draft.workerEffort, "(inherit)"),
+    d("reviewer", "r", draft.review, "(required)"),
+    d("review-model", "v", draft.reviewModel, "(safe default)"),
     { label: "", key: "", command: "", sep: true },
   ];
   // Save is offered only once both halves are named — a crew without them
@@ -219,7 +222,7 @@ export function runCrewPicker(explicitProject?: string): void {
     resolveGardenRunner(),
   );
 
-  runMenu({ title: plan.title, rows: plan.items.map(i => ({ label: i.label, key: i.key, tmux: i.command })) });
+  runnerAndMenu(plan);
 }
 
 // _crew-set <project> <crew>: apply the chosen crew and re-bake the status pane
