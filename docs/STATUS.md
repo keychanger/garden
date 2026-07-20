@@ -114,6 +114,7 @@ stateDiagram-v2
     reviewing --> merge_pending : reviewer Stop (passes)
     reviewing --> failing : reviewer Stop (fails)
     reviewing --> working : worker push (stale review)
+    reviewing --> working : worker edit mid-review (review cancelled)
     reviewing --> done : holistic final review (CLEAN / shadow / no-commit)
 
     merge_pending --> merged : queue: ff merge
@@ -182,6 +183,7 @@ a terminal state — it returns to `working` when the operator responds
 | reviewing     | done          | Holistic final review `Stop`: CLEAN / shadow / no-commit (interposed whole-task pass) |
 | reviewing     | failing       | Reviewer `Stop` with verdict FAILED                  |
 | reviewing     | working       | Worker push event (commits during review, aborted)   |
+| reviewing     | working       | Worker ran a mutating tool (Edit/Write) mid-review — the reviewer shares the worktree, so the pass is cancelled and re-armed for the worker's next quiescence. Applies to the holistic pass too (its markers clear; the gate re-evaluates at the next terminal state). Read-only activity (an operator Q&A turn) leaves the review running. |
 | merge-pending | merged        | Merge queue: ff merge succeeds (no sentinel)         |
 | merge-pending | done          | Merge queue: ff merge succeeds AND `.garden-done` present at merge time |
 | merge-pending | resolving     | Merge queue: rebase conflict (resolver launched)     |
@@ -234,6 +236,10 @@ signals the status pane. They drive:
 - `working → asking` (worker's `PreToolUse` for user-input tools, `PermissionRequest`)
 - `asking → working` (worker's `PostToolUse` for user-input tools)
 - `reviewing → merge-pending`, `reviewing → failing` (reviewer's `Stop`)
+- `reviewing → working` (worker's `PostToolUse` for a mutating tool while the
+  review is in flight: the hook stamps `reviewInterruptedAt` and pokes the
+  poller, which kills the reviewer and cancels the pass — hooks write
+  `agentStatus`, the poller writes `prState`)
 - `resolving → merge-pending`, `resolving → failing` (resolver's `Stop`)
 - `ci-fixing → merge-pending`, `ci-fixing → failing` (ci-fix agent's `Stop`)
 

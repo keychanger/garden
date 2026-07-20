@@ -298,6 +298,17 @@ export function handleReviewing(
   baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
+  // A mutating tool call landed on the worker while this review was in flight
+  // (hooks/default.ts stamps reviewInterruptedAt): the reviewer shares the
+  // worker's worktree, so the tree it is certifying is being rewritten under
+  // it. Any verdict from this pass is untrustworthy — a CLEAN would hand the
+  // live worktree to the merge queue's cleanWorktree — so cancel it, even if
+  // the reviewer already finished and wrote a result. Checked before the
+  // holistic branch: the interposed whole-task pass shares the worktree and
+  // the hazard. The re-review happens at quiescence via the worker's next Stop.
+  if (entry.reviewInterruptedAt) {
+    return cancelReviewOnWorkerEdit(projectName, projectPath, baseBranch, entry);
+  }
   // The interposed whole-task final review (poller-holistic-review.ts) runs in
   // the same reviewing window but is dispatched differently — no per-phase diff,
   // no 2nd review, CLEAN finalizes to done, a fix rides the merge gate. It owns
@@ -1478,6 +1489,54 @@ export function resetToWorkingOnWorkerPush(
   scheduleDelayedPoke(projectName, 0);
 }
 
+// The worker ran a mutating tool while its review was in flight (marker
+// stamped by hooks/default.ts, checked at the top of handleReviewing). Kill
+// the reviewer and reset to working; the verdict — even one already written —
+// is discarded, since it certifies a tree that was rewritten under it.
+// resetToWorkingOnWorkerPush's sibling for the operator-prompt race rather
+// than the worker-push race, so it additionally clears the holistic markers
+// (the whole-task pass shares the worktree and is cancelled the same way; the
+// holistic gate re-evaluates at the worker's next terminal transition).
+export function cancelReviewOnWorkerEdit(
+  projectName: string,
+  projectPath: string,
+  baseBranch: string,
+  entry: WorkerEntry,
+): boolean {
+  log.info("poller", "review cancelled: worker edited worktree mid-review", {
+    worker: entry.name,
+    data: {
+      project: projectName,
+      holistic: entry.holisticFinalActive === true,
+      interruptedAt: entry.reviewInterruptedAt,
+    },
+  });
+  killReviewWindow(projectName, entry.name);
+
+  const wtPath = entry.worktreePath ?? projectPath;
+  const hasCommits = getCommitSummary(wtPath, baseBranch).length > 0;
+
+  transitionState(projectName, entry.name, "working", {
+    reviewInterruptedAt: undefined,
+    reviewWindowName: undefined,
+    reviewStartedAt: undefined,
+    reviewRetryCount: undefined,
+    unparseableRetryCount: undefined,
+    quotaRetryCount: undefined,
+    reviewFallbackHarness: undefined,
+    reviewRetryAt: undefined,
+    holisticFinalActive: undefined,
+    holisticReviewMode: undefined,
+    // Keep the review armed: the branch still holds unreviewed commits.
+    // handleWorking's agentStatus="working" guard defers the relaunch until
+    // the worker goes quiet, and its Stop hook independently re-marks + pokes
+    // — this is the belt for a worker whose Stop never fires (killed mid-turn).
+    pendingReviewAt: hasCommits ? Date.now() : undefined,
+  });
+  refreshDashboard();
+  return true;
+}
+
 // Pokes the project's FIFO after REVIEW_TIMEOUT_MS so the poller wakes to
 // run the `isReviewTimedOut` check below — a hung reviewer produces no events
 // on its own, so without this the timeout would never be detected. Spurious
@@ -1749,6 +1808,10 @@ function launchReview(
     lastSeenSha: launchSha,
     lastShaChangeAt: new Date().toISOString(),
     pendingReviewAt: undefined,
+    // Defensively clear a leaked mid-review-edit marker: one stamped in the
+    // instant between a prior pass's verdict dispatch and its poll would
+    // otherwise cancel this fresh review on its first handleReviewing tick.
+    reviewInterruptedAt: undefined,
     mergePendingAt: entry.mergePendingAt,
     preReviewSha,
     // Defensively clear any leaked holistic final-review markers. A per-phase

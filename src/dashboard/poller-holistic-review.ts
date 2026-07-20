@@ -223,6 +223,9 @@ function launchHolisticFinalReview(
     reviewWindowName: revWindow,
     reviewStartedAt: Date.now(),
     preReviewSha,
+    // Same defensive clear as launchReview: a stale mid-review-edit marker
+    // would cancel this fresh pass on its first handleReviewing tick.
+    reviewInterruptedAt: undefined,
     holisticFinalActive: true,
     holisticReviewMode: mode,
     lastSeenSha: preReviewSha,

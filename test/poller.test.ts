@@ -346,6 +346,26 @@ describe("poll — working state", () => {
     );
   });
 
+  it("clears a leaked mid-review-edit marker on a fresh review launch", () => {
+    // The marker can be stamped in the instant between a prior pass's verdict
+    // dispatch and the hook's registry write — it then leaks forward through
+    // states handleReviewing never sees. If a fresh launch didn't clear it,
+    // the new review would cancel itself on its first handleReviewing tick.
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle",
+        pendingReviewAt: Date.now(), reviewInterruptedAt: Date.now() - 5000 }),
+    ]);
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "reviewing",
+        reviewInterruptedAt: undefined,
+      }),
+    );
+  });
+
   it("clears a leaked holistic final-review marker on a fresh per-phase review launch", () => {
     // A prior holistic FIX that reached merge-pending but then failed to merge
     // (resolver/ci-fix budget exhausted, wedged merge) parks the worker in
@@ -958,6 +978,61 @@ describe("poll — review/resolve timeout", () => {
 });
 
 describe("poll — reviewing state (async)", () => {
+  it("cancels the in-flight review when the worker edited the worktree mid-review", () => {
+    // The operator prompted the worker mid-review and it ran a mutating tool
+    // (hooks/default.ts stamped reviewInterruptedAt). The reviewer shares the
+    // worktree, so the pass must be cancelled: window killed, worker reset to
+    // working with the review re-armed for its next quiescence.
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",
+        agentStatus: "working", reviewInterruptedAt: Date.now(), lastSeenSha: "abc123" }),
+    ]);
+    vi.mocked(windowExists).mockReturnValue(true); // reviewer still live
+
+    poll("myproject");
+
+    expect(killWindowSafe).toHaveBeenCalledWith("_myproject-review-bold-ash");
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "working",
+        reviewInterruptedAt: undefined,
+        reviewWindowName: undefined,
+        reviewStartedAt: undefined,
+        pendingReviewAt: expect.any(Number),
+      }),
+    );
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(mergeToBase).not.toHaveBeenCalled();
+  });
+
+  it("discards an already-written verdict when the worker edited mid-review", () => {
+    // The reviewer finished (window gone, CLEAN result on disk) but the marker
+    // says the tree was rewritten during the pass — the verdict certifies a
+    // tree that no longer exists. It must be discarded, not dispatched.
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",
+        agentStatus: "working", reviewInterruptedAt: Date.now(), lastSeenSha: "abc123" }),
+    ]);
+    vi.mocked(windowExists).mockReturnValue(false);
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) return "Looks good.\nCLEAN";
+      return "{}";
+    });
+
+    poll("myproject");
+
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merge-pending" }),
+    );
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "working", reviewInterruptedAt: undefined }),
+    );
+  });
+
   it("returns false while review window is still running", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",
@@ -2371,6 +2446,28 @@ describe("poll — holistic final review (interposed whole-task review)", () => 
     poll("myproject");
     expect(forcePushBranch).not.toHaveBeenCalled();
     expect(registryMock.findWorkerByName("myproject", "bold-ash")!.prState).toBe("reviewing");
+  });
+
+  it("cancels the holistic pass when the worker edited the worktree mid-review", () => {
+    // The whole-task pass shares the worker's worktree, so a mid-review edit
+    // cancels it the same way as a per-phase review — with the holistic
+    // markers cleared so a later re-entry into reviewing routes to the
+    // per-phase reviewer. The gate re-evaluates at the next terminal state.
+    setHolistic({ holisticReviewMode: "fix", reviewInterruptedAt: Date.now() });
+    vi.mocked(windowExists).mockReturnValue(true); // reviewer still live
+
+    poll("myproject");
+
+    expect(killWindowSafe).toHaveBeenCalledWith("_myproject-review-bold-ash");
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({
+        prState: "working",
+        reviewInterruptedAt: undefined,
+        holisticFinalActive: undefined,
+        holisticReviewMode: undefined,
+      }),
+    );
+    expect(forcePushBranch).not.toHaveBeenCalled();
   });
 
   it("shadow mode: surfaces findings as an alert and finalizes done (never merges)", () => {

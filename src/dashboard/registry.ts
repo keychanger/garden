@@ -163,6 +163,14 @@ export interface WorkerEntry {
   // when launchReview runs. Per STATUS.md invariant 2: "working is the only
   // entry point to the review cycle" — pendingReviewAt makes that explicit.
   pendingReviewAt?: number;
+  // Epoch ms when a mutating tool call (Edit/Write) completed on the worker
+  // while its review was in flight (stamped by hooks/default.ts). The reviewer
+  // shares the worker's worktree, so the tree under review is being rewritten;
+  // handleReviewing cancels the pass and resets to working — the re-review
+  // happens at quiescence via the worker's next Stop. Cleared by the cancel
+  // and defensively at every review launch (a marker stamped in the instant
+  // between verdict dispatch and the poll would otherwise leak forward).
+  reviewInterruptedAt?: number;
   reviewWindowName?: string;
   // Epoch ms when the current reviewer/resolver window was launched. Set by
   // launchReview/launchResolver, cleared whenever reviewWindowName is cleared.

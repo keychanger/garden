@@ -347,7 +347,35 @@ const onToolActivity: HookMethod = (ctx) => {
     fields.agentStatus = "working";
   }
   applyAndLog(ctx, fields);
+  markReviewInterrupted(ctx);
 };
+
+// Tools that rewrite the worktree. Bash is deliberately absent: a worker
+// answering an operator question mid-review runs read-only Bash (git log, rg)
+// far more often than it mutates through Bash alone, and the commit/push
+// backstops in poller-review catch a Bash-only mutator one turn later.
+const MUTATING_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
+
+// A mutating tool completing while this worker's review is in flight means
+// the reviewer — which shares the worker's worktree — is now certifying a
+// tree being rewritten under it (the operator prompted the worker mid-review;
+// the reviewer's own tool calls never reach here, GARDEN_REVIEWER=1
+// short-circuits in the dispatcher). Stamp the interruption and poke the
+// poller; the cancel itself is the poller's job — hooks write agentStatus,
+// the poller writes prState.
+function markReviewInterrupted(ctx: HookContext): void {
+  if (!ctx.workerInfo) return;
+  const { project, name, entry } = ctx.workerInfo;
+  if (entry.prState !== "reviewing" || entry.reviewInterruptedAt) return;
+  const toolName = ctx.input.tool_name;
+  if (typeof toolName !== "string" || !MUTATING_TOOLS.has(toolName)) return;
+  updateWorkerFields(project, name, { reviewInterruptedAt: Date.now() });
+  triggerProjectPoll(project);
+  log.info("hook", "mutating tool during review, marked for cancel", {
+    worker: name,
+    data: { project, tool: toolName },
+  });
+}
 
 // Shared logic for notification / pretooluse: both indicate Claude is
 // blocked waiting for user input mid-turn. Accept "working" (normal path)
