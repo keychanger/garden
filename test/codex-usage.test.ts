@@ -310,15 +310,41 @@ describe("codex usage meter", () => {
       expect(strip(lines[1])).toContain("codex");
     });
 
-    it("heads each column with a bold name and an underline instead of a blank row", async () => {
+    it("heads each column with a bold grey name and an underline instead of a blank row", async () => {
       const now = Date.now();
       seedBoth(now);
       const { renderUsagePane } = await import("../src/dashboard/usage.js");
       const lines = renderUsagePane(now, 112).split("\n");
-      expect(lines[1]).toContain("\x1b[1;4mclaude");
-      expect(lines[1]).toContain("\x1b[1;4mcodex");
+      expect(lines[1]).toContain("\x1b[1;90;4mclaude");
+      expect(lines[1]).toContain("\x1b[1;90;4mcodex");
       // The meters follow immediately — the rule is the separation.
       expect(strip(lines[2])).toContain("5h");
+    });
+
+    it("renders the name in the same grey as the rule it continues into", async () => {
+      const now = Date.now();
+      seedBoth(now);
+      const { renderUsagePane } = await import("../src/dashboard/usage.js");
+      const lines = renderUsagePane(now, 112).split("\n");
+      // Every styled run on the header row carries the same explicit grey; the
+      // name differs from the rule in weight only. A bold run that omitted the
+      // color inherited the default foreground and rendered bright white, which
+      // read as a mismatch against the grey rule.
+      const styles = [...lines[1].matchAll(/\x1b\[([0-9;]+)m/g)]
+        .map((m) => m[1])
+        .filter((c) => c !== "0");
+      expect(styles.length).toBeGreaterThan(0);
+      for (const c of styles) expect(c.split(";")).toContain("90");
+    });
+
+    it("closes the pane with a blank line so the meters clear the bottom border", async () => {
+      const now = Date.now();
+      seedBoth(now);
+      const { renderUsagePane } = await import("../src/dashboard/usage.js");
+      const lines = renderUsagePane(now, 112).split("\n");
+      expect(strip(lines[lines.length - 1]).trim()).toBe("");
+      // ...and the row above it is a real meter, not a second blank.
+      expect(strip(lines[lines.length - 2]).trim()).not.toBe("");
     });
 
     it("carries each header's underline across the full width of its column", async () => {
@@ -327,8 +353,8 @@ describe("codex usage meter", () => {
       const { renderUsagePane } = await import("../src/dashboard/usage.js");
       const out = renderUsagePane(now, 112);
       const lines = out.split("\n");
-      // Each header is two underlined runs: the bold name then the dim rule.
-      const runs = [...lines[1].matchAll(/\x1b\[[12];4m([^\x1b]*)\x1b\[0m/g)].map((m) => m[1]);
+      // Each header is two underlined runs: the bold name then the plain rule.
+      const runs = [...lines[1].matchAll(/\x1b\[(?:1;)?90;4m([^\x1b]*)\x1b\[0m/g)].map((m) => m[1]);
       const claudeRule = runs[0].length + runs[1].length; // "claude" + trailing rule
       const codexRule = runs[2].length + runs[3].length;  // "codex" + trailing rule
       expect(claudeRule).toBeGreaterThan("claude".length);

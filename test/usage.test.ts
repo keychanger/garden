@@ -589,8 +589,8 @@ describe("renderUsagePane", () => {
     });
     const render = await importRender();
     const lines = render(now).split("\n");
-    // 1 leading blank (for breathing room under the pane border) + 3 meters.
-    expect(lines).toHaveLength(4);
+    // Blank line above and below (breathing room inside the pane border) + 3 meters.
+    expect(lines).toHaveLength(5);
     expect(lines[1]).toContain("5h");
     expect(lines[2]).toContain("week");
     expect(lines[3]).toContain("fable"); // model label, lowercased to match the column
@@ -616,7 +616,7 @@ describe("renderUsagePane", () => {
     });
     const render = await importRender();
     const lines = render(now).split("\n");
-    expect(lines).toHaveLength(5); // blank + 5h + week + fable + haiku
+    expect(lines).toHaveLength(6); // blank + 5h + week + fable + haiku + blank
     expect(lines[3]).toContain("fable");
     expect(lines[3]).toContain("12%");
     expect(lines[4]).toContain("haiku");
@@ -737,7 +737,7 @@ describe("renderUsagePane", () => {
     });
     const render = await importRender();
     const lines = render(now).split("\n");
-    expect(lines).toHaveLength(3); // leading blank + 5h + week
+    expect(lines).toHaveLength(4); // leading blank + 5h + week + trailing blank
     expect(lines[1]).toContain("5h");
     expect(lines[2]).toContain("week");
   });
@@ -837,8 +837,8 @@ describe("renderUsagePane", () => {
     // lines[0] is the leading blank; meters start at index 1.
     expect(lines[1]).toContain("42%");
     expect(lines[2]).toContain("\u2014");
-    // No scoped meters \u2192 no third row.
-    expect(lines).toHaveLength(3);
+    // No scoped meters \u2192 no third meter row.
+    expect(lines).toHaveLength(4);
   });
 
   // Strips ANSI SGR + clear-to-EOL for display-width assertions.
@@ -858,7 +858,7 @@ describe("renderUsagePane", () => {
     const render = await importRender();
     // Simulates Cmd+ zoomed left column: ~32 cols wide.
     const lines = render(now, 32).split("\n");
-    expect(lines).toHaveLength(4);
+    expect(lines).toHaveLength(5);
     for (const l of lines) expect(visibleLen(l)).toBeLessThanOrEqual(32);
     // Reset duration dropped at this width so the bar still has usable cells —
     // the line ends right after the pct, with no trailing "2h 0m".
@@ -971,8 +971,8 @@ describe("renderUsagePane", () => {
     });
     const render = await importRender();
     const lines = render(now).split("\n");
-    // Leading blank + 3 meters + 1 tag = 5 lines when an error is present.
-    expect(lines).toHaveLength(5);
+    // Leading blank + 3 meters + 1 tag + trailing blank = 6 lines when an error is present.
+    expect(lines).toHaveLength(6);
     expect(lines[4]).toContain("(stale 2h, account meter rate-limited, retrying in 10m)");
     for (const l of lines.slice(0, 4)) {
       expect(l).not.toContain("stale");
@@ -993,7 +993,7 @@ describe("renderUsagePane", () => {
     });
     const render = await importRender();
     const lines = render(now).split("\n");
-    expect(lines).toHaveLength(4);
+    expect(lines).toHaveLength(5);
   });
 
   it("surfaces a scoped (Fable) fetch error as a health tag without freezing the primary bars", async () => {
@@ -1012,8 +1012,8 @@ describe("renderUsagePane", () => {
     });
     const render = await importRender();
     const lines = render(now).split("\n");
-    // Leading blank + 3 meters + 1 scoped-error tag = 5 lines.
-    expect(lines).toHaveLength(5);
+    // Leading blank + 3 meters + 1 scoped-error tag + trailing blank = 6 lines.
+    expect(lines).toHaveLength(6);
     expect(lines[1]).toContain("26%"); // primary bar still live
     expect(lines[4]).toContain("(Fable meter rate-limited)");
     expect(lines[4]).not.toContain("account meter"); // not the freezing primary error
@@ -1032,7 +1032,7 @@ describe("renderUsagePane", () => {
     });
     const render = await importRender();
     const lines = render(now, 40).split("\n");
-    const tagLine = lines[lines.length - 1];
+    const tagLine = lines[lines.length - 2]; // above the trailing blank
     const visible = tagLine.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
     expect(visible.length).toBeLessThanOrEqual(40);
     expect(visible).toContain("…"); // ellipsis
@@ -1050,8 +1050,8 @@ describe("renderUsagePane", () => {
     });
     const render = await importRender();
     const lines = render(now).split("\n");
-    // Leading blank + 3 meters + 1 extra footer = 5 lines.
-    expect(lines).toHaveLength(5);
+    // Leading blank + 3 meters + 1 extra footer + trailing blank = 6 lines.
+    expect(lines).toHaveLength(6);
     const extraLine = lines[4];
     expect(extraLine).toContain("extra");
     expect(extraLine).toContain("1234 / 5000 credits (25%)");
@@ -1073,8 +1073,8 @@ describe("renderUsagePane", () => {
     });
     const render = await importRender();
     const lines = render(now).split("\n");
-    // Leading blank + 3 meters + extra footer + health tag = 6 lines.
-    expect(lines).toHaveLength(6);
+    // Leading blank + 3 meters + extra footer + health tag + trailing blank = 7 lines.
+    expect(lines).toHaveLength(7);
     expect(lines[4]).toContain("1234 / 5000 credits");
     expect(lines[5]).toContain("(stale 2h, account meter rate-limited, retrying in 10m)");
   });

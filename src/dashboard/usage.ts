@@ -1342,8 +1342,12 @@ function padVisible(s: string, width: number): string {
   const w = visibleWidth(s);
   return w >= width ? s : s + " ".repeat(width - w);
 }
+// Trailing blank to match the leading one: without it the last meter sits hard
+// against the pane's bottom border (the status bar directly beneath it), which
+// reads as cramped from below the same way the header did from above. The pane
+// auto-sizes to its line count, so this costs the row it provides.
 function finalizePane(lines: string[]): string {
-  return lines.map(l => l + "\x1b[K").join("\n");
+  return [...lines, ""].map(l => l + "\x1b[K").join("\n");
 }
 
 // Indented, fully-dimmed footer row under the meters. Truncates with an
@@ -1503,13 +1507,17 @@ function dim(s: string): string {
   return `\x1b[2m${s}\x1b[0m`;
 }
 
-// A column heading: the provider name in bold, then the underline carried on
-// dim across the rest of the column so the rule spans the meters it heads.
-// Bold and dim are contradictory SGR attributes, so the name and the rule are
-// emitted as separate runs rather than one combined style.
+// A column heading: the provider name in bold, then the underline carried
+// across the rest of the column so the rule spans the meters it heads. Both
+// runs pin the SAME explicit grey (90) rather than leaning on dim — a bold run
+// with dim omitted inherits the default foreground and renders bright white,
+// which read as a mismatch against the grey rule it continues into. Weight is
+// the only difference between the two runs.
+const HEADER_GREY = "90";
 function columnHeader(name: string, width: number): string {
   const rule = " ".repeat(Math.max(0, width - name.length));
-  return `\x1b[1;4m${name}\x1b[0m` + (rule ? `\x1b[2;4m${rule}\x1b[0m` : "");
+  return `\x1b[1;${HEADER_GREY};4m${name}\x1b[0m`
+    + (rule ? `\x1b[${HEADER_GREY};4m${rule}\x1b[0m` : "");
 }
 
 export function formatDuration(ms: number): string {
