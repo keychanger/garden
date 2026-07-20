@@ -375,6 +375,42 @@ describe("buildCrewPickerPlan", () => {
   });
 });
 
+describe("crew menu quick-keys", () => {
+  // Same invariant the workflow picker asserts: tmux display-menu silently
+  // gives a repeated key to the FIRST row claiming it, so a collision makes a
+  // row unreachable rather than erroring. The composer already hit this once
+  // (`reviewer` and `review-model` both defaulting to `r`), which is why its
+  // keys are hand-assigned rather than derived from the field name.
+  //
+  // Empty keys are excluded: a menu longer than nine rows deliberately leaves
+  // the overflow unbound, and repeated "" means "no quick-key", not a clash.
+  const assertUnique = (plan: { items: { key: string; sep?: boolean }[] }) => {
+    const keys = plan.items.filter((i) => !i.sep && i.key).map((i) => i.key);
+    expect(new Set(keys).size).toBe(keys.length);
+  };
+  const runner = "/n /cli.js";
+  const crews = listCrews(withDeepseek());
+
+  it("the picker binds every key at most once", () => {
+    assertUnique(buildCrewPickerPlan("garden", "all-claude", crews, runner));
+  });
+
+  it("the composer binds every key at most once, in both create and edit shape", () => {
+    const full = { worker: "claude", workerModel: "opus", workerEffort: "xhigh", review: "codex", reviewModel: "opus" };
+    assertUnique(buildCrewComposerPlan("garden", full, runner));
+    assertUnique(buildCrewComposerPlan("garden", { ...full, editing: "heavy" }, runner));
+    assertUnique(buildCrewComposerPlan("garden", {}, runner));
+  });
+
+  it("the dimension submenu binds every key at most once, including the clear row", () => {
+    assertUnique(buildCrewDimSubmenuPlan("garden", "model", ["opus", "sonnet"], "opus", "inherit", runner));
+  });
+
+  it("the stored-crew chooser binds every key at most once", () => {
+    assertUnique(buildStoredCrewPickerPlan("garden", "edit", crews, runner, crews.map((c) => c.name)));
+  });
+});
+
 describe("crew composer plans", () => {
   const runner = "/n /cli.js";
 
