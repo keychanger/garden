@@ -181,8 +181,8 @@ export function buildCrewDimSubmenuPlan(
   return { title: `${field} for the new crew`, items };
 }
 
-// The stored-crew chooser for the edit / delete flows. Builtins are excluded:
-// they are generated, so there is nothing to edit and nothing to delete.
+// The crew chooser for the edit / delete flows. Edit lists every crew (see
+// below); delete lists stored crews only.
 export function buildStoredCrewPickerPlan(
   projectName: string,
   action: "edit" | "delete",
@@ -221,7 +221,6 @@ export function buildStoredCrewPickerPlan(
   });
   return { title: action === "edit" ? "Edit which crew?" : "Delete which crew?", items };
 }
-
 
 // Spawned by the ⌥⇧C hotkey. Resolves the focused project, builds the plan,
 // and drives tmux display-menu.
@@ -304,8 +303,6 @@ export function runStoredCrewPicker(projectName: string, action: string): void {
   ));
 }
 
-// _crew-edit <project> <name>: seed the draft from an existing crew and open
-// the composer on it.
 // _crew-edit <project> <name>: seed the draft from an existing crew and open
 // the composer on it. A BUILTIN is editable here: it has no storage of its own,
 // so saving materializes a stored crew of the same name that shadows it
