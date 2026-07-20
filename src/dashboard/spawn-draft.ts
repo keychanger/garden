@@ -17,6 +17,12 @@ export const SPAWN_DRAFT_MAX_AGE_MS = 5 * 60_000;
 export interface SpawnDraftPatch {
   base?: string;
   crew?: string;
+  // Build member — WHO builds, in crew vocabulary (`claude`, `codex`, ... —
+  // see listMembers in crew.ts). Consumed as newWorker's `harness`, which is
+  // authoritative over a staged crew's worker half, so staging both picks this
+  // builder and keeps the crew only for the reviewer. Absent = the project
+  // default (its `harness` key or its bound crew).
+  member?: string;
   // Per-worker model alias/id (opaque string; opus/sonnet/haiku/fable or a
   // concrete id) — threaded into newWorker as `model`. Default/grow only.
   model?: string;
@@ -37,11 +43,12 @@ function draftPath(project: string): string {
 // The current draft for a project, or {} when absent or stale (> MAX_AGE_MS).
 export function readSpawnDraft(project: string): SpawnDraftPatch {
   try {
-    const parsed = JSON.parse(fs.readFileSync(draftPath(project), "utf-8")) as { base?: string; crew?: string; model?: string; effort?: string; ts?: number };
+    const parsed = JSON.parse(fs.readFileSync(draftPath(project), "utf-8")) as { base?: string; crew?: string; member?: string; model?: string; effort?: string; ts?: number };
     if (typeof parsed.ts !== "number" || Date.now() - parsed.ts > SPAWN_DRAFT_MAX_AGE_MS) return {};
     return {
       ...(parsed.base ? { base: parsed.base } : {}),
       ...(parsed.crew ? { crew: parsed.crew } : {}),
+      ...(parsed.member ? { member: parsed.member } : {}),
       ...(parsed.model ? { model: parsed.model } : {}),
       ...(parsed.effort ? { effort: parsed.effort } : {}),
     };
@@ -57,6 +64,7 @@ export function writeSpawnDraft(project: string, patch: SpawnDraftPatch): void {
   const merged: SpawnDraftPatch = { ...current };
   if (patch.base !== undefined) { if (patch.base) merged.base = patch.base; else delete merged.base; }
   if (patch.crew !== undefined) { if (patch.crew) merged.crew = patch.crew; else delete merged.crew; }
+  if (patch.member !== undefined) { if (patch.member) merged.member = patch.member; else delete merged.member; }
   if (patch.model !== undefined) { if (patch.model) merged.model = patch.model; else delete merged.model; }
   if (patch.effort !== undefined) { if (patch.effort) merged.effort = patch.effort; else delete merged.effort; }
   try {

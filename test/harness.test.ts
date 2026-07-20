@@ -283,6 +283,43 @@ describe("codex adapter dialect", () => {
     expect(resume).not.toContain("--dangerously-bypass-approvals-and-sandbox");
   });
 
+  it("renders the effort rung as model_reasoning_effort, and keeps ultracode a no-op", async () => {
+    const { getHarnessCore } = await importCore();
+    const codex = getHarnessCore("codex");
+    // Codex's reasoning dial is a config key, not a flag, so it rides the same
+    // `-c` channel as the hooks and sandbox.
+    const withEffort = codex.buildAgentCommand({
+      sessionId: "", resume: false, contextFile: "/ignored", effort: "xhigh", envPrefix: "",
+    });
+    expect(withEffort).toContain("-c model_reasoning_effort=xhigh");
+
+    // Codex has its own "ultra" reasoning level. It must pass through as a
+    // config value — it is NOT garden's ultracode sentinel, which has no Codex
+    // analog and stays a no-op.
+    const ultra = codex.buildAgentCommand({
+      sessionId: "", resume: false, contextFile: "/ignored", effort: "ultra", envPrefix: "",
+    });
+    expect(ultra).toContain("-c model_reasoning_effort=ultra");
+
+    const ultracodeOnly = codex.buildAgentCommand({
+      sessionId: "", resume: false, contextFile: "/ignored", ultracode: true, envPrefix: "",
+    });
+    expect(ultracodeOnly).not.toContain("model_reasoning_effort");
+    expect(ultracodeOnly).not.toContain("--effort");
+
+    // No rung requested = no override; Codex uses the model's own default.
+    const bare = codex.buildAgentCommand({
+      sessionId: "", resume: false, contextFile: "/ignored", envPrefix: "",
+    });
+    expect(bare).not.toContain("model_reasoning_effort");
+
+    // The rung survives a resume, so a bounced worker keeps its reasoning depth.
+    const resumed = codex.buildAgentCommand({
+      sessionId: "019f-abc", resume: true, contextFile: "/ignored", effort: "high", envPrefix: "",
+    });
+    expect(resumed).toContain("-c model_reasoning_effort=high");
+  });
+
   it("adds the worktree git common dir to the sandbox writable roots", async () => {
     const { getHarnessCore } = await importCore();
     // A linked worktree's git store lives at the main checkout's .git, outside

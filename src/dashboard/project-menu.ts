@@ -104,9 +104,13 @@ export function buildProjectModelSubmenuPlan(project: string, current: string | 
   return buildEnumSubmenuPlan(project, "model", `Default model for ${project} (default+grow workers)`, PROJECT_MODEL_CHOICES, current, runner, "unset — account/provider default");
 }
 
-// Default reasoning effort (default + grow workers). "ultra" is the ultracode
-// preset (max effort + dynamic workflows), not a plain rung — it only affects
-// claude-code workers (a codex worker ignores effort).
+// Default reasoning effort (default + grow workers). These are the claude-code
+// rungs: the four plain ones (low/medium/high/xhigh) happen to be valid Codex
+// reasoning levels too, so they carry over to a codex worker as
+// `model_reasoning_effort`, but "ultra" here is the ultracode preset (max
+// effort + dynamic workflows) rather than a rung, and that preset has no Codex
+// analog. Codex's fuller ladder (which adds "max" and its own genuine "ultra")
+// is offered per-spawn by the ⌥⇧N composer once codex is the build member.
 export function buildProjectEffortSubmenuPlan(project: string, current: string | undefined, runner: string): MenuSpec {
   return buildEnumSubmenuPlan(project, "effort", `Default effort for ${project} (ultra = ultracode preset)`, PROJECT_EFFORT_CHOICES, current, runner, "unset — no effort passed");
 }

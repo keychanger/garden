@@ -14,6 +14,10 @@ vi.mock("node:fs", () => ({
 
 vi.mock("../src/config.js", () => ({
   tryGetProject: vi.fn(),
+  // The plant paths resolve the draft's build member, which reads the garden
+  // config for the member list. An empty config yields the builtin members
+  // (the registered harnesses) and no providers.
+  loadConfig: vi.fn(() => ({ projects: {}, providers: {} })),
   SESSIONS_DIR: "/tmp/garden-sessions-test",
   GARDEN_DIR: "/tmp/garden-test",
 }));
@@ -38,7 +42,9 @@ vi.mock("../src/dashboard/tmux.js", () => ({
 import {
   buildWorkflowPickerPlan, buildComposeBaseSubmenuPlan,
   buildComposeCrewSubmenuPlan, buildComposeModelSubmenuPlan,
-  buildComposeEffortSubmenuPlan, draftLaunchOpts, plantGrowFromPicker, plantBotanistFromPicker,
+  buildComposeEffortSubmenuPlan, buildComposeMemberSubmenuPlan, draftLaunchOpts,
+  composerModels, composerEfforts, effectiveBuildMember, claudeOnlyLaunchOpts,
+  plantGrowFromPicker, plantBotanistFromPicker,
 } from "../src/dashboard/trellis-picker.js";
 import { newWorker } from "../src/dashboard/workers.js";
 import { tryGetProject } from "../src/config.js";
@@ -54,17 +60,18 @@ beforeEach(() => {
 // ─── buildWorkflowPickerPlan ──────────────────────────────────────────────
 
 describe("buildWorkflowPickerPlan", () => {
-  it("returns the d/o/t/h workflow rows, a separator, then the m/e/c/b composer rows", () => {
+  it("returns the d/o/t/h workflow rows, a separator, then the w/m/e/c/b composer rows", () => {
     const rows = buildWorkflowPickerPlan("proj", RUNNER).rows;
     expect(rows[0].key).toBe("d");
     expect(rows[1].key).toBe("o"); // botanist ('b' is the base-branch composer row)
     expect(rows[2].key).toBe("t");
     expect(rows[3].key).toBe("h"); // hoop — the grow workflow's operator-facing name
     expect(rows[4].sep).toBe(true);
-    expect(rows[5].key).toBe("m");
-    expect(rows[6].key).toBe("e");
-    expect(rows[7].key).toBe("c");
-    expect(rows[8].key).toBe("b");
+    expect(rows[5].key).toBe("w"); // build member — who builds ('b' is base, 'm' is model)
+    expect(rows[6].key).toBe("m");
+    expect(rows[7].key).toBe("e");
+    expect(rows[8].key).toBe("c");
+    expect(rows[9].key).toBe("b");
   });
 
   it("binds every quick-key at most once", () => {
@@ -102,24 +109,31 @@ describe("buildWorkflowPickerPlan", () => {
     expect(row.tmux).toBeUndefined();
   });
 
-  it("the composer rows dispatch the model/effort/crew/base submenus and show the staged draft", () => {
+  it("the composer rows dispatch the build/model/effort/crew/base submenus and show the staged draft", () => {
     const rows = buildWorkflowPickerPlan("proj", RUNNER, {
-      model: "sonnet", effort: "xhigh", crew: "all-codex", base: "v2-api",
+      member: "codex", model: "gpt-5.6-sol", effort: "xhigh", crew: "all-codex", base: "v2-api",
     }).rows;
-    expect(rows[5].run).toContain("_compose-model-submenu");
-    expect(rows[5].label).toContain("sonnet");
-    expect(rows[6].run).toContain("_compose-effort-submenu");
-    expect(rows[6].label).toContain("xhigh");
-    expect(rows[7].run).toContain("_compose-crew-submenu");
-    expect(rows[7].label).toContain("all-codex");
-    expect(rows[8].run).toContain("_compose-base-submenu");
-    expect(rows[8].label).toContain("v2-api");
+    expect(rows[5].run).toContain("_compose-member-submenu");
+    expect(rows[5].label).toContain("codex");
+    expect(rows[6].run).toContain("_compose-model-submenu");
+    expect(rows[6].label).toContain("gpt-5.6-sol");
+    expect(rows[7].run).toContain("_compose-effort-submenu");
+    expect(rows[7].label).toContain("xhigh");
+    expect(rows[8].run).toContain("_compose-crew-submenu");
+    expect(rows[8].label).toContain("all-codex");
+    expect(rows[9].run).toContain("_compose-base-submenu");
+    expect(rows[9].label).toContain("v2-api");
   });
 
   it("reflects a staged draft in the title bracket, reading like the spoken recipe", () => {
     const plan = buildWorkflowPickerPlan("proj", RUNNER, { model: "sonnet", effort: "xhigh", crew: "all-claude" });
     // model and effort bare (sonnet · xhigh), crew labeled.
     expect(plan.title).toContain("sonnet · xhigh · crew all-claude");
+  });
+
+  it("leads the title bracket with the build member — the recipe reads codex · gpt-5.6-sol", () => {
+    const plan = buildWorkflowPickerPlan("proj", RUNNER, { member: "codex", model: "gpt-5.6-sol", effort: "high" });
+    expect(plan.title).toContain("codex · gpt-5.6-sol · high");
   });
 
   it("shell-escapes the project name when it contains unsafe characters", () => {
@@ -179,6 +193,76 @@ describe("buildComposeEffortSubmenuPlan", () => {
   });
 });
 
+// ─── buildComposeMemberSubmenuPlan ────────────────────────────────────────
+
+describe("buildComposeMemberSubmenuPlan", () => {
+  it("renders one row per member plus a trailing clear row", () => {
+    const rows = buildComposeMemberSubmenuPlan("proj", ["claude", "codex"], undefined, RUNNER).rows;
+    expect(rows).toHaveLength(3);
+    expect(rows[0].label).toBe("claude");
+    expect(rows[1].label).toBe("codex");
+    expect(rows.at(-1)!.label).toMatch(/clear/i);
+    expect(rows.at(-1)!.key).toBe("0");
+  });
+
+  it("stages the chosen member via _spawn-draft <project> member <member>", () => {
+    const rows = buildComposeMemberSubmenuPlan("proj", ["codex"], undefined, RUNNER).rows;
+    expect(rows[0].run).toContain("_spawn-draft");
+    expect(rows[0].run).toContain("member");
+    expect(rows[0].run).toContain("codex");
+  });
+
+  it("marks the current member with a check", () => {
+    const rows = buildComposeMemberSubmenuPlan("proj", ["claude", "codex"], "codex", RUNNER).rows;
+    expect(rows[1].label).toContain("✓");
+  });
+});
+
+// ─── harness-scoped model/effort vocabularies ─────────────────────────────
+
+describe("composerModels / composerEfforts", () => {
+  it("offers Anthropic aliases for a claude-code build member", () => {
+    expect(composerModels("claude-code")).toContain("opus");
+    expect(composerModels("claude-code")).toContain("fable");
+  });
+
+  it("offers Codex slugs — never Anthropic aliases — for a codex build member", () => {
+    const models = composerModels("codex");
+    expect(models.length).toBeGreaterThan(0);
+    expect(models).not.toContain("opus");
+    expect(models.every(m => m.startsWith("gpt-"))).toBe(true);
+  });
+
+  it("offers the claude-code ladder ending in the ultracode sentinel for claude", () => {
+    expect(composerEfforts("claude-code")).toEqual(["low", "medium", "high", "xhigh", "ultra"]);
+  });
+
+  it("offers Codex's own reasoning rungs — which include max — for codex", () => {
+    expect(composerEfforts("codex")).toContain("max");
+  });
+});
+
+// ─── effectiveBuildMember ─────────────────────────────────────────────────
+
+describe("effectiveBuildMember", () => {
+  const config = { projects: {}, providers: {} } as never;
+
+  it("prefers an explicitly staged member over everything else", () => {
+    expect(effectiveBuildMember({ harness: "codex" }, { member: "claude" }, config)).toBe("claude");
+  });
+
+  it("falls back to the project default when nothing is staged", () => {
+    expect(effectiveBuildMember({ harness: "codex" }, {}, config)).toBe("codex");
+    expect(effectiveBuildMember({}, {}, config)).toBe("claude");
+  });
+
+  it("reads a staged crew's worker half when no member is staged", () => {
+    // This is the fix for "I only see Anthropic models": the dims follow the
+    // crew's builder, not the project's.
+    expect(effectiveBuildMember({}, { crew: "codex-claude" }, config)).toBe("codex");
+  });
+});
+
 // ─── draftLaunchOpts ──────────────────────────────────────────────────────
 
 describe("draftLaunchOpts", () => {
@@ -192,6 +276,32 @@ describe("draftLaunchOpts", () => {
 
   it("returns an empty object for a draft with no model/effort", () => {
     expect(draftLaunchOpts({ base: "v2-api" })).toEqual({});
+  });
+
+  it("passes codex rungs through untranslated — its 'ultra' is a reasoning level, not the ultracode preset", () => {
+    expect(draftLaunchOpts({ model: "gpt-5.6-sol", effort: "ultra" }, "codex"))
+      .toEqual({ model: "gpt-5.6-sol", effort: "ultra" });
+    expect(draftLaunchOpts({ effort: "max" }, "codex")).toEqual({ effort: "max" });
+  });
+});
+
+// ─── claudeOnlyLaunchOpts ─────────────────────────────────────────────────
+
+describe("claudeOnlyLaunchOpts", () => {
+  it("passes the dims through when the draft builds with claude", () => {
+    expect(claudeOnlyLaunchOpts({}, { model: "sonnet", effort: "xhigh" }))
+      .toEqual({ model: "sonnet", effort: "xhigh" });
+  });
+
+  it("drops model and effort when the draft stages a foreign build member", () => {
+    // grow/botanist are claude-code-only, so a codex-staged model would
+    // otherwise reach a Claude worker as `--model gpt-5.6-sol`.
+    expect(claudeOnlyLaunchOpts({}, { member: "codex", model: "gpt-5.6-sol", effort: "max" }))
+      .toEqual({});
+  });
+
+  it("drops them for a foreign member inherited from a staged crew", () => {
+    expect(claudeOnlyLaunchOpts({}, { crew: "codex-claude", model: "gpt-5.6-sol" })).toEqual({});
   });
 });
 

@@ -57,8 +57,9 @@ function codexHookFlags(hookRunner: string): string {
 }
 
 // $CODEX_HOME is Codex's CLAUDE_CONFIG_DIR analog (relocates sessions/, auth,
-// config). Defaults to ~/.codex.
-function codexHome(): string {
+// config). Defaults to ~/.codex. Exported for codex-models.ts, which reads the
+// model catalog Codex caches in the same directory.
+export function codexHome(): string {
   return process.env.CODEX_HOME || path.join(process.env.HOME || os.homedir(), ".codex");
 }
 
@@ -208,16 +209,24 @@ export const codexCore: HarnessCore = {
   // reviewer is short-lived and garden owns its trust boundary. A looping
   // worker running unbounded model-generated commands must stay confined.
   buildAgentCommand(opts: AgentCommandOptions): string {
-    // opts.ultracode / opts.effort are claude-code dials and are ignored here,
-    // same as the pre-existing ultracode no-op — a codex effort mapping
-    // (model_reasoning_effort) can be added when a codex worker needs it.
+    // opts.ultracode is a claude-code preset with no Codex analog and stays a
+    // no-op. opts.effort DOES map: Codex's reasoning rung is the
+    // `model_reasoning_effort` config key, so it rides the same `-c` override
+    // channel as the hooks and sandbox rather than a flag. The rung vocabulary
+    // is per-model and comes from Codex's own catalog (CODEX_EFFORT_LEVELS,
+    // codex-models.ts) — it is NOT WORKER_EFFORT_LEVELS, so no value mapping
+    // happens here; the composer offers the Codex rungs directly and this
+    // passes the operator's choice through verbatim.
     const modelFlag = opts.model ? ` -m ${shellEscape(opts.model)}` : "";
+    const effortFlag = opts.effort
+      ? ` -c ${shellEscape(`model_reasoning_effort=${opts.effort}`)}`
+      : "";
     const trust = "--dangerously-bypass-hook-trust";
     const sandbox = codexSandboxFlags(opts.worktreeGitDir);
     const hooks = codexHookFlags(resolveHookRunner());
     return opts.resume
-      ? `${opts.envPrefix}codex resume ${shellEscape(opts.sessionId)} ${trust} ${sandbox} ${hooks}${modelFlag}`
-      : `${opts.envPrefix}codex ${trust} ${sandbox} ${hooks}${modelFlag}`;
+      ? `${opts.envPrefix}codex resume ${shellEscape(opts.sessionId)} ${trust} ${sandbox} ${hooks}${modelFlag}${effortFlag}`
+      : `${opts.envPrefix}codex ${trust} ${sandbox} ${hooks}${modelFlag}${effortFlag}`;
   },
 
   // Headless one-shot (reviewer/resolver/ci-fix) — the spike-verified path.

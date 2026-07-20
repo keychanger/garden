@@ -38,6 +38,13 @@ describe("spawn draft", () => {
     expect(readSpawnDraft("lex")).toEqual({ model: "sonnet", effort: "xhigh", crew: "all-claude" });
   });
 
+  it("merges and clears the build member alongside the other dims", () => {
+    writeSpawnDraft("lex", { member: "codex", model: "gpt-5.6-sol" });
+    expect(readSpawnDraft("lex")).toEqual({ member: "codex", model: "gpt-5.6-sol" });
+    writeSpawnDraft("lex", { member: "" });
+    expect(readSpawnDraft("lex")).toEqual({ model: "gpt-5.6-sol" });
+  });
+
   it("an empty-string value clears that field", () => {
     writeSpawnDraft("lex", { base: "v2-api", crew: "all-codex" });
     writeSpawnDraft("lex", { base: "" });

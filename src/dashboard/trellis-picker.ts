@@ -22,8 +22,9 @@ import { resolveGardenRunner } from "./runner.js";
 import { readDashState } from "./state.js";
 import { shellEscape, tmuxDisplay, menuRunShell } from "./tmux.js";
 import { runMenu, type MenuSpec, type MenuRow } from "./menu.js";
-import { loadConfig } from "../config.js";
-import { listCrews } from "./crew.js";
+import { loadConfig, type GardenConfig, type ProjectConfig } from "../config.js";
+import { listCrews, listMembers, findMember, getCrew, projectWorkerMemberName } from "./crew.js";
+import { codexModels, CODEX_EFFORT_LEVELS } from "./harness/codex-models.js";
 import { listBranches } from "./git.js";
 import { WORKER_EFFORT_LEVELS } from "./create.js";
 import { readSpawnDraft, writeSpawnDraft, consumeSpawnDraft, type SpawnDraftPatch } from "./spawn-draft.js";
@@ -362,25 +363,80 @@ function buildIteration1Seed(
 // multi-line or special-character seeds use the CLI:
 // `garden workers new --workflow grow --seed-file <path>`.
 
-// Suggested models for the composer's model dim — the everyday Anthropic
+// Suggested models for a claude-code build member — the everyday Anthropic
 // aliases (fable included, per the "fable ultracode" ergonomic). Opaque
 // strings passed to `--model`; the CLI `workers new --model <id>` covers any
 // exotic id, exactly as base/crew keep their fixed lists.
 const COMPOSER_MODELS = ["opus", "sonnet", "haiku", "fable"];
 
-// The composer's effort rungs: the four claude-code `--effort` levels plus
-// "ultra" — the top rung the consumer maps to the ultracode preset.
+// The claude-code effort rungs: the four `--effort` levels plus "ultra" — the
+// top rung the consumer maps to the ultracode preset.
 const COMPOSER_EFFORTS = [...WORKER_EFFORT_LEVELS, "ultra"];
 
-// Map a consumed draft's model/effort onto newWorker options. "ultra" is the
-// ultracode preset (max effort + workflows), so it becomes `ultracode: true`
-// rather than an effort value; the other rungs pass through as `effort`. Used
-// by both the default and grow consume paths so the mapping lives in one place.
-export function draftLaunchOpts(draft: SpawnDraftPatch): { model?: string; effort?: string; ultracode?: boolean } {
+const CODEX_HARNESS = "codex";
+const DEFAULT_MEMBER_HARNESS = "claude-code";
+
+// The build member the composer is currently configuring — the answer to "who
+// builds this worker". Precedence mirrors newWorker's own harness resolution:
+// the explicitly staged member wins, else a staged crew's worker half, else the
+// project default (its `harness` key or its bound crew). This is what makes the
+// model and effort dims correct rather than always-Anthropic: a project bound to
+// an all-claude crew offers Anthropic aliases, and staging `codex` re-populates
+// both submenus from Codex's catalog.
+export function effectiveBuildMember(
+  project: Pick<ProjectConfig, "harness" | "provider" | "crew">,
+  draft: SpawnDraftPatch,
+  config: GardenConfig,
+): string {
+  if (draft.member) return draft.member;
+  if (draft.crew) {
+    const crew = getCrew(draft.crew, config);
+    if (crew) return crew.worker.name;
+  }
+  return projectWorkerMemberName(project, config);
+}
+
+// The harness a member builds with. An unknown member (a crew or config naming
+// something since removed) resolves to the default rather than erroring — the
+// composer is a menu, and newWorker validates the harness for real at spawn.
+export function memberHarness(member: string, config: GardenConfig): string {
+  return findMember(member, config)?.harness ?? DEFAULT_MEMBER_HARNESS;
+}
+
+// Model / effort vocabularies are per-harness, not universal: Codex names
+// concrete slugs (gpt-5.6-sol) where Anthropic names aliases (opus), and Codex's
+// reasoning rungs are its own `model_reasoning_effort` values. Offering one
+// harness's vocabulary while the other builds is the bug this fixes.
+export function composerModels(harness: string): string[] {
+  return harness === CODEX_HARNESS ? codexModels() : COMPOSER_MODELS;
+}
+
+export function composerEfforts(harness: string): string[] {
+  return harness === CODEX_HARNESS ? CODEX_EFFORT_LEVELS : COMPOSER_EFFORTS;
+}
+
+// Map a consumed draft's model/effort onto newWorker options, in the target
+// harness's dialect. On claude-code, "ultra" is the ultracode preset (max effort
+// + dynamic workflows), so it becomes `ultracode: true` rather than an effort
+// value; the other rungs pass through as `effort`. On codex, every rung —
+// including its own genuine "ultra" reasoning level — is a plain
+// `model_reasoning_effort` value, and ultracode has no analog, so the whole
+// ladder passes through untranslated. Used by every consume path so the mapping
+// lives in one place. `harness` absent = claude-code (the grow/botanist plant
+// paths, which are claude-code-only workflows).
+export function draftLaunchOpts(
+  draft: SpawnDraftPatch,
+  harness?: string,
+): { model?: string; effort?: string; ultracode?: boolean } {
   const opts: { model?: string; effort?: string; ultracode?: boolean } = {};
   if (draft.model) opts.model = draft.model;
-  if (draft.effort === "ultra") opts.ultracode = true;
-  else if (draft.effort) opts.effort = draft.effort;
+  if (harness === CODEX_HARNESS) {
+    if (draft.effort) opts.effort = draft.effort;
+  } else if (draft.effort === "ultra") {
+    opts.ultracode = true;
+  } else if (draft.effort) {
+    opts.effort = draft.effort;
+  }
   return opts;
 }
 
@@ -388,6 +444,7 @@ export function draftLaunchOpts(draft: SpawnDraftPatch): { model?: string; effor
 // model and effort bare (sonnet · xhigh), crew and base labeled.
 function draftBracket(draft: SpawnDraftPatch): string {
   const parts: string[] = [];
+  if (draft.member) parts.push(draft.member);
   if (draft.model) parts.push(draft.model);
   if (draft.effort) parts.push(draft.effort);
   if (draft.crew) parts.push(`crew ${draft.crew}`);
@@ -395,10 +452,11 @@ function draftBracket(draft: SpawnDraftPatch): string {
   return parts.length ? ` (${parts.join(" · ")})` : "";
 }
 
-// Build the workflow picker / spawn composer plan: the three workflow rows, then
-// the base/crew override rows. The `default` row dispatches _compose-default
-// (consumes the staged draft) — NOT _new-worker, which ⌥n keeps as the
-// draft-free fast path. Pure: the draft is read by the caller and passed in.
+// Build the workflow picker / spawn composer plan: the workflow rows, then the
+// override rows (build member, model, effort, crew, base). The `default` row
+// dispatches _compose-default (consumes the staged draft) — NOT _new-worker,
+// which ⌥n keeps as the draft-free fast path. Pure: the draft is read by the
+// caller and passed in.
 export function buildWorkflowPickerPlan(
   projectName: string,
   runner: string,
@@ -411,6 +469,7 @@ export function buildWorkflowPickerPlan(
     { label: "(t) trellis — pick a frozen design doc", key: "t", tmux: shellCmdTrellisPicker(runner, projectName) },
     { label: "(h) hoop — bounded iteration loop", key: "h", tmux: shellCmdGrowPlant(runner, projectName) },
     { sep: true, label: "" },
+    { label: `(w) build…         [${draft.member ?? "default"}]`, key: "w", run: `${runner} dashboard _compose-member-submenu ${p}` },
     { label: `(m) model…         [${draft.model ?? "default"}]`, key: "m", run: `${runner} dashboard _compose-model-submenu ${p}` },
     { label: `(e) effort…        [${draft.effort ?? "default"}]`, key: "e", run: `${runner} dashboard _compose-effort-submenu ${p}` },
     { label: `(c) crew…          [${draft.crew ?? "default"}]`, key: "c", run: `${runner} dashboard _compose-crew-submenu ${p}` },
@@ -432,6 +491,23 @@ export function buildComposeBaseSubmenuPlan(project: string, branches: string[],
   }));
   rows.push({ label: "(0) clear — project default", key: "0", run: `${runner} dashboard _spawn-draft ${p} base ${shellEscape("")}` });
   return { title: `Base branch for the new worker on ${project}`, rows };
+}
+
+// Build member dim — who builds (claude / codex / any other registered
+// harness). Staged as `member` and consumed as newWorker's `harness`, which
+// outranks a staged crew's worker half, so picking a builder here and a crew
+// there means "this builder, that reviewer". Provider members are absent for
+// the same reason the crew submenu filters them: a per-worker spawn has no
+// provider path yet (the worker's backend comes from the project).
+export function buildComposeMemberSubmenuPlan(project: string, members: string[], current: string | undefined, runner: string): MenuSpec {
+  const p = shellEscape(project);
+  const rows: MenuRow[] = members.map((m, i) => ({
+    label: m === current ? `${m}  ✓` : m,
+    key: i < 9 ? String(i + 1) : "",
+    run: `${runner} dashboard _spawn-draft ${p} member ${shellEscape(m)}`,
+  }));
+  rows.push({ label: "(0) clear — project default", key: "0", run: `${runner} dashboard _spawn-draft ${p} member ${shellEscape("")}` });
+  return { title: `Build agent for the new worker on ${project}`, rows };
 }
 
 export function buildComposeCrewSubmenuPlan(project: string, crews: string[], current: string | undefined, runner: string): MenuSpec {
@@ -511,36 +587,98 @@ export function runComposeCrewSubmenu(projectName: string): void {
   runMenu(buildComposeCrewSubmenuPlan(projectName, crews, readSpawnDraft(projectName).crew, resolveGardenRunner()));
 }
 
-export function runComposeModelSubmenu(projectName: string): void {
+export function runComposeMemberSubmenu(projectName: string): void {
   if (!tryGetProject(projectName)) { tmuxDisplay(`Unknown project '${projectName}'.`); return; }
-  runMenu(buildComposeModelSubmenuPlan(projectName, COMPOSER_MODELS, readSpawnDraft(projectName).model, resolveGardenRunner()));
+  // Harness members only — see buildComposeMemberSubmenuPlan.
+  const members = listMembers(loadConfig()).filter(m => !m.provider).map(m => m.name);
+  runMenu(buildComposeMemberSubmenuPlan(projectName, members, readSpawnDraft(projectName).member, resolveGardenRunner()));
+}
+
+// The model and effort submenus are populated for the draft's EFFECTIVE build
+// member, so they always describe the agent that will actually run.
+export function runComposeModelSubmenu(projectName: string): void {
+  const project = tryGetProject(projectName);
+  if (!project) { tmuxDisplay(`Unknown project '${projectName}'.`); return; }
+  const draft = readSpawnDraft(projectName);
+  const models = composerModels(draftBuildHarness(project, draft));
+  runMenu(buildComposeModelSubmenuPlan(projectName, models, draft.model, resolveGardenRunner()));
 }
 
 export function runComposeEffortSubmenu(projectName: string): void {
-  if (!tryGetProject(projectName)) { tmuxDisplay(`Unknown project '${projectName}'.`); return; }
-  runMenu(buildComposeEffortSubmenuPlan(projectName, COMPOSER_EFFORTS, readSpawnDraft(projectName).effort, resolveGardenRunner()));
+  const project = tryGetProject(projectName);
+  if (!project) { tmuxDisplay(`Unknown project '${projectName}'.`); return; }
+  const draft = readSpawnDraft(projectName);
+  const efforts = composerEfforts(draftBuildHarness(project, draft));
+  runMenu(buildComposeEffortSubmenuPlan(projectName, efforts, draft.effort, resolveGardenRunner()));
 }
 
-// _spawn-draft <project> <field> <value>: stage a base/crew/model/effort
+// Launch opts for the claude-code-only workflows (grow, botanist). They cannot
+// honor a build member — `--harness` is default-workflow-only — so a draft
+// staged for a foreign harness would otherwise hand them that harness's model
+// and effort while spawning claude: `--model gpt-5.6-sol` on a Claude worker.
+// The dims are dropped rather than translated (there is no sensible mapping
+// from a Codex slug to an Anthropic alias), leaving the account default.
+export function claudeOnlyLaunchOpts(
+  project: Pick<ProjectConfig, "harness" | "provider" | "crew">,
+  draft: SpawnDraftPatch,
+): { model?: string; effort?: string; ultracode?: boolean } {
+  if (draftBuildHarness(project, draft) !== DEFAULT_MEMBER_HARNESS) return {};
+  return draftLaunchOpts(draft);
+}
+
+// The harness a draft will build with, resolved through the member chain.
+function draftBuildHarness(
+  project: Pick<ProjectConfig, "harness" | "provider" | "crew">,
+  draft: SpawnDraftPatch,
+): string {
+  const config = loadConfig();
+  return memberHarness(effectiveBuildMember(project, draft, config), config);
+}
+
+// _spawn-draft <project> <field> <value>: stage a base/crew/member/model/effort
 // override and re-open the composer (form feel). Empty value clears the field.
+//
+// Changing the BUILD member also clears any staged model and effort when the
+// harness changes. Those two dims are named in the outgoing harness's
+// vocabulary — `sonnet` and the ultracode `ultra` mean nothing to Codex, and
+// `gpt-5.6-sol` means nothing to Claude — so carrying them across would stage a
+// recipe that cannot run. Clearing drops both to the account default, which is
+// always valid; the operator re-picks from the now-correct list.
 export function stageSpawnDraft(projectName: string, field: string, value: string): void {
-  if (field !== "base" && field !== "crew" && field !== "model" && field !== "effort") {
+  if (field !== "base" && field !== "crew" && field !== "member" && field !== "model" && field !== "effort") {
     tmuxDisplay(`Unknown draft field '${field}'.`); return;
   }
-  writeSpawnDraft(projectName, { [field]: value });
+  const patch: SpawnDraftPatch = { [field]: value };
+  if (field === "member" || field === "crew") {
+    const project = tryGetProject(projectName);
+    if (project) {
+      const draft = readSpawnDraft(projectName);
+      const before = draftBuildHarness(project, draft);
+      const after = draftBuildHarness(project, { ...draft, [field]: value });
+      if (before !== after) { patch.model = ""; patch.effort = ""; }
+    }
+  }
+  writeSpawnDraft(projectName, patch);
   runWorkflowPicker(projectName);
 }
 
 // _compose-default <project>: consume the staged draft and spawn a default
 // worker with its base/crew overrides. Distinct from ⌥n's _new-worker.
 export function composeDefaultFromPicker(projectName: string): void {
-  if (!tryGetProject(projectName)) { tmuxDisplay(`Unknown project '${projectName}'.`); return; }
+  const project = tryGetProject(projectName);
+  if (!project) { tmuxDisplay(`Unknown project '${projectName}'.`); return; }
+  const config = loadConfig();
   const draft = consumeSpawnDraft(projectName);
+  // The staged member becomes `harness`, which newWorker treats as authoritative
+  // over a crew's worker half — so staging both spawns this builder reviewed by
+  // that crew's reviewer. The model/effort dialect follows the same harness.
+  const harness = memberHarness(effectiveBuildMember(project, draft, config), config);
   const newName = newWorker({
     projectName,
     ...(draft.base ? { base: draft.base } : {}),
     ...(draft.crew ? { crew: draft.crew } : {}),
-    ...draftLaunchOpts(draft),
+    ...(draft.member ? { harness: draft.member } : {}),
+    ...draftLaunchOpts(draft, harness),
   });
   if (!newName) {
     tmuxDisplay(`Failed to spawn worker on '${projectName}'. Is the dashboard running?`);
@@ -581,8 +719,10 @@ export function plantGrowFromPicker(projectName: string, seed: string): void {
     seedMessageFile: seedFile,
     ...(draft.base ? { base: draft.base } : {}),
     // Grow honors the model/effort dims (default-adjacent — entry.model +
-    // ultracode apply); crew is default-only and not consumed here.
-    ...draftLaunchOpts(draft),
+    // ultracode apply); crew and build member are default-only and not consumed
+    // here, so a foreign-harness draft drops both dims rather than handing
+    // claude another harness's model.
+    ...claudeOnlyLaunchOpts(project, draft),
   });
   if (!newName) {
     try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
@@ -622,9 +762,10 @@ export function plantBotanistFromPicker(projectName: string): void {
     workflow: "botanist",
     seedMessageFile: seedFile,
     ...(draft.base ? { base: draft.base } : {}),
-    // Model/effort dims layer over the workflow's Opus/xhigh default; crew is
-    // default-only and not consumed (draftLaunchOpts excludes it).
-    ...draftLaunchOpts(draft),
+    // Model/effort dims layer over the workflow's Opus/xhigh default; crew and
+    // build member are default-only and not consumed, so a foreign-harness
+    // draft drops both dims rather than handing claude another harness's model.
+    ...claudeOnlyLaunchOpts(project, draft),
   });
   if (!newName) {
     try { fs.unlinkSync(seedFile); } catch { /* ignore */ }

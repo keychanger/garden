@@ -103,10 +103,16 @@ export interface NewWorkerOptions {
   // entry.ultracode + entry.model and threaded into every launch/resume/bounce.
   // Ignored for trellis vines (they resolve their own model per iteration).
   ultracode?: boolean;
-  // Per-worker reasoning effort (one of WORKER_EFFORT_LEVELS: low/medium/high/
-  // xhigh) for default/grow workers. Persisted to entry.effort and rendered as
-  // `--effort <level>`. The "ultra" rung is expressed via `ultracode`, not
-  // here; a caller must not set both. Ignored for trellis vines.
+  // Per-worker reasoning effort for default/grow workers. Persisted to
+  // entry.effort and rendered by the target harness's adapter. The value is in
+  // the HARNESS's vocabulary, not one global ladder: claude-code takes
+  // WORKER_EFFORT_LEVELS (low/medium/high/xhigh) and renders `--effort <level>`,
+  // with the top rung "ultra" expressed via `ultracode` rather than here (a
+  // caller must not set both); codex takes its own reasoning levels
+  // (CODEX_EFFORT_LEVELS, which include a genuine "ultra" unrelated to the
+  // ultracode preset) and renders `-c model_reasoning_effort=<level>`. Stored
+  // opaquely — the composer and the CLI each validate against the ladder the
+  // chosen harness actually accepts. Ignored for trellis vines.
   effort?: string;
   // Trellis-specific options, ignored unless workflow === "trellis".
   trellis?: {

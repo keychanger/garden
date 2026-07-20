@@ -626,13 +626,18 @@ export interface WorktreeCommandOptions {
    *  survives the worker's lifetime. The paired Opus pin travels via
    *  `model`. */
   ultracode?: boolean;
-  /** Per-worker reasoning effort (`WorkerEntry.effort`), one of
-   *  WORKER_EFFORT_LEVELS — rendered as claude-code's `--effort <level>`.
-   *  Independent of `model`: "extra-high sonnet" is `model: sonnet` +
-   *  `effort: xhigh`. The top rung (max effort + dynamic workflows) is the
-   *  `ultracode` preset, not an effort value, so effort and ultracode never
-   *  co-occur; buildAgentCommand lets ultracode win if both are somehow set.
-   *  A foreign harness (codex) ignores it, mirroring ultracode. */
+  /** Per-worker reasoning effort (`WorkerEntry.effort`), in the target
+   *  harness's own vocabulary — claude-code takes WORKER_EFFORT_LEVELS and
+   *  renders `--effort <level>`; codex takes CODEX_EFFORT_LEVELS and renders
+   *  `-c model_reasoning_effort=<level>`. The two ladders overlap on
+   *  low/medium/high/xhigh but are not the same list, so the composer offers
+   *  the chosen harness's own rungs. Independent of `model`: "extra-high
+   *  sonnet" is `model: sonnet` + `effort: xhigh`. On claude-code the top rung
+   *  (max effort + dynamic workflows) is the `ultracode` preset, not an effort
+   *  value, so effort and ultracode never co-occur; buildAgentCommand lets
+   *  ultracode win if both are somehow set. Codex has no ultracode analog and
+   *  ignores that flag — but its own "ultra" reasoning level is a plain effort
+   *  value that passes straight through. */
   effort?: string;
   /** Harness adapter name (`WorkerEntry.harness`). Absent = the default
    *  claude-code adapter. Threaded by resume/bounce/loop callers from the
