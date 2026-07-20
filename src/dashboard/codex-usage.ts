@@ -34,6 +34,7 @@ import path from "node:path";
 import { SESSIONS_DIR, loadConfig } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { readRegistry } from "./registry.js";
+import { resolveProjectCrew } from "./crew.js";
 
 const CODEX_USAGE_FILE = path.join(SESSIONS_DIR, "codex-usage.json");
 // rate_limits rides recent response events; the tail is plenty and keeps each
@@ -244,16 +245,21 @@ export function captureCodexUsageLatest(): boolean {
 
 // Is Codex actually in this fleet? probeCodexUsage spends real Codex quota, so
 // it must never fire on an all-Claude garden. True when any project selects the
-// codex harness for its worker or any review role, or any registered worker was
-// spawned on it (including via a per-worker crew, whose name encodes both
-// halves — `claude-codex` is a Codex reviewer).
+// codex harness for its worker or any review role — via a flat key OR its bound
+// crew, which is where a `claude-codex` project's Codex REVIEWER now lives (the
+// binding is by reference, so the flat keys are empty) — or any registered
+// worker was spawned on it (including via a per-worker crew, whose name encodes
+// both halves).
 export function codexInFleet(): boolean {
   try {
-    for (const p of Object.values(loadConfig().projects)) {
+    const config = loadConfig();
+    for (const p of Object.values(config.projects)) {
       if (p.harness === "codex") return true;
       for (const role of [p.roles?.reviewer, p.roles?.resolver, p.roles?.ciFix]) {
         if (role?.harness === "codex") return true;
       }
+      const crew = resolveProjectCrew(p, config);
+      if (crew && (crew.worker.harness === "codex" || crew.review.harness === "codex")) return true;
     }
   } catch { /* config unreadable — fall through to the registry */ }
   try {

@@ -415,7 +415,7 @@ export async function status(args: string[]): Promise<void> {
         missingBases: configuredBase === undefined
           ? undefined
           : collectMissingBases(project.name, projectConfig?.path, definedBases(project.workers)),
-        projectMember: projectConfig ? projectWorkerMemberName(projectConfig) : "claude",
+        projectMember: projectConfig ? projectWorkerMemberName(projectConfig, config) : "claude",
         projectProvider: projectConfig?.provider,
         projectCrew: projectConfig ? (deriveCrew(projectConfig, config) ?? "custom") : "custom",
       };
@@ -1129,7 +1129,7 @@ export function renderQuickStatus(
         missingBases: configuredBase === undefined
           ? undefined
           : collectMissingBases(name, projectConfig?.path, definedBases(workers)),
-        projectMember: projectConfig ? projectWorkerMemberName(projectConfig) : "claude",
+        projectMember: projectConfig ? projectWorkerMemberName(projectConfig, config) : "claude",
         projectProvider: projectConfig?.provider,
         projectCrew: projectConfig ? (deriveCrew(projectConfig, config) ?? "custom") : "custom",
       };

@@ -20,7 +20,7 @@ import { resolveGardenRunner } from "./runner.js";
 import { shellEscape, tmuxDisplay } from "./tmux.js";
 import { runMenu, type MenuSpec, type MenuRow } from "./menu.js";
 import { refreshDashboard } from "./header.js";
-import { deriveCrew } from "./crew.js";
+import { deriveCrew, resolveProjectCrew } from "./crew.js";
 import { ASSIGNABLE_LOG_COLOR_KEYS } from "../log-palette.js";
 import { setProjectConfigKey, SETTABLE_KEYS, type SettableKey } from "./project-config-mutate.js";
 import { listBranches, resolveBaseBranch } from "./git.js";
@@ -57,8 +57,8 @@ export function buildProjectMenuPlan(v: ProjectMenuView): MenuSpec {
   const p = shellEscape(v.project);
   const g = v.runner;
   const sub = (name: string) => `${g} dashboard ${name} ${p}`;
-  // crew (harness/backend + reviewer) and model/effort are independent axes —
-  // neither overrides the other. They sit adjacent so that reads visually.
+  // crew and model/effort sit adjacent because they overlap: a stored crew can
+  // pin model/effort too, and these flat keys are the override layer above it.
   const rows: MenuRow[] = [
     { label: `(1) base branch      ${v.base}`, key: "1", run: sub("_config-branch-submenu") },
     { label: `(2) crew             ${v.crew}`, key: "2", run: `${g} dashboard _crew-picker ${p}` },
@@ -98,8 +98,8 @@ export function buildHolisticSubmenuPlan(project: string, current: string, runne
 }
 
 // Default worker model (default + grow workers; trellis resolves its own per
-// iteration). Independent of crew — crew picks the harness/backend, this picks
-// the model within it.
+// iteration). This flat key is the override layer above a bound crew's own
+// model pin.
 export function buildProjectModelSubmenuPlan(project: string, current: string | undefined, runner: string): MenuSpec {
   return buildEnumSubmenuPlan(project, "model", `Default model for ${project} (default+grow workers)`, PROJECT_MODEL_CHOICES, current, runner, "unset — account/provider default");
 }
@@ -135,7 +135,12 @@ export function runProjectMenu(explicitProject?: string): void {
   runMenu(buildProjectMenuPlan(projectMenuView(name, project, config)));
 }
 
-function projectMenuView(name: string, project: ProjectConfig, config: GardenConfig): ProjectMenuView {
+// Pure view builder (exported for tests). A crew-bound project's model/effort
+// may come from the crew rather than a flat key, so the row reports the crew
+// value tagged with its source — otherwise the menu reads "account default" on
+// a project whose crew pins opus.
+export function projectMenuView(name: string, project: ProjectConfig, config: GardenConfig): ProjectMenuView {
+  const crew = resolveProjectCrew(project, config);
   return {
     project: name,
     runner: resolveGardenRunner(),
@@ -147,8 +152,8 @@ function projectMenuView(name: string, project: ProjectConfig, config: GardenCon
     ciGate: project.requireCiSuccess ?? true,
     holistic: project.holisticReview ?? `${DEFAULT_HOLISTIC_REVIEW} (default)`,
     logColor: project.logColor ?? "auto",
-    model: project.model ?? "account default",
-    effort: project.effort ?? "default",
+    model: project.model ?? (crew?.worker.model ? `${crew.worker.model} (crew ${crew.name})` : "account default"),
+    effort: project.effort ?? (crew?.worker.effort ? `${crew.worker.effort} (crew ${crew.name})` : "default"),
     checks: project.checks ?? NOT_SET,
     postMerge: project.postMerge ?? NOT_SET,
   };

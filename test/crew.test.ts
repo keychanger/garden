@@ -97,6 +97,18 @@ describe("worker member name (status-pane identity badge source)", () => {
     expect(projectWorkerMemberName({ path: "/p", harness: "codex" })).toBe("codex");
     expect(projectWorkerMemberName({ path: "/p", provider: "deepseek" })).toBe("deepseek");
   });
+
+  it("reads the bound crew's worker half, since the binding clears the flat key", () => {
+    // applyCrew records `crew: codex-claude` and deletes project.harness, so a
+    // flat-key-only baseline would report "claude" and badge every one of the
+    // project's own default workers as an override.
+    const c = cfg();
+    expect(projectWorkerMemberName({ path: "/p", crew: "codex-claude" }, c)).toBe("codex");
+    // The flat key is the override layer and still wins over the crew.
+    expect(projectWorkerMemberName({ path: "/p", crew: "codex-claude", harness: "claude-code" }, c)).toBe("claude");
+    // A dangling binding is inert, not a crash.
+    expect(projectWorkerMemberName({ path: "/p", crew: "gone" }, c)).toBe("claude");
+  });
 });
 
 describe("applyCrew", () => {
@@ -208,6 +220,18 @@ describe("stored crews", () => {
       { worker: { member: "claude" }, review: { member: "claude", effort: "high" } },
       store.value,
     )).toThrow(/no effort/);
+  });
+
+  it("rejects a worker effort outside the rungs, like the flat effort key does", () => {
+    // Unvalidated, a typo would ride all the way to `--effort bogus` on the
+    // agent launch — `garden config <p> effort` rejects the same value.
+    expect(() => saveCrew("bad", { worker: { member: "claude", effort: "max" }, review: { member: "claude" } }))
+      .toThrow(/effort must be one of/);
+    for (const rung of ["low", "medium", "high", "xhigh", "ultra"]) {
+      expect(() => validateCrewDef(
+        { worker: { member: "claude", effort: rung }, review: { member: "claude" } }, store.value,
+      )).not.toThrow();
+    }
   });
 
   it("drops a crew whose member no longer resolves rather than throwing", () => {

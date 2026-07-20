@@ -92,7 +92,7 @@ Projects:
                                  A provider can build but never reviews (safety net).
                                  Builtins carry a harness pairing only; define your own to pin
                                  model and effort too:
-                                   crew add heavy --worker claude --model opus --effort xhigh \
+                                   crew add heavy --worker claude --model opus --effort xhigh \\
                                      --review claude --review-model opus
                                    crew add cheap --from all-claude --model sonnet --effort medium
                                    crew apply heavy myproject

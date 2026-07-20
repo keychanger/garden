@@ -3,10 +3,16 @@
 import { describe, it, expect, vi } from "vitest";
 
 vi.mock("../src/dashboard/header.js", () => ({ refreshDashboard: vi.fn() }));
+// projectMenuView resolves the effective base + runner; both shell out.
+vi.mock("../src/dashboard/git.js", () => ({
+  resolveBaseBranch: vi.fn(() => "main"),
+  listBranches: vi.fn(() => ["main"]),
+}));
+vi.mock("../src/dashboard/runner.js", () => ({ resolveGardenRunner: vi.fn(() => "garden") }));
 
 const {
   buildProjectMenuPlan, buildEnumSubmenuPlan, buildProjectBranchSubmenuPlan, buildHolisticSubmenuPlan,
-  buildProjectModelSubmenuPlan, buildProjectEffortSubmenuPlan,
+  buildProjectModelSubmenuPlan, buildProjectEffortSubmenuPlan, projectMenuView,
 } = await import("../src/dashboard/project-menu.js");
 
 const view = {
@@ -114,5 +120,33 @@ describe("buildProjectEffortSubmenuPlan", () => {
     expect(plan.rows.find(r => r.label.startsWith("ultra"))!.label).toContain("✓");
     expect(plan.rows.find(r => r.label.startsWith("xhigh"))!.run).toBe("garden dashboard _config-set lex effort xhigh");
     expect(plan.rows.at(-1)!.run).toBe("garden dashboard _config-set lex effort ''");
+  });
+});
+
+// A crew-bound project writes no flat model/effort key (the binding is by
+// reference), so a flat-key-only view would report "account default" for a
+// project whose crew pins opus/xhigh — on the operator's main read surface.
+describe("projectMenuView with a bound crew", () => {
+  const config = {
+    projects: {},
+    crews: { heavy: { worker: { member: "claude", model: "opus", effort: "xhigh" }, review: { member: "claude" } } },
+  } as unknown as Parameters<typeof projectMenuView>[2];
+
+  it("reports the crew's model/effort, naming the crew as the source", () => {
+    const v = projectMenuView("lex", { path: "/p", crew: "heavy" }, config);
+    expect(v.model).toBe("opus (crew heavy)");
+    expect(v.effort).toBe("xhigh (crew heavy)");
+  });
+
+  it("shows the flat key when it overrides the crew", () => {
+    const v = projectMenuView("lex", { path: "/p", crew: "heavy", model: "haiku" }, config);
+    expect(v.model).toBe("haiku");
+    expect(v.effort).toBe("xhigh (crew heavy)");
+  });
+
+  it("falls back to the account default with no crew and no key", () => {
+    const v = projectMenuView("lex", { path: "/p" }, config);
+    expect(v.model).toBe("account default");
+    expect(v.effort).toBe("default");
   });
 });

@@ -32,6 +32,13 @@ import {
 import { harnessNames } from "./harness/core.js";
 
 const DEFAULT_HARNESS = "claude-code";
+
+// A crew's worker effort answers the same question as the flat `effort` project
+// key and renders through the same `--effort <level>`, so it takes the same
+// values: the four claude-code rungs plus "ultra" (the ultracode preset). Kept
+// as a local literal for the same reason project-config-mutate.ts does — this
+// module must not pull in create.ts's module graph.
+const CREW_EFFORT_VALUES = ["low", "medium", "high", "xhigh", "ultra"] as const;
 // Operator-facing member name for the claude-code harness. Other harnesses and
 // providers use their own name.
 const CLAUDE_MEMBER = "claude";
@@ -176,9 +183,16 @@ export function workerMemberName(harness: string | undefined, provider: string |
 }
 
 // The member name a project's default worker resolves to (its harness + its
-// provider) — the baseline the per-worker badge is compared against.
-export function projectWorkerMemberName(project: Pick<ProjectConfig, "harness" | "provider">): string {
-  return workerMemberName(project.harness, project.provider);
+// provider) — the baseline the per-worker badge is compared against. Reads the
+// same chain newWorker does: the flat key, then the bound crew's worker half
+// (pass config to consult it), else the default. Without it a crew-bound
+// project would report `claude` and badge every one of its own default workers.
+export function projectWorkerMemberName(
+  project: Pick<ProjectConfig, "harness" | "provider" | "crew">,
+  config?: GardenConfig,
+): string {
+  const crewHarness = config ? resolveProjectCrew(project, config)?.worker.harness : undefined;
+  return workerMemberName(project.harness ?? crewHarness, project.provider);
 }
 
 // The crew name pairing a worker's CURRENT build member (its fixed harness +
@@ -311,6 +325,9 @@ export function validateCrewDef(def: StoredCrew, config: GardenConfig): void {
     );
   }
   if (def.review.effort) throw new Error("Review roles take no effort — it has no analog outside the worker.");
+  if (def.worker.effort && !(CREW_EFFORT_VALUES as readonly string[]).includes(def.worker.effort)) {
+    throw new Error(`effort must be one of: ${CREW_EFFORT_VALUES.join(", ")}, got '${def.worker.effort}'`);
+  }
 }
 
 export function saveCrew(name: string, def: StoredCrew): void {

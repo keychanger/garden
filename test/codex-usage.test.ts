@@ -391,9 +391,9 @@ describe("codex usage meter", () => {
       expect(codexInFleet()).toBe(false);
     });
 
-    it("is true when a review role uses codex (the claude-codex crew shape)", async () => {
-      // Exactly the on-disk shape `garden config <p> crew claude-codex` writes:
-      // no worker harness, codex on the three review roles.
+    it("is true when a review role uses codex (a hand-tuned / pre-crew config)", async () => {
+      // A config that spells the roles out rather than binding a crew: no
+      // worker harness, codex on the three review roles.
       writeConfig(
         "  wolf:\n    path: /tmp/wolf\n    roles:\n" +
         "      reviewer:\n        harness: codex\n" +
@@ -408,6 +408,28 @@ describe("codex usage meter", () => {
       writeConfig("  p:\n    path: /tmp/p\n    harness: codex\n");
       const { codexInFleet } = await import("../src/dashboard/codex-usage.js");
       expect(codexInFleet()).toBe(true);
+    });
+
+    // Crews bind BY REFERENCE, so a crew-bound project writes no flat harness
+    // or roles key at all — the Codex seat lives only in the crew name. Reading
+    // the flat keys alone would leave a `claude-codex` project (Codex reviewer,
+    // Claude worker) spending Codex quota with the meter switched off.
+    it("is true when the project's BOUND crew puts codex on review", async () => {
+      writeConfig("  p:\n    path: /tmp/p\n    crew: claude-codex\n");
+      const { codexInFleet } = await import("../src/dashboard/codex-usage.js");
+      expect(codexInFleet()).toBe(true);
+    });
+
+    it("is true when the project's bound crew builds with codex", async () => {
+      writeConfig("  p:\n    path: /tmp/p\n    crew: codex-claude\n");
+      const { codexInFleet } = await import("../src/dashboard/codex-usage.js");
+      expect(codexInFleet()).toBe(true);
+    });
+
+    it("is false when the bound crew is all-claude", async () => {
+      writeConfig("  p:\n    path: /tmp/p\n    crew: all-claude\n");
+      const { codexInFleet } = await import("../src/dashboard/codex-usage.js");
+      expect(codexInFleet()).toBe(false);
     });
 
     it("is true when a registered worker carries a codex crew", async () => {
