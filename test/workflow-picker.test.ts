@@ -39,16 +39,27 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   menuRunShell: vi.fn((s: string) => `run-shell "${s.replace(/[\\$"`]/g, "\\$&")}"`),
 }));
 
+// stageSpawnDraft re-opens the picker (the form feel), which would shell out to
+// tmux; the draft store is faked so the staged patch is directly assertable.
+vi.mock("../src/dashboard/menu.js", () => ({ runMenu: vi.fn() }));
+vi.mock("../src/dashboard/runner.js", () => ({ resolveGardenRunner: vi.fn(() => "garden") }));
+vi.mock("../src/dashboard/spawn-draft.js", () => ({
+  readSpawnDraft: vi.fn(() => ({})),
+  writeSpawnDraft: vi.fn(),
+  consumeSpawnDraft: vi.fn(() => ({})),
+}));
+
 import {
   buildWorkflowPickerPlan, buildComposeBaseSubmenuPlan,
   buildComposeCrewSubmenuPlan, buildComposeModelSubmenuPlan,
   buildComposeEffortSubmenuPlan, buildComposeMemberSubmenuPlan, draftLaunchOpts,
   composerModels, composerEfforts, effectiveBuildMember, claudeOnlyLaunchOpts,
-  plantGrowFromPicker, plantBotanistFromPicker,
+  plantGrowFromPicker, plantBotanistFromPicker, stageSpawnDraft,
 } from "../src/dashboard/trellis-picker.js";
 import { newWorker } from "../src/dashboard/workers.js";
 import { tryGetProject } from "../src/config.js";
 import { tmuxDisplay } from "../src/dashboard/tmux.js";
+import { readSpawnDraft, writeSpawnDraft } from "../src/dashboard/spawn-draft.js";
 import fs from "node:fs";
 
 const RUNNER = "/usr/local/bin/garden";
@@ -282,6 +293,84 @@ describe("draftLaunchOpts", () => {
     expect(draftLaunchOpts({ model: "gpt-5.6-sol", effort: "ultra" }, "codex"))
       .toEqual({ model: "gpt-5.6-sol", effort: "ultra" });
     expect(draftLaunchOpts({ effort: "max" }, "codex")).toEqual({ effort: "max" });
+  });
+});
+
+// ─── stageSpawnDraft ──────────────────────────────────────────────────────
+
+describe("stageSpawnDraft", () => {
+  beforeEach(() => {
+    vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/proj" } as ReturnType<typeof tryGetProject>);
+    vi.mocked(readSpawnDraft).mockReturnValue({});
+  });
+
+  it("rejects an unknown field without writing", () => {
+    stageSpawnDraft("proj", "bogus", "x");
+    expect(vi.mocked(writeSpawnDraft)).not.toHaveBeenCalled();
+    expect(vi.mocked(tmuxDisplay)).toHaveBeenCalledWith("Unknown draft field 'bogus'.");
+  });
+
+  it("stages base/model/effort verbatim, touching nothing else", () => {
+    stageSpawnDraft("proj", "model", "sonnet");
+    expect(vi.mocked(writeSpawnDraft)).toHaveBeenCalledWith("proj", { model: "sonnet" });
+  });
+
+  // The load-bearing guard: `sonnet` and the ultracode `ultra` name nothing
+  // Codex can run, so carrying them across a harness change would stage a
+  // recipe that cannot launch. Clearing drops both to the account default.
+  it("clears a staged model/effort when the build member changes harness", () => {
+    vi.mocked(readSpawnDraft).mockReturnValue({ model: "sonnet", effort: "ultra" });
+    stageSpawnDraft("proj", "member", "codex");
+    expect(vi.mocked(writeSpawnDraft)).toHaveBeenCalledWith(
+      "proj", { member: "codex", model: "", effort: "" },
+    );
+  });
+
+  it("clears them on the way back to claude too", () => {
+    vi.mocked(readSpawnDraft).mockReturnValue({ member: "codex", model: "gpt-5.6-sol" });
+    stageSpawnDraft("proj", "member", "claude");
+    expect(vi.mocked(writeSpawnDraft)).toHaveBeenCalledWith(
+      "proj", { member: "claude", model: "", effort: "" },
+    );
+  });
+
+  // Clearing the member falls back to the project default. Same harness in and
+  // out means the staged vocabulary is still valid, so it must survive.
+  it("keeps model/effort when the member changes but the harness does not", () => {
+    vi.mocked(readSpawnDraft).mockReturnValue({ member: "claude", model: "sonnet", effort: "xhigh" });
+    stageSpawnDraft("proj", "member", "");
+    expect(vi.mocked(writeSpawnDraft)).toHaveBeenCalledWith("proj", { member: "" });
+  });
+
+  // A crew supplies the build member when none is staged, so switching crews
+  // can move the harness just as staging a member can.
+  it("clears model/effort when a staged crew moves the build harness", () => {
+    vi.mocked(readSpawnDraft).mockReturnValue({ model: "sonnet" });
+    stageSpawnDraft("proj", "crew", "codex-claude");
+    expect(vi.mocked(writeSpawnDraft)).toHaveBeenCalledWith(
+      "proj", { crew: "codex-claude", model: "", effort: "" },
+    );
+  });
+
+  it("keeps them for a crew whose worker half builds with the same harness", () => {
+    vi.mocked(readSpawnDraft).mockReturnValue({ model: "sonnet" });
+    stageSpawnDraft("proj", "crew", "claude-codex");
+    expect(vi.mocked(writeSpawnDraft)).toHaveBeenCalledWith("proj", { crew: "claude-codex" });
+  });
+
+  // An explicitly staged member outranks the crew's worker half, so a crew
+  // change under a pinned member cannot move the harness.
+  it("keeps them when a staged member already outranks the incoming crew", () => {
+    vi.mocked(readSpawnDraft).mockReturnValue({ member: "codex", model: "gpt-5.6-sol" });
+    stageSpawnDraft("proj", "crew", "claude-codex");
+    expect(vi.mocked(writeSpawnDraft)).toHaveBeenCalledWith("proj", { crew: "claude-codex" });
+  });
+
+  it("stages without clearing when the project is unknown (no harness to compare)", () => {
+    vi.mocked(tryGetProject).mockReturnValue(undefined);
+    vi.mocked(readSpawnDraft).mockReturnValue({ model: "sonnet" });
+    stageSpawnDraft("proj", "member", "codex");
+    expect(vi.mocked(writeSpawnDraft)).toHaveBeenCalledWith("proj", { member: "codex" });
   });
 });
 
