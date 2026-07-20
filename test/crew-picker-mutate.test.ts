@@ -45,7 +45,8 @@ beforeEach(() => {
   displayed.lines = [];
 });
 
-const { setCrewDimFromPicker, saveCrewFromPicker, deleteCrewFromPicker, cancelCrewComposer } =
+const { setCrewDimFromPicker, saveCrewFromPicker, deleteCrewFromPicker, cancelCrewComposer,
+  runStoredCrewPicker } =
   await import("../src/dashboard/crew-picker.js");
 const { readCrewDraft, writeCrewDraft, seedCrewDraft } = await import("../src/dashboard/crew-draft.js");
 const { getCrew, saveCrew, applyCrew } = await import("../src/dashboard/crew.js");
@@ -108,6 +109,32 @@ describe("composing and saving a crew from the menu", () => {
     expect(() => saveCrewFromPicker("garden", "bad")).not.toThrow();
     expect(store.value.crews).toBeUndefined();
     expect(displayed.lines.join()).toMatch(/cannot review/);
+  });
+});
+
+describe("the edit/delete chooser with nothing stored", () => {
+  // The picker offers edit/delete unconditionally, so this is the path an
+  // operator with no crews yet actually lands on. It must explain the empty
+  // state and point at the fix — a silent no-op here is exactly the
+  // "feature looks broken" failure the unconditional rows were meant to end.
+  it("explains the empty state instead of opening an empty menu", () => {
+    for (const action of ["edit", "delete"]) {
+      displayed.lines = [];
+      runStoredCrewPicker("garden", action);
+      expect(displayed.lines.join()).toMatch(/No crews defined yet — use 'new crew…' first\./);
+    }
+  });
+
+  it("rejects an unknown action rather than silently doing nothing", () => {
+    runStoredCrewPicker("garden", "frobnicate");
+    expect(displayed.lines.join()).toMatch(/Unknown crew action 'frobnicate'/);
+  });
+
+  it("opens the chooser once a crew exists", () => {
+    saveCrew("heavy", { worker: { member: "claude" }, review: { member: "claude" } });
+    displayed.lines = [];
+    runStoredCrewPicker("garden", "edit");
+    expect(displayed.lines).toEqual([]);
   });
 });
 

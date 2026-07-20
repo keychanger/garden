@@ -335,14 +335,17 @@ describe("buildCrewPickerPlan", () => {
     expect(plan.items.some((i) => i.command.includes("deepseek-claude"))).toBe(true);
   });
 
-  it("offers 'new crew' always, but edit/delete only once a stored crew exists", () => {
+  it("offers new/edit/delete even with no stored crew, so an empty state cannot read as a missing feature", () => {
+    // Regression: these were gated on a stored crew existing. With none, the
+    // menu showed a lone "new crew…" and looked half-shipped — indistinguishable
+    // from the feature not being there. The empty case is answered by a message
+    // in runStoredCrewPicker, not by hiding the affordance.
     const runner = "/n /cli.js";
     const builtinOnly = buildCrewPickerPlan("garden", null, listCrews(cfg()), runner);
     const labels = (p: typeof builtinOnly) => p.items.map((i) => i.label);
     expect(labels(builtinOnly)).toContain("new crew…");
-    // Builtins are generated — there is nothing to edit and nothing to delete.
-    expect(labels(builtinOnly)).not.toContain("edit crew…");
-    expect(labels(builtinOnly)).not.toContain("delete crew…");
+    expect(labels(builtinOnly)).toContain("edit crew…");
+    expect(labels(builtinOnly)).toContain("delete crew…");
 
     const withStored = buildCrewPickerPlan("garden", null, [
       { name: "heavy", worker: { name: "claude", harness: "claude-code", model: "opus" }, review: { name: "claude", harness: "claude-code" }, builtin: false },

@@ -59,27 +59,32 @@ export function buildCrewPickerPlan(
     };
   });
   // Management rows below the pick list: selecting a crew BINDS it (the common
-  // act), while these three define what there is to bind. Edit/delete are
-  // offered only when a stored crew exists — builtins are neither.
-  const hasStored = crews.some((c) => !c.builtin);
+  // act), while these three define what there is to bind.
+  //
+  // All three are shown UNCONDITIONALLY, including when no stored crew exists
+  // yet. Gating edit/delete on `crews.some(c => !c.builtin)` reads as a
+  // half-shipped feature — the operator opens the menu to manage crews, sees a
+  // lone "new crew…", and cannot tell an empty state from a missing one. tmux
+  // display-menu has no disabled-row rendering to lean on (see the "-"-prefix
+  // note in menu.ts), so the choice is show-with-a-message or hide entirely;
+  // the message is far cheaper than the confusion. runStoredCrewPicker answers
+  // an empty list with "No crews defined yet — use 'new crew…' first."
   items.push({ label: "", key: "", command: "", sep: true });
   items.push({
     label: "new crew…",
     key: "n",
     command: menuRunShell(`${runner} dashboard _crew-compose ${shellEscape(projectName)} new`),
   });
-  if (hasStored) {
-    items.push({
-      label: "edit crew…",
-      key: "e",
-      command: menuRunShell(`${runner} dashboard _crew-pick-stored ${shellEscape(projectName)} edit`),
-    });
-    items.push({
-      label: "delete crew…",
-      key: "d",
-      command: menuRunShell(`${runner} dashboard _crew-pick-stored ${shellEscape(projectName)} delete`),
-    });
-  }
+  items.push({
+    label: "edit crew…",
+    key: "e",
+    command: menuRunShell(`${runner} dashboard _crew-pick-stored ${shellEscape(projectName)} edit`),
+  });
+  items.push({
+    label: "delete crew…",
+    key: "d",
+    command: menuRunShell(`${runner} dashboard _crew-pick-stored ${shellEscape(projectName)} delete`),
+  });
   return { title: `Crew: ${projectName}${current ? ` (${current})` : ""}`, items };
 }
 
