@@ -433,14 +433,37 @@ describe("crew composer plans", () => {
     expect(required.items.some((i) => i.sep)).toBe(false);
   });
 
-  it("the stored-crew chooser lists only stored crews and targets the action", () => {
-    const crews = [
-      { name: "heavy", worker: { name: "claude", harness: "claude-code" }, review: { name: "claude", harness: "claude-code" }, builtin: false },
-      ...listCrews(cfg()),
-    ];
-    const plan = buildStoredCrewPickerPlan("garden", "delete", crews, runner);
+  const STORED = { name: "heavy", worker: { name: "claude", harness: "claude-code" }, review: { name: "claude", harness: "claude-code" }, builtin: false };
+
+  it("delete lists only stored crews — a builtin is generated, so there is nothing to remove", () => {
+    const plan = buildStoredCrewPickerPlan("garden", "delete", [STORED, ...listCrews(cfg())], runner);
     expect(plan.items).toHaveLength(1);
     expect(plan.items[0].command).toContain("_crew-delete");
     expect(plan.items[0].command).toContain("heavy");
+  });
+
+  it("edit lists builtins too, tagged as override-on-save", () => {
+    // A builtin has no storage to edit in place; saving materializes a stored
+    // crew of the same name that shadows it. `all-codex` is the natural start
+    // for "codex, but pinned to opus", so it belongs in the list.
+    const crews = [STORED, ...listCrews(cfg())];
+    const plan = buildStoredCrewPickerPlan("garden", "edit", crews, runner, listCrews(cfg()).map((c) => c.name));
+    expect(plan.items).toHaveLength(crews.length);
+    const codex = plan.items.find((i) => i.label.startsWith("all-codex"))!;
+    expect(codex.label).toContain("builtin — edit to override");
+    expect(codex.command).toContain("_crew-edit");
+    // A stored crew with a name of its own carries no tag.
+    expect(plan.items.find((i) => i.label.startsWith("heavy"))!.label).not.toContain("builtin");
+  });
+
+  it("tags a stored crew that shadows a builtin as reverting on delete", () => {
+    // listCrews drops the builtin a stored name shadows, so the relationship is
+    // only recoverable from the generated name list — hence the extra argument.
+    const shadowing = { ...STORED, name: "all-codex" };
+    const plan = buildStoredCrewPickerPlan("garden", "delete", [shadowing], runner, ["all-codex", "all-claude"]);
+    expect(plan.items[0].label).toContain("reverts to builtin");
+
+    const ownName = buildStoredCrewPickerPlan("garden", "delete", [STORED], runner, ["all-codex"]);
+    expect(ownName.items[0].label).not.toContain("reverts to builtin");
   });
 });

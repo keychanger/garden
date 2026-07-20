@@ -154,26 +154,33 @@ function handleWrite(args: string[], mode: "add" | "edit"): void {
   if (mode === "add" && existing) {
     throw new Error(`Crew '${name}' already exists. Use 'garden crew edit ${name}' to change it.`);
   }
-  if (mode === "edit" && !existing) {
-    if (isBuiltinCrew(name, config)) {
-      throw new Error(`'${name}' is a builtin crew. Copy it first: garden crew add <new-name> --from ${name}`);
-    }
+  // Editing a BUILTIN is allowed and materializes a stored crew of the same
+  // name that shadows it — the same gesture the ⌥⇧C picker offers, so the two
+  // surfaces agree. `--from` remains the way to clone under a DIFFERENT name.
+  // `garden crew remove <name>` later drops the override and restores the
+  // generated pairing.
+  if (mode === "edit" && !existing && !isBuiltinCrew(name, config)) {
     throw new Error(`No stored crew '${name}'. Create it with: garden crew add ${name} …`);
   }
 
   // --from seeds every dimension from another crew (builtin or stored) so
   // "clone and tweak" is a single call — the common agentic gesture.
+  const seedFrom = (src: CrewSpec): StoredCrew => ({
+    worker: {
+      member: src.worker.name,
+      ...(src.worker.model ? { model: src.worker.model } : {}),
+      ...(src.worker.effort ? { effort: src.worker.effort } : {}),
+    },
+    review: { member: src.review.name, ...(src.review.model ? { model: src.review.model } : {}) },
+  });
+
   let base: StoredCrew;
   if (flags.from) {
-    const src = requireCrew(flags.from, config);
-    base = {
-      worker: {
-        member: src.worker.name,
-        ...(src.worker.model ? { model: src.worker.model } : {}),
-        ...(src.worker.effort ? { effort: src.worker.effort } : {}),
-      },
-      review: { member: src.review.name, ...(src.review.model ? { model: src.review.model } : {}) },
-    };
+    base = seedFrom(requireCrew(flags.from, config));
+  } else if (mode === "edit" && !existing) {
+    // Editing a builtin: seed from the generated pairing so the flags express a
+    // DELTA against it, rather than forcing the operator to restate both halves.
+    base = seedFrom(requireCrew(name, config));
   } else if (existing) {
     base = { worker: { ...existing.worker }, review: { ...existing.review } };
   } else {

@@ -12,7 +12,7 @@ import { refreshDashboard } from "./header.js";
 import { log } from "./log.js";
 import {
   listCrews, deriveCrew, getCrew, applyCrew, formatRecipe,
-  listMembers, reviewerMembers, saveCrew, deleteCrew, type CrewSpec,
+  listMembers, reviewerMembers, saveCrew, deleteCrew, builtinCrews, type CrewSpec,
 } from "./crew.js";
 import { readCrewDraft, writeCrewDraft, clearCrewDraft, seedCrewDraft, type CrewDraft } from "./crew-draft.js";
 
@@ -188,18 +188,40 @@ export function buildStoredCrewPickerPlan(
   action: "edit" | "delete",
   crews: CrewSpec[],
   runner: string,
+  // Every name the generated set produces. Needed because `crews` (from
+  // listCrews) has already dropped any builtin a stored crew shadows, so the
+  // shadowing relationship is not recoverable from that list alone.
+  builtinNames: readonly string[] = [],
 ): CrewPickerPlan {
-  const stored = crews.filter((c) => !c.builtin);
-  const width = Math.max(...stored.map((c) => c.name.length), 0);
-  const items: CrewMenuItem[] = stored.map((crew, i) => ({
-    label: `${crew.name.padEnd(width)}  ${formatRecipe(crew)}`,
-    key: i < 9 ? String(i + 1) : "",
-    command: menuRunShell(
-      `${runner} dashboard _crew-${action} ${shellEscape(projectName)} ${shellEscape(crew.name)}`,
-    ),
-  }));
+  // EDIT lists every crew, builtins included. A builtin has no storage to edit
+  // in place, but a stored crew SHADOWS a builtin of the same name — so editing
+  // one materializes it as an override you then tune, and deleting that
+  // override reverts to the generated pairing. That round trip is why builtins
+  // belong here: `all-codex` is the natural starting point for "codex, but
+  // pinned to opus", and requiring `crew add … --from` first was busywork.
+  //
+  // DELETE lists stored crews only: a pure builtin is generated, so there is
+  // nothing to remove and selecting it could only produce an error.
+  const listed = action === "edit" ? crews : crews.filter((c) => !c.builtin);
+  const width = Math.max(...listed.map((c) => c.name.length), 0);
+  const recipeWidth = Math.max(...listed.map((c) => formatRecipe(c).length), 0);
+  const items: CrewMenuItem[] = listed.map((crew, i) => {
+    // Tag what selecting the row will DO, since the two cases differ in kind:
+    // editing a builtin creates an override; deleting an override restores one.
+    const tag = crew.builtin
+      ? "  builtin — edit to override"
+      : (builtinNames.includes(crew.name) ? "  reverts to builtin" : "");
+    return {
+      label: `${crew.name.padEnd(width)}  ${formatRecipe(crew).padEnd(tag ? recipeWidth : 0)}${tag}`,
+      key: i < 9 ? String(i + 1) : "",
+      command: menuRunShell(
+        `${runner} dashboard _crew-${action} ${shellEscape(projectName)} ${shellEscape(crew.name)}`,
+      ),
+    };
+  });
   return { title: action === "edit" ? "Edit which crew?" : "Delete which crew?", items };
 }
+
 
 // Spawned by the ⌥⇧C hotkey. Resolves the focused project, builds the plan,
 // and drives tmux display-menu.
@@ -270,20 +292,29 @@ export function runStoredCrewPicker(projectName: string, action: string): void {
     tmuxDisplay(`Unknown crew action '${action}'.`);
     return;
   }
-  const crews = listCrews(loadConfig());
-  if (!crews.some((c) => !c.builtin)) {
+  const config = loadConfig();
+  const crews = listCrews(config);
+  // Only DELETE can come up empty — edit always has the builtins to offer.
+  if (action === "delete" && !crews.some((c) => !c.builtin)) {
     tmuxDisplay("No crews defined yet — use 'new crew…' first.");
     return;
   }
-  runnerAndMenu(buildStoredCrewPickerPlan(projectName, action, crews, resolveGardenRunner()));
+  runnerAndMenu(buildStoredCrewPickerPlan(
+    projectName, action, crews, resolveGardenRunner(), builtinCrews(config).map((c) => c.name),
+  ));
 }
 
 // _crew-edit <project> <name>: seed the draft from an existing crew and open
 // the composer on it.
+// _crew-edit <project> <name>: seed the draft from an existing crew and open
+// the composer on it. A BUILTIN is editable here: it has no storage of its own,
+// so saving materializes a stored crew of the same name that shadows it
+// (listCrews resolves stored-over-builtin). Deleting that override later
+// restores the generated pairing, so the round trip is lossless.
 export function runCrewEdit(projectName: string, crewName: string): void {
   const spec = getCrew(crewName, loadConfig());
-  if (!spec || spec.builtin) {
-    tmuxDisplay(`'${crewName}' is not an editable crew.`);
+  if (!spec) {
+    tmuxDisplay(`Unknown crew '${crewName}'.`);
     return;
   }
   seedCrewDraft(crewName, {
@@ -390,6 +421,11 @@ export function saveCrewFromPicker(projectName: string, crewName: string): void 
 // _crew-delete <project> <name>: remove a stored crew, reporting any projects
 // left holding an (inert) dangling reference.
 export function deleteCrewFromPicker(projectName: string, crewName: string): void {
+  // Whether this name also exists in the generated set decides what deleting
+  // MEANS: removing an override (the builtin comes back, and any bound project
+  // keeps resolving) versus removing the name outright (bound projects fall
+  // back to their own keys). Checked before the delete, while both still exist.
+  const revertsToBuiltin = builtinCrews(loadConfig()).some((c) => c.name === crewName);
   let bound: string[];
   try {
     bound = deleteCrew(crewName);
@@ -397,10 +433,12 @@ export function deleteCrewFromPicker(projectName: string, crewName: string): voi
     tmuxDisplay(String(err instanceof Error ? err.message : err));
     return;
   }
-  log.info("crew-picker", "deleted crew", { data: { crew: crewName, bound } });
+  log.info("crew-picker", "deleted crew", { data: { crew: crewName, bound, revertsToBuiltin } });
   tmuxDisplay(
-    `Crew deleted: ${crewName}`
-    + (bound.length > 0 ? ` — ${bound.join(", ")} now resolve from their own keys` : ""),
+    revertsToBuiltin
+      ? `Override removed: ${crewName} is the builtin again`
+      : `Crew deleted: ${crewName}`
+        + (bound.length > 0 ? ` — ${bound.join(", ")} now resolve from their own keys` : ""),
   );
   try { refreshDashboard(); } catch { /* best effort */ }
   runCrewPicker(projectName);

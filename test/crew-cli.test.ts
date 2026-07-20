@@ -76,10 +76,18 @@ describe("garden crew add/edit", () => {
     await expect(crew(["edit", "ghost", "--model", "opus"])).rejects.toThrow(/No stored crew 'ghost'/);
   });
 
-  it("points at --from when asked to edit a builtin", async () => {
-    const { crew } = await setup();
-    await expect(crew(["edit", "all-codex", "--model", "opus"]))
-      .rejects.toThrow(/builtin crew\. Copy it first: garden crew add <new-name> --from all-codex/);
+  it("editing a builtin materializes an override under the same name", async () => {
+    // Matches the ⌥⇧C picker, which lists builtins in its edit chooser. The
+    // flags express a DELTA against the generated pairing rather than
+    // restating it, and `crew remove` later restores the builtin.
+    const { crew, loadConfig } = await setup();
+    await crew(["edit", "all-codex", "--model", "opus"]);
+    expect(loadConfig().crews?.["all-codex"]).toEqual({
+      worker: { member: "codex", model: "opus" },
+      review: { member: "codex" },
+    });
+    const { getCrew } = await import("../src/dashboard/crew.js");
+    expect(getCrew("all-codex", loadConfig())!.builtin).toBe(false);
   });
 
   it("requires both halves when not cloning", async () => {

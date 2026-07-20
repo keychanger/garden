@@ -43,12 +43,14 @@ beforeEach(() => {
   sessionsDir.value = tmpDir;
   store.value = { projects: { garden: { path: "/p" } } } as GardenConfig;
   displayed.lines = [];
+  vi.mocked(runMenu).mockClear();
 });
 
 const { setCrewDimFromPicker, saveCrewFromPicker, deleteCrewFromPicker, cancelCrewComposer,
-  runStoredCrewPicker } =
+  runStoredCrewPicker, runCrewEdit } =
   await import("../src/dashboard/crew-picker.js");
 const { readCrewDraft, writeCrewDraft, seedCrewDraft } = await import("../src/dashboard/crew-draft.js");
+const { runMenu } = await import("../src/dashboard/menu.js");
 const { getCrew, saveCrew, applyCrew } = await import("../src/dashboard/crew.js");
 
 describe("composing and saving a crew from the menu", () => {
@@ -113,16 +115,24 @@ describe("composing and saving a crew from the menu", () => {
 });
 
 describe("the edit/delete chooser with nothing stored", () => {
-  // The picker offers edit/delete unconditionally, so this is the path an
-  // operator with no crews yet actually lands on. It must explain the empty
-  // state and point at the fix — a silent no-op here is exactly the
-  // "feature looks broken" failure the unconditional rows were meant to end.
-  it("explains the empty state instead of opening an empty menu", () => {
-    for (const action of ["edit", "delete"]) {
-      displayed.lines = [];
-      runStoredCrewPicker("garden", action);
-      expect(displayed.lines.join()).toMatch(/No crews defined yet — use 'new crew…' first\./);
-    }
+  // DELETE is the only action that can come up empty: a builtin is generated,
+  // so there is nothing to remove. It must explain that and point at the fix —
+  // a silent no-op is the "feature looks broken" failure the unconditional
+  // picker rows were meant to end.
+  it("delete explains the empty state instead of opening an empty menu", () => {
+    runStoredCrewPicker("garden", "delete");
+    expect(displayed.lines.join()).toMatch(/No crews defined yet — use 'new crew…' first\./);
+  });
+
+  // EDIT always has the builtins to offer, so it must never hit that message.
+  it("edit opens straight away, since the builtins are always editable", () => {
+    runStoredCrewPicker("garden", "edit");
+    expect(displayed.lines).toEqual([]);
+    // Asserted positively: "no message" alone would also hold if the chooser
+    // silently failed to open, which is the very failure being guarded against.
+    expect(vi.mocked(runMenu)).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Edit which crew?" }),
+    );
   });
 
   it("rejects an unknown action rather than silently doing nothing", () => {
@@ -130,11 +140,54 @@ describe("the edit/delete chooser with nothing stored", () => {
     expect(displayed.lines.join()).toMatch(/Unknown crew action 'frobnicate'/);
   });
 
-  it("opens the chooser once a crew exists", () => {
+  it("delete opens the chooser once a stored crew exists", () => {
     saveCrew("heavy", { worker: { member: "claude" }, review: { member: "claude" } });
     displayed.lines = [];
-    runStoredCrewPicker("garden", "edit");
+    runStoredCrewPicker("garden", "delete");
     expect(displayed.lines).toEqual([]);
+    expect(vi.mocked(runMenu)).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Delete which crew?" }),
+    );
+  });
+});
+
+describe("editing a builtin materializes an override", () => {
+  // The round trip that makes builtins editable at all: edit seeds from the
+  // generated pairing, save stores it under the same name (shadowing), delete
+  // drops the override and the builtin comes back. Lossless in both directions.
+  it("seeds the draft from the builtin and stamps it as the edit target", () => {
+    runCrewEdit("garden", "all-codex");
+    expect(readCrewDraft()).toEqual({ editing: "all-codex", worker: "codex", review: "codex" });
+  });
+
+  it("saving writes a stored crew that shadows the builtin", () => {
+    runCrewEdit("garden", "all-codex");
+    setCrewDimFromPicker("garden", "model", "opus");
+    saveCrewFromPicker("garden", "all-codex");
+    expect(store.value.crews?.["all-codex"]).toEqual({
+      worker: { member: "codex", model: "opus" }, review: { member: "codex" },
+    });
+    const spec = getCrew("all-codex", store.value)!;
+    expect(spec.builtin).toBe(false);
+    expect(spec.worker.model).toBe("opus");
+  });
+
+  it("deleting the override restores the builtin and says so", () => {
+    saveCrew("all-codex", { worker: { member: "codex", model: "opus" }, review: { member: "codex" } });
+    displayed.lines = [];
+    deleteCrewFromPicker("garden", "all-codex");
+    expect(store.value.crews).toBeUndefined();
+    const spec = getCrew("all-codex", store.value)!;
+    expect(spec.builtin).toBe(true);
+    expect(spec.worker.model).toBeUndefined();
+    // The message must distinguish this from deleting a name outright.
+    expect(displayed.lines.join()).toMatch(/Override removed: all-codex is the builtin again/);
+  });
+
+  it("rejects an unknown name rather than seeding an empty draft", () => {
+    runCrewEdit("garden", "no-such-crew");
+    expect(displayed.lines.join()).toMatch(/Unknown crew 'no-such-crew'/);
+    expect(readCrewDraft()).toEqual({});
   });
 });
 
