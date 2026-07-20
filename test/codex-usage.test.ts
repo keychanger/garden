@@ -327,17 +327,20 @@ describe("codex usage meter", () => {
       const { renderUsagePane } = await import("../src/dashboard/usage.js");
       const out = renderUsagePane(now, 112);
       const lines = out.split("\n");
-      // Underlined runs (bold name + dim rule) measured against the widths of
-      // the meter rows they head: the rule spans the column, not just the word.
+      // Each header is two underlined runs: the bold name then the dim rule.
       const runs = [...lines[1].matchAll(/\x1b\[[12];4m([^\x1b]*)\x1b\[0m/g)].map((m) => m[1]);
       const claudeRule = runs[0].length + runs[1].length; // "claude" + trailing rule
       const codexRule = runs[2].length + runs[3].length;  // "codex" + trailing rule
-      const meterRows = lines.slice(2).map(strip).filter((l) => l.trim());
-      const claudeWidth = Math.max(...meterRows.map((l) => l.trimEnd().length));
       expect(claudeRule).toBeGreaterThan("claude".length);
-      // Claude column is measured without its 4-space indent.
-      expect(claudeRule).toBeLessThanOrEqual(claudeWidth);
       expect(codexRule).toBeGreaterThan("codex".length);
+      // Together with the 4-space indent and the inter-column gap the two rules
+      // account for the entire width of the meter rows beneath — i.e. each one
+      // reaches its own column's right edge instead of stopping at the word.
+      const header = strip(lines[1]);
+      const meterRows = lines.slice(2).map(strip).filter((l) => l.trim());
+      expect(header.length).toBe(Math.max(...meterRows.map((l) => l.length)));
+      const gap = header.length - 4 - claudeRule - codexRule;
+      expect(gap).toBeGreaterThanOrEqual(3); // COLUMN_GAP floor
     });
 
     it("spreads the columns into the right-hand slack instead of bunching them left", async () => {
