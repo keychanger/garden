@@ -186,7 +186,7 @@ Workers:
                                  (--max-iterations caps the passes, default 5); botanist plants a
                                  design worker whose deliverable is a doc, not code (Opus/xhigh
                                  designer seat) — --seed / --seed-file optionally inlines the design
-                                 brief, and without one the botanist greets and waits for the brief
+                                 brief, and without one no message is sent — the brief arrives
                                  as your first message in its pane. --model overrides
                                  the workflow's default worker model. --effort sets the reasoning
                                  rung (ultra = max effort + dynamic workflows; default/grow/botanist).

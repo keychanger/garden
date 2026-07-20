@@ -60,12 +60,12 @@ interface WorkerInfo {
   baseBranch?: string;
   // Identity fields, rendered grey and override-only. The worker's harness (a
   // member badge shows when it differs from the project's default member) and
-  // the workflow (drives workflowRowDecor) join the leading badge cluster; the
+  // the workflow (drives workflowRowDecor) join the badge cluster, and the
   // pinned model (default/grow use entry.model, vines use trellis.workerModel)
-  // renders as a trailing tag AFTER the detail column instead, so a long model
-  // id doesn't widen the badge column and dead-space every model-less row. All
-  // undefined for a plain default-workflow worker on the account default, in
-  // which case nothing renders — default is invisible.
+  // is the cluster's trailing tag — the whole cluster trails the detail column
+  // (see renderWorkerRow), so a badge costs width only on the row carrying it.
+  // All undefined for a plain default-workflow worker on the account default,
+  // in which case nothing renders — default is invisible.
   harness?: string;
   // Per-worker provider backend (entry.provider). Pairs with `harness` to name
   // the worker's build member — a worker on a different backend than its
