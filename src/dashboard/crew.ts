@@ -245,7 +245,9 @@ export function crewOverridden(project: ProjectConfig, config: GardenConfig): bo
   if (spec.worker.effort && project.effort !== undefined) return true;
   return (["reviewer", "resolver", "ciFix"] as const).some((r) => {
     const t = project.roles?.[r];
-    return t?.harness !== undefined || (spec.review.model !== undefined && t?.model !== undefined);
+    return t?.harness !== undefined
+      || (spec.review.model !== undefined && t?.model !== undefined)
+      || (spec.review.effort !== undefined && t?.effort !== undefined);
   });
 }
 
@@ -284,6 +286,7 @@ export function applyCrew(projectName: string, spec: CrewSpec): void {
     if (!target) continue;
     delete target.harness;
     if (spec.review.model) delete target.model;
+    if (spec.review.effort) delete target.effort;
     if (Object.keys(target).length === 0) delete roles[role];
   }
   if (Object.keys(roles).length === 0) delete project.roles;
@@ -319,14 +322,14 @@ export function validateCrewDef(def: StoredCrew, config: GardenConfig): void {
   if (!review) {
     throw new Error(`Unknown member '${def.review.member}'. Available: ${names.join(", ")}`);
   }
-  // The load-bearing asymmetry: a provider on a review role defeats the safety
-  // net that a cheap/experimental worker is checked by a strong first-party
-  // model. Enforced here so it cannot be smuggled in via a stored definition.
   if (def.review.effort && !isValidReviewEffort(def.review.effort)) {
     throw new Error(
       `Unknown review effort '${def.review.effort}'. Levels: ${REVIEW_EFFORT_LEVELS.join(", ")}.`,
     );
   }
+  // The load-bearing asymmetry: a provider on a review role defeats the safety
+  // net that a cheap/experimental worker is checked by a strong first-party
+  // model. Enforced here so it cannot be smuggled in via a stored definition.
   if (review.provider) {
     const ok = reviewerMembers(config).map((m) => m.name).join(", ");
     throw new Error(

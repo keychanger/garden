@@ -318,6 +318,38 @@ describe("crew binding by reference", () => {
     expect(crewOverridden(p, store.value)).toBe(false);
   });
 
+  it("clears a per-role effort the crew now owns, so it cannot shadow the binding", () => {
+    // The flat `roles.<r>.effort` outranks the crew in resolveReviewRole, so a
+    // survivor would pin every review at the old rung forever and make
+    // `crew edit --review-effort` appear to do nothing.
+    saveCrew("thorough", {
+      worker: { member: "claude" }, review: { member: "claude", effort: "max" },
+    });
+    store.value.projects.garden.roles = { reviewer: { effort: "low" } };
+    applyCrew("garden", getCrew("thorough", store.value)!);
+    expect(store.value.projects.garden.roles).toBeUndefined();
+    expect(crewOverridden(store.value.projects.garden, store.value)).toBe(false);
+  });
+
+  it("flags a per-role effort re-tweaked after adoption, so the override is not invisible", () => {
+    saveCrew("thorough", {
+      worker: { member: "claude" }, review: { member: "claude", effort: "max" },
+    });
+    applyCrew("garden", getCrew("thorough", store.value)!);
+    store.value.projects.garden.roles = { reviewer: { effort: "low" } };
+    expect(crewOverridden(store.value.projects.garden, store.value)).toBe(true);
+  });
+
+  it("leaves a per-role effort the crew does not pin", () => {
+    // Narrowness cuts both ways: a crew asking no effort question leaves the
+    // project's own answer standing, like the model dimension.
+    saveCrew("harness-only", { worker: { member: "claude" }, review: { member: "claude" } });
+    store.value.projects.garden.roles = { reviewer: { effort: "low" } };
+    applyCrew("garden", getCrew("harness-only", store.value)!);
+    expect(store.value.projects.garden.roles?.reviewer?.effort).toBe("low");
+    expect(crewOverridden(store.value.projects.garden, store.value)).toBe(false);
+  });
+
   it("leaves a flat key the crew does not set, and flags a later override", () => {
     saveCrew("harness-only", { worker: { member: "claude" }, review: { member: "claude" } });
     store.value.projects.garden.model = "haiku";

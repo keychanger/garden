@@ -939,6 +939,41 @@ describe("config role subcommand", () => {
     expect(loadConfig().projects.garden.roles?.reviewer?.harness).toBe("claude-code");
   });
 
+  it("persists a review effort and surfaces it in the role read-back", async () => {
+    const { config, loadConfig } = await setup();
+    await config(["garden", "role", "reviewer", "effort", "max"]);
+    expect(loadConfig().projects.garden.roles?.reviewer?.effort).toBe("max");
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((m?: unknown) => { lines.push(String(m)); });
+    try {
+      await config(["garden", "role", "reviewer"]);
+    } finally {
+      spy.mockRestore();
+    }
+    // Non-TTY, so output() takes the JSON branch; the pretty branch appends
+    // `effort=max` to the same roleLine.
+    expect(JSON.parse(lines.join("\n"))).toMatchObject({ role: "reviewer", effort: "max" });
+  });
+
+  it("reports a null effort when the dial was never touched", async () => {
+    const { config } = await setup();
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((m?: unknown) => { lines.push(String(m)); });
+    try {
+      await config(["garden", "role", "reviewer"]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(JSON.parse(lines.join("\n")).effort).toBeNull();
+  });
+
+  it("rejects a review effort from the worker ladder", async () => {
+    // "ultra" is the ultracode preset, not an effort value a headless run renders.
+    const { config } = await setup();
+    await expect(config(["garden", "role", "reviewer", "effort", "ultra"]))
+      .rejects.toThrow(/Unknown effort 'ultra'/);
+  });
+
   it("rejects an unknown role and dimension", async () => {
     const { config } = await setup();
     await expect(config(["garden", "role", "worker", "harness", "codex"]))

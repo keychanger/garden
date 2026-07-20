@@ -196,13 +196,14 @@ export function applyCrewToProject(
   const workerDesc = spec.worker.provider
     ? `${spec.worker.name} (claude-code via provider ${spec.worker.provider})`
     : spec.worker.name;
-  const dims = [
-    spec.worker.model ? `model=${spec.worker.model}` : "",
-    spec.worker.effort ? `effort=${spec.worker.effort}` : "",
-  ].filter(Boolean).join(" ");
+  const dims = (m: { model?: string; effort?: string }): string => {
+    const parts = [m.model ? `model=${m.model}` : "", m.effort ? `effort=${m.effort}` : ""];
+    const s = parts.filter(Boolean).join(" ");
+    return s ? ` ${s}` : "";
+  };
   console.log(
-    `Set crew '${name}' for ${project.name}: worker=${workerDesc}${dims ? ` ${dims}` : ""}`
-    + `, review=${spec.review.name}${spec.review.model ? ` model=${spec.review.model}` : ""}.`,
+    `Set crew '${name}' for ${project.name}: worker=${workerDesc}${dims(spec.worker)}`
+    + `, review=${spec.review.name}${dims(spec.review)}.`,
   );
 }
 
@@ -261,7 +262,10 @@ function handleRoleCommand(
 
 function roleLine(project: ProjectConfig & { name: string }, roleKey: ReviewRole): string {
   const res = resolveReviewRole(project, "default", roleKey);
-  return `harness=${res.harness} model=${res.model ?? "(harness default)"}`;
+  // Effort is appended only when resolved: unset means the account default,
+  // so a project that never touched the dial reads exactly as it did before.
+  return `harness=${res.harness} model=${res.model ?? "(harness default)"}`
+    + (res.effort ? ` effort=${res.effort}` : "");
 }
 
 function showRoleMatrix(project: ProjectConfig & { name: string }): void {
@@ -276,7 +280,7 @@ function showRoleMatrix(project: ProjectConfig & { name: string }): void {
 function showRoleResolution(project: ProjectConfig & { name: string }, roleArg: string, roleKey: ReviewRole): void {
   const res = resolveReviewRole(project, "default", roleKey);
   output(
-    { role: roleArg, harness: res.harness, model: res.model ?? null },
+    { role: roleArg, harness: res.harness, model: res.model ?? null, effort: res.effort ?? null },
     () => `  ${roleArg}: ${roleLine(project, roleKey)}`,
   );
 }
