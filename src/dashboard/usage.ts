@@ -1214,7 +1214,9 @@ export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number):
   // read as cramped. The pane auto-sizes to its content, so the extra row costs
   // nothing but the space it is there to provide.
   const header = `${padVisible(`${INDENT}${dim("claude")}`, leftWidth)}${gap}${dim("codex")}`;
-  const rows: string[] = ["", header];
+  // Blank line under the header so the provider labels read as headings for the
+  // meters below rather than as a first meter row crowded against them.
+  const rows: string[] = ["", header, ""];
   const n = Math.max(claudeLines.length, codexLines.length);
   for (let i = 0; i < n; i++) {
     const left = claudeLines[i] ?? "";

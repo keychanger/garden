@@ -310,6 +310,15 @@ describe("codex usage meter", () => {
       expect(strip(lines[1])).toContain("codex");
     });
 
+    it("separates the column headers from the meters with a blank line", async () => {
+      const now = Date.now();
+      seedBoth(now);
+      const { renderUsagePane } = await import("../src/dashboard/usage.js");
+      const lines = renderUsagePane(now, 112).split("\n");
+      expect(strip(lines[2]).trim()).toBe("");
+      expect(strip(lines[3])).toContain("5h");
+    });
+
     it("spreads the columns into the right-hand slack instead of bunching them left", async () => {
       const now = Date.now();
       seedBoth(now);
