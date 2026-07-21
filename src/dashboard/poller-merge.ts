@@ -6,10 +6,14 @@
 // lives here. When a rebase conflict appears, control transfers to the
 // resolver lifecycle in poller-resolve.ts.
 import { execSync, execFileSync, spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import {
   tryGetProject, getAutoContinueConfig, setAutoContinueConfig,
   anyAnthropicMeteredProject, projectUsageGateExempt, tryResolveProvider,
+  SESSIONS_DIR,
 } from "../config.js";
+import { atomicWriteFile } from "./atomic-write.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { addAlert } from "./alerts.js";
 import { dispatchDelayedAutoContinue, isAwaitingInput, isDoneSet, setDoneSentinel } from "./continue.js";
@@ -47,9 +51,15 @@ const AUTO_CONTINUE_DEBOUNCE_MS = 10_000;
 // Last fast-forward outcome per `${project}:${base}`, so the post-merge alert
 // fires only when the local base checkout *enters* an un-advanceable state (or
 // switches failure modes), not on every subsequent merge while it stays broken.
-// In-memory, per poller process: a poller restart re-alerts once, which is
-// acceptable. Keyed by project:base (not worker) because a stuck checkout
-// affects every worker's merge — the operator wants one alert, not one each.
+// Keyed by project:base (not worker) because a stuck checkout affects every
+// worker's merge — the operator wants one alert, not one each.
+//
+// CAVEAT: the poller execs a fresh process per poll, so this Map is empty at
+// the top of every poll and the enters-a-bad-state edge detection does not
+// actually fire — every merge re-alerts. What bounds it in practice is
+// addAlert's own 1-hour identical-key dedup, so a stuck checkout surfaces
+// hourly rather than once. Log-only, so it is left as-is; the durable fix is
+// the same one WorkerEntry.ciNoRuns got (see the CI grace stamp above).
 const lastFfState = new Map<string, string>();
 
 // Test seam: clear the entry-tracking map so each test starts from a clean
@@ -57,8 +67,15 @@ const lastFfState = new Map<string, string>();
 export function __resetFfStateForTest(): void {
   lastFfState.clear();
   projectHasCi.clear();
-  ciNoRunsSince.clear();
-  ciRecheckArmedUntil.clear();
+}
+
+// Test seam: drop ONLY the in-memory maps, simulating the process boundary the
+// poller crosses between every poll. State that must survive a poll (the CI
+// grace stamp, the recheck arming) lives on disk and is deliberately untouched
+// here — a test that resets this between polls is asserting the production
+// process model, not a fresh fixture.
+export function __simulatePollerRestartForTest(): void {
+  projectHasCi.clear();
 }
 // Stranded threshold for the merged-state sweep. Must outlast the +6s/+16s
 // delivery legs of a merge-time dispatch so the sweep never races an
@@ -77,24 +94,43 @@ const CI_PENDING_RECHECK_MS = 60_000;
 // otherwise the exact commit CI most needs to vet merges un-gated). A poller
 // restart re-learns it on the first check-run.
 const projectHasCi = new Map<string, boolean>();
-// Epoch ms when the gate first saw zero check-runs on a CI-having project,
-// keyed by `${project}:${sha}`, so the grace-window defer is bounded.
-const ciNoRunsSince = new Map<string, number>();
 // Check-runs materialize within ~30s of a push; 3 min is a safe ceiling past
 // which we conclude a CI project's SHA genuinely has none and stop deferring.
+// The grace stamp itself lives on WorkerEntry.ciNoRuns — see the note there for
+// why it cannot be a module Map.
 const CI_NO_RUNS_GRACE_MS = 3 * 60_000;
-// Per-project epoch ms until which a 60s recheck poke is already armed, so a
-// burst of external pokes during a pending / grace stall doesn't stack a fresh
-// self-perpetuating sleeper on each one (they would otherwise accumulate).
-const ciRecheckArmedUntil = new Map<string, number>();
+
+// Marker file recording that a 60s recheck poke is already in flight for a
+// project. Its MTIME is the arming time — a poke is outstanding while the
+// marker is younger than CI_PENDING_RECHECK_MS, so no content or schema is
+// needed. Like the grace stamp this must outlive the poll process: as a module
+// Map the dedup never fired, and every external poke arriving during a pending
+// or grace stall spawned another self-perpetuating sleeper. That amplification
+// is what left 43 orphaned sleep processes poking wolf's poller on 2026-07-21.
+function ciRecheckMarkerPath(projectName: string): string {
+  return path.join(SESSIONS_DIR, `ci-recheck-${projectName}`);
+}
 
 // Arm the single 60s CI recheck poke for a project, deduped: if one is already
-// scheduled (armed time still in the future) do nothing, so repeated gate
-// defers across a stall don't stack sleepers.
+// scheduled do nothing, so repeated gate defers across a stall don't stack
+// sleepers. Fails open (arms the poke) when the marker can't be read or
+// written — a duplicate poke is recoverable, a dropped one strands the merge.
 function armCiRecheck(projectName: string): void {
-  const now = Date.now();
-  if ((ciRecheckArmedUntil.get(projectName) ?? 0) > now) return;
-  ciRecheckArmedUntil.set(projectName, now + CI_PENDING_RECHECK_MS);
+  const marker = ciRecheckMarkerPath(projectName);
+  try {
+    if (Date.now() - fs.statSync(marker).mtimeMs < CI_PENDING_RECHECK_MS) return;
+  } catch {
+    // No marker yet (or unreadable) — nothing is armed, fall through and arm.
+  }
+  try {
+    // Throwaway heartbeat — a crash that loses it costs one duplicate poke,
+    // so skip the fsync (see AtomicWriteOpts.durable).
+    atomicWriteFile(marker, "", { durable: false });
+  } catch (err) {
+    log.warn("poller", "ci gate: could not write recheck marker, poke may duplicate", {
+      data: { project: projectName, error: String(err) },
+    });
+  }
   scheduleDelayedPoke(projectName, CI_PENDING_RECHECK_MS);
 }
 // Failure budget before the worker is parked in `failing` instead of
@@ -315,7 +351,9 @@ function gateCiStatus(
   // clear a stale no-runs grace stamp for this SHA now that runs exist.
   if (status.kind === "success" || status.kind === "failed" || status.kind === "pending") {
     projectHasCi.set(projectName, true);
-    ciNoRunsSince.delete(`${projectName}:${sha}`);
+    if (entry.ciNoRuns) {
+      updateWorkerFields(projectName, entry.name, { ciNoRuns: undefined });
+    }
   }
 
   switch (status.kind) {
@@ -339,22 +377,28 @@ function gateCiStatus(
       // that this same race hides (see projectDefinesCi). The flag remains as an
       // OR for CI that has no workflow file in the repo.
       if (projectDefinesCi(projectPath) || projectHasCi.get(projectName) === true) {
-        const key = `${projectName}:${sha}`;
-        let since = ciNoRunsSince.get(key);
-        if (since === undefined) { since = Date.now(); ciNoRunsSince.set(key, since); }
-        if (Date.now() - since < CI_NO_RUNS_GRACE_MS) {
+        // The stamp is per-SHA: a stamp for a different SHA belongs to a
+        // superseded commit (reviewer fix, ci-fix force-push), so the new tip
+        // starts its own window rather than inheriting an expired one.
+        let since = entry.ciNoRuns?.sha === sha ? entry.ciNoRuns.since : undefined;
+        if (since === undefined) {
+          since = Date.now();
+          updateWorkerFields(projectName, entry.name, { ciNoRuns: { sha, since } });
+        }
+        const waited = Date.now() - since;
+        if (waited < CI_NO_RUNS_GRACE_MS) {
           log.info("poller", "ci gate: check-runs not yet materialized on a CI project, deferring", {
             worker: entry.name,
-            data: { project: projectName, sha: sha.slice(0, 7) },
+            data: { project: projectName, sha: sha.slice(0, 7), waitedMs: waited },
           });
           armCiRecheck(projectName);
           return false;
         }
         log.warn("poller", "ci gate: still no check-runs after grace on a CI project, passing through", {
           worker: entry.name,
-          data: { project: projectName, sha: sha.slice(0, 7) },
+          data: { project: projectName, sha: sha.slice(0, 7), waitedMs: waited },
         });
-        ciNoRunsSince.delete(key);
+        updateWorkerFields(projectName, entry.name, { ciNoRuns: undefined });
         return true;
       }
       log.debug("poller", "ci gate: no check-runs on commit, skipping", {
@@ -877,8 +921,13 @@ export function handleMerged(
 //
 // Per-worker throttle for the "blocked by closed gate" info line: the sweep
 // replays maybeAutoContinue on every poke, so this caps the log at one line per
-// worker per hour instead of one per poke. In-memory, cleared when the worker's
-// gate opens again (see below) — a fresh strand after that logs immediately.
+// worker per hour instead of one per poke. Cleared when the worker's gate opens
+// again (see below) — a fresh strand after that logs immediately.
+//
+// CAVEAT: as with lastFfState above, the poller's fresh-process-per-poll model
+// empties this Map every poll, so the throttle does not actually fire and the
+// line logs once per poke after all. Log-only; the durable fix is a marker file
+// or an entry field (see WorkerEntry.ciNoRuns).
 const GATE_BLOCK_LOG_WINDOW_MS = 60 * 60 * 1000;
 const gateBlockLoggedAt = new Map<string, number>();
 

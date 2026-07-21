@@ -8,18 +8,30 @@ vi.mock("node:child_process", () => ({
   spawn: vi.fn(() => ({ unref: vi.fn() })),
 }));
 
+// Written-file mtimes, keyed by path. The CI recheck-poke dedup marker is a
+// real file whose MTIME is the arming time, so a stat that reports no mtime
+// makes the dedup comparison NaN and the guard silently never fires. Living at
+// module scope (outside any poll() call) also models the property that matters:
+// the marker outlives the per-poll process, which is the whole point of it
+// being on disk rather than in a module Map.
+const fsMtimes = vi.hoisted(() => new Map<string, number>());
+
 vi.mock("node:fs", () => ({
   default: {
-    existsSync: vi.fn(() => false),
-    statSync: vi.fn(() => ({ isFIFO: () => true })),
+    existsSync: vi.fn((p: string) => fsMtimes.has(p)),
+    statSync: vi.fn((p: string) => ({ isFIFO: () => true, mtimeMs: fsMtimes.get(p) })),
     openSync: vi.fn(() => 3),
     writeSync: vi.fn(),
     closeSync: vi.fn(),
-    unlinkSync: vi.fn(),
+    unlinkSync: vi.fn((p: string) => { fsMtimes.delete(p); }),
+    rmSync: vi.fn((p: string) => { fsMtimes.delete(p); }),
     mkdirSync: vi.fn(),
     readFileSync: vi.fn(() => "{}"),
-    writeFileSync: vi.fn(),
-    renameSync: vi.fn(),
+    writeFileSync: vi.fn((p: string) => { fsMtimes.set(p, Date.now()); }),
+    renameSync: vi.fn((from: string, to: string) => {
+      fsMtimes.set(to, fsMtimes.get(from) ?? Date.now());
+      fsMtimes.delete(from);
+    }),
     readdirSync: vi.fn(() => []),
     constants: { O_CREAT: 0, O_EXCL: 0, O_WRONLY: 0 },
   },
@@ -242,7 +254,9 @@ vi.mock("../src/dashboard/poller-fifo.js", async () => {
 
 import fs from "node:fs";
 import { poll, postPush, restartLongLivedPollers, startProjectPoller } from "../src/dashboard/poller.js";
-import { __resetFfStateForTest, _resetGateBlockThrottleForTest } from "../src/dashboard/poller-merge.js";
+import {
+  __resetFfStateForTest, __simulatePollerRestartForTest, _resetGateBlockThrottleForTest,
+} from "../src/dashboard/poller-merge.js";
 import { tryGetProject, getAutoContinueConfig, getMaxConcurrentReviews } from "../src/config.js";
 import { updateWorkerFields, findWorkerByName } from "../src/dashboard/registry.js";
 import {
@@ -288,6 +302,9 @@ beforeEach(() => {
   vi.resetAllMocks();
   registryMock._clear();
   __resetFfStateForTest();
+  // The CI recheck-poke dedup marker is a real file under SESSIONS_DIR (it has
+  // to outlive the poll process). Clear it so each test starts unarmed.
+  try { fs.rmSync("/tmp/fake-sessions/ci-recheck-myproject"); } catch { /* not armed */ }
   // Re-establish factory defaults after reset
   vi.mocked(windowExists).mockReturnValue(true);
   // Review cap defaults to unlimited with no live reviewer windows, so the
@@ -3937,6 +3954,74 @@ describe("poll — merge-pending CI gate", () => {
     }
   });
 
+  it("expires the grace window across poller restarts, not just within one process", () => {
+    // Regression: the poller loop is `while true; do garden dashboard _poll; read; done`
+    // — a FRESH process per poll. The grace stamp lived in a module-level Map,
+    // so every poll re-created it as "now", the elapsed check measured ~0ms, and
+    // the merge deferred forever. Two wolf workers sat in merge-pending for 5.5h
+    // on 2026-07-21 logging "check-runs not yet materialized" on a loop.
+    //
+    // Every poll here crosses the process boundary, which is what production
+    // does. Only durable state (the registry) may carry the window.
+    const t0 = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(t0);
+    try {
+      vi.mocked(projectDefinesCi).mockReturnValue(true);
+      vi.mocked(checkCiStatus).mockReturnValue({ kind: "no-ci" });
+      registryMock._setEntries("myproject", [pending()]);
+
+      __simulatePollerRestartForTest();
+      poll("myproject");
+      expect(mergeToBase).not.toHaveBeenCalled();
+      // The stamp must be on the durable entry, not in module memory.
+      expect(findWorkerByName("myproject", "bold-ash")?.ciNoRuns)
+        .toEqual({ sha: "deadbeefcafe", since: t0 });
+
+      // A poll partway through the window still defers.
+      nowSpy.mockReturnValue(t0 + 60_000);
+      __simulatePollerRestartForTest();
+      poll("myproject");
+      expect(mergeToBase).not.toHaveBeenCalled();
+
+      // Past the ceiling it passes through, measuring from the ORIGINAL stamp.
+      nowSpy.mockReturnValue(t0 + 3 * 60_000 + 1);
+      __simulatePollerRestartForTest();
+      poll("myproject");
+      expect(mergeToBase).toHaveBeenCalled();
+      expect(findWorkerByName("myproject", "bold-ash")?.ciNoRuns).toBeUndefined();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("restarts the grace window on a new SHA rather than inheriting the old one", () => {
+    // A reviewer-fix / ci-fix force-push replaces the tip. That new commit is
+    // the one CI most needs to vet, so it gets a full fresh window instead of
+    // inheriting a stamp that has already aged out.
+    const t0 = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(t0);
+    try {
+      vi.mocked(projectDefinesCi).mockReturnValue(true);
+      vi.mocked(checkCiStatus).mockReturnValue({ kind: "no-ci" });
+      registryMock._setEntries("myproject", [pending()]);
+
+      poll("myproject");
+      expect(findWorkerByName("myproject", "bold-ash")?.ciNoRuns?.sha).toBe("deadbeefcafe");
+
+      // Force-push lands a new tip just as the old window would have expired.
+      nowSpy.mockReturnValue(t0 + 3 * 60_000 + 1);
+      vi.mocked(getBranchHeadSha).mockReturnValue("feedface");
+      __simulatePollerRestartForTest();
+      poll("myproject");
+
+      expect(mergeToBase).not.toHaveBeenCalled();
+      expect(findWorkerByName("myproject", "bold-ash")?.ciNoRuns)
+        .toEqual({ sha: "feedface", since: t0 + 3 * 60_000 + 1 });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("arms only one CI recheck poke across repeated defers in the same window", () => {
     // Freeze the clock so the armed window (now + 60s) stays in the future for
     // all three polls, exercising armCiRecheck's dedup guard deterministically.
@@ -3946,10 +4031,16 @@ describe("poll — merge-pending CI gate", () => {
       vi.mocked(checkCiStatus).mockReturnValue({ kind: "pending", pending: ["build"] });
       registryMock._setEntries("myproject", [pending()]);
 
-      // Three defers inside one 60s window: the first arms a recheck poke, the
-      // next two must find one already scheduled and NOT stack another sleeper.
+      // Three defers inside one 60s window, each in its own poller process (as
+      // production runs them): the first arms a recheck poke, the next two must
+      // find one already scheduled and NOT stack another sleeper. The dedup
+      // lived in a module Map, so it never fired across the process boundary —
+      // every external poke during a stall spawned another self-perpetuating
+      // sleeper, leaving 43 orphaned `sleep` processes poking wolf's poller.
       poll("myproject");
+      __simulatePollerRestartForTest();
       poll("myproject");
+      __simulatePollerRestartForTest();
       poll("myproject");
 
       const recheckPokes = vi.mocked(scheduleDelayedPoke).mock.calls.filter(c => c[1] === 60_000);
