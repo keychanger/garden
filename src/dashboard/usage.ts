@@ -1229,6 +1229,14 @@ export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number):
     const right = codexLines[i];
     rows.push(right ? `${padVisible(left, leftWidth)}${gap}${right}` : left);
   }
+  // Closing rule, mirroring the header's: each column's own width, so the two
+  // rules stack into a pair of bounds around the meters. Its own row, with no
+  // blank above — the rule rides the bottom of otherwise-empty cells, so the
+  // row itself is the clearance.
+  rows.push(
+    `${padVisible(`${INDENT}${columnRule(leftWidth - INDENT.length)}`, leftWidth)}` +
+    `${gap}${columnRule(codexWidth)}`,
+  );
   return finalizePane(rows);
 }
 
@@ -1516,9 +1524,18 @@ function dim(s: string): string {
 // the only difference between the two runs.
 const HEADER_GREY = "90";
 function columnHeader(name: string, width: number): string {
-  const rule = " ".repeat(Math.max(0, width - name.length));
-  return `\x1b[1;${HEADER_GREY};4m${name}\x1b[0m`
-    + (rule ? `\x1b[${HEADER_GREY};4m${rule}\x1b[0m` : "");
+  return `\x1b[1;${HEADER_GREY};4m${name}\x1b[0m` + columnRule(width - name.length);
+}
+
+// A bare run of the same grey underline, no label. Heads nothing — it closes
+// the meter block from below, so the column reads as bounded on both sides
+// rather than trailing off into the pane. On its own row the rule paints at
+// the bottom of empty cells, which is what supplies the clearance from the
+// last meter above it (the header needed an explicit blank row for the same
+// reason, in the other direction).
+function columnRule(width: number): string {
+  const rule = " ".repeat(Math.max(0, width));
+  return rule ? `\x1b[${HEADER_GREY};4m${rule}\x1b[0m` : "";
 }
 
 export function formatDuration(ms: number): string {

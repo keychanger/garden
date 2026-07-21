@@ -345,8 +345,43 @@ describe("codex usage meter", () => {
       const { renderUsagePane } = await import("../src/dashboard/usage.js");
       const lines = renderUsagePane(now, 112).split("\n");
       expect(strip(lines[lines.length - 1]).trim()).toBe("");
-      // ...and the row above it is a real meter, not a second blank.
-      expect(strip(lines[lines.length - 2]).trim()).not.toBe("");
+      // ...and the row above it is the closing rule (blank text, underlined),
+      // not a second empty row.
+      expect(lines[lines.length - 2]).toContain("\x1b[90;4m");
+      // ...with a real meter above that.
+      expect(strip(lines[lines.length - 3]).trim()).not.toBe("");
+    });
+
+    it("closes the meters with a rule spanning the same columns as the header's", async () => {
+      const now = Date.now();
+      seedBoth(now);
+      const { renderUsagePane } = await import("../src/dashboard/usage.js");
+      const lines = renderUsagePane(now, 112).split("\n");
+      // The header and footer rules bound the meter block, so they must cover
+      // identical column spans — the header's underline includes the label
+      // itself, so "claude" is part of its run.
+      const spans = (line: string) => {
+        const out: Array<[number, number]> = [];
+        let col = 0, on = false, start = 0;
+        for (const part of line.split(/(\x1b\[[0-9;]*m)/)) {
+          if (part.startsWith("\x1b[")) {
+            const under = part.slice(2, -1).split(";").includes("4");
+            if (under && !on) { start = col; on = true; }
+            else if (!under && on) { out.push([start, col]); on = false; }
+            continue;
+          }
+          col += strip(part).length;
+        }
+        if (on) out.push([start, col]);
+        // Merge runs that abut (bold name → plain rule is one visual line).
+        return out.reduce<Array<[number, number]>>((acc, s) => {
+          const prev = acc[acc.length - 1];
+          if (prev && prev[1] === s[0]) prev[1] = s[1];
+          else acc.push(s);
+          return acc;
+        }, []);
+      };
+      expect(spans(lines[lines.length - 2])).toEqual(spans(lines[1]));
     });
 
     it("carries each header's underline across the full width of its column", async () => {
