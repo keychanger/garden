@@ -43,6 +43,10 @@ interface RefreshOptions {
   windowNames?: string[];
   config?: ReturnType<typeof loadConfig>;
   registry?: WorkerRegistry;
+  // Route pane resizes through resizeAndSignalNoRefresh (no clear-history /
+  // refresh-client -S) — set by the _client-resized re-bake, which must never
+  // disturb copy-mode scrolling the way a full refresh did (a10642c).
+  copyModeSafe?: boolean;
 }
 
 export function setupStatusBar(_gardenRunner: string): void {
@@ -905,7 +909,8 @@ function writeQuickStatus(opts?: RefreshOptions): void {
       // dedup) so no-op refreshes still fork nothing.
       const h = Math.max(statusPaneFloorLines(opts?.config, opts?.registry), rendered.split("\n").length) + 1;
       const cur = getPaneSize(state.statusPaneId);
-      resizeAndSignal(state.statusPaneId, h, cur?.height ?? null);
+      const pin = opts?.copyModeSafe ? resizeAndSignalNoRefresh : resizeAndSignal;
+      pin(state.statusPaneId, h, cur?.height ?? null);
     }
   } catch { /* best effort */ }
 }
@@ -944,9 +949,10 @@ export function writeHistoryRendered(opts?: RefreshOptions): void {
 // sibling. refreshDashboard is in dist/hook.js's import closure, so a call here
 // pulls renderAlertsPane (and commands/logs.ts, for wrapDetail) into the lean
 // hook bundle — measured at +2.8KB on every hook fire's cold start, versus +260
-// bytes when esbuild can tree-shake it out. The two callers that actually
-// matter live in the CLI bundle: focusAlerts (entry) and refreshStatusElapsed
-// (the watchdog's 60s tick, for ages and ambient poller-raised alerts). That
+// bytes when esbuild can tree-shake it out. The callers that actually matter
+// live in the CLI bundle: focusAlerts (entry), refreshStatusElapsed (the
+// watchdog's 60s tick, for ages and ambient poller-raised alerts), and
+// rebakePanesOnResize (the view wraps to the pane width). That
 // leaves ambient alerts up to a tick late in the pane — the same latency the
 // status pane's per-project ⚠ counts already have, and the bar badge is
 // instant regardless.
@@ -1026,7 +1032,8 @@ function writeUsageRendered(opts?: RefreshOptions): void {
     if (state.usagePaneId) {
       // +1 for the pane-border-status top row.
       const h = rendered.split("\n").length + 1;
-      resizeAndSignal(state.usagePaneId, h, cur?.height ?? null);
+      const pin = opts?.copyModeSafe ? resizeAndSignalNoRefresh : resizeAndSignal;
+      pin(state.usagePaneId, h, cur?.height ?? null);
     }
   } catch { /* best effort */ }
 }
@@ -1049,6 +1056,54 @@ export function repinStatusPaneHeight(state: DashboardState): void {
     if (cur === h) return;
     resizeAndSignalNoRefresh(state.statusPaneId, h, cur);
   } catch { /* no rendered file yet, or pane gone — best effort */ }
+}
+
+// Same reconciliation for the usage pane, whose height is also content-derived
+// (meter rows plus an optional health-tag row). Falls back to the caller's
+// default height when no render exists yet (fresh session, meter disabled).
+export function repinUsagePaneHeight(state: DashboardState, fallbackHeight: number): void {
+  if (!state.usagePaneId) return;
+  try {
+    let h = fallbackHeight;
+    try {
+      h = fs.readFileSync(USAGE_RENDERED_FILE, "utf-8").split("\n").length + 1;
+    } catch { /* no rendered file yet — pin to the default */ }
+    const cur = getPaneSize(state.usagePaneId)?.height ?? null;
+    if (cur === h) return;
+    resizeAndSignalNoRefresh(state.usagePaneId, h, cur);
+  } catch { /* pane gone — best effort */ }
+}
+
+// The _client-resized re-bake. The pre-baked pane content is width-shaped —
+// status rows are capped to the pane width, usage meter bars scale to it, and
+// the history/alerts views wrap to it — so a terminal resize leaves every
+// baked file rendered for the OLD width until the next event-driven refresh,
+// which an idle fleet may not produce for a long time (the "panes look wrong
+// until I spawn a worker" failure). Re-render everything at the fresh widths
+// here, on the resize event itself, then reconcile the heights that tmux's
+// proportional redistribution drifted (the repin* pair covers the case where
+// the content bytes didn't change, which the writers' dedup would skip).
+// Everything routes through the copy-mode-safe signal path — never
+// refresh-client — so a resize can't disturb copy-mode scrolling (a10642c).
+// CLI-bundle only (like refreshStatusElapsed): not reachable from hook.js, so
+// the alerts renderer stays tree-shaken out of the hook bundle.
+export function rebakePanesOnResize(state: DashboardState, usageFallbackHeight: number): void {
+  // The resize event is precisely the moment the TTL'd width cache goes stale;
+  // bust it so writeQuickStatus re-reads the pane width unconditionally.
+  cachedStatusWidth = null;
+  const shared: RefreshOptions = {
+    state,
+    windowNames: listAllWindowNames(),
+    config: loadConfig(),
+    registry: readRegistry(),
+    copyModeSafe: true,
+  };
+  writeQuickStatus(shared);
+  writeUsageRendered(shared);
+  writeHistoryRendered(shared);
+  writeAlertsRendered(shared);
+  repinStatusPaneHeight(state);
+  repinUsagePaneHeight(state, usageFallbackHeight);
 }
 
 // resizeAndSignal's ordering (grow-then-signal / signal-then-shrink) without its

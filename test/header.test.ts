@@ -156,6 +156,8 @@ import {
   installInputGuard,
   setPaneProjectColor,
   repinStatusPaneHeight,
+  repinUsagePaneHeight,
+  rebakePanesOnResize,
   _resetHeaderCachesForTest,
 } from "../src/dashboard/header.js";
 
@@ -164,6 +166,7 @@ import { readDashState, type DashboardState } from "../src/dashboard/state.js";
 import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields, removeWorker } from "../src/dashboard/registry.js";
 import { currentBranchFast, worktreeExists } from "../src/dashboard/git.js";
 import { renderQuickStatus, resolveWorkerStatus } from "../src/commands/status.js";
+import { renderUsagePane } from "../src/dashboard/usage.js";
 import { isPlotFocused, loadConfig, logColorKeyForProject } from "../src/config.js";
 import { log } from "../src/dashboard/log.js";
 import fs from "node:fs";
@@ -1144,6 +1147,97 @@ describe("repinStatusPaneHeight", () => {
     vi.mocked(fs.readFileSync).mockImplementation((() => { throw new Error("ENOENT"); }) as never);
     expect(() => repinStatusPaneHeight(makeState({ statusPaneId: "%0" }))).not.toThrow();
     expect(vi.mocked(tmux).mock.calls.some(c => c[0] === "resize-pane")).toBe(false);
+  });
+});
+
+// ===========================================================================
+// repinUsagePaneHeight + rebakePanesOnResize (the _client-resized content re-bake)
+// ===========================================================================
+
+describe("repinUsagePaneHeight", () => {
+  const mockUsageFile = (content: string) =>
+    vi.mocked(fs.readFileSync).mockImplementation(
+      ((p: unknown) => {
+        if (String(p).includes("usage.rendered")) return content;
+        return "{}";
+      }) as never,
+    );
+
+  it("pins the pane to the rendered file's line count + 1", () => {
+    mockUsageFile("u1\nu2\nu3\nu4\nu5\nu6"); // 6 lines -> height 7
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 5 });
+
+    repinUsagePaneHeight(makeState({ usagePaneId: "%2" }), 5);
+
+    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%2", "-y", "7");
+  });
+
+  it("falls back to the provided default height when no rendered file exists", () => {
+    vi.mocked(fs.readFileSync).mockImplementation((() => { throw new Error("ENOENT"); }) as never);
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 3 });
+
+    repinUsagePaneHeight(makeState({ usagePaneId: "%2" }), 5);
+
+    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%2", "-y", "5");
+  });
+
+  it("is a no-op when the height already matches the content", () => {
+    mockUsageFile("u1\nu2\nu3"); // 3 lines -> height 4
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 4 });
+
+    repinUsagePaneHeight(makeState({ usagePaneId: "%2" }), 5);
+
+    expect(vi.mocked(tmux).mock.calls.some(c => c[0] === "resize-pane")).toBe(false);
+  });
+
+  it("is a no-op when usagePaneId is null", () => {
+    repinUsagePaneHeight(makeState({ usagePaneId: null }), 5);
+    expect(tmux).not.toHaveBeenCalled();
+  });
+});
+
+describe("rebakePanesOnResize", () => {
+  // The pre-baked pane content is width-shaped, so the resize handler must
+  // re-render it at the fresh widths — not just re-pin heights. Before this
+  // existed, resized panes stayed baked for the old width until the next
+  // event-driven refresh (an idle fleet: until the next worker was created).
+
+  it("busts the width TTL cache so the status render sees the post-resize width", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 10 });
+    refreshDashboard(); // primes the TTL cache at width 120
+
+    vi.mocked(getPaneSize).mockReturnValue({ width: 40, height: 10 });
+    rebakePanesOnResize(makeState({ statusPaneId: "%0" }), 5);
+
+    // Within the 1s TTL a plain refresh would still see 120 (asserted in the
+    // width-threading suite); the resize re-bake must read the width fresh.
+    expect(vi.mocked(renderQuickStatus).mock.calls.at(-1)?.[4]).toBe(40);
+  });
+
+  it("re-renders the usage pane at the fresh pane width", () => {
+    vi.mocked(renderUsagePane).mockReturnValue("u1\nu2\nu3");
+    vi.mocked(getPaneSize).mockReturnValue({ width: 90, height: 5 });
+
+    rebakePanesOnResize(makeState({ usagePaneId: "%2" }), 5);
+
+    expect(vi.mocked(renderUsagePane).mock.calls.at(-1)?.[1]).toBe(90);
+  });
+
+  it("never forks refresh-client or clear-history (copy-mode safety)", () => {
+    vi.mocked(renderUsagePane).mockReturnValue("u1\nu2\nu3");
+    vi.mocked(getPaneSize).mockReturnValue({ width: 100, height: 5 });
+    vi.mocked(getPanePid).mockReturnValue("999");
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    rebakePanesOnResize(makeState({ statusPaneId: "%0", usagePaneId: "%2" }), 5);
+
+    // The re-bake resized panes (content height != current height) ...
+    expect(vi.mocked(tmux).mock.calls.some(c => c[0] === "resize-pane")).toBe(true);
+    // ... yet stayed on the SIGUSR1-only path.
+    expect(vi.mocked(tmux).mock.calls.some(c => c[0] === "refresh-client")).toBe(false);
+    expect(vi.mocked(tmux).mock.calls.some(c => c[0] === "clear-history")).toBe(false);
+    killSpy.mockRestore();
   });
 });
 

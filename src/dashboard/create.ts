@@ -89,8 +89,9 @@ export function ensureDashboard(): void {
       disablePaneInput(healed.usagePaneId);
     }
 
-    // Re-pin the usage pane on terminal resize. Minimal handler (resize-pane only)
-    // so it doesn't disturb copy-mode in worker/logs panes the way the old refreshDashboard-based hook did (a10642c).
+    // Re-bake pane content + re-pin heights on terminal resize (the baked files
+    // are width-shaped). Copy-mode-safe: the handler repaints via SIGUSR1 only,
+    // never refresh-client, which broke copy-mode scrolling (a10642c).
     try {
       const gardenRunner = resolveGardenRunner();
       const inner = `${gardenRunner} dashboard _client-resized 2>/dev/null`;
@@ -264,7 +265,7 @@ export function ensureDashboard(): void {
       `run-shell -b ${tmuxDoubleQuote(inner)}`);
   } catch { /* hooks may not be supported on very old tmux */ }
 
-  // Re-pin usage pane on terminal resize (see reattach path for rationale).
+  // Re-bake pane content + re-pin heights on terminal resize (see reattach path for rationale).
   try {
     const inner = `${gardenRunner} dashboard _client-resized 2>/dev/null`;
     tmux("set-hook", "-t", DASHBOARD_SESSION, "client-resized",

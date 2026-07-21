@@ -450,22 +450,18 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   if (sub === "_pane-died") return handlePaneDied(args[1]);
   if (sub === "_title-changed") return handleTitleChanged(args[1], args[2]);
   if (sub === "_client-resized") {
-    // Re-pin usage pane height: tmux redistributes pane sizes proportionally on
-    // terminal resize, leaving blank rows below the meters until the next refresh.
-    // Skip refresh-client/full refresh — those broke copy-mode scrolling (a10642c).
+    // Terminal resize: tmux redistributes pane sizes proportionally AND the
+    // pre-baked pane content (status rows capped to width, usage bars scaled
+    // to it) is now rendered for the old width. Re-bake content at the fresh
+    // widths and reconcile the drifted heights — all via SIGUSR1 repaints,
+    // never refresh-client/full refresh, which broke copy-mode scrolling
+    // (a10642c). See rebakePanesOnResize.
     const { readDashState } = await import("./state.js");
-    const { tmux } = await import("./tmux.js");
     const { USAGE_PANE_HEIGHT, presizeHiddenWindows } = await import("./create.js");
-    const { repinStatusPaneHeight } = await import("./header.js");
+    const { rebakePanesOnResize } = await import("./header.js");
     try {
       const state = readDashState();
-      if (state.usagePaneId) {
-        tmux("resize-pane", "-t", state.usagePaneId, "-y", String(USAGE_PANE_HEIGHT));
-      }
-      // The status pane height is content-derived and drifts under the same
-      // proportional redistribution; writeQuickStatus only re-pins it past its
-      // content dedup, so reconcile it here on the resize event itself.
-      repinStatusPaneHeight(state);
+      rebakePanesOnResize(state, USAGE_PANE_HEIGHT);
       // The right slot is 60% of the terminal, so resizing the terminal changes
       // its width. Hidden worker windows are window-size=manual (resize-window
       // sets that), so they stay frozen at the old width and a worker that keeps
