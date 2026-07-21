@@ -310,15 +310,17 @@ describe("codex usage meter", () => {
       expect(strip(lines[1])).toContain("codex");
     });
 
-    it("heads each column with a bold grey name and an underline instead of a blank row", async () => {
+    it("heads each column with a bold grey underlined name, then a blank row before the meters", async () => {
       const now = Date.now();
       seedBoth(now);
       const { renderUsagePane } = await import("../src/dashboard/usage.js");
       const lines = renderUsagePane(now, 112).split("\n");
       expect(lines[1]).toContain("\x1b[1;90;4mclaude");
       expect(lines[1]).toContain("\x1b[1;90;4mcodex");
-      // The meters follow immediately — the rule is the separation.
-      expect(strip(lines[2])).toContain("5h");
+      // The rule sits at the bottom of the label's cell, so the meters get a
+      // blank row of clearance rather than butting against it.
+      expect(strip(lines[2]).trim()).toBe("");
+      expect(strip(lines[3])).toContain("5h");
     });
 
     it("renders the name in the same grey as the rule it continues into", async () => {

@@ -1213,15 +1213,16 @@ export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number):
   // header row, which put the column labels hard against the pane border and
   // read as cramped. The pane auto-sizes to its content, so the extra row costs
   // nothing but the space it is there to provide.
-  // The labels are underlined rather than followed by a blank line: the rule
-  // rides the label's own row, so it separates the heading from the meters
-  // without spending a row on emptiness (a blank one read as too airy). The
-  // rule runs the full width of the column it heads, so it reads as a divider
-  // for the meters beneath rather than as decoration on the word.
+  // The labels are underlined: the rule runs the full width of the column it
+  // heads, so it reads as a divider for the meters beneath rather than as
+  // decoration on the word. A blank row follows it — the rule sits at the very
+  // bottom of the label's cell, so without one the first meter bar butts
+  // straight against it. A terminal only spaces in whole rows, so a full row is
+  // the smallest gap available (operator call, 2026-07-21).
   const header =
     `${padVisible(`${INDENT}${columnHeader("claude", leftWidth - INDENT.length)}`, leftWidth)}` +
     `${gap}${columnHeader("codex", codexWidth)}`;
-  const rows: string[] = ["", header];
+  const rows: string[] = ["", header, ""];
   const n = Math.max(claudeLines.length, codexLines.length);
   for (let i = 0; i < n; i++) {
     const left = claudeLines[i] ?? "";
