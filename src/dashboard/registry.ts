@@ -660,6 +660,11 @@ function isWorkerRegistry(x: unknown): x is WorkerRegistry {
       for (const field of GUARDED_STRING_FIELDS) {
         if (entry[field] !== undefined && typeof entry[field] !== "string") return false;
       }
+      if (entry.ciNoRuns !== undefined) {
+        if (!entry.ciNoRuns || typeof entry.ciNoRuns !== "object") return false;
+        const stamp = entry.ciNoRuns as Record<string, unknown>;
+        if (typeof stamp.sha !== "string" || typeof stamp.since !== "number") return false;
+      }
     }
   }
   return true;
