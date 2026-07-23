@@ -1283,7 +1283,7 @@ function renderCodexColumn(
 ): string[] {
   const lines: string[] = [];
   for (const w of data.windows) {
-    const label = codexWindowLabel(w.windowMinutes).padEnd(CODEX_LABEL_WIDTH);
+    const label = codexWindowLabel(w.windowMinutes).padEnd(LABEL_WIDTH);
     const resetsAtMs = w.resetsAt * 1000;
     // Window rolled over since capture — our pct describes the previous one.
     if (resetsAtMs <= nowMs) { lines.push(`${label}  ${dim("—")}`); continue; }
@@ -1298,10 +1298,13 @@ function renderCodexColumn(
   // A zero balance is the steady state for a subscription account with no
   // pay-as-you-go credits — a permanent "$0.00" row carries no information, so
   // the footer only appears once there is a balance to watch.
+  // "credits" (7 chars) is one wider than LABEL_WIDTH, so it overflows the
+  // shared column instead of padding to it — harmless since this row has no
+  // bar to keep aligned with the window rows above it.
   if (typeof data.creditBalance === "number" && data.creditBalance > 0) {
-    lines.push(`${"credits".padEnd(CODEX_LABEL_WIDTH)}  ${dim(`$${data.creditBalance.toFixed(2)}`)}`);
+    lines.push(`${"credits".padEnd(LABEL_WIDTH)}  ${dim(`$${data.creditBalance.toFixed(2)}`)}`);
   } else if (data.creditsUnlimited) {
-    lines.push(`${"credits".padEnd(CODEX_LABEL_WIDTH)}  ${dim("unlimited")}`);
+    lines.push(`${"credits".padEnd(LABEL_WIDTH)}  ${dim("unlimited")}`);
   }
   return lines;
 }
@@ -1325,8 +1328,7 @@ const MAX_COLUMN_GAP = 16;
 // Right margin held back when widening, mirroring INDENT on the left so the
 // content sits inside symmetric margins rather than running to the pane edge.
 const RIGHT_MARGIN = INDENT.length;
-const CODEX_LABEL_WIDTH = 7; // "credits" is the longest codex label
-const CODEX_MIN_WIDTH = MIN_BAR_WIDTH + CODEX_LABEL_WIDTH + 8; // label + bar + "  NN%"
+const CODEX_MIN_WIDTH = MIN_BAR_WIDTH + LABEL_WIDTH + 8; // label + bar + "  NN%"
 
 // Spread the two columns into the dead space on the right rather than leaving
 // them bunched at the left with a ragged empty margin. The Codex column is
