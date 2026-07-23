@@ -159,6 +159,27 @@ describe("codex usage meter", () => {
     expect(codexPart).not.toContain("█");    // no filled bar cell
   });
 
+  it("aligns Codex week bars with Claude week bars", async () => {
+    const now = Date.now();
+    seedClaude(now);
+    const nowS = Math.floor(now / 1000);
+    seedCodex({
+      windows: [
+        { windowMinutes: 300, usedPercent: 3, resetsAt: nowS + 4 * 60 * 60 },
+        { windowMinutes: 10080, usedPercent: 17, resetsAt: nowS + 6 * 24 * 60 * 60 },
+      ],
+    }, now);
+    const { renderUsagePane } = await import("../src/dashboard/usage.js");
+    const visible = renderUsagePane(now, 120).split("\n")
+      .map((line) => line.replace(/\x1b\[[0-9;]*[A-Za-z]/g, ""))
+      .find((line) => line.match(/week.*week/))!;
+    const firstLabel = visible.indexOf("week");
+    const secondLabel = visible.indexOf("week", firstLabel + 1);
+    const firstBar = visible.indexOf("█", firstLabel);
+    const secondBar = visible.indexOf("█", secondLabel);
+    expect(firstBar - firstLabel).toBe(secondBar - secondLabel);
+  });
+
   it("renders a dim credit balance footer under the Codex bars", async () => {
     const now = Date.now();
     seedClaude(now);
