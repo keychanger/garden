@@ -36,19 +36,63 @@ export function setupKeybindings(gardenRunner: string): void {
   }
 
   // Mouse scroll: always enter copy-mode on wheel-up instead of passing
-  // events to alternate-screen apps (like Claude Code).
+  // events to alternate-screen apps (like Claude Code). Gated on
+  // @garden_mouse_lock (set only on the usage/status panes — see
+  // lockPaneMouse in tmux.ts): on those two, the wheel is a no-op rather
+  // than scrolling, since they're pure repaint content with nothing to
+  // scroll back through.
   try {
     execFileSync("tmux", [
       "bind-key", "-n", "WheelUpPane",
-      "if-shell", "-F", "#{pane_in_mode}",
-      "send-keys -M",
-      "copy-mode -e; send-keys -M"
+      "if-shell", "-F", "-t", "=", "#{@garden_mouse_lock}",
+      "select-pane -t =",
+      'if-shell -F "#{pane_in_mode}" "send-keys -M" "copy-mode -e; send-keys -M"'
     ], { stdio: "ignore" });
   } catch { /* ignore */ }
   try {
     execFileSync("tmux", [
       "bind-key", "-n", "WheelDownPane",
-      "send-keys", "-M"
+      "if-shell", "-F", "-t", "=", "#{@garden_mouse_lock}",
+      "select-pane -t =",
+      "send-keys -M"
+    ], { stdio: "ignore" });
+  } catch { /* ignore */ }
+
+  // Mouse click/drag/double/triple-click: same @garden_mouse_lock gate as the
+  // wheel bindings above, so the usage/status panes can't be text-selected
+  // either. The false branch reproduces tmux's own stock root-table bindings
+  // for these events (see `tmux list-keys -T root`) so every other pane's
+  // click/drag/select-word/select-line behavior is unchanged.
+  try {
+    execFileSync("tmux", [
+      "bind-key", "-n", "MouseDown1Pane",
+      "if-shell", "-F", "-t", "=", "#{@garden_mouse_lock}",
+      "select-pane -t =",
+      "select-pane -t = ; send-keys -M"
+    ], { stdio: "ignore" });
+  } catch { /* ignore */ }
+  try {
+    execFileSync("tmux", [
+      "bind-key", "-n", "MouseDrag1Pane",
+      "if-shell", "-F", "-t", "=", "#{@garden_mouse_lock}",
+      "select-pane -t =",
+      'if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" "send-keys -M" "copy-mode -M"'
+    ], { stdio: "ignore" });
+  } catch { /* ignore */ }
+  try {
+    execFileSync("tmux", [
+      "bind-key", "-n", "DoubleClick1Pane",
+      "if-shell", "-F", "-t", "=", "#{@garden_mouse_lock}",
+      "select-pane -t =",
+      'select-pane -t = ; if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" "send-keys -M" "copy-mode -H ; send-keys -X select-word ; run-shell -d 0.3 ; send-keys -X copy-pipe-and-cancel"'
+    ], { stdio: "ignore" });
+  } catch { /* ignore */ }
+  try {
+    execFileSync("tmux", [
+      "bind-key", "-n", "TripleClick1Pane",
+      "if-shell", "-F", "-t", "=", "#{@garden_mouse_lock}",
+      "select-pane -t =",
+      'select-pane -t = ; if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" "send-keys -M" "copy-mode -H ; send-keys -X select-line ; run-shell -d 0.3 ; send-keys -X copy-pipe-and-cancel"'
     ], { stdio: "ignore" });
   } catch { /* ignore */ }
 

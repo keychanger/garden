@@ -117,6 +117,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   resizeWindow: vi.fn(),
   listAllWindowNames: vi.fn(() => []),
   disablePaneInput: vi.fn(),
+  lockPaneMouse: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/registry.js", () => ({

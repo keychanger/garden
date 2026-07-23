@@ -57,7 +57,16 @@ import path from "node:path";
 // composer's own modules (trellis-picker.ts, harness/codex-models.ts) absent
 // from the bundle entirely, which is what keeps the Codex catalog read off the
 // per-tool-call path.
-const HOOK_BUNDLE_CEILING_BYTES = 238 * 1024;
+// Bumped 238->240kb for the usage/status mouse lockdown: setupKeybindings
+// (hotkeys.ts, already reachable via create.ts) gained root-table mouse
+// bindings (MouseDown1Pane/MouseDrag1Pane/DoubleClick1Pane/TripleClick1Pane,
+// plus the existing WheelUpPane/WheelDownPane) gated on the new
+// @garden_mouse_lock pane option, so the usage/status panes' mouse events
+// no-op instead of entering copy-mode. ~380 bytes over the old ceiling, all
+// in hotkeys.ts's existing bytesInOutput — lockPaneMouse itself (tmux.ts)
+// tree-shakes out of the hook bundle entirely, since only create.ts/
+// validate.ts (neither hook-reachable) call it.
+const HOOK_BUNDLE_CEILING_BYTES = 240 * 1024;
 // skills.ts contributes only a tree-shaken sliver today (<100 bytes); a
 // retained skills bundle is ~28kb. The threshold sits well between.
 const SKILLS_BYTES_CEILING = 2 * 1024;

@@ -536,6 +536,18 @@ export function disablePaneInput(paneId: string): void {
   } catch { log.debug("tmux", "disablePaneInput failed", { data: { paneId } }); }
 }
 
+// Marks a pane as mouse-locked: the root-table mouse bindings installed by
+// setupKeybindings() check this pane option on whatever pane the mouse event
+// targets and no-op (beyond switching focus there) instead of scrolling into
+// copy-mode or starting a text selection. Used on the usage and status panes
+// only — pure repaint content with no scrollback or copy-paste value, unlike
+// logs/history/alerts which the operator does scroll and copy from. Like
+// disablePaneInput, this is a pane option and may not survive respawn-pane —
+// callers pair the two and re-apply both after each respawn.
+export function lockPaneMouse(paneId: string): void {
+  setPaneVar(paneId, "garden_mouse_lock", "1");
+}
+
 export function getPaneLabel(paneId: string): string | null {
   try {
     const label = tmuxOutput("display-message", "-t", paneId, "-p", "#{@garden_name}");

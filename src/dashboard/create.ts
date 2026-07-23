@@ -18,7 +18,7 @@ import { formatLogsPaneLabel } from "../commands/logs.js";
 import {
   tmux, tmuxOutput, tmuxSplit, setPaneTitle, setPaneLabel, setPaneVar,
   getFirstPaneId, shellEscape, tmuxDoubleQuote, newDashboardWindow,
-  getPaneSize, resizeWindow, listSessionPanes, disablePaneInput,
+  getPaneSize, resizeWindow, listSessionPanes, disablePaneInput, lockPaneMouse,
 } from "./tmux.js";
 import { readRegistry, updateWorkerFields, resolveResumeAgentStatus } from "./registry.js";
 import { log, truncateLog } from "./log.js";
@@ -87,6 +87,7 @@ export function ensureDashboard(): void {
       try { tmux("resize-pane", "-t", healed.usagePaneId, "-y", String(USAGE_PANE_HEIGHT)); } catch { /* pane may be gone */ }
       try { tmux("clear-history", "-t", healed.usagePaneId); } catch { /* ignore */ }
       disablePaneInput(healed.usagePaneId);
+      lockPaneMouse(healed.usagePaneId);
     }
 
     // Re-bake pane content + re-pin heights on terminal resize (the baked files
@@ -229,6 +230,8 @@ export function ensureDashboard(): void {
   setPaneLabel(gardenShellId, "growhouse");
   disablePaneInput(usageId);
   disablePaneInput(statusId);
+  lockPaneMouse(usageId);
+  lockPaneMouse(statusId);
   if (firstProject) {
     setPaneLabel(rightPaneId, `shell-${firstProject}`);
     setPaneTitle(rightPaneId, firstProject);
@@ -1185,6 +1188,7 @@ export function respawnStatusPane(state: DashboardState): void {
   try { tmux("resize-pane", "-t", state.statusPaneId, "-y", String(statusHeight)); } catch { /* pane may be gone */ }
   try { tmux("clear-history", "-t", state.statusPaneId); } catch { /* ignore */ }
   disablePaneInput(state.statusPaneId);
+  lockPaneMouse(state.statusPaneId);
 }
 
 // `garden logs --follow` caches the pre-rebuild bundle in memory; respawn so it picks up new code.
