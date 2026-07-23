@@ -1306,9 +1306,10 @@ function renderCodexColumn(
   return lines;
 }
 
-// window_minutes -> a compact human label: 300 -> "5h", 10080 -> "7d",
-// 43200 -> "30d".
+// window_minutes -> a compact human label: 300 -> "5h", 10080 -> "week"
+// (matching the Claude meter's weekly label rather than "7d"), 43200 -> "30d".
 function codexWindowLabel(minutes: number): string {
+  if (minutes === 10080) return "week";
   if (minutes % 1440 === 0) return `${minutes / 1440}d`;
   if (minutes % 60 === 0) return `${minutes / 60}h`;
   return `${minutes}m`;
