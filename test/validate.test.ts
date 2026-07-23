@@ -96,7 +96,7 @@ import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, tmux
 import { readRegistry, writeRegistry, mutateRegistry } from "../src/dashboard/registry.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 
-import { setPaneTitle, setPaneLabel, disablePaneInput } from "../src/dashboard/tmux.js";
+import { setPaneTitle, setPaneLabel, disablePaneInput, lockPaneMouse } from "../src/dashboard/tmux.js";
 
 function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
   return {
@@ -166,6 +166,7 @@ describe("validateAndHeal", () => {
     // Healed status pane must be input-disabled; otherwise operator keystrokes
     // echo into it after a mid-session recreate.
     expect(disablePaneInput).toHaveBeenCalledWith("%50");
+    expect(lockPaneMouse).toHaveBeenCalledWith("%50");
   });
 
   it("recreates garden pane when gardenShellPaneId is stale", () => {
@@ -378,6 +379,7 @@ describe("validateAndHeal", () => {
     expect(setPaneTitle).toHaveBeenCalledWith("%60", "garden");
     expect(setPaneLabel).toHaveBeenCalledWith("%60", "#[fg=green,bold]garden#[default] 🌱");
     expect(disablePaneInput).toHaveBeenCalledWith("%60");
+    expect(lockPaneMouse).toHaveBeenCalledWith("%60");
   });
 
   it("leaves usagePaneId null when status pane is also gone and cannot be recreated", () => {

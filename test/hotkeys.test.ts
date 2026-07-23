@@ -149,6 +149,34 @@ describe("setupKeybindings", () => {
     }
   });
 
+  it("gates root mouse events on the target pane's mouse lock", () => {
+    setupKeybindings("/path/to/garden");
+    const events = [
+      "WheelUpPane",
+      "WheelDownPane",
+      "MouseDown1Pane",
+      "MouseDrag1Pane",
+      "DoubleClick1Pane",
+      "TripleClick1Pane",
+    ];
+    for (const event of events) {
+      const bind = execFileSyncMock.mock.calls.find((call) => {
+        const argv = call[1] as string[];
+        return Array.isArray(argv)
+          && argv[0] === "bind-key"
+          && argv[1] === "-n"
+          && argv[2] === event;
+      });
+      expect(bind, `${event} should be bound`).toBeDefined();
+      const argv = bind![1] as string[];
+      expect(argv.slice(3, 8)).toEqual([
+        "if-shell", "-F", "-t", "=", "#{@garden_mouse_lock}",
+      ]);
+      expect(argv[8]).toBe("select-pane -t =");
+      expect(argv[9]).toBeDefined();
+    }
+  });
+
   it("clears the selection on a plain click so the lingering highlight can be dismissed", () => {
     // copy-pipe-no-clear leaves the selection highlighted after a drag. Without
     // clearing it on a plain click, the highlight lingers with no way to dismiss
