@@ -310,6 +310,15 @@ describe("codex usage meter", () => {
       expect(strip(lines[1])).toContain("codex");
     });
 
+    it("labels the seven-day Codex window as week to match Claude", async () => {
+      const now = Date.now();
+      seedBoth(now);
+      const { renderUsagePane } = await import("../src/dashboard/usage.js");
+      const visible = strip(renderUsagePane(now, 112));
+      expect(visible).toContain("week");
+      expect(visible).not.toContain("7d");
+    });
+
     it("heads each column with a bold grey underlined name, then a blank row before the meters", async () => {
       const now = Date.now();
       seedBoth(now);
