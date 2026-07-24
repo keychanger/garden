@@ -95,6 +95,14 @@ function showProjectConfig(project: ProjectConfig & { name: string }): void {
       if (project.sandboxDenyCredentials !== undefined) {
         data.sandboxDenyCredentials = String(project.sandboxDenyCredentials);
       }
+    } else if (key === "beadIntake") {
+      if (project.beadIntake !== undefined) {
+        data.beadIntake = String(project.beadIntake);
+      }
+    } else if (key === "beadIntakeCap") {
+      if (project.beadIntakeCap !== undefined) {
+        data.beadIntakeCap = String(project.beadIntakeCap);
+      }
     } else if (project[key]) {
       data[key] = project[key]!;
     }
@@ -160,6 +168,18 @@ function showConfigKey(project: ProjectConfig & { name: string }, key: SettableK
   }
   if (key === "sandboxDenyCredentials") {
     const v = project.sandboxDenyCredentials;
+    if (v !== undefined) output({ [key]: v }, () => String(v));
+    else output({ [key]: null }, () => `(not set)`);
+    return;
+  }
+  if (key === "beadIntake") {
+    const v = project.beadIntake;
+    if (v !== undefined) output({ [key]: v }, () => String(v));
+    else output({ [key]: null }, () => `(not set)`);
+    return;
+  }
+  if (key === "beadIntakeCap") {
+    const v = project.beadIntakeCap;
     if (v !== undefined) output({ [key]: v }, () => String(v));
     else output({ [key]: null }, () => `(not set)`);
     return;

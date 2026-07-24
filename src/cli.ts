@@ -80,6 +80,9 @@ Projects:
   config <project> [key] [value] View or set project config
                                  keys incl. model / effort (default+grow worker
                                  defaults; per-spawn --model/--effort override)
+                                 and beadIntake / beadIntakeCap (bead-intake loop:
+                                 dispatch-labeled epics in the project's .beads
+                                 store spawn workers; see 'garden poke')
   config <project> role [<role> [harness|model|effort] [value]]
                                  Per-role review harness/model/effort (role: reviewer|resolver|ci-fix)
                                  effort is claude-code-only: low|medium|high|xhigh|max
@@ -158,6 +161,7 @@ Dashboard:
   health                         Check dashboard state consistency
   doctor                         Environment preflight (tmux / claude / gh / node / config / Option-key)
   kick <worker>                  Re-arm a stranded 'working' worker for review
+  poke [project]                 Wake the project's poller now (runs bead intake immediately; board's dispatch gate uses this)
   bounce <worker>                Restart a worker's Claude process (preserves session history)
   hold <worker>                  Interrupt a working worker and mark it 'paused' (sends Escape; ⌥e in the dashboard toggles this on the focused worker; the next prompt resumes it)
   pause <worker>                 Suppress post-merge auto-continue (writes the .garden-done sentinel; a worker UserPromptSubmit also clears it, so prompting an explicitly-paused worker is itself an unpause)

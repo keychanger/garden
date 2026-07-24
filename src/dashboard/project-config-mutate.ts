@@ -29,6 +29,7 @@ export const SETTABLE_KEYS = [
   "claudeProfile", "provider",
   "harness", "model", "effort", "logColor", "trellisDir", "maxTrellisIterations",
   "trellisOpusFallback", "maxGrowIterations", "requireCiSuccess", "holisticReview",
+  "beadIntake", "beadIntakeCap",
 ] as const;
 export type SettableKey = typeof SETTABLE_KEYS[number];
 
@@ -201,6 +202,28 @@ export function setProjectConfigKey(projectName: string, key: SettableKey, value
       message = `Set ${key} = ${value} for ${projectName}`;
     } else {
       throw new Error(`requireCiSuccess must be 'true' or 'false', got '${value}'`);
+    }
+  } else if (key === "beadIntake") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.beadIntake;
+      message = `Cleared ${key} for ${projectName} (default: off)`;
+    } else if (value === "true" || value === "false") {
+      project.beadIntake = value === "true";
+      message = `Set ${key} = ${value} for ${projectName} (dispatch-labeled epics in the project's .beads store drive worker intake; BEADS_ACTOR/BEADS_DIR injected into newly created or bounced workers)`;
+    } else {
+      throw new Error(`beadIntake must be 'true' or 'false', got '${value}'`);
+    }
+  } else if (key === "beadIntakeCap") {
+    if (value === "" || value === "unset" || value === "null") {
+      delete project.beadIntakeCap;
+      message = `Cleared ${key} for ${projectName} (default: 3)`;
+    } else {
+      const n = Number.parseInt(value, 10);
+      if (!Number.isFinite(n) || n < 1) {
+        throw new Error(`beadIntakeCap must be a positive integer, got '${value}'`);
+      }
+      project.beadIntakeCap = n;
+      message = `Set ${key} = ${n} for ${projectName}`;
     }
   } else if (key === "sandboxDenyCredentials") {
     if (value === "" || value === "unset" || value === "null") {

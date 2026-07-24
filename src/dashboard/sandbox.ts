@@ -1,3 +1,4 @@
+import path from "node:path";
 import { tryResolveProvider, type ProjectConfig } from "../config.js";
 
 export interface SandboxConfig {
@@ -95,6 +96,13 @@ export function buildSandboxConfig(opts: {
 
   const allowWrite = new Set<string>(DEFAULT_ALLOW_WRITE);
   allowWrite.add(opts.worktreePath);
+
+  // Bead-intake projects: workers run bd against the project checkout's
+  // canonical .beads store (BEADS_DIR points there — the worktree copy has no
+  // database), and every bd invocation takes a write lock inside that dir.
+  if (opts.project.beadIntake) {
+    allowWrite.add(path.join(opts.project.path, ".beads"));
+  }
 
   const sandbox: SandboxConfig = {
     enabled: true,

@@ -19,6 +19,7 @@ import { focus, unfocus } from "./focus.js";
 import { reorder } from "./reorder.js";
 import { plot } from "./plot.js";
 import { kick } from "./kick.js";
+import { poke } from "./poke.js";
 import { bounce } from "./bounce.js";
 import { hold } from "./hold.js";
 import { pause } from "./pause.js";
@@ -68,6 +69,7 @@ export const commands: Record<string, Command> = {
   logs,
   diary,
   kick,
+  poke,
   bounce,
   hold,
   pause,

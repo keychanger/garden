@@ -873,6 +873,7 @@ export GARDEN_PROJECT=${projectNameLit}
 export GARDEN_WORKER=${workerLit}
 export GARDEN_BRANCH=${branchLit}
 export GARDEN_BASE_BRANCH="$BASE"
+${beadsEnvExports(projectName, workerName)}
 
 # Atomically write stdin to a destination via tmp+rename so concurrent readers
 # (Claude on SessionStart / --resume reading .claude/settings.json) never see
@@ -1086,7 +1087,26 @@ function workerEnvExports(
     `export GARDEN_PROJECT=${shellEscape(projectName)} ` +
     `GARDEN_WORKER=${shellEscape(workerName)} ` +
     `GARDEN_BRANCH=${shellEscape(branchName)} ` +
-    `GARDEN_BASE_BRANCH=${shellEscape(base)};`
+    `GARDEN_BASE_BRANCH=${shellEscape(base)};` +
+    beadsEnvExports(projectName, workerName)
+  );
+}
+
+// Bead-intake projects only (else empty — the launch command stays
+// byte-identical). BEADS_ACTOR names this worker as bd's claim/audit actor —
+// `bd update --claim` writes it as assignee, making the bd assignee the
+// garden registry key (the board↔garden join contract, DELEGATION.md).
+// BEADS_DIR pins bd to the project checkout's canonical store: the worktree
+// carries the tracked .beads files but not the gitignored database, so bd
+// run bare in the worktree would bootstrap a divergent local DB and the
+// worker's `bd close` would never reach board or the intake loop.
+export function beadsEnvExports(projectName: string, workerName: string): string {
+  const project = tryGetProject(projectName);
+  if (project?.beadIntake !== true) return "";
+  const beadsDir = path.join(project.path, ".beads");
+  return (
+    ` export BEADS_ACTOR=${shellEscape(workerName)} ` +
+    `BEADS_DIR=${shellEscape(beadsDir)};`
   );
 }
 

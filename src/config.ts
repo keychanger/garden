@@ -82,6 +82,17 @@ export interface ProjectConfig {
   // to ultracode. See WORKER_EFFORT_LEVELS (dashboard/create.ts).
   effort?: string;
   logColor?: string;
+  // Bead-intake loop (board→garden delegation; board's docs/DELEGATION.md).
+  // When true, this project's poller converts ready, dispatch-labeled beads
+  // in the project checkout's .beads store into workers (see
+  // dashboard/poller-intake.ts for the label contract), and every worker gets
+  // BEADS_ACTOR=<worker-name> + BEADS_DIR=<project>/.beads injected alongside
+  // the GARDEN_* vars, with sandbox write access to the canonical .beads
+  // store. Default off: projects without beads never shell out to bd.
+  beadIntake?: boolean;
+  // Intake concurrency governor: max intake-dispatched workers live at once
+  // for this project. Default DEFAULT_BEAD_INTAKE_CAP (3) in poller-intake.ts.
+  beadIntakeCap?: number;
   // Trellis workflow keys. See WORKFLOWS.md "Project config".
   // Directory containing trellis files. Resolved relative to the project
   // root. Default: ".garden/trellises".
@@ -205,6 +216,7 @@ const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "claudeProfile", "provider",
   "harness", "model", "effort", "logColor", "trellisDir", "maxTrellisIterations",
   "trellisOpusFallback", "maxGrowIterations", "requireCiSuccess", "holisticReview",
+  "beadIntake", "beadIntakeCap",
 ]);
 
 export function isValidConfigKey(key: string): boolean {

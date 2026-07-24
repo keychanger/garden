@@ -27,6 +27,7 @@ import {
 import { withFileLock } from "./file-lock.js";
 import { getWorkflow } from "./workflows/index.js";
 import { processPendingHandoffs } from "./handoff-dispatch.js";
+import { runBeadIntake } from "./poller-intake.js";
 
 // Re-exports of the public API consumed elsewhere in the codebase.
 // External callers continue to import from "./poller" — the split is
@@ -60,7 +61,22 @@ export function poll(projectName: string): boolean {
       data: { error: String(err) },
     });
   }
-  return pollProject(projectName);
+  const changed = pollProject(projectName);
+  // Bead-intake step (board→garden delegation): converts ready,
+  // dispatch-labeled beads into workers for projects opted in via
+  // `beadIntake: true`. Runs after the lifecycle pass so review/merge work is
+  // never delayed behind bd shell-outs; throttled internally (explicit
+  // `garden poke` bypasses the throttle). See poller-intake.ts.
+  let intakeChanged = false;
+  try {
+    const project = tryGetProject(projectName);
+    if (project) intakeChanged = runBeadIntake(projectName, project);
+  } catch (err) {
+    log.error("poller", "bead intake failed", {
+      data: { project: projectName, error: String(err) },
+    });
+  }
+  return changed || intakeChanged;
 }
 
 function pollProject(projectName: string): boolean {

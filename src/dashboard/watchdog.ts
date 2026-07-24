@@ -43,7 +43,7 @@ import {
 } from "./codex-usage.js";
 import { commitsBehindOrigin, gardenInstallRepo } from "./git.js";
 import { readDashState, writeDashState, withStateLock } from "./state.js";
-import { getBuildBranch } from "../config.js";
+import { getBuildBranch, loadConfig } from "../config.js";
 import { GARDEN_VERSION } from "../version.js";
 
 export const WATCHDOG_TICK_MS = 60_000;
@@ -299,6 +299,27 @@ export const HOUSEKEEP_INTERVAL_MS = 60 * 60_000;
 // kept off the render path because formatRightBar runs on the hook firehose.
 export const BUILD_STALENESS_INTERVAL_MS = 5 * 60_000;
 
+// Bead-intake heartbeat: the slow self-arm timer DELEGATION.md's intake loop
+// calls for. The poller is event-driven, and a fully idle project fires no
+// events — so an epic gated open while nothing else moves would wait forever.
+// The watchdog (the fleet's one recurring tick) pokes each opted-in project's
+// FIFO on this cadence; the poller-side 60s throttle keeps the resulting pass
+// cheap, and explicit `garden poke` wakes remain the fast path.
+export const INTAKE_BEAT_MS = 5 * 60_000;
+
+// Poke every beadIntake-enabled project's poller so its intake step runs even
+// on a quiet fleet. Config is re-read each beat so an operator toggling
+// `beadIntake` mid-session is picked up without a watchdog restart.
+export function pokeBeadIntakeProjects(): string[] {
+  const poked: string[] = [];
+  for (const [name, project] of Object.entries(loadConfig().projects)) {
+    if (project.beadIntake !== true) continue;
+    triggerProjectPoll(name);
+    poked.push(name);
+  }
+  return poked;
+}
+
 // Recount how far the running build trails its configured branch and cache it
 // in dashboard state for the status bar. Returns true when the number changed,
 // so the caller repaints only on a real move. No-ops on a dev build or an
@@ -399,6 +420,9 @@ export async function runWatchdogLoop(): Promise<void> {
   // 0, unlike the codex probe: a dashboard restart is exactly when a rebuild
   // may have just landed, and recounting costs one local git call.
   let lastStalenessAt = 0;
+  // 0 so the first tick after (re)spawn pokes intake projects — a restart may
+  // have eaten a poke, and the poller-side throttle bounds the cost.
+  let lastIntakeBeatAt = 0;
   // Timestamp the START of each iteration; the gap to the next start spans the
   // whole loop (tick body + the fixed sleep), so a suspend during EITHER is
   // measured — capturing only around the sleep would miss a suspend mid-body.
@@ -471,6 +495,17 @@ export async function runWatchdogLoop(): Promise<void> {
           if (probeCodexUsageIfStale(probeNow)) refreshDashboard();
         } catch (err) {
           log.warn("watchdog", "codex usage probe failed", { data: { error: String(err) } });
+        }
+      }
+      // Bead-intake heartbeat (see INTAKE_BEAT_MS): a plain FIFO poke per
+      // opted-in project, so gated epics dispatch even when no lifecycle
+      // event is arriving.
+      if (Date.now() - lastIntakeBeatAt >= INTAKE_BEAT_MS) {
+        lastIntakeBeatAt = Date.now();
+        try {
+          pokeBeadIntakeProjects();
+        } catch (err) {
+          log.warn("watchdog", "bead intake beat failed", { data: { error: String(err) } });
         }
       }
       // Disk housekeeping on the hourly throttle — bounds dashboard.log and the
