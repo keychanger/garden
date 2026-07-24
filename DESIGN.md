@@ -433,7 +433,7 @@ The display combines both axes: lifecycle state takes priority when present, oth
 
 The intake loop (`src/dashboard/poller-intake.ts` + the bd client in `src/dashboard/beads.ts`) converts ready, dispatch-labeled beads in a project's `.beads` store into garden workers. It is garden's half of the board→garden delegation design (board's `docs/DELEGATION.md` is the authority): bd owns the work graph and computes the ready frontier (`bd swarm status <epic> --json` — never the `--parent` family, which is empty for dependency-edge epics on bd 1.0.3); board steers dispatch via labels on the epic; garden subscribes to the frontier and executes. Opt-in per project via `beadIntake: true` (+ optional `beadIntakeCap`, default 3). Projects without the flag never shell out to bd.
 
-**Where it runs.** A step at the end of each poller cycle (`poll()` in `poller.ts`), throttled to one pass per 60 s via an on-disk mtime stamp (`intake-last-<project>` in `SESSIONS_DIR` — poller processes are exec-per-wake, so any remembered state lives on disk). `garden poke [project]` bypasses the throttle: it writes an `intake-poke-<project>` marker and pokes the project's poll FIFO (`<project>-poll-signal`), so the very next cycle runs intake now — this is the fire-and-forget wake board's dispatch gate keys use. The liveness watchdog adds the one recurring beat the design needs (`INTAKE_BEAT_MS`, 5 min): a plain FIFO poke per opted-in project, so a gated epic dispatches even when no lifecycle event is arriving.
+**Where it runs.** A step at the end of each poller cycle (`poll()` in `poller.ts`), throttled to one pass per 60 s via an on-disk mtime stamp (`intake-last-<project>` in `SESSIONS_DIR` — poller processes are exec-per-wake, so any remembered state lives on disk). `garden poke [project]` bypasses the throttle: it writes an `intake-poke-<project>` marker, ensures the project's poller exists, and pokes its FIFO (`<project>-poll-signal`), so the very next cycle runs intake now — this is the fire-and-forget wake board's dispatch gate keys use. The liveness watchdog adds the one recurring beat the design needs (`INTAKE_BEAT_MS`, 5 min): it keeps a poller alive for each opted-in project even when the project has no workers, then sends a plain FIFO poke, so a gated epic can dispatch the project's first worker when no lifecycle event is arriving.
 
 **The label contract** (all on the epic, except `retry` on the bead):
 
@@ -583,6 +583,10 @@ All read commands detect whether stdout is a TTY:
     dashboard.log           # Structured JSON log (10MB cap enforced by the watchdog's hourly truncateLog)
     <project>-poll-signal   # FIFO for waking project pollers
     <project>-poller.spawn.lock  # Transient lock serializing poller spawn across processes
+    intake-last-<project>        # Mtime stamp throttling bead-intake passes
+    intake-poke-<project>        # One-shot marker bypassing the intake throttle
+    seeds/
+      bead-<uuid>.md             # Seed briefing for an intake-dispatched worker
     ci-recheck-<project>         # Mtime marker deduping the CI gate's delayed recheck poke
     growhouse-init.zsh            # Garden growhouse init (custom prompt + auto-dispatch)
     diary-view.sh                 # Diary view editor loop (⌥d)

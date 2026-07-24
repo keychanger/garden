@@ -795,6 +795,34 @@ describe("sandboxDenyCredentials project config key", () => {
   });
 });
 
+describe("bead intake project config keys", () => {
+  async function setup() {
+    const { saveConfig, GARDEN_DIR, loadConfig } = await importConfig();
+    const { config } = await import("../src/commands/config.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
+    return { config, loadConfig };
+  }
+
+  it("persists the opt-in and a positive integer cap", async () => {
+    const { config, loadConfig } = await setup();
+    await config(["garden", "beadIntake", "true"]);
+    await config(["garden", "beadIntakeCap", "4"]);
+    expect(loadConfig().projects.garden).toMatchObject({
+      beadIntake: true,
+      beadIntakeCap: 4,
+    });
+  });
+
+  it("rejects partial and non-positive cap values", async () => {
+    const { config } = await setup();
+    await expect(config(["garden", "beadIntakeCap", "3workers"]))
+      .rejects.toThrow(/positive integer/);
+    await expect(config(["garden", "beadIntakeCap", "0"]))
+      .rejects.toThrow(/positive integer/);
+  });
+});
+
 // Holistic post-merge review mode — a three-value enum config key
 // ("off" | "shadow" | "fix"; see src/config.ts and the dispatcher in
 // src/dashboard/poller-holistic-review.ts). Beyond the sibling-key pattern

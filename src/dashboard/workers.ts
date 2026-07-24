@@ -838,7 +838,7 @@ export function killPane(): void {
         });
 
         const remaining = getWorkers(state.activeProject);
-        if (remaining.length === 0) {
+        if (remaining.length === 0 && project.beadIntake !== true) {
           stopProjectPoller(state.activeProject);
         }
 

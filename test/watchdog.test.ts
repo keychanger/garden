@@ -62,6 +62,7 @@ vi.mock("../src/dashboard/git.js", () => ({
 vi.mock("../src/config.js", () => ({
   SESSIONS_DIR: "/tmp/fake-sessions",
   getBuildBranch: vi.fn(() => "main"),
+  loadConfig: vi.fn(() => ({ projects: {} })),
 }));
 
 vi.mock("../src/version.js", () => ({ GARDEN_VERSION: "abc1234" }));
@@ -83,6 +84,7 @@ import {
   refreshBuildStaleness,
 } from "../src/dashboard/watchdog.js";
 import { commitsBehindOrigin, gardenInstallRepo } from "../src/dashboard/git.js";
+import { loadConfig } from "../src/config.js";
 import { writeDashState } from "../src/dashboard/state.js";
 import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
 import { newDashboardWindow, windowExists, listAllWindowNames } from "../src/dashboard/tmux.js";
@@ -113,6 +115,7 @@ beforeEach(() => {
   // mockReturnValue(true) would leak — restore the "no live window" default.
   windowExistsMock.mockReturnValue(false);
   registryMock._clear();
+  vi.mocked(loadConfig).mockReturnValue({ projects: {} });
 });
 
 describe("latestActivityMs", () => {
@@ -387,6 +390,15 @@ describe("healProjectPollers", () => {
     const ensure = vi.fn();
     expect(healProjectPollers(ensure)).toEqual([]);
     expect(ensure).not.toHaveBeenCalled();
+  });
+
+  it("ensures an intake-enabled project with no workers so it can dispatch the first bead", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: { board: { path: "/repo/board", beadIntake: true } },
+    });
+    const ensure = vi.fn();
+    expect(healProjectPollers(ensure)).toEqual(["board"]);
+    expect(ensure).toHaveBeenCalledWith("board");
   });
 
   it("ensures regardless of worker state — a quiescent project still needs its poller", () => {

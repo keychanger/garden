@@ -218,8 +218,8 @@ export function setProjectConfigKey(projectName: string, key: SettableKey, value
       delete project.beadIntakeCap;
       message = `Cleared ${key} for ${projectName} (default: 3)`;
     } else {
-      const n = Number.parseInt(value, 10);
-      if (!Number.isFinite(n) || n < 1) {
+      const n = Number(value);
+      if (!Number.isInteger(n) || n < 1) {
         throw new Error(`beadIntakeCap must be a positive integer, got '${value}'`);
       }
       project.beadIntakeCap = n;

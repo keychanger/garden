@@ -260,8 +260,16 @@ export function restartLongLivedPollers(gardenRunner: string): void {
   }
 
   const registry = readRegistry();
-  for (const [projectName, entries] of Object.entries(registry.workers)) {
-    if (entries.length === 0) continue;
+  const config = loadConfig();
+  const projects = new Set(
+    Object.entries(registry.workers)
+      .filter(([, entries]) => entries.length > 0)
+      .map(([projectName]) => projectName),
+  );
+  for (const [projectName, project] of Object.entries(config.projects)) {
+    if (project.beadIntake === true) projects.add(projectName);
+  }
+  for (const projectName of projects) {
     try {
       stopProjectPoller(projectName);
       startProjectPoller(projectName, gardenRunner);

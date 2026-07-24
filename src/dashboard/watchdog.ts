@@ -149,7 +149,8 @@ export function tick(lastPokeAt: Map<string, number>, nowMs: number): void {
   }
 }
 
-// Ensure every project that holds workers has exactly one live poller window.
+// Ensure every project that holds workers or has bead intake enabled has
+// exactly one live poller window.
 // Delegates to the injected `ensurePoller` (startProjectPoller), which is
 // convergent: it spawns when no window exists, collapses duplicates to one,
 // and no-ops when exactly one is live. Calling it for every project each tick
@@ -165,9 +166,17 @@ export function healProjectPollers(
   ensurePoller: (project: string) => void,
 ): string[] {
   const registry = readRegistry();
+  const config = loadConfig();
+  const projects = new Set(
+    Object.entries(registry.workers)
+      .filter(([, entries]) => entries.length > 0)
+      .map(([project]) => project),
+  );
+  for (const [project, projectConfig] of Object.entries(config.projects)) {
+    if (projectConfig.beadIntake === true) projects.add(project);
+  }
   const ensured: string[] = [];
-  for (const [project, entries] of Object.entries(registry.workers)) {
-    if (entries.length === 0) continue;
+  for (const project of projects) {
     try {
       ensurePoller(project);
       ensured.push(project);
