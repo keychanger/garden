@@ -1,9 +1,14 @@
 # Botanist Workflow
 
-> This document lives under `docs/future/` — it describes an unshipped
-> design. Workers must not act on it (no botanist workflow exists in the
-> registry, no `garden botanist` command, no skill bundle). See
-> `rules.md` § Specifications and documentation.
+> **This design has shipped** (2026-07): the `botanist` workflow is in the
+> registry, `garden botanist publish` exists, and the skill is bundled.
+> The authoritative description is `WORKFLOWS.md` § botanist plus
+> `CLAUDE.md`/`DESIGN.md` — the as-built implementation diverged from this
+> doc in several places (artifacts are git-excluded rather than committed;
+> the only publishable output is a tracked `docs/` file via
+> `isPublishablePath`; scope violations park as `botanist-scope`; the
+> designer defaults to Opus at `xhigh`). This doc remains as the design
+> record; where it disagrees with the shipped code and docs, they win.
 
 Design document for `botanist`, a proposed garden workflow whose unit of
 output is a **design artifact, not a commit** — and whose deeper purpose is to
@@ -17,10 +22,10 @@ of those three seats is independently selectable and freely swappable.
 ## Status
 
 - **Phase 1** (workflow skeleton, docs-only writes, operator-gated
-  completion, operator-driven handoff): not started. No code, no CLI surface,
-  no skill bundle.
+  completion, operator-driven handoff): **shipped 2026-07** (with the
+  as-built deviations listed in the header note).
 - **Phase 2** (crew-parameterized assisted handoff, artifact-type awareness):
-  designed below, not started.
+  designed below; `--handoff-crew` is partially in.
 - **Phase 3** (design-role-in-crew, optional design-review fan-out): sketched,
   deferred.
 

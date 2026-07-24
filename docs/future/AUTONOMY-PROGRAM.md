@@ -11,8 +11,9 @@
 Speculative — no code. This is a **north-star map**: it does not design new
 machinery so much as place the existing `docs/future/` autonomy designs in
 one prioritized sequence, name the few genuinely-new pieces that none of
-them cover, and surface two architectural forks the corpus has not yet
-resolved. It exists because garden accumulated a strong but scattered set
+them cover, and surface two architectural forks (Fork 1 — backlog
+substrate — was resolved to beads on 2026-07-24; see §5. Fork 2 remains
+open). It exists because garden accumulated a strong but scattered set
 of autonomy designs independently, and a fresh end-to-end review kept
 re-deriving them — the missing artifact was the connective tissue, not
 more designs.
@@ -247,6 +248,17 @@ single-writer poller draining an owned JSONL store structurally avoids the
 merge-conflict failure mode that still dogs beads — but `bd` is built,
 agent-legible, and PLAN-WORKFLOW already designed around it. This decision
 gates the entire origination layer; it should be made before either ships.
+
+**Resolved 2026-07-24 — beads.** The operator committed to the bd/beads
+substrate. The deciding factor was the stack above garden, not the corpus's
+internal trade-offs: board is a beads TUI and clio already reads `bd export`,
+so the "sit at the board with clio while garden executes" vision requires
+the shared graph both of those tools already speak. The consumption side
+ships first — the board→garden delegation loop specced in board's
+`docs/future/DELEGATION.md` (ready-frontier intake, `BEADS_ACTOR` join,
+bead seed contract) — with `PLAN-WORKFLOW.md` (the producer) sequenced
+after a consumer exists. `SPRIG.md`'s flat-file backlog loses as a
+substrate; its harden/refactor tiers can re-target beads if built.
 
 ### Fork 2 — the default worker's model
 
