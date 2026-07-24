@@ -10,7 +10,7 @@
 > designer defaults to Opus at `xhigh`). This doc remains as the design
 > record; where it disagrees with the shipped code and docs, they win.
 
-Design document for `botanist`, a proposed garden workflow whose unit of
+Design record for `botanist`, a shipped garden workflow whose unit of
 output is a **design artifact, not a commit** — and whose deeper purpose is to
 put a *strong* model in the design seat, in the loop with the operator, then
 hand the approved design off to a *builder* that can be a different, cheaper, or

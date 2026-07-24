@@ -24,8 +24,8 @@ import path from "node:path";
 // large retained closure. renderQuickStatus and its row-render helpers are
 // import-reachable from the hook graph via header.ts, so incremental status-pane
 // work lands here — a future extraction of the render path out of the commands
-// layer would shrink this back down. Bumped 216->220kb for the OPERATOR-UI
-// status-pane grammar (Phase 3: identity badges, ANSI-aware width helpers,
+// layer would shrink this back down. Bumped 216->220kb for the status-pane
+// grammar now specified in DESIGN.md (identity badges, ANSI-aware width helpers,
 // workflow row decoration, per-project alert counts). Bumped 220->224kb for the
 // holistic whole-task final review: its aggregated-diff prompt sections
 // (prompts.ts) and verdict handler (poller-review.ts) are import-reachable from

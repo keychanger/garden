@@ -1035,7 +1035,7 @@ describe("config harness key", () => {
 });
 
 // Project-level baseBranch key — the authoritative merge target for new
-// workers (Phase 2 of the OPERATOR-UI work). Drives the setConfigKey branch in
+// workers (see DESIGN.md "Worker row grammar"). Drives the setConfigKey branch in
 // config(): persists a trimmed branch name, clears on the sentinels, and
 // rejects a whitespace-only value. Validation of existence-on-origin is a soft
 // warning at set time (the spawn path does the hard check), so a name that
