@@ -5,6 +5,15 @@
 > `.garden/sprigs.md` convention is live). See `rules.md`
 > § Specifications and documentation.
 
+> **Partially superseded (2026-07-24).** The backlog-substrate fork was
+> resolved against this design's flat `.garden/sprigs.md` store: beads is
+> the committed substrate (AUTONOMY-PROGRAM.md §5, Fork 1). If sprig is
+> built, its backlog becomes beads (a label or tier field on beads, drained
+> through the same ready-frontier the delegation loop consumes). The parts
+> that survive unchanged: the scarce-resource reframe, the three risk
+> tiers and their reviewer enforcement (`OUT-OF-TIER`), the autoplant gate
+> chain, and the premature-`.garden-done` prerequisite.
+
 Design for **sprig**: a way for garden to turn idle token quota into
 bounded self-improvement work on registered projects, at operator-chosen
 risk levels, without spending the resources that are actually scarce.

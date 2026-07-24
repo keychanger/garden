@@ -13,7 +13,7 @@ that the merge-time review could not have seen because the evidence did
 not exist yet.
 
 This is the longer-horizon sibling of the **holistic review** feature
-currently being designed in conversation. The holistic review is a
+(since shipped — `src/dashboard/poller-holistic-review.ts`). The holistic review is a
 point-in-time snapshot taken at merge: when a default-workflow worker
 finishes a task spanning two or more merge cycles, garden spawns one
 headless reviewer over the whole-task cumulative diff to catch cross-phase
@@ -490,9 +490,9 @@ likely to be real.
 
 ## Relationship to sibling designs
 
-- **Holistic review** (in-conversation, not yet in the codebase) — the
-  point-in-time merge-time sibling and the preferred eventual hypothesis
-  producer (Phase 3). Horizon review depends on it for the automatic
+- **Holistic review** (shipped — `src/dashboard/poller-holistic-review.ts`)
+  — the point-in-time merge-time sibling and the preferred eventual
+  hypothesis producer (Phase 3). Horizon review depends on it for the automatic
   trigger but not for phases 0–2.
 - **`docs/future/SPRIG.md`** — shares the core discipline that the scarce
   resource is operator review attention and codebase coherence, not tokens.

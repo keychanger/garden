@@ -33,8 +33,8 @@ export interface ProjectConfig {
   // status pane treats a worker whose pinned base differs from this as a
   // deliberate override (a grey badge) rather than the "checkout drifted"
   // warning. Unset (the legacy default) means workers follow whatever branch
-  // the project checkout is on at spawn time. See docs/future/OPERATOR-UI.md
-  // Part 2 + PROJECT-CUSTOMIZATION.md A1.3.
+  // the project checkout is on at spawn time. See DESIGN.md "Worker row
+  // grammar" + docs/future/PROJECT-CUSTOMIZATION.md A1.3.
   baseBranch?: string;
   checks?: string;
   postMerge?: string;

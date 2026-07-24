@@ -179,7 +179,8 @@ interface RowRenderCtx {
 
 // The pieces of a worker row, assembled by collectSegments and laid out by
 // renderWorkerRow. Splitting collection from layout is what lets the TTY and
-// baked paths share one row definition. The grammar (OPERATOR-UI.md Part 1),
+// baked paths share one row definition. The grammar (DESIGN.md "Worker row
+// grammar"),
 // left to right: core (focus/icon/name/state), then the elastic detail
 // (description) — nothing sits between the state and the description — then the
 // grey identity cluster (badges + model) trailing, then the status-class flags.
@@ -294,8 +295,8 @@ function renderWorkerRow(
   return seg.stale ? dimRow(colored) : colored;
 }
 
-// Render a project header row. Shared by both paths. Layout (OPERATOR-UI.md
-// Part 1): `<n>. <name> <⋅base> <crew> ✎ ⚠n ◄` — grey identity tokens, then
+// Render a project header row. Shared by both paths. Layout (DESIGN.md "Worker
+// row grammar"): `<n>. <name> <⋅base> <crew> ✎ ⚠n ◄` — grey identity tokens, then
 // the yellow unread-alert count, then the active marker.
 function renderProjectHeader(h: {
   index: number;

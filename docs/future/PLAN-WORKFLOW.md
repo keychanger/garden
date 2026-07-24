@@ -4,6 +4,20 @@
 > design. Workers must not act on it (no `bd` commands, no bead filing,
 > no `~/.beads/`). See `rules.md` § Specifications and documentation.
 
+> **Sequencing update (2026-07-24).** The substrate fork went plan's way:
+> beads is the committed work-graph substrate (AUTONOMY-PROGRAM.md §5,
+> Fork 1). But the consumption side ships first — the board→garden
+> delegation loop specced in board's `docs/future/DELEGATION.md` — and its
+> Phase 4 "planner workflow" is a deliberately scaled-down first
+> instantiation of this design (read a pinned doc, emit wisps + an
+> integration bead, `bd dep cycles`, stop). When plan proper ships, it
+> should absorb or supersede that planner rather than coexist with it.
+> Plan is **not** superseded by botanist — they are siblings by design:
+> botanist produces the approved design *document*; plan decomposes an
+> approved document into the executable beads *graph*. One line item here
+> is already free: the `.garden-awaiting-input` human-gate sentinel
+> shipped with botanist.
+
 Design document for `plan`, garden's planned fourth workflow. Plan would
 convert a human-described feature into a graph of beads with dependencies,
 ready for parallel execution by other workflows. The phased delivery section
