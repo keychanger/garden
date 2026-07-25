@@ -1304,8 +1304,11 @@ function buildClaudeLines(nowMs: number, paneWidth: number | undefined): string[
   // No scoped meters → no extra row; a rolled-over window renders "—" per entry.
   // All scoped meters come from one fetch, so they share its age.
   const scopedAge = formatScopedAge(snap.scopedAt, nowMs);
+  const scopedFit = scopedAge && paneWidth !== undefined
+    ? computeMeterFit(paneWidth - `  · ${scopedAge}`.length)
+    : fit;
   for (const s of d.scoped ?? []) {
-    lines.push(renderMeterLine(s.label.toLowerCase(), s, nowMs, SEVEN_DAY_MS, fit, scopedAge));
+    lines.push(renderMeterLine(s.label.toLowerCase(), s, nowMs, SEVEN_DAY_MS, scopedFit, scopedAge));
   }
   // Extra usage (pay-as-you-go credits) sits below the meters as a dim footnote
   // and above the health tag — real data first, freshness annotation last.

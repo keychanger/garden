@@ -643,9 +643,25 @@ describe("renderUsagePane", () => {
     const lines = render(now, 120).split("\n");
     const scopedRow = lines.find((l) => l.includes("fable"))!;
     expect(scopedRow).toContain("11h old");
+    expect(visibleLen(scopedRow)).toBeLessThanOrEqual(120);
     // The primary bars are current, so nothing else claims staleness.
     expect(lines.find((l) => l.includes("5h "))).not.toContain("old");
     expect(render(now, 120)).not.toContain("stale");
+  });
+
+  it("fits an aged scoped row within a moderately narrow pane", async () => {
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      dataAt: new Date(now).toISOString(),
+      scopedAt: new Date(now - 11 * 60 * 60_000).toISOString(),
+      data: {
+        scoped: [{ label: "Fable", pct: 85, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() }],
+      },
+    });
+    const render = await importRender();
+    const scopedRow = render(now, 48).split("\n").find((l) => l.includes("fable"))!;
+    expect(scopedRow).toContain("11h old");
+    expect(visibleLen(scopedRow)).toBeLessThanOrEqual(48);
   });
 
   it("leaves the scoped row unannotated while it is within its cadence", async () => {
