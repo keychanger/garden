@@ -8,6 +8,7 @@ import {
   summarizeTurn,
   resolveTranscriptPath,
   sumTranscriptUsage,
+  readLatestTranscriptModel,
   formatConversationPane,
   gardenLabel,
   handoffSeedLabel,
@@ -596,5 +597,61 @@ describe("resolveTranscriptPath", () => {
 
   it("returns null when neither exists", () => {
     expect(resolveTranscriptPath(baseEntry({ transcriptPath: "/nope.jsonl" }))).toBeNull();
+  });
+});
+
+describe("readLatestTranscriptModel — the model a worker is actually running", () => {
+  const tmp = useTmpHome();
+
+  function write(name: string, content: string): string {
+    const p = path.join(tmp.sessionsDir, name);
+    fs.writeFileSync(p, content);
+    return p;
+  }
+
+  const asstWithModel = (model: string, ts: string) => ({
+    type: "assistant",
+    message: { role: "assistant", model, content: [{ type: "text", text: "hi" }] },
+    timestamp: ts,
+  });
+
+  it("returns the newest assistant message's model", () => {
+    const p = write("a.jsonl", jsonl([
+      asstWithModel("claude-opus-5", "2026-07-25T10:00:00Z"),
+      asstWithModel("claude-fable-5", "2026-07-25T11:00:00Z"),
+    ]));
+    expect(readLatestTranscriptModel(p)).toBe("claude-fable-5");
+  });
+
+  it("scans back past trailing user and tool-result lines", () => {
+    const p = write("b.jsonl", jsonl([
+      asstWithModel("claude-fable-5", "2026-07-25T11:00:00Z"),
+      user("a follow-up question"),
+      user([{ type: "tool_result", content: "done" }]),
+    ]));
+    expect(readLatestTranscriptModel(p)).toBe("claude-fable-5");
+  });
+
+  it("finds the model in the tail of a transcript larger than the scan window", () => {
+    // A megabyte of head, so the read starts mid-file and drops a partial line.
+    const head = jsonl(Array.from({ length: 400 }, () =>
+      user("x".repeat(2600))));
+    const p = write("c.jsonl", head + jsonl([asstWithModel("claude-fable-5", "2026-07-25T11:00:00Z")]));
+    expect(fs.statSync(p).size).toBeGreaterThan(1_000_000);
+    expect(readLatestTranscriptModel(p)).toBe("claude-fable-5");
+  });
+
+  it("returns undefined when no assistant message carries a model", () => {
+    const p = write("d.jsonl", jsonl([user("hello"), user("still no assistant")]));
+    expect(readLatestTranscriptModel(p)).toBeUndefined();
+  });
+
+  it("returns undefined for an unreadable transcript rather than throwing", () => {
+    expect(readLatestTranscriptModel(path.join(tmp.sessionsDir, "nope.jsonl"))).toBeUndefined();
+  });
+
+  it("ignores malformed lines", () => {
+    const p = write("e.jsonl", `{"model": broken json\n` + jsonl([asstWithModel("claude-fable-5", "2026-07-25T11:00:00Z")]));
+    expect(readLatestTranscriptModel(p)).toBe("claude-fable-5");
   });
 });

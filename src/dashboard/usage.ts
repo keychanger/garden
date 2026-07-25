@@ -40,6 +40,7 @@ import {
 import { withFileLock } from "./file-lock.js";
 import { log } from "./log.js";
 import { readRegistry, type WorkerEntry } from "./registry.js";
+import { readLatestTranscriptModel, resolveTranscriptPath } from "./conversation.js";
 
 export const USAGE_FILE = path.join(SESSIONS_DIR, "claude-usage.json");
 const USAGE_LOCK = path.join(SESSIONS_DIR, "claude-usage.lock");
@@ -644,6 +645,16 @@ export const SCOPED_POLL_MS = 60 * 60 * 1000;
 // that can collaterally rate-limit the primary /v1/messages probe.
 export const SCOPED_IDLE_POLL_MS = 12 * 60 * 60 * 1000;
 
+// When the scoped row starts carrying its own age. The row refreshes on its own
+// cadence — hourly at best, the idle keepalive otherwise — so it is legitimately
+// far older than the primary bars, which is why `scopedAt` is excluded from the
+// stale tag (see assembleSnapshot). But an hours-old bar rendered identically to
+// a live one reads as a broken meter rather than a throttled row: it is exactly
+// what a stuck gate looked like. Past the active cadence plus a margin (so an
+// actively-metered row never flickers the tag between hourly refreshes), the row
+// says how old it is.
+export const SCOPED_AGE_TAG_AFTER_MS = SCOPED_POLL_MS + 30 * 60 * 1000;
+
 // A worker counts as "actively using" a scoped model when it fired a Claude
 // hook within this window — its session is live and consuming quota now (the
 // 10s heartbeat keeps lastEventAt fresh while a worker runs; it goes stale
@@ -736,25 +747,54 @@ export function scopedFetchDue(
 
 // Whether any worker in the fleet is actively running a model whose weekly
 // quota is the scoped bar (Fable today). "Actively" = the worker's effective
-// model — its pinned `model`, or a trellis vine's `workerModel` — matches a
-// scoped label case-insensitively AND it fired a hook within SCOPED_ACTIVE_MS
-// (a live, quota-consuming session). Labels come from the last snapshot's scoped
-// meters, so the gate auto-tracks whatever model Anthropic scopes next; before
-// the first successful scoped fetch there are none, so we fall back to "fable"
-// (the current scoped model, and the substring in its "claude-fable-5" ids).
-// Pure over an explicit worker list for testability.
+// model matches a scoped label case-insensitively AND it fired a hook within
+// SCOPED_ACTIVE_MS (a live, quota-consuming session). Labels come from the last
+// snapshot's scoped meters, so the gate auto-tracks whatever model Anthropic
+// scopes next; before the first successful scoped fetch there are none, so we
+// fall back to "fable" (the current scoped model, and the substring in its
+// "claude-fable-5" ids). Pure over an explicit worker list for testability.
+//
+// The effective model is NOT `entry.model`: that field records only an explicit
+// pin (`workers new --model`, a project/crew default), and most workers carry
+// none — they run the account default, which on this fleet is routinely the
+// scoped model itself. Reading the pin alone reported "no scoped worker" for a
+// fleet that was entirely Fable, pinning the bar to the 12h keepalive forever
+// (diagnosed 2026-07-25: three live claude-fable-5 workers, every one unpinned).
+// `observedModel` resolves what the worker is really running; the pin is kept
+// as the cheap first answer, and an unresolvable model counts as not-scoped —
+// the safe direction for the throttled endpoint's budget.
 export function scopedModelInUse(
   scopedLabels: string[],
   nowMs: number,
   workers: WorkerEntry[],
+  observedModel?: (w: WorkerEntry) => string | undefined,
 ): boolean {
   const labels = (scopedLabels.length ? scopedLabels : ["fable"]).map((l) => l.toLowerCase());
   for (const w of workers) {
-    const model = (w.model ?? w.trellis?.workerModel ?? "").toLowerCase();
-    if (!model || !labels.some((l) => model.includes(l))) continue;
-    if (nowMs - (w.lastEventAt ?? 0) <= SCOPED_ACTIVE_MS) return true;
+    // Liveness first: observedModel reads the worker's transcript off disk, and
+    // a worker that has been quiet past the window cannot open the gate however
+    // it is configured.
+    if (nowMs - (w.lastEventAt ?? 0) > SCOPED_ACTIVE_MS) continue;
+    const pinned = w.model ?? w.trellis?.workerModel;
+    const model = (pinned ?? observedModel?.(w) ?? "").toLowerCase();
+    if (!model) continue;
+    if (labels.some((l) => model.includes(l))) return true;
   }
   return false;
+}
+
+// What a worker is actually running, read from its transcript. Only claude-code
+// workers can spend Anthropic scoped quota — a Codex worker's rollout names
+// OpenAI models, so skip it rather than parse a foreign format for an answer
+// that could never match a scoped label.
+function observedWorkerModel(w: WorkerEntry): string | undefined {
+  if (w.harness && w.harness !== "claude-code") return undefined;
+  try {
+    const transcript = resolveTranscriptPath(w);
+    return transcript ? readLatestTranscriptModel(transcript) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // IO wrapper over scopedModelInUse: reads every project's workers from the
@@ -767,7 +807,7 @@ function anyScopedModelWorkerActive(
   try {
     const labels = (prior?.data?.scoped ?? []).map((s) => s.label);
     const workers = Object.values(readRegistry().workers).flat();
-    return scopedModelInUse(labels, nowMs, workers);
+    return scopedModelInUse(labels, nowMs, workers, observedWorkerModel);
   } catch {
     return false;
   }
@@ -1262,8 +1302,10 @@ function buildClaudeLines(nowMs: number, paneWidth: number | undefined): string[
   lines.push(renderMeterLine("week", d.weekly,   nowMs, SEVEN_DAY_MS, fit));
   // One bar per model-scoped weekly meter (Fable, etc.), labeled by the model.
   // No scoped meters → no extra row; a rolled-over window renders "—" per entry.
+  // All scoped meters come from one fetch, so they share its age.
+  const scopedAge = formatScopedAge(snap.scopedAt, nowMs);
   for (const s of d.scoped ?? []) {
-    lines.push(renderMeterLine(s.label.toLowerCase(), s, nowMs, SEVEN_DAY_MS, fit));
+    lines.push(renderMeterLine(s.label.toLowerCase(), s, nowMs, SEVEN_DAY_MS, fit, scopedAge));
   }
   // Extra usage (pay-as-you-go credits) sits below the meters as a dim footnote
   // and above the health tag — real data first, freshness annotation last.
@@ -1444,12 +1486,22 @@ export function formatBriefAge(ms: number): string {
   return `${Math.floor(hr / 24)}d`;
 }
 
+// Age annotation for the scoped row, "" while the bar is within its own
+// cadence. Pure; SCOPED_AGE_TAG_AFTER_MS carries the reasoning.
+export function formatScopedAge(scopedAt: string | undefined, nowMs: number): string {
+  const at = scopedAt ? Date.parse(scopedAt) : NaN;
+  if (!Number.isFinite(at)) return "";
+  const ageMs = nowMs - at;
+  return ageMs > SCOPED_AGE_TAG_AFTER_MS ? `${formatBriefAge(ageMs)} old` : "";
+}
+
 function renderMeterLine(
   label: string,
   meter: UsageMeter | undefined,
   nowMs: number,
   windowMs: number | undefined,
   fit: { barWidth: number; showReset: boolean },
+  suffix = "",
 ): string {
   const paddedLabel = label.length > LABEL_WIDTH ? label.slice(0, LABEL_WIDTH) : label.padEnd(LABEL_WIDTH);
   if (!meter) return `${INDENT}${paddedLabel}  ${dim("—")}`;
@@ -1473,7 +1525,10 @@ function renderMeterLine(
     ? formatDurationBare(resetsAt - nowMs)
     : "";
   const resetPart = resetText ? `  ${dim(resetText)}` : "";
-  return `${INDENT}${paddedLabel}  ${bar}  ${pctText}${resetPart}`;
+  // Rides the same width budget as the reset column: on a pane too narrow for
+  // the reset there is no room for a second annotation either.
+  const agePart = suffix && fit.showReset ? `  ${dim(`· ${suffix}`)}` : "";
+  return `${INDENT}${paddedLabel}  ${bar}  ${pctText}${resetPart}${agePart}`;
 }
 
 function renderBar(pct: number, barWidth: number, markerPct?: number): string {

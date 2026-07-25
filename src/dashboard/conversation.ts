@@ -153,6 +153,63 @@ export function sumTranscriptUsage(transcriptPath: string | null): TranscriptUsa
   return total;
 }
 
+// Bytes of transcript tail scanned for the running model. The newest assistant
+// message is normally the last line, so the scan almost always hits on its
+// first candidate; the window only needs to be wide enough to clear a trailing
+// run of user/tool lines.
+const MODEL_TAIL_BYTES = 256 * 1024;
+
+// The model a worker is ACTUALLY running, from the newest assistant message in
+// its transcript. `WorkerEntry.model` records only an explicit pin, so an
+// unpinned worker — the common case — runs the account default, which the
+// registry cannot name. Callers that must reason about real model usage (the
+// scoped usage-meter gate) need this rather than the pin.
+//
+// Same ground truth as sumTranscriptUsage().model, but tail-read: that one
+// parses the entire transcript for its token sums, which is far too heavy for
+// something the usage poller calls per live worker every cycle.
+//
+// Fails soft to undefined on any I/O or parse error.
+export function readLatestTranscriptModel(transcriptPath: string): string | undefined {
+  let raw: string;
+  let partialHead = false;
+  try {
+    const size = fs.statSync(transcriptPath).size;
+    const start = Math.max(0, size - MODEL_TAIL_BYTES);
+    partialHead = start > 0;
+    const fd = fs.openSync(transcriptPath, "r");
+    try {
+      const buf = Buffer.alloc(Math.min(size, MODEL_TAIL_BYTES));
+      const read = fs.readSync(fd, buf, 0, buf.length, start);
+      raw = buf.subarray(0, read).toString("utf-8");
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return undefined;
+  }
+  const lines = raw.split("\n");
+  // Reading from an offset can land mid-line; that first fragment is not
+  // parseable JSON and would only ever be skipped, but drop it explicitly.
+  if (partialHead) lines.shift();
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    // Cheap pre-filter: most transcript lines are user/tool records with no
+    // model field, and parsing them all would dominate the scan.
+    if (!line || !line.includes('"model"')) continue;
+    let obj: Record<string, unknown>;
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!obj || typeof obj !== "object" || obj.type !== "assistant") continue;
+    const message = obj.message as { model?: string } | undefined;
+    if (typeof message?.model === "string" && message.model) return message.model;
+  }
+  return undefined;
+}
+
 // Read the tail of the transcript and return the last `maxTurns` turns in
 // chronological order (oldest first). Fails soft: any I/O or parse error, or a
 // schema we don't recognize, yields an empty array rather than throwing.

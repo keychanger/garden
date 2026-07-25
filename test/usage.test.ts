@@ -6,6 +6,7 @@ import {
   parseUnifiedHeaders,
   scopedFetchDue,
   scopedModelInUse,
+  formatScopedAge,
   mergeUsageData,
   assembleSnapshot,
   formatDuration,
@@ -21,6 +22,7 @@ import {
   SCOPED_POLL_MS,
   SCOPED_IDLE_POLL_MS,
   SCOPED_ACTIVE_MS,
+  SCOPED_AGE_TAG_AFTER_MS,
   RATE_LIMIT_FLOOR_MS,
   RATE_LIMIT_MARGIN_MS,
   RATE_LIMIT_MAX_BACKOFF_MS,
@@ -221,9 +223,53 @@ describe("scopedModelInUse — gate the Fable fetch on an active Fable worker", 
   it("is false when no live worker runs a scoped model", () => {
     const workers = [
       { name: "a", model: "claude-opus-4-8", ...fresh },
-      { name: "b", ...fresh }, // account-default model, no pin
     ] as never;
     expect(scopedModelInUse(["Fable"], now, workers)).toBe(false);
+  });
+  it("is false for an unpinned worker when nothing can observe what it runs", () => {
+    const workers = [{ name: "b", ...fresh }] as never; // account default, unknowable
+    expect(scopedModelInUse(["Fable"], now, workers)).toBe(false);
+  });
+
+  // The pin is only a pin: an unpinned worker runs the account default, which is
+  // routinely the scoped model itself. Reading the pin alone reported "idle" for
+  // a fleet that was entirely Fable and froze the bar on the 12h keepalive.
+  it("is true when an unpinned live worker is observed running a scoped model", () => {
+    const workers = [{ name: "b", ...fresh }] as never;
+    expect(scopedModelInUse(["Fable"], now, workers, () => "claude-fable-5")).toBe(true);
+  });
+  it("is false when an unpinned live worker is observed running an unscoped model", () => {
+    const workers = [{ name: "b", ...fresh }] as never;
+    expect(scopedModelInUse(["Fable"], now, workers, () => "claude-opus-5")).toBe(false);
+  });
+  it("prefers the pin over the observed model — no read when the pin answers", () => {
+    const workers = [{ name: "w", model: "claude-fable-5", ...fresh }] as never;
+    const observed = vi.fn(() => "claude-opus-5");
+    expect(scopedModelInUse(["Fable"], now, workers, observed)).toBe(true);
+    expect(observed).not.toHaveBeenCalled();
+  });
+  it("never observes a worker that is quiet past the active window", () => {
+    const workers = [{ name: "w", ...stale }] as never;
+    const observed = vi.fn(() => "claude-fable-5");
+    expect(scopedModelInUse(["Fable"], now, workers, observed)).toBe(false);
+    expect(observed).not.toHaveBeenCalled();
+  });
+});
+
+describe("formatScopedAge — the scoped row's own freshness annotation", () => {
+  const now = Date.now();
+  it("is silent while the bar is within its active cadence", () => {
+    expect(formatScopedAge(new Date(now - 40 * 60_000).toISOString(), now)).toBe("");
+  });
+  it("is silent right up to the threshold, so an hourly refresh never flickers it", () => {
+    expect(formatScopedAge(new Date(now - SCOPED_AGE_TAG_AFTER_MS + 60_000).toISOString(), now)).toBe("");
+  });
+  it("carries the age once the bar outlives its cadence", () => {
+    expect(formatScopedAge(new Date(now - 11 * 60 * 60_000).toISOString(), now)).toBe("11h old");
+  });
+  it("is silent when the scoped bar has never been fetched", () => {
+    expect(formatScopedAge(undefined, now)).toBe("");
+    expect(formatScopedAge("not-a-date", now)).toBe("");
   });
 });
 
@@ -576,6 +622,44 @@ describe("renderUsagePane", () => {
     const render = await importRender();
     const out = render(now);
     expect(out).toContain("rate-limited");
+  });
+
+  it("tags the scoped row with its age once it outlives its own cadence", async () => {
+    // The scoped bar refreshes on its own slow cadence, so it can be far older
+    // than the primary bars without anything being wrong — but an hours-old bar
+    // that renders identically to a live one is indistinguishable from a stuck
+    // meter, which is exactly how a broken gate presented.
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      dataAt: new Date(now).toISOString(),
+      scopedAt: new Date(now - 11 * 60 * 60_000).toISOString(),
+      data: {
+        fiveHour: { pct: 26, resetsAt: new Date(now + 2 * 60 * 60_000).toISOString() },
+        weekly:   { pct: 35, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
+        scoped:   [{ label: "Fable", pct: 85, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() }],
+      },
+    });
+    const render = await importRender();
+    const lines = render(now, 120).split("\n");
+    const scopedRow = lines.find((l) => l.includes("fable"))!;
+    expect(scopedRow).toContain("11h old");
+    // The primary bars are current, so nothing else claims staleness.
+    expect(lines.find((l) => l.includes("5h "))).not.toContain("old");
+    expect(render(now, 120)).not.toContain("stale");
+  });
+
+  it("leaves the scoped row unannotated while it is within its cadence", async () => {
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      dataAt: new Date(now).toISOString(),
+      scopedAt: new Date(now - 40 * 60_000).toISOString(),
+      data: {
+        fiveHour: { pct: 26, resetsAt: new Date(now + 2 * 60 * 60_000).toISOString() },
+        scoped:   [{ label: "Fable", pct: 85, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() }],
+      },
+    });
+    const render = await importRender();
+    expect(render(now, 120)).not.toContain("old");
   });
 
   it("renders 5h, week, and a scoped model bar", async () => {
