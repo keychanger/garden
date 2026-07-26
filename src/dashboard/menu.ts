@@ -35,6 +35,12 @@ export interface MenuRow {
 export interface MenuSpec {
   title: string;
   rows: MenuRow[];
+  /** Row to select when the menu opens (0-based, counting separators — tmux
+   *  indexes every item and skips forward off an unselectable one). Omitted or
+   *  negative leaves tmux's default, the first row. Menus re-opened by their
+   *  own selection (the ⌥⇧N composer) use this so a choice returns the cursor
+   *  where it was instead of the top. */
+  startingChoice?: number;
 }
 
 // Build the `tmux display-menu` argv for a spec. Pure (menuRunShell is pure), so
@@ -42,6 +48,11 @@ export interface MenuSpec {
 // empty name); a normal row pushes three (label, key, command).
 export function buildMenuArgv(spec: MenuSpec): string[] {
   const argv = ["display-menu", "-O", "-T", spec.title, "-x", "C", "-y", "C"];
+  // tmux rejects a negative -C, and only honors it at all for a menu opened
+  // from a key binding rather than the mouse — which is every menu garden opens.
+  if (spec.startingChoice !== undefined && spec.startingChoice >= 0) {
+    argv.push("-C", String(spec.startingChoice));
+  }
   for (const row of spec.rows) {
     if (row.sep) {
       argv.push("");

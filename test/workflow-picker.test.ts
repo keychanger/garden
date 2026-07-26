@@ -152,6 +152,20 @@ describe("buildWorkflowPickerPlan", () => {
     const rows = buildWorkflowPickerPlan("proj with space", RUNNER).rows;
     expect(rows[1].run).toContain("'proj with space'");
   });
+
+  it("re-opens on the dim just staged, so a choice doesn't walk the cursor back to the top", () => {
+    // tmux's -C indexes every item, separator included — the row positions
+    // asserted above are the indexes.
+    expect(buildWorkflowPickerPlan("proj", RUNNER, {}, "member").startingChoice).toBe(5);
+    expect(buildWorkflowPickerPlan("proj", RUNNER, {}, "model").startingChoice).toBe(6);
+    expect(buildWorkflowPickerPlan("proj", RUNNER, {}, "effort").startingChoice).toBe(7);
+    expect(buildWorkflowPickerPlan("proj", RUNNER, {}, "crew").startingChoice).toBe(8);
+    expect(buildWorkflowPickerPlan("proj", RUNNER, {}, "base").startingChoice).toBe(9);
+  });
+
+  it("opens at the top when nothing was staged (the ⌥⇧N hotkey path)", () => {
+    expect(buildWorkflowPickerPlan("proj", RUNNER).startingChoice).toBeUndefined();
+  });
 });
 
 // ─── buildComposeModelSubmenuPlan ─────────────────────────────────────────
@@ -177,6 +191,13 @@ describe("buildComposeModelSubmenuPlan", () => {
     const rows = buildComposeModelSubmenuPlan("proj", ["opus", "sonnet"], "sonnet", RUNNER).rows;
     expect(rows[0].label).toBe("opus");
     expect(rows[1].label).toContain("✓");
+  });
+
+  it("opens on the staged value, and at the top when nothing is staged or the value is gone", () => {
+    expect(buildComposeModelSubmenuPlan("proj", ["opus", "sonnet"], "sonnet", RUNNER).startingChoice).toBe(1);
+    expect(buildComposeModelSubmenuPlan("proj", ["opus"], undefined, RUNNER).startingChoice).toBeUndefined();
+    // A staged value the member's vocabulary no longer offers (harness changed).
+    expect(buildComposeModelSubmenuPlan("proj", ["opus"], "gpt-5.6-sol", RUNNER).startingChoice).toBeUndefined();
   });
 });
 

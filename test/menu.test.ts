@@ -31,6 +31,20 @@ describe("buildMenuArgv", () => {
     expect(argv.slice(-3)).toEqual(["R", "", menuRunShell("garden dashboard _x")]);
   });
 
+  it("emits -C for a starting choice, before the row tokens", () => {
+    const argv = buildMenuArgv({ title: "t", rows: [{ label: "A", key: "a", tmux: "x" }], startingChoice: 5 });
+    expect(argv.slice(0, 10)).toEqual(["display-menu", "-O", "-T", "t", "-x", "C", "-y", "C", "-C", "5"]);
+  });
+
+  it("omits -C when there is no starting choice, or one tmux would reject", () => {
+    expect(buildMenuArgv({ title: "t", rows: [] })).not.toContain("-C");
+    expect(buildMenuArgv({ title: "t", rows: [], startingChoice: -1 })).not.toContain("-C");
+  });
+
+  it("keeps a zero starting choice (the first row is a real selection)", () => {
+    expect(buildMenuArgv({ title: "t", rows: [], startingChoice: 0 }).slice(-2)).toEqual(["-C", "0"]);
+  });
+
   it("prefers a raw `tmux` command over `run`", () => {
     const argv = buildMenuArgv({ title: "t", rows: [{ label: "R", tmux: "command-prompt -p x", run: "ignored" }] });
     expect(argv.slice(-1)).toEqual(["command-prompt -p x"]);

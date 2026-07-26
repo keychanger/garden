@@ -473,6 +473,17 @@ function draftBracket(draft: SpawnDraftPatch): string {
   return parts.length ? ` (${parts.join(" · ")})` : "";
 }
 
+// The composer's override dimensions, and the quick-key of the row that stages
+// each one. Staging a dim re-opens the composer with that row still under the
+// cursor (`focus`), so picking a model leaves you at model — a menu that
+// re-opens itself on every choice would otherwise walk the operator back to the
+// top row each time.
+export type ComposerDim = "member" | "model" | "effort" | "crew" | "base";
+
+const COMPOSER_DIM_KEYS: Record<ComposerDim, string> = {
+  member: "w", model: "m", effort: "e", crew: "c", base: "b",
+};
+
 // Build the workflow picker / spawn composer plan: the workflow rows, then the
 // override rows (build member, model, effort, crew, base). The `default` row
 // dispatches _compose-default (consumes the staged draft) — NOT _new-worker,
@@ -482,6 +493,7 @@ export function buildWorkflowPickerPlan(
   projectName: string,
   runner: string,
   draft: SpawnDraftPatch = {},
+  focus?: ComposerDim,
 ): MenuSpec {
   const p = shellEscape(projectName);
   const rows: MenuRow[] = [
@@ -496,7 +508,19 @@ export function buildWorkflowPickerPlan(
     { label: `(c) crew…          [${draft.crew ?? "default"}]`, key: "c", run: `${runner} dashboard _compose-crew-submenu ${p}` },
     { label: `(b) base branch…   [${draft.base ?? "default"}]`, key: "b", run: `${runner} dashboard _compose-base-submenu ${p}` },
   ];
-  return { title: `New worker on ${projectName}${draftBracket(draft)}`, rows };
+  const startingChoice = focus ? rows.findIndex(r => r.key === COMPOSER_DIM_KEYS[focus]) : undefined;
+  return { title: `New worker on ${projectName}${draftBracket(draft)}`, rows, startingChoice };
+}
+
+// Open a value submenu on the staged value, so re-entering a dim you already
+// set lands on it rather than the top of a long list (branches, Codex models).
+// Nothing staged means no row describes the current state — the trailing
+// "clear" row is the default, not a selection — so tmux's own default (the
+// first row) stands.
+function currentIndex(values: string[], current: string | undefined): number | undefined {
+  if (!current) return undefined;
+  const i = values.indexOf(current);
+  return i >= 0 ? i : undefined;
 }
 
 // Compose base/crew submenus: pick a value, stage it in the draft, re-open the
@@ -511,7 +535,7 @@ export function buildComposeBaseSubmenuPlan(project: string, branches: string[],
     run: `${runner} dashboard _spawn-draft ${p} base ${shellEscape(b)}`,
   }));
   rows.push({ label: "(0) clear — project default", key: "0", run: `${runner} dashboard _spawn-draft ${p} base ${shellEscape("")}` });
-  return { title: `Base branch for the new worker on ${project}`, rows };
+  return { title: `Base branch for the new worker on ${project}`, rows, startingChoice: currentIndex(branches, current) };
 }
 
 // Build member dim — who builds: `claude`, `codex`, any other registered
@@ -527,7 +551,7 @@ export function buildComposeMemberSubmenuPlan(project: string, members: string[]
     run: `${runner} dashboard _spawn-draft ${p} member ${shellEscape(m)}`,
   }));
   rows.push({ label: "(0) clear — project default", key: "0", run: `${runner} dashboard _spawn-draft ${p} member ${shellEscape("")}` });
-  return { title: `Build agent for the new worker on ${project}`, rows };
+  return { title: `Build agent for the new worker on ${project}`, rows, startingChoice: currentIndex(members, current) };
 }
 
 export function buildComposeCrewSubmenuPlan(project: string, crews: string[], current: string | undefined, runner: string): MenuSpec {
@@ -538,7 +562,7 @@ export function buildComposeCrewSubmenuPlan(project: string, crews: string[], cu
     run: `${runner} dashboard _spawn-draft ${p} crew ${shellEscape(c)}`,
   }));
   rows.push({ label: "(0) clear — project default crew", key: "0", run: `${runner} dashboard _spawn-draft ${p} crew ${shellEscape("")}` });
-  return { title: `Crew for the new worker on ${project}`, rows };
+  return { title: `Crew for the new worker on ${project}`, rows, startingChoice: currentIndex(crews, current) };
 }
 
 // Model dim (default/grow workers; trellis resolves its own). Fixed alias list
@@ -551,7 +575,7 @@ export function buildComposeModelSubmenuPlan(project: string, models: string[], 
     run: `${runner} dashboard _spawn-draft ${p} model ${shellEscape(m)}`,
   }));
   rows.push({ label: "(0) clear — account default", key: "0", run: `${runner} dashboard _spawn-draft ${p} model ${shellEscape("")}` });
-  return { title: `Model for the new worker on ${project}`, rows };
+  return { title: `Model for the new worker on ${project}`, rows, startingChoice: currentIndex(models, current) };
 }
 
 // Effort dim (default/grow workers). The four `--effort` rungs plus "ultra" —
@@ -568,12 +592,12 @@ export function buildComposeEffortSubmenuPlan(project: string, efforts: string[]
     };
   });
   rows.push({ label: "(0) clear — account default", key: "0", run: `${runner} dashboard _spawn-draft ${p} effort ${shellEscape("")}` });
-  return { title: `Effort for the new worker on ${project}`, rows };
+  return { title: `Effort for the new worker on ${project}`, rows, startingChoice: currentIndex(efforts, current) };
 }
 
 // Spawned by the ⌥⇧N hotkey. Resolves the active project, builds the
 // 3-row plan, and drives tmux display-menu.
-export function runWorkflowPicker(explicitProject?: string): void {
+export function runWorkflowPicker(explicitProject?: string, focus?: ComposerDim): void {
   let projectName = explicitProject;
   if (!projectName) {
     const state = readDashState();
@@ -590,7 +614,7 @@ export function runWorkflowPicker(explicitProject?: string): void {
   }
 
   const runner = resolveGardenRunner();
-  runMenu(buildWorkflowPickerPlan(projectName, runner, readSpawnDraft(projectName)));
+  runMenu(buildWorkflowPickerPlan(projectName, runner, readSpawnDraft(projectName), focus));
 }
 
 // _compose-base-submenu / _compose-crew-submenu: stage a base/crew override.
@@ -701,7 +725,7 @@ export function stageSpawnDraft(projectName: string, field: string, value: strin
     }
   }
   writeSpawnDraft(projectName, patch);
-  runWorkflowPicker(projectName);
+  runWorkflowPicker(projectName, field);
 }
 
 // _compose-default <project>: consume the staged draft and spawn a default
