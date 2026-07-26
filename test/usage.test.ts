@@ -100,6 +100,18 @@ describe("normalizeUsage", () => {
     expect(normalizeUsage(raw).scoped).toBeUndefined();
   });
 
+  it("only treats the exact inactive zero-percent null-reset shape as unopened", () => {
+    const scope = { model: { display_name: "Fable" } };
+    const raw = {
+      limits: [
+        { kind: "weekly_scoped", percent: 0, is_active: false, scope },
+        { kind: "weekly_scoped", percent: 5, resets_at: null, is_active: false, scope },
+        { kind: "weekly_scoped", percent: 0, resets_at: null, is_active: true, scope },
+      ],
+    };
+    expect(normalizeUsage(raw).scoped).toBeUndefined();
+  });
+
   it("treats null buckets as absent", () => {
     const raw = {
       five_hour:        { utilization: 4, resets_at: "2026-04-15T23:00:00Z" },

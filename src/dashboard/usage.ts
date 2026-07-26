@@ -512,6 +512,7 @@ function pickScopedMeters(limits: unknown): ScopedMeter[] {
     if (e["kind"] !== "weekly_scoped") continue;
     const pct = e["percent"];
     const reset = e["resets_at"];
+    const active = e["is_active"];
     const scope = e["scope"];
     const model = scope && typeof scope === "object"
       ? (scope as Record<string, unknown>)["model"]
@@ -520,8 +521,11 @@ function pickScopedMeters(limits: unknown): ScopedMeter[] {
       ? (model as Record<string, unknown>)["display_name"]
       : undefined;
     if (typeof pct !== "number" || typeof label !== "string" || !label) continue;
-    if (reset != null && typeof reset !== "string") continue;
-    out.push(reset ? { pct, resetsAt: reset, label } : { pct, label });
+    if (typeof reset === "string") {
+      out.push({ pct, resetsAt: reset, label });
+    } else if (reset === null && pct === 0 && active === false) {
+      out.push({ pct, label });
+    }
   }
   return out;
 }
