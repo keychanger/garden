@@ -492,7 +492,7 @@ describe("updateHeaderVar", () => {
     expect(nameCalls).toHaveLength(1);
     const strip = nameCalls[0][2];
     // Active plot is filled + bold; others empty + dim.
-    expect(strip).toContain("#[bold]● imp#[default]");
+    expect(strip).toContain("#[fg=default,bold]● imp#[default]");
     expect(strip).toContain("#[fg=colour244]○ all#[default]");
   });
 
@@ -503,7 +503,7 @@ describe("updateHeaderVar", () => {
     const strip = nameCalls[0][2];
     expect(strip).toContain("#[fg=colour244]○ all#[default]");
     expect(strip).toContain("#[fg=colour244]○ imp#[default]");
-    expect(strip).not.toContain("#[bold]●");
+    expect(strip).not.toContain("●");
   });
 
   it("clears @garden_plot on the status pane (plot strip lives in @garden_name now)", () => {
@@ -593,7 +593,7 @@ describe("updateHeaderVar", () => {
 
     const strip = vi.mocked(setPaneVar).mock.calls.find(c => c[1] === "garden_name")?.[2] ?? "";
     // The display carries a current braille frame (not the sentinel).
-    expect(strip).toMatch(/#\[bold\]● [⠀-⣿] imp#\[default\]/);
+    expect(strip).toMatch(/#\[fg=default,bold\]● [⠀-⣿] imp#\[default\]/);
 
     // The template written to disk carries the sentinel instead of the frame.
     const writeCall = writeFileSpy.mock.calls.find(c => String(c[0]).includes("plot-strip.template."));
@@ -603,6 +603,45 @@ describe("updateHeaderVar", () => {
 
     writeFileSpy.mockRestore();
     renameSpy.mockRestore();
+  });
+
+  it("renders the spinner in flat grey on a non-active plot, inside the segment's own color run", () => {
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: { garden: [{ name: "w1", sessionId: "s", task: "", agentStatus: "working" }] },
+    } as never);
+    vi.mocked(resolveWorkerStatus).mockReturnValue("working" as never);
+
+    updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "imp" }) });
+    const strip = vi.mocked(setPaneVar).mock.calls.find(c => c[1] === "garden_name")?.[2] ?? "";
+    // "all" is not the active plot: circle, spinner and name share one grey run.
+    // The spinner must NOT sit in a bare #[default] gap — see formatPlotSegment.
+    expect(strip).toMatch(/#\[fg=colour244\]○ [⠀-⣿] all#\[default\]/);
+  });
+
+  // Regression guard for the green-spinner bug: the strip is drawn as the status
+  // pane's pane-border-format, where a glyph with no explicit fg resolves against
+  // tmux's pane-active-border-style (default fg=green) whenever that pane is
+  // active. Every visible glyph must therefore live inside an explicit #[fg=…]
+  // run, never after a bare #[default].
+  it("leaves no glyph colorless in any plot state", () => {
+    for (const status of ["working", "failing", "asking", "done", "idle"]) {
+      vi.mocked(readRegistry).mockReturnValue({
+        workers: { garden: [{ name: "w1", sessionId: "s", task: "", agentStatus: status }] },
+      } as never);
+      vi.mocked(resolveWorkerStatus).mockReturnValue(status as never);
+
+      for (const activePlot of ["imp", null]) {
+        vi.mocked(setPaneVar).mockClear();
+        updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot }) });
+        const strip = vi.mocked(setPaneVar).mock.calls.find(c => c[1] === "garden_name")?.[2] ?? "";
+        // Text after a #[default] and before the next #[…] is unstyled; only the
+        // two-space separator between segments is allowed to land there.
+        for (const gap of strip.split("#[default]").slice(1)) {
+          const unstyled = gap.split("#[")[0];
+          expect(unstyled.trim(), `unstyled glyph in ${status}/${activePlot} strip: ${strip}`).toBe("");
+        }
+      }
+    }
   });
 
   it("prioritizes failing > asking > merged > working > idle across workers in a plot", () => {

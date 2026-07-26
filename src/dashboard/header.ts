@@ -230,20 +230,30 @@ function buildPlotStrip(
   return { display, template };
 }
 
+// Every glyph in a segment MUST carry an explicit `fg=`. This strip is drawn as
+// the status pane's pane-border-format, and tmux resolves a colorless glyph
+// against the base cell it hands to format_draw — pane-border-style normally,
+// but pane-active-border-style whenever the status pane is the active pane.
+// Garden never overrides those, so the tmux default applies:
+//   #{?pane_in_mode,fg=yellow,#{?synchronize-panes,fg=red,fg=green}}
+// A colorless glyph therefore turned GREEN every time focus landed on the
+// status pane (the mouse-lock bindings in hotkeys.ts select it before the
+// pane-focus-in guard bounces focus away, so a click or wheel over the strip
+// was enough) and yellow in copy-mode — reading as a `done` plot when the plot
+// was merely working. `fg=default` is the color the border already resolved to
+// in the common case, so pinning it preserves today's look and only removes the
+// leak. Per DESIGN.md, green in this strip means `done` and nothing else.
 function formatPlotSegment(name: string, isActive: boolean, status: PlotState): string {
   const circle = isActive ? "●" : "○";
+  const neutral = isActive ? "fg=default,bold" : "fg=colour244";
   if (status === "idle") {
-    return isActive
-      ? `#[bold]${circle} ${name}#[default]`
-      : `#[fg=colour244]${circle} ${name}#[default]`;
+    return `#[${neutral}]${circle} ${name}#[default]`;
   }
   const icon = PLOT_ICONS[status];
   if (status === "working") {
-    // Keep active/inactive bold/dim on circle+name; spinner stays bright so
-    // "something's happening" reads at a glance even on unselected plots.
-    return isActive
-      ? `#[bold]${circle} ${icon} ${name}#[default]`
-      : `#[fg=colour244]${circle}#[default] ${icon} #[fg=colour244]${name}#[default]`;
+    // The spinner shares the segment's neutral color rather than standing out
+    // on its own: bright-on-active, flat grey on the plots you aren't in.
+    return `#[${neutral}]${circle} ${icon} ${name}#[default]`;
   }
   const color = PLOT_COLORS[status];
   const style = isActive ? `fg=${color},bold` : `fg=${color}`;
