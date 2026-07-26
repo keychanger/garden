@@ -55,8 +55,15 @@ export interface UsageMeter {
 // with the model's display name — so the label is data, and the bar
 // auto-tracks whatever model Anthropic scopes next without a code change.
 // Zero or more per response.
-export interface ScopedMeter extends UsageMeter {
+//
+// `resetsAt` is optional here (unlike the flat buckets): a scoped window that
+// has not opened yet — no usage of that model since the weekly reset — comes
+// back as `is_active: false` with `percent: 0` and a null `resets_at`. That is
+// a real 0% reading, not a malformed entry, so it keeps its bar and simply
+// renders without a reset countdown.
+export interface ScopedMeter extends Omit<UsageMeter, "resetsAt"> {
   label: string;
+  resetsAt?: string; // ISO 8601; absent until the scoped window opens
 }
 
 // Pay-as-you-go overflow credits beyond the plan quota. Surfaced only when the
@@ -121,6 +128,11 @@ export function snapshotMeters(snap: UsageSnapshot | null): Meter[] {
   if (d.fiveHour) out.push({ key: "fiveHour", label: "5h", ...d.fiveHour });
   if (d.weekly) out.push({ key: "weekly", label: "week", ...d.weekly });
   for (const s of d.scoped ?? []) {
+    // A scoped window that hasn't opened has no reset anchor, and every
+    // consumer of this seam is reset-anchored policy (pause until reset,
+    // fire-after-reset). Such a meter also reads 0%, so nothing downstream
+    // wants it; the pane renders it straight from `data.scoped`.
+    if (!s.resetsAt) continue;
     out.push({ key: "scoped", label: s.label, pct: s.pct, resetsAt: s.resetsAt });
   }
   return out;
@@ -370,8 +382,11 @@ export function parseRetryAfter(header: unknown, nowMs: number = Date.now()): nu
 //     seven_day_opus:   null,
 //     limits: [ { kind: "session",       group, percent, resets_at },
 //               { kind: "weekly_all",    group, percent, resets_at },
-//               { kind: "weekly_scoped", group, percent, resets_at,
+//               { kind: "weekly_scoped", group, percent, resets_at, is_active,
 //                 scope: { model: { id, display_name } } }, ... ],
+//     (a weekly_scoped entry the account hasn't used since the weekly reset is
+//      served with is_active: false, percent: 0, and a NULL resets_at — the
+//      window hasn't opened, so there is nothing to count down to)
 //     extra_usage:      { is_enabled, monthly_limit, used_credits, utilization } | null }
 // As of 2026-05 some responses arrive wrapped in an envelope:
 //   { schema_version: 2, quota: { five_hour: ..., seven_day: ..., ... } }
@@ -479,8 +494,15 @@ function pickBuckets(r: Record<string, unknown>): UsageData {
 // Model-scoped weekly meters live in the `limits` array as `weekly_scoped`
 // entries, each tagged with `scope.model.display_name`. Multiple scoped
 // models yield multiple bars. Parsed defensively: an entry missing a numeric
-// percent, a reset timestamp, or a usable label is skipped rather than
-// rendered as a mislabeled or empty bar.
+// percent or a usable label is skipped rather than rendered as a mislabeled
+// or empty bar.
+//
+// A null `resets_at` is NOT malformed. Until the model is used in the current
+// weekly window the endpoint reports the entry as `is_active: false`,
+// `percent: 0`, `resets_at: null` — there is no countdown because the window
+// has not started. Dropping it there made the Fable bar vanish from the pane
+// at every weekly reset and reappear only on first use, which reads as a
+// broken meter; the bar is kept, anchor-less, at its true 0%.
 function pickScopedMeters(limits: unknown): ScopedMeter[] {
   if (!Array.isArray(limits)) return [];
   const out: ScopedMeter[] = [];
@@ -497,10 +519,9 @@ function pickScopedMeters(limits: unknown): ScopedMeter[] {
     const label = model && typeof model === "object"
       ? (model as Record<string, unknown>)["display_name"]
       : undefined;
-    if (typeof pct !== "number" || typeof reset !== "string" || typeof label !== "string" || !label) {
-      continue;
-    }
-    out.push({ pct, resetsAt: reset, label });
+    if (typeof pct !== "number" || typeof label !== "string" || !label) continue;
+    if (reset != null && typeof reset !== "string") continue;
+    out.push(reset ? { pct, resetsAt: reset, label } : { pct, label });
   }
   return out;
 }
@@ -1500,7 +1521,7 @@ export function formatScopedAge(scopedAt: string | undefined, nowMs: number): st
 
 function renderMeterLine(
   label: string,
-  meter: UsageMeter | undefined,
+  meter: { pct: number; resetsAt?: string } | undefined,
   nowMs: number,
   windowMs: number | undefined,
   fit: { barWidth: number; showReset: boolean },
@@ -1508,7 +1529,9 @@ function renderMeterLine(
 ): string {
   const paddedLabel = label.length > LABEL_WIDTH ? label.slice(0, LABEL_WIDTH) : label.padEnd(LABEL_WIDTH);
   if (!meter) return `${INDENT}${paddedLabel}  ${dim("—")}`;
-  const resetsAt = Date.parse(meter.resetsAt);
+  // No reset anchor (a scoped window that hasn't opened): the bar and pct are
+  // still true, so only the countdown and the time-elapsed marker drop out.
+  const resetsAt = meter.resetsAt ? Date.parse(meter.resetsAt) : NaN;
   // The server-side window has rolled over since our cached pct was fetched —
   // the bucket is in a new window and our pct describes the previous one.
   // Rendering the stale value as if it were current would lie until the next

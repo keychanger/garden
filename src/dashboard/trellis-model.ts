@@ -119,7 +119,7 @@ interface SonnetExhaustion {
                         // actual snapshot tracks one Sonnet meter, the
                         // seven-day bucket. See TRELLIS-PLAN.md Q1.
   pct: number;          // rounded percentage for the alert text
-  resetsAt: string;     // ISO 8601
+  resetsAt?: string;    // ISO 8601; absent while the scoped window is unopened
 }
 
 function sonnetExhaustion(

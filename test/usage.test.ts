@@ -74,6 +74,32 @@ describe("normalizeUsage", () => {
     ]);
   });
 
+  it("keeps a scoped meter whose window hasn't opened (null resets_at)", () => {
+    // Until the model is used in the current weekly window the endpoint serves
+    // the entry as is_active:false / percent:0 / resets_at:null. That's a real
+    // 0% reading, so the bar stays — without a reset anchor. Dropping it made
+    // the Fable bar vanish at every weekly reset until first use.
+    const raw = {
+      five_hour: { utilization: 1, resets_at: "2026-07-26T20:00:00Z" },
+      limits: [
+        { kind: "weekly_scoped", percent: 0, resets_at: null, is_active: false,
+          scope: { model: { id: null, display_name: "Fable" } } },
+      ],
+    };
+    expect(normalizeUsage(raw).scoped).toEqual([{ label: "Fable", pct: 0 }]);
+  });
+
+  it("skips a scoped entry whose resets_at is neither a string nor null", () => {
+    const raw = {
+      five_hour: { utilization: 1, resets_at: "2026-07-26T20:00:00Z" },
+      limits: [
+        { kind: "weekly_scoped", percent: 5, resets_at: 1774526400,
+          scope: { model: { display_name: "Fable" } } },
+      ],
+    };
+    expect(normalizeUsage(raw).scoped).toBeUndefined();
+  });
+
   it("treats null buckets as absent", () => {
     const raw = {
       five_hour:        { utilization: 4, resets_at: "2026-04-15T23:00:00Z" },
@@ -825,9 +851,34 @@ describe("renderUsagePane", () => {
     expect(scopedLine).not.toContain("\u2502"); // no marker
   });
 
+  it("renders a scoped meter with no reset anchor as a 0% bar", async () => {
+    // The scoped window hasn't opened (no usage of that model since the weekly
+    // reset), so the endpoint serves it with a null resets_at and there is no
+    // countdown to draw. The reading is a true 0%, so the bar belongs on the
+    // pane rather than disappearing until first use.
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        fiveHour: { pct: 26, resetsAt: new Date(now + 2 * 60 * 60_000).toISOString() },
+        weekly:   { pct: 0, resetsAt: new Date(now + 7 * 24 * 60 * 60_000).toISOString() },
+        scoped:   [{ label: "fable", pct: 0 }],
+      },
+    });
+    const render = await importRender();
+    const scopedLine = render(now).split("\n").find(l => l.includes("fable"));
+    expect(scopedLine).toBeDefined();
+    expect(scopedLine).toContain("0%");
+    expect(scopedLine).not.toContain("\u2014"); // not an em-dash row
+    expect(scopedLine).toContain("\u2591");     // empty bar cells
+    expect(scopedLine).not.toContain("\u2588"); // nothing filled at 0%
+    expect(scopedLine).not.toContain("\u2502"); // no time-elapsed marker
+    const visible = scopedLine!.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+    expect(visible.trimEnd()).toMatch(/0%$/);   // no reset countdown trailing it
+  });
+
   it("renders no scoped row when there are no model-scoped meters", async () => {
-    // The endpoint returns no weekly_scoped entry when no scoped usage has
-    // accrued. There's simply no third bar then \u2014 the pane is two rows.
+    // Some responses carry no weekly_scoped entry at all (an account with no
+    // scoped model). There's simply no third bar then \u2014 the pane is two rows.
     writeSnapshot({
       fetchedAt: new Date(now).toISOString(),
       data: {

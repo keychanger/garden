@@ -106,8 +106,11 @@ function formatAge(ms: number): string {
   return `${mins}m ago`;
 }
 
-function meterRow(m: { pct: number; resetsAt: string } | undefined): string {
+function meterRow(m: { pct: number; resetsAt?: string } | undefined): string {
   if (!m) return "—";
+  const pct = `${String(Math.round(m.pct)).padStart(3)}%`;
+  // A scoped window that hasn't opened yet has no reset to count down to.
+  if (!m.resetsAt) return pct;
   const ms = Date.parse(m.resetsAt) - Date.now();
-  return `${String(Math.round(m.pct)).padStart(3)}%   resets ${formatDuration(ms)}`;
+  return `${pct}   resets ${formatDuration(ms)}`;
 }

@@ -93,6 +93,18 @@ const cases: Case[] = [
     fixture: "wrapped-all-null.json",
     expected: {},
   },
+  {
+    // Captured 2026-07-26, hours after a weekly reset with no Fable usage yet:
+    // the weekly_scoped entry is still served, at percent 0 with a null
+    // resets_at (is_active: false) because the scoped window hasn't opened.
+    // The meter survives as an anchor-less 0% bar rather than being dropped.
+    fixture: "unopened-scoped-window.json",
+    expected: {
+      fiveHour: { pct: 1, resetsAt: "2026-07-26T19:59:59.539550+00:00" },
+      weekly:   { pct: 0, resetsAt: "2026-08-02T10:59:59.539576+00:00" },
+      scoped:   [{ label: "Fable", pct: 0 }],
+    },
+  },
 ];
 
 describe("normalizeUsage against recorded response shapes", () => {
