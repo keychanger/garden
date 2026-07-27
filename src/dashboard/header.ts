@@ -196,12 +196,15 @@ export function updateHeaderVar(opts?: RefreshOptions): void {
 
 const PLOT_ICONS: Record<Exclude<PlotState, "idle">, string> = {
   failing: "✖",  // heavy x
+  // Same red failure signal, spinning: a failing worker being worked on.
+  "failing-working": PLOT_SPINNER_SENTINEL,
   asking:  "⚑",  // flag
   done:    "✓",  // check — terminal cleanup signal
   working: PLOT_SPINNER_SENTINEL,
 };
 const PLOT_COLORS: Record<Exclude<PlotState, "idle" | "working">, string> = {
   failing: "red",
+  "failing-working": "red",
   asking:  "yellow",
   done:    "green",
 };

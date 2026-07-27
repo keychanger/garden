@@ -546,6 +546,53 @@ describe("updateHeaderVar", () => {
     expect(strip).toContain("#[fg=red,bold]● ✖ imp#[default]");
   });
 
+  it("renders a red spinner when a failing worker in the plot is working", () => {
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: { garden: [{ name: "w1", sessionId: "s", task: "", prState: "failing", agentStatus: "working" }] },
+    } as never);
+    vi.mocked(resolveWorkerStatus).mockImplementation((e: { prState?: string } | undefined) => {
+      return (e?.prState ?? "idle") as never;
+    });
+
+    updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "imp" }) });
+    const strip = vi.mocked(setPaneVar).mock.calls.find(c => c[1] === "garden_name")?.[2] ?? "";
+    expect(strip).toMatch(/#\[fg=red,bold\]● [⠀-⣿] imp#\[default\]/);
+    expect(strip).not.toContain("✖");
+  });
+
+  it("keeps the failing ✖ static when the failing worker is idle and a sibling is working", () => {
+    // The spinner tracks the FAILING worker, not the plot's general activity.
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: { garden: [
+        { name: "w1", sessionId: "s", task: "", prState: "failing", agentStatus: "idle" },
+        { name: "w2", sessionId: "s", task: "", agentStatus: "working" },
+      ]},
+    } as never);
+    vi.mocked(resolveWorkerStatus).mockImplementation((e: { prState?: string; agentStatus?: string } | undefined) => {
+      return (e?.prState ?? e?.agentStatus ?? "idle") as never;
+    });
+
+    updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "imp" }) });
+    const strip = vi.mocked(setPaneVar).mock.calls.find(c => c[1] === "garden_name")?.[2] ?? "";
+    expect(strip).toContain("#[fg=red,bold]● ✖ imp#[default]");
+  });
+
+  it("prefers the failing spinner when a later worker in the plot is failing and working", () => {
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: { garden: [
+        { name: "w1", sessionId: "s", task: "", prState: "failing", agentStatus: "idle" },
+        { name: "w2", sessionId: "s", task: "", prState: "failing", agentStatus: "working" },
+      ]},
+    } as never);
+    vi.mocked(resolveWorkerStatus).mockImplementation((e: { prState?: string; agentStatus?: string } | undefined) => {
+      return (e?.prState ?? e?.agentStatus ?? "idle") as never;
+    });
+
+    updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "imp" }) });
+    const strip = vi.mocked(setPaneVar).mock.calls.find(c => c[1] === "garden_name")?.[2] ?? "";
+    expect(strip).toMatch(/#\[fg=red,bold\]● [⠀-⣿] imp#\[default\]/);
+  });
+
   it("renders a yellow ⚑ icon when any worker in the plot is asking", () => {
     vi.mocked(readRegistry).mockReturnValue({
       workers: { garden: [{ name: "w1", sessionId: "s", task: "", agentStatus: "asking" }] },

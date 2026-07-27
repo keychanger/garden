@@ -247,6 +247,29 @@ describe("lifecycle state display (prState takes priority)", () => {
     expect(failingLine).toMatch(/\x1b\[1;31m/);
   });
 
+  it("spins the icon of a failing worker that is mid-turn, keeping the red failing row", async () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "working", prState: "failing" },
+    ]);
+    const lines = await captureConsoleLog(() => status([]));
+    const line = lines.find(l => l.includes("bold-ash"))!;
+    expect(line).toContain("failing");
+    expect(line).toMatch(/\x1b\[1;31m/);
+    // Spinner braille in place of the heavy x — the pane animates it in place.
+    expect(line).toMatch(/[⠀-⣿]/);
+    expect(line).not.toContain("✖");
+  });
+
+  it("keeps the static ✖ on a failing worker whose agent is not working", async () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "idle", prState: "failing" },
+    ]);
+    const lines = await captureConsoleLog(() => status([]));
+    const line = lines.find(l => l.includes("bold-ash"))!;
+    expect(line).toContain("✖");
+    expect(line).not.toMatch(/[⠀-⣿]/);
+  });
+
   it("shows merged from prState as a neutral row (transient post-merge beat, not green)", async () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "", agentStatus: "idle", prState: "merged" },

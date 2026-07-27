@@ -52,6 +52,11 @@ interface WorkerInfo {
   // the worker is still in poller state `working`, it just wrote the sentinel
   // and ended its turn. Renders a `?` in the row flags.
   awaitingInput: boolean;
+  // True when the row's state comes from prState `failing` but the agent is
+  // mid-turn (agentStatus `working`) — the operator prompted the failed worker
+  // and it is working the problem. The row stays red and still reads `failing`;
+  // only the icon becomes the spinner. See iconFor.
+  failingBusy: boolean;
   failCount: number;
   // The branch this worker is pinned to merge into. Undefined for legacy
   // entries written before the field existed. The renderer compares it
@@ -142,6 +147,11 @@ const STATUS_ICONS: Record<WorkerStatus, string> = {
 };
 
 function iconFor(worker: WorkerInfo): string {
+  // A failing worker the operator has put back to work keeps everything that
+  // says "broken" — the red row, the `failing` state cell — and swaps only its
+  // icon for the spinner, so a row being worked on is distinguishable from one
+  // parked in failure. Same fixed frame as `working` (see below).
+  if (worker.status === "failing" && worker.failingBusy) return STATUS_ICONS.working;
   // Bake a FIXED spinner frame (STATUS_ICONS.working === SPINNER_FRAMES[0]) for
   // a working row, not a Date.now()-derived one. The status pane animates the
   // frame locally at 0.12s by replacing the baked braille char, so a
@@ -603,6 +613,16 @@ export function resolveWorkerStatus(
   return cs ?? "ready";
 }
 
+// A worker whose code is parked in `failing` but whose agent is mid-turn: the
+// operator prompted it about the failure and it is working on it. prState wins
+// the state cell (resolveWorkerStatus), so agentStatus is otherwise invisible
+// here — this is the one place it's read back out, to animate the row's icon.
+export function isFailingBusy(
+  entry: { agentStatus?: string; prState?: string } | undefined,
+): boolean {
+  return entry?.prState === "failing" && entry?.agentStatus === "working";
+}
+
 // Distill the trellis fields off a registry entry into the WorkerInfo
 // shape used by the renderer. Returns undefined for default-workflow
 // workers — the bracket is omitted.
@@ -1016,6 +1036,7 @@ function collectWorkers(
       lastStateChangeAt: entry?.lastStateChangeAt,
       stale: entry ? isWorkerStale(entry) : false,
       awaitingInput: isAwaitingInput(entry?.worktreePath),
+      failingBusy: isFailingBusy(entry),
       failCount: entry?.failCount ?? 0,
       baseBranch: entry?.baseBranch,
       harness: entry?.harness,
@@ -1043,6 +1064,7 @@ function collectWorkers(
       lastStateChangeAt: entry?.lastStateChangeAt,
       stale: entry ? isWorkerStale(entry) : false,
       awaitingInput: isAwaitingInput(entry?.worktreePath),
+      failingBusy: isFailingBusy(entry),
       failCount: entry?.failCount ?? 0,
       baseBranch: entry?.baseBranch,
       harness: entry?.harness,
