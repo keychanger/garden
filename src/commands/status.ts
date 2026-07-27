@@ -12,6 +12,7 @@ import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
 import { getWorkers, readRegistry, batchUpdateWorkerFields, compareWorkerFreshness, isWorkerStale, type WorkerRegistry } from "../dashboard/registry.js";
 import { listHiddenWorkerWindows, windowExists, getFirstPaneId, getPaneTitle } from "../dashboard/tmux.js";
+import { resolveWorkerActivity } from "../dashboard/harness/core.js";
 import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/window-names.js";
 import { currentBranchFast, branchExistsOnOrigin } from "../dashboard/git.js";
 import { diaryHasContent } from "../diary.js";
@@ -318,10 +319,12 @@ function renderProjectHeader(h: {
   return `  ${h.index}. ${displayName}${baseToken}${crewBadge}${formatDiaryGlyph(h.name)}${alert}${marker}`;
 }
 
-// Refresh all workers' task fields from their live tmux pane titles. Called
-// before rendering so the registry has current data even if no hook has fired
-// recently (e.g. workers in the middle of a long work session). This keeps
-// the registry as the source of truth — we update it, then render from it.
+// Refresh all workers' task fields from whatever source their harness owns
+// (resolveWorkerActivity — the live pane title for Claude Code, the transcript
+// for Codex). Called before rendering so the registry has current data even if
+// no hook has fired recently (e.g. workers in the middle of a long work
+// session). This keeps the registry as the source of truth — we update it,
+// then render from it.
 function refreshWorkerTasks(state: DashboardState): void {
   try {
     const registry = readRegistry();
@@ -329,17 +332,18 @@ function refreshWorkerTasks(state: DashboardState): void {
 
     for (const [project, entries] of Object.entries(registry.workers)) {
       for (const entry of entries) {
-        const windowName = workerWin(project, entry.name);
-        let paneId: string | null = null;
-        if (state.activeWindowName === windowName && state.activePaneId) {
-          paneId = state.activePaneId;
-        } else if (windowExists(windowName)) {
-          paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
-        }
-        if (!paneId) continue;
-        const title = getPaneTitle(paneId);
-        if (title && title !== entry.task) {
-          updates.push({ project, workerName: entry.name, fields: { task: title } });
+        const summary = resolveWorkerActivity(entry, () => {
+          const windowName = workerWin(project, entry.name);
+          let paneId: string | null = null;
+          if (state.activeWindowName === windowName && state.activePaneId) {
+            paneId = state.activePaneId;
+          } else if (windowExists(windowName)) {
+            paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
+          }
+          return paneId ? getPaneTitle(paneId) : null;
+        });
+        if (summary && summary !== entry.task) {
+          updates.push({ project, workerName: entry.name, fields: { task: summary } });
         }
       }
     }

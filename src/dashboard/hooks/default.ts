@@ -30,6 +30,7 @@ import {
   findWorkerByName, updateWorkerFields, type WorkerEntry,
 } from "../registry.js";
 import { getPaneTitle } from "../tmux.js";
+import { resolveWorkerActivity } from "../harness/core.js";
 import { maybeRefreshUsage } from "../usage.js";
 import { resolveGardenRunner } from "../runner.js";
 import type { HookContext, HookMethod, WorkflowHookHandlers } from "../workflows/types.js";
@@ -225,16 +226,17 @@ function applyAndLog(
     fields.sessionId = sid;
   }
 
-  // Capture the live pane title as the worker's task summary. Claude sets
-  // the title via terminal escape sequences; reading it gives the registry
-  // an updated "what is this worker doing" string. Title may be missing at
-  // session start or briefly after UserPromptSubmit — leave the previous
-  // task field intact in those cases.
-  const paneId = findWorkerPaneId(ctx.workerInfo.project, ctx.workerInfo.name);
-  if (paneId) {
-    const title = getPaneTitle(paneId);
-    if (title) fields.task = title;
-  }
+  // Refresh the worker's task summary. Claude Code sets the pane title via
+  // terminal escape sequences as it works, so reading it gives an updated
+  // "what is this worker doing" string; a harness whose title carries no such
+  // summary (Codex) reads its own transcript instead. Either source may come
+  // back empty — at session start, briefly after UserPromptSubmit, or before
+  // the agent has said anything — so leave the previous task field intact then.
+  const summary = resolveWorkerActivity(ctx.workerInfo.entry, () => {
+    const paneId = findWorkerPaneId(ctx.workerInfo!.project, ctx.workerInfo!.name);
+    return paneId ? getPaneTitle(paneId) : null;
+  });
+  if (summary) fields.task = summary;
 
   try {
     updateWorkerFields(ctx.workerInfo.project, ctx.workerInfo.name, fields);

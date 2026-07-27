@@ -70,6 +70,22 @@ describe("harness registries", () => {
     expect(full.isTransientError).toBe(core.isTransientError);
   });
 
+  it("resolveWorkerActivity reads the pane title only for a harness without its own source", async () => {
+    const { resolveWorkerActivity } = await importCore();
+    const paneTitle = vi.fn(() => "Analyze bot performance");
+
+    const claude = { name: "w", harness: "claude-code", task: "" } as never;
+    expect(resolveWorkerActivity(claude, paneTitle)).toBe("Analyze bot performance");
+
+    // Codex owns the field: the pane title thunk is never even invoked, so its
+    // tmux forks are not paid, and a null read means "keep the previous
+    // summary" rather than falling through to the (useless) title.
+    paneTitle.mockClear();
+    const codex = { name: "w", harness: "codex", task: "", transcriptPath: "/no/such.jsonl" } as never;
+    expect(resolveWorkerActivity(codex, paneTitle)).toBeNull();
+    expect(paneTitle).not.toHaveBeenCalled();
+  });
+
   it("canonicalHarnessName maps the 'claude' alias to the registry name", async () => {
     const { canonicalHarnessName } = await importCore();
     // The crew member name for claude-code is "claude"; accept it as an alias.
@@ -417,6 +433,61 @@ describe("codex adapter dialect", () => {
     const { getHarnessCore } = await importCore();
     expect(getHarnessCore("codex").readTurns(null)).toEqual([]);
     expect(getHarnessCore("codex").readTurns("/no/such/rollout.jsonl")).toEqual([]);
+  });
+});
+
+// Codex's terminal title carries no rolling summary (verified against codex
+// 0.144.6: `activity` is a spinner, `task-progress` a counter, `thread-title`
+// the thread UUID, `project-name` the worktree basename), so the status pane's
+// detail column is derived from the rollout instead.
+describe("codex readActivity (status-pane summary)", () => {
+  const entryFor = (fixture: string, over: Record<string, unknown> = {}) => ({
+    name: "weak-brave-snow", transcriptPath: path.join(HERE, "fixtures/codex", fixture),
+    task: "", ...over,
+  }) as never;
+
+  it("reports the step the newest plan is on", async () => {
+    const { getHarnessCore } = await importCore();
+    // Two update_plan calls in the file; the newer one is in progress on step 2.
+    expect(getHarnessCore("codex").readActivity!(entryFor("rollout-plan.jsonl")))
+      .toBe("Add the .gitignore");
+  });
+
+  it("falls back to the last completed step once the plan is finished", async () => {
+    const { getHarnessCore } = await importCore();
+    expect(getHarnessCore("codex").readActivity!(entryFor("rollout-plan-done.jsonl")))
+      .toBe("Add the .gitignore");
+  });
+
+  it("names the worker from its opening prompt until a plan exists", async () => {
+    const { getHarnessCore } = await importCore();
+    // First line only — the seed briefing is a paragraph, the detail column a row.
+    expect(getHarnessCore("codex").readActivity!(entryFor("rollout-sample.jsonl")))
+      .toBe("Review calc.py for bugs and fix them.");
+  });
+
+  it("keeps an established summary rather than re-reporting the opening prompt", async () => {
+    const { getHarnessCore } = await importCore();
+    const entry = entryFor("rollout-sample.jsonl", { task: "Fix the calc.py sign bug" });
+    expect(getHarnessCore("codex").readActivity!(entry)).toBeNull();
+  });
+
+  it("heals a task left as the worker's own name by the default codex title", async () => {
+    const { getHarnessCore } = await importCore();
+    const entry = entryFor("rollout-sample.jsonl", { task: "weak-brave-snow" });
+    expect(getHarnessCore("codex").readActivity!(entry))
+      .toBe("Review calc.py for bugs and fix them.");
+  });
+
+  it("returns null when the transcript is missing", async () => {
+    const { getHarnessCore } = await importCore();
+    const entry = { name: "w", transcriptPath: "/no/such/rollout.jsonl", task: "" } as never;
+    expect(getHarnessCore("codex").readActivity!(entry)).toBeNull();
+  });
+
+  it("is not implemented for claude-code, whose pane title carries the summary", async () => {
+    const { getHarnessCore } = await importCore();
+    expect(getHarnessCore("claude-code").readActivity).toBeUndefined();
   });
 });
 

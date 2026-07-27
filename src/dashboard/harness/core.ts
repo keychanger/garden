@@ -10,6 +10,7 @@
 // stops working. Resolution semantics match getHarness: absent =
 // claude-code, unknown falls back with a warning.
 import { log } from "../log.js";
+import type { WorkerEntry } from "../registry.js";
 import { claudeCodeCore } from "./claude-code-core.js";
 import { codexCore } from "./codex-core.js";
 import type { HarnessCore } from "./types.js";
@@ -28,6 +29,21 @@ export function getHarnessCore(name?: string): HarnessCore {
     data: { name, fallback: DEFAULT_HARNESS },
   });
   return claudeCodeCore;
+}
+
+// The worker's status-pane summary, from whichever source its harness owns
+// (HarnessCore.readActivity). A harness that reads its own activity is
+// authoritative — the pane title is not consulted at all, and `paneTitle` is a
+// thunk so its tmux forks are never paid for such a worker. Null from either
+// source means "keep the previous summary"; every caller already treats a
+// falsy result that way, since Claude Code leaves the title unset at session
+// start and briefly after each prompt.
+export function resolveWorkerActivity(
+  entry: WorkerEntry,
+  paneTitle: () => string | null,
+): string | null {
+  const core = getHarnessCore(entry.harness);
+  return core.readActivity ? core.readActivity(entry) : paneTitle();
 }
 
 // Is this a registered harness name? Config-set paths validate STRICTLY with

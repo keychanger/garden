@@ -66,7 +66,15 @@ import path from "node:path";
 // in hotkeys.ts's existing bytesInOutput — lockPaneMouse itself (tmux.ts)
 // tree-shakes out of the hook bundle entirely, since only create.ts/
 // validate.ts (neither hook-reachable) call it.
-const HOOK_BUNDLE_CEILING_BYTES = 240 * 1024;
+// Bumped 240->242kb for the Codex status-pane activity summary
+// (codex-core.ts readActivity + its bounded rollout readers, ~1.7kb; plus
+// ~0.2kb for resolveWorkerActivity in harness/core.ts). codex-core.ts is a
+// HarnessCore and so hook-reachable by design — the hook path is one of the
+// three callers, since it is what refreshes a worker's task field on a state
+// change. Legitimate reachable code, not a retained closure: skillsBytes is
+// still 0 and the heavy adapter half (codex.ts installRuntimeConfig) stays
+// shaken out.
+const HOOK_BUNDLE_CEILING_BYTES = 242 * 1024;
 // skills.ts contributes only a tree-shaken sliver today (<100 bytes); a
 // retained skills bundle is ~28kb. The threshold sits well between.
 const SKILLS_BYTES_CEILING = 2 * 1024;

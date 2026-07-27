@@ -120,6 +120,21 @@ export interface HarnessCore {
   resolveTranscriptPath(entry: WorkerEntry): string | null;
   /** Parse the transcript into the neutral Turn[] model. */
   readTurns(transcriptPath: string | null, maxTurns?: number): Turn[];
+  /** The worker's "what am I doing" summary for the status pane's detail
+   *  column, for a harness that does NOT paint one into its terminal title.
+   *  Claude Code does (it rewrites the title as it works), so it omits this
+   *  and garden reads the pane title; Codex's title items are metadata and
+   *  counters only, so it derives the summary from its own transcript.
+   *
+   *  Defining it makes the harness AUTHORITATIVE over the field: a null
+   *  return means "nothing to say right now, keep the previous summary",
+   *  NOT "fall back to the pane title" — for such a harness the pane title
+   *  is known-useless (Codex paints the worktree directory name, which is
+   *  the worker name garden already renders in its own column).
+   *
+   *  Called from the status render paths and the hook path, so it must stay
+   *  bounded — tail-read the transcript, never parse it whole. */
+  readActivity?(entry: WorkerEntry): string | null;
 }
 
 export interface HarnessAdapter extends HarnessCore {

@@ -328,6 +328,33 @@ export const codexCore: HarnessCore = {
     }
     return turns.slice(-maxTurns);
   },
+
+  // The status pane's "what is this worker doing" summary. Codex has a
+  // terminal-title feature ([tui].terminal_title, default ["activity",
+  // "project-name"]) but NONE of its items is the rolling summary Claude Code
+  // writes: verified against codex 0.144.6 (2026-07-27), `activity` is a bare
+  // spinner glyph, `project-name` falls back to the cwd basename (for a garden
+  // worktree that IS the worker name — the symptom this method exists to fix),
+  // `task-progress` renders a counter ("Tasks 3/5"), and `thread-title` renders
+  // the thread UUID live even once the title is extracted on disk. So the
+  // summary is derived here instead.
+  //
+  // Source of truth is Codex's own plan: the newest update_plan call names the
+  // step it is on, which is the closest analog to Claude's title (a short
+  // model-written phrase describing current work). Before any plan exists,
+  // fall back ONCE to the opening prompt — that is what Codex itself extracts
+  // as the thread title, and it keeps a fresh worker's row from reading blank.
+  readActivity(entry: WorkerEntry): string | null {
+    const transcript = codexCore.resolveTranscriptPath(entry);
+    if (!transcript || !isReadable(transcript)) return null;
+    const step = latestPlanStep(readTail(transcript, ACTIVITY_TAIL_BYTES));
+    if (step) return step;
+    // A task equal to the worker name is the pre-fix symptom, not a summary —
+    // Codex's default title is `project-name`, which falls back to the worktree
+    // basename. Treat it as unset so an existing worker heals without a bounce.
+    const unset = !entry.task || entry.task === entry.name;
+    return unset ? firstPromptLine(transcript) : null;
+  },
 };
 
 // --- transcript helpers (light; no heavy deps) ---
@@ -345,6 +372,7 @@ interface CodexLine {
     images?: unknown[];
     local_images?: unknown[];
     name?: unknown;
+    arguments?: unknown;
   };
 }
 
@@ -360,6 +388,111 @@ function joinTextElements(els: unknown): string {
   return els
     .map((e) => (typeof e === "string" ? e : e && typeof e === "object" && typeof (e as { text?: unknown }).text === "string" ? (e as { text: string }).text : ""))
     .join("");
+}
+
+// Bounds for readActivity's reads. A plan record is ~1KB, so the tail holds
+// many of them. The head has to clear the rollout's preamble before the
+// opening prompt, which is NOT small: Codex records the composed instructions
+// (garden's rules ride the worktree AGENTS.md) up front, measured at 70-90KB
+// for real garden workers — so the head bound has a wide margin over that, and
+// the read happens at most once per worker (it is skipped as soon as the entry
+// has a task). Both stay well under readTurns' 16MB cap: readActivity runs on
+// the status render and hook paths, readTurns only when the history view is open.
+const ACTIVITY_TAIL_BYTES = 256 * 1024;
+const ACTIVITY_HEAD_BYTES = 512 * 1024;
+const ACTIVITY_MAX_CHARS = 120;
+
+// The step the newest update_plan call is on: the first in-progress entry, or
+// the last completed one when the plan has finished. Scans backwards and stops
+// at the first plan found, so cost is a few lines in the common case. The
+// tail's leading line may be clipped mid-record; unparseable lines are skipped,
+// which covers it.
+function latestPlanStep(tail: string): string | null {
+  const lines = tail.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line || !line.includes("update_plan")) continue;
+    let rec: CodexLine;
+    try {
+      rec = JSON.parse(line) as CodexLine;
+    } catch {
+      continue;
+    }
+    const p = rec.payload;
+    if (!p || (p.type !== "function_call" && p.type !== "custom_tool_call")) continue;
+    if (p.name !== "update_plan") continue;
+    // Codex passes tool arguments as a JSON *string*, so this is a second parse.
+    let plan: unknown;
+    try {
+      plan = (JSON.parse(typeof p.arguments === "string" ? p.arguments : "{}") as { plan?: unknown }).plan;
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(plan)) continue;
+    const steps = plan.filter((s): s is { step: string; status?: string } =>
+      Boolean(s) && typeof s === "object" && typeof (s as { step?: unknown }).step === "string");
+    const current = steps.find(s => s.status === "in_progress")
+      ?? [...steps].reverse().find(s => s.status === "completed");
+    if (current) return condense(current.step);
+  }
+  return null;
+}
+
+// The opening operator prompt, condensed — Codex extracts the same message as
+// the thread title, so this is its own naming of the thread.
+function firstPromptLine(transcriptPath: string): string | null {
+  let head: string;
+  try {
+    head = readHead(transcriptPath, ACTIVITY_HEAD_BYTES);
+  } catch {
+    return null;
+  }
+  for (const line of head.split("\n")) {
+    if (!line.trim()) continue;
+    let rec: CodexLine;
+    try {
+      rec = JSON.parse(line) as CodexLine;
+    } catch {
+      continue;
+    }
+    const p = rec.payload;
+    if (!p || rec.type !== "event_msg" || p.type !== "user_message") continue;
+    const text = typeof p.message === "string" ? p.message : joinTextElements(p.text_elements);
+    const condensed = condense(text);
+    if (condensed) return condensed;
+  }
+  return null;
+}
+
+// One line, bounded — the status pane's detail column truncates too, but the
+// registry should not carry a whole paragraph.
+function condense(text: string): string {
+  const line = text.trim().split("\n").find(l => l.trim())?.trim() ?? "";
+  return line.length > ACTIVITY_MAX_CHARS ? `${line.slice(0, ACTIVITY_MAX_CHARS - 1)}…` : line;
+}
+
+function readHead(p: string, bytes: number): string {
+  const fd = fs.openSync(p, "r");
+  try {
+    const buf = Buffer.alloc(bytes);
+    const read = fs.readSync(fd, buf, 0, bytes, 0);
+    return buf.subarray(0, read).toString("utf-8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function readTail(p: string, bytes: number): string {
+  const size = fs.statSync(p).size;
+  if (size <= bytes) return fs.readFileSync(p, "utf-8");
+  const fd = fs.openSync(p, "r");
+  try {
+    const buf = Buffer.alloc(bytes);
+    fs.readSync(fd, buf, 0, bytes, size - bytes);
+    return buf.toString("utf-8");
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function isReadable(p: string): boolean {

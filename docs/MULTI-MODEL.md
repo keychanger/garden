@@ -181,7 +181,12 @@ Distilled from the audit, in descending order of how load-bearing they are:
 5. **System-prompt/rules injection** at session start
    (`--append-system-prompt-file` today).
 6. **An on-disk transcript** parseable into the history view's `Turn[]`
-   model (`conversation.ts`).
+   model (`conversation.ts`). It also has to yield the status pane's
+   "what am I doing" summary when the harness does not paint one into
+   its terminal title — Claude Code does (garden reads the pane title),
+   Codex does not, so `HarnessCore.readActivity` derives it from the
+   rollout instead (see Layer 3 and DESIGN.md "Where the detail text
+   comes from"). Degradable: losing it costs a blank detail column.
 7. **Working/asking status signals** (PostToolUse heartbeat,
    PermissionRequest → `asking`). These degrade gracefully — losing them
    costs status fidelity, not correctness.
@@ -689,6 +694,21 @@ is mandatory on the interactive worker launch for the event relay to
 fire (the headless reviewer omits it, so Codex skips the untrusted
 hooks — which is what a reviewer wants); rules via `AGENTS.md` (no
 system-prompt flag); Codex enforces its own sandbox (`--sandbox` modes).
+
+Verified 2026-07-27 (codex 0.144.6): Codex's terminal title is real but
+carries no rolling summary. `[tui].terminal_title` takes a list of item
+identifiers (`activity`, `project-name`, `current-dir`, `run-state`,
+`thread-title`, `git-branch`, `context-remaining`/`-used`, the usage and
+token counters, `model`/`reasoning`, `task-progress`, …), joined with
+` | `, and `codex doctor --json` reports the resolved list. None of them
+is Claude Code's model-written phrase: `activity` is a bare spinner
+glyph, `task-progress` renders `Tasks 3/5`, and `thread-title` renders
+the thread UUID live even though Codex does extract a title on disk (the
+opening user message, in `$CODEX_HOME/state_*.sqlite`). The shipped
+default is `["activity", "project-name"]`, and `project-name` falls back
+to the cwd basename — which for a garden worktree is the worker's own
+name. That is why the summary is derived from the rollout
+(`readActivity`) rather than configured.
 
 Reviewer-first slices (each independently mergeable, Claude fleet
 byte-identical, full gate green):

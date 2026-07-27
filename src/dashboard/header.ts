@@ -24,7 +24,7 @@ import { renderAlertsPane } from "../commands/alerts.js";
 import { workerWindowName as workerWin, parseWorkerWindow, parseWorkerSuffix } from "./window-names.js";
 import { renderUsagePane } from "./usage.js";
 import { formatConversationPane } from "./conversation.js";
-import { getHarnessCore } from "./harness/core.js";
+import { getHarnessCore, resolveWorkerActivity } from "./harness/core.js";
 import { resolvePlotStatus, type PlotState } from "./plot-status.js";
 
 export const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
@@ -772,9 +772,10 @@ export function refreshDashboardPlotCycle(opts?: RefreshOptions): void {
   writeHistoryRendered(shared); // follow focus when cycling plots in ⌥h mode
 }
 
-// Refresh all workers' task fields from their live tmux pane titles. This
-// catches tasks set by Claude during work — the hook handler only captures
-// the title at hook time, but Claude updates the pane title continuously as
+// Refresh all workers' task fields from whatever source their harness owns
+// (resolveWorkerActivity — the live pane title for Claude Code, the transcript
+// for Codex). This catches tasks set during work — the hook handler only
+// captures the summary at hook time, but an agent updates it continuously as
 // it works. By refreshing on every dashboard update (which piggybacks on
 // existing hook events), we keep all workers' tasks current without polling.
 //
@@ -811,9 +812,9 @@ function refreshWorkerTasks(cachedRegistry?: WorkerRegistry, cachedState?: Dashb
         } else {
           raw = byWindow.get(logical)?.rawTitle;
         }
-        const title = cleanPaneTitle(raw);
-        if (title && title !== entry.task) {
-          updates.push({ project, workerName: entry.name, fields: { task: title } });
+        const summary = resolveWorkerActivity(entry, () => cleanPaneTitle(raw));
+        if (summary && summary !== entry.task) {
+          updates.push({ project, workerName: entry.name, fields: { task: summary } });
         }
       }
     }
