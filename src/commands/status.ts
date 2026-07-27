@@ -297,7 +297,7 @@ function renderWorkerRow(
     }
   }
   if (budget !== undefined && detail && visibleWidth(detail) > budget) {
-    detail = truncateToVisibleWidth(detail, Math.max(0, budget));
+    detail = truncateToVisibleWidth(detail, Math.max(0, budget), true);
   }
 
   const detailCell = detail ? `  ${detail}` : "";
@@ -542,11 +542,23 @@ function codePointWidth(cp: number): number {
 // second terminal line, which desyncs the in-place repaint (the rendered line
 // count no longer matches the displayed height) and corrupts the pane on the
 // next refresh.
+//
+// `ellipsis` marks the cut with a trailing "…", reserving a column for it so
+// the result still fits maxWidth. The detail column asks for it: an agent's
+// summary is prose, and prose stopped mid-word with no marker reads as a
+// broken render rather than a long line (operator call, 2026-07-27). The
+// whole-line backstop does not — it only trims what the row grammar already
+// fit, so a marker there would claim a truncation that did not happen. The
+// marker is dropped below 2 columns, where it would be the entire cell.
 // A single CSI escape sequence anchored at the string start — shared by the two
 // ANSI-aware width scanners below (status rows carry only CSI color codes).
 const CSI_SEQ = /^\x1b\[[0-9;?]*[ -/]*[@-~]/;
 
-export function truncateToVisibleWidth(s: string, maxWidth: number): string {
+export function truncateToVisibleWidth(s: string, maxWidth: number, ellipsis = false): string {
+  // Reserve the marker's column only when the string genuinely overflows —
+  // reserving up front would mark a string that fits exactly.
+  const marked = ellipsis && maxWidth >= 2 && visibleWidth(s) > maxWidth;
+  const limit = marked ? maxWidth - 1 : maxWidth;
   let out = "";
   let visible = 0;
   let sawEscape = false;
@@ -558,7 +570,12 @@ export function truncateToVisibleWidth(s: string, maxWidth: number): string {
     }
     const cp = s.codePointAt(i)!;
     const w = codePointWidth(cp);
-    if (visible + w > maxWidth) return sawEscape ? out + "\x1b[0m" : out;
+    // The marker goes inside the reset so it inherits the cut text's color
+    // rather than rendering bare against the rest of the row.
+    if (visible + w > limit) {
+      const cut = marked ? `${out}…` : out;
+      return sawEscape ? `${cut}\x1b[0m` : cut;
+    }
     out += String.fromCodePoint(cp);
     visible += w;
     i += cp > 0xffff ? 2 : 1;

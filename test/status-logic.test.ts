@@ -1045,8 +1045,30 @@ describe("identity badges + grammar (Phase 3)", () => {
     const line = lineFor(renderQuickStatus(state, undefined, undefined, undefined, 60), "bold-ash");
     // The status-class flag survives at the end of the row...
     expect(line).toContain("gate closed");
-    // ...while the elastic detail is truncated (the full string does not fit).
+    // ...while the elastic detail is truncated (the full string does not fit),
+    // and the cut is marked so a summary stopped mid-word does not read as a
+    // broken render.
     expect(line).not.toContain("a-very-long-activity-string-that-cannot-fit");
+    expect(line).toContain("…");
+  });
+
+  it("marks a truncated detail without pushing the row past the pane cap", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", agentStatus: "idle",
+        task: "Place on Desktop if permitted and report the exact artifact location" },
+    ]);
+    const line = lineFor(renderQuickStatus(state, undefined, undefined, undefined, 60), "bold-ash");
+    expect(visibleWidth(line)).toBeLessThanOrEqual(58); // paneWidth - 2
+    expect(line).toContain("…");
+  });
+
+  it("leaves a detail that fits unmarked", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", agentStatus: "idle", task: "short summary" },
+    ]);
+    const line = lineFor(renderQuickStatus(state, undefined, undefined, undefined, 200), "bold-ash");
+    expect(line).toContain("short summary");
+    expect(line).not.toContain("…");
   });
 
   it("drops the badge cluster before the core on a narrow pane", () => {
@@ -1138,6 +1160,26 @@ describe("truncateToVisibleWidth", () => {
     // dropped before it can push the row past the cap.
     expect(truncateToVisibleWidth("🚀🚀🚀 go", 4)).toBe("🚀🚀");
     expect(truncateToVisibleWidth("中文字", 4)).toBe("中文");
+  });
+
+  it("marks a cut with an ellipsis that fits inside the width when asked", () => {
+    const out = truncateToVisibleWidth("hello world", 5, true);
+    expect(out).toBe("hell…");
+    expect(visible(out)).toBe(5);
+  });
+
+  it("leaves a fitting string unmarked even when the ellipsis is asked for", () => {
+    expect(truncateToVisibleWidth("hello", 5, true)).toBe("hello");
+  });
+
+  it("keeps the ellipsis inside the color run so it is not left bare", () => {
+    // The marker precedes the reset, so it renders in the cut text's color.
+    expect(truncateToVisibleWidth("\x1b[31mredtext", 4, true)).toBe("\x1b[31mred…\x1b[0m");
+  });
+
+  it("drops the marker below two columns, where it would be the whole cell", () => {
+    expect(truncateToVisibleWidth("hello", 1, true)).toBe("h");
+    expect(visible(truncateToVisibleWidth("hello", 0, true))).toBe(0);
   });
 
   it("treats combining marks as zero width", () => {
