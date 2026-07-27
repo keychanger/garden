@@ -347,7 +347,13 @@ export const codexCore: HarnessCore = {
   readActivity(entry: WorkerEntry): string | null {
     const transcript = codexCore.resolveTranscriptPath(entry);
     if (!transcript || !isReadable(transcript)) return null;
-    const step = latestPlanStep(readTail(transcript, ACTIVITY_TAIL_BYTES));
+    let tail: string;
+    try {
+      tail = readTail(transcript, ACTIVITY_TAIL_BYTES);
+    } catch {
+      return null;
+    }
+    const step = latestPlanStep(tail);
     if (step) return step;
     // A task equal to the worker name is the pre-fix symptom, not a summary —
     // Codex's default title is `project-name`, which falls back to the worktree

@@ -485,6 +485,16 @@ describe("codex readActivity (status-pane summary)", () => {
     expect(getHarnessCore("codex").readActivity!(entry)).toBeNull();
   });
 
+  it("returns null when a readable transcript path cannot be read as a file", async () => {
+    const { getHarnessCore } = await importCore();
+    const entry = {
+      name: "w",
+      transcriptPath: path.join(HERE, "fixtures/codex"),
+      task: "",
+    } as never;
+    expect(getHarnessCore("codex").readActivity!(entry)).toBeNull();
+  });
+
   it("is not implemented for claude-code, whose pane title carries the summary", async () => {
     const { getHarnessCore } = await importCore();
     expect(getHarnessCore("claude-code").readActivity).toBeUndefined();
