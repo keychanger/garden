@@ -284,37 +284,11 @@ export function readConversation(
         const promptSource = typeof obj.promptSource === "string" ? obj.promptSource : undefined;
         if (isInjectedSystemMessage(raw, promptSource)) continue;
         // The typed prompt carries an inline "[Image #N]" reference when a
-        // screenshot is attached. Strip it and flag the turn so the view shows
-        // a clean "[screenshot]" marker instead of the placeholder.
-        const image = /\[Image #\d+\]/.test(raw);
-        const text = collapse(raw.replace(/\[Image #\d+\]/g, " "));
-        if (!text) continue;
+        // screenshot is attached; promptTurn strips it and flags the turn.
+        const turn = promptTurn(raw, ts, /\[Image #\d+\]/.test(raw));
+        if (!turn) continue;
         flush();
-        // garden's own continuation prompts (interrupt/merge auto-continue,
-        // handoff callbacks, trellis/grow iterations) are pasted into the pane,
-        // so they read as `promptSource:"typed"` — the [garden] fence, not the
-        // source, identifies them. Show a compact labeled marker instead of the
-        // multi-paragraph text, and keep the response: a post-merge auto-
-        // continue is often a whole phase of real work.
-        if (text.startsWith("[garden]")) {
-          turns.push({ role: "garden", text: gardenLabel(text), ts });
-          pending = { tools: [], firstText: "", ts };
-          seenUser = true;
-          continue;
-        }
-        // A handoff seed is the briefing garden pastes into a freshly spawned
-        // worker as its first prompt (`[handoff from <project>/<worker>]`). Like
-        // a [garden] continuation it's garden-injected and multi-paragraph, so
-        // collapse it to a compact source-labeled marker and keep the response
-        // (the worker's actual work on the handed-off task).
-        const handoff = handoffSeedLabel(text);
-        if (handoff) {
-          turns.push({ role: "garden", text: handoff, ts });
-          pending = { tools: [], firstText: "", ts };
-          seenUser = true;
-          continue;
-        }
-        turns.push({ role: "user", text, ts, ...(image ? { image: true } : {}) });
+        turns.push(turn);
         pending = { tools: [], firstText: "", ts };
         seenUser = true;
       }
@@ -342,9 +316,31 @@ export function readConversation(
   return turns.slice(-maxTurns);
 }
 
-interface ToolUse {
+export interface ToolUse {
   name: string;
   input: Record<string, unknown>;
+}
+
+// A user-role message as the history view shows it, or null when nothing
+// survives collapsing. Shared by every harness reader: the operator types the
+// same prompts and garden pastes the same continuations into a Codex pane as
+// into a Claude one, so the marker collapsing belongs here rather than in each
+// adapter.
+//   - garden's own continuation prompts (interrupt/merge auto-continue, handoff
+//     callbacks, trellis/grow iterations) carry a [garden] fence and collapse to
+//     a compact labeled marker instead of their multi-paragraph text. The
+//     response is kept: a post-merge auto-continue is often a whole phase of work.
+//   - a handoff seed (`[handoff from <project>/<worker>]`) is garden-injected in
+//     the same way and collapses to a source-labeled marker.
+//   - an inline "[Image #N]" screenshot reference is stripped; `image` flags the
+//     turn so the view paints a clean "[screenshot]" marker instead.
+export function promptTurn(raw: string, ts: string, image = false): Turn | null {
+  const text = collapse(raw.replace(/\[Image #\d+\]/g, " "));
+  if (!text) return null;
+  if (text.startsWith("[garden]")) return { role: "garden", text: gardenLabel(text), ts };
+  const handoff = handoffSeedLabel(text);
+  if (handoff) return { role: "garden", text: handoff, ts };
+  return { role: "user", text, ts, ...(image ? { image: true } : {}) };
 }
 
 export function classifyVerb(tools: string[]): Verb {

@@ -181,7 +181,19 @@ Distilled from the audit, in descending order of how load-bearing they are:
 5. **System-prompt/rules injection** at session start
    (`--append-system-prompt-file` today).
 6. **An on-disk transcript** parseable into the history view's `Turn[]`
-   model (`conversation.ts`). It also has to yield the status pane's
+   model (`conversation.ts`). `Turn[]` is a *summary*, not a transcript
+   dump, and that is the contract every adapter's `readTurns` owes: one
+   assistant entry per operator prompt (accumulate the harness's
+   activity between prompts, flush on the next one), each named by what
+   the turn DID rather than by the model's prose. An adapter meets it by
+   mapping its harness's tool vocabulary onto the neutral names
+   `summarizeTurn` reads and handing it the accumulated calls — including
+   deriving the tools the harness lacks natively (Codex reads and
+   searches by shelling out, so Read/Grep come from the command text).
+   Emitting one turn per assistant message instead reproduces the agent
+   pane in a worse format: Codex writes a message per progress narration
+   (`phase: "commentary"`), ~5 per prompt on a real worker. It also has
+   to yield the status pane's
    "what am I doing" summary when the harness does not paint one into
    its terminal title — Claude Code does (garden reads the pane title),
    Codex does not, so `HarnessCore.readActivity` derives it from the

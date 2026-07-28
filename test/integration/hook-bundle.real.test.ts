@@ -74,7 +74,15 @@ import path from "node:path";
 // change. Legitimate reachable code, not a retained closure: skillsBytes is
 // still 0 and the heavy adapter half (codex.ts installRuntimeConfig) stays
 // shaken out.
-const HOOK_BUNDLE_CEILING_BYTES = 242 * 1024;
+// Bumped 242->244kb for the Codex history-view parity work: codex-core.ts's
+// readTurns now accumulates a whole exchange and maps Codex's tool vocabulary
+// onto the neutral names summarizeTurn reads (+1.7kb in codex-core.ts's own
+// bytesInOutput; conversation.ts shrank ~25 bytes as the prompt-marker logic
+// moved into the shared promptTurn). Same shape as the readActivity bump above
+// — codex-core.ts is a HarnessCore and hook-reachable by design — and it pulls
+// in no new module: conversation.ts was already in the bundle via
+// claude-code-core.ts. skillsBytes stays 0 and codex.ts stays shaken out.
+const HOOK_BUNDLE_CEILING_BYTES = 244 * 1024;
 // skills.ts contributes only a tree-shaken sliver today (<100 bytes); a
 // retained skills bundle is ~28kb. The threshold sits well between.
 const SKILLS_BYTES_CEILING = 2 * 1024;

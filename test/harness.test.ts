@@ -26,6 +26,9 @@ vi.mock("../src/dashboard/tmux.js", () => ({
     /^[a-zA-Z0-9_./:=-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`,
   ),
   pasteAndSubmit: vi.fn(),
+  // conversation.ts strips terminal escapes from transcript text before it is
+  // summarized; the codex reader reaches it through summarizeTurn/promptTurn.
+  stripControlSequences: vi.fn((s: string) => s),
 }));
 
 beforeEach(() => vi.clearAllMocks());
@@ -406,17 +409,30 @@ describe("codex adapter dialect", () => {
     expect(q("Reviewed the diff.\nFIXED")).toBeNull();
   });
 
-  it("readTurns parses the rollout into turns with verb tagging", async () => {
+  // Parity with the claude-code reader: the history view is a summary, so an
+  // assistant turn is described by what it DID, and one exchange yields one
+  // assistant entry no matter how many progress messages the model emitted.
+  it("readTurns summarizes an exchange by its actions, not the model's prose", async () => {
     const { getHarnessCore } = await importCore();
     const fixture = path.join(HERE, "fixtures/codex/rollout-sample.jsonl");
     const turns = getHarnessCore("codex").readTurns(fixture);
     expect(turns).toHaveLength(4);
     expect(turns[0]).toMatchObject({ role: "user", text: "Review calc.py for bugs and fix them." });
-    // a patch_apply_end since the last prompt -> "worked"
-    expect(turns[1]).toMatchObject({ role: "assistant", text: "Fixed the off-by-sign bug in add().", verb: "worked" });
+    // Two agent_messages (commentary + final_answer) fold into ONE turn, named
+    // by the patch it applied and the shell it ran inside the `exec` wrapper.
+    expect(turns[1]).toMatchObject({
+      role: "assistant",
+      text: "edited calc.py · ran tests · committed",
+      verb: "worked",
+    });
     expect(turns[2]).toMatchObject({ role: "user", text: "What does calc.py do now?" });
-    // no tools since the last prompt -> "answered"
-    expect(turns[3]).toMatchObject({ role: "assistant", verb: "answered" });
+    // No tools since the last prompt -> "answered", and with no action to name
+    // the summary falls back to the opening sentence of the reply.
+    expect(turns[3]).toMatchObject({
+      role: "assistant",
+      text: "It adds two numbers correctly.",
+      verb: "answered",
+    });
   });
 
   it("readTurns tags a tool-only turn (no edit) as planned", async () => {
@@ -426,7 +442,24 @@ describe("codex adapter dialect", () => {
     expect(turns).toHaveLength(2);
     expect(turns[0]).toMatchObject({ role: "user", text: "What files are in the repo?" });
     // a non-edit tool call (exec_command) since the last prompt, no patch_apply_end -> "planned"
-    expect(turns[1]).toMatchObject({ role: "assistant", verb: "planned" });
+    expect(turns[1]).toMatchObject({ role: "assistant", text: "ran commands", verb: "planned" });
+  });
+
+  // Codex reads and searches through the shell, so those actions have to be
+  // derived from the command text or every exploration turn reads "ran commands".
+  it("readTurns names shell reads and searches, and collapses garden prompts", async () => {
+    const { getHarnessCore } = await importCore();
+    const fixture = path.join(HERE, "fixtures/codex/rollout-garden.jsonl");
+    const turns = getHarnessCore("codex").readTurns(fixture);
+    expect(turns).toHaveLength(4);
+    // A handoff seed briefing is garden-injected: a compact source-labeled
+    // marker, not the multi-paragraph text.
+    expect(turns[0]).toMatchObject({ role: "garden", text: "handoff from garden/plush-faint-dusk" });
+    // rg + sed + cat inside one `exec` snippet -> the files it opened.
+    expect(turns[1]).toMatchObject({ role: "assistant", text: "explored 2 files", verb: "planned" });
+    // A [garden] continuation collapses to its labeled kind.
+    expect(turns[2]).toMatchObject({ role: "garden", text: "continue after merge" });
+    expect(turns[3]).toMatchObject({ role: "assistant", text: "pushed", verb: "worked" });
   });
 
   it("readTurns returns [] for a null or unreadable path", async () => {

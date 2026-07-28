@@ -17,7 +17,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { Turn, Verb } from "../conversation.js";
+import { promptTurn, summarizeTurn } from "../conversation.js";
+import type { ToolUse, Turn } from "../conversation.js";
 import type { WorkerEntry } from "../registry.js";
 import { shellEscape, pasteAndSubmit } from "../tmux.js";
 import { resolveHookRunner } from "../runner.js";
@@ -272,12 +273,20 @@ export const codexCore: HarnessCore = {
   // Parse Codex's rollout JSONL into the neutral Turn[] model (worker-path
   // history view). Line envelope {type, timestamp, payload}; the operator's
   // prompts are event_msg/user_message, the assistant text is
-  // event_msg/agent_message. Verb tagging (verified against a real
-  // apply_patch-bearing rollout, codex 0.142.5): the reliable edit signal is
-  // an event_msg/patch_apply_end (Codex's edit primitive is a custom_tool_call
-  // + patch event, NOT a function_call named apply_patch — those are
-  // exec_command shell calls); any function_call/custom_tool_call is tool
-  // activity. worked > planned > answered.
+  // event_msg/agent_message, tool activity is response_item/function_call and
+  // /custom_tool_call, and an applied edit is an event_msg/patch_apply_end.
+  //
+  // Structure mirrors readConversation (conversation.ts) exactly, because the
+  // history view is a SUMMARY, not a transcript dump. Two things follow from
+  // that and both are load-bearing:
+  //   - One assistant entry per exchange. Codex emits an agent_message per
+  //     progress narration (phase "commentary") as well as the final answer —
+  //     a real worker showed 38 of them across 8 prompts — so activity is
+  //     accumulated between operator prompts and flushed as ONE turn.
+  //   - That turn is summarized by what it DID (summarizeTurn), not by the
+  //     model's prose. Codex's tool vocabulary is mapped onto the neutral names
+  //     that summarizer reasons about (see codexToolUses), so a Codex turn
+  //     reads in the same words as a Claude one ("edited calc.py · ran tests").
   readTurns(transcriptPath: string | null, maxTurns = DEFAULT_MAX_TURNS): Turn[] {
     if (!transcriptPath || !isReadable(transcriptPath)) return [];
     let raw: string;
@@ -287,10 +296,17 @@ export const codexCore: HarnessCore = {
       return [];
     }
     const turns: Turn[] = [];
-    // Track tool activity between the operator's prompt and the assistant's
-    // reply so the assistant turn can be tagged worked/planned/answered.
-    let sawEdit = false;
-    let sawTool = false;
+    let pending: { tools: ToolUse[]; firstText: string; ts: string } | null = null;
+    let seenUser = false;
+
+    const flush = (): void => {
+      if (pending && (pending.tools.length > 0 || pending.firstText)) {
+        const { text, verb } = summarizeTurn(pending.tools, pending.firstText);
+        turns.push({ role: "assistant", text, verb, ts: pending.ts });
+      }
+      pending = null;
+    };
+
     for (const line of raw.split("\n")) {
       if (!line.trim()) continue;
       let rec: CodexLine;
@@ -301,31 +317,36 @@ export const codexCore: HarnessCore = {
       }
       const p = rec.payload;
       if (!p || typeof p !== "object") continue;
+      const ts = rec.timestamp ?? "";
+
       if (rec.type === "event_msg" && p.type === "user_message") {
-        sawEdit = false;
-        sawTool = false;
         const text = typeof p.message === "string" ? p.message : joinTextElements(p.text_elements);
-        turns.push({
-          role: "user",
-          text: text.trim(),
-          ts: rec.timestamp ?? "",
-          image: Boolean((p.images?.length ?? 0) || (p.local_images?.length ?? 0)),
-        });
+        const image = Boolean((p.images?.length ?? 0) || (p.local_images?.length ?? 0));
+        const turn = promptTurn(text, ts, image);
+        if (!turn) continue;
+        flush();
+        turns.push(turn);
+        pending = { tools: [], firstText: "", ts };
+        seenUser = true;
+        continue;
+      }
+      // Drop dangling activity from a head the byte cap clipped, matching
+      // readConversation: an assistant turn with no prompt above it is noise.
+      if (!seenUser) continue;
+      if (!pending) pending = { tools: [], firstText: "", ts };
+
+      if (rec.type === "response_item" && (p.type === "function_call" || p.type === "custom_tool_call")) {
+        pending.tools.push(...codexToolUses(p));
       } else if (rec.type === "event_msg" && p.type === "patch_apply_end") {
-        sawEdit = true;
-      } else if (rec.type === "response_item" && (p.type === "function_call" || p.type === "custom_tool_call")) {
-        sawTool = true;
-        if (isEditTool(p.name)) sawEdit = true;
+        pending.tools.push(...editToolUses(changedPaths(p.changes)));
+      } else if (rec.type === "event_msg" && p.type === "web_search_end") {
+        pending.tools.push({ name: "WebSearch", input: {} });
       } else if (rec.type === "event_msg" && p.type === "agent_message") {
-        const verb: Verb = sawEdit ? "worked" : sawTool ? "planned" : "answered";
-        turns.push({
-          role: "assistant",
-          text: typeof p.message === "string" ? p.message.trim() : "",
-          verb,
-          ts: rec.timestamp ?? "",
-        });
+        if (!pending.firstText && typeof p.message === "string") pending.firstText = p.message;
+        if (ts) pending.ts = ts;
       }
     }
+    flush();
     return turns.slice(-maxTurns);
   },
 
@@ -371,22 +392,110 @@ const MAX_BYTES = 16 * 1024 * 1024;
 interface CodexLine {
   type?: string;
   timestamp?: string;
-  payload?: {
-    type?: string;
-    message?: unknown;
-    text_elements?: unknown;
-    images?: unknown[];
-    local_images?: unknown[];
-    name?: unknown;
-    arguments?: unknown;
-  };
+  payload?: CodexPayload;
 }
 
-// Codex tool names that mutate the worktree -> "worked". apply_patch is
-// Codex's edit primitive; Edit/Write are the documented aliases.
+interface CodexPayload {
+  type?: string;
+  message?: unknown;
+  text_elements?: unknown;
+  images?: unknown[];
+  local_images?: unknown[];
+  name?: unknown;
+  arguments?: unknown;
+  input?: unknown;
+  changes?: unknown;
+}
+
+// --- tool mapping: Codex's vocabulary -> the neutral names summarizeTurn reads ---
+
+// Codex tool names that mutate the worktree. apply_patch is Codex's edit
+// primitive (a custom_tool_call, not a function_call); Edit/Write/MultiEdit are
+// the documented aliases. They map to "Write" so summarizeTurn counts them as
+// edits — the name it checks, not the one Codex used.
 const EDIT_TOOLS = new Set(["apply_patch", "Edit", "Write", "MultiEdit"]);
-function isEditTool(name: unknown): boolean {
-  return typeof name === "string" && EDIT_TOOLS.has(name);
+
+// Codex's shell primitives. `exec_command` is the function_call form (arguments
+// are a JSON string carrying `cmd`); `exec` is the custom_tool_call form, whose
+// `input` is a JS snippet wrapping a tools.exec_command({cmd:"…"}) call.
+const SHELL_TOOLS = new Set(["exec_command", "exec", "shell", "local_shell"]);
+
+function editToolUses(files: string[]): ToolUse[] {
+  // An edit with no parseable path still has to register as an edit;
+  // summarizeTurn renders that as the generic "edited files".
+  if (files.length === 0) return [{ name: "Write", input: {} }];
+  return files.map(f => ({ name: "Write", input: { file_path: f } }));
+}
+
+function codexToolUses(p: CodexPayload): ToolUse[] {
+  const name = typeof p.name === "string" ? p.name : "";
+  if (EDIT_TOOLS.has(name)) {
+    return editToolUses(patchedPaths(typeof p.input === "string" ? p.input : ""));
+  }
+  if (SHELL_TOOLS.has(name)) return shellToolUses(shellCommandOf(p));
+  // Codex's subagent primitive; its siblings (wait_agent, list_agents,
+  // send_message) are plumbing and stay neutral tool activity.
+  if (name === "spawn_agent") return [{ name: "Task", input: {} }];
+  if (name === "web_search") return [{ name: "WebSearch", input: {} }];
+  // Anything else — update_plan, wait, followup_task — is neutral: it marks the
+  // turn as having used tools ("planned") without naming an action, exactly as
+  // an unrecognized Claude tool does.
+  return [{ name: name || "tool", input: {} }];
+}
+
+// The shell command a tool call ran, or "" when it can't be recovered. The
+// custom_tool_call form's `input` is the JS snippet itself — passed through
+// whole rather than unwrapped, since every downstream check is a substring
+// match and the wrapper text matches none of them.
+function shellCommandOf(p: CodexPayload): string {
+  if (typeof p.input === "string") return p.input;
+  if (typeof p.arguments !== "string") return "";
+  try {
+    const a = JSON.parse(p.arguments) as { cmd?: unknown; command?: unknown };
+    if (typeof a.cmd === "string") return a.cmd;
+    if (typeof a.command === "string") return a.command;
+    if (Array.isArray(a.command)) return a.command.filter(x => typeof x === "string").join(" ");
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+// Codex reads and searches through the SHELL, where Claude has dedicated Read
+// and Grep tools — so those neutral tools are derived from the command text.
+// Without this every exploration turn collapses to "ran commands", which is the
+// difference between a history that says what the worker looked at and one that
+// doesn't. The Bash tool use is always emitted: it carries the command to
+// summarizeTurn's commit/push/test/build detection.
+const SEARCH_UTIL = /(?:^|[|;&(]\s*)(?:sudo\s+)?(?:rg|grep|egrep|fgrep|ag|find|fd)\s/;
+const READ_SEGMENT = /(?:^|[|;&(]\s*)(?:sudo\s+)?(?:cat|bat|nl|head|tail|less|more|sed)\s([^|;&()]*)/g;
+const PATH_TOKEN = /[\w@.\-/]+\.[A-Za-z0-9_]{1,8}\b/g;
+
+function shellToolUses(cmd: string): ToolUse[] {
+  const uses: ToolUse[] = [{ name: "Bash", input: { command: cmd } }];
+  if (!cmd) return uses;
+  if (SEARCH_UTIL.test(cmd)) uses.push({ name: "Grep", input: {} });
+  for (const seg of cmd.matchAll(READ_SEGMENT)) {
+    for (const p of seg[1].matchAll(PATH_TOKEN)) {
+      uses.push({ name: "Read", input: { file_path: p[0] } });
+    }
+  }
+  return uses;
+}
+
+// Paths an applied patch touched, from the patch_apply_end event's `changes`
+// map (path -> {type, content}).
+function changedPaths(changes: unknown): string[] {
+  if (!changes || typeof changes !== "object") return [];
+  return Object.keys(changes as Record<string, unknown>);
+}
+
+// Paths named by an apply_patch call's body, whose format is a run of
+// `*** Add|Update|Delete File: <path>` headers.
+const PATCH_HEADER = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm;
+
+function patchedPaths(input: string): string[] {
+  return [...input.matchAll(PATCH_HEADER)].map(m => m[1].trim()).filter(Boolean);
 }
 
 function joinTextElements(els: unknown): string {

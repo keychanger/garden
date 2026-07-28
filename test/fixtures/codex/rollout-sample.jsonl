@@ -2,10 +2,12 @@
 {"type":"turn_context","timestamp":"2026-07-01T13:02:06.500Z","payload":{"cwd":"/tmp/wt","model":"gpt-5-codex","turn_id":"t1","sandbox_policy":"danger-full-access"}}
 {"type":"event_msg","timestamp":"2026-07-01T13:02:07.000Z","payload":{"type":"task_started","turn_id":"t1"}}
 {"type":"event_msg","timestamp":"2026-07-01T13:02:08.000Z","payload":{"type":"user_message","message":"Review calc.py for bugs and fix them.","text_elements":[],"images":[]}}
+{"type":"event_msg","timestamp":"2026-07-01T13:02:09.500Z","payload":{"type":"agent_message","message":"I'll read calc.py first, then patch whatever I find.","phase":"commentary"}}
 {"type":"response_item","timestamp":"2026-07-01T13:02:10.000Z","payload":{"type":"function_call","name":"exec_command","call_id":"c1","arguments":"{\"cmd\":\"cat calc.py\"}"}}
-{"type":"response_item","timestamp":"2026-07-01T13:02:12.000Z","payload":{"type":"custom_tool_call","name":"apply_patch","call_id":"c2"}}
-{"type":"event_msg","timestamp":"2026-07-01T13:02:12.500Z","payload":{"type":"patch_apply_end","turn_id":"t1","success":true}}
-{"type":"event_msg","timestamp":"2026-07-01T13:02:15.000Z","payload":{"type":"agent_message","message":"Fixed the off-by-sign bug in add().","phase":"final"}}
+{"type":"response_item","timestamp":"2026-07-01T13:02:12.000Z","payload":{"type":"custom_tool_call","name":"apply_patch","call_id":"c2","input":"*** Begin Patch\n*** Update File: /tmp/wt/calc.py\n@@\n-    return a - b\n+    return a + b\n*** End Patch"}}
+{"type":"event_msg","timestamp":"2026-07-01T13:02:12.500Z","payload":{"type":"patch_apply_end","turn_id":"t1","success":true,"changes":{"/tmp/wt/calc.py":{"type":"update"}}}}
+{"type":"response_item","timestamp":"2026-07-01T13:02:13.000Z","payload":{"type":"custom_tool_call","name":"exec","call_id":"c3","input":"const r = await tools.exec_command({cmd:\"npm test && git commit -am 'fix add()'\",workdir:\"/tmp/wt\"});\ntext(r.output);\n"}}
+{"type":"event_msg","timestamp":"2026-07-01T13:02:15.000Z","payload":{"type":"agent_message","message":"Fixed the off-by-sign bug in add().","phase":"final_answer"}}
 {"type":"event_msg","timestamp":"2026-07-01T13:02:15.500Z","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"Fixed the off-by-sign bug in add()."}}
 {"type":"event_msg","timestamp":"2026-07-01T13:03:00.000Z","payload":{"type":"user_message","message":"What does calc.py do now?","text_elements":[]}}
-{"type":"event_msg","timestamp":"2026-07-01T13:03:03.000Z","payload":{"type":"agent_message","message":"It adds two numbers correctly.","phase":"final"}}
+{"type":"event_msg","timestamp":"2026-07-01T13:03:03.000Z","payload":{"type":"agent_message","message":"It adds two numbers correctly. Nothing else changed.","phase":"final_answer"}}
