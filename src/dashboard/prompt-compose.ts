@@ -149,11 +149,14 @@ export function findSpecFiles(wtPath: string, changedFiles: string[]): string[] 
 
 // Architecture / overview docs handed to the reviewer so it can check the diff
 // against them. AGENTS.md and CLAUDE.md are the same document in most repos —
-// one is the real file, the other a one-line `@` import or a symlink — so a
-// section that survives stripping to under MIN_DOC_CHARS is dropped rather than
-// spending prompt bytes on a pointer.
+// one is the real file, the other an `@` import or a symlink. Import-only files
+// may also carry maintainer comments, which Claude Code does not put in context.
 const DOC_FILES = ["DESIGN.md", "AGENTS.md", "CLAUDE.md"];
-const MIN_DOC_CHARS = 200;
+
+function isAgentDocPointer(body: string): boolean {
+  const visible = body.replace(/<!--[\s\S]*?-->/g, "").trim();
+  return /^@(AGENTS|CLAUDE)\.md$/.test(visible);
+}
 
 export function readDocSections(wtPath: string): string[] {
   const sections: string[] = [];
@@ -167,7 +170,7 @@ export function readDocSections(wtPath: string): string[] {
     // On a Codex worktree, garden owns AGENTS.md and has prepended the worker
     // rules the prompt already carries. Review the repo's own content only.
     const body = stripGardenRules(content).trim();
-    if (body.length < MIN_DOC_CHARS) continue;
+    if (!body || isAgentDocPointer(body)) continue;
     // A symlinked pair resolves to identical bytes through both names.
     if (seen.has(body)) continue;
     seen.add(body);

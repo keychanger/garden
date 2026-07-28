@@ -51,8 +51,6 @@ beforeEach(() => {
 
 // Fixture repo shaped the way garden expects one: AGENTS.md is the real
 // instruction file and CLAUDE.md is the `@AGENTS.md` pointer at it.
-// readDocSections drops sections under a minimum length, so the docs here have
-// to be long enough to read as documentation rather than as a pointer stub.
 const docBody = (title: string) => `# ${title}\n\n${`${title} notes for the project. `.repeat(10)}`;
 const defaultRead = ((p: unknown) => {
   const name = String(p).split("/").pop() as string;
@@ -208,8 +206,6 @@ describe("buildSpecWarning", () => {
 });
 
 describe("readDocSections", () => {
-  // readDocSections drops sections under a minimum length, so test docs have to
-  // be long enough to read as real documentation rather than a pointer stub.
   const body = (name: string) => `# ${name}\n\n${`${name} architecture notes. `.repeat(20)}`;
   const GARDEN_MARKER = "<!-- garden worker rules (managed by garden; not committed) -->";
 
@@ -236,6 +232,23 @@ describe("readDocSections", () => {
     const result = readDocSections("/wt");
     expect(result.length).toBe(1);
     expect(result[0]).toContain("AGENTS.md");
+  });
+
+  it("skips an import stub with maintainer comments", () => {
+    serve({
+      "AGENTS.md": body("AGENTS"),
+      "CLAUDE.md": "@AGENTS.md\n\n<!-- AGENTS.md is the source of truth. -->\n",
+    });
+    const result = readDocSections("/wt");
+    expect(result.length).toBe(1);
+    expect(result[0]).toContain("AGENTS.md");
+  });
+
+  it("keeps short documents that are not import stubs", () => {
+    serve({ "DESIGN.md": "# Design\n\nShort but authoritative." });
+    expect(readDocSections("/wt")).toEqual([
+      "### DESIGN.md\n\n# Design\n\nShort but authoritative.",
+    ]);
   });
 
   it("reads a symlinked pair once", () => {
