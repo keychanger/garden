@@ -415,10 +415,10 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     // The Codex meter has no passive refresh path — reading the rollout only
     // re-reports the last time Codex ran, so refresh the active half here too.
     // Gated on staleness, NOT probed outright: this route is the Claude Code
-    // Stop hook's usage backstop (maybeRefreshUsage), which re-fires on every
-    // hook while the usage poller is down — an ungated probe would spend Codex
-    // quota per hook. The operator's explicit `garden usage refresh` is the
-    // ungated path.
+    // Stop hook's usage lane (maybeRefreshUsage), which can re-fire on its 90s
+    // demand cooldown throughout active work — an ungated probe would spend
+    // Codex quota every 90s. The operator's explicit `garden usage refresh`
+    // is the ungated path.
     try {
       probeCodexUsageIfStale();
     } catch { /* best effort — the Claude half already refreshed */ }

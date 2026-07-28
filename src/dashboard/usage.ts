@@ -1003,9 +1003,10 @@ function logUsageOutcome(
 //   2. Fetch (async, no lock held).
 //   3. Re-acquire the lock to write the final snapshot. Brief, sync, atomic.
 //
-// On crash mid-fetch the bumped `fetchedAt` naturally expires after the
-// applicable backoff window (POLL_OK_MS for the poller, slightly longer for
-// hooks), so a stuck claim self-heals rather than wedging the meter.
+// On crash mid-fetch the bumped `fetchedAt` naturally expires after the next
+// caller's cadence window (HOOK_REFRESH_COOLDOWN_MS for a turn-end hook,
+// POLL_OK_MS for the poller), so a stuck claim self-heals rather than wedging
+// the meter.
 //
 // `reason` is the caller's own cadence class and gates the healthy-snapshot
 // age check. The poller claims with "poller" so a freshly respawned poller

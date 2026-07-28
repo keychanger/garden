@@ -536,7 +536,7 @@ describe("codex usage meter", () => {
   });
 
   // probeCodexUsageIfStale is the gate every AMBIENT caller (watchdog tick, the
-  // Stop-hook usage backstop) must go through. Both fire on cadences garden does
+  // Stop-hook usage lane) must go through. Both fire on cadences garden does
   // not control, so a miss here spends real Codex quota per firing.
   describe("probeCodexUsageIfStale", () => {
     function writeCodexProject(): void {
