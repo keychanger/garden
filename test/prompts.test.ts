@@ -46,8 +46,21 @@ beforeEach(() => {
   vi.mocked(getDiffAgainstBase).mockReturnValue("diff content");
   vi.mocked(getChangedFiles).mockReturnValue(["src/foo.ts"]);
   vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject", checks: null } as ReturnType<typeof tryGetProject>);
-  vi.mocked(fs.readFileSync).mockReturnValue("file content");
+  vi.mocked(fs.readFileSync).mockImplementation(defaultRead);
 });
+
+// Fixture repo shaped the way garden expects one: AGENTS.md is the real
+// instruction file and CLAUDE.md is the `@AGENTS.md` pointer at it.
+// readDocSections drops sections under a minimum length, so the docs here have
+// to be long enough to read as documentation rather than as a pointer stub.
+const docBody = (title: string) => `# ${title}\n\n${`${title} notes for the project. `.repeat(10)}`;
+const defaultRead = ((p: unknown) => {
+  const name = String(p).split("/").pop() as string;
+  if (name === "DESIGN.md") return docBody("Architecture");
+  if (name === "AGENTS.md") return docBody("Agent quick-start");
+  if (name === "CLAUDE.md") return "@AGENTS.md\n";
+  return "file content";
+}) as unknown as typeof fs.readFileSync;
 
 describe("buildReviewPrompt — initial review", () => {
   it("rebases onto origin, not the local base ref", () => {
@@ -77,7 +90,7 @@ describe("buildReviewPrompt — initial review", () => {
   it("includes test verification text", () => {
     vi.mocked(fs.readFileSync).mockImplementation(((p: string) => {
       if (String(p).includes("test/")) return "test file content";
-      return "file content";
+      return defaultRead(p as never) as string;
     }) as typeof fs.readFileSync);
     const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry());
     expect(result).toContain("Verify these still correctly cover the changed behavior");
@@ -195,11 +208,52 @@ describe("buildSpecWarning", () => {
 });
 
 describe("readDocSections", () => {
-  it("reads DESIGN.md and CLAUDE.md", () => {
+  // readDocSections drops sections under a minimum length, so test docs have to
+  // be long enough to read as real documentation rather than a pointer stub.
+  const body = (name: string) => `# ${name}\n\n${`${name} architecture notes. `.repeat(20)}`;
+  const GARDEN_MARKER = "<!-- garden worker rules (managed by garden; not committed) -->";
+
+  // Serve per-filename content through the shared readFileSync mock.
+  const serve = (files: Record<string, string>) => {
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      const name = String(p).split("/").pop() as string;
+      if (!(name in files)) throw new Error("ENOENT");
+      return files[name];
+    });
+  };
+
+  it("reads DESIGN.md, AGENTS.md and CLAUDE.md", () => {
+    serve({ "DESIGN.md": body("DESIGN"), "AGENTS.md": body("AGENTS"), "CLAUDE.md": body("CLAUDE") });
     const result = readDocSections("/wt");
-    expect(result.length).toBe(2);
+    expect(result.length).toBe(3);
     expect(result[0]).toContain("DESIGN.md");
-    expect(result[1]).toContain("CLAUDE.md");
+    expect(result[1]).toContain("AGENTS.md");
+    expect(result[2]).toContain("CLAUDE.md");
+  });
+
+  it("skips a CLAUDE.md that is only an @AGENTS.md import stub", () => {
+    serve({ "AGENTS.md": body("AGENTS"), "CLAUDE.md": "@AGENTS.md\n" });
+    const result = readDocSections("/wt");
+    expect(result.length).toBe(1);
+    expect(result[0]).toContain("AGENTS.md");
+  });
+
+  it("reads a symlinked pair once", () => {
+    // A symlink resolves to identical bytes through both names.
+    const shared = body("SHARED");
+    serve({ "AGENTS.md": shared, "CLAUDE.md": shared });
+    const result = readDocSections("/wt");
+    expect(result.length).toBe(1);
+  });
+
+  it("strips garden's worker rules from a composed AGENTS.md", () => {
+    const repoDoc = body("REPO");
+    serve({ "AGENTS.md": `${GARDEN_MARKER}\n\nworker rules text\n\n---\n\n${repoDoc}` });
+    const result = readDocSections("/wt");
+    expect(result.length).toBe(1);
+    expect(result[0]).toContain("REPO architecture notes");
+    expect(result[0]).not.toContain("worker rules text");
+    expect(result[0]).not.toContain(GARDEN_MARKER);
   });
 
   it("handles missing files gracefully", () => {
@@ -254,7 +308,7 @@ describe("prompt output snapshots (workflow-refactor regression net)", () => {
     vi.mocked(fs.readFileSync).mockImplementation(((p: string) => {
       const path = String(p);
       if (path.endsWith("STATUS.md")) return "# Spec\n\nIf the code disagrees, the code is wrong.";
-      return "file content";
+      return defaultRead(p as never) as string;
     }) as typeof fs.readFileSync);
     const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry());
     expect(result).toMatchSnapshot();

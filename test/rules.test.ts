@@ -107,13 +107,13 @@ describe("buildWorktreeRules", () => {
   });
 
   it("treats docs and configs as deliverables, not just code", async () => {
-    // Workers have regressed on doc-only tasks (e.g. "create CLAUDE.md"):
+    // Workers have regressed on doc-only tasks (e.g. "create AGENTS.md"):
     // they wrote the file, considered the task done, and stopped without
     // committing or pushing. The wording must explicitly cover non-code files.
     const { buildWorktreeRules } = await importRules();
     const result = buildWorktreeRules("test-branch");
     expect(result).toContain("docs");
-    expect(result).toContain("CLAUDE.md");
+    expect(result).toContain("AGENTS.md");
   });
 
   it("instructs to verify clean tree before ending turn", async () => {

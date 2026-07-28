@@ -52,6 +52,15 @@ in `<project>/.garden/rules.md` can extend or override these.
 - Do not reference task IDs, milestone names, or internal tracking terms in code, comments,
   commit messages, or documentation.
 - Do not use emojis in code, documentation, commit messages, or logs.
+- A project's agent instructions live in **one** file: `AGENTS.md`. Claude Code reads
+  `CLAUDE.md` and never `AGENTS.md`; Codex reads `AGENTS.md` and never `CLAUDE.md`, and
+  this fleet runs both against the same repos. So `AGENTS.md` is the real file and
+  `CLAUDE.md` is a pointer at it — a single `@AGENTS.md` import line, optionally followed
+  by a section that is genuinely meaningless to a non-Claude harness. Never maintain the
+  same instructions in both files; that is the drift this convention exists to prevent.
+  When you update project instructions, edit `AGENTS.md`. If you are working in a repo
+  that still has instructions in `CLAUDE.md`, leave the migration alone unless it is your
+  task — but do not add a second copy.
 - Files under `docs/future/` (or any `future/` directory at the docs root of a project)
   describe unshipped designs, speculative architectures, or external-codebase analyses.
   Treat them as background context only. Do not run commands, file issues, create

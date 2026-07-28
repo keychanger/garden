@@ -19,16 +19,13 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import type { ProjectConfig } from "../../config.js";
 import { atomicWriteFile } from "../atomic-write.js";
+import { AGENTS_MARKER, composeAgentsMd } from "./agents-md.js";
 import { codexCore } from "./codex-core.js";
 import type { HarnessAdapter } from "./types.js";
 
 function codexHome(): string {
   return process.env.CODEX_HOME || path.join(process.env.HOME || os.homedir(), ".codex");
 }
-
-// Marker prefixing garden's rules inside a worktree AGENTS.md, so a re-install
-// is idempotent and a composed file is recognizable.
-const AGENTS_MARKER = "<!-- garden worker rules (managed by garden; not committed) -->";
 
 // Write the Codex runtime config into the worktree/CODEX_HOME. Idempotent;
 // called at bootstrap (via the _install-worker-runtime subcommand), refresh,
@@ -114,7 +111,6 @@ function resolveRepoRoot(targetDir: string): string | null {
 // --append-system-prompt-file.
 export function installCodexAgentsMd(targetDir: string, rulesText: string): void {
   const agentsPath = path.join(targetDir, "AGENTS.md");
-  const body = `${AGENTS_MARKER}\n\n${rulesText.trim()}\n`;
   const tracked = isTracked(targetDir, "AGENTS.md");
   if (tracked) {
     let original = "";
@@ -124,7 +120,7 @@ export function installCodexAgentsMd(targetDir: string, rulesText: string): void
       /* tracked but missing in the worktree — treat as empty original */
     }
     if (original.startsWith(AGENTS_MARKER)) return;
-    atomicWriteFile(agentsPath, `${body}\n---\n\n${original.trimStart()}`);
+    atomicWriteFile(agentsPath, composeAgentsMd(rulesText, original));
     // Keep the local composition out of `git status` / commits.
     try {
       execFileSync("git", ["-C", targetDir, "update-index", "--skip-worktree", "AGENTS.md"]);
@@ -132,7 +128,7 @@ export function installCodexAgentsMd(targetDir: string, rulesText: string): void
       /* best effort */
     }
   } else {
-    atomicWriteFile(agentsPath, body);
+    atomicWriteFile(agentsPath, composeAgentsMd(rulesText, ""));
     // Untracked garden file — exclude it (ensureWorktreeExcludes carries the
     // AGENTS.md pattern) so it never appears in the worker's git status.
   }

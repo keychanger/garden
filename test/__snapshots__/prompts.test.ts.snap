@@ -119,12 +119,13 @@ Review the branch diff against the project rules below.
 Check for:
 - Adherence to project rules (commit style, code patterns, scope discipline)
 - Code quality issues, security concerns, or unnecessary complexity
-- Documentation accuracy and completeness. For \`CLAUDE.md\` (Claude Code's quick-start
-  for workers in this project) and any other architecture / overview documentation
+- Documentation accuracy and completeness. For the project's agent quick-start
+  (\`AGENTS.md\`, or \`CLAUDE.md\` where that is the real file rather than an import of it)
+  and any other architecture / overview documentation
   included below, are all claims still correct after this diff? Flag stale descriptions,
   broken cross-references, out-of-date file lists. Then check for additive gaps: if this
   diff introduces a kind of thing where someone might add another later (a command, a
-  workflow, an agent type, a plugin, a hook), does \`CLAUDE.md\` have an "Adding a new X"
+  workflow, an agent type, a plugin, a hook), does the quick-start have an "Adding a new X"
   how-to to anchor that? Adding such a section is the most common form of "missing
   section for new behavior" and is the easiest to miss. Skip the question for doc kinds
   the project doesn't keep — don't request creation of docs the project doesn't already
@@ -174,10 +175,14 @@ Verify these are still accurate after the diff above.
 
 ### DESIGN.md
 
-file content
-### CLAUDE.md
+# Architecture
 
-file content
+Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project.
+### AGENTS.md
+
+# Agent quick-start
+
+Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project.
 
 ## Test Files (corresponding to changed source files)
 
@@ -235,12 +240,13 @@ Review the branch diff against the project rules below.
 Check for:
 - Adherence to project rules (commit style, code patterns, scope discipline)
 - Code quality issues, security concerns, or unnecessary complexity
-- Documentation accuracy and completeness. For \`CLAUDE.md\` (Claude Code's quick-start
-  for workers in this project) and any other architecture / overview documentation
+- Documentation accuracy and completeness. For the project's agent quick-start
+  (\`AGENTS.md\`, or \`CLAUDE.md\` where that is the real file rather than an import of it)
+  and any other architecture / overview documentation
   included below, are all claims still correct after this diff? Flag stale descriptions,
   broken cross-references, out-of-date file lists. Then check for additive gaps: if this
   diff introduces a kind of thing where someone might add another later (a command, a
-  workflow, an agent type, a plugin, a hook), does \`CLAUDE.md\` have an "Adding a new X"
+  workflow, an agent type, a plugin, a hook), does the quick-start have an "Adding a new X"
   how-to to anchor that? Adding such a section is the most common form of "missing
   section for new behavior" and is the easiest to miss. Skip the question for doc kinds
   the project doesn't keep — don't request creation of docs the project doesn't already
@@ -290,10 +296,14 @@ Verify these are still accurate after the diff above.
 
 ### DESIGN.md
 
-file content
-### CLAUDE.md
+# Architecture
 
-file content
+Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project.
+### AGENTS.md
+
+# Agent quick-start
+
+Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project.
 
 ## Test Files (corresponding to changed source files)
 
@@ -369,12 +379,13 @@ Review the branch diff against the project rules below.
 Check for:
 - Adherence to project rules (commit style, code patterns, scope discipline)
 - Code quality issues, security concerns, or unnecessary complexity
-- Documentation accuracy and completeness. For \`CLAUDE.md\` (Claude Code's quick-start
-  for workers in this project) and any other architecture / overview documentation
+- Documentation accuracy and completeness. For the project's agent quick-start
+  (\`AGENTS.md\`, or \`CLAUDE.md\` where that is the real file rather than an import of it)
+  and any other architecture / overview documentation
   included below, are all claims still correct after this diff? Flag stale descriptions,
   broken cross-references, out-of-date file lists. Then check for additive gaps: if this
   diff introduces a kind of thing where someone might add another later (a command, a
-  workflow, an agent type, a plugin, a hook), does \`CLAUDE.md\` have an "Adding a new X"
+  workflow, an agent type, a plugin, a hook), does the quick-start have an "Adding a new X"
   how-to to anchor that? Adding such a section is the most common form of "missing
   section for new behavior" and is the easiest to miss. Skip the question for doc kinds
   the project doesn't keep — don't request creation of docs the project doesn't already
@@ -424,10 +435,14 @@ Verify these are still accurate after the diff above.
 
 ### DESIGN.md
 
-file content
-### CLAUDE.md
+# Architecture
 
-file content
+Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project.
+### AGENTS.md
+
+# Agent quick-start
+
+Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project.
 
 ## Test Files (corresponding to changed source files)
 
@@ -474,12 +489,13 @@ Review the branch diff against the project rules below.
 Check for:
 - Adherence to project rules (commit style, code patterns, scope discipline)
 - Code quality issues, security concerns, or unnecessary complexity
-- Documentation accuracy and completeness. For \`CLAUDE.md\` (Claude Code's quick-start
-  for workers in this project) and any other architecture / overview documentation
+- Documentation accuracy and completeness. For the project's agent quick-start
+  (\`AGENTS.md\`, or \`CLAUDE.md\` where that is the real file rather than an import of it)
+  and any other architecture / overview documentation
   included below, are all claims still correct after this diff? Flag stale descriptions,
   broken cross-references, out-of-date file lists. Then check for additive gaps: if this
   diff introduces a kind of thing where someone might add another later (a command, a
-  workflow, an agent type, a plugin, a hook), does \`CLAUDE.md\` have an "Adding a new X"
+  workflow, an agent type, a plugin, a hook), does the quick-start have an "Adding a new X"
   how-to to anchor that? Adding such a section is the most common form of "missing
   section for new behavior" and is the easiest to miss. Skip the question for doc kinds
   the project doesn't keep — don't request creation of docs the project doesn't already
@@ -533,10 +549,14 @@ Verify these are still accurate after the diff above.
 
 ### DESIGN.md
 
-file content
-### CLAUDE.md
+# Architecture
 
-file content
+Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project. Architecture notes for the project.
+### AGENTS.md
+
+# Agent quick-start
+
+Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project. Agent quick-start notes for the project.
 
 ## Test Files (corresponding to changed source files)
 

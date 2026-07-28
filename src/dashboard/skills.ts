@@ -47,7 +47,7 @@ Runs \`touch .garden-done\` at the root of your worktree (your CWD). On the next
 
 Before \`touch .garden-done\`, walk the project's documentation:
 
-- If your work introduced a new "add one of these" extension point — a kind of thing where someone might add another later (a command, a workflow, an agent type, a plugin, a hook) — does \`CLAUDE.md\` have an "Adding a new X" how-to to anchor it? \`CLAUDE.md\` is the canonical place. If the project doesn't have one, suggest creating one rather than silently skipping.
+- If your work introduced a new "add one of these" extension point — a kind of thing where someone might add another later (a command, a workflow, an agent type, a plugin, a hook) — does the project's agent quick-start have an "Adding a new X" how-to to anchor it? That is \`AGENTS.md\` (or \`CLAUDE.md\` where that is the real file rather than an import of it) — the canonical place. If the project doesn't have one, suggest creating one rather than silently skipping.
 - If your work introduced a new core concept (a thing on par with the project's existing nouns), is it described in the project's architecture or overview document, where one exists? Don't create such a doc just for this — only update if it already exists.
 - If your work referenced or completed a design / spec document written in future tense, is the tense correct now?
 

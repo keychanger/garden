@@ -16,6 +16,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { tryGetProject } from "../config.js";
 import { buildRulesContext } from "../rules.js";
+import { stripGardenRules } from "./harness/agents-md.js";
 import {
   getChangedFiles, getCommitSummary, getDiffAgainstBase,
 } from "./git.js";
@@ -146,14 +147,31 @@ export function findSpecFiles(wtPath: string, changedFiles: string[]): string[] 
   return specs;
 }
 
+// Architecture / overview docs handed to the reviewer so it can check the diff
+// against them. AGENTS.md and CLAUDE.md are the same document in most repos —
+// one is the real file, the other a one-line `@` import or a symlink — so a
+// section that survives stripping to under MIN_DOC_CHARS is dropped rather than
+// spending prompt bytes on a pointer.
+const DOC_FILES = ["DESIGN.md", "AGENTS.md", "CLAUDE.md"];
+const MIN_DOC_CHARS = 200;
+
 export function readDocSections(wtPath: string): string[] {
   const sections: string[] = [];
-  for (const docFile of ["DESIGN.md", "CLAUDE.md"]) {
+  const seen = new Set<string>();
+  for (const docFile of DOC_FILES) {
     const fullPath = path.join(wtPath, docFile);
+    let content: string;
     try {
-      const content = fs.readFileSync(fullPath, "utf-8");
-      sections.push(`### ${docFile}\n\n${content}`);
-    } catch { /* file may not exist */ }
+      content = fs.readFileSync(fullPath, "utf-8");
+    } catch { continue; /* file may not exist */ }
+    // On a Codex worktree, garden owns AGENTS.md and has prepended the worker
+    // rules the prompt already carries. Review the repo's own content only.
+    const body = stripGardenRules(content).trim();
+    if (body.length < MIN_DOC_CHARS) continue;
+    // A symlinked pair resolves to identical bytes through both names.
+    if (seen.has(body)) continue;
+    seen.add(body);
+    sections.push(`### ${docFile}\n\n${body}`);
   }
   return sections;
 }

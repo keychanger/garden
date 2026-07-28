@@ -28,6 +28,41 @@ Claude sessions are configured with layered rules files injected via `--append-s
 
 Rules are plain markdown. Edit them directly.
 
+On the Codex path there is no `--append-system-prompt-file`, so the same composed
+text is written into the worktree `AGENTS.md` instead (`installCodexAgentsMd`).
+The format is owned by `src/dashboard/harness/agents-md.ts`, a string-only leaf:
+garden's rules under `AGENTS_MARKER`, a `---`, then any `AGENTS.md` the repo
+itself tracks. The file is git-excluded when untracked and marked
+`skip-worktree` when tracked, so it never reaches a commit. `stripGardenRules`
+is the inverse, and every reader of a worktree `AGENTS.md`-as-documentation must
+apply it — `readDocSections` does, or a Codex worker's reviewer prompt would
+carry the worker rules twice.
+
+### Agent instruction files
+
+A project's instructions live in **one** file. Claude Code reads `CLAUDE.md` and
+never `AGENTS.md`; Codex reads `AGENTS.md` and never `CLAUDE.md`. A fleet that
+runs both harnesses against the same repo — which this one does — therefore
+needs `AGENTS.md` as the real file and `CLAUDE.md` as a pointer at it: a single
+`@AGENTS.md` import line, or a symlink. Two independently-maintained files is
+the failure mode, and it is silent — each harness works from a different set of
+instructions and nothing reports the divergence.
+
+Garden enforces this at two levels:
+
+- **`rules.md`** carries the convention, so every worker maintains the pairing
+  as part of ordinary doc upkeep.
+- **`garden doctor`** reports it fleet-wide. `classifyAgentDocs`
+  (`src/commands/doctor.ts`) classifies each registered project's checkout as
+  `paired`, `unlinked` (both files exist independently), `claude-only`,
+  `codex-only`, or `none`, and the check names the fix for each non-paired
+  state. `none` is not reported — a repo with no agent instructions has nothing
+  to unify, and doctor does not nag for docs a project never kept.
+
+Prefer the import over the symlink: it leaves room for a Claude-only section
+below it, it avoids interacting with garden's atomic rewrite of a Codex
+worktree's `AGENTS.md`, and it needs no Administrator privileges on Windows.
+
 ## Dashboard Layout
 
 ```
@@ -499,7 +534,7 @@ garden stats [--by <axis>] [--since Nd|Nh|Nm] [-p <project>]
                                    # --by config|model|provider|harness|workflow|crew|rules|version
 garden alerts                      # View dashboard alerts (unread/read split, level glyphs, relative age)
 garden alerts clear                # Dismiss all alerts
-garden doctor                      # Environment preflight (tmux / claude / gh / node / config / Option-key)
+garden doctor                      # Environment preflight (tmux / claude / gh / node / config / agent docs / Option-key)
 garden logs [options]              # View dashboard logs (pretty-printed)
 garden logs filter [<expr>]        # Show / set the sticky filter (also via ⌥/ in dashboard)
 garden logs filter --clear         # Remove the sticky filter
