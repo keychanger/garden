@@ -1383,24 +1383,35 @@ describe("decideRefresh — rate-limit floor", () => {
   });
 });
 
-describe("decideRefresh — hook is a poller-liveness backstop", () => {
+describe("decideRefresh — hook is the demand lane", () => {
   const now = Date.parse("2026-04-15T20:00:00Z");
 
-  // The ordering the whole budget math rests on: a live poller always fetches
-  // first, so turn-end hooks add zero traffic in steady state.
-  it("keeps the hook cooldown above the poller cadence", () => {
-    expect(HOOK_REFRESH_COOLDOWN_MS).toBeGreaterThan(POLL_OK_MS);
+  // The ordering the freshness guarantee rests on: a turn ending refreshes the
+  // bars long before the poller's idle cadence would come round to it.
+  it("keeps the hook cooldown below the poller cadence", () => {
+    expect(HOOK_REFRESH_COOLDOWN_MS).toBeLessThan(POLL_OK_MS);
   });
 
-  it("lets the poller refresh a snapshot the hook still considers fresh", () => {
-    const snap = { fetchedAt: new Date(now - POLL_OK_MS - 1000).toISOString(), data: {} };
-    expect(decideRefresh(snap, now, "poller").shouldRefresh).toBe(true);
-    expect(decideRefresh(snap, now, "hook").shouldRefresh).toBe(false);
-  });
-
-  it("lets the hook refresh once the poller has missed its window", () => {
+  it("lets the hook refresh a snapshot the poller still considers fresh", () => {
     const snap = { fetchedAt: new Date(now - HOOK_REFRESH_COOLDOWN_MS - 1000).toISOString(), data: {} };
     expect(decideRefresh(snap, now, "hook").shouldRefresh).toBe(true);
+    expect(decideRefresh(snap, now, "poller").shouldRefresh).toBe(false);
+  });
+
+  it("still refreshes on the poller's cadence when no turns are ending", () => {
+    const snap = { fetchedAt: new Date(now - POLL_OK_MS - 1000).toISOString(), data: {} };
+    expect(decideRefresh(snap, now, "poller").shouldRefresh).toBe(true);
+  });
+
+  // The demand lane must not become a way around a 429: the faster cooldown
+  // applies to the healthy path only, and the error backoffs outrank it.
+  it("holds the hook lane to the rate-limit backoff, not its own cooldown", () => {
+    const snap = {
+      fetchedAt: new Date(now - HOOK_REFRESH_COOLDOWN_MS - 1000).toISOString(),
+      error: "rate-limited",
+      data: {},
+    };
+    expect(decideRefresh(snap, now, "hook").shouldRefresh).toBe(false);
   });
 });
 

@@ -3,9 +3,11 @@
 // the primary 5h/weekly bars from cheap /v1/messages response headers and, at
 // most hourly, hits the throttled /api/oauth/usage endpoint for the model-
 // scoped bar (see usage.ts). The poll cadence (10 min on success) comes from
-// usage.ts:decideRefresh — the same rule the Stop-hook backstop refresh uses,
-// so neither path can outpace the other; a rare header 429 still honors server
-// Retry-After with margin and escalation.
+// usage.ts:decideRefresh, which also serves the Stop-hook lane on its own
+// shorter cooldown — during active work the hooks keep the bars fresh and this
+// loop mostly finds a young snapshot and sleeps, leaving it as the idle floor
+// and the backstop for when hooks stop arriving. A rare header 429 still
+// honors server Retry-After with margin and escalation, on both lanes alike.
 import { newDashboardWindow, windowExists, killWindowSafe } from "./tmux.js";
 import { usagePollerWindowName } from "./window-names.js";
 import { decideRefresh, readUsageSnapshot, refreshUsage } from "./usage.js";

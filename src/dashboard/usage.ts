@@ -644,12 +644,16 @@ export const RATE_LIMIT_MAX_BACKOFF_MS = 4 * 60 * 60 * 1000;
 // Poller backoff applied to 401/403. Not transient — waits for a login.
 export const AUTH_BACKOFF_MS = 30 * 60 * 1000;
 
-// The hook path is a poller-liveness backstop, not a faster lane: it sits
-// above POLL_OK_MS so a live poller always fetches first, and a turn-end
-// only triggers a refresh when the poller has missed its window (window
-// killed, machine slept). Every fetch the hook path doesn't make is budget
-// left for the poller's own cadence.
-export const HOOK_REFRESH_COOLDOWN_MS = POLL_OK_MS + 2 * 60 * 1000;
+// The hook path is the demand lane, sitting BELOW POLL_OK_MS: the bars only
+// move when workers spend tokens, and a turn ending is the signal that they
+// just did — so turn-end is the fetch that keeps the meter fresh, and the
+// poller becomes the idle floor plus the liveness backstop. Cost is bounded by
+// this cooldown rather than by fleet size: every worker's Stop hook consults
+// the same on-disk snapshot, so N workers ending turns together produce one
+// fetch, and an idle fleet ends no turns and so spends nothing. Error backoffs
+// are shared by both lanes (decideRefresh), so a faster healthy-path cadence
+// cannot widen a 429 cascade.
+export const HOOK_REFRESH_COOLDOWN_MS = 90 * 1000;
 
 // Cadence for the secondary (oauth-endpoint) fetch that supplies the model-
 // scoped weekly bar. The primary 5h/weekly bars refresh every poll from cheap

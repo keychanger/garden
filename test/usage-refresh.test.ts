@@ -258,12 +258,11 @@ describe("refreshUsage — the claim honors the caller's cadence class", () => {
     fs.writeFileSync(path.join(env.sessionsDir, "claude-usage.json"), JSON.stringify(snap));
   }
 
-  it("poller fetches a snapshot the hook path leaves alone", async () => {
+  it("hook path fetches a snapshot the poller leaves alone", async () => {
     const usage = await import("../src/dashboard/usage.js");
-    // Aged past the poller cadence but inside the hook backstop cooldown —
-    // the poller's own claim, so a healthy loop keeps its cadence while
-    // hook-spawned refreshes (and a respawned poller claiming as a hook
-    // would) stay out of the budget.
+    // Aged past the hook's demand cooldown but inside the poller's idle
+    // cadence — turn-end is what keeps the meter fresh between poller ticks,
+    // so the hook claims here while a healthy loop stays on its own clock.
     const age = (usage.POLL_OK_MS + usage.HOOK_REFRESH_COOLDOWN_MS) / 2;
     const fetchedAt = new Date(Date.now() - age).toISOString();
     seedSnapshot({ fetchedAt, data: {} });
@@ -271,14 +270,14 @@ describe("refreshUsage — the claim honors the caller's cadence class", () => {
     // still observable via readPersonalCredential and the rewritten snapshot.
     mockState.readPersonalCredential.mockReturnValue(null);
 
-    const hookSnap = await usage.refreshUsage();
-    expect(hookSnap.fetchedAt).toBe(fetchedAt);
+    const pollerSnap = await usage.refreshUsage(false, "poller");
+    expect(pollerSnap.fetchedAt).toBe(fetchedAt);
     expect(mockState.readPersonalCredential).not.toHaveBeenCalled();
 
-    const pollerSnap = await usage.refreshUsage(false, "poller");
+    const hookSnap = await usage.refreshUsage();
     expect(mockState.readPersonalCredential).toHaveBeenCalled();
-    expect(pollerSnap.fetchedAt).not.toBe(fetchedAt);
-    expect(pollerSnap.error).toBe("no Claude Code credentials found");
+    expect(hookSnap.fetchedAt).not.toBe(fetchedAt);
+    expect(hookSnap.error).toBe("no Claude Code credentials found");
   });
 });
 
