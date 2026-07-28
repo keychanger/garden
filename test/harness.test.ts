@@ -445,6 +445,17 @@ describe("codex adapter dialect", () => {
     expect(turns[1]).toMatchObject({ role: "assistant", text: "ran commands", verb: "planned" });
   });
 
+  it("readTurns recognizes a search at the start of an exec wrapper", async () => {
+    const { getHarnessCore } = await importCore();
+    const fixture = path.join(HERE, "fixtures/codex/rollout-exec-search.jsonl");
+    const turns = getHarnessCore("codex").readTurns(fixture);
+    expect(turns[1]).toMatchObject({
+      role: "assistant",
+      text: "searched the codebase",
+      verb: "planned",
+    });
+  });
+
   // Codex reads and searches through the shell, so those actions have to be
   // derived from the command text or every exploration turn reads "ran commands".
   it("readTurns names shell reads and searches, and collapses garden prompts", async () => {

@@ -443,12 +443,22 @@ function codexToolUses(p: CodexPayload): ToolUse[] {
   return [{ name: name || "tool", input: {} }];
 }
 
-// The shell command a tool call ran, or "" when it can't be recovered. The
-// custom_tool_call form's `input` is the JS snippet itself — passed through
-// whole rather than unwrapped, since every downstream check is a substring
-// match and the wrapper text matches none of them.
+// The shell command a tool call ran, or "" when it can't be recovered.
 function shellCommandOf(p: CodexPayload): string {
-  if (typeof p.input === "string") return p.input;
+  if (typeof p.input === "string") {
+    // `exec` wraps exec_command in a JS snippet. Recover its double-quoted cmd
+    // so utilities at the start of the command still match the anchored
+    // Read/Grep patterns below.
+    const match = p.input.match(/\bcmd\s*:\s*"((?:\\.|[^"\\])*)"/);
+    if (match) {
+      try {
+        return JSON.parse(`"${match[1]}"`) as string;
+      } catch {
+        return p.input;
+      }
+    }
+    return p.input;
+  }
   if (typeof p.arguments !== "string") return "";
   try {
     const a = JSON.parse(p.arguments) as { cmd?: unknown; command?: unknown };
