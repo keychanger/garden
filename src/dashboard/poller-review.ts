@@ -132,6 +132,10 @@ export const STALE_AGENT_STATUS_MS = 60 * 60 * 1000;
 // be tuning a threshold nothing is expected to reach.
 export const MAX_REVIEW_PROMPT_BYTES = 1024 * 1024;
 
+export function reviewPromptBytes(prompt: string): number {
+  return Buffer.byteLength(prompt, "utf8");
+}
+
 const REVIEW_VERDICT_VOCAB = ["CLEAN", "FIXED", "FAILED"] as const;
 
 export interface ReviewResult {
@@ -1773,7 +1777,8 @@ function launchReview(
   // NOT an operator-action reason: splitting the oversized commit rewrites the
   // branch, and the new SHA re-enters review through the normal failing
   // debounce — the fix retries itself.
-  if (prompt.length > MAX_REVIEW_PROMPT_BYTES) {
+  const promptBytes = reviewPromptBytes(prompt);
+  if (promptBytes > MAX_REVIEW_PROMPT_BYTES) {
     const headSha = getBranchHeadSha(wtPath);
     const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(1)}MB`;
     addAlert({
@@ -1782,16 +1787,16 @@ function launchReview(
       project: projectName,
       worker: entry.name,
       message:
-        `Review prompt for ${entry.name} is ${mb(prompt.length)} (ceiling ${mb(MAX_REVIEW_PROMPT_BYTES)}) — `
+        `Review prompt for ${entry.name} is ${mb(promptBytes)} (ceiling ${mb(MAX_REVIEW_PROMPT_BYTES)}) — `
         + `the branch diff against ${baseBranch} is too large for any reviewer's context window. `
-        + `Split the work into smaller commits and push; the review retries on the new SHA.`,
+        + `Split the work across smaller branches and push a reduced diff; the review retries on the new SHA.`,
       dedupKey: `oversized-diff:${projectName}:${entry.name}:${headSha ?? "?"}`,
     });
     log.warn("poller", "review prompt exceeds context ceiling; not launching", {
       worker: entry.name,
       data: {
         project: projectName,
-        promptBytes: prompt.length,
+        promptBytes,
         ceilingBytes: MAX_REVIEW_PROMPT_BYTES,
         baseBranch,
       },

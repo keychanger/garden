@@ -38,7 +38,7 @@ import { transitionState } from "./poller-state.js";
 import { autoContinueGateReason } from "./poller-merge.js";
 import {
   reviewPromptPath, reviewResultPath, scheduleReviewTimeoutPoke,
-  MAX_REVIEW_PROMPT_BYTES,
+  MAX_REVIEW_PROMPT_BYTES, reviewPromptBytes,
 } from "./poller-review.js";
 import { addAlert } from "./alerts.js";
 
@@ -205,7 +205,8 @@ function launchHolisticFinalReview(
   // unreviewable range leaves the worker `done` rather than failing it — the
   // file's stated posture for every other could-not-complete outcome. Alerted,
   // not silent: the operator loses the cross-phase check and should know.
-  if (prompt.length > MAX_REVIEW_PROMPT_BYTES) {
+  const promptBytes = reviewPromptBytes(prompt);
+  if (promptBytes > MAX_REVIEW_PROMPT_BYTES) {
     const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(1)}MB`;
     addAlert({
       level: "warn",
@@ -213,7 +214,7 @@ function launchHolisticFinalReview(
       project: projectName,
       worker: entry.name,
       message:
-        `Skipped the whole-task review for ${entry.name}: assembled prompt is ${mb(prompt.length)} `
+        `Skipped the whole-task review for ${entry.name}: assembled prompt is ${mb(promptBytes)} `
         + `(ceiling ${mb(MAX_REVIEW_PROMPT_BYTES)}), larger than any reviewer's context window. `
         + `The per-phase reviews all passed; only the cross-phase check was skipped.`,
       dedupKey: `oversized-holistic:${projectName}:${entry.name}`,
@@ -222,7 +223,7 @@ function launchHolisticFinalReview(
       worker: entry.name,
       data: {
         project: projectName,
-        promptBytes: prompt.length,
+        promptBytes,
         ceilingBytes: MAX_REVIEW_PROMPT_BYTES,
       },
     });

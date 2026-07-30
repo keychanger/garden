@@ -88,8 +88,8 @@ export type FailingReason =
   // exceeds MAX_REVIEW_PROMPT_BYTES — the branch diff is larger than any
   // reviewer's context window, so the agent CLI rejects the prompt before the
   // reviewer starts and no retry can help. NOT an operator-action reason:
-  // splitting the oversized commit rewrites the branch, and the resulting SHA
-  // re-enters review through the normal failing debounce. `garden kick` does
+  // reducing the branch diff changes its SHA, and the resulting SHA re-enters
+  // review through the normal failing debounce. `garden kick` does
   // NOT accept it — kicking an unchanged diff re-fails identically.
   | "oversized-diff"
   // Set by handleWorking's skip-review path (poller-review.ts) when a botanist

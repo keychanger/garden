@@ -280,7 +280,9 @@ import { sweepGhostEntries } from "../src/dashboard/validate.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
 import { recordCiFixOutcome } from "../src/dashboard/telemetry.js";
 import { extractReviewVerdict } from "../src/dashboard/verdict-extract.js";
-import { MAX_REVIEW_PROMPT_BYTES } from "../src/dashboard/poller-review.js";
+import {
+  MAX_REVIEW_PROMPT_BYTES, reviewPromptBytes,
+} from "../src/dashboard/poller-review.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 const registryMock = await import("../src/dashboard/registry.js") as {
@@ -735,7 +737,24 @@ describe("poll — working state", () => {
     expect(alert).toBeDefined();
     expect(alert!.level).toBe("error");
     expect(alert!.message).toMatch(/too large/i);
-    expect(alert!.message).toMatch(/smaller commits/i);
+    expect(alert!.message).toMatch(/smaller branches/i);
+  });
+
+  it("measures the review ceiling in UTF-8 bytes rather than JavaScript characters", () => {
+    const prompt = "é".repeat(Math.floor(MAX_REVIEW_PROMPT_BYTES / 2) + 1);
+    expect(prompt.length).toBeLessThan(MAX_REVIEW_PROMPT_BYTES);
+    expect(reviewPromptBytes(prompt)).toBeGreaterThan(MAX_REVIEW_PROMPT_BYTES);
+
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
+    ]);
+    vi.mocked(getDiffAgainstBase).mockReturnValue(prompt);
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "failing", failingReason: "oversized-diff" }),
+    );
   });
 
   // Guard against the threshold creeping down onto real work: the largest
