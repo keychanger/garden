@@ -82,7 +82,13 @@ import path from "node:path";
 // — codex-core.ts is a HarnessCore and hook-reachable by design — and it pulls
 // in no new module: conversation.ts was already in the bundle via
 // claude-code-core.ts. skillsBytes stays 0 and codex.ts stays shaken out.
-const HOOK_BUNDLE_CEILING_BYTES = 244 * 1024;
+// Bumped 244->246kb for the oversized-review-prompt guard (+1362 bytes:
+// ~800 in poller-review.ts's launchReview, ~562 in poller-holistic-review.ts).
+// Same shape as every bump above — both files are already hook-reachable via
+// the review path, and the guard pulls in no new module (alerts.ts was already
+// in the bundle via poller-review.ts). Verified against the metafile: the
+// growth is those two files' own bytesInOutput and skillsBytes is still 0.
+const HOOK_BUNDLE_CEILING_BYTES = 246 * 1024;
 // skills.ts contributes only a tree-shaken sliver today (<100 bytes); a
 // retained skills bundle is ~28kb. The threshold sits well between.
 const SKILLS_BYTES_CEILING = 2 * 1024;

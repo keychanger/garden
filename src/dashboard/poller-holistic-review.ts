@@ -38,7 +38,9 @@ import { transitionState } from "./poller-state.js";
 import { autoContinueGateReason } from "./poller-merge.js";
 import {
   reviewPromptPath, reviewResultPath, scheduleReviewTimeoutPoke,
+  MAX_REVIEW_PROMPT_BYTES,
 } from "./poller-review.js";
+import { addAlert } from "./alerts.js";
 
 // Which trigger site invoked the dispatcher. Surfaced in the decision trace so
 // validation can confirm both the merge-driven and trail-off paths fire; a
@@ -193,6 +195,36 @@ function launchHolisticFinalReview(
   if (prompt === null) {
     log.warn("poller", "holistic-review could not build prompt; leaving worker done", {
       worker: entry.name, data: { project: projectName },
+    });
+    return; // guard already set — the worker stays `done`
+  }
+
+  // Same context ceiling as a per-phase review, and the whole-task range is the
+  // more likely one to reach it. Disposition differs: this pass is best-effort
+  // over work that already merged and already passed per-phase review, so an
+  // unreviewable range leaves the worker `done` rather than failing it — the
+  // file's stated posture for every other could-not-complete outcome. Alerted,
+  // not silent: the operator loses the cross-phase check and should know.
+  if (prompt.length > MAX_REVIEW_PROMPT_BYTES) {
+    const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(1)}MB`;
+    addAlert({
+      level: "warn",
+      source: "review",
+      project: projectName,
+      worker: entry.name,
+      message:
+        `Skipped the whole-task review for ${entry.name}: assembled prompt is ${mb(prompt.length)} `
+        + `(ceiling ${mb(MAX_REVIEW_PROMPT_BYTES)}), larger than any reviewer's context window. `
+        + `The per-phase reviews all passed; only the cross-phase check was skipped.`,
+      dedupKey: `oversized-holistic:${projectName}:${entry.name}`,
+    });
+    log.warn("poller", "holistic-review prompt exceeds context ceiling; leaving worker done", {
+      worker: entry.name,
+      data: {
+        project: projectName,
+        promptBytes: prompt.length,
+        ceilingBytes: MAX_REVIEW_PROMPT_BYTES,
+      },
     });
     return; // guard already set — the worker stays `done`
   }

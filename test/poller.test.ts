@@ -280,6 +280,7 @@ import { sweepGhostEntries } from "../src/dashboard/validate.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
 import { recordCiFixOutcome } from "../src/dashboard/telemetry.js";
 import { extractReviewVerdict } from "../src/dashboard/verdict-extract.js";
+import { MAX_REVIEW_PROMPT_BYTES } from "../src/dashboard/poller-review.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 const registryMock = await import("../src/dashboard/registry.js") as {
@@ -687,6 +688,73 @@ describe("poll — working state", () => {
     );
     expect(launchCall).toBeDefined();
     expect((launchCall![2] as Record<string, unknown>).pendingReviewAt).toBeUndefined();
+  });
+
+  // A branch diff larger than any reviewer's context window is rejected by the
+  // agent CLI before the reviewer starts, so every launch and every retry is
+  // wasted. This is the weak-brave-snow shape: a sensitive-history rewrite
+  // squashed five commits into one 2.9MB delta, the assembled prompt measured
+  // ~1.16M tokens against a 1M ceiling, and three doomed launches burned the
+  // retry ladder in 36s before parking the worker behind a "Claude unavailable
+  // or unparseable output" alert that named nothing actionable.
+  it("parks a worker whose review prompt exceeds the context ceiling instead of launching", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
+    ]);
+    vi.mocked(getDiffAgainstBase).mockReturnValue("x".repeat(MAX_REVIEW_PROMPT_BYTES + 1));
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "failing", failingReason: "oversized-diff" }),
+    );
+    // Never launched: no reviewer window, and no `reviewing` transition to
+    // start a timeout clock against.
+    expect(newDashboardWindow).not.toHaveBeenCalledWith(
+      expect.stringContaining("review"),
+      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
+    );
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "reviewing" }),
+    );
+  });
+
+  it("names the size and the remedy in the oversized-diff alert", () => {
+    // The whole point of the guard is a message the operator can act on —
+    // "unavailable or unparseable" sent them to the logs for nothing.
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
+    ]);
+    vi.mocked(getDiffAgainstBase).mockReturnValue("x".repeat(MAX_REVIEW_PROMPT_BYTES + 1));
+
+    poll("myproject");
+
+    const alert = vi.mocked(addAlert).mock.calls.find(
+      ([a]) => a.worker === "bold-ash",
+    )?.[0];
+    expect(alert).toBeDefined();
+    expect(alert!.level).toBe("error");
+    expect(alert!.message).toMatch(/too large/i);
+    expect(alert!.message).toMatch(/smaller commits/i);
+  });
+
+  // Guard against the threshold creeping down onto real work: the largest
+  // healthy review delta observed across 160 commits of two active repos was
+  // 336KB, so a diff of that order must still reach the reviewer.
+  it("still launches a review for a large-but-reviewable diff", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
+    ]);
+    vi.mocked(getDiffAgainstBase).mockReturnValue("x".repeat(400 * 1024));
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "reviewing" }),
+    );
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ failingReason: "oversized-diff" }),
+    );
   });
 
   it("allows multiple workers to transition independently", () => {

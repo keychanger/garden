@@ -37,7 +37,9 @@ export async function kick(args: string[]): Promise<void> {
     const hint = state === "failing"
       ? ` (failingReason='${failingReason ?? "code"}'). Kick only auto-recovers ` +
         `review-side failures (${[...REVIEW_SIDE_FAILING_REASONS].join(", ")}); ` +
-        `for code failures push a new commit, for trellis-flagged run ` +
+        `for code failures push a new commit, for oversized-diff split the ` +
+        `branch into smaller commits (a retry on the same diff fails identically), ` +
+        `for trellis-flagged run ` +
         `'garden trellis resume', for an exhausted iteration budget inspect and ` +
         `amend the trellis, then re-spawn the vine with a higher --max-iterations ` +
         `(or kill it).`

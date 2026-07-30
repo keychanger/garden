@@ -113,6 +113,25 @@ export const UNPARSEABLE_REVIEW_BACKOFF_MS = 15_000; // 15s
 // handleWorking is the real protection against clobbering live edits.
 export const STALE_AGENT_STATUS_MS = 60 * 60 * 1000;
 
+// Ceiling on the assembled reviewer prompt. Past this the prompt is rejected by
+// the agent CLI before the reviewer starts — the request exceeds the model's
+// context window — so launching is guaranteed to waste the whole retry ladder
+// and park the worker behind a misleading "unavailable or unparseable output"
+// alert. Better to name the real problem up front.
+//
+// Sized from measurement, not guesswork. Across the last 80 commits of two
+// active repos (garden, wolf): median review delta 3-14KB, p95 88-155KB, and
+// the largest single delta observed 336KB. The failure this guards against was
+// a 2.88MB branch diff (one commit, 195 files, +48160/-5455) that assembled to
+// ~1.16M tokens against a 1M ceiling. 1MB sits ~3x above the largest healthy
+// delta and ~2.8x below the failure, so a borderline-large branch is still
+// handed to the reviewer — if the diff is merely big, letting the review run
+// and fail is no worse than today. Only the hopeless case is caught.
+//
+// Deliberately one constant rather than a config key: a per-project knob would
+// be tuning a threshold nothing is expected to reach.
+export const MAX_REVIEW_PROMPT_BYTES = 1024 * 1024;
+
 const REVIEW_VERDICT_VOCAB = ["CLEAN", "FIXED", "FAILED"] as const;
 
 export interface ReviewResult {
@@ -1746,6 +1765,47 @@ function launchReview(
   if (prompt === null) {
     log.warn("poller", "failed to build review prompt", { worker: entry.name, data: { project: projectName } });
     return false;
+  }
+
+  // The prompt carries the whole branch diff inline. Past the ceiling the agent
+  // CLI rejects it before the reviewer starts, so park the worker now with the
+  // real reason rather than burning the retry ladder on three doomed launches.
+  // NOT an operator-action reason: splitting the oversized commit rewrites the
+  // branch, and the new SHA re-enters review through the normal failing
+  // debounce — the fix retries itself.
+  if (prompt.length > MAX_REVIEW_PROMPT_BYTES) {
+    const headSha = getBranchHeadSha(wtPath);
+    const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(1)}MB`;
+    addAlert({
+      level: "error",
+      source: "review",
+      project: projectName,
+      worker: entry.name,
+      message:
+        `Review prompt for ${entry.name} is ${mb(prompt.length)} (ceiling ${mb(MAX_REVIEW_PROMPT_BYTES)}) — `
+        + `the branch diff against ${baseBranch} is too large for any reviewer's context window. `
+        + `Split the work into smaller commits and push; the review retries on the new SHA.`,
+      dedupKey: `oversized-diff:${projectName}:${entry.name}:${headSha ?? "?"}`,
+    });
+    log.warn("poller", "review prompt exceeds context ceiling; not launching", {
+      worker: entry.name,
+      data: {
+        project: projectName,
+        promptBytes: prompt.length,
+        ceilingBytes: MAX_REVIEW_PROMPT_BYTES,
+        baseBranch,
+      },
+    });
+    transitionState(projectName, entry.name, "failing", {
+      failCount: (entry.failCount ?? 0) + 1,
+      failingReason: "oversized-diff",
+      failingSha: headSha ?? undefined,
+      lastSeenSha: headSha ?? undefined,
+      lastShaChangeAt: new Date().toISOString(),
+      pendingReviewAt: undefined,
+    });
+    refreshDashboard();
+    return true;
   }
 
   // GARDEN_REVIEWER=1 marks this Claude as the reviewer so its hooks
