@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { generateWorkerName } from "../src/dashboard/names.js";
+import { generateWorkerName, isGeneratedWorkerName } from "../src/dashboard/names.js";
 
 describe("generateWorkerName", () => {
   it("returns adjective-adjective-noun format", () => {
@@ -28,6 +28,12 @@ describe("generateWorkerName", () => {
     expect(names.size).toBeGreaterThan(1);
   });
 
+  it("generates names its own recognizer accepts", () => {
+    for (let i = 0; i < 20; i++) {
+      expect(isGeneratedWorkerName(generateWorkerName([]))).toBe(true);
+    }
+  });
+
   it("falls back to exhaustive search when random path collides", () => {
     // Math.random()=0 always picks index 0: "arch-arch-arc"
     // Put that name in the existing list to force the exhaustive fallback
@@ -41,5 +47,28 @@ describe("generateWorkerName", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe("isGeneratedWorkerName", () => {
+  it("recognizes vocabulary triples", () => {
+    expect(isGeneratedWorkerName("rich-wee-bay")).toBe(true);
+    expect(isGeneratedWorkerName("bleak-hoar-glow")).toBe(true);
+    expect(isGeneratedWorkerName("bold-keen-ash")).toBe(true);
+  });
+
+  it("rejects operator branch names", () => {
+    expect(isGeneratedWorkerName("main")).toBe(false);
+    expect(isGeneratedWorkerName("develop")).toBe(false);
+    expect(isGeneratedWorkerName("feat/task-remove")).toBe(false);
+    expect(isGeneratedWorkerName("fix-worker-signal")).toBe(false);
+    expect(isGeneratedWorkerName("release-2-0")).toBe(false);
+  });
+
+  it("rejects near-misses on shape or vocabulary", () => {
+    expect(isGeneratedWorkerName("rich-wee")).toBe(false); // two parts
+    expect(isGeneratedWorkerName("rich-wee-bay-x")).toBe(false); // four parts
+    expect(isGeneratedWorkerName("bay-rich-wee")).toBe(false); // noun first
+    expect(isGeneratedWorkerName("")).toBe(false);
   });
 });

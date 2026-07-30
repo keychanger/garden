@@ -355,6 +355,25 @@ describe("listBranches (real git)", () => {
     expect(listBranches(env.repoPath, 2)).toHaveLength(2); // cap honored
   });
 
+  it("excludes worker-named branches from the list", async () => {
+    const { listBranches } = await import("../../src/dashboard/git.js");
+    // Worker branches (generated adjective-adjective-noun names) are never
+    // sensible base/build targets — the pickers must not offer them. A
+    // local-only one covers stale branches whose worker is long removed.
+    git(env.repoPath, "checkout", "-b", "rich-wee-bay");
+    fs.writeFileSync(path.join(env.repoPath, "w.txt"), "w");
+    git(env.repoPath, "add", "w.txt");
+    git(env.repoPath, "commit", "-m", "worker work");
+    git(env.repoPath, "push", "origin", "rich-wee-bay");
+    git(env.repoPath, "checkout", "-b", "bold-keen-ash");
+    git(env.repoPath, "checkout", "main");
+
+    const branches = listBranches(env.repoPath);
+    expect(branches).toContain("main");
+    expect(branches).not.toContain("rich-wee-bay");
+    expect(branches).not.toContain("bold-keen-ash");
+  });
+
   it("returns [] on a path that is not a git repo (best-effort)", async () => {
     const { listBranches } = await import("../../src/dashboard/git.js");
     expect(listBranches(path.join(env.home, "not-a-repo"))).toEqual([]);

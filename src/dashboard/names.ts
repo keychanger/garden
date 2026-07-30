@@ -54,6 +54,18 @@ const NOUNS = [
   "wing", "wisp", "woe", "wolf", "wood", "wrath", "wren", "yew",
 ];
 
+const ADJECTIVE_SET = new Set(ADJECTIVES);
+const NOUN_SET = new Set(NOUNS);
+
+// Whether a string is a name this generator could have produced. Covers every
+// worker branch ever created — including ones whose worker is long removed —
+// so branch pickers can drop them without consulting the registry.
+export function isGeneratedWorkerName(name: string): boolean {
+  const parts = name.split("-");
+  return parts.length === 3
+    && ADJECTIVE_SET.has(parts[0]) && ADJECTIVE_SET.has(parts[1]) && NOUN_SET.has(parts[2]);
+}
+
 export function generateWorkerName(existingNames: string[]): string {
   const used = new Set(existingNames);
 

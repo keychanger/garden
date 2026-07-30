@@ -6,6 +6,7 @@ import { SESSIONS_DIR } from "../config.js";
 import type { ProjectConfig } from "../config.js";
 import type { WorkerEntry } from "./registry.js";
 import { atomicWriteFile } from "./atomic-write.js";
+import { isGeneratedWorkerName } from "./names.js";
 import { log } from "./log.js";
 
 const WORKTREE_BASE = path.join(
@@ -50,7 +51,9 @@ export function resolveSpawnBase(
 // Feeds the base-branch submenus (worker + project config menus). Origin refs
 // are stripped of the "origin/" prefix and de-duped against local names (a
 // branch both checked out and on origin appears once); HEAD / origin/HEAD are
-// dropped. Best-effort — an empty list on any git error.
+// dropped, as are worker branches (generated adjective-adjective-noun names —
+// never sensible base/build targets, and an active fleet would otherwise fill
+// the cap with them). Best-effort — an empty list on any git error.
 export function listBranches(repoPath: string, limit = 12): string[] {
   try {
     const out = git(
@@ -63,7 +66,7 @@ export function listBranches(repoPath: string, limit = 12): string[] {
       let name = raw.trim();
       if (!name || name === "origin" || name.endsWith("/HEAD")) continue;
       if (name.startsWith("origin/")) name = name.slice("origin/".length);
-      if (name === "HEAD" || seen.has(name)) continue;
+      if (name === "HEAD" || seen.has(name) || isGeneratedWorkerName(name)) continue;
       seen.add(name);
       names.push(name);
       if (names.length >= limit) break;
