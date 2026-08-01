@@ -21,7 +21,7 @@ import { resolveTranscriptPath } from "./conversation.js";
 import {
   branchExistsOnOrigin, commitExists, createWorktree, fetchOrigin,
   isAncestor, localBranchExists, resolveBaseBranch, worktreeExists,
-  worktreePath as defaultWorktreePath,
+  worktreePath as defaultWorktreePath, workerCleanupMarkerPath,
 } from "./git.js";
 import { startProjectPoller, projectPollerRunning } from "./poller.js";
 import { resolveGardenRunner } from "./runner.js";
@@ -167,6 +167,11 @@ export function resurrectWorker(t: Tombstone): ResurrectOutcome {
       `the conversation is gone, so there is nothing to resume.`,
     );
   }
+  if (fs.existsSync(workerCleanupMarkerPath(t.project, t.worker))) {
+    throw new Error(
+      `Cleanup for ${t.project}/${t.worker} is still running — retry resurrection in a moment.`,
+    );
+  }
 
   const notes: string[] = [];
   const wtPath = t.entry.worktreePath ?? defaultWorktreePath(t.project, t.worker);
@@ -207,13 +212,14 @@ export function resurrectWorker(t: Tombstone): ResurrectOutcome {
 }
 
 // The kill's git cleanup runs as a detached background process, so a very
-// fresh tombstone can race it: the worktree may still be on disk. If it is a
-// valid worktree, adopt it as-is (best case — even uncommitted files are
-// still there); a bare leftover directory without .git blocks `worktree add`
-// and needs the operator's eyes, not an rm -rf from us.
+// failed cleanup can leave the worktree on disk. If it is a valid worktree,
+// adopt it as-is (best case — even uncommitted files are still there); a bare
+// leftover directory without .git blocks `worktree add` and needs the
+// operator's eyes, not an rm -rf from us. The live-cleanup marker is checked
+// before this point so its detached process cannot delete an adopted tree.
 function recoverExistingWorktree(wtPath: string, notes: string[]): string {
   if (worktreeExists(wtPath)) {
-    notes.push("worktree was still on disk (kill cleanup hadn't finished) — adopted as-is");
+    notes.push("worktree was still on disk after kill cleanup — adopted as-is");
     return "existing worktree";
   }
   throw new Error(

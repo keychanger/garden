@@ -147,6 +147,16 @@ describe("resurrectWorker (real fs/git)", () => {
     expect(fs.readFileSync(path.join(worktreePath, "uncommitted.txt"), "utf-8")).toBe("still here\n");
   });
 
+  it("refuses to race a detached kill cleanup that can still delete the worktree", async () => {
+    const { createWorktree, workerCleanupMarkerPath } = await import("../../src/dashboard/git.js");
+    createWorktree(projectPath, worktreePath, WORKER);
+    fs.writeFileSync(workerCleanupMarkerPath(PROJECT, WORKER), "");
+
+    const t = await tombstoneFor({});
+    const { resurrectWorker } = await import("../../src/dashboard/resurrect.js");
+    expect(() => resurrectWorker(t)).toThrow(/cleanup.*still running/i);
+  });
+
   it("refuses a path that exists but is not a worktree", async () => {
     fs.mkdirSync(worktreePath, { recursive: true });
     fs.writeFileSync(path.join(worktreePath, "junk.txt"), "not a worktree\n");

@@ -145,6 +145,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   tryPublishBranch: vi.fn(() => ({ ok: true })),
   gardenDoneTrackedInHead: vi.fn(() => false),
   getRemoteTrackingSha: vi.fn(() => "basesha1234"),
+  workerCleanupMarkerPath: vi.fn(() => "/tmp/fake-sessions/worker-cleanup-myproject-swift-oak"),
 }));
 
 vi.mock("../src/dashboard/alerts.js", () => ({

@@ -203,6 +203,10 @@ export function fetchOrigin(repoPath: string): boolean {
   }
 }
 
+export function workerCleanupMarkerPath(project: string, worker: string): string {
+  return path.join(SESSIONS_DIR, `worker-cleanup-${project}-${worker}`);
+}
+
 export function removeWorktree(repoPath: string, wtPath: string): void {
   try {
     git(repoPath, "worktree", "remove", wtPath, "--force");

@@ -1,5 +1,6 @@
 // Worker lifecycle: creation and destruction of Claude worker sessions.
 import path from "node:path";
+import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { DASHBOARD_SESSION } from "../session.js";
 import { getProject, tryGetProject, tryResolveProvider, loadConfig, plotsMap } from "../config.js";
@@ -35,7 +36,7 @@ import { isRegisteredHarness, harnessNames, canonicalHarnessName } from "./harne
 import { resolveGardenRunner } from "./runner.js";
 import {
   worktreePath, resolveBaseBranch, resolveSpawnBase, branchExistsOnOrigin, tryPublishBranch,
-  gardenDoneTrackedInHead, getRemoteTrackingSha,
+  gardenDoneTrackedInHead, getRemoteTrackingSha, workerCleanupMarkerPath,
 } from "./git.js";
 import { addAlert } from "./alerts.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
@@ -761,6 +762,8 @@ export function killPane(): void {
   let cleanupRepoPath: string | undefined;
   let cleanupWtPath: string | undefined;
   let cleanupBranch: string | undefined;
+  let cleanupProject: string | undefined;
+  let cleanupWorker: string | undefined;
 
   withStateLock(() => {
     const state = readDashState();
@@ -849,6 +852,8 @@ export function killPane(): void {
         }
 
         if (entry) {
+          cleanupProject = state.activeProject;
+          cleanupWorker = killedWorkerName;
           cleanupRepoPath = project.path;
           cleanupWtPath = entry.worktreePath;
           cleanupBranch = entry.branchName;
@@ -861,8 +866,10 @@ export function killPane(): void {
   });
 
   // Heavy git cleanup runs outside the lock — only spawns a background process.
-  if (cleanupRepoPath) {
-    backgroundGitCleanup(cleanupRepoPath, cleanupWtPath, cleanupBranch);
+  if (cleanupProject && cleanupWorker && cleanupRepoPath) {
+    backgroundGitCleanup(
+      cleanupProject, cleanupWorker, cleanupRepoPath, cleanupWtPath, cleanupBranch,
+    );
   }
 }
 
@@ -1098,6 +1105,8 @@ function resolveWorkerPaneId(project: string, worker: string): string | null {
 }
 
 function backgroundGitCleanup(
+  project: string,
+  worker: string,
   repoPath: string,
   wtPath: string | undefined,
   branchName: string | undefined,
@@ -1114,7 +1123,15 @@ function backgroundGitCleanup(
     );
   }
   if (parts.length === 0) return;
-  const script = parts.map(p => `(${p}) 2>/dev/null || true`).join("; ");
-  const child = spawn("sh", ["-c", script], { detached: true, stdio: "ignore" });
-  child.unref();
+  const marker = workerCleanupMarkerPath(project, worker);
+  fs.writeFileSync(marker, "");
+  const cleanup = parts.map(p => `(${p}) 2>/dev/null || true`).join("; ");
+  const script = `${cleanup}; rm -f ${shellEscape(marker)}`;
+  try {
+    const child = spawn("sh", ["-c", script], { detached: true, stdio: "ignore" });
+    child.unref();
+  } catch (err) {
+    fs.rmSync(marker, { force: true });
+    throw err;
+  }
 }
