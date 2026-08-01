@@ -203,6 +203,37 @@ describe("telemetry", () => {
     expect(e.workerId).toBe("garden/bold-ash/1000");
   });
 
+  it("records a worker.removed tombstone carrying the full final entry", async () => {
+    const t = await importTelemetry();
+    const entry = {
+      name: "shy-glib-cove",
+      sessionId: "ae5bc7bd-0000-4000-8000-000000000000",
+      task: "schema migration",
+      worktreePath: "/home/x/.garden/worktrees/wolf/shy-glib-cove",
+      branchName: "shy-glib-cove",
+      baseBranch: "main",
+      createdAt: 1_000,
+      workflow: "default",
+      mergeCount: 3,
+      holisticReviewedThroughMergeCount: 3,
+      lastSeenSha: "abc123",
+    };
+    t.recordWorkerRemoved("wolf", "shy-glib-cove", 1_000, "default", entry);
+    const e = readEvents(t.telemetryDir())[0];
+    expect(e.event).toBe("worker.removed");
+    expect(e.workerId).toBe("wolf/shy-glib-cove/1000");
+    expect(e.workflow).toBe("default");
+    expect(e.entry).toEqual(entry);
+  });
+
+  it("records a worker.resurrected marker under the original workerId", async () => {
+    const t = await importTelemetry();
+    t.recordWorkerResurrected("wolf", "shy-glib-cove", 1_000, "default");
+    const e = readEvents(t.telemetryDir())[0];
+    expect(e.event).toBe("worker.resurrected");
+    expect(e.workerId).toBe("wolf/shy-glib-cove/1000");
+  });
+
   it("appends events rather than overwriting", async () => {
     const t = await importTelemetry();
     t.recordStateTransition("garden", "w", 1, "default", "working", "reviewing");

@@ -363,6 +363,53 @@ export function recordOperatorAction(
   });
 }
 
+// worker.removed — the tombstone. Emitted at the operator-kill path (⌥x), the
+// one place a worker is deliberately hard-deleted, immediately before
+// removeWorker erases the registry entry. Carries the ENTIRE final WorkerEntry
+// under `entry` (typed loosely here — registry.ts imports this module, so the
+// real WorkerEntry type cannot be named without a cycle): the agent transcript
+// survives a kill on disk, so this snapshot is the only missing piece needed
+// to rebuild the worker later (`garden resurrect`). Deliberately verbatim
+// rather than a field selection — a rebuild wants maximum fidelity, kills are
+// rare, and the ledger is never truncated. Spawn-failure rollbacks also call
+// removeWorker but never tombstone: there is no session worth resurrecting.
+export function recordWorkerRemoved(
+  project: string,
+  worker: string,
+  createdAt: number | undefined,
+  workflow: string,
+  entry: Record<string, unknown>,
+): void {
+  write({
+    event: "worker.removed",
+    project,
+    worker,
+    workerId: telemetryWorkerId(project, worker, createdAt),
+    workflow,
+    entry,
+  });
+}
+
+// worker.resurrected — `garden resurrect` rebuilt a killed worker from its
+// tombstone. Keeps the ledger coherent: without it, a resurrected worker's
+// later events would trail its worker.removed with no explanation. Same
+// workerId as the original lifetime (createdAt is preserved by the rebuild),
+// so analysis joins treat the resurrected span as the same worker.
+export function recordWorkerResurrected(
+  project: string,
+  worker: string,
+  createdAt: number | undefined,
+  workflow: string,
+): void {
+  write({
+    event: "worker.resurrected",
+    project,
+    worker,
+    workerId: telemetryWorkerId(project, worker, createdAt),
+    workflow,
+  });
+}
+
 // merge — a completed merge, with the counts the pure state event can't carry:
 // the cumulative merge ordinal (the multi-phase cycle number) and how many
 // files this cycle touched. terminalState is "done" (worker self-declared

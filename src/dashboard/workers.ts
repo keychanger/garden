@@ -18,7 +18,7 @@ import {
   addWorker, removeWorker, findWorkerByName, getAllWorkerNames,
   updateWorkerFields, getWorkers, resolveResumeAgentStatus, compareWorkerFreshness, type AgentStatus,
 } from "./registry.js";
-import { recordWorkerCreated, recordOperatorAction, shortHash, type RoleSnapshot } from "./telemetry.js";
+import { recordWorkerCreated, recordOperatorAction, recordWorkerRemoved, shortHash, type RoleSnapshot } from "./telemetry.js";
 import { deriveCrew, getCrew, resolveProjectCrew } from "./crew.js";
 import { resolveReviewRole, type ReviewRole } from "./roles.js";
 import { buildRulesContext } from "../rules.js";
@@ -831,6 +831,12 @@ export function killPane(): void {
         const entry = findWorkerByName(state.activeProject, killedWorkerName);
 
         killReviewWindow(state.activeProject, killedWorkerName);
+        if (entry) {
+          recordWorkerRemoved(
+            state.activeProject, killedWorkerName, entry.createdAt,
+            entry.workflow ?? "default", { ...entry },
+          );
+        }
         removeWorker(state.activeProject, killedWorkerName);
         log.info("workers", "killed", {
           worker: killedWorkerName,
