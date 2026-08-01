@@ -20,7 +20,7 @@ import {
   getFirstPaneId, shellEscape, tmuxDoubleQuote, newDashboardWindow,
   getPaneSize, resizeWindow, listSessionPanes, disablePaneInput, lockPaneMouse,
 } from "./tmux.js";
-import { readRegistry, updateWorkerFields, resolveResumeAgentStatus } from "./registry.js";
+import { readRegistry, updateWorkerFields, resolveResumeAgentStatus, type WorkerEntry } from "./registry.js";
 import { log, truncateLog } from "./log.js";
 import { validateAndHeal } from "./validate.js";
 import { startProjectPoller, signalFifoPath, restartLongLivedPollers } from "./poller.js";
@@ -313,15 +313,6 @@ export function ensureDashboard(): void {
 
     for (const entry of entries) {
       if (!entry.sessionId) continue;
-      // Per-worker base: honors entry.baseBranch pinned at creation, falls
-      // back to current-checkout resolution for legacy entries.
-      const baseBranch = getWorkerBaseBranch(entry, projectConfig.path);
-      if (entry.worktreePath && wtExists(entry.worktreePath)) {
-        installPollTriggerHook(entry.worktreePath, gardenRunner, projectName);
-        getHarness(entry.harness).installRuntimeConfig(
-          entry.worktreePath, workerProject(projectConfig, entry.provider),
-        );
-      }
       // Capture mid-turn interruption before we overwrite agentStatus below.
       // pane-died sets interruptedWhileWorking when agentStatus was "working"
       // at exit; if pane-died never fired (tmux server crash), agentStatus
@@ -337,46 +328,8 @@ export function ensureDashboard(): void {
       const resumeStatus = resolveResumeAgentStatus(entry);
       const wasInterrupted = resumeStatus === "ready";
       updateWorkerFields(projectName, entry.name, { agentStatus: resumeStatus });
-      const workerCwd = entry.worktreePath ?? projectConfig.path;
-      const trellisRelativePath = trellisRelativePathForEntry(entry, projectConfig.path);
-      // entry.model: default/grow per-worker pin; trellis resolves per
-      // iteration, so vines never carry it.
-      const resumeOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string; provider?: string; botanist?: boolean } = {};
-      if (trellisRelativePath) resumeOpts.trellisRelativePath = trellisRelativePath;
-      if (entry.model) resumeOpts.model = entry.model;
-      if (entry.ultracode) resumeOpts.ultracode = true;
-      if (entry.effort) resumeOpts.effort = entry.effort;
-      if (entry.harness) resumeOpts.harness = entry.harness;
-      // `!== undefined`: the empty string is the explicit-first-party marker.
-      if (entry.provider !== undefined) resumeOpts.provider = entry.provider;
-      if (entry.workflow === "botanist") resumeOpts.botanist = true;
-      const resumeCmd = entry.worktreePath && entry.branchName
-        ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.ultracode || resumeOpts.effort || resumeOpts.harness || resumeOpts.provider !== undefined || resumeOpts.botanist
-            ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch, resumeOpts)
-            : buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch))
-        : buildResumeCommand(projectName, projectConfig.path, entry.sessionId);
-      const workerWindowName = workerWin(projectName, entry.name);
-
-      // Hold the window open with a no-op placeholder, resize, then respawn
-      // with the real resume command. This ensures Claude's TUI first paint
-      // happens in a correctly-sized grid; otherwise the new window is created
-      // at tmux's default size and the early hard-wrapped lines stay frozen
-      // in scrollback at the narrow width.
-      // `sleep infinity` is GNU-only; macOS BSD sleep exits 1 and the
-      // placeholder pane dies before respawn-pane lands. Use a finite value.
-      newDashboardWindow(workerWindowName, "-c", workerCwd, "sh", "-c", "exec sleep 86400");
-      if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
-      const workerPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindowName}`);
-      if (workerPaneId) {
-        tmux("respawn-pane", "-k", "-c", workerCwd, "-t", workerPaneId, "sh", "-c", resumeCmd);
-        setPaneLabel(workerPaneId, entry.name);
-        setPaneVar(workerPaneId, "garden_clock", "1");
-        setPaneProjectColor(workerPaneId, projectName);
-        if (entry.task) {
-          setPaneVar(workerPaneId, "garden_task", entry.task);
-          setPaneTitle(workerPaneId, entry.task);
-        }
-      }
+      const workerWindowName = respawnWorkerWindow(projectName, projectConfig, entry, rightSize);
+      if (!workerWindowName) continue;
 
       if (projectName === state.activeProject && !firstResumedWindow) {
         firstResumedWindow = workerWindowName;
@@ -1048,6 +1001,74 @@ exec $SHELL
   // it's written. Atomic write so the read can't catch a half-written file.
   atomicWriteFile(scriptFile, script, { mode: 0o755 });
   return scriptFile;
+}
+
+// Recreate one worker's hidden window and resume its agent session in it —
+// the per-entry core of ensureDashboard's attach-time resume loop, shared
+// with `garden resurrect` (which rebuilds a killed worker from its telemetry
+// tombstone and then needs exactly this respawn). Installs the worktree's
+// runtime config (hook settings + sandbox, poll-trigger git hook) when the
+// worktree exists, builds the harness resume command, and paints the pane
+// identity vars. Returns the window name, or null when the entry has no
+// sessionId to resume. Callers own the agentStatus write — attach parks
+// interrupted workers at "ready", resurrect always lands at "idle".
+export function respawnWorkerWindow(
+  projectName: string,
+  projectConfig: ProjectConfig,
+  entry: WorkerEntry,
+  size: { width: number; height: number } | null,
+): string | null {
+  if (!entry.sessionId) return null;
+  // Per-worker base: honors entry.baseBranch pinned at creation, falls
+  // back to current-checkout resolution for legacy entries.
+  const baseBranch = getWorkerBaseBranch(entry, projectConfig.path);
+  if (entry.worktreePath && wtExists(entry.worktreePath)) {
+    installPollTriggerHook(entry.worktreePath, resolveGardenRunner(), projectName);
+    getHarness(entry.harness).installRuntimeConfig(
+      entry.worktreePath, workerProject(projectConfig, entry.provider),
+    );
+  }
+  const workerCwd = entry.worktreePath ?? projectConfig.path;
+  const trellisRelativePath = trellisRelativePathForEntry(entry, projectConfig.path);
+  // entry.model: default/grow per-worker pin; trellis resolves per
+  // iteration, so vines never carry it.
+  const resumeOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string; provider?: string; botanist?: boolean } = {};
+  if (trellisRelativePath) resumeOpts.trellisRelativePath = trellisRelativePath;
+  if (entry.model) resumeOpts.model = entry.model;
+  if (entry.ultracode) resumeOpts.ultracode = true;
+  if (entry.effort) resumeOpts.effort = entry.effort;
+  if (entry.harness) resumeOpts.harness = entry.harness;
+  // `!== undefined`: the empty string is the explicit-first-party marker.
+  if (entry.provider !== undefined) resumeOpts.provider = entry.provider;
+  if (entry.workflow === "botanist") resumeOpts.botanist = true;
+  const resumeCmd = entry.worktreePath && entry.branchName
+    ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.ultracode || resumeOpts.effort || resumeOpts.harness || resumeOpts.provider !== undefined || resumeOpts.botanist
+        ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch, resumeOpts)
+        : buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch))
+    : buildResumeCommand(projectName, projectConfig.path, entry.sessionId);
+  const workerWindowName = workerWin(projectName, entry.name);
+
+  // Hold the window open with a no-op placeholder, resize, then respawn
+  // with the real resume command. This ensures Claude's TUI first paint
+  // happens in a correctly-sized grid; otherwise the new window is created
+  // at tmux's default size and the early hard-wrapped lines stay frozen
+  // in scrollback at the narrow width.
+  // `sleep infinity` is GNU-only; macOS BSD sleep exits 1 and the
+  // placeholder pane dies before respawn-pane lands. Use a finite value.
+  newDashboardWindow(workerWindowName, "-c", workerCwd, "sh", "-c", "exec sleep 86400");
+  if (size) resizeWindow(workerWindowName, size.width, size.height);
+  const workerPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindowName}`);
+  if (workerPaneId) {
+    tmux("respawn-pane", "-k", "-c", workerCwd, "-t", workerPaneId, "sh", "-c", resumeCmd);
+    setPaneLabel(workerPaneId, entry.name);
+    setPaneVar(workerPaneId, "garden_clock", "1");
+    setPaneProjectColor(workerPaneId, projectName);
+    if (entry.task) {
+      setPaneVar(workerPaneId, "garden_task", entry.task);
+      setPaneTitle(workerPaneId, entry.task);
+    }
+  }
+  return workerWindowName;
 }
 
 export function buildWorktreeResumeCommand(
