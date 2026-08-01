@@ -166,6 +166,9 @@ Dashboard:
   hold <worker>                  Interrupt a working worker and mark it 'paused' (sends Escape; ⌥e in the dashboard toggles this on the focused worker; the next prompt resumes it)
   pause <worker>                 Suppress post-merge auto-continue (writes the .garden-done sentinel; a worker UserPromptSubmit also clears it, so prompting an explicitly-paused worker is itself an unpause)
   resume <worker>                Re-arm post-merge auto-continue (clears the .garden-done sentinel)
+  resurrect                      List killed workers rebuildable from their tombstones (newest first)
+  resurrect <worker>             Rebuild a killed worker: worktree at its original path, entry restored, session resumed
+  resurrect --search <expr>      Narrow the list by name/task/branch and transcript content ("what it did")
   handoff <project> [-m "<msg>"] Spawn a fresh worker on <project> seeded with a briefing (stdin or -m)
                                  Add --expect-callback to receive a one-shot prompt at this pane when the child terminates
                                  Add --ultracode to create the worker in ultracode mode (Opus + max effort + dynamic workflows)

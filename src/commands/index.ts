@@ -40,6 +40,7 @@ import { doctor } from "./doctor.js";
 import { handoff } from "./handoff.js";
 import { reply } from "./reply.js";
 import { workers } from "./workers.js";
+import { resurrect } from "./resurrect.js";
 import { trellis } from "./trellis.js";
 import { botanist } from "./botanist.js";
 import { diag } from "./diag.js";
@@ -91,6 +92,7 @@ export const commands: Record<string, Command> = {
   handoff,
   reply,
   workers,
+  resurrect,
   trellis,
   botanist,
   diag,

@@ -155,11 +155,52 @@ export function createWorktree(
   repoPath: string,
   wtPath: string,
   branchName: string,
+  opts: { startPoint?: string; useExistingBranch?: boolean } = {},
 ): void {
   fs.mkdirSync(path.dirname(wtPath), { recursive: true });
-  git(repoPath, "worktree", "add", wtPath, "-b", branchName);
+  if (opts.useExistingBranch) {
+    git(repoPath, "worktree", "add", wtPath, branchName);
+  } else if (opts.startPoint) {
+    git(repoPath, "worktree", "add", wtPath, "-b", branchName, opts.startPoint);
+  } else {
+    git(repoPath, "worktree", "add", wtPath, "-b", branchName);
+  }
   log.info("git", "created worktree", { data: { branchName } });
   installDeps(wtPath);
+}
+
+export function localBranchExists(repoPath: string, branchName: string): boolean {
+  try {
+    git(repoPath, "show-ref", "--verify", "--quiet", `refs/heads/${branchName}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// A deleted branch's commits survive in the object store until gc, so a
+// killed worker's unmerged tip is often still reachable by SHA even though
+// no ref names it anymore. `garden resurrect` uses this to decide whether it
+// can restore the branch at its final position instead of restarting from
+// the base.
+export function commitExists(repoPath: string, sha: string): boolean {
+  try {
+    git(repoPath, "cat-file", "-e", `${sha}^{commit}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Best-effort full fetch; returns whether it succeeded so callers can note
+// (not fail on) an offline origin.
+export function fetchOrigin(repoPath: string): boolean {
+  try {
+    git(repoPath, "fetch", "origin");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function removeWorktree(repoPath: string, wtPath: string): void {

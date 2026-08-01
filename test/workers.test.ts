@@ -162,6 +162,7 @@ vi.mock("../src/dashboard/poller.js", () => ({
 vi.mock("../src/dashboard/telemetry.js", () => ({
   recordWorkerCreated: vi.fn(),
   recordOperatorAction: vi.fn(),
+  recordWorkerRemoved: vi.fn(),
   shortHash: vi.fn(() => "rulesHash"),
 }));
 
@@ -202,7 +203,7 @@ import {
   gardenDoneTrackedInHead,
 } from "../src/dashboard/git.js";
 import { addAlert } from "../src/dashboard/alerts.js";
-import { recordWorkerCreated } from "../src/dashboard/telemetry.js";
+import { recordWorkerCreated, recordWorkerRemoved } from "../src/dashboard/telemetry.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "../src/dashboard/poller.js";
 import { workerWindowName as workerWin, shellWindowName as shellWin, parseWorkerSuffix } from "../src/dashboard/window-names.js";
 import { getProject, tryGetProject, loadConfig } from "../src/config.js";
@@ -1456,6 +1457,30 @@ describe("killPane always kills", () => {
       expect.stringContaining("uncommitted changes"),
     );
     expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "swift-oak");
+  });
+
+  it("tombstones the full final entry before removing it", () => {
+    const state = makeState();
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(getFirstPaneId).mockReturnValue("%25");
+
+    const entry = {
+      name: "swift-oak", sessionId: "s1", task: "migrate the schema",
+      branchName: "swift-oak", worktreePath: "/wt/swift-oak",
+      createdAt: 42, workflow: "grow", mergeCount: 3,
+    };
+    vi.mocked(findWorkerByName).mockReturnValue(entry);
+
+    killPane();
+
+    expect(vi.mocked(recordWorkerRemoved)).toHaveBeenCalledWith(
+      "myproject", "swift-oak", 42, "grow", entry,
+    );
+    // Tombstone written before the entry is erased — the snapshot must come
+    // from the live registry, not a race with removeWorker.
+    const removedOrder = vi.mocked(recordWorkerRemoved).mock.invocationCallOrder[0];
+    const removeOrder = vi.mocked(removeWorker).mock.invocationCallOrder[0];
+    expect(removedOrder).toBeLessThan(removeOrder);
   });
 });
 
