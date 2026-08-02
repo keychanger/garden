@@ -27,6 +27,7 @@ import { launchHeadlessAgent } from "./headless-agent.js";
 import { log } from "./log.js";
 import { persistIteration } from "./loop.js";
 import { buildReviewPrompt } from "./prompts.js";
+import { MAX_REVIEW_PROMPT_BYTES, reviewPromptBytes } from "./prompt-compose.js";
 import {
   findWorkerByName, updateWorkerFields,
   type WorkerEntry,
@@ -112,29 +113,6 @@ export const UNPARSEABLE_REVIEW_BACKOFF_MS = 15_000; // 15s
 // worktree. Set well above that ceiling; the clean-worktree gate in
 // handleWorking is the real protection against clobbering live edits.
 export const STALE_AGENT_STATUS_MS = 60 * 60 * 1000;
-
-// Ceiling on the assembled reviewer prompt. Past this the prompt is rejected by
-// the agent CLI before the reviewer starts — the request exceeds the model's
-// context window — so launching is guaranteed to waste the whole retry ladder
-// and park the worker behind a misleading "unavailable or unparseable output"
-// alert. Better to name the real problem up front.
-//
-// Sized from measurement, not guesswork. Across the last 80 commits of two
-// active repos (garden, wolf): median review delta 3-14KB, p95 88-155KB, and
-// the largest single delta observed 336KB. The failure this guards against was
-// a 2.88MB branch diff (one commit, 195 files, +48160/-5455) that assembled to
-// ~1.16M tokens against a 1M ceiling. 1MB sits ~3x above the largest healthy
-// delta and ~2.8x below the failure, so a borderline-large branch is still
-// handed to the reviewer — if the diff is merely big, letting the review run
-// and fail is no worse than today. Only the hopeless case is caught.
-//
-// Deliberately one constant rather than a config key: a per-project knob would
-// be tuning a threshold nothing is expected to reach.
-export const MAX_REVIEW_PROMPT_BYTES = 1024 * 1024;
-
-export function reviewPromptBytes(prompt: string): number {
-  return Buffer.byteLength(prompt, "utf8");
-}
 
 const REVIEW_VERDICT_VOCAB = ["CLEAN", "FIXED", "FAILED"] as const;
 
@@ -1771,11 +1749,14 @@ function launchReview(
     return false;
   }
 
-  // The prompt carries the whole branch diff inline. Past the ceiling the agent
-  // CLI rejects it before the reviewer starts, so park the worker now with the
-  // real reason rather than burning the retry ladder on three doomed launches.
-  // NOT an operator-action reason: splitting the oversized commit rewrites the
-  // branch, and the new SHA re-enters review through the normal failing
+  // Backstop. The builder already degrades an oversized branch delta to a file
+  // summary the reviewer pages through itself (composeWithinCeiling), so a
+  // prompt still over the ceiling here means the NON-diff context — rules, docs,
+  // test files — is what does not fit, and no reviewer can be launched at all:
+  // the agent CLI rejects the request before the reviewer starts. Park the
+  // worker with the real reason rather than burning the retry ladder on three
+  // doomed launches. NOT an operator-action reason: shrinking the branch
+  // rewrites it, and the new SHA re-enters review through the normal failing
   // debounce — the fix retries itself.
   const promptBytes = reviewPromptBytes(prompt);
   if (promptBytes > MAX_REVIEW_PROMPT_BYTES) {
@@ -1787,8 +1768,9 @@ function launchReview(
       project: projectName,
       worker: entry.name,
       message:
-        `Review prompt for ${entry.name} is ${mb(promptBytes)} (ceiling ${mb(MAX_REVIEW_PROMPT_BYTES)}) — `
-        + `the branch diff against ${baseBranch} is too large for any reviewer's context window. `
+        `Review prompt for ${entry.name} is ${mb(promptBytes)} (ceiling ${mb(MAX_REVIEW_PROMPT_BYTES)}) even `
+        + `with the branch diff reduced to a file summary — the surrounding context (rules, docs, test files) `
+        + `is too large for any reviewer's context window. `
         + `Split the work across smaller branches and push a reduced diff; the review retries on the new SHA.`,
       dedupKey: `oversized-diff:${projectName}:${entry.name}:${headSha ?? "?"}`,
     });

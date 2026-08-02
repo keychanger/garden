@@ -16,8 +16,10 @@ vi.mock("../src/dashboard/log.js", () => ({
 
 vi.mock("../src/dashboard/git.js", () => ({
   getDiffAgainstBase: vi.fn(() => "diff content"),
+  getDiffStat: vi.fn(() => " src/foo.ts | 4000 ++++\n 1 file changed"),
   getCommitSummary: vi.fn(() => "abc1234 fix: something"),
   getChangedFiles: vi.fn(() => ["src/foo.ts"]),
+  resolveHolisticDiff: vi.fn(() => "holistic diff content"),
 }));
 
 vi.mock("../src/rules.js", () => ({
@@ -26,8 +28,9 @@ vi.mock("../src/rules.js", () => ({
 
 import fs from "node:fs";
 import { tryGetProject } from "../src/config.js";
-import { getDiffAgainstBase, getChangedFiles } from "../src/dashboard/git.js";
-import { buildReviewPrompt, buildResolvePrompt, findSpecFiles, buildSpecWarning, readDocSections, readTestSections } from "../src/dashboard/prompts.js";
+import { getDiffAgainstBase, getDiffStat, getChangedFiles, resolveHolisticDiff } from "../src/dashboard/git.js";
+import { buildReviewPrompt, buildResolvePrompt, buildHolisticFinalReviewPrompt, findSpecFiles, buildSpecWarning, readDocSections, readTestSections } from "../src/dashboard/prompts.js";
+import { MAX_REVIEW_PROMPT_BYTES } from "../src/dashboard/prompt-compose.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 function makeEntry(overrides?: Partial<WorkerEntry>): WorkerEntry {
@@ -118,6 +121,66 @@ describe("buildReviewPrompt — initial review", () => {
     expect(result).toBeNull();
   });
 
+});
+
+// A branch delta too large to inline is still reviewable: the reviewer runs
+// inside the worktree with a shell, so the prompt degrades to the per-file
+// summary plus the command to page the diff. The alternative — refusing to
+// review at all — is what the ceiling used to mean.
+describe("buildReviewPrompt — oversized diff", () => {
+  const oversized = "x".repeat(MAX_REVIEW_PROMPT_BYTES + 1);
+
+  it("swaps the inline diff for a file summary the reviewer pages itself", () => {
+    vi.mocked(getDiffAgainstBase).mockReturnValue(oversized);
+    vi.mocked(getDiffStat).mockReturnValue(" src/foo.ts | 4000 ++++\n 1 file changed");
+
+    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry())!;
+
+    expect(result).not.toContain(oversized);
+    expect(result).toContain("too large to inline");
+    expect(result).toContain("git diff origin/main...HEAD -- <path>");
+    expect(result).toContain("1 file changed");
+    expect(Buffer.byteLength(result, "utf8")).toBeLessThanOrEqual(MAX_REVIEW_PROMPT_BYTES);
+    expect(getDiffStat).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "origin/main...HEAD");
+  });
+
+  it("tells the reviewer to name the files it could not read", () => {
+    // Without this the reviewer emits a CLEAN over a delta it only partly
+    // read, and the verdict reads as full coverage.
+    vi.mocked(getDiffAgainstBase).mockReturnValue(oversized);
+    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry())!;
+    expect(result).toContain("which files you did NOT");
+  });
+
+  it("still renders the summary block when the stat call fails", () => {
+    vi.mocked(getDiffAgainstBase).mockReturnValue(oversized);
+    vi.mocked(getDiffStat).mockReturnValue("");
+    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry())!;
+    expect(result).toContain("summary unavailable");
+    expect(result).toContain("git diff origin/main...HEAD -- <path>");
+  });
+
+  it("leaves a diff that fits completely untouched", () => {
+    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry())!;
+    expect(result).toContain("diff content");
+    expect(result).not.toContain("too large to inline");
+    expect(getDiffStat).not.toHaveBeenCalled();
+  });
+
+  it("degrades the whole-task holistic range the same way", () => {
+    // The assembled cross-phase range is the likeliest one to blow the
+    // ceiling, and a skipped holistic pass is a silently lost check.
+    vi.mocked(resolveHolisticDiff).mockReturnValue(oversized);
+    const entry = makeEntry({ baseBranchSha: "base123", holisticTouchedFiles: ["src/foo.ts"] });
+
+    const result = buildHolisticFinalReviewPrompt("myproject", "/repo/myproject", "main", entry)!;
+
+    expect(result).not.toContain(oversized);
+    expect(result).toContain("git diff base123..origin/main -- <path>");
+    expect(getDiffStat).toHaveBeenCalledWith(
+      "/tmp/wt/myproject/bold-ash", "base123..origin/main", ["src/foo.ts"],
+    );
+  });
 });
 
 describe("buildResolvePrompt", () => {

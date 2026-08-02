@@ -15,9 +15,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  composePrompt, gatherPromptContext,
+  composePrompt, composeWithinCeiling, gatherPromptContext,
   type PromptContext, type PromptSection,
 } from "./prompt-compose.js";
+import { getDiffStat } from "./git.js";
 import {
   reviewIntroSection,
   reviewSpecWarningSection,
@@ -199,7 +200,9 @@ export function buildTrellisReviewPrompt(
 ): string | null {
   const ctx = gatherPromptContext(projectName, projectPath, baseBranch, entry);
   if (!ctx) return null;
-  return composePrompt(trellisReviewSections, ctx);
+  const wtPath = entry.worktreePath ?? projectPath;
+  return composeWithinCeiling(trellisReviewSections, ctx,
+    () => getDiffStat(wtPath, `origin/${baseBranch}...HEAD`));
 }
 
 // --- Helpers -------------------------------------------------------------

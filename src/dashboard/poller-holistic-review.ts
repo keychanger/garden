@@ -38,8 +38,8 @@ import { transitionState } from "./poller-state.js";
 import { autoContinueGateReason } from "./poller-merge.js";
 import {
   reviewPromptPath, reviewResultPath, scheduleReviewTimeoutPoke,
-  MAX_REVIEW_PROMPT_BYTES, reviewPromptBytes,
 } from "./poller-review.js";
+import { MAX_REVIEW_PROMPT_BYTES, reviewPromptBytes } from "./prompt-compose.js";
 import { addAlert } from "./alerts.js";
 
 // Which trigger site invoked the dispatcher. Surfaced in the decision trace so
@@ -200,11 +200,14 @@ function launchHolisticFinalReview(
   }
 
   // Same context ceiling as a per-phase review, and the whole-task range is the
-  // more likely one to reach it. Disposition differs: this pass is best-effort
-  // over work that already merged and already passed per-phase review, so an
-  // unreviewable range leaves the worker `done` rather than failing it — the
-  // file's stated posture for every other could-not-complete outcome. Alerted,
-  // not silent: the operator loses the cross-phase check and should know.
+  // more likely one to reach it — so the builder's degrade-to-a-file-summary
+  // fallback (composeWithinCeiling) matters most here. Reaching this check means
+  // even the summarized prompt does not fit. Disposition differs from a
+  // per-phase review: this pass is best-effort over work that already merged and
+  // already passed per-phase review, so an unreviewable range leaves the worker
+  // `done` rather than failing it — the file's stated posture for every other
+  // could-not-complete outcome. Alerted, not silent: the operator loses the
+  // cross-phase check and should know.
   const promptBytes = reviewPromptBytes(prompt);
   if (promptBytes > MAX_REVIEW_PROMPT_BYTES) {
     const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(1)}MB`;

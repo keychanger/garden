@@ -8,13 +8,13 @@
 // section list plus a thin builder — the I/O gathering and the join logic
 // are shared.
 import {
-  composePrompt, gatherPromptContext, makeContext,
+  composePrompt, composeWithinCeiling, gatherPromptContext, makeContext,
   findSpecFiles, readDocSections, readTestSections,
   type PromptContext, type PromptData, type PromptSection,
 } from "./prompt-compose.js";
 import { tryGetProject } from "../config.js";
 import { buildRulesContext } from "../rules.js";
-import { getCommitSummary, resolveHolisticDiff } from "./git.js";
+import { getCommitSummary, getDiffStat, resolveHolisticDiff } from "./git.js";
 import { log } from "./log.js";
 import type { WorkerEntry } from "./registry.js";
 
@@ -155,9 +155,42 @@ export const reviewRulesSection: PromptSection = {
 export const reviewDiffSection: PromptSection = {
   name: "diff",
   render(ctx) {
+    if (ctx.data.diffStat !== undefined) {
+      return pagedDiffBlock(
+        "## Diff (too large to inline — file summary only)",
+        `git diff origin/${ctx.baseBranch}...HEAD -- <path>`,
+        ctx.data.diffStat,
+      );
+    }
     return `## Diff\n\n\`\`\`diff\n${ctx.data.diff}\n\`\`\``;
   },
 };
+
+// Rendered in place of an inlined diff when the delta exceeds what the prompt
+// can carry (see composeWithinCeiling). The reviewer has a shell in the
+// worktree, so it can read the delta itself; what it needs from us is the file
+// list, the exact range to diff against, and an explicit instruction not to
+// imply coverage it does not have.
+function pagedDiffBlock(heading: string, command: string, stat: string): string {
+  return [
+    heading,
+    "",
+    "The full delta is larger than this prompt can carry, so only the per-file",
+    "summary is below. You are running INSIDE the worktree with a shell — read the",
+    "diff yourself, file by file:",
+    "",
+    `    ${command}`,
+    "",
+    "Work through the files in the summary, largest first and anything whose path",
+    "suggests core logic. You will not be able to hold the whole delta at once.",
+    "Review what you can reach, and state in your response which files you did NOT",
+    "read rather than implying you reviewed all of them.",
+    "",
+    "```",
+    stat || "(summary unavailable — run the command above without a path to start)",
+    "```",
+  ].join("\n");
+}
 
 // Documentation section is always rendered with intro text plus the list of
 // doc files (DESIGN.md, CLAUDE.md). Doc files are joined with single \n
@@ -565,10 +598,18 @@ export const holisticActionSection: PromptSection = {
 export const holisticDiffSection: PromptSection = {
   name: "holistic-diff",
   render(ctx) {
+    const from = ctx.entry.baseBranchSha ?? "base";
+    const range = `${from}..origin/${ctx.baseBranch}`;
+    if (ctx.data.diffStat !== undefined) {
+      return pagedDiffBlock(
+        `## Assembled whole-task diff (\`${range}\`, scoped to touched files) — too large to inline`,
+        `git diff ${range} -- <path>`,
+        ctx.data.diffStat,
+      );
+    }
     const diff = ctx.data.diff.trim();
     const body = diff || "(scoped range is empty — inspect the worktree directly)";
-    const from = ctx.entry.baseBranchSha ?? "base";
-    return `## Assembled whole-task diff (\`${from}..origin/${ctx.baseBranch}\`, scoped to touched files)\n\n\`\`\`diff\n${body}\n\`\`\``;
+    return `## Assembled whole-task diff (\`${range}\`, scoped to touched files)\n\n\`\`\`diff\n${body}\n\`\`\``;
   },
 };
 
@@ -629,7 +670,9 @@ export function buildReviewPrompt(
 ): string | null {
   const ctx = gatherPromptContext(projectName, projectPath, baseBranch, entry);
   if (!ctx) return null;
-  return composePrompt(reviewSections, ctx);
+  const wtPath = entry.worktreePath ?? projectPath;
+  return composeWithinCeiling(reviewSections, ctx,
+    () => getDiffStat(wtPath, `origin/${baseBranch}...HEAD`));
 }
 
 // CI-fix context: full review I/O (diff + commits + rules-equivalent context
@@ -694,7 +737,9 @@ export function buildHolisticFinalReviewPrompt(
     testSections: readTestSections(wtPath, files),
     specFiles: findSpecFiles(wtPath, files),
   };
-  return composePrompt(holisticReviewSections, makeContext(projectName, projectPath, baseBranch, entry, data));
+  const ctx = makeContext(projectName, projectPath, baseBranch, entry, data);
+  return composeWithinCeiling(holisticReviewSections, ctx,
+    () => getDiffStat(wtPath, `${fromSha}..${toRef}`, files));
 }
 
 function makeResolveContext(

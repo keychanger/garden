@@ -76,7 +76,7 @@ describe("garden review", () => {
     expect(text).toContain("verdict   fixed");
     expect(text).toContain("changes during review (aaaaaaa..bbbbbbb)");
     expect(text).toContain("1 file changed");
-    expect(getDiffStat).toHaveBeenCalledWith("/tmp/wt", "aaaaaaa1", "bbbbbbb2");
+    expect(getDiffStat).toHaveBeenCalledWith("/tmp/wt", "aaaaaaa1..bbbbbbb2");
   });
 
   it("marks checks not passing for a failed review", async () => {

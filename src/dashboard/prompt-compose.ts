@@ -27,6 +27,10 @@ const SPEC_MARKER = "the code is wrong";
 
 export interface PromptData {
   diff: string;
+  /** Per-file `--stat` summary of the same range as `diff`, set only when the
+   *  delta was too large to inline (see composeWithinCeiling). Diff sections
+   *  render this plus paging instructions instead of `diff`, which is empty. */
+  diffStat?: string;
   commitSummary: string;
   branchName: string;
   rules: string;
@@ -73,6 +77,59 @@ export function composePrompt(
     parts.push(rendered);
   }
   return parts.join("\n\n");
+}
+
+// Ceiling on the assembled reviewer prompt. Past this the prompt is rejected by
+// the agent CLI before the reviewer starts — the request exceeds the model's
+// context window — so launching is guaranteed to waste the whole retry ladder
+// and park the worker behind a misleading "unavailable or unparseable output"
+// alert. It is a composition threshold first (composeWithinCeiling below drops
+// the inline diff to bring a prompt under it) and a park-the-worker threshold
+// only when that fails.
+//
+// Sized from measurement, not guesswork. Across the last 80 commits of two
+// active repos (garden, wolf): median review delta 3-14KB, p95 88-155KB, and
+// the largest single delta observed 336KB. The failure this guards against was
+// a 2.88MB branch diff (one commit, 195 files, +48160/-5455) that assembled to
+// ~1.16M tokens against a 1M ceiling. 1MB sits ~3x above the largest healthy
+// delta and ~2.8x below the failure, so a borderline-large branch is still
+// handed to the reviewer inline — if the diff is merely big, letting the review
+// run and fail is no worse than not trying.
+//
+// It is NOT sized to the reviewer's whole context window on purpose. The
+// reviewer works in that window too: it rebases, resolves conflicts, runs the
+// checks suite (whose failure output alone runs to tens of KB), reads files and
+// edits them. A prompt sized to fill the window compacts mid-review, and a
+// compacted reviewer certifies a summary of the diff rather than the diff.
+//
+// Deliberately one constant rather than a config key: a per-project knob would
+// be tuning a threshold nothing is expected to reach.
+export const MAX_REVIEW_PROMPT_BYTES = 1024 * 1024;
+
+export function reviewPromptBytes(prompt: string): number {
+  return Buffer.byteLength(prompt, "utf8");
+}
+
+// Compose, and if the assembled prompt busts the ceiling, recompose once with
+// the diff replaced by its `--stat` summary (`stat` is a thunk so the extra git
+// call happens only on that path). The reviewer runs INSIDE the worktree with a
+// shell, so a delta too large to carry inline is still reviewable — it just has
+// to page through `git diff` itself, which is what the diff sections tell it to
+// do when `diffStat` is set. A degraded review beats the alternative of parking
+// the worker and reviewing nothing; a branch that fits takes the byte-identical
+// original path. The caller's own ceiling check remains the backstop for when
+// even the summarized prompt does not fit (rules/docs/tests dominating).
+export function composeWithinCeiling(
+  sections: readonly PromptSection[],
+  ctx: PromptContext,
+  stat: () => string,
+): string {
+  const prompt = composePrompt(sections, ctx);
+  if (reviewPromptBytes(prompt) <= MAX_REVIEW_PROMPT_BYTES) return prompt;
+  const paged = makeContext(ctx.projectName, ctx.projectPath, ctx.baseBranch, ctx.entry, {
+    ...ctx.data, diff: "", diffStat: stat(),
+  });
+  return composePrompt(sections, paged);
 }
 
 // Review-flavored gatherer: fetches diff, commits, rules, docs, tests, and

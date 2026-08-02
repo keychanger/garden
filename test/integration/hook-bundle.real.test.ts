@@ -88,7 +88,17 @@ import path from "node:path";
 // the review path, and the guard pulls in no new module (alerts.ts was already
 // in the bundle via poller-review.ts). Verified against the metafile: the
 // growth is those two files' own bytesInOutput and skillsBytes is still 0.
-const HOOK_BUNDLE_CEILING_BYTES = 246 * 1024;
+// Bumped 246->248kb for the degrade-instead-of-park review fallback
+// (composeWithinCeiling, +1655 bytes total: +1096 in prompts.ts for the paged
+// diff block's prose and the two diff sections' branches, +283 in
+// prompt-compose.ts for composeWithinCeiling plus the ceiling constants moved
+// there from poller-review.ts, +214 in git.ts for getDiffStat's range/scoped
+// generalization, +71 in trellis-prompts.ts, +5 in poller-holistic-review.ts,
+// -14 in poller-review.ts as the constants left). Same shape as every bump
+// above: all six files were already hook-reachable via the review path, the
+// change pulls in no new module, and the metafile attributes the growth to
+// those files' own bytesInOutput with skillsBytes still 0.
+const HOOK_BUNDLE_CEILING_BYTES = 248 * 1024;
 // skills.ts contributes only a tree-shaken sliver today (<100 bytes); a
 // retained skills bundle is ~28kb. The threshold sits well between.
 const SKILLS_BYTES_CEILING = 2 * 1024;

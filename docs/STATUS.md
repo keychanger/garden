@@ -169,7 +169,7 @@ a terminal state — it returns to `working` when the operator responds
 | working       | asking        | Worker `PreToolUse` (mid-turn user-input tool)       |
 | working       | asking        | Worker `PermissionRequest`                           |
 | working       | reviewing     | Worker `Stop`; new commits ahead of base             |
-| working       | failing       | Assembled review prompt exceeds the context ceiling — `failingReason: "oversized-diff"`, no reviewer launched |
+| working       | failing       | Assembled review prompt exceeds the context ceiling even with the diff reduced to a file summary — `failingReason: "oversized-diff"`, no reviewer launched |
 | idle          | working       | Worker `UserPromptSubmit`                            |
 | idle          | working       | Worker `PostToolUse` (self-heal; stale idle)         |
 | idle          | asking        | Worker `PreToolUse` (self-heal; stale idle)          |

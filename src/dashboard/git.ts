@@ -618,19 +618,25 @@ export function getChangedFilesBetween(
   }
 }
 
-// `git diff --stat from..to` as a human-readable block (files + insertion/
-// deletion counts), for `garden review`. Empty string on a no-op range (a
-// CLEAN review, where the reviewer pushed nothing) or any git failure.
+// `git diff --stat <range>` as a human-readable block (files + insertion/
+// deletion counts). Two callers: `garden review` renders the review-window
+// delta, and a reviewer prompt whose diff is too large to inline carries this
+// summary instead so the reviewer can page the delta itself. Optional
+// `files` scopes the range the same way the holistic diff is scoped. Empty
+// string on a no-op range (a CLEAN review, where the reviewer pushed nothing)
+// or any git failure — both callers render a fallback rather than throwing.
 export function getDiffStat(
   wtPath: string,
-  fromSha: string,
-  toSha: string,
+  range: string,
+  files: string[] = [],
 ): string {
   try {
-    return git(wtPath, "diff", "--stat", `${fromSha}..${toSha}`).trim();
+    const args = ["diff", "--stat", range];
+    if (files.length > 0) args.push("--", ...files);
+    return git(wtPath, ...args).trim();
   } catch (err) {
     log.warn("git", "getDiffStat failed", {
-      data: { fromSha, toSha, error: String(err) },
+      data: { range, error: String(err) },
     });
     return "";
   }

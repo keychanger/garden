@@ -167,6 +167,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   getBranchHeadSha: vi.fn(() => "abc123"),
   getRemoteTrackingSha: vi.fn(() => "abc123"),
   getDiffAgainstBase: vi.fn(() => "diff --git a/file.ts b/file.ts"),
+  getDiffStat: vi.fn(() => " file.ts | 2 +-\n 1 file changed"),
   forcePushBranch: vi.fn(),
   mergeToBase: vi.fn(),
   rebaseBranch: vi.fn(() => ({ kind: "ok" })),
@@ -264,7 +265,7 @@ import {
   forcePushBranch, mergeToBase, rebaseBranch, abortRebase, cleanWorktree,
   fastForwardBase,
   getChangedFiles, getChangedFilesBetween,
-  getCommitSummary, hasCommitsAhead, getNewCommitSummary, getDiffAgainstBase,
+  getCommitSummary, hasCommitsAhead, getNewCommitSummary, getDiffAgainstBase, getDiffStat,
   isWorktreeDirty,
   listModifiedTrackedFiles, revertChurn,
   syncWorktreeToRemote,
@@ -282,7 +283,8 @@ import { recordCiFixOutcome } from "../src/dashboard/telemetry.js";
 import { extractReviewVerdict } from "../src/dashboard/verdict-extract.js";
 import {
   MAX_REVIEW_PROMPT_BYTES, reviewPromptBytes,
-} from "../src/dashboard/poller-review.js";
+} from "../src/dashboard/prompt-compose.js";
+import { buildRulesContext } from "../src/rules.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 const registryMock = await import("../src/dashboard/registry.js") as {
@@ -317,6 +319,8 @@ beforeEach(() => {
   vi.mocked(getFirstPaneId).mockReturnValue("%5");
   vi.mocked(getChangedFiles).mockReturnValue([]);
   vi.mocked(getDiffAgainstBase).mockReturnValue("diff --git a/file.ts b/file.ts");
+  vi.mocked(getDiffStat).mockReturnValue(" file.ts | 2 +-\n 1 file changed");
+  vi.mocked(buildRulesContext).mockReturnValue("test rules");
   vi.mocked(getCommitSummary).mockReturnValue("abc123 fix something");
   vi.mocked(hasCommitsAhead).mockReturnValue(true);
   vi.mocked(isWorktreeDirty).mockReturnValue(false);
@@ -692,18 +696,37 @@ describe("poll — working state", () => {
     expect((launchCall![2] as Record<string, unknown>).pendingReviewAt).toBeUndefined();
   });
 
-  // A branch diff larger than any reviewer's context window is rejected by the
-  // agent CLI before the reviewer starts, so every launch and every retry is
-  // wasted. This is the weak-brave-snow shape: a sensitive-history rewrite
-  // squashed five commits into one 2.9MB delta, the assembled prompt measured
-  // ~1.16M tokens against a 1M ceiling, and three doomed launches burned the
-  // retry ladder in 36s before parking the worker behind a "Claude unavailable
-  // or unparseable output" alert that named nothing actionable.
-  it("parks a worker whose review prompt exceeds the context ceiling instead of launching", () => {
+  // A branch diff larger than any reviewer's context window used to park the
+  // worker outright. It no longer does: the builder replaces the inline diff
+  // with the per-file summary and the reviewer pages the delta itself in the
+  // worktree. This is the weak-brave-snow shape (a sensitive-history rewrite
+  // squashed five commits into one 2.9MB delta) and the wolf/dense-long-tide
+  // shape (215 files, +50k lines) — both are now reviewed, if shallowly,
+  // instead of stranded.
+  it("launches a degraded review rather than parking on an oversized branch diff", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
     ]);
     vi.mocked(getDiffAgainstBase).mockReturnValue("x".repeat(MAX_REVIEW_PROMPT_BYTES + 1));
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "reviewing" }),
+    );
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ failingReason: "oversized-diff" }),
+    );
+  });
+
+  // The ceiling still parks a worker, but only when the non-diff context is
+  // what does not fit — nothing can be summarized away, so no reviewer can be
+  // launched at all and every retry would fail identically.
+  it("parks a worker whose prompt exceeds the ceiling even without the diff", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
+    ]);
+    vi.mocked(buildRulesContext).mockReturnValue("r".repeat(MAX_REVIEW_PROMPT_BYTES + 1));
 
     poll("myproject");
 
@@ -727,7 +750,7 @@ describe("poll — working state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
     ]);
-    vi.mocked(getDiffAgainstBase).mockReturnValue("x".repeat(MAX_REVIEW_PROMPT_BYTES + 1));
+    vi.mocked(buildRulesContext).mockReturnValue("r".repeat(MAX_REVIEW_PROMPT_BYTES + 1));
 
     poll("myproject");
 
@@ -741,14 +764,14 @@ describe("poll — working state", () => {
   });
 
   it("measures the review ceiling in UTF-8 bytes rather than JavaScript characters", () => {
-    const prompt = "é".repeat(Math.floor(MAX_REVIEW_PROMPT_BYTES / 2) + 1);
-    expect(prompt.length).toBeLessThan(MAX_REVIEW_PROMPT_BYTES);
-    expect(reviewPromptBytes(prompt)).toBeGreaterThan(MAX_REVIEW_PROMPT_BYTES);
+    const rules = "é".repeat(Math.floor(MAX_REVIEW_PROMPT_BYTES / 2) + 1);
+    expect(rules.length).toBeLessThan(MAX_REVIEW_PROMPT_BYTES);
+    expect(reviewPromptBytes(rules)).toBeGreaterThan(MAX_REVIEW_PROMPT_BYTES);
 
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
     ]);
-    vi.mocked(getDiffAgainstBase).mockReturnValue(prompt);
+    vi.mocked(buildRulesContext).mockReturnValue(rules);
 
     poll("myproject");
 

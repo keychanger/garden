@@ -31,7 +31,7 @@ export async function review(args: string[]): Promise<void> {
   // when the SHAs actually differ and the worktree is still on disk.
   let diffStat: string | undefined;
   if (last?.preReviewSha && last.tipSha && last.preReviewSha !== last.tipSha && entry.worktreePath) {
-    const stat = getDiffStat(entry.worktreePath, last.preReviewSha, last.tipSha);
+    const stat = getDiffStat(entry.worktreePath, `${last.preReviewSha}..${last.tipSha}`);
     if (stat) diffStat = stat;
   }
 
