@@ -364,9 +364,21 @@ export const reviewSections: readonly PromptSection[] = [
 export function buildReviewPrompt(...args): string | null {
   const ctx = gatherPromptContext(...args);
   if (!ctx) return null;
-  return composePrompt(reviewSections, ctx);
+  return composeWithinCeiling(reviewSections, ctx,
+    () => getDiffStat(wtPath, `origin/${baseBranch}...HEAD`));
 }
 ```
+
+**A review builder composes through `composeWithinCeiling`, not bare
+`composePrompt`.** It measures the assembled prompt against
+`MAX_REVIEW_PROMPT_BYTES` and, when it busts, recomposes once with the inline
+diff replaced by its `git diff --stat` summary (the third argument is a thunk,
+so the extra git call only happens on that path) — the diff sections render
+paging instructions instead, and the reviewer, which runs inside the worktree
+with a shell, reads the delta itself. A builder that calls `composePrompt`
+directly reverts its workflow to the old hard wall: a branch too large to inline
+parks the worker in `failing` with `oversized-diff` and gets no review at all.
+Non-review builders (the resolver, which carries no diff) use `composePrompt`.
 
 `buildResolvePrompt` similarly becomes a smaller list of resolve-specific
 sections (some shared with review, e.g. branch info; some unique, e.g.
@@ -1487,9 +1499,11 @@ tests, docs) against the trellis, full stop.
 
 #### Section composition
 
-The trellis review prompt is built from `composePrompt(trellisReviewSections, ctx)`.
-It reuses sections from the default review and adds three trellis-specific
-ones:
+The trellis review prompt is built from
+`composeWithinCeiling(trellisReviewSections, ctx, …)` (see Component 3 — it
+degrades an oversized branch diff to a `--stat` summary the reviewer pages
+itself, rather than parking the vine). It reuses sections from the default
+review and adds three trellis-specific ones:
 
 ```ts
 export const trellisReviewSections: readonly PromptSection[] = [
