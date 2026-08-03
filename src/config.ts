@@ -4,12 +4,7 @@ import path from "node:path";
 import yaml from "js-yaml";
 import { atomicWriteFile } from "./dashboard/atomic-write.js";
 import { withFileLock } from "./dashboard/file-lock.js";
-import {
-  CONFIG_PATH,
-  GARDEN_DIR,
-  HOME_DIR,
-  SESSIONS_DIR,
-} from "./paths.js";
+import { CONFIG_PATH, HOME_DIR } from "./paths.js";
 import {
   ASSIGNABLE_LOG_COLOR_KEYS,
   RESERVED_LOG_COLOR_KEY,

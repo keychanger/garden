@@ -633,7 +633,7 @@ All read commands detect whether stdout is a TTY:
       <project>-<worker>-review-result.txt  # Transient reviewer/resolver output
       <project>-<worker>-ci-fix-prompt.txt  # Transient CI-fix prompt
       <project>-<worker>-ci-fix-result.txt  # Transient CI-fix output
-      <result>.stderr                         # Non-Claude harness diagnostic sidecar
+      <result>.stderr               # Non-Claude harness diagnostic sidecar
     reports/
       holistic-findings-<project>-<worker>.md  # Durable holistic shadow report
   sessions/

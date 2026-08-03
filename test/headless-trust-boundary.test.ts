@@ -63,4 +63,30 @@ describe("headless-agent trust boundary", () => {
     expect(isWithin(HEADLESS_RUNS_DIR, result)).toBe(true);
     expect(path.basename(result).length).toBeLessThanOrEqual(255);
   });
+
+  // Hashing is the fallback, not the rule: an ordinary project/worker pair
+  // keeps its readable filename. The operator reads these names out of
+  // `garden logs` and off disk while debugging a stuck review, and the legacy
+  // SESSIONS_DIR sweep in cleanContextFiles matches on the same basenames.
+  it("preserves ordinary project and worker names verbatim in the filename", () => {
+    expect(path.basename(reviewResultPath("garden", "swift-oak")))
+      .toBe("garden-swift-oak-review-result.txt");
+    expect(path.basename(ciFixPromptPath("wolf", "bleak-hoar-glow")))
+      .toBe("wolf-bleak-hoar-glow-ci-fix-prompt.txt");
+  });
+
+  // Two distinct forged identities must not collapse onto one verdict file —
+  // sharing it would let one worker read or overwrite another's verdict, which
+  // is the boundary this whole module exists to hold. Lone surrogates are the
+  // sharp case: they are unrepresentable in UTF-8, so hashing the name as UTF-8
+  // replaces every one of them with U+FFFD and collides distinct names.
+  it("maps distinct unsafe identities to distinct artifact paths", () => {
+    const paths = [
+      reviewResultPath("p", "\uD800"),
+      reviewResultPath("p", "\uD801"),
+      reviewResultPath("p", "worker/../../escape"),
+      reviewResultPath("p", "worker\0escape"),
+    ];
+    expect(new Set(paths).size).toBe(paths.length);
+  });
 });
