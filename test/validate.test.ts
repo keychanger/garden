@@ -95,6 +95,7 @@ import { readDashState, writeDashState, withStateLock } from "../src/dashboard/s
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, tmuxSplit } from "../src/dashboard/tmux.js";
 import { readRegistry, writeRegistry, mutateRegistry } from "../src/dashboard/registry.js";
 import type { DashboardState } from "../src/dashboard/state.js";
+import { HEADLESS_RUNS_DIR } from "../src/paths.js";
 
 import { setPaneTitle, setPaneLabel, disablePaneInput, lockPaneMouse } from "../src/dashboard/tmux.js";
 
@@ -533,11 +534,15 @@ describe("cleanContextFiles", () => {
 
   it("deletes stale review files but protects an in-flight review's files", () => {
     // Spy on the shared node:fs so no real filesystem is touched.
-    vi.spyOn(fs, "readdirSync").mockReturnValue([
-      "myproject-live-worker-review-result.txt",
-      "myproject-live-worker-review-prompt.txt",
-      "myproject-stale-worker-review-result.txt",
-    ] as unknown as ReturnType<typeof fs.readdirSync>);
+    vi.spyOn(fs, "readdirSync").mockImplementation((directory) => (
+      String(directory) === DIR
+        ? [
+          "myproject-live-worker-review-result.txt",
+          "myproject-live-worker-review-prompt.txt",
+          "myproject-stale-worker-review-result.txt",
+        ]
+        : []
+    ) as unknown as ReturnType<typeof fs.readdirSync>);
     const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(() => {});
     // A worker whose review window is still up must keep its files; a worker
     // with no live review window is stale and its leftover files are swept.
@@ -559,9 +564,11 @@ describe("cleanContextFiles", () => {
   });
 
   it("sweeps a review file when its worker's review window has died", () => {
-    vi.spyOn(fs, "readdirSync").mockReturnValue([
-      "myproject-gone-worker-review-result.txt",
-    ] as unknown as ReturnType<typeof fs.readdirSync>);
+    vi.spyOn(fs, "readdirSync").mockImplementation((directory) => (
+      String(directory) === DIR
+        ? ["myproject-gone-worker-review-result.txt"]
+        : []
+    ) as unknown as ReturnType<typeof fs.readdirSync>);
     const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(() => {});
     vi.mocked(readRegistry).mockReturnValue({
       workers: {
@@ -576,6 +583,46 @@ describe("cleanContextFiles", () => {
     cleanContextFiles();
 
     expect(unlink).toHaveBeenCalledWith(`${DIR}/myproject-gone-worker-review-result.txt`);
+  });
+
+  it("sweeps stale trusted artifacts while protecting every live review-family file", () => {
+    vi.spyOn(fs, "readdirSync").mockImplementation((directory) => (
+      String(directory) === HEADLESS_RUNS_DIR
+        ? [
+          "myproject-live-worker-review-result.txt",
+          "myproject-live-worker-ci-fix-result.txt",
+          "myproject-live-worker-ci-fix-result.txt.stderr",
+          "myproject-stale-worker-ci-fix-result.txt",
+          "operator-note.txt",
+        ]
+        : []
+    ) as unknown as ReturnType<typeof fs.readdirSync>);
+    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: {
+        myproject: [
+          { name: "live-worker", sessionId: "s", task: "",
+            reviewWindowName: "_myproject-ci-fix-live-worker" },
+        ],
+      },
+    });
+    vi.mocked(windowExists).mockReturnValue(true);
+
+    cleanContextFiles();
+
+    expect(unlink).toHaveBeenCalledWith(
+      `${HEADLESS_RUNS_DIR}/myproject-stale-worker-ci-fix-result.txt`,
+    );
+    expect(unlink).not.toHaveBeenCalledWith(
+      `${HEADLESS_RUNS_DIR}/myproject-live-worker-review-result.txt`,
+    );
+    expect(unlink).not.toHaveBeenCalledWith(
+      `${HEADLESS_RUNS_DIR}/myproject-live-worker-ci-fix-result.txt`,
+    );
+    expect(unlink).not.toHaveBeenCalledWith(
+      `${HEADLESS_RUNS_DIR}/myproject-live-worker-ci-fix-result.txt.stderr`,
+    );
+    expect(unlink).not.toHaveBeenCalledWith(`${HEADLESS_RUNS_DIR}/operator-note.txt`);
   });
 });
 

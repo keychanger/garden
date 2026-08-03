@@ -1,5 +1,6 @@
 // State validation and self-healing: reconciles dashboard state with tmux reality.
 import fs from "node:fs";
+import path from "node:path";
 import { SESSIONS_DIR, loadConfig } from "../config.js";
 import { type DashboardState, readDashState, writeDashState, withStateLock } from "./state.js";
 import { mutateRegistry, readRegistry, type WorkerRegistry } from "./registry.js";
@@ -10,10 +11,14 @@ import { startProjectPoller, projectPollerRunning } from "./poller.js";
 import { createGardenGrowhouseWindow, USAGE_PANE_HEIGHT } from "./create.js";
 import { resolveGardenRunner } from "./runner.js";
 import { gardenWindowName, workerWindowName } from "./window-names.js";
-import { reviewResultPath, reviewPromptPath } from "./poller-review.js";
 import { buildStatusCommand, buildUsageCommand } from "./header.js";
 import { gardenRestoreFromHidden } from "./layout.js";
 import { addAlert } from "./alerts.js";
+import { HEADLESS_RUNS_DIR } from "../paths.js";
+import {
+  headlessArtifactNames,
+  isHeadlessArtifactName,
+} from "./headless-paths.js";
 
 /**
  * Recreate the status pane if it's missing. Reads and writes state atomically.
@@ -427,18 +432,16 @@ export function cleanContextFiles(): void {
   try {
     const config = loadConfig();
     const projectNames = new Set(Object.keys(config.projects));
-    // A reviewer or resolver writes its verdict into the review-result file and
-    // reads its prompt from the review-prompt file. If cleanContextFiles runs
-    // during a live review (this fires on every dashboard attach), deleting
-    // those files leaves the verdict unreadable and spuriously fails the review.
-    // Protect the files of any worker whose review/resolve window is still up.
+    // Review-family prompts and verdicts live in the trusted headless directory.
+    // Protect every artifact belonging to a live reviewer/resolver/ci-fix window.
     const registry = readRegistry();
     const protectedFiles = new Set<string>();
     for (const [projectName, entries] of Object.entries(registry.workers)) {
       for (const entry of entries) {
         if (entry.reviewWindowName && windowExists(entry.reviewWindowName)) {
-          protectedFiles.add(reviewResultPath(projectName, entry.name).split("/").pop()!);
-          protectedFiles.add(reviewPromptPath(projectName, entry.name).split("/").pop()!);
+          for (const file of headlessArtifactNames(projectName, entry.name)) {
+            protectedFiles.add(file);
+          }
         }
       }
     }
@@ -458,8 +461,15 @@ export function cleanContextFiles(): void {
       if (file.endsWith("-review-result.txt") || file.endsWith("-review-prompt.txt")) {
         if (protectedFiles.has(file)) continue;
         fs.unlinkSync(`${SESSIONS_DIR}/${file}`);
-        log.info("validate", "removed stale review file", { data: { file } });
+        log.info("validate", "removed legacy stale review file", { data: { file } });
       }
+    }
+
+    const headlessFiles = fs.readdirSync(HEADLESS_RUNS_DIR);
+    for (const file of headlessFiles) {
+      if (!isHeadlessArtifactName(file) || protectedFiles.has(file)) continue;
+      fs.unlinkSync(path.join(HEADLESS_RUNS_DIR, file));
+      log.info("validate", "removed stale headless artifact", { data: { file } });
     }
   } catch { /* sessions dir might not exist */ }
 }

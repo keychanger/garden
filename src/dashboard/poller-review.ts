@@ -6,8 +6,7 @@
 // hooks so they don't get treated as worker hooks.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
-import { tryGetProject, SESSIONS_DIR, getMaxConcurrentReviews } from "../config.js";
+import { tryGetProject, getMaxConcurrentReviews } from "../config.js";
 import { addAlert } from "./alerts.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { resolveReviewRole, SAFE_REVIEW_MODEL } from "./roles.js";
@@ -45,6 +44,13 @@ import { reviewWindowName } from "./window-names.js";
 import { signalFifoPath, scheduleDelayedPoke } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
 import { recordReviewVerdict } from "./telemetry.js";
+import {
+  holisticFindingsPath,
+  reviewPromptPath,
+  reviewResultPath,
+} from "./headless-paths.js";
+
+export { reviewPromptPath, reviewResultPath } from "./headless-paths.js";
 
 // Wall-clock ceiling on a single reviewer or resolver run. If the tmux window
 // is still alive past this, the poller kills it and escalates to `failing`.
@@ -119,14 +125,6 @@ const REVIEW_VERDICT_VOCAB = ["CLEAN", "FIXED", "FAILED"] as const;
 export interface ReviewResult {
   verdict: "clean" | "fixed" | "failed";
   body: string;
-}
-
-export function reviewResultPath(project: string, worker: string): string {
-  return path.join(SESSIONS_DIR, `${project}-${worker}-review-result.txt`);
-}
-
-export function reviewPromptPath(project: string, worker: string): string {
-  return path.join(SESSIONS_DIR, `${project}-${worker}-review-prompt.txt`);
 }
 
 // `working` worker: the Stop-hook FIFO poke gets us here. The Stop hook
@@ -531,11 +529,11 @@ function handleHolisticFinalReview(
   };
 
   if (mode === "shadow") {
-    // Analysis-only: surface findings, never merge. A durable copy lands in
-    // SESSIONS_DIR so the operator can read the full report past the alert cap.
+    // Analysis-only: surface findings, never merge. A durable copy lands in the
+    // trusted reports directory so the operator can read past the alert cap.
     const findings = (review?.body ?? rawOutput ?? "").trim();
     const coherent = review?.verdict === "clean";
-    const durable = path.join(SESSIONS_DIR, `holistic-findings-${projectName}-${entry.name}.md`);
+    const durable = holisticFindingsPath(projectName, entry.name);
     try { atomicWriteFile(durable, findings || "CLEAN — no cross-phase defects."); } catch { /* best effort */ }
     addAlert({
       level: "warn",

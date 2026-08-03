@@ -49,6 +49,15 @@ reads or runs.
   operator's next commit executed unsandboxed. The scoped install closes that: the main
   checkout runs its own default `.git/hooks`, and the operator's own hooks (e.g. a
   block-push-to-main guard) stay armed.
+- **Review-channel integrity.** Reviewer, resolver, and CI-fix prompts, results, and
+  harness sidecars live under `~/.garden/control/headless`, outside the worker's
+  `~/.garden/sessions` write grant. Durable holistic shadow reports live under
+  `~/.garden/control/reports`. The outer poller-owned launch shell opens these files
+  before the headless agent runs, so sandboxed agents can still consume the prompt and
+  emit a verdict without granting the worker write access to the verdict channel.
+  Unsafe, malformed, or oversized project and worker names are mapped to bounded SHA-256
+  filename components, preventing a forged registry name from traversing out of the
+  control tree or exceeding filesystem filename limits.
 - **Registry forgery guard (partial).** The worker registry lives in the
   sandbox-writable `~/.garden/sessions`. Its read guard (`isWorkerRegistry` in
   `src/dashboard/registry.ts`) type-checks the trusted fields (`prState`, `agentStatus`,
@@ -97,11 +106,13 @@ reads or runs.
   trust decision about the repo content under review, not only about review quality.
   Confining it is pending the same `writable_roots` validation as the worker case, plus
   confirming `codex exec` can complete a review under a non-bypass sandbox.
-- **The registry is writable by workers.** The type guard is defense-in-depth; a worker
-  with a valid-looking forged entry can still manipulate fleet state (e.g. retarget its
-  own merge base). The principled fix — moving the registry out of the worker-writable
-  set and routing worker-initiated mutations (`garden workers grow`) through a validated
-  request-file the poller applies — is planned.
+- **The registry is writable by workers.** Moving review exchange files closes verdict
+  replacement, but it does not make `~/.garden/sessions` a trusted control store. The
+  registry type guard is defense-in-depth; a worker with a valid-looking forged entry
+  can still manipulate fleet state (e.g. retarget its own merge base). The principled
+  fix — moving the registry out of the worker-writable set and routing worker-initiated
+  mutations (`garden workers grow`) through a validated request file the poller applies
+  — remains required.
 - **`postMerge`/`checks` commands are trusted.** They come from `~/.garden/config.yml`,
   which is not in any sandbox write grant, so a worker cannot set them. Do not move
   `config.yml` into a writable location.

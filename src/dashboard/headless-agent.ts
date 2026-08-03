@@ -1,7 +1,7 @@
-// Headless agent primitive: launches a one-shot `claude -p` in a hidden tmux
-// window. Used by the reviewer (poller-review.ts) and resolver (poller-resolve.ts)
-// — both share the same launch shape (write prompt, clean stale result, kill
-// stale window, tmux new-window with `claude -p < prompt > result; poke-fifo`).
+// Headless agent primitive: launches a one-shot harness process in a hidden
+// tmux window. Reviewer, resolver, and CI-fix callers share the same launch
+// shape (write prompt, clean stale result, replace stale window, run the
+// harness with prompt/result redirection, then poke the FIFO).
 // See WORKFLOWS.md Component 1 for the full contract.
 //
 // The primitive does NOT touch the registry, does NOT enforce timeouts, and
@@ -98,4 +98,3 @@ export function launchHeadlessAgent(
 
   return { windowName: opts.windowName, launchedAt };
 }
-

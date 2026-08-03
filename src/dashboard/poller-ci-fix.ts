@@ -11,8 +11,7 @@
 //
 // See poller-resolve.ts for the analogous merge-conflict resolution flow.
 import fs from "node:fs";
-import path from "node:path";
-import { SESSIONS_DIR, tryGetProject } from "../config.js";
+import { tryGetProject } from "../config.js";
 import { addAlert } from "./alerts.js";
 import { resolveReviewRole } from "./roles.js";
 import { codexStderrSidecar } from "./harness/codex-core.js";
@@ -36,24 +35,22 @@ import {
 import { transitionState } from "./poller-state.js";
 import { recordCiFixOutcome } from "./telemetry.js";
 import {
+  ciFixPromptPath,
+  ciFixResultPath,
+} from "./headless-paths.js";
+import {
   REVIEW_TIMEOUT_MS, scheduleReviewTimeoutPoke,
 } from "./poller-review.js";
 
 export const CI_FIX_BUDGET = 3;
+
+export { ciFixPromptPath, ciFixResultPath } from "./headless-paths.js";
 
 const CI_FIX_VERDICT_VOCAB = ["FIXED", "FAILED"] as const;
 
 interface CiFixResult {
   verdict: "fixed" | "failed";
   body: string;
-}
-
-export function ciFixPromptPath(project: string, worker: string): string {
-  return path.join(SESSIONS_DIR, `${project}-${worker}-ci-fix-prompt.txt`);
-}
-
-export function ciFixResultPath(project: string, worker: string): string {
-  return path.join(SESSIONS_DIR, `${project}-${worker}-ci-fix-result.txt`);
 }
 
 export interface FailingCheck {
@@ -540,4 +537,3 @@ export function cleanCiFixFiles(projectName: string, workerName: string): void {
   try { fs.unlinkSync(codexStderrSidecar(resultFile)); } catch { /* ignore */ }
   try { fs.unlinkSync(ciFixPromptPath(projectName, workerName)); } catch { /* ignore */ }
 }
-

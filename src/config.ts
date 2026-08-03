@@ -5,6 +5,12 @@ import yaml from "js-yaml";
 import { atomicWriteFile } from "./dashboard/atomic-write.js";
 import { withFileLock } from "./dashboard/file-lock.js";
 import {
+  CONFIG_PATH,
+  GARDEN_DIR,
+  HOME_DIR,
+  SESSIONS_DIR,
+} from "./paths.js";
+import {
   ASSIGNABLE_LOG_COLOR_KEYS,
   RESERVED_LOG_COLOR_KEY,
   RESERVED_LOG_COLOR_PROJECT,
@@ -12,15 +18,7 @@ import {
   pickLogColor,
 } from "./log-palette.js";
 
-function requireHome(): string {
-  const h = process.env.HOME ?? process.env.USERPROFILE;
-  if (!h) throw new Error("Cannot determine home directory: neither HOME nor USERPROFILE is set.");
-  return h;
-}
-const HOME = requireHome();
-export const GARDEN_DIR = path.join(HOME, ".garden");
-export const CONFIG_PATH = path.join(GARDEN_DIR, "config.yml");
-export const SESSIONS_DIR = path.join(GARDEN_DIR, "sessions");
+export { CONFIG_PATH, GARDEN_DIR, SESSIONS_DIR } from "./paths.js";
 
 export const PLOT_MAX_PROJECTS = 9;
 export const DEFAULT_PLOT = "all";
@@ -476,8 +474,8 @@ export function setLogsMode(mode: LogsMode): void {
 }
 
 export function expandHome(p: string): string {
-  if (p === "~") return HOME;
-  if (p.startsWith("~/")) return path.join(HOME, p.slice(2));
+  if (p === "~") return HOME_DIR;
+  if (p.startsWith("~/")) return path.join(HOME_DIR, p.slice(2));
   return p;
 }
 
@@ -582,7 +580,7 @@ export function projectUsageGateExempt(projectName: string, config?: GardenConfi
   if (!project.claudeProfile) return false;
   const profile = tryResolveClaudeProfile(project, cfg);
   if (!profile) return false;
-  return path.resolve(profile.configDir) !== path.resolve(HOME, ".claude");
+  return path.resolve(profile.configDir) !== path.resolve(HOME_DIR, ".claude");
 }
 
 export function loadConfig(): GardenConfig {

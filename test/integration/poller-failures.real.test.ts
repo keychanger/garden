@@ -236,8 +236,10 @@ describe("poller failure modes (real fs/git, mocked tmux/dashboard)", () => {
       // exact shape from the operator's screenshot — so parseLastLineVerdict
       // returns null even though the review clearly passed.
       const { reviewResultPath } = await import("../../src/dashboard/poller-review.js");
+      const resultFile = reviewResultPath(PROJECT, WORKER);
+      fs.mkdirSync(path.dirname(resultFile), { recursive: true });
       fs.writeFileSync(
-        reviewResultPath(PROJECT, WORKER),
+        resultFile,
         "Reviewed the diff and reran the suite.\n"
           + "Final suite is green (2609 unit + 103 integration, lint clean).\n",
       );
@@ -280,8 +282,10 @@ describe("poller failure modes (real fs/git, mocked tmux/dashboard)", () => {
       const headSha = git(worktreePath, "rev-parse", "HEAD");
 
       const { reviewResultPath } = await import("../../src/dashboard/poller-review.js");
+      const resultFile = reviewResultPath(PROJECT, WORKER);
+      fs.mkdirSync(path.dirname(resultFile), { recursive: true });
       fs.writeFileSync(
-        reviewResultPath(PROJECT, WORKER),
+        resultFile,
         "I kicked off an async sub-analysis and will report back later.\n",
       );
 
