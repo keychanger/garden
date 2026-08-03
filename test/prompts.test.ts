@@ -29,7 +29,7 @@ vi.mock("../src/rules.js", () => ({
 import fs from "node:fs";
 import { tryGetProject } from "../src/config.js";
 import { getDiffAgainstBase, getDiffStat, getChangedFiles, resolveHolisticDiff } from "../src/dashboard/git.js";
-import { buildReviewPrompt, buildResolvePrompt, buildHolisticFinalReviewPrompt, findSpecFiles, buildSpecWarning, readDocSections, readTestSections } from "../src/dashboard/prompts.js";
+import { buildReviewPrompt, buildResolvePrompt, buildCiFixPrompt, buildHolisticFinalReviewPrompt, findSpecFiles, buildSpecWarning, readDocSections, readTestSections } from "../src/dashboard/prompts.js";
 import { MAX_REVIEW_PROMPT_BYTES } from "../src/dashboard/prompt-compose.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
@@ -165,6 +165,19 @@ describe("buildReviewPrompt — oversized diff", () => {
     expect(result).toContain("diff content");
     expect(result).not.toContain("too large to inline");
     expect(getDiffStat).not.toHaveBeenCalled();
+  });
+
+  it("degrades the ci-fix prompt the same way", () => {
+    // The ci-fix diff section opts out on an empty diff, and the degraded path
+    // empties `diff` — so checking diff-first would drop the section entirely
+    // and leave the agent no pointer to the delta at all.
+    vi.mocked(getDiffAgainstBase).mockReturnValue(oversized);
+
+    const result = buildCiFixPrompt("myproject", "/repo/myproject", "main", makeEntry())!;
+
+    expect(result).not.toContain(oversized);
+    expect(result).toContain("Diff under review (too large to inline");
+    expect(result).toContain("git diff origin/main...HEAD -- <path>");
   });
 
   it("degrades the whole-task holistic range the same way", () => {

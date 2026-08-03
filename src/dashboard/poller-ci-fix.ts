@@ -22,6 +22,7 @@ import { refreshDashboard } from "./header.js";
 import { launchHeadlessAgent } from "./headless-agent.js";
 import { log } from "./log.js";
 import { buildCiFixPrompt } from "./prompts.js";
+import { MAX_REVIEW_PROMPT_BYTES, reviewPromptBytes } from "./prompt-compose.js";
 import {
   updateWorkerFields,
   type WorkerEntry,
@@ -118,6 +119,55 @@ export function launchCiFix(
   if (prompt === null) {
     log.warn("poller", "failed to build ci-fix prompt", { worker: entry.name, data: { project: projectName } });
     return false;
+  }
+
+  // Backstop, mirroring launchReview. The builder already degrades an oversized
+  // branch delta to a file summary the agent pages itself, so a prompt still
+  // over the ceiling means the non-diff context does not fit and the agent CLI
+  // rejects the request before the fix agent starts. Every attempt would fail
+  // identically, so park now on the same terminal this file already uses for
+  // "self-healing cannot help" (`failingReason: "ci"`, red CI the operator must
+  // look at) rather than spending the budget on three doomed launches. The
+  // attempt counter is deliberately NOT incremented — nothing ran.
+  const promptBytes = reviewPromptBytes(prompt);
+  if (promptBytes > MAX_REVIEW_PROMPT_BYTES) {
+    const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(1)}MB`;
+    addAlert({
+      level: "error",
+      source: "review",
+      project: projectName,
+      worker: entry.name,
+      message:
+        `CI is red for ${entry.name} and the fix agent cannot be launched: its prompt is `
+        + `${mb(promptBytes)} (ceiling ${mb(MAX_REVIEW_PROMPT_BYTES)}) even with the branch diff `
+        + `reduced to a file summary. Fix the failing checks by hand, or split the work across `
+        + `smaller branches.`,
+      dedupKey: `oversized-cifix:${projectName}:${entry.name}:${sha}`,
+    });
+    log.warn("poller", "ci-fix prompt exceeds context ceiling; not launching", {
+      worker: entry.name,
+      data: {
+        project: projectName,
+        promptBytes,
+        ceilingBytes: MAX_REVIEW_PROMPT_BYTES,
+        baseBranch,
+      },
+    });
+    transitionState(projectName, entry.name, "failing", {
+      failCount: (entry.failCount ?? 0) + 1,
+      failingReason: "ci",
+      failingSha: sha,
+      lastSeenSha: sha,
+      lastShaChangeAt: new Date().toISOString(),
+      mergePendingAt: undefined,
+      // Reset the budget on the park, mirroring escalateCiFixBudget — a worker
+      // that recovers must not carry a silently-reduced budget into a later
+      // merge cycle.
+      ciFixAttempts: 0,
+      preCiFixSha: undefined,
+    });
+    refreshDashboard();
+    return true;
   }
 
   // Ci-fix role resolution (independent of reviewer/resolver) — same strong

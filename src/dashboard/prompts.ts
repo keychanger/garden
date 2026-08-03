@@ -466,6 +466,16 @@ export const ciFixStepsSection: PromptSection = {
 export const ciFixDiffSection: PromptSection = {
   name: "ci-fix-diff",
   render(ctx) {
+    // diffStat before the empty-diff opt-out: on the degraded path `diff` is
+    // deliberately emptied, so checking it first would drop the section and
+    // leave the agent with no pointer to the delta at all.
+    if (ctx.data.diffStat !== undefined) {
+      return pagedDiffBlock(
+        "## Diff under review (too large to inline — file summary only)",
+        `git diff origin/${ctx.baseBranch}...HEAD -- <path>`,
+        ctx.data.diffStat,
+      );
+    }
     if (!ctx.data.diff) return null;
     return `## Diff under review\n\n\`\`\`diff\n${ctx.data.diff}\n\`\`\``;
   },
@@ -687,7 +697,9 @@ export function buildCiFixPrompt(
 ): string | null {
   const ctx = gatherPromptContext(projectName, projectPath, baseBranch, entry);
   if (!ctx) return null;
-  return composePrompt(ciFixSections, ctx);
+  const wtPath = entry.worktreePath ?? projectPath;
+  return composeWithinCeiling(ciFixSections, ctx,
+    () => getDiffStat(wtPath, `origin/${baseBranch}...HEAD`));
 }
 
 // Resolver context: minimal I/O — only the commits the resolver needs to

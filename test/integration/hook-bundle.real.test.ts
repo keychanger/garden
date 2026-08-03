@@ -98,7 +98,16 @@ import path from "node:path";
 // above: all six files were already hook-reachable via the review path, the
 // change pulls in no new module, and the metafile attributes the growth to
 // those files' own bytesInOutput with skillsBytes still 0.
-const HOOK_BUNDLE_CEILING_BYTES = 248 * 1024;
+// Bumped 248->250kb for the same guard on the ci-fix path (+1011 bytes: +779
+// in poller-ci-fix.ts for launchCiFix's backstop, +232 in prompts.ts for
+// ciFixDiffSection's paged branch and buildCiFixPrompt's composeWithinCeiling
+// call). Both files were already hook-reachable, no new module enters, and
+// skillsBytes is still 0. Taken now rather than at 249kb because the ci-fix
+// growth left under 1kb of headroom under the old ceiling — this restores the
+// ~2kb of routine-drift slack the coarse backstop is meant to carry, without
+// touching SKILLS_BYTES_CEILING, which is the precise detector for the ~28kb
+// retained-closure regression this guard exists for.
+const HOOK_BUNDLE_CEILING_BYTES = 250 * 1024;
 // skills.ts contributes only a tree-shaken sliver today (<100 bytes); a
 // retained skills bundle is ~28kb. The threshold sits well between.
 const SKILLS_BYTES_CEILING = 2 * 1024;

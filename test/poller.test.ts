@@ -3938,6 +3938,69 @@ describe("poll — merge-pending CI gate", () => {
     );
   });
 
+  it("launches a degraded ci-fix rather than parking on an oversized branch diff", () => {
+    // Same fallback as the review path: the agent reads the failing checks and
+    // pages the diff itself in the worktree, so an oversized delta is still
+    // fixable.
+    vi.mocked(checkCiStatus).mockReturnValue({
+      kind: "failed",
+      failed: [{ name: "lint-and-test", conclusion: "failure" }],
+    });
+    vi.mocked(getDiffAgainstBase).mockReturnValue("x".repeat(MAX_REVIEW_PROMPT_BYTES + 1));
+    registryMock._setEntries("myproject", [pending()]);
+
+    poll("myproject");
+
+    const ciFixingCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "ci-fixing",
+    );
+    expect(ciFixingCall).toBeDefined();
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "failing" }),
+    );
+  });
+
+  it("parks without spending the ci-fix budget when even the summarized prompt is oversized", () => {
+    // Non-diff context over the ceiling — for the ci-fix prompt that is the
+    // commit summary, since it carries no rules/docs/tests sections. Nothing
+    // can be summarized away, the agent CLI rejects the request before the fix
+    // agent starts, and all three attempts would fail identically. Park on the
+    // file's existing "self-healing cannot help" terminal instead of burning
+    // the budget.
+    vi.mocked(checkCiStatus).mockReturnValue({
+      kind: "failed",
+      failed: [{ name: "lint-and-test", conclusion: "failure" }],
+    });
+    vi.mocked(getCommitSummary).mockReturnValue("c".repeat(MAX_REVIEW_PROMPT_BYTES + 1));
+    registryMock._setEntries("myproject", [pending()]);
+
+    poll("myproject");
+
+    const failingCall = vi.mocked(updateWorkerFields).mock.calls.find(
+      c => (c[2] as Record<string, unknown>).prState === "failing",
+    );
+    expect(failingCall).toBeDefined();
+    const fields = failingCall![2] as Record<string, unknown>;
+    expect(fields.failingReason).toBe("ci");
+    // Budget reset, never incremented — nothing ran.
+    expect(fields.ciFixAttempts).toBe(0);
+    // No fix-agent window, and no ci-fixing transition to time out against.
+    expect(newDashboardWindow).not.toHaveBeenCalledWith(
+      "_myproject-ci-fix-bold-ash",
+      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
+    );
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "ci-fixing" }),
+    );
+
+    const alert = vi.mocked(addAlert).mock.calls.find(
+      ([a]) => a.worker === "bold-ash" && String(a.message).includes("fix agent cannot be launched"),
+    )?.[0];
+    expect(alert).toBeDefined();
+    expect(alert!.level).toBe("error");
+    expect(alert!.message).toMatch(/by hand/i);
+  });
+
   it("escalates to failing with reason 'ci' once the ci-fix budget is exhausted", () => {
     vi.mocked(checkCiStatus).mockReturnValue({
       kind: "failed",
