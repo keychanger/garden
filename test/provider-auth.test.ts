@@ -277,11 +277,15 @@ describe("provider token sync", () => {
     vi.mocked(dashboardExists).mockReturnValue(true);
     const { tmuxOutput, tmuxWithHiddenEnvironment } = await import("../src/dashboard/tmux.js");
     const { providerTokenVaultEnv, tmuxWorkerCommand } = await import("../src/dashboard/claude-env.js");
+    const { resolveWorkerLaunchPlan } = await import("../src/dashboard/launch-plan.js");
     const provider = config.resolveProvider({ provider: "deepseek" })!;
     const vaultEnv = providerTokenVaultEnv(provider);
     vi.mocked(tmuxOutput).mockReturnValue(`${vaultEnv}=sk-test`);
 
-    tmuxWorkerCommand(config.getProject("garden"), "respawn-pane", "-k", "-t", "%7");
+    const plan = resolveWorkerLaunchPlan({
+      project: config.getProject("garden"), workflow: "default", resume: false,
+    });
+    tmuxWorkerCommand(plan, "respawn-pane", "-k", "-t", "%7");
 
     expect(tmuxWithHiddenEnvironment).toHaveBeenCalledWith(
       vaultEnv,
@@ -299,11 +303,15 @@ describe("provider token sync", () => {
     vi.mocked(dashboardExists).mockReturnValue(true);
     const { tmux, tmuxOutput, tmuxWithHiddenEnvironment } = await import("../src/dashboard/tmux.js");
     const { providerTokenVaultEnv, tmuxWorkerCommand } = await import("../src/dashboard/claude-env.js");
+    const { resolveWorkerLaunchPlan } = await import("../src/dashboard/launch-plan.js");
     const provider = config.resolveProvider({ provider: "deepseek" })!;
     const vaultEnv = providerTokenVaultEnv(provider);
     vi.mocked(tmuxOutput).mockReturnValue(`${vaultEnv}=stored-token`);
 
-    tmuxWorkerCommand(config.getProject("garden"), "respawn-pane", "-k", "-t", "%7");
+    const plan = resolveWorkerLaunchPlan({
+      project: config.getProject("garden"), workflow: "default", resume: false,
+    });
+    tmuxWorkerCommand(plan, "respawn-pane", "-k", "-t", "%7");
 
     expect(tmux).not.toHaveBeenCalled();
     expect(tmuxOutput).toHaveBeenCalledTimes(1);
@@ -323,9 +331,13 @@ describe("provider token sync", () => {
     const { tmuxOutput, tmuxWithHiddenEnvironment } = await import("../src/dashboard/tmux.js");
     vi.mocked(tmuxOutput).mockReturnValue("");
     const { tmuxWorkerCommand } = await import("../src/dashboard/claude-env.js");
+    const { resolveWorkerLaunchPlan } = await import("../src/dashboard/launch-plan.js");
+    const plan = resolveWorkerLaunchPlan({
+      project: config.getProject("garden"), workflow: "default", resume: false,
+    });
 
     expect(() => tmuxWorkerCommand(
-      config.getProject("garden"), "respawn-pane", "-k", "-t", "%7",
+      plan, "respawn-pane", "-k", "-t", "%7",
     )).toThrow(`requires $${TOKEN_ENV}`);
     expect(tmuxWithHiddenEnvironment).not.toHaveBeenCalled();
   });
@@ -333,8 +345,12 @@ describe("provider token sync", () => {
   it("keeps non-provider tmux commands on the ordinary path", async () => {
     const { tmux, tmuxWithHiddenEnvironment } = await import("../src/dashboard/tmux.js");
     const { tmuxWorkerCommand } = await import("../src/dashboard/claude-env.js");
+    const { resolveWorkerLaunchPlan } = await import("../src/dashboard/launch-plan.js");
+    const plan = resolveWorkerLaunchPlan({
+      project: { path: "/repo" }, workflow: "default", resume: false,
+    });
 
-    tmuxWorkerCommand({}, "respawn-pane", "-k", "-t", "%7");
+    tmuxWorkerCommand(plan, "respawn-pane", "-k", "-t", "%7");
 
     expect(tmux).toHaveBeenCalledWith("respawn-pane", "-k", "-t", "%7");
     expect(tmuxWithHiddenEnvironment).not.toHaveBeenCalled();

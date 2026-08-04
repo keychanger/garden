@@ -1,9 +1,7 @@
-// Harness registry. Resolution mirrors the workflow registry: a worker's
-// `entry.harness` names its adapter; absent means "claude-code" (the only
-// registered adapter today — legacy entries predate the field). Unknown
-// names fall back to the default rather than throwing: launch paths
-// (dashboard attach, resume, bounce) must not abort wholesale on a
-// hand-broken registry entry, matching tryResolveProvider's posture.
+// Full harness registry. Absent means "claude-code" for legacy entries.
+// Unknown names retain a best-effort fallback for non-execution callers, but
+// production launch paths resolve through launch-plan.ts first and therefore
+// fail closed before calling this function.
 import { log } from "../log.js";
 import { claudeCodeAdapter } from "./claude-code.js";
 import { codexAdapter } from "./codex.js";

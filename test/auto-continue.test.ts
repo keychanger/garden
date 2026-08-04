@@ -357,9 +357,9 @@ describe("projectUsageGateExempt", () => {
     expect(projectUsageGateExempt("ghost-project")).toBe(false);
     expect(projectUsageGateExempt("broken")).toBe(false);
     // A configured-but-unresolvable provider is NOT exempt on its own — the
-    // worker falls back to the metered first-party pool (workerEnvPrefix), so
-    // the gate must still apply. But if a non-default profile is also set, the
-    // fallback lands on that (exempt) pool.
+    // An invalid provider cannot prove this project spends a separate pool, so
+    // the gate stays conservative. A valid non-default profile still provides
+    // independent evidence of an exempt pool.
     expect(projectUsageGateExempt("ghostprov")).toBe(false);
     expect(projectUsageGateExempt("ghostprovimp")).toBe(true);
   });

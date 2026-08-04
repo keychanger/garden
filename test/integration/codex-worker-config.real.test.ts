@@ -7,7 +7,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 function git(cwd: string, ...args: string[]): string {
   return spawnSync("git", ["-C", cwd, ...args], { encoding: "utf-8" }).stdout ?? "";
@@ -70,12 +71,113 @@ describe("codex worker config install (real fs + git)", () => {
     expect((cfg.match(/trust_level = "trusted"/g) ?? []).length).toBe(1);
   });
 
+  it("serializes trust installation across independent worker processes", async () => {
+    const adapterUrl = pathToFileURL(
+      path.resolve("src/dashboard/harness/index.ts"),
+    ).href;
+    const source = `
+      const { getHarness } = await import(${JSON.stringify(adapterUrl)});
+      getHarness("codex").installRuntimeConfig(
+        ${JSON.stringify(wt)},
+        { path: ${JSON.stringify(proj)} },
+      );
+    `;
+    const run = () => new Promise<void>((resolve, reject) => {
+      const child = spawn(process.execPath, [
+        "--import", "tsx", "--input-type=module", "--eval", source,
+      ], {
+        cwd: process.cwd(),
+        env: { ...process.env, CODEX_HOME: codexHome },
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      let stderr = "";
+      child.stderr.on("data", chunk => { stderr += String(chunk); });
+      child.on("error", reject);
+      child.on("exit", code => {
+        if (code === 0) resolve();
+        else reject(new Error(`installer exited ${code}: ${stderr}`));
+      });
+    });
+
+    await Promise.all(Array.from({ length: 8 }, run));
+    const cfg = fs.readFileSync(path.join(codexHome, "config.toml"), "utf-8");
+    expect((cfg.match(/trust_level = "trusted"/g) ?? []).length).toBe(1);
+  }, 20_000);
+
   it("writes garden rules to AGENTS.md when the repo ships none", async () => {
     const { installCodexAgentsMd } = await import("../../src/dashboard/harness/codex.js");
     installCodexAgentsMd(wt, "COMMIT AND PUSH THEN STOP");
     const agents = fs.readFileSync(path.join(wt, "AGENTS.md"), "utf-8");
     expect(agents).toContain("COMMIT AND PUSH THEN STOP");
     expect(agents).toContain("managed by garden");
+  });
+
+  it("refreshes composed rules through the adapter while preserving repository rules", async () => {
+    fs.writeFileSync(path.join(wt, "AGENTS.md"), "# repo rules\nRUN THE TESTS\n");
+    git(wt, "add", "AGENTS.md");
+    git(wt, "commit", "-m", "add agents");
+
+    const { getHarness } = await import("../../src/dashboard/harness/index.js");
+    getHarness("codex").installRuntimeConfig(
+      wt, { path: proj }, { rulesText: "GARDEN RULES V1" },
+    );
+    getHarness("codex").installRuntimeConfig(
+      wt, { path: proj }, { rulesText: "GARDEN RULES V2" },
+    );
+
+    const agents = fs.readFileSync(path.join(wt, "AGENTS.md"), "utf-8");
+    expect(agents).toContain("GARDEN RULES V2");
+    expect(agents).not.toContain("GARDEN RULES V1");
+    expect(agents).toContain("RUN THE TESTS");
+    expect((agents.match(/managed by garden/g) ?? []).length).toBe(1);
+  });
+
+  it("preserves a tracked worktree edit on the first rules install", async () => {
+    fs.writeFileSync(path.join(wt, "AGENTS.md"), "# repo rules\nINDEX VERSION\n");
+    git(wt, "add", "AGENTS.md");
+    git(wt, "commit", "-m", "add agents");
+    fs.writeFileSync(path.join(wt, "AGENTS.md"), "# repo rules\nLOCAL VERSION\n");
+
+    const { getHarness } = await import("../../src/dashboard/harness/index.js");
+    getHarness("codex").installRuntimeConfig(
+      wt, { path: proj }, { rulesText: "GARDEN RULES" },
+    );
+
+    const agents = fs.readFileSync(path.join(wt, "AGENTS.md"), "utf-8");
+    expect(agents).toContain("GARDEN RULES");
+    expect(agents).toContain("LOCAL VERSION");
+    expect(agents).not.toContain("INDEX VERSION");
+  });
+
+  it("refreshes repository rules from Git even while AGENTS.md is skip-worktree", async () => {
+    fs.writeFileSync(path.join(wt, "AGENTS.md"), "# repo rules\nVERSION ONE\n");
+    git(wt, "add", "AGENTS.md");
+    git(wt, "commit", "-m", "add agents");
+
+    const { getHarness } = await import("../../src/dashboard/harness/index.js");
+    getHarness("codex").installRuntimeConfig(
+      wt, { path: proj }, { rulesText: "GARDEN RULES V1" },
+    );
+
+    // Model a rebase/merge advancing the tracked file: Git's index has the
+    // new repository content while the skip-worktree file still contains
+    // Garden's V1 composition over VERSION ONE.
+    const blob = spawnSync(
+      "git", ["-C", wt, "hash-object", "-w", "--stdin"],
+      { input: "# repo rules\nVERSION TWO\n", encoding: "utf-8" },
+    );
+    expect(blob.status).toBe(0);
+    git(wt, "update-index", "--no-skip-worktree", "AGENTS.md");
+    git(wt, "update-index", "--cacheinfo", `100644,${blob.stdout.trim()},AGENTS.md`);
+    git(wt, "update-index", "--skip-worktree", "AGENTS.md");
+
+    getHarness("codex").installRuntimeConfig(
+      wt, { path: proj }, { rulesText: "GARDEN RULES V2" },
+    );
+    const agents = fs.readFileSync(path.join(wt, "AGENTS.md"), "utf-8");
+    expect(agents).toContain("GARDEN RULES V2");
+    expect(agents).toContain("VERSION TWO");
+    expect(agents).not.toContain("VERSION ONE");
   });
 
   it("composes over a repo's own AGENTS.md, preserves it, and keeps git status clean", async () => {

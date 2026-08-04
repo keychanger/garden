@@ -152,6 +152,15 @@ describe("anyAnthropicMeteredProject", () => {
     });
     expect(config.anyAnthropicMeteredProject()).toBe(false);
   });
+
+  it("keeps the first-party meter alive for an invalid provider reference", async () => {
+    const config = await setup();
+    config.saveConfig({
+      projects: { a: { path: "/a", provider: "missing" } },
+      providers: {},
+    });
+    expect(config.anyAnthropicMeteredProject()).toBe(true);
+  });
 });
 
 describe("providerEnvPrefix / workerEnvPrefix", () => {

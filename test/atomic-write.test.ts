@@ -107,6 +107,30 @@ describe("atomicWriteFile", () => {
     }
   });
 
+  it("fsyncs the parent directory after rename so the new name is durable", async () => {
+    const { atomicWriteFile } = await importHelper();
+    const openSpy = vi.spyOn(fs, "openSync");
+    const fsyncSpy = vi.spyOn(fs, "fsyncSync");
+    const renameSpy = vi.spyOn(fs, "renameSync");
+    try {
+      const dest = path.join(env.sessionsDir, "directory-durable.txt");
+      atomicWriteFile(dest, "state");
+      const directoryOpen = openSpy.mock.calls.findIndex(
+        ([opened, flags]) => opened === env.sessionsDir && flags === "r",
+      );
+      expect(directoryOpen).toBeGreaterThanOrEqual(0);
+      const directoryFd = openSpy.mock.results[directoryOpen]?.value;
+      expect(fsyncSpy).toHaveBeenCalledWith(directoryFd);
+      expect(renameSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        openSpy.mock.invocationCallOrder[directoryOpen],
+      );
+    } finally {
+      openSpy.mockRestore();
+      fsyncSpy.mockRestore();
+      renameSpy.mockRestore();
+    }
+  });
+
   it("skips the fsync when durable is false but still writes atomically", async () => {
     const { atomicWriteFile } = await importHelper();
     const spy = vi.spyOn(fs, "fsyncSync");

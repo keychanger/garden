@@ -117,7 +117,7 @@ describe("interposed final review launch (touched files present)", () => {
     expect(after.reviewWindowName).toBeTruthy();
     // The reviewer ran headless, marked GARDEN_REVIEWER, on the review harness.
     expect(launchHeadlessAgent).toHaveBeenCalledTimes(1);
-    const opts = launchHeadlessAgent.mock.calls[0][0] as { envVars?: Record<string, string>; harness?: string };
+    const opts = launchHeadlessAgent.mock.calls[0][0] as { envVars?: Record<string, string> };
     expect(opts.envVars).toMatchObject({ GARDEN_REVIEWER: "1" });
   });
 
@@ -141,8 +141,8 @@ describe("interposed final review launch (touched files present)", () => {
     hol.maybeDispatchHolisticReview("proj", env.gardenDir, "main", entry, "transitionToTerminal");
 
     expect(launchHeadlessAgent).toHaveBeenCalledTimes(1);
-    const opts = launchHeadlessAgent.mock.calls[0][0] as { harness?: string };
-    expect(opts.harness).toBe("codex");
+    const opts = launchHeadlessAgent.mock.calls[0][0] as { launchPlan?: { harness?: string } };
+    expect(opts.launchPlan?.harness).toBe("codex");
     expect(reg.findWorkerByName("proj", "codex-reviewed")!.holisticReviewMode).toBe("fix");
   });
 });

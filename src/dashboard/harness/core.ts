@@ -7,8 +7,9 @@
 // because package.json's "sideEffects": false lets esbuild shake the
 // unused heavy methods. The bundle-size guard test
 // (test/integration/hook-bundle.real.test.ts) fails if that shaking ever
-// stops working. Resolution semantics match getHarness: absent =
-// claude-code, unknown falls back with a warning.
+// stops working. Absent names resolve to claude-code for legacy entries.
+// Unknown names retain a best-effort fallback for status/read callers;
+// execution paths first pass through launch-plan.ts and fail closed.
 import { log } from "../log.js";
 import type { WorkerEntry } from "../registry.js";
 import { claudeCodeCore } from "./claude-code-core.js";
@@ -46,10 +47,9 @@ export function resolveWorkerActivity(
   return core.readActivity ? core.readActivity(entry) : paneTitle();
 }
 
-// Is this a registered harness name? Config-set paths validate STRICTLY with
-// this (reject an unknown harness at the operator surface) rather than relying
-// on getHarnessCore's launch-time warn-fallback. Launch paths keep the
-// fallback for resilience; the operator surface should fail loudly.
+// Is this a registered harness name? Config-set and launch-plan paths validate
+// STRICTLY with this rather than relying on getHarnessCore's read-path
+// fallback.
 export function isRegisteredHarness(name: string): boolean {
   return name in CORES;
 }

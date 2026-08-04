@@ -7,9 +7,59 @@
 // normalized lifecycle events on WorkflowHookHandlers and the option types
 // below.
 // See docs/MULTI-MODEL.md "Layer 3: harness adapters".
-import type { ProjectConfig } from "../../config.js";
+import type { ProjectConfig, ResolvedProvider } from "../../config.js";
 import type { WorkerEntry } from "../registry.js";
 import type { Turn } from "../conversation.js";
+
+export type HeadlessRole = "reviewer" | "resolver" | "ciFix";
+
+export type LaunchBackend =
+  | { kind: "harness-account" }
+  | { kind: "anthropic-compatible"; provider: string; baseUrl: string };
+
+export type LaunchCredentialReference =
+  | { kind: "harness-account" }
+  | {
+      kind: "tmux-hidden-environment";
+      variable: string;
+      sourceEnvironment: string;
+    };
+
+export interface WorkerLaunchPlan {
+  role: "worker";
+  harness: string;
+  backend: LaunchBackend;
+  credential: LaunchCredentialReference;
+  model?: string;
+  ultracode?: boolean;
+  effort?: string;
+  envPrefix: string;
+  executionPolicy: "sandboxed-worker";
+  requiredCapabilities: {
+    turnEnd: true;
+    sandbox: true;
+    workflow: string;
+    resume: boolean;
+    providerProfiles: boolean;
+  };
+  /** Project view with a per-worker provider override already applied. */
+  runtimeProject: ProjectConfig;
+  /** Resolved profile used by the credential launch chokepoint. Never carries
+   *  the credential value, only its configured source name. */
+  resolvedProvider: ResolvedProvider | null;
+}
+
+export interface HeadlessLaunchPlan {
+  role: HeadlessRole;
+  harness: string;
+  backend: { kind: "harness-account" };
+  credential: { kind: "harness-account" };
+  model?: string;
+  effort?: string;
+  envPrefix: string;
+  executionPolicy: "trusted-headless";
+  requiredCapabilities: { headlessRole: HeadlessRole };
+}
 
 export interface AgentCommandOptions {
   /** Session identifier — minted by allocateSessionId for new sessions,
@@ -22,21 +72,8 @@ export interface AgentCommandOptions {
    *  The adapter owns the delivery mechanism — a flag for Claude Code,
    *  an AGENTS.md or prompt prefix for harnesses without one. */
   contextFile: string;
-  /** Opaque model string (alias or concrete id). Absent = the account
-   *  or backend default. */
-  model?: string;
-  /** Ultracode preset: launch in Claude Code's ultracode mode (max effort +
-   *  the dynamic-workflow keyword trigger). Absent/false = normal launch.
-   *  The paired Opus model pin is threaded separately via `model`. */
-  ultracode?: boolean;
-  /** Reasoning-effort rung (one of WORKER_EFFORT_LEVELS) — claude-code
-   *  renders `--effort <level>`. Independent of `model`. Mutually exclusive
-   *  with `ultracode` (which already fixes max effort); if both are set the
-   *  adapter lets ultracode win. A harness without an effort dial ignores it. */
-  effort?: string;
-  /** Pre-composed env-assignments prefix (provider/profile env from
-   *  claude-env.ts). Already shell-safe; prepended verbatim. */
-  envPrefix: string;
+  /** Validated identity/backend/policy tuple for this launch. */
+  launchPlan: WorkerLaunchPlan;
   /** Absolute path to the worktree's shared git common dir (`<main>/.git`).
    *  A harness whose sandbox does not auto-grant the git dir (Codex
    *  workspace-write) adds it to its writable roots so the worker can
@@ -52,18 +89,8 @@ export interface HeadlessCommandOptions {
   promptFile: string;
   /** Where the agent's stdout+stderr land for verdict parsing. */
   resultFile: string;
-  model?: string;
-  /** Reasoning effort for this headless run. Verified against claude 2.1.215:
-   *  `--effort` is a top-level flag, so `claude -p --effort <level>` is valid —
-   *  the review family is not structurally barred from an effort dial the way
-   *  it once claimed. Levels are low/medium/high/xhigh/max; unlike the worker's
-   *  rungs there is no "ultra", since ultracode is a worker preset (settings
-   *  file + dynamic workflows) rather than an effort value — a headless
-   *  reviewer that wants the ceiling asks for `max` literally. A harness
-   *  without an effort dial ignores it. */
-  effort?: string;
-  /** Pre-composed provider/profile env prefix. */
-  envPrefix: string;
+  /** Validated review-role identity/backend/policy tuple for this launch. */
+  launchPlan: HeadlessLaunchPlan;
   /** Inline env assignments (e.g. `GARDEN_REVIEWER=1 `), pre-escaped. */
   inlineEnv: string;
 }
@@ -87,6 +114,8 @@ export interface HarnessCapabilities {
    *  Kept explicit and fail-closed so registering a harness does not silently
    *  opt it into future workflow protocols. */
   workerWorkflows: readonly string[];
+  /** Review-family roles this adapter can execute headlessly. */
+  headlessRoles: readonly HeadlessRole[];
 }
 
 // The light half of an adapter: everything reachable from the hook bundle.
@@ -149,5 +178,9 @@ export interface HarnessAdapter extends HarnessCore {
    *  registration, sandbox, permissions, bundled skills — whatever the
    *  harness reads. Idempotent; called at bootstrap, refresh, bounce,
    *  and loop respawn. CLI-bundle only — see HarnessCore. */
-  installRuntimeConfig(worktree: string, project: ProjectConfig): void;
+  installRuntimeConfig(
+    worktree: string,
+    project: ProjectConfig,
+    runtime?: { rulesText?: string },
+  ): void;
 }

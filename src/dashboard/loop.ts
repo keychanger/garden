@@ -26,11 +26,11 @@ import { tryGetProject, SESSIONS_DIR } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import {
   buildWorktreeWorkerCommand,
-  workerProject,
+  buildWorktreeContextText,
   type WorktreeCommandOptions,
 } from "./create.js";
 import { getHarness } from "./harness/index.js";
-import { getHarnessCore, workerLaunchCompatibilityError } from "./harness/core.js";
+import { resolveWorkerLaunchPlan } from "./launch-plan.js";
 import { dispatchDelayedSeed, paneHasOperatorDraft } from "./continue.js";
 import { log } from "./log.js";
 import {
@@ -150,18 +150,29 @@ export function loopAutoContinueAfterMerge(
 
   const launchHarness = workerCommandOpts.harness ?? entry.harness;
   const launchProvider = workerCommandOpts.provider ?? entry.provider;
-  const launchProject = workerProject(project, launchProvider);
-  const compatibilityError = workerLaunchCompatibilityError(
-    getHarnessCore(launchHarness),
-    {
+  // Workflow callers supply iteration-specific options (trellis's resolved
+  // model, grow's counters), while the durable worker entry owns ordinary
+  // tuning. Falling back here keeps grow's model/effort/ultracode settings
+  // across every cold iteration respawn.
+  const launchModel = workerCommandOpts.model ?? entry.model;
+  const launchUltracode = workerCommandOpts.ultracode ?? entry.ultracode;
+  const launchEffort = workerCommandOpts.effort ?? entry.effort;
+  let launchPlan;
+  try {
+    launchPlan = resolveWorkerLaunchPlan({
+      project,
+      provider: launchProvider,
+      harness: launchHarness,
       workflow: entry.workflow ?? "default",
-      provider: launchProject.provider ?? null,
-    },
-  );
-  if (compatibilityError) {
-    log.error("workers", `${hooks.logTag} continue rejected: incompatible harness capabilities`, {
+      resume: false,
+      model: launchModel,
+      ultracode: launchUltracode,
+      effort: launchEffort,
+    });
+  } catch (err) {
+    log.error("workers", `${hooks.logTag} continue rejected: invalid launch plan`, {
       worker: workerName,
-      data: { project: projectName, error: compatibilityError },
+      data: { project: projectName, error: String(err) },
     });
     return false;
   }
@@ -199,14 +210,21 @@ export function loopAutoContinueAfterMerge(
   // Under the worker's own backend, matching the respawn env below — a refresh
   // that reverted the sandbox to the project's provider would leave the loop's
   // next iteration pointed at one endpoint with another allowlisted.
-  getHarness(launchHarness).installRuntimeConfig(
-    wtPath, launchProject,
+  getHarness(launchPlan.harness).installRuntimeConfig(
+    wtPath,
+    launchPlan.runtimeProject,
+    {
+      rulesText: buildWorktreeContextText(
+        projectName, project.path, branchName, entry.baseBranch,
+        workerCommandOpts,
+      ),
+    },
   );
 
   // Regenerate sessionId per iteration — Claude cold-starts in the pane with
   // no prior conversation history. Persist BEFORE the respawn so concurrent
   // reads see the new value.
-  const newSessionId = getHarness(launchHarness).allocateSessionId();
+  const newSessionId = getHarness(launchPlan.harness).allocateSessionId();
   const respawnCmd = buildWorktreeWorkerCommand(
     projectName,
     project.path,
@@ -219,10 +237,7 @@ export function loopAutoContinueAfterMerge(
     // unless the hooks caller already pinned one.
     {
       ...workerCommandOpts,
-      harness: launchHarness,
-      // Same reasoning for the backend: a respawn must reach the same endpoint
-      // the worker has been building against, not the project default.
-      provider: launchProvider,  // "" = explicit first-party, preserved by ??
+      launchPlan,
     },
   );
   updateWorkerFields(projectName, workerName, {
@@ -241,7 +256,7 @@ export function loopAutoContinueAfterMerge(
   // pass --session-id (fresh) instead of --resume.
   try {
     tmuxWorkerCommand(
-      launchProject,
+      launchPlan,
       "respawn-pane", "-k", "-c", wtPath, "-t", paneId, "sh", "-c", respawnCmd,
     );
   } catch (err) {

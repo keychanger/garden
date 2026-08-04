@@ -5,8 +5,51 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type {
+  HeadlessLaunchPlan,
+  HeadlessRole,
+  WorkerLaunchPlan,
+} from "../src/dashboard/harness/types.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+function workerPlan(
+  harness: string,
+  overrides: Partial<WorkerLaunchPlan> = {},
+): WorkerLaunchPlan {
+  return {
+    role: "worker",
+    harness,
+    backend: { kind: "harness-account" },
+    credential: { kind: "harness-account" },
+    envPrefix: "",
+    executionPolicy: "sandboxed-worker",
+    requiredCapabilities: {
+      turnEnd: true, sandbox: true, workflow: "default",
+      resume: false, providerProfiles: false,
+    },
+    runtimeProject: { path: "/repo" },
+    resolvedProvider: null,
+    ...overrides,
+  };
+}
+
+function headlessPlan(
+  harness: string,
+  role: HeadlessRole = "reviewer",
+  overrides: Partial<HeadlessLaunchPlan> = {},
+): HeadlessLaunchPlan {
+  return {
+    role,
+    harness,
+    backend: { kind: "harness-account" },
+    credential: { kind: "harness-account" },
+    envPrefix: "",
+    executionPolicy: "trusted-headless",
+    requiredCapabilities: { headlessRole: role },
+    ...overrides,
+  };
+}
 
 // Real captured `codex exec` stderr (codex 0.144.5, 2026-07-16) — a
 // ChatGPT-subscription account out of quota. stdout was empty; this line
@@ -106,7 +149,7 @@ describe("claude-code adapter dialect", () => {
     const { getHarnessCore } = await importCore();
     const cmd = getHarnessCore().buildAgentCommand({
       sessionId: "abc-123", resume: false, contextFile: "/tmp/ctx.md",
-      envPrefix: "CLAUDE_CONFIG_DIR=/p ",
+      launchPlan: workerPlan("claude-code", { envPrefix: "CLAUDE_CONFIG_DIR=/p " }),
     });
     expect(cmd).toBe(
       "CLAUDE_CONFIG_DIR=/p claude --rc --session-id abc-123 --append-system-prompt-file /tmp/ctx.md",
@@ -117,7 +160,7 @@ describe("claude-code adapter dialect", () => {
     const { getHarnessCore } = await importCore();
     const cmd = getHarnessCore().buildAgentCommand({
       sessionId: "abc-123", resume: true, contextFile: "/tmp/ctx.md",
-      model: "deepseek-v4-pro", envPrefix: "",
+      launchPlan: workerPlan("claude-code", { model: "deepseek-v4-pro" }),
     });
     expect(cmd).toBe(
       "claude --rc --model deepseek-v4-pro --resume abc-123 --append-system-prompt-file /tmp/ctx.md",
@@ -128,7 +171,7 @@ describe("claude-code adapter dialect", () => {
     const { getHarnessCore } = await importCore();
     const cmd = getHarnessCore().buildAgentCommand({
       sessionId: "abc-123", resume: false, contextFile: "/tmp/ctx.md",
-      model: "opus[1m]", ultracode: true, envPrefix: "",
+      launchPlan: workerPlan("claude-code", { model: "opus[1m]", ultracode: true }),
     });
     expect(cmd).toBe(
       "claude --rc --model 'opus[1m]' --effort max "
@@ -141,7 +184,7 @@ describe("claude-code adapter dialect", () => {
     const { getHarnessCore } = await importCore();
     const cmd = getHarnessCore().buildAgentCommand({
       sessionId: "abc-123", resume: false, contextFile: "/tmp/ctx.md",
-      envPrefix: "",
+      launchPlan: workerPlan("claude-code"),
     });
     expect(cmd).not.toContain("--effort");
     expect(cmd).not.toContain("--settings");
@@ -151,7 +194,7 @@ describe("claude-code adapter dialect", () => {
     const { getHarnessCore } = await importCore();
     const cmd = getHarnessCore().buildAgentCommand({
       sessionId: "abc-123", resume: false, contextFile: "/tmp/ctx.md",
-      model: "sonnet", effort: "xhigh", envPrefix: "",
+      launchPlan: workerPlan("claude-code", { model: "sonnet", effort: "xhigh" }),
     });
     expect(cmd).toBe(
       "claude --rc --model sonnet --effort xhigh "
@@ -163,7 +206,7 @@ describe("claude-code adapter dialect", () => {
     const { getHarnessCore } = await importCore();
     const cmd = getHarnessCore().buildAgentCommand({
       sessionId: "abc-123", resume: false, contextFile: "/tmp/ctx.md",
-      effort: "high", ultracode: true, envPrefix: "",
+      launchPlan: workerPlan("claude-code", { effort: "high", ultracode: true }),
     });
     // Exactly one --effort (max), no duplicate from the effort rung.
     expect(cmd.match(/--effort/g)).toHaveLength(1);
@@ -175,7 +218,10 @@ describe("claude-code adapter dialect", () => {
     const { getHarnessCore } = await importCore();
     const cmd = getHarnessCore().buildHeadlessCommand({
       promptFile: "/tmp/p.txt", resultFile: "/tmp/r.txt",
-      model: "opus", envPrefix: "CLAUDE_CONFIG_DIR=/p ", inlineEnv: "GARDEN_REVIEWER=1 ",
+      launchPlan: headlessPlan("claude-code", "reviewer", {
+        model: "opus", envPrefix: "CLAUDE_CONFIG_DIR=/p ",
+      }),
+      inlineEnv: "GARDEN_REVIEWER=1 ",
     });
     expect(cmd).toBe(
       "GARDEN_REVIEWER=1 CLAUDE_CONFIG_DIR=/p claude -p --model opus < /tmp/p.txt > /tmp/r.txt 2>&1",
@@ -189,7 +235,10 @@ describe("claude-code adapter dialect", () => {
     const { getHarnessCore } = await importCore();
     const cmd = getHarnessCore().buildHeadlessCommand({
       promptFile: "/tmp/p.txt", resultFile: "/tmp/r.txt",
-      model: "opus", effort: "max", envPrefix: "", inlineEnv: "",
+      launchPlan: headlessPlan("claude-code", "reviewer", {
+        model: "opus", effort: "max",
+      }),
+      inlineEnv: "",
     });
     expect(cmd).toBe("claude -p --model opus --effort max < /tmp/p.txt > /tmp/r.txt 2>&1");
   });
@@ -198,7 +247,7 @@ describe("claude-code adapter dialect", () => {
     const { getHarnessCore } = await importCore();
     const cmd = getHarnessCore().buildHeadlessCommand({
       promptFile: "/tmp/p.txt", resultFile: "/tmp/r.txt",
-      envPrefix: "", inlineEnv: "",
+      launchPlan: headlessPlan("claude-code"), inlineEnv: "",
     });
     expect(cmd).toBe("claude -p < /tmp/p.txt > /tmp/r.txt 2>&1");
     expect(cmd).not.toContain("--effort");
@@ -223,6 +272,7 @@ describe("claude-code adapter dialect", () => {
       skills: true,
       providerProfiles: true,
       workerWorkflows: ["default", "grow", "trellis", "botanist"],
+      headlessRoles: ["reviewer", "resolver", "ciFix"],
     });
   });
 
@@ -247,7 +297,10 @@ describe("codex adapter dialect", () => {
     const { getHarnessCore } = await importCore();
     const cmd = getHarnessCore("codex").buildHeadlessCommand({
       promptFile: "/tmp/p.txt", resultFile: "/tmp/r.txt",
-      model: "gpt-5-codex", effort: "max", envPrefix: "", inlineEnv: "GARDEN_REVIEWER=1 ",
+      launchPlan: headlessPlan("codex", "reviewer", {
+        model: "gpt-5-codex", effort: "max",
+      }),
+      inlineEnv: "GARDEN_REVIEWER=1 ",
     });
     // effort is a claude-code dial — codex renders no equivalent, mirroring how
     // its worker builder drops effort/ultracode.
@@ -265,7 +318,8 @@ describe("codex adapter dialect", () => {
   it("builds the interactive launch: no --session-id, hook-trust bypass on, real workspace-write sandbox", async () => {
     const { getHarnessCore } = await importCore();
     const fresh = getHarnessCore("codex").buildAgentCommand({
-      sessionId: "", resume: false, contextFile: "/ignored", model: "gpt-5-codex", envPrefix: "",
+      sessionId: "", resume: false, contextFile: "/ignored",
+      launchPlan: workerPlan("codex", { model: "gpt-5-codex" }),
     });
     // Event relay needs the hook-trust bypass; the model flag rides through.
     expect(fresh).toContain("codex --dangerously-bypass-hook-trust");
@@ -286,7 +340,8 @@ describe("codex adapter dialect", () => {
     process.env.HOME = "/home/fixture";
     try {
       const pinned = getHarnessCore("codex").buildAgentCommand({
-        sessionId: "", resume: false, contextFile: "/ignored", envPrefix: "",
+        sessionId: "", resume: false, contextFile: "/ignored",
+        launchPlan: workerPlan("codex"),
       });
       expect(pinned).toContain(
         `-c 'sandbox_workspace_write.writable_roots=["/home/fixture/.npm", ` +
@@ -297,7 +352,13 @@ describe("codex adapter dialect", () => {
     }
 
     const resume = getHarnessCore("codex").buildAgentCommand({
-      sessionId: "019f-abc", resume: true, contextFile: "/ignored", envPrefix: "",
+      sessionId: "019f-abc", resume: true, contextFile: "/ignored",
+      launchPlan: workerPlan("codex", {
+        requiredCapabilities: {
+          turnEnd: true, sandbox: true, workflow: "default",
+          resume: true, providerProfiles: false,
+        },
+      }),
     });
     expect(resume).toContain("codex resume 019f-abc --dangerously-bypass-hook-trust");
     expect(resume).toContain("-s workspace-write");
@@ -310,7 +371,8 @@ describe("codex adapter dialect", () => {
     // Codex's reasoning dial is a config key, not a flag, so it rides the same
     // `-c` channel as the hooks and sandbox.
     const withEffort = codex.buildAgentCommand({
-      sessionId: "", resume: false, contextFile: "/ignored", effort: "xhigh", envPrefix: "",
+      sessionId: "", resume: false, contextFile: "/ignored",
+      launchPlan: workerPlan("codex", { effort: "xhigh" }),
     });
     expect(withEffort).toContain("-c model_reasoning_effort=xhigh");
 
@@ -318,25 +380,29 @@ describe("codex adapter dialect", () => {
     // config value — it is NOT garden's ultracode sentinel, which has no Codex
     // analog and stays a no-op.
     const ultra = codex.buildAgentCommand({
-      sessionId: "", resume: false, contextFile: "/ignored", effort: "ultra", envPrefix: "",
+      sessionId: "", resume: false, contextFile: "/ignored",
+      launchPlan: workerPlan("codex", { effort: "ultra" }),
     });
     expect(ultra).toContain("-c model_reasoning_effort=ultra");
 
     const ultracodeOnly = codex.buildAgentCommand({
-      sessionId: "", resume: false, contextFile: "/ignored", ultracode: true, envPrefix: "",
+      sessionId: "", resume: false, contextFile: "/ignored",
+      launchPlan: workerPlan("codex", { ultracode: true }),
     });
     expect(ultracodeOnly).not.toContain("model_reasoning_effort");
     expect(ultracodeOnly).not.toContain("--effort");
 
     // No rung requested = no override; Codex uses the model's own default.
     const bare = codex.buildAgentCommand({
-      sessionId: "", resume: false, contextFile: "/ignored", envPrefix: "",
+      sessionId: "", resume: false, contextFile: "/ignored",
+      launchPlan: workerPlan("codex"),
     });
     expect(bare).not.toContain("model_reasoning_effort");
 
     // The rung survives a resume, so a bounced worker keeps its reasoning depth.
     const resumed = codex.buildAgentCommand({
-      sessionId: "019f-abc", resume: true, contextFile: "/ignored", effort: "high", envPrefix: "",
+      sessionId: "019f-abc", resume: true, contextFile: "/ignored",
+      launchPlan: workerPlan("codex", { effort: "high" }),
     });
     expect(resumed).toContain("-c model_reasoning_effort=high");
   });
@@ -347,14 +413,16 @@ describe("codex adapter dialect", () => {
     // cwd — Codex workspace-write must be granted it or the worker cannot
     // commit/push (claude-code's sandbox auto-grants it; Codex's does not).
     const withGit = getHarnessCore("codex").buildAgentCommand({
-      sessionId: "", resume: false, contextFile: "/ignored", envPrefix: "",
+      sessionId: "", resume: false, contextFile: "/ignored",
+      launchPlan: workerPlan("codex"),
       worktreeGitDir: "/Users/x/proj/.git",
     });
     expect(withGit).toContain('"/Users/x/proj/.git"');
     expect(withGit).toContain("sandbox_workspace_write.writable_roots=[");
     // Absent when no git dir is threaded (e.g. the ad-hoc project-dir launch).
     const withoutGit = getHarnessCore("codex").buildAgentCommand({
-      sessionId: "", resume: false, contextFile: "/ignored", envPrefix: "",
+      sessionId: "", resume: false, contextFile: "/ignored",
+      launchPlan: workerPlan("codex"),
     });
     expect(withoutGit).not.toContain("/.git\"");
   });
@@ -370,6 +438,7 @@ describe("codex adapter dialect", () => {
       turnEnd: true, promptSubmitted: true, toolActivity: true, askingSignal: true,
       resume: true, sandbox: true, skills: false,
       providerProfiles: false, workerWorkflows: ["default"],
+      headlessRoles: ["reviewer", "resolver", "ciFix"],
     });
   });
 
@@ -588,7 +657,8 @@ describe("codex -c hook injection (worker turn-end relay)", () => {
     // file: Codex resolves project hooks at the repo root, so a file written
     // into a linked worktree never fires (verified 2026-07-06).
     const cmd = getHarnessCore("codex").buildAgentCommand({
-      sessionId: "", resume: false, contextFile: "/ignored", envPrefix: "",
+      sessionId: "", resume: false, contextFile: "/ignored",
+      launchPlan: workerPlan("codex"),
     });
     expect(cmd).toMatch(/hooks\.SessionStart=.*sessionstart"/);
     expect(cmd).toMatch(/hooks\.UserPromptSubmit=.* prompt"/);

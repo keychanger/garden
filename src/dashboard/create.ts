@@ -39,11 +39,12 @@ import {
   BOTANIST_SKILL_CONTENT, BOTANIST_SKILL_DIRNAME, BOTANIST_SKILL_FILENAME,
 } from "./skills.js";
 import {
-  providerSessionSanitizerArgs, workerEnvPrefix,
+  providerSessionSanitizerArgs,
   syncAllProviderTokenVaults, tmuxWorkerCommand,
 } from "./claude-env.js";
 import { getHarness } from "./harness/index.js";
-import { getHarnessCore, workerLaunchCompatibilityError } from "./harness/core.js";
+import { resolveWorkerLaunchPlan } from "./launch-plan.js";
+import type { WorkerLaunchPlan } from "./harness/types.js";
 import { buildSettingsJson } from "./harness/claude-code.js";
 import { gardenWindowName, shellWindowName as shellWin, workerWindowName as workerWin, isGardenWindow } from "./window-names.js";
 
@@ -138,9 +139,49 @@ export function ensureDashboard(): void {
         for (const entry of entries) {
           if (!entry.worktreePath || !wtExists(entry.worktreePath)) continue;
           installPollTriggerHook(entry.worktreePath, resolveGardenRunner(), pname);
-          getHarness(entry.harness).installRuntimeConfig(
-            entry.worktreePath, workerProject(proj, entry.provider),
-          );
+          try {
+            const runtimeRulesOpts: WorktreeCommandOptions = {};
+            const trellisRelativePath = trellisRelativePathForEntry(entry, proj.path);
+            if (trellisRelativePath) runtimeRulesOpts.trellisRelativePath = trellisRelativePath;
+            if (entry.workflow === "grow" && entry.grow) {
+              runtimeRulesOpts.grow = {
+                iteration: entry.grow.iteration ?? 0,
+                maxIterations: entry.grow.maxIterations ?? 5,
+              };
+            }
+            if (entry.workflow === "botanist") runtimeRulesOpts.botanist = true;
+            const launchPlan = resolveWorkerLaunchPlan({
+              project: proj,
+              provider: entry.provider,
+              harness: entry.harness,
+              workflow: entry.workflow ?? "default",
+              resume: true,
+              model: entry.model,
+              ultracode: entry.ultracode,
+              effort: entry.effort,
+            });
+            runtimeRulesOpts.launchPlan = launchPlan;
+            getHarness(launchPlan.harness).installRuntimeConfig(
+              entry.worktreePath,
+              launchPlan.runtimeProject,
+              {
+                rulesText: buildWorktreeContextText(
+                  pname,
+                  proj.path,
+                  entry.branchName ?? entry.name,
+                  getWorkerBaseBranch(entry, proj.path),
+                  runtimeRulesOpts,
+                ),
+              },
+            );
+          } catch (err) {
+            // One stale/invalid worker identity must not prevent every later
+            // worker from refreshing its hooks and rules on attach.
+            log.warn("workers", "runtime refresh skipped", {
+              worker: entry.name,
+              data: { project: pname, error: String(err) },
+            });
+          }
         }
       }
     } catch { /* best effort — initial-create path will catch up next restart */ }
@@ -532,25 +573,40 @@ export function createShellWindow(projectName: string, projectPath: string): voi
 
 export function buildWorkerCommand(projectName: string, projectPath: string, sessionId: string): string {
   const project = resolveProjectForHooks(projectName, projectPath);
-  const harness = getHarness();
-  harness.installRuntimeConfig(projectPath, project);
   const gardenRunner = resolveGardenRunner();
   const contextFile = writeContextFile(projectName, projectPath);
+  const launchPlan = resolveWorkerLaunchPlan({
+    project, workflow: "default", resume: false,
+  });
+  const harness = getHarness(launchPlan.harness);
+  harness.installRuntimeConfig(projectPath, launchPlan.runtimeProject, {
+    rulesText: fs.readFileSync(contextFile, "utf-8"),
+  });
   const agentCmd = harness.buildAgentCommand({
-    sessionId, resume: false, contextFile, envPrefix: workerEnvPrefix(project),
+    sessionId, resume: false, contextFile, launchPlan,
   });
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${agentCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
 }
 
-export function buildResumeCommand(projectName: string, projectPath: string, sessionId: string): string {
+export function buildResumeCommand(
+  projectName: string,
+  projectPath: string,
+  sessionId: string,
+  launchPlanOverride?: WorkerLaunchPlan,
+): string {
   const project = resolveProjectForHooks(projectName, projectPath);
-  const harness = getHarness();
-  harness.installRuntimeConfig(projectPath, project);
   const gardenRunner = resolveGardenRunner();
   const contextFile = writeContextFile(projectName, projectPath);
+  const launchPlan = launchPlanOverride ?? resolveWorkerLaunchPlan({
+    project, workflow: "default", resume: true,
+  });
+  const harness = getHarness(launchPlan.harness);
+  harness.installRuntimeConfig(projectPath, launchPlan.runtimeProject, {
+    rulesText: fs.readFileSync(contextFile, "utf-8"),
+  });
   const agentCmd = harness.buildAgentCommand({
-    sessionId, resume: true, contextFile, envPrefix: workerEnvPrefix(project),
+    sessionId, resume: true, contextFile, launchPlan,
   });
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${agentCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
@@ -570,6 +626,10 @@ export function isWorkerEffort(value: string): value is WorkerEffort {
 }
 
 export interface WorktreeCommandOptions {
+  /** Pre-resolved launch identity. Production launch boundaries pass this so
+   *  command rendering, runtime install, and tmux credential injection consume
+   *  the same validated tuple. Direct builder callers may omit it. */
+  launchPlan?: WorkerLaunchPlan;
   /** Worktree-relative path to the trellis file. When set,
    *  buildWorktreeRules appends the three trellis paragraphs to the
    *  worker's system prompt. Default workers omit this and get the
@@ -615,8 +675,8 @@ export interface WorktreeCommandOptions {
    *  of the build member, overriding the project's `provider` key for this
    *  worker's launch env. Absent = the project key applies, so the common case
    *  threads nothing; the empty string means explicitly first-party (see
-   *  workerProject). Threaded by resume/bounce/loop callers from the entry so
-   *  the backend survives the worker's lifetime, exactly like `model`. */
+   *  `workerProject` in launch-plan.ts). Threaded by resume/bounce/loop callers
+   *  from the entry so the backend survives the worker's lifetime. */
   provider?: string;
   /** Harness adapter name (`WorkerEntry.harness`). Absent = the default
    *  claude-code adapter. Threaded by resume/bounce/loop callers from the
@@ -644,10 +704,10 @@ export function buildWorktreeWorkerCommand(
     { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow, botanist: opts?.botanist },
   );
   const project = resolveProjectForHooks(projectName, projectPath);
-  const agentCmd = getHarness(opts?.harness).buildAgentCommand({
-    sessionId, resume: false, contextFile, model: opts?.model,
-    ultracode: opts?.ultracode, effort: opts?.effort, envPrefix: workerEnvPrefix(workerProject(project, opts?.provider)),
-    worktreeGitDir: codexWorktreeGitDir(opts?.harness, projectPath),
+  const launchPlan = commandLaunchPlan(project, opts, false);
+  const agentCmd = getHarness(launchPlan.harness).buildAgentCommand({
+    sessionId, resume: false, contextFile, launchPlan,
+    worktreeGitDir: codexWorktreeGitDir(launchPlan.harness, projectPath),
   });
   return `${agentCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }
@@ -656,21 +716,36 @@ export function buildWorktreeWorkerCommand(
 // provider replaced by the worker's own, when that worker carries a per-worker
 // override (its build member named a backend). Absent override = the project
 // unchanged, so every pre-existing launch path is byte-identical.
-// Both halves of the worker's runtime read through this — the launch env
-// (workerEnvPrefix) and the sandbox egress allowlist (buildSandboxConfig, which
-// admits the provider's inference host) — so a worker cannot end up pointed at
-// one backend while its sandbox admits another. Only the worker role consults
-// it: reviewerEnvPrefix deliberately reads the project, since the review family
-// stays first-party by construction.
-export function workerProject<T extends { provider?: string }>(project: T, provider: string | undefined): T {
-  // undefined = no per-worker answer, inherit the project (the pre-existing
-  // path, byte-identical). A non-empty string = this worker's backend. The
-  // EMPTY string is the explicit-first-party marker newWorker stamps for a
-  // member that named no provider — it must clear the project's, not fall
-  // through to it, or "claude" on a provider-backed project would silently
-  // launch against the provider anyway.
-  if (provider === undefined) return project;
-  return { ...project, provider: provider || undefined };
+// Both halves of the worker's runtime read through this resolved view — the
+// launch plan's env projection and buildSandboxConfig's egress allowlist — so
+// a worker cannot end up pointed at one backend while its sandbox admits
+// another. Only the worker role consults it: reviewerEnvPrefix deliberately
+// reads the project, since the review family stays first-party by construction.
+export { workerProject } from "./launch-plan.js";
+
+function commandLaunchPlan(
+  project: ProjectConfig,
+  opts: WorktreeCommandOptions | undefined,
+  resume: boolean,
+): WorkerLaunchPlan {
+  if (opts?.launchPlan) return opts.launchPlan;
+  const workflow = opts?.trellisRelativePath
+    ? "trellis"
+    : opts?.grow
+      ? "grow"
+      : opts?.botanist
+        ? "botanist"
+        : "default";
+  return resolveWorkerLaunchPlan({
+    project,
+    provider: opts?.provider,
+    harness: opts?.harness,
+    workflow,
+    resume,
+    model: opts?.model,
+    ultracode: opts?.ultracode,
+    effort: opts?.effort,
+  });
 }
 
 // The worktree git common dir a Codex worker's sandbox must be able to write
@@ -760,6 +835,7 @@ export function buildWorktreeBootstrapScript(
   // would single-quote the whole multi-token string.
   const gardenRunnerLit = gardenRunner;
   const project = resolveProjectForHooks(projectName, projectPath);
+  const launchPlan = commandLaunchPlan(project, opts, false);
   // The bootstrap inlines the Claude Code runtime config in shell form
   // (settings.json + skills layout below) — this whole script is the
   // claude-code dialect today. A second harness adds an adapter method
@@ -770,7 +846,7 @@ export function buildWorktreeBootstrapScript(
   // allowlist, not the project's.
   const settingsJson = buildSettingsJson(resolveHookRunner(), buildSandboxConfig({
     worktreePath: wtPath,
-    project: workerProject(project, opts?.provider),
+    project: launchPlan.runtimeProject,
     remoteHost: getRemoteHost(project.path),
   }));
   const settingsJsonLit = shellEscape(settingsJson);
@@ -789,10 +865,9 @@ export function buildWorktreeBootstrapScript(
   const botanistSkillLit = shellEscape(BOTANIST_SKILL_CONTENT);
   const botanistSkillDirnameLit = shellEscape(BOTANIST_SKILL_DIRNAME);
   const botanistSkillFilenameLit = shellEscape(BOTANIST_SKILL_FILENAME);
-  const agentCmd = getHarness(opts?.harness).buildAgentCommand({
-    sessionId, resume: false, contextFile, model: opts?.model,
-    ultracode: opts?.ultracode, effort: opts?.effort, envPrefix: workerEnvPrefix(workerProject(project, opts?.provider)),
-    worktreeGitDir: codexWorktreeGitDir(opts?.harness, projectPath),
+  const agentCmd = getHarness(launchPlan.harness).buildAgentCommand({
+    sessionId, resume: false, contextFile, launchPlan,
+    worktreeGitDir: codexWorktreeGitDir(launchPlan.harness, projectPath),
   });
 
   const base = baseBranch ?? "main";
@@ -804,12 +879,12 @@ export function buildWorktreeBootstrapScript(
   // The inline config below is the claude-code dialect (.claude/settings.json +
   // skills). For a Codex worker it is inert (Codex ignores .claude/), so rather
   // than fork the whole bootstrap we leave it and ADD the Codex runtime after
-  // worktree setup: .codex/hooks.json + directory-trust + the composed rules as
-  // AGENTS.md, installed by the _install-worker-runtime subcommand (reuses the
+  // worktree setup: directory-trust + the composed rules as AGENTS.md (hooks
+  // ride launch-time -c overrides), installed by _install-worker-runtime (reuses the
   // adapter's TS, no fragile shell-gen). Empty string for claude keeps the
   // generated script byte-identical to today.
   const contextFileLit = shellEscape(contextFile);
-  const codexRuntimeInstall = opts?.harness === "codex"
+  const codexRuntimeInstall = launchPlan.harness === "codex"
     ? `\n# Install the Codex worker runtime the inline claude config above omits.\n`
       + `${gardenRunnerLit} dashboard _install-worker-runtime ${projectNameLit} ${workerLit} ${contextFileLit} 2>/dev/null || true\n`
     : "";
@@ -1028,49 +1103,60 @@ export function respawnWorkerWindow(
   size: { width: number; height: number } | null,
 ): string | null {
   if (!entry.sessionId) return null;
-  const launchProject = workerProject(projectConfig, entry.provider);
-  const compatibilityError = workerLaunchCompatibilityError(
-    getHarnessCore(entry.harness),
-    {
+  let launchPlan: WorkerLaunchPlan;
+  try {
+    launchPlan = resolveWorkerLaunchPlan({
+      project: projectConfig,
+      provider: entry.provider,
+      harness: entry.harness,
       workflow: entry.workflow ?? "default",
-      provider: launchProject.provider ?? null,
       resume: true,
-    },
-  );
-  if (compatibilityError) {
-    log.error("workers", "worker resume rejected: incompatible harness capabilities", {
+      model: entry.model,
+      ultracode: entry.ultracode,
+      effort: entry.effort,
+    });
+  } catch (err) {
+    log.error("workers", "worker resume rejected: invalid launch plan", {
       worker: entry.name,
-      data: { project: projectName, error: compatibilityError },
+      data: { project: projectName, error: String(err) },
     });
     return null;
   }
   // Per-worker base: honors entry.baseBranch pinned at creation, falls
   // back to current-checkout resolution for legacy entries.
   const baseBranch = getWorkerBaseBranch(entry, projectConfig.path);
-  if (entry.worktreePath && wtExists(entry.worktreePath)) {
-    installPollTriggerHook(entry.worktreePath, resolveGardenRunner(), projectName);
-    getHarness(entry.harness).installRuntimeConfig(
-      entry.worktreePath, launchProject,
-    );
-  }
   const workerCwd = entry.worktreePath ?? projectConfig.path;
   const trellisRelativePath = trellisRelativePathForEntry(entry, projectConfig.path);
   // entry.model: default/grow per-worker pin; trellis resolves per
   // iteration, so vines never carry it.
-  const resumeOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string; provider?: string; botanist?: boolean } = {};
+  const resumeOpts: WorktreeCommandOptions = { launchPlan };
   if (trellisRelativePath) resumeOpts.trellisRelativePath = trellisRelativePath;
-  if (entry.model) resumeOpts.model = entry.model;
-  if (entry.ultracode) resumeOpts.ultracode = true;
-  if (entry.effort) resumeOpts.effort = entry.effort;
-  if (entry.harness) resumeOpts.harness = entry.harness;
-  // `!== undefined`: the empty string is the explicit-first-party marker.
-  if (entry.provider !== undefined) resumeOpts.provider = entry.provider;
+  if (entry.workflow === "grow" && entry.grow) {
+    resumeOpts.grow = {
+      iteration: entry.grow.iteration ?? 0,
+      maxIterations: entry.grow.maxIterations ?? 5,
+    };
+  }
   if (entry.workflow === "botanist") resumeOpts.botanist = true;
+  if (entry.worktreePath && wtExists(entry.worktreePath)) {
+    installPollTriggerHook(entry.worktreePath, resolveGardenRunner(), projectName);
+    getHarness(launchPlan.harness).installRuntimeConfig(
+      entry.worktreePath,
+      launchPlan.runtimeProject,
+      {
+        rulesText: buildWorktreeContextText(
+          projectName, projectConfig.path, entry.branchName ?? entry.name,
+          baseBranch, resumeOpts,
+        ),
+      },
+    );
+  }
   const resumeCmd = entry.worktreePath && entry.branchName
-    ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.ultracode || resumeOpts.effort || resumeOpts.harness || resumeOpts.provider !== undefined || resumeOpts.botanist
-        ? buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch, resumeOpts)
-        : buildWorktreeResumeCommand(projectName, projectConfig.path, entry.name, entry.branchName, entry.sessionId, baseBranch))
-    : buildResumeCommand(projectName, projectConfig.path, entry.sessionId);
+    ? buildWorktreeResumeCommand(
+        projectName, projectConfig.path, entry.name, entry.branchName,
+        entry.sessionId, baseBranch, resumeOpts,
+      )
+    : buildResumeCommand(projectName, projectConfig.path, entry.sessionId, launchPlan);
   const workerWindowName = workerWin(projectName, entry.name);
 
   // Hold the window open with a no-op placeholder, resize, then respawn
@@ -1086,7 +1172,7 @@ export function respawnWorkerWindow(
   if (workerPaneId) {
     try {
       tmuxWorkerCommand(
-        launchProject,
+        launchPlan,
         "respawn-pane", "-k", "-c", workerCwd, "-t", workerPaneId, "sh", "-c", resumeCmd,
       );
     } catch (err) {
@@ -1133,11 +1219,11 @@ export function buildWorktreeResumeCommand(
   );
   const gardenRunner = resolveGardenRunner();
   const project = resolveProjectForHooks(projectName, projectPath);
+  const launchPlan = commandLaunchPlan(project, opts, true);
   const identityExports = workerEnvExports(projectName, workerName, branchName, baseBranch);
-  const claudeCmd = getHarness(opts?.harness).buildAgentCommand({
-    sessionId, resume: true, contextFile, model: opts?.model,
-    ultracode: opts?.ultracode, effort: opts?.effort, envPrefix: workerEnvPrefix(workerProject(project, opts?.provider)),
-    worktreeGitDir: codexWorktreeGitDir(opts?.harness, projectPath),
+  const claudeCmd = getHarness(launchPlan.harness).buildAgentCommand({
+    sessionId, resume: true, contextFile, launchPlan,
+    worktreeGitDir: codexWorktreeGitDir(launchPlan.harness, projectPath),
   });
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${identityExports} ${claudeCmd}; ${exitHook}; ${pollSignalSnippet(projectName)} exec $SHELL`;
@@ -1204,6 +1290,25 @@ function writeWorktreeContextFile(
     botanist?: boolean;
   },
 ): string {
+  const context = buildWorktreeContextText(
+    projectName, projectPath, branchName, baseBranch, opts,
+  );
+  const contextFile = path.join(SESSIONS_DIR, `dashboard-${projectName}-${branchName}.context`);
+  atomicWriteFile(contextFile, context);
+  return contextFile;
+}
+
+export function buildWorktreeContextText(
+  projectName: string,
+  projectPath: string,
+  branchName: string,
+  baseBranch?: string,
+  opts?: {
+    trellisRelativePath?: string;
+    grow?: { iteration: number; maxIterations: number };
+    botanist?: boolean;
+  },
+): string {
   const base = buildRulesContext(projectName, projectPath);
   const checksCommand = tryGetProject(projectName)?.checks;
   const worktreeRules = buildWorktreeRules(
@@ -1218,10 +1323,7 @@ function writeWorktreeContextFile(
       ...(checksCommand ? { checksCommand } : {}),
     },
   );
-  const context = `${base}\n\n${worktreeRules}`;
-  const contextFile = path.join(SESSIONS_DIR, `dashboard-${projectName}-${branchName}.context`);
-  atomicWriteFile(contextFile, context);
-  return contextFile;
+  return `${base}\n\n${worktreeRules}`;
 }
 
 export function writeGrowhouseInitScript(gardenRunner: string): string {

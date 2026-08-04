@@ -5,6 +5,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("node:crypto", () => ({
   default: { randomUUID: vi.fn(() => "fake-uuid-1234") },
   randomUUID: vi.fn(() => "fake-lock-uuid"),
+  createHash: vi.fn(() => {
+    const hash = {
+      update: vi.fn(() => hash),
+      digest: vi.fn(() => "A1B2C3D4E5F6"),
+    };
+    return hash;
+  }),
 }));
 
 vi.mock("node:fs", () => ({
@@ -28,18 +35,30 @@ vi.mock("../src/session.js", () => ({
   dashboardExists: vi.fn(() => false),
 }));
 
-vi.mock("../src/config.js", () => ({
-  logColorKeyForProject: vi.fn(() => null),
-  getProject: vi.fn(() => ({ name: "myproject", path: "/repo/myproject" })),
-  tryGetProject: vi.fn(() => ({ name: "myproject", path: "/repo/myproject" })),
-  tryResolveClaudeProfile: vi.fn(() => null),
-  tryResolveProvider: vi.fn(() => null),
-  anyAnthropicMeteredProject: vi.fn(() => true),
-  ENV_VAR_NAME_RE: /^[A-Z_][A-Z0-9_]*$/,
-  loadConfig: vi.fn(() => ({ projects: {}, plots: {} })),
-  plotsMap: vi.fn(() => ({})),
-  SESSIONS_DIR: "/tmp/fake-sessions",
-}));
+vi.mock("../src/config.js", () => {
+  const tryResolveProvider = vi.fn(() => null);
+  const loadConfig = vi.fn(() => ({ projects: {}, plots: {} }));
+  return {
+    logColorKeyForProject: vi.fn(() => null),
+    getProject: vi.fn(() => ({ name: "myproject", path: "/repo/myproject" })),
+    tryGetProject: vi.fn(() => ({ name: "myproject", path: "/repo/myproject" })),
+    tryResolveClaudeProfile: vi.fn(() => null),
+    tryResolveProvider,
+    resolveProvider: vi.fn((project: { provider?: string }, config?: { providers?: Record<string, Record<string, unknown>> }) => {
+      const provider = tryResolveProvider(project);
+      if (provider) return provider;
+      if (!project.provider) return null;
+      const definition = (config ?? loadConfig()).providers?.[project.provider];
+      if (!definition) throw new Error(`Unknown provider '${project.provider}'.`);
+      return { ...definition, name: project.provider, label: definition.label ?? project.provider };
+    }),
+    anyAnthropicMeteredProject: vi.fn(() => true),
+    ENV_VAR_NAME_RE: /^[A-Z_][A-Z0-9_]*$/,
+    loadConfig,
+    plotsMap: vi.fn(() => ({})),
+    SESSIONS_DIR: "/tmp/fake-sessions",
+  };
+});
 
 vi.mock("../src/dashboard/navigate.js", () => ({
   swapVisibleToProject: vi.fn(),
@@ -63,6 +82,7 @@ vi.mock("../src/dashboard/header.js", () => ({
 
 vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
+  tmuxWithHiddenEnvironment: vi.fn(),
   tmuxDisplay: vi.fn(),
   newDashboardWindowPaned: vi.fn(() => "%10"),
   setPaneLabel: vi.fn(),
@@ -122,6 +142,7 @@ vi.mock("../src/dashboard/create.js", () => ({
   buildWorktreeBootstrapScript: vi.fn(() => "/tmp/fake-bootstrap.sh"),
   buildWorktreeResumeCommand: vi.fn(() => "claude --resume FAKE-ID"),
   buildResumeCommand: vi.fn(() => "claude --resume FAKE-ID-NW"),
+  buildWorktreeContextText: vi.fn(() => "rules"),
   createShellWindow: vi.fn(),
   trellisRelativePathForEntry: vi.fn(() => undefined),
   // Pure helper — use the real semantics so the provider view bounce installs
@@ -215,11 +236,12 @@ import { addAlert } from "../src/dashboard/alerts.js";
 import { recordWorkerCreated, recordWorkerRemoved } from "../src/dashboard/telemetry.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "../src/dashboard/poller.js";
 import { workerWindowName as workerWin, shellWindowName as shellWin, parseWorkerSuffix } from "../src/dashboard/window-names.js";
-import { getProject, tryGetProject, loadConfig } from "../src/config.js";
+import { getProject, tryGetProject, tryResolveProvider, loadConfig } from "../src/config.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import type { DashboardState } from "../src/dashboard/state.js";
+import { dashboardExists } from "../src/session.js";
 
 function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
   return {
@@ -249,6 +271,10 @@ beforeEach(() => {
   vi.mocked(findWorkerByName).mockReturnValue(null);
   vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 50 });
   vi.mocked(fs.readFileSync).mockImplementation(() => { throw new Error("ENOENT"); });
+  vi.mocked(tryGetProject).mockReset().mockReturnValue({ name: "myproject", path: "/repo/myproject" });
+  vi.mocked(tryResolveProvider).mockReset().mockReturnValue(null);
+  vi.mocked(dashboardExists).mockReturnValue(false);
+  delete process.env.GARDEN_TEST_PROVIDER_KEY;
   // clearAllMocks clears calls but not implementations, so a test that stubs a
   // stored-crew config would otherwise leak it into every later test.
   vi.mocked(loadConfig).mockReturnValue({ projects: {}, plots: {} } as ReturnType<typeof loadConfig>);
@@ -286,6 +312,13 @@ describe("newWorker", () => {
       "fake-uuid-1234",
       "/home/user/.garden/worktrees/myproject/bold-ash",
       "main",
+      {
+        launchPlan: expect.objectContaining({
+          role: "worker",
+          harness: "claude-code",
+          executionPolicy: "sandboxed-worker",
+        }),
+      },
     );
   });
 
@@ -935,8 +968,15 @@ describe("newWorker", () => {
 
   it("provider: stamps entry.provider for a provider-backed build member", () => {
     vi.mocked(loadConfig).mockReturnValue({
-      projects: {}, plots: {}, providers: { deepseek: {} },
+      projects: {}, plots: {}, providers: {
+        deepseek: {
+          baseUrl: "https://api.deepseek.example/anthropic",
+          authTokenEnv: "GARDEN_TEST_PROVIDER_KEY",
+        },
+      },
     } as unknown as ReturnType<typeof loadConfig>);
+    process.env.GARDEN_TEST_PROVIDER_KEY = "test-token";
+    vi.mocked(dashboardExists).mockReturnValue(true);
     vi.mocked(readDashState).mockReturnValue(makeState());
     expect(newWorker({ harness: "claude", provider: "deepseek" })).toBe("bold-ash");
     const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
@@ -981,10 +1021,49 @@ describe("newWorker", () => {
     vi.mocked(tryGetProject).mockReturnValueOnce({
       name: "myproject", path: "/repo/myproject", provider: "deepseek",
     } as ReturnType<typeof tryGetProject>);
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: {}, plots: {}, providers: {
+        deepseek: {
+          baseUrl: "https://api.deepseek.example/anthropic",
+          authTokenEnv: "GARDEN_TEST_PROVIDER_KEY",
+        },
+      },
+    } as unknown as ReturnType<typeof loadConfig>);
+    process.env.GARDEN_TEST_PROVIDER_KEY = "test-token";
+    vi.mocked(dashboardExists).mockReturnValue(true);
     vi.mocked(readDashState).mockReturnValue(makeState());
-    newWorker({});
+    expect(newWorker({})).toBe("bold-ash");
     const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
     expect(entry.provider).toBeUndefined();
+  });
+
+  it("provider: pins a project-crew backend so resume cannot switch accounts", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: {}, plots: {},
+      providers: {
+        deepseek: {
+          baseUrl: "https://api.deepseek.example/anthropic",
+          authTokenEnv: "GARDEN_TEST_PROVIDER_KEY",
+        },
+      },
+      crews: {
+        fleet: {
+          worker: { member: "deepseek" },
+          review: { member: "claude" },
+        },
+      },
+    } as unknown as ReturnType<typeof loadConfig>);
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", crew: "fleet",
+    } as ReturnType<typeof tryGetProject>);
+    process.env.GARDEN_TEST_PROVIDER_KEY = "test-token";
+    vi.mocked(dashboardExists).mockReturnValue(true);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+
+    expect(newWorker({})).toBe("bold-ash");
+    const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.harness).toBe("claude-code");
+    expect(entry.provider).toBe("deepseek");
   });
 
   it("crew: a codex-worker crew builds with codex even on a claude-default project", () => {
@@ -1084,16 +1163,21 @@ describe("newWorker", () => {
     newWorker({ harness: "codex" });
     const call = vi.mocked(buildWorktreeBootstrapScript).mock.calls[0];
     expect(call).toHaveLength(8);
-    expect(call[7]).toEqual(expect.objectContaining({ harness: "codex" }));
+    expect(call[7]).toEqual(expect.objectContaining({
+      launchPlan: expect.objectContaining({ harness: "codex" }),
+    }));
   });
 
-  it("harness: absent for a plain default worker (7-arg bootstrap call)", () => {
+  it("harness: resolves a structured default launch plan for a plain worker", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     newWorker();
     const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
     expect(entry.harness).toBeUndefined();
-    // Default worker preserves the legacy 7-arg bootstrap arity (no opts object).
-    expect(vi.mocked(buildWorktreeBootstrapScript).mock.calls[0]).toHaveLength(7);
+    const call = vi.mocked(buildWorktreeBootstrapScript).mock.calls[0];
+    expect(call).toHaveLength(8);
+    expect(call[7]).toEqual(expect.objectContaining({
+      launchPlan: expect.objectContaining({ harness: "claude-code" }),
+    }));
   });
 
   // ===== Project-default harness (config <p> harness / crew) =====
@@ -1570,6 +1654,7 @@ describe("bounceWorker", () => {
 
     expect(vi.mocked(buildWorktreeResumeCommand)).toHaveBeenCalledWith(
       "myproject", "/repo/myproject", "swift-oak", "swift-oak", "sess-abc", "main",
+      { launchPlan: expect.objectContaining({ harness: "claude-code", role: "worker" }) },
     );
     const respawnCall = vi.mocked(tmux).mock.calls.find(c => c[0] === "respawn-pane");
     expect(respawnCall).toBeDefined();
@@ -1591,6 +1676,12 @@ describe("bounceWorker", () => {
     });
     vi.mocked(tryGetProject).mockReturnValue({
       name: "myproject", path: "/repo/myproject", provider: "deepseek",
+    });
+    vi.mocked(tryResolveProvider).mockReturnValue({
+      name: "deepseek",
+      label: "deepseek",
+      baseUrl: "https://api.deepseek.example/anthropic",
+      authTokenEnv: "GARDEN_TEST_PROVIDER_KEY",
     });
 
     expect(() => bounceWorker("myproject", "swift-oak"))
@@ -1614,6 +1705,7 @@ describe("bounceWorker", () => {
 
     expect(vi.mocked(getHarness)().installRuntimeConfig).toHaveBeenCalledWith(
       "/wt/swift-oak", expect.objectContaining({ path: "/repo/myproject" }),
+      { rulesText: "rules" },
     );
   });
 
@@ -1628,6 +1720,7 @@ describe("bounceWorker", () => {
 
     expect(vi.mocked(buildWorktreeResumeCommand)).toHaveBeenCalledWith(
       "myproject", "/repo/myproject", "swift-oak", "swift-oak", "sess-abc", "develop",
+      { launchPlan: expect.objectContaining({ harness: "claude-code", role: "worker" }) },
     );
     expect(vi.mocked(resolveBaseBranch)).not.toHaveBeenCalled();
   });

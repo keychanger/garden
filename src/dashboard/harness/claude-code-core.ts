@@ -83,6 +83,7 @@ export const claudeCodeCore: HarnessCore = {
     skills: true,
     providerProfiles: true,
     workerWorkflows: ["default", "grow", "trellis", "botanist"],
+    headlessRoles: ["reviewer", "resolver", "ciFix"],
   },
 
   // Claude Code accepts a caller-supplied session UUID (--session-id) and
@@ -97,35 +98,37 @@ export const claudeCodeCore: HarnessCore = {
   // staying inside shellEscape's unquoted charset (UUIDs do) — a session
   // id outside it would render quoted where the legacy path was raw.
   buildAgentCommand(opts: AgentCommandOptions): string {
-    const modelFlag = opts.model ? ` --model ${shellEscape(opts.model)}` : "";
+    const plan = opts.launchPlan;
+    const modelFlag = plan.model ? ` --model ${shellEscape(plan.model)}` : "";
     // Ultracode preset: max effort plus the dynamic-workflow keyword trigger.
     // `--effort max` is the session-effort flag; `ultracodeKeywordTrigger` has
     // no dedicated flag, so it rides in via `--settings <json>` (an additional
     // settings source Claude Code merges over .claude/settings.json). The
-    // paired Opus pin arrives through `opts.model`, not here.
-    const ultracodeFlags = opts.ultracode
+    // paired Opus pin arrives through `plan.model`, not here.
+    const ultracodeFlags = plan.ultracode
       ? ` --effort max --settings ${shellEscape(ULTRACODE_SETTINGS_JSON)}`
       : "";
     // General reasoning-effort rung (low/medium/high/xhigh). Ultracode already
     // fixes `--effort max`, so it wins and effort is suppressed to avoid a
     // duplicate flag. Absent effort renders nothing — byte-identical to the
     // pre-effort launch command for every existing worker.
-    const effortFlag = opts.effort && !opts.ultracode ? ` --effort ${shellEscape(opts.effort)}` : "";
+    const effortFlag = plan.effort && !plan.ultracode ? ` --effort ${shellEscape(plan.effort)}` : "";
     const sessionFlag = opts.resume
       ? `--resume ${shellEscape(opts.sessionId)}`
       : `--session-id ${shellEscape(opts.sessionId)}`;
-    return `${opts.envPrefix}claude --rc${modelFlag}${effortFlag}${ultracodeFlags} ${sessionFlag} `
+    return `${plan.envPrefix}claude --rc${modelFlag}${effortFlag}${ultracodeFlags} ${sessionFlag} `
       + `--append-system-prompt-file ${shellEscape(opts.contextFile)}`;
   },
 
   // The one-shot print mode: prompt on stdin, final answer (and any error
   // tail isTransientError inspects) on the redirected stdout+stderr.
   buildHeadlessCommand(opts: HeadlessCommandOptions): string {
-    const modelFlag = opts.model ? ` --model ${shellEscape(opts.model)}` : "";
+    const plan = opts.launchPlan;
+    const modelFlag = plan.model ? ` --model ${shellEscape(plan.model)}` : "";
     // `--effort` is a top-level claude flag, so it composes with `-p` exactly
     // as it does with the interactive launch (verified against 2.1.215).
-    const effortFlag = opts.effort ? ` --effort ${shellEscape(opts.effort)}` : "";
-    return `${opts.inlineEnv}${opts.envPrefix}claude -p${modelFlag}${effortFlag}`
+    const effortFlag = plan.effort ? ` --effort ${shellEscape(plan.effort)}` : "";
+    return `${opts.inlineEnv}${plan.envPrefix}claude -p${modelFlag}${effortFlag}`
       + ` < ${shellEscape(opts.promptFile)} > ${shellEscape(opts.resultFile)} 2>&1`;
   },
 

@@ -30,6 +30,18 @@ import fs from "node:fs";
 import { tmux, newDashboardWindow, windowExists, killWindowSafe } from "../src/dashboard/tmux.js";
 import { launchHeadlessAgent } from "../src/dashboard/headless-agent.js";
 
+const DEFAULT_HEADLESS_PLAN = {
+  role: "reviewer",
+  harness: "claude-code",
+  backend: { kind: "harness-account" },
+  credential: { kind: "harness-account" },
+  model: undefined,
+  effort: undefined,
+  envPrefix: "",
+  executionPolicy: "trusted-headless",
+  requiredCapabilities: { headlessRole: "reviewer" },
+} as const;
+
 function baseOpts(overrides: Partial<Parameters<typeof launchHeadlessAgent>[0]> = {}) {
   return {
     cwd: "/tmp/wt/myproject/bold-ash",
@@ -37,7 +49,7 @@ function baseOpts(overrides: Partial<Parameters<typeof launchHeadlessAgent>[0]> 
     prompt: "Review this branch.",
     promptFile: "/tmp/sessions/myproject-bold-ash-review-prompt.txt",
     resultFile: "/tmp/sessions/myproject-bold-ash-review-result.txt",
-    envPrefix: "",
+    launchPlan: DEFAULT_HEADLESS_PLAN,
     signalFifo: "/tmp/sessions/myproject-poll-signal",
     ...overrides,
   };
@@ -107,7 +119,9 @@ describe("launchHeadlessAgent", () => {
   });
 
   it("prepends envPrefix when provided", () => {
-    launchHeadlessAgent(baseOpts({ envPrefix: "CLAUDE_CONFIG_DIR=/tmp/.claude " }));
+    launchHeadlessAgent(baseOpts({
+      launchPlan: { ...DEFAULT_HEADLESS_PLAN, envPrefix: "CLAUDE_CONFIG_DIR=/tmp/.claude " },
+    }));
     const cmd = vi.mocked(newDashboardWindow).mock.calls[0][5] as string;
     expect(cmd).toMatch(/^CLAUDE_CONFIG_DIR=\/tmp\/\.claude claude -p /);
   });

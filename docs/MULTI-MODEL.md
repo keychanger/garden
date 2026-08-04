@@ -35,6 +35,17 @@ will go stale; re-verify before implementing a phase that depends on
 them. Each remaining phase is independently mergeable and leaves garden
 fully working for the existing Claude-only fleet.
 
+Every production execution now crosses a structured-plan boundary before an
+adapter renders a command. `resolveWorkerLaunchPlan` binds the worker's role,
+harness, backend, credential *reference* (never the secret), model/effort,
+execution policy, and required capabilities into one `WorkerLaunchPlan`;
+`resolveHeadlessLaunchPlan` does the same for reviewer/resolver/ci-fix. Unknown
+harness/provider identities and incompatible capability tuples fail closed at
+that boundary. Create, attach, bounce, loop-respawn, and every headless poller
+then pass the same validated object to command rendering and credential
+injection, preventing those paths from independently re-resolving to different
+accounts or policies.
+
 Where Phase 1's implementation deliberately settled or trimmed the
 original sketch:
 
@@ -479,42 +490,42 @@ by name, with `claude-code` as the default and the reference
 implementation:
 
 ```ts
-interface HarnessAdapter {
-  name: string;                          // "claude-code" | "codex" | "opencode"
-  // Session identity. claude-code mints a UUID garden passes via
-  // --session-id; codex assigns its own id, recovered after launch.
-  allocateSessionId(): string | null;
-  recoverSessionId(entry: WorkerEntry): string | null;
-  // Launch: collapses create.ts's five builders into two. LaunchOptions
-  // carries the resolved concrete model for this launch. The returned
-  // command includes the harness's pane-exit turn-end shim.
-  buildLaunchCommand(opts: LaunchOptions): string;   // new session
-  buildResumeCommand(opts: LaunchOptions): string;   // resume (capability-gated)
-  // Worktree provisioning: settings/hooks/skills/rules delivery.
-  installRuntimeConfig(worktree: string, project: ProjectConfig): void;
-  // Live prompt delivery into the pane (claude-code: pasteAndSubmit's
-  // paste-then-Enter contract; other TUIs supply their own).
+interface WorkerLaunchPlan {
+  role: "worker";
+  harness: string;
+  backend: LaunchBackend;
+  credential: LaunchCredentialReference;
+  model?: string;
+  effort?: string;
+  executionPolicy: "sandboxed-worker";
+  requiredCapabilities: WorkerRequirements;
+}
+
+interface HarnessCore {
+  name: string;
+  allocateSessionId(): string;
+  buildAgentCommand(opts: { launchPlan: WorkerLaunchPlan; /* session/context */ }): string;
+  buildHeadlessCommand(opts: { launchPlan: HeadlessLaunchPlan; /* prompt/result */ }): string;
   deliverPrompt(paneId: string, text: string): void;
-  // Headless one-shot (reviewer/resolver/ci-fix).
-  buildHeadlessCommand(opts: HeadlessOptions): string;
+  resolveTranscriptPath(entry: WorkerEntry): string | null;
+  readTurns(path: string | null, max?: number): Turn[];
   isTransientError(outputTail: string): boolean;
-  // Transcript.
-  resolveTranscript(entry: WorkerEntry): TranscriptHandle | null;
-  readTurns(handle: TranscriptHandle, max: number): Turn[];
-  // Provider/credential env for a session in this harness.
-  sessionEnv(project: ProjectConfig, profile: ProviderProfile): Record<string, string>;
-  // What this harness can and cannot signal.
   capabilities: {
-    turnEnd: true;                 // required; non-negotiable (see tiers)
-    promptSubmitted: boolean;      // sentinel-clear + delivery confirmation
-    toolActivity: boolean;         // working heartbeat + stale detection
-    askingSignal: boolean;         // the `asking` status
-    resume: boolean;               // bounce/recovery; false = resume requests rejected
-    sandbox: boolean;              // harness-enforced sandbox available
-    skills: boolean;               // native skill mechanism; false = fold into rules
-    providerProfiles: boolean;     // consumes Garden's ANTHROPIC_* provider contract
-    workerWorkflows: string[];     // explicit, fail-closed workflow allowlist
+    turnEnd: true;
+    resume: boolean;
+    sandbox: boolean;
+    providerProfiles: boolean;
+    workerWorkflows: string[];
+    headlessRoles: ("reviewer" | "resolver" | "ciFix")[];
   };
+}
+
+interface HarnessAdapter extends HarnessCore {
+  installRuntimeConfig(
+    worktree: string,
+    project: ProjectConfig,
+    runtime?: { rulesText?: string },
+  ): void;
 }
 ```
 
@@ -542,25 +553,34 @@ Notes pinned down by the audit:
   the done skill", ".claude/skills/done/SKILL.md") become template
   variables the adapter fills. A worktree may carry multiple harness
   dialects side by side — see mixed fleets below.
+- **Runtime refresh is idempotent and current.** Attach, bounce, and loop
+  respawn recompose the same workflow-specific rules used at spawn. For Codex,
+  the first install preserves the worktree's actual repository instructions;
+  subsequent refreshes strip the managed block and read tracked `AGENTS.md`
+  content from Git's index (the working file is intentionally skip-worktree),
+  then write one fresh composition. Repo rules and Garden rules can therefore
+  both advance. The shared `CODEX_HOME/config.toml` trust-table check/append
+  runs under a cross-process file lock, so concurrent worker bootstraps cannot
+  emit duplicate TOML tables.
 - **Sandbox is a capability, not a given.** Claude and Codex both
   enforce their own; the shared `buildSandboxConfig` computation
   (writable roots + egress hosts) stays, and the adapter serializes it
   into its harness's dialect. A harness with `sandbox: false` is not
   eligible for autonomous workers — surfaced at `workers new` time, not
   discovered in production.
-- **Headless agents install their own harness's config.** The reviewer
-  runs with cwd inside the *worker's* worktree (`poller-review.ts`); a
-  Claude reviewer in a Codex worker's worktree would find no
-  `.claude/settings.json` — no hooks (fine) but also **no sandbox** (not
-  fine). The headless launch path therefore runs the *agent's own*
-  adapter's `installRuntimeConfig` before launch, unconditionally. The
-  `GARDEN_REVIEWER=1` suppression stays for the same-harness case, owned
-  by the adapter's event shim.
+- **Headless identity is the agent's, not the worker's.** Review-family role
+  resolution produces its own `HeadlessLaunchPlan`, and
+  `launchHeadlessAgent` renders only through that plan. Worker bootstrap keeps
+  the Claude runtime config alongside a Codex worker's config, so the default
+  Claude reviewer retains its sandbox; `codex exec` carries its trusted
+  headless policy on the command itself. `GARDEN_REVIEWER=1` suppression stays
+  on the same-harness Claude path.
 - **Session identity is harness-shaped.** `loop.ts`'s
   cold-respawn-per-iteration currently mints a fresh UUID via
   `crypto.randomUUID` and hands it to `--session-id`; Codex assigns its
-  own session ids. The respawn dance routes through
-  `allocateSessionId`/`recoverSessionId` so both contracts fit.
+  own session ids. The respawn dance routes fresh identity allocation through
+  the adapter, and Codex's lifecycle relay captures its assigned `session_id`
+  onto the registry entry for later resume.
 - **Where identity lives**: `WorkerEntry.harness?: string` (flat,
   defaulted to `"claude-code"`, exactly like the existing `workflow`
   field) and `WorkerEntry.provider?: string` (`WorkerEntry.model` already
@@ -576,7 +596,7 @@ Garden refuses to silently degrade. Each adapter's capability flags place
 it in a tier and are enforced at spawn time:
 
 - **Tier A (full parity)**: all events. claude-code today; Codex lands
-  here via `hooks.json` with one documented caveat — its
+  here via launch-time hook overrides with one documented caveat — its
   PreToolUse/PostToolUse coverage has gaps (not all shell calls, no
   WebSearch-class tools), so the working heartbeat is partial and
   `health`'s stale thresholds need to tolerate it; opencode is
@@ -619,11 +639,13 @@ new seams through existing chokepoints; it does not move them.
 
 ## Migration across phases
 
-Workers pin their launch command, settings/hook routes, and env at
-creation time. Config changes (provider/harness/model) therefore apply
-to newly created or bounced workers only; live workers keep their pinned
-contract until recreated — the same staleness model the dashboard
-already has for rebuilds. The Phase 2 rename pairs the `readRegistry`
+Each execution resolves one immutable launch plan before it starts. Per-worker
+selections stamped on `WorkerEntry` survive resume and loop respawn; a worker
+that intentionally inherits the project's flat provider resolves that current
+project value on an explicit bounce. Config changes never mutate an already
+running pane. Runtime rules and hook paths are refreshed more aggressively:
+attach, bounce, and loop respawn rebuild them from the current Garden build and
+repository. The Phase 2 rename pairs the `readRegistry`
 migration with a transition window in which live workers still writing
 `agentStatus` are read correctly. Rollback at every phase is "remove
 the config key": running workers are unaffected and new workers fall
@@ -717,13 +739,13 @@ Verified Codex facts (0.142.5): headless `codex exec --json
 (recovered post-launch, not minted — the one real divergence from
 claude-code); transcript JSONL at
 `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<thread_id>.jsonl` (created
-on first run); hooks via `.codex/hooks.json` (stdin-JSON payload carrying
-`transcript_path`/`session_id`/`cwd`/`hook_event_name`, mapping 1:1 onto
-garden's wire events) but trust-gated → `--dangerously-bypass-hook-trust`
-is mandatory on the interactive worker launch for the event relay to
-fire (the headless reviewer omits it, so Codex skips the untrusted
-hooks — which is what a reviewer wants); rules via `AGENTS.md` (no
-system-prompt flag); Codex enforces its own sandbox (`--sandbox` modes).
+on first run); lifecycle hooks injected as launch-time `-c` overrides (a
+worktree-local `.codex/hooks.json` does not fire because Codex resolves
+project hooks at the repository root), with stdin-JSON payloads mapping onto
+Garden's wire events. `--dangerously-bypass-hook-trust` is mandatory on the
+interactive worker launch for that relay; the headless reviewer omits it and
+fires no worker relay. Rules arrive through `AGENTS.md` (no system-prompt
+flag); Codex enforces its own sandbox (`--sandbox` modes).
 
 Verified 2026-07-27 (codex 0.144.6): Codex's terminal title is real but
 carries no rolling summary. `[tui].terminal_title` takes a list of item
@@ -747,7 +769,7 @@ byte-identical, full gate green):
   `codex-core.ts` (headless command with the stdout/stderr split;
   `isTransientError` for OpenAI/Codex shapes; capabilities; the light
   methods incl. the rollout `readTurns`) + `codex.ts`
-  (`installRuntimeConfig` → `.codex/hooks.json`) + register in both
+  (`installRuntimeConfig` → trust, excludes, and managed `AGENTS.md`) + register in both
   registries. Selectable by nothing yet — the existing fleet is untouched.
 - **Slices B+C — reviewer-role resolution → Codex-as-reviewer. SHIPPED**
   (landed together — a Codex reviewer needs no per-worktree config, which
@@ -765,19 +787,16 @@ byte-identical, full gate green):
   provider-only Opus pin, each overridable). A Codex reviewer works because
   its prompt is delivered on stdin (no AGENTS.md), it authenticates itself
   (no env), and it omits `--dangerously-bypass-hook-trust` (fires no relay).
-  Deferred to the worker path: a *claude* reviewer installing its own
-  `.claude/` config into a *Codex worker's* worktree (only reachable once
-  Codex workers exist) and the union git-excludes that go with it.
+  Worker bootstrap retains the Claude runtime beside Codex's config, so a
+  default Claude reviewer in a Codex worktree keeps its sandbox and the shared
+  excludes contain both dialects.
 
-Then the **worker path** (second priority): interactive
-`buildAgentCommand`, a spike proving Codex fires `Stop` per-turn (the
-poller's liveness poke), session-identity recovery across
-newWorker/loop/bounce/resume, `--harness` worker selection with a runtime
-capability gate, the bootstrap config-install seam (stop inlining the
-claude dialect), the `continue.ts`/`header.ts`
-`deliverPrompt`/`readTurns` routing, and the full per-role resolver for
-the worker. AGENTS.md-collision handling (never clobber a repo's own
-`AGENTS.md`) and Codex sandbox/network translation live here.
+**Worker path. SHIPPED.** Interactive `buildAgentCommand`, Codex's per-turn
+event relay, session-id capture, `--harness` selection with capability gates,
+bootstrap/runtime install, prompt/transcript/activity routing, managed
+`AGENTS.md` composition, and Codex sandbox/network translation all ship. The
+remaining worker gaps are live verification of `codex resume` and
+Codex-aware unsent-draft detection.
 
 Resolved decisions: Codex-reviewer is primary and *not* Claude-locked;
 all three review roles default to explicit Opus; worker-provider stays
@@ -787,8 +806,8 @@ role is rejected in v1 (`ProviderProfile` is an `ANTHROPIC_*` env-swap
 descriptor that cannot describe a Codex backend); review-family knobs are
 project-config-only (no per-worker reviewer flag).
 
-**Phase 5 — Codex worker completion + opencode + fleet polish (on
-demand).** The Codex worker path above, then opencode (Tier A via its
+**Phase 5 — Codex completion + opencode + fleet polish (on demand).** Close
+the two remaining Codex worker gaps above, then add opencode (Tier A via its
 event bus) for open-source breadth beyond Ollama-behind-Claude, plus
 mixed-fleet `health`/`validate` and per-provider meters. Build when a
 concrete need appears.
@@ -826,6 +845,6 @@ concrete need appears.
   meter/usage commands no-op gracefully against third-party base URLs;
   whether hooks fire identically under `-p` on the pinned CLI version
   (the headless path's event needs are minimal — the FIFO poke comes
-  from the shell wrapper, not hooks, so exposure is low); Codex
-  hooks.json firing semantics under `codex exec`; whether Codex's
-  PostToolUse coverage gaps matter in practice for stale detection.
+  from the shell wrapper, not hooks, so exposure is low); live `codex resume`
+  behavior; Codex's unsent-draft prompt glyph; and whether Codex's PostToolUse
+  coverage gaps matter in practice for stale detection.

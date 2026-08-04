@@ -113,13 +113,10 @@ export function launchResolver(
     prompt,
     promptFile: reviewPromptPath(projectName, entry.name),
     resultFile: reviewResultPath(projectName, entry.name),
-    envPrefix: resolver.envPrefix,
+    launchPlan: resolver,
     envVars: { GARDEN_REVIEWER: "1" },
     signalFifo: signalFifoPath(projectName),
     onLaunched: () => scheduleReviewTimeoutPoke(projectName),
-    model: resolver.model,
-    effort: resolver.effort,
-    harness: resolver.harness,
   });
 
   const preResolveSha = getBranchHeadSha(wtPath);

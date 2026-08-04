@@ -24,7 +24,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts --passWithNoTests",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage --exclude 'test/integration/**'"
   },
   "dependencies": {
     "js-yaml": "^4.1.0"

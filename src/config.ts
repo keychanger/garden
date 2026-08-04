@@ -527,11 +527,10 @@ export function resolveProvider(
   };
 }
 
-// Mirrors tryResolveClaudeProfile: launch paths (dashboard attach, resume,
-// bounce) must not abort wholesale on a hand-broken config entry, so they
-// fall back to the first-party Anthropic path. `garden config <project>
-// provider` validates at set time, which makes this fallback unreachable
-// through the CLI.
+// Best-effort resolver for inspection/metering paths where an invalid profile
+// means "not a usable provider". Execution paths use resolveProvider through
+// resolveWorkerLaunchPlan and fail closed; falling back there would cross an
+// account/vendor boundary.
 export function tryResolveProvider(
   project: Pick<ProjectConfig, "provider">,
   config?: GardenConfig,
@@ -552,7 +551,11 @@ export function anyAnthropicMeteredProject(config?: GardenConfig): boolean {
   const cfg = config ?? loadConfig();
   const projects = Object.values(cfg.projects);
   if (projects.length === 0) return true;
-  return projects.some((p) => !p.provider);
+  // A broken provider reference cannot launch new work and is not evidence of
+  // a real third-party token pool. Keep the first-party meter alive
+  // conservatively (including for legacy panes launched before the config was
+  // damaged) rather than hiding it as though the fleet were provider-only.
+  return projects.some((p) => !p.provider || tryResolveProvider(p, cfg) === null);
 }
 
 // True when a project's workers draw tokens from a pool the default-account
@@ -560,14 +563,11 @@ export function anyAnthropicMeteredProject(config?: GardenConfig): boolean {
 // resolving to a config dir other than the default ~/.claude (a separate
 // Claude subscription). The auto-continue usage gate skips such projects —
 // pausing them on the default account's meters would strand work whose
-// tokens those meters never counted. This must mirror `workerEnvPrefix`
-// (claude-env.ts), which picks the pool the worker actually launches on.
-// Fails closed: an unknown project counts as metered; a configured-but-
-// unresolvable provider is NOT exempt on its own — like workerEnvPrefix it
-// falls back to the first-party path, so it falls through to the profile
-// check (default ~/.claude → metered); an unresolvable profile also counts
-// as metered. The gate then still applies unless the worker genuinely runs
-// on a non-default pool.
+// tokens those meters never counted. Fails closed: an unknown project counts
+// as metered; a configured-but-unresolvable provider is NOT exempt (worker
+// execution rejects that identity rather than changing accounts), and an
+// unresolvable profile also counts as metered. The gate therefore applies
+// unless the project genuinely resolves to a non-default pool.
 export function projectUsageGateExempt(projectName: string, config?: GardenConfig): boolean {
   const cfg = config ?? loadConfig();
   const project = cfg.projects[projectName];

@@ -19,7 +19,8 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import type { ProjectConfig } from "../../config.js";
 import { atomicWriteFile } from "../atomic-write.js";
-import { AGENTS_MARKER, composeAgentsMd } from "./agents-md.js";
+import { withFileLock } from "../file-lock.js";
+import { AGENTS_MARKER, composeAgentsMd, stripGardenRules } from "./agents-md.js";
 import { codexCore } from "./codex-core.js";
 import type { HarnessAdapter } from "./types.js";
 
@@ -37,9 +38,16 @@ function codexHome(): string {
 // worktree's .codex/hooks.json (it resolves project hooks at the repo root).
 // Rules delivery (AGENTS.md, loaded from the worktree cwd) is separate — it
 // needs the composed rules text and rides installCodexAgentsMd at spawn.
-function installRuntimeConfig(targetDir: string, _project: ProjectConfig): void {
+function installRuntimeConfig(
+  targetDir: string,
+  _project: ProjectConfig,
+  runtime?: { rulesText?: string },
+): void {
   ensureWorktreeExcludes(targetDir);
   ensureDirectoryTrust(targetDir);
+  if (runtime?.rulesText !== undefined) {
+    installCodexAgentsMd(targetDir, runtime.rulesText);
+  }
 }
 
 // Pre-seed the worktree's repository as a trusted project in
@@ -55,24 +63,26 @@ function installRuntimeConfig(targetDir: string, _project: ProjectConfig): void 
 // common dir's parent — NOT the worktree itself. Seeding the worktree path
 // leaves Codex still prompting ("Trusting will apply to the repository root:
 // <main>"). So garden seeds the repo root; one entry then covers every
-// worktree of the project. Idempotent; appended (garden seeds before launching
-// Codex, so there is no concurrent writer to clobber).
+// worktree of the project. Garden's read/check/append is serialized across
+// worker bootstraps so two simultaneous Codex launches cannot emit duplicate
+// TOML tables.
 function ensureDirectoryTrust(targetDir: string): void {
   const repoRoot = resolveRepoRoot(targetDir);
   if (!repoRoot) return;
   const cfg = path.join(codexHome(), "config.toml");
   const header = `[projects.${JSON.stringify(repoRoot)}]`;
-  let current = "";
   try {
-    current = fs.readFileSync(cfg, "utf-8");
-  } catch {
-    /* file may not exist yet — created by the append below */
-  }
-  if (current.includes(header)) return;
-  const sep = current === "" ? "" : current.endsWith("\n") ? "\n" : "\n\n";
-  try {
-    fs.mkdirSync(codexHome(), { recursive: true });
-    fs.appendFileSync(cfg, `${sep}${header}\ntrust_level = "trusted"\n`);
+    withFileLock(`${cfg}.garden.lock`, () => {
+      let current = "";
+      try {
+        current = fs.readFileSync(cfg, "utf-8");
+      } catch {
+        /* file may not exist yet — created by the append below */
+      }
+      if (current.includes(header)) return;
+      const sep = current === "" ? "" : current.endsWith("\n") ? "\n" : "\n\n";
+      fs.appendFileSync(cfg, `${sep}${header}\ntrust_level = "trusted"\n`);
+    }, { name: "codex-trust" });
   } catch {
     /* best effort — a missed trust entry surfaces as the interactive prompt */
   }
@@ -106,21 +116,33 @@ function resolveRepoRoot(targetDir: string): string | null {
 // the worktree AGENTS.md. If the repo ships its own, garden's rules are
 // prepended above a delimiter, the original preserved, and the file marked
 // skip-worktree so `git status` stays clean and it is never committed. If not,
-// garden writes it fresh (excluded via ensureWorktreeExcludes). Idempotent on
-// the marker. rulesText is the same composed rules a Claude worker gets via
-// --append-system-prompt-file.
+// garden writes it fresh (excluded via ensureWorktreeExcludes). On refresh,
+// the tracked repository portion comes from Git's index rather than the
+// skip-worktree file (which deliberately remains stale across branch updates);
+// the current file is only the fallback. This lets both Garden's rules and the
+// repository's own instructions advance without nesting markers. rulesText is
+// the same composed rules a Claude worker gets via --append-system-prompt-file.
 export function installCodexAgentsMd(targetDir: string, rulesText: string): void {
   const agentsPath = path.join(targetDir, "AGENTS.md");
   const tracked = isTracked(targetDir, "AGENTS.md");
+  let current = "";
+  try {
+    current = fs.readFileSync(agentsPath, "utf-8");
+  } catch {
+    /* missing AGENTS.md has an empty repository portion */
+  }
+  // On the first install, preserve the worktree's actual repository content
+  // (including a local edit) rather than replacing it with the index version.
+  // Once Garden owns the file, its marker tells us the worktree copy may be
+  // stale behind skip-worktree and the index becomes authoritative.
+  const original = tracked
+    ? current.startsWith(AGENTS_MARKER)
+      ? readTrackedAgentsMd(targetDir, current)
+      : current
+    : stripGardenRules(current);
+  const next = composeAgentsMd(rulesText, original);
+  if (next !== current) atomicWriteFile(agentsPath, next);
   if (tracked) {
-    let original = "";
-    try {
-      original = fs.readFileSync(agentsPath, "utf-8");
-    } catch {
-      /* tracked but missing in the worktree — treat as empty original */
-    }
-    if (original.startsWith(AGENTS_MARKER)) return;
-    atomicWriteFile(agentsPath, composeAgentsMd(rulesText, original));
     // Keep the local composition out of `git status` / commits.
     try {
       execFileSync("git", ["-C", targetDir, "update-index", "--skip-worktree", "AGENTS.md"]);
@@ -128,9 +150,19 @@ export function installCodexAgentsMd(targetDir: string, rulesText: string): void
       /* best effort */
     }
   } else {
-    atomicWriteFile(agentsPath, composeAgentsMd(rulesText, ""));
     // Untracked garden file — exclude it (ensureWorktreeExcludes carries the
     // AGENTS.md pattern) so it never appears in the worker's git status.
+  }
+}
+
+function readTrackedAgentsMd(targetDir: string, current: string): string {
+  try {
+    return execFileSync("git", ["-C", targetDir, "show", ":AGENTS.md"], {
+      encoding: "utf-8",
+    });
+  } catch {
+    // A damaged/mid-operation index should not erase repository instructions.
+    return stripGardenRules(current);
   }
 }
 

@@ -363,9 +363,9 @@ export interface WorkerEntry {
   // Harness adapter that drives this worker's agent CLI (launch dialect,
   // runtime config, transcript format, prompt delivery). Absent =
   // "claude-code" — consumers read with `getHarness(entry.harness)`,
-  // mirroring the `entry.workflow ?? "default"` pattern. No spawn-time
-  // selector exists yet; the field lands ahead of the second adapter so
-  // resume/bounce/loop paths thread it from day one.
+  // mirroring the `entry.workflow ?? "default"` pattern. New workers can
+  // select it directly or through a crew/build member; launch, resume,
+  // bounce, and loop all consume the same validated WorkerLaunchPlan.
   // See docs/MULTI-MODEL.md "Layer 3".
   harness?: string;
   // Per-worker provider backend (axis 1, the `harness` analog for axis 2) —
@@ -377,9 +377,9 @@ export interface WorkerEntry {
   // first-party — and must CLEAR a provider-backed project's key rather than
   // inherit it, or `claude` on such a project would launch against the
   // provider anyway (see `workerProject` in create.ts, the one decoder).
-  // Read by the launch/resume/bounce env
-  // builders (`workerEnvPrefix`) and by the usage gate, both of which resolve
-  // it through the same `resolveProvider` the project key uses — a worker on a
+  // Execution resolves it once into a validated WorkerLaunchPlan, whose
+  // environment projection is shared by launch/resume/bounce/loop. Read-only
+  // usage helpers resolve the same identity independently — a worker on a
   // provider spends a token pool the Claude meters do not describe, exactly
   // like a provider-backed project. NEVER consulted for the review family:
   // reviewer/resolver/ci-fix stay first-party by construction (a provider on

@@ -246,13 +246,10 @@ function launchHolisticFinalReview(
     prompt,
     promptFile: reviewPromptPath(projectName, entry.name),
     resultFile: reviewResultPath(projectName, entry.name),
-    envPrefix: reviewer.envPrefix,
+    launchPlan: reviewer,
     envVars: { GARDEN_REVIEWER: "1" },
     signalFifo: signalFifoPath(projectName),
     onLaunched: () => scheduleReviewTimeoutPoke(projectName),
-    model: reviewer.model,
-    effort: reviewer.effort,
-    harness: reviewer.harness,
   });
 
   const preReviewSha = getBranchHeadSha(wtPath) ?? undefined;

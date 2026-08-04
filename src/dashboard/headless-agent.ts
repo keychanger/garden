@@ -12,6 +12,7 @@ import fs from "node:fs";
 import { atomicWriteFile } from "./atomic-write.js";
 import { newDashboardWindow, windowExists, killWindowSafe, shellEscape } from "./tmux.js";
 import { getHarnessCore } from "./harness/core.js";
+import type { HeadlessLaunchPlan } from "./harness/types.js";
 
 export interface HeadlessAgentLaunchOptions {
   /** Working directory for the claude process (typically the worktree). */
@@ -24,8 +25,8 @@ export interface HeadlessAgentLaunchOptions {
   promptFile: string;
   /** Where claude writes stdout+stderr. Cleaned before launch. */
   resultFile: string;
-  /** Output of claudeEnvPrefix(project) — e.g. `CLAUDE_CONFIG_DIR=... `. May be empty. */
-  envPrefix: string;
+  /** Validated role/backend/model/policy tuple. */
+  launchPlan: HeadlessLaunchPlan;
   /** Additional env vars set inline before the claude invocation. e.g. `{ GARDEN_REVIEWER: "1" }`. */
   envVars?: Record<string, string>;
   /** FIFO poked when the agent exits. The shell guard `[ -p $FIFO ]` covers
@@ -37,24 +38,6 @@ export interface HeadlessAgentLaunchOptions {
    *  is created — typically schedules a delayed wake-up so the workflow's
    *  state handler can detect timeout on the next poll cycle. */
   onLaunched?: () => void;
-  /** Model to pass to claude via `--model`. When set, the inline command
-   *  becomes `claude -p --model <model> < prompt > result`. When unset
-   *  (default reviewer, default resolver), no `--model` flag is passed
-   *  and claude uses the account's default model. Opaque string (alias or
-   *  concrete model id). The trellis reviewer always sets "opus" per
-   *  WORKFLOWS.md Invariant 10 — reviewer quality is non-negotiable, so
-   *  the model is pinned regardless of the worker's model or quota state. */
-  model?: string;
-  /** Reasoning effort for this run, rendered by the harness (claude-code:
-   *  `--effort <level>`, valid alongside `-p`; a harness without the dial
-   *  ignores it). Levels low/medium/high/xhigh/max — no "ultra", since
-   *  ultracode is a worker-only preset rather than an effort value. Absent =
-   *  the harness/account default, which is the shipped behavior. */
-  effort?: string;
-  /** Harness adapter running this headless agent. Absent = claude-code.
-   *  This is the AGENT's harness (reviewer/resolver/ci-fix), independent
-   *  of the worker's — see docs/MULTI-MODEL.md "Mixed fleets". */
-  harness?: string;
 }
 
 export interface HeadlessAgentLaunchResult {
@@ -81,12 +64,10 @@ export function launchHeadlessAgent(
     : "";
   // The harness owns the agent invocation; the FIFO-poke suffix is garden's
   // completion signal and stays caller-composed.
-  const agentCmd = getHarnessCore(opts.harness).buildHeadlessCommand({
+  const agentCmd = getHarnessCore(opts.launchPlan.harness).buildHeadlessCommand({
     promptFile: opts.promptFile,
     resultFile: opts.resultFile,
-    model: opts.model,
-    effort: opts.effort,
-    envPrefix: opts.envPrefix,
+    launchPlan: opts.launchPlan,
     inlineEnv,
   });
   const cmd = `${agentCmd}; [ -p ${escapedFifo} ] && (echo > ${escapedFifo}) 2>/dev/null`;

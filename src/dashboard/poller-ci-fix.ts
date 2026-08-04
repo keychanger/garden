@@ -180,13 +180,10 @@ export function launchCiFix(
     prompt,
     promptFile: ciFixPromptPath(projectName, entry.name),
     resultFile: ciFixResultPath(projectName, entry.name),
-    envPrefix: ciFix.envPrefix,
+    launchPlan: ciFix,
     envVars: { GARDEN_REVIEWER: "1" },
     signalFifo: signalFifoPath(projectName),
     onLaunched: () => scheduleReviewTimeoutPoke(projectName),
-    model: ciFix.model,
-    effort: ciFix.effort,
-    harness: ciFix.harness,
   });
 
   const preCiFixSha = getBranchHeadSha(wtPath);

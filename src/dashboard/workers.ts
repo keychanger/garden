@@ -3,7 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { DASHBOARD_SESSION } from "../session.js";
-import { getProject, tryGetProject, tryResolveProvider, loadConfig, plotsMap } from "../config.js";
+import { getProject, tryGetProject, loadConfig, plotsMap } from "../config.js";
 import {
   syncProviderTokenToVault, providerTokenPresence, tmuxWorkerCommand,
 } from "./claude-env.js";
@@ -32,13 +32,15 @@ import { resolveAndApplyVineModel } from "./trellis-model.js";
 import { getWorkflow } from "./workflows/index.js";
 import {
   buildWorktreeBootstrapScript, buildWorktreeResumeCommand, buildResumeCommand,
-  createShellWindow, trellisRelativePathForEntry, workerProject,
+  buildWorktreeContextText, createShellWindow, trellisRelativePathForEntry,
+  type WorktreeCommandOptions,
 } from "./create.js";
 import { getHarness } from "./harness/index.js";
 import {
-  getHarnessCore, isRegisteredHarness, harnessNames, canonicalHarnessName,
-  workerLaunchCompatibilityError,
+  canonicalHarnessName,
 } from "./harness/core.js";
+import { resolveWorkerLaunchPlan } from "./launch-plan.js";
+import type { WorkerLaunchPlan } from "./harness/types.js";
 import { resolveGardenRunner } from "./runner.js";
 import {
   worktreePath, resolveBaseBranch, resolveSpawnBase, branchExistsOnOrigin, tryPublishBranch,
@@ -78,8 +80,8 @@ export interface NewWorkerOptions {
   // via ⌥n on the target project + ⌥w to cycle to it.
   background?: boolean;
   // Harness adapter for this worker (agent CLI in the pane). Defaults to
-  // claude-code. "codex" spawns a Codex worker (own sandbox, .codex/hooks.json
-  // event relay, AGENTS.md rules). Validated against the registry; an unknown
+  // claude-code. "codex" spawns a Codex worker (own sandbox, launch-time hook
+  // relay, AGENTS.md rules). Validated against the registry; an unknown
   // harness is refused. Persisted on entry.harness and threaded through
   // launch/resume/loop.
   harness?: string;
@@ -257,15 +259,22 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   // a bare omission here would silently hand a provider-backed project's
   // backend to a worker whose member said claude. The empty string is that
   // explicit-first-party marker (the same clear-by-empty idiom the spawn
-  // draft uses); workerProject in create.ts is the one reader that decodes it.
-  const providerStamp = memberNamed ? (namedProvider ?? "") : undefined;
+  // draft uses); resolveWorkerLaunchPlan is the decoder.
+  // A provider supplied by the project's bound crew must also be pinned: the
+  // project itself has no provider key for resume/bounce to inherit, and crew
+  // definitions are intentionally resolved only at spawn time for the worker
+  // half. Without the pin, the first launch uses the crew backend but the next
+  // resume silently switches to first-party credentials.
+  const providerStamp = memberNamed
+    ? (namedProvider ?? "")
+    : project.provider === undefined
+      ? projectCrew?.worker.provider
+      : undefined;
   // Validate a per-worker override before stamping: the operator named a
   // backend, so a name that resolves to nothing must fail loudly here rather
   // than silently launching first-party and billing the wrong pool. Scoped to
-  // the named member deliberately — an inherited project provider keeps its
-  // existing contract (validated at `garden config` set time, with
-  // workerEnvPrefix's warn-and-fall-back for a hand-broken config), so a
-  // config the operator has not touched can never be made unspawnable here.
+  // the named member deliberately; the structured launch-plan resolver below
+  // validates inherited project and project-crew providers as well.
   const providerOverride = memberNamed ? namedProvider : undefined;
   if (providerOverride && !gardenConfig.providers?.[providerOverride]) {
     const known = Object.keys(gardenConfig.providers ?? {});
@@ -280,26 +289,24 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   // --harness, the workflow picker, the project default), so the stamped
   // entry.harness is always a registry name.
   const resolvedHarness = rawHarness === undefined ? undefined : canonicalHarnessName(rawHarness);
-  if (resolvedHarness && !isRegisteredHarness(resolvedHarness)) {
-    tmuxDisplay(`Unknown harness '${resolvedHarness}'. Known: ${harnessNames().join(", ")}.`);
-    log.error("workers", "rejected newWorker: unknown harness", {
-      data: { project: targetProject, harness: resolvedHarness },
-    });
-    return null;
-  }
-  const compatibilityError = workerLaunchCompatibilityError(
-    getHarnessCore(resolvedHarness),
-    { workflow: workflowName, provider: rawProvider ?? null },
-  );
-  if (compatibilityError) {
-    tmuxDisplay(compatibilityError);
-    log.error("workers", "rejected newWorker: incompatible harness capabilities", {
+  let preflightPlan: WorkerLaunchPlan;
+  try {
+    preflightPlan = resolveWorkerLaunchPlan({
+      project: { ...project, provider: rawProvider },
+      harness: resolvedHarness,
+      workflow: workflowName,
+      resume: false,
+    }, gardenConfig);
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    tmuxDisplay(error);
+    log.error("workers", "rejected newWorker: invalid launch plan", {
       data: {
         project: targetProject,
         harness: resolvedHarness ?? "claude-code",
         workflow: workflowName,
         provider: rawProvider ?? null,
-        error: compatibilityError,
+        error,
       },
     });
     return null;
@@ -312,7 +319,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   // Resolved against the worker's OWN provider (which may differ from the
   // project's, or be absent where the project has one), so the token check
   // describes the endpoint this worker will actually reach.
-  const workerProvider = tryResolveProvider({ provider: rawProvider }, gardenConfig);
+  const workerProvider = preflightPlan.resolvedProvider;
   if (workerProvider) {
     syncProviderTokenToVault(workerProvider);
     const presence = providerTokenPresence(workerProvider);
@@ -477,7 +484,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // Session identity is harness-shaped (Claude Code accepts a minted
     // UUID; Codex assigns its own id post-launch, so its adapter returns the
     // empty sentinel — recovered from the hook payload later).
-    const sessionId = getHarness(resolvedHarness).allocateSessionId();
+    const sessionId = getHarness(preflightPlan.harness).allocateSessionId();
     const branchName = workerName;
     const wtPath = worktreePath(targetProject, workerName);
     return {
@@ -495,8 +502,9 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       // Harness adapter (agent CLI). Absent = claude-code; consumers read via
       // getHarness(entry.harness). Threaded into launch/resume/loop.
       ...(resolvedHarness ? { harness: resolvedHarness } : {}),
-      // Per-worker provider backend (the member's axis-1 half). Absent = the
-      // project key applies, so only a genuine per-worker override is stamped.
+      // Durable provider backend (the member's axis-1 half). Absent = the
+      // project's flat provider key applies; project-crew providers are pinned
+      // because no flat key exists for later resume paths to inherit.
       ...(providerStamp !== undefined ? { provider: providerStamp } : {}),
       // Per-worker crew — its review half, applied live by resolveReviewRole
       // (the build half is already folded into resolvedHarness above).
@@ -580,29 +588,24 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     }
   }
 
+  const launchPlan: WorkerLaunchPlan = {
+    ...preflightPlan,
+    model: resolvedModel,
+    ultracode: ultracode || undefined,
+    effort: effectiveEffort,
+  };
+
   // Write the bootstrap script that handles slow setup (git fetch, worktree
   // creation, npm install) inside the tmux pane so the window appears instantly
-  // with progress output instead of blocking the hotkey handler. Default
-  // workers omit the options argument entirely (preserves arity for existing
-  // callers and tests).
-  const bootstrapOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string; provider?: string; botanist?: boolean } = {};
+  // with progress output instead of blocking the hotkey handler. Every
+  // production spawn carries the resolved launch plan through this boundary.
+  const bootstrapOpts: WorktreeCommandOptions = { launchPlan };
   if (trellisRelativePath) bootstrapOpts.trellisRelativePath = trellisRelativePath;
-  if (resolvedModel) bootstrapOpts.model = resolvedModel;
-  if (ultracode) bootstrapOpts.ultracode = true;
-  if (effectiveEffort) bootstrapOpts.effort = effectiveEffort;
-  if (resolvedHarness) bootstrapOpts.harness = resolvedHarness;
-  // Only a per-worker override needs threading — the project key is read
-  // from config by the launch builders themselves.
-  if (providerStamp !== undefined) bootstrapOpts.provider = providerStamp;
   if (workflowName === "botanist") bootstrapOpts.botanist = true;
-  const scriptFile = (bootstrapOpts.trellisRelativePath || bootstrapOpts.model || bootstrapOpts.ultracode || bootstrapOpts.effort || bootstrapOpts.harness || bootstrapOpts.provider || bootstrapOpts.botanist)
-    ? buildWorktreeBootstrapScript(
-        project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
-        bootstrapOpts,
-      )
-    : buildWorktreeBootstrapScript(
-        project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
-      );
+  const scriptFile = buildWorktreeBootstrapScript(
+    project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
+    bootstrapOpts,
+  );
 
   const workerWindowName = workerWin(targetProject, workerName);
 
@@ -630,7 +633,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         "sh", "-c", "exec sleep 86400");
       if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
       tmuxWorkerCommand(
-        workerProject(project, providerStamp),
+        launchPlan,
         "respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd,
       );
       if (workerPaneId) {
@@ -669,7 +672,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
           "sh", "-c", "exec sleep 86400");
         if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
         tmuxWorkerCommand(
-          workerProject(project, providerStamp),
+          launchPlan,
           "respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd,
         );
         if (workerPaneId) setPaneLabel(workerPaneId, workerName);
@@ -944,18 +947,16 @@ export function bounceWorker(projectName: string, workerName: string): void {
   const baseBranch = entry.baseBranch
     ?? (projectInfo ? resolveBaseBranch(projectInfo.path) : undefined);
 
-  const launchProject = projectInfo
-    ? workerProject(projectInfo, entry.provider)
-    : null;
-  const compatibilityError = workerLaunchCompatibilityError(
-    getHarnessCore(entry.harness),
-    {
-      workflow: entry.workflow ?? "default",
-      provider: launchProject?.provider ?? null,
-      resume: true,
-    },
-  );
-  if (compatibilityError) throw new Error(compatibilityError);
+  const launchPlan = resolveWorkerLaunchPlan({
+    project: projectInfo ?? { path: entry.worktreePath ?? "" },
+    provider: entry.provider,
+    harness: entry.harness,
+    workflow: entry.workflow ?? "default",
+    resume: true,
+    model: entry.model,
+    ultracode: entry.ultracode,
+    effort: entry.effort,
+  });
 
   // Rewrite .claude/settings.json so bounce picks up hook/sandbox
   // changes from a rebuilt garden. buildWorktreeResumeCommand doesn't do
@@ -964,42 +965,41 @@ export function bounceWorker(projectName: string, workerName: string): void {
   // The worker's own backend, so a bounce cannot rewrite the sandbox's egress
   // allowlist back to the project's provider under a worker launching at
   // another (`""` = explicitly first-party — see workerProject).
-  if (entry.worktreePath && launchProject) {
-    getHarness(entry.harness).installRuntimeConfig(
-      entry.worktreePath, launchProject,
-    );
-  }
-
   const trellisRelativePath = projectInfo
     ? trellisRelativePathForEntry(entry, projectInfo.path)
     : undefined;
   // entry.model carries the default/grow per-worker pin; trellis vines
-  // resolve their model per iteration, not on bounce. Plain workers omit
-  // the options arg so existing tests (which assert exact argument arity)
-  // still pass.
-  const resumeOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string; provider?: string } = {};
+  // resolve their model per iteration, not on bounce.
+  const resumeOpts: WorktreeCommandOptions = { launchPlan };
   if (trellisRelativePath) resumeOpts.trellisRelativePath = trellisRelativePath;
-  if (entry.model) resumeOpts.model = entry.model;
-  if (entry.ultracode) resumeOpts.ultracode = true;
-  if (entry.effort) resumeOpts.effort = entry.effort;
-  if (entry.harness) resumeOpts.harness = entry.harness;
-  // `!== undefined`, not truthy: the empty string is the explicit-first-party
-  // marker and must survive a bounce exactly like a named backend does.
-  if (entry.provider !== undefined) resumeOpts.provider = entry.provider;
+  if (entry.workflow === "grow" && entry.grow) {
+    resumeOpts.grow = {
+      iteration: entry.grow.iteration ?? 0,
+      maxIterations: entry.grow.maxIterations ?? 5,
+    };
+  }
+  if (entry.workflow === "botanist") resumeOpts.botanist = true;
+  if (entry.worktreePath && projectInfo && entry.branchName) {
+    getHarness(launchPlan.harness).installRuntimeConfig(
+      entry.worktreePath,
+      launchPlan.runtimeProject,
+      {
+        rulesText: buildWorktreeContextText(
+          projectName, projectInfo.path, entry.branchName, baseBranch, resumeOpts,
+        ),
+      },
+    );
+  }
   const resumeCmd = entry.worktreePath && entry.branchName && projectInfo
-    ? (resumeOpts.trellisRelativePath || resumeOpts.model || resumeOpts.ultracode || resumeOpts.effort || resumeOpts.harness || resumeOpts.provider !== undefined
-        ? buildWorktreeResumeCommand(
-            projectName, projectInfo.path, entry.name, entry.branchName,
-            entry.sessionId, baseBranch, resumeOpts,
-          )
-        : buildWorktreeResumeCommand(
-            projectName, projectInfo.path, entry.name, entry.branchName,
-            entry.sessionId, baseBranch,
-          ))
+    ? buildWorktreeResumeCommand(
+        projectName, projectInfo.path, entry.name, entry.branchName,
+        entry.sessionId, baseBranch, resumeOpts,
+      )
     : buildResumeCommand(
         projectName,
         projectInfo?.path ?? entry.worktreePath ?? "",
         entry.sessionId,
+        launchPlan,
       );
 
   // Resolve the post-resume status from the pre-bounce entry, before we
@@ -1014,7 +1014,7 @@ export function bounceWorker(projectName: string, workerName: string): void {
   if (cwd) respawnArgs.push("-c", cwd);
   respawnArgs.push("-t", paneId, "sh", "-c", resumeCmd);
   tmuxWorkerCommand(
-    launchProject ?? { provider: undefined },
+    launchPlan,
     ...respawnArgs,
   );
 

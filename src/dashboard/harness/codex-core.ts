@@ -169,7 +169,7 @@ function quotaLimitResetHint(output: string): string | null {
 
 export const codexCore: HarnessCore = {
   name: "codex",
-  // Tier A intent: Codex 0.142.5's hooks.json covers the full lifecycle
+  // Tier A intent: Codex's hook surface covers the full lifecycle
   // (SessionStart/UserPromptSubmit/PreToolUse/PostToolUse/PermissionRequest/
   // Stop). toolActivity is declared true though Codex's PreToolUse/PostToolUse
   // coverage is partial (not all shell calls) — the worker-path slices tune
@@ -186,6 +186,7 @@ export const codexCore: HarnessCore = {
     skills: false,
     providerProfiles: false,
     workerWorkflows: ["default"],
+    headlessRoles: ["reviewer", "resolver", "ciFix"],
   },
 
   // Codex assigns its OWN session id (thread_id) at launch — garden cannot
@@ -201,8 +202,8 @@ export const codexCore: HarnessCore = {
   // No --session-id (Codex assigns its own id) and no system-prompt flag —
   // garden's rules reach Codex via AGENTS.md (installRuntimeConfig). The
   // event relay REQUIRES --dangerously-bypass-hook-trust: garden's
-  // programmatically-written .codex/hooks.json is untrusted, so without the
-  // bypass Codex silently skips every hook and no turn-end/status reaches the
+  // programmatically-injected hook config is untrusted, so without the bypass
+  // Codex silently skips every hook and no turn-end/status reaches the
   // poller (verified 2026-07-06: Stop fires per turn interactively with the
   // bypass). Resume is the `codex resume <session-id>` subcommand.
   //
@@ -212,24 +213,25 @@ export const codexCore: HarnessCore = {
   // reviewer is short-lived and garden owns its trust boundary. A looping
   // worker running unbounded model-generated commands must stay confined.
   buildAgentCommand(opts: AgentCommandOptions): string {
-    // opts.ultracode is a claude-code preset with no Codex analog and stays a
-    // no-op. opts.effort DOES map: Codex's reasoning rung is the
+    const plan = opts.launchPlan;
+    // plan.ultracode is a claude-code preset with no Codex analog and stays a
+    // no-op. plan.effort DOES map: Codex's reasoning rung is the
     // `model_reasoning_effort` config key, so it rides the same `-c` override
     // channel as the hooks and sandbox rather than a flag. The rung vocabulary
     // is per-model and comes from Codex's own catalog (CODEX_EFFORT_LEVELS,
     // codex-models.ts) — it is NOT WORKER_EFFORT_LEVELS, so no value mapping
     // happens here; the composer offers the Codex rungs directly and this
     // passes the operator's choice through verbatim.
-    const modelFlag = opts.model ? ` -m ${shellEscape(opts.model)}` : "";
-    const effortFlag = opts.effort
-      ? ` -c ${shellEscape(`model_reasoning_effort=${opts.effort}`)}`
+    const modelFlag = plan.model ? ` -m ${shellEscape(plan.model)}` : "";
+    const effortFlag = plan.effort
+      ? ` -c ${shellEscape(`model_reasoning_effort=${plan.effort}`)}`
       : "";
     const trust = "--dangerously-bypass-hook-trust";
     const sandbox = codexSandboxFlags(opts.worktreeGitDir);
     const hooks = codexHookFlags(resolveHookRunner());
     return opts.resume
-      ? `${opts.envPrefix}codex resume ${shellEscape(opts.sessionId)} ${trust} ${sandbox} ${hooks}${modelFlag}${effortFlag}`
-      : `${opts.envPrefix}codex ${trust} ${sandbox} ${hooks}${modelFlag}${effortFlag}`;
+      ? `${plan.envPrefix}codex resume ${shellEscape(opts.sessionId)} ${trust} ${sandbox} ${hooks}${modelFlag}${effortFlag}`
+      : `${plan.envPrefix}codex ${trust} ${sandbox} ${hooks}${modelFlag}${effortFlag}`;
   },
 
   // Headless one-shot (reviewer/resolver/ci-fix) — the spike-verified path.
@@ -241,12 +243,13 @@ export const codexCore: HarnessCore = {
   // own. --dangerously-bypass-approvals-and-sandbox lets the reviewer edit,
   // commit, and push under garden's trust boundary (garden owns the sandbox).
   buildHeadlessCommand(opts: HeadlessCommandOptions): string {
-    // opts.effort is a claude-code dial and is ignored here, mirroring the
-    // worker builder's treatment of effort/ultracode. A codex mapping
-    // (model_reasoning_effort) can be added when a codex reviewer needs one.
-    const modelFlag = opts.model ? ` -m ${shellEscape(opts.model)}` : "";
+    const plan = opts.launchPlan;
+    // Review-role effort is currently a claude-code-only configuration dial,
+    // so a Codex headless plan ignores it. A `model_reasoning_effort` mapping
+    // can be added when the role surface gains a Codex effort vocabulary.
+    const modelFlag = plan.model ? ` -m ${shellEscape(plan.model)}` : "";
     const err = shellEscape(codexStderrSidecar(opts.resultFile));
-    return `${opts.inlineEnv}${opts.envPrefix}codex exec --dangerously-bypass-approvals-and-sandbox${modelFlag}`
+    return `${opts.inlineEnv}${plan.envPrefix}codex exec --dangerously-bypass-approvals-and-sandbox${modelFlag}`
       + ` < ${shellEscape(opts.promptFile)} > ${shellEscape(opts.resultFile)} 2> ${err}`;
   },
 

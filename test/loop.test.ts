@@ -11,14 +11,22 @@ vi.mock("node:fs", () => ({
   },
 }));
 
-vi.mock("../src/config.js", () => ({
-  tryGetProject: vi.fn(),
-  tryResolveClaudeProfile: vi.fn(() => null),
-  tryResolveProvider: vi.fn(() => null),
-  anyAnthropicMeteredProject: vi.fn(() => true),
-  ENV_VAR_NAME_RE: /^[A-Z_][A-Z0-9_]*$/,
-  SESSIONS_DIR: "/tmp/garden-sessions-test",
-}));
+vi.mock("../src/config.js", () => {
+  const tryResolveProvider = vi.fn(() => null);
+  return {
+    tryGetProject: vi.fn(),
+    tryResolveClaudeProfile: vi.fn(() => null),
+    tryResolveProvider,
+    resolveProvider: vi.fn((project: { provider?: string }) => {
+      const provider = tryResolveProvider(project);
+      if (project.provider && !provider) throw new Error(`Unknown provider '${project.provider}'.`);
+      return provider;
+    }),
+    anyAnthropicMeteredProject: vi.fn(() => true),
+    ENV_VAR_NAME_RE: /^[A-Z_][A-Z0-9_]*$/,
+    SESSIONS_DIR: "/tmp/garden-sessions-test",
+  };
+});
 
 vi.mock("../src/session.js", () => ({
   DASHBOARD_SESSION: "garden-dashboard",
@@ -53,6 +61,7 @@ vi.mock("../src/dashboard/log.js", () => ({
 
 vi.mock("../src/dashboard/create.js", () => ({
   buildWorktreeWorkerCommand: vi.fn(() => "claude --resume sess-mock"),
+  buildWorktreeContextText: vi.fn(() => "rules"),
   // Pure helper — real semantics ("" clears the project's provider, absent
   // inherits it), so the respawn's runtime-config view is genuinely exercised.
   workerProject: (project: { provider?: string }, provider: string | undefined) =>
@@ -326,6 +335,7 @@ describe("loopAutoContinueAfterMerge", () => {
     expect(vi.mocked(getHarness)().installRuntimeConfig).toHaveBeenCalledWith(
       "/tmp/wt/myproject/bold-ash",
       expect.objectContaining({ path: "/tmp/projects/myproject" }),
+      { rulesText: "rules" },
     );
 
     // updateWorkerFields includes a fresh sessionId (different from the old)
@@ -354,7 +364,10 @@ describe("loopAutoContinueAfterMerge", () => {
       "bold-ash",
       expect.any(String), // sessionId
       "main",             // baseBranch
-      { trellisRelativePath: ".garden/trellises/foo.md" },
+      expect.objectContaining({
+        trellisRelativePath: ".garden/trellises/foo.md",
+        launchPlan: expect.objectContaining({ harness: "claude-code", role: "worker" }),
+      }),
     );
 
     // The continue prompt was built via hooks (workflow-specific) and stashed
@@ -369,6 +382,39 @@ describe("loopAutoContinueAfterMerge", () => {
       "myproject",
       "bold-ash",
       expect.stringMatching(/trellis-seed-myproject-bold-ash-\d+\.txt$/),
+    );
+  });
+
+  it("preserves entry tuning across a grow cold-respawn", () => {
+    vi.mocked(findWorkerByName).mockReturnValue(makeWorker({
+      workflow: "grow",
+      model: "sonnet",
+      effort: "xhigh",
+      grow: { seed: "keep improving", iteration: 1, maxIterations: 5 },
+    }));
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+
+    expect(loopAutoContinueAfterMerge(
+      "myproject", "bold-ash", makeHooks(),
+      { grow: { iteration: 2, maxIterations: 5 } },
+    )).toBe(true);
+
+    expect(buildWorktreeWorkerCommand).toHaveBeenCalledWith(
+      "myproject",
+      "/tmp/projects/myproject",
+      "bold-ash",
+      "bold-ash",
+      expect.any(String),
+      "main",
+      expect.objectContaining({
+        launchPlan: expect.objectContaining({
+          model: "sonnet",
+          effort: "xhigh",
+        }),
+      }),
     );
   });
 

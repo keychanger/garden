@@ -11,7 +11,8 @@ import path from "node:path";
 
 export interface AtomicWriteOpts {
   mode?: number;
-  // Flush the tmp file to stable storage before the rename (default true).
+  // Flush the tmp file before rename and the parent directory afterward
+  // (default true).
   // Set false for throwaway files that a crash can safely lose because the
   // next event rebuilds them — the repaint render caches (status.rendered,
   // usage.rendered, history.rendered, plot-strip.template). fsync is ~97% of
@@ -59,6 +60,16 @@ export function atomicWriteFile(
       } catch { /* durability is best-effort */ }
     }
     fs.renameSync(tmpFile, filePath);
+    // Persist the directory entry created by rename. Flushing only the file's
+    // bytes leaves a power-loss window where the new name itself can vanish.
+    // Directory fsync is unsupported on some filesystems/platforms, so it has
+    // the same best-effort contract as the file flush above.
+    if (opts?.durable !== false) {
+      try {
+        const dirFd = fs.openSync(path.dirname(filePath), "r");
+        try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+      } catch { /* durability is best-effort */ }
+    }
   } catch (err) {
     try { fs.unlinkSync(tmpFile); } catch { /* tmp may not exist */ }
     throw err;

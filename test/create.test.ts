@@ -25,17 +25,29 @@ vi.mock("../src/session.js", () => ({
   DASHBOARD_SESSION: "garden-dashboard",
 }));
 
-vi.mock("../src/config.js", () => ({
-  logColorKeyForProject: vi.fn(() => null),
-  loadConfig: vi.fn(() => ({ projects: { myproject: { path: "/repo/myproject" } } })),
-  tryGetProject: vi.fn(() => ({ path: "/repo/myproject" })),
-  tryResolveClaudeProfile: vi.fn(() => null),
-  tryResolveProvider: vi.fn(() => null),
-  anyAnthropicMeteredProject: vi.fn(() => true),
-  ENV_VAR_NAME_RE: /^[A-Z_][A-Z0-9_]*$/,
-  getFocusedProjectNames: vi.fn(() => ["myproject"]),
-  SESSIONS_DIR: "/tmp/fake-sessions",
-}));
+vi.mock("../src/config.js", () => {
+  const tryResolveProvider = vi.fn(() => null);
+  const loadConfig = vi.fn(() => ({ projects: { myproject: { path: "/repo/myproject" } } }));
+  return {
+    logColorKeyForProject: vi.fn(() => null),
+    loadConfig,
+    tryGetProject: vi.fn(() => ({ path: "/repo/myproject" })),
+    tryResolveClaudeProfile: vi.fn(() => null),
+    tryResolveProvider,
+    resolveProvider: vi.fn((project: { provider?: string }, config?: { providers?: Record<string, Record<string, unknown>> }) => {
+      const provider = tryResolveProvider(project);
+      if (provider) return provider;
+      if (!project.provider) return null;
+      const definition = (config ?? loadConfig()).providers?.[project.provider];
+      if (!definition) throw new Error(`Unknown provider '${project.provider}'.`);
+      return { ...definition, name: project.provider, label: definition.label ?? project.provider };
+    }),
+    anyAnthropicMeteredProject: vi.fn(() => true),
+    ENV_VAR_NAME_RE: /^[A-Z_][A-Z0-9_]*$/,
+    getFocusedProjectNames: vi.fn(() => ["myproject"]),
+    SESSIONS_DIR: "/tmp/fake-sessions",
+  };
+});
 
 vi.mock("../src/rules.js", () => ({
   buildRulesContext: vi.fn(() => "rules"),
@@ -170,6 +182,7 @@ import {
   respawnWorkerWindow,
 } from "../src/dashboard/create.js";
 import { tmux, newDashboardWindow, tmuxSplit, getFirstPaneId, setPaneLabel, setPaneTitle, setPaneVar, shellEscape, disablePaneInput, killWindowSafe } from "../src/dashboard/tmux.js";
+import { tryGetProject, tryResolveProvider } from "../src/config.js";
 
 const savedArgv1 = process.argv[1];
 afterAll(() => { process.argv[1] = savedArgv1; });
@@ -177,6 +190,8 @@ afterAll(() => { process.argv[1] = savedArgv1; });
 beforeEach(() => {
   vi.clearAllMocks();
   process.argv[1] = "/usr/local/bin/garden";
+  vi.mocked(tryGetProject).mockReset().mockReturnValue({ path: "/repo/myproject" });
+  vi.mocked(tryResolveProvider).mockReset().mockReturnValue(null);
 });
 
 describe("claude-code adapter installRuntimeConfig", () => {

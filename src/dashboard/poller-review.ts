@@ -23,6 +23,7 @@ import { getWorkflow } from "./workflows/index.js";
 import { isPublishablePath } from "./botanist-paths.js";
 import { refreshDashboard } from "./header.js";
 import { launchHeadlessAgent } from "./headless-agent.js";
+import { resolveHeadlessLaunchPlan } from "./launch-plan.js";
 import { log } from "./log.js";
 import { persistIteration } from "./loop.js";
 import { buildReviewPrompt } from "./prompts.js";
@@ -1819,11 +1820,12 @@ function launchReview(
   // resumes automatically (see handleQuotaFallbackReview).
   const projectCfg = tryGetProject(projectName) ?? {};
   const reviewer = entry.reviewFallbackHarness
-    ? {
+    ? resolveHeadlessLaunchPlan({
+        role: "reviewer",
         harness: entry.reviewFallbackHarness,
         model: SAFE_REVIEW_MODEL,
         envPrefix: reviewerEnvPrefix(projectCfg),
-      }
+      })
     : resolveReviewRole(projectCfg, entry.workflow ?? "default", "reviewer", undefined, entry);
   const revWindow = reviewWindowName(projectName, entry.name);
   launchHeadlessAgent({
@@ -1832,13 +1834,10 @@ function launchReview(
     prompt,
     promptFile: reviewPromptPath(projectName, entry.name),
     resultFile: reviewResultPath(projectName, entry.name),
-    envPrefix: reviewer.envPrefix,
+    launchPlan: reviewer,
     envVars: { GARDEN_REVIEWER: "1" },
     signalFifo: signalFifoPath(projectName),
     onLaunched: () => scheduleReviewTimeoutPoke(projectName),
-    model: reviewer.model,
-    effort: reviewer.effort,
-    harness: reviewer.harness,
   });
 
   // Capture the remote tracking SHA at launch time. handleReviewing compares

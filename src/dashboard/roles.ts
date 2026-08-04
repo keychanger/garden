@@ -4,31 +4,20 @@
 // (`garden config <p> role reviewer harness codex`) while keeping the safety
 // net intact — the default is always a strong first-party Anthropic reviewer.
 //
-// The worker role resolves elsewhere (workerEnvPrefix + entry.harness/model);
-// worker harness selection lands in the worker-path slice. Kept separate on
-// purpose: roles are INDEPENDENTLY knobbed, never a shared model setting.
+// The worker role resolves through resolveWorkerLaunchPlan; this file stays
+// separate because review roles are INDEPENDENTLY knobbed, never a shared
+// worker model/backend setting.
 // See docs/MULTI-MODEL.md "Phase 4".
 import { loadConfig, type GardenConfig, type ProjectConfig } from "../config.js";
 import { reviewerEnvPrefix } from "./claude-env.js";
 import { getWorkflow } from "./workflows/index.js";
 import { getCrew, resolveProjectCrew } from "./crew.js";
 import type { WorkerEntry } from "./registry.js";
+import { resolveHeadlessLaunchPlan } from "./launch-plan.js";
+import type { HeadlessLaunchPlan, HeadlessRole } from "./harness/types.js";
 
-export type ReviewRole = "reviewer" | "resolver" | "ciFix";
-
-export interface ReviewRoleResolution {
-  /** Harness adapter that runs this role (default "claude-code"). */
-  harness: string;
-  /** Model to pass the harness, or undefined for its own default. */
-  model?: string;
-  /** Reasoning effort, or undefined for the harness default. Resolved on the
-   *  same chain as model; there is no safe-default floor (unlike
-   *  SAFE_REVIEW_MODEL) because an unset effort already means "whatever the
-   *  account does by default", which is the shipped behavior. */
-  effort?: string;
-  /** Env-assignment prefix for the launch (harness-aware). */
-  envPrefix: string;
-}
+export type ReviewRole = HeadlessRole;
+export type ReviewRoleResolution = HeadlessLaunchPlan;
 
 // Operator choice (2026-07): the review family defaults to explicit strong
 // Anthropic Opus, so a cheap or experimental worker is never reviewed,
@@ -94,5 +83,5 @@ export function resolveReviewRole(
     ? (entryCrew?.review.effort ?? target.effort ?? projectCrew?.review.effort)
     : undefined;
   const envPrefix = harness === "claude-code" ? reviewerEnvPrefix(project, config) : "";
-  return { harness, model, effort, envPrefix };
+  return resolveHeadlessLaunchPlan({ role, harness, model, effort, envPrefix });
 }

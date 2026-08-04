@@ -6,6 +6,7 @@ import {
 import { shellEscape, tmux, tmuxOutput, tmuxWithHiddenEnvironment } from "./tmux.js";
 import { DASHBOARD_SESSION, dashboardExists } from "../session.js";
 import { log } from "./log.js";
+import type { WorkerLaunchPlan } from "./harness/types.js";
 
 export function claudeConfigDirFor(
   project: Pick<ProjectConfig, "claudeProfile">,
@@ -35,19 +36,16 @@ export function claudeEnvObject(
   return dir ? { CLAUDE_CONFIG_DIR: dir } : {};
 }
 
-// Env prefix for a WORKER session: the project's provider env when one is
-// configured, else the first-party claudeProfile env. Used by every worker
-// launch/resume/bootstrap command builder in create.ts.
+// Legacy/best-effort worker env helper. Production launch boundaries derive
+// this once in resolveWorkerLaunchPlan, which resolves providers strictly.
 export function workerEnvPrefix(
   project: Pick<ProjectConfig, "claudeProfile" | "provider">,
   config?: GardenConfig,
 ): string {
   const provider = tryResolveProvider(project, config);
   if (provider) return providerEnvPrefix(provider);
-  // A configured-but-unresolvable provider falls back to the first-party
-  // path (matching the claudeProfile fallback idiom so launch paths never
-  // abort wholesale) — but unlike a profile fallback this crosses a vendor
-  // and spend boundary, so it must be loud, not silent.
+  // Best-effort callers retain the historical loud fallback. Launch callers
+  // never reach it: resolveWorkerLaunchPlan rejects the invalid identity.
   if (project.provider) {
     log.warn("provider", "provider failed to resolve; worker falling back to the first-party Anthropic path", {
       data: { provider: project.provider },
@@ -262,10 +260,10 @@ export function providerTokenPresence(
 // for the single atomic command queue that creates or respawns this worker.
 // Non-provider workers retain the ordinary tmux path byte-for-byte.
 export function tmuxWorkerCommand(
-  project: Pick<ProjectConfig, "provider">,
+  launchPlan: WorkerLaunchPlan,
   ...args: string[]
 ): void {
-  const provider = tryResolveProvider(project);
+  const provider = launchPlan.resolvedProvider;
   if (!provider) {
     tmux(...args);
     return;
