@@ -120,6 +120,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   listAllWindowNames: vi.fn(() => []),
   disablePaneInput: vi.fn(),
   lockPaneMouse: vi.fn(),
+  killWindowSafe: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/registry.js", () => ({
@@ -168,7 +169,7 @@ import {
   buildWorktreeResumeCommand,
   respawnWorkerWindow,
 } from "../src/dashboard/create.js";
-import { tmux, newDashboardWindow, tmuxSplit, getFirstPaneId, setPaneLabel, setPaneTitle, setPaneVar, shellEscape, disablePaneInput } from "../src/dashboard/tmux.js";
+import { tmux, newDashboardWindow, tmuxSplit, getFirstPaneId, setPaneLabel, setPaneTitle, setPaneVar, shellEscape, disablePaneInput, killWindowSafe } from "../src/dashboard/tmux.js";
 
 const savedArgv1 = process.argv[1];
 afterAll(() => { process.argv[1] = savedArgv1; });
@@ -425,6 +426,34 @@ describe("respawnWorkerWindow capability gate", () => {
 
     expect(result).toBeNull();
     expect(newDashboardWindow).not.toHaveBeenCalled();
+  });
+
+  // The attach-time resume loop calls this before keybindings, the pollers,
+  // and the watchdog are started, so an escaping launch error takes the whole
+  // dashboard down with it — dead hotkeys and no review pipeline for every
+  // project — over one worker whose provider token is in neither the shell nor
+  // the vault. Report it as an unresumed worker (null) instead, and don't
+  // leave the placeholder window standing in for a worker that never launched.
+  it("reports a failed provider launch as unresumed rather than throwing", async () => {
+    const { tryResolveProvider } = await import("../src/config.js");
+    vi.mocked(tryResolveProvider).mockReturnValue({
+      name: "deepseek", label: "deepseek",
+      baseUrl: "https://api.deepseek.com/anthropic",
+      authTokenEnv: "DEEPSEEK_API_KEY_ABSENT",
+    });
+    try {
+      const result = respawnWorkerWindow(
+        "myproject",
+        { name: "myproject", path: "/repo/myproject", provider: "deepseek" },
+        { name: "bold-ash", sessionId: "session-1", task: "", workflow: "default" },
+        null,
+      );
+
+      expect(result).toBeNull();
+      expect(killWindowSafe).toHaveBeenCalledWith("_myproject-worker-bold-ash");
+    } finally {
+      vi.mocked(tryResolveProvider).mockReturnValue(null);
+    }
   });
 });
 

@@ -19,6 +19,7 @@ import {
   tmux, tmuxOutput, tmuxSplit, setPaneTitle, setPaneLabel, setPaneVar,
   getFirstPaneId, shellEscape, tmuxDoubleQuote, newDashboardWindow,
   getPaneSize, resizeWindow, listSessionPanes, disablePaneInput, lockPaneMouse,
+  killWindowSafe,
 } from "./tmux.js";
 import { readRegistry, updateWorkerFields, resolveResumeAgentStatus, type WorkerEntry } from "./registry.js";
 import { log, truncateLog } from "./log.js";
@@ -1083,10 +1084,29 @@ export function respawnWorkerWindow(
   if (size) resizeWindow(workerWindowName, size.width, size.height);
   const workerPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindowName}`);
   if (workerPaneId) {
-    tmuxWorkerCommand(
-      launchProject,
-      "respawn-pane", "-k", "-c", workerCwd, "-t", workerPaneId, "sh", "-c", resumeCmd,
-    );
+    try {
+      tmuxWorkerCommand(
+        launchProject,
+        "respawn-pane", "-k", "-c", workerCwd, "-t", workerPaneId, "sh", "-c", resumeCmd,
+      );
+    } catch (err) {
+      // One worker failing to relaunch is that worker's problem, not the
+      // dashboard's. The attach-time resume loop calls this BEFORE keybindings,
+      // the per-project pollers, and the watchdog are started, so an escaping
+      // error (tmuxWorkerCommand throws when a provider's token is in neither
+      // the operator's shell nor the hidden vault — the ordinary case for a
+      // fresh tmux server opened from a shell that never exported the key)
+      // would leave the whole fleet with dead hotkeys and no review pipeline.
+      // Report it the way an unresumable entry is already reported — null,
+      // which both callers handle — and take the placeholder window back down
+      // so no empty pane is left claiming to be the worker.
+      log.error("workers", "worker resume failed; leaving the worker unresumed", {
+        worker: entry.name,
+        data: { project: projectName, error: String(err) },
+      });
+      killWindowSafe(workerWindowName);
+      return null;
+    }
     setPaneLabel(workerPaneId, entry.name);
     setPaneVar(workerPaneId, "garden_clock", "1");
     setPaneProjectColor(workerPaneId, projectName);
