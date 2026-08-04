@@ -579,9 +579,12 @@ export function buildWorkerCommand(projectName: string, projectPath: string, ses
     project, workflow: "default", resume: false,
   });
   const harness = getHarness(launchPlan.harness);
-  harness.installRuntimeConfig(projectPath, launchPlan.runtimeProject, {
-    rulesText: fs.readFileSync(contextFile, "utf-8"),
-  });
+  // No rulesText: targetDir here is the PROJECT CHECKOUT, not a worktree, and
+  // a harness whose rules channel is a repo file (Codex's AGENTS.md) would
+  // rewrite the operator's own tracked instructions and mark them
+  // skip-worktree — invisible in `git status` by construction. Rules delivery
+  // belongs to the worktree paths.
+  harness.installRuntimeConfig(projectPath, launchPlan.runtimeProject);
   const agentCmd = harness.buildAgentCommand({
     sessionId, resume: false, contextFile, launchPlan,
   });
@@ -602,9 +605,10 @@ export function buildResumeCommand(
     project, workflow: "default", resume: true,
   });
   const harness = getHarness(launchPlan.harness);
-  harness.installRuntimeConfig(projectPath, launchPlan.runtimeProject, {
-    rulesText: fs.readFileSync(contextFile, "utf-8"),
-  });
+  // No rulesText — same reason as buildWorkerCommand: this installs into the
+  // project checkout, where a repo-file rules channel would clobber the
+  // operator's own AGENTS.md behind skip-worktree.
+  harness.installRuntimeConfig(projectPath, launchPlan.runtimeProject);
   const agentCmd = harness.buildAgentCommand({
     sessionId, resume: true, contextFile, launchPlan,
   });

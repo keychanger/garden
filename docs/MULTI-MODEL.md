@@ -511,12 +511,16 @@ interface HarnessCore {
   readTurns(path: string | null, max?: number): Turn[];
   isTransientError(outputTail: string): boolean;
   capabilities: {
-    turnEnd: true;
-    resume: boolean;
-    sandbox: boolean;
-    providerProfiles: boolean;
-    workerWorkflows: string[];
-    headlessRoles: ("reviewer" | "resolver" | "ciFix")[];
+    turnEnd: true;              // required; non-negotiable (see tiers)
+    promptSubmitted: boolean;   // sentinel-clear + delivery confirmation
+    toolActivity: boolean;      // working heartbeat + stale detection
+    askingSignal: boolean;      // the `asking` status
+    skills: boolean;            // native skill mechanism; false = fold into rules
+    resume: boolean;            // bounce/recovery; false = resume requests rejected
+    sandbox: boolean;           // harness-enforced sandbox available
+    providerProfiles: boolean;  // consumes Garden's ANTHROPIC_* provider contract
+    workerWorkflows: string[];  // explicit, fail-closed workflow allowlist
+    headlessRoles: ("reviewer" | "resolver" | "ciFix")[];  // review-family opt-in
   };
 }
 

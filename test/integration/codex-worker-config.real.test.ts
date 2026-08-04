@@ -132,6 +132,25 @@ describe("codex worker config install (real fs + git)", () => {
     expect((agents.match(/managed by garden/g) ?? []).length).toBe(1);
   });
 
+  // The project-checkout launch builders (buildWorkerCommand /
+  // buildResumeCommand) install the runtime config into the operator's own
+  // checkout, so they deliberately omit rulesText. That omission is only safe
+  // because it leaves a repo-file rules channel alone: rewriting a tracked
+  // AGENTS.md there and marking it skip-worktree would clobber the operator's
+  // instructions invisibly (`git status` stays clean by construction).
+  it("leaves a tracked AGENTS.md untouched when no rulesText is supplied", async () => {
+    fs.writeFileSync(path.join(wt, "AGENTS.md"), "# repo rules\nDO NOT CLOBBER\n");
+    git(wt, "add", "AGENTS.md");
+    git(wt, "commit", "-m", "add agents");
+
+    const { getHarness } = await import("../../src/dashboard/harness/index.js");
+    getHarness("codex").installRuntimeConfig(wt, { path: proj });
+
+    expect(fs.readFileSync(path.join(wt, "AGENTS.md"), "utf-8"))
+      .toBe("# repo rules\nDO NOT CLOBBER\n");
+    expect(git(wt, "ls-files", "-v", "AGENTS.md").trim()).toMatch(/^H /);
+  });
+
   it("preserves a tracked worktree edit on the first rules install", async () => {
     fs.writeFileSync(path.join(wt, "AGENTS.md"), "# repo rules\nINDEX VERSION\n");
     git(wt, "add", "AGENTS.md");
