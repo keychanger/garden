@@ -4,7 +4,9 @@ import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { DASHBOARD_SESSION } from "../session.js";
 import { getProject, tryGetProject, tryResolveProvider, loadConfig, plotsMap } from "../config.js";
-import { syncProviderTokenToSession, providerTokenPresence } from "./claude-env.js";
+import {
+  syncProviderTokenToVault, providerTokenPresence, tmuxWorkerCommand,
+} from "./claude-env.js";
 import { readDashState, writeDashState, withStateLock } from "./state.js";
 import { parkToHidden, restoreFromHidden } from "./layout.js";
 import { refreshDashboard, setPaneProjectColor } from "./header.js";
@@ -32,7 +34,10 @@ import {
   createShellWindow, trellisRelativePathForEntry, workerProject,
 } from "./create.js";
 import { getHarness } from "./harness/index.js";
-import { isRegisteredHarness, harnessNames, canonicalHarnessName } from "./harness/core.js";
+import {
+  getHarnessCore, isRegisteredHarness, harnessNames, canonicalHarnessName,
+  workerLaunchCompatibilityError,
+} from "./harness/core.js";
 import { resolveGardenRunner } from "./runner.js";
 import {
   worktreePath, resolveBaseBranch, resolveSpawnBase, branchExistsOnOrigin, tryPublishBranch,
@@ -279,22 +284,37 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       });
       return;
     }
+    const compatibilityError = workerLaunchCompatibilityError(
+      getHarnessCore(resolvedHarness),
+      { workflow: workflowName, provider: rawProvider ?? null },
+    );
+    if (compatibilityError) {
+      tmuxDisplay(compatibilityError);
+      log.error("workers", "rejected newWorker: incompatible harness capabilities", {
+        data: {
+          project: targetProject,
+          harness: resolvedHarness ?? "claude-code",
+          workflow: workflowName,
+          provider: rawProvider ?? null,
+          error: compatibilityError,
+        },
+      });
+      return;
+    }
 
-    // Provider preflight: the worker's launch command references the API
-    // key as "$<authTokenEnv>", expanded from the tmux session env. Sync
-    // the key from this process (best-effort — covers the operator-shell
-    // invocation path) and refuse to spawn a worker that would launch with
-    // an empty token; an unauthenticated worker fails opaquely at first
+    // Provider preflight: retain the key in tmux's hidden launch vault
+    // (best-effort from this operator-shell invocation) and refuse to spawn a
+    // worker without it. An unauthenticated worker fails opaquely at first
     // inference, far from the cause.
     // Resolved against the worker's OWN provider (which may differ from the
     // project's, or be absent where the project has one), so the token check
     // describes the endpoint this worker will actually reach.
     const workerProvider = tryResolveProvider({ provider: rawProvider }, gardenConfig);
     if (workerProvider) {
-      syncProviderTokenToSession(workerProvider);
+      syncProviderTokenToVault(workerProvider);
       const presence = providerTokenPresence(workerProvider);
       if (!presence.shell && presence.session !== true) {
-        tmuxDisplay(`Provider '${workerProvider.name}' requires $${workerProvider.authTokenEnv} — not set in this shell or the dashboard session.`);
+        tmuxDisplay(`Provider '${workerProvider.name}' requires $${workerProvider.authTokenEnv} — not set in this shell or the scoped worker vault.`);
         log.error("workers", "rejected newWorker: provider token env var unset", {
           data: {
             project: targetProject,
@@ -617,7 +637,10 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         const workerPaneId = newDashboardWindowPaned(workerWindowName, "-c", project.path,
           "sh", "-c", "exec sleep 86400");
         if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
-        tmux("respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd);
+        tmuxWorkerCommand(
+          workerProject(project, providerStamp),
+          "respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd,
+        );
         if (workerPaneId) {
           setPaneLabel(workerPaneId, workerName);
           setPaneVar(workerPaneId, "garden_clock", "1");
@@ -631,7 +654,10 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         const workerPaneId = newDashboardWindowPaned(workerWindowName, "-c", project.path,
           "sh", "-c", "exec sleep 86400");
         if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
-        tmux("respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd);
+        tmuxWorkerCommand(
+          workerProject(project, providerStamp),
+          "respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd,
+        );
         if (workerPaneId) setPaneLabel(workerPaneId, workerName);
         restoreFromHidden(workerWindowName, state);
         // Re-apply label after swap (swap-pane may not preserve pane options)
@@ -906,6 +932,19 @@ export function bounceWorker(projectName: string, workerName: string): void {
   const baseBranch = entry.baseBranch
     ?? (projectInfo ? resolveBaseBranch(projectInfo.path) : undefined);
 
+  const launchProject = projectInfo
+    ? workerProject(projectInfo, entry.provider)
+    : null;
+  const compatibilityError = workerLaunchCompatibilityError(
+    getHarnessCore(entry.harness),
+    {
+      workflow: entry.workflow ?? "default",
+      provider: launchProject?.provider ?? null,
+      resume: true,
+    },
+  );
+  if (compatibilityError) throw new Error(compatibilityError);
+
   // Rewrite .claude/settings.json so bounce picks up hook/sandbox
   // changes from a rebuilt garden. buildWorktreeResumeCommand doesn't do
   // this on its own (unlike buildResumeCommand); the attach-time resume
@@ -913,9 +952,9 @@ export function bounceWorker(projectName: string, workerName: string): void {
   // The worker's own backend, so a bounce cannot rewrite the sandbox's egress
   // allowlist back to the project's provider under a worker launching at
   // another (`""` = explicitly first-party — see workerProject).
-  if (entry.worktreePath && projectInfo) {
+  if (entry.worktreePath && launchProject) {
     getHarness(entry.harness).installRuntimeConfig(
-      entry.worktreePath, workerProject(projectInfo, entry.provider),
+      entry.worktreePath, launchProject,
     );
   }
 
@@ -962,7 +1001,10 @@ export function bounceWorker(projectName: string, workerName: string): void {
   const respawnArgs = ["respawn-pane", "-k"];
   if (cwd) respawnArgs.push("-c", cwd);
   respawnArgs.push("-t", paneId, "sh", "-c", resumeCmd);
-  tmux(...respawnArgs);
+  tmuxWorkerCommand(
+    launchProject ?? { provider: undefined },
+    ...respawnArgs,
+  );
 
   // SessionStart fires on --resume (source="resume") but the hook now preserves
   // the status we write here (see hooks/default.ts) instead of resetting it, so

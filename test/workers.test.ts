@@ -828,6 +828,33 @@ describe("newWorker", () => {
     );
   });
 
+  it("harness: rejects a provider profile with a harness that cannot consume it", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: {}, plots: {}, providers: { deepseek: {} },
+    } as unknown as ReturnType<typeof loadConfig>);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+
+    expect(newWorker({ harness: "codex", provider: "deepseek" })).toBeNull();
+    expect(vi.mocked(addWorker)).not.toHaveBeenCalled();
+    expect(vi.mocked(tmuxDisplay)).toHaveBeenCalledWith(
+      expect.stringContaining("does not support provider profiles"),
+    );
+  });
+
+  it("harness: rejects a workflow the selected harness does not support", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+
+    expect(newWorker({
+      harness: "codex",
+      workflow: "grow",
+      grow: { seed: "ship it", maxIterations: 3 },
+    })).toBeNull();
+    expect(vi.mocked(addWorker)).not.toHaveBeenCalled();
+    expect(vi.mocked(tmuxDisplay)).toHaveBeenCalledWith(
+      expect.stringContaining("does not support workflow 'grow'"),
+    );
+  });
+
   it("crew: derives the build harness from the crew's worker member and stamps entry.crew", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     expect(newWorker({ crew: "all-codex" })).toBe("bold-ash");
@@ -1513,6 +1540,25 @@ describe("bounceWorker", () => {
       "respawn-pane", "-k", "-c", "/wt/swift-oak", "-t", "%2",
       "sh", "-c", "claude --resume FAKE-ID",
     ]));
+  });
+
+  it("refuses a bounce after the worker's harness/provider pair becomes incompatible", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak",
+      sessionId: "sess-abc",
+      task: "",
+      branchName: "swift-oak",
+      worktreePath: "/wt/swift-oak",
+      harness: "codex",
+      workflow: "default",
+    });
+    vi.mocked(tryGetProject).mockReturnValue({
+      name: "myproject", path: "/repo/myproject", provider: "deepseek",
+    });
+
+    expect(() => bounceWorker("myproject", "swift-oak"))
+      .toThrow(/does not support provider profiles/);
+    expect(vi.mocked(tmux).mock.calls.some(call => call[0] === "respawn-pane")).toBe(false);
   });
 
   it("writes agentStatus=idle for a non-working worker (resume hook preserves it)", () => {

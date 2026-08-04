@@ -55,7 +55,9 @@ describe("provider env in worker commands", () => {
     const cmd = buildWorkerCommand("myproject", "/repo/myproject", "sess-1");
     vi.mocked(tryResolveProvider).mockReturnValue(null);
     expect(cmd).toContain("ANTHROPIC_BASE_URL=");
-    expect(cmd).toContain('ANTHROPIC_AUTH_TOKEN="$DEEPSEEK_API_KEY"');
+    expect(cmd).toMatch(/ANTHROPIC_AUTH_TOKEN="\$GARDEN_PROVIDER_TOKEN_[A-F0-9]+"/);
+    expect(cmd).toMatch(/env -u GARDEN_PROVIDER_TOKEN_[A-F0-9]+ claude --rc/);
+    expect(cmd).not.toContain("$DEEPSEEK_API_KEY");
     expect(cmd).toContain("ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro");
     // The env assignments must precede the binary they configure.
     expect(cmd.indexOf("ANTHROPIC_BASE_URL=")).toBeLessThan(cmd.indexOf("claude --rc"));
@@ -164,6 +166,7 @@ import {
   buildWorktreeWorkerCommand,
   buildWorktreeBootstrapScript,
   buildWorktreeResumeCommand,
+  respawnWorkerWindow,
 } from "../src/dashboard/create.js";
 import { tmux, newDashboardWindow, tmuxSplit, getFirstPaneId, setPaneLabel, setPaneTitle, setPaneVar, shellEscape, disablePaneInput } from "../src/dashboard/tmux.js";
 
@@ -402,6 +405,26 @@ describe("buildResumeCommand", () => {
     const cmd = buildResumeCommand("myproject", "/repo/myproject", "session-123");
     expect(cmd).toContain("_claude-hook stop");
     expect(cmd).toContain("exec $SHELL");
+  });
+});
+
+describe("respawnWorkerWindow capability gate", () => {
+  it("does not recreate an existing worker after its harness/provider pair becomes incompatible", () => {
+    const result = respawnWorkerWindow(
+      "myproject",
+      { name: "myproject", path: "/repo/myproject", provider: "deepseek" },
+      {
+        name: "bold-ash",
+        sessionId: "session-1",
+        task: "",
+        harness: "codex",
+        workflow: "default",
+      },
+      null,
+    );
+
+    expect(result).toBeNull();
+    expect(newDashboardWindow).not.toHaveBeenCalled();
   });
 });
 

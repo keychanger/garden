@@ -241,6 +241,16 @@ describe("loopAutoContinueAfterMerge", () => {
     expect(tmux).not.toHaveBeenCalled();
   });
 
+  it("refuses a respawn after the worker's harness/provider pair becomes incompatible", () => {
+    vi.mocked(findWorkerByName).mockReturnValue(makeWorker({ harness: "codex" }));
+    vi.mocked(tryGetProject).mockReturnValue({
+      name: "myproject", path: "/repo/myproject", provider: "deepseek",
+    });
+
+    expect(loopAutoContinueAfterMerge("myproject", "bold-ash", makeHooks(), {})).toBe(false);
+    expect(vi.mocked(tmux).mock.calls.some(call => call[0] === "respawn-pane")).toBe(false);
+  });
+
   it("returns false when no pane can be located", () => {
     vi.mocked(findWorkerByName).mockReturnValue(makeWorker());
     vi.mocked(windowExists).mockReturnValue(false);

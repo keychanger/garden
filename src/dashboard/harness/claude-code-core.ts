@@ -81,6 +81,8 @@ export const claudeCodeCore: HarnessCore = {
     resume: true,
     sandbox: true,
     skills: true,
+    providerProfiles: true,
+    workerWorkflows: ["default", "grow", "trellis", "botanist"],
   },
 
   // Claude Code accepts a caller-supplied session UUID (--session-id) and

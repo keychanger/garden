@@ -246,10 +246,10 @@ export interface ProviderProfile {
   // ANTHROPIC_BASE_URL for sessions on this provider. http(s) URL.
   baseUrl: string;
   // NAME of the env var holding the API key (e.g. "DEEPSEEK_API_KEY").
-  // The key value itself never enters config.yml or a tmux command line:
-  // launch commands interpolate `ANTHROPIC_AUTH_TOKEN="$<name>"` and the
-  // pane shell expands it at spawn time. Must match ENV_VAR_NAME_RE —
-  // that regex is the injection guard for the unquoted interpolation.
+  // The key value itself never enters config.yml. Garden reads this variable
+  // from the operator shell, retains it as hidden tmux state, and exposes it
+  // only while launching a worker for this provider. Must match
+  // ENV_VAR_NAME_RE so the configured source is unambiguously an env name.
   authTokenEnv: string;
   label?: string;
   // What the opus/sonnet/haiku model aliases resolve to on this backend
@@ -267,13 +267,17 @@ export interface ResolvedProvider extends ProviderProfile {
 }
 
 export const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+const PROCESS_CRITICAL_ENV_VARS = new Set([
+  "HOME", "PATH", "SHELL", "USER", "LOGNAME", "TMPDIR", "TERM", "TMUX",
+  "PWD", "OLDPWD", "SHLVL", "NODE_OPTIONS", "NODE_PATH", "CODEX_HOME",
+  "CLAUDE_CONFIG_DIR",
+]);
 const PROVIDER_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
 const MODEL_MAP_KEYS = ["opus", "sonnet", "haiku"] as const;
 
 // Shared by `garden provider add` (CLI input) and resolveProvider (defense
-// against hand-edited config.yml — authTokenEnv is interpolated into shell
-// commands, so an invalid name must fail loudly at resolve time, not spawn
-// a worker with a malformed env assignment).
+// against hand-edited config.yml — authTokenEnv names process environment,
+// so an invalid name must fail loudly at resolve time, not at worker spawn).
 export function assertValidProvider(name: string, p: ProviderProfile): void {
   if (!PROVIDER_NAME_RE.test(name)) {
     throw new Error(`Provider name must be alphanumeric/dash/underscore: ${name}`);
@@ -290,6 +294,11 @@ export function assertValidProvider(name: string, p: ProviderProfile): void {
   if (!ENV_VAR_NAME_RE.test(p.authTokenEnv)) {
     throw new Error(
       `Provider '${name}': authTokenEnv must be an env var name (A-Z, 0-9, _), got '${p.authTokenEnv}'`,
+    );
+  }
+  if (PROCESS_CRITICAL_ENV_VARS.has(p.authTokenEnv)) {
+    throw new Error(
+      `Provider '${name}': authTokenEnv cannot use process-critical env var '${p.authTokenEnv}'`,
     );
   }
   for (const key of Object.keys(p.modelMap ?? {})) {

@@ -26,6 +26,7 @@ vi.mock("../src/dashboard/header.js", () => ({
 
 vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
+  tmuxWithHiddenEnvironment: vi.fn(),
   newDashboardWindow: vi.fn(),
   tmuxOutput: vi.fn(() => ""),
   windowExists: vi.fn(() => false),
@@ -122,25 +123,221 @@ describe("garden auth status provider rows", () => {
 });
 
 describe("provider token sync", () => {
-  it("pushes the key into the tmux session env when the dashboard runs", async () => {
+  it("builds blank new-session overrides so the first dashboard pane inherits no provider token", async () => {
+    const config = await setup();
+    const gardenConfig = {
+      projects: {},
+      providers: {
+        deepseek: PROVIDER,
+        shared: { ...PROVIDER, authTokenEnv: TOKEN_ENV },
+        ollama: { ...PROVIDER, authTokenEnv: "OLLAMA_API_KEY" },
+      },
+    };
+    const { providerSessionSanitizerArgs } = await import("../src/dashboard/claude-env.js");
+
+    expect(providerSessionSanitizerArgs(gardenConfig)).toEqual([
+      "-e", `${TOKEN_ENV}=`,
+      "-e", "OLLAMA_API_KEY=",
+    ]);
+    expect(providerSessionSanitizerArgs(gardenConfig).join(" ")).not.toContain("sk-");
+    expect(config.ENV_VAR_NAME_RE.test(TOKEN_ENV)).toBe(true);
+  });
+
+  it("rejects invalid provider source variables before building new-session arguments", async () => {
+    const config = await setup();
+    const { providerSessionSanitizerArgs } = await import("../src/dashboard/claude-env.js");
+
+    expect(() => providerSessionSanitizerArgs({
+      projects: {},
+      providers: {
+        broken: { baseUrl: "https://example.com", authTokenEnv: "HOME" },
+      },
+    })).toThrow(/process-critical env var 'HOME'/);
+  });
+
+  it("stores the key as hidden tmux state and removes the legacy inherited variable", async () => {
     const config = await setup();
     config.saveConfig({ projects: {}, providers: { deepseek: PROVIDER } });
     process.env[TOKEN_ENV] = "sk-test";
     const { dashboardExists } = await import("../src/session.js");
     vi.mocked(dashboardExists).mockReturnValue(true);
     const { tmux } = await import("../src/dashboard/tmux.js");
-    const { syncProviderTokenToSession } = await import("../src/dashboard/claude-env.js");
-    syncProviderTokenToSession(config.resolveProvider({ provider: "deepseek" })!);
-    expect(tmux).toHaveBeenCalledWith("set-environment", "-t", "garden", TOKEN_ENV, "sk-test");
+    const { providerTokenVaultEnv, syncProviderTokenToVault } = await import("../src/dashboard/claude-env.js");
+    syncProviderTokenToVault(config.resolveProvider({ provider: "deepseek" })!);
+    const vaultEnv = providerTokenVaultEnv(config.resolveProvider({ provider: "deepseek" })!);
+    expect(tmux).toHaveBeenCalledWith(
+      "set-environment", "-h", "-t", "garden", vaultEnv, "sk-test",
+      ";", "set-environment", "-r", "-t", "garden", TOKEN_ENV,
+    );
   });
 
   it("does nothing without the key or without a dashboard", async () => {
     const config = await setup();
     config.saveConfig({ projects: {}, providers: { deepseek: PROVIDER } });
     const { tmux } = await import("../src/dashboard/tmux.js");
-    const { syncProviderTokenToSession } = await import("../src/dashboard/claude-env.js");
-    syncProviderTokenToSession(config.resolveProvider({ provider: "deepseek" })!);
+    const { syncProviderTokenToVault } = await import("../src/dashboard/claude-env.js");
+    syncProviderTokenToVault(config.resolveProvider({ provider: "deepseek" })!);
     expect(tmux).not.toHaveBeenCalled();
+  });
+
+  it("migrates a legacy inherited session token into the hidden vault", async () => {
+    const config = await setup();
+    config.saveConfig({ projects: {}, providers: { deepseek: PROVIDER } });
+    const { dashboardExists } = await import("../src/session.js");
+    vi.mocked(dashboardExists).mockReturnValue(true);
+    const { tmux, tmuxOutput } = await import("../src/dashboard/tmux.js");
+    vi.mocked(tmuxOutput).mockReturnValue(`${TOKEN_ENV}=legacy-token`);
+    const { providerTokenVaultEnv, syncProviderTokenToVault } = await import("../src/dashboard/claude-env.js");
+    const provider = config.resolveProvider({ provider: "deepseek" })!;
+
+    syncProviderTokenToVault(provider);
+
+    expect(tmux).toHaveBeenCalledWith(
+      "set-environment", "-h", "-t", "garden",
+      providerTokenVaultEnv(provider), "legacy-token",
+      ";", "set-environment", "-r", "-t", "garden", TOKEN_ENV,
+    );
+  });
+
+  it("migrates every configured provider before cleaning a shared legacy source", async () => {
+    const config = await setup();
+    config.saveConfig({
+      projects: {},
+      providers: {
+        deepseek: PROVIDER,
+        gateway: { ...PROVIDER, baseUrl: "https://gateway.example.com" },
+      },
+    });
+    const { dashboardExists } = await import("../src/session.js");
+    vi.mocked(dashboardExists).mockReturnValue(true);
+    const { tmux, tmuxOutput } = await import("../src/dashboard/tmux.js");
+    vi.mocked(tmuxOutput).mockReturnValue(`${TOKEN_ENV}=legacy-token`);
+    const {
+      providerTokenVaultEnv,
+      syncAllProviderTokenVaults,
+    } = await import("../src/dashboard/claude-env.js");
+    const gardenConfig = config.loadConfig();
+
+    syncAllProviderTokenVaults(gardenConfig);
+
+    const resolved = ["deepseek", "gateway"]
+      .map(provider => config.resolveProvider({ provider }, gardenConfig)!);
+    for (const provider of resolved) {
+      expect(tmux).toHaveBeenCalledWith(
+        "set-environment", "-h", "-t", "garden",
+        providerTokenVaultEnv(provider), "legacy-token",
+        ";", "set-environment", "-r", "-t", "garden", TOKEN_ENV,
+      );
+    }
+    expect(tmuxOutput).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks hidden vault presence without reading the legacy variable", async () => {
+    const config = await setup();
+    config.saveConfig({ projects: {}, providers: { deepseek: PROVIDER } });
+    const { dashboardExists } = await import("../src/session.js");
+    vi.mocked(dashboardExists).mockReturnValue(true);
+    const { tmuxOutput } = await import("../src/dashboard/tmux.js");
+    const { providerTokenPresence, providerTokenVaultEnv } = await import("../src/dashboard/claude-env.js");
+    const provider = config.resolveProvider({ provider: "deepseek" })!;
+    const vaultEnv = providerTokenVaultEnv(provider);
+    vi.mocked(tmuxOutput).mockReturnValue(`${vaultEnv}=stored-token`);
+
+    expect(providerTokenPresence(provider).session).toBe(true);
+    expect(tmuxOutput).toHaveBeenCalledWith(
+      "show-environment", "-h", "-t", "garden", vaultEnv,
+    );
+    expect(vi.mocked(tmuxOutput).mock.calls.flat()).not.toContain(TOKEN_ENV);
+  });
+
+  it("removes the hidden value when its provider is deleted", async () => {
+    const config = await setup();
+    config.saveConfig({ projects: {}, providers: { deepseek: PROVIDER } });
+    const { dashboardExists } = await import("../src/session.js");
+    vi.mocked(dashboardExists).mockReturnValue(true);
+    const { tmux } = await import("../src/dashboard/tmux.js");
+    const { clearProviderTokenVault, providerTokenVaultEnv } = await import("../src/dashboard/claude-env.js");
+    const provider = config.resolveProvider({ provider: "deepseek" })!;
+
+    clearProviderTokenVault(provider);
+
+    expect(tmux).toHaveBeenCalledWith(
+      "set-environment", "-u", "-t", "garden", providerTokenVaultEnv(provider),
+    );
+  });
+
+  it("scopes the hidden token to one worker tmux command", async () => {
+    const config = await setup();
+    config.saveConfig({
+      projects: { garden: { path: "/repo", provider: "deepseek" } },
+      providers: { deepseek: PROVIDER },
+    });
+    process.env[TOKEN_ENV] = "sk-test";
+    const { dashboardExists } = await import("../src/session.js");
+    vi.mocked(dashboardExists).mockReturnValue(true);
+    const { tmuxOutput, tmuxWithHiddenEnvironment } = await import("../src/dashboard/tmux.js");
+    const { providerTokenVaultEnv, tmuxWorkerCommand } = await import("../src/dashboard/claude-env.js");
+    const provider = config.resolveProvider({ provider: "deepseek" })!;
+    const vaultEnv = providerTokenVaultEnv(provider);
+    vi.mocked(tmuxOutput).mockReturnValue(`${vaultEnv}=sk-test`);
+
+    tmuxWorkerCommand(config.getProject("garden"), "respawn-pane", "-k", "-t", "%7");
+
+    expect(tmuxWithHiddenEnvironment).toHaveBeenCalledWith(
+      vaultEnv,
+      "respawn-pane", "-k", "-t", "%7",
+    );
+  });
+
+  it("reuses an existing hidden token without an extra tmux write", async () => {
+    const config = await setup();
+    config.saveConfig({
+      projects: { garden: { path: "/repo", provider: "deepseek" } },
+      providers: { deepseek: PROVIDER },
+    });
+    const { dashboardExists } = await import("../src/session.js");
+    vi.mocked(dashboardExists).mockReturnValue(true);
+    const { tmux, tmuxOutput, tmuxWithHiddenEnvironment } = await import("../src/dashboard/tmux.js");
+    const { providerTokenVaultEnv, tmuxWorkerCommand } = await import("../src/dashboard/claude-env.js");
+    const provider = config.resolveProvider({ provider: "deepseek" })!;
+    const vaultEnv = providerTokenVaultEnv(provider);
+    vi.mocked(tmuxOutput).mockReturnValue(`${vaultEnv}=stored-token`);
+
+    tmuxWorkerCommand(config.getProject("garden"), "respawn-pane", "-k", "-t", "%7");
+
+    expect(tmux).not.toHaveBeenCalled();
+    expect(tmuxOutput).toHaveBeenCalledTimes(1);
+    expect(tmuxWithHiddenEnvironment).toHaveBeenCalledWith(
+      vaultEnv, "respawn-pane", "-k", "-t", "%7",
+    );
+  });
+
+  it("refuses a provider launch when neither shell nor vault has a token", async () => {
+    const config = await setup();
+    config.saveConfig({
+      projects: { garden: { path: "/repo", provider: "deepseek" } },
+      providers: { deepseek: PROVIDER },
+    });
+    const { dashboardExists } = await import("../src/session.js");
+    vi.mocked(dashboardExists).mockReturnValue(true);
+    const { tmuxOutput, tmuxWithHiddenEnvironment } = await import("../src/dashboard/tmux.js");
+    vi.mocked(tmuxOutput).mockReturnValue("");
+    const { tmuxWorkerCommand } = await import("../src/dashboard/claude-env.js");
+
+    expect(() => tmuxWorkerCommand(
+      config.getProject("garden"), "respawn-pane", "-k", "-t", "%7",
+    )).toThrow(`requires $${TOKEN_ENV}`);
+    expect(tmuxWithHiddenEnvironment).not.toHaveBeenCalled();
+  });
+
+  it("keeps non-provider tmux commands on the ordinary path", async () => {
+    const { tmux, tmuxWithHiddenEnvironment } = await import("../src/dashboard/tmux.js");
+    const { tmuxWorkerCommand } = await import("../src/dashboard/claude-env.js");
+
+    tmuxWorkerCommand({}, "respawn-pane", "-k", "-t", "%7");
+
+    expect(tmux).toHaveBeenCalledWith("respawn-pane", "-k", "-t", "%7");
+    expect(tmuxWithHiddenEnvironment).not.toHaveBeenCalled();
   });
 });
 

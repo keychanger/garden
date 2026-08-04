@@ -118,6 +118,14 @@ describe("resolveProvider / tryResolveProvider", () => {
     expect(() => config.resolveProvider({ provider: "evil" })).toThrow("authTokenEnv");
     expect(config.tryResolveProvider({ provider: "evil" })).toBeNull();
   });
+
+  it("rejects a process-critical variable as authTokenEnv", async () => {
+    const config = await setup();
+    expect(() => config.assertValidProvider("evil", {
+      baseUrl: "https://x.com",
+      authTokenEnv: "HOME",
+    })).toThrow(/cannot use process-critical env var 'HOME'/);
+  });
 });
 
 describe("anyAnthropicMeteredProject", () => {
@@ -147,15 +155,17 @@ describe("anyAnthropicMeteredProject", () => {
 });
 
 describe("providerEnvPrefix / workerEnvPrefix", () => {
-  it("emits base URL, unexpanded token reference, and model map", async () => {
+  it("emits base URL, a scoped vault reference, and model map", async () => {
     const config = await setup();
     config.saveConfig({ projects: {}, providers: { deepseek: DEEPSEEK } });
     const { providerEnvPrefix } = await import("../src/dashboard/claude-env.js");
     const prefix = providerEnvPrefix(config.resolveProvider({ provider: "deepseek" })!);
     expect(prefix).toContain("ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic ");
-    // The token is a "$VAR" reference expanded by the pane shell at spawn
-    // time — the key value must never be inlined.
-    expect(prefix).toContain('ANTHROPIC_AUTH_TOKEN="$DEEPSEEK_API_KEY"');
+    // The source is Garden's hidden tmux vault variable, not the operator's
+    // env-var name, and it is removed before the agent process starts.
+    expect(prefix).toMatch(/ANTHROPIC_AUTH_TOKEN="\$GARDEN_PROVIDER_TOKEN_[A-F0-9]+"/);
+    expect(prefix).toMatch(/env -u GARDEN_PROVIDER_TOKEN_[A-F0-9]+ /);
+    expect(prefix).not.toContain("$DEEPSEEK_API_KEY");
     expect(prefix).toContain("ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro");
     expect(prefix).toContain("ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-flash");
     expect(prefix).not.toContain("ANTHROPIC_DEFAULT_HAIKU_MODEL");
@@ -279,6 +289,19 @@ describe("garden provider command", () => {
     await expect(provider(["remove", "deepseek"])).rejects.toThrow("still used by: a");
   });
 
+  it("remove refuses while a worker override references the provider", async () => {
+    const config = await setup();
+    config.saveConfig({ projects: {}, providers: { deepseek: DEEPSEEK } });
+    const { REGISTRY_FILE } = await import("../src/dashboard/registry.js");
+    fs.writeFileSync(REGISTRY_FILE, JSON.stringify({
+      workers: { a: [{ name: "swift-oak", provider: "deepseek" }] },
+    }));
+    const { provider } = await import("../src/commands/provider.js");
+
+    await expect(provider(["remove", "deepseek"]))
+      .rejects.toThrow("still used by: a/swift-oak");
+  });
+
   it("remove deletes an unreferenced provider", async () => {
     const config = await setup();
     config.saveConfig({ projects: {}, providers: { deepseek: DEEPSEEK } });
@@ -311,6 +334,19 @@ describe("garden config provider key", () => {
     await configCmd(["a", "provider", "unset"]);
     expect(config.loadConfig().projects.a.provider).toBeUndefined();
     logSpy.mockRestore();
+  });
+
+  it("rejects a provider on a project whose worker harness cannot consume provider profiles", async () => {
+    const config = await setup();
+    config.saveConfig({
+      projects: { a: { path: "/a", harness: "codex" } },
+      providers: { deepseek: DEEPSEEK },
+    });
+    const { config: configCmd } = await import("../src/commands/config.js");
+
+    await expect(configCmd(["a", "provider", "deepseek"]))
+      .rejects.toThrow(/does not support provider profiles/);
+    expect(config.loadConfig().projects.a.provider).toBeUndefined();
   });
 });
 

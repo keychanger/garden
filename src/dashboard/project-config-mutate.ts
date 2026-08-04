@@ -10,8 +10,12 @@
 // `throw`s stay here so both surfaces share them. Behavior is byte-identical to
 // the pre-extraction CLI (guarded by a config-output test).
 import { loadConfig, saveConfig, DEFAULT_HOLISTIC_REVIEW, REVIEW_EFFORT_LEVELS, isValidReviewEffort } from "../config.js";
-import { syncProviderTokenToSession } from "./claude-env.js";
-import { isRegisteredHarness, harnessNames, canonicalHarnessName } from "./harness/core.js";
+import { syncProviderTokenToVault } from "./claude-env.js";
+import {
+  getHarnessCore, isRegisteredHarness, harnessNames, canonicalHarnessName,
+  workerLaunchCompatibilityError,
+} from "./harness/core.js";
+import { resolveProjectCrew } from "./crew.js";
 import { branchExistsOnOrigin } from "./git.js";
 import type { ReviewRole } from "./roles.js";
 import {
@@ -58,6 +62,27 @@ export interface MutateResult {
 
 function result(message: string, notes: string[]): MutateResult {
   return notes.length > 0 ? { message, notes } : { message };
+}
+
+function assertWorkerConfigCompatible(
+  project: { harness?: string; provider?: string; crew?: string },
+  cfg: ReturnType<typeof loadConfig>,
+  override: { harness?: string; provider?: string },
+): void {
+  const crew = resolveProjectCrew(project, cfg);
+  const harness = override.harness
+    ?? project.harness
+    ?? crew?.worker.harness
+    ?? "claude-code";
+  const provider = override.provider
+    ?? project.provider
+    ?? crew?.worker.provider
+    ?? null;
+  const compatibilityError = workerLaunchCompatibilityError(
+    getHarnessCore(harness),
+    { workflow: "default", provider },
+  );
+  if (compatibilityError) throw new Error(compatibilityError);
 }
 
 export function setProjectConfigKey(projectName: string, key: SettableKey, value: string): MutateResult {
@@ -117,8 +142,9 @@ export function setProjectConfigKey(projectName: string, key: SettableKey, value
           `Unknown provider '${value}'. Register it first with 'garden provider add ${value}'.`,
         );
       }
+      assertWorkerConfigCompatible(project, cfg, { provider: value });
       project.provider = value;
-      syncProviderTokenToSession({ ...providerEntry, name: value, label: providerEntry.label ?? value });
+      syncProviderTokenToVault({ ...providerEntry, name: value, label: providerEntry.label ?? value });
       message = `Set ${key} = ${value} for ${projectName} (applies to newly created or bounced workers; reviewers stay on Anthropic)`;
       if (!process.env[providerEntry.authTokenEnv]) {
         notes.push(`  note: ${providerEntry.authTokenEnv} is not set in this shell — export it, then run 'garden auth status' to sync and verify.`);
@@ -135,6 +161,7 @@ export function setProjectConfigKey(projectName: string, key: SettableKey, value
         `Unknown harness '${value}'. Registered harnesses: ${harnessNames().join(", ")}.`,
       );
     } else {
+      assertWorkerConfigCompatible(project, cfg, { harness: value });
       project.harness = value;
       message = `Set ${key} = ${value} for ${projectName} (applies to newly created or bounced workers; review family selects its own harness under 'role')`;
     }

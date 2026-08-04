@@ -58,6 +58,41 @@ export function tmux(...args: string[]): void {
   }
 }
 
+// Run one tmux command while a hidden session variable is temporarily
+// inheritable. The unhide, target command, and re-hide are one tmux command
+// queue, so no command from another client can create a pane between them.
+// The variable's VALUE never crosses the client argv boundary: tmux expands
+// it server-side from its hidden environment. If the target command fails and
+// aborts the queue before the final re-hide, the recovery call restores the
+// hidden bit before the error escapes.
+export function tmuxWithHiddenEnvironment(variable: string, ...args: string[]): void {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(variable)) {
+    throw new Error(`Invalid tmux environment variable: ${variable}`);
+  }
+  const format = `#{${variable}}`;
+  const hide = [
+    "set-environment", "-hF", "-t", DASHBOARD_SESSION,
+    variable, format,
+  ];
+  try {
+    tmux(
+      "set-environment", "-F", "-t", DASHBOARD_SESSION,
+      variable, format,
+      ";", ...args,
+      ";", ...hide,
+    );
+  } catch (err) {
+    try {
+      tmux(...hide);
+    } catch (cleanupErr) {
+      log.error("tmux", "failed to re-hide scoped environment after tmux command failure", {
+        data: { variable, error: String(cleanupErr) },
+      });
+    }
+    throw err;
+  }
+}
+
 // Run several tmux commands in ONE client connect. Each group is a full command
 // argv (e.g. ["set-option", "-t", target, ...]); they are joined with tmux's
 // `;` argv command separator so a single execFileSync pays one client-connect

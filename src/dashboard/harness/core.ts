@@ -58,6 +58,25 @@ export function harnessNames(): string[] {
   return Object.keys(CORES);
 }
 
+export function workerLaunchCompatibilityError(
+  harness: HarnessCore,
+  requirements: { workflow: string; provider: string | null; resume?: boolean },
+): string | null {
+  if (!harness.capabilities.sandbox) {
+    return `Harness '${harness.name}' does not provide a sandbox and cannot run autonomous workers.`;
+  }
+  if (!harness.capabilities.workerWorkflows.includes(requirements.workflow)) {
+    return `Harness '${harness.name}' does not support workflow '${requirements.workflow}'.`;
+  }
+  if (requirements.provider && !harness.capabilities.providerProfiles) {
+    return `Harness '${harness.name}' does not support provider profiles; provider '${requirements.provider}' requires a compatible harness.`;
+  }
+  if (requirements.resume && !harness.capabilities.resume) {
+    return `Harness '${harness.name}' cannot resume sessions.`;
+  }
+  return null;
+}
+
 // Operator-facing harness aliases. The claude-code harness is named "claude"
 // as a crew member (crew.ts) and reads better as "claude" wherever an operator
 // types a harness name (`--harness claude`, `config <p> harness claude`), so

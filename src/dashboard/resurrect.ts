@@ -194,11 +194,14 @@ export function resurrectWorker(t: Tombstone): ResurrectOutcome {
   if (dashboardExists()) {
     const state = readDashState();
     const size = state.activePaneId ? getPaneSize(state.activePaneId) : null;
-    respawnWorkerWindow(t.project, projectConfig, rebuilt, size);
+    const windowName = respawnWorkerWindow(t.project, projectConfig, rebuilt, size);
     if (!projectPollerRunning(t.project)) {
       startProjectPoller(t.project, resolveGardenRunner());
     }
-    resumed = true;
+    resumed = windowName !== null;
+    if (!resumed) {
+      notes.push("session was not resumed — check the worker harness/provider configuration");
+    }
   } else {
     notes.push("dashboard not running — the session resumes on the next `garden dashboard`");
   }

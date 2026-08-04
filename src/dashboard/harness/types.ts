@@ -80,6 +80,13 @@ export interface HarnessCapabilities {
   resume: boolean;
   sandbox: boolean;
   skills: boolean;
+  /** Can this harness consume Garden's ProviderProfile contract
+   *  (ANTHROPIC_* routing), rather than merely choosing its own models? */
+  providerProfiles: boolean;
+  /** Worker workflows whose launch/resume semantics this adapter implements.
+   *  Kept explicit and fail-closed so registering a harness does not silently
+   *  opt it into future workflow protocols. */
+  workerWorkflows: readonly string[];
 }
 
 // The light half of an adapter: everything reachable from the hook bundle.

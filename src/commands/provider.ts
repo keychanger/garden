@@ -5,7 +5,11 @@ import {
   loadConfig, saveConfig, assertValidProvider,
   type GardenConfig, type ProviderProfile,
 } from "../config.js";
-import { syncProviderTokenToSession } from "../dashboard/claude-env.js";
+import {
+  clearProviderTokenVault,
+  syncProviderTokenToVault,
+} from "../dashboard/claude-env.js";
+import { readRegistry } from "../dashboard/registry.js";
 import { isTTY } from "../output.js";
 
 export async function provider(args: string[]): Promise<void> {
@@ -71,6 +75,16 @@ function projectsByProvider(cfg: GardenConfig): Record<string, string[]> {
     }
   }
   return out;
+}
+
+function workersByProvider(name: string): string[] {
+  const workers: string[] = [];
+  for (const [project, entries] of Object.entries(readRegistry().workers)) {
+    for (const entry of entries) {
+      if (entry.provider === name) workers.push(`${project}/${entry.name}`);
+    }
+  }
+  return workers;
 }
 
 interface AddFlags {
@@ -147,10 +161,10 @@ function handleAdd(args: string[]): void {
   cfg.providers = { ...providers, [flags.name]: profile };
   saveConfig(cfg);
 
-  // Push the key into the running dashboard's tmux session env now, while
-  // this process has the operator's shell env — worker panes inherit the
-  // session env, not the operator's later shells.
-  syncProviderTokenToSession({ ...profile, name: flags.name, label: profile.label ?? flags.name });
+  // Retain the key in the running dashboard's hidden tmux vault while this
+  // process has the operator's shell env. Worker launches receive only their
+  // selected provider's key; ordinary panes inherit none of the vault.
+  syncProviderTokenToVault({ ...profile, name: flags.name, label: profile.label ?? flags.name });
 
   console.log(`Added provider '${flags.name}'`);
   console.log(`  baseUrl:  ${profile.baseUrl}`);
@@ -163,18 +177,29 @@ function handleRemove(args: string[]): void {
   if (!name) throw new Error(`Usage: garden provider remove <name>`);
   const cfg = loadConfig();
   const providers = cfg.providers ?? {};
-  if (!providers[name]) throw new Error(`Unknown provider: ${name}`);
+  const profile = providers[name];
+  if (!profile) throw new Error(`Unknown provider: ${name}`);
 
-  const usage = projectsByProvider(cfg)[name] ?? [];
+  const projectUsage = projectsByProvider(cfg)[name] ?? [];
+  const workerUsage = workersByProvider(name);
+  const usage = [...projectUsage, ...workerUsage];
   if (usage.length > 0) {
+    const remedies = [
+      projectUsage.length > 0
+        ? `Run 'garden config <project> provider unset' for the listed projects.`
+        : "",
+      workerUsage.length > 0
+        ? "Close the listed workers before removing their provider."
+        : "",
+    ].filter(Boolean).join(" ");
     throw new Error(
-      `Provider '${name}' is still used by: ${usage.join(", ")}. `
-      + `Run 'garden config <project> provider unset' first.`,
+      `Provider '${name}' is still used by: ${usage.join(", ")}. ${remedies}`,
     );
   }
 
   delete providers[name];
   cfg.providers = providers;
   saveConfig(cfg);
+  clearProviderTokenVault({ ...profile, name, label: profile.label ?? name });
   console.log(`Removed provider '${name}'.`);
 }

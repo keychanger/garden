@@ -1060,6 +1060,25 @@ describe("config harness key", () => {
     await expect(config(["garden", "harness", "gpt4all"]))
       .rejects.toThrow(/Unknown harness 'gpt4all'/);
   });
+
+  it("rejects a harness that cannot consume the project's provider profile", async () => {
+    const { saveConfig, GARDEN_DIR, loadConfig } = await importConfig();
+    const { config } = await import("../src/commands/config.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({
+      projects: { garden: { path: "/tmp/garden", provider: "deepseek" } },
+      providers: {
+        deepseek: {
+          baseUrl: "https://api.deepseek.com/anthropic",
+          authTokenEnv: "DEEPSEEK_API_KEY",
+        },
+      },
+    });
+
+    await expect(config(["garden", "harness", "codex"]))
+      .rejects.toThrow(/does not support provider profiles/);
+    expect(loadConfig().projects.garden.harness).toBeUndefined();
+  });
 });
 
 // Project-level baseBranch key — the authoritative merge target for new

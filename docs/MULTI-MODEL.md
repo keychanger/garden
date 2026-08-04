@@ -332,26 +332,35 @@ interface ProviderProfile {
 The legal invariant is structural: a provider is API-key-backed by
 construction — the type has no field that could reference a subscription
 OAuth credential, so OAuth can never be combined with a custom base URL.
-API keys are referenced by env var name (no-secrets-in-config), validated
-against a strict env-var-name regex because the name is interpolated into
-launch commands as an unexpanded `"$NAME"` shell reference — expanded at
-spawn time, so the key value never appears in config.yml, tmux command
-lines, or ps output. A Bedrock/Vertex `cloud-iam` shape
+API keys are referenced by env var name (no-secrets-in-config) and validated
+against a strict env-var-name regex. Garden translates the source name into a
+provider-specific hidden tmux variable; generated launch commands contain
+only that internal name, never the configured source name or key value. A
+Bedrock/Vertex `cloud-iam` shape
 (`CLAUDE_CODE_USE_BEDROCK` / `CLAUDE_CODE_USE_VERTEX`) is expressible
 later as a sibling field set; out of scope through Phase 5.
 
-**Key delivery.** The `"$NAME"` reference expands in the environment the
-tmux server gives the pane — frozen at server start, not the operator's
-later shells. Garden bridges this explicitly: the operator-shell entry
-points (`provider add`, `config set provider`, dashboard create/attach,
-`workers new`, `auth status`) push the key from the CLI process into the
-dashboard's tmux **session environment** (`tmux set-environment`), where
-it persists for the server's lifetime and reaches every later
-respawn/bounce/loop launch. `workers new` preflights: a provider-backed
-worker whose key is in neither this shell nor the session env is refused
-with a concrete message rather than launched unauthenticated. `garden
-auth status` reports both locations and heals on read (it syncs from the
-shell it runs in), so it is both the diagnostic and the fix.
+**Key delivery.** Garden bridges the operator shell to tmux explicitly, but
+does not put provider keys in the environment inherited by every pane. The
+operator-shell entry points (`provider add`, `config set provider`, dashboard
+create/attach, `workers new`, `auth status`) copy each key into a
+provider-specific **hidden** tmux environment variable. A fresh dashboard also
+passes blank `new-session -e` overrides for every configured source name, so
+its first pane cannot inherit a key before the vault sync runs. Hidden
+variables persist for the server lifetime but tmux withholds them from new processes.
+Every provider-worker create/resume/bounce/loop path uses
+`tmuxWorkerCommand`, which sends one atomic tmux command queue: unveil only
+the chosen provider variable, create or respawn the selected pane, then
+re-hide it. `providerEnvPrefix` maps that value to `ANTHROPIC_AUTH_TOKEN` and
+uses `env -u` to remove Garden's internal variable before starting the agent.
+If the target tmux command aborts the queue, a recovery call re-hides the
+variable before the error escapes. Unrelated workers and project shells never
+inherit provider tokens. `workers new` preflights: a provider-backed worker
+whose key is in neither this shell nor the hidden vault is refused with a
+concrete message rather than launched unauthenticated. `garden auth status`
+reports both locations and heals on read, so it is both the diagnostic and
+the fix. An upgrade bridge migrates and removes the ordinary session variable
+written by older Garden versions.
 
 Operator surface (implemented; the `workers new --provider` per-worker
 override is Phase 2):
@@ -500,9 +509,11 @@ interface HarnessAdapter {
     promptSubmitted: boolean;      // sentinel-clear + delivery confirmation
     toolActivity: boolean;         // working heartbeat + stale detection
     askingSignal: boolean;         // the `asking` status
-    resume: boolean;               // bounce/recovery; false = cold restart
+    resume: boolean;               // bounce/recovery; false = resume requests rejected
     sandbox: boolean;              // harness-enforced sandbox available
     skills: boolean;               // native skill mechanism; false = fold into rules
+    providerProfiles: boolean;     // consumes Garden's ANTHROPIC_* provider contract
+    workerWorkflows: string[];     // explicit, fail-closed workflow allowlist
   };
 }
 ```
@@ -562,7 +573,7 @@ Notes pinned down by the audit:
 ### Capability tiers and degradation policy
 
 Garden refuses to silently degrade. Each adapter's capability flags place
-it in a tier, displayed in the status pane and enforced at spawn time:
+it in a tier and are enforced at spawn time:
 
 - **Tier A (full parity)**: all events. claude-code today; Codex lands
   here via `hooks.json` with one documented caveat — its
@@ -578,6 +589,13 @@ it in a tier, displayed in the status pane and enforced at spawn time:
 - **No tier (rejected)**: a harness with no turn-end signal cannot run
   workers. STATUS.md's no-polling invariant is preserved by refusing the
   harness, not by polling around it. aider and goose sit here today.
+
+Spawn enforcement also rejects a harness without a sandbox, a workflow not
+listed in `workerWorkflows`, a resume operation when `resume` is false, or a
+provider-backed worker whose harness has `providerProfiles: false`. Provider
+profiles are specifically Claude Code's Anthropic-compatible env-swap
+contract; they are not a generic model-routing mechanism for foreign
+harnesses.
 
 ### Mixed fleets and the review pipeline
 

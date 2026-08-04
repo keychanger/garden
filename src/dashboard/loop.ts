@@ -30,12 +30,14 @@ import {
   type WorktreeCommandOptions,
 } from "./create.js";
 import { getHarness } from "./harness/index.js";
+import { getHarnessCore, workerLaunchCompatibilityError } from "./harness/core.js";
 import { dispatchDelayedSeed, paneHasOperatorDraft } from "./continue.js";
 import { log } from "./log.js";
 import {
   findWorkerByName, updateWorkerFields, type WorkerEntry,
 } from "./registry.js";
 import { resolveGardenRunner } from "./runner.js";
+import { tmuxWorkerCommand } from "./claude-env.js";
 import { readDashState } from "./state.js";
 import {
   tmux, shellEscape, getFirstPaneId, paneExists, windowExists,
@@ -146,6 +148,24 @@ export function loopAutoContinueAfterMerge(
     return false;
   }
 
+  const launchHarness = workerCommandOpts.harness ?? entry.harness;
+  const launchProvider = workerCommandOpts.provider ?? entry.provider;
+  const launchProject = workerProject(project, launchProvider);
+  const compatibilityError = workerLaunchCompatibilityError(
+    getHarnessCore(launchHarness),
+    {
+      workflow: entry.workflow ?? "default",
+      provider: launchProject.provider ?? null,
+    },
+  );
+  if (compatibilityError) {
+    log.error("workers", `${hooks.logTag} continue rejected: incompatible harness capabilities`, {
+      worker: workerName,
+      data: { project: projectName, error: compatibilityError },
+    });
+    return false;
+  }
+
   const paneId = resolveWorkerPaneId(projectName, workerName);
   if (!paneId) {
     log.warn("workers", `${hooks.logTag} continue skipped, no pane`, {
@@ -179,14 +199,14 @@ export function loopAutoContinueAfterMerge(
   // Under the worker's own backend, matching the respawn env below — a refresh
   // that reverted the sandbox to the project's provider would leave the loop's
   // next iteration pointed at one endpoint with another allowlisted.
-  getHarness(entry.harness).installRuntimeConfig(
-    wtPath, workerProject(project, entry.provider),
+  getHarness(launchHarness).installRuntimeConfig(
+    wtPath, launchProject,
   );
 
   // Regenerate sessionId per iteration — Claude cold-starts in the pane with
   // no prior conversation history. Persist BEFORE the respawn so concurrent
   // reads see the new value.
-  const newSessionId = getHarness(entry.harness).allocateSessionId();
+  const newSessionId = getHarness(launchHarness).allocateSessionId();
   const respawnCmd = buildWorktreeWorkerCommand(
     projectName,
     project.path,
@@ -199,10 +219,10 @@ export function loopAutoContinueAfterMerge(
     // unless the hooks caller already pinned one.
     {
       ...workerCommandOpts,
-      harness: workerCommandOpts.harness ?? entry.harness,
+      harness: launchHarness,
       // Same reasoning for the backend: a respawn must reach the same endpoint
       // the worker has been building against, not the project default.
-      provider: workerCommandOpts.provider ?? entry.provider,  // "" = explicit first-party, preserved by ??
+      provider: launchProvider,  // "" = explicit first-party, preserved by ??
     },
   );
   updateWorkerFields(projectName, workerName, {
@@ -220,7 +240,10 @@ export function loopAutoContinueAfterMerge(
   // the same pane. Same primitive bounceWorker uses; the difference is we
   // pass --session-id (fresh) instead of --resume.
   try {
-    tmux("respawn-pane", "-k", "-c", wtPath, "-t", paneId, "sh", "-c", respawnCmd);
+    tmuxWorkerCommand(
+      launchProject,
+      "respawn-pane", "-k", "-c", wtPath, "-t", paneId, "sh", "-c", respawnCmd,
+    );
   } catch (err) {
     log.error("workers", `${hooks.logTag} respawn-pane failed`, {
       worker: workerName, data: { project: projectName, error: String(err) },

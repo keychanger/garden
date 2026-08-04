@@ -184,6 +184,8 @@ export const codexCore: HarnessCore = {
     resume: true,
     sandbox: true,
     skills: false,
+    providerProfiles: false,
+    workerWorkflows: ["default"],
   },
 
   // Codex assigns its OWN session id (thread_id) at launch — garden cannot

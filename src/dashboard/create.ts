@@ -37,8 +37,12 @@ import {
   GROW_SKILL_CONTENT, GROW_SKILL_DIRNAME, GROW_SKILL_FILENAME,
   BOTANIST_SKILL_CONTENT, BOTANIST_SKILL_DIRNAME, BOTANIST_SKILL_FILENAME,
 } from "./skills.js";
-import { workerEnvPrefix, syncAllProviderTokens } from "./claude-env.js";
+import {
+  providerSessionSanitizerArgs, workerEnvPrefix,
+  syncAllProviderTokenVaults, tmuxWorkerCommand,
+} from "./claude-env.js";
 import { getHarness } from "./harness/index.js";
+import { getHarnessCore, workerLaunchCompatibilityError } from "./harness/core.js";
 import { buildSettingsJson } from "./harness/claude-code.js";
 import { gardenWindowName, shellWindowName as shellWin, workerWindowName as workerWin, isGardenWindow } from "./window-names.js";
 
@@ -71,10 +75,10 @@ export function ensureDashboard(): void {
       return h;
     });
 
-    // Re-push provider API keys into the session env on every attach — this
-    // process has the operator's shell env; the running server's env was
-    // frozen at its creation.
-    try { syncAllProviderTokens(loadConfig()); } catch { /* config unavailable */ }
+    // Refresh provider API keys in hidden tmux state on every attach. The
+    // running server retains them for scoped worker bounce/resume without
+    // putting them in the environment inherited by ordinary panes.
+    try { syncAllProviderTokenVaults(loadConfig()); } catch { /* config unavailable */ }
 
     // Heal sessions from older builds that left history-limit at tmux's 2000-line default.
     try { tmux("set-option", "-t", DASHBOARD_SESSION, "history-limit", "1000000"); } catch { /* ignore */ }
@@ -191,12 +195,13 @@ export function ensureDashboard(): void {
 
   tmux(
     "new-session", "-d", "-s", DASHBOARD_SESSION, "-n", "main", "-c", cwd,
+    ...providerSessionSanitizerArgs(config),
     "-x", cols, "-y", rows
   );
 
-  // The fresh server inherited this process's env, but set-environment makes
-  // the provider keys survive server-env quirks and later config edits.
-  syncAllProviderTokens(config);
+  // Move provider keys out of the fresh server's inheritable environment and
+  // into hidden tmux state retained for scoped worker launches.
+  syncAllProviderTokenVaults(config);
 
   tmux("set-option", "-t", DASHBOARD_SESSION, "set-titles", "on");
   tmux("set-option", "-t", DASHBOARD_SESSION, "set-titles-string", "garden");
@@ -329,7 +334,10 @@ export function ensureDashboard(): void {
       const wasInterrupted = resumeStatus === "ready";
       updateWorkerFields(projectName, entry.name, { agentStatus: resumeStatus });
       const workerWindowName = respawnWorkerWindow(projectName, projectConfig, entry, rightSize);
-      if (!workerWindowName) continue;
+      if (!workerWindowName) {
+        updateWorkerFields(projectName, entry.name, { agentStatus: "exited" });
+        continue;
+      }
 
       if (projectName === state.activeProject && !firstResumedWindow) {
         firstResumedWindow = workerWindowName;
@@ -1019,13 +1027,29 @@ export function respawnWorkerWindow(
   size: { width: number; height: number } | null,
 ): string | null {
   if (!entry.sessionId) return null;
+  const launchProject = workerProject(projectConfig, entry.provider);
+  const compatibilityError = workerLaunchCompatibilityError(
+    getHarnessCore(entry.harness),
+    {
+      workflow: entry.workflow ?? "default",
+      provider: launchProject.provider ?? null,
+      resume: true,
+    },
+  );
+  if (compatibilityError) {
+    log.error("workers", "worker resume rejected: incompatible harness capabilities", {
+      worker: entry.name,
+      data: { project: projectName, error: compatibilityError },
+    });
+    return null;
+  }
   // Per-worker base: honors entry.baseBranch pinned at creation, falls
   // back to current-checkout resolution for legacy entries.
   const baseBranch = getWorkerBaseBranch(entry, projectConfig.path);
   if (entry.worktreePath && wtExists(entry.worktreePath)) {
     installPollTriggerHook(entry.worktreePath, resolveGardenRunner(), projectName);
     getHarness(entry.harness).installRuntimeConfig(
-      entry.worktreePath, workerProject(projectConfig, entry.provider),
+      entry.worktreePath, launchProject,
     );
   }
   const workerCwd = entry.worktreePath ?? projectConfig.path;
@@ -1059,7 +1083,10 @@ export function respawnWorkerWindow(
   if (size) resizeWindow(workerWindowName, size.width, size.height);
   const workerPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindowName}`);
   if (workerPaneId) {
-    tmux("respawn-pane", "-k", "-c", workerCwd, "-t", workerPaneId, "sh", "-c", resumeCmd);
+    tmuxWorkerCommand(
+      launchProject,
+      "respawn-pane", "-k", "-c", workerCwd, "-t", workerPaneId, "sh", "-c", resumeCmd,
+    );
     setPaneLabel(workerPaneId, entry.name);
     setPaneVar(workerPaneId, "garden_clock", "1");
     setPaneProjectColor(workerPaneId, projectName);

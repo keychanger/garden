@@ -32,6 +32,7 @@ vi.mock("../src/dashboard/window-names.js", () => ({
 
 import {
   tmux,
+  tmuxWithHiddenEnvironment,
   tmuxBatch,
   tmuxOutput,
   tmuxSplit,
@@ -393,6 +394,49 @@ describe("tmuxNewWindow", () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "tmux",
       ["new-window", "-P", "-F", "#{pane_id}", "-d", "-t", "garden-dashboard", "-n", "test"],
+      expect.anything(),
+    );
+  });
+});
+
+describe("tmuxWithHiddenEnvironment", () => {
+  it("unhides the variable only around one atomic tmux command queue", () => {
+    tmuxWithHiddenEnvironment(
+      "GARDEN_PROVIDER_TOKEN_ABC",
+      "respawn-pane", "-k", "-t", "%7", "sh", "-c", "run",
+    );
+
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      [
+        "set-environment", "-F", "-t", "garden-dashboard",
+        "GARDEN_PROVIDER_TOKEN_ABC", "#{GARDEN_PROVIDER_TOKEN_ABC}",
+        ";", "respawn-pane", "-k", "-t", "%7", "sh", "-c", "run",
+        ";", "set-environment", "-hF", "-t", "garden-dashboard",
+        "GARDEN_PROVIDER_TOKEN_ABC", "#{GARDEN_PROVIDER_TOKEN_ABC}",
+      ],
+      expect.anything(),
+    );
+  });
+
+  it("re-hides the variable when the scoped command fails", () => {
+    mockExecFileSync
+      .mockImplementationOnce(() => { throw new Error("spawn failed"); })
+      .mockReturnValueOnce("");
+
+    expect(() => tmuxWithHiddenEnvironment(
+      "GARDEN_PROVIDER_TOKEN_ABC",
+      "respawn-pane", "-k", "-t", "%7", "sh", "-c", "run",
+    )).toThrow(/tmux set-environment failed/);
+
+    expect(mockExecFileSync).toHaveBeenCalledTimes(2);
+    expect(mockExecFileSync).toHaveBeenLastCalledWith(
+      "tmux",
+      [
+        "set-environment", "-hF", "-t", "garden-dashboard",
+        "GARDEN_PROVIDER_TOKEN_ABC", "#{GARDEN_PROVIDER_TOKEN_ABC}",
+      ],
       expect.anything(),
     );
   });

@@ -221,6 +221,8 @@ describe("claude-code adapter dialect", () => {
       resume: true,
       sandbox: true,
       skills: true,
+      providerProfiles: true,
+      workerWorkflows: ["default", "grow", "trellis", "botanist"],
     });
   });
 
@@ -367,7 +369,41 @@ describe("codex adapter dialect", () => {
     expect(getHarnessCore("codex").capabilities).toEqual({
       turnEnd: true, promptSubmitted: true, toolActivity: true, askingSignal: true,
       resume: true, sandbox: true, skills: false,
+      providerProfiles: false, workerWorkflows: ["default"],
     });
+  });
+
+  it("rejects unsupported autonomous-worker requirements before launch", async () => {
+    const { getHarnessCore, workerLaunchCompatibilityError } = await importCore();
+    const codex = getHarnessCore("codex");
+
+    expect(workerLaunchCompatibilityError(codex, {
+      workflow: "default", provider: "deepseek",
+    })).toMatch(/does not support provider profiles/);
+    expect(workerLaunchCompatibilityError(codex, {
+      workflow: "grow", provider: null,
+    })).toMatch(/does not support workflow 'grow'/);
+
+    const unsafe = {
+      ...getHarnessCore(),
+      name: "unsafe",
+      capabilities: { ...getHarnessCore().capabilities, sandbox: false },
+    };
+    expect(workerLaunchCompatibilityError(unsafe, {
+      workflow: "default", provider: null,
+    })).toMatch(/does not provide a sandbox/);
+
+    const noResume = {
+      ...getHarnessCore(),
+      name: "no-resume",
+      capabilities: { ...getHarnessCore().capabilities, resume: false },
+    };
+    expect(workerLaunchCompatibilityError(noResume, {
+      workflow: "default", provider: null, resume: true,
+    })).toMatch(/cannot resume sessions/);
+    expect(workerLaunchCompatibilityError(noResume, {
+      workflow: "default", provider: null, resume: false,
+    })).toBeNull();
   });
 
   it("classifies a transient backend error but not a clean verdict", async () => {
