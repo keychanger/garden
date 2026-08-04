@@ -1,18 +1,9 @@
 // Default workflow definition: reproduces pre-refactor behavior bit-for-bit.
 // validTransitions is a literal copy of the old VALID_TRANSITIONS constant
 // from poller-state.ts (the constant was removed when transitionState moved
-// to registry-routed dispatch). stateHandlers and hookHandlers point at the
-// existing handler functions — none of those handlers need to change for
-// the foundation refactor.
-//
-// hookHandlers is a captured value (no getter). The init cycle that used to
-// force the getter (workflows/default.ts -> hooks/default.ts -> header.ts ->
-// workflows/index.ts -> workflows/default.ts) was eliminated by extracting
-// handleClaudeHook out of header.ts into hook-dispatcher.ts, so header.ts
-// no longer imports from workflows/. The bundled regression test
-// (test/integration/claude-hook-bundled.real.test.ts) now runs as part of
-// the default `npm test` and gates this on every reviewer pass.
-import { defaultHookHandlers } from "../hooks/default.js";
+// to registry-routed dispatch). stateHandlers point at the existing handler
+// functions — none of those handlers need to change for the foundation
+// refactor. Agent hooks are shared outside the workflow state graph.
 import { handleCiFixing } from "../poller-ci-fix.js";
 import { handleMergePending, handleMerged } from "../poller-merge.js";
 import { handleResolving } from "../poller-resolve.js";
@@ -33,5 +24,4 @@ export const defaultWorkflow: WorkflowDefinition = {
     merged: handleMerged,
     done: handleDone,
   },
-  hookHandlers: defaultHookHandlers,
 };

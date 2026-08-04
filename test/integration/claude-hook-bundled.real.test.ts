@@ -21,16 +21,11 @@ function runHookBundle(args: string[], opts: { home: string; cwd: string; logLev
   });
 }
 
-// Regression: when hooks/default.ts and workflows/default.ts participated in
-// a module-init cycle, esbuild captured workflow.hookHandlers as undefined
-// and every Claude Code hook crashed with
-//   "Cannot read properties of undefined (reading 'onStop')"
-// Vitest's source-level module resolution doesn't reproduce the bundling
-// order, so the broken bundle could still pass unit tests. This test runs
-// the real bundle from inside a worktree-shaped cwd so the hook actually
-// reaches pickHookMethod (the crash site) — when cwd is outside any
-// worktree, handleClaudeHook short-circuits at workerFromCwd and never
-// dereferences workflow.hookHandlers.
+// Regression: hook dispatch has previously failed only in the production
+// esbuild bundle because module-init ordering differed from Vitest's
+// source-module execution. This test runs the real bundle from inside a
+// worktree-shaped cwd so the hook reaches pickHookMethod instead of returning
+// early from workerFromCwd.
 const env = useGitTmpHome();
 
 const PROJECT = "myproject";
@@ -72,9 +67,8 @@ beforeEach(() => {
 
 describe("dashboard _claude-hook (bundled)", () => {
   it("exits cleanly for every Claude Code hook event", () => {
-    // Each event routes through pickHookMethod into a different hook method
-    // on workflow.hookHandlers. If any handler is undefined (cycle bug) the
-    // hook crashes with "Cannot read properties of undefined".
+    // Each event routes through pickHookMethod into a different shared hook
+    // method. A missing handler must fail in the production bundle too.
     for (const event of ["sessionstart", "prompt", "notification", "pretooluse", "posttooluse"]) {
       const result = runCli(["dashboard", "_claude-hook", event], {
         home: env.home,
@@ -100,8 +94,7 @@ describe("dashboard _claude-hook (bundled)", () => {
   });
 
   // The dedicated minimal bundle (dist/hook.js) has its own import closure, so
-  // it needs the same module-init-cycle guard the full cli.js path gets above:
-  // a cycle that left workflow.hookHandlers undefined would crash here too.
+  // exercise it separately from the full cli.js path above.
   it("the minimal hook bundle exits cleanly for every event", () => {
     for (const event of ["sessionstart", "prompt", "notification", "pretooluse", "posttooluse", "stop"]) {
       const result = runHookBundle([event], { home: env.home, cwd: worktreePath });

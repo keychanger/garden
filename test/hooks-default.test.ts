@@ -44,7 +44,7 @@ vi.mock("../src/config.js", () => ({
   tryGetProject: vi.fn(() => ({ path: "/repo/myproject" })),
 }));
 
-import { defaultHookHandlers } from "../src/dashboard/hooks/default.js";
+import { workerHookHandlers } from "../src/dashboard/hooks/default.js";
 import { updateWorkerFields } from "../src/dashboard/registry.js";
 import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
@@ -82,7 +82,7 @@ describe("onToolActivity — mid-review-edit marker", () => {
   });
 
   it("stamps reviewInterruptedAt and pokes the poller on a mutating tool during review", () => {
-    defaultHookHandlers.onToolActivity(toolCtx({ prState: "reviewing" }, "Edit"));
+    workerHookHandlers.onToolActivity(toolCtx({ prState: "reviewing" }, "Edit"));
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       { reviewInterruptedAt: expect.any(Number) });
@@ -92,14 +92,14 @@ describe("onToolActivity — mid-review-edit marker", () => {
   it("covers each mutating tool", () => {
     for (const tool of ["Edit", "MultiEdit", "Write", "NotebookEdit"]) {
       vi.clearAllMocks();
-      defaultHookHandlers.onToolActivity(toolCtx({ prState: "reviewing" }, tool));
+      workerHookHandlers.onToolActivity(toolCtx({ prState: "reviewing" }, tool));
       expect(interruptStamps(), tool).toHaveLength(1);
     }
   });
 
   it("ignores read-only tools — an operator Q&A turn must not cancel the review", () => {
     for (const tool of ["Read", "Grep", "Glob", "Bash", "WebFetch", "TodoWrite"]) {
-      defaultHookHandlers.onToolActivity(toolCtx({ prState: "reviewing" }, tool));
+      workerHookHandlers.onToolActivity(toolCtx({ prState: "reviewing" }, tool));
     }
     expect(interruptStamps()).toHaveLength(0);
     expect(triggerProjectPoll).not.toHaveBeenCalled();
@@ -107,20 +107,20 @@ describe("onToolActivity — mid-review-edit marker", () => {
 
   it("ignores mutating tools outside the reviewing state", () => {
     for (const prState of [undefined, "working", "merge-pending", "merged", "done"] as const) {
-      defaultHookHandlers.onToolActivity(toolCtx({ prState }, "Edit"));
+      workerHookHandlers.onToolActivity(toolCtx({ prState }, "Edit"));
     }
     expect(interruptStamps()).toHaveLength(0);
   });
 
   it("stamps once — an already-marked review is not re-stamped", () => {
-    defaultHookHandlers.onToolActivity(
+    workerHookHandlers.onToolActivity(
       toolCtx({ prState: "reviewing", reviewInterruptedAt: 12345 }, "Edit"));
     expect(interruptStamps()).toHaveLength(0);
     expect(triggerProjectPoll).not.toHaveBeenCalled();
   });
 
   it("ignores a tool event with no tool_name (foreign harness relay)", () => {
-    defaultHookHandlers.onToolActivity(toolCtx({ prState: "reviewing" }));
+    workerHookHandlers.onToolActivity(toolCtx({ prState: "reviewing" }));
     expect(interruptStamps()).toHaveLength(0);
   });
 });

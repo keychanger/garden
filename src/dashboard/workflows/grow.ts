@@ -13,7 +13,6 @@
 // on the wire — a worker stamped with `workflow: "grow"` here walks the
 // same review/merge lifecycle as a default worker. The per-iteration cold
 // respawn that distinguishes grow from default lands later.
-import { defaultHookHandlers } from "../hooks/default.js";
 import { handleCiFixing } from "../poller-ci-fix.js";
 import { handleMergePending, handleMerged } from "../poller-merge.js";
 import { handleResolving } from "../poller-resolve.js";
@@ -34,7 +33,6 @@ export const growWorkflow: WorkflowDefinition = {
     merged: handleMerged,
     done: handleDone,
   },
-  hookHandlers: defaultHookHandlers,
   // workerModel and reviewerModel both unset — grow uses the account
   // default. Loops are bounded by N, not by quality concerns the way
   // trellis is.

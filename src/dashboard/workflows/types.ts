@@ -1,7 +1,8 @@
 // Workflow definition types. A WorkflowDefinition is a data record that
-// describes how a worker's lifecycle is processed: which state machine
-// transitions are valid, which handlers run for each state, and how the
-// worker's Claude Code hooks are dispatched. See WORKFLOWS.md Component 4.
+// describes how a worker's poller lifecycle is processed: which state machine
+// transitions are valid and which handlers run for each state. Agent hooks are
+// shared lifecycle plumbing and stay outside this graph so the hot hook bundle
+// does not retain poller handlers. See WORKFLOWS.md Component 4.
 //
 // The default workflow (workflows/default.ts) reproduces the pre-refactor
 // behavior bit-for-bit. Future workflows declare their own definitions
@@ -15,9 +16,9 @@ export type StateHandler = (
   entry: WorkerEntry,
 ) => boolean;
 
-// Thin context passed to hook handlers. The default handler builds a richer
+// Thin context passed to hook handlers. The shared handler builds a richer
 // accumulator pattern privately — that stays out of this type and is an
-// implementation detail of defaultHookHandlers in hooks/default.ts.
+// implementation detail of workerHookHandlers in hooks/default.ts.
 export interface HookContext {
   event: string;
   /** Raw JSON parsed from stdin. Currently the only field consumed is
@@ -58,9 +59,6 @@ export interface WorkflowDefinition {
    *  a handler that returns `false` (no-op) so the contract stays
    *  exhaustive and the dispatcher needs no defensive runtime check. */
   stateHandlers: Record<PrState, StateHandler>;
-  /** Dispatched by handleClaudeHook in hook-dispatcher.ts. The default
-   *  workflow's handlers live in hooks/default.ts. */
-  hookHandlers: WorkflowHookHandlers;
   /** Default model for worker iterations. When set, the worker bootstrap
    *  passes `--model <workerModel>` to claude unless the worker entry
    *  carries a per-worker override (`WorkerEntry.trellis.workerModel`).

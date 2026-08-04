@@ -438,15 +438,20 @@ export interface WorkflowDefinition {
    *  register a no-op (`() => false`); the type contract leaves the
    *  dispatcher in poller.ts free of defensive runtime guards. */
   stateHandlers: Record<PrState, StateHandler>;
-  /** Dispatched by handleClaudeHook. Default workflow's handlers are
-   *  the current code, extracted unchanged. */
-  hookHandlers: WorkflowHookHandlers;
 }
 ```
 
 `HookContext` and `HookAction` are extracted from the current Claude hook
 handler in `src/dashboard/header.ts`. The shape is whatever the current
 code already builds; this refactor just names it.
+
+`WorkflowHookHandlers` is the shared normalized hook contract, not a field on
+`WorkflowDefinition`. All shipped workflows use the same agent-activity
+semantics (session start, prompt, turn end, operator block, tool activity), so
+`hook-dispatcher.ts` binds directly to `workerHookHandlers`. Workflow
+definitions remain poller-only. This boundary is load-bearing: importing the
+workflow registry from the per-tool-call hook retained every review, merge,
+resolve, and CI-fix handler in `dist/hook.js`.
 
 ```ts
 // index.ts
@@ -469,7 +474,6 @@ import { handleWorking, handleReviewing } from "../poller-review.js";
 import { handleMergePending, handleMerged } from "../poller-merge.js";
 import { handleResolving } from "../poller-resolve.js";
 import { handleFailing, handleDone } from "../poller-state.js";
-import { defaultHookHandlers } from "../hooks/default.js"; // see Phase 4
 import type { WorkflowDefinition } from "./types.js";
 
 export const defaultWorkflow: WorkflowDefinition = {
@@ -492,7 +496,6 @@ export const defaultWorkflow: WorkflowDefinition = {
     merged: handleMerged,
     done: handleDone,
   },
-  hookHandlers: defaultHookHandlers,
 };
 ```
 
@@ -576,22 +579,21 @@ export function transitionState(...): void {
 The `VALID_TRANSITIONS` exported constant is removed. Any external import
 breaks at compile time and is migrated to `getWorkflow(name).validTransitions`.
 
-#### 5c — Claude hook handler (`src/dashboard/header.ts`)
+#### 5c — Claude hook handler (`src/dashboard/hook-dispatcher.ts`)
 
 Today, `handleClaudeHook` is one big switch on hook kind that writes to
 the registry directly. After the refactor:
 
-1. Extract the existing handler bodies into `defaultHookHandlers` in
+1. Extract the existing handler bodies into `workerHookHandlers` in
    `src/dashboard/hooks/default.ts`. Functions are unchanged in behavior;
    only the location changes.
-2. `handleClaudeHook` becomes a thin dispatcher: read the worker's
-   workflow, look it up, call the appropriate `hookHandlers.onXxx` method.
-3. `defaultHookHandlers` is what the default workflow points to.
+2. `handleClaudeHook` becomes a thin dispatcher: translate the harness wire
+   event and call the matching shared `workerHookHandlers.onXxx` method.
+3. Keep the dispatcher and handlers free of `workflows/index.ts`; only the
+   FIFO wake primitive may cross from the poller side into the hook graph.
 
-The reviewer/resolver short-circuit (`GARDEN_REVIEWER=1` env flag) lives
-inside the default hook handlers — it is workflow-specific, not a
-top-level concern. Future workflows that want different reviewer-tagging
-can override it.
+The reviewer/resolver short-circuit (`GARDEN_REVIEWER=1` env flag) lives at
+the top of the dispatcher, before worktree or registry reads.
 
 This is the part of the refactor that has the most surface area in
 existing code. It is sequenced last (Phase 4) so the first three phases
@@ -729,15 +731,17 @@ tests pass unchanged.
 **Acceptance**: integration tests pass unchanged. New integration test
 passes. No behavior change observable from outside the dashboard.
 
-#### Phase 4 — Hook handler workflow-awareness
+#### Phase 4 — Shared hook handler extraction
 
 **Deliverables**:
 - `src/dashboard/hooks/default.ts` with the existing hook handler bodies
   relocated.
-- `handleClaudeHook` (now in `hook-dispatcher.ts`, originally in `header.ts`) becomes a registry-aware dispatcher.
-- The default workflow points to `defaultHookHandlers`.
-- Tests for the hook dispatcher (`handleClaudeHook` reads
-  `entry.workflow`, looks up the workflow, calls the right method).
+- `handleClaudeHook` (now in `hook-dispatcher.ts`, originally in `header.ts`)
+  translates wire events onto `workerHookHandlers`.
+- Workflow definitions remain poller-only; the hook import graph must not
+  retain workflow state handlers.
+- Tests for hook behavior plus an esbuild-metafile guard that rejects poller
+  state modules and a bundle above 128KB.
 
 **Acceptance**: `test/claude-hook.test.ts` and
 `test/integration/claude-hook.real.test.ts` pass unchanged. Hook
@@ -1058,7 +1062,7 @@ load-bearing files are:
 
 | File                                              | Purpose                                                                                                       |
 |---------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
-| `src/dashboard/workflows/trellis.ts`              | New file. The `WorkflowDefinition` itself: validTransitions, stateHandlers, hookHandlers, `workerModel: "sonnet"`, `reviewerModel: "opus"`. |
+| `src/dashboard/workflows/trellis.ts`              | New file. The `WorkflowDefinition` itself: validTransitions, stateHandlers, `workerModel: "sonnet"`, `reviewerModel: "opus"`. |
 | `src/dashboard/workflows/types.ts`                | Extend `WorkflowDefinition` with `workerModel?: "opus" \| "sonnet"` and `reviewerModel?: "opus" \| "sonnet"`. |
 | `src/dashboard/workflows/index.ts`                | Register `trellisWorkflow` in the registry.                                                                  |
 | `src/dashboard/registry.ts`                       | Extend `WorkerEntry` with the trellis fields and `failingReason` (see "Worker entry additions").             |
@@ -1108,13 +1112,13 @@ in the **state handlers**: `handleReviewing` parses a trellis-specific
 verdict vocabulary, and the post-merge auto-continue dispatcher emits a
 trellis-shaped prompt.
 
-#### Hook handlers
+#### Agent hooks
 
-Trellis wires `defaultHookHandlers` directly — `onSessionStart`,
-`onPromptSubmitted`, `onBlockedOnOperator`, `onToolActivity`, and
-`onTurnEnded` are all the default implementations (the trellis-specific
-behavior lives in the state handlers, not in hook overrides). What
-`onTurnEnded` does for a vine:
+Trellis uses the shared `workerHookHandlers` automatically —
+`WorkflowDefinition` carries no hook table. `onSessionStart`,
+`onPromptSubmitted`, `onBlockedOnOperator`, `onToolActivity`, and `onTurnEnded`
+have the same semantics for every workflow; trellis-specific behavior lives in
+the poller state handlers. What `onTurnEnded` does for a vine:
 
 - **Stop with new commits ahead of base** — same as default: pokes the
   poller FIFO, sets `pendingReviewAt`. Triggers an iteration.
@@ -2398,9 +2402,9 @@ section, the code is wrong.**
 
 Grow is the second workflow registered against the foundation
 (`workflows/index.ts`). It reuses default's verdict vocabulary
-(CLEAN/FIXED/FAILED), default's `hookHandlers`, and default's
-state handlers — only the post-merge dispatch and the iteration counter
-diverge.
+(CLEAN/FIXED/FAILED) and state handlers — only the post-merge dispatch and the
+iteration counter diverge. Agent activity hooks are shared outside the workflow
+registry.
 
 ### Why this exists
 
@@ -2821,8 +2825,8 @@ handoff).
 
 - `workflows/botanist.ts` — the definition (reuses default's 8 state handlers;
   `skipsReviewMerge`, `workerModel: "opus"`, `workerEffort: "xhigh"`).
-- `botanist-paths.ts` — `isPublishablePath` leaf (kept light: reachable from the
-  lean `dist/hook.js` closure via `poller-review.ts`).
+- `botanist-paths.ts` — `isPublishablePath` leaf, letting the poller enforce the
+  boundary without importing the publish mutation path.
 - `botanist-publish.ts` — `publishBotanistArtifact` (move + commit + `.garden-done`;
   no push — the poller merge pushes).
 - `botanist-prompts.ts` — `buildBotanistSeed` (plant-time framing; only used

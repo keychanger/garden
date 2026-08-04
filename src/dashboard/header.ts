@@ -1,12 +1,9 @@
 // Dashboard header and status bar: renders active project context (left)
 // and garden build version (right) in the tmux status line. Also owns the
 // pane-died and pane-title-changed handlers and the dashboard-refresh
-// orchestration. The Claude Code hook dispatcher (handleClaudeHook) lives
-// in hook-dispatcher.ts — it must NOT live here, because hooks/default.ts
-// statically imports header.ts for findWorkerPaneId/refreshDashboard, and
-// header.ts importing workflows/index.ts (which the dispatcher needs)
-// would close the init cycle that previously crashed every Claude Code
-// hook. Keep this file workflows-free.
+// orchestration. The Claude Code hook dispatcher (handleClaudeHook) lives in
+// hook-dispatcher.ts. Keep this file workflows-free: it is imported by the hot
+// hook path, while workflows/index.ts retains every poller state handler.
 import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR, loadConfig, tryGetProject, plotsMap, isPlotFocused, logColorKeyForProject } from "../config.js";
@@ -331,7 +328,7 @@ export function installInputGuard(state: DashboardState): void {
 }
 
 // Locate a worker's pane regardless of whether it's currently visible in the
-// right slot or parked in a hidden window. Used by the default hook handler
+// right slot or parked in a hidden window. Used by the shared hook handler
 // to read the live tmux pane title (which Claude sets via terminal escape
 // sequences and which doubles as a "what is this worker doing" summary), and
 // by the dashboard's task-refresh paths (handleTitleChanged, refreshWorkerTasks).

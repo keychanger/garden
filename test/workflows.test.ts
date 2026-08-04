@@ -101,7 +101,6 @@ describe("getWorkflow", () => {
       name: "test-workflow",
       validTransitions: { ...PRE_REFACTOR_VALID_TRANSITIONS },
       stateHandlers: stubStateHandlers(),
-      hookHandlers: defaultWorkflow.hookHandlers,
     };
     registerWorkflow(custom);
     expect(getWorkflow("test-workflow")).toBe(custom);
@@ -154,38 +153,6 @@ describe("defaultWorkflow", () => {
     }
   });
 
-  it("hookHandlers are wired to defaultHookHandlers (Phase 4)", () => {
-    // Phase 4 wires the real handlers. A null workerInfo context is the
-    // "hook fired outside any worktree" case — the handler must early-return
-    // without throwing or mutating any registry state.
-    expect(() =>
-      defaultWorkflow.hookHandlers.onTurnEnded({ event: "stop", input: {}, workerInfo: null })
-    ).not.toThrow();
-  });
-
-  it("hookHandlers exposes one method per normalized lifecycle event", () => {
-    // The dispatcher in hook-dispatcher.ts translates wire event names to
-    // garden's normalized lifecycle methods; each must have a handler.
-    // Catches typos in the WorkflowHookHandlers type.
-    expect(typeof defaultWorkflow.hookHandlers.onSessionStart).toBe("function");
-    expect(typeof defaultWorkflow.hookHandlers.onPromptSubmitted).toBe("function");
-    expect(typeof defaultWorkflow.hookHandlers.onTurnEnded).toBe("function");
-    expect(typeof defaultWorkflow.hookHandlers.onBlockedOnOperator).toBe("function");
-    expect(typeof defaultWorkflow.hookHandlers.onToolActivity).toBe("function");
-  });
-
-  it("hookHandlers are bound at module-init time (vitest sanity check)", () => {
-    // Vitest sanity check only — it does NOT reproduce esbuild's bundling
-    // order, so it cannot catch the module-init cycle on its own. The
-    // load-bearing regression net is test/integration/claude-hook-bundled.real.test.ts,
-    // which spawns the built bundle and triggers each hook event. That
-    // bundled test is part of the default `npm test` (see vitest.config.ts).
-    // Keep this assertion as cheap insurance against the source-level form
-    // of the bug, but trust the bundled test for cycle regressions.
-    expect(defaultWorkflow.hookHandlers).not.toBeUndefined();
-    expect(defaultWorkflow.hookHandlers.onTurnEnded).not.toBeUndefined();
-    expect(typeof defaultWorkflow.hookHandlers.onTurnEnded).toBe("function");
-  });
 });
 
 describe("trellisWorkflow (phase 1 skeleton)", () => {
@@ -215,13 +182,6 @@ describe("trellisWorkflow (phase 1 skeleton)", () => {
     }
   });
 
-  it("phase 1 reuses default's hookHandlers verbatim", () => {
-    // Phase 2 may override individual hook methods; phase 1 confirms
-    // identity reuse so Stop/UserPromptSubmit/SessionStart wiring is
-    // shared with default workers.
-    expect(trellisWorkflow.hookHandlers).toBe(defaultWorkflow.hookHandlers);
-  });
-
   it("default workflow leaves workerModel/reviewerModel unset (no behavior change)", () => {
     expect(defaultWorkflow.workerModel).toBeUndefined();
     expect(defaultWorkflow.reviewerModel).toBeUndefined();
@@ -248,12 +208,6 @@ describe("growWorkflow", () => {
         `grow workflow missing handler for state ${state}`,
       ).toBeDefined();
     }
-  });
-
-  it("reuses default's hookHandlers verbatim while no per-iteration mechanics are wired", () => {
-    // Identity reuse confirms Stop/UserPromptSubmit/SessionStart wiring is
-    // shared with default. Future work may override individual hook methods.
-    expect(growWorkflow.hookHandlers).toBe(defaultWorkflow.hookHandlers);
   });
 
   it("leaves workerModel and reviewerModel unset (account default applies)", () => {
@@ -299,10 +253,6 @@ describe("botanistWorkflow", () => {
     }
   });
 
-  it("reuses default's hookHandlers verbatim", () => {
-    expect(botanistWorkflow.hookHandlers).toBe(defaultWorkflow.hookHandlers);
-  });
-
   it("declares the designer seat: workerModel 'opus', workerEffort 'xhigh', no reviewerModel", () => {
     // Design is judgment-heavy, so the designer defaults to Opus at max effort.
     // No reviewerModel — a botanist branch runs no reviewer.
@@ -328,7 +278,6 @@ describe("registerWorkflow", () => {
       name: "override-test",
       validTransitions: { ...PRE_REFACTOR_VALID_TRANSITIONS },
       stateHandlers: stubStateHandlers(),
-      hookHandlers: defaultWorkflow.hookHandlers,
     };
     registerWorkflow(replacement);
     expect(getWorkflow("override-test")).toBe(replacement);
@@ -339,7 +288,6 @@ describe("registerWorkflow", () => {
       name: "duplicate-test",
       validTransitions: { ...PRE_REFACTOR_VALID_TRANSITIONS },
       stateHandlers: stubStateHandlers(),
-      hookHandlers: defaultWorkflow.hookHandlers,
     };
     registerWorkflow(first);
     vi.mocked(log.warn).mockClear();

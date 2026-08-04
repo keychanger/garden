@@ -16,7 +16,7 @@ A tmux session (`garden-dashboard`) that serves as the primary interface. The da
 Interactive Claude Code sessions running inside the dashboard. Each project can have multiple workers (e.g., one for a feature, one for a review). Workers persist when you switch between projects — they're parked in hidden tmux windows and swapped back in when you return.
 
 ### Workflows
-A **workflow** is a `WorkflowDefinition` (state machine + state handlers + hook handlers) that drives a worker's lifecycle. Each worker has a `workflow` field on its registry entry; the poller dispatcher and the Claude Code hook dispatcher route through `getWorkflow(name)` rather than hard-coded switches. The `default` workflow reproduces the standard "review and merge" pipeline. Alternate workflows are introduced as data, not as forks of the dispatcher. Architectural rationale: `WORKFLOWS.md`. Author guide: `AGENTS.md` § "Adding a new workflow".
+A **workflow** is a `WorkflowDefinition` (state machine + poller state handlers) that drives a worker's review/merge lifecycle. Each worker has a `workflow` field on its registry entry, and the poller dispatcher routes through `getWorkflow(name)` rather than a hard-coded switch. Agent activity hooks are shared lifecycle plumbing: `hook-dispatcher.ts` binds directly to `workerHookHandlers` and never imports the workflow registry, whose static definitions retain every review/merge/resolve handler. This keeps the per-tool-call hook graph independent from the poller graph. The `default` workflow reproduces the standard "review and merge" pipeline. Alternate workflows are introduced as data, not as forks of the poller dispatcher. Architectural rationale: `WORKFLOWS.md`. Author guide: `AGENTS.md` § "Adding a new workflow".
 
 A `WorkflowDefinition` can also set `skipsReviewMerge: true` (the **botanist** design workflow): once its branch has commits ahead of base, the shared `handleWorking` routes it `working → merge-pending` directly, never launching a reviewer — its deliverable is a design document the operator already reviewed at the human gate, not code to critique. Before the transition it enforces that the committed diff touches only the publishable `docs/` boundary (`isPublishablePath`); a botanist that committed code parks in `failing` with `failingReason: "botanist-scope"` and an operator alert, and re-publishes automatically once the non-doc files are removed and re-pushed. The CI/merge gate still applies. See `src/dashboard/poller-review.ts` `handleSkipReviewMerge` and the `garden botanist publish` command.
 
@@ -696,7 +696,7 @@ All read commands detect whether stdout is a TTY:
 
 ## Technology
 
-- TypeScript, compiled via esbuild to `dist/cli.js` (plus `dist/hook.js`, a minimal entrypoint for the per-tool-call Claude hook so its node cold-start parses only the hook dispatcher's closure; worker hook commands prefix it with a fleet-shared `NODE_COMPILE_CACHE` dir under `~/.cache` so each cold start reuses the bundle's cached V8 bytecode)
+- TypeScript, compiled via esbuild to `dist/cli.js` (plus `dist/hook.js`, a minimal entrypoint for the per-tool-call Claude hook so its node cold-start parses only the shared hook closure, not workflow/poller handlers; the minified bundle is guarded below 128KB and worker hook commands prefix it with a fleet-shared `NODE_COMPILE_CACHE` dir under `~/.cache` so each cold start reuses the bundle's cached V8 bytecode)
 - tmux for session persistence and pane management
 - `js-yaml` for config parsing
 - No CLI framework — lightweight `process.argv` dispatch with aliases

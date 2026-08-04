@@ -41,9 +41,9 @@ unaffected.
   `WorkflowDefinition` named `"trellis"` with `workerModel: "sonnet"`,
   `reviewerModel: "opus"`, `validTransitions` deep-equal to default's,
   `stateHandlers` reusing default's handlers (imports from `poller-state`,
-  `poller-review`, `poller-merge`, `poller-resolve`), `hookHandlers`
-  reusing `defaultHookHandlers`. The data-only skeleton — phase 2 swaps in
-  trellis-specific reviewing/merge handlers.
+  `poller-review`, `poller-merge`, `poller-resolve`). Agent activity hooks are
+  shared outside `WorkflowDefinition`. The data-only skeleton — phase 2 swaps
+  in trellis-specific reviewing/merge handlers.
 - `src/dashboard/workflows/index.ts` — `registerWorkflow(trellisWorkflow)`
   alongside default.
 - `src/dashboard/registry.ts` — extend `WorkerEntry` with the optional

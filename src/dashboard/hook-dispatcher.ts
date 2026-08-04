@@ -1,24 +1,15 @@
-// Claude Code hook dispatcher: looks up the worker's workflow and routes the
-// event to the appropriate hookHandlers method. Per-event behavior lives in
-// the workflow's hookHandlers (default workflow's are in hooks/default.ts).
-//
-// Why this is its own file (and not inside header.ts where it used to live):
-// header.ts is imported by hooks/default.ts for findWorkerPaneId/refreshDashboard.
-// If header.ts also imported `getWorkflow` from workflows/index.ts, the chain
-// `workflows/default.ts → hooks/default.ts → header.ts → workflows/index.ts →
-// workflows/default.ts` closed a module-init cycle that crashed every Claude
-// Code hook with "Cannot read properties of undefined (reading 'onStop')"
-// under esbuild's bundling order. Splitting the dispatcher off keeps header.ts
-// free of any workflows imports and lets defaultWorkflow.hookHandlers go back
-// to a captured value (no getter).
+// Claude Code hook dispatcher. Wire events map onto the lifecycle handlers in
+// hooks/default.ts. Hooks are shared by every shipped workflow: workflows vary
+// in poller state handling, not in how agent activity updates worker state.
+// Keeping that distinction explicit prevents this per-tool-call entrypoint
+// from importing workflows/index.ts and retaining the entire poller graph.
 //
 // Reviewer/resolver hooks short-circuit here (GARDEN_REVIEWER=1) — they fire
 // from the same worktree as the worker and would otherwise be indistinguishable.
-import { workerFromCwd, readHookInput } from "./hooks/default.js";
+import { workerHookHandlers, workerFromCwd, readHookInput } from "./hooks/default.js";
 import { findWorkerByName } from "./registry.js";
 import { refreshDashboard } from "./header.js";
 import { log } from "./log.js";
-import { getWorkflow } from "./workflows/index.js";
 import type { HookContext, HookMethod, WorkflowHookHandlers } from "./workflows/types.js";
 
 export function handleClaudeHook(event: string): void {
@@ -45,8 +36,7 @@ export function handleClaudeHook(event: string): void {
     workerInfo: { name: cwdInfo.worker, project: cwdInfo.project, entry },
   };
 
-  const workflow = getWorkflow(entry.workflow ?? "default");
-  const method = pickHookMethod(workflow.hookHandlers, event);
+  const method = pickHookMethod(workerHookHandlers, event);
   if (!method) {
     // debug, not warn: this fires once per hook invocation (a separate
     // short-lived process each time, so no in-process dedup can throttle it).
@@ -56,7 +46,7 @@ export function handleClaudeHook(event: string): void {
     // neither warrants a warn-level firehose. GARDEN_LOG_LEVEL=debug to surface.
     log.debug("hook", "unhandled claude hook event", {
       worker: cwdInfo.worker,
-      data: { project: cwdInfo.project, event, workflow: workflow.name },
+      data: { project: cwdInfo.project, event, workflow: entry.workflow ?? "default" },
     });
     return;
   }

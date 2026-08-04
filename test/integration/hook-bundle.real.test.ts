@@ -16,104 +16,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-// Ceiling above today's ~225kb minified production bundle (minify +
-// keep-names): trips on the ~28kb step a retained adapter/skills closure adds,
-// not on routine drift. The precise detector for that regression is
-// SKILLS_BYTES_CEILING below (it reads skills.ts's bytesInOutput straight from
-// the metafile); this total-size ceiling is the coarse backstop for any other
-// large retained closure. renderQuickStatus and its row-render helpers are
-// import-reachable from the hook graph via header.ts, so incremental status-pane
-// work lands here — a future extraction of the render path out of the commands
-// layer would shrink this back down. Bumped 216->220kb for the status-pane
-// grammar now specified in DESIGN.md (identity badges, ANSI-aware width helpers,
-// workflow row decoration, per-project alert counts). Bumped 220->224kb for the
-// holistic whole-task final review: its aggregated-diff prompt sections
-// (prompts.ts) and verdict handler (poller-review.ts) are import-reachable from
-// the hook graph via the existing review path — legitimate feature code, not a
-// retained closure (skills stayed fully shaken out, SKILLS_BYTES_CEILING=0).
-// Bumped 224->228kb for the Haiku verdict-extraction fallback (verdict-extract.ts,
-// ~1.9kb): poller-review.ts is import-reachable from the hook graph, so its new
-// dependency rides in — again legitimate review-recovery code, not a retained
-// closure. The ~28kb regression this guard exists for is still caught by
-// SKILLS_BYTES_CEILING and by the remaining ~3kb of coarse headroom.
-// Bumped 228->230kb for the botanist skip-review handler (poller-review.ts
-// handleSkipReviewMerge, ~0.5kb): same shape — legitimate state-handler feature
-// code reachable via the workflow-def stateHandlers the hook graph already
-// carries. The heavy publish logic (git commit/move) is deliberately kept out
-// via the botanist-paths.ts leaf (only isPublishablePath rides in), verified by
-// the metafile below and by publishBotanistArtifact being absent from the bundle.
-// Bumped 230->236kb for two client-readiness security changes: the js-yaml
-// 4.1.1->4.3.0 advisory upgrade (js-yaml rides in via config.ts's loadConfig,
-// which the hook graph carries) is the bulk, plus the reviewer-race
-// clean-worktree gate in poller-review.ts handleWorking (~0.3kb). Both are
-// legitimate reachable code, not a retained closure; SKILLS_BYTES_CEILING still
-// guards the skills-content regression this backstop was built for.
-// Bumped 236->238kb for the per-worker provider (the build member's axis-1
-// half): the auto-continue usage gate in poller-merge.ts now resolves a
-// worker's own backend before the project's, and the status row carries
-// WorkerInfo.provider into workerMemberName (commands/status.ts, already
-// reachable via header.ts). ~35 bytes over the old ceiling — verified against
-// the metafile as those two files growing, with skillsBytes still 0 and the
-// composer's own modules (trellis-picker.ts, harness/codex-models.ts) absent
-// from the bundle entirely, which is what keeps the Codex catalog read off the
-// per-tool-call path.
-// Bumped 238->240kb for the usage/status mouse lockdown: setupKeybindings
-// (hotkeys.ts, already reachable via create.ts) gained root-table mouse
-// bindings (MouseDown1Pane/MouseDrag1Pane/DoubleClick1Pane/TripleClick1Pane,
-// plus the existing WheelUpPane/WheelDownPane) gated on the new
-// @garden_mouse_lock pane option, so the usage/status panes' mouse events
-// no-op instead of entering copy-mode. ~380 bytes over the old ceiling, all
-// in hotkeys.ts's existing bytesInOutput — lockPaneMouse itself (tmux.ts)
-// tree-shakes out of the hook bundle entirely, since only create.ts/
-// validate.ts (neither hook-reachable) call it.
-// Bumped 240->242kb for the Codex status-pane activity summary
-// (codex-core.ts readActivity + its bounded rollout readers, ~1.7kb; plus
-// ~0.2kb for resolveWorkerActivity in harness/core.ts). codex-core.ts is a
-// HarnessCore and so hook-reachable by design — the hook path is one of the
-// three callers, since it is what refreshes a worker's task field on a state
-// change. Legitimate reachable code, not a retained closure: skillsBytes is
-// still 0 and the heavy adapter half (codex.ts installRuntimeConfig) stays
-// shaken out.
-// Bumped 242->244kb for the Codex history-view parity work: codex-core.ts's
-// readTurns now accumulates a whole exchange and maps Codex's tool vocabulary
-// onto the neutral names summarizeTurn reads (+1.7kb in codex-core.ts's own
-// bytesInOutput; conversation.ts shrank ~25 bytes as the prompt-marker logic
-// moved into the shared promptTurn). Same shape as the readActivity bump above
-// — codex-core.ts is a HarnessCore and hook-reachable by design — and it pulls
-// in no new module: conversation.ts was already in the bundle via
-// claude-code-core.ts. skillsBytes stays 0 and codex.ts stays shaken out.
-// Bumped 244->246kb for the oversized-review-prompt guard (+1362 bytes:
-// ~800 in poller-review.ts's launchReview, ~562 in poller-holistic-review.ts).
-// Same shape as every bump above — both files are already hook-reachable via
-// the review path, and the guard pulls in no new module (alerts.ts was already
-// in the bundle via poller-review.ts). Verified against the metafile: the
-// growth is those two files' own bytesInOutput and skillsBytes is still 0.
-// Bumped 246->248kb for the degrade-instead-of-park review fallback
-// (composeWithinCeiling, +1655 bytes total: +1096 in prompts.ts for the paged
-// diff block's prose and the two diff sections' branches, +283 in
-// prompt-compose.ts for composeWithinCeiling plus the ceiling constants moved
-// there from poller-review.ts, +214 in git.ts for getDiffStat's range/scoped
-// generalization, +71 in trellis-prompts.ts, +5 in poller-holistic-review.ts,
-// -14 in poller-review.ts as the constants left). Same shape as every bump
-// above: all six files were already hook-reachable via the review path, the
-// change pulls in no new module, and the metafile attributes the growth to
-// those files' own bytesInOutput with skillsBytes still 0.
-// Bumped 248->250kb for the same guard on the ci-fix path (+1011 bytes: +779
-// in poller-ci-fix.ts for launchCiFix's backstop, +232 in prompts.ts for
-// ciFixDiffSection's paged branch and buildCiFixPrompt's composeWithinCeiling
-// call). Both files were already hook-reachable, no new module enters, and
-// skillsBytes is still 0. Taken now rather than at 249kb because the ci-fix
-// growth left under 1kb of headroom under the old ceiling — this restores the
-// ~2kb of routine-drift slack the coarse backstop is meant to carry, without
-// touching SKILLS_BYTES_CEILING, which is the precise detector for the ~28kb
-// retained-closure regression this guard exists for.
-const HOOK_BUNDLE_CEILING_BYTES = 250 * 1024;
+// The workflow/poller split reduced the measured minified bundle from 249.0KB
+// to 120.8KB. Keep enough headroom for small hook-path changes without letting
+// a state-handler graph quietly return.
+const HOOK_BUNDLE_CEILING_BYTES = 128 * 1024;
 // skills.ts contributes only a tree-shaken sliver today (<100 bytes); a
 // retained skills bundle is ~28kb. The threshold sits well between.
 const SKILLS_BYTES_CEILING = 2 * 1024;
+const POLLER_MODULE_RE = /dashboard\/poller(?:-[^/]+)?\.ts$/;
+const ALLOWED_POLLER_LEAF = "src/dashboard/poller-fifo.ts";
 
 describe("hook bundle size guard (real esbuild)", () => {
-  it("keeps dist/hook.js lean and the skills content shaken out", () => {
+  it("keeps dist/hook.js lean and poller handlers out", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "garden-hook-bundle-"));
     const outfile = path.join(tmp, "hook.js");
     const metafile = path.join(tmp, "meta.json");
@@ -137,6 +51,10 @@ describe("hook bundle size guard (real esbuild)", () => {
         .filter(([k]) => k.endsWith("dashboard/skills.ts"))
         .reduce((sum, [, v]) => sum + v.bytesInOutput, 0);
       expect(skillsBytes).toBeLessThan(SKILLS_BYTES_CEILING);
+
+      const retainedPollerModules = Object.keys(inputs)
+        .filter(k => POLLER_MODULE_RE.test(k) && k !== ALLOWED_POLLER_LEAF);
+      expect(retainedPollerModules).toEqual([]);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

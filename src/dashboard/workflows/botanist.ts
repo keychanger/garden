@@ -16,7 +16,6 @@
 // of base it routes working → merge-pending directly (no reviewer — the operator
 // already reviewed the prose at the gate), after enforcing that the committed
 // diff touches only publishable paths. See handleWorking (poller-review.ts).
-import { defaultHookHandlers } from "../hooks/default.js";
 import { handleCiFixing } from "../poller-ci-fix.js";
 import { handleMergePending, handleMerged } from "../poller-merge.js";
 import { handleResolving } from "../poller-resolve.js";
@@ -37,7 +36,6 @@ export const botanistWorkflow: WorkflowDefinition = {
     merged: handleMerged,
     done: handleDone,
   },
-  hookHandlers: defaultHookHandlers,
   // The designer seat: design is judgment-heavy, so a botanist defaults to
   // Opus at max reasoning effort. Both are workflow-level defaults layered
   // beneath a per-spawn --model / --effort (newWorker resolution), so an

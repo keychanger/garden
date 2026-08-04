@@ -2,7 +2,7 @@
 // authoritative spec.
 //
 // Phase 1 ships a skeletal definition that reuses the default workflow's
-// state handlers and hook handlers. The workflow's data shape (name,
+// state handlers. The workflow's data shape (name,
 // validTransitions, workerModel, reviewerModel) is what consumers (the
 // registry, model resolution in phase 3) need first; behavior divergence
 // (trellis-specific reviewer prompts, per-iteration context reset,
@@ -12,7 +12,6 @@
 // workflow on the wire — a worker stamped with `workflow: "trellis"` in
 // phase 1 walks the same review/merge lifecycle as a default worker.
 // Phase 2 swaps in trellis-specific handlers and that equivalence ends.
-import { defaultHookHandlers } from "../hooks/default.js";
 import { handleCiFixing } from "../poller-ci-fix.js";
 import { handleMergePending, handleMerged } from "../poller-merge.js";
 import { handleResolving } from "../poller-resolve.js";
@@ -33,7 +32,6 @@ export const trellisWorkflow: WorkflowDefinition = {
     merged: handleMerged,
     done: handleDone,
   },
-  hookHandlers: defaultHookHandlers,
   workerModel: "sonnet",
   reviewerModel: "opus",
 };

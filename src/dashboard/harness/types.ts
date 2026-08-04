@@ -3,9 +3,9 @@
 // (interactive, resume, headless), how its runtime config reaches the
 // worktree, how prompts are delivered to its TUI, how its transcript is
 // read, and which lifecycle capabilities it can signal. The dispatcher,
-// pollers, and state machine stay harness-agnostic — they speak the
+// pollers, and state machine stay harness-agnostic — they speak the shared
 // normalized lifecycle events on WorkflowHookHandlers and the option types
-// below. Mirrors the workflow registry pattern (workflows/types.ts).
+// below.
 // See docs/MULTI-MODEL.md "Layer 3: harness adapters".
 import type { ProjectConfig } from "../../config.js";
 import type { WorkerEntry } from "../registry.js";

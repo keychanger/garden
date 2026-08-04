@@ -1,8 +1,7 @@
-// Default workflow's hook handlers. Reproduces pre-refactor behavior of the
+// Shared worker hook handlers. Reproduces pre-refactor behavior of the
 // monolithic handleClaudeHook in header.ts: each Claude Code hook event
 // (sessionstart, prompt, notification, pretooluse, posttooluse, stop) maps to
-// a method here. The dispatcher in header.ts looks up the worker's workflow
-// and calls the appropriate method.
+// a method here. hook-dispatcher.ts translates wire events and invokes them.
 //
 // Helpers that were previously private to handleClaudeHook (workerFromCwd,
 // readHookInput, findWorkerPaneId, routeStopHookEnd, hasRecentWorkerAlert)
@@ -10,8 +9,9 @@
 // rendering surface, and moving them out of header.ts shrinks that file by
 // ~150 lines while keeping all hook logic colocated.
 //
-// See WORKFLOWS.md Component 5c for the rationale (avoid an import cycle
-// through workflows/default.ts and keep handleClaudeHook a true dispatcher).
+// These handlers deliberately do not import the workflow registry. Workflow
+// state handlers are poller concerns; pulling that registry into this module
+// retains the whole review/merge graph in the per-tool-call hook bundle.
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -21,10 +21,8 @@ import { clearAwaitingInput, clearDoneSentinel, isDoneSet } from "../continue.js
 import { getWorkerBaseBranch } from "../git.js";
 import { findWorkerPaneId, refreshDashboard } from "../header.js";
 import { log } from "../log.js";
-// Import directly from poller-fifo (leaf module) rather than through
-// poller.ts. poller.ts imports getWorkflow from workflows/index.ts; routing
-// through it would re-close the workflows/default.ts -> hooks/default.ts ->
-// poller.ts -> workflows/index.ts -> workflows/default.ts init cycle.
+// Import the FIFO wake primitive directly. The hook only signals the poller;
+// it must not import poller.ts or any state handler.
 import { triggerProjectPoll } from "../poller-fifo.js";
 import {
   findWorkerByName, updateWorkerFields, type WorkerEntry,
@@ -396,7 +394,7 @@ function midTurnAskingFields(ctx: HookContext): FieldsDelta {
   return {};
 }
 
-export const defaultHookHandlers: WorkflowHookHandlers = {
+export const workerHookHandlers: WorkflowHookHandlers = {
   onSessionStart,
   onPromptSubmitted,
   onTurnEnded,

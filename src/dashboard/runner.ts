@@ -3,12 +3,8 @@
 // Code hooks, post-merge auto-continue, the worker pre-push hook, etc.). Lives
 // in its own leaf module so it can be imported from anywhere — including
 // hooks/default.ts — without dragging the rest of dashboard/create.ts into
-// the import graph. This severed the module-init cycle through create.ts
-// (workflows/default.ts -> hooks/default.ts -> create.ts -> poller.ts ->
-// workflows/index.ts -> workflows/default.ts). The companion break — moving
-// handleClaudeHook out of header.ts into hook-dispatcher.ts so header.ts
-// itself no longer imports workflows/index.ts — closes the second path.
-// With both severed, defaultWorkflow.hookHandlers can hold a captured value.
+// the import graph. Keeping the hook dispatcher and handlers workflow-free
+// likewise prevents the per-tool-call bundle from retaining poller handlers.
 //
 // The returned string is a multi-token shell command line: an interpreter
 // path followed by a script path, separated by a space. Each token is
@@ -93,7 +89,7 @@ export function resolveGardenRunner(): string {
 // Companion runner for the per-tool-call Claude hook. The hook fires on every
 // tool completion by every agent, so routing it through cli.js would parse the
 // entire command+dashboard bundle on each fire. dist/hook.js (built from
-// src/hook-entry.ts) bundles only the hook dispatcher's import closure — ~60%
+// src/hook-entry.ts) bundles only the hook dispatcher's import closure — ~80%
 // smaller — so the node cold-start is cheaper. Worker settings.json hook
 // commands invoke this; cli.js keeps its own `_claude-hook` route so workers
 // whose settings predate this still work until their next refresh. Pre-escaped
@@ -136,7 +132,7 @@ export function resolveHookRunner(): string {
 // Node's on-disk V8 compile cache (Node >= 22.1), as a ready-to-prepend shell
 // prefix for the per-tool-call hook command. That hook cold-starts a fresh node
 // process on every fire by every agent; caching the compiled bytecode of the
-// ~200KB hook.js bundle shaves a measured ~8% off each cold start. The dir sits
+// ~120KB hook.js bundle shaves a measured ~8% off each cold start. The dir sits
 // under ~/.cache — a sandbox-writable root for workers (sandbox.ts
 // DEFAULT_ALLOW_WRITE) — and is shared across every worker and project, so the
 // first fire compiles and all later fires across the whole fleet reuse it. Node
