@@ -58,10 +58,17 @@ reads or runs.
   Unsafe, malformed, or oversized project and worker names are mapped to bounded SHA-256
   filename components, preventing a forged registry name from traversing out of the
   control tree or exceeding filesystem filename limits.
+- **Handoff-channel integrity.** A worker writes only the UUID-named request and seed
+  into `~/.garden/sessions`. Before acting, an unsandboxed poller moves the request into
+  `~/.garden/control/handoff`, binds the body ID to the filename, and copies the seed
+  from a no-follow, containment-checked stable file descriptor. Claims, delayed seed
+  copies, and durable results remain outside the worker write grant. Dead-owner claims
+  are replayed from the protected tree, while a request ID on the registry entry and a
+  durable receipt prevent replay from spawning the same handoff twice.
 - **Registry forgery guard (partial).** The worker registry lives in the
   sandbox-writable `~/.garden/sessions`. Its read guard (`isWorkerRegistry` in
   `src/dashboard/registry.ts`) type-checks the trusted fields (`prState`, `agentStatus`,
-  `baseBranch`, `branchName`, `worktreePath`, `sessionId`) so a forged wrong-typed value
+  `baseBranch`, `branchName`, `worktreePath`, `sessionId`, `handoffRequestId`) so a forged wrong-typed value
   cannot flow into a path/git/dispatch consumer. This stops malformed forgery; it does
   not stop a well-formed malicious entry (see residuals).
 - **Credential read-deny (opt-in).** With `sandboxDenyCredentials` set on a project,

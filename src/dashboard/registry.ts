@@ -335,17 +335,20 @@ export interface WorkerEntry {
   holisticFinalActive?: boolean;
   holisticReviewMode?: "fix" | "shadow";
   role?: string;
-  // Handoff lineage. `parentWorker` + `parentProject` are set by newWorker on
-  // workers created via `garden handoff` so the child knows where it came
-  // from. When `handoffCallbackExpected` is also true (caller passed
+  // Handoff identity and lineage. `handoffRequestId` binds a spawned worker to
+  // the durable IPC request that created it, allowing a dispatcher recovering
+  // an abandoned claim to return the existing worker instead of spawning a
+  // duplicate. `parentWorker` + `parentProject` are set by newWorker on workers
+  // created via `garden handoff` so the child knows where it came from. When
+  // `handoffCallbackExpected` is also true (caller passed
   // --expect-callback), transitionState fires a one-shot callback prompt at
   // the parent's pane the first time the child reaches a terminal prState
   // (merged/done/failing). handoffCallbackFiredAt records when that dispatch
   // happened — it's the idempotency guard so a replayed terminal transition
   // doesn't double-fire. handoffReplyNote is an optional freeform string the
   // child can attach via `garden reply` before terminating; it gets inlined
-  // into the callback prompt. All five fields are absent on non-handoff
-  // workers.
+  // into the callback prompt. All fields are absent on non-handoff workers.
+  handoffRequestId?: string;
   parentWorker?: string;
   parentProject?: string;
   handoffCallbackExpected?: boolean;
@@ -653,6 +656,7 @@ function withRegistryLock<T>(fn: () => T): T {
 // registries.
 const GUARDED_STRING_FIELDS = [
   "prState", "agentStatus", "baseBranch", "branchName", "worktreePath", "sessionId",
+  "handoffRequestId",
 ] as const;
 
 function isWorkerRegistry(x: unknown): x is WorkerRegistry {

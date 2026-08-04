@@ -13,6 +13,7 @@ vi.mock("../src/config.js", () => ({
 vi.mock("../src/dashboard/handoff-dispatch.js", () => ({
   submitHandoffRequest: vi.fn(),
   waitForHandoffResponse: vi.fn(),
+  withdrawPendingHandoffRequest: vi.fn(() => true),
 }));
 
 vi.mock("../src/dashboard/poller-fifo.js", () => ({
@@ -22,7 +23,7 @@ vi.mock("../src/dashboard/poller-fifo.js", () => ({
 import { handoff } from "../src/commands/handoff.js";
 import { tryGetProject, loadConfig } from "../src/config.js";
 import {
-  submitHandoffRequest, waitForHandoffResponse,
+  submitHandoffRequest, waitForHandoffResponse, withdrawPendingHandoffRequest,
 } from "../src/dashboard/handoff-dispatch.js";
 import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
 
@@ -43,6 +44,7 @@ beforeEach(() => {
     workerName: "bold-ash",
     completedAt: Date.now(),
   });
+  vi.mocked(withdrawPendingHandoffRequest).mockReturnValue(true);
   delete process.env.GARDEN_PROJECT;
   delete process.env.GARDEN_WORKER;
 });
@@ -134,6 +136,14 @@ describe("garden handoff command", () => {
     expect(fs.readdirSync(seedsDir)).toEqual([]);
   });
 
+  it("preserves the seed when a claimed request times out so recovery can finish", async () => {
+    vi.mocked(waitForHandoffResponse).mockResolvedValue(null);
+    vi.mocked(withdrawPendingHandoffRequest).mockReturnValue(false);
+    await expect(handoff(["other", "-m", "msg"])).rejects.toThrow(/may still recover/);
+    const seedsDir = path.join(tmpDir, "seeds");
+    expect(fs.readdirSync(seedsDir)).toHaveLength(1);
+  });
+
   it("unlinks the seed file and surfaces the dispatcher's error when newWorker rejects", async () => {
     vi.mocked(waitForHandoffResponse).mockResolvedValue({
       error: "Base branch 'main' has no local origin/main ref.",
@@ -148,6 +158,15 @@ describe("garden handoff command", () => {
   it("prints the new worker name on success so the operator knows where it landed", async () => {
     const lines = await captureConsoleLog(() => handoff(["other", "-m", "msg"]));
     expect(lines.join("\n")).toContain("other/bold-ash");
+  });
+
+  it("allows longer worker creation only after the request is claimed", async () => {
+    await captureConsoleLog(() => handoff(["other", "-m", "msg"]));
+    expect(vi.mocked(waitForHandoffResponse)).toHaveBeenCalledWith(
+      "req-id-1",
+      15_000,
+      75_000,
+    );
   });
 
   it("passes expectCallback + parent env to the dispatch when --expect-callback is set", async () => {

@@ -388,6 +388,17 @@ describe("newWorker", () => {
     );
   });
 
+  it("stamps the handoff request id for crash-safe dispatch reconciliation", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ handoffRequestId: "00000000-0000-4000-8000-000000000000" });
+    expect(vi.mocked(addWorker)).toHaveBeenCalledWith(
+      "myproject",
+      expect.objectContaining({
+        handoffRequestId: "00000000-0000-4000-8000-000000000000",
+      }),
+    );
+  });
+
   it("raises a project-scoped alert when .garden-done is tracked in HEAD", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     vi.mocked(gardenDoneTrackedInHead).mockReturnValue(true);

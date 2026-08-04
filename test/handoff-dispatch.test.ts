@@ -7,6 +7,10 @@ vi.mock("../src/config.js", () => ({
   SESSIONS_DIR: "",
 }));
 
+vi.mock("../src/paths.js", () => ({
+  CONTROL_DIR: "",
+}));
+
 // log.ts captures `LOG_FILE = path.join(SESSIONS_DIR, "dashboard.log")` at
 // module init, so the SESSIONS_DIR="" mock above resolves it to the relative
 // path "dashboard.log" — every log call would then append to CWD. Mock the
@@ -19,22 +23,51 @@ vi.mock("../src/dashboard/workers.js", () => ({
   newWorker: vi.fn(),
 }));
 
+vi.mock("../src/dashboard/registry.js", () => ({
+  getWorkers: vi.fn(() => []),
+}));
+
 import {
-  submitHandoffRequest, waitForHandoffResponse, processPendingHandoffs,
+  submitHandoffRequest, waitForHandoffResponse, withdrawPendingHandoffRequest,
+  processPendingHandoffs,
 } from "../src/dashboard/handoff-dispatch.js";
 import { newWorker } from "../src/dashboard/workers.js";
+import { getWorkers } from "../src/dashboard/registry.js";
 
 const cfg = await import("../src/config.js") as unknown as { SESSIONS_DIR: string };
+const gardenPaths = await import("../src/paths.js") as unknown as { CONTROL_DIR: string };
 
 let tmpDir: string;
 let reqDir: string;
+let controlDir: string;
+let claimsDir: string;
 let validSeed: string;
+
+const CLAIM_TOKEN = "00000000-0000-4000-8000-000000000000";
+const RESPONSE_ID = "11111111-1111-4111-8111-111111111111";
+
+function moveToClaim(id: string, ownerPid: number): string {
+  fs.mkdirSync(claimsDir, { recursive: true });
+  const claim = path.join(
+    claimsDir,
+    `${id}.req.json.processing.${ownerPid}.${CLAIM_TOKEN}`,
+  );
+  fs.renameSync(path.join(reqDir, `${id}.req.json`), claim);
+  return claim;
+}
+
+function resultPath(id: string): string {
+  return path.join(controlDir, "handoff", "receipts", `${id}.result.json`);
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "garden-handoff-dispatch-test-"));
   cfg.SESSIONS_DIR = tmpDir;
+  controlDir = path.join(tmpDir, "control");
+  gardenPaths.CONTROL_DIR = controlDir;
   reqDir = path.join(tmpDir, "handoff-requests");
+  claimsDir = path.join(controlDir, "handoff", "claims");
   // A seed file inside the seeds dir — the only location processPendingHandoffs
   // accepts (its realpath must stay within SESSIONS_DIR/seeds).
   const seedsDir = path.join(tmpDir, "seeds");
@@ -57,22 +90,50 @@ describe("submitHandoffRequest", () => {
     });
     expect(typeof body.createdAt).toBe("number");
   });
+
+  it("withdraws only while the request is still pending", () => {
+    const pending = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    expect(withdrawPendingHandoffRequest(pending)).toBe(true);
+    expect(fs.existsSync(path.join(reqDir, `${pending}.req.json`))).toBe(false);
+
+    const claimed = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    moveToClaim(claimed, process.pid);
+    expect(withdrawPendingHandoffRequest(claimed)).toBe(false);
+  });
 });
 
 describe("waitForHandoffResponse", () => {
-  it("returns the parsed response and deletes the response file", async () => {
-    fs.mkdirSync(reqDir, { recursive: true });
-    const id = "abc";
-    const respFile = path.join(reqDir, `${id}.resp.json`);
+  it("returns the parsed durable response", async () => {
+    const id = RESPONSE_ID;
+    const respFile = resultPath(id);
+    fs.mkdirSync(path.dirname(respFile), { recursive: true });
     fs.writeFileSync(respFile, JSON.stringify({ workerName: "bold-ash", completedAt: 1 }));
     const resp = await waitForHandoffResponse(id, 1000);
     expect(resp).toEqual({ workerName: "bold-ash", completedAt: 1 });
-    expect(fs.existsSync(respFile)).toBe(false);
+    expect(fs.existsSync(respFile)).toBe(true);
   });
 
   it("returns null when the timeout elapses without a response", async () => {
-    const resp = await waitForHandoffResponse("never", 200);
+    const resp = await waitForHandoffResponse(RESPONSE_ID, 200);
     expect(resp).toBeNull();
+  });
+
+  it("rejects an unsafe response id instead of resolving a path outside the inbox", async () => {
+    await expect(waitForHandoffResponse("../../escape", 10)).rejects.toThrow(/request id/i);
+  });
+
+  it("extends the deadline after the dispatcher claims a slow request", async () => {
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    const reqFile = path.join(reqDir, `${id}.req.json`);
+    const respFile = resultPath(id);
+    setTimeout(() => { fs.unlinkSync(reqFile); }, 50);
+    setTimeout(() => {
+      fs.mkdirSync(path.dirname(respFile), { recursive: true });
+      fs.writeFileSync(respFile, JSON.stringify({ workerName: "slow-oak", completedAt: 1 }));
+    }, 400);
+
+    const resp = await waitForHandoffResponse(id, 200, 1_000);
+    expect(resp?.workerName).toBe("slow-oak");
   });
 });
 
@@ -88,10 +149,11 @@ describe("processPendingHandoffs", () => {
     processPendingHandoffs();
     expect(vi.mocked(newWorker)).toHaveBeenCalledWith({
       projectName: "wolf",
-      seedMessageFile: validSeed,
+      seedMessageFile: path.join(controlDir, "handoff", "seeds", `${id}.txt`),
       background: true,
+      handoffRequestId: id,
     });
-    const respFile = path.join(reqDir, `${id}.resp.json`);
+    const respFile = resultPath(id);
     expect(fs.existsSync(respFile)).toBe(true);
     const resp = JSON.parse(fs.readFileSync(respFile, "utf8"));
     expect(resp.workerName).toBe("bold-ash");
@@ -106,7 +168,7 @@ describe("processPendingHandoffs", () => {
     });
     const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
     processPendingHandoffs();
-    const respFile = path.join(reqDir, `${id}.resp.json`);
+    const respFile = resultPath(id);
     const resp = JSON.parse(fs.readFileSync(respFile, "utf8"));
     expect(resp.error).toContain("Base branch 'main' missing");
     expect(resp.workerName).toBeUndefined();
@@ -116,23 +178,82 @@ describe("processPendingHandoffs", () => {
     vi.mocked(newWorker).mockReturnValue(null);
     const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
     processPendingHandoffs();
-    const respFile = path.join(reqDir, `${id}.resp.json`);
+    const respFile = resultPath(id);
     const resp = JSON.parse(fs.readFileSync(respFile, "utf8"));
     expect(resp.error).toContain("newWorker returned null");
   });
 
-  it("skips a file already claimed by another poller (atomic rename loses)", () => {
+  it("leaves a claim owned by a live dispatcher untouched", () => {
     vi.mocked(newWorker).mockReturnValue("bold-ash");
     const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
-    // Simulate another poller claiming the file first.
-    const reqFile = path.join(reqDir, `${id}.req.json`);
-    const otherClaim = reqFile + ".processing";
-    fs.renameSync(reqFile, otherClaim);
+    const otherClaim = moveToClaim(id, process.pid);
 
     processPendingHandoffs();
     expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
-    // The other claim file remains untouched.
     expect(fs.existsSync(otherClaim)).toBe(true);
+  });
+
+  it("recovers a claim abandoned by a dead dispatcher", () => {
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    const abandoned = moveToClaim(id, 999_999_999);
+
+    processPendingHandoffs();
+
+    expect(vi.mocked(newWorker)).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(abandoned)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")))
+      .toMatchObject({ workerName: "bold-ash" });
+  });
+
+  it("reconciles an abandoned claim to its existing worker without spawning twice", () => {
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    moveToClaim(id, 999_999_999);
+    vi.mocked(getWorkers).mockReturnValueOnce([{
+      name: "already-spawned",
+      sessionId: "session",
+      task: "",
+      handoffRequestId: id,
+    }]);
+
+    processPendingHandoffs();
+
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")))
+      .toMatchObject({ workerName: "already-spawned" });
+  });
+
+  it("replays a durable receipt instead of repeating a completed dispatch", () => {
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    moveToClaim(id, 999_999_999);
+    const receiptsDir = path.join(controlDir, "handoff", "receipts");
+    fs.mkdirSync(receiptsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(receiptsDir, `${id}.result.json`),
+      JSON.stringify({ workerName: "receipt-oak", completedAt: 1 }),
+    );
+
+    processPendingHandoffs();
+
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")))
+      .toMatchObject({ workerName: "receipt-oak" });
+  });
+
+  it("fails an abandoned legacy claim rather than risking a duplicate spawn", () => {
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    const request = path.join(reqDir, `${id}.req.json`);
+    const legacyClaim = `${request}.processing`;
+    fs.renameSync(request, legacyClaim);
+    const stale = new Date(Date.now() - 180_000);
+    fs.utimesSync(legacyClaim, stale, stale);
+
+    processPendingHandoffs();
+
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(fs.existsSync(legacyClaim)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
+      .toMatch(/cannot be replayed safely/i);
   });
 
   it("propagates handoffCallback when expectCallback + parent fields set", () => {
@@ -191,6 +312,21 @@ describe("processPendingHandoffs", () => {
     }));
   });
 
+  it("binds the result path to the request filename rather than a forged body id", () => {
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    const reqFile = path.join(reqDir, `${id}.req.json`);
+    const request = JSON.parse(fs.readFileSync(reqFile, "utf8"));
+    request.id = "../../escaped";
+    fs.writeFileSync(reqFile, JSON.stringify(request));
+
+    processPendingHandoffs();
+
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
+      .toMatch(/does not match/i);
+  });
+
   it("does not pass ultracode to newWorker for a plain request", () => {
     vi.mocked(newWorker).mockReturnValue("bold-ash");
     submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
@@ -211,8 +347,8 @@ describe("processPendingHandoffs", () => {
     const id2 = submitHandoffRequest({ targetProject: "fox", seedFile: s2 });
     processPendingHandoffs();
     expect(vi.mocked(newWorker)).toHaveBeenCalledTimes(2);
-    expect(fs.existsSync(path.join(reqDir, `${id1}.resp.json`))).toBe(true);
-    expect(fs.existsSync(path.join(reqDir, `${id2}.resp.json`))).toBe(true);
+    expect(fs.existsSync(resultPath(id1))).toBe(true);
+    expect(fs.existsSync(resultPath(id2))).toBe(true);
   });
 
   it("rejects a request whose seedFile escapes the seeds directory", () => {
@@ -238,6 +374,27 @@ describe("processPendingHandoffs", () => {
     processPendingHandoffs();
     expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(reqDir, `${id}.req.json.processing`))).toBe(false);
+  });
+
+  it("hands newWorker a protected seed copy that cannot be swapped after validation", () => {
+    const secret = path.join(tmpDir, "secret.txt");
+    fs.writeFileSync(secret, "secret content");
+    let dispatchedSeedPath = "";
+    let dispatchedSeedContent = "";
+    vi.mocked(newWorker).mockImplementationOnce(opts => {
+      try { fs.unlinkSync(validSeed); } catch { /* dispatcher already removed it */ }
+      fs.symlinkSync(secret, validSeed);
+      dispatchedSeedPath = opts.seedMessageFile!;
+      dispatchedSeedContent = fs.readFileSync(opts.seedMessageFile!, "utf8");
+      return "bold-ash";
+    });
+    submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+
+    processPendingHandoffs();
+
+    expect(vi.mocked(newWorker)).toHaveBeenCalledTimes(1);
+    expect(dispatchedSeedPath).not.toBe(validSeed);
+    expect(dispatchedSeedContent).toBe("seed content");
   });
 
   it("rejects a malformed request that fails the shape guard", () => {

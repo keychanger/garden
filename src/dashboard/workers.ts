@@ -147,6 +147,10 @@ export interface NewWorkerOptions {
     seed: string;
     maxIterations: number;
   };
+  // Durable identity of the request-file IPC operation that created this
+  // worker. The dispatcher uses it to reconcile an abandoned claim after a
+  // crash without spawning the same handoff twice.
+  handoffRequestId?: string;
   // Handoff lineage and callback opt-in. Set only when this worker is being
   // created via `garden handoff --expect-callback` (background path).
   // Writes the parent linkage and the expectCallback flag onto the child's
@@ -487,6 +491,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       agentStatus: "loading",
       createdAt: Date.now(),
       workflow: workflowName,
+      ...(opts.handoffRequestId ? { handoffRequestId: opts.handoffRequestId } : {}),
       // Harness adapter (agent CLI). Absent = claude-code; consumers read via
       // getHarness(entry.harness). Threaded into launch/resume/loop.
       ...(resolvedHarness ? { harness: resolvedHarness } : {}),

@@ -69,6 +69,7 @@ describe("readRegistry", () => {
       { name: "w", baseBranch: 42 },
       { name: "w", prState: ["reviewing"] },
       { name: "w", sessionId: 7 },
+      { name: "w", handoffRequestId: ["forged"] },
       { name: "w", ciNoRuns: { sha: "abc", since: "now" } },
     ]) {
       fs.writeFileSync(REGISTRY_FILE, JSON.stringify({ workers: { proj: [bad] } }));
@@ -82,11 +83,14 @@ describe("readRegistry", () => {
       workers: { proj: [{
         name: "ok", prState: "reviewing", baseBranch: "main",
         worktreePath: "/wt/proj/ok", sessionId: "abc",
+        handoffRequestId: "00000000-0000-4000-8000-000000000000",
         ciNoRuns: { sha: "deadbeef", since: 123 },
       }] },
     }));
     expect(readRegistry().workers.proj[0]).toMatchObject({
-      name: "ok", ciNoRuns: { sha: "deadbeef", since: 123 },
+      name: "ok",
+      handoffRequestId: "00000000-0000-4000-8000-000000000000",
+      ciNoRuns: { sha: "deadbeef", since: 123 },
     });
   });
 });

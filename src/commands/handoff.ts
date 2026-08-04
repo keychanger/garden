@@ -5,18 +5,19 @@
 // Implementation: the worker pane that runs this CLI is sandboxed by Claude
 // Code, which blocks the tmux server socket. We can't call tmux directly. So
 // the CLI writes a request to ~/.garden/sessions/handoff-requests/ (sandbox-
-// allowed), pokes one or more project pollers, and waits on a response file
+// allowed), pokes one or more project pollers, and waits on the durable receipt
 // the unsandboxed poller writes once newWorker returns. The whole round-trip
 // is typically <500ms.
 import fs from "node:fs";
 import path from "node:path";
 import { tryGetProject, SESSIONS_DIR, loadConfig } from "../config.js";
 import {
-  submitHandoffRequest, waitForHandoffResponse,
+  submitHandoffRequest, waitForHandoffResponse, withdrawPendingHandoffRequest,
 } from "../dashboard/handoff-dispatch.js";
 import { triggerProjectPoll } from "../dashboard/poller-fifo.js";
 
-const HANDOFF_TIMEOUT_MS = 15_000;
+const HANDOFF_CLAIM_TIMEOUT_MS = 15_000;
+const HANDOFF_PROCESSING_TIMEOUT_MS = 75_000;
 
 export async function handoff(args: string[]): Promise<void> {
   const targetProject = args[0];
@@ -99,13 +100,25 @@ export async function handoff(args: string[]): Promise<void> {
     triggerProjectPoll(projectName);
   }
 
-  const resp = await waitForHandoffResponse(reqId, HANDOFF_TIMEOUT_MS);
+  const resp = await waitForHandoffResponse(
+    reqId,
+    HANDOFF_CLAIM_TIMEOUT_MS,
+    HANDOFF_PROCESSING_TIMEOUT_MS,
+  );
   if (!resp) {
-    try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
+    const withdrawn = withdrawPendingHandoffRequest(reqId);
+    if (withdrawn) {
+      try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
+    }
+    const recoveryNote = withdrawn
+      ? ""
+      : " The request was already claimed and may still recover; check the dashboard before resubmitting.";
     throw new Error(
-      `Handoff to '${targetProject}' timed out after ${HANDOFF_TIMEOUT_MS / 1000}s. `
+      `Handoff to '${targetProject}' timed out before dispatch completed. `
+      + `Garden waits ${HANDOFF_CLAIM_TIMEOUT_MS / 1000}s for a poller to claim the request `
+      + `and up to ${HANDOFF_PROCESSING_TIMEOUT_MS / 1000}s for worker creation after that. `
       + "Is the dashboard running with at least one active project poller? "
-      + "Check 'garden health'.",
+      + `Check 'garden health'.${recoveryNote}`,
     );
   }
   if (resp.error) {
