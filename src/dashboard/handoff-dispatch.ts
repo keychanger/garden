@@ -38,6 +38,11 @@ const LEGACY_CLAIM_STALE_MS = 120_000;
 const RECEIPT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const RESPONSE_POLL_MS = 150;
 
+// Every directory below is resolved per-call, never captured in a module-level
+// constant: tests mutate SESSIONS_DIR / CONTROL_DIR after import (see
+// test/handoff-dispatch.test.ts) to point at fresh tmpdirs. A const would
+// capture their empty initial values and silently drop writes into relative
+// paths under CWD.
 function requestsDir(): string {
   return path.join(SESSIONS_DIR, "handoff-requests");
 }
@@ -90,9 +95,19 @@ export interface HandoffRequest {
   targetProject: string;
   seedFile: string;
   createdAt: number;
+  // Set when the source worker invoked `garden handoff` with --expect-callback.
+  // The child's registry entry inherits these so transitionState can fire a
+  // one-shot callback prompt at the parent on the child's first terminal
+  // state. parentProject + parentWorker are captured from the source worker's
+  // $GARDEN_PROJECT / $GARDEN_WORKER env at submit time; both are required for
+  // expectCallback to take effect (an invocation outside a worker pane has no
+  // parent to call back to).
   expectCallback?: boolean;
   parentProject?: string;
   parentWorker?: string;
+  // Set when the source worker invoked `garden handoff --ultracode`. The child
+  // is created with the ultracode preset (Opus + max effort + dynamic-workflow
+  // trigger). See `NewWorkerOptions.ultracode`.
   ultracode?: boolean;
 }
 
@@ -272,6 +287,14 @@ function persistReceipt(id: string, response: HandoffResponse): void {
   atomicWriteFile(receiptPath(id), JSON.stringify(response), { mode: 0o600 });
 }
 
+// The seed MUST resolve (through symlinks) to inside the handoff seeds
+// directory. Without that bound a worker-authored request could point seedFile
+// at an arbitrary path (/etc/…, ~/.ssh/…, a sibling worktree) and newWorker
+// would read its contents into the child's first prompt — an info-disclosure
+// read across the sandbox boundary. Copying the validated bytes into the
+// control tree is what makes the check stick: the pathname the worker can still
+// rewrite is never opened again, so the delayed seed delivery cannot be fed a
+// file swapped in after validation.
 function protectedSeedFor(request: HandoffRequest): string | null {
   const destination = protectedSeedPath(request.id);
   const existing = readStableRegularFile(destination, protectedSeedsDir(), MAX_SEED_BYTES);
@@ -380,12 +403,20 @@ function processClaim(claimFile: string, filenameId: string): void {
 
   const seedFile = protectedSeedFor(request);
   if (!seedFile) {
-    rejectClaim(claimFile, filenameId, "rejected seed file outside the stable seeds boundary");
+    rejectClaim(
+      claimFile,
+      filenameId,
+      "seed file rejected: it must be a regular file inside the seeds directory, "
+      + "unchanged during the read, and no larger than 1MB",
+    );
     return;
   }
 
   let response: HandoffResponse;
   try {
+    // Only propagate parent linkage when --expect-callback was set AND both
+    // env-derived fields are present. A handoff submitted from outside a worker
+    // pane has nowhere to call back to; record nothing rather than half-state.
     const handoffCallback = request.expectCallback && request.parentProject && request.parentWorker
       ? {
           parentProject: request.parentProject,

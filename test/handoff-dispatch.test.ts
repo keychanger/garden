@@ -256,6 +256,22 @@ describe("processPendingHandoffs", () => {
       .toMatch(/cannot be replayed safely/i);
   });
 
+  it("leaves a fresh legacy claim alone — a pre-upgrade dispatcher may still hold it", () => {
+    // A legacy claim carries no owner pid, so liveness can only be inferred from
+    // age. Stealing a fresh one would double-spawn against a dispatcher from the
+    // old binary that is still mid-newWorker.
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    const legacyClaim = `${path.join(reqDir, `${id}.req.json`)}.processing`;
+    fs.renameSync(path.join(reqDir, `${id}.req.json`), legacyClaim);
+
+    processPendingHandoffs();
+
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(fs.existsSync(legacyClaim)).toBe(true);
+    expect(fs.existsSync(resultPath(id))).toBe(false);
+  });
+
   it("propagates handoffCallback when expectCallback + parent fields set", () => {
     vi.mocked(newWorker).mockReturnValue("bold-ash");
     submitHandoffRequest({
@@ -359,8 +375,11 @@ describe("processPendingHandoffs", () => {
     const id = submitHandoffRequest({ targetProject: "wolf", seedFile: outsideSeed });
     processPendingHandoffs();
     expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
-    expect(fs.existsSync(path.join(reqDir, `${id}.req.json.processing`))).toBe(false);
     expect(fs.existsSync(path.join(reqDir, `${id}.req.json`))).toBe(false);
+    // The rejection reaches the operator as a receipt rather than a silent drop
+    // that only surfaces as a client-side timeout.
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
+      .toMatch(/seed file rejected/i);
   });
 
   it("rejects a seedFile symlink that escapes the seeds directory", () => {
@@ -397,13 +416,27 @@ describe("processPendingHandoffs", () => {
     expect(dispatchedSeedContent).toBe("seed content");
   });
 
-  it("rejects a malformed request that fails the shape guard", () => {
+  it("drops a request whose filename is not a UUID before it is ever claimed", () => {
+    // The filename is the authoritative id, so a name that can't supply one is
+    // unclaimable — there is no path to write a receipt to. Deleted in place.
     fs.mkdirSync(reqDir, { recursive: true });
-    // Missing targetProject / seedFile — not a valid HandoffRequest.
     fs.writeFileSync(path.join(reqDir, "bad.req.json"), JSON.stringify({ id: "x", createdAt: 1 }));
     processPendingHandoffs();
     expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
-    expect(fs.existsSync(path.join(reqDir, "bad.req.json.processing"))).toBe(false);
+    expect(fs.existsSync(path.join(reqDir, "bad.req.json"))).toBe(false);
+  });
+
+  it("rejects a malformed request that fails the shape guard", () => {
+    // The filename must be a real UUID or the request is dropped by the
+    // filename guard above and the shape guard is never reached.
+    fs.mkdirSync(reqDir, { recursive: true });
+    const id = RESPONSE_ID;
+    // Missing targetProject / seedFile — not a valid HandoffRequest.
+    fs.writeFileSync(path.join(reqDir, `${id}.req.json`), JSON.stringify({ id, createdAt: 1 }));
+    processPendingHandoffs();
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
+      .toMatch(/shape guard/i);
   });
 
   it("drops a request body that parses to null / a primitive / an array without throwing", () => {
@@ -411,22 +444,24 @@ describe("processPendingHandoffs", () => {
     // non-object guard (null / primitive / array) must reject cleanly rather than
     // throw — a throw would abort the whole poll pass and strand sibling requests.
     fs.mkdirSync(reqDir, { recursive: true });
-    for (const [name, body] of [
-      ["null.req.json", "null"],
-      ["number.req.json", "42"],
-      ["array.req.json", "[]"],
-    ]) {
-      fs.writeFileSync(path.join(reqDir, name), body);
+    const ids = [
+      ["22222222-2222-4222-8222-222222222222", "null"],
+      ["33333333-3333-4333-8333-333333333333", "42"],
+      ["44444444-4444-4444-8444-444444444444", "[]"],
+    ];
+    for (const [id, body] of ids) {
+      fs.writeFileSync(path.join(reqDir, `${id}.req.json`), body);
     }
     expect(() => processPendingHandoffs()).not.toThrow();
     expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
-    for (const name of ["null.req.json", "number.req.json", "array.req.json"]) {
-      expect(fs.existsSync(path.join(reqDir, name + ".processing"))).toBe(false);
+    for (const [id] of ids) {
+      expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
+        .toMatch(/shape guard/i);
     }
   });
 
   it("rejects a seedFile that does not exist on disk (realpath throws)", () => {
-    // Drives seedFileWithinSeedsDir's realpathSync catch branch: a seedFile named
+    // Drives readStableRegularFile's realpathSync catch branch: a seedFile named
     // inside seeds/ but never written resolves to nothing, so the request is
     // dropped rather than handed to newWorker.
     const missingSeed = path.join(tmpDir, "seeds", "gone.txt");
@@ -439,7 +474,7 @@ describe("processPendingHandoffs", () => {
 
   it("rejects a seedFile that is a dangling symlink inside seeds/", () => {
     // A symlink living inside seeds/ whose target was deleted: realpathSync throws,
-    // the catch returns false, and the request is dropped.
+    // readStableRegularFile returns null, and the request is dropped.
     const target = path.join(tmpDir, "vanished.txt");
     const link = path.join(tmpDir, "seeds", "dangling.txt");
     fs.symlinkSync(target, link); // target intentionally never created

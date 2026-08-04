@@ -644,6 +644,10 @@ All read commands detect whether stdout is a TTY:
       <result>.stderr               # Non-Claude harness diagnostic sidecar
     reports/
       holistic-findings-<project>-<worker>.md  # Durable holistic shadow report
+    handoff/
+      claims/<id>.req.json.processing.<pid>.<token>  # In-flight handoff claim (owner pid + token)
+      seeds/<id>.txt                        # Protected copy of the handoff briefing
+      receipts/<id>.result.json             # Durable dispatch result + client response (24h retention)
   sessions/
     dashboard.state.json  # Dashboard pane state
     dashboard.registry.json  # Worker registry (persists across restarts)
@@ -657,8 +661,11 @@ All read commands detect whether stdout is a TTY:
     <project>-poller.spawn.lock  # Transient lock serializing poller spawn across processes
     intake-last-<project>        # Mtime stamp throttling bead-intake passes
     intake-poke-<project>        # One-shot marker bypassing the intake throttle
+    handoff-requests/
+      <id>.req.json              # Untrusted handoff inbox (worker-writable; claimed into control/handoff)
     seeds/
       bead-<uuid>.md             # Seed briefing for an intake-dispatched worker
+      seed-<ts>-<rand>.txt       # Handoff briefing (copied into control/handoff/seeds at claim)
     ci-recheck-<project>         # Mtime marker deduping the CI gate's delayed recheck poke
     growhouse-init.zsh            # Garden growhouse init (custom prompt + auto-dispatch)
     diary-view.sh                 # Diary view editor loop (⌥d)
