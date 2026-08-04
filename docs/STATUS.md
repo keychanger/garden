@@ -97,6 +97,7 @@ stateDiagram-v2
     working --> asking : PreToolUse (mid-turn user-input)
     working --> asking : PermissionRequest
     working --> reviewing : Stop / new commits
+    working --> failing : review cannot launch / workflow budget exhausted
     working --> paused : operator hold
     asking --> paused : operator hold
 
@@ -170,6 +171,7 @@ a terminal state — it returns to `working` when the operator responds
 | working       | asking        | Worker `PermissionRequest`                           |
 | working       | reviewing     | Worker `Stop`; new commits ahead of base             |
 | working       | failing       | Assembled review prompt exceeds the context ceiling even with the diff reduced to a file summary — `failingReason: "oversized-diff"`, no reviewer launched |
+| working       | failing       | Workflow iteration budget is exhausted before a reviewer can launch |
 | idle          | working       | Worker `UserPromptSubmit`                            |
 | idle          | working       | Worker `PostToolUse` (self-heal; stale idle)         |
 | idle          | asking        | Worker `PreToolUse` (self-heal; stale idle)          |
@@ -206,6 +208,13 @@ a terminal state — it returns to `working` when the operator responds
 | any           | exited        | tmux `pane-died` hook                                |
 
 A worker never returns to `ready` once it has received its first input.
+
+Poller-driven `prState` changes are compare-and-set operations. `transitionState`
+reads the current worker entry, validates the edge against that worker's workflow,
+and persists the new state and related fields under one registry lock. An edge
+that is no longer valid because another process advanced the worker is rejected
+without writing; explicit recovery code must opt into `forceTransitionState`.
+This keeps the table above executable rather than advisory.
 
 ## How transitions are detected
 

@@ -14,7 +14,7 @@ import {
 import { refreshDashboard } from "./header.js";
 import { log } from "./log.js";
 import {
-  findWorkerByName, updateWorkerFields, OPERATOR_ACTION_FAILING_REASONS,
+  findWorkerByName, updateWorkerFields, updateWorkerFieldsIf, OPERATOR_ACTION_FAILING_REASONS,
   type WorkerEntry, type PrState, type WorkerFieldsUpdate,
 } from "./registry.js";
 import { scheduleDelayedPoke } from "./poller-fifo.js";
@@ -26,95 +26,160 @@ import {
 
 export const DEBOUNCE_MS = 30_000;
 
+interface HandoffCallbackDispatch {
+  childProject: string;
+  childWorker: string;
+  childBranch: string | undefined;
+  terminalState: "merged" | "done" | "failing";
+  parentProject: string;
+  parentWorker: string;
+  replyNote: string | undefined;
+}
+
+interface TransitionResult {
+  applied: boolean;
+  fromState: PrState;
+  workflowName: string;
+  requestedWorkflow?: string;
+  createdAt?: number;
+  callback: HandoffCallbackDispatch | null;
+}
+
+function callbackDispatchFor(
+  projectName: string,
+  workerName: string,
+  entry: Readonly<WorkerEntry>,
+  toState: PrState,
+): HandoffCallbackDispatch | null {
+  if (toState !== "merged" && toState !== "done" && toState !== "failing") return null;
+  if (!entry.handoffCallbackExpected || entry.handoffCallbackFiredAt) return null;
+  if (!entry.parentProject || !entry.parentWorker) return null;
+  return {
+    childProject: projectName,
+    childWorker: workerName,
+    childBranch: entry.branchName,
+    terminalState: toState,
+    parentProject: entry.parentProject,
+    parentWorker: entry.parentWorker,
+    replyNote: entry.handoffReplyNote,
+  };
+}
+
+function dispatchHandoffCallback(callback: HandoffCallbackDispatch): void {
+  void import("./continue.js").then(({ notifyHandoffCallback }) => {
+    notifyHandoffCallback(callback);
+  }).catch(err => {
+    log.warn("poller", "handoff callback dispatch failed", {
+      worker: callback.childWorker,
+      data: { project: callback.childProject, error: String(err) },
+    });
+  });
+}
+
+function applyTransition(
+  projectName: string,
+  workerName: string,
+  toState: PrState,
+  extraFields?: Omit<WorkerFieldsUpdate, "prState">,
+  allowInvalid = false,
+): boolean {
+  const now = Date.now();
+  const result = updateWorkerFieldsIf<TransitionResult>(projectName, workerName, entry => {
+    const fromState: PrState = entry.prState ?? "working";
+    const workflowName = entry.workflow ?? "default";
+    const valid = getValidTransitions(workflowName)[fromState]?.includes(toState) === true;
+    if (!valid && !allowInvalid) {
+      return {
+        fields: null,
+        result: {
+          applied: false,
+          fromState,
+          workflowName,
+          requestedWorkflow: entry.workflow,
+          callback: null,
+        },
+      };
+    }
+
+    const callback = callbackDispatchFor(projectName, workerName, entry, toState);
+    const stateFields: Omit<WorkerFieldsUpdate, "prState"> = toState !== fromState
+      ? { ...extraFields, lastStateChangeAt: now }
+      : { ...extraFields };
+    if (callback) stateFields.handoffCallbackFiredAt = now;
+    return {
+      fields: { ...stateFields, prState: toState },
+      result: {
+        applied: true,
+        fromState,
+        workflowName,
+        requestedWorkflow: entry.workflow,
+        createdAt: entry.createdAt,
+        callback,
+      },
+    };
+  });
+
+  if (!result) return false;
+  if (!result.applied) {
+    log.warn("poller", `invalid state transition: ${result.fromState} -> ${toState}`, {
+      worker: workerName,
+      data: {
+        project: projectName,
+        workflow: result.workflowName,
+        requested: result.requestedWorkflow,
+      },
+    });
+    return false;
+  }
+  if (toState !== result.fromState) {
+    recordStateTransition(
+      projectName,
+      workerName,
+      result.createdAt,
+      result.workflowName,
+      result.fromState,
+      toState,
+    );
+  }
+  if (result.callback) dispatchHandoffCallback(result.callback);
+  return true;
+}
+
 export function transitionState(
   projectName: string,
   workerName: string,
   toState: PrState,
   extraFields?: Omit<WorkerFieldsUpdate, "prState">,
-): void {
-  const entry = findWorkerByName(projectName, workerName);
-  const fromState: PrState = entry?.prState ?? "working";
-  const workflowName = entry?.workflow ?? "default";
-  const validTransitions = getValidTransitions(workflowName);
-  if (!validTransitions[fromState]?.includes(toState)) {
-    log.warn("poller", `invalid state transition: ${fromState} -> ${toState}`, {
-      worker: workerName,
-      // `requested` is the raw value on the registry entry (may be undefined
-      // for legacy entries or a name unknown to the registry, in which case
-      // getValidTransitions has already silently fallen back to default —
-      // preserving the original value here makes that fallback visible).
-      data: { project: projectName, workflow: workflowName, requested: entry?.workflow },
-    });
-  }
-  // Stamp lastStateChangeAt on a genuine prState move so it tracks the last
-  // real state transition on the poller side too — the hook path already stamps
-  // it for agentStatus changes (applyAndLog). This keeps the field authoritative
-  // for both the row-ordering freshness key (workerSortFreshness) and the status
-  // pane's time-in-state suffix: without it, a poller-driven move (e.g.
-  // reviewing -> merge-pending) would leave the field pinned to the worker's
-  // last hook and mis-measure how long it has sat in the new state. Only on an
-  // actual change so a redundant same-state re-write doesn't reset the clock.
-  const stateFields: Omit<WorkerFieldsUpdate, "prState"> =
-    toState !== fromState ? { ...extraFields, lastStateChangeAt: Date.now() } : { ...extraFields };
-  updateWorkerFields(projectName, workerName, { ...stateFields, prState: toState });
-  // Ledger the move on a genuine transition only (same gate as the
-  // lastStateChangeAt stamp). `entry` guards against a name unknown to the
-  // registry — updateWorkerFields no-ops in that case, so recording would
-  // ledger a transition that never persisted.
-  if (entry && toState !== fromState) {
-    recordStateTransition(projectName, workerName, entry.createdAt, workflowName, fromState, toState);
-  }
-  maybeFireHandoffCallback(projectName, workerName, toState);
+): boolean {
+  return applyTransition(projectName, workerName, toState, extraFields);
 }
 
-// One-shot callback dispatch for handoff children that requested it via
-// `garden handoff --expect-callback`. Fires when the child reaches its first
-// terminal prState (merged/done/failing). Idempotent: handoffCallbackFiredAt
-// is set before the dispatch so a replayed transition (rare: terminal state
-// re-write within the same merge cycle) doesn't double-fire. Hooked here
-// rather than at each individual call site so every path that lands on a
-// terminal state — finalizeMerge's `merged`/`done`, every poller-review
-// failing transition, the resolver's failing transition — is covered by
-// one chokepoint.
+export function forceTransitionState(
+  projectName: string,
+  workerName: string,
+  toState: PrState,
+  extraFields?: Omit<WorkerFieldsUpdate, "prState">,
+): boolean {
+  return applyTransition(projectName, workerName, toState, extraFields, true);
+}
+
+// The Stop hook's trail-off `done` write bypasses transitionState, so
+// handleDone uses this sibling path to claim the same one-shot callback under
+// the registry lock. Poller-driven terminal moves claim it in applyTransition.
 function maybeFireHandoffCallback(
   projectName: string,
   workerName: string,
   toState: PrState,
 ): void {
-  if (toState !== "merged" && toState !== "done" && toState !== "failing") return;
-  const entry = findWorkerByName(projectName, workerName);
-  if (!entry) return;
-  if (!entry.handoffCallbackExpected) return;
-  if (entry.handoffCallbackFiredAt) return;
-  if (!entry.parentProject || !entry.parentWorker) return;
-
-  // Mark fired BEFORE dispatch under the registry lock. notifyHandoffCallback
-  // is best-effort — if the parent pane is gone or busy, it silently no-ops.
-  // Either way, this callback was the one shot we get.
-  updateWorkerFields(projectName, workerName, {
-    handoffCallbackFiredAt: Date.now(),
+  const now = Date.now();
+  const callback = updateWorkerFieldsIf(projectName, workerName, entry => {
+    const dispatch = callbackDispatchFor(projectName, workerName, entry, toState);
+    return {
+      fields: dispatch ? { handoffCallbackFiredAt: now } : null,
+      result: dispatch,
+    };
   });
-
-  // Lazy import: continue.ts depends on registry, and registry doesn't depend
-  // on continue.ts. Static import here would be fine, but the lazy form keeps
-  // poller-state.ts free of any UI-layer transitive imports for callers that
-  // don't transition to a terminal state.
-  void import("./continue.js").then(({ notifyHandoffCallback }) => {
-    notifyHandoffCallback({
-      childProject: projectName,
-      childWorker: workerName,
-      childBranch: entry.branchName,
-      terminalState: toState,
-      parentProject: entry.parentProject!,
-      parentWorker: entry.parentWorker!,
-      replyNote: entry.handoffReplyNote,
-    });
-  }).catch(err => {
-    log.warn("poller", "handoff callback dispatch failed", {
-      worker: workerName,
-      data: { project: projectName, error: String(err) },
-    });
-  });
+  if (callback) dispatchHandoffCallback(callback);
 }
 
 // failingReasons that require operator action — the failing → working push

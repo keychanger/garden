@@ -2,7 +2,7 @@
 // workers reach by env swap under the unchanged Claude Code harness.
 // See docs/MULTI-MODEL.md "Layer 1: provider descriptors".
 import {
-  loadConfig, saveConfig, assertValidProvider,
+  loadConfig, mutateConfig, assertValidProvider,
   type GardenConfig, type ProviderProfile,
 } from "../config.js";
 import {
@@ -142,12 +142,6 @@ function handleAdd(args: string[]): void {
   if (!flags.baseUrl || !flags.authTokenEnv) {
     throw new Error(ADD_USAGE);
   }
-  const cfg = loadConfig();
-  const providers = cfg.providers ?? {};
-  if (providers[flags.name]) {
-    throw new Error(`Provider already exists: ${flags.name}`);
-  }
-
   const profile: ProviderProfile = {
     baseUrl: flags.baseUrl,
     authTokenEnv: flags.authTokenEnv,
@@ -158,8 +152,11 @@ function handleAdd(args: string[]): void {
 
   assertValidProvider(flags.name, profile);
 
-  cfg.providers = { ...providers, [flags.name]: profile };
-  saveConfig(cfg);
+  mutateConfig(cfg => {
+    const providers = cfg.providers ?? {};
+    if (providers[flags.name]) throw new Error(`Provider already exists: ${flags.name}`);
+    cfg.providers = { ...providers, [flags.name]: profile };
+  });
 
   // Retain the key in the running dashboard's hidden tmux vault while this
   // process has the operator's shell env. Worker launches receive only their
@@ -175,31 +172,30 @@ function handleAdd(args: string[]): void {
 function handleRemove(args: string[]): void {
   const name = args[0];
   if (!name) throw new Error(`Usage: garden provider remove <name>`);
-  const cfg = loadConfig();
-  const providers = cfg.providers ?? {};
-  const profile = providers[name];
-  if (!profile) throw new Error(`Unknown provider: ${name}`);
-
-  const projectUsage = projectsByProvider(cfg)[name] ?? [];
   const workerUsage = workersByProvider(name);
-  const usage = [...projectUsage, ...workerUsage];
-  if (usage.length > 0) {
-    const remedies = [
-      projectUsage.length > 0
-        ? `Run 'garden config <project> provider unset' for the listed projects.`
-        : "",
-      workerUsage.length > 0
-        ? "Close the listed workers before removing their provider."
-        : "",
-    ].filter(Boolean).join(" ");
-    throw new Error(
-      `Provider '${name}' is still used by: ${usage.join(", ")}. ${remedies}`,
-    );
-  }
-
-  delete providers[name];
-  cfg.providers = providers;
-  saveConfig(cfg);
+  const profile = mutateConfig(cfg => {
+    const providers = cfg.providers ?? {};
+    const current = providers[name];
+    if (!current) throw new Error(`Unknown provider: ${name}`);
+    const projectUsage = projectsByProvider(cfg)[name] ?? [];
+    const usage = [...projectUsage, ...workerUsage];
+    if (usage.length > 0) {
+      const remedies = [
+        projectUsage.length > 0
+          ? `Run 'garden config <project> provider unset' for the listed projects.`
+          : "",
+        workerUsage.length > 0
+          ? "Close the listed workers before removing their provider."
+          : "",
+      ].filter(Boolean).join(" ");
+      throw new Error(
+        `Provider '${name}' is still used by: ${usage.join(", ")}. ${remedies}`,
+      );
+    }
+    delete providers[name];
+    cfg.providers = providers;
+    return current;
+  });
   clearProviderTokenVault({ ...profile, name, label: profile.label ?? name });
   console.log(`Removed provider '${name}'.`);
 }

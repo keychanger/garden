@@ -62,6 +62,25 @@ describe("loadConfig", () => {
   });
 });
 
+describe("mutateConfig", () => {
+  it("holds the config lock across a read-modify-write and persists the result", async () => {
+    const { mutateConfig, loadConfig, saveConfig, GARDEN_DIR, CONFIG_PATH } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: {}, plots: {} });
+
+    mutateConfig(config => {
+      expect(fs.existsSync(`${CONFIG_PATH}.lock`)).toBe(true);
+      config.projects.alpha = { path: "/tmp/alpha" };
+      config.limits = { checksSlots: 2 };
+    });
+
+    expect(loadConfig()).toMatchObject({
+      projects: { alpha: { path: "/tmp/alpha" } },
+      limits: { checksSlots: 2 },
+    });
+  });
+});
+
 describe("getProject", () => {
   it("returns a registered project", async () => {
     const { getProject, saveConfig, GARDEN_DIR } = await importConfig();

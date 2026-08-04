@@ -987,6 +987,25 @@ export function addWorker(project: string, entry: WorkerEntry): void {
   });
 }
 
+export function addWorkerWithUniqueName<T extends WorkerEntry>(
+  project: string,
+  createEntry: (existingNames: string[]) => T,
+): T {
+  return withRegistryLock(() => {
+    const registry = readRegistry();
+    const existingNames = Object.values(registry.workers)
+      .flatMap(entries => entries.map(entry => entry.name));
+    const entry = createEntry(existingNames);
+    if (existingNames.includes(entry.name)) {
+      throw new Error(`Worker name is already registered: ${entry.name}`);
+    }
+    if (!registry.workers[project]) registry.workers[project] = [];
+    registry.workers[project].push(entry);
+    writeRegistry(registry);
+    return entry;
+  });
+}
+
 export function removeWorker(project: string, workerName: string): void {
   withRegistryLock(() => {
     const registry = readRegistry();
@@ -1021,6 +1040,29 @@ export interface WorkerFieldsUpdate
   grow?: Partial<GrowData>;
 }
 
+function applyWorkerFields(
+  entry: WorkerEntry,
+  fields: WorkerFieldsUpdate,
+  project: string,
+  workerName: string,
+): void {
+  if (fields.prState && fields.prState !== entry.prState) {
+    log.info("poller", `${entry.prState ?? "new"} -> ${fields.prState}`, {
+      worker: workerName,
+      data: { project },
+    });
+  }
+
+  const { trellis: trellisUpdate, grow: growUpdate, ...rest } = fields;
+  Object.assign(entry, rest);
+  if (trellisUpdate !== undefined) {
+    entry.trellis = { ...(entry.trellis ?? {}), ...trellisUpdate } as TrellisData;
+  }
+  if (growUpdate !== undefined) {
+    entry.grow = { ...(entry.grow ?? {}), ...growUpdate } as GrowData;
+  }
+}
+
 export function updateWorkerFields(
   project: string,
   workerName: string,
@@ -1032,31 +1074,31 @@ export function updateWorkerFields(
     if (!entries) return;
     const entry = entries.find(e => e.name === workerName);
     if (!entry) return;
-
-    if (fields.prState && fields.prState !== entry.prState) {
-      log.info("poller", `${entry.prState ?? "new"} -> ${fields.prState}`, {
-        worker: workerName,
-        data: { project },
-      });
-    }
-
-    const { trellis: trellisUpdate, grow: growUpdate, ...rest } = fields;
-    Object.assign(entry, rest);
-    if (trellisUpdate !== undefined) {
-      // Merge into existing trellis. If entry.trellis is unset (a default
-      // worker received a stray trellis update — caller bug), the spread
-      // still produces a TrellisData-shaped object from whatever was passed.
-      entry.trellis = { ...(entry.trellis ?? {}), ...trellisUpdate } as TrellisData;
-    }
-    if (growUpdate !== undefined) {
-      // Same deep-merge pattern as trellis. Caller bug if entry.grow is
-      // unset and the update lacks `seed`; the resulting object would have
-      // no anchoring seed for iter ≥ 2 prompts. The cast lets the broken
-      // shape persist (rather than throw) so the loop can surface it
-      // visibly via a missing-seed iteration prompt.
-      entry.grow = { ...(entry.grow ?? {}), ...growUpdate } as GrowData;
-    }
+    applyWorkerFields(entry, fields, project, workerName);
     writeRegistry(registry);
+  });
+}
+
+export interface ConditionalWorkerUpdate<T> {
+  fields: WorkerFieldsUpdate | null;
+  result: T;
+}
+
+export function updateWorkerFieldsIf<T>(
+  project: string,
+  workerName: string,
+  decide: (entry: Readonly<WorkerEntry>) => ConditionalWorkerUpdate<T>,
+): T | undefined {
+  return withRegistryLock(() => {
+    const registry = readRegistry();
+    const entry = registry.workers[project]?.find(candidate => candidate.name === workerName);
+    if (!entry) return undefined;
+    const decision = decide(entry);
+    if (decision.fields !== null) {
+      applyWorkerFields(entry, decision.fields, project, workerName);
+      writeRegistry(registry);
+    }
+    return decision.result;
   });
 }
 
@@ -1071,20 +1113,7 @@ export function batchUpdateWorkerFields(
       if (!entries) continue;
       const entry = entries.find(e => e.name === workerName);
       if (!entry) continue;
-      if (fields.prState && fields.prState !== entry.prState) {
-        log.info("poller", `${entry.prState ?? "new"} -> ${fields.prState}`, {
-          worker: workerName,
-          data: { project },
-        });
-      }
-      const { trellis: trellisUpdate, grow: growUpdate, ...rest } = fields;
-      Object.assign(entry, rest);
-      if (trellisUpdate !== undefined) {
-        entry.trellis = { ...(entry.trellis ?? {}), ...trellisUpdate } as TrellisData;
-      }
-      if (growUpdate !== undefined) {
-        entry.grow = { ...(entry.grow ?? {}), ...growUpdate } as GrowData;
-      }
+      applyWorkerFields(entry, fields, project, workerName);
     }
     writeRegistry(registry);
   });

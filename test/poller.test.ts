@@ -109,16 +109,29 @@ vi.mock("../src/dashboard/tmux.js", () => ({
 
 vi.mock("../src/dashboard/registry.js", () => {
   const entries: Record<string, import("../src/dashboard/registry.js").WorkerEntry[]> = {};
+  const updateWorkerFields = vi.fn(
+    (project: string, name: string, fields: Record<string, unknown>) => {
+      const list = entries[project];
+      if (!list) return;
+      const entry = list.find(e => e.name === name);
+      if (entry) Object.assign(entry, fields);
+    },
+  );
   return {
     OPERATOR_ACTION_FAILING_REASONS: new Set(["trellis-flagged", "iteration-budget", "stagnation"]),
     readRegistry: vi.fn(() => ({ workers: entries })),
     getWorkers: vi.fn((project: string) => entries[project] ?? []),
-    updateWorkerFields: vi.fn(
-      (project: string, name: string, fields: Record<string, unknown>) => {
-        const list = entries[project];
-        if (!list) return;
-        const entry = list.find(e => e.name === name);
-        if (entry) Object.assign(entry, fields);
+    updateWorkerFields,
+    updateWorkerFieldsIf: vi.fn(
+      (project: string, name: string, decide: (entry: import("../src/dashboard/registry.js").WorkerEntry) => {
+        fields: Record<string, unknown> | null;
+        result: unknown;
+      }) => {
+        const entry = entries[project]?.find(candidate => candidate.name === name);
+        if (!entry) return undefined;
+        const decision = decide(entry);
+        if (decision.fields !== null) updateWorkerFields(project, name, decision.fields);
+        return decision.result;
       },
     ),
     findWorkerByName: vi.fn(
@@ -5535,6 +5548,14 @@ describe("startProjectPoller — window convergence", () => {
   // vitest, so this pins the mechanism: the spawn happens inside the lock.
   it("runs the check-and-spawn inside the per-project spawn lock", () => {
     vi.mocked(windowIndices).mockReturnValue([]);
+    let lockOwner = "";
+    vi.mocked(fs.writeSync).mockImplementationOnce((_fd, data) => {
+      lockOwner = String(data);
+      return Buffer.byteLength(lockOwner);
+    });
+    vi.mocked(fs.readFileSync).mockImplementation((filePath) =>
+      String(filePath).includes("solo-poller.spawn.lock") ? lockOwner : "{}",
+    );
 
     startProjectPoller("solo", "node /usr/local/bin/garden");
 

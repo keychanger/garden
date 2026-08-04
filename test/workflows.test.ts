@@ -46,7 +46,7 @@ function stubStateHandlers(): Record<PrState, StateHandler> {
 // that reaches done gets one interposed aggregated review, which finalizes back
 // to done (CLEAN) or re-opens done→reviewing to run.
 const PRE_REFACTOR_VALID_TRANSITIONS: Record<PrState, PrState[]> = {
-  working:         ["reviewing"],
+  working:         ["reviewing", "failing"],
   reviewing:       ["merge-pending", "working", "failing", "done"],
   "merge-pending": ["merged", "done", "resolving", "ci-fixing", "working", "failing"],
   resolving:       ["merge-pending", "working", "failing"],

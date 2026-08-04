@@ -417,14 +417,12 @@ export function getChecksSlotsOverride(config?: GardenConfig): number | undefine
 // Lock-protected R/M/W of a single limits key. Passing undefined clears it.
 // Returns the merged LimitsConfig.
 export function setLimit(key: keyof LimitsConfig, value: number | undefined): LimitsConfig {
-  return withConfigLock(() => {
-    const cfg = loadConfig();
+  return mutateConfig(cfg => {
     const limits: LimitsConfig = { ...(cfg.limits ?? {}) };
     if (value === undefined) delete limits[key];
     else limits[key] = value;
     if (Object.keys(limits).length === 0) delete cfg.limits;
     else cfg.limits = limits;
-    saveConfig(cfg);
     return limits;
   });
 }
@@ -432,12 +430,10 @@ export function setLimit(key: keyof LimitsConfig, value: number | undefined): Li
 // Set (or clear, with undefined) the branch the running build compares itself
 // against. Same lock-protected R/M/W shape as setLimit.
 export function setBuildBranch(branch: string | undefined): string {
-  return withConfigLock(() => {
-    const cfg = loadConfig();
+  return mutateConfig(cfg => {
     const trimmed = branch?.trim();
     if (!trimmed) delete cfg.build;
     else cfg.build = { ...(cfg.build ?? {}), branch: trimmed };
-    saveConfig(cfg);
     return getBuildBranch(cfg);
   });
 }
@@ -451,15 +447,13 @@ export function setAutoContinueConfig(patch: Partial<AutoContinueConfig>): AutoC
   // Lock-protected R/M/W: the poller's threshold-tripping write
   // (autoContinueGateReason) races with operator commands like
   // `garden auto on` if both load the file before either saves.
-  return withConfigLock(() => {
-    const cfg = loadConfig();
+  return mutateConfig(cfg => {
     const merged: AutoContinueConfig = { ...getAutoContinueConfig(cfg), ...patch };
     // Strip pause metadata when not paused so the file stays clean.
     const persisted: Partial<AutoContinueConfig> = { ...merged };
     if (persisted.pausedUntil === undefined) delete persisted.pausedUntil;
     if (persisted.pausedReason === undefined) delete persisted.pausedReason;
     cfg.autoContinue = persisted;
-    saveConfig(cfg);
     return merged;
   });
 }
@@ -470,10 +464,8 @@ export function getLogsMode(config?: GardenConfig): LogsMode {
 }
 
 export function setLogsMode(mode: LogsMode): void {
-  withConfigLock(() => {
-    const cfg = loadConfig();
+  mutateConfig(cfg => {
     cfg.logs = { ...(cfg.logs ?? {}), mode };
-    saveConfig(cfg);
   });
 }
 
@@ -723,13 +715,18 @@ export function saveConfig(config: GardenConfig): void {
 
 const CONFIG_LOCK_FILE = `${CONFIG_PATH}.lock`;
 
-// Serialize read-modify-write cycles on the config file. Used by writers
-// that cannot tolerate a lost-update race against another writer (notably
-// the poller's auto-continue threshold-trip vs. operator `garden auto on`).
-// Most operator commands don't need this — they're invoked sequentially by
-// a human, and an interleaved write is implausible.
+// Serialize read-modify-write cycles on the config file.
 export function withConfigLock<T>(fn: () => T): T {
   return withFileLock(CONFIG_LOCK_FILE, fn, { name: "config" });
+}
+
+export function mutateConfig<T>(fn: (config: GardenConfig) => T): T {
+  return withConfigLock(() => {
+    const config = loadConfig();
+    const result = fn(config);
+    saveConfig(config);
+    return result;
+  });
 }
 
 export function getProject(name: string): ProjectConfig & { name: string } {

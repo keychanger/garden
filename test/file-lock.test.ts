@@ -116,16 +116,27 @@ describe("withFileLock", () => {
     expect(fs.existsSync(lockPath)).toBe(false); // released after fn
   });
 
-  it("reclaims a lock older than the stale threshold even with a live-looking pid", async () => {
-    // pid reuse after a reboot: the recorded pid now belongs to an unrelated
-    // live process, so the liveness probe lies. Age is the tiebreaker.
+  it("does not reclaim an old lock while its holder pid is still live", async () => {
     const { withFileLock } = await importHelper();
     const lockPath = path.join(env.sessionsDir, "oldlive.lock");
     fs.writeFileSync(lockPath, String(process.pid));
     const old = new Date(Date.now() - 60_000);
     fs.utimesSync(lockPath, old, old);
-    let ran = false;
-    withFileLock(lockPath, () => { ran = true; });
-    expect(ran).toBe(true);
+    expect(() => withFileLock(lockPath, () => { /* never runs */ }, { deadlineMs: 50 }))
+      .toThrow(/Could not acquire/);
+    expect(fs.existsSync(lockPath)).toBe(true);
+  });
+
+  it("does not remove a replacement lock when releasing", async () => {
+    const { withFileLock } = await importHelper();
+    const lockPath = path.join(env.sessionsDir, "replaced.lock");
+    const replacementOwner = `${process.pid}:replacement-owner`;
+
+    withFileLock(lockPath, () => {
+      fs.unlinkSync(lockPath);
+      fs.writeFileSync(lockPath, replacementOwner);
+    });
+
+    expect(fs.readFileSync(lockPath, "utf-8")).toBe(replacementOwner);
   });
 });

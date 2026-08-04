@@ -155,6 +155,24 @@ describe("transitionState handoff callback chokepoint", () => {
     expect(notifyHandoffCallback).not.toHaveBeenCalled();
   });
 
+  it("rejects an invalid transition without changing the persisted state", async () => {
+    await seedChild();
+    const { transitionState } = await import("../src/dashboard/poller-state.js");
+    const { findWorkerByName } = await import("../src/dashboard/registry.js");
+
+    expect(transitionState("wolf", "bold-ash", "reviewing")).toBe(false);
+    expect(findWorkerByName("wolf", "bold-ash")?.prState).toBe("merge-pending");
+  });
+
+  it("requires the explicit recovery API to force an invalid transition", async () => {
+    await seedChild();
+    const { forceTransitionState } = await import("../src/dashboard/poller-state.js");
+    const { findWorkerByName } = await import("../src/dashboard/registry.js");
+
+    expect(forceTransitionState("wolf", "bold-ash", "reviewing")).toBe(true);
+    expect(findWorkerByName("wolf", "bold-ash")?.prState).toBe("reviewing");
+  });
+
   it("does not re-fire when handoffCallbackFiredAt is already set (idempotency)", async () => {
     await seedChild({
       expectCallback: true,

@@ -23,7 +23,7 @@
 // with no migration.
 import {
   loadConfig,
-  saveConfig,
+  mutateConfig,
   type CrewRole,
   REVIEW_EFFORT_LEVELS,
   isValidReviewEffort,
@@ -269,40 +269,39 @@ export function crewOverridden(project: ProjectConfig, config: GardenConfig): bo
 // avoid split-brain. So the crew owns the value, but the value lives in
 // `project.provider` where every reader already looks.
 export function applyCrew(projectName: string, spec: CrewSpec): void {
-  const config = loadConfig();
-  const project = config.projects[projectName];
-  if (!project) throw new Error(`Unknown project: ${projectName}`);
+  mutateConfig(config => {
+    const project = config.projects[projectName];
+    if (!project) throw new Error(`Unknown project: ${projectName}`);
 
-  project.crew = spec.name;
-  delete project.harness;
-  if (spec.worker.provider) project.provider = spec.worker.provider;
-  else delete project.provider;
-  if (spec.worker.model) delete project.model;
-  if (spec.worker.effort) delete project.effort;
+    project.crew = spec.name;
+    delete project.harness;
+    if (spec.worker.provider) project.provider = spec.worker.provider;
+    else delete project.provider;
+    if (spec.worker.model) delete project.model;
+    if (spec.worker.effort) delete project.effort;
 
-  const roles = project.roles ?? {};
-  for (const role of ["reviewer", "resolver", "ciFix"] as const) {
-    const target = roles[role];
-    if (!target) continue;
-    delete target.harness;
-    if (spec.review.model) delete target.model;
-    if (spec.review.effort) delete target.effort;
-    if (Object.keys(target).length === 0) delete roles[role];
-  }
-  if (Object.keys(roles).length === 0) delete project.roles;
-  else project.roles = roles;
-
-  saveConfig(config);
+    const roles = project.roles ?? {};
+    for (const role of ["reviewer", "resolver", "ciFix"] as const) {
+      const target = roles[role];
+      if (!target) continue;
+      delete target.harness;
+      if (spec.review.model) delete target.model;
+      if (spec.review.effort) delete target.effort;
+      if (Object.keys(target).length === 0) delete roles[role];
+    }
+    if (Object.keys(roles).length === 0) delete project.roles;
+    else project.roles = roles;
+  });
 }
 
 // Unbind a project from its crew, leaving the flat keys as-is. The project
 // keeps whatever it currently resolves to, now spelled out rather than named.
 export function clearCrew(projectName: string): void {
-  const config = loadConfig();
-  const project = config.projects[projectName];
-  if (!project) throw new Error(`Unknown project: ${projectName}`);
-  delete project.crew;
-  saveConfig(config);
+  mutateConfig(config => {
+    const project = config.projects[projectName];
+    if (!project) throw new Error(`Unknown project: ${projectName}`);
+    delete project.crew;
+  });
 }
 
 // --- CRUD over stored definitions -------------------------------------------
@@ -342,23 +341,22 @@ export function validateCrewDef(def: StoredCrew, config: GardenConfig): void {
 }
 
 export function saveCrew(name: string, def: StoredCrew): void {
-  const config = loadConfig();
-  validateCrewDef(def, config);
-  config.crews = { ...(config.crews ?? {}), [name]: def };
-  saveConfig(config);
+  mutateConfig(config => {
+    validateCrewDef(def, config);
+    config.crews = { ...(config.crews ?? {}), [name]: def };
+  });
 }
 
 // Remove a stored definition. Projects bound to it fall back to their flat keys
 // (deriveCrew reports null, resolution skips the crew layer) rather than
 // breaking — the binding is a reference, and a dangling one is inert.
 export function deleteCrew(name: string): string[] {
-  const config = loadConfig();
-  if (!config.crews?.[name]) throw new Error(`No stored crew '${name}'.`);
-  delete config.crews[name];
-  if (Object.keys(config.crews).length === 0) delete config.crews;
-  const bound = Object.entries(config.projects)
-    .filter(([, p]) => p.crew === name)
-    .map(([n]) => n);
-  saveConfig(config);
-  return bound;
+  return mutateConfig(config => {
+    if (!config.crews?.[name]) throw new Error(`No stored crew '${name}'.`);
+    delete config.crews[name];
+    if (Object.keys(config.crews).length === 0) delete config.crews;
+    return Object.entries(config.projects)
+      .filter(([, p]) => p.crew === name)
+      .map(([n]) => n);
+  });
 }

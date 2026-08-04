@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import {
-  loadConfig, saveConfig, expandHome,
+  loadConfig, mutateConfig, expandHome,
   type ClaudeProfile, type GardenConfig,
 } from "../config.js";
 import { isTTY } from "../output.js";
@@ -92,11 +92,6 @@ function parseAddFlags(args: string[]): AddFlags {
 
 function handleAdd(args: string[]): void {
   const flags = parseAddFlags(args);
-  const cfg = loadConfig();
-  const profiles = cfg.claudeProfiles ?? {};
-  if (profiles[flags.name]) {
-    throw new Error(`Profile already exists: ${flags.name}`);
-  }
   const configDir = flags.configDir ?? `~/.claude-${flags.name}`;
   const profile: ClaudeProfile = { configDir };
   if (flags.label && flags.label !== flags.name) profile.label = flags.label;
@@ -104,8 +99,11 @@ function handleAdd(args: string[]): void {
   const resolved = expandHome(configDir);
   fs.mkdirSync(resolved, { recursive: true });
 
-  cfg.claudeProfiles = { ...profiles, [flags.name]: profile };
-  saveConfig(cfg);
+  mutateConfig(cfg => {
+    const profiles = cfg.claudeProfiles ?? {};
+    if (profiles[flags.name]) throw new Error(`Profile already exists: ${flags.name}`);
+    cfg.claudeProfiles = { ...profiles, [flags.name]: profile };
+  });
 
   console.log(`Added claude profile '${flags.name}'`);
   console.log(`  configDir: ${resolved}`);
@@ -116,21 +114,19 @@ function handleAdd(args: string[]): void {
 function handleRemove(args: string[]): void {
   const name = args[0];
   if (!name) throw new Error(`Usage: garden claude-profile remove <name>`);
-  const cfg = loadConfig();
-  const profiles = cfg.claudeProfiles ?? {};
-  if (!profiles[name]) throw new Error(`Unknown profile: ${name}`);
-
-  const usage = projectsByProfile(cfg)[name] ?? [];
-  if (usage.length > 0) {
-    throw new Error(
-      `Profile '${name}' is still used by: ${usage.join(", ")}. ` +
-      `Run 'garden config <project> claudeProfile unset' first.`,
-    );
-  }
-
-  delete profiles[name];
-  cfg.claudeProfiles = profiles;
-  saveConfig(cfg);
+  mutateConfig(cfg => {
+    const profiles = cfg.claudeProfiles ?? {};
+    if (!profiles[name]) throw new Error(`Unknown profile: ${name}`);
+    const usage = projectsByProfile(cfg)[name] ?? [];
+    if (usage.length > 0) {
+      throw new Error(
+        `Profile '${name}' is still used by: ${usage.join(", ")}. ` +
+        `Run 'garden config <project> claudeProfile unset' first.`,
+      );
+    }
+    delete profiles[name];
+    cfg.claudeProfiles = profiles;
+  });
   console.log(`Removed claude profile '${name}' (config dir left intact on disk).`);
 }
 

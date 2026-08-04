@@ -21,6 +21,7 @@ vi.mock("../src/config.js", async (orig) => {
     get SESSIONS_DIR() { return sessionsDir.value; },
     loadConfig: () => store.value,
     saveConfig: (c: GardenConfig) => { store.value = c; },
+    mutateConfig: <T>(fn: (config: GardenConfig) => T) => fn(store.value),
     tryGetProject: (n: string) => (store.value.projects[n] ? { name: n, ...store.value.projects[n] } : null),
   };
 });

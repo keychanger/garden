@@ -224,6 +224,30 @@ describe("addWorker / getWorkers", () => {
     const { getWorkers } = await importRegistry();
     expect(getWorkers("unknown")).toEqual([]);
   });
+
+  it("allocates a globally unique name from the locked registry snapshot", async () => {
+    const { addWorker, addWorkerWithUniqueName, getWorkers } = await importRegistry();
+    addWorker("proj1", mkEntry({ name: "bold-ash" }));
+
+    const entry = addWorkerWithUniqueName("proj2", existingNames => {
+      expect(existingNames).toEqual(["bold-ash"]);
+      return mkEntry({ name: "calm-bay", worktreePath: "/tmp/calm-bay" });
+    });
+
+    expect(entry.worktreePath).toBe("/tmp/calm-bay");
+    expect(getWorkers("proj2")).toEqual([
+      expect.objectContaining({ name: "calm-bay", worktreePath: "/tmp/calm-bay" }),
+    ]);
+  });
+
+  it("rejects a duplicate name without modifying the registry", async () => {
+    const { addWorker, addWorkerWithUniqueName, getWorkers } = await importRegistry();
+    addWorker("proj1", mkEntry({ name: "bold-ash" }));
+
+    expect(() => addWorkerWithUniqueName("proj2", () => mkEntry({ name: "bold-ash" })))
+      .toThrow("Worker name is already registered: bold-ash");
+    expect(getWorkers("proj2")).toEqual([]);
+  });
 });
 
 describe("removeWorker", () => {

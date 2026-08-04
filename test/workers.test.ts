@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("node:crypto", () => ({
   default: { randomUUID: vi.fn(() => "fake-uuid-1234") },
+  randomUUID: vi.fn(() => "fake-lock-uuid"),
 }));
 
 vi.mock("node:fs", () => ({
@@ -85,12 +86,19 @@ vi.mock("../src/dashboard/registry.js", async (importActual) => {
   // used by killPane's replacement-window selection) stay live; only the
   // stateful accessors below are faked.
   const actual = await importActual<typeof import("../src/dashboard/registry.js")>();
+  const addWorker = vi.fn();
+  const getAllWorkerNames = vi.fn((): string[] => []);
   return {
     ...actual,
-    addWorker: vi.fn(),
+    addWorker,
+    addWorkerWithUniqueName: vi.fn((project: string, createEntry: (names: string[]) => unknown) => {
+      const entry = createEntry(getAllWorkerNames());
+      addWorker(project, entry);
+      return entry;
+    }),
     removeWorker: vi.fn(),
     findWorkerByName: vi.fn(() => null),
-    getAllWorkerNames: vi.fn(() => []),
+    getAllWorkerNames,
     getWorkers: vi.fn(() => []),
     updateWorkerFields: vi.fn(),
     // Pure status helper — use the real logic so bounce's resume-status routing
@@ -441,6 +449,17 @@ describe("newWorker", () => {
     expect(msgs.some((m) => m.includes("Published 'main' to origin"))).toBe(true);
   });
 
+  it("publishes a missing base branch before entering the dashboard state lock", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(branchExistsOnOrigin).mockReturnValueOnce(false);
+    newWorker();
+
+    expect(vi.mocked(tryPublishBranch)).toHaveBeenCalled();
+    expect(vi.mocked(withStateLock)).toHaveBeenCalled();
+    expect(vi.mocked(tryPublishBranch).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(withStateLock).mock.invocationCallOrder[0]);
+  });
+
   it("rejects creation when auto-publish fails, surfacing the git error", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     vi.mocked(branchExistsOnOrigin).mockReturnValueOnce(false);
@@ -478,6 +497,13 @@ describe("newWorker", () => {
     vi.mocked(tryGetProject).mockReturnValueOnce({ name: "other", path: "/repo/other" });
     newWorker({ projectName: "other", seedMessageFile: "/tmp/seed.txt", background: true });
     expect(vi.mocked(swapVisibleToProject)).not.toHaveBeenCalled();
+  });
+
+  it("background handoff does not acquire the dashboard state lock", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
+    vi.mocked(tryGetProject).mockReturnValueOnce({ name: "other", path: "/repo/other" });
+    newWorker({ projectName: "other", seedMessageFile: "/tmp/seed.txt", background: true });
+    expect(vi.mocked(withStateLock)).not.toHaveBeenCalled();
   });
 
   it("background handoff does NOT park or restore the visible pane", () => {

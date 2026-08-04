@@ -1,5 +1,5 @@
 // Reorder plots in the ⌥p cycle: moves a plot within the ordered plots map.
-import { loadConfig, saveConfig, reorderPlotInCycle, tryGetPlot, tryGetProject, plotNames } from "../config.js";
+import { mutateConfig, reorderPlotInCycle, tryGetPlot, plotNames } from "../config.js";
 import { dashboardExists } from "../session.js";
 import { refreshDashboard } from "../dashboard/header.js";
 
@@ -16,22 +16,21 @@ export async function reorder(args: string[]): Promise<void> {
     throw new Error(`Invalid position: ${posArg}`);
   }
 
-  const config = loadConfig();
-  if (!tryGetPlot(config, name)) {
-    if (tryGetProject(name)) {
-      throw new Error(
-        `'${name}' is a project, not a plot. Use 'garden plot reorder <plot> ${name} <position>' to move a project inside a plot.`,
-      );
+  const names = mutateConfig(config => {
+    if (!tryGetPlot(config, name)) {
+      if (config.projects[name]) {
+        throw new Error(
+          `'${name}' is a project, not a plot. Use 'garden plot reorder <plot> ${name} <position>' to move a project inside a plot.`,
+        );
+      }
+      throw new Error(`Unknown plot: ${name}. Run 'garden plot' to see plots.`);
     }
-    throw new Error(`Unknown plot: ${name}. Run 'garden plot' to see plots.`);
-  }
-
-  reorderPlotInCycle(config, name, position);
-  saveConfig(config);
+    reorderPlotInCycle(config, name, position);
+    return plotNames(config);
+  });
   if (dashboardExists()) refreshDashboard();
 
   console.log("Plot order:");
-  const names = plotNames(config);
   for (let i = 0; i < names.length; i++) {
     console.log(`  ${i + 1}. ${names[i]}`);
   }

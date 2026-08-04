@@ -107,7 +107,7 @@ export interface WorkflowDefinition {
 // hook-dispatcher.ts extraction in 2026-04). Keeping this constant in a
 // leaf module pre-empts the next regression.
 export const defaultValidTransitions: Record<PrState, PrState[]> = {
-  working:         ["reviewing"],
+  working:         ["reviewing", "failing"],
   // reviewing → done is the holistic final-review CLEAN path: the interposed
   // whole-task review found nothing to change, so the worker finalizes without
   // a merge (see poller-holistic-review.ts).

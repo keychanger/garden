@@ -18,8 +18,9 @@ import {
 } from "./tmux.js";
 import { generateWorkerName } from "./names.js";
 import {
-  addWorker, removeWorker, findWorkerByName, getAllWorkerNames,
-  updateWorkerFields, getWorkers, resolveResumeAgentStatus, compareWorkerFreshness, type AgentStatus,
+  addWorkerWithUniqueName, removeWorker, findWorkerByName,
+  updateWorkerFields, getWorkers, resolveResumeAgentStatus, compareWorkerFreshness,
+  type AgentStatus, type WorkerEntry,
 } from "./registry.js";
 import { recordWorkerCreated, recordOperatorAction, recordWorkerRemoved, shortHash, type RoleSnapshot } from "./telemetry.js";
 import { deriveCrew, getCrew, resolveProjectCrew } from "./crew.js";
@@ -160,347 +161,317 @@ export interface NewWorkerOptions {
 }
 
 export function newWorker(opts: NewWorkerOptions = {}): string | null {
-  let createdName: string | null = null;
-  withStateLock(() => {
-    const state = readDashState();
-    const targetProject = opts.projectName ?? state.activeProject;
-    if (!targetProject) {
-      tmuxDisplay("No project selected. Use ⌥1-⌥9 first.");
-      return;
-    }
+  const initialState = readDashState();
+  const targetProject = opts.projectName ?? initialState.activeProject;
+  if (!targetProject) {
+    tmuxDisplay("No project selected. Use ⌥1-⌥9 first.");
+    return null;
+  }
 
-    const project = tryGetProject(targetProject);
-    if (!project) {
-      tmuxDisplay(`Unknown project '${targetProject}'.`);
-      return;
-    }
+  const project = tryGetProject(targetProject);
+  if (!project) {
+    tmuxDisplay(`Unknown project '${targetProject}'.`);
+    return null;
+  }
 
-    // Worker harness selection (agent CLI in the pane): per-worker --harness,
-    // else the project default (set directly or by a crew), else claude-code.
-    // The project default applies to the DEFAULT workflow ONLY — trellis/grow
-    // loop mechanics (per-iteration model resolution, cold-respawn session
-    // identity) are wired for claude-code, so a foreign harness worker is
-    // "default workflow only". This mirrors the CLI's explicit --harness guard
-    // (commands/workers.ts), which rejects `--harness` with a non-default
-    // workflow; without this gate a project defaulting to codex (via a crew or
-    // `config <p> harness`) would silently stamp codex onto a trellis/grow vine.
-    // Validate against the registry so an unknown name fails loudly here rather
-    // than silently falling back at launch.
-    const workflowName = opts.workflow ?? "default";
-    // Worker harness resolution. A per-worker crew is AUTHORITATIVE over the
-    // build harness (its worker member) — project.harness is not consulted when a
-    // crew is given, so a claude-worker crew (claude-codex / all-claude) builds
-    // with claude even on a project defaulting to a foreign harness, and a
-    // codex-worker crew builds with codex. The claude-code member is pinned
-    // explicitly (mirroring `--harness claude`) rather than left to fall through:
-    // stamping undefined here would drop to project.harness at this line and
-    // silently launch the project's default harness for a worker the operator
-    // explicitly asked to build with claude. The CLI guard makes --crew and
-    // --harness mutually exclusive; a provider-backed worker member is accepted,
-    // its backend riding entry.provider (see the provider block below). The
-    // crew's REVIEW half rides entry.crew (stamped below) and is applied live by
-    // resolveReviewRole.
-    //
-    // Beneath all of that sits the PROJECT's bound crew (project.crew), read by
-    // reference so editing the definition re-targets the project: flat
-    // project.harness still wins over it (the override layer), and it applies
-    // on the default workflow only, exactly like project.harness.
-    // Each crew dimension is gated exactly like the flat project key it sits
-    // beneath: harness is default-workflow-only (like project.harness), while
-    // model/effort follow project.model/effort (default+grow).
-    const gardenConfig = loadConfig();
-    const projectCrew = resolveProjectCrew(project, gardenConfig);
-    const workerCrew = opts.crew ? getCrew(opts.crew, gardenConfig) : null;
-    const projectHarness = workflowName === "default"
-      ? (project.harness ?? projectCrew?.worker.harness)
-      : undefined;
-    let rawHarness: string | undefined;
-    if (opts.harness) {
-      rawHarness = opts.harness;
-    } else if (opts.crew) {
-      rawHarness = workerCrew?.worker.harness ?? projectHarness;
-    } else {
-      rawHarness = projectHarness;
-    }
+  // Worker harness selection (agent CLI in the pane): per-worker --harness,
+  // else the project default (set directly or by a crew), else claude-code.
+  // The project default applies to the DEFAULT workflow ONLY — trellis/grow
+  // loop mechanics (per-iteration model resolution, cold-respawn session
+  // identity) are wired for claude-code, so a foreign harness worker is
+  // "default workflow only". This mirrors the CLI's explicit --harness guard
+  // (commands/workers.ts), which rejects `--harness` with a non-default
+  // workflow; without this gate a project defaulting to codex (via a crew or
+  // `config <p> harness`) would silently stamp codex onto a trellis/grow vine.
+  // Validate against the registry so an unknown name fails loudly here rather
+  // than silently falling back at launch.
+  const workflowName = opts.workflow ?? "default";
+  // Worker harness resolution. A per-worker crew is AUTHORITATIVE over the
+  // build harness (its worker member) — project.harness is not consulted when a
+  // crew is given, so a claude-worker crew (claude-codex / all-claude) builds
+  // with claude even on a project defaulting to a foreign harness, and a
+  // codex-worker crew builds with codex. The claude-code member is pinned
+  // explicitly (mirroring `--harness claude`) rather than left to fall through:
+  // stamping undefined here would drop to project.harness at this line and
+  // silently launch the project's default harness for a worker the operator
+  // explicitly asked to build with claude. The CLI guard makes --crew and
+  // --harness mutually exclusive; a provider-backed worker member is accepted,
+  // its backend riding entry.provider (see the provider block below). The
+  // crew's REVIEW half rides entry.crew (stamped below) and is applied live by
+  // resolveReviewRole.
+  //
+  // Beneath all of that sits the PROJECT's bound crew (project.crew), read by
+  // reference so editing the definition re-targets the project: flat
+  // project.harness still wins over it (the override layer), and it applies
+  // on the default workflow only, exactly like project.harness.
+  // Each crew dimension is gated exactly like the flat project key it sits
+  // beneath: harness is default-workflow-only (like project.harness), while
+  // model/effort follow project.model/effort (default+grow).
+  const gardenConfig = loadConfig();
+  const projectCrew = resolveProjectCrew(project, gardenConfig);
+  const workerCrew = opts.crew ? getCrew(opts.crew, gardenConfig) : null;
+  const projectHarness = workflowName === "default"
+    ? (project.harness ?? projectCrew?.worker.harness)
+    : undefined;
+  let rawHarness: string | undefined;
+  if (opts.harness) {
+    rawHarness = opts.harness;
+  } else if (opts.crew) {
+    rawHarness = workerCrew?.worker.harness ?? projectHarness;
+  } else {
+    rawHarness = projectHarness;
+  }
 
-    // Worker PROVIDER resolution (axis 1), the sibling of the harness block
-    // above. A build member is a (harness, provider) PAIR, so naming one is a
-    // statement about both halves: `--harness claude` on a provider-backed
-    // project means first-party claude, and staging the `deepseek` member means
-    // claude-code against that backend. Without the pair semantics the composer
-    // would have to lie — it would show `[claude]` for a worker that in fact
-    // launches against the project's provider, and there would be no way to
-    // spell "first-party" on such a project at all.
-    //
-    // Precedence therefore mirrors harness exactly: an explicit per-worker
-    // member (opts.provider alongside opts.harness) > the per-worker crew's
-    // worker half > the project key > the project's bound crew. The one
-    // asymmetry is the default-workflow gate: harness is default-only, and a
-    // provider rides with it, so a trellis/grow vine keeps the project's
-    // provider whatever member was named.
-    const projectProvider = project.provider ?? projectCrew?.worker.provider;
-    // Was a build member named for THIS worker at all? Only then does the pair
-    // rule apply; otherwise the project key answers, exactly as before.
-    const memberNamed = workflowName === "default"
-      && Boolean(opts.harness || opts.provider || (opts.crew && workerCrew));
-    const namedProvider = opts.harness || opts.provider
-      ? opts.provider
-      : workerCrew?.worker.provider;
-    // The provider this worker actually launches against.
-    const rawProvider = memberNamed ? namedProvider : projectProvider;
-    // What gets PERSISTED. A named member is recorded even when its provider is
-    // absent, because "explicitly first-party" is a real answer that must
-    // survive to launch: entry.provider absent means "inherit the project", so
-    // a bare omission here would silently hand a provider-backed project's
-    // backend to a worker whose member said claude. The empty string is that
-    // explicit-first-party marker (the same clear-by-empty idiom the spawn
-    // draft uses); workerProject in create.ts is the one reader that decodes it.
-    const providerStamp = memberNamed ? (namedProvider ?? "") : undefined;
-    // Validate a per-worker override before stamping: the operator named a
-    // backend, so a name that resolves to nothing must fail loudly here rather
-    // than silently launching first-party and billing the wrong pool. Scoped to
-    // the named member deliberately — an inherited project provider keeps its
-    // existing contract (validated at `garden config` set time, with
-    // workerEnvPrefix's warn-and-fall-back for a hand-broken config), so a
-    // config the operator has not touched can never be made unspawnable here.
-    const providerOverride = memberNamed ? namedProvider : undefined;
-    if (providerOverride && !gardenConfig.providers?.[providerOverride]) {
-      const known = Object.keys(gardenConfig.providers ?? {});
-      tmuxDisplay(`Unknown provider '${providerOverride}'.${known.length ? ` Known: ${known.join(", ")}.` : " None configured."}`);
-      log.error("workers", "rejected newWorker: unknown provider", {
-        data: { project: targetProject, provider: providerOverride },
-      });
-      return;
-    }
-    // Canonicalize the operator-facing "claude" alias to the registry name.
-    // This is the chokepoint every worker-creation path funnels through (CLI
-    // --harness, the workflow picker, the project default), so the stamped
-    // entry.harness is always a registry name.
-    const resolvedHarness = rawHarness === undefined ? undefined : canonicalHarnessName(rawHarness);
-    if (resolvedHarness && !isRegisteredHarness(resolvedHarness)) {
-      tmuxDisplay(`Unknown harness '${resolvedHarness}'. Known: ${harnessNames().join(", ")}.`);
-      log.error("workers", "rejected newWorker: unknown harness", {
-        data: { project: targetProject, harness: resolvedHarness },
-      });
-      return;
-    }
-    const compatibilityError = workerLaunchCompatibilityError(
-      getHarnessCore(resolvedHarness),
-      { workflow: workflowName, provider: rawProvider ?? null },
-    );
-    if (compatibilityError) {
-      tmuxDisplay(compatibilityError);
-      log.error("workers", "rejected newWorker: incompatible harness capabilities", {
+  // Worker PROVIDER resolution (axis 1), the sibling of the harness block
+  // above. A build member is a (harness, provider) PAIR, so naming one is a
+  // statement about both halves: `--harness claude` on a provider-backed
+  // project means first-party claude, and staging the `deepseek` member means
+  // claude-code against that backend. Without the pair semantics the composer
+  // would have to lie — it would show `[claude]` for a worker that in fact
+  // launches against the project's provider, and there would be no way to
+  // spell "first-party" on such a project at all.
+  //
+  // Precedence therefore mirrors harness exactly: an explicit per-worker
+  // member (opts.provider alongside opts.harness) > the per-worker crew's
+  // worker half > the project key > the project's bound crew. The one
+  // asymmetry is the default-workflow gate: harness is default-only, and a
+  // provider rides with it, so a trellis/grow vine keeps the project's
+  // provider whatever member was named.
+  const projectProvider = project.provider ?? projectCrew?.worker.provider;
+  // Was a build member named for THIS worker at all? Only then does the pair
+  // rule apply; otherwise the project key answers, exactly as before.
+  const memberNamed = workflowName === "default"
+    && Boolean(opts.harness || opts.provider || (opts.crew && workerCrew));
+  const namedProvider = opts.harness || opts.provider
+    ? opts.provider
+    : workerCrew?.worker.provider;
+  // The provider this worker actually launches against.
+  const rawProvider = memberNamed ? namedProvider : projectProvider;
+  // What gets PERSISTED. A named member is recorded even when its provider is
+  // absent, because "explicitly first-party" is a real answer that must
+  // survive to launch: entry.provider absent means "inherit the project", so
+  // a bare omission here would silently hand a provider-backed project's
+  // backend to a worker whose member said claude. The empty string is that
+  // explicit-first-party marker (the same clear-by-empty idiom the spawn
+  // draft uses); workerProject in create.ts is the one reader that decodes it.
+  const providerStamp = memberNamed ? (namedProvider ?? "") : undefined;
+  // Validate a per-worker override before stamping: the operator named a
+  // backend, so a name that resolves to nothing must fail loudly here rather
+  // than silently launching first-party and billing the wrong pool. Scoped to
+  // the named member deliberately — an inherited project provider keeps its
+  // existing contract (validated at `garden config` set time, with
+  // workerEnvPrefix's warn-and-fall-back for a hand-broken config), so a
+  // config the operator has not touched can never be made unspawnable here.
+  const providerOverride = memberNamed ? namedProvider : undefined;
+  if (providerOverride && !gardenConfig.providers?.[providerOverride]) {
+    const known = Object.keys(gardenConfig.providers ?? {});
+    tmuxDisplay(`Unknown provider '${providerOverride}'.${known.length ? ` Known: ${known.join(", ")}.` : " None configured."}`);
+    log.error("workers", "rejected newWorker: unknown provider", {
+      data: { project: targetProject, provider: providerOverride },
+    });
+    return null;
+  }
+  // Canonicalize the operator-facing "claude" alias to the registry name.
+  // This is the chokepoint every worker-creation path funnels through (CLI
+  // --harness, the workflow picker, the project default), so the stamped
+  // entry.harness is always a registry name.
+  const resolvedHarness = rawHarness === undefined ? undefined : canonicalHarnessName(rawHarness);
+  if (resolvedHarness && !isRegisteredHarness(resolvedHarness)) {
+    tmuxDisplay(`Unknown harness '${resolvedHarness}'. Known: ${harnessNames().join(", ")}.`);
+    log.error("workers", "rejected newWorker: unknown harness", {
+      data: { project: targetProject, harness: resolvedHarness },
+    });
+    return null;
+  }
+  const compatibilityError = workerLaunchCompatibilityError(
+    getHarnessCore(resolvedHarness),
+    { workflow: workflowName, provider: rawProvider ?? null },
+  );
+  if (compatibilityError) {
+    tmuxDisplay(compatibilityError);
+    log.error("workers", "rejected newWorker: incompatible harness capabilities", {
+      data: {
+        project: targetProject,
+        harness: resolvedHarness ?? "claude-code",
+        workflow: workflowName,
+        provider: rawProvider ?? null,
+        error: compatibilityError,
+      },
+    });
+    return null;
+  }
+
+  // Provider preflight: retain the key in tmux's hidden launch vault
+  // (best-effort from this operator-shell invocation) and refuse to spawn a
+  // worker without it. An unauthenticated worker fails opaquely at first
+  // inference, far from the cause.
+  // Resolved against the worker's OWN provider (which may differ from the
+  // project's, or be absent where the project has one), so the token check
+  // describes the endpoint this worker will actually reach.
+  const workerProvider = tryResolveProvider({ provider: rawProvider }, gardenConfig);
+  if (workerProvider) {
+    syncProviderTokenToVault(workerProvider);
+    const presence = providerTokenPresence(workerProvider);
+    if (!presence.shell && presence.session !== true) {
+      tmuxDisplay(`Provider '${workerProvider.name}' requires $${workerProvider.authTokenEnv} — not set in this shell or the scoped worker vault.`);
+      log.error("workers", "rejected newWorker: provider token env var unset", {
         data: {
           project: targetProject,
-          harness: resolvedHarness ?? "claude-code",
-          workflow: workflowName,
-          provider: rawProvider ?? null,
-          error: compatibilityError,
+          provider: workerProvider.name,
+          envVar: workerProvider.authTokenEnv,
         },
       });
-      return;
+      return null;
     }
+  }
 
-    // Provider preflight: retain the key in tmux's hidden launch vault
-    // (best-effort from this operator-shell invocation) and refuse to spawn a
-    // worker without it. An unauthenticated worker fails opaquely at first
-    // inference, far from the cause.
-    // Resolved against the worker's OWN provider (which may differ from the
-    // project's, or be absent where the project has one), so the token check
-    // describes the endpoint this worker will actually reach.
-    const workerProvider = tryResolveProvider({ provider: rawProvider }, gardenConfig);
-    if (workerProvider) {
-      syncProviderTokenToVault(workerProvider);
-      const presence = providerTokenPresence(workerProvider);
-      if (!presence.shell && presence.session !== true) {
-        tmuxDisplay(`Provider '${workerProvider.name}' requires $${workerProvider.authTokenEnv} — not set in this shell or the scoped worker vault.`);
-        log.error("workers", "rejected newWorker: provider token env var unset", {
-          data: {
-            project: targetProject,
-            provider: workerProvider.name,
-            envVar: workerProvider.authTokenEnv,
-          },
-        });
-        return;
-      }
-    }
+  // --workflow trellis without opts.trellis is a bug — the CLI must
+  // surface this with a clear error before we add the worker.
+  if (opts.workflow === "trellis" && !opts.trellis) {
+    tmuxDisplay("--workflow trellis requires the trellis options to be set (caller bug).");
+    log.error("workers", "rejected newWorker: workflow=trellis but no trellis opts", {
+      data: { project: targetProject },
+    });
+    return null;
+  }
+  // --workflow grow without opts.grow is the same caller bug.
+  if (opts.workflow === "grow" && !opts.grow) {
+    tmuxDisplay("--workflow grow requires the grow options to be set (caller bug).");
+    log.error("workers", "rejected newWorker: workflow=grow but no grow opts", {
+      data: { project: targetProject },
+    });
+    return null;
+  }
 
-    // --workflow trellis without opts.trellis is a bug — the CLI must
-    // surface this with a clear error before we add the worker.
-    if (opts.workflow === "trellis" && !opts.trellis) {
-      tmuxDisplay("--workflow trellis requires the trellis options to be set (caller bug).");
-      log.error("workers", "rejected newWorker: workflow=trellis but no trellis opts", {
-        data: { project: targetProject },
+  const background = opts.background ?? false;
+
+  const gardenRunner = resolveGardenRunner();
+
+  const baseBranch = resolveSpawnBase(project, opts.base);
+
+  // A worker whose base branch isn't on origin breaks silently: every
+  // `origin/<base>..HEAD` check in the Stop hook and poller fails, so the
+  // review cycle never starts. The natural failure mode is the operator
+  // switching the main checkout to a brand-new local branch and pressing
+  // ⌥n. Treat that as a publish gesture: push <base> to origin so it
+  // gains the ref everything downstream needs, then proceed. If the push
+  // fails (no remote, branch protection, non-fast-forward, network),
+  // surface the real git error so the operator knows what to fix.
+  // Check is local-refs only — see branchExistsOnOrigin doc.
+  if (!branchExistsOnOrigin(project.path, baseBranch)) {
+    const result = tryPublishBranch(project.path, baseBranch);
+    if (result.ok) {
+      tmuxDisplay(`Published '${baseBranch}' to origin (worker base ref).`);
+      log.info("workers", "auto-published base branch for new worker", {
+        data: { project: targetProject, baseBranch },
       });
-      return;
-    }
-    // --workflow grow without opts.grow is the same caller bug.
-    if (opts.workflow === "grow" && !opts.grow) {
-      tmuxDisplay("--workflow grow requires the grow options to be set (caller bug).");
-      log.error("workers", "rejected newWorker: workflow=grow but no grow opts", {
-        data: { project: targetProject },
+    } else {
+      // The git stderr is often multi-line ("hint:" lines, etc.); the last
+      // non-empty line is usually the actionable reason ("fatal: 'origin'
+      // does not appear to be a git repository", "! [rejected] non-fast-
+      // forward", "remote: error: GH006: Protected branch update failed").
+      const lastLine =
+        result.error.split("\n").map((l) => l.trim()).filter(Boolean).pop()
+        ?? result.error;
+      tmuxDisplay(
+        `Cannot create worker: couldn't publish '${baseBranch}' to origin — ${lastLine}`,
+      );
+      log.error("workers", "rejected newWorker: base branch publish failed", {
+        data: { project: targetProject, baseBranch, error: result.error },
       });
-      return;
+      return null;
     }
+  }
 
-    const background = opts.background ?? false;
+  if (gardenDoneTrackedInHead(project.path)) {
+    addAlert({
+      level: "warn",
+      source: "create",
+      project: targetProject,
+      message: `\`.garden-done\` is tracked in HEAD of ${targetProject}.`,
+      dedupKey: `garden-done-tracked:${targetProject}`,
+    });
+  }
 
-    // Cross-project foreground: switch active project to the target first, so
-    // the park/restore + state mutation below behave exactly like ⌥n on that
-    // project. If the target lives outside the current active plot, also
-    // switch to a plot that contains it — otherwise ⌥1-9 navigation desyncs
-    // from the visible pane. Skipped in background mode (handoff): the
-    // operator's view stays put and the new worker remains hidden.
-    if (!background && opts.projectName && opts.projectName !== state.activeProject) {
-      const plots = plotsMap(loadConfig());
-      const activePlotProjects = state.activePlot && plots[state.activePlot]
-        ? plots[state.activePlot].projects
-        : [];
-      if (!activePlotProjects.includes(opts.projectName)) {
-        for (const [plotName, plot] of Object.entries(plots)) {
-          if (plot.projects.includes(opts.projectName)) {
-            state.activePlot = plotName;
-            break;
-          }
-        }
-      }
-      swapVisibleToProject(opts.projectName, project, state);
-    }
+  // Compute the worktree-relative trellis path so buildWorktreeRules can
+  // append the trellis-specific paragraphs to the worker's system prompt.
+  // Default workers leave this undefined and get the baseline rules.
+  const trellisRelativePath =
+    opts.workflow === "trellis" && opts.trellis
+      ? path.relative(project.path, opts.trellis.path)
+      : undefined;
 
-    const existingNames = getAllWorkerNames();
+  // Stamp the registry entry FIRST so model resolution (below) can read
+  // it. If model resolution refuses (Sonnet exhausted + fallback
+  // disabled), we roll back via removeWorker before any tmux/disk work.
+  // (workflowName resolved above, alongside harness selection.)
+  // Ultracode preset pins Opus (unless an explicit --model was also passed).
+  // Trellis vines resolve their own model per iteration, so the preset's
+  // model pin does not apply there — only its non-trellis workers get it.
+  // Project-level model/effort defaults (config.ts ProjectConfig.model /
+  // .effort) sit one layer beneath the per-spawn opts, exactly as
+  // resolveSpawnBase layers project.baseBranch beneath --base: per-spawn
+  // opts win, the project default fills the gap, the account/provider default
+  // is the floor. They apply to default+grow only — trellis resolves its own
+  // model per iteration and carries no effort, so it never consults them.
+  const projectDefaultsApply = workflowName === "default" || workflowName === "grow";
+  // The project effort default may itself be "ultra" (the ultracode preset).
+  // A per-spawn effort/ultracode gesture wins; otherwise the project default
+  // fills in, and "ultra" there means the preset just as `--effort ultra`
+  // does at the CLI.
+  //
+  // A crew's worker half supplies both dims one layer down from the flat
+  // project key: per-worker crew (--crew) above the project key, the
+  // project's bound crew below it.
+  const crewEffort = projectDefaultsApply
+    ? (workerCrew?.worker.effort ?? project.effort ?? projectCrew?.worker.effort)
+    : undefined;
+  let reqUltracode = opts.ultracode === true;
+  let reqEffort = opts.effort;
+  if (!reqUltracode && reqEffort === undefined && crewEffort) {
+    if (crewEffort === "ultra") reqUltracode = true;
+    else reqEffort = crewEffort;
+  }
+  const projectModel = projectDefaultsApply
+    ? (workerCrew?.worker.model ?? project.model ?? projectCrew?.worker.model)
+    : undefined;
+  // Workflow-level model/effort defaults (the botanist designer seat → Opus /
+  // xhigh) sit one layer beneath the per-spawn and project defaults, mirroring
+  // how trellis reads workflow.workerModel per iteration. Not applied for
+  // trellis, which resolves its own model per iteration and carries no effort.
+  const workflowDef = getWorkflow(workflowName);
+  const workflowModelDefault = workflowName !== "trellis" ? workflowDef.workerModel : undefined;
+  const workflowEffortDefault = workflowName !== "trellis" ? workflowDef.workerEffort : undefined;
+
+  const ultracode = reqUltracode && workflowName !== "trellis";
+  // Model precedence: per-spawn --model > the ultracode preset's Opus pin
+  // (an explicit per-spawn gesture, more specific than a project default) >
+  // project.model > the workflow's own default (botanist Opus) > account/
+  // provider default.
+  const effectiveModel = ultracode
+    ? (opts.model ?? ULTRACODE_MODEL)
+    : (opts.model ?? projectModel ?? workflowModelDefault);
+  // Per-worker effort rung for default/grow/botanist. Suppressed for trellis
+  // (own model resolution) and when ultracode is set (that preset already
+  // fixes max effort — the composer/CLI keep them mutually exclusive, this is
+  // defense-in-depth so a caller passing both never double-sets effort). The
+  // workflow default (botanist xhigh) fills in when no per-spawn/project rung
+  // was requested.
+  const effectiveEffort = !ultracode && workflowName !== "trellis"
+    ? (reqEffort ?? workflowEffortDefault)
+    : undefined;
+  // origin/<baseBranch> tip at creation — the `from` endpoint of the
+  // whole-task cumulative diff a later holistic review computes. Captured
+  // here (after the publish gesture guarantees the ref exists) because the
+  // base advances as this and sibling workers merge, so it cannot be
+  // reconstructed reliably afterward.
+  const baseBranchSha = getRemoteTrackingSha(project.path, baseBranch) ?? undefined;
+  const createdEntry = addWorkerWithUniqueName(targetProject, existingNames => {
     const workerName = generateWorkerName(existingNames);
-    // Session identity is harness-shaped (Claude Code accepts a minted
-    // UUID; Codex assigns its own id post-launch, so its adapter returns the
-    // empty sentinel — recovered from the hook payload later).
     const sessionId = getHarness(resolvedHarness).allocateSessionId();
     const branchName = workerName;
     const wtPath = worktreePath(targetProject, workerName);
-    const gardenRunner = resolveGardenRunner();
-
-    const baseBranch = resolveSpawnBase(project, opts.base);
-
-    // A worker whose base branch isn't on origin breaks silently: every
-    // `origin/<base>..HEAD` check in the Stop hook and poller fails, so the
-    // review cycle never starts. The natural failure mode is the operator
-    // switching the main checkout to a brand-new local branch and pressing
-    // ⌥n. Treat that as a publish gesture: push <base> to origin so it
-    // gains the ref everything downstream needs, then proceed. If the push
-    // fails (no remote, branch protection, non-fast-forward, network),
-    // surface the real git error so the operator knows what to fix.
-    // Check is local-refs only — see branchExistsOnOrigin doc.
-    if (!branchExistsOnOrigin(project.path, baseBranch)) {
-      const result = tryPublishBranch(project.path, baseBranch);
-      if (result.ok) {
-        tmuxDisplay(`Published '${baseBranch}' to origin (worker base ref).`);
-        log.info("workers", "auto-published base branch for new worker", {
-          worker: workerName,
-          data: { project: targetProject, baseBranch },
-        });
-      } else {
-        // The git stderr is often multi-line ("hint:" lines, etc.); the last
-        // non-empty line is usually the actionable reason ("fatal: 'origin'
-        // does not appear to be a git repository", "! [rejected] non-fast-
-        // forward", "remote: error: GH006: Protected branch update failed").
-        const lastLine =
-          result.error.split("\n").map((l) => l.trim()).filter(Boolean).pop()
-          ?? result.error;
-        tmuxDisplay(
-          `Cannot create worker: couldn't publish '${baseBranch}' to origin — ${lastLine}`,
-        );
-        log.error("workers", "rejected newWorker: base branch publish failed", {
-          worker: workerName,
-          data: { project: targetProject, baseBranch, error: result.error },
-        });
-        return;
-      }
-    }
-
-    if (gardenDoneTrackedInHead(project.path)) {
-      addAlert({
-        level: "warn",
-        source: "create",
-        project: targetProject,
-        message: `\`.garden-done\` is tracked in HEAD of ${targetProject}.`,
-        dedupKey: `garden-done-tracked:${targetProject}`,
-      });
-    }
-
-    // Compute the worktree-relative trellis path so buildWorktreeRules can
-    // append the trellis-specific paragraphs to the worker's system prompt.
-    // Default workers leave this undefined and get the baseline rules.
-    const trellisRelativePath =
-      opts.workflow === "trellis" && opts.trellis
-        ? path.relative(project.path, opts.trellis.path)
-        : undefined;
-
-    // Stamp the registry entry FIRST so model resolution (below) can read
-    // it. If model resolution refuses (Sonnet exhausted + fallback
-    // disabled), we roll back via removeWorker before any tmux/disk work.
-    // (workflowName resolved above, alongside harness selection.)
-    // Ultracode preset pins Opus (unless an explicit --model was also passed).
-    // Trellis vines resolve their own model per iteration, so the preset's
-    // model pin does not apply there — only its non-trellis workers get it.
-    // Project-level model/effort defaults (config.ts ProjectConfig.model /
-    // .effort) sit one layer beneath the per-spawn opts, exactly as
-    // resolveSpawnBase layers project.baseBranch beneath --base: per-spawn
-    // opts win, the project default fills the gap, the account/provider default
-    // is the floor. They apply to default+grow only — trellis resolves its own
-    // model per iteration and carries no effort, so it never consults them.
-    const projectDefaultsApply = workflowName === "default" || workflowName === "grow";
-    // The project effort default may itself be "ultra" (the ultracode preset).
-    // A per-spawn effort/ultracode gesture wins; otherwise the project default
-    // fills in, and "ultra" there means the preset just as `--effort ultra`
-    // does at the CLI.
-    //
-    // A crew's worker half supplies both dims one layer down from the flat
-    // project key: per-worker crew (--crew) above the project key, the
-    // project's bound crew below it.
-    const crewEffort = projectDefaultsApply
-      ? (workerCrew?.worker.effort ?? project.effort ?? projectCrew?.worker.effort)
-      : undefined;
-    let reqUltracode = opts.ultracode === true;
-    let reqEffort = opts.effort;
-    if (!reqUltracode && reqEffort === undefined && crewEffort) {
-      if (crewEffort === "ultra") reqUltracode = true;
-      else reqEffort = crewEffort;
-    }
-    const projectModel = projectDefaultsApply
-      ? (workerCrew?.worker.model ?? project.model ?? projectCrew?.worker.model)
-      : undefined;
-    // Workflow-level model/effort defaults (the botanist designer seat → Opus /
-    // xhigh) sit one layer beneath the per-spawn and project defaults, mirroring
-    // how trellis reads workflow.workerModel per iteration. Not applied for
-    // trellis, which resolves its own model per iteration and carries no effort.
-    const workflowDef = getWorkflow(workflowName);
-    const workflowModelDefault = workflowName !== "trellis" ? workflowDef.workerModel : undefined;
-    const workflowEffortDefault = workflowName !== "trellis" ? workflowDef.workerEffort : undefined;
-
-    const ultracode = reqUltracode && workflowName !== "trellis";
-    // Model precedence: per-spawn --model > the ultracode preset's Opus pin
-    // (an explicit per-spawn gesture, more specific than a project default) >
-    // project.model > the workflow's own default (botanist Opus) > account/
-    // provider default.
-    const effectiveModel = ultracode
-      ? (opts.model ?? ULTRACODE_MODEL)
-      : (opts.model ?? projectModel ?? workflowModelDefault);
-    // Per-worker effort rung for default/grow/botanist. Suppressed for trellis
-    // (own model resolution) and when ultracode is set (that preset already
-    // fixes max effort — the composer/CLI keep them mutually exclusive, this is
-    // defense-in-depth so a caller passing both never double-sets effort). The
-    // workflow default (botanist xhigh) fills in when no per-spawn/project rung
-    // was requested.
-    const effectiveEffort = !ultracode && workflowName !== "trellis"
-      ? (reqEffort ?? workflowEffortDefault)
-      : undefined;
-    // origin/<baseBranch> tip at creation — the `from` endpoint of the
-    // whole-task cumulative diff a later holistic review computes. Captured
-    // here (after the publish gesture guarantees the ref exists) because the
-    // base advances as this and sibling workers merge, so it cannot be
-    // reconstructed reliably afterward.
-    const baseBranchSha = getRemoteTrackingSha(project.path, baseBranch) ?? undefined;
-    const createdAt = Date.now();
-    addWorker(targetProject, {
+    return {
       name: workerName,
       sessionId,
       task: "",
@@ -509,7 +480,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       baseBranch,
       ...(baseBranchSha ? { baseBranchSha } : {}),
       agentStatus: "loading",
-      createdAt,
+      createdAt: Date.now(),
       workflow: workflowName,
       // Harness adapter (agent CLI). Absent = claude-code; consumers read via
       // getHarness(entry.harness). Threaded into launch/resume/loop.
@@ -564,90 +535,106 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
             handoffCallbackExpected: true,
           }
         : {}),
-    });
+    } satisfies WorkerEntry;
+  });
+  const {
+    name: workerName,
+    sessionId,
+    branchName,
+    worktreePath: wtPath,
+    createdAt,
+  } = createdEntry;
 
-    // For trellis vines, resolve the iteration's model now (before the
-    // bootstrap is built). Resolution may fall back Sonnet → Opus, or
-    // refuse outright when Sonnet is exhausted and trellisOpusFallback
-    // is false. A refusal rolls back the entry and bails — no pane
-    // spawned, no worktree created.
-    let resolvedModel: string | undefined =
-      workflowName !== "trellis" ? effectiveModel : undefined;
-    if (workflowName === "trellis") {
-      const stamped = findWorkerByName(targetProject, workerName);
-      if (stamped) {
-        const m = resolveAndApplyVineModel(targetProject, stamped, getWorkflow("trellis"));
-        if (m === null) {
-          // Sonnet exhausted + trellisOpusFallback=false. Roll back.
-          removeWorker(targetProject, workerName);
-          tmuxDisplay(
-            `Cannot plant vine: Sonnet exhausted and trellisOpusFallback=false. ` +
-            `Wait for the Sonnet meter to reset, run 'garden auto on', or ` +
-            `set 'garden config ${targetProject} trellisOpusFallback true'.`,
-          );
-          return;
-        }
-        resolvedModel = m;
+  // For trellis vines, resolve the iteration's model now (before the
+  // bootstrap is built). Resolution may fall back Sonnet → Opus, or
+  // refuse outright when Sonnet is exhausted and trellisOpusFallback
+  // is false. A refusal rolls back the entry and bails — no pane
+  // spawned, no worktree created.
+  let resolvedModel: string | undefined =
+    workflowName !== "trellis" ? effectiveModel : undefined;
+  if (workflowName === "trellis") {
+    const stamped = findWorkerByName(targetProject, workerName);
+    if (stamped) {
+      const m = resolveAndApplyVineModel(targetProject, stamped, getWorkflow("trellis"));
+      if (m === null) {
+        // Sonnet exhausted + trellisOpusFallback=false. Roll back.
+        removeWorker(targetProject, workerName);
+        tmuxDisplay(
+          `Cannot plant vine: Sonnet exhausted and trellisOpusFallback=false. ` +
+          `Wait for the Sonnet meter to reset, run 'garden auto on', or ` +
+          `set 'garden config ${targetProject} trellisOpusFallback true'.`,
+        );
+        return null;
       }
+      resolvedModel = m;
     }
+  }
 
-    // Write the bootstrap script that handles slow setup (git fetch, worktree
-    // creation, npm install) inside the tmux pane so the window appears instantly
-    // with progress output instead of blocking the hotkey handler. Default
-    // workers omit the options argument entirely (preserves arity for existing
-    // callers and tests).
-    const bootstrapOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string; provider?: string; botanist?: boolean } = {};
-    if (trellisRelativePath) bootstrapOpts.trellisRelativePath = trellisRelativePath;
-    if (resolvedModel) bootstrapOpts.model = resolvedModel;
-    if (ultracode) bootstrapOpts.ultracode = true;
-    if (effectiveEffort) bootstrapOpts.effort = effectiveEffort;
-    if (resolvedHarness) bootstrapOpts.harness = resolvedHarness;
-    // Only a per-worker override needs threading — the project key is read
-    // from config by the launch builders themselves.
-    if (providerStamp !== undefined) bootstrapOpts.provider = providerStamp;
-    if (workflowName === "botanist") bootstrapOpts.botanist = true;
-    const scriptFile = (bootstrapOpts.trellisRelativePath || bootstrapOpts.model || bootstrapOpts.ultracode || bootstrapOpts.effort || bootstrapOpts.harness || bootstrapOpts.provider || bootstrapOpts.botanist)
-      ? buildWorktreeBootstrapScript(
-          project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
-          bootstrapOpts,
-        )
-      : buildWorktreeBootstrapScript(
-          project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
-        );
+  // Write the bootstrap script that handles slow setup (git fetch, worktree
+  // creation, npm install) inside the tmux pane so the window appears instantly
+  // with progress output instead of blocking the hotkey handler. Default
+  // workers omit the options argument entirely (preserves arity for existing
+  // callers and tests).
+  const bootstrapOpts: { trellisRelativePath?: string; model?: string; ultracode?: boolean; effort?: string; harness?: string; provider?: string; botanist?: boolean } = {};
+  if (trellisRelativePath) bootstrapOpts.trellisRelativePath = trellisRelativePath;
+  if (resolvedModel) bootstrapOpts.model = resolvedModel;
+  if (ultracode) bootstrapOpts.ultracode = true;
+  if (effectiveEffort) bootstrapOpts.effort = effectiveEffort;
+  if (resolvedHarness) bootstrapOpts.harness = resolvedHarness;
+  // Only a per-worker override needs threading — the project key is read
+  // from config by the launch builders themselves.
+  if (providerStamp !== undefined) bootstrapOpts.provider = providerStamp;
+  if (workflowName === "botanist") bootstrapOpts.botanist = true;
+  const scriptFile = (bootstrapOpts.trellisRelativePath || bootstrapOpts.model || bootstrapOpts.ultracode || bootstrapOpts.effort || bootstrapOpts.harness || bootstrapOpts.provider || bootstrapOpts.botanist)
+    ? buildWorktreeBootstrapScript(
+        project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
+        bootstrapOpts,
+      )
+    : buildWorktreeBootstrapScript(
+        project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
+      );
 
-    const workerWindowName = workerWin(targetProject, workerName);
+  const workerWindowName = workerWin(targetProject, workerName);
 
-    try {
-      // Spawn the bootstrap shell only after the window is sized to the right
-      // slot. Otherwise the new window comes up at tmux's default (typically
-      // 80×24, sometimes narrower), Claude's TUI does its first paint into
-      // that small grid, and those hard-wrapped lines stay frozen in scrollback
-      // forever. The placeholder/respawn-pane dance closes that race: create
-      // window holding a long sleep, resize, then respawn-pane with the
-      // real script in a correctly-sized grid. NOTE: `sleep infinity` is a
-      // GNU coreutils-ism and exits 1 on macOS BSD sleep ("usage: sleep
-      // seconds"), which destroyed the placeholder pane before respawn-pane
-      // could land. Use a finite large value — respawn replaces it in ms.
-      const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
-      const bootstrapCmd = `sh ${shellEscape(scriptFile)}`;
-      if (background) {
-        // Hidden creation only — no park, no restore. The window is born detached
-        // and stays detached. The operator's visible pane and dashboard state are
-        // not touched.
-        const workerPaneId = newDashboardWindowPaned(workerWindowName, "-c", project.path,
-          "sh", "-c", "exec sleep 86400");
-        if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
-        tmuxWorkerCommand(
-          workerProject(project, providerStamp),
-          "respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd,
-        );
-        if (workerPaneId) {
-          setPaneLabel(workerPaneId, workerName);
-          setPaneVar(workerPaneId, "garden_clock", "1");
-          setPaneProjectColor(workerPaneId, targetProject);
+  let stateForRefresh = initialState;
+  const bootstrapCmd = `sh ${shellEscape(scriptFile)}`;
+  try {
+    if (background) {
+      const rightSize = initialState.activePaneId
+        ? getPaneSize(initialState.activePaneId)
+        : null;
+      const workerPaneId = newDashboardWindowPaned(workerWindowName, "-c", project.path,
+        "sh", "-c", "exec sleep 86400");
+      if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
+      tmuxWorkerCommand(
+        workerProject(project, providerStamp),
+        "respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd,
+      );
+      if (workerPaneId) {
+        setPaneLabel(workerPaneId, workerName);
+        setPaneVar(workerPaneId, "garden_clock", "1");
+        setPaneProjectColor(workerPaneId, targetProject);
+      }
+    } else {
+      withStateLock(() => {
+        const state = readDashState();
+        if (targetProject !== state.activeProject) {
+          const plots = plotsMap(gardenConfig);
+          const activePlotProjects = state.activePlot && plots[state.activePlot]
+            ? plots[state.activePlot].projects
+            : [];
+          if (!activePlotProjects.includes(targetProject)) {
+            for (const [plotName, plot] of Object.entries(plots)) {
+              if (plot.projects.includes(targetProject)) {
+                state.activePlot = plotName;
+                break;
+              }
+            }
+          }
+          swapVisibleToProject(targetProject, project, state);
         }
-      } else {
-        // Show the new pane immediately — bootstrap runs inside it
+
+        const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
         const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject!);
         parkToHidden(parkName, state);
 
@@ -660,94 +647,91 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         );
         if (workerPaneId) setPaneLabel(workerPaneId, workerName);
         restoreFromHidden(workerWindowName, state);
-        // Re-apply label after swap (swap-pane may not preserve pane options)
         if (state.activePaneId) {
           setPaneLabel(state.activePaneId, workerName);
           setPaneVar(state.activePaneId, "garden_clock", "1");
           setPaneProjectColor(state.activePaneId, targetProject);
         }
-      }
-    } catch (err) {
-      // addWorker (and trellis model resolution) already wrote the registry
-      // entry; if pane creation fails it would otherwise sit in agentStatus=
-      // "loading" forever with no worktree and no pane. Roll back so the next
-      // attempt isn't blocked by name collision and the dashboard isn't lying
-      // about pending workers.
-      removeWorker(targetProject, workerName);
-      log.error("workers", "tmux pane creation failed; rolled back registry entry", {
-        worker: workerName,
-        data: { project: targetProject, error: String(err) },
+        state.activePaneType = "worker";
+        state.activeWindowName = workerWindowName;
+        state.lastActiveWorker[targetProject] = workerWindowName;
+        writeDashState(state);
+        stateForRefresh = state;
       });
-      throw err;
     }
-
-    log.info("workers", "created", {
+  } catch (err) {
+    // addWorker (and trellis model resolution) already wrote the registry
+    // entry; if pane creation fails it would otherwise sit in agentStatus=
+    // "loading" forever with no worktree and no pane. Roll back so the next
+    // attempt isn't blocked by name collision and the dashboard isn't lying
+    // about pending workers.
+    removeWorker(targetProject, workerName);
+    log.error("workers", "tmux pane creation failed; rolled back registry entry", {
       worker: workerName,
-      data: { project: targetProject, branch: branchName, model: resolvedModel, background },
+      data: { project: targetProject, error: String(err) },
     });
+    throw err;
+  }
 
-    // Ledger the launch now that the pane has actually spawned — emitting
-    // before the pane-creation try/catch above would leave a phantom
-    // worker.created in the append-only (never-truncated) ledger whenever that
-    // rollback fires (tmux spawn failure), over-counting launches in read-time
-    // aggregation. The full configuration snapshot is frozen onto the event
-    // because config is mutable (a crew swap rewrites harness/roles) and can't
-    // be reconstructed by joining against live config later. Best-effort: the
-    // snapshot helpers (deriveCrew / resolveReviewRole / buildRulesContext)
-    // read files and config, so guard the whole block — a telemetry failure
-    // must never abort a worker launch.
-    try {
-      const cfg = loadConfig();
-      // A per-worker crew (opts.crew) overrides the review family live, so the
-      // frozen snapshot must record what actually applies to THIS worker, not
-      // the project's crew — mirroring how resolvedHarness already folds in the
-      // crew's build half. Thread it into both the role snapshot (review
-      // harness) and the crew field (garden stats --by crew groups on it).
-      const crewEntry = opts.crew ? { crew: opts.crew } : undefined;
-      const roleSnapshot = (role: ReviewRole): RoleSnapshot => {
-        const r = resolveReviewRole(project, workflowName, role, cfg, crewEntry);
-        return { harness: r.harness, model: r.model };
-      };
-      recordWorkerCreated(targetProject, workerName, createdAt, {
-        workflow: workflowName,
-        harness: resolvedHarness ?? "claude-code",
-        provider: rawProvider ?? null,
-        model: resolvedModel ?? null,
-        ultracode,
-        crew: opts.crew ?? deriveCrew(project, cfg),
-        roles: {
-          reviewer: roleSnapshot("reviewer"),
-          resolver: roleSnapshot("resolver"),
-          ciFix: roleSnapshot("ciFix"),
-        },
-        baseBranch,
-        rulesHash: shortHash(buildRulesContext(project.name, project.path)),
-        gardenVersion: GARDEN_VERSION,
-      });
-    } catch (err) {
-      log.warn("workers", "telemetry worker.created emit failed", {
-        worker: workerName,
-        data: { project: targetProject, error: String(err) },
-      });
-    }
-
-    ensureProjectPoller(targetProject, gardenRunner);
-
-    if (!background) {
-      state.activePaneType = "worker";
-      state.activeWindowName = workerWindowName;
-      state.lastActiveWorker[targetProject] = workerWindowName;
-      writeDashState(state);
-    }
-    refreshDashboard({ state });
-
-    if (opts.seedMessageFile) {
-      dispatchDelayedSeed(gardenRunner, targetProject, workerName, opts.seedMessageFile);
-    }
-
-    createdName = workerName;
+  log.info("workers", "created", {
+    worker: workerName,
+    data: { project: targetProject, branch: branchName, model: resolvedModel, background },
   });
-  return createdName;
+
+  // Ledger the launch now that the pane has actually spawned — emitting
+  // before the pane-creation try/catch above would leave a phantom
+  // worker.created in the append-only (never-truncated) ledger whenever that
+  // rollback fires (tmux spawn failure), over-counting launches in read-time
+  // aggregation. The full configuration snapshot is frozen onto the event
+  // because config is mutable (a crew swap rewrites harness/roles) and can't
+  // be reconstructed by joining against live config later. Best-effort: the
+  // snapshot helpers (deriveCrew / resolveReviewRole / buildRulesContext)
+  // read files and config, so guard the whole block — a telemetry failure
+  // must never abort a worker launch.
+  try {
+    const cfg = loadConfig();
+    // A per-worker crew (opts.crew) overrides the review family live, so the
+    // frozen snapshot must record what actually applies to THIS worker, not
+    // the project's crew — mirroring how resolvedHarness already folds in the
+    // crew's build half. Thread it into both the role snapshot (review
+    // harness) and the crew field (garden stats --by crew groups on it).
+    const crewEntry = opts.crew ? { crew: opts.crew } : undefined;
+    const roleSnapshot = (role: ReviewRole): RoleSnapshot => {
+      const r = resolveReviewRole(project, workflowName, role, cfg, crewEntry);
+      return { harness: r.harness, model: r.model };
+    };
+    recordWorkerCreated(targetProject, workerName, createdAt, {
+      workflow: workflowName,
+      harness: resolvedHarness ?? "claude-code",
+      provider: rawProvider ?? null,
+      model: resolvedModel ?? null,
+      ultracode,
+      crew: opts.crew ?? deriveCrew(project, cfg),
+      roles: {
+        reviewer: roleSnapshot("reviewer"),
+        resolver: roleSnapshot("resolver"),
+        ciFix: roleSnapshot("ciFix"),
+      },
+      baseBranch,
+      rulesHash: shortHash(buildRulesContext(project.name, project.path)),
+      gardenVersion: GARDEN_VERSION,
+    });
+  } catch (err) {
+    log.warn("workers", "telemetry worker.created emit failed", {
+      worker: workerName,
+      data: { project: targetProject, error: String(err) },
+    });
+  }
+
+  ensureProjectPoller(targetProject, gardenRunner);
+
+  refreshDashboard({ state: stateForRefresh });
+
+  if (opts.seedMessageFile) {
+    dispatchDelayedSeed(gardenRunner, targetProject, workerName, opts.seedMessageFile);
+  }
+
+  return workerName;
 }
 
 // Pick which hidden worker takes over the visible slot when the current one

@@ -1,7 +1,7 @@
 // Adds a project directory to the garden config. Name is derived from the directory basename.
 import path from "node:path";
 import fs from "node:fs";
-import { loadConfig, saveConfig, assignLogColor } from "../config.js";
+import { mutateConfig, assignLogColor } from "../config.js";
 import { dashboardExists } from "../session.js";
 import { refreshDashboard } from "../dashboard/header.js";
 
@@ -41,22 +41,22 @@ export async function add(args: string[]): Promise<void> {
 
   const name = path.basename(resolved);
   validateProjectName(name);
-  const config = loadConfig();
-
-  if (config.projects[name]) {
-    const existing = config.projects[name].path;
-    if (existing === resolved) {
-      console.log(`Project '${name}' is already added.`);
-      return;
+  const added = mutateConfig(config => {
+    if (config.projects[name]) {
+      const existing = config.projects[name].path;
+      if (existing === resolved) return false;
+      throw new Error(
+        `A project named '${name}' already exists at ${existing}. Remove it first.`
+      );
     }
-    throw new Error(
-      `A project named '${name}' already exists at ${existing}. Remove it first.`
-    );
+    config.projects[name] = { path: resolved };
+    assignLogColor(config, name);
+    return true;
+  });
+  if (!added) {
+    console.log(`Project '${name}' is already added.`);
+    return;
   }
-
-  config.projects[name] = { path: resolved };
-  assignLogColor(config, name);
-  saveConfig(config);
   console.log(`Added project '${name}' (${resolved})`);
 
   if (dashboardExists()) {

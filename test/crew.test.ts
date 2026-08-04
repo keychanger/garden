@@ -3,7 +3,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { GardenConfig, ProjectConfig } from "../src/config.js";
 
-// applyCrew mutates config via loadConfig/saveConfig — back them with an
+// applyCrew mutates config through the transactional helper — back it with an
 // in-memory store. The pure functions (listCrews/getCrew/deriveCrew) take
 // config as an argument and are unaffected.
 const { store } = vi.hoisted(() => ({ store: { value: null as unknown as GardenConfig } }));
@@ -13,6 +13,7 @@ vi.mock("../src/config.js", async (orig) => {
     ...actual,
     loadConfig: () => store.value,
     saveConfig: (c: GardenConfig) => { store.value = c; },
+    mutateConfig: <T>(fn: (config: GardenConfig) => T) => fn(store.value),
   };
 });
 

@@ -3,7 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import readline from "node:readline";
 import { execFileSync, spawnSync } from "node:child_process";
-import { loadConfig, saveConfig, addProjectToPlot, tryGetPlot, PLOT_MAX_PROJECTS, assignLogColor } from "../config.js";
+import { loadConfig, mutateConfig, addProjectToPlot, tryGetPlot, PLOT_MAX_PROJECTS, assignLogColor } from "../config.js";
 import { readDashState } from "../dashboard/state.js";
 import { dashboardExists } from "../session.js";
 import { refreshDashboard } from "../dashboard/header.js";
@@ -70,12 +70,25 @@ export async function create(args: string[]): Promise<void> {
   git(["remote", "add", "origin", remoteUrlFor(slug)]);
   git(["push", "-u", "origin", "main"]);
 
-  config.projects[name] = { path: resolved };
-  assignLogColor(config, name);
-  if (activePlot) {
-    addProjectToPlot(config, activePlot, name);
-  }
-  saveConfig(config);
+  mutateConfig(current => {
+    if (current.projects[name]) {
+      throw new Error(
+        `A project named '${name}' was added concurrently at ${current.projects[name].path}.`,
+      );
+    }
+    if (activePlot) {
+      const plot = tryGetPlot(current, activePlot);
+      if (!plot) throw new Error(`Active plot '${activePlot}' is missing from config.`);
+      if (plot.projects.length >= PLOT_MAX_PROJECTS) {
+        throw new Error(
+          `Active plot '${activePlot}' became full while the repository was being created.`,
+        );
+      }
+    }
+    current.projects[name] = { path: resolved };
+    assignLogColor(current, name);
+    if (activePlot) addProjectToPlot(current, activePlot, name);
+  });
 
   if (activePlot) {
     console.log(`Added project '${name}' (${resolved}) to plot '${activePlot}'.`);

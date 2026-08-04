@@ -1,7 +1,7 @@
 // Manage plots: named, ordered subsets of projects that drive the dashboard view.
 import {
   loadConfig,
-  saveConfig,
+  mutateConfig,
   plotsMap,
   plotNames,
   getPlot,
@@ -89,14 +89,11 @@ function cmdCreate(args: string[]): void {
   const projects = args.slice(1);
   if (!name) throw new Error("Usage: garden plot create <name> [project...]");
 
-  const config = loadConfig();
-  createPlotCfg(config, name, projects);
-  saveConfig(config);
-
-  // Auto-activate only when no plot is active — so first-time users land on
-  // their new plot, but existing workflows don't silently jump views.
-  const current = currentActivePlot(config);
-  const autoActivated = !current;
+  const activePlot = readDashState().activePlot;
+  const autoActivated = mutateConfig(config => {
+    createPlotCfg(config, name, projects);
+    return !activePlot || !plotNames(config).includes(activePlot);
+  });
   if (autoActivated) setActivePlot(name);
 
   console.log(
@@ -109,18 +106,16 @@ function cmdDelete(args: string[]): void {
   const name = args[0];
   if (!name) throw new Error("Usage: garden plot delete <name>");
 
-  const config = loadConfig();
-  if (!tryGetPlot(config, name)) throw new Error(`Unknown plot: ${name}.`);
-
-  const active = currentActivePlot(config);
-  if (active === name) {
-    throw new Error(
-      `Cannot delete the active plot '${name}'. Switch first: 'garden plot <other>'.`,
-    );
-  }
-
-  deletePlotCfg(config, name);
-  saveConfig(config);
+  const activePlot = readDashState().activePlot;
+  mutateConfig(config => {
+    if (!tryGetPlot(config, name)) throw new Error(`Unknown plot: ${name}.`);
+    if (activePlot === name) {
+      throw new Error(
+        `Cannot delete the active plot '${name}'. Switch first: 'garden plot <other>'.`,
+      );
+    }
+    deletePlotCfg(config, name);
+  });
   console.log(`Deleted plot '${name}'.`);
   if (dashboardExists()) refreshDashboard();
 }
@@ -129,12 +124,10 @@ function cmdRename(args: string[]): void {
   const [oldName, newName] = args;
   if (!oldName || !newName) throw new Error("Usage: garden plot rename <old> <new>");
 
-  const config = loadConfig();
   // Capture the active-plot pointer *before* renaming — once the config no
   // longer contains oldName, currentActivePlot(config) can't recognize it.
   const priorActivePlot = readDashState().activePlot;
-  renamePlotCfg(config, oldName, newName);
-  saveConfig(config);
+  mutateConfig(config => renamePlotCfg(config, oldName, newName));
   if (priorActivePlot === oldName) setActivePlot(newName);
 
   console.log(`Renamed plot '${oldName}' → '${newName}'.`);
@@ -158,9 +151,7 @@ function cmdAdd(args: string[]): void {
     }
   }
 
-  const config = loadConfig();
-  addProjectToPlot(config, plotName, projectName, position);
-  saveConfig(config);
+  mutateConfig(config => addProjectToPlot(config, plotName, projectName, position));
   console.log(`Added '${projectName}' to plot '${plotName}'.`);
   if (dashboardExists()) refreshDashboard();
 }
@@ -171,9 +162,7 @@ function cmdRemove(args: string[]): void {
     throw new Error("Usage: garden plot remove <plot> <project>");
   }
 
-  const config = loadConfig();
-  removeProjectFromPlot(config, plotName, projectName);
-  saveConfig(config);
+  mutateConfig(config => removeProjectFromPlot(config, plotName, projectName));
   console.log(`Removed '${projectName}' from plot '${plotName}'.`);
   if (dashboardExists()) refreshDashboard();
 }
@@ -186,9 +175,7 @@ function cmdReorder(args: string[]): void {
   const position = parseInt(posArg, 10);
   if (!Number.isFinite(position)) throw new Error(`Invalid position: ${posArg}`);
 
-  const config = loadConfig();
-  reorderProjectInPlot(config, plotName, projectName, position);
-  saveConfig(config);
+  mutateConfig(config => reorderProjectInPlot(config, plotName, projectName, position));
   console.log(`Moved '${projectName}' to position ${position} in plot '${plotName}'.`);
   if (dashboardExists()) refreshDashboard();
 }
