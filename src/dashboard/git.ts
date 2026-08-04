@@ -150,6 +150,45 @@ export function worktreePath(project: string, workerName: string): string {
   return path.join(WORKTREE_BASE, project, workerName);
 }
 
+// Every worker worktree directory on disk, as the (project, name) pair the
+// registry keys by. This is the inverse of worktreePath(): the layout is exactly
+// two levels deep under WORKTREE_BASE, so a project dir's children are worker
+// names. Lives here rather than in the caller so WORKTREE_BASE stays private.
+//
+// Deliberately reports what is on DISK without consulting the registry or git —
+// its one consumer (the watchdog's orphan sweep) exists to find directories the
+// registry does not know about, so filtering here would hide them. A worktree
+// whose git metadata is already broken still shows up, which is the point: those
+// are the ones nothing else can see.
+export function listWorktreeDirs(): { project: string; name: string; path: string }[] {
+  const found: { project: string; name: string; path: string }[] = [];
+  let projects: fs.Dirent[];
+  try {
+    projects = fs.readdirSync(WORKTREE_BASE, { withFileTypes: true });
+  } catch {
+    return found; // no worktrees yet, or HOME unset
+  }
+  for (const project of projects) {
+    if (!project.isDirectory()) continue;
+    const projectDir = path.join(WORKTREE_BASE, project.name);
+    let workers: fs.Dirent[];
+    try {
+      workers = fs.readdirSync(projectDir, { withFileTypes: true });
+    } catch {
+      continue; // raced with a removal
+    }
+    for (const worker of workers) {
+      if (!worker.isDirectory()) continue;
+      found.push({
+        project: project.name,
+        name: worker.name,
+        path: path.join(projectDir, worker.name),
+      });
+    }
+  }
+  return found;
+}
+
 
 export function createWorktree(
   repoPath: string,

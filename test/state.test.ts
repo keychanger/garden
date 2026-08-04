@@ -28,6 +28,7 @@ describe("readDashState", () => {
       lastActiveWorker: {},
       lastActiveProjectByPlot: {},
       buildBehind: null,
+      orphanWorktreeSignature: null,
     });
   });
 
@@ -89,6 +90,7 @@ describe("writeDashState / readDashState", () => {
       lastActiveWorker: {},
       lastActiveProjectByPlot: {},
       buildBehind: 3,
+      orphanWorktreeSignature: "garden/lost-pale-fern",
     };
     writeDashState(original);
     const loaded = readDashState();

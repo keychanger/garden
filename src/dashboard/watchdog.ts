@@ -18,11 +18,13 @@
 // whole review/merge pipeline stalls silently. The watchdog closes that gap so
 // a dead — or accidentally duplicated — poller self-heals within one tick.
 //
-// 3. Alert on orphaned worker windows: a live tmux worker window with no
-// registry entry (see alertOrphanedWindows). The create/sweep race could
-// delete a worker's entry mid-bootstrap, leaving a running but invisible pane
-// that no poller reviews. Detection only — the watchdog never reconstructs an
-// entry; it makes the casualty visible so the operator can recover it.
+// 3. Alert on orphans — a resource whose registry entry is gone while the
+// resource lives, in either of the two places one can survive. A live tmux
+// worker window (see alertOrphanedWindows) means a running but invisible pane
+// that no poller reviews; a worktree directory (see alertOrphanedWorktrees, on
+// the hourly housekeeping throttle) means disk nothing owns. Detection only in
+// both cases — the watchdog never reconstructs an entry and never deletes a
+// tree; it makes the casualty visible so the operator can decide.
 //
 // Runs in a single hidden tmux window (_garden-watchdog), mirroring the usage
 // poller's lifecycle: the window being killed (reset or exit) is the
@@ -41,7 +43,9 @@ import { sweepSpawnDrafts } from "./spawn-draft.js";
 import {
   captureCodexUsageLatest, probeCodexUsageIfStale, CODEX_PROBE_INTERVAL_MS,
 } from "./codex-usage.js";
-import { commitsBehindOrigin, gardenInstallRepo } from "./git.js";
+import {
+  commitsBehindOrigin, gardenInstallRepo, listWorktreeDirs, workerCleanupMarkerPath,
+} from "./git.js";
 import { readDashState, writeDashState, withStateLock } from "./state.js";
 import { getBuildBranch, loadConfig } from "../config.js";
 import { GARDEN_VERSION } from "../version.js";
@@ -388,16 +392,208 @@ export function sweepBootstrapScripts(nowMs: number): number {
   return removed;
 }
 
+// A worktree directory younger than this is never called an orphan. Two races
+// make a young unclaimed directory normal rather than leaked: a spawn in flight
+// (the worktree exists while `npm install` runs, before the registry entry is
+// durable) and a kill's detached git cleanup, which removes the directory
+// moments after removeWorker deleted the entry. An hour is far past both, and
+// costs nothing to wait — these live for months, so reporting one late is
+// strictly better than reporting a healthy spawn as garbage.
+export const ORPHAN_WORKTREE_GRACE_MS = 60 * 60_000;
+
+// Cap on directory entries visited while sizing one orphan. A worktree can hold
+// a full node_modules (100k+ files), and this runs on the watchdog's own thread
+// — an unbounded walk over several orphans would stall the liveness tick that
+// re-pokes stranded workers. At the cap the size is reported as a floor rather
+// than pretending to be exact.
+export const ORPHAN_WORKTREE_WALK_CAP = 50_000;
+
+// Recursive size of a directory, abandoning the walk at `cap` entries. Symlinks
+// are counted by their own size and never followed — a worktree's node_modules
+// is full of them (.bin/*) and following them would double-count or escape the
+// tree entirely.
+export function directoryBytes(
+  dir: string,
+  cap: number = ORPHAN_WORKTREE_WALK_CAP,
+): { bytes: number; truncated: boolean } {
+  let bytes = 0;
+  let visited = 0;
+  const stack = [dir];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue; // vanished mid-walk, or unreadable
+    }
+    for (const entry of entries) {
+      if (++visited > cap) return { bytes, truncated: true };
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(full);
+        continue;
+      }
+      try {
+        bytes += fs.lstatSync(full).size;
+      } catch { /* raced with a removal */ }
+    }
+  }
+  return { bytes, truncated: false };
+}
+
+export interface OrphanedWorktree {
+  project: string;
+  name: string;
+  path: string;
+  /** Time since anything last modified the directory (see the mtime rationale). */
+  idleMs: number;
+  bytes: number;
+  truncated: boolean;
+}
+
+// Worktree directories on disk that no registry entry claims. This is the
+// worktree analogue of alertOrphanedWindows: there the *entry* is missing while
+// a window lives, here it is missing while a directory lives. Nothing else in
+// garden can see these — validate.ts reconciles registry → disk (it clears a
+// dangling entry.worktreePath and drops ghost `loading` entries) but never walks
+// the directories asking which are unclaimed, so an orphan is invisible by
+// omission rather than by policy. 12 had accumulated over ~4 months (6.3GB, half
+// of them carrying a node_modules) before anyone looked.
+//
+// Matched on the (project, name) pair the directory layout encodes, NOT on
+// entry.worktreePath: validate.ts sets that field to undefined when the path is
+// missing, and a resurrect can rebuild an entry whose path is not yet written —
+// either would make a live worker's tree read as unclaimed.
+export function findOrphanedWorktrees(
+  registry: WorkerRegistry,
+  nowMs: number,
+): OrphanedWorktree[] {
+  const claimed = new Set<string>();
+  for (const [project, entries] of Object.entries(registry.workers)) {
+    for (const entry of entries) claimed.add(`${project}\0${entry.name}`);
+  }
+  const orphans: OrphanedWorktree[] = [];
+  for (const dir of listWorktreeDirs()) {
+    if (claimed.has(`${dir.project}\0${dir.name}`)) continue;
+    // A kill's detached cleanup is still running against this tree — it will
+    // remove the directory itself. Same marker resurrect refuses on.
+    if (fs.existsSync(workerCleanupMarkerPath(dir.project, dir.name))) continue;
+    let idleMs: number;
+    try {
+      // mtime, not birthtime: the question is "has anything touched this
+      // recently", since that is what distinguishes an in-flight spawn or a
+      // running cleanup from an abandoned tree. Creation time would also
+      // mis-describe the age — a worker created months ago but orphaned
+      // yesterday would report as months stale.
+      idleMs = nowMs - fs.statSync(dir.path).mtimeMs;
+    } catch {
+      continue; // vanished between listing and stat
+    }
+    if (idleMs < ORPHAN_WORKTREE_GRACE_MS) continue;
+    const { bytes, truncated } = directoryBytes(dir.path);
+    orphans.push({ ...dir, idleMs, bytes, truncated });
+  }
+  return orphans;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)}GB`;
+  if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)}MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))}KB`;
+}
+
+// How many orphans to name individually in the alert before summarizing.
+const ORPHAN_WORKTREE_NAME_LIMIT = 5;
+
+// Surface unclaimed worktrees to the operator. DETECTION ONLY — the watchdog
+// never deletes one, for the same reason it never reconstructs an orphaned
+// window: an unclaimed tree can still hold the only copy of uncommitted work
+// (one of the 12 found in the first sweep held 978 uncommitted lines), and
+// deciding that is the operator's call, not a background sweep's. Committed work
+// is never at stake — a worktree's branch lives in the repo and survives its
+// removal — so the alert says so, since that is what makes the cleanup safe.
+//
+// Fires on CHANGE only, against the signature persisted in dashboard state: the
+// set is a standing condition that can persist for months while the hourly sweep
+// re-derives it, so keying addAlert's dedup on it alone (a 1-hour window) would
+// nag ~24 times a day forever. Returns the number of orphans found, whether or
+// not this call alerted.
+export function alertOrphanedWorktrees(nowMs: number): number {
+  const orphans = findOrphanedWorktrees(readRegistry(), nowMs);
+  const signature = orphans.map(o => `${o.project}/${o.name}`).sort().join(",") || null;
+  let changed = false;
+  withStateLock(() => {
+    const state = readDashState();
+    if (state.orphanWorktreeSignature === signature) return;
+    state.orphanWorktreeSignature = signature;
+    writeDashState(state);
+    changed = true;
+  });
+  if (!changed || orphans.length === 0) return orphans.length;
+
+  // One alert per project rather than one fleet-wide: the alert store is keyed by
+  // project and the status pane renders a per-project unread count, so a
+  // single cross-project alert would have to be filed under some arbitrary
+  // project's badge. The change signature is still global — one sweep, one
+  // decision — so all affected projects alert together.
+  const byProject = new Map<string, OrphanedWorktree[]>();
+  for (const orphan of orphans) {
+    const list = byProject.get(orphan.project) ?? [];
+    list.push(orphan);
+    byProject.set(orphan.project, list);
+  }
+  for (const [project, list] of byProject) {
+    const totalBytes = list.reduce((sum, o) => sum + o.bytes, 0);
+    const atLeast = list.some(o => o.truncated) ? "at least " : "";
+    const named = list
+      .slice(0, ORPHAN_WORKTREE_NAME_LIMIT)
+      .map(o => `${o.name} (${formatBytes(o.bytes)}, idle ${Math.floor(o.idleMs / 86_400_000)}d)`)
+      .join(", ");
+    const rest = list.length - Math.min(list.length, ORPHAN_WORKTREE_NAME_LIMIT);
+    addAlert({
+      level: "warn",
+      source: "watchdog",
+      project,
+      message:
+        `${list.length} worktree${list.length === 1 ? "" : "s"} on disk with no ` +
+        `registry entry, holding ${atLeast}${formatBytes(totalBytes)}: ${named}` +
+        `${rest > 0 ? `, and ${rest} more` : ""}. Nothing owns ` +
+        `${list.length === 1 ? "it" : "them"} — no dashboard row, no poller, no ` +
+        `reviewer. Committed work is safe either way (a branch outlives its ` +
+        `worktree), so only uncommitted changes need saving first: ` +
+        `\`git -C <repo> worktree remove --force <path>\`, then ` +
+        `\`git -C <repo> worktree prune\`. [orphan-worktree]`,
+      dedupKey: `watchdog-orphan-worktrees:${project}:${signature}`,
+    });
+    log.warn("watchdog", "orphaned worktrees (no registry entry)", {
+      data: {
+        project,
+        count: list.length,
+        bytes: totalBytes,
+        worktrees: list.map(o => o.name),
+      },
+    });
+  }
+  return orphans.length;
+}
+
 // Bound two on-disk artifacts the fleet accumulates unbounded. Called on the
 // hourly throttle (see the loop): (1) dashboard.log — truncateLog tail-trims it
 // past its 10MB cap, but was only ever invoked on fresh dashboard creation, so a
 // long-lived session's log grew unbounded between restarts; enforce the cap on a
 // recurring cadence instead. (2) spent bootstrap scripts (see above). Transitions
 // no state — pure disk housekeeping, consistent with the watchdog contract.
+//
+// Also carries the orphaned-worktree sweep, which is detection rather than
+// bounding: it belongs on this throttle rather than the 60s tick because it walks
+// directories to size what it finds, and an unclaimed worktree that has sat for
+// months is not news that needs reporting within a minute.
 export function housekeeping(nowMs: number): void {
   truncateLog();
   sweepBootstrapScripts(nowMs);
   sweepSpawnDrafts(nowMs);
+  alertOrphanedWorktrees(nowMs);
 }
 
 export async function runWatchdogLoop(): Promise<void> {

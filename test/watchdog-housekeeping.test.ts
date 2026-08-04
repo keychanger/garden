@@ -87,3 +87,161 @@ describe("housekeeping", () => {
     expect(fs.existsSync(stale)).toBe(false);
   });
 });
+
+// Orphaned-worktree detection. Uses real directories under the tmp HOME because
+// the sweep's whole job is reading what is on disk — WORKTREE_BASE is frozen from
+// HOME at git.js import, so the dynamic importWatchdog() above is load-bearing.
+function makeWorktree(env: { gardenDir: string }, project: string, name: string, opts: {
+  idleMs?: number;
+  nowMs?: number;
+  files?: Record<string, string>;
+} = {}): string {
+  const dir = path.join(env.gardenDir, "worktrees", project, name);
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [rel, content] of Object.entries(opts.files ?? { "README.md": "hi\n" })) {
+    const full = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, content);
+  }
+  if (opts.idleMs !== undefined && opts.nowMs !== undefined) {
+    const t = (opts.nowMs - opts.idleMs) / 1000;
+    fs.utimesSync(dir, t, t);
+  }
+  return dir;
+}
+
+const NOW = 1_000_000_000_000;
+
+describe("findOrphanedWorktrees", () => {
+  it("reports a worktree no registry entry claims, with its size", async () => {
+    const { findOrphanedWorktrees, ORPHAN_WORKTREE_GRACE_MS } = await importWatchdog();
+    makeWorktree(env, "garden", "lost-pale-fern", {
+      idleMs: ORPHAN_WORKTREE_GRACE_MS + 60_000,
+      nowMs: NOW,
+      files: { "a.txt": "x".repeat(4096) },
+    });
+
+    const orphans = findOrphanedWorktrees({ workers: {} }, NOW);
+
+    expect(orphans.map(o => `${o.project}/${o.name}`)).toEqual(["garden/lost-pale-fern"]);
+    expect(orphans[0].bytes).toBeGreaterThanOrEqual(4096);
+    expect(orphans[0].idleMs).toBeGreaterThan(ORPHAN_WORKTREE_GRACE_MS);
+  });
+
+  it("never reports a worktree a registry entry claims", async () => {
+    const { findOrphanedWorktrees, ORPHAN_WORKTREE_GRACE_MS } = await importWatchdog();
+    makeWorktree(env, "garden", "live-keen-oak", {
+      idleMs: ORPHAN_WORKTREE_GRACE_MS * 100, // ancient, but owned
+      nowMs: NOW,
+    });
+
+    // Matched on (project, name) — deliberately with NO worktreePath set, the
+    // shape validate.ts leaves behind when it clears a missing path.
+    const registry = {
+      workers: { garden: [{ name: "live-keen-oak" }] },
+    } as unknown as Parameters<typeof findOrphanedWorktrees>[0];
+
+    expect(findOrphanedWorktrees(registry, NOW)).toEqual([]);
+  });
+
+  it("spares a freshly created worktree — a spawn mid-bootstrap is not an orphan", async () => {
+    const { findOrphanedWorktrees } = await importWatchdog();
+    // No idleMs: just created, so mtime is now.
+    makeWorktree(env, "garden", "new-brisk-elm");
+
+    expect(findOrphanedWorktrees({ workers: {} }, NOW + 1000)).toEqual([]);
+  });
+
+  it("spares a worktree whose kill cleanup is still running", async () => {
+    const { findOrphanedWorktrees, ORPHAN_WORKTREE_GRACE_MS } = await importWatchdog();
+    const { workerCleanupMarkerPath } = await import("../src/dashboard/git.js");
+    makeWorktree(env, "garden", "dying-swift-ash", {
+      idleMs: ORPHAN_WORKTREE_GRACE_MS + 60_000,
+      nowMs: NOW,
+    });
+    // The detached cleanup writes this and removes it when done; it will delete
+    // the tree itself, so the sweep must not report it as garbage meanwhile.
+    fs.writeFileSync(workerCleanupMarkerPath("garden", "dying-swift-ash"), "");
+
+    expect(findOrphanedWorktrees({ workers: {} }, NOW)).toEqual([]);
+  });
+
+  it("finds orphans across several projects", async () => {
+    const { findOrphanedWorktrees, ORPHAN_WORKTREE_GRACE_MS } = await importWatchdog();
+    const old = { idleMs: ORPHAN_WORKTREE_GRACE_MS + 60_000, nowMs: NOW };
+    makeWorktree(env, "garden", "one-old-yew", old);
+    makeWorktree(env, "lex", "two-old-fir", old);
+
+    const found = findOrphanedWorktrees({ workers: {} }, NOW)
+      .map(o => `${o.project}/${o.name}`).sort();
+
+    expect(found).toEqual(["garden/one-old-yew", "lex/two-old-fir"]);
+  });
+});
+
+describe("directoryBytes", () => {
+  it("stops at the visit cap and says the size is a floor", async () => {
+    const { directoryBytes } = await importWatchdog();
+    const dir = path.join(env.gardenDir, "walkme");
+    fs.mkdirSync(dir, { recursive: true });
+    for (let i = 0; i < 12; i++) fs.writeFileSync(path.join(dir, `f${i}`), "xxxx");
+
+    const capped = directoryBytes(dir, 5);
+    expect(capped.truncated).toBe(true);
+
+    const full = directoryBytes(dir, 1000);
+    expect(full.truncated).toBe(false);
+    expect(full.bytes).toBe(12 * 4);
+  });
+});
+
+describe("alertOrphanedWorktrees", () => {
+  it("alerts once per orphan set, not on every hourly sweep", async () => {
+    const { alertOrphanedWorktrees, ORPHAN_WORKTREE_GRACE_MS } = await importWatchdog();
+    const { readAlerts } = await import("../src/dashboard/alerts.js");
+    makeWorktree(env, "garden", "stale-dim-holt", {
+      idleMs: ORPHAN_WORKTREE_GRACE_MS + 60_000, nowMs: NOW,
+    });
+
+    expect(alertOrphanedWorktrees(NOW)).toBe(1);
+    const afterFirst = readAlerts().alerts.length;
+    expect(afterFirst).toBe(1);
+    expect(readAlerts().alerts[0].project).toBe("garden");
+    expect(readAlerts().alerts[0].message).toContain("stale-dim-holt");
+
+    // Same set an hour later: still found, but the operator is not re-nagged.
+    expect(alertOrphanedWorktrees(NOW + 3_600_000)).toBe(1);
+    expect(readAlerts().alerts.length).toBe(afterFirst);
+  });
+
+  it("alerts again once the set changes, and files one alert per project", async () => {
+    const { alertOrphanedWorktrees, ORPHAN_WORKTREE_GRACE_MS } = await importWatchdog();
+    const { readAlerts } = await import("../src/dashboard/alerts.js");
+    const old = { idleMs: ORPHAN_WORKTREE_GRACE_MS + 60_000, nowMs: NOW };
+    makeWorktree(env, "garden", "first-worn-birch", old);
+
+    alertOrphanedWorktrees(NOW);
+    expect(readAlerts().alerts.length).toBe(1);
+
+    // A second orphan appears, in a different project.
+    makeWorktree(env, "lex", "second-thin-reed", old);
+    expect(alertOrphanedWorktrees(NOW)).toBe(2);
+
+    // Both projects file an alert for the new set. garden's own orphan did not
+    // change, so its second alert is redundant — accepted deliberately: the
+    // signature is fleet-wide (one sweep, one decision), and the alternative is
+    // a per-project signature map in dashboard state to save one alert on an
+    // event that fires only when the orphan set genuinely changes. It is bounded
+    // (never the hourly nag the signature exists to prevent), not a loop.
+    const projects = readAlerts().alerts.map(a => a.project).sort();
+    expect(projects).toEqual(["garden", "garden", "lex"]);
+  });
+
+  it("stays silent when nothing is orphaned", async () => {
+    const { alertOrphanedWorktrees } = await importWatchdog();
+    const { readAlerts } = await import("../src/dashboard/alerts.js");
+
+    expect(alertOrphanedWorktrees(NOW)).toBe(0);
+    expect(readAlerts().alerts.length).toBe(0);
+  });
+});

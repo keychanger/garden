@@ -323,6 +323,7 @@ export function ensureDashboard(): void {
   } catch { /* hooks may not be supported on very old tmux */ }
 
   const state: DashboardState = {
+    orphanWorktreeSignature: null,
     activeProject: firstProject,
     activePlot: initialActivePlot,
     statusPaneId: statusId,

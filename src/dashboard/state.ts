@@ -47,6 +47,14 @@ export interface DashboardState {
   // per call would spawn a subprocess per tool use. State is already read on
   // every refresh, so carrying it costs nothing.
   buildBehind: number | null;
+  // Signature of the orphaned-worktree set the operator was last alerted about
+  // (sorted `project/name` joined; null means "none outstanding"). An orphaned
+  // worktree is a standing condition that can persist for months, and the
+  // watchdog re-sweeps hourly — plus its in-loop throttle resets to 0 on every
+  // watchdog respawn — so without a persisted marker the same pile would re-alert
+  // roughly hourly and forever. Comparing signatures makes the alert fire on
+  // CHANGE only: a new orphan appearing, or the set shrinking after a cleanup.
+  orphanWorktreeSignature: string | null;
 }
 
 export const STATE_FILE = path.join(SESSIONS_DIR, "dashboard.state.json");
@@ -66,6 +74,7 @@ const DEFAULT_STATE: DashboardState = {
   lastActiveWorker: {},
   lastActiveProjectByPlot: {},
   buildBehind: null,
+  orphanWorktreeSignature: null,
 };
 
 // Shape guard for parsed state. Runs AFTER the migration patches so legacy
@@ -97,7 +106,8 @@ function isDashboardState(x: unknown): x is DashboardState {
     isRecord(r.lastActiveProjectByPlot) &&
     // Tolerate absence: state files written before this field existed are
     // valid, and readDashState fills the default.
-    (r.buildBehind === undefined || r.buildBehind === null || typeof r.buildBehind === "number")
+    (r.buildBehind === undefined || r.buildBehind === null || typeof r.buildBehind === "number") &&
+    (r.orphanWorktreeSignature === undefined || isStrOrNull(r.orphanWorktreeSignature))
   );
 }
 
@@ -139,6 +149,7 @@ export function readDashState(): DashboardState {
     if (raw.alertsSeenMark === undefined) raw.alertsSeenMark = null;
     if (raw.usagePaneId === undefined) raw.usagePaneId = null;
     if (raw.buildBehind === undefined) raw.buildBehind = null;
+    if (raw.orphanWorktreeSignature === undefined) raw.orphanWorktreeSignature = null;
     if (raw.activePlot === undefined) raw.activePlot = null;
     if (!raw.lastActiveWorker) raw.lastActiveWorker = {};
     if (!raw.lastActiveProjectByPlot) raw.lastActiveProjectByPlot = {};
