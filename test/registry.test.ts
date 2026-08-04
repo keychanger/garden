@@ -398,6 +398,47 @@ describe("updateWorkerFields", () => {
   });
 });
 
+// The compare-and-set primitive transitionState is built on: the decision runs
+// against the locked snapshot, so a caller can read the current entry and
+// choose whether to write inside a single registry transaction.
+describe("updateWorkerFieldsIf", () => {
+  it("applies the fields and returns the decision result when fields are given", async () => {
+    const { addWorker, updateWorkerFieldsIf, getWorkers } = await importRegistry();
+    addWorker("proj", mkEntry({ name: "bold-ash", prState: "working" }));
+
+    const seen = updateWorkerFieldsIf("proj", "bold-ash", entry => ({
+      fields: { prState: "reviewing" },
+      result: entry.prState,
+    }));
+
+    expect(seen).toBe("working"); // decided against the pre-update snapshot
+    expect(getWorkers("proj")[0].prState).toBe("reviewing");
+  });
+
+  it("writes nothing when the decision returns null fields, but still returns its result", async () => {
+    const { addWorker, updateWorkerFieldsIf, getWorkers } = await importRegistry();
+    addWorker("proj", mkEntry({ name: "bold-ash", prState: "working", task: "orig" }));
+
+    const result = updateWorkerFieldsIf("proj", "bold-ash", () => ({
+      fields: null,
+      result: "rejected",
+    }));
+
+    expect(result).toBe("rejected");
+    expect(getWorkers("proj")[0]).toMatchObject({ prState: "working", task: "orig" });
+  });
+
+  it("returns undefined without calling the decision for an unknown worker or project", async () => {
+    const { addWorker, updateWorkerFieldsIf } = await importRegistry();
+    addWorker("proj", mkEntry({ name: "bold-ash" }));
+    const decide = vi.fn(() => ({ fields: { prState: "merged" as const }, result: 1 }));
+
+    expect(updateWorkerFieldsIf("proj", "nonexistent", decide)).toBeUndefined();
+    expect(updateWorkerFieldsIf("unknown", "bold-ash", decide)).toBeUndefined();
+    expect(decide).not.toHaveBeenCalled();
+  });
+});
+
 describe("batchUpdateWorkerFields", () => {
   it("updates multiple workers in a single write", async () => {
     const { addWorker, batchUpdateWorkerFields, getWorkers } = await importRegistry();

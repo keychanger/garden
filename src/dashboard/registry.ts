@@ -1056,9 +1056,17 @@ function applyWorkerFields(
   const { trellis: trellisUpdate, grow: growUpdate, ...rest } = fields;
   Object.assign(entry, rest);
   if (trellisUpdate !== undefined) {
+    // Merge into existing trellis. If entry.trellis is unset (a default
+    // worker received a stray trellis update — caller bug), the spread
+    // still produces a TrellisData-shaped object from whatever was passed.
     entry.trellis = { ...(entry.trellis ?? {}), ...trellisUpdate } as TrellisData;
   }
   if (growUpdate !== undefined) {
+    // Same deep-merge pattern as trellis. Caller bug if entry.grow is
+    // unset and the update lacks `seed`; the resulting object would have
+    // no anchoring seed for iter ≥ 2 prompts. The cast lets the broken
+    // shape persist (rather than throw) so the loop can surface it
+    // visibly via a missing-seed iteration prompt.
     entry.grow = { ...(entry.grow ?? {}), ...growUpdate } as GrowData;
   }
 }

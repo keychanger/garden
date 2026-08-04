@@ -466,8 +466,13 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   // base advances as this and sibling workers merge, so it cannot be
   // reconstructed reliably afterward.
   const baseBranchSha = getRemoteTrackingSha(project.path, baseBranch) ?? undefined;
+  // Name allocation and insertion share one locked registry snapshot, so two
+  // concurrent ⌥n presses can never mint the same worker name.
   const createdEntry = addWorkerWithUniqueName(targetProject, existingNames => {
     const workerName = generateWorkerName(existingNames);
+    // Session identity is harness-shaped (Claude Code accepts a minted
+    // UUID; Codex assigns its own id post-launch, so its adapter returns the
+    // empty sentinel — recovered from the hook payload later).
     const sessionId = getHarness(resolvedHarness).allocateSessionId();
     const branchName = workerName;
     const wtPath = worktreePath(targetProject, workerName);
@@ -599,7 +604,20 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   let stateForRefresh = initialState;
   const bootstrapCmd = `sh ${shellEscape(scriptFile)}`;
   try {
+    // Both branches below spawn the bootstrap shell only after the window is
+    // sized to the right slot. Otherwise the new window comes up at tmux's
+    // default (typically 80×24, sometimes narrower), Claude's TUI does its
+    // first paint into that small grid, and those hard-wrapped lines stay
+    // frozen in scrollback forever. The placeholder/respawn-pane dance closes
+    // that race: create window holding a long sleep, resize, then respawn-pane
+    // with the real script in a correctly-sized grid. NOTE: `sleep infinity` is
+    // a GNU coreutils-ism and exits 1 on macOS BSD sleep ("usage: sleep
+    // seconds"), which destroyed the placeholder pane before respawn-pane could
+    // land. Use a finite large value — respawn replaces it in ms.
     if (background) {
+      // Hidden creation only — no park, no restore, and no state lock: the
+      // window is born detached and stays detached, so none of the operator's
+      // visible pane state is touched.
       const rightSize = initialState.activePaneId
         ? getPaneSize(initialState.activePaneId)
         : null;
@@ -616,6 +634,10 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         setPaneProjectColor(workerPaneId, targetProject);
       }
     } else {
+      // Show the new pane immediately — bootstrap runs inside it. Only the
+      // visible-state mutations (project/plot switch, park, restore, final
+      // write) need the state lock; everything slow or failure-prone already
+      // finished above, so the lock is held for tmux calls alone.
       withStateLock(() => {
         const state = readDashState();
         if (targetProject !== state.activeProject) {
@@ -647,6 +669,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         );
         if (workerPaneId) setPaneLabel(workerPaneId, workerName);
         restoreFromHidden(workerWindowName, state);
+        // Re-apply label after swap (swap-pane may not preserve pane options)
         if (state.activePaneId) {
           setPaneLabel(state.activePaneId, workerName);
           setPaneVar(state.activePaneId, "garden_clock", "1");
