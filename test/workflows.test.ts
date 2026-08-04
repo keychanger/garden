@@ -152,7 +152,6 @@ describe("defaultWorkflow", () => {
       }
     }
   });
-
 });
 
 describe("trellisWorkflow (phase 1 skeleton)", () => {

@@ -25,8 +25,8 @@ the first concrete second workflow registered against the surface.
 
 **Status**: foundation complete. The code matches this section. Adding a new
 workflow is a data-only change plus optional new prompt sections; the
-dispatcher in `poller.ts` and the hook handler in `header.ts` do not need
-edits.
+dispatcher in `poller.ts` and the hook dispatcher in `hook-dispatcher.ts` do
+not need edits.
 
 ### Goal
 
@@ -630,10 +630,10 @@ run end-to-end and pass without modification.
   this refactor that imported it must be updated to call
   `getWorkflow(name).validTransitions`. This is a compile-time break, not
   a runtime one.
-- **Hook handler signature**: the hook handler is dispatched through the
-  workflow registry, but its external entry point (`handleClaudeHook`)
-  preserves its signature. CLI internal command `_claude-hook` is
-  unchanged.
+- **Hook handler signature**: the hook handler is dispatched from the shared
+  `workerHookHandlers` (not through the workflow registry), and its external
+  entry point (`handleClaudeHook`) preserves its signature. CLI internal
+  command `_claude-hook` is unchanged.
 
 ### Testing strategy
 
