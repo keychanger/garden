@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { spawn } from "node:child_process";
 import { SESSIONS_DIR } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux } from "./tmux.js";
@@ -12,6 +13,9 @@ import { GARDEN_VERSION } from "../version.js";
 // state.ts is a leaf (fs/path/config/atomic-write/file-lock/log) — no cycle
 // back to alerts.ts, and nothing heavy added to the hook bundle's closure.
 import { readDashState } from "./state.js";
+// runner.ts is a leaf too (fs/path/tmux) and already sits in the hook bundle's
+// closure via hooks/default.ts, so refreshAlertsPane costs it nothing.
+import { resolveGardenRunner } from "./runner.js";
 
 export interface Alert {
   id: string;
@@ -181,7 +185,35 @@ export function addAlert(fields: AddAlertInput): void {
       worker: created.worker,
       data: { project: created.project, source: created.source, level: created.level },
     });
+    refreshAlertsPane();
   }
+}
+
+// Re-bake the ⌥a alerts view when it is the garden pane's active view, so an
+// alert raised while the operator is watching it appears at once rather than on
+// the watchdog's next 60s tick (the pane was otherwise only baked on entry, so
+// a worker failing under an open alerts view showed nothing until ⌥a was
+// pressed again).
+//
+// Out of process rather than a direct writeAlertsRendered call: that renderer
+// lives in header.ts, which imports this module (formatRightBar,
+// unreadAlertCountsByProject) — importing back is a cycle — and it pulls
+// commands/alerts.ts into dist/hook.js's closure, the ~2.8KB per-hook-fire cost
+// writeAlertsRendered's own doc comment exists to avoid. addAlert is reachable
+// from the hook bundle, so the same constraint applies here.
+//
+// Gated on the view actually being active, so every alert raised while the
+// operator is looking at any other garden view spawns nothing; the child
+// re-checks the same condition before writing. Fires only for a newly written
+// alert, never a deduped one, whose suppression changes no rendered byte.
+function refreshAlertsPane(): void {
+  try {
+    if (readDashState().gardenPaneType !== "alerts") return;
+    spawn("sh", ["-c", `${resolveGardenRunner()} dashboard _refresh-alerts 2>/dev/null`], {
+      detached: true,
+      stdio: "ignore",
+    }).unref();
+  } catch { /* the watchdog's 60s tick re-bakes the view anyway */ }
 }
 
 export function clearAlerts(): void {

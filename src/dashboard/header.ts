@@ -972,11 +972,12 @@ export function writeHistoryRendered(opts?: RefreshOptions): void {
 // hook bundle — measured at +2.8KB on every hook fire's cold start, versus +260
 // bytes when esbuild can tree-shake it out. The callers that actually matter
 // live in the CLI bundle: focusAlerts (entry), refreshStatusElapsed (the
-// watchdog's 60s tick, for ages and ambient poller-raised alerts), and
-// rebakePanesOnResize (the view wraps to the pane width). That
-// leaves ambient alerts up to a tick late in the pane — the same latency the
-// status pane's per-project ⚠ counts already have, and the bar badge is
-// instant regardless.
+// watchdog's 60s tick, for row ages), rebakePanesOnResize (the view wraps to
+// the pane width), and the `dashboard _refresh-alerts` route, which addAlert
+// spawns for a newly raised alert so one arriving under an open view repaints
+// at once rather than a tick later (refreshAlertsPane, alerts.ts — spawned
+// rather than called for this same bundle reason, plus the header→alerts
+// import cycle a direct call would close).
 export function writeAlertsRendered(opts?: RefreshOptions): void {
   try {
     const state = opts?.state ?? readDashState();

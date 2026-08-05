@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("node:fs", () => ({
   default: {
@@ -40,11 +40,20 @@ vi.mock("../src/version.js", () => ({
   GARDEN_VERSION: "test",
 }));
 
-// refreshAlertBadge reads the cached build-staleness count to colour the bar.
-// These tests are about alert logic, so stub it flat rather than standing up a
-// state file on the mocked fs.
+// refreshAlertBadge reads the cached build-staleness count to colour the bar,
+// and refreshAlertsPane reads which view the garden pane is showing. These
+// tests are about alert logic, so stub both flat rather than standing up a
+// state file on the mocked fs; the pane-refresh tests override gardenPaneType.
 vi.mock("../src/dashboard/state.js", () => ({
-  readDashState: vi.fn(() => ({ buildBehind: null })),
+  readDashState: vi.fn(() => ({ buildBehind: null, gardenPaneType: "growhouse" })),
+}));
+
+vi.mock("node:child_process", () => ({
+  spawn: vi.fn(() => ({ unref: vi.fn() })),
+}));
+
+vi.mock("../src/dashboard/runner.js", () => ({
+  resolveGardenRunner: vi.fn(() => "/bin/node /opt/garden/cli.js"),
 }));
 
 vi.mock("node:crypto", () => ({
@@ -59,6 +68,8 @@ import {
 } from "../src/dashboard/alerts.js";
 import { log } from "../src/dashboard/log.js";
 import { withFileLock } from "../src/dashboard/file-lock.js";
+import { spawn } from "node:child_process";
+import { readDashState } from "../src/dashboard/state.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -293,6 +304,50 @@ describe("addAlert lock failure", () => {
     expect(fs.writeFileSync).not.toHaveBeenCalled();
     expect(log.error).not.toHaveBeenCalled();
     expect(log.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("addAlert alerts-view refresh", () => {
+  const alertsView = { buildBehind: null, gardenPaneType: "alerts" };
+  const otherView = { buildBehind: null, gardenPaneType: "growhouse" };
+
+  afterEach(() => {
+    vi.mocked(readDashState).mockReturnValue(otherView as never);
+  });
+
+  it("re-bakes the alerts view when it is the active garden pane", () => {
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(readDashState).mockReturnValue(alertsView as never);
+
+    addAlert({ level: "error", source: "poller", project: "p", worker: "w", message: "boom" });
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    const cmd = vi.mocked(spawn).mock.calls[0][1] as string[];
+    expect(cmd[1]).toContain("dashboard _refresh-alerts");
+  });
+
+  it("spawns nothing when the operator is looking at another garden view", () => {
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(readDashState).mockReturnValue(otherView as never);
+
+    addAlert({ level: "error", source: "poller", project: "p", worker: "w", message: "boom" });
+
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("spawns nothing for a deduped alert, which changes no rendered byte", () => {
+    vi.mocked(readDashState).mockReturnValue(alertsView as never);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+      alerts: [{
+        id: "1", ts: new Date().toISOString(), level: "error",
+        source: "poller", project: "p", worker: "w", message: "boom",
+      }],
+    }));
+
+    addAlert({ level: "error", source: "poller", project: "p", worker: "w", message: "boom" });
+
+    expect(spawn).not.toHaveBeenCalled();
   });
 });
 

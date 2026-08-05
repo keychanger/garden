@@ -407,6 +407,15 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     await runDiagAlert(args[1]);
     return;
   }
+  if (sub === "_refresh-alerts") {
+    // Spawned by addAlert when the ⌥a view is live (see refreshAlertsPane in
+    // alerts.ts). Dynamically imported so the renderer stays out of every other
+    // route's parse, and writeAlertsRendered self-gates on the view still being
+    // active — the operator may have switched panes since the spawn.
+    const { writeAlertsRendered } = await import("./header.js");
+    writeAlertsRendered();
+    return;
+  }
   if (sub === "_usage-refresh") {
     const { refreshUsage } = await import("./usage.js");
     const { refreshDashboard } = await import("./header.js");
