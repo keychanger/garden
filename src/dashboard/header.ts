@@ -819,15 +819,12 @@ function refreshWorkerTasks(cachedRegistry?: WorkerRegistry, cachedState?: Dashb
         const activePaneId = state.activeWindowName === logical ? state.activePaneId : null;
         const raw = activePaneId ? byPaneId.get(activePaneId) : byWindow.get(logical)?.rawTitle;
         const summary = resolveWorkerActivity(entry, () => cleanPaneTitle(raw));
+        // The registry may already hold this summary because the hook path
+        // wrote it before this refresh. Keep the visible border synchronized
+        // independently of whether a registry update is still needed.
+        if (summary && activePaneId) setPaneVar(activePaneId, "garden_task", summary);
         if (summary && summary !== entry.task) {
           updates.push({ project, workerName: entry.name, fields: { task: summary } });
-          // Keep the visible pane's border label in step. For Claude Code
-          // handleTitleChanged already does this on the title event that
-          // produced the summary; for a harness whose summary comes from its
-          // transcript instead, this is the only live refresher — otherwise
-          // the border froze at whatever was current when the pane was
-          // swapped in.
-          if (activePaneId) setPaneVar(activePaneId, "garden_task", summary);
         }
       }
     }

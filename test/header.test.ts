@@ -981,6 +981,10 @@ describe("refreshWorkerTasks (via refreshDashboard)", () => {
     refreshDashboard();
 
     expect(batchUpdateWorkerFields).not.toHaveBeenCalled();
+    // Border synchronization is independent of the registry write. The hook
+    // commonly updates entry.task before this refresh, and harness-owned
+    // activity has no pane-title event that can update the border instead.
+    expect(setPaneVar).toHaveBeenCalledWith("%5", "garden_task", "same task");
   });
 
   it("falls back to byWindow lookup when worker pane is parked (not active)", () => {
