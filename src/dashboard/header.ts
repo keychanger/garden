@@ -440,12 +440,22 @@ export function handleTitleChanged(windowName: string | undefined, paneId: strin
 
   if (!project || !worker) return;
 
-  const title = getPaneTitle(paneId);
-  if (!title) return;
-
-  // Skip if unchanged
   const entry = findWorkerByName(project, worker);
-  if (!entry || entry.task === title) return;
+  if (!entry) return;
+
+  // A harness that reads its own activity (HarnessCore.readActivity) is
+  // authoritative — its pane title carries no summary, so a title event must
+  // not touch the task. Codex's default terminal title renders `project-name`,
+  // which falls back to the cwd basename: for a garden worktree that IS the
+  // worker's own name, and writing it here stomped the transcript-derived
+  // summary the hook and status-render paths had just set. Returning before
+  // getPaneTitle also keeps such a worker's title events off the tmux fork.
+  // Its task stays current via resolveWorkerActivity in applyAndLog and
+  // refreshWorkerTasks, which is also where its pane border is refreshed.
+  if (getHarnessCore(entry.harness).readActivity) return;
+
+  const title = getPaneTitle(paneId);
+  if (!title || entry.task === title) return;
 
   try {
     updateWorkerFields(project, worker, { task: title });
@@ -806,15 +816,18 @@ function refreshWorkerTasks(cachedRegistry?: WorkerRegistry, cachedState?: Dashb
     for (const [project, entries] of Object.entries(registry.workers)) {
       for (const entry of entries) {
         const logical = workerWin(project, entry.name);
-        let raw: string | undefined;
-        if (state.activeWindowName === logical && state.activePaneId) {
-          raw = byPaneId.get(state.activePaneId);
-        } else {
-          raw = byWindow.get(logical)?.rawTitle;
-        }
+        const activePaneId = state.activeWindowName === logical ? state.activePaneId : null;
+        const raw = activePaneId ? byPaneId.get(activePaneId) : byWindow.get(logical)?.rawTitle;
         const summary = resolveWorkerActivity(entry, () => cleanPaneTitle(raw));
         if (summary && summary !== entry.task) {
           updates.push({ project, workerName: entry.name, fields: { task: summary } });
+          // Keep the visible pane's border label in step. For Claude Code
+          // handleTitleChanged already does this on the title event that
+          // produced the summary; for a harness whose summary comes from its
+          // transcript instead, this is the only live refresher — otherwise
+          // the border froze at whatever was current when the pane was
+          // swapped in.
+          if (activePaneId) setPaneVar(activePaneId, "garden_task", summary);
         }
       }
     }

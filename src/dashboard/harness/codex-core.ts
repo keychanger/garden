@@ -550,22 +550,53 @@ function latestPlanStep(tail: string): string | null {
     }
     const p = rec.payload;
     if (!p || (p.type !== "function_call" && p.type !== "custom_tool_call")) continue;
-    if (p.name !== "update_plan") continue;
-    // Codex passes tool arguments as a JSON *string*, so this is a second parse.
-    let plan: unknown;
-    try {
-      plan = (JSON.parse(typeof p.arguments === "string" ? p.arguments : "{}") as { plan?: unknown }).plan;
-    } catch {
-      continue;
-    }
-    if (!Array.isArray(plan)) continue;
-    const steps = plan.filter((s): s is { step: string; status?: string } =>
-      Boolean(s) && typeof s === "object" && typeof (s as { step?: unknown }).step === "string");
+    const steps = planSteps(p);
     const current = steps.find(s => s.status === "in_progress")
       ?? [...steps].reverse().find(s => s.status === "completed");
     if (current) return condense(current.step);
   }
   return null;
+}
+
+interface PlanStep {
+  step: string;
+  status?: string;
+}
+
+// The plan carried by an update_plan call, in either shape Codex emits it.
+// Direct call (`name: "update_plan"`, arguments a JSON *string*) is the older
+// tool protocol; codex 0.146.0 running a gpt-5-codex model instead routes it
+// through the generic `exec` tool, whose `input` is JS SOURCE
+// (`await tools.update_plan({plan:[{step:"…",status:"…"}]})`). Reading only the
+// direct shape left the summary frozen at the opening prompt for every current
+// Codex worker — verified against three live rollouts, 2026-08-05.
+function planSteps(p: CodexPayload): PlanStep[] {
+  if (p.name === "update_plan") {
+    let plan: unknown;
+    try {
+      plan = (JSON.parse(typeof p.arguments === "string" ? p.arguments : "{}") as { plan?: unknown }).plan;
+    } catch {
+      return [];
+    }
+    if (!Array.isArray(plan)) return [];
+    return plan.filter((s): s is PlanStep =>
+      Boolean(s) && typeof s === "object" && typeof (s as { step?: unknown }).step === "string");
+  }
+  if (typeof p.input === "string" && p.input.includes("update_plan")) return stepsFromSource(p.input);
+  return [];
+}
+
+// The exec shape's object literal has unquoted keys, so it is not JSON and
+// cannot be re-parsed. Scan the source for step/status pairs instead of
+// evaluating model-authored code.
+const PLAN_STEP_RE = /["']?step["']?\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*["']?status["']?\s*:\s*"([a-z_]+)"/g;
+
+function stepsFromSource(src: string): PlanStep[] {
+  const steps: PlanStep[] = [];
+  for (const m of src.matchAll(PLAN_STEP_RE)) {
+    steps.push({ step: m[1].replace(/\\(["'\\])/g, "$1"), status: m[2] });
+  }
+  return steps;
 }
 
 // The opening operator prompt, condensed — Codex extracts the same message as

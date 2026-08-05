@@ -608,6 +608,16 @@ describe("codex readActivity (status-pane summary)", () => {
       .toBe("Add the .gitignore");
   });
 
+  // codex 0.146.0 (gpt-5-codex) routes update_plan through its generic `exec`
+  // tool, whose input is JS source rather than JSON arguments. Reading only
+  // the direct-call shape left every current Codex worker's summary frozen at
+  // its opening prompt.
+  it("reads the plan when update_plan is called through the exec tool", async () => {
+    const { getHarnessCore } = await importCore();
+    expect(getHarnessCore("codex").readActivity!(entryFor("rollout-plan-exec.jsonl")))
+      .toBe("Design the module boundaries");
+  });
+
   it("names the worker from its opening prompt until a plan exists", async () => {
     const { getHarnessCore } = await importCore();
     // First line only — the seed briefing is a paragraph, the detail column a row.

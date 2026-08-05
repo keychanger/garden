@@ -146,6 +146,7 @@ import {
   setupStatusBar,
   updateHeaderVar,
   handlePaneDied,
+  handleTitleChanged,
   buildStatusCommand,
   buildUsageCommand,
   buildHistoryCommand,
@@ -882,6 +883,49 @@ describe("handlePaneDied", () => {
       "garden", "bold-ash",
       { agentStatus: "exited" },
     );
+  });
+});
+
+// ===========================================================================
+// handleTitleChanged
+// ===========================================================================
+
+describe("handleTitleChanged", () => {
+  it("writes the pane title as the task for a claude-code worker", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash",
+      sessionId: "s1",
+      task: "old task",
+      agentStatus: "working",
+    });
+    vi.mocked(getPaneTitle).mockReturnValue("new task");
+
+    handleTitleChanged("_garden-worker-bold-ash", "%5");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith(
+      "garden", "bold-ash", { task: "new task" },
+    );
+  });
+
+  // Regression: Codex's default terminal title renders `project-name`, which
+  // falls back to the worktree basename — the worker's own name. Writing it
+  // here stomped the transcript-derived summary readActivity had just set,
+  // which is exactly what the operator saw: a good summary replaced by
+  // "coy-stout-elk". A harness that reads its own activity owns the task.
+  it("ignores the pane title for a harness that reads its own activity", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "rust-free-brink",
+      sessionId: "s2",
+      task: "Auditing the poller's merge path",
+      agentStatus: "working",
+      harness: "codex",
+    });
+    vi.mocked(getPaneTitle).mockReturnValue("rust-free-brink");
+
+    handleTitleChanged("_garden-worker-rust-free-brink", "%7");
+
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+    expect(setPaneVar).not.toHaveBeenCalled();
   });
 });
 
