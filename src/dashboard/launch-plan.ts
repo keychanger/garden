@@ -34,6 +34,20 @@ export interface WorkerLaunchPlanInput {
   effort?: string;
 }
 
+export const DEFAULT_CODEX_MODEL = "gpt-5.6-sol";
+export const DEFAULT_CODEX_EFFORT = "high";
+
+function harnessTuning(harness: string, model?: string, effort?: string): {
+  model?: string;
+  effort?: string;
+} {
+  if (harness !== "codex") return { model, effort };
+  return {
+    model: model ?? DEFAULT_CODEX_MODEL,
+    effort: effort ?? DEFAULT_CODEX_EFFORT,
+  };
+}
+
 export function workerProject<T extends { provider?: string }>(
   project: T,
   provider: string | undefined,
@@ -86,15 +100,16 @@ export function resolveWorkerLaunchPlan(
     : harness === "claude-code"
       ? claudeEnvPrefix(runtimeProject, config)
       : "";
+  const tuning = harnessTuning(harness, input.model, input.effort);
 
   return {
     role: "worker",
     harness,
     backend,
     credential,
-    model: input.model,
+    model: tuning.model,
     ultracode: input.ultracode,
-    effort: input.effort,
+    effort: tuning.effort,
     envPrefix,
     executionPolicy: "sandboxed-worker",
     requiredCapabilities: {
@@ -121,13 +136,14 @@ export function resolveHeadlessLaunchPlan(input: {
   if (!core.capabilities.headlessRoles.includes(input.role)) {
     throw new Error(`Harness '${harness}' cannot run the '${input.role}' headless role.`);
   }
+  const tuning = harnessTuning(harness, input.model, input.effort);
   return {
     role: input.role,
     harness,
     backend: { kind: "harness-account" },
     credential: { kind: "harness-account" },
-    model: input.model,
-    effort: input.effort,
+    model: tuning.model,
+    effort: tuning.effort,
     envPrefix: input.envPrefix,
     executionPolicy: "trusted-headless",
     requiredCapabilities: { headlessRole: input.role },

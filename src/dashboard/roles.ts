@@ -22,7 +22,7 @@ export type ReviewRoleResolution = HeadlessLaunchPlan;
 // Operator choice (2026-07): the review family defaults to explicit strong
 // Anthropic Opus, so a cheap or experimental worker is never reviewed,
 // resolved, or CI-fixed cheaply. Applied only on the claude-code path — a
-// foreign harness (codex) uses its own account default when unpinned (an
+// foreign harness (codex) uses its own harness default when unpinned (an
 // Anthropic alias would be meaningless there). Overridable per role via
 // `garden config <p> role <role> model <m>`.
 export const SAFE_REVIEW_MODEL = "opus";
@@ -67,8 +67,7 @@ export function resolveReviewRole(
   const workflowModel = role === "reviewer" ? getWorkflow(workflow).reviewerModel : undefined;
   // Both the workflow model and SAFE_REVIEW_MODEL are Anthropic aliases,
   // meaningless to a foreign harness — so an unpinned foreign harness (codex)
-  // gets NO model flag and uses its own account default. Only an explicit
-  // model (per-role key or a crew's review pin) reaches a foreign harness.
+  // gets no Anthropic model. Its launch plan supplies the Codex default.
   const model = entryCrew?.review.model
     ?? target.model
     ?? projectCrew?.review.model
@@ -77,11 +76,9 @@ export function resolveReviewRole(
   // model chain falls back to Opus (the safety net that a cheap worker still
   // gets a strong review), whereas an unset effort simply means the account
   // default — the behavior every review had before this dial existed. It is
-  // also claude-code-only, like the model aliases: a foreign harness has no
-  // `--effort` to render, so passing one would be silently meaningless.
-  const effort = harness === "claude-code"
-    ? (entryCrew?.review.effort ?? target.effort ?? projectCrew?.review.effort)
-    : undefined;
+  // Both registered harnesses accept these review-effort rungs. If none is
+  // configured, the launch plan applies only the target harness's own default.
+  const effort = entryCrew?.review.effort ?? target.effort ?? projectCrew?.review.effort;
   const envPrefix = harness === "claude-code" ? reviewerEnvPrefix(project, config) : "";
   return resolveHeadlessLaunchPlan({ role, harness, model, effort, envPrefix });
 }

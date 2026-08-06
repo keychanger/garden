@@ -244,12 +244,12 @@ export const codexCore: HarnessCore = {
   // commit, and push under garden's trust boundary (garden owns the sandbox).
   buildHeadlessCommand(opts: HeadlessCommandOptions): string {
     const plan = opts.launchPlan;
-    // Review-role effort is currently a claude-code-only configuration dial,
-    // so a Codex headless plan ignores it. A `model_reasoning_effort` mapping
-    // can be added when the role surface gains a Codex effort vocabulary.
     const modelFlag = plan.model ? ` -m ${shellEscape(plan.model)}` : "";
+    const effortFlag = plan.effort
+      ? ` -c ${shellEscape(`model_reasoning_effort=${plan.effort}`)}`
+      : "";
     const err = shellEscape(codexStderrSidecar(opts.resultFile));
-    return `${opts.inlineEnv}${plan.envPrefix}codex exec --dangerously-bypass-approvals-and-sandbox${modelFlag}`
+    return `${opts.inlineEnv}${plan.envPrefix}codex exec --dangerously-bypass-approvals-and-sandbox${modelFlag}${effortFlag}`
       + ` < ${shellEscape(opts.promptFile)} > ${shellEscape(opts.resultFile)} 2> ${err}`;
   },
 

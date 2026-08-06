@@ -37,13 +37,13 @@ describe("resolveReviewRole", () => {
     }
   });
 
-  it("routes a review role to Codex with its own auth (no Anthropic env, no forced Opus)", async () => {
+  it("routes a review role to Codex with its own auth and harness defaults", async () => {
     const { resolveReviewRole } = await importRoles();
     const r = resolveReviewRole(
       project({ roles: { reviewer: { harness: "codex" } } }), "default", "reviewer");
     expect(r.harness).toBe("codex");
-    // No SAFE_REVIEW_MODEL on a foreign harness — Codex uses its own default.
-    expect(r.model).toBeUndefined();
+    expect(r.model).toBe("gpt-5.6-sol");
+    expect(r.effort).toBe("high");
     // Codex authenticates itself; it never gets the Anthropic env prefix.
     expect(r.envPrefix).toBe("");
   });
@@ -81,15 +81,16 @@ describe("resolveReviewRole", () => {
     expect(r.model).toBe("opus");
   });
 
-  it("does not leak the workflow's reviewerModel to an unpinned Codex reviewer", async () => {
+  it("uses Codex defaults instead of leaking the workflow's reviewerModel", async () => {
     const { resolveReviewRole } = await importRoles();
     // trellis pins reviewerModel=opus, an Anthropic alias meaningless to Codex.
-    // An unpinned Codex reviewer must get NO model so codex uses its own default
-    // — the workflow model is a claude-code-only term.
+    // The workflow model is a claude-code-only term; the Codex harness applies
+    // its own model and effort defaults instead.
     const r = resolveReviewRole(
       project({ roles: { reviewer: { harness: "codex" } } }), "trellis", "reviewer");
     expect(r.harness).toBe("codex");
-    expect(r.model).toBeUndefined();
+    expect(r.model).toBe("gpt-5.6-sol");
+    expect(r.effort).toBe("high");
   });
 
   it("keeps role knobs independent — a Codex reviewer does not move the resolver", async () => {
@@ -206,7 +207,7 @@ describe("resolveReviewRole", () => {
     const { resolveReviewRole } = await importRoles();
     const unpinned = resolveReviewRole(project({ crew: "c" }), "default", "reviewer",
       withCrews({ c: { worker: { member: "claude" }, review: { member: "codex" } } }));
-    expect(unpinned.model).toBeUndefined();
+    expect(unpinned.model).toBe("gpt-5.6-sol");
     const pinned = resolveReviewRole(project({ crew: "c" }), "default", "reviewer",
       withCrews({ c: { worker: { member: "claude" }, review: { member: "codex", model: "gpt-5" } } }));
     expect(pinned.model).toBe("gpt-5");
@@ -240,12 +241,12 @@ describe("resolveReviewRole", () => {
     expect(r.effort).toBeUndefined();
   });
 
-  it("never sends effort to a foreign harness, which has no --effort to render", async () => {
+  it("passes an explicit review effort to Codex above its harness default", async () => {
     const { resolveReviewRole } = await importRoles();
     const config = withCrews({ c: { worker: { member: "claude" }, review: { member: "codex", effort: "max" } } });
     const r = resolveReviewRole(project({ crew: "c" }), "default", "reviewer", config);
     expect(r.harness).toBe("codex");
-    expect(r.effort).toBeUndefined();
+    expect(r.effort).toBe("max");
   });
 
   it("a bound crew that no longer exists falls back to the safe default", async () => {

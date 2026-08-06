@@ -737,6 +737,11 @@ cross-harness reviewer needs no new suppression; and the reviewer takes
 its prompt on stdin, so the AGENTS.md-collision concern below is
 worker-only.
 
+Every unpinned Codex launch uses Garden's harness default of
+`gpt-5.6-sol` with `high` reasoning. The launch-plan boundary applies that
+pair uniformly to interactive workers and all three headless roles, while an
+explicit worker, project, crew, or role value remains higher precedence.
+
 Verified Codex facts (0.142.5): headless `codex exec --json
 --output-schema --cd -m --sandbox --skip-git-repo-check`; interactive
 `codex` Ratatui TUI; session identity is a Codex-assigned `thread_id`

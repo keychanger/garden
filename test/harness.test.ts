@@ -302,12 +302,11 @@ describe("codex adapter dialect", () => {
       }),
       inlineEnv: "GARDEN_REVIEWER=1 ",
     });
-    // effort is a claude-code dial — codex renders no equivalent, mirroring how
-    // its worker builder drops effort/ultracode.
     // The verdict is stdout's last line; the token trailer is stderr, so the
     // result file is stdout-only (not 2>&1) with stderr to a sidecar.
     expect(cmd).toBe(
       "GARDEN_REVIEWER=1 codex exec --dangerously-bypass-approvals-and-sandbox -m gpt-5-codex"
+      + " -c model_reasoning_effort=max"
       + " < /tmp/p.txt > /tmp/r.txt 2> /tmp/r.txt.stderr",
     );
     // A headless reviewer must NOT bypass hook trust — it wants Codex to skip

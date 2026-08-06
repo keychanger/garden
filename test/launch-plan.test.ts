@@ -68,6 +68,17 @@ describe("resolveWorkerLaunchPlan", () => {
     expect(plan.backend).toEqual({ kind: "harness-account" });
     expect(plan.credential).toEqual({ kind: "harness-account" });
     expect(plan.envPrefix).toBe("");
+    expect(plan.model).toBe("gpt-5.6-sol");
+    expect(plan.effort).toBe("high");
+  });
+
+  it("keeps explicit Codex tuning above the harness defaults", () => {
+    const plan = resolveWorkerLaunchPlan({
+      project: project(), harness: "codex", workflow: "default", resume: false,
+      model: "gpt-5.6-terra", effort: "max",
+    }, config);
+    expect(plan.model).toBe("gpt-5.6-terra");
+    expect(plan.effort).toBe("max");
   });
 
   it("fails closed on unknown providers, harnesses, and incompatible pairs", () => {
@@ -98,6 +109,14 @@ describe("resolveWorkerLaunchPlan", () => {
 });
 
 describe("resolveHeadlessLaunchPlan", () => {
+  it("defaults every unpinned Codex headless role to Sol at high effort", () => {
+    for (const role of ["reviewer", "resolver", "ciFix"] as const) {
+      const plan = resolveHeadlessLaunchPlan({ role, harness: "codex", envPrefix: "" });
+      expect(plan.model).toBe("gpt-5.6-sol");
+      expect(plan.effort).toBe("high");
+    }
+  });
+
   it("makes the trusted review policy and role capability explicit", () => {
     const plan = resolveHeadlessLaunchPlan({
       role: "reviewer",
@@ -111,7 +130,7 @@ describe("resolveHeadlessLaunchPlan", () => {
       backend: { kind: "harness-account" },
       credential: { kind: "harness-account" },
       model: "gpt-5.6-sol",
-      effort: undefined,
+      effort: "high",
       envPrefix: "",
       executionPolicy: "trusted-headless",
       requiredCapabilities: { headlessRole: "reviewer" },
