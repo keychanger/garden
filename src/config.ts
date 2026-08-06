@@ -153,8 +153,10 @@ export interface RoleTarget {
   harness?: string;
   model?: string;
   /** Reasoning effort for this role's headless run (claude-code renders
-   *  `--effort <level>`; a foreign harness ignores it). One of
-   *  REVIEW_EFFORT_LEVELS. Absent = the harness/account default. */
+   *  `--effort <level>`; codex renders `-c model_reasoning_effort=<level>`).
+   *  One of REVIEW_EFFORT_LEVELS, every rung of which both registered
+   *  harnesses accept. Absent = the harness default — the account default on
+   *  claude-code, DEFAULT_CODEX_EFFORT on codex. */
   effort?: string;
 }
 

@@ -72,12 +72,13 @@ export function resolveReviewRole(
     ?? target.model
     ?? projectCrew?.review.model
     ?? (harness === "claude-code" ? (workflowModel ?? SAFE_REVIEW_MODEL) : undefined);
-  // Effort resolves on the same chain as model, but has NO default floor: the
-  // model chain falls back to Opus (the safety net that a cheap worker still
-  // gets a strong review), whereas an unset effort simply means the account
-  // default — the behavior every review had before this dial existed. It is
-  // Both registered harnesses accept these review-effort rungs. If none is
-  // configured, the launch plan applies only the target harness's own default.
+  // Effort resolves on the same chain as model, but has NO default floor of
+  // its own: the model chain falls back to Opus (the safety net that a cheap
+  // worker still gets a strong review), whereas an unset effort is simply left
+  // to the launch plan, which applies the target harness's own default — the
+  // account default on claude-code (the behavior every review had before this
+  // dial existed), DEFAULT_CODEX_EFFORT on codex. Both registered harnesses
+  // accept every REVIEW_EFFORT_LEVELS rung, so nothing is mapped here.
   const effort = entryCrew?.review.effort ?? target.effort ?? projectCrew?.review.effort;
   const envPrefix = harness === "claude-code" ? reviewerEnvPrefix(project, config) : "";
   return resolveHeadlessLaunchPlan({ role, harness, model, effort, envPrefix });
