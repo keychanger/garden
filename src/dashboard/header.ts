@@ -707,7 +707,9 @@ export function refreshDashboard(opts?: RefreshOptions): void {
     registry: opts?.registry ?? readRegistry(),
   };
   // Paint first (writeQuickStatus/writeUsageRendered signal their panes inline);
-  // tmux-heavy refreshWorkerTasks runs after so latency stays off plot switches.
+  // tmux-heavy refreshWorkerTasks runs after so latency stays off plot switches;
+  // when it discovers a new task the pane is re-baked from its updated snapshot
+  // rather than showing the prior text until the next event.
   // Window names are suppressed at window-creation time (newDashboardWindow), so
   // there is no per-refresh window-name sweep here.
   updateHeaderVar(shared);

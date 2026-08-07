@@ -707,7 +707,7 @@ function firstPromptLine(transcriptPath: string): string | null {
       continue;
     }
     const text = codexUserMessage(rec)?.text ?? responseItemUserText(rec);
-    if (text === null) continue;
+    if (text === null || INJECTED_CONTEXT_RE.test(text)) continue;
     const condensed = condense(text);
     if (condensed) return condensed;
   }
@@ -717,7 +717,9 @@ function firstPromptLine(transcriptPath: string): string | null {
 // Codex records the AGENTS.md composition and the environment block as
 // injected user-role messages ahead of the operator's own prompt, so naming
 // either as the worker's activity would report garden's own rules back at it.
-const INJECTED_CONTEXT_RE = /^\s*(?:# AGENTS\.md instructions for\b|<environment_context\b)/;
+// Applied to every prompt shape below, not just one: which record carries the
+// injected block varies by Codex version.
+const INJECTED_CONTEXT_RE = /^\s*(?:# AGENTS\.md instructions\b|<environment_context\b)/;
 
 // The current rollout shape for an operator prompt: a `response_item` message
 // with role "user". Older rollouts carry it as an `event_msg` instead, which
@@ -725,8 +727,7 @@ const INJECTED_CONTEXT_RE = /^\s*(?:# AGENTS\.md instructions for\b|<environment
 function responseItemUserText(rec: CodexLine): string | null {
   const p = rec.payload;
   if (!p || rec.type !== "response_item" || p.type !== "message" || p.role !== "user") return null;
-  const text = joinTextElements(p.content);
-  return INJECTED_CONTEXT_RE.test(text) ? null : text;
+  return joinTextElements(p.content);
 }
 
 // One line, bounded — the status pane's detail column truncates too, but the

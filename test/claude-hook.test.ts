@@ -700,6 +700,38 @@ describe("handleClaudeHook — heartbeat throttle (perf)", () => {
     expect(updateWorkerFields).toHaveBeenCalled();
   });
 
+  // A Codex worker's task is derived from its rollout, not from a pane-title
+  // event, so nothing else discovers the operator's opening prompt. Throttling
+  // the discovery would leave the `awaiting task` placeholder on the row for up
+  // to a heartbeat interval after the worker was actually given work.
+  it("a codex worker still carrying the creation placeholder is not throttled", () => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "working",
+      lastEventAt: Date.now(),
+      harness: "codex",
+      task: "awaiting task",
+    });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("posttooluse");
+
+    expect(updateWorkerFields).toHaveBeenCalled();
+  });
+
+  it("a codex worker with a real summary is throttled like any other", () => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "working",
+      lastEventAt: Date.now(),
+      harness: "codex",
+      task: "Auditing the poller's merge path",
+    });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("posttooluse");
+
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
+
   it("a state-changing hook is NEVER throttled, even with a fresh lastEventAt", () => {
     // asking → working is a real transition; it must write regardless of how
     // recently the heartbeat fired, or the worker would appear stuck in asking.
