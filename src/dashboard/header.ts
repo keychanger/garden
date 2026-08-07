@@ -714,7 +714,8 @@ export function refreshDashboard(opts?: RefreshOptions): void {
   writeQuickStatus(shared);
   writeUsageRendered(shared);
   writeHistoryRendered(shared);
-  refreshWorkerTasks(shared.registry, shared.state);
+  const refreshedRegistry = refreshWorkerTasks(shared.registry, shared.state);
+  if (refreshedRegistry) writeQuickStatus({ ...shared, registry: refreshedRegistry });
 }
 
 // Lean refresh for worker cycling: skip header/tasks/usage since only the status marker moves.
@@ -793,12 +794,15 @@ export function refreshDashboardPlotCycle(opts?: RefreshOptions): void {
 // (windowName, paneId, title) in a single fork. The previous shape ran
 // findWorkerPaneId + getPaneTitle per worker — 2-3 tmux forks each, scaling
 // linearly with worker count. Now constant: one fork regardless of N.
-function refreshWorkerTasks(cachedRegistry?: WorkerRegistry, cachedState?: DashboardState): void {
+function refreshWorkerTasks(
+  cachedRegistry?: WorkerRegistry,
+  cachedState?: DashboardState,
+): WorkerRegistry | null {
   try {
     const registry = cachedRegistry ?? readRegistry();
     const state = cachedState ?? readDashState();
     const panes = listSessionPaneTitles();
-    if (panes.length === 0) return;
+    if (panes.length === 0) return null;
 
     // Index by both window name (the parked-pane lookup) and pane id (the
     // active-window swap-pane lookup). A worker's pane is in its logical
@@ -831,8 +835,20 @@ function refreshWorkerTasks(cachedRegistry?: WorkerRegistry, cachedState?: Dashb
 
     if (updates.length > 0) {
       batchUpdateWorkerFields(updates);
+      const workers = Object.fromEntries(
+        Object.entries(registry.workers).map(([project, entries]) => [
+          project,
+          entries.map(entry => {
+            const update = updates.find(u => u.project === project && u.workerName === entry.name);
+            return update ? { ...entry, ...update.fields } : entry;
+          }),
+        ]),
+      );
+      return { workers };
     }
+    return null;
   } catch { /* best effort — don't block dashboard refresh */ }
+  return null;
 }
 
 // Floor lines for the status pane: the tallest rendered height among all plots

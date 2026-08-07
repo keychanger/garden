@@ -24,6 +24,8 @@ import { shellEscape, pasteAndSubmit } from "../tmux.js";
 import { resolveHookRunner } from "../runner.js";
 import type { AgentCommandOptions, HarnessCore, HeadlessCommandOptions } from "./types.js";
 
+export const CODEX_AWAITING_TASK = "awaiting task";
+
 // Garden's lifecycle hooks for a Codex WORKER, injected into the launch command
 // as `-c` config overrides rather than a .codex/hooks.json file. Verified
 // 2026-07-06 (codex 0.142.5): a linked git worktree does NOT load hooks from a
@@ -394,7 +396,7 @@ export const codexCore: HarnessCore = {
     // A task equal to the worker name is the pre-fix symptom, not a summary —
     // Codex's default title is `project-name`, which falls back to the worktree
     // basename. Treat it as unset so an existing worker heals without a bounce.
-    const unset = !entry.task || entry.task === entry.name;
+    const unset = !entry.task || entry.task === entry.name || entry.task === CODEX_AWAITING_TASK;
     return unset ? firstPromptLine(transcript) : null;
   },
 };
@@ -412,6 +414,8 @@ interface CodexLine {
 
 interface CodexPayload {
   type?: string;
+  role?: unknown;
+  content?: unknown;
   message?: unknown;
   text_elements?: unknown;
   images?: unknown[];
@@ -597,13 +601,22 @@ function joinTextElements(els: unknown): string {
     .join("");
 }
 
+export function initialCodexActivity(seed?: string): string {
+  if (!seed) return CODEX_AWAITING_TASK;
+  const lines = seed.split("\n").map(line => line.trim()).filter(Boolean);
+  let line = lines[0] ?? "";
+  if (/^\[handoff(?:\s|\])/i.test(line)) line = lines[1] ?? "";
+  line = line.replace(/^\[garden\]\s*/i, "");
+  return condense(line) || CODEX_AWAITING_TASK;
+}
+
 // Bounds for readActivity's reads. A plan record is ~1KB, so the tail holds
 // many of them. The head has to clear the rollout's preamble before the
 // opening prompt, which is NOT small: Codex records the composed instructions
 // (garden's rules ride the worktree AGENTS.md) up front, measured at 70-90KB
 // for real garden workers — so the head bound has a wide margin over that, and
-// the read happens at most once per worker (it is skipped as soon as the entry
-// has a task). Both stay well under readTurns' 16MB cap: readActivity runs on
+// the read stops once the opening prompt replaces the creation placeholder.
+// Both stay well under readTurns' 16MB cap: readActivity runs on
 // the status render and hook paths, readTurns only when the history view is open.
 const ACTIVITY_TAIL_BYTES = 256 * 1024;
 const ACTIVITY_HEAD_BYTES = 512 * 1024;
@@ -693,12 +706,27 @@ function firstPromptLine(transcriptPath: string): string | null {
     } catch {
       continue;
     }
-    const userMessage = codexUserMessage(rec);
-    if (!userMessage) continue;
-    const condensed = condense(userMessage.text);
+    const text = codexUserMessage(rec)?.text ?? responseItemUserText(rec);
+    if (text === null) continue;
+    const condensed = condense(text);
     if (condensed) return condensed;
   }
   return null;
+}
+
+// Codex records the AGENTS.md composition and the environment block as
+// injected user-role messages ahead of the operator's own prompt, so naming
+// either as the worker's activity would report garden's own rules back at it.
+const INJECTED_CONTEXT_RE = /^\s*(?:# AGENTS\.md instructions for\b|<environment_context\b)/;
+
+// The current rollout shape for an operator prompt: a `response_item` message
+// with role "user". Older rollouts carry it as an `event_msg` instead, which
+// codexUserMessage reads. Null means this record is not an operator prompt.
+function responseItemUserText(rec: CodexLine): string | null {
+  const p = rec.payload;
+  if (!p || rec.type !== "response_item" || p.type !== "message" || p.role !== "user") return null;
+  const text = joinTextElements(p.content);
+  return INJECTED_CONTEXT_RE.test(text) ? null : text;
 }
 
 // One line, bounded — the status pane's detail column truncates too, but the

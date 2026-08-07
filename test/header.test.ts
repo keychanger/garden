@@ -959,6 +959,13 @@ describe("refreshWorkerTasks (via refreshDashboard)", () => {
     expect(batchUpdateWorkerFields).toHaveBeenCalledWith([
       { project: "garden", workerName: "bold-ash", fields: { task: "new task" } },
     ]);
+    expect(vi.mocked(renderQuickStatus).mock.calls.at(-1)?.[3]).toEqual({
+      workers: {
+        garden: [
+          { name: "bold-ash", sessionId: "s1", task: "new task", agentStatus: "working" },
+        ],
+      },
+    });
   });
 
   it("skips update when task is unchanged", () => {

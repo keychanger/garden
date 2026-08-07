@@ -1,0 +1,2 @@
+{"timestamp":"2026-08-07T16:17:01.892Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /repo/worker\n\n<INSTRUCTIONS>managed rules</INSTRUCTIONS>"},{"type":"input_text","text":"<environment_context>managed environment</environment_context>"}]}}
+{"timestamp":"2026-08-07T16:17:02.793Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Investigate why Codex workers have blank task summaries.\nPlease implement the fix."}]}}

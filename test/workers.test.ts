@@ -894,7 +894,23 @@ describe("newWorker", () => {
     expect(newWorker({ harness: "codex" })).toBe("bold-ash");
     expect(vi.mocked(addWorker)).toHaveBeenCalledWith(
       "myproject",
-      expect.objectContaining({ workflow: "default", harness: "codex" }),
+      expect.objectContaining({ workflow: "default", harness: "codex", task: "awaiting task" }),
+    );
+  });
+
+  it("harness: names a seeded codex worker before its prompt is delivered", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(fs.readFileSync).mockImplementation((file) => {
+      if (file === "/tmp/seed.txt") {
+        return "[handoff from garden/parent]\n\nRepair the status summary lifecycle.\nMore detail.";
+      }
+      throw new Error("ENOENT");
+    });
+
+    expect(newWorker({ harness: "codex", seedMessageFile: "/tmp/seed.txt" })).toBe("bold-ash");
+    expect(vi.mocked(addWorker)).toHaveBeenCalledWith(
+      "myproject",
+      expect.objectContaining({ task: "Repair the status summary lifecycle." }),
     );
   });
 

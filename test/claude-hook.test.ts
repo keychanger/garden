@@ -605,6 +605,31 @@ describe("handleClaudeHook — refresh skip on no-op transitions", () => {
     expect(refreshCalls).toHaveLength(0);
   });
 
+  it("posttooluse repaints a changed task even without a state transition", () => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "working",
+      task: "old task",
+    });
+    setCwd("garden", "bold-ash");
+    vi.mocked(readDashState).mockReturnValueOnce({
+      activeProject: "garden",
+      statusPaneId: null,
+      gardenShellPaneId: null,
+      activePaneId: "%5",
+      activePaneType: "worker",
+      activeWindowName: "_garden-worker-bold-ash",
+    });
+    vi.mocked(getPaneTitle).mockReturnValueOnce("Investigate blank task summaries");
+
+    handleClaudeHook("posttooluse");
+
+    expect(entries.garden[0].task).toBe("Investigate blank task summaries");
+    const refreshCalls = vi.mocked(tmuxBatch).mock.calls.flat().filter(
+      g => g[0] === "refresh-client" && g[1] === "-S",
+    );
+    expect(refreshCalls.length).toBeGreaterThan(0);
+  });
+
   it("pretooluse that flips working → asking DOES refresh the dashboard", () => {
     seedWorker("garden", "bold-ash", { agentStatus: "working" });
     setCwd("garden", "bold-ash");

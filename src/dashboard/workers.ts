@@ -36,6 +36,7 @@ import {
   type WorktreeCommandOptions,
 } from "./create.js";
 import { getHarness } from "./harness/index.js";
+import { initialCodexActivity } from "./harness/codex-core.js";
 import {
   canonicalHarnessName,
 } from "./harness/core.js";
@@ -477,6 +478,16 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   // base advances as this and sibling workers merge, so it cannot be
   // reconstructed reliably afterward.
   const baseBranchSha = getRemoteTrackingSha(project.path, baseBranch) ?? undefined;
+  let initialTask = "";
+  if (preflightPlan.harness === "codex") {
+    let seed: string | undefined;
+    if (opts.seedMessageFile) {
+      try {
+        seed = fs.readFileSync(opts.seedMessageFile, "utf8");
+      } catch { /* seed dispatch reports unreadable files on its own path */ }
+    }
+    initialTask = initialCodexActivity(seed);
+  }
   // Name allocation and insertion share one locked registry snapshot, so two
   // concurrent ⌥n presses can never mint the same worker name.
   const createdEntry = addWorkerWithUniqueName(targetProject, existingNames => {
@@ -490,7 +501,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     return {
       name: workerName,
       sessionId,
-      task: "",
+      task: initialTask,
       worktreePath: wtPath,
       branchName,
       baseBranch,

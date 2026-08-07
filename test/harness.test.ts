@@ -661,6 +661,19 @@ describe("codex readActivity (status-pane summary)", () => {
       .toBe("Fix the empty Codex history. [Image #1]");
   });
 
+  it("reads current response-item prompts without naming injected context", async () => {
+    const { getHarnessCore } = await importCore();
+    expect(getHarnessCore("codex").readActivity!(entryFor("rollout-response-messages.jsonl")))
+      .toBe("Investigate why Codex workers have blank task summaries.");
+  });
+
+  it("replaces the creation placeholder with the opening prompt", async () => {
+    const { getHarnessCore } = await importCore();
+    const entry = entryFor("rollout-response-messages.jsonl", { task: "awaiting task" });
+    expect(getHarnessCore("codex").readActivity!(entry))
+      .toBe("Investigate why Codex workers have blank task summaries.");
+  });
+
   it("keeps an established summary rather than re-reporting the opening prompt", async () => {
     const { getHarnessCore } = await importCore();
     const entry = entryFor("rollout-sample.jsonl", { task: "Fix the calc.py sign bug" });

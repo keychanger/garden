@@ -29,6 +29,7 @@ import {
 } from "../registry.js";
 import { getPaneTitle } from "../tmux.js";
 import { resolveWorkerActivity } from "../harness/core.js";
+import { CODEX_AWAITING_TASK } from "../harness/codex-core.js";
 import { maybeRefreshUsage } from "../usage.js";
 import { resolveGardenRunner } from "../runner.js";
 import type { HookContext, HookMethod, WorkflowHookHandlers } from "../workflows/types.js";
@@ -195,7 +196,12 @@ function applyAndLog(
   // machine is untouched.
   const stateChanged = fields.agentStatus !== undefined || fields.prState !== undefined;
   const now = Date.now();
-  if (!stateChanged && now - (ctx.workerInfo.entry.lastEventAt ?? 0) < HOOK_HEARTBEAT_MS) {
+  const activityUnset = ctx.workerInfo.entry.harness === "codex"
+    && (!ctx.workerInfo.entry.task
+      || ctx.workerInfo.entry.task === CODEX_AWAITING_TASK
+      || ctx.workerInfo.entry.task === ctx.workerInfo.entry.name);
+  if (!stateChanged && !activityUnset
+      && now - (ctx.workerInfo.entry.lastEventAt ?? 0) < HOOK_HEARTBEAT_MS) {
     return;
   }
   fields.lastEventAt = now;
@@ -234,6 +240,7 @@ function applyAndLog(
     const paneId = findWorkerPaneId(ctx.workerInfo!.project, ctx.workerInfo!.name);
     return paneId ? getPaneTitle(paneId) : null;
   });
+  const taskChanged = Boolean(summary && summary !== ctx.workerInfo.entry.task);
   if (summary) fields.task = summary;
 
   try {
@@ -265,7 +272,7 @@ function applyAndLog(
   // Skip the dashboard cascade when nothing visible changed — pretooluse and
   // posttooluse fire on every Claude tool call and dominate hook traffic, but
   // most don't flip agentStatus (the cs guards above narrow the writes).
-  if (stateChanged) refreshDashboard();
+  if (stateChanged || taskChanged) refreshDashboard();
 }
 
 // ---------------------------------------------------------------------------
