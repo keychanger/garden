@@ -590,9 +590,9 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
 
   const launchPlan: WorkerLaunchPlan = {
     ...preflightPlan,
-    model: resolvedModel,
+    model: resolvedModel ?? preflightPlan.model,
     ultracode: ultracode || undefined,
-    effort: effectiveEffort,
+    effort: effectiveEffort ?? preflightPlan.effort,
   };
 
   // Write the bootstrap script that handles slow setup (git fetch, worktree

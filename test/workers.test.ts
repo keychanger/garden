@@ -1168,6 +1168,19 @@ describe("newWorker", () => {
     }));
   });
 
+  it("harness: preserves Codex model and effort defaults in the bootstrap plan", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ harness: "codex" });
+    const call = vi.mocked(buildWorktreeBootstrapScript).mock.calls[0];
+    expect(call[7]).toEqual(expect.objectContaining({
+      launchPlan: expect.objectContaining({
+        harness: "codex",
+        model: "gpt-5.6-sol",
+        effort: "high",
+      }),
+    }));
+  });
+
   it("harness: resolves a structured default launch plan for a plain worker", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     newWorker();
