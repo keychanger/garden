@@ -1181,6 +1181,23 @@ describe("newWorker", () => {
     }));
   });
 
+  it("harness: an explicit model/effort still outranks the Codex launch defaults", () => {
+    // The tuning default is the FLOOR, not an override — it fills the gap only
+    // when nothing more specific resolved above it. Guards the direction of the
+    // fallback: swapping the operands would leave the default case above green
+    // while silently pinning every codex worker to gpt-5.6-sol/high.
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ harness: "codex", model: "gpt-5.1-codex", effort: "low" });
+    const call = vi.mocked(buildWorktreeBootstrapScript).mock.calls[0];
+    expect(call[7]).toEqual(expect.objectContaining({
+      launchPlan: expect.objectContaining({
+        harness: "codex",
+        model: "gpt-5.1-codex",
+        effort: "low",
+      }),
+    }));
+  });
+
   it("harness: resolves a structured default launch plan for a plain worker", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     newWorker();
