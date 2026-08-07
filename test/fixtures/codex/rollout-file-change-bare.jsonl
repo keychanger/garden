@@ -1,0 +1,3 @@
+{"type":"session_meta","timestamp":"2026-08-07T16:30:01.000Z","payload":{"session_id":"019fdd07-0000-7403-913a-07f107e85f9c","cli_version":"0.147.0"}}
+{"type":"event_msg","timestamp":"2026-08-07T16:30:02.000Z","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"user-1","content":[{"type":"text","text":"Apply the patch."}]}}}
+{"type":"event_msg","timestamp":"2026-08-07T16:30:09.000Z","payload":{"type":"item_completed","item":{"type":"FileChange","id":"exec-1","changes":{}}}}

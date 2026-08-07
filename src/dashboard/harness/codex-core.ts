@@ -277,11 +277,12 @@ export const codexCore: HarnessCore = {
 
   // Parse Codex's rollout JSONL into the neutral Turn[] model (worker-path
   // history view). Line envelope {type, timestamp, payload}; the operator's
-  // prompts and assistant text use event_msg/user_message and /agent_message
-  // through Codex 0.146, then event_msg/item_completed with UserMessage and
-  // AgentMessage items in 0.147. Tool activity remains response_item/
-  // function_call and /custom_tool_call, and an applied edit is an
-  // event_msg/patch_apply_end.
+  // prompts, assistant text, and applied edits use event_msg/user_message,
+  // /agent_message and /patch_apply_end through Codex 0.146, then
+  // event_msg/item_completed with UserMessage, AgentMessage and FileChange
+  // items in 0.147 (the FileChange item carries the same `changes` map the
+  // patch_apply_end event did). Tool activity remains response_item/
+  // function_call and /custom_tool_call in both.
   //
   // Structure mirrors readConversation (conversation.ts) exactly, because the
   // history view is a SUMMARY, not a transcript dump. Two things follow from
@@ -343,16 +344,21 @@ export const codexCore: HarnessCore = {
 
       if (rec.type === "response_item" && (p.type === "function_call" || p.type === "custom_tool_call")) {
         pending.tools.push(...codexToolUses(p));
-      } else if (rec.type === "event_msg" && p.type === "patch_apply_end") {
-        pending.tools.push(...editToolUses(changedPaths(p.changes)));
-      } else if (rec.type === "event_msg" && p.type === "web_search_end") {
+        continue;
+      }
+      if (rec.type === "event_msg" && p.type === "web_search_end") {
         pending.tools.push({ name: "WebSearch", input: {} });
-      } else {
-        const agentMessage = codexAgentMessage(rec);
-        if (agentMessage) {
-          if (!pending.firstText) pending.firstText = agentMessage;
-          if (ts) pending.ts = ts;
-        }
+        continue;
+      }
+      const changed = codexAppliedChanges(rec);
+      if (changed) {
+        pending.tools.push(...editToolUses(changed));
+        continue;
+      }
+      const agentMessage = codexAgentMessage(rec);
+      if (agentMessage) {
+        if (!pending.firstText) pending.firstText = agentMessage;
+        if (ts) pending.ts = ts;
       }
     }
     flush();
@@ -420,6 +426,7 @@ interface CodexPayload {
 interface CodexCompletedItem {
   type?: unknown;
   content?: unknown;
+  changes?: unknown;
 }
 
 function codexUserMessage(rec: CodexLine): { text: string; image: boolean } | null {
@@ -445,6 +452,18 @@ function codexAgentMessage(rec: CodexLine): string | null {
   if (p.type === "agent_message") return typeof p.message === "string" ? p.message : null;
   const item = completedItem(p, "AgentMessage");
   return item ? completedItemText(item) : null;
+}
+
+// The paths an applied edit touched, or null when this record is not one.
+// Empty-but-present is meaningful and distinct from null: an edit whose paths
+// could not be read still has to register as an edit (editToolUses renders
+// that as the generic "edited files").
+function codexAppliedChanges(rec: CodexLine): string[] | null {
+  const p = rec.payload;
+  if (!p || rec.type !== "event_msg") return null;
+  if (p.type === "patch_apply_end") return changedPaths(p.changes);
+  const item = completedItem(p, "FileChange");
+  return item ? changedPaths(item.changes) : null;
 }
 
 function completedItem(p: CodexPayload, type: string): CodexCompletedItem | null {

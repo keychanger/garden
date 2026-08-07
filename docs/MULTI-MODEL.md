@@ -771,11 +771,20 @@ to the cwd basename — which for a garden worktree is the worker's own
 name. That is why the summary is derived from the rollout
 (`readActivity`) rather than configured.
 
-Verified 2026-08-07 (codex 0.147.0): rollout user and assistant messages
-moved from `event_msg/user_message` and `event_msg/agent_message` to
-`event_msg/item_completed` records carrying `UserMessage` and `AgentMessage`
-items. `readTurns` and the opening-prompt fallback accept both envelopes so
-existing histories remain readable across the CLI upgrade.
+Verified 2026-08-07 (codex 0.147.0): rollout user messages, assistant
+messages, and applied edits moved from `event_msg/user_message`,
+`event_msg/agent_message`, and `event_msg/patch_apply_end` to
+`event_msg/item_completed` records carrying `UserMessage`, `AgentMessage`,
+and `FileChange` items — the `FileChange` item carries the same `changes`
+map the `patch_apply_end` event did. The cutover is clean (the day before
+the upgrade: 9667 `patch_apply_end`, zero `FileChange`; the day after: the
+reverse), so all three are read from both envelopes: `readTurns` and the
+opening-prompt fallback accept either, and existing histories stay readable
+across the upgrade. Tool activity did NOT move — it is still
+`response_item/function_call` and `/custom_tool_call`, which is also how an
+edit's originating `exec` call still arrives; only the applied-edit event
+carrying the touched paths changed shape, and missing it leaves a coding
+turn summarized by everything except the files it edited.
 
 Reviewer-first slices (each independently mergeable, Claude fleet
 byte-identical, full gate green):

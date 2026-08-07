@@ -539,10 +539,14 @@ describe("codex adapter dialect", () => {
     });
   });
 
-  it("readTurns parses current item_completed message records", async () => {
+  // Codex 0.147 moved prompts, assistant text AND applied edits into
+  // event_msg/item_completed items. Missing the edit half leaves a coding turn
+  // summarized by everything except the thing it did.
+  it("readTurns parses current item_completed message and file-change records", async () => {
     const { getHarnessCore } = await importCore();
     const fixture = path.join(HERE, "fixtures/codex/rollout-item-completed.jsonl");
     const turns = getHarnessCore("codex").readTurns(fixture);
+    // Two AgentMessages (commentary + final_answer) still fold into ONE turn.
     expect(turns).toHaveLength(2);
     expect(turns[0]).toMatchObject({
       role: "user",
@@ -551,9 +555,19 @@ describe("codex adapter dialect", () => {
     });
     expect(turns[1]).toMatchObject({
       role: "assistant",
-      text: "searched the codebase",
-      verb: "planned",
+      text: "edited codex-core.ts",
+      verb: "worked",
     });
+  });
+
+  // The FileChange item carries the same `changes` map patch_apply_end did, so
+  // an edit whose paths are unreadable still registers as an edit.
+  it("readTurns names an item_completed edit with no readable paths", async () => {
+    const { getHarnessCore } = await importCore();
+    const fixture = path.join(HERE, "fixtures/codex/rollout-file-change-bare.jsonl");
+    const turns = getHarnessCore("codex").readTurns(fixture);
+    expect(turns).toHaveLength(2);
+    expect(turns[1]).toMatchObject({ role: "assistant", text: "edited files" });
   });
 
   it("readTurns tags a tool-only turn (no edit) as planned", async () => {
