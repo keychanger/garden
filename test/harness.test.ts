@@ -539,6 +539,23 @@ describe("codex adapter dialect", () => {
     });
   });
 
+  it("readTurns parses current item_completed message records", async () => {
+    const { getHarnessCore } = await importCore();
+    const fixture = path.join(HERE, "fixtures/codex/rollout-item-completed.jsonl");
+    const turns = getHarnessCore("codex").readTurns(fixture);
+    expect(turns).toHaveLength(2);
+    expect(turns[0]).toMatchObject({
+      role: "user",
+      text: "Fix the empty Codex history.",
+      image: true,
+    });
+    expect(turns[1]).toMatchObject({
+      role: "assistant",
+      text: "searched the codebase",
+      verb: "planned",
+    });
+  });
+
   it("readTurns tags a tool-only turn (no edit) as planned", async () => {
     const { getHarnessCore } = await importCore();
     const fixture = path.join(HERE, "fixtures/codex/rollout-planned.jsonl");
@@ -622,6 +639,12 @@ describe("codex readActivity (status-pane summary)", () => {
     // First line only — the seed briefing is a paragraph, the detail column a row.
     expect(getHarnessCore("codex").readActivity!(entryFor("rollout-sample.jsonl")))
       .toBe("Review calc.py for bugs and fix them.");
+  });
+
+  it("names a current-schema worker from its opening prompt", async () => {
+    const { getHarnessCore } = await importCore();
+    expect(getHarnessCore("codex").readActivity!(entryFor("rollout-item-completed.jsonl")))
+      .toBe("Fix the empty Codex history. [Image #1]");
   });
 
   it("keeps an established summary rather than re-reporting the opening prompt", async () => {

@@ -277,9 +277,11 @@ export const codexCore: HarnessCore = {
 
   // Parse Codex's rollout JSONL into the neutral Turn[] model (worker-path
   // history view). Line envelope {type, timestamp, payload}; the operator's
-  // prompts are event_msg/user_message, the assistant text is
-  // event_msg/agent_message, tool activity is response_item/function_call and
-  // /custom_tool_call, and an applied edit is an event_msg/patch_apply_end.
+  // prompts and assistant text use event_msg/user_message and /agent_message
+  // through Codex 0.146, then event_msg/item_completed with UserMessage and
+  // AgentMessage items in 0.147. Tool activity remains response_item/
+  // function_call and /custom_tool_call, and an applied edit is an
+  // event_msg/patch_apply_end.
   //
   // Structure mirrors readConversation (conversation.ts) exactly, because the
   // history view is a SUMMARY, not a transcript dump. Two things follow from
@@ -324,10 +326,9 @@ export const codexCore: HarnessCore = {
       if (!p || typeof p !== "object") continue;
       const ts = rec.timestamp ?? "";
 
-      if (rec.type === "event_msg" && p.type === "user_message") {
-        const text = typeof p.message === "string" ? p.message : joinTextElements(p.text_elements);
-        const image = Boolean((p.images?.length ?? 0) || (p.local_images?.length ?? 0));
-        const turn = promptTurn(text, ts, image);
+      const userMessage = codexUserMessage(rec);
+      if (userMessage) {
+        const turn = promptTurn(userMessage.text, ts, userMessage.image);
         if (!turn) continue;
         flush();
         turns.push(turn);
@@ -346,9 +347,12 @@ export const codexCore: HarnessCore = {
         pending.tools.push(...editToolUses(changedPaths(p.changes)));
       } else if (rec.type === "event_msg" && p.type === "web_search_end") {
         pending.tools.push({ name: "WebSearch", input: {} });
-      } else if (rec.type === "event_msg" && p.type === "agent_message") {
-        if (!pending.firstText && typeof p.message === "string") pending.firstText = p.message;
-        if (ts) pending.ts = ts;
+      } else {
+        const agentMessage = codexAgentMessage(rec);
+        if (agentMessage) {
+          if (!pending.firstText) pending.firstText = agentMessage;
+          if (ts) pending.ts = ts;
+        }
       }
     }
     flush();
@@ -410,6 +414,60 @@ interface CodexPayload {
   arguments?: unknown;
   input?: unknown;
   changes?: unknown;
+  item?: unknown;
+}
+
+interface CodexCompletedItem {
+  type?: unknown;
+  content?: unknown;
+}
+
+function codexUserMessage(rec: CodexLine): { text: string; image: boolean } | null {
+  const p = rec.payload;
+  if (!p || rec.type !== "event_msg") return null;
+  if (p.type === "user_message") {
+    return {
+      text: typeof p.message === "string" ? p.message : joinTextElements(p.text_elements),
+      image: Boolean((p.images?.length ?? 0) || (p.local_images?.length ?? 0)),
+    };
+  }
+  const item = completedItem(p, "UserMessage");
+  if (!item) return null;
+  return {
+    text: completedItemText(item),
+    image: completedItemHasImage(item),
+  };
+}
+
+function codexAgentMessage(rec: CodexLine): string | null {
+  const p = rec.payload;
+  if (!p || rec.type !== "event_msg") return null;
+  if (p.type === "agent_message") return typeof p.message === "string" ? p.message : null;
+  const item = completedItem(p, "AgentMessage");
+  return item ? completedItemText(item) : null;
+}
+
+function completedItem(p: CodexPayload, type: string): CodexCompletedItem | null {
+  if (p.type !== "item_completed" || !p.item || typeof p.item !== "object") return null;
+  const item = p.item as CodexCompletedItem;
+  return item.type === type ? item : null;
+}
+
+function completedItemText(item: CodexCompletedItem): string {
+  if (!Array.isArray(item.content)) return "";
+  return item.content
+    .map((block) => block && typeof block === "object" && typeof (block as { text?: unknown }).text === "string"
+      ? (block as { text: string }).text : "")
+    .join("");
+}
+
+function completedItemHasImage(item: CodexCompletedItem): boolean {
+  if (!Array.isArray(item.content)) return false;
+  return item.content.some((block) => {
+    if (!block || typeof block !== "object") return false;
+    const type = (block as { type?: unknown }).type;
+    return type === "local_image" || type === "image" || type === "input_image";
+  });
 }
 
 // --- tool mapping: Codex's vocabulary -> the neutral names summarizeTurn reads ---
@@ -616,10 +674,9 @@ function firstPromptLine(transcriptPath: string): string | null {
     } catch {
       continue;
     }
-    const p = rec.payload;
-    if (!p || rec.type !== "event_msg" || p.type !== "user_message") continue;
-    const text = typeof p.message === "string" ? p.message : joinTextElements(p.text_elements);
-    const condensed = condense(text);
+    const userMessage = codexUserMessage(rec);
+    if (!userMessage) continue;
+    const condensed = condense(userMessage.text);
     if (condensed) return condensed;
   }
   return null;
