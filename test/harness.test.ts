@@ -723,7 +723,9 @@ describe("codex -c hook injection (worker turn-end relay)", () => {
     expect(cmd).toMatch(/hooks\.UserPromptSubmit=.* prompt"/);
     expect(cmd).toMatch(/hooks\.Stop=.* stop"/);
     expect(cmd).toMatch(/hooks\.PostToolUse=.*posttooluse"/);
-    // Codex PreToolUse fires for every tool -> a working heartbeat, not asking.
+    // Codex PreToolUse fires for ordinary tools -> a working heartbeat. Its
+    // built-in request_user_input bypasses this hook and is watched via the
+    // rollout instead.
     expect(cmd).toMatch(/hooks\.PreToolUse=.*posttooluse"/);
     // PermissionRequest is the real blocked-on-operator signal.
     expect(cmd).toMatch(/hooks\.PermissionRequest=.*pretooluse"/);

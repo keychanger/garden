@@ -677,6 +677,16 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   still does not write `prState`: the cancel is the poller's, in
   `handleReviewing`. The marker is stamped once per pass and cleared by
   the cancel and by every review launch.
+- Codex `request_user_input` rollout state → `agentStatus = "asking"`
+  while the latest call has no matching `function_call_output`, then
+  `agentStatus = "working"` once that result arrives. Codex 0.147 does
+  not emit `PreToolUse` for this built-in plan-mode tool, so the watchdog
+  owns an `fs.watch` listener on `$CODEX_HOME/sessions` and reconciles the
+  changed rollout instead of polling. The completion only clears an
+  `asking` transition older than that result, so a later permission prompt
+  cannot be mistaken for the plan-mode question completing. As on the
+  Claude path, the bold-yellow row and plot flag are the signal; this is
+  not an alert-store failure.
 
 **The poller** writes `prState` in response to the events documented in
 "How transitions are detected." The poller is the only writer of
@@ -801,6 +811,10 @@ sequenceDiagram
     Hook->>StatusPane: SIGUSR1
     StatusPane->>User: shows "idle"
 ```
+
+For Codex plan mode, replace the `PreToolUse`/`PostToolUse` pair above
+with the rollout's `request_user_input` function call and matching output.
+The state transitions and dashboard rendering are otherwise identical.
 
 ## Known edge cases
 

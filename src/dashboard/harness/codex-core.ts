@@ -421,10 +421,55 @@ interface CodexPayload {
   images?: unknown[];
   local_images?: unknown[];
   name?: unknown;
+  call_id?: unknown;
   arguments?: unknown;
   input?: unknown;
   changes?: unknown;
   item?: unknown;
+}
+
+export interface CodexInputRequestState {
+  waiting: boolean;
+  changedAt: number;
+}
+
+const INPUT_REQUEST_TAIL_BYTES = 512 * 1024;
+
+export function readCodexInputRequestState(transcriptPath: string): CodexInputRequestState | null {
+  if (!isReadable(transcriptPath)) return null;
+  let tail: string;
+  try {
+    tail = readTail(transcriptPath, INPUT_REQUEST_TAIL_BYTES);
+  } catch {
+    return null;
+  }
+
+  let latestCallId = "";
+  let waiting = false;
+  let latestChangedAt = 0;
+  for (const line of tail.split("\n")) {
+    if (!line.trim()) continue;
+    let rec: CodexLine;
+    try {
+      rec = JSON.parse(line) as CodexLine;
+    } catch {
+      continue;
+    }
+    if (rec.type !== "response_item" || !rec.payload) continue;
+    const callId = typeof rec.payload.call_id === "string" ? rec.payload.call_id : "";
+    const changedAt = Date.parse(rec.timestamp ?? "") || 0;
+    if (rec.payload.type === "function_call"
+        && rec.payload.name === "request_user_input" && callId) {
+      latestCallId = callId;
+      waiting = true;
+      latestChangedAt = changedAt;
+    } else if (rec.payload.type === "function_call_output"
+        && latestCallId === callId) {
+      waiting = false;
+      latestChangedAt = changedAt;
+    }
+  }
+  return latestCallId ? { waiting, changedAt: latestChangedAt } : null;
 }
 
 interface CodexCompletedItem {

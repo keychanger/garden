@@ -1,5 +1,5 @@
-// Liveness watchdog: a slow recurring tick with three duties, none of which
-// transitions worker state itself.
+// Liveness watchdog: a slow recurring tick with three duties, plus one
+// event-driven Codex rollout listener.
 //
 // 1. Re-poke projects holding workers stranded in active states. The state
 // machine is event-driven (docs/STATUS.md invariant 6) and a dropped one-shot
@@ -26,6 +26,10 @@
 // both cases — the watchdog never reconstructs an entry and never deletes a
 // tree; it makes the casualty visible so the operator can decide.
 //
+// The rollout listener translates Codex's hookless request_user_input call and
+// result records into the shared asking/working worker states. It is driven by
+// fs.watch writes, not by the recurring tick.
+//
 // Runs in a single hidden tmux window (_garden-watchdog), mirroring the usage
 // poller's lifecycle: the window being killed (reset or exit) is the
 // termination signal — no signal file, no FIFO. Unlike the usage poller it
@@ -43,6 +47,7 @@ import { sweepSpawnDrafts } from "./spawn-draft.js";
 import {
   captureCodexUsageLatest, probeCodexUsageIfStale, CODEX_PROBE_INTERVAL_MS,
 } from "./codex-usage.js";
+import { startCodexInputWatcher } from "./codex-input.js";
 import {
   commitsBehindOrigin, gardenInstallRepo, listWorktreeDirs, workerCleanupMarkerPath,
 } from "./git.js";
@@ -609,6 +614,7 @@ export async function runWatchdogLoop(): Promise<void> {
   // surface minimal; header.ts is heavy and this module is start/stop-imported by
   // poller.ts. Re-bakes the status pane each tick so time-in-state suffixes tick.
   const { refreshStatusElapsed, refreshDashboard } = await import("./header.js");
+  startCodexInputWatcher(refreshDashboard);
   const gardenRunner = resolveGardenRunner();
   // Damping state lives in the loop closure: it persists across ticks and
   // resets on window respawn, which is fine — a respawn is itself a restart

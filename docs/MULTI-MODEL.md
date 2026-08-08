@@ -546,6 +546,11 @@ Notes pinned down by the audit:
   per harness. No adapter may introduce polling to synthesize an event
   it lacks — a missing capability is declared, not papered over
   (STATUS.md's no-polling invariant binds adapters too).
+  Codex's built-in `request_user_input` is the one event-surface exception:
+  0.147 writes the pending call and answer to the rollout but fires no
+  `PreToolUse`/`PostToolUse`. Garden therefore watches rollout filesystem
+  writes and translates that call/result pair into the same normalized
+  asking/working events. This remains event-driven; no timer scans sessions.
 - **`installRuntimeConfig` owns the config-file dialect**:
   `.claude/settings.json` + `.claude/skills/` for Claude;
   `CODEX_HOME/config.toml` directory-trust + `AGENTS.md` for Codex
@@ -785,6 +790,12 @@ across the upgrade. Tool activity did NOT move — it is still
 edit's originating `exec` call still arrives; only the applied-edit event
 carrying the touched paths changed shape, and missing it leaves a coding
 turn summarized by everything except the files it edited.
+The plan-mode `request_user_input` built-in is likewise a
+`response_item/function_call`, followed by its matching
+`function_call_output` after the operator answers, but it bypasses Codex's
+otherwise catch-all `PreToolUse` hook. The watchdog's recursive rollout
+watcher detects that pending/result pair and drives Garden's ordinary
+`working → asking → working` status path immediately.
 
 Reviewer-first slices (each independently mergeable, Claude fleet
 byte-identical, full gate green):
