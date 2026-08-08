@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { batchUpdateWorkerFields, readRegistry, type WorkerEntry } from "./registry.js";
+import { readRegistry, updateWorkerFieldsIf, type WorkerEntry } from "./registry.js";
 import { codexHome, readCodexInputRequestState } from "./harness/codex-core.js";
 import { log } from "./log.js";
 
@@ -11,7 +11,8 @@ export function reconcileCodexInputRequests(changedTranscriptPath?: string): boo
   const updates: Array<{
     project: string;
     workerName: string;
-    fields: Partial<WorkerEntry>;
+    from: WorkerEntry["agentStatus"];
+    to: WorkerEntry["agentStatus"];
   }> = [];
   const now = Date.now();
 
@@ -37,23 +38,35 @@ export function reconcileCodexInputRequests(changedTranscriptPath?: string): boo
       }
       if (!agentStatus) continue;
 
-      updates.push({
-        project,
-        workerName: entry.name,
-        fields: { agentStatus, lastEventAt: now, lastStateChangeAt: now },
-      });
+      updates.push({ project, workerName: entry.name, from: entry.agentStatus, to: agentStatus });
     }
   }
 
   if (updates.length === 0) return false;
-  batchUpdateWorkerFields(updates);
+  // The scan above reads the registry unlocked, so a hook can land between it
+  // and the write — the Stop hook that idles a turn ending in the same instant
+  // the rollout records its last line is the realistic one, and stomping it
+  // back to `working` leaves the row spinning until the operator's next prompt.
+  // Re-check the status we decided from inside the lock and drop the update if
+  // another writer already moved it (same guard shape as absorbSleep).
+  let changed = false;
   for (const update of updates) {
+    const applied = updateWorkerFieldsIf(update.project, update.workerName, entry => (
+      entry.agentStatus === update.from
+        ? {
+          fields: { agentStatus: update.to, lastEventAt: now, lastStateChangeAt: now },
+          result: true,
+        }
+        : { fields: null, result: false }
+    ));
+    if (!applied) continue;
+    changed = true;
     log.info("codex-input", "reconciled request_user_input state", {
       worker: update.workerName,
-      data: { project: update.project, agentStatus: update.fields.agentStatus },
+      data: { project: update.project, agentStatus: update.to },
     });
   }
-  return true;
+  return changed;
 }
 
 export function startCodexInputWatcher(onStateChange: () => void): void {

@@ -8,17 +8,25 @@ import type { WorkerEntry } from "../src/dashboard/registry.js";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const workers: Record<string, WorkerEntry[]> = {};
 
+// Runs just before updateWorkerFieldsIf evaluates its decide callback, modeling
+// a concurrent hook write (a Stop that idled the turn) landing between
+// reconcileCodexInputRequests' unlocked scan and its locked write — the race the
+// inner status re-check defends.
+let onUpdate: (() => void) | undefined;
+
 vi.mock("../src/dashboard/registry.js", () => ({
   readRegistry: vi.fn(() => ({ workers })),
-  batchUpdateWorkerFields: vi.fn((updates: Array<{
-    project: string;
-    workerName: string;
-    fields: Partial<WorkerEntry>;
-  }>) => {
-    for (const update of updates) {
-      const entry = workers[update.project]?.find(candidate => candidate.name === update.workerName);
-      if (entry) Object.assign(entry, update.fields);
-    }
+  updateWorkerFieldsIf: vi.fn((
+    project: string,
+    workerName: string,
+    decide: (entry: WorkerEntry) => { fields: Partial<WorkerEntry> | null; result: unknown },
+  ) => {
+    onUpdate?.();
+    const entry = workers[project]?.find(candidate => candidate.name === workerName);
+    if (!entry) return undefined;
+    const decision = decide(entry);
+    if (decision.fields !== null) Object.assign(entry, decision.fields);
+    return decision.result;
   }),
 }));
 
@@ -36,7 +44,7 @@ import {
   reconcileCodexInputRequests,
   startCodexInputWatcher,
 } from "../src/dashboard/codex-input.js";
-import { batchUpdateWorkerFields } from "../src/dashboard/registry.js";
+import { updateWorkerFieldsIf } from "../src/dashboard/registry.js";
 
 const requestedAt = Date.parse("2026-08-07T23:35:24.483Z");
 const answeredAt = Date.parse("2026-08-07T23:36:04.112Z");
@@ -59,6 +67,7 @@ function entry(fields: Partial<WorkerEntry> = {}): WorkerEntry {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  onUpdate = undefined;
   for (const project of Object.keys(workers)) delete workers[project];
 });
 
@@ -94,7 +103,23 @@ describe("reconcileCodexInputRequests", () => {
 
     expect(reconcileCodexInputRequests()).toBe(false);
     expect(worker.agentStatus).toBe("asking");
-    expect(batchUpdateWorkerFields).not.toHaveBeenCalled();
+    expect(updateWorkerFieldsIf).not.toHaveBeenCalled();
+  });
+
+  it("drops the update when a hook moved the worker between the scan and the write", () => {
+    // The Stop hook idles a turn that ended while the answered rollout was
+    // still being reconciled. Writing `working` over that would leave the row
+    // spinning until the operator's next prompt, with nothing to correct it.
+    const worker = entry({
+      agentStatus: "asking",
+      lastStateChangeAt: requestedAt,
+      transcriptPath: fixture("rollout-answered-input.jsonl"),
+    });
+    workers.garden = [worker];
+    onUpdate = () => { worker.agentStatus = "idle"; };
+
+    expect(reconcileCodexInputRequests()).toBe(false);
+    expect(worker.agentStatus).toBe("idle");
   });
 
   it("ignores Claude workers and inactive Codex workers", () => {
@@ -104,7 +129,7 @@ describe("reconcileCodexInputRequests", () => {
     ];
 
     expect(reconcileCodexInputRequests()).toBe(false);
-    expect(batchUpdateWorkerFields).not.toHaveBeenCalled();
+    expect(updateWorkerFieldsIf).not.toHaveBeenCalled();
   });
 });
 
