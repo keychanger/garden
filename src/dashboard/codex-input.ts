@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { readRegistry, updateWorkerFieldsIf, type WorkerEntry } from "./registry.js";
-import { codexHome, readCodexInputRequestState } from "./harness/codex-core.js";
+import { codexHome, readCodexInputRequestState, readCodexTurnState } from "./harness/codex-core.js";
 import { log } from "./log.js";
 
 const WATCH_DEBOUNCE_MS = 250;
@@ -27,14 +27,35 @@ export function reconcileCodexInputRequests(changedTranscriptPath?: string): boo
         continue;
       }
       const input = readCodexInputRequestState(entry.transcriptPath);
-      if (!input) continue;
 
       let agentStatus: WorkerEntry["agentStatus"] | undefined;
-      if (input.waiting && entry.agentStatus === "working") {
+      if (input?.waiting && entry.agentStatus === "working") {
         agentStatus = "asking";
-      } else if (!input.waiting && entry.agentStatus === "asking"
+      } else if (input && !input.waiting && entry.agentStatus === "asking"
           && input.changedAt >= (entry.lastStateChangeAt ?? 0)) {
         agentStatus = "working";
+      } else if (!input?.waiting && entry.agentStatus === "working") {
+        // Stand in for the Stop hook Codex did not fire. `working` outlives the
+        // turn whenever the last tool call lands after the turn's final Stop
+        // (see readCodexTurnState), and nothing else ever clears it: the worker
+        // is parked at its prompt, so no further hook fires unprompted, and the
+        // merge gate refuses to touch a worktree it believes an agent is
+        // editing — a silent stall until the operator notices.
+        //
+        // The freshness guard is what keeps this from racing a turn that just
+        // started: a new prompt writes `working` with lastEventAt now, while
+        // the rollout still ends at the PREVIOUS turn's task_complete, so an
+        // unguarded heal would idle a worker that is genuinely running.
+        //
+        // It compares lastEventAt, NOT lastStateChangeAt: the latter is stamped
+        // by prState transitions too, so a worker that goes on to `reviewing`
+        // and `merge-pending` carries a lastStateChangeAt minutes NEWER than the
+        // turn end it is waiting to have recognized — which is precisely the
+        // stalled shape, and would leave the heal permanently out of reach.
+        const turn = readCodexTurnState(entry.transcriptPath);
+        if (turn?.complete && turn.changedAt >= (entry.lastEventAt ?? 0)) {
+          agentStatus = "idle";
+        }
       }
       if (!agentStatus) continue;
 
@@ -61,7 +82,9 @@ export function reconcileCodexInputRequests(changedTranscriptPath?: string): boo
     ));
     if (!applied) continue;
     changed = true;
-    log.info("codex-input", "reconciled request_user_input state", {
+    log.info("codex-input", update.to === "idle"
+      ? "reconciled turn end missed by the Stop hook"
+      : "reconciled request_user_input state", {
       worker: update.workerName,
       data: { project: update.project, agentStatus: update.to },
     });

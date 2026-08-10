@@ -1,0 +1,5 @@
+{"timestamp":"2026-08-09T09:36:43.187Z","ordinal":901,"type":"response_item","payload":{"type":"function_call","name":"send_message","call_id":"call_send_1","arguments":"{\"text\":\"Pushed commit 99308d2.\"}"}}
+{"timestamp":"2026-08-09T09:36:43.419Z","ordinal":902,"type":"response_item","payload":{"type":"function_call_output","call_id":"call_send_1"}}
+{"timestamp":"2026-08-09T09:36:46.864Z","ordinal":903,"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Worktree is clean and fully pushed."}]}}
+{"timestamp":"2026-08-09T09:36:46.878Z","ordinal":904,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1200,"output_tokens":340}}}}
+{"timestamp":"2026-08-09T09:36:46.882Z","ordinal":905,"type":"event_msg","payload":{"type":"task_complete"}}

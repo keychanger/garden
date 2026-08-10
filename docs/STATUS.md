@@ -687,6 +687,23 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   cannot be mistaken for the plan-mode question completing. As on the
   Claude path, the bold-yellow row and plot flag are the signal; this is
   not an alert-store failure.
+- Codex rollout turn end → `agentStatus = "idle"` when a `working` worker's
+  rollout has no `response_item` after its newest `task_complete`. Unlike
+  Claude Code's, Codex's `Stop` hook is **not** reliably the last event of a
+  turn: Codex emits `task_complete` several times per operator turn and fires
+  `Stop` on only some of them, while `PostToolUse` keeps firing for tool calls
+  that land after a `Stop`. When the final tool activity follows the turn's
+  last `Stop`, `agentStatus` is left at `working` with no hook remaining to
+  clear it — the worker is parked at its prompt, so nothing fires unprompted.
+  Codex's own record is therefore the authoritative turn-end signal, read by
+  the same `fs.watch` listener. The freshness guard compares `lastEventAt`,
+  **not** `lastStateChangeAt`: the latter is stamped by `prState` transitions
+  too, so a stalled worker that reached `merge-pending` carries a
+  `lastStateChangeAt` newer than the turn end it needs recognized, which would
+  put the heal permanently out of reach for exactly the workers that need it.
+  Observed 2026-08-09: a wolf worker held `merge-pending` for 30 hours because
+  `handleMergePending` will not touch a worktree it believes an agent is
+  editing, and that defer is logged at debug only.
 
 **The poller** writes `prState` in response to the events documented in
 "How transitions are detected." The poller is the only writer of

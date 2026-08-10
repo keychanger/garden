@@ -472,6 +472,59 @@ export function readCodexInputRequestState(transcriptPath: string): CodexInputRe
   return latestCallId ? { waiting, changedAt: latestChangedAt } : null;
 }
 
+export interface CodexTurnState {
+  complete: boolean;
+  changedAt: number;
+}
+
+// Whether the rollout's newest activity is a finished turn. This is the
+// authoritative turn-end signal for a Codex worker, and it exists because
+// Codex's `Stop` hook is NOT reliably the last event of a turn the way Claude
+// Code's is: Codex emits `task_complete` several times per operator turn (21
+// times in the rollout that motivated this) and fires `Stop` on only some of
+// them, while `PostToolUse` keeps firing for tool calls that land AFTER a
+// Stop. Observed 2026-08-09 on codex 0.147: a worker fired Stop (garden wrote
+// `idle`), then called `send_message` 37s later (garden wrote `working` off
+// PostToolUse), then reached its real `task_complete` 3.7s after that with no
+// second Stop — leaving `agentStatus: "working"` with nothing to clear it and
+// stalling the merge gate for 30 hours. Reading Codex's own record is the only
+// signal that survives a missed hook.
+//
+// `response_item` is the activity marker (every tool call, reasoning block and
+// assistant message is one) and `task_complete` the terminator, so the turn is
+// over exactly when no response_item follows the newest task_complete. The
+// trailing `token_count` event_msg that Codex writes alongside task_complete is
+// not activity and is correctly ignored.
+export function readCodexTurnState(transcriptPath: string): CodexTurnState | null {
+  if (!isReadable(transcriptPath)) return null;
+  let tail: string;
+  try {
+    tail = readTail(transcriptPath, INPUT_REQUEST_TAIL_BYTES);
+  } catch {
+    return null;
+  }
+
+  let latestActivityAt = 0;
+  let latestCompleteAt = 0;
+  for (const line of tail.split("\n")) {
+    if (!line.trim()) continue;
+    let rec: CodexLine;
+    try {
+      rec = JSON.parse(line) as CodexLine;
+    } catch {
+      continue;
+    }
+    const at = Date.parse(rec.timestamp ?? "") || 0;
+    if (rec.type === "response_item") {
+      latestActivityAt = Math.max(latestActivityAt, at);
+    } else if (rec.type === "event_msg" && rec.payload?.type === "task_complete") {
+      latestCompleteAt = Math.max(latestCompleteAt, at);
+    }
+  }
+  if (latestCompleteAt === 0) return null;
+  return { complete: latestCompleteAt >= latestActivityAt, changedAt: latestCompleteAt };
+}
+
 interface CodexCompletedItem {
   type?: unknown;
   content?: unknown;

@@ -48,6 +48,8 @@ import { updateWorkerFieldsIf } from "../src/dashboard/registry.js";
 
 const requestedAt = Date.parse("2026-08-07T23:35:24.483Z");
 const answeredAt = Date.parse("2026-08-07T23:36:04.112Z");
+const turnActivityAt = Date.parse("2026-08-09T09:36:43.187Z");
+const turnCompleteAt = Date.parse("2026-08-09T09:36:46.882Z");
 
 function fixture(name: string): string {
   return path.join(HERE, "fixtures", "codex", name);
@@ -120,6 +122,96 @@ describe("reconcileCodexInputRequests", () => {
 
     expect(reconcileCodexInputRequests()).toBe(false);
     expect(worker.agentStatus).toBe("idle");
+  });
+
+  // Codex fires `Stop` on only some of the several `task_complete` events it
+  // emits per turn, and keeps firing PostToolUse afterwards — so `working` can
+  // outlive the turn with no hook left to clear it. Observed 2026-08-09: a
+  // worker stalled 30h in merge-pending because the merge gate refuses to touch
+  // a worktree it believes an agent is editing.
+  it("idles a Codex worker whose rollout shows the turn already ended", () => {
+    const worker = entry({
+      agentStatus: "working",
+      lastEventAt: turnActivityAt,
+      lastStateChangeAt: turnActivityAt,
+      transcriptPath: fixture("rollout-turn-complete.jsonl"),
+    });
+    workers.garden = [worker];
+
+    expect(reconcileCodexInputRequests()).toBe(true);
+    expect(worker.agentStatus).toBe("idle");
+  });
+
+  it("heals a worker whose prState advanced after the turn ended", () => {
+    // The stalled shape from 2026-08-09: the premature Stop launched a review,
+    // so reviewing -> merge-pending stamped lastStateChangeAt minutes AFTER the
+    // real task_complete. Keying the freshness guard on lastStateChangeAt puts
+    // the heal permanently out of reach for exactly the workers that need it.
+    const worker = entry({
+      agentStatus: "working",
+      prState: "merge-pending",
+      lastEventAt: turnActivityAt,
+      lastStateChangeAt: turnCompleteAt + 219_000,
+      transcriptPath: fixture("rollout-turn-complete.jsonl"),
+    });
+    workers.garden = [worker];
+
+    expect(reconcileCodexInputRequests()).toBe(true);
+    expect(worker.agentStatus).toBe("idle");
+  });
+
+  it("leaves working alone while activity follows the newest task_complete", () => {
+    const worker = entry({
+      agentStatus: "working",
+      lastStateChangeAt: 0,
+      transcriptPath: fixture("rollout-turn-resumed.jsonl"),
+    });
+    workers.garden = [worker];
+
+    expect(reconcileCodexInputRequests()).toBe(false);
+    expect(worker.agentStatus).toBe("working");
+  });
+
+  it("leaves a freshly prompted worker working when the turn end predates it", () => {
+    // The rollout still ends at the PREVIOUS turn's task_complete when a new
+    // prompt lands, so an unguarded heal would idle a worker that is running.
+    const worker = entry({
+      agentStatus: "working",
+      lastEventAt: turnCompleteAt + 1000,
+      transcriptPath: fixture("rollout-turn-complete.jsonl"),
+    });
+    workers.garden = [worker];
+
+    expect(reconcileCodexInputRequests()).toBe(false);
+    expect(worker.agentStatus).toBe("working");
+  });
+
+  it("keeps asking rather than idling it on a completed turn", () => {
+    // request_user_input parks the turn; the rollout shows no activity after
+    // the last task_complete, but the worker is blocked on the operator.
+    const worker = entry({
+      agentStatus: "asking",
+      lastStateChangeAt: turnActivityAt,
+      transcriptPath: fixture("rollout-turn-complete.jsonl"),
+    });
+    workers.garden = [worker];
+
+    expect(reconcileCodexInputRequests()).toBe(false);
+    expect(worker.agentStatus).toBe("asking");
+  });
+
+  it("drops the idle heal when a hook moved the worker between scan and write", () => {
+    const worker = entry({
+      agentStatus: "working",
+      lastEventAt: turnActivityAt,
+      lastStateChangeAt: turnActivityAt,
+      transcriptPath: fixture("rollout-turn-complete.jsonl"),
+    });
+    workers.garden = [worker];
+    onUpdate = () => { worker.agentStatus = "asking"; };
+
+    expect(reconcileCodexInputRequests()).toBe(false);
+    expect(worker.agentStatus).toBe("asking");
   });
 
   it("ignores Claude workers and inactive Codex workers", () => {
