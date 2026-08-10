@@ -39,8 +39,10 @@ These are the only states the user sees in the status pane.
 `working` means exactly one thing: **Claude has received a submitted
 prompt and has not yet finished its response.**
 
-It starts the instant the `UserPromptSubmit` hook fires and ends the
-instant the `Stop` hook fires. Nothing else flips it.
+It starts the instant the `UserPromptSubmit` hook fires. Claude Code's
+authoritative end signal is `Stop`; for Codex, the rollout's final
+`task_complete` is the backstop when `Stop` is missed. Nothing heuristic
+flips it.
 
 Things that *are* working:
 - Generating tokens
@@ -94,6 +96,7 @@ stateDiagram-v2
     ready --> working : UserPromptSubmit
 
     working --> idle : Stop / no new commits
+    working --> idle : Codex task_complete / missed Stop
     working --> asking : PreToolUse (mid-turn user-input)
     working --> asking : PermissionRequest
     working --> reviewing : Stop / new commits
@@ -151,7 +154,7 @@ stateDiagram-v2
     end note
 ```
 
-The two exits from `working` via `Stop` are the core branching point:
+The two normal exits from `working` via `Stop` are the core branching point:
 - **No new commits** → `idle` (turn ended, ball in user's court)
 - **New commits** → `reviewing` (skips idle, enters review cycle)
 
@@ -167,6 +170,7 @@ a terminal state — it returns to `working` when the operator responds
 | loading       | ready         | Worker `SessionStart` hook                           |
 | ready         | working       | Worker `UserPromptSubmit` (first)                    |
 | working       | idle          | Worker `Stop`; no new commits ahead of base          |
+| working       | idle          | Codex rollout's final `task_complete`; `Stop` missed |
 | working       | asking        | Worker `PreToolUse` (mid-turn user-input tool)       |
 | working       | asking        | Worker `PermissionRequest`                           |
 | working       | reviewing     | Worker `Stop`; new commits ahead of base             |
@@ -701,6 +705,9 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   too, so a stalled worker that reached `merge-pending` carries a
   `lastStateChangeAt` newer than the turn end it needs recognized, which would
   put the heal permanently out of reach for exactly the workers that need it.
+  A successful heal also pokes the project's poller, as the normal `Stop` path
+  does, so a deferred merge gate re-evaluates immediately rather than waiting
+  for the watchdog's lost-delivery backstop.
   Observed 2026-08-09: a wolf worker held `merge-pending` for 30 hours because
   `handleMergePending` will not touch a worktree it believes an agent is
   editing, and that defer is logged at debug only.

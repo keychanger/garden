@@ -34,6 +34,10 @@ vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+vi.mock("../src/dashboard/poller-fifo.js", () => ({
+  triggerProjectPoll: vi.fn(),
+}));
+
 vi.mock("../src/dashboard/tmux.js", () => ({
   shellEscape: vi.fn((value: string) => value),
   pasteAndSubmit: vi.fn(),
@@ -45,6 +49,7 @@ import {
   startCodexInputWatcher,
 } from "../src/dashboard/codex-input.js";
 import { updateWorkerFieldsIf } from "../src/dashboard/registry.js";
+import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
 
 const requestedAt = Date.parse("2026-08-07T23:35:24.483Z");
 const answeredAt = Date.parse("2026-08-07T23:36:04.112Z");
@@ -124,6 +129,19 @@ describe("reconcileCodexInputRequests", () => {
     expect(worker.agentStatus).toBe("idle");
   });
 
+  it("does not clear a permission request that lands between scan and write", () => {
+    const worker = entry({
+      agentStatus: "asking",
+      lastStateChangeAt: requestedAt,
+      transcriptPath: fixture("rollout-answered-input.jsonl"),
+    });
+    workers.garden = [worker];
+    onUpdate = () => { worker.lastStateChangeAt = answeredAt + 1000; };
+
+    expect(reconcileCodexInputRequests()).toBe(false);
+    expect(worker.agentStatus).toBe("asking");
+  });
+
   // Codex fires `Stop` on only some of the several `task_complete` events it
   // emits per turn, and keeps firing PostToolUse afterwards — so `working` can
   // outlive the turn with no hook left to clear it. Observed 2026-08-09: a
@@ -140,6 +158,7 @@ describe("reconcileCodexInputRequests", () => {
 
     expect(reconcileCodexInputRequests()).toBe(true);
     expect(worker.agentStatus).toBe("idle");
+    expect(triggerProjectPoll).toHaveBeenCalledWith("garden");
   });
 
   it("heals a worker whose prState advanced after the turn ended", () => {
@@ -212,6 +231,20 @@ describe("reconcileCodexInputRequests", () => {
 
     expect(reconcileCodexInputRequests()).toBe(false);
     expect(worker.agentStatus).toBe("asking");
+  });
+
+  it("drops the idle heal when concurrent tool activity keeps the worker working", () => {
+    const worker = entry({
+      agentStatus: "working",
+      lastEventAt: turnActivityAt,
+      transcriptPath: fixture("rollout-turn-complete.jsonl"),
+    });
+    workers.garden = [worker];
+    onUpdate = () => { worker.lastEventAt = turnCompleteAt + 1000; };
+
+    expect(reconcileCodexInputRequests()).toBe(false);
+    expect(worker.agentStatus).toBe("working");
+    expect(triggerProjectPoll).not.toHaveBeenCalled();
   });
 
   it("ignores Claude workers and inactive Codex workers", () => {

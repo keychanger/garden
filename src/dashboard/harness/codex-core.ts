@@ -504,8 +504,8 @@ export function readCodexTurnState(transcriptPath: string): CodexTurnState | nul
     return null;
   }
 
-  let latestActivityAt = 0;
-  let latestCompleteAt = 0;
+  let complete: boolean | null = null;
+  let changedAt = 0;
   for (const line of tail.split("\n")) {
     if (!line.trim()) continue;
     let rec: CodexLine;
@@ -514,15 +514,15 @@ export function readCodexTurnState(transcriptPath: string): CodexTurnState | nul
     } catch {
       continue;
     }
-    const at = Date.parse(rec.timestamp ?? "") || 0;
     if (rec.type === "response_item") {
-      latestActivityAt = Math.max(latestActivityAt, at);
+      complete = false;
     } else if (rec.type === "event_msg" && rec.payload?.type === "task_complete") {
-      latestCompleteAt = Math.max(latestCompleteAt, at);
+      complete = true;
+      changedAt = Date.parse(rec.timestamp ?? "") || 0;
     }
   }
-  if (latestCompleteAt === 0) return null;
-  return { complete: latestCompleteAt >= latestActivityAt, changedAt: latestCompleteAt };
+  if (complete === null || (complete && changedAt === 0)) return null;
+  return { complete, changedAt };
 }
 
 interface CodexCompletedItem {

@@ -3,6 +3,7 @@ import path from "node:path";
 import { readRegistry, updateWorkerFieldsIf, type WorkerEntry } from "./registry.js";
 import { codexHome, readCodexInputRequestState, readCodexTurnState } from "./harness/codex-core.js";
 import { log } from "./log.js";
+import { triggerProjectPoll } from "./poller-fifo.js";
 
 const WATCH_DEBOUNCE_MS = 250;
 
@@ -13,6 +14,8 @@ export function reconcileCodexInputRequests(changedTranscriptPath?: string): boo
     workerName: string;
     from: WorkerEntry["agentStatus"];
     to: WorkerEntry["agentStatus"];
+    guardField?: "lastEventAt" | "lastStateChangeAt";
+    guardValue?: number;
   }> = [];
   const now = Date.now();
 
@@ -59,7 +62,17 @@ export function reconcileCodexInputRequests(changedTranscriptPath?: string): boo
       }
       if (!agentStatus) continue;
 
-      updates.push({ project, workerName: entry.name, from: entry.agentStatus, to: agentStatus });
+      const guardField = agentStatus === "idle"
+        ? "lastEventAt"
+        : entry.agentStatus === "asking" ? "lastStateChangeAt" : undefined;
+      updates.push({
+        project,
+        workerName: entry.name,
+        from: entry.agentStatus,
+        to: agentStatus,
+        guardField,
+        guardValue: guardField ? entry[guardField] : undefined,
+      });
     }
   }
 
@@ -68,20 +81,23 @@ export function reconcileCodexInputRequests(changedTranscriptPath?: string): boo
   // and the write — the Stop hook that idles a turn ending in the same instant
   // the rollout records its last line is the realistic one, and stomping it
   // back to `working` leaves the row spinning until the operator's next prompt.
-  // Re-check the status we decided from inside the lock and drop the update if
-  // another writer already moved it (same guard shape as absorbSleep).
+  // Re-check the status and whichever freshness field informed the decision
+  // from inside the lock, and drop the update if another writer moved either.
   let changed = false;
   for (const update of updates) {
-    const applied = updateWorkerFieldsIf(update.project, update.workerName, entry => (
-      entry.agentStatus === update.from
+    const applied = updateWorkerFieldsIf(update.project, update.workerName, entry => {
+      const guardMatches = !update.guardField
+        || entry[update.guardField] === update.guardValue;
+      return entry.agentStatus === update.from && guardMatches
         ? {
           fields: { agentStatus: update.to, lastEventAt: now, lastStateChangeAt: now },
           result: true,
         }
-        : { fields: null, result: false }
-    ));
+        : { fields: null, result: false };
+    });
     if (!applied) continue;
     changed = true;
+    if (update.to === "idle") triggerProjectPoll(update.project);
     log.info("codex-input", update.to === "idle"
       ? "reconciled turn end missed by the Stop hook"
       : "reconciled request_user_input state", {
