@@ -546,11 +546,13 @@ Notes pinned down by the audit:
   per harness. No adapter may introduce polling to synthesize an event
   it lacks — a missing capability is declared, not papered over
   (STATUS.md's no-polling invariant binds adapters too).
-  Codex's built-in `request_user_input` is the one event-surface exception:
-  0.147 writes the pending call and answer to the rollout but fires no
-  `PreToolUse`/`PostToolUse`. Garden therefore watches rollout filesystem
-  writes and translates that call/result pair into the same normalized
-  asking/working events. This remains event-driven; no timer scans sessions.
+  Codex's rollout is the event-surface backstop for two signals its hooks do
+  not reliably carry. Codex 0.147 writes a built-in `request_user_input` call
+  and answer there but fires no `PreToolUse`/`PostToolUse`; Garden translates
+  that pair into the same normalized asking/working events. Codex can also
+  omit the final `Stop` after later tool activity, so a final `task_complete`
+  with no following `response_item` heals a stale `working` worker to `idle`.
+  Both paths are driven by rollout filesystem writes; no timer scans sessions.
 - **`installRuntimeConfig` owns the config-file dialect**:
   `.claude/settings.json` + `.claude/skills/` for Claude;
   `CODEX_HOME/config.toml` directory-trust + `AGENTS.md` for Codex
@@ -795,7 +797,10 @@ The plan-mode `request_user_input` built-in is likewise a
 `function_call_output` after the operator answers, but it bypasses Codex's
 otherwise catch-all `PreToolUse` hook. The watchdog's recursive rollout
 watcher detects that pending/result pair and drives Garden's ordinary
-`working → asking → working` status path immediately.
+`working → asking → working` status path immediately. The watcher also reads
+the rollout in append order: when no `response_item` follows the newest
+`task_complete`, it heals `working → idle` if the final `Stop` was missed and
+wakes the project poller so a deferred merge gate re-evaluates immediately.
 
 Reviewer-first slices (each independently mergeable, Claude fleet
 byte-identical, full gate green):
