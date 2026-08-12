@@ -191,12 +191,9 @@ describe("rebaseBranch (real git)", () => {
     expect(result.kind).toBe("conflict");
   });
 
-  // The lex/lost-light-pulse failure, 2026-08-12: a worker legitimately merged
-  // a sibling branch into its own, leaving the base tip as the merge commit's
-  // first parent. The branch was a pure fast-forward of the base, but plain
-  // `git rebase` flattened the merge and replayed the sibling's commits against
-  // a tree that already had them — an unwinnable conflict that burned the whole
-  // resolver budget.
+  // A worker may legitimately merge another branch into its own while still
+  // containing the current base tip. The branch can fast-forward onto the base,
+  // but a plain `git rebase` would unnecessarily flatten that merge.
   it("skips the rebase when the branch merged a sibling on top of the base tip", async () => {
     const { createWorktree, rebaseBranch } =
       await import("../../src/dashboard/git.js");

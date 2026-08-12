@@ -325,9 +325,9 @@ export type RebaseResult =
   | { kind: "conflict" }
   | { kind: "error"; error: string };
 
-// Merge commits in `origin/<base>..HEAD`. A plain `git rebase` DROPS these and
-// linearizes: every commit from the merged-in side is replayed one at a time
-// onto the base, against a tree that already contains their content. Used to
+// Merge commits in `origin/<base>..HEAD`. A plain `git rebase` drops these and
+// linearizes their commits; when the merged side came from the base, that can
+// also replay commits onto a tree that already contains their content. Used to
 // pick the rebase mode below.
 export function branchMergeCommits(worktreePath: string, baseBranch: string): string[] {
   try {

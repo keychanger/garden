@@ -25,8 +25,8 @@ abc1234 fix: something
 2. Run \`git rebase origin/main\` — except if
    \`git rev-list --merges origin/main..HEAD\` is non-empty, in which case the
    branch contains a merge commit and you must rebase with \`--rebase-merges\`. A plain
-   rebase drops the merge and replays every commit from the merged-in side against a tree
-   that already has their content, which produces conflicts that cannot be resolved.
+   rebase drops the merge topology and linearizes the merged-in commits; if they came from
+   the base, it can also replay them against a tree that already contains their content.
 
 3. If conflicts appear:
    - Read each conflict carefully and resolve it preserving the intent of both sides.
@@ -84,8 +84,8 @@ abc1234 fix: something
 2. Run \`git rebase origin/main\` — except if
    \`git rev-list --merges origin/main..HEAD\` is non-empty, in which case the
    branch contains a merge commit and you must rebase with \`--rebase-merges\`. A plain
-   rebase drops the merge and replays every commit from the merged-in side against a tree
-   that already has their content, which produces conflicts that cannot be resolved.
+   rebase drops the merge topology and linearizes the merged-in commits; if they came from
+   the base, it can also replay them against a tree that already contains their content.
 
 3. If conflicts appear:
    - Read each conflict carefully and resolve it preserving the intent of both sides.
