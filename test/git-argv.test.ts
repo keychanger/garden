@@ -361,7 +361,29 @@ describe("cleanWorktree", () => {
 });
 
 describe("rebaseBranch", () => {
+  // rebaseBranch probes the repo before choosing a rebase mode: `merge-base
+  // --is-ancestor` (has the branch already got the base tip?) and `rev-list
+  // --merges` (does it carry merge commits?). Stub both so each test states the
+  // branch shape it is exercising.
+  function stubBranch(opts: {
+    baseIsAncestor?: boolean;
+    merges?: string[];
+    rebaseFails?: string;
+  }) {
+    mockExec.mockImplementation((_cmd, args) => {
+      const argv = args as string[];
+      if (argv[0] === "merge-base") {
+        if (!opts.baseIsAncestor) throw new Error("not an ancestor");
+        return "";
+      }
+      if (argv[0] === "rev-list") return (opts.merges ?? []).join("\n");
+      if (argv[0] === "rebase" && opts.rebaseFails) throw new Error(opts.rebaseFails);
+      return "";
+    });
+  }
+
   it("returns 'ok' on successful rebase", () => {
+    stubBranch({});
     expect(rebaseBranch("/tmp/wt", "main")).toEqual({ kind: "ok" });
     expect(mockExec).toHaveBeenCalledWith(
       "git",
@@ -371,6 +393,7 @@ describe("rebaseBranch", () => {
   });
 
   it("uses the specified base branch", () => {
+    stubBranch({});
     rebaseBranch("/tmp/wt", "develop");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
@@ -379,25 +402,39 @@ describe("rebaseBranch", () => {
     );
   });
 
+  it("skips the rebase entirely when the branch already contains the base tip", () => {
+    stubBranch({ baseIsAncestor: true, merges: ["deadbee"] });
+    expect(rebaseBranch("/tmp/wt", "main")).toEqual({ kind: "up-to-date" });
+    expect(mockExec).not.toHaveBeenCalledWith(
+      "git",
+      expect.arrayContaining(["rebase"]),
+      expect.anything(),
+    );
+  });
+
+  it("preserves merge topology with --rebase-merges when the branch has a merge commit", () => {
+    stubBranch({ merges: ["deadbee"] });
+    expect(rebaseBranch("/tmp/wt", "main")).toEqual({ kind: "ok" });
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["rebase", "--rebase-merges", "origin/main"],
+      expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+  });
+
   it("returns 'conflict' when rebase has merge conflicts", () => {
-    mockExec.mockImplementation(() => {
-      throw new Error("CONFLICT (content): Merge conflict in file.ts");
-    });
+    stubBranch({ rebaseFails: "CONFLICT (content): Merge conflict in file.ts" });
     expect(rebaseBranch("/tmp/wt", "main")).toEqual({ kind: "conflict" });
   });
 
   it("returns 'conflict' when rebase could not apply a commit", () => {
-    mockExec.mockImplementation(() => {
-      throw new Error("error: could not apply abc1234... some commit message");
-    });
+    stubBranch({ rebaseFails: "error: could not apply abc1234... some commit message" });
     expect(rebaseBranch("/tmp/wt", "main")).toEqual({ kind: "conflict" });
   });
 
   it("returns an error result carrying the git error for non-conflict failures", () => {
     const msg = "fatal: Unable to create '.git/index.lock': File exists.";
-    mockExec.mockImplementation(() => {
-      throw new Error(msg);
-    });
+    stubBranch({ rebaseFails: msg });
     const result = rebaseBranch("/tmp/wt", "main");
     expect(result.kind).toBe("error");
     if (result.kind === "error") {

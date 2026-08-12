@@ -190,6 +190,72 @@ describe("rebaseBranch (real git)", () => {
     const result = rebaseBranch(wt, "main");
     expect(result.kind).toBe("conflict");
   });
+
+  // The lex/lost-light-pulse failure, 2026-08-12: a worker legitimately merged
+  // a sibling branch into its own, leaving the base tip as the merge commit's
+  // first parent. The branch was a pure fast-forward of the base, but plain
+  // `git rebase` flattened the merge and replayed the sibling's commits against
+  // a tree that already had them — an unwinnable conflict that burned the whole
+  // resolver budget.
+  it("skips the rebase when the branch merged a sibling on top of the base tip", async () => {
+    const { createWorktree, rebaseBranch } =
+      await import("../../src/dashboard/git.js");
+    git(env.repoPath, "checkout", "-b", "sibling");
+    fs.writeFileSync(path.join(env.repoPath, "sibling.txt"), "sibling\n");
+    git(env.repoPath, "add", "sibling.txt");
+    git(env.repoPath, "commit", "-m", "sibling work");
+    git(env.repoPath, "checkout", "main");
+
+    const wt = path.join(env.home, "wt", "merged");
+    createWorktree(env.repoPath, wt, "merged-branch");
+    fs.writeFileSync(path.join(wt, "worker.txt"), "worker\n");
+    git(wt, "add", "worker.txt");
+    git(wt, "commit", "-m", "worker work");
+    git(wt, "merge", "--no-ff", "sibling", "-m", "merge sibling");
+    git(wt, "fetch", "origin");
+    const mergeSha = git(wt, "rev-parse", "HEAD");
+
+    const result = rebaseBranch(wt, "main");
+
+    expect(result.kind).toBe("up-to-date");
+    // HEAD untouched: still the merge commit, still with the base tip reachable
+    // as its first parent.
+    expect(git(wt, "rev-parse", "HEAD")).toBe(mergeSha);
+    expect(git(wt, "rev-list", "--merges", "origin/main..HEAD")).toBe(mergeSha);
+  });
+
+  it("preserves the merge commit when the base advanced and a rebase is required", async () => {
+    const { createWorktree, rebaseBranch } =
+      await import("../../src/dashboard/git.js");
+    git(env.repoPath, "checkout", "-b", "sibling");
+    fs.writeFileSync(path.join(env.repoPath, "sibling.txt"), "sibling\n");
+    git(env.repoPath, "add", "sibling.txt");
+    git(env.repoPath, "commit", "-m", "sibling work");
+    git(env.repoPath, "checkout", "main");
+
+    const wt = path.join(env.home, "wt", "merged-behind");
+    createWorktree(env.repoPath, wt, "merged-behind-branch");
+    fs.writeFileSync(path.join(wt, "worker.txt"), "worker\n");
+    git(wt, "add", "worker.txt");
+    git(wt, "commit", "-m", "worker work");
+    git(wt, "merge", "--no-ff", "sibling", "-m", "merge sibling");
+
+    // Base advances after the merge, so the branch genuinely has to be replayed.
+    fs.writeFileSync(path.join(env.repoPath, "main-only.txt"), "main\n");
+    git(env.repoPath, "add", "main-only.txt");
+    git(env.repoPath, "commit", "-m", "main advance");
+    git(env.repoPath, "push", "origin", "main");
+    git(wt, "fetch", "origin");
+
+    const result = rebaseBranch(wt, "main");
+
+    expect(result.kind).toBe("ok");
+    // The branch now sits on the advanced base...
+    expect(git(wt, "rev-list", "--count", "HEAD..origin/main")).toBe("0");
+    // ...and the merge survived the replay rather than being flattened away.
+    expect(git(wt, "rev-list", "--merges", "origin/main..HEAD")).not.toBe("");
+    expect(git(wt, "log", "--format=%s", "origin/main..HEAD")).toContain("merge sibling");
+  });
 });
 
 describe("currentBranch (real git)", () => {

@@ -317,12 +317,55 @@ export function cleanWorktree(
 
 export type RebaseResult =
   | { kind: "ok" }
+  // The branch already contains the base tip, so there was nothing to replay
+  // and no rebase ran. Callers treat it exactly like `ok` — it exists so the
+  // skip is visible in logs and tests rather than indistinguishable from a
+  // rebase that did work.
+  | { kind: "up-to-date" }
   | { kind: "conflict" }
   | { kind: "error"; error: string };
 
-export function rebaseBranch(worktreePath: string, baseBranch: string): RebaseResult {
+// Merge commits in `origin/<base>..HEAD`. A plain `git rebase` DROPS these and
+// linearizes: every commit from the merged-in side is replayed one at a time
+// onto the base, against a tree that already contains their content. Used to
+// pick the rebase mode below.
+export function branchMergeCommits(worktreePath: string, baseBranch: string): string[] {
   try {
-    git(worktreePath, "rebase", `origin/${baseBranch}`);
+    const out = git(worktreePath, "rev-list", "--merges", `origin/${baseBranch}..HEAD`);
+    return out.split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+export function rebaseBranch(worktreePath: string, baseBranch: string): RebaseResult {
+  // Fast-forward short-circuit. When the base tip is already an ancestor of
+  // HEAD the branch sits strictly on top of the base and merging it is a pure
+  // fast-forward — but `git rebase` does NOT no-op here if the branch carries a
+  // merge commit (its fast-forward check requires linear history). It flattens
+  // the merge and replays the merged side's commits, which then conflict
+  // against content the tree already has. That is unwinnable for the resolver,
+  // so skip the rebase entirely: there is nothing to replay.
+  if (isAncestor(worktreePath, `origin/${baseBranch}`, "HEAD")) {
+    log.info("git", "branch already contains the base tip; skipping rebase", {
+      data: { worktreePath, baseBranch },
+    });
+    return { kind: "up-to-date" };
+  }
+  // The base advanced, so the branch really must be replayed. Preserve merge
+  // topology when it has any — `--rebase-merges` recreates the merge commits
+  // instead of flattening them.
+  const merges = branchMergeCommits(worktreePath, baseBranch);
+  const args = merges.length > 0
+    ? ["rebase", "--rebase-merges", `origin/${baseBranch}`]
+    : ["rebase", `origin/${baseBranch}`];
+  if (merges.length > 0) {
+    log.info("git", "rebasing with --rebase-merges to preserve merge topology", {
+      data: { worktreePath, baseBranch, mergeCommits: merges },
+    });
+  }
+  try {
+    git(worktreePath, ...args);
     return { kind: "ok" };
   } catch (err) {
     const msg = String(err);

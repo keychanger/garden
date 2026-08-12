@@ -2747,6 +2747,33 @@ describe("poll — merge-pending state", () => {
     );
   });
 
+  it("merges without a resolver when the branch already contains the base tip", () => {
+    // A branch that merged a sibling in (base tip as the merge commit's first
+    // parent) needs no rebase at all — rebaseBranch reports up-to-date and the
+    // queue must treat that like a clean rebase, not launch a resolver against
+    // an unwinnable replay. See git.ts rebaseBranch.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "up-to-date" });
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true, advanced: "worktree" });
+
+    poll("myproject");
+
+    expect(abortRebase).not.toHaveBeenCalled();
+    expect(newDashboardWindow).not.toHaveBeenCalledWith(
+      "_myproject-review-bold-ash",
+      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
+    );
+    expect(mergeToBase).toHaveBeenCalledWith("/repo/myproject", "bold-ash", "main", { project: "myproject", worker: "bold-ash" });
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merged" }),
+    );
+  });
+
   it("clears merged to working when the worker becomes active during finalization (race)", () => {
     // The worker is idle when the merge guard runs (so finalization proceeds),
     // but the operator prompts it mid-finalize. Simulate the hook flipping
