@@ -466,6 +466,37 @@ describe("handleClaudeHook — core events", () => {
     expect(entry.prState).toBeUndefined();
   });
 
+  it("stop with commits ahead does not queue review when cleanliness is indeterminate", async () => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "working",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+    });
+    setCwd("garden", "bold-ash");
+
+    const { execFileSync } = await import("node:child_process");
+    vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[] | undefined;
+      if (argv?.[0] === "rev-list") return "1" as unknown as Buffer;
+      if (argv?.[0] === "status") throw new Error("git status timed out");
+      return "" as unknown as Buffer;
+    });
+
+    handleClaudeHook("stop");
+
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(entry.agentStatus).toBe("idle");
+    expect(entry.pendingReviewAt).toBeUndefined();
+    expect(log.warn).toHaveBeenCalledWith(
+      "hook",
+      "stop hook skipped review (worktree not provably clean)",
+      expect.objectContaining({
+        worker: "bold-ash",
+        data: expect.objectContaining({ dirty: "indeterminate" }),
+      }),
+    );
+    expect(addAlert).not.toHaveBeenCalled();
+  });
+
   it("stop fires base-drift alert when rev-list against origin/<base> throws", async () => {
     seedWorker("garden", "bold-ash", {
       agentStatus: "working",

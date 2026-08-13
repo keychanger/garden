@@ -266,8 +266,9 @@ signals the status pane. They drive:
 - `ci-fixing → merge-pending`, `ci-fixing → failing` (ci-fix agent's `Stop`)
 
 The worker's `Stop` hook also pokes the project's poller FIFO if it sees
-new commits ahead of the base branch — so review starts immediately,
-without waiting for any tick.
+new commits ahead of the base branch on a clean worktree — so review starts
+immediately, without waiting for any tick. A dirty or indeterminate worktree
+does not queue review.
 
 **2. Worker push events** — a worker's `git push` completion pokes its
 project's poller FIFO via a pre-push hook installed in each worktree.
@@ -547,10 +548,10 @@ clock. Update the list above when you do.
    an internal `pushed` lifecycle state between "commits exist" and
    "reviewer launched". The current model collapses that gap: the worker's
    Stop hook sets `pendingReviewAt` (and pokes the poller FIFO) the moment
-   it observes commits ahead of base on a clean worktree, and the poller's next wake transitions
-   the worker directly to `reviewing`. The window is sub-second and not
-   user-visible. `pushed` does not appear in the registry, the renderer,
-   or the type system.
+   it observes commits ahead of base on a clean worktree, and the poller's
+   next wake transitions the worker directly to `reviewing`. The window is
+   sub-second and not user-visible. `pushed` does not appear in the registry,
+   the renderer, or the type system.
 
 6. **Every transition is event-triggered.** No transition is discovered
    by a recurring tick or fallback poll. The poller wakes only when
@@ -645,8 +646,9 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   it was set on (a later turn dirties the worktree; that turn's dirty
   `Stop` skips re-arming but cannot unset the stale flag),
   `handleWorking` re-checks cleanliness at the launch point and defers —
-  leaving `pendingReviewAt` set — until the tree is provably clean. If instead there are no commits ahead and
-  `.garden-done` is present (invariant 4 path 2), the Stop hook writes
+  leaving `pendingReviewAt` set — until the tree is provably clean. If
+  instead there are no commits ahead and `.garden-done` is present
+  (invariant 4 path 2), the Stop hook writes
   `prState = "done"` and pokes the poller once so `handleDone` runs the
   trail-off holistic-review trigger.
 - `PreToolUse` (matched to `AskUserQuestion`, `ExitPlanMode`) →

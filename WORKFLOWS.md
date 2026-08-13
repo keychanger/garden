@@ -1120,8 +1120,9 @@ Trellis uses the shared `workerHookHandlers` automatically —
 have the same semantics for every workflow; trellis-specific behavior lives in
 the poller state handlers. What `onTurnEnded` does for a vine:
 
-- **Stop with new commits ahead of base** — same as default: pokes the
-  poller FIFO, sets `pendingReviewAt`. Triggers an iteration.
+- **Stop with new commits ahead of base on a clean worktree** — same as
+  default: pokes the poller FIFO, sets `pendingReviewAt`. Triggers an
+  iteration. A dirty or indeterminate worktree does not queue review.
 - **Stop with no new commits ahead and no `.garden-done` and a remaining
   drift list from the previous review** — counts toward the **stagnation
   counter**. Three consecutive Stops with no commits → `failing` with
@@ -1215,6 +1216,9 @@ event, seeded with the last drift list.
        └────────────────────────────────────────────┘
 ```
 
+In this diagram, `Stop+commits` means commits ahead on a provably clean
+worktree; a dirty or indeterminate worktree remains idle until a clean Stop.
+
 Reading the diagram: the `merged → auto-continue → working` shared
 arrow above is *only* taken on `DRIFT`. On `ALIGNED`, the workflow
 writes `.garden-done` before `merge-pending`, which causes
@@ -1226,7 +1230,9 @@ the merge transition altogether. Only `DRIFT` re-enters `working`.
 
 1. **Trigger.** Worker pushes commits and the Stop hook fires (or the
    pre-push hook fires before Stop on slower disks). Stop hook sees
-   commits ahead of base, sets `pendingReviewAt`, pokes the poller.
+   commits ahead of base on a clean worktree, sets `pendingReviewAt`, and
+   pokes the poller. A dirty or indeterminate worktree waits for the next
+   clean-tree Stop.
 2. **Review.** Poller transitions `working → reviewing`. Launches a
    reviewer via `launchHeadlessAgent` with the **trellis review prompt**
    (see "Reviewer prompt"). Reviewer: rebases worker's branch onto
@@ -2480,6 +2486,9 @@ The metaphor: workers grow the codebase. Trellis-bound workers grow
        │                                │
        └────────────────────────────────┘
 ```
+
+In this diagram, `Stop+commits` means commits ahead on a provably clean
+worktree; a dirty or indeterminate worktree remains idle until a clean Stop.
 
 `done` has two paths: worker-declared (sentinel set during iter K) or
 budget-exhausted (iter K = max, sentinel auto-written by

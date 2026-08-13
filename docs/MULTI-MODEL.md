@@ -171,8 +171,8 @@ Distilled from the audit, in descending order of how load-bearing they are:
 
 1. **A turn-end signal.** The Stop hook is the *autonomous* entry point
    to the review/merge pipeline (`hooks/default.ts` `onTurnEnded` →
-   commits-ahead check → `pendingReviewAt` → FIFO poke). Operator
-   overrides exist (`garden kick`, trellis plant, internal re-review
+   commits-ahead + clean-worktree checks → `pendingReviewAt` → FIFO poke).
+   Operator overrides exist (`garden kick`, trellis plant, internal re-review
    re-entries also set `pendingReviewAt`), but a worker that never
    signals turn-end can never advance itself, and STATUS.md forbids
    fallback polling. This requirement is non-negotiable.
@@ -452,7 +452,7 @@ migration treatment:
   |---|---|---|
   | `session-start(source)` | SessionStart hook | `ready`/preserve-on-resume |
   | `prompt-submitted` | UserPromptSubmit hook | `working`, clears sentinels/`merged` |
-  | `turn-ended` | Stop hook; adapters also fire it from the pane-exit shim (today `_claude-hook stop` appended to launch commands) as a best-effort flush on graceful exit | `idle`, commits-ahead check, review entry |
+  | `turn-ended` | Stop hook; adapters also fire it from the pane-exit shim (today `_claude-hook stop` appended to launch commands) as a best-effort flush on graceful exit | `idle`, commits-ahead + clean-worktree checks, review entry |
   | `blocked-on-operator` | PermissionRequest / PreToolUse matchers / Notification | `asking` |
   | `tool-activity` | PostToolUse | heartbeat, self-heal `asking`→`working` |
   | `exited` | tmux pane-died handler (not a harness event) | `exited`, interrupt capture |
