@@ -390,7 +390,7 @@ The capture is driven from the **watchdog** tick (`watchdog.ts`), not the usage 
 The dashboard surfaces important events as alerts — persistent messages that require operator attention. Alerts are stored atomically in `~/.garden/sessions/dashboard.alerts.json` (same write-tmp-then-rename pattern as other state files), capped at 100 entries.
 
 **Events that generate alerts:**
-- Worker bootstrap could not fast-forward main checkout (stale main, dirty worktree)
+- Worker bootstrap could not fast-forward the main checkout (stale main, dirty worktree), or aborted because the requested base was missing with no usable origin default or origin could not be reached
 - Review process failure (Claude unavailable, timeout, unparseable output)
 - Reviewer or resolver exceeded the 60-minute wall-clock cap and was killed (typically a hung subprocess — e.g. tests with no timeout blocked by the sandbox — wedging the state machine)
 - Reviewer could not fix issues (FAILED verdict)
