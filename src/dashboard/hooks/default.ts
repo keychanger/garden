@@ -87,6 +87,25 @@ function hasRecentWorkerAlert(
   }
 }
 
+// True when `git status --porcelain` reports any tracked or untracked
+// (not-gitignored) change; null when the invocation fails, so the caller can
+// tell "provably clean" from "couldn't determine". Not git.ts's
+// isWorktreeDirty: that helper's 60s git timeout is sized for the poller,
+// and a hung git here stalls the Stop hook (see the rev-list call below).
+function worktreeHasUncommittedChanges(cwd: string): boolean | null {
+  try {
+    const out = execFileSync("git", ["status", "--porcelain"], {
+      cwd,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000,
+    });
+    return out.trim().length > 0;
+  } catch {
+    return null;
+  }
+}
+
 function routeStopHookEnd(projectName: string, workerName: string): void {
   const project = tryGetProject(projectName);
   if (!project) return;
@@ -107,6 +126,27 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
     }).trim();
     const ahead = parseInt(out, 10);
     if (Number.isFinite(ahead) && ahead > 0) {
+      // The reviewer certifies the committed snapshot of this same worktree,
+      // so a Stop that fires mid-work — an agent pausing to answer an operator
+      // question with uncommitted WIP on disk — must not queue a review: it
+      // would review a stale tree and force-push under live edits. Skip when
+      // any tracked or untracked change exists; the next clean-tree Stop
+      // re-arms. When cleanliness cannot be established, fail closed the same
+      // way. handleWorking re-checks at launch for the residual window where
+      // an earlier clean Stop's pendingReviewAt outlives a later dirty tree.
+      const dirty = worktreeHasUncommittedChanges(cwd);
+      if (dirty !== false) {
+        const level = dirty === null ? "warn" : "info";
+        log[level]("hook", "stop hook skipped review (worktree not provably clean)", {
+          worker: workerName,
+          data: {
+            project: projectName,
+            commitsAhead: ahead,
+            dirty: dirty === null ? "indeterminate" : true,
+          },
+        });
+        return;
+      }
       updateWorkerFields(projectName, workerName, { pendingReviewAt: Date.now() });
       triggerProjectPoll(projectName);
       log.info("hook", "stop hook marked pending review", {

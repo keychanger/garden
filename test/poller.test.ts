@@ -458,6 +458,49 @@ describe("poll — working state", () => {
     );
   });
 
+  it("defers review launch when the worktree is dirty at launch time", () => {
+    // pendingReviewAt can outlive the clean tree it was set on: an earlier
+    // clean-tree Stop armed it, then a later turn dirtied the worktree (its
+    // dirty Stop skips re-arming but cannot unset the stale flag). The
+    // launch-point backstop must defer — never review a dirty tree — while
+    // leaving pendingReviewAt set so a later clean-tree Stop re-drives.
+    vi.mocked(isWorktreeDirty).mockReturnValue(true);
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
+    ]);
+
+    poll("myproject");
+
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(newDashboardWindow).not.toHaveBeenCalledWith(
+      expect.stringContaining("review"),
+      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
+    );
+    // pendingReviewAt must survive the deferral (no clearing write).
+    const cleared = vi.mocked(updateWorkerFields).mock.calls.some(
+      c => "pendingReviewAt" in (c[2] as Record<string, unknown>)
+        && (c[2] as Record<string, unknown>).pendingReviewAt === undefined,
+    );
+    expect(cleared).toBe(false);
+  });
+
+  it("defers review launch when worktree dirtiness is indeterminate at launch time", () => {
+    // isWorktreeDirty returns null when the git call itself failed. Fail
+    // closed: a review must not launch when cleanliness cannot be established.
+    vi.mocked(isWorktreeDirty).mockReturnValue(null);
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
+    ]);
+
+    poll("myproject");
+
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(newDashboardWindow).not.toHaveBeenCalledWith(
+      expect.stringContaining("review"),
+      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
+    );
+  });
+
   it("does nothing when agentStatus is working (Claude still active)", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "working", agentStatus: "working", pendingReviewAt: Date.now() }),

@@ -237,6 +237,21 @@ export function handleWorking(
     return false;
   }
 
+  // Launch-point backstop for the Stop hook's clean-tree gate: pendingReviewAt
+  // can outlive the clean tree it was set on (a later turn dirtied the
+  // worktree; that turn's dirty Stop skips re-arming but cannot unset the
+  // stale flag). launchReview rebases and force-pushes in this worktree, so
+  // never proceed unless it is provably clean — an indeterminate git result
+  // counts as dirty. pendingReviewAt stays set; the next clean-tree Stop (or
+  // any sibling poke) re-drives the launch.
+  if (isWorktreeDirty(wtPath) !== false) {
+    log.info("poller", "review deferred: worktree not provably clean", {
+      worker: entry.name,
+      data: { project: projectName },
+    });
+    return false;
+  }
+
   return launchReview(projectName, projectPath, baseBranch, entry);
 }
 

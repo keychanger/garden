@@ -30,6 +30,17 @@ vi.mock("../../src/dashboard/poller.js", () => ({
   triggerProjectPoll: vi.fn(),
   signalFifoPath: vi.fn(() => "/tmp/fake-fifo"),
 }));
+// hooks/default.ts pokes the poller through poller-fifo directly (not
+// poller.ts). Mock it so the dirty-worktree tests can assert no review wake
+// was produced, not just that pendingReviewAt stayed unset.
+vi.mock("../../src/dashboard/poller-fifo.js", () => ({
+  triggerProjectPoll: vi.fn(),
+  signalFifoPath: vi.fn(() => "/tmp/fake-fifo"),
+  pollerSpawnLockPath: vi.fn(() => "/tmp/fake-spawn-lock"),
+  scheduleDelayedPoke: vi.fn(),
+  isWorkerClaudeWorking: vi.fn(() => false),
+  ensureSignalFifo: vi.fn(() => true),
+}));
 vi.mock("../../src/dashboard/runner.js", () => ({
   resolveGardenRunner: vi.fn(() => "garden"),
 }));
@@ -218,17 +229,88 @@ describe("handleClaudeHook (real fs + real git)", () => {
     expect(w.pendingReviewAt).toBeUndefined();
   });
 
-  it("stop with commits ahead of base sets pendingReviewAt", async () => {
+  it("stop with commits ahead of base sets pendingReviewAt and pokes the poller", async () => {
     seedRegistry("working");
     fs.writeFileSync(path.join(worktreePath, "ahead.txt"), "x\n");
     git(worktreePath, "add", "ahead.txt");
     git(worktreePath, "commit", "-m", "ahead");
     process.chdir(worktreePath);
     const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
+    const { triggerProjectPoll } = await import("../../src/dashboard/poller-fifo.js");
+    vi.mocked(triggerProjectPoll).mockClear();
     handleClaudeHook("stop");
     const w = readRegistryFile().workers[PROJECT][0] as { agentStatus: string; pendingReviewAt?: number };
     expect(w.agentStatus).toBe("idle");
     expect(typeof w.pendingReviewAt).toBe("number");
+    expect(triggerProjectPoll).toHaveBeenCalledWith(PROJECT);
+  });
+
+  it("stop with commits ahead but unstaged tracked changes does NOT queue a review", async () => {
+    // The wolf reproduction: commits ahead of base plus WIP edits to tracked
+    // files. The worker only paused mid-work (e.g. to answer an operator
+    // question) — reviewing now would certify a stale committed snapshot and
+    // force-push under live edits.
+    seedRegistry("working");
+    fs.writeFileSync(path.join(worktreePath, "ahead.txt"), "x\n");
+    git(worktreePath, "add", "ahead.txt");
+    git(worktreePath, "commit", "-m", "ahead");
+    fs.writeFileSync(path.join(worktreePath, "ahead.txt"), "work in progress\n");
+    process.chdir(worktreePath);
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
+    const { triggerProjectPoll } = await import("../../src/dashboard/poller-fifo.js");
+    vi.mocked(triggerProjectPoll).mockClear();
+    handleClaudeHook("stop");
+    const w = readRegistryFile().workers[PROJECT][0] as { agentStatus: string; pendingReviewAt?: number };
+    expect(w.agentStatus).toBe("idle");
+    expect(w.pendingReviewAt).toBeUndefined();
+    expect(triggerProjectPoll).not.toHaveBeenCalled();
+  });
+
+  it("stop with commits ahead but an untracked file does NOT queue a review", async () => {
+    seedRegistry("working");
+    fs.writeFileSync(path.join(worktreePath, "ahead.txt"), "x\n");
+    git(worktreePath, "add", "ahead.txt");
+    git(worktreePath, "commit", "-m", "ahead");
+    fs.writeFileSync(path.join(worktreePath, "scratch.txt"), "untracked wip\n");
+    process.chdir(worktreePath);
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
+    const { triggerProjectPoll } = await import("../../src/dashboard/poller-fifo.js");
+    vi.mocked(triggerProjectPoll).mockClear();
+    handleClaudeHook("stop");
+    const w = readRegistryFile().workers[PROJECT][0] as { agentStatus: string; pendingReviewAt?: number };
+    expect(w.agentStatus).toBe("idle");
+    expect(w.pendingReviewAt).toBeUndefined();
+    expect(triggerProjectPoll).not.toHaveBeenCalled();
+  });
+
+  it("stop with commits ahead but staged uncommitted changes does NOT queue a review", async () => {
+    seedRegistry("working");
+    fs.writeFileSync(path.join(worktreePath, "ahead.txt"), "x\n");
+    git(worktreePath, "add", "ahead.txt");
+    git(worktreePath, "commit", "-m", "ahead");
+    fs.writeFileSync(path.join(worktreePath, "staged.txt"), "staged wip\n");
+    git(worktreePath, "add", "staged.txt");
+    process.chdir(worktreePath);
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
+    const { triggerProjectPoll } = await import("../../src/dashboard/poller-fifo.js");
+    vi.mocked(triggerProjectPoll).mockClear();
+    handleClaudeHook("stop");
+    const w = readRegistryFile().workers[PROJECT][0] as { pendingReviewAt?: number };
+    expect(w.pendingReviewAt).toBeUndefined();
+    expect(triggerProjectPoll).not.toHaveBeenCalled();
+  });
+
+  it("stop with a dirty tree but NO commits ahead still leaves pendingReviewAt unset", async () => {
+    // Guards the clean-vs-dirty gate from accidentally inverting the
+    // no-commits path: nothing to review either way.
+    seedRegistry("working");
+    fs.writeFileSync(path.join(worktreePath, "scratch.txt"), "untracked wip\n");
+    process.chdir(worktreePath);
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
+    handleClaudeHook("stop");
+    const w = readRegistryFile().workers[PROJECT][0] as { agentStatus: string; pendingReviewAt?: number };
+    expect(w.agentStatus).toBe("idle");
+    expect(w.pendingReviewAt).toBeUndefined();
   });
 
   it("sessionstart sets ready when no source", async () => {
