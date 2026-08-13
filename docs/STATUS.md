@@ -99,7 +99,7 @@ stateDiagram-v2
     working --> idle : Codex task_complete / missed Stop
     working --> asking : PreToolUse (mid-turn user-input)
     working --> asking : PermissionRequest
-    working --> reviewing : Stop / new commits
+    working --> reviewing : Stop / new commits, clean worktree
     working --> failing : review cannot launch / workflow budget exhausted
     working --> paused : operator hold
     asking --> paused : operator hold
@@ -156,7 +156,14 @@ stateDiagram-v2
 
 The two normal exits from `working` via `Stop` are the core branching point:
 - **No new commits** → `idle` (turn ended, ball in user's court)
-- **New commits** → `reviewing` (skips idle, enters review cycle)
+- **New commits + clean worktree** → `reviewing` (skips idle, enters review cycle)
+- **New commits + dirty worktree** → `idle`, review NOT queued. Uncommitted
+  tracked or untracked changes mean the agent stopped mid-work (e.g. paused
+  to answer an operator question with WIP on disk); the reviewer certifies
+  the committed snapshot of that same worktree, so reviewing now would
+  certify a stale tree and force-push under live edits. An indeterminate
+  cleanliness check fails closed the same way. The next clean-tree `Stop`
+  re-arms the review.
 
 `working` also exits to `asking` mid-turn (PreToolUse / PermissionRequest)
 when Claude needs operator input before it can continue. `asking` is not
@@ -170,10 +177,11 @@ a terminal state — it returns to `working` when the operator responds
 | loading       | ready         | Worker `SessionStart` hook                           |
 | ready         | working       | Worker `UserPromptSubmit` (first)                    |
 | working       | idle          | Worker `Stop`; no new commits ahead of base          |
+| working       | idle          | Worker `Stop`; commits ahead but the worktree has uncommitted (or indeterminate) changes — review not queued; the next clean-tree `Stop` re-arms |
 | working       | idle          | Codex rollout's final `task_complete`; `Stop` missed |
 | working       | asking        | Worker `PreToolUse` (mid-turn user-input tool)       |
 | working       | asking        | Worker `PermissionRequest`                           |
-| working       | reviewing     | Worker `Stop`; new commits ahead of base             |
+| working       | reviewing     | Worker `Stop`; new commits ahead of base, worktree clean |
 | working       | failing       | Assembled review prompt exceeds the context ceiling even with the diff reduced to a file summary — `failingReason: "oversized-diff"`, no reviewer launched |
 | working       | failing       | Workflow iteration budget is exhausted before a reviewer can launch |
 | idle          | working       | Worker `UserPromptSubmit`                            |
@@ -539,7 +547,7 @@ clock. Update the list above when you do.
    an internal `pushed` lifecycle state between "commits exist" and
    "reviewer launched". The current model collapses that gap: the worker's
    Stop hook sets `pendingReviewAt` (and pokes the poller FIFO) the moment
-   it observes commits ahead of base, and the poller's next wake transitions
+   it observes commits ahead of base on a clean worktree, and the poller's next wake transitions
    the worker directly to `reviewing`. The window is sub-second and not
    user-visible. `pushed` does not appear in the registry, the renderer,
    or the type system.
@@ -619,15 +627,25 @@ Claude process and call `garden dashboard _claude-hook <event>`:
 - `UserPromptSubmit` → `agentStatus = "working"`. Also clears `prState`
   if it equals `merged` or `done` (this is the only place either is
   cleared).
-- `Stop` → `agentStatus = "idle"`. If commits ahead of base exist, also
-  sets `pendingReviewAt = Date.now()` and pokes the project's poller FIFO
-  so review begins immediately. `pendingReviewAt` is the per-worker mark
+- `Stop` → `agentStatus = "idle"`. If commits ahead of base exist AND the
+  worktree is clean (`git status --porcelain` empty — no tracked or
+  untracked changes), also sets `pendingReviewAt = Date.now()` and pokes
+  the project's poller FIFO so review begins immediately. A dirty tree
+  means the agent stopped mid-work (paused to answer an operator question
+  with WIP on disk), so queuing would review a stale committed snapshot;
+  the queue is skipped and the next clean-tree `Stop` re-arms. An
+  indeterminate cleanliness check fails closed the same way.
+  `pendingReviewAt` is the per-worker mark
   that the Stop hook just observed new commits — without it, the poller
   cannot tell "Stop hook just fired" from "worker has been idle with
   stale commits for a month" and would spuriously review old branches.
   This is what makes invariant 2 enforceable: only Stop sets the flag,
   only the poller's working→reviewing transition reads it, and
-  `launchReview` clears it. If instead there are no commits ahead and
+  `launchReview` clears it. Because the flag can outlive the clean tree
+  it was set on (a later turn dirties the worktree; that turn's dirty
+  `Stop` skips re-arming but cannot unset the stale flag),
+  `handleWorking` re-checks cleanliness at the launch point and defers —
+  leaving `pendingReviewAt` set — until the tree is provably clean. If instead there are no commits ahead and
   `.garden-done` is present (invariant 4 path 2), the Stop hook writes
   `prState = "done"` and pokes the poller once so `handleDone` runs the
   trail-off holistic-review trigger.
