@@ -938,15 +938,18 @@ FETCH_OUT=$(git -C ${projectPathLit} fetch origin "$BASE" 2>&1) || FETCH_RC=$?
 [ -n "$FETCH_OUT" ] && printf '%s\\n' "$FETCH_OUT"
 if [ "$FETCH_RC" -ne 0 ]; then
   BOOTSTRAP_FAIL="fetch failed: $FETCH_OUT"
-  # Fetch failed. If ls-remote ALSO fails, the branch is genuinely gone from
-  # origin (typical cause: operator merged the PR on GitHub and deleted the
-  # branch, leaving the main checkout parked on a now-dead ref). In that case,
-  # fall back to origin's default branch — discovered via "ls-remote --symref
-  # origin HEAD" — rather than dying mid-bootstrap. Transient network errors
-  # are still tolerated: if ls-remote SUCCEEDS, we proceed with the local ref.
+  # Fetch failed. "ls-remote --exit-code" tells us why: exit 2 means origin
+  # answered and the branch is genuinely gone (typical cause: operator merged
+  # the PR on GitHub and deleted the branch, leaving the main checkout parked
+  # on a now-dead ref) — fall back to origin's default branch, discovered via
+  # "ls-remote --symref origin HEAD", rather than dying mid-bootstrap. Any
+  # other non-zero exit (auth failure, outage, DNS) means origin could not be
+  # reached at all — the branch may be fine, so never rewrite the base off
+  # that signal; abort and tell the operator to retry the spawn. If ls-remote
+  # SUCCEEDS, the fetch failure was transient: proceed with the local ref.
   LS_RC=0
   LS_OUT=$(git -C ${projectPathLit} ls-remote --exit-code --heads origin "$BASE" 2>&1) || LS_RC=$?
-  if [ "$LS_RC" -ne 0 ]; then
+  if [ "$LS_RC" -eq 2 ]; then
     printf '  WARNING: origin has no branch %s — looking up origin default branch...\\n' "$BASE" >&2
     DEFAULT_BRANCH=$(git -C ${projectPathLit} ls-remote --symref origin HEAD 2>/dev/null \\
       | sed -n 's|^ref: refs/heads/\\([^	]*\\)	HEAD|\\1|p' \\
@@ -972,7 +975,7 @@ if [ "$FETCH_RC" -ne 0 ]; then
     else
       printf '  ERROR: origin has no branch %s and cannot resolve origin HEAD.\\n' "$BASE" >&2
       printf '%s\\n' "$LS_OUT" >&2
-      ${gardenRunnerLit} dashboard _bootstrap-fail ${projectNameLit} ${workerLit} "base $ORIG_BASE missing on origin and origin/HEAD unresolved" 2>/dev/null || true
+      ${gardenRunnerLit} dashboard _bootstrap-fail ${projectNameLit} ${workerLit} "base $ORIG_BASE missing on origin and origin/HEAD unresolved. Switch the main checkout to a pushed branch (e.g. main) and retry" 2>/dev/null || true
       # Keep the pane alive — exit 1 would close it and tmux would destroy the
       # right-slot pane, leaving state.activePaneId stale and wedging every
       # subsequent park/swap. exec a shell so the operator sees the error and
@@ -980,6 +983,16 @@ if [ "$FETCH_RC" -ne 0 ]; then
       printf '\\n  Press ⌥x to close this pane.\\n' >&2
       exec $SHELL
     fi
+  elif [ "$LS_RC" -ne 0 ]; then
+    # Origin unreachable (GitHub outage, auth path degraded, DNS). The base
+    # branch may be perfectly healthy, so the missing-base fallback must not
+    # run — a retry once origin answers is the only remedy.
+    printf '  ERROR: could not reach origin to verify base %s.\\n' "$BASE" >&2
+    printf '%s\\n' "$LS_OUT" >&2
+    ${gardenRunnerLit} dashboard _bootstrap-fail ${projectNameLit} ${workerLit} "could not reach origin to verify base $ORIG_BASE (ls-remote: $LS_OUT). Retry the spawn once origin is reachable" 2>/dev/null || true
+    # Same pane-preservation rationale as the missing-base abort above.
+    printf '\\n  Press ⌥x to close this pane.\\n' >&2
+    exec $SHELL
   fi
 fi
 

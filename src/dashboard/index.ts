@@ -523,8 +523,9 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     return;
   }
   if (sub === "_bootstrap-fail") {
-    // Bootstrap aborted irrecoverably (base missing on origin AND no
-    // resolvable origin/HEAD). The worker entry was stamped in addWorker
+    // Bootstrap aborted irrecoverably (base missing on origin with no
+    // resolvable origin/HEAD, or origin unreachable — the reason text names
+    // the case and its remedy). The worker entry was stamped in addWorker
     // before the bootstrap ran but never reached worktree creation, so
     // remove it before the pane dies — otherwise it persists as a ghost
     // (agentStatus="exited" with no worktree on disk) that the ghost
@@ -547,7 +548,7 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
       source: "bootstrap",
       project: projectName ?? "unknown",
       worker: workerName,
-      message: `Worker bootstrap aborted: ${errText}. Switch the main checkout to a pushed branch (e.g. main) and retry.`,
+      message: `Worker bootstrap aborted: ${errText}.`,
       dedupKey: `bootstrap-fail:${projectName ?? "unknown"}`,
     });
     return;

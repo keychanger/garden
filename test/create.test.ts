@@ -889,6 +889,41 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(script).toMatch(/Falling back to origin default/);
   });
 
+  // Regression: 2026-08-13 GitHub outage — git auth degraded, so both fetch
+  // and ls-remote failed with "Permission denied (publickey)" (exit 128).
+  // The script treated ANY non-zero ls-remote exit as "branch gone from
+  // origin" and aborted with "base main missing on origin and origin/HEAD
+  // unresolved", sending the operator to fix a checkout that was healthy.
+  // ls-remote --exit-code distinguishes the cases: exit 2 means origin
+  // answered and the ref is absent; any other failure means origin was
+  // unreachable and the base must not be second-guessed.
+  it("falls back only on ls-remote exit 2 and reports other failures as origin unreachable", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "main",
+    );
+    const call = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    );
+    expect(call).toBeDefined();
+    const script = call![1] as string;
+    // The missing-base fallback fires on exit 2 specifically, not on any
+    // non-zero exit.
+    expect(script).toContain('[ "$LS_RC" -eq 2 ]');
+    expect(script).not.toMatch(/^\s*if \[ "\$LS_RC" -ne 0 \]/m);
+    // Every other non-zero exit (auth failure, outage, DNS) aborts with a
+    // message naming the real condition and remedy — never the misleading
+    // "missing on origin" advice.
+    expect(script).toMatch(/could not reach origin to verify base/);
+    expect(script).toContain(
+      'dashboard _bootstrap-fail myproject bold-ash "could not reach origin',
+    );
+    // The unreachable abort keeps the right-slot pane alive like the other
+    // abort paths.
+    expect(script).toMatch(/elif \[ "\$LS_RC" -ne 0 \]; then[\s\S]*?exec \$SHELL/);
+  });
+
   it("traps unhandled errors with exec \\$SHELL so a failure outside the missing-base path still keeps the right-slot pane alive", () => {
     process.argv[1] = "/usr/local/bin/garden";
     buildWorktreeBootstrapScript(
