@@ -87,15 +87,7 @@ export function ensureDashboard(): void {
     try { tmux("set-option", "-t", DASHBOARD_SESSION, "history-limit", "1000000"); } catch { /* ignore */ }
 
     respawnStatusPane(healed);
-    if (healed.usagePaneId) {
-      const gardenRunner = resolveGardenRunner();
-      const usageCmd = buildUsageCommand(gardenRunner);
-      try { tmux("respawn-pane", "-k", "-t", healed.usagePaneId, "sh", "-c", usageCmd); } catch { /* ignore */ }
-      try { tmux("resize-pane", "-t", healed.usagePaneId, "-y", String(USAGE_PANE_HEIGHT)); } catch { /* pane may be gone */ }
-      try { tmux("clear-history", "-t", healed.usagePaneId); } catch { /* ignore */ }
-      disablePaneInput(healed.usagePaneId);
-      lockPaneMouse(healed.usagePaneId);
-    }
+    respawnUsagePane(healed);
 
     // Re-bake pane content + re-pin heights on terminal resize (the baked files
     // are width-shaped). Copy-mode-safe: the handler repaints via SIGUSR1 only,
@@ -1416,6 +1408,43 @@ export function respawnStatusPane(state: DashboardState): void {
   try { tmux("clear-history", "-t", state.statusPaneId); } catch { /* ignore */ }
   disablePaneInput(state.statusPaneId);
   lockPaneMouse(state.statusPaneId);
+}
+
+export function respawnUsagePane(state: DashboardState): void {
+  if (!state.usagePaneId) return;
+  const gardenRunner = resolveGardenRunner();
+  const usageCmd = buildUsageCommand(gardenRunner);
+  try { tmux("respawn-pane", "-k", "-t", state.usagePaneId, "sh", "-c", usageCmd); } catch { /* ignore */ }
+  try { tmux("resize-pane", "-t", state.usagePaneId, "-y", String(USAGE_PANE_HEIGHT)); } catch { /* pane may be gone */ }
+  try { tmux("clear-history", "-t", state.usagePaneId); } catch { /* ignore */ }
+  disablePaneInput(state.usagePaneId);
+  lockPaneMouse(state.usagePaneId);
+}
+
+// The history/alerts views are passive SIGUSR1 repaint loops like the usage
+// pane, but they live in hidden _garden-* windows and swap into the garden
+// slot when active — so a respawn has to find the loop wherever it currently
+// lives. respawn-pane -k kills the pane's whole process group, which is what
+// makes these the recovery path for a wedged or duplicated loop.
+function respawnGardenViewLoop(state: DashboardState, view: "history" | "alerts", cmd: string): void {
+  let target: string | null = null;
+  if (state.gardenPaneType === view && state.gardenShellPaneId) {
+    target = state.gardenShellPaneId;
+  } else {
+    try { target = getFirstPaneId(`${DASHBOARD_SESSION}:${gardenWindowName(view)}`); } catch { /* window doesn't exist */ }
+  }
+  if (!target) return;
+  try { tmux("respawn-pane", "-k", "-t", target, "sh", "-c", cmd); } catch { /* pane gone */ }
+  try { tmux("clear-history", "-t", target); } catch { /* pane gone */ }
+  disablePaneInput(target);
+}
+
+export function respawnHistoryPane(state: DashboardState): void {
+  respawnGardenViewLoop(state, "history", buildHistoryCommand(resolveGardenRunner()));
+}
+
+export function respawnAlertsPane(state: DashboardState): void {
+  respawnGardenViewLoop(state, "alerts", buildAlertsCommand(resolveGardenRunner()));
 }
 
 // `garden logs --follow` caches the pre-rebuild bundle in memory; respawn so it picks up new code.

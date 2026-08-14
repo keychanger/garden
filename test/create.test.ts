@@ -104,6 +104,9 @@ vi.mock("../src/dashboard/hotkeys.js", () => ({
 vi.mock("../src/dashboard/header.js", () => ({
   setupStatusBar: vi.fn(),
   buildStatusCommand: vi.fn(() => "status-command"),
+  buildUsageCommand: vi.fn(() => "usage-command"),
+  buildHistoryCommand: vi.fn(() => "history-command"),
+  buildAlertsCommand: vi.fn(() => "alerts-command"),
   updateHeaderVar: vi.fn(),
   setPaneProjectColor: vi.fn(),
 }));
@@ -180,6 +183,10 @@ import {
   buildWorktreeBootstrapScript,
   buildWorktreeResumeCommand,
   respawnWorkerWindow,
+  respawnUsagePane,
+  respawnHistoryPane,
+  respawnAlertsPane,
+  USAGE_PANE_HEIGHT,
 } from "../src/dashboard/create.js";
 import { tmux, newDashboardWindow, tmuxSplit, getFirstPaneId, setPaneLabel, setPaneTitle, setPaneVar, shellEscape, disablePaneInput, killWindowSafe } from "../src/dashboard/tmux.js";
 import { tryGetProject, tryResolveProvider } from "../src/config.js";
@@ -575,6 +582,51 @@ describe("createLogsWindow", () => {
   it("hard-disables pane input so logs stays read-only across swaps", () => {
     createLogsWindow();
     expect(disablePaneInput).toHaveBeenCalledWith("%5");
+  });
+});
+
+describe("passive pane respawn helpers (garden redraw)", () => {
+  const baseState = {
+    statusPaneId: "%2",
+    usagePaneId: "%3",
+    gardenShellPaneId: "%0",
+    gardenPaneType: "growhouse",
+  } as never;
+
+  it("respawnUsagePane respawns the loop, re-pins height, and re-disables input", () => {
+    respawnUsagePane(baseState);
+    expect(tmux).toHaveBeenCalledWith("respawn-pane", "-k", "-t", "%3", "sh", "-c", "usage-command");
+    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%3", "-y", String(USAGE_PANE_HEIGHT));
+    expect(disablePaneInput).toHaveBeenCalledWith("%3");
+  });
+
+  it("respawnUsagePane no-ops without a usagePaneId", () => {
+    respawnUsagePane({ ...(baseState as object), usagePaneId: null } as never);
+    expect(tmux).not.toHaveBeenCalled();
+  });
+
+  it("respawnHistoryPane targets the garden slot when history is the active view", () => {
+    respawnHistoryPane({ ...(baseState as object), gardenPaneType: "history" } as never);
+    expect(tmux).toHaveBeenCalledWith("respawn-pane", "-k", "-t", "%0", "sh", "-c", "history-command");
+    expect(disablePaneInput).toHaveBeenCalledWith("%0");
+  });
+
+  it("respawnHistoryPane targets the hidden _garden-history window otherwise", () => {
+    respawnHistoryPane(baseState);
+    expect(getFirstPaneId).toHaveBeenCalledWith("garden-dashboard:_garden-history");
+    expect(tmux).toHaveBeenCalledWith("respawn-pane", "-k", "-t", "%5", "sh", "-c", "history-command");
+  });
+
+  it("respawnAlertsPane targets the hidden _garden-alerts window when not active", () => {
+    respawnAlertsPane(baseState);
+    expect(getFirstPaneId).toHaveBeenCalledWith("garden-dashboard:_garden-alerts");
+    expect(tmux).toHaveBeenCalledWith("respawn-pane", "-k", "-t", "%5", "sh", "-c", "alerts-command");
+  });
+
+  it("respawn helpers no-op when the hidden window does not exist", () => {
+    vi.mocked(getFirstPaneId).mockImplementationOnce(() => { throw new Error("no window"); });
+    respawnAlertsPane(baseState);
+    expect(tmux).not.toHaveBeenCalled();
   });
 });
 

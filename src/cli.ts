@@ -159,6 +159,7 @@ Dashboard:
   logs filter [<expr>]           Show / set sticky filter (also via ⌥/ in dashboard)
   logs filter --clear            Remove the sticky filter
   health                         Check dashboard state consistency
+  redraw                         Rebuild the dashboard's passive panes (status/usage/history/alerts): re-bake content, respawn each repaint loop (recovers a frozen or garbled pane)
   doctor                         Environment preflight (tmux / claude / gh / node / config / Option-key)
   kick <worker>                  Re-arm a stranded 'working' worker for review
   poke [project]                 Wake the project's poller now (runs bead intake immediately; board's dispatch gate uses this)

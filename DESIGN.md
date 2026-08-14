@@ -587,6 +587,8 @@ garden logs filter --clear         # Remove the sticky filter
 garden kick <worker>               # Re-arm a stranded 'working' worker for review; also recovers
                                    # `failing` workers whose failingReason is review-side
                                    # (`unparseable-verdict` / `transient-review` / `quota`)
+garden redraw                      # Rebuild the passive panes (status/usage/history/alerts): re-bake
+                                   # content, respawn each repaint loop — recovers a frozen/garbled pane
 garden bounce <worker>             # Restart a worker's Claude process (preserves session history)
 garden hold <worker>               # Interrupt a working worker and mark it 'paused' (⌥e in the dashboard; next prompt resumes)
 garden pause <worker>              # Suppress post-merge auto-continue (writes the .garden-done sentinel)
