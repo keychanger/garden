@@ -2757,7 +2757,9 @@ uncommitted — working memory, not commits):
 
 ### The human gate
 
-`.garden-awaiting-input` is a sentinel shared with the (unbuilt) plan workflow.
+`.garden-awaiting-input` is a general human-gate sentinel; botanist is its one
+user today (the shipped planner workflow has no mid-run gate — its review
+gate is board-side promotion).
 Auto-continue skips a worker holding it (`autoContinueSkipReason`,
 `poller-merge.ts`); `onPromptSubmitted` clears it unconditionally (unlike
 `.garden-done`, a gated worker holds it while `prState` is still `working`).
