@@ -7,6 +7,7 @@
 // the worker via $GARDEN_WORKER, mirroring `garden workers grow` / `garden whoami`.
 import { readRegistry, findWorkerByName, type WorkerEntry } from "../dashboard/registry.js";
 import { publishBotanistArtifact, BOTANIST_PUBLISH_ROOT } from "../dashboard/botanist-publish.js";
+import { tryGetProject } from "../config.js";
 
 export async function botanist(args: string[]): Promise<void> {
   const sub = args[0];
@@ -91,7 +92,12 @@ async function publishCommand(args: string[]): Promise<void> {
     throw new Error(`Worker '${workerName}' has no worktreePath in the registry.`);
   }
 
-  const result = publishBotanistArtifact(entry.worktreePath, to, { dryRun, project: projectName });
+  const trellisDir = tryGetProject(projectName)?.trellisDir;
+  const result = publishBotanistArtifact(entry.worktreePath, to, {
+    dryRun,
+    project: projectName,
+    ...(trellisDir ? { trellisDir } : {}),
+  });
   if (!result.ok) {
     throw new Error(result.message);
   }

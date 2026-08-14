@@ -224,8 +224,8 @@ Botanist (design workflow — see WORKFLOWS.md § "Botanist workflow"):
                                       Publish an approved design artifact: move it from the worker's
                                       .garden/botanist/ working dir to a tracked docs/ path, commit it,
                                       and mark the botanist done (self-resolves via $GARDEN_WORKER). The
-                                      poller merges it with no reviewer, then the botanist executes the
-                                      approved handoff plan. --dry-run previews, changes nothing.
+                                      botanist then executes the approved handoff plan while the poller
+                                      merges the doc with no reviewer. --dry-run previews, changes nothing.
 
 Diagnostics (temporary — see src/commands/diag.ts cleanup checklist):
   diag handoff                        Spawn a worker pre-loaded with the latest auto-captured status-pane corruption snapshot

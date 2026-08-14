@@ -5,15 +5,15 @@
 // fast-forwards base, exactly as it does for any worker, so publish needs no
 // network and works inside the worker sandbox.
 //
-// Top-level imports are kept light (node builtins + continue/log) because
-// isPublishablePath is imported by poller-review.ts, which is reachable from the
-// lean dist/hook.js closure — the git operations run only from the CLI command.
+// The publish mutation path is CLI-only. Poller scope enforcement imports the
+// node:path-only botanist-paths.ts leaf so this module never enters hook.js.
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { setDoneSentinel } from "./continue.js";
 import { log } from "./log.js";
 import { BOTANIST_PUBLISH_ROOT, isPublishablePath } from "./botanist-paths.js";
+import { shellEscape } from "./tmux.js";
 
 export { BOTANIST_PUBLISH_ROOT, isPublishablePath } from "./botanist-paths.js";
 
@@ -31,7 +31,7 @@ export interface PublishResult {
 export function publishBotanistArtifact(
   worktreePath: string,
   toRelPath: string,
-  opts: { dryRun?: boolean; project?: string } = {},
+  opts: { dryRun?: boolean; project?: string; trellisDir?: string } = {},
 ): PublishResult {
   if (!isPublishablePath(toRelPath)) {
     return {
@@ -87,13 +87,17 @@ export function publishBotanistArtifact(
   });
 
   const proj = opts.project ?? "<project>";
+  const trellisTarget = path.join(
+    opts.trellisDir ?? ".garden/trellises",
+    `${name}.md`,
+  );
   return {
     ok: true,
     message: `Published '${toRelPath}' (committed, marked done). The poller will merge it — no reviewer runs.\n`
       + `Now execute the handoff plan the operator approved (see the botanist skill):\n`
-      + `  default builder — spawn it yourself: garden handoff ${proj} < .garden/botanist/handoff-brief.md\n`
+      + `  default builder — spawn it yourself: garden handoff ${shellEscape(proj)} < .garden/botanist/handoff-brief.md\n`
       + `    (inline the design in the brief: the doc has not merged when the new worker branches)\n`
       + `  trellis builder — needs the trellis spine in the doc; the operator runs, in the checkout after merge:\n`
-      + `    cp ${toRelPath} .garden/trellises/${name}.md && garden workers new ${proj} --workflow trellis --trellis ${name}`,
+      + `    cp ${shellEscape(toRelPath)} ${shellEscape(trellisTarget)} && garden workers new ${shellEscape(proj)} --workflow trellis --trellis ${shellEscape(name)}`,
   };
 }

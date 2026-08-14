@@ -8,10 +8,14 @@ vi.mock("../src/dashboard/botanist-publish.js", () => ({
   BOTANIST_PUBLISH_ROOT: "docs/",
   publishBotanistArtifact: vi.fn(() => ({ ok: true, message: "published ok" })),
 }));
+vi.mock("../src/config.js", () => ({
+  tryGetProject: vi.fn(),
+}));
 
 import { botanist } from "../src/commands/botanist.js";
 import { findWorkerByName } from "../src/dashboard/registry.js";
 import { publishBotanistArtifact } from "../src/dashboard/botanist-publish.js";
+import { tryGetProject } from "../src/config.js";
 
 function seedBotanist() {
   vi.mocked(findWorkerByName).mockReturnValue({
@@ -23,6 +27,7 @@ function seedBotanist() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(tryGetProject).mockReturnValue(null);
   process.env.GARDEN_WORKER = "bold-ash";
   process.env.GARDEN_PROJECT = "proj";
 });
@@ -48,6 +53,24 @@ describe("garden botanist publish", () => {
       "/tmp/wt/proj/bold-ash",
       "docs/future/design.md",
       { dryRun: true, project: "proj" },
+    );
+  });
+
+  it("threads the project's configured trellisDir into the publish guidance", async () => {
+    seedBotanist();
+    vi.mocked(tryGetProject).mockReturnValue({
+      name: "proj",
+      path: "/tmp/proj",
+      trellisDir: "docs/trellises",
+    });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await botanist(["publish", "--to", "docs/future/design.md"]);
+
+    expect(publishBotanistArtifact).toHaveBeenCalledWith(
+      "/tmp/wt/proj/bold-ash",
+      "docs/future/design.md",
+      { dryRun: false, project: "proj", trellisDir: "docs/trellises" },
     );
   });
 

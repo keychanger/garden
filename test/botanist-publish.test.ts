@@ -114,4 +114,21 @@ describe("publishBotanistArtifact", () => {
     expect(r.message).toContain("--workflow trellis --trellis notification-levels");
     expect(r.message).not.toContain("--trellis docs/");
   });
+
+  it("uses the configured trellisDir and shell-escapes the printed command", () => {
+    const wt = makeWorktreeWithArtifact();
+    const r = publishBotanistArtifact(wt, "docs/future/notification levels.md", {
+      project: "my project",
+      trellisDir: "docs/custom trellises",
+    });
+
+    expect(r.ok).toBe(true);
+    expect(r.message).toContain(
+      "cp 'docs/future/notification levels.md' 'docs/custom trellises/notification levels.md'",
+    );
+    expect(r.message).toContain(
+      "garden workers new 'my project' --workflow trellis --trellis 'notification levels'",
+    );
+    expect(r.message).toContain("garden handoff 'my project'");
+  });
 });
