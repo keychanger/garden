@@ -90,9 +90,9 @@ export function publishBotanistArtifact(
   return {
     ok: true,
     message: `Published '${toRelPath}' (committed, marked done). The poller will merge it — no reviewer runs.\n`
-      + `Hand off to a builder seeded from the doc, e.g.:\n`
-      + `  garden workers new ${proj} --workflow trellis --trellis ${toRelPath}\n`
-      + `For a non-default builder crew, set it on the project first (garden config ${proj} crew <name>) — `
-      + `per-spawn --crew is default-workflow only today.`,
+      + `Now execute the handoff plan the operator approved (see the botanist skill):\n`
+      + `  default builder — spawn it yourself: garden handoff ${proj} < .garden/botanist/handoff-brief.md\n`
+      + `    (inline the design in the brief: the doc has not merged when the new worker branches)\n`
+      + `  trellis builder — the operator runs: garden workers new ${proj} --workflow trellis --trellis ${toRelPath}`,
   };
 }

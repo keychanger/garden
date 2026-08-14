@@ -105,6 +105,17 @@ describe("installClaudeSkills", () => {
     expect(BOTANIST_SKILL_CONTENT).toContain("Do not edit");
   });
 
+  it("botanist skill has the botanist run the approved handoff itself", () => {
+    // The approval ask carries the handoff plan, and the default plan is a
+    // botanist-spawned default-workflow builder seeded from the brief file.
+    expect(BOTANIST_SKILL_CONTENT).toContain("state your handoff plan");
+    expect(BOTANIST_SKILL_CONTENT).toContain(
+      "garden handoff <project> < .garden/botanist/handoff-brief.md",
+    );
+    // Trellis builders stay operator-run — the handoff IPC is default-only.
+    expect(BOTANIST_SKILL_CONTENT).toContain("--workflow trellis --trellis");
+  });
+
   it("writes the handoff skill alongside done so workers can invoke it", () => {
     installClaudeSkills("/Users/x/.garden/worktrees/myproject/bold-ash");
     expect(fs.mkdirSync).toHaveBeenCalledWith(

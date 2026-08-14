@@ -2752,7 +2752,8 @@ uncommitted — working memory, not commits):
    `answers.md`, drafts `artifact.md`, and re-enters the gate as many times as
    the operator wants more options. Ends when the operator approves.
 4. **Publish** — `garden botanist publish` moves the artifact to a tracked
-   `docs/` path, commits it, and writes `.garden-done`.
+   `docs/` path, commits it, and writes `.garden-done`; the botanist then
+   executes the handoff plan the operator approved (see Handoff below).
 
 ### The human gate
 
@@ -2796,20 +2797,30 @@ the publish after the failing debounce.
 | Seat | What fills it | How selected |
 |---|---|---|
 | **Designer** | the botanist worker itself | its own harness/model; defaults to Opus at `xhigh` effort (`workflow.workerModel`/`workerEffort`), overridable per run via `--model`/`--effort`/`--harness` (a Codex designer works) |
-| **Builder** | a downstream worker spawned at handoff | the operator-run handoff command (see below) |
+| **Builder** | a downstream worker spawned at handoff | default-workflow: spawned by the botanist via `garden handoff` on approval; trellis: the operator-run plant command (see below) |
 | **Reviewer** | the builder's reviewer | stays strong first-party by default (the shipped crew safety invariant) |
 
 ### Handoff
 
-Operator-driven (the doc's Phase 1, the shipped default): `garden botanist
-publish` prints a suggested handoff command seeded from the published doc, e.g.
-`garden workers new <project> --workflow trellis --trellis <path>`. The operator
-runs it — staying in control of the design→build transition, no runaway
-auto-spawn. A non-default builder crew is set on the project first (`garden
-config <project> crew <name>`), since per-spawn `--crew` is default-workflow only
-today (see CREWS). Assisted auto-spawn (the doc's Phase 2) is deferred: it needs
-the shared, security-sensitive handoff IPC extended and per-spawn crew-for-trellis,
-neither of which the operator-driven path requires.
+Approval-driven, botanist-executed for the default case: the converge gate's
+approval ask states the handoff plan alongside the final artifact, so one
+"approve" authorizes both — publish, then build. On approval the botanist
+publishes first (a failed publish must not leave a builder working from an
+unpublished design), then spawns a **default-workflow builder** itself through
+the existing `garden handoff` IPC, seeded from
+`.garden/botanist/handoff-brief.md` — a self-contained briefing that inlines the
+full design, because the child branches from `origin/<base>` before the
+published doc merges, so the doc path does not yet exist in its worktree. The
+operator redirects in the approval itself: a **trellis builder** stays
+operator-run (`garden workers new <project> --workflow trellis --trellis
+<path>` — the handoff IPC spawns default-workflow workers only), or **no
+builder**. A non-default builder crew is set on the project first (`garden
+config <project> crew <name>`), since per-spawn `--crew` is default-workflow
+only today (see CREWS). The publish command prints both routes as a reminder.
+Full assisted handoff (the doc's Phase 2 — `--handoff <workflow>` /
+`--handoff-crew` on publish, trellis auto-spawn) remains deferred: it needs the
+shared, security-sensitive handoff IPC extended and per-spawn crew-for-trellis,
+neither of which the skill-level path requires.
 
 ### Triggering
 
@@ -2847,7 +2858,9 @@ handoff).
 
 ### Deferred
 
-- **Assisted auto-spawn handoff** — see Handoff above.
+- **Full assisted handoff** (trellis auto-spawn, `--handoff <workflow>` /
+  `--handoff-crew` on publish) — see Handoff above; the default-builder case
+  ships skill-level.
 - **`--artifact-type`** (trellis/memo/freeform) — subsumed by the publish `--to` path.
 - **`garden workers botanist`** to convert an active default worker mid-run.
 - **Designer-in-the-crew-name** (the `<designer>-<builder>-<reviewer>` triple) —

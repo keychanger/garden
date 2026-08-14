@@ -405,11 +405,13 @@ export const BOTANIST_SKILL_FILENAME = "SKILL.md";
 // Bundled with every worker but only relevant to a botanist (design) worker —
 // its frontmatter description gates it at planning time so build workers ignore
 // it. Teaches the four-phase design pipeline: frame the problem, sketch options
-// + ask questions (then pause for the operator), converge on an approach, and
-// publish the approved artifact to a tracked docs/ path.
+// + ask questions (then pause for the operator), converge on an approach, then
+// publish the approved artifact to a tracked docs/ path and hand off to the
+// builder the operator approved (default-workflow via garden handoff; trellis
+// stays an operator-run plant).
 export const BOTANIST_SKILL_CONTENT = `---
 name: botanist
-description: The method for a garden botanist (design) worker. Use when you are on the botanist workflow (garden whoami shows workflow: botanist) to run the four-phase design pipeline — frame, options, converge, publish — whose deliverable is a design artifact (a document), not code. Covers where to write artifacts, how to format options and questions, how to pause at the human gate, and how to publish once the operator approves. Do NOT edit src/, tests, or configs.
+description: The method for a garden botanist (design) worker. Use when you are on the botanist workflow (garden whoami shows workflow: botanist) to run the four-phase design pipeline — frame, options, converge, publish — whose deliverable is a design artifact (a document), not code. Covers where to write artifacts, how to format options and questions, how to pause at the human gate, and how to publish and hand off to a builder once the operator approves. Do NOT edit src/, tests, or configs.
 ---
 
 # Botanist: design, don't build
@@ -435,17 +437,23 @@ When the operator responds, capture their answers to \`.garden/botanist/answers.
 
 This phase **loops**: if the operator says "explore another option" or "try again," return to phase-2-style options, then re-converge. Re-enter the gate each time you need direction — \`touch .garden-awaiting-input\` and end your turn. Keep going until the operator approves.
 
-### 4. Publish
+When the artifact looks final, ask for approval and state your handoff plan **in the same message**, so one "approve" carries both. The default plan: publish, then spawn a **default-workflow builder** yourself, seeded with the design. Name the alternatives so the operator can redirect in their approval: a **trellis builder** (which they spawn — see phase 4), **no builder**, or \`--ultracode\` for a full-strength builder. A bare "approve" means the stated plan runs as-is, handoff included.
+
+### 4. Publish and hand off
 Only when the operator **explicitly approves** ("approve", "ship it", "publish"):
 1. Make sure your finished artifact is at \`.garden/botanist/artifact.md\`.
 2. Run \`garden botanist publish --to docs/future/<name>.md\` (pick a descriptive \`<name>\`). This moves the artifact to that tracked path, commits it, and marks you done — the poller then merges it with **no reviewer** (the operator already reviewed the prose at the gate). Pass \`--dry-run\` first to preview. The target MUST be under \`docs/\` — a botanist publishes docs, not code, and the merge refuses anything else. Do NOT publish to \`.garden/\` (git-excluded, would never merge). Do NOT hand-commit code files: committing anything outside \`docs/\` parks you in \`failing\`.
-3. In your pane, give the operator the suggested handoff command for a builder — e.g. \`garden workers new <project> --workflow trellis --trellis docs/future/<name>.md\`. For a non-default builder crew, they set it on the project first (\`garden config <project> crew <name>\`) — per-spawn \`--crew\` is default-workflow only today, so it cannot ride the trellis plant.
+3. Execute the handoff plan the operator approved. Publish first, then hand off — never the reverse: a failed publish must not leave a builder working from an unpublished design.
+   - **Default builder** (the default plan): write \`.garden/botanist/handoff-brief.md\` — a self-contained implementation briefing that **inlines the full design**. The new worker branches from \`origin/<base>\` before your doc merges, so the published path does not exist in its worktree yet; name \`docs/future/<name>.md\` as where the canonical copy will land. Then run \`garden handoff <project> < .garden/botanist/handoff-brief.md\` (add \`--ultracode\` only if the operator asked for it) and report the new worker's name. Do NOT pass \`--expect-callback\` — publish already marked you done, so a callback could never reach you.
+   - **Trellis builder**: the handoff mechanism spawns default-workflow workers only, so give the operator the command to run — \`garden workers new <project> --workflow trellis --trellis docs/future/<name>.md\`. For a non-default builder crew, they set it on the project first (\`garden config <project> crew <name>\`) — per-spawn \`--crew\` is default-workflow only today, so it cannot ride the trellis plant.
+   - **No builder**: just report the publish.
 
 ## What NOT to do
 - Do not edit \`src/\`, tests, or configs. If you catch yourself writing code, stop — that is the builder's job.
 - Do not \`git add\`/\`commit\`/\`push\` during phases 1–3. Your artifacts are uncommitted working notes until publish.
 - Do not run project checks.
 - Do not publish without explicit operator approval. The gate is the whole point.
+- Do not hand off to a builder outside an approved plan — the plan is stated at the gate, and the operator's approval is what authorizes the spawn.
 - Do not invent scope. The framing's "out of scope" section bounds your design.
 `;
 

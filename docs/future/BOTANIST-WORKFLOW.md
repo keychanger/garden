@@ -25,7 +25,13 @@ of those three seats is independently selectable and freely swappable.
   completion, operator-driven handoff): **shipped 2026-07** (with the
   as-built deviations listed in the header note).
 - **Phase 2** (crew-parameterized assisted handoff, artifact-type awareness):
-  designed below; `--handoff-crew` is partially in.
+  designed below; `--handoff-crew` is partially in. The skill-level slice
+  shipped 2026-08: the converge gate's approval ask states the handoff plan, and
+  on approval the botanist publishes then spawns a default-workflow builder
+  itself via the existing `garden handoff` IPC (design inlined in the briefing;
+  trellis builders stay operator-run). The publish-flag surface
+  (`--handoff <workflow>` / `--handoff-crew`) and trellis auto-spawn remain
+  open. Authoritative behavior: WORKFLOWS.md § "Botanist workflow".
 - **Phase 3** (design-role-in-crew, optional design-review fan-out): sketched,
   deferred.
 
