@@ -527,7 +527,20 @@ export function buildStatusCommand(gardenRunner: string): string {
     // chronic. Reset on pane respawn.
     `diag_count=0`,
     `sd='${sessionsDir}'`,
+    // Fork-duplicate guard. Observed 2026-08-14: a USR1 landing in the fork
+    // window of one of this loop's command substitutions left a full duplicate
+    // of the script running as a child of the real loop. The duplicate held a
+    // stale $cur, repainted it at 8Hz over the fresh content, and the parent
+    // blocked forever waiting for the "command substitution" to finish — the
+    // pane froze mid-garble. $(exec sh -c 'echo $PPID') is the bash-3.2 BASHPID
+    // substitute: the exec'd sh's parent is whichever process really forked it,
+    // so a duplicate sees its own pid here, not $mypid, and exits at its next
+    // outer-loop iteration instead of fighting the real loop for the tty.
+    // One fork per outer iteration (per USR1 wake or ~60s of animation) —
+    // outside the inner spinner loop's wait, per the trap-narrowing comment.
+    `mypid=$(exec sh -c 'echo $PPID')`,
     `while true; do`,
+    `  if [ "$(exec sh -c 'echo $PPID')" != "$mypid" ]; then exit 0; fi;`,
     `  if [ $sig -eq 1 ]; then`,
     // Signal trap already displayed the pre-rendered content and set prev.
     `    cur="$prev";`,

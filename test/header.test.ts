@@ -259,6 +259,19 @@ describe("buildStatusCommand", () => {
     expect(cmd).toContain(`printf '%s\\n' "$cur" | awk`);
   });
 
+  it("exits a fork-race duplicate of the loop via the self-pid guard", () => {
+    // A USR1 landing in a command substitution's fork window can leave a full
+    // duplicate of the loop script running as a child of the real loop; the
+    // duplicate repaints its stale $cur over fresh content while the parent
+    // blocks forever on the never-finishing substitution (observed 2026-08-14).
+    // The guard compares the real pid ($(exec sh -c 'echo $PPID'), the bash-3.2
+    // BASHPID substitute) against the pid captured at init and exits on
+    // mismatch, so a duplicate dies at its next outer-loop iteration.
+    const cmd = buildStatusCommand("garden");
+    expect(cmd).toContain(`mypid=$(exec sh -c 'echo $PPID')`);
+    expect(cmd).toContain(`if [ "$(exec sh -c 'echo $PPID')" != "$mypid" ]; then exit 0; fi;`);
+  });
+
   it("keeps the SIGUSR1 trap narrow (only re-reads $sf, not $pst)", () => {
     const cmd = buildStatusCommand("garden");
     // Extract the trap action body (between the first quote after `trap '` and the matching `'`).
