@@ -124,16 +124,26 @@ describe("incrementFailedLabel", () => {
   });
 });
 
-// The store-resolution rule (board DELEGATION.md Decision 15): a configured
-// beadsDir reaches bd as BEADS_DIR — the same variable worker env injection
-// uses — while the default case stays byte-identical to the pre-beadsDir env
-// so bd keeps discovering the checkout's own .beads from cwd.
+// The store-resolution rule (board DELEGATION.md Decision 15): every bd child
+// gets the resolved BEADS_DIR, overriding any store inherited from the shell
+// that invoked garden.
 describe("shared-store resolution (beadsDir)", () => {
-  it("bdChildEnv injects BEADS_DIR only for a configured shared store", () => {
+  it("bdChildEnv injects the configured store or the checkout default", () => {
     const shared = bdChildEnv({ path: "/repo", beadsDir: "/board/.beads" });
     expect(shared.BEADS_DIR).toBe("/board/.beads");
     const plain = bdChildEnv(STORE);
-    expect(plain).toEqual({ ...process.env });
+    expect(plain.BEADS_DIR).toBe("/repo/.beads");
+  });
+
+  it("bdChildEnv replaces an inherited store from another worker", () => {
+    const inherited = process.env.BEADS_DIR;
+    process.env.BEADS_DIR = "/other/.beads";
+    try {
+      expect(bdChildEnv(STORE).BEADS_DIR).toBe("/repo/.beads");
+    } finally {
+      if (inherited === undefined) delete process.env.BEADS_DIR;
+      else process.env.BEADS_DIR = inherited;
+    }
   });
 
   it("bdChildEnv layers BEADS_ACTOR on top of the store env", () => {
@@ -150,11 +160,11 @@ describe("shared-store resolution (beadsDir)", () => {
     expect((call[2] as { env: Record<string, string> }).env.BEADS_DIR).toBe("/board/.beads");
   });
 
-  it("runBd without beadsDir leaves the child env untouched", () => {
+  it("runBd without beadsDir pins the checkout's own store", () => {
     vi.mocked(spawnSync).mockReturnValueOnce(bdOk("fine"));
     runBd(STORE, ["list"]);
     const call = vi.mocked(spawnSync).mock.calls[0];
-    expect((call[2] as { env: Record<string, string> }).env).toEqual({ ...process.env });
+    expect((call[2] as { env: Record<string, string> }).env.BEADS_DIR).toBe("/repo/.beads");
   });
 });
 

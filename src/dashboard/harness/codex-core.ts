@@ -17,6 +17,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveBeadsDir } from "../../config.js";
 import { promptTurn, summarizeTurn } from "../conversation.js";
 import type { ToolUse, Turn } from "../conversation.js";
 import type { WorkerEntry } from "../registry.js";
@@ -86,23 +87,28 @@ export function codexStderrSidecar(resultFile: string): string {
 //     worktree is what the sandbox actually enforces for a Codex worker.
 //   - writable_roots — garden's shared extra roots beyond cwd + /tmp. Mirrors
 //     the HOME-based entries of sandbox.ts DEFAULT_ALLOW_WRITE (npm/cache/
-//     registry writes during checks) plus the worktree's shared git common dir
-//     (worktreeGitDir). A garden worker runs in a *linked* worktree whose real
-//     git dir is the main checkout's `.git` — outside cwd — so without that
-//     root a Codex worker could not commit or push (claude-code's sandbox
-//     auto-grants the git dir; Codex workspace-write does not). The HOME roots
-//     are constant across workers; the git dir is per-project, passed in.
+//     registry writes during checks), the resolved beads store for an intake
+//     project, plus the worktree's shared git common dir (worktreeGitDir). A
+//     garden worker runs in a *linked* worktree whose real git dir is the main
+//     checkout's `.git` — outside cwd — so without that root a Codex worker
+//     could not commit or push (claude-code's sandbox auto-grants the git dir;
+//     Codex workspace-write does not). The HOME roots are constant across
+//     workers; the bead and git roots are per-project.
 // Every dynamic value is shell-escaped: the result is spliced into the launch
 // command string.
-function codexSandboxFlags(worktreeGitDir?: string): string {
+function codexSandboxFlags(
+  project: AgentCommandOptions["launchPlan"]["runtimeProject"],
+  worktreeGitDir?: string,
+): string {
   const home = process.env.HOME || os.homedir();
   const writableRoots = [
     path.join(home, ".npm"),
     path.join(home, ".cache"),
     path.join(home, ".garden", "sessions"),
   ];
+  if (project.beadIntake) writableRoots.push(resolveBeadsDir(project));
   if (worktreeGitDir) writableRoots.push(worktreeGitDir);
-  const rootsToml = `sandbox_workspace_write.writable_roots=[${writableRoots.map(r => `"${r}"`).join(", ")}]`;
+  const rootsToml = `sandbox_workspace_write.writable_roots=[${writableRoots.map(r => JSON.stringify(r)).join(", ")}]`;
   return "-s workspace-write -a never"
     + ` -c ${shellEscape("sandbox_workspace_write.network_access=true")}`
     + ` -c ${shellEscape(rootsToml)}`;
@@ -229,7 +235,7 @@ export const codexCore: HarnessCore = {
       ? ` -c ${shellEscape(`model_reasoning_effort=${plan.effort}`)}`
       : "";
     const trust = "--dangerously-bypass-hook-trust";
-    const sandbox = codexSandboxFlags(opts.worktreeGitDir);
+    const sandbox = codexSandboxFlags(plan.runtimeProject, opts.worktreeGitDir);
     const hooks = codexHookFlags(resolveHookRunner());
     return opts.resume
       ? `${plan.envPrefix}codex resume ${shellEscape(opts.sessionId)} ${trust} ${sandbox} ${hooks}${modelFlag}${effortFlag}`

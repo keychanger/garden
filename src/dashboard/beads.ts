@@ -3,10 +3,10 @@
 // checkout so every call hits the project's canonical .beads store — never a
 // worktree copy (worktrees carry the tracked .beads files but not the
 // gitignored Dolt database, so bd there would bootstrap a divergent local DB).
-// A project pinned to a shared store (`beadsDir`, board's DELEGATION.md
-// Decision 15) additionally gets BEADS_DIR in the child env — the same
-// variable worker env injection uses (beadsEnvExports), both spelled by
-// resolveBeadsDir so the two bd surfaces cannot resolve different stores.
+// Every call pins BEADS_DIR in the child env — the same variable worker env
+// injection uses (beadsEnvExports), both spelled by resolveBeadsDir so the two
+// bd surfaces cannot resolve different stores. This also replaces an ambient
+// BEADS_DIR inherited when garden is invoked from another project's worker.
 //
 // Verified 1.0.3 behavior this module encodes:
 // - `bd update --claim` sets assignee+in_progress on an UNASSIGNED bead, is a
@@ -76,14 +76,14 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-// Child env for a bd shell-out. Only a configured shared store injects
-// BEADS_DIR (via resolveBeadsDir, the one resolution rule); the default case
-// leaves the env untouched — bd keeps discovering <project>/.beads from cwd,
-// byte-identical to the pre-beadsDir behavior.
+// Child env for a bd shell-out. Always override any inherited BEADS_DIR with
+// resolveBeadsDir's result: garden commands can be invoked from inside another
+// project's worker, whose environment names that other project's store. Cwd
+// still stays at this project for project-relative paths.
 export function bdChildEnv(store: BeadsStore, actor?: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
-    ...(store.beadsDir ? { BEADS_DIR: resolveBeadsDir(store) } : {}),
+    BEADS_DIR: resolveBeadsDir(store),
     ...(actor ? { BEADS_ACTOR: actor } : {}),
   };
 }

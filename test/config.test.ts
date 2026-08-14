@@ -864,6 +864,8 @@ describe("resolveBeadsDir / beadsStoreError", () => {
     const { resolveBeadsDir } = await importConfig();
     expect(resolveBeadsDir({ path: "/repo" })).toBe(path.join("/repo", ".beads"));
     expect(resolveBeadsDir({ path: "/repo", beadsDir: "/board/.beads" })).toBe("/board/.beads");
+    expect(() => resolveBeadsDir({ path: "/repo", beadsDir: "board/.beads" }))
+      .toThrow(/absolute path/);
   });
 
   it("flags a missing or non-directory beadsDir, and only a configured one", async () => {
@@ -873,6 +875,9 @@ describe("resolveBeadsDir / beadsStoreError", () => {
     // Configured but missing.
     expect(beadsStoreError({ path: "/repo", beadsDir: path.join(tmpHome, "missing", ".beads") }))
       .toMatch(/does not exist/);
+    // A hand-edited config cannot bypass the CLI's absolute-path guard.
+    expect(beadsStoreError({ path: "/repo", beadsDir: "relative/.beads" }))
+      .toMatch(/not an absolute path/);
     // Configured but a file, not a directory.
     const file = path.join(tmpHome, "not-a-dir");
     fs.writeFileSync(file, "x");

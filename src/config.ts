@@ -239,6 +239,9 @@ export function isValidConfigKey(key: string): boolean {
 // diverge into the split-brain DELEGATION.md warns about (intake reading one
 // store while workers write another).
 export function resolveBeadsDir(project: Pick<ProjectConfig, "path" | "beadsDir">): string {
+  if (project.beadsDir && !path.isAbsolute(project.beadsDir)) {
+    throw new Error(`configured beadsDir must be an absolute path: ${project.beadsDir}`);
+  }
   return project.beadsDir ?? path.join(project.path, ".beads");
 }
 
@@ -252,6 +255,9 @@ export function resolveBeadsDir(project: Pick<ProjectConfig, "path" | "beadsDir"
 // (poller-intake.ts) and as a preflight row by `garden doctor`.
 export function beadsStoreError(project: Pick<ProjectConfig, "path" | "beadsDir">): string | null {
   if (!project.beadsDir) return null;
+  if (!path.isAbsolute(project.beadsDir)) {
+    return `configured beadsDir is not an absolute path: ${project.beadsDir}`;
+  }
   let stat: fs.Stats;
   try {
     stat = fs.statSync(project.beadsDir);

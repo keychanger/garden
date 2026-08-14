@@ -426,6 +426,35 @@ describe("codex adapter dialect", () => {
     expect(withoutGit).not.toContain("/.git\"");
   });
 
+  it("adds the resolved beads store to an intake worker's sandbox", async () => {
+    const { getHarnessCore } = await importCore();
+    const codex = getHarnessCore("codex");
+    const ownStore = codex.buildAgentCommand({
+      sessionId: "", resume: false, contextFile: "/ignored",
+      launchPlan: workerPlan("codex", {
+        runtimeProject: { path: "/repo", beadIntake: true },
+      }),
+    });
+    expect(ownStore).toContain('"/repo/.beads"');
+
+    const sharedStore = codex.buildAgentCommand({
+      sessionId: "", resume: false, contextFile: "/ignored",
+      launchPlan: workerPlan("codex", {
+        runtimeProject: { path: "/repo", beadIntake: true, beadsDir: "/board/.beads" },
+      }),
+    });
+    expect(sharedStore).toContain('"/board/.beads"');
+    expect(sharedStore).not.toContain('"/repo/.beads"');
+
+    const quotedStore = codex.buildAgentCommand({
+      sessionId: "", resume: false, contextFile: "/ignored",
+      launchPlan: workerPlan("codex", {
+        runtimeProject: { path: "/repo", beadIntake: true, beadsDir: '/board/"primary"/.beads' },
+      }),
+    });
+    expect(quotedStore).toContain(String.raw`"/board/\"primary\"/.beads"`);
+  });
+
   it("allocateSessionId returns the empty sentinel (Codex assigns its own)", async () => {
     const { getHarnessCore } = await importCore();
     expect(getHarnessCore("codex").allocateSessionId()).toBe("");

@@ -1745,12 +1745,17 @@ describe("removal-time bead unclaim", () => {
   });
 
   it("reopens and unassigns a self-assigned in_progress bead", () => {
+    vi.mocked(tryGetProject).mockReturnValue({
+      name: "myproject", path: "/repo/myproject", beadsDir: "/board/.beads",
+    });
     vi.mocked(findWorkerByName).mockReturnValue(beadWorker());
     vi.mocked(showBeads).mockReturnValue([beadDetail()]);
 
     killPane();
 
-    expect(vi.mocked(showBeads)).toHaveBeenCalledWith(expect.objectContaining({ path: "/repo/myproject" }), ["bd-1"]);
+    expect(vi.mocked(showBeads)).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/repo/myproject", beadsDir: "/board/.beads" }), ["bd-1"],
+    );
     expect(vi.mocked(reopenBead)).toHaveBeenCalledWith(
       expect.objectContaining({ path: "/repo/myproject" }), "bd-1", expect.stringContaining("swift-oak"),
     );

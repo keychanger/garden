@@ -139,6 +139,10 @@ The title and status panes are passive: keyboard input, mouse selection, and whe
 3. Add to the help text in `src/cli.ts`
 4. Use `output()` and `resolveProject*()` per Conventions
 
+## Adding a new project config key
+
+Add the field to `ProjectConfig` and `VALID_CONFIG_KEYS` in `src/config.ts`, then add it to `SETTABLE_KEYS` and the validation/mutation switch in `src/dashboard/project-config-mutate.ts` so the CLI has one authoritative writer. Update `src/cli.ts` help plus the Projects summary above; add a dashboard menu row only when the key is an everyday interactive control. Cover set, clear, invalid, and read-back behavior in `test/config.test.ts`, and update `DESIGN.md` when the key changes runtime architecture.
+
 ## Adding a new workflow
 
 See `WORKFLOWS.md`. Short version: define a poller-only `WorkflowDefinition` in `src/dashboard/workflows/<name>.ts`, register it in `workflows/index.ts`, and reuse `default.ts`'s state handlers wherever possible. Agent activity hooks are shared lifecycle plumbing; do not import the workflow registry from `hook-dispatcher.ts` or `hooks/default.ts`. Tests: `test/workflows.test.ts` + an integration test on the real external boundary the workflow drives. Concrete examples in the registry: `trellis.ts` (full-spec divergence — own reviewer prompt, verdict vocab, model pinning, post-merge dispatch), `grow.ts` (minimal loop divergence), and the botanist/planner pair (data-only definitions that reuse default handlers and invert worker posture through rules/skills). If your workflow shares the cold-respawn-per-iteration mechanics, supply a `LoopHooks` instance (see `src/dashboard/loop.ts`) instead of forking the dance.
