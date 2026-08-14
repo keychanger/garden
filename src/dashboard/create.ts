@@ -12,7 +12,7 @@ import { buildRulesContext, buildWorktreeRules } from "../rules.js";
 import { type DashboardState, readDashState, writeDashState, withStateLock, STATE_FILE } from "./state.js";
 import { restoreFromHidden } from "./layout.js";
 import { setupKeybindings } from "./hotkeys.js";
-import { setupStatusBar, buildStatusCommand, buildUsageCommand, buildHistoryCommand, buildAlertsCommand, updateHeaderVar, installInputGuard, setPaneProjectColor } from "./header.js";
+import { setupStatusBar, buildStatusCommand, buildUsageCommand, buildHistoryCommand, buildAlertsCommand, updateHeaderVar, installInputGuard, setPaneProjectColor, statusRenderedHeight, usageRenderedHeight } from "./header.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { formatLogsPaneLabel } from "../commands/logs.js";
 import {
@@ -1401,7 +1401,8 @@ reset()  { ${gardenRunner} reset "$@"; }
 export function respawnStatusPane(state: DashboardState): void {
   if (!state.statusPaneId) return;
   const gardenRunner = resolveGardenRunner();
-  const statusHeight = Math.max(4, renderQuickStatus(state).split("\n").length) + 1;
+  const statusHeight = statusRenderedHeight()
+    ?? Math.max(4, renderQuickStatus(state).split("\n").length) + 1;
   const statusCmd = buildStatusCommand(gardenRunner);
   try { tmux("respawn-pane", "-k", "-t", state.statusPaneId, "sh", "-c", statusCmd); } catch { /* ignore */ }
   try { tmux("resize-pane", "-t", state.statusPaneId, "-y", String(statusHeight)); } catch { /* pane may be gone */ }
@@ -1414,8 +1415,9 @@ export function respawnUsagePane(state: DashboardState): void {
   if (!state.usagePaneId) return;
   const gardenRunner = resolveGardenRunner();
   const usageCmd = buildUsageCommand(gardenRunner);
+  const usageHeight = usageRenderedHeight(USAGE_PANE_HEIGHT);
   try { tmux("respawn-pane", "-k", "-t", state.usagePaneId, "sh", "-c", usageCmd); } catch { /* ignore */ }
-  try { tmux("resize-pane", "-t", state.usagePaneId, "-y", String(USAGE_PANE_HEIGHT)); } catch { /* pane may be gone */ }
+  try { tmux("resize-pane", "-t", state.usagePaneId, "-y", String(usageHeight)); } catch { /* pane may be gone */ }
   try { tmux("clear-history", "-t", state.usagePaneId); } catch { /* ignore */ }
   disablePaneInput(state.usagePaneId);
   lockPaneMouse(state.usagePaneId);

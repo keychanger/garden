@@ -1106,12 +1106,29 @@ function writeUsageRendered(opts?: RefreshOptions): void {
 export function repinStatusPaneHeight(state: DashboardState): void {
   if (!state.statusPaneId) return;
   try {
-    const rendered = fs.readFileSync(STATUS_RENDERED_FILE, "utf-8");
-    const h = Math.max(statusPaneFloorLines(), rendered.split("\n").length) + 1;
+    const h = statusRenderedHeight();
+    if (h == null) return;
     const cur = getPaneSize(state.statusPaneId)?.height ?? null;
     if (cur === h) return;
     resizeAndSignalNoRefresh(state.statusPaneId, h, cur);
   } catch { /* no rendered file yet, or pane gone — best effort */ }
+}
+
+export function statusRenderedHeight(): number | null {
+  try {
+    const rendered = fs.readFileSync(STATUS_RENDERED_FILE, "utf-8");
+    return Math.max(statusPaneFloorLines(), rendered.split("\n").length) + 1;
+  } catch {
+    return null;
+  }
+}
+
+export function usageRenderedHeight(fallbackHeight: number): number {
+  try {
+    return fs.readFileSync(USAGE_RENDERED_FILE, "utf-8").split("\n").length + 1;
+  } catch {
+    return fallbackHeight;
+  }
 }
 
 // Same reconciliation for the usage pane, whose height is also content-derived
@@ -1120,10 +1137,7 @@ export function repinStatusPaneHeight(state: DashboardState): void {
 export function repinUsagePaneHeight(state: DashboardState, fallbackHeight: number): void {
   if (!state.usagePaneId) return;
   try {
-    let h = fallbackHeight;
-    try {
-      h = fs.readFileSync(USAGE_RENDERED_FILE, "utf-8").split("\n").length + 1;
-    } catch { /* no rendered file yet — pin to the default */ }
+    const h = usageRenderedHeight(fallbackHeight);
     const cur = getPaneSize(state.usagePaneId)?.height ?? null;
     if (cur === h) return;
     resizeAndSignalNoRefresh(state.usagePaneId, h, cur);

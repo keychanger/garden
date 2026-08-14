@@ -1,5 +1,5 @@
 import { dashboardExists } from "../session.js";
-import { readDashState } from "../dashboard/state.js";
+import { readDashState, withStateLock } from "../dashboard/state.js";
 import {
   respawnStatusPane,
   respawnUsagePane,
@@ -24,13 +24,15 @@ export async function redraw(_args: string[]): Promise<void> {
     );
     return;
   }
-  const state = readDashState();
-  try { refreshDashboard({ state }); } catch { /* best effort — stale bake still paints */ }
-  try { writeAlertsRendered({ state }); } catch { /* best effort */ }
-  respawnStatusPane(state);
-  respawnUsagePane(state);
-  respawnHistoryPane(state);
-  respawnAlertsPane(state);
+  withStateLock(() => {
+    const state = readDashState();
+    try { refreshDashboard({ state }); } catch { /* best effort — stale bake still paints */ }
+    try { writeAlertsRendered({ state }); } catch { /* best effort */ }
+    respawnStatusPane(state);
+    respawnUsagePane(state);
+    respawnHistoryPane(state);
+    respawnAlertsPane(state);
+  });
   output(
     { redrawn: true },
     () => "Dashboard redrawn: status, usage, history, and alerts panes respawned from freshly baked content.",

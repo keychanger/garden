@@ -107,6 +107,8 @@ vi.mock("../src/dashboard/header.js", () => ({
   buildUsageCommand: vi.fn(() => "usage-command"),
   buildHistoryCommand: vi.fn(() => "history-command"),
   buildAlertsCommand: vi.fn(() => "alerts-command"),
+  statusRenderedHeight: vi.fn(() => 23),
+  usageRenderedHeight: vi.fn(() => 8),
   updateHeaderVar: vi.fn(),
   setPaneProjectColor: vi.fn(),
 }));
@@ -183,10 +185,10 @@ import {
   buildWorktreeBootstrapScript,
   buildWorktreeResumeCommand,
   respawnWorkerWindow,
+  respawnStatusPane,
   respawnUsagePane,
   respawnHistoryPane,
   respawnAlertsPane,
-  USAGE_PANE_HEIGHT,
 } from "../src/dashboard/create.js";
 import { tmux, newDashboardWindow, tmuxSplit, getFirstPaneId, setPaneLabel, setPaneTitle, setPaneVar, shellEscape, disablePaneInput, killWindowSafe } from "../src/dashboard/tmux.js";
 import { tryGetProject, tryResolveProvider } from "../src/config.js";
@@ -593,10 +595,16 @@ describe("passive pane respawn helpers (garden redraw)", () => {
     gardenPaneType: "growhouse",
   } as never;
 
-  it("respawnUsagePane respawns the loop, re-pins height, and re-disables input", () => {
+  it("respawnStatusPane preserves the rendered content-derived height", () => {
+    respawnStatusPane(baseState);
+    expect(tmux).toHaveBeenCalledWith("respawn-pane", "-k", "-t", "%2", "sh", "-c", "status-command");
+    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%2", "-y", "23");
+  });
+
+  it("respawnUsagePane preserves the rendered height and re-disables input", () => {
     respawnUsagePane(baseState);
     expect(tmux).toHaveBeenCalledWith("respawn-pane", "-k", "-t", "%3", "sh", "-c", "usage-command");
-    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%3", "-y", String(USAGE_PANE_HEIGHT));
+    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%3", "-y", "8");
     expect(disablePaneInput).toHaveBeenCalledWith("%3");
   });
 

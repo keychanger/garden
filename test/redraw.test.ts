@@ -6,6 +6,7 @@ vi.mock("../src/session.js", () => ({
 
 vi.mock("../src/dashboard/state.js", () => ({
   readDashState: vi.fn(),
+  withStateLock: vi.fn((fn: () => unknown) => fn()),
 }));
 
 vi.mock("../src/dashboard/create.js", () => ({
@@ -27,6 +28,7 @@ vi.mock("../src/output.js", () => ({
 import { redraw } from "../src/commands/redraw.js";
 import { dashboardExists } from "../src/session.js";
 import { readDashState } from "../src/dashboard/state.js";
+import { withStateLock } from "../src/dashboard/state.js";
 import {
   respawnStatusPane,
   respawnUsagePane,
@@ -66,6 +68,7 @@ describe("redraw", () => {
     expect(respawnUsagePane).toHaveBeenCalledWith(state);
     expect(respawnHistoryPane).toHaveBeenCalledWith(state);
     expect(respawnAlertsPane).toHaveBeenCalledWith(state);
+    expect(withStateLock).toHaveBeenCalledOnce();
     // Bake before respawn: the fresh loops read the pre-baked files on their
     // first iteration, so stale bakes would repaint stale content.
     const bakeOrder = vi.mocked(refreshDashboard).mock.invocationCallOrder[0];
