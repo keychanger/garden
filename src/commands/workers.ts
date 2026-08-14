@@ -2,7 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { tryGetProject, SESSIONS_DIR, loadConfig } from "../config.js";
-import { newWorker } from "../dashboard/workers.js";
+import { newWorker, stopWorkerByName } from "../dashboard/workers.js";
+import { resolveWorkerArg } from "./resolve-worker.js";
 import { WORKER_EFFORT_LEVELS, isWorkerEffort } from "../dashboard/create.js";
 import { isRegisteredHarness, harnessNames, canonicalHarnessName } from "../dashboard/harness/core.js";
 import { getCrew, listCrews } from "../dashboard/crew.js";
@@ -29,12 +30,17 @@ export async function workers(args: string[]): Promise<void> {
     await growCommand(args.slice(1));
     return;
   }
+  if (sub === "stop") {
+    await stopCommand(args.slice(1));
+    return;
+  }
   throw new Error(
     `Usage:\n`
     + `  garden workers new <project> [--workflow trellis|grow|botanist] [--base <branch>] [--trellis <name>] `
     + `[--seed <text> | --seed-file <path>] [--model <alias-or-id>] [--effort low|medium|high|xhigh|ultra] [--harness <name>] [--max-iterations N]\n`
     + `  garden workers grow [<worker>] [--seed <text> | --seed-file <path> | --goal-file <path>] `
-    + `[--max-iterations N]`,
+    + `[--max-iterations N]\n`
+    + `  garden workers stop <worker>`,
   );
 }
 
@@ -386,6 +392,32 @@ async function newCommand(args: string[]): Promise<void> {
   const modelTag = workerModel ? ` model=${workerModel}` : "";
   console.log(
     `Planted vine ${projectName}/${newName} on trellis '${trellisName}' (${maxIter} iterations max${modelTag}).`,
+  );
+}
+
+// `garden workers stop <worker>` — remove a worker end-to-end from the CLI:
+// worker + review windows killed, telemetry tombstone written, the guarded
+// removal-time bead unclaim run, registry entry removed, branch/worktree
+// cleanup dispatched. The same removal the dashboard ⌥x performs, addressed
+// by name (prefix matching and `.` for the focused worker come from
+// resolveWorkerArg). The target is required — a destructive verb should not
+// default to whatever pane happens to be focused.
+async function stopCommand(args: string[]): Promise<void> {
+  const target = args[0];
+  if (!target) {
+    throw new Error("Usage: garden workers stop <worker>");
+  }
+  if (args.length > 1) {
+    throw new Error(
+      `Unexpected extra arguments: ${args.slice(1).map(a => `'${a}'`).join(", ")}. `
+      + `Usage: garden workers stop <worker>`,
+    );
+  }
+  const resolved = resolveWorkerArg(target);
+  stopWorkerByName(resolved.project, resolved.worker);
+  console.log(
+    `Stopped ${resolved.project}/${resolved.worker} `
+    + `(worker removed; branch/worktree cleanup running in the background).`,
   );
 }
 

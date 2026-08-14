@@ -535,6 +535,9 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     if (projectName && workerName) {
       try {
         const { removeWorker } = await import("./registry.js");
+        // Pre-work rollback (bootstrap abort): the worker never ran, so raw
+        // removeWorker without workers.ts's finalizeWorkerRemoval bead-unclaim
+        // tail is deliberate.
         removeWorker(projectName, workerName);
       } catch (err) {
         log.warn("bootstrap", "fail: failed to remove worker entry", {

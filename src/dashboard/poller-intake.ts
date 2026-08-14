@@ -214,6 +214,19 @@ export function buildBeadSeed(opts: {
   ].join("\n");
 }
 
+// The spawn seam is an options object so later intake extensions widen it
+// without reshaping every fake: `bead` is stamped onto the worker's registry
+// entry (the registry→bd half of the bead↔worker join — recall/reconcile and
+// the removal-time unclaim read it); `workflow` is declared for the planner
+// workflow but not consumed yet — every spawn today uses the default
+// workflow.
+export interface IntakeSpawnRequest {
+  seed: string;
+  task: string;
+  bead?: string;
+  workflow?: string;
+}
+
 // bd operations + spawn machinery, injectable for tests. The real deps shell
 // out to bd (cwd = the project checkout) and go through newWorker.
 export interface IntakeDeps {
@@ -227,7 +240,7 @@ export interface IntakeDeps {
   unassign(id: string): boolean;
   addLabel(id: string, label: string): boolean;
   removeLabel(id: string, label: string): boolean;
-  spawn(seedContent: string, task: string): string | null;
+  spawn(req: IntakeSpawnRequest): string | null;
   workers(): WorkerEntry[];
   alert(input: Parameters<typeof addAlert>[0]): void;
   nowMs(): number;
@@ -412,7 +425,7 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
         bead,
         mergedSiblings: st.completed.map(c => c.id),
       });
-      const name = deps.spawn(seed, `bead ${bead.id}: ${bead.title}`);
+      const name = deps.spawn({ seed, task: `bead ${bead.id}: ${bead.title}`, bead: bead.id });
       if (!name) {
         // Spawn machinery is broken (not bead-specific) — stop the pass
         // rather than burn the budget against a dead newWorker. Refund the
@@ -577,23 +590,31 @@ function runIntakeOnceReal(projectName: string, project: ProjectConfig): boolean
     unassign: (id) => unassignBead(projectPath, id),
     addLabel: (id, label) => addLabel(projectPath, id, label),
     removeLabel: (id, label) => removeLabel(projectPath, id, label),
-    spawn: (seedContent, task) => spawnBeadWorker(projectName, seedContent, task),
+    spawn: (req) => spawnBeadWorker(projectName, req),
     workers: () => getWorkers(projectName),
     alert: addAlert,
     nowMs: () => Date.now(),
   });
 }
 
-function spawnBeadWorker(projectName: string, seedContent: string, task: string): string | null {
+function spawnBeadWorker(projectName: string, req: IntakeSpawnRequest): string | null {
   const seedsDir = path.join(SESSIONS_DIR, "seeds");
   fs.mkdirSync(seedsDir, { recursive: true });
   const seedFile = path.join(seedsDir, `bead-${crypto.randomUUID()}.md`);
-  atomicWriteFile(seedFile, seedContent);
-  const name = newWorker({ projectName, seedMessageFile: seedFile, background: true });
+  atomicWriteFile(seedFile, req.seed);
+  const name = newWorker({
+    projectName,
+    seedMessageFile: seedFile,
+    background: true,
+    // Registry→bd join: recall/reconcile and the removal-time unclaim read
+    // entry.bead. (req.workflow is declared on the seam but not consumed —
+    // intake spawns default-workflow workers only.)
+    ...(req.bead ? { bead: req.bead } : {}),
+  });
   if (!name) {
     try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
     return null;
   }
-  updateWorkerTask(projectName, name, task);
+  updateWorkerTask(projectName, name, req.task);
   return name;
 }

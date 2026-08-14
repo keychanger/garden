@@ -328,6 +328,38 @@ describe("processPendingHandoffs", () => {
     }));
   });
 
+  it("passes the bead id to newWorker when the request carries it", () => {
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed, bead: "bd-9" });
+    processPendingHandoffs();
+    expect(vi.mocked(newWorker)).toHaveBeenCalledWith(expect.objectContaining({
+      projectName: "wolf",
+      bead: "bd-9",
+    }));
+  });
+
+  it("omits the bead field from the newWorker call when the request has none", () => {
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    processPendingHandoffs();
+    const call = vi.mocked(newWorker).mock.calls[0][0];
+    expect(call && "bead" in call).toBe(false);
+  });
+
+  it("rejects a request whose bead field is not a bounded string", () => {
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    const reqFile = path.join(reqDir, `${id}.req.json`);
+    const request = JSON.parse(fs.readFileSync(reqFile, "utf8"));
+    request.bead = 42;
+    fs.writeFileSync(reqFile, JSON.stringify(request));
+
+    processPendingHandoffs();
+
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
+      .toMatch(/shape guard/i);
+  });
+
   it("binds the result path to the request filename rather than a forged body id", () => {
     vi.mocked(newWorker).mockReturnValue("bold-ash");
     const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });

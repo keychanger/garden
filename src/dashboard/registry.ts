@@ -354,6 +354,16 @@ export interface WorkerEntry {
   handoffCallbackExpected?: boolean;
   handoffCallbackFiredAt?: number;
   handoffReplyNote?: string;
+  // Bead id this worker is building (bd's work graph — board's
+  // docs/DELEGATION.md). Stamped at creation by the intake dispatcher and by
+  // `garden handoff --bead`; the registry→bd half of the bead↔worker join
+  // (the bd→registry half is the bead's assignee == the worker name). Three
+  // consumers: the intake reconcile/recall step (stop a worker whose bead was
+  // closed or taken over), the guarded removal-time unclaim (DELEGATION.md
+  // Decision 12 — finalizeWorkerRemoval in workers.ts), and board's chips
+  // before a hand-run handoff's claim lands. A top-level optional scalar —
+  // no readRegistry migration (the crew/effort precedent).
+  bead?: string;
   // Workflow definition that drives this worker's poller lifecycle (state
   // machine and state handlers). Set to "default" by newWorker. Absent on
   // legacy entries from before the workflow registry shipped — poller

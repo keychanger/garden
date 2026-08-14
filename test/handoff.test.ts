@@ -229,4 +229,40 @@ describe("garden handoff command", () => {
     expect(call.expectCallback).toBe(true);
     expect(lines.join("\n")).toMatch(/ultracode mode; callback requested/);
   });
+
+  it("threads --bead <id> into the dispatch request", async () => {
+    await captureConsoleLog(() => handoff(["other", "--bead", "bd-7", "-m", "build bead 7"]));
+    const call = vi.mocked(submitHandoffRequest).mock.calls[0][0];
+    expect(call.bead).toBe("bd-7");
+  });
+
+  it("rejects --bead without a value", async () => {
+    await expect(handoff(["other", "--bead"])).rejects.toThrow(/--bead requires a bead id/);
+    expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
+  });
+
+  it("rejects --bead immediately followed by another flag (no id swallowing)", async () => {
+    await expect(handoff(["other", "--bead", "-m", "msg"])).rejects.toThrow(/--bead requires a bead id/);
+    expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
+  });
+
+  it("does not treat --bead or its value as part of the briefing", async () => {
+    await captureConsoleLog(() => handoff(["other", "--bead", "bd-7", "-m", "the real briefing"]));
+    const seedsDir = path.join(tmpDir, "seeds");
+    const body = fs.readFileSync(path.join(seedsDir, fs.readdirSync(seedsDir)[0]), "utf8");
+    expect(body).toContain("the real briefing");
+    expect(body).not.toContain("--bead");
+    expect(body).not.toContain("bd-7");
+  });
+
+  it("leaves bead undefined on the dispatch when --bead is not passed", async () => {
+    await captureConsoleLog(() => handoff(["other", "-m", "msg"]));
+    const call = vi.mocked(submitHandoffRequest).mock.calls[0][0];
+    expect(call.bead).toBeUndefined();
+  });
+
+  it("notes the bead in the success line", async () => {
+    const lines = await captureConsoleLog(() => handoff(["other", "--bead", "bd-7", "-m", "msg"]));
+    expect(lines.join("\n")).toMatch(/bead bd-7/);
+  });
 });

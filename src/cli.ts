@@ -172,6 +172,7 @@ Dashboard:
   handoff <project> [-m "<msg>"] Spawn a fresh worker on <project> seeded with a briefing (stdin or -m)
                                  Add --expect-callback to receive a one-shot prompt at this pane when the child terminates
                                  Add --ultracode to create the worker in ultracode mode (Opus + max effort + dynamic workflows)
+                                 Add --bead <id> to stamp the bead↔worker join on the new worker's registry entry (no bd claim is made)
   reply [-m "<msg>"]             Stage a freeform note for the parent that handed off to this worker (delivered with the callback)
   auto [on|off|status]           Toggle the global auto-continue gate
   auto threshold <N>             Set the usage-threshold percent (auto-disable above this)
@@ -203,6 +204,10 @@ Workers:
                                  Convert an active default worker into a grow loop after its
                                  current work merges (self-resolves via $GARDEN_WORKER). The durable
                                  goal lives at <worktree>/.garden/grow-goal.md, editable mid-loop.
+  workers stop <worker>          Remove a worker end-to-end from the CLI: windows killed, telemetry
+                                 tombstone written, its bead (if any) conditionally unclaimed, entry
+                                 removed, branch/worktree cleanup dispatched — the same removal the
+                                 dashboard ⌥x performs. Prefix matching and '.' resolve like kick/bounce.
 
 Trellis (spec-driven loop workflow — see WORKFLOWS.md § "Trellis workflow"):
   trellis list <project> [--active]   List trellises (active + archived)

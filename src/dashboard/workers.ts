@@ -48,6 +48,7 @@ import {
   gardenDoneTrackedInHead, getRemoteTrackingSha, workerCleanupMarkerPath,
 } from "./git.js";
 import { addAlert } from "./alerts.js";
+import { showBeads, reopenBead, unassignBead } from "./beads.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
 import { dispatchDelayedContinue, dispatchDelayedSeed } from "./continue.js";
 import { swapVisibleToProject } from "./navigate.js";
@@ -154,6 +155,11 @@ export interface NewWorkerOptions {
   // worker. The dispatcher uses it to reconcile an abandoned claim after a
   // crash without spawning the same handoff twice.
   handoffRequestId?: string;
+  // Bead id this worker builds (WorkerEntry.bead). Set by the intake
+  // dispatcher and by `garden handoff --bead` so both share this one write
+  // path. Stamping makes NO bd claim — intake claims after the spawn
+  // returns, and a handoff worker's own briefed claim is the claim.
+  bead?: string;
   // Handoff lineage and callback opt-in. Set only when this worker is being
   // created via `garden handoff --expect-callback` (background path).
   // Writes the parent linkage and the expectCallback flag onto the child's
@@ -510,6 +516,8 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       createdAt: Date.now(),
       workflow: workflowName,
       ...(opts.handoffRequestId ? { handoffRequestId: opts.handoffRequestId } : {}),
+      // Bead↔worker join (registry→bd half). See NewWorkerOptions.bead.
+      ...(opts.bead ? { bead: opts.bead } : {}),
       // Harness adapter (agent CLI). Absent = claude-code; consumers read via
       // getHarness(entry.harness). Threaded into launch/resume/loop.
       ...(resolvedHarness ? { harness: resolvedHarness } : {}),
@@ -587,6 +595,8 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       const m = resolveAndApplyVineModel(targetProject, stamped, getWorkflow("trellis"));
       if (m === null) {
         // Sonnet exhausted + trellisOpusFallback=false. Roll back.
+        // Pre-work rollback: no bd claim can exist yet, so raw removeWorker
+        // (not the finalizeWorkerRemoval bead-unclaim tail) is deliberate.
         removeWorker(targetProject, workerName);
         tmuxDisplay(
           `Cannot plant vine: Sonnet exhausted and trellisOpusFallback=false. ` +
@@ -707,6 +717,10 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // "loading" forever with no worktree and no pane. Roll back so the next
     // attempt isn't blocked by name collision and the dashboard isn't lying
     // about pending workers.
+    // Pre-work rollback: a stamped `bead` field may exist, but no bd claim
+    // does (intake claims only after newWorker returns; a handoff worker's
+    // claim is its own first action), so raw removeWorker without the
+    // finalizeWorkerRemoval bead-unclaim tail is deliberate.
     removeWorker(targetProject, workerName);
     log.error("workers", "tmux pane creation failed; rolled back registry entry", {
       worker: workerName,
@@ -808,14 +822,14 @@ function pickReplacementWorkerWindow(
 }
 
 export function killPane(): void {
-  // Declare cleanup vars outside the lock so backgroundGitCleanup can run
-  // after the lock is released — it only spawns a child process and does not
-  // touch state.
-  let cleanupRepoPath: string | undefined;
-  let cleanupWtPath: string | undefined;
-  let cleanupBranch: string | undefined;
-  let cleanupProject: string | undefined;
-  let cleanupWorker: string | undefined;
+  // The removal target is captured inside the state lock and finalized after
+  // it releases: finalizeWorkerRemoval shells out to bd for the removal-time
+  // bead unclaim (up to ~20s per call) and must never run while the dashboard
+  // state lock is held.
+  let removalProject: string | undefined;
+  let removalWorker: string | undefined;
+  let removalEntry: WorkerEntry | null = null;
+  let didKill = false;
 
   withStateLock(() => {
     const state = readDashState();
@@ -883,46 +897,148 @@ export function killPane(): void {
       }
       const killedWorkerName = parseWorkerSuffix(killedWindowName);
       if (killedWorkerName) {
-        const entry = findWorkerByName(state.activeProject, killedWorkerName);
-
-        killReviewWindow(state.activeProject, killedWorkerName);
-        if (entry) {
-          recordWorkerRemoved(
-            state.activeProject, killedWorkerName, entry.createdAt,
-            entry.workflow ?? "default", { ...entry },
-          );
-        }
-        removeWorker(state.activeProject, killedWorkerName);
-        log.info("workers", "killed", {
-          worker: killedWorkerName,
-          data: { project: state.activeProject, branch: entry?.branchName },
-        });
-
-        const remaining = getWorkers(state.activeProject);
-        if (remaining.length === 0 && project.beadIntake !== true) {
-          stopProjectPoller(state.activeProject);
-        }
-
-        if (entry) {
-          cleanupProject = state.activeProject;
-          cleanupWorker = killedWorkerName;
-          cleanupRepoPath = project.path;
-          cleanupWtPath = entry.worktreePath;
-          cleanupBranch = entry.branchName;
-        }
+        removalProject = state.activeProject;
+        removalWorker = killedWorkerName;
+        removalEntry = findWorkerByName(state.activeProject, killedWorkerName) ?? null;
       }
     }
 
     writeDashState(state);
-    refreshDashboard();
+    didKill = true;
   });
 
-  // Heavy git cleanup runs outside the lock — only spawns a background process.
-  if (cleanupProject && cleanupWorker && cleanupRepoPath) {
+  if (!didKill) return;
+  if (removalProject && removalWorker) {
+    finalizeWorkerRemoval(removalProject, removalWorker, removalEntry);
+  }
+  refreshDashboard();
+}
+
+// Shared removal tail — every operator removal path (the dashboard ⌥x kill in
+// killPane above, `garden workers stop` via stopWorkerByName below) funnels
+// through this one function so the tombstone and the Decision-12 bead unclaim
+// exist in exactly one place. Runs OUTSIDE the dashboard state lock: the
+// unclaim shells out to bd (up to ~20s per call under store-lock retries) and
+// must not freeze the dashboard. The pre-work rollback removal sites
+// (trellis-model refusal, tmux spawn failure, bootstrap aborts) deliberately
+// stay on raw removeWorker — no bd claim exists there to unclaim.
+export function finalizeWorkerRemoval(
+  projectName: string,
+  workerName: string,
+  entry: WorkerEntry | null,
+): void {
+  const project = tryGetProject(projectName);
+
+  killReviewWindow(projectName, workerName);
+  if (entry) {
+    recordWorkerRemoved(
+      projectName, workerName, entry.createdAt,
+      entry.workflow ?? "default", { ...entry },
+    );
+    // Decision-12 unclaim runs BEFORE removeWorker: if it crashes mid-write,
+    // the registry entry (and its bead join) is still on disk for a retry,
+    // instead of a hard-deleted entry orphaning an in_progress bead.
+    unclaimBeadOnRemoval(projectName, project?.path, entry);
+  }
+  removeWorker(projectName, workerName);
+  log.info("workers", "killed", {
+    worker: workerName,
+    data: { project: projectName, branch: entry?.branchName },
+  });
+
+  const remaining = getWorkers(projectName);
+  if (remaining.length === 0 && project?.beadIntake !== true) {
+    stopProjectPoller(projectName);
+  }
+
+  if (entry && project) {
     backgroundGitCleanup(
-      cleanupProject, cleanupWorker, cleanupRepoPath, cleanupWtPath, cleanupBranch,
+      projectName, workerName, project.path, entry.worktreePath, entry.branchName,
     );
   }
+}
+
+// The guarded removal-time unclaim (board docs/DELEGATION.md Decision 12).
+// Garden's registry hard-deletes worker entries, and the intake reaper
+// deliberately never touches a bead whose assignee has no registry entry — so
+// without this, removing a worker orphans its in_progress bead forever. The
+// guard: reopen (when in_progress) + unassign ONLY a bead that is still
+// open/in_progress AND still assigned to this worker. A closed bead is done
+// work; a foreign-assigned bead is the operator's recall claim (or another
+// actor's work) — both are left untouched. Failures are never silent: any bd
+// read or write failure raises a warn alert naming the bead, because a failed
+// unclaim reopens the orphaned-bead hole this exists to close.
+function unclaimBeadOnRemoval(
+  projectName: string,
+  projectPath: string | undefined,
+  entry: WorkerEntry,
+): void {
+  const beadId = entry.bead;
+  if (!beadId) return;
+  try {
+    if (!projectPath) {
+      throw new Error(`project '${projectName}' is not registered; no checkout to run bd in`);
+    }
+    const detail = showBeads(projectPath, [beadId])[0];
+    if (!detail) throw new Error(`bd show returned no data for bead ${beadId}`);
+    if (detail.status !== "open" && detail.status !== "in_progress") return;
+    if (detail.assignee !== entry.name) return;
+    if (detail.status === "in_progress"
+        && !reopenBead(projectPath, beadId, `garden: worker ${entry.name} removed`)) {
+      throw new Error("bd reopen failed");
+    }
+    if (!unassignBead(projectPath, beadId)) throw new Error("bd assign '' failed");
+    log.info("workers", "unclaimed bead on worker removal", {
+      worker: entry.name,
+      data: { project: projectName, bead: beadId },
+    });
+  } catch (err) {
+    addAlert({
+      level: "warn",
+      source: "workers",
+      project: projectName,
+      worker: entry.name,
+      message:
+        `Bead ${beadId} was not unclaimed when worker '${entry.name}' was removed `
+        + `(${err instanceof Error ? err.message : String(err)}). It may still be `
+        + `assigned to the removed worker — reopen/unassign it manually.`,
+      dedupKey: `bead-unclaim:${projectName}:${beadId}`,
+    });
+    log.warn("workers", "bead unclaim failed on worker removal", {
+      worker: entry.name,
+      data: { project: projectName, bead: beadId, error: String(err) },
+    });
+  }
+}
+
+// `garden workers stop <worker>` back end: remove a worker by name — the
+// dashboard ⌥x kill, addressed from the CLI. A target holding the visible
+// pane routes through killPane (the focus-swap path picks its replacement);
+// a parked or hidden target kills its window directly. Both end in the same
+// finalizeWorkerRemoval tail (tombstone, Decision-12 bead unclaim, registry
+// removal, poller-stop check, background git cleanup).
+export function stopWorkerByName(projectName: string, workerName: string): void {
+  const entry = findWorkerByName(projectName, workerName);
+  if (!entry) {
+    throw new Error(`No worker '${workerName}' in project '${projectName}'.`);
+  }
+  const windowName = workerWin(projectName, workerName);
+  const state = readDashState();
+  if (state.activePaneType === "worker" && state.activeWindowName === windowName) {
+    killPane();
+    return;
+  }
+
+  killWindowSafe(windowName);
+  withStateLock(() => {
+    const s = readDashState();
+    if (s.lastActiveWorker[projectName] === windowName) {
+      delete s.lastActiveWorker[projectName];
+      writeDashState(s);
+    }
+  });
+  finalizeWorkerRemoval(projectName, workerName, entry);
+  refreshDashboard();
 }
 
 // Kill and restart the Claude process in a worker's pane via `claude --resume`.

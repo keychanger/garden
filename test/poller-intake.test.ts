@@ -28,7 +28,7 @@ import {
   parseDispatchState, retryCount, failedCount, shouldReap, isIntakeLive, buildBeadSeed,
   runIntakeOnce, runBeadIntake, intakeDue, intakeStampPath, intakePokePath,
   BREAKER_THRESHOLD, DEFAULT_BEAD_INTAKE_CAP, INTAKE_MIN_INTERVAL_MS, REAPER_GRACE_MS,
-  type IntakeDeps,
+  type IntakeDeps, type IntakeSpawnRequest,
 } from "../src/dashboard/poller-intake.js";
 import { intakeErrorPath, readIntakeStatus } from "../src/dashboard/intake-paths.js";
 import type { BeadDetail, SwarmStatus } from "../src/dashboard/beads.js";
@@ -185,7 +185,7 @@ interface FakeWorld {
   statuses: Record<string, SwarmStatus>;
   details: Record<string, BeadDetail>;
   workers: WorkerEntry[];
-  spawns: Array<{ seed: string; task: string }>;
+  spawns: IntakeSpawnRequest[];
   spawnResult: (n: number) => string | null;
   claims: Array<{ id: string; actor: string }>;
   claimResult: boolean;
@@ -239,9 +239,9 @@ function makeDeps(w: FakeWorld, over: Partial<IntakeDeps> = {}): IntakeDeps {
       w.ops.push(`remove:${label}`);
       return true;
     },
-    spawn: (seed, task) => {
-      w.spawns.push({ seed, task });
-      w.ops.push(`spawn:${task}`);
+    spawn: (req) => {
+      w.spawns.push(req);
+      w.ops.push(`spawn:${req.task}`);
       return w.spawnResult(w.spawns.length);
     },
     workers: () => w.workers,
@@ -273,6 +273,8 @@ describe("runIntakeOnce", () => {
     expect(runIntakeOnce(makeDeps(w))).toBe(true);
     expect(w.spawns).toHaveLength(1);
     expect(w.spawns[0].task).toBe("bead b1: one");
+    // The registry→bd join: intake asks the spawn seam to stamp entry.bead.
+    expect(w.spawns[0].bead).toBe("b1");
     expect(w.claims).toEqual([{ id: "b1", actor: "worker-1" }]);
     expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:spent:1" });
     // No pre-existing spent label -> nothing removed.

@@ -217,6 +217,12 @@ describe("addWorker / getWorkers", () => {
     expect(workers[0].task).toBe("fixing bugs");
   });
 
+  it("persists the bead join field across write/read", async () => {
+    const { addWorker, readRegistry } = await importRegistry();
+    addWorker("proj", { name: "bold-ash", sessionId: "abc", task: "", bead: "bd-42" });
+    expect(readRegistry().workers.proj[0].bead).toBe("bd-42");
+  });
+
   it("appends to existing workers for same project", async () => {
     const { addWorker, getWorkers } = await importRegistry();
     addWorker("proj", { name: "bold-ash", sessionId: "a", task: "" });

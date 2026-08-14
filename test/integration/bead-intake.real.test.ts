@@ -16,7 +16,7 @@ import {
   addLabel, removeLabel,
 } from "../../src/dashboard/beads.js";
 import {
-  runIntakeOnce, REAPER_GRACE_MS, type IntakeDeps,
+  runIntakeOnce, REAPER_GRACE_MS, type IntakeDeps, type IntakeSpawnRequest,
 } from "../../src/dashboard/poller-intake.js";
 import type { WorkerEntry } from "../../src/dashboard/registry.js";
 
@@ -62,8 +62,8 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
   });
 
   function makeDeps(opts: { workers?: WorkerEntry[]; cap?: number } = {}):
-    IntakeDeps & { spawns: Array<{ seed: string; task: string }>; alerts: string[] } {
-    const spawns: Array<{ seed: string; task: string }> = [];
+    IntakeDeps & { spawns: IntakeSpawnRequest[]; alerts: string[] } {
+    const spawns: IntakeSpawnRequest[] = [];
     const alerts: string[] = [];
     let n = 0;
     return {
@@ -77,7 +77,7 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
       unassign: (id) => unassignBead(repo, id),
       addLabel: (id, label) => addLabel(repo, id, label),
       removeLabel: (id, label) => removeLabel(repo, id, label),
-      spawn: (seed, task) => { spawns.push({ seed, task }); n++; return `it-worker-${n}`; },
+      spawn: (req) => { spawns.push(req); n++; return `it-worker-${n}`; },
       workers: () => opts.workers ?? [],
       alert: (input) => { alerts.push(`${input.level}:${input.message}`); },
       nowMs: () => Date.now(),
@@ -95,6 +95,8 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
     expect(deps.spawns).toHaveLength(2);
     expect(deps.spawns[0].seed).toContain("The epic design doc.");
     expect(deps.spawns[0].seed).toContain("--claim");
+    // Every dispatched spawn names its bead so the worker entry carries the join.
+    expect(deps.spawns.map(s => s.bead).sort()).toEqual([childIds[0], childIds[1]].sort());
 
     // Claims landed in bd: assignee is the worker name, status in_progress.
     const details = showBeads(repo, [childIds[0], childIds[1]]);

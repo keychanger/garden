@@ -109,6 +109,11 @@ export interface HandoffRequest {
   // is created with the ultracode preset (Opus + max effort + dynamic-workflow
   // trigger). See `NewWorkerOptions.ultracode`.
   ultracode?: boolean;
+  // Set when the source worker invoked `garden handoff --bead <id>`. Stamped
+  // onto the child's registry entry (the registry→bd bead↔worker join); the
+  // dispatch makes no bd claim — the child's own briefed claim is the claim.
+  // See `NewWorkerOptions.bead`.
+  bead?: string;
 }
 
 export interface HandoffResponse {
@@ -124,6 +129,7 @@ export function submitHandoffRequest(opts: {
   parentProject?: string;
   parentWorker?: string;
   ultracode?: boolean;
+  bead?: string;
 }): string {
   fs.mkdirSync(requestsDir(), { recursive: true });
   const id = crypto.randomUUID();
@@ -136,6 +142,7 @@ export function submitHandoffRequest(opts: {
     parentProject: opts.parentProject,
     parentWorker: opts.parentWorker,
     ultracode: opts.ultracode,
+    bead: opts.bead,
   };
   atomicWriteFile(requestPath(id), JSON.stringify(req), { mode: 0o600 });
   return id;
@@ -265,7 +272,8 @@ function isHandoffRequest(value: unknown): value is HandoffRequest {
     && (request.expectCallback === undefined || typeof request.expectCallback === "boolean")
     && (request.parentProject === undefined || boundedString(request.parentProject, 128))
     && (request.parentWorker === undefined || boundedString(request.parentWorker, 128))
-    && (request.ultracode === undefined || typeof request.ultracode === "boolean");
+    && (request.ultracode === undefined || typeof request.ultracode === "boolean")
+    && (request.bead === undefined || boundedString(request.bead, 128));
 }
 
 function parseJson(data: Buffer): unknown {
@@ -431,6 +439,7 @@ function processClaim(claimFile: string, filenameId: string): void {
       handoffRequestId: request.id,
       ...(handoffCallback ? { handoffCallback } : {}),
       ...(request.ultracode ? { ultracode: true } : {}),
+      ...(request.bead ? { bead: request.bead } : {}),
     });
     const reconciledWorker = workerName ?? findExistingWorker(request);
     response = reconciledWorker

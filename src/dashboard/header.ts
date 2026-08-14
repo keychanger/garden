@@ -372,6 +372,9 @@ export function handlePaneDied(windowName: string | undefined): void {
   if (entry.agentStatus === "loading"
       && (!entry.worktreePath || !worktreeExists(entry.worktreePath))) {
     try {
+      // Pre-work rollback (bootstrap abort): the worker never ran, so raw
+      // removeWorker without workers.ts's finalizeWorkerRemoval bead-unclaim
+      // tail is deliberate.
       removeWorker(project, worker);
       log.info("hook", "pane-died → removed (bootstrap aborted, no worktree)", {
         worker,

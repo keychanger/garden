@@ -23,11 +23,13 @@ export async function handoff(args: string[]): Promise<void> {
   const targetProject = args[0];
   if (!targetProject || targetProject.startsWith("-")) {
     throw new Error(
-      "Usage: garden handoff <target-project> [--expect-callback] [--ultracode] [-m \"message\"]\n"
-      + "       garden handoff <target-project> [--expect-callback] [--ultracode] < message-file\n"
-      + "       garden handoff <target-project> [--expect-callback] [--ultracode] <<'EOF' ... EOF\n"
+      "Usage: garden handoff <target-project> [--expect-callback] [--ultracode] [--bead <id>] [-m \"message\"]\n"
+      + "       garden handoff <target-project> [--expect-callback] [--ultracode] [--bead <id>] < message-file\n"
+      + "       garden handoff <target-project> [--expect-callback] [--ultracode] [--bead <id>] <<'EOF' ... EOF\n"
       + "\n"
-      + "  --ultracode  create the new worker in ultracode mode (Opus + max effort + dynamic workflows)",
+      + "  --ultracode  create the new worker in ultracode mode (Opus + max effort + dynamic workflows)\n"
+      + "  --bead <id>  stamp the bead id on the new worker's registry entry (the bead↔worker join;\n"
+      + "               makes no bd claim — the worker's own briefed claim is the claim)",
     );
   }
 
@@ -46,6 +48,22 @@ export async function handoff(args: string[]): Promise<void> {
   const ultracodeIdx = rest.indexOf("--ultracode");
   const ultracode = ultracodeIdx !== -1;
   if (ultracode) rest.splice(ultracodeIdx, 1);
+
+  // --bead <id>: stamp the bead field on the new worker's registry entry —
+  // the registry→bd join board's chips and the removal-time unclaim read.
+  // Makes NO bd claim (the worker's own briefed claim is the claim).
+  // Value-carrying: splice BOTH tokens out before readBriefing scans rest
+  // for -m, or the id would be read as the -m message.
+  const beadIdx = rest.indexOf("--bead");
+  let bead: string | undefined;
+  if (beadIdx !== -1) {
+    const value = rest[beadIdx + 1];
+    if (!value || !value.trim() || value.startsWith("-")) {
+      throw new Error("--bead requires a bead id argument.");
+    }
+    bead = value.trim();
+    rest.splice(beadIdx, 2);
+  }
 
   const briefing = await readBriefing(rest);
   if (!briefing.trim()) {
@@ -82,6 +100,7 @@ export async function handoff(args: string[]): Promise<void> {
     parentProject: sourceProject,
     parentWorker: sourceWorker,
     ultracode,
+    bead,
   });
 
   // Poke any poller that might be listening. The target's poller is the
@@ -133,6 +152,7 @@ export async function handoff(args: string[]): Promise<void> {
   const notes = [
     ultracode ? "ultracode mode" : null,
     expectCallback ? "callback requested on terminal state" : null,
+    bead ? `bead ${bead}` : null,
   ].filter(Boolean);
   const suffix = notes.length ? ` (${notes.join("; ")})` : "";
   console.log(`Handed off to ${targetProject}/${resp.workerName}.${suffix}`);

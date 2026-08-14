@@ -181,6 +181,14 @@ vi.mock("../src/dashboard/alerts.js", () => ({
   addAlert: vi.fn(),
 }));
 
+// bd shell-outs for the removal-time bead unclaim (Decision 12). Real beads.ts
+// spawns the bd binary; the matrix below drives the guard through these.
+vi.mock("../src/dashboard/beads.js", () => ({
+  showBeads: vi.fn(() => []),
+  reopenBead: vi.fn(() => true),
+  unassignBead: vi.fn(() => true),
+}));
+
 vi.mock("../src/dashboard/poller.js", () => ({
   ensureProjectPoller: vi.fn(),
   killReviewWindow: vi.fn(),
@@ -205,9 +213,10 @@ vi.mock("../src/rules.js", () => ({
 // --- Imports (after mocks) ---
 
 import {
-  newWorker, killPane, bounceWorker, bounceActiveWorker,
+  newWorker, killPane, stopWorkerByName, bounceWorker, bounceActiveWorker,
   decideHold, holdWorker, releaseWorker, holdActiveWorker,
 } from "../src/dashboard/workers.js";
+import { showBeads, reopenBead, unassignBead } from "../src/dashboard/beads.js";
 import { readDashState, writeDashState, withStateLock } from "../src/dashboard/state.js";
 import { parkToHidden, restoreFromHidden } from "../src/dashboard/layout.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
@@ -272,6 +281,9 @@ beforeEach(() => {
   vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 50 });
   vi.mocked(fs.readFileSync).mockImplementation(() => { throw new Error("ENOENT"); });
   vi.mocked(tryGetProject).mockReset().mockReturnValue({ name: "myproject", path: "/repo/myproject" });
+  vi.mocked(showBeads).mockReset().mockReturnValue([]);
+  vi.mocked(reopenBead).mockReset().mockReturnValue(true);
+  vi.mocked(unassignBead).mockReset().mockReturnValue(true);
   vi.mocked(tryResolveProvider).mockReset().mockReturnValue(null);
   vi.mocked(dashboardExists).mockReturnValue(false);
   delete process.env.GARDEN_TEST_PROVIDER_KEY;
@@ -1676,6 +1688,230 @@ describe("killPane always kills", () => {
     const removedOrder = vi.mocked(recordWorkerRemoved).mock.invocationCallOrder[0];
     const removeOrder = vi.mocked(removeWorker).mock.invocationCallOrder[0];
     expect(removedOrder).toBeLessThan(removeOrder);
+  });
+});
+
+// =============================================================================
+// Removal-time bead unclaim (board docs/DELEGATION.md Decision 12) — driven
+// through killPane, since the guard lives in the shared finalizeWorkerRemoval
+// tail every operator removal path funnels through.
+// =============================================================================
+
+describe("removal-time bead unclaim", () => {
+  function beadWorker(over: Record<string, unknown> = {}) {
+    return {
+      name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak",
+      worktreePath: "/wt/swift-oak", bead: "bd-1", ...over,
+    };
+  }
+
+  function beadDetail(over: Record<string, unknown> = {}) {
+    return {
+      id: "bd-1", title: "a bead", status: "in_progress", priority: 2,
+      labels: [], assignee: "swift-oak", ...over,
+    };
+  }
+
+  beforeEach(() => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(getFirstPaneId).mockReturnValue("%25");
+  });
+
+  it("reopens and unassigns a self-assigned in_progress bead", () => {
+    vi.mocked(findWorkerByName).mockReturnValue(beadWorker());
+    vi.mocked(showBeads).mockReturnValue([beadDetail()]);
+
+    killPane();
+
+    expect(vi.mocked(showBeads)).toHaveBeenCalledWith("/repo/myproject", ["bd-1"]);
+    expect(vi.mocked(reopenBead)).toHaveBeenCalledWith(
+      "/repo/myproject", "bd-1", expect.stringContaining("swift-oak"),
+    );
+    expect(vi.mocked(unassignBead)).toHaveBeenCalledWith("/repo/myproject", "bd-1");
+    expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "swift-oak");
+    expect(vi.mocked(addAlert)).not.toHaveBeenCalled();
+  });
+
+  it("unassigns without reopening a self-assigned open bead", () => {
+    vi.mocked(findWorkerByName).mockReturnValue(beadWorker());
+    vi.mocked(showBeads).mockReturnValue([beadDetail({ status: "open" })]);
+
+    killPane();
+
+    expect(vi.mocked(reopenBead)).not.toHaveBeenCalled();
+    expect(vi.mocked(unassignBead)).toHaveBeenCalledWith("/repo/myproject", "bd-1");
+  });
+
+  it("leaves a closed bead untouched", () => {
+    vi.mocked(findWorkerByName).mockReturnValue(beadWorker());
+    vi.mocked(showBeads).mockReturnValue([beadDetail({ status: "closed" })]);
+
+    killPane();
+
+    expect(vi.mocked(reopenBead)).not.toHaveBeenCalled();
+    expect(vi.mocked(unassignBead)).not.toHaveBeenCalled();
+    expect(vi.mocked(addAlert)).not.toHaveBeenCalled();
+    expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "swift-oak");
+  });
+
+  it("leaves a foreign-assigned bead untouched (preserves the operator's recall claim)", () => {
+    vi.mocked(findWorkerByName).mockReturnValue(beadWorker());
+    vi.mocked(showBeads).mockReturnValue([beadDetail({ assignee: "joshua" })]);
+
+    killPane();
+
+    expect(vi.mocked(reopenBead)).not.toHaveBeenCalled();
+    expect(vi.mocked(unassignBead)).not.toHaveBeenCalled();
+    expect(vi.mocked(addAlert)).not.toHaveBeenCalled();
+  });
+
+  it("makes no bd call when the entry carries no bead field", () => {
+    vi.mocked(findWorkerByName).mockReturnValue(beadWorker({ bead: undefined }));
+
+    killPane();
+
+    expect(vi.mocked(showBeads)).not.toHaveBeenCalled();
+    expect(vi.mocked(reopenBead)).not.toHaveBeenCalled();
+    expect(vi.mocked(unassignBead)).not.toHaveBeenCalled();
+  });
+
+  it("raises a warn alert when the unclaim write fails, and still removes the worker", () => {
+    vi.mocked(findWorkerByName).mockReturnValue(beadWorker());
+    vi.mocked(showBeads).mockReturnValue([beadDetail()]);
+    vi.mocked(reopenBead).mockReturnValue(false);
+
+    killPane();
+
+    expect(vi.mocked(addAlert)).toHaveBeenCalledWith(expect.objectContaining({
+      level: "warn",
+      source: "workers",
+      project: "myproject",
+      worker: "swift-oak",
+      dedupKey: "bead-unclaim:myproject:bd-1",
+    }));
+    expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "swift-oak");
+  });
+
+  it("raises the same alert when the bd read fails (never silent)", () => {
+    vi.mocked(findWorkerByName).mockReturnValue(beadWorker());
+    vi.mocked(showBeads).mockImplementation(() => { throw new Error("bd show failed: store locked"); });
+
+    killPane();
+
+    expect(vi.mocked(addAlert)).toHaveBeenCalledWith(expect.objectContaining({
+      level: "warn",
+      dedupKey: "bead-unclaim:myproject:bd-1",
+      message: expect.stringContaining("store locked"),
+    }));
+    expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "swift-oak");
+  });
+
+  it("orders the tail: tombstone, then unclaim, then registry removal", () => {
+    vi.mocked(findWorkerByName).mockReturnValue(beadWorker());
+    vi.mocked(showBeads).mockReturnValue([beadDetail()]);
+
+    killPane();
+
+    const tombstone = vi.mocked(recordWorkerRemoved).mock.invocationCallOrder[0];
+    const unclaim = vi.mocked(unassignBead).mock.invocationCallOrder[0];
+    const removal = vi.mocked(removeWorker).mock.invocationCallOrder[0];
+    // The unclaim must precede the hard delete: a crash mid-unclaim leaves
+    // the entry (and its bead join) on disk instead of an orphaned bead.
+    expect(tombstone).toBeLessThan(unclaim);
+    expect(unclaim).toBeLessThan(removal);
+  });
+});
+
+// =============================================================================
+// stopWorkerByName (`garden workers stop` back end)
+// =============================================================================
+
+describe("stopWorkerByName", () => {
+  const parkedState = () => makeState({
+    activePaneType: "shell",
+    activeWindowName: "_myproject-shell",
+  });
+
+  it("throws for an unknown worker", () => {
+    vi.mocked(findWorkerByName).mockReturnValue(null);
+    expect(() => stopWorkerByName("myproject", "ghost"))
+      .toThrow(/No worker 'ghost' in project 'myproject'/);
+    expect(vi.mocked(removeWorker)).not.toHaveBeenCalled();
+  });
+
+  it("removes a parked worker end-to-end: window, review window, tombstone, entry, git cleanup", () => {
+    vi.mocked(readDashState).mockReturnValue(parkedState());
+    const entry = {
+      name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak",
+      worktreePath: "/wt/swift-oak", createdAt: 42,
+    };
+    vi.mocked(findWorkerByName).mockReturnValue(entry);
+
+    stopWorkerByName("myproject", "swift-oak");
+
+    expect(vi.mocked(killWindowSafe)).toHaveBeenCalledWith("_myproject-worker-swift-oak");
+    expect(vi.mocked(killReviewWindow)).toHaveBeenCalledWith("myproject", "swift-oak");
+    expect(vi.mocked(recordWorkerRemoved)).toHaveBeenCalledWith(
+      "myproject", "swift-oak", 42, "default", { ...entry },
+    );
+    expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "swift-oak");
+    expect(vi.mocked(spawn)).toHaveBeenCalledWith(
+      "sh", ["-c", expect.stringContaining("worktree remove")],
+      { detached: true, stdio: "ignore" },
+    );
+    expect(vi.mocked(refreshDashboard)).toHaveBeenCalled();
+  });
+
+  it("clears lastActiveWorker for the stopped worker", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activePaneType: "shell",
+      activeWindowName: "_myproject-shell",
+      lastActiveWorker: { myproject: "_myproject-worker-swift-oak" },
+    }));
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak",
+    });
+
+    stopWorkerByName("myproject", "swift-oak");
+
+    const written = vi.mocked(writeDashState).mock.calls[0][0];
+    expect(written.lastActiveWorker["myproject"]).toBeUndefined();
+  });
+
+  it("runs the Decision-12 unclaim through the shared tail", () => {
+    vi.mocked(readDashState).mockReturnValue(parkedState());
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak", bead: "bd-1",
+    });
+    vi.mocked(showBeads).mockReturnValue([{
+      id: "bd-1", title: "a bead", status: "in_progress", priority: 2,
+      labels: [], assignee: "swift-oak",
+    }]);
+
+    stopWorkerByName("myproject", "swift-oak");
+
+    expect(vi.mocked(reopenBead)).toHaveBeenCalledWith(
+      "/repo/myproject", "bd-1", expect.stringContaining("swift-oak"),
+    );
+    expect(vi.mocked(unassignBead)).toHaveBeenCalledWith("/repo/myproject", "bd-1");
+  });
+
+  it("routes a target holding the visible pane through the killPane focus-swap path", () => {
+    // makeState's default active window IS the target worker's window.
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(getFirstPaneId).mockReturnValue("%25");
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak",
+      worktreePath: "/wt/swift-oak",
+    });
+
+    stopWorkerByName("myproject", "swift-oak");
+
+    // The focus-swap path picked a replacement pane (shell fallback here)
+    // instead of a blind window kill of the visible pane.
+    expect(vi.mocked(tmux)).toHaveBeenCalledWith("swap-pane", "-s", "%2", "-t", "%25");
+    expect(vi.mocked(removeWorker)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "swift-oak");
   });
 });
 
