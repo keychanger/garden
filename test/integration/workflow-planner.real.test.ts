@@ -83,7 +83,7 @@ describe.skipIf(!bdInstalled)("planner contract against real bd", () => {
 
     // Linked: the epic's swarm frontier sees all three, leaves ready and the
     // integration gate blocked behind them.
-    const st = swarmStatus(repo, epicId);
+    const st = swarmStatus({ path: repo }, epicId);
     expect(st?.ready.map(r => r.id).sort()).toEqual([leaf1, leaf2].sort());
     expect(st?.blocked.map(r => r.id)).toEqual([integration]);
 
@@ -96,7 +96,7 @@ describe.skipIf(!bdInstalled)("planner contract against real bd", () => {
 
     // The integration label survives the create (buildBeadSeed's dispatch
     // branch keys on it).
-    const detail = showBeads(repo, [integration])[0];
+    const detail = showBeads({ path: repo }, [integration])[0];
     expect(detail.labels).toContain("integration");
   }, TEST_TIMEOUT);
 
@@ -109,23 +109,23 @@ describe.skipIf(!bdInstalled)("planner contract against real bd", () => {
     // The planner's completion contract: remove plan:planning, add plan:ready
     // (or plan:failed). Exercise every rewrite through the same beads.ts
     // client the intake loop uses.
-    expect(addLabel(repo, epicId, "plan:pending")).toBe(true);
-    let epic = listOpenEpics(repo).find(e => e.id === epicId);
+    expect(addLabel({ path: repo }, epicId, "plan:pending")).toBe(true);
+    let epic = listOpenEpics({ path: repo }).find(e => e.id === epicId);
     expect(epic?.labels).toContain("plan:pending");
 
-    expect(removeLabel(repo, epicId, "plan:pending")).toBe(true);
-    expect(addLabel(repo, epicId, "plan:planning")).toBe(true);
-    epic = listOpenEpics(repo).find(e => e.id === epicId);
+    expect(removeLabel({ path: repo }, epicId, "plan:pending")).toBe(true);
+    expect(addLabel({ path: repo }, epicId, "plan:planning")).toBe(true);
+    epic = listOpenEpics({ path: repo }).find(e => e.id === epicId);
     expect(epic?.labels).toContain("plan:planning");
     expect(epic?.labels).not.toContain("plan:pending");
 
-    expect(removeLabel(repo, epicId, "plan:planning")).toBe(true);
-    expect(addLabel(repo, epicId, "plan:ready")).toBe(true);
-    epic = listOpenEpics(repo).find(e => e.id === epicId);
+    expect(removeLabel({ path: repo }, epicId, "plan:planning")).toBe(true);
+    expect(addLabel({ path: repo }, epicId, "plan:ready")).toBe(true);
+    epic = listOpenEpics({ path: repo }).find(e => e.id === epicId);
     expect(epic?.labels).toContain("plan:ready");
     expect(epic?.labels).not.toContain("plan:planning");
 
-    expect(removeLabel(repo, epicId, "plan:ready")).toBe(true);
+    expect(removeLabel({ path: repo }, epicId, "plan:ready")).toBe(true);
   }, TEST_TIMEOUT);
 
   it("canary: bd create --graph silently drops --ephemeral (why the seed forbids it)", () => {
@@ -149,20 +149,23 @@ describe.skipIf(!bdInstalled)("planner contract against real bd", () => {
   it("the plan-consume loop moves a real epic pending -> planning and spawns one planner", () => {
     const planEpic = createBead("consume epic", ["-t", "epic"]);
     bd("update", planEpic, "--design", "Consume-loop design doc.");
+    // Intake scopes every pass to project:<name> epics (the shared-store
+    // conjunct), so the fixture epics carry this suite's.
+    bd("label", "add", planEpic, "project:planner-it");
     bd("label", "add", planEpic, "plan:pending");
 
     const spawns: IntakeSpawnRequest[] = [];
     const deps: IntakeDeps = {
       projectName: "planner-it",
       cap: 10,
-      listOpenEpics: () => listOpenEpics(repo),
-      swarmStatus: (id) => swarmStatus(repo, id),
-      showBeads: (ids) => showBeads(repo, ids),
-      claim: (id, actor) => claimBead(repo, id, actor),
-      reopen: (id, reason) => reopenBead(repo, id, reason),
-      unassign: (id) => unassignBead(repo, id),
-      addLabel: (id, label) => addLabel(repo, id, label),
-      removeLabel: (id, label) => removeLabel(repo, id, label),
+      listOpenEpics: () => listOpenEpics({ path: repo }),
+      swarmStatus: (id) => swarmStatus({ path: repo }, id),
+      showBeads: (ids) => showBeads({ path: repo }, ids),
+      claim: (id, actor) => claimBead({ path: repo }, id, actor),
+      reopen: (id, reason) => reopenBead({ path: repo }, id, reason),
+      unassign: (id) => unassignBead({ path: repo }, id),
+      addLabel: (id, label) => addLabel({ path: repo }, id, label),
+      removeLabel: (id, label) => removeLabel({ path: repo }, id, label),
       spawn: (req) => { spawns.push(req); return `it-planner-${spawns.length}`; },
       workers: () => [],
       alert: () => { /* not exercised */ },
@@ -178,7 +181,7 @@ describe.skipIf(!bdInstalled)("planner contract against real bd", () => {
     expect(spawns[0].seed).toContain("plan:ready");
 
     // Durably at plan:planning before any further wake could act.
-    const epic = listOpenEpics(repo).find(e => e.id === planEpic);
+    const epic = listOpenEpics({ path: repo }).find(e => e.id === planEpic);
     expect(epic?.labels).toContain("plan:planning");
     expect(epic?.labels).not.toContain("plan:pending");
 
@@ -195,20 +198,21 @@ describe.skipIf(!bdInstalled)("planner contract against real bd", () => {
     const gateEpic = createBead("gate epic", ["-t", "epic"]);
     bd("update", gateEpic, "--design", "Gate design doc.");
     const gate = createBead("integration", ["--parent", gateEpic, "-l", "integration"]);
+    bd("label", "add", gateEpic, "project:planner-it");
     bd("label", "add", gateEpic, "dispatch:manual");
 
     const spawns: IntakeSpawnRequest[] = [];
     const deps: IntakeDeps = {
       projectName: "planner-it",
       cap: 10,
-      listOpenEpics: () => listOpenEpics(repo),
-      swarmStatus: (id) => swarmStatus(repo, id),
-      showBeads: (ids) => showBeads(repo, ids),
-      claim: (id, actor) => claimBead(repo, id, actor),
-      reopen: (id, reason) => reopenBead(repo, id, reason),
-      unassign: (id) => unassignBead(repo, id),
-      addLabel: (id, label) => addLabel(repo, id, label),
-      removeLabel: (id, label) => removeLabel(repo, id, label),
+      listOpenEpics: () => listOpenEpics({ path: repo }),
+      swarmStatus: (id) => swarmStatus({ path: repo }, id),
+      showBeads: (ids) => showBeads({ path: repo }, ids),
+      claim: (id, actor) => claimBead({ path: repo }, id, actor),
+      reopen: (id, reason) => reopenBead({ path: repo }, id, reason),
+      unassign: (id) => unassignBead({ path: repo }, id),
+      addLabel: (id, label) => addLabel({ path: repo }, id, label),
+      removeLabel: (id, label) => removeLabel({ path: repo }, id, label),
       spawn: (req) => { spawns.push(req); return `it-gate-${spawns.length}`; },
       workers: () => [],
       alert: () => { /* not exercised */ },

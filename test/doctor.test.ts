@@ -122,3 +122,38 @@ describe("garden doctor", () => {
     }));
   });
 });
+
+// Shared-store preflight (DELEGATION.md Decision 15): projects pinning a
+// beadsDir get one row — ok listing the resolved stores, warn naming each
+// dangling one — and fleets with no beadsDir keys get no row at all.
+describe("checkBeadsStores", () => {
+  it("returns null when no project configures a beadsDir", async () => {
+    const { checkBeadsStores } = await import("../src/commands/doctor.js");
+    expect(checkBeadsStores({ a: { path: "/repo/a" } })).toBeNull();
+  });
+
+  it("reports ok for existing stores and warn for dangling ones", async () => {
+    const { checkBeadsStores } = await import("../src/commands/doctor.js");
+    const fsReal = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const dir = fsReal.mkdtempSync(path.join(os.tmpdir(), "doctor-beads-"));
+    try {
+      const store = path.join(dir, ".beads");
+      fsReal.mkdirSync(store);
+      const ok = checkBeadsStores({ a: { path: "/repo/a", beadsDir: store } });
+      expect(ok).toMatchObject({ name: "beads stores", status: "ok" });
+      expect(ok!.detail).toContain(store);
+
+      const warn = checkBeadsStores({
+        a: { path: "/repo/a", beadsDir: store },
+        b: { path: "/repo/b", beadsDir: path.join(dir, "missing", ".beads") },
+      });
+      expect(warn).toMatchObject({ name: "beads stores", status: "warn" });
+      expect(warn!.detail).toContain("does not exist");
+      expect(warn!.detail).toContain("b:");
+    } finally {
+      fsReal.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

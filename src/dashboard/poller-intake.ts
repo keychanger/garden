@@ -90,7 +90,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { SESSIONS_DIR, type ProjectConfig } from "../config.js";
+import {
+  SESSIONS_DIR, resolveBeadsDir, beadsStoreError, type ProjectConfig,
+} from "../config.js";
 import {
   intakeStampPath, intakePokePath, writeIntakeError, clearIntakeError,
 } from "./intake-paths.js";
@@ -360,7 +362,8 @@ export interface IntakeSpawnRequest {
 }
 
 // bd operations + spawn machinery, injectable for tests. The real deps shell
-// out to bd (cwd = the project checkout) and go through newWorker.
+// out to bd (cwd = the project checkout, store resolved via resolveBeadsDir)
+// and go through newWorker.
 export interface IntakeDeps {
   projectName: string;
   cap: number;
@@ -387,7 +390,15 @@ export interface IntakeDeps {
 // ready frontier up to min(cap slack, budget remaining, wave size). Returns
 // true when anything changed (a spawn, a reap, a stop, or a label write).
 export function runIntakeOnce(deps: IntakeDeps): boolean {
-  const allEpics = deps.listOpenEpics();
+  // Project scoping (DELEGATION.md Decision 15): with a shared store, every
+  // project's pass sees every project's epics, so the whole pass — plan
+  // consume, reaper, governor, dispatch — is scoped client-side to epics
+  // carrying this project's `project:<name>` label (the bd query stays broad:
+  // one call still serves everything). Harmless for a project on its own
+  // store too — board's own epics carry project:board — and an epic with no
+  // matching label simply never drives this project's intake.
+  const projectLabel = `project:${deps.projectName}`;
+  const allEpics = deps.listOpenEpics().filter(e => e.labels.includes(projectLabel));
   // The two label families select independent loops: an epic is planned via
   // plan:* and dispatched via dispatch:*, and one carrying both runs both
   // (planning a fresh epic while dispatching its already-promoted children is
@@ -905,6 +916,40 @@ export function runBeadIntake(projectName: string, project: ProjectConfig): bool
   if (!intakeDue(projectName, Date.now())) return false;
   stampIntakeRun(projectName);
 
+  // Fail-closed store check (Decision 15's loud dangling-store rule): a
+  // configured beadsDir that is missing is never run against — bd would
+  // bootstrap a fresh divergent DB there, the split-brain the shared
+  // resolver exists to prevent. Stamped as the intake error (board's
+  // dispatcher-liveness chip reads it) AND alerted, throttled like any pass.
+  const storeError = beadsStoreError(project);
+  if (storeError) {
+    writeIntakeError(projectName, storeError);
+    log.warn("intake", "beads store unavailable; intake pass skipped", {
+      data: { project: projectName, error: storeError },
+    });
+    addAlert({
+      level: "error",
+      source: "intake",
+      project: projectName,
+      message: `Bead intake halted: ${storeError}. Fix or clear 'garden config ${projectName} beadsDir'.`,
+      dedupKey: `intake-store:${projectName}`,
+    });
+    return false;
+  }
+  // Which store this pass resolved — the split-brain diagnostic DELEGATION.md
+  // wants loud. Info when a shared store is pinned (the interesting case);
+  // the default own-checkout store logs at debug.
+  const store = resolveBeadsDir(project);
+  if (project.beadsDir) {
+    log.info("intake", "intake pass resolved shared beads store", {
+      data: { project: projectName, store },
+    });
+  } else {
+    log.debug("intake", "intake pass resolved beads store", {
+      data: { project: projectName, store },
+    });
+  }
+
   try {
     const changed = runIntakeOnceReal(projectName, project);
     clearIntakeError(projectName);
@@ -919,18 +964,17 @@ export function runBeadIntake(projectName: string, project: ProjectConfig): bool
 }
 
 function runIntakeOnceReal(projectName: string, project: ProjectConfig): boolean {
-  const projectPath = project.path;
   return runIntakeOnce({
     projectName,
     cap: project.beadIntakeCap ?? DEFAULT_BEAD_INTAKE_CAP,
-    listOpenEpics: () => listOpenEpics(projectPath),
-    swarmStatus: (epicId) => swarmStatus(projectPath, epicId),
-    showBeads: (ids) => showBeads(projectPath, ids),
-    claim: (id, actor) => claimBead(projectPath, id, actor),
-    reopen: (id, reason) => reopenBead(projectPath, id, reason),
-    unassign: (id) => unassignBead(projectPath, id),
-    addLabel: (id, label) => addLabel(projectPath, id, label),
-    removeLabel: (id, label) => removeLabel(projectPath, id, label),
+    listOpenEpics: () => listOpenEpics(project),
+    swarmStatus: (epicId) => swarmStatus(project, epicId),
+    showBeads: (ids) => showBeads(project, ids),
+    claim: (id, actor) => claimBead(project, id, actor),
+    reopen: (id, reason) => reopenBead(project, id, reason),
+    unassign: (id) => unassignBead(project, id),
+    addLabel: (id, label) => addLabel(project, id, label),
+    removeLabel: (id, label) => removeLabel(project, id, label),
     spawn: (req) => spawnBeadWorker(projectName, req),
     stopWorker: (name) => {
       try {

@@ -43,6 +43,10 @@ vi.mock("../src/config.js", () => {
       return { ...definition, name: project.provider, label: definition.label ?? project.provider };
     }),
     anyAnthropicMeteredProject: vi.fn(() => true),
+    // Mirror the real one-rule resolver: beadsDir wins, else the checkout's
+    // own .beads (beadsEnvExports tests assert the generated exports).
+    resolveBeadsDir: vi.fn((p: { path: string; beadsDir?: string }) =>
+      p.beadsDir ?? `${p.path}/.beads`),
     ENV_VAR_NAME_RE: /^[A-Z_][A-Z0-9_]*$/,
     getFocusedProjectNames: vi.fn(() => ["myproject"]),
     SESSIONS_DIR: "/tmp/fake-sessions",
@@ -181,6 +185,7 @@ import {
   createGardenRootWindow,
   buildWorkerCommand,
   buildResumeCommand,
+  beadsEnvExports,
   buildWorktreeWorkerCommand,
   buildWorktreeBootstrapScript,
   buildWorktreeResumeCommand,
@@ -1112,5 +1117,31 @@ describe("writeDiaryViewScript (via createGardenDiaryWindow)", () => {
     // collapse to nothing rather than pass an empty argument; "$f" stays quoted
     // so a diary path with spaces is one argument.
     expect(script).toContain('$ed $wrap "$f"');
+  });
+});
+
+// The worker-env half of the shared-store resolution rule (board DELEGATION.md
+// Decision 15): BEADS_DIR follows resolveBeadsDir, so a configured beadsDir
+// points the worker's bd verbs at the same store the intake pass reads.
+describe("beadsEnvExports", () => {
+  it("is empty for projects without beadIntake", () => {
+    vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject" });
+    expect(beadsEnvExports("myproject", "swift-oak")).toBe("");
+  });
+
+  it("exports the checkout's own .beads by default", () => {
+    vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject", beadIntake: true });
+    const exports = beadsEnvExports("myproject", "swift-oak");
+    expect(exports).toContain("BEADS_ACTOR=swift-oak");
+    expect(exports).toContain("BEADS_DIR=/repo/myproject/.beads");
+  });
+
+  it("exports the configured shared store when beadsDir is set", () => {
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject", beadIntake: true, beadsDir: "/board/.beads",
+    });
+    const exports = beadsEnvExports("myproject", "swift-oak");
+    expect(exports).toContain("BEADS_DIR=/board/.beads");
+    expect(exports).not.toContain("/repo/myproject/.beads");
   });
 });

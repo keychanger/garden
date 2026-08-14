@@ -46,6 +46,9 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
     repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "bead-intake-")));
     bd("init");
     epicId = createBead("intake epic", ["-t", "epic"]);
+    // Intake scopes every pass to epics labeled project:<name> (the
+    // shared-store conjunct), so the fixture epic carries this suite's.
+    bd("label", "add", epicId, "project:intake-it");
     bd("update", epicId, "--design", "The epic design doc.");
     for (const title of ["slice one", "slice two", "slice three"]) {
       childIds.push(createBead(title));
@@ -70,14 +73,14 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
     return {
       projectName: "intake-it",
       cap: opts.cap ?? 10,
-      listOpenEpics: () => listOpenEpics(repo),
-      swarmStatus: (id) => swarmStatus(repo, id),
-      showBeads: (ids) => showBeads(repo, ids),
-      claim: (id, actor) => claimBead(repo, id, actor),
-      reopen: (id, reason) => reopenBead(repo, id, reason),
-      unassign: (id) => unassignBead(repo, id),
-      addLabel: (id, label) => addLabel(repo, id, label),
-      removeLabel: (id, label) => removeLabel(repo, id, label),
+      listOpenEpics: () => listOpenEpics({ path: repo }),
+      swarmStatus: (id) => swarmStatus({ path: repo }, id),
+      showBeads: (ids) => showBeads({ path: repo }, ids),
+      claim: (id, actor) => claimBead({ path: repo }, id, actor),
+      reopen: (id, reason) => reopenBead({ path: repo }, id, reason),
+      unassign: (id) => unassignBead({ path: repo }, id),
+      addLabel: (id, label) => addLabel({ path: repo }, id, label),
+      removeLabel: (id, label) => removeLabel({ path: repo }, id, label),
       spawn: (req) => { spawns.push(req); n++; return `it-worker-${n}`; },
       stopWorker: (name) => { stops.push(name); return true; },
       workers: () => opts.workers ?? [],
@@ -102,17 +105,17 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
     expect(deps.spawns.map(s => s.bead).sort()).toEqual([childIds[0], childIds[1]].sort());
 
     // Claims landed in bd: assignee is the worker name, status in_progress.
-    const details = showBeads(repo, [childIds[0], childIds[1]]);
+    const details = showBeads({ path: repo }, [childIds[0], childIds[1]]);
     for (const d of details) {
       expect(d.status).toBe("in_progress");
       expect(d.assignee).toMatch(/^it-worker-/);
     }
-    const st = swarmStatus(repo, epicId);
+    const st = swarmStatus({ path: repo }, epicId);
     expect(st?.active).toHaveLength(2);
     expect(st?.ready).toHaveLength(0);
 
     // Manual authorization consumed; session counter written.
-    const epic = listOpenEpics(repo).find(e => e.id === epicId);
+    const epic = listOpenEpics({ path: repo }).find(e => e.id === epicId);
     expect(epic?.labels).toContain("dispatch:dispatched");
     expect(epic?.labels).not.toContain("dispatch:manual");
     expect(epic?.labels).toContain("dispatch:spent:2");
@@ -127,7 +130,7 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
     // Which it-worker-N claimed which bead depends on the priority tiebreak
     // over random bd id suffixes — read the actual assignee rather than
     // assuming the dispatch order.
-    const owner = showBeads(repo, [childIds[0]])[0].assignee;
+    const owner = showBeads({ path: repo }, [childIds[0]])[0].assignee;
     expect(owner).toMatch(/^it-worker-/);
     // Verified 1.0.3 quirk the seed relies on: same-actor re-claim succeeds.
     const res = spawnSync("bd", ["update", childIds[0], "--claim"], {
@@ -149,8 +152,8 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
     // assumed from dispatch order (random id suffixes decide the tiebreak).
     bd("label", "remove", epicId, "dispatch:dispatched");
     bd("label", "add", epicId, "dispatch:auto");
-    const deadName = showBeads(repo, [childIds[0]])[0].assignee!;
-    const liveName = showBeads(repo, [childIds[1]])[0].assignee!;
+    const deadName = showBeads({ path: repo }, [childIds[0]])[0].assignee!;
+    const liveName = showBeads({ path: repo }, [childIds[1]])[0].assignee!;
     const deadEntry: WorkerEntry = {
       name: deadName, sessionId: "s", task: "",
       agentStatus: "exited", lastEventAt: Date.now() - REAPER_GRACE_MS - 1000,
@@ -162,7 +165,7 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
     expect(runIntakeOnce(deps)).toBe(true);
 
     // Reaped: reopened, unassigned, retry-labeled...
-    const reaped = showBeads(repo, [childIds[0]])[0];
+    const reaped = showBeads({ path: repo }, [childIds[0]])[0];
     expect(reaped.status).toBe("open");
     expect(reaped.assignee).toBeUndefined();
     expect(reaped.labels).toContain("dispatch:retry:1");
@@ -173,7 +176,7 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
     const deps2 = makeDeps({ workers: [liveEntry] });
     expect(runIntakeOnce(deps2)).toBe(true);
     expect(deps2.spawns.length).toBeGreaterThanOrEqual(1);
-    const reclaimed = showBeads(repo, [childIds[0]])[0];
+    const reclaimed = showBeads({ path: repo }, [childIds[0]])[0];
     expect(reclaimed.status).toBe("in_progress");
     expect(reclaimed.assignee).toMatch(/^it-worker-/);
   }, TEST_TIMEOUT);
@@ -184,7 +187,7 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
     bd("label", "add", epicId, "budget:3");
     const deps = makeDeps({ workers: [] });
     runIntakeOnce(deps);
-    const epic = listOpenEpics(repo).find(e => e.id === epicId);
+    const epic = listOpenEpics({ path: repo }).find(e => e.id === epicId);
     expect(epic?.labels).toContain("dispatch:budget-exhausted");
     expect(deps.alerts.some(a => a.startsWith("error:"))).toBe(true);
 
@@ -202,13 +205,14 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
     for (const id of waveKids) {
       bd("link", id, waveEpic, "--type", "parent-child");
     }
+    bd("label", "add", waveEpic, "project:intake-it");
     bd("label", "add", waveEpic, "dispatch:manual");
 
     // Pass 1: one slot, one spawn — the arm stays, the mid-wave marker lands.
     const deps = makeDeps({ cap: 1 });
     expect(runIntakeOnce(deps)).toBe(true);
     expect(deps.spawns).toHaveLength(1);
-    let labels = listOpenEpics(repo).find(e => e.id === waveEpic)!.labels;
+    let labels = listOpenEpics({ path: repo }).find(e => e.id === waveEpic)!.labels;
     expect(labels).toContain("dispatch:manual");
     expect(labels).toContain("dispatch:dispatching");
     expect(labels).not.toContain("dispatch:dispatched");
@@ -218,14 +222,14 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
     const deps2 = makeDeps({ cap: 1 });
     expect(runIntakeOnce(deps2)).toBe(true);
     expect(deps2.spawns).toHaveLength(1);
-    labels = listOpenEpics(repo).find(e => e.id === waveEpic)!.labels;
+    labels = listOpenEpics({ path: repo }).find(e => e.id === waveEpic)!.labels;
     expect(labels).toContain("dispatch:dispatched");
     expect(labels).not.toContain("dispatch:manual");
     expect(labels).not.toContain("dispatch:dispatching");
     expect(labels).toContain("dispatch:spent:2");
 
     // Both beads claimed as their workers.
-    const kids = showBeads(repo, waveKids);
+    const kids = showBeads({ path: repo }, waveKids);
     for (const k of kids) {
       expect(k.status).toBe("in_progress");
       expect(k.assignee).toMatch(/^it-worker-/);
@@ -235,7 +239,7 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
   it("stops a displaced worker on the pass after an operator recall, claim intact", () => {
     // The operator's board-side take-over: reassign the bead away from its
     // worker with a real bd write (the `c c` gesture is a bd assign).
-    const displaced = showBeads(repo, [childIds[1]])[0].assignee!;
+    const displaced = showBeads({ path: repo }, [childIds[1]])[0].assignee!;
     expect(displaced).toMatch(/^it-worker-/);
     bd("assign", childIds[1], "operator-recall");
 
@@ -253,7 +257,7 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
     // nothing to bd, and the removal tail's Decision-12 guard likewise
     // refuses to unclaim a foreign-assigned bead. The claimed bead is out of
     // the frontier, so nothing re-dispatches the recalled work either.
-    const after = showBeads(repo, [childIds[1]])[0];
+    const after = showBeads({ path: repo }, [childIds[1]])[0];
     expect(after.assignee).toBe("operator-recall");
     expect(after.status).toBe("in_progress");
     expect(deps.spawns).toHaveLength(0);

@@ -3,6 +3,10 @@
 // checkout so every call hits the project's canonical .beads store — never a
 // worktree copy (worktrees carry the tracked .beads files but not the
 // gitignored Dolt database, so bd there would bootstrap a divergent local DB).
+// A project pinned to a shared store (`beadsDir`, board's DELEGATION.md
+// Decision 15) additionally gets BEADS_DIR in the child env — the same
+// variable worker env injection uses (beadsEnvExports), both spelled by
+// resolveBeadsDir so the two bd surfaces cannot resolve different stores.
 //
 // Verified 1.0.3 behavior this module encodes:
 // - `bd update --claim` sets assignee+in_progress on an UNASSIGNED bead, is a
@@ -17,7 +21,18 @@
 // - stderr may carry advisory noise (a beads.role warning) on success; only
 //   the exit status decides ok, and JSON is parsed from stdout alone.
 import { spawnSync } from "node:child_process";
+import { resolveBeadsDir } from "../config.js";
 import { log } from "./log.js";
+
+// The store context every bd call takes in place of a bare path: cwd stays
+// the project checkout (bead descriptions and design docs may name
+// project-relative paths), and `beadsDir` — when set — overrides bd's cwd
+// discovery via BEADS_DIR. Structurally satisfied by ProjectConfig, so call
+// sites hand their project config straight through.
+export interface BeadsStore {
+  path: string;
+  beadsDir?: string;
+}
 
 const BD_TIMEOUT_MS = 20_000;
 // The embedded Dolt store takes an exclusive lock per invocation; a concurrent
@@ -61,20 +76,29 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+// Child env for a bd shell-out. Only a configured shared store injects
+// BEADS_DIR (via resolveBeadsDir, the one resolution rule); the default case
+// leaves the env untouched — bd keeps discovering <project>/.beads from cwd,
+// byte-identical to the pre-beadsDir behavior.
+export function bdChildEnv(store: BeadsStore, actor?: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...(store.beadsDir ? { BEADS_DIR: resolveBeadsDir(store) } : {}),
+    ...(actor ? { BEADS_ACTOR: actor } : {}),
+  };
+}
+
 export function runBd(
-  projectPath: string,
+  store: BeadsStore,
   args: string[],
   opts?: { actor?: string },
 ): BdResult {
   for (let attempt = 0; ; attempt++) {
     const res = spawnSync("bd", args, {
-      cwd: projectPath,
+      cwd: store.path,
       encoding: "utf8",
       timeout: BD_TIMEOUT_MS,
-      env: {
-        ...process.env,
-        ...(opts?.actor ? { BEADS_ACTOR: opts.actor } : {}),
-      },
+      env: bdChildEnv(store, opts?.actor),
     });
     if (res.error) {
       return { ok: false, stdout: "", stderr: String(res.error) };
@@ -88,8 +112,8 @@ export function runBd(
   }
 }
 
-function bdJson(projectPath: string, args: string[]): unknown {
-  const res = runBd(projectPath, [...args, "--json"]);
+function bdJson(store: BeadsStore, args: string[]): unknown {
+  const res = runBd(store, [...args, "--json"]);
   if (!res.ok) {
     const detail = res.stderr.trim().slice(0, 500) || "unknown error";
     log.warn("beads", "bd command failed", {
@@ -141,15 +165,15 @@ function asBeadRefs(x: unknown): BeadRef[] {
 
 // Open (non-closed) epics. Dispatch labels are filtered by the caller — the
 // query stays broad so one call serves both the dispatch gate and the reaper.
-export function listOpenEpics(projectPath: string): BeadDetail[] {
-  const parsed = bdJson(projectPath, ["query", "type=epic AND NOT status=closed"]);
+export function listOpenEpics(store: BeadsStore): BeadDetail[] {
+  const parsed = bdJson(store, ["query", "type=epic AND NOT status=closed"]);
   if (!Array.isArray(parsed)) throw new Error("bd query returned an unexpected shape");
   return parsed.map(asBeadDetail).filter((d): d is BeadDetail => d !== null);
 }
 
 // The live wavefront, computed by bd from the dependency DAG.
-export function swarmStatus(projectPath: string, epicId: string): SwarmStatus | null {
-  const parsed = bdJson(projectPath, ["swarm", "status", epicId]);
+export function swarmStatus(store: BeadsStore, epicId: string): SwarmStatus | null {
+  const parsed = bdJson(store, ["swarm", "status", epicId]);
   if (typeof parsed !== "object" || parsed === null) {
     throw new Error(`bd swarm status ${epicId} returned an unexpected shape`);
   }
@@ -162,9 +186,9 @@ export function swarmStatus(projectPath: string, epicId: string): SwarmStatus | 
   };
 }
 
-export function showBeads(projectPath: string, ids: string[]): BeadDetail[] {
+export function showBeads(store: BeadsStore, ids: string[]): BeadDetail[] {
   if (ids.length === 0) return [];
-  const parsed = bdJson(projectPath, ["show", ...ids]);
+  const parsed = bdJson(store, ["show", ...ids]);
   if (!Array.isArray(parsed)) throw new Error("bd show returned an unexpected shape");
   return parsed.map(asBeadDetail).filter((d): d is BeadDetail => d !== null);
 }
@@ -172,8 +196,8 @@ export function showBeads(projectPath: string, ids: string[]): BeadDetail[] {
 // Atomic claim as the given actor: assignee + in_progress in one bd write.
 // Succeeds (no-op) if already claimed by the same actor; fails on a foreign
 // claim — which is the idempotency guarantee the intake loop builds on.
-export function claimBead(projectPath: string, id: string, actor: string): boolean {
-  const res = runBd(projectPath, ["update", id, "--claim"], { actor });
+export function claimBead(store: BeadsStore, id: string, actor: string): boolean {
+  const res = runBd(store, ["update", id, "--claim"], { actor });
   if (!res.ok) {
     log.warn("beads", "claim failed", {
       data: { id, actor, stderr: res.stderr.trim().slice(0, 300) },
@@ -182,20 +206,20 @@ export function claimBead(projectPath: string, id: string, actor: string): boole
   return res.ok;
 }
 
-export function reopenBead(projectPath: string, id: string, reason: string): boolean {
-  return runBd(projectPath, ["reopen", id, "-r", reason]).ok;
+export function reopenBead(store: BeadsStore, id: string, reason: string): boolean {
+  return runBd(store, ["reopen", id, "-r", reason]).ok;
 }
 
-export function unassignBead(projectPath: string, id: string): boolean {
-  return runBd(projectPath, ["assign", id, ""]).ok;
+export function unassignBead(store: BeadsStore, id: string): boolean {
+  return runBd(store, ["assign", id, ""]).ok;
 }
 
-export function addLabel(projectPath: string, id: string, label: string): boolean {
-  return runBd(projectPath, ["label", "add", id, label]).ok;
+export function addLabel(store: BeadsStore, id: string, label: string): boolean {
+  return runBd(store, ["label", "add", id, label]).ok;
 }
 
-export function removeLabel(projectPath: string, id: string, label: string): boolean {
-  return runBd(projectPath, ["label", "remove", id, label]).ok;
+export function removeLabel(store: BeadsStore, id: string, label: string): boolean {
+  return runBd(store, ["label", "remove", id, label]).ok;
 }
 
 // Max-wins parse of `<prefix>N` counter labels across duplicates (both sides

@@ -840,6 +840,48 @@ describe("bead intake project config keys", () => {
     await expect(config(["garden", "beadIntakeCap", "0"]))
       .rejects.toThrow(/positive integer/);
   });
+
+  // The shared-store key (DELEGATION.md Decision 15): round-trips an absolute
+  // path, rejects a relative one, and clears back to the default store.
+  it("persists an absolute beadsDir and clears it on unset", async () => {
+    const { config, loadConfig } = await setup();
+    await config(["garden", "beadsDir", "/board/.beads"]);
+    expect(loadConfig().projects.garden.beadsDir).toBe("/board/.beads");
+    await config(["garden", "beadsDir", "unset"]);
+    expect(loadConfig().projects.garden.beadsDir).toBeUndefined();
+  });
+
+  it("rejects a relative beadsDir", async () => {
+    const { config } = await setup();
+    await expect(config(["garden", "beadsDir", "board/.beads"]))
+      .rejects.toThrow(/absolute path/);
+  });
+});
+
+// The one store-resolution rule + its dangling-store check (src/config.ts).
+describe("resolveBeadsDir / beadsStoreError", () => {
+  it("resolves the configured shared store, else the checkout's own .beads", async () => {
+    const { resolveBeadsDir } = await importConfig();
+    expect(resolveBeadsDir({ path: "/repo" })).toBe(path.join("/repo", ".beads"));
+    expect(resolveBeadsDir({ path: "/repo", beadsDir: "/board/.beads" })).toBe("/board/.beads");
+  });
+
+  it("flags a missing or non-directory beadsDir, and only a configured one", async () => {
+    const { beadsStoreError } = await importConfig();
+    // Default store: never flagged, even when absent on disk.
+    expect(beadsStoreError({ path: "/nonexistent" })).toBeNull();
+    // Configured but missing.
+    expect(beadsStoreError({ path: "/repo", beadsDir: path.join(tmpHome, "missing", ".beads") }))
+      .toMatch(/does not exist/);
+    // Configured but a file, not a directory.
+    const file = path.join(tmpHome, "not-a-dir");
+    fs.writeFileSync(file, "x");
+    expect(beadsStoreError({ path: "/repo", beadsDir: file })).toMatch(/not a directory/);
+    // Configured and healthy.
+    const dir = path.join(tmpHome, ".beads");
+    fs.mkdirSync(dir);
+    expect(beadsStoreError({ path: "/repo", beadsDir: dir })).toBeNull();
+  });
 });
 
 // Holistic post-merge review mode — a three-value enum config key

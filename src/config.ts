@@ -77,15 +77,27 @@ export interface ProjectConfig {
   logColor?: string;
   // Bead-intake loop (board→garden delegation; board's docs/DELEGATION.md).
   // When true, this project's poller converts ready, dispatch-labeled beads
-  // in the project checkout's .beads store into workers (see
-  // dashboard/poller-intake.ts for the label contract), and every worker gets
-  // BEADS_ACTOR=<worker-name> + BEADS_DIR=<project>/.beads injected alongside
-  // the GARDEN_* vars, with sandbox write access to the canonical .beads
+  // in the project's resolved .beads store (resolveBeadsDir below) into
+  // workers (see dashboard/poller-intake.ts for the label contract), and
+  // every worker gets BEADS_ACTOR=<worker-name> + BEADS_DIR=<resolved store>
+  // injected alongside the GARDEN_* vars, with sandbox write access to that
   // store. Default off: projects without beads never shell out to bd.
   beadIntake?: boolean;
   // Intake concurrency governor: max intake-dispatched workers live at once
   // for this project. Default DEFAULT_BEAD_INTAKE_CAP (3) in poller-intake.ts.
   beadIntakeCap?: number;
+  // Absolute path to the .beads store this project's bd calls resolve —
+  // board's docs/DELEGATION.md Decision 15: pointing several projects at one
+  // shared store (in practice the board repo's .beads) is what makes
+  // cross-project delegation two config lines (`beadIntake true` + this key).
+  // Consumed through resolveBeadsDir below by BOTH bd surfaces — garden's own
+  // shell-outs (dashboard/beads.ts sets BEADS_DIR in the child env) and the
+  // worker env injection (beadsEnvExports) — plus the sandbox write grant, so
+  // intake can never read a different store than workers write. With a shared
+  // store, intake scopes itself to epics labeled `project:<name>`
+  // (poller-intake.ts). Absent = the project checkout's own .beads,
+  // unchanged legacy behavior.
+  beadsDir?: string;
   // Trellis workflow keys. See WORKFLOWS.md "Project config".
   // Directory containing trellis files. Resolved relative to the project
   // root. Default: ".garden/trellises".
@@ -211,11 +223,45 @@ const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "claudeProfile", "provider",
   "harness", "model", "effort", "logColor", "trellisDir", "maxTrellisIterations",
   "trellisOpusFallback", "maxGrowIterations", "requireCiSuccess", "holisticReview",
-  "beadIntake", "beadIntakeCap",
+  "beadIntake", "beadIntakeCap", "beadsDir",
 ]);
 
 export function isValidConfigKey(key: string): boolean {
   return VALID_CONFIG_KEYS.has(key);
+}
+
+// The one store-resolution rule (board docs/DELEGATION.md Decision 15): a
+// project's effective beads store is its `beadsDir` when set, else the
+// checkout's own `.beads`. Every surface that names the store — bd shell-outs
+// (dashboard/beads.ts), worker env injection (beadsEnvExports in
+// dashboard/create.ts), the sandbox write grant (dashboard/sandbox.ts), and
+// `garden doctor` — resolves through here, so the two bd surfaces cannot
+// diverge into the split-brain DELEGATION.md warns about (intake reading one
+// store while workers write another).
+export function resolveBeadsDir(project: Pick<ProjectConfig, "path" | "beadsDir">): string {
+  return project.beadsDir ?? path.join(project.path, ".beads");
+}
+
+// Loud dangling-store check for a configured beadsDir (Decision 15's "fails
+// loudly when the configured store is unavailable"): returns the problem, or
+// null when the store is usable. The default (unset) case is exempt — bd
+// bootstrapping the checkout's own .beads on first use is legacy behavior —
+// but a configured store that is missing must never be run against: bd would
+// bootstrap a fresh divergent DB at that path, the exact split-brain the
+// shared resolver exists to prevent. Consumed fail-closed by the intake pass
+// (poller-intake.ts) and as a preflight row by `garden doctor`.
+export function beadsStoreError(project: Pick<ProjectConfig, "path" | "beadsDir">): string | null {
+  if (!project.beadsDir) return null;
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(project.beadsDir);
+  } catch {
+    return `configured beadsDir does not exist: ${project.beadsDir}`;
+  }
+  if (!stat.isDirectory()) {
+    return `configured beadsDir is not a directory: ${project.beadsDir}`;
+  }
+  return null;
 }
 
 export interface PlotConfig {

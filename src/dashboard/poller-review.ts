@@ -1283,7 +1283,9 @@ function dispatchDefaultVerdict(
 // — so any bd failure only logs a warning and the caller's failing transition
 // proceeds unchanged. Returns a short note folded into the review-failed
 // alert message (empty for workers with no bead). The bd calls run against
-// the project checkout (a worktree's .beads has no database).
+// the project checkout (a worktree's .beads has no database), resolving the
+// store through the project config's beadsDir like every other bd surface;
+// an unregistered project falls back to a bare-path store (default .beads).
 function stampBeadReviewFailure(
   projectName: string,
   projectPath: string,
@@ -1292,11 +1294,12 @@ function stampBeadReviewFailure(
   const beadId = entry.bead;
   if (!beadId) return "";
   try {
-    const detail = showBeads(projectPath, [beadId])[0];
+    const store = tryGetProject(projectName) ?? { path: projectPath };
+    const detail = showBeads(store, [beadId])[0];
     if (!detail) throw new Error(`bd show returned no data for bead ${beadId}`);
     const { ok, count } = incrementFailedLabel({
-      addLabel: (id, label) => addLabel(projectPath, id, label),
-      removeLabel: (id, label) => removeLabel(projectPath, id, label),
+      addLabel: (id, label) => addLabel(store, id, label),
+      removeLabel: (id, label) => removeLabel(store, id, label),
     }, beadId, detail.labels);
     if (!ok) throw new Error(`bd label add dispatch:failed:${count} failed`);
     log.info("poller", "review rejection recorded on bead", {

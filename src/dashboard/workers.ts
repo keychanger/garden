@@ -3,7 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { DASHBOARD_SESSION } from "../session.js";
-import { getProject, tryGetProject, loadConfig, plotsMap } from "../config.js";
+import { getProject, tryGetProject, loadConfig, plotsMap, type ProjectConfig } from "../config.js";
 import {
   syncProviderTokenToVault, providerTokenPresence, tmuxWorkerCommand,
 } from "./claude-env.js";
@@ -965,7 +965,7 @@ export function finalizeWorkerRemoval(
     // Decision-12 unclaim runs BEFORE removeWorker: if it crashes mid-write,
     // the registry entry (and its bead join) is still on disk for a retry,
     // instead of a hard-deleted entry orphaning an in_progress bead.
-    unclaimBeadOnRemoval(projectName, project?.path, entry);
+    unclaimBeadOnRemoval(projectName, project, entry);
   }
   removeWorker(projectName, workerName);
   log.info("workers", "killed", {
@@ -997,24 +997,24 @@ export function finalizeWorkerRemoval(
 // unclaim reopens the orphaned-bead hole this exists to close.
 function unclaimBeadOnRemoval(
   projectName: string,
-  projectPath: string | undefined,
+  project: (ProjectConfig & { name: string }) | null,
   entry: WorkerEntry,
 ): void {
   const beadId = entry.bead;
   if (!beadId) return;
   try {
-    if (!projectPath) {
+    if (!project) {
       throw new Error(`project '${projectName}' is not registered; no checkout to run bd in`);
     }
-    const detail = showBeads(projectPath, [beadId])[0];
+    const detail = showBeads(project, [beadId])[0];
     if (!detail) throw new Error(`bd show returned no data for bead ${beadId}`);
     if (detail.status !== "open" && detail.status !== "in_progress") return;
     if (detail.assignee !== entry.name) return;
     if (detail.status === "in_progress"
-        && !reopenBead(projectPath, beadId, `garden: worker ${entry.name} removed`)) {
+        && !reopenBead(project, beadId, `garden: worker ${entry.name} removed`)) {
       throw new Error("bd reopen failed");
     }
-    if (!unassignBead(projectPath, beadId)) throw new Error("bd assign '' failed");
+    if (!unassignBead(project, beadId)) throw new Error("bd assign '' failed");
     log.info("workers", "unclaimed bead on worker removal", {
       worker: entry.name,
       data: { project: projectName, bead: beadId },

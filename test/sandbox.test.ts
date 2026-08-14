@@ -39,6 +39,27 @@ describe("buildSandboxConfig", () => {
     expect(cfg.filesystem.allowWrite).toContain("~/.garden/sessions");
   });
 
+  // Bead-intake projects: the worker's bd calls take a write lock inside the
+  // resolved store, so the grant must follow the same resolveBeadsDir rule
+  // as BEADS_DIR injection — the checkout's own .beads by default, a
+  // configured shared store (beadsDir) otherwise.
+  it("grants write access to the resolved beads store on beadIntake projects", () => {
+    const own = buildSandboxConfig({
+      worktreePath: "/wt/alpha",
+      project: { path: "/repo", beadIntake: true },
+      remoteHost: null,
+    });
+    expect(own.filesystem.allowWrite).toContain("/repo/.beads");
+
+    const shared = buildSandboxConfig({
+      worktreePath: "/wt/alpha",
+      project: { path: "/repo", beadIntake: true, beadsDir: "/board/.beads" },
+      remoteHost: null,
+    });
+    expect(shared.filesystem.allowWrite).toContain("/board/.beads");
+    expect(shared.filesystem.allowWrite).not.toContain("/repo/.beads");
+  });
+
   it("includes Anthropic, github, and npm in default domains", () => {
     const cfg = buildSandboxConfig({
       worktreePath: "/wt/alpha",

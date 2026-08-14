@@ -80,9 +80,12 @@ Projects:
   config <project> [key] [value] View or set project config
                                  keys incl. model / effort (default+grow worker
                                  defaults; per-spawn --model/--effort override)
-                                 and beadIntake / beadIntakeCap (bead-intake loop:
-                                 dispatch-labeled epics in the project's .beads
-                                 store spawn workers; see 'garden poke')
+                                 and beadIntake / beadIntakeCap / beadsDir
+                                 (bead-intake loop: dispatch-labeled epics
+                                 labeled project:<name> in the resolved .beads
+                                 store spawn workers; beadsDir points intake AND
+                                 worker bd calls at a shared store, default the
+                                 project's own .beads; see 'garden poke')
   config <project> role [<role> [harness|model|effort] [value]]
                                  Per-role review harness/model/effort (role: reviewer|resolver|ci-fix)
                                  effort is claude-code-only: low|medium|high|xhigh|max

@@ -43,8 +43,15 @@ function entry(over: Partial<WorkerEntry> & { name: string }): WorkerEntry {
   return { sessionId: "s", task: "", ...over };
 }
 
+// Epics default to this project's own scope label: intake filters every pass
+// to `project:<name>` (the shared-store conjunct), so a fixture without one
+// would be invisible. A fixture that passes its own project:* label keeps it.
 function epic(over: Partial<BeadDetail> & { id: string }): BeadDetail {
-  return { title: `epic ${over.id}`, status: "open", priority: 1, labels: [], ...over };
+  const labels = over.labels ?? [];
+  const scoped = labels.some(l => l.startsWith("project:"))
+    ? labels
+    : [...labels, "project:board"];
+  return { title: `epic ${over.id}`, status: "open", priority: 1, ...over, labels: scoped };
 }
 
 function bead(over: Partial<BeadDetail> & { id: string }): BeadDetail {
@@ -388,6 +395,38 @@ describe("runIntakeOnce", () => {
     const w = makeWorld({ epics: [epic({ id: "e1", labels: ["project:x"] })] });
     expect(runIntakeOnce(makeDeps(w))).toBe(false);
     expect(w.spawns).toHaveLength(0);
+  });
+
+  // Shared-store project scoping (DELEGATION.md Decision 15): every pass is
+  // filtered to epics labeled project:<name>, so another project's epics in a
+  // shared store never drive this project's dispatch, plan, or reaper loops.
+  it("ignores dispatch epics labeled for another project", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto", "project:other"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "one" }] }) },
+      details: { b1: bead({ id: "b1" }) },
+    });
+    expect(runIntakeOnce(makeDeps(w))).toBe(false);
+    expect(w.spawns).toHaveLength(0);
+  });
+
+  it("ignores plan:pending epics labeled for another project", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["plan:pending", "project:other"] })],
+    });
+    expect(runIntakeOnce(makeDeps(w))).toBe(false);
+    expect(w.spawns).toHaveLength(0);
+    expect(w.labelsRemoved).toHaveLength(0);
+  });
+
+  it("dispatches an epic carrying this project's own scope label as before", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto", "project:board"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "one" }] }) },
+      details: { b1: bead({ id: "b1" }) },
+    });
+    expect(runIntakeOnce(makeDeps(w))).toBe(true);
+    expect(w.spawns).toHaveLength(1);
   });
 
   it("dispatches unassigned ready beads, claims as the worker, and counts spend", () => {
@@ -1357,6 +1396,19 @@ describe("runBeadIntake error stamp", () => {
     status = readIntakeStatus(project);
     expect(status.lastIntakeError).toBeUndefined();
     expect(status.lastIntakeAt).toBeDefined();
+  });
+
+  // Decision 15's loud dangling-store check: a configured beadsDir that is
+  // missing must never be run against (bd would bootstrap a divergent DB
+  // there) — the pass is skipped fail-closed and the failure is stamped as
+  // the intake error board's liveness chip reads.
+  it("skips the pass fail-closed when the configured beadsDir is dangling", () => {
+    expect(runBeadIntake(project, {
+      ...config,
+      beadsDir: "/definitely/missing/.beads",
+    })).toBe(false);
+    expect(bd.listOpenEpics).not.toHaveBeenCalled();
+    expect(readIntakeStatus(project).lastIntakeError).toContain("does not exist");
   });
 
   it("a throttled call neither runs a pass nor clears the error", () => {

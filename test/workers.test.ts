@@ -1750,11 +1750,11 @@ describe("removal-time bead unclaim", () => {
 
     killPane();
 
-    expect(vi.mocked(showBeads)).toHaveBeenCalledWith("/repo/myproject", ["bd-1"]);
+    expect(vi.mocked(showBeads)).toHaveBeenCalledWith(expect.objectContaining({ path: "/repo/myproject" }), ["bd-1"]);
     expect(vi.mocked(reopenBead)).toHaveBeenCalledWith(
-      "/repo/myproject", "bd-1", expect.stringContaining("swift-oak"),
+      expect.objectContaining({ path: "/repo/myproject" }), "bd-1", expect.stringContaining("swift-oak"),
     );
-    expect(vi.mocked(unassignBead)).toHaveBeenCalledWith("/repo/myproject", "bd-1");
+    expect(vi.mocked(unassignBead)).toHaveBeenCalledWith(expect.objectContaining({ path: "/repo/myproject" }), "bd-1");
     expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "swift-oak");
     expect(vi.mocked(addAlert)).not.toHaveBeenCalled();
   });
@@ -1766,7 +1766,7 @@ describe("removal-time bead unclaim", () => {
     killPane();
 
     expect(vi.mocked(reopenBead)).not.toHaveBeenCalled();
-    expect(vi.mocked(unassignBead)).toHaveBeenCalledWith("/repo/myproject", "bd-1");
+    expect(vi.mocked(unassignBead)).toHaveBeenCalledWith(expect.objectContaining({ path: "/repo/myproject" }), "bd-1");
   });
 
   it("leaves a closed bead untouched", () => {
@@ -1918,9 +1918,9 @@ describe("stopWorkerByName", () => {
     stopWorkerByName("myproject", "swift-oak");
 
     expect(vi.mocked(reopenBead)).toHaveBeenCalledWith(
-      "/repo/myproject", "bd-1", expect.stringContaining("swift-oak"),
+      expect.objectContaining({ path: "/repo/myproject" }), "bd-1", expect.stringContaining("swift-oak"),
     );
-    expect(vi.mocked(unassignBead)).toHaveBeenCalledWith("/repo/myproject", "bd-1");
+    expect(vi.mocked(unassignBead)).toHaveBeenCalledWith(expect.objectContaining({ path: "/repo/myproject" }), "bd-1");
   });
 
   it("routes a target holding the visible pane through the killPane focus-swap path", () => {

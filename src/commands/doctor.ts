@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
 import path from "node:path";
 import { output, isTTY } from "../output.js";
-import { CONFIG_PATH, loadConfig } from "../config.js";
+import { CONFIG_PATH, loadConfig, beadsStoreError } from "../config.js";
 
 // Node 22.1 is the floor: the worker hook commands set NODE_COMPILE_CACHE
 // (added in 22.1) to reuse cached V8 bytecode across cold starts. Older node
@@ -164,6 +164,38 @@ function checkAgentDocs(): Check {
   };
 }
 
+// Shared-store preflight (board docs/DELEGATION.md Decision 15): every
+// project pinning a beadsDir must point at an existing directory, or its
+// intake pass reads one store while nothing writes it — the split-brain the
+// shared resolver exists to prevent. Only rendered when at least one project
+// sets the key; the default own-checkout store needs no preflight (bd
+// bootstraps it on first use, legacy behavior). Exported for tests.
+export function checkBeadsStores(
+  projects: Record<string, { path: string; beadsDir?: string }>,
+): Check | null {
+  const rows: string[] = [];
+  const bad: string[] = [];
+  for (const [name, project] of Object.entries(projects)) {
+    if (!project.beadsDir) continue;
+    const err = beadsStoreError(project);
+    if (err) bad.push(`${name}: ${err}`);
+    else rows.push(`${name} → ${project.beadsDir}`);
+  }
+  if (rows.length === 0 && bad.length === 0) return null;
+  if (bad.length > 0) {
+    return { name: "beads stores", status: "warn", detail: bad.join("; ") };
+  }
+  return { name: "beads stores", status: "ok", detail: rows.join("; ") };
+}
+
+function checkBeadsStoresFromConfig(): Check | null {
+  try {
+    return checkBeadsStores(loadConfig().projects ?? {});
+  } catch {
+    return null;
+  }
+}
+
 function checkOptionKey(): Check {
   // Not programmatically verifiable — the dashboard hotkeys are M-<key>
   // bindings that only fire if the terminal sends Option as Meta/Esc+.
@@ -182,8 +214,9 @@ export async function doctor(): Promise<void> {
     checkNode(),
     checkConfig(),
     checkAgentDocs(),
+    checkBeadsStoresFromConfig(),
     checkOptionKey(),
-  ];
+  ].filter((c): c is Check => c !== null);
 
   if (!isTTY) {
     output({ checks });

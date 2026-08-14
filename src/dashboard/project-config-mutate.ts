@@ -9,9 +9,10 @@
 // CLI prints them, the menu shows the primary via tmuxDisplay. Validation
 // `throw`s stay here so both surfaces share them. Behavior is byte-identical to
 // the pre-extraction CLI (guarded by a config-output test).
+import path from "node:path";
 import {
-  mutateConfig, DEFAULT_HOLISTIC_REVIEW, REVIEW_EFFORT_LEVELS, isValidReviewEffort,
-  type GardenConfig, type ResolvedProvider,
+  mutateConfig, beadsStoreError, DEFAULT_HOLISTIC_REVIEW, REVIEW_EFFORT_LEVELS,
+  isValidReviewEffort, type GardenConfig, type ResolvedProvider,
 } from "../config.js";
 import { syncProviderTokenToVault } from "./claude-env.js";
 import {
@@ -36,7 +37,7 @@ export const SETTABLE_KEYS = [
   "claudeProfile", "provider",
   "harness", "model", "effort", "logColor", "trellisDir", "maxTrellisIterations",
   "trellisOpusFallback", "maxGrowIterations", "requireCiSuccess", "holisticReview",
-  "beadIntake", "beadIntakeCap",
+  "beadIntake", "beadIntakeCap", "beadsDir",
 ] as const;
 export type SettableKey = typeof SETTABLE_KEYS[number];
 
@@ -255,6 +256,27 @@ export function setProjectConfigKey(projectName: string, key: SettableKey, value
         }
         project.beadIntakeCap = n;
         message = `Set ${key} = ${n} for ${projectName}`;
+      }
+    } else if (key === "beadsDir") {
+      if (value === "" || value === "unset" || value === "null") {
+        delete project.beadsDir;
+        message = `Cleared ${key} for ${projectName} (bd resolves the checkout's own .beads)`;
+      } else {
+        const dir = value.trim();
+        if (!path.isAbsolute(dir)) {
+          throw new Error(`beadsDir must be an absolute path to a .beads directory, got '${value}'`);
+        }
+        project.beadsDir = dir;
+        message = `Set ${key} = ${dir} for ${projectName} (intake and worker bd calls resolve this store; applies to newly created or bounced workers)`;
+        // Soft notes only (mirroring baseBranch's origin note): the intake
+        // pass and `garden doctor` do the hard dangling-store enforcement.
+        if (path.basename(dir) !== ".beads") {
+          notes.push(`  note: '${dir}' is not named .beads — bd expects a .beads store directory.`);
+        }
+        const storeNote = beadsStoreError({ path: project.path, beadsDir: dir });
+        if (storeNote) {
+          notes.push(`  note: ${storeNote} — intake will refuse to run until it is a directory.`);
+        }
       }
     } else if (key === "sandboxDenyCredentials") {
       if (value === "" || value === "unset" || value === "null") {

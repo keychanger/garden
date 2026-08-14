@@ -7,7 +7,7 @@ import {
   DASHBOARD_SESSION,
 } from "../session.js";
 import { atomicWriteFile } from "./atomic-write.js";
-import { loadConfig, tryGetProject, getFocusedProjectNames, firstFocusedPlotName, plotNames, SESSIONS_DIR, type ProjectConfig } from "../config.js";
+import { loadConfig, tryGetProject, getFocusedProjectNames, firstFocusedPlotName, plotNames, resolveBeadsDir, SESSIONS_DIR, type ProjectConfig } from "../config.js";
 import { buildRulesContext, buildWorktreeRules } from "../rules.js";
 import { type DashboardState, readDashState, writeDashState, withStateLock, STATE_FILE } from "./state.js";
 import { restoreFromHidden } from "./layout.js";
@@ -1276,14 +1276,17 @@ function workerEnvExports(
 // byte-identical). BEADS_ACTOR names this worker as bd's claim/audit actor —
 // `bd update --claim` writes it as assignee, making the bd assignee the
 // garden registry key (the board↔garden join contract, DELEGATION.md).
-// BEADS_DIR pins bd to the project checkout's canonical store: the worktree
-// carries the tracked .beads files but not the gitignored database, so bd
-// run bare in the worktree would bootstrap a divergent local DB and the
-// worker's `bd close` would never reach board or the intake loop.
+// BEADS_DIR pins bd to the project's resolved canonical store (the checkout's
+// own .beads, or the shared store a configured beadsDir names — the same
+// resolveBeadsDir rule garden's own bd shell-outs use, board's DELEGATION.md
+// Decision 15): the worktree carries the tracked .beads files but not the
+// gitignored database, so bd run bare in the worktree would bootstrap a
+// divergent local DB and the worker's `bd close` would never reach board or
+// the intake loop.
 export function beadsEnvExports(projectName: string, workerName: string): string {
   const project = tryGetProject(projectName);
   if (project?.beadIntake !== true) return "";
-  const beadsDir = path.join(project.path, ".beads");
+  const beadsDir = resolveBeadsDir(project);
   return (
     ` export BEADS_ACTOR=${shellEscape(workerName)} ` +
     `BEADS_DIR=${shellEscape(beadsDir)};`

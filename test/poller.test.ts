@@ -1439,9 +1439,9 @@ describe("poll — reviewing state (async)", () => {
 
     // The write runs against the project checkout (worktrees have no bd DB),
     // incremented max-wins from the bead's current labels, stragglers GC'd.
-    expect(showBeads).toHaveBeenCalledWith("/repo/myproject", ["gard-b1"]);
-    expect(addLabel).toHaveBeenCalledWith("/repo/myproject", "gard-b1", "dispatch:failed:2");
-    expect(removeLabel).toHaveBeenCalledWith("/repo/myproject", "gard-b1", "dispatch:failed:1");
+    expect(showBeads).toHaveBeenCalledWith(expect.objectContaining({ path: "/repo/myproject" }), ["gard-b1"]);
+    expect(addLabel).toHaveBeenCalledWith(expect.objectContaining({ path: "/repo/myproject" }), "gard-b1", "dispatch:failed:2");
+    expect(removeLabel).toHaveBeenCalledWith(expect.objectContaining({ path: "/repo/myproject" }), "gard-b1", "dispatch:failed:1");
     // One alert, with the bead folded into the message — not a second alert.
     expect(vi.mocked(addAlert).mock.calls.filter(c => c[0].source === "review")).toHaveLength(1);
     expect(addAlert).toHaveBeenCalledWith(

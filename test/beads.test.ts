@@ -10,8 +10,12 @@ vi.mock("../src/dashboard/log.js", () => ({
 }));
 
 import {
-  listOpenEpics, swarmStatus, showBeads, claimBead, runBd, incrementFailedLabel,
+  listOpenEpics, swarmStatus, showBeads, claimBead, runBd, bdChildEnv,
+  incrementFailedLabel,
 } from "../src/dashboard/beads.js";
+
+// The default store context: cwd-discovered .beads, no BEADS_DIR override.
+const STORE = { path: "/repo" };
 
 function bdOk(stdout: string) {
   return { status: 0, stdout, stderr: "", error: undefined } as ReturnType<typeof spawnSync>;
@@ -31,7 +35,7 @@ describe("listOpenEpics", () => {
       { id: "e1", title: "Epic", status: "open", priority: 1, labels: ["dispatch:auto"], design: "D" },
       { id: "junk" }, // missing title -> dropped
     ])));
-    const epics = listOpenEpics("/repo");
+    const epics = listOpenEpics(STORE);
     expect(epics).toHaveLength(1);
     expect(epics[0]).toMatchObject({ id: "e1", labels: ["dispatch:auto"], design: "D" });
     const call = vi.mocked(spawnSync).mock.calls[0];
@@ -42,9 +46,9 @@ describe("listOpenEpics", () => {
 
   it("throws on a failed or unparseable run so intake records the failure", () => {
     vi.mocked(spawnSync).mockReturnValueOnce(bdFail("boom"));
-    expect(() => listOpenEpics("/repo")).toThrow("bd query type=epic AND NOT status=closed failed: boom");
+    expect(() => listOpenEpics(STORE)).toThrow("bd query type=epic AND NOT status=closed failed: boom");
     vi.mocked(spawnSync).mockReturnValueOnce(bdOk("not json"));
-    expect(() => listOpenEpics("/repo")).toThrow("returned unparseable JSON");
+    expect(() => listOpenEpics(STORE)).toThrow("returned unparseable JSON");
   });
 });
 
@@ -56,7 +60,7 @@ describe("swarmStatus", () => {
       blocked: [],
       completed: [{ id: "b0", title: "zero" }],
     })));
-    const st = swarmStatus("/repo", "e1");
+    const st = swarmStatus(STORE, "e1");
     expect(st?.ready).toEqual([{ id: "b1", title: "one", assignee: "w1" }, { id: "b2", title: "two" }]);
     expect(st?.active).toEqual([{ id: "b3", title: "three", assignee: "w2" }]);
     expect(st?.completed.map(c => c.id)).toEqual(["b0"]);
@@ -64,13 +68,13 @@ describe("swarmStatus", () => {
 
   it("throws when bd fails so intake records the failure", () => {
     vi.mocked(spawnSync).mockReturnValueOnce(bdFail("no epic"));
-    expect(() => swarmStatus("/repo", "e1")).toThrow("bd swarm status e1 failed: no epic");
+    expect(() => swarmStatus(STORE, "e1")).toThrow("bd swarm status e1 failed: no epic");
   });
 });
 
 describe("showBeads", () => {
   it("returns [] without shelling out for an empty id list", () => {
-    expect(showBeads("/repo", [])).toEqual([]);
+    expect(showBeads(STORE, [])).toEqual([]);
     expect(vi.mocked(spawnSync)).not.toHaveBeenCalled();
   });
 
@@ -79,7 +83,7 @@ describe("showBeads", () => {
       { id: "b1", title: "one", status: "open", priority: 0, labels: [] },
       { id: "b2", title: "two", status: "open", priority: 2, labels: [], description: "d" },
     ])));
-    const beads = showBeads("/repo", ["b1", "b2"]);
+    const beads = showBeads(STORE, ["b1", "b2"]);
     expect(beads.map(b => b.id)).toEqual(["b1", "b2"]);
     expect(beads[1].description).toBe("d");
     expect(vi.mocked(spawnSync).mock.calls[0][1]).toEqual(["show", "b1", "b2", "--json"]);
@@ -89,7 +93,7 @@ describe("showBeads", () => {
 describe("claimBead", () => {
   it("claims with BEADS_ACTOR set to the worker name", () => {
     vi.mocked(spawnSync).mockReturnValueOnce(bdOk("ok"));
-    expect(claimBead("/repo", "b1", "swift-oak")).toBe(true);
+    expect(claimBead(STORE, "b1", "swift-oak")).toBe(true);
     const call = vi.mocked(spawnSync).mock.calls[0];
     expect(call[1]).toEqual(["update", "b1", "--claim"]);
     expect((call[2] as { env: Record<string, string> }).env.BEADS_ACTOR).toBe("swift-oak");
@@ -97,7 +101,7 @@ describe("claimBead", () => {
 
   it("reports a foreign claim as failure", () => {
     vi.mocked(spawnSync).mockReturnValueOnce(bdFail("issue already claimed by other"));
-    expect(claimBead("/repo", "b1", "swift-oak")).toBe(false);
+    expect(claimBead(STORE, "b1", "swift-oak")).toBe(false);
   });
 });
 
@@ -120,19 +124,53 @@ describe("incrementFailedLabel", () => {
   });
 });
 
+// The store-resolution rule (board DELEGATION.md Decision 15): a configured
+// beadsDir reaches bd as BEADS_DIR — the same variable worker env injection
+// uses — while the default case stays byte-identical to the pre-beadsDir env
+// so bd keeps discovering the checkout's own .beads from cwd.
+describe("shared-store resolution (beadsDir)", () => {
+  it("bdChildEnv injects BEADS_DIR only for a configured shared store", () => {
+    const shared = bdChildEnv({ path: "/repo", beadsDir: "/board/.beads" });
+    expect(shared.BEADS_DIR).toBe("/board/.beads");
+    const plain = bdChildEnv(STORE);
+    expect(plain).toEqual({ ...process.env });
+  });
+
+  it("bdChildEnv layers BEADS_ACTOR on top of the store env", () => {
+    const env = bdChildEnv({ path: "/repo", beadsDir: "/board/.beads" }, "swift-oak");
+    expect(env.BEADS_DIR).toBe("/board/.beads");
+    expect(env.BEADS_ACTOR).toBe("swift-oak");
+  });
+
+  it("runBd keeps cwd at the project path and passes BEADS_DIR when set", () => {
+    vi.mocked(spawnSync).mockReturnValueOnce(bdOk("fine"));
+    runBd({ path: "/repo", beadsDir: "/board/.beads" }, ["list"]);
+    const call = vi.mocked(spawnSync).mock.calls[0];
+    expect(call[2]).toMatchObject({ cwd: "/repo" });
+    expect((call[2] as { env: Record<string, string> }).env.BEADS_DIR).toBe("/board/.beads");
+  });
+
+  it("runBd without beadsDir leaves the child env untouched", () => {
+    vi.mocked(spawnSync).mockReturnValueOnce(bdOk("fine"));
+    runBd(STORE, ["list"]);
+    const call = vi.mocked(spawnSync).mock.calls[0];
+    expect((call[2] as { env: Record<string, string> }).env).toEqual({ ...process.env });
+  });
+});
+
 describe("runBd lock retry", () => {
   it("retries once on a transient lock error, then succeeds", () => {
     vi.mocked(spawnSync)
       .mockReturnValueOnce(bdFail("opening lock file: resource busy"))
       .mockReturnValueOnce(bdOk("fine"));
-    const res = runBd("/repo", ["list"]);
+    const res = runBd(STORE, ["list"]);
     expect(res.ok).toBe(true);
     expect(vi.mocked(spawnSync)).toHaveBeenCalledTimes(2);
   });
 
   it("does not retry non-lock failures", () => {
     vi.mocked(spawnSync).mockReturnValueOnce(bdFail("unknown issue"));
-    expect(runBd("/repo", ["list"]).ok).toBe(false);
+    expect(runBd(STORE, ["list"]).ok).toBe(false);
     expect(vi.mocked(spawnSync)).toHaveBeenCalledTimes(1);
   });
 });
