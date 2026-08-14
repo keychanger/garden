@@ -40,11 +40,11 @@ describe("listOpenEpics", () => {
     expect(call[2]).toMatchObject({ cwd: "/repo" });
   });
 
-  it("returns empty on a failed or unparseable run", () => {
+  it("throws on a failed or unparseable run so intake records the failure", () => {
     vi.mocked(spawnSync).mockReturnValueOnce(bdFail("boom"));
-    expect(listOpenEpics("/repo")).toEqual([]);
+    expect(() => listOpenEpics("/repo")).toThrow("bd query type=epic AND NOT status=closed failed: boom");
     vi.mocked(spawnSync).mockReturnValueOnce(bdOk("not json"));
-    expect(listOpenEpics("/repo")).toEqual([]);
+    expect(() => listOpenEpics("/repo")).toThrow("returned unparseable JSON");
   });
 });
 
@@ -62,9 +62,9 @@ describe("swarmStatus", () => {
     expect(st?.completed.map(c => c.id)).toEqual(["b0"]);
   });
 
-  it("returns null when bd fails", () => {
+  it("throws when bd fails so intake records the failure", () => {
     vi.mocked(spawnSync).mockReturnValueOnce(bdFail("no epic"));
-    expect(swarmStatus("/repo", "e1")).toBeNull();
+    expect(() => swarmStatus("/repo", "e1")).toThrow("bd swarm status e1 failed: no epic");
   });
 });
 

@@ -463,6 +463,24 @@ describe("runIntakeOnce", () => {
     expect(w.alerts[0].dedupKey).toBe("intake-budget-write:board:e1");
   });
 
+  it("preserves the old durable count when adding the pre-charge fails", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto", "dispatch:spent:2"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "1" }] }) },
+      details: { b1: bead({ id: "b1" }) },
+    });
+    const deps = makeDeps(w, {
+      addLabel: (id, label) => {
+        w.labelsAdded.push({ id, label });
+        return !label.startsWith("dispatch:spent:");
+      },
+    });
+    runIntakeOnce(deps);
+    expect(w.spawns).toHaveLength(0);
+    expect(w.labelsRemoved).not.toContainEqual({ id: "e1", label: "dispatch:spent:2" });
+    expect(w.alerts[0]?.dedupKey).toBe("intake-budget-write:board:e1");
+  });
+
   it("aborts on a failed straggler removal too (remove is half the write)", () => {
     const w = makeWorld({
       epics: [epic({ id: "e1", labels: ["dispatch:auto", "dispatch:spent:2"] })],
@@ -477,6 +495,7 @@ describe("runIntakeOnce", () => {
     });
     runIntakeOnce(deps);
     expect(w.spawns).toHaveLength(0);
+    expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:spent:3" });
     expect(w.alerts[0]?.dedupKey).toBe("intake-budget-write:board:e1");
   });
 
@@ -490,11 +509,36 @@ describe("runIntakeOnce", () => {
     runIntakeOnce(makeDeps(w));
     expect(w.spawns).toHaveLength(1);
     expect(w.claims).toHaveLength(0);
-    // Charge: remove spent:2, add spent:3. Refund: remove spent:3, re-add spent:2.
+    // Charge: add spent:3, remove spent:2. Refund: re-add spent:2, remove spent:3.
     expect(w.labelsRemoved).toContainEqual({ id: "e1", label: "dispatch:spent:2" });
     expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:spent:3" });
     expect(w.labelsRemoved).toContainEqual({ id: "e1", label: "dispatch:spent:3" });
     expect(w.labelsAdded.filter(l => l.label === "dispatch:spent:2")).toHaveLength(1);
+  });
+
+  it("keeps the higher charge when restoring a failed spawn's prior count fails", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto", "dispatch:spent:2"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "t" }] }) },
+      details: { b1: bead({ id: "b1" }) },
+      spawnResult: () => null,
+    });
+    let chargeAdded = false;
+    const deps = makeDeps(w, {
+      addLabel: (id, label) => {
+        w.labelsAdded.push({ id, label });
+        if (label === "dispatch:spent:3") {
+          chargeAdded = true;
+          return true;
+        }
+        if (chargeAdded && label === "dispatch:spent:2") return false;
+        return true;
+      },
+    });
+    runIntakeOnce(deps);
+    expect(w.spawns).toHaveLength(1);
+    expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:spent:3" });
+    expect(w.labelsRemoved).not.toContainEqual({ id: "e1", label: "dispatch:spent:3" });
   });
 
   it("does not re-add a zero count when refunding the first charge", () => {
@@ -613,6 +657,38 @@ describe("runIntakeOnce", () => {
     expect(w.labelsAdded.filter(l => l.label.startsWith("dispatch:spent:"))).toHaveLength(1);
     // The raced bead left the frontier, so the wave still consumed.
     expect(w.labelsRemoved).toContainEqual({ id: "e1", label: "dispatch:manual" });
+  });
+
+  it("fails closed when the frontier detail read is incomplete", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:manual", "dispatch:dispatching"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "1" }, { id: "b2", title: "2" }] }) },
+      details: { b1: bead({ id: "b1" }) },
+    });
+    expect(() => runIntakeOnce(makeDeps(w))).toThrow("incomplete frontier data");
+    expect(w.spawns).toHaveLength(0);
+    expect(w.labelsRemoved).not.toContainEqual({ id: "e1", label: "dispatch:manual" });
+    expect(w.labelsAdded).not.toContainEqual({ id: "e1", label: "dispatch:dispatched" });
+  });
+
+  it("fails closed when the pre-spawn detail re-check returns no bead", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "1" }] }) },
+      details: { b1: bead({ id: "b1" }) },
+    });
+    let reads = 0;
+    const deps = makeDeps(w, {
+      showBeads: () => ++reads === 1 ? [w.details.b1] : [],
+    });
+    expect(() => runIntakeOnce(deps)).toThrow("returned no data for bead b1");
+    expect(w.spawns).toHaveLength(0);
+    expect(w.labelsAdded).toHaveLength(0);
+  });
+
+  it("fails the pass when swarm status cannot be read", () => {
+    const w = makeWorld({ epics: [epic({ id: "e1", labels: ["dispatch:auto"] })] });
+    expect(() => runIntakeOnce(makeDeps(w))).toThrow("returned no data for epic e1");
   });
 
   it("retries a failed post-spawn claim once, then leaves it to the worker", () => {

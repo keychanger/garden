@@ -88,13 +88,14 @@ export function runBd(
   }
 }
 
-function bdJson(projectPath: string, args: string[]): unknown | null {
+function bdJson(projectPath: string, args: string[]): unknown {
   const res = runBd(projectPath, [...args, "--json"]);
   if (!res.ok) {
+    const detail = res.stderr.trim().slice(0, 500) || "unknown error";
     log.warn("beads", "bd command failed", {
-      data: { args, stderr: res.stderr.trim().slice(0, 500) },
+      data: { args, stderr: detail },
     });
-    return null;
+    throw new Error(`bd ${args.join(" ")} failed: ${detail}`);
   }
   try {
     return JSON.parse(res.stdout);
@@ -102,7 +103,7 @@ function bdJson(projectPath: string, args: string[]): unknown | null {
     log.warn("beads", "bd returned unparseable JSON", {
       data: { args, stdout: res.stdout.slice(0, 200) },
     });
-    return null;
+    throw new Error(`bd ${args.join(" ")} returned unparseable JSON`);
   }
 }
 
@@ -142,14 +143,16 @@ function asBeadRefs(x: unknown): BeadRef[] {
 // query stays broad so one call serves both the dispatch gate and the reaper.
 export function listOpenEpics(projectPath: string): BeadDetail[] {
   const parsed = bdJson(projectPath, ["query", "type=epic AND NOT status=closed"]);
-  if (!Array.isArray(parsed)) return [];
+  if (!Array.isArray(parsed)) throw new Error("bd query returned an unexpected shape");
   return parsed.map(asBeadDetail).filter((d): d is BeadDetail => d !== null);
 }
 
 // The live wavefront, computed by bd from the dependency DAG.
 export function swarmStatus(projectPath: string, epicId: string): SwarmStatus | null {
   const parsed = bdJson(projectPath, ["swarm", "status", epicId]);
-  if (typeof parsed !== "object" || parsed === null) return null;
+  if (typeof parsed !== "object" || parsed === null) {
+    throw new Error(`bd swarm status ${epicId} returned an unexpected shape`);
+  }
   const r = parsed as Record<string, unknown>;
   return {
     ready: asBeadRefs(r.ready),
@@ -162,7 +165,7 @@ export function swarmStatus(projectPath: string, epicId: string): SwarmStatus | 
 export function showBeads(projectPath: string, ids: string[]): BeadDetail[] {
   if (ids.length === 0) return [];
   const parsed = bdJson(projectPath, ["show", ...ids]);
-  if (!Array.isArray(parsed)) return [];
+  if (!Array.isArray(parsed)) throw new Error("bd show returned an unexpected shape");
   return parsed.map(asBeadDetail).filter((d): d is BeadDetail => d !== null);
 }
 

@@ -40,7 +40,7 @@
 //   dispatch:retry:N           garden-written on a bead each time the reaper
 //                              recovers it
 //   dispatch:failed:N          quality-failure counter on a bead (read-only
-//                              here; the review pipeline writes it). At
+//                              here; its writer is future work). At
 //                              BREAKER_THRESHOLD the frontier excludes the
 //                              bead — the circuit breaker's read side.
 //
@@ -92,8 +92,8 @@ export { intakeStampPath, intakePokePath } from "./intake-paths.js";
 
 // The circuit breaker's read side (DELEGATION.md Decision 8): a bead whose
 // dispatch:failed:N reaches this count is excluded from the frontier — its
-// blocked descendants wait, and board renders the epic chip red. Nothing here
-// writes dispatch:failed:N; the review pipeline does.
+// blocked descendants wait, and board renders the epic chip red. Nothing in
+// garden writes dispatch:failed:N yet.
 export const BREAKER_THRESHOLD = 2;
 
 export interface DispatchState {
@@ -247,7 +247,8 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
   const statuses = new Map<string, SwarmStatus>();
   for (const epic of epics) {
     const st = deps.swarmStatus(epic.id);
-    if (st) statuses.set(epic.id, st);
+    if (!st) throw new Error(`bd swarm status returned no data for epic ${epic.id}`);
+    statuses.set(epic.id, st);
   }
 
   let changed = false;
@@ -262,7 +263,8 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
       if (!bead.assignee) continue;
       if (!shouldReap(bead.assignee, byName.get(bead.assignee), deps.nowMs())) continue;
       const detail = deps.showBeads([bead.id])[0];
-      const retryLabels = detail?.labels ?? [];
+      if (!detail) throw new Error(`bd show returned no data for bead ${bead.id}`);
+      const retryLabels = detail.labels;
       const retries = retryCount(retryLabels);
       if (!deps.reopen(bead.id, `garden intake reaper: worker ${bead.assignee} died`)) continue;
       deps.unassign(bead.id);
@@ -325,7 +327,12 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
     // priority sort, so an excluded bead can neither hold a slot open nor
     // outrank an eligible sibling.
     const unassigned = st.ready.filter(b => !b.assignee);
-    const frontier = (unassigned.length > 0 ? deps.showBeads(unassigned.map(b => b.id)) : [])
+    const unassignedIds = unassigned.map(b => b.id);
+    const frontierDetails = unassignedIds.length > 0 ? deps.showBeads(unassignedIds) : [];
+    if (!sameIds(unassignedIds, frontierDetails)) {
+      throw new Error(`bd show returned incomplete frontier data for epic ${epic.id}`);
+    }
+    const frontier = frontierDetails
       .filter(d => {
         if (failedCount(d.labels) < BREAKER_THRESHOLD) return true;
         log.info("intake", "bead excluded by circuit breaker", {
@@ -358,7 +365,8 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
       // here (another intake pass, an operator claim, a recall). Re-read the
       // single bead and skip without charging if a claim appeared.
       const fresh = deps.showBeads([bead.id])[0];
-      if (fresh?.assignee) {
+      if (!fresh) throw new Error(`bd show returned no data for bead ${bead.id}`);
+      if (fresh.assignee) {
         frontierLeft--;
         log.info("intake", "bead claimed since frontier snapshot; skipping", {
           data: { project: deps.projectName, epic: epic.id, bead: bead.id, assignee: fresh.assignee },
@@ -371,8 +379,13 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
       // than spawn a session the counter never sees.
       const prevSpent = spent;
       const nextLabel = `dispatch:spent:${spent + 1}`;
-      let chargeOk = removeCountLabels(deps, epic.id, spentLabels, "dispatch:spent:");
-      if (chargeOk) chargeOk = deps.addLabel(epic.id, nextLabel);
+      // Add the higher count first. If adding fails, the old count remains;
+      // if cleanup fails, max-wins parsing sees the new count. Either partial
+      // write therefore overcounts or preserves spend, never undercounts it.
+      let chargeOk = deps.addLabel(epic.id, nextLabel);
+      if (chargeOk) {
+        chargeOk = removeCountLabels(deps, epic.id, spentLabels, "dispatch:spent:");
+      }
       if (!chargeOk) {
         log.error("intake", "budget label write failed; aborting epic dispatch pass", {
           data: { project: deps.projectName, epic: epic.id, bead: bead.id },
@@ -405,8 +418,13 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
         // rather than burn the budget against a dead newWorker. Refund the
         // pre-charge best-effort; a failed refund leaves an overcount, which
         // fails closed (fewer future sessions, never an uncounted one).
-        const refunded = deps.removeLabel(epic.id, nextLabel)
-          && (prevSpent === 0 || deps.addLabel(epic.id, `dispatch:spent:${prevSpent}`));
+        // Restore a non-zero prior count before removing the charge. A failed
+        // restore leaves nextLabel in place (an overcount); a failed removal
+        // leaves both labels and max-wins also keeps the overcount.
+        const refunded = prevSpent === 0
+          ? deps.removeLabel(epic.id, nextLabel)
+          : deps.addLabel(epic.id, `dispatch:spent:${prevSpent}`)
+            && deps.removeLabel(epic.id, nextLabel);
         log.error("intake", "spawn failed; halting dispatch pass", {
           data: { project: deps.projectName, epic: epic.id, bead: bead.id, refunded },
         });
@@ -453,6 +471,12 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
   }
 
   return changed;
+}
+
+function sameIds(expected: string[], actual: BeadDetail[]): boolean {
+  if (expected.length !== actual.length) return false;
+  const actualIds = new Set(actual.map(bead => bead.id));
+  return actualIds.size === expected.length && expected.every(id => actualIds.has(id));
 }
 
 // Remove every label matching a counter prefix (straggler GC for max-wins
