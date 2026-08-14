@@ -2811,9 +2811,13 @@ the existing `garden handoff` IPC, seeded from
 `.garden/botanist/handoff-brief.md` — a self-contained briefing that inlines the
 full design, because the child branches from `origin/<base>` before the
 published doc merges, so the doc path does not yet exist in its worktree. The
-operator redirects in the approval itself: a **trellis builder** stays
-operator-run (`garden workers new <project> --workflow trellis --trellis
-<path>` — the handoff IPC spawns default-workflow workers only), or **no
+operator redirects in the approval itself: a **trellis builder** (operator-run
+and two-step, because the handoff IPC spawns default-workflow workers only and
+`--trellis` resolves a *named*, tagged trellis inside the project's trellis dir
+— see "Plant-time pre-flight" — never a `docs/` path: the botanist bakes the
+trellis spine into the artifact before publish, and after the merge the
+operator copies the doc into the trellis dir and plants it by name, `garden
+workers new <project> --workflow trellis --trellis <name>`), or **no
 builder**. A non-default builder crew is set on the project first (`garden
 config <project> crew <name>`), since per-spawn `--crew` is default-workflow
 only today (see CREWS). The publish command prints both routes as a reminder.

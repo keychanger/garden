@@ -93,6 +93,7 @@ export function publishBotanistArtifact(
       + `Now execute the handoff plan the operator approved (see the botanist skill):\n`
       + `  default builder — spawn it yourself: garden handoff ${proj} < .garden/botanist/handoff-brief.md\n`
       + `    (inline the design in the brief: the doc has not merged when the new worker branches)\n`
-      + `  trellis builder — the operator runs: garden workers new ${proj} --workflow trellis --trellis ${toRelPath}`,
+      + `  trellis builder — needs the trellis spine in the doc; the operator runs, in the checkout after merge:\n`
+      + `    cp ${toRelPath} .garden/trellises/${name}.md && garden workers new ${proj} --workflow trellis --trellis ${name}`,
   };
 }

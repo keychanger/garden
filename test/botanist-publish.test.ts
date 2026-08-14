@@ -104,8 +104,14 @@ describe("publishBotanistArtifact", () => {
     // The done sentinel was written so the skip-review merge finalizes to done.
     expect(fs.existsSync(path.join(wt, ".garden-done"))).toBe(true);
 
-    // The success message points the botanist at both handoff routes.
+    // The success message points the botanist at both handoff routes. The
+    // trellis route must plant by NAME from the trellis dir — --trellis never
+    // resolves a docs/ path (trellis-tag.ts findTrellisByName).
     expect(r.message).toContain("garden handoff");
-    expect(r.message).toContain("--workflow trellis --trellis docs/future/notification-levels.md");
+    expect(r.message).toContain(
+      "cp docs/future/notification-levels.md .garden/trellises/notification-levels.md",
+    );
+    expect(r.message).toContain("--workflow trellis --trellis notification-levels");
+    expect(r.message).not.toContain("--trellis docs/");
   });
 });
