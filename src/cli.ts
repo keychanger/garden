@@ -185,7 +185,7 @@ Dashboard:
   version, --version, -v         Print the garden build version (git short SHA, or "dev" under tsx)
 
 Workers:
-  workers new <project> [--workflow default|trellis|grow|botanist] [--model <alias-or-id>] [--effort low|medium|high|xhigh|ultra]
+  workers new <project> [--workflow default|trellis|grow|botanist|planner] [--model <alias-or-id>] [--effort low|medium|high|xhigh|ultra]
                         [--harness codex] [--crew <name>] [--base <branch>] [--trellis <name>]
                         [--seed <text> | --seed-file <path>] [--max-iterations N]
                                  Spawn a new worker. default plants an interactive worker;
@@ -195,11 +195,15 @@ Workers:
                                  design worker whose deliverable is a doc, not code (Opus/xhigh
                                  designer seat) — --seed / --seed-file optionally inlines the design
                                  brief, and without one no message is sent — the brief arrives
-                                 as your first message in its pane. --model overrides
+                                 as your first message in its pane; planner plants a decomposition
+                                 worker whose deliverable is a bead DAG in the project's bd store
+                                 (Opus/xhigh seat, normally intake-spawned from a plan:pending
+                                 epic — see DESIGN.md "Bead intake"). --model overrides
                                  the workflow's default worker model. --effort sets the reasoning
-                                 rung (ultra = max effort + dynamic workflows; default/grow/botanist).
-                                 --harness picks the agent CLI (default claude-code; codex = a
-                                 sandboxed Codex worker, default/botanist workflows only).
+                                 rung (ultra = max effort + dynamic workflows; default/grow/
+                                 botanist/planner). --harness picks the agent CLI (default
+                                 claude-code; codex = a sandboxed Codex worker, default/botanist
+                                 workflows only).
   workers grow [<worker>] --seed <text> | --seed-file <path> | --goal-file <path>
                                  Convert an active default worker into a grow loop after its
                                  current work merges (self-resolves via $GARDEN_WORKER). The durable

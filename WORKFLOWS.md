@@ -2870,6 +2870,127 @@ handoff).
 - **Designer-in-the-crew-name** (the `<designer>-<builder>-<reviewer>` triple) —
   needs the role-agnostic `resolveRole` CREWS scoped.
 
+## Planner workflow
+
+Spec for the **planner** workflow: a **decomposition** worker whose unit of
+output is a dependency-gated **bead DAG** written to the project's bd store —
+not code and not a commit. A planner is the garden half of board's `plan:*`
+lifecycle (board's `docs/DELEGATION.md`, phase 4d + Decisions 13/16, is the
+cross-repo authority): board arms an epic `plan:pending` (the `S` key); the
+intake loop consumes that to `plan:planning` and spawns exactly one planner;
+the planner reads the epic's pinned design doc, emits the child DAG as
+ephemeral draft wisps plus an `integration`-labeled child, and finishes by
+rewriting the label to `plan:ready` (or `plan:failed`); board renders the
+draft dimmed and the operator's second `S` promotes it. **If the code
+disagrees with this section, the code is wrong.**
+
+### The contract
+
+The planner's exact bd commands ride its seed message (`buildPlannerSeed`,
+`poller-intake.ts`) — the rules inversion (`rules.ts` planner branch) and the
+bundled `planner` skill carry the posture and method, the seed carries the
+epic-specific spellings. The contract, all verified against the installed
+bd 1.0.3 (`test/integration/workflow-planner.real.test.ts` pins every
+spelling):
+
+1. Read the design doc (inlined in the seed) and draft the child DAG — one
+   worker-session per child, blocker edges for real ordering constraints
+   only, plus ONE extra child titled and labeled `integration` that every
+   leaf blocks (its worker verifies the assembled feature; bd rejects
+   epic↔task `blocks` edges in both directions, so the integration bead is a
+   task like its siblings — DELEGATION.md Decision 13).
+2. Create each child as an ephemeral wisp:
+   `bd create "<title>" --ephemeral --parent <epic> -d "<desc>"`
+   (`-l integration` on the gate child). Wire every edge explicitly:
+   `bd dep <blocker> --blocks <blocked>`, including one edge per leaf onto
+   the integration child.
+3. `bd dep cycles` as belt-and-suspenders (bd also rejects cycle-closing
+   edges at write time), then sanity-check `bd swarm status <epic> --json`.
+4. On success `bd label remove <epic> plan:planning` + `bd label add <epic>
+   plan:ready`; on ANY failure land `plan:failed`. Never leave the epic at
+   `plan:planning`.
+5. Never `bd promote` (board's `S` owns promotion), never claim/close beads,
+   never commit code; then stop.
+
+**Deliberate deviation from DELEGATION.md's sketch:** the doc's phase-4d
+inventory wanted ONE `bd create --graph --ephemeral` call with top-level
+`edges[]`. Empirically (2026-08-14, installed 1.0.3), `--graph` **silently
+ignores `--ephemeral`** in every spelling (CLI flag, node-level fields, plan
+top level) — the children come out permanent, which would bypass board's
+draft-review gate entirely (dimmed wisps, `S` promotion, `;plan:none`
+discard all key on `ephemeral:true`). Ephemerality is the load-bearing half
+of the contract, so the seed pins the per-child spelling above instead; a
+canary integration test pins the `--graph` misbehavior so a future bd that
+fixes it prompts reconsidering the single-call form. The doc's other
+`--graph` warning (node-level `deps` arrays silently ignored) and the
+`--dry-run` trap (it writes anyway) are carried into the seed verbatim.
+
+### The workflow definition
+
+Botanist-shaped and data-only: reuses default's 8 state handlers,
+`workerModel: "opus"` + `workerEffort: "xhigh"` (decomposition is
+judgment-heavy — the designer seat), `skipsReviewMerge: true`. A planner
+writes only to the bd store, so its branch never gains a tracked commit —
+`handleWorking` sees zero commits and the worker idles after finishing, like
+a botanist at its human gate; a planner that drifts into committing rides the
+same publishable-path boundary check as botanist (anything outside `docs/`
+parks it in `failing`). `plannerValidTransitions` diverges from default only
+on `working` (`["merge-pending", "failing", "done"]`), exactly like botanist.
+
+### Spawning
+
+The normal planner is **intake-spawned**: the plan-consume loop in
+`runIntakeOnce` (`poller-intake.ts`) runs BEFORE the dispatch loop, admits
+epics via the widened `plan:*` filter, and for each `plan:pending` epic
+consumes the label BEFORE the spawn (Decision 16: remove `plan:pending` —
+a failed remove aborts that epic with an error alert, since proceeding risks
+duplicate planners on the next wake — then add `plan:planning`, then spawn
+one planner through the intake spawn seam with `workflow: "planner"`). Only
+`pending` is spawnable, so repeated poller wakes are idempotent by
+construction; a spawn failure rewrites `planning` → `failed` with an alert.
+The planner carries no bead assignee and is deliberately **exempt from the
+intake cap/governor and the budget counter** — the governor joins on bd
+assignees and `budget:N` caps dispatched *build* sessions, and a planner is
+neither. It is likewise invisible to the intake reconcile step — cleanup
+is `garden workers stop` or the dashboard `⌥x` kill.
+
+`workers new <project> --workflow planner [--seed …|--seed-file …] [--model …]
+[--effort …] [--base …]` plants one from the CLI (hand-run dispatch and
+testing). The seed is optional and delivered RAW — no framing wrapper, since
+intake composes the contract seed itself; without one, no message is sent and
+the brief arrives as the operator's first pane message (the botanist
+pattern). A planner spawned outside a `beadIntake` project has no
+`BEADS_DIR`/`BEADS_ACTOR` env, so its bd calls would hit a worktree-local
+store — plant planners on opted-in projects.
+
+### Code layout
+
+- `workflows/planner.ts` — the definition (reuses default's 8 state handlers;
+  `skipsReviewMerge`, `workerModel: "opus"`, `workerEffort: "xhigh"`).
+- `workflows/types.ts` — `plannerValidTransitions` + the `getValidTransitions`
+  branch.
+- `poller-intake.ts` — the plan-consume loop in `runIntakeOnce`,
+  `buildPlannerSeed`, and `IntakeSpawnRequest.workflow`.
+- The rules inversion (`rules.ts` planner branch), the bundled `planner` skill
+  (`skills.ts`), the `planner` badge (`status.ts` `workflowRowDecor`), the CLI
+  validation union (`commands/workers.ts`), and cli.ts help.
+- Tests: `test/workflows.test.ts`, `test/rules.test.ts`, `test/skills.test.ts`,
+  `test/poller-intake.test.ts` (plan-consume loop + seeds),
+  `test/grow-cli.test.ts` (CLI), and
+  `test/integration/workflow-planner.real.test.ts` (the bd spellings).
+
+### Deferred
+
+- **A `⌥⇧N` picker row** — planners are intake-spawned from board's `S`; a
+  tmux picker row would collect no epic context. The CLI plant covers the
+  hand-run case.
+- **Reconcile visibility** — a planner has no `bead` field, so the reconcile
+  step cannot see it; a planner orphaned by a board-side `;plan:none` keeps
+  running until stopped by hand.
+- **Codex planners** — `workerWorkflows` on the codex adapter does not include
+  `planner`; the seat is claude-code only for now.
+- **`BEADS_DIR` injection for non-intake projects** — see Spawning above.
+
 ## Holistic-review workflow
 
 Garden reviews each worker push in isolation (`origin/<base>..HEAD`) — one delta

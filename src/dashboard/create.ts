@@ -37,6 +37,7 @@ import {
   TRELLIS_AUTHOR_SKILL_CONTENT, TRELLIS_AUTHOR_SKILL_DIRNAME, TRELLIS_AUTHOR_SKILL_FILENAME,
   GROW_SKILL_CONTENT, GROW_SKILL_DIRNAME, GROW_SKILL_FILENAME,
   BOTANIST_SKILL_CONTENT, BOTANIST_SKILL_DIRNAME, BOTANIST_SKILL_FILENAME,
+  PLANNER_SKILL_CONTENT, PLANNER_SKILL_DIRNAME, PLANNER_SKILL_FILENAME,
 } from "./skills.js";
 import {
   providerSessionSanitizerArgs,
@@ -150,6 +151,7 @@ export function ensureDashboard(): void {
               };
             }
             if (entry.workflow === "botanist") runtimeRulesOpts.botanist = true;
+            if (entry.workflow === "planner") runtimeRulesOpts.planner = true;
             const launchPlan = resolveWorkerLaunchPlan({
               project: proj,
               provider: entry.provider,
@@ -693,6 +695,12 @@ export interface WorktreeCommandOptions {
    *  `entry.workflow` so the inversion survives the worker's lifetime.
    *  Mutually exclusive with `trellisRelativePath` / `grow`. */
   botanist?: boolean;
+  /** When set, buildWorktreeRules inverts the worktree posture for a planner
+   *  (decomposition) worker — the deliverable is a bead DAG in the bd store,
+   *  not code — and suppresses the checks paragraph. Threaded from the spawn
+   *  (workflow === "planner") and re-derived on resume/bounce from
+   *  `entry.workflow`. Mutually exclusive with the other workflow options. */
+  planner?: boolean;
 }
 
 export function buildWorktreeWorkerCommand(
@@ -706,7 +714,7 @@ export function buildWorktreeWorkerCommand(
 ): string {
   const contextFile = writeWorktreeContextFile(
     projectName, projectPath, branchName, baseBranch,
-    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow, botanist: opts?.botanist },
+    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow, botanist: opts?.botanist, planner: opts?.planner },
   );
   const project = resolveProjectForHooks(projectName, projectPath);
   const launchPlan = commandLaunchPlan(project, opts, false);
@@ -740,7 +748,9 @@ function commandLaunchPlan(
       ? "grow"
       : opts?.botanist
         ? "botanist"
-        : "default";
+        : opts?.planner
+          ? "planner"
+          : "default";
   return resolveWorkerLaunchPlan({
     project,
     provider: opts?.provider,
@@ -810,7 +820,7 @@ export function buildWorktreeBootstrapScript(
   // Write the context file eagerly (fast, just file I/O)
   const contextFile = writeWorktreeContextFile(
     projectName, projectPath, branchName, baseBranch,
-    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow, botanist: opts?.botanist },
+    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow, botanist: opts?.botanist, planner: opts?.planner },
   );
 
   const fifoLit = shellEscape(signalFifoPath(projectName));
@@ -870,6 +880,9 @@ export function buildWorktreeBootstrapScript(
   const botanistSkillLit = shellEscape(BOTANIST_SKILL_CONTENT);
   const botanistSkillDirnameLit = shellEscape(BOTANIST_SKILL_DIRNAME);
   const botanistSkillFilenameLit = shellEscape(BOTANIST_SKILL_FILENAME);
+  const plannerSkillLit = shellEscape(PLANNER_SKILL_CONTENT);
+  const plannerSkillDirnameLit = shellEscape(PLANNER_SKILL_DIRNAME);
+  const plannerSkillFilenameLit = shellEscape(PLANNER_SKILL_FILENAME);
   const agentCmd = getHarness(launchPlan.harness).buildAgentCommand({
     sessionId, resume: false, contextFile, launchPlan,
     worktreeGitDir: codexWorktreeGitDir(launchPlan.harness, projectPath),
@@ -1073,6 +1086,8 @@ mkdir -p ${wtPathLit}/.claude/skills/${growSkillDirnameLit}
 printf '%s' ${growSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${growSkillDirnameLit}/${growSkillFilenameLit}
 mkdir -p ${wtPathLit}/.claude/skills/${botanistSkillDirnameLit}
 printf '%s' ${botanistSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${botanistSkillDirnameLit}/${botanistSkillFilenameLit}
+mkdir -p ${wtPathLit}/.claude/skills/${plannerSkillDirnameLit}
+printf '%s' ${plannerSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${plannerSkillDirnameLit}/${plannerSkillFilenameLit}
 
 # Ensure garden-managed dirs are excluded from git status.
 # Writing to the common info/exclude covers all worktrees and never gets committed.
@@ -1156,6 +1171,7 @@ export function respawnWorkerWindow(
     };
   }
   if (entry.workflow === "botanist") resumeOpts.botanist = true;
+  if (entry.workflow === "planner") resumeOpts.planner = true;
   if (entry.worktreePath && wtExists(entry.worktreePath)) {
     installPollTriggerHook(entry.worktreePath, resolveGardenRunner(), projectName);
     getHarness(launchPlan.harness).installRuntimeConfig(
@@ -1233,7 +1249,7 @@ export function buildWorktreeResumeCommand(
 ): string {
   const contextFile = writeWorktreeContextFile(
     projectName, projectPath, branchName, baseBranch,
-    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow, botanist: opts?.botanist },
+    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow, botanist: opts?.botanist, planner: opts?.planner },
   );
   const gardenRunner = resolveGardenRunner();
   const project = resolveProjectForHooks(projectName, projectPath);
@@ -1306,6 +1322,7 @@ function writeWorktreeContextFile(
     trellisRelativePath?: string;
     grow?: { iteration: number; maxIterations: number };
     botanist?: boolean;
+    planner?: boolean;
   },
 ): string {
   const context = buildWorktreeContextText(
@@ -1325,6 +1342,7 @@ export function buildWorktreeContextText(
     trellisRelativePath?: string;
     grow?: { iteration: number; maxIterations: number };
     botanist?: boolean;
+    planner?: boolean;
   },
 ): string {
   const base = buildRulesContext(projectName, projectPath);
@@ -1338,6 +1356,7 @@ export function buildWorktreeContextText(
         : {}),
       ...(opts?.grow ? { grow: opts.grow } : {}),
       ...(opts?.botanist ? { botanist: true } : {}),
+      ...(opts?.planner ? { planner: true } : {}),
       ...(checksCommand ? { checksCommand } : {}),
     },
   );

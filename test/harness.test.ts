@@ -271,7 +271,7 @@ describe("claude-code adapter dialect", () => {
       sandbox: true,
       skills: true,
       providerProfiles: true,
-      workerWorkflows: ["default", "grow", "trellis", "botanist"],
+      workerWorkflows: ["default", "grow", "trellis", "botanist", "planner"],
       headlessRoles: ["reviewer", "resolver", "ciFix"],
     });
   });

@@ -777,6 +777,10 @@ function workflowRowDecor(worker: WorkerInfo): { badge?: string; detail?: string
       // the live activity text keeps the detail slot (a static detail here
       // would clobber it).
       return { badge: "botanist" };
+    case "planner":
+      // Same identity-not-activity call as botanist: the planner's live
+      // activity keeps the detail slot.
+      return { badge: "planner" };
     default:
       return {};
   }

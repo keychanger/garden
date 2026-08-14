@@ -27,6 +27,9 @@ import {
   BOTANIST_SKILL_DIRNAME,
   BOTANIST_SKILL_FILENAME,
   BOTANIST_SKILL_CONTENT,
+  PLANNER_SKILL_DIRNAME,
+  PLANNER_SKILL_FILENAME,
+  PLANNER_SKILL_CONTENT,
   installClaudeSkills,
 } from "../src/dashboard/skills.js";
 
@@ -116,6 +119,41 @@ describe("installClaudeSkills", () => {
     expect(BOTANIST_SKILL_CONTENT).toContain("Do NOT pass `--expect-callback`");
     // Trellis builders stay operator-run — the handoff IPC is default-only.
     expect(BOTANIST_SKILL_CONTENT).toContain("--workflow trellis --trellis");
+  });
+
+  it("writes the planner skill alongside the others", () => {
+    installClaudeSkills("/Users/x/.garden/worktrees/myproject/bold-ash");
+    expect(fs.mkdirSync).toHaveBeenCalledWith(
+      "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/planner",
+      { recursive: true },
+    );
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining("/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/planner/SKILL.md."),
+      PLANNER_SKILL_CONTENT,
+    );
+  });
+
+  it("planner skill declares its name and carries the method checklist", () => {
+    expect(PLANNER_SKILL_CONTENT).toMatch(/^---\nname: planner\n/);
+    expect(PLANNER_SKILL_DIRNAME).toBe("planner");
+    expect(PLANNER_SKILL_FILENAME).toBe("SKILL.md");
+    // The method: read the doc, draft the DAG, the create/dep spellings, the
+    // pitfalls, the label rewrites, stop.
+    expect(PLANNER_SKILL_CONTENT).toContain("Read the design doc");
+    expect(PLANNER_SKILL_CONTENT).toContain("--ephemeral --parent");
+    expect(PLANNER_SKILL_CONTENT).toContain("bd dep");
+    expect(PLANNER_SKILL_CONTENT).toContain("--blocks");
+    // The verified 1.0.3 pitfalls (the reason --graph is banned here).
+    expect(PLANNER_SKILL_CONTENT).toContain("bd create --graph");
+    expect(PLANNER_SKILL_CONTENT).toContain("--dry-run");
+    expect(PLANNER_SKILL_CONTENT).toContain("bd dep cycles");
+    // The integration child and the completion rewrites.
+    expect(PLANNER_SKILL_CONTENT).toContain("integration");
+    expect(PLANNER_SKILL_CONTENT).toContain("plan:ready");
+    expect(PLANNER_SKILL_CONTENT).toContain("plan:failed");
+    // No promotion, no code.
+    expect(PLANNER_SKILL_CONTENT).toContain("bd promote");
+    expect(PLANNER_SKILL_CONTENT).toContain("Do not edit repo files");
   });
 
   it("writes the handoff skill alongside done so workers can invoke it", () => {

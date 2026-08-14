@@ -29,7 +29,7 @@ vi.mock("../src/dashboard/beads.js", async (importOriginal) => ({
 
 import {
   parseDispatchState, retryCount, failedCount, shouldReap, shouldReapFailing,
-  isIntakeLive, buildBeadSeed,
+  isIntakeLive, buildBeadSeed, buildPlannerSeed,
   runIntakeOnce, runBeadIntake, intakeDue, intakeStampPath, intakePokePath,
   BREAKER_THRESHOLD, DEFAULT_BEAD_INTAKE_CAP, INTAKE_MIN_INTERVAL_MS, REAPER_GRACE_MS,
   type IntakeDeps, type IntakeSpawnRequest,
@@ -206,6 +206,89 @@ describe("buildBeadSeed", () => {
     });
     expect(seed).toContain("no design doc pinned");
     expect(seed).toContain("none yet");
+  });
+
+  it("a leaf bead does NOT carry the assembly contract", () => {
+    const seed = buildBeadSeed({
+      projectName: "board",
+      epic: { id: "e", title: "t" },
+      bead: bead({ id: "b" }),
+      mergedSiblings: [],
+    });
+    expect(seed).not.toContain("integration gate");
+  });
+
+  it("an integration-labeled bead gets the assembly contract, keeping the claim/close protocol", () => {
+    const seed = buildBeadSeed({
+      projectName: "board",
+      epic: { id: "board-e1", title: "Big feature", design: "The design text." },
+      bead: bead({ id: "board-int", title: "integration", labels: ["integration"] }),
+      mergedSiblings: ["board-b1", "board-b2"],
+    });
+    // The verify-the-assembly contract (Decision 13).
+    expect(seed).toContain("integration gate");
+    expect(seed).toContain("ASSEMBLED feature");
+    expect(seed).toContain("every sibling");
+    expect(seed).toContain("full gates");
+    expect(seed).toContain("File new beads");
+    expect(seed).toContain("instead of fixing sibling scope");
+    // The protocol lines stay identical to the leaf contract.
+    expect(seed).toContain("bd update board-int --claim");
+    expect(seed).toContain("bd close board-int");
+    expect(seed).toContain("bd update board-int -s blocked");
+    expect(seed).toContain("bd label add board-int human");
+    expect(seed).toContain("stop and mark yourself done");
+  });
+});
+
+describe("buildPlannerSeed", () => {
+  const seed = buildPlannerSeed({
+    projectName: "board",
+    epic: { id: "board-e1", title: "Big feature", design: "The full design doc text." },
+  });
+
+  it("names the epic and inlines the full design doc", () => {
+    expect(seed).toContain("board-e1");
+    expect(seed).toContain("Big feature");
+    expect(seed).toContain("The full design doc text.");
+  });
+
+  it("pins the verified wisp-create and edge spellings with the --graph and --dry-run warnings", () => {
+    expect(seed).toContain("--ephemeral --parent board-e1");
+    expect(seed).toContain("bd dep <blocker-id> --blocks <blocked-id>");
+    // The 1.0.3 pitfalls: --graph loses ephemerality and node-level deps;
+    // --dry-run writes anyway.
+    expect(seed).toContain("bd create --graph");
+    expect(seed).toContain("silently ignores --ephemeral");
+    expect(seed).toContain('"deps"');
+    expect(seed).toContain("--dry-run");
+    expect(seed).toContain("bd dep cycles");
+  });
+
+  it("requires the integration child that every leaf blocks", () => {
+    expect(seed).toContain("integration");
+    expect(seed).toContain("-l integration");
+    expect(seed).toContain("bd dep <leaf-id> --blocks <integration-id>");
+    expect(seed).toContain("EVERY leaf");
+  });
+
+  it("carries both label rewrites and the no-promote / no-code rules", () => {
+    expect(seed).toContain("bd label remove board-e1 plan:planning");
+    expect(seed).toContain("bd label add board-e1 plan:ready");
+    expect(seed).toContain("plan:failed");
+    expect(seed).toContain("bd promote");
+    expect(seed).toContain("never");
+    expect(seed).toContain("commit code");
+    expect(seed).toContain("no commits, no");
+  });
+
+  it("marks a missing design doc without inventing scope", () => {
+    const bare = buildPlannerSeed({
+      projectName: "board",
+      epic: { id: "e", title: "t" },
+    });
+    expect(bare).toContain("no design doc pinned");
+    expect(bare).toContain("do not invent scope");
   });
 });
 
@@ -1048,6 +1131,147 @@ describe("runIntakeOnce", () => {
     expect(w.stops).toEqual(["w1"]);
     expect(w.spawns).toHaveLength(1);
     expect(w.spawns[0].task).toBe("bead b2: next");
+  });
+});
+
+describe("runIntakeOnce — plan:* consume loop", () => {
+  it("consumes plan:pending BEFORE the spawn and spawns exactly one planner", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["plan:pending"], design: "The doc." })],
+    });
+    expect(runIntakeOnce(makeDeps(w))).toBe(true);
+    expect(w.spawns).toHaveLength(1);
+    expect(w.spawns[0].workflow).toBe("planner");
+    expect(w.spawns[0].task).toBe("plan epic e1: epic e1");
+    // A planner carries no bead — it holds no assignee and is invisible to
+    // the governor join and reconcile.
+    expect(w.spawns[0].bead).toBeUndefined();
+    expect(w.spawns[0].seed).toContain("The doc.");
+    expect(w.spawns[0].seed).toContain("plan:ready");
+    // Consume-before-spawn ordering (Decision 16): both label writes land
+    // before the spawn record.
+    const removeIdx = w.ops.indexOf("remove:plan:pending");
+    const addIdx = w.ops.indexOf("add:plan:planning");
+    const spawnIdx = w.ops.findIndex(op => op.startsWith("spawn:plan epic e1"));
+    expect(removeIdx).toBeGreaterThanOrEqual(0);
+    expect(addIdx).toBeGreaterThan(removeIdx);
+    expect(spawnIdx).toBeGreaterThan(addIdx);
+  });
+
+  it("never spawns for plan:planning, plan:ready, or plan:failed epics (idempotency)", () => {
+    for (const label of ["plan:planning", "plan:ready", "plan:failed"]) {
+      const w = makeWorld({ epics: [epic({ id: "e1", labels: [label] })] });
+      expect(runIntakeOnce(makeDeps(w))).toBe(false);
+      expect(w.spawns).toHaveLength(0);
+      expect(w.labelsAdded).toHaveLength(0);
+      expect(w.labelsRemoved).toHaveLength(0);
+    }
+  });
+
+  it("aborts the epic with an error alert when the pending remove fails (no spawn)", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["plan:pending"] })],
+    });
+    const deps = makeDeps(w, {
+      removeLabel: (id, label) => {
+        w.labelsRemoved.push({ id, label });
+        return label !== "plan:pending";
+      },
+    });
+    runIntakeOnce(deps);
+    expect(w.spawns).toHaveLength(0);
+    expect(w.labelsAdded).toHaveLength(0);
+    expect(w.alerts).toHaveLength(1);
+    expect(w.alerts[0].level).toBe("error");
+    expect(w.alerts[0].dedupKey).toBe("intake-plan:board:e1");
+  });
+
+  it("lands plan:failed best-effort when the planning write fails after the consume", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["plan:pending"] })],
+    });
+    const deps = makeDeps(w, {
+      addLabel: (id, label) => {
+        w.labelsAdded.push({ id, label });
+        w.ops.push(`add:${label}`);
+        return label !== "plan:planning";
+      },
+    });
+    expect(runIntakeOnce(deps)).toBe(true);
+    expect(w.spawns).toHaveLength(0);
+    expect(w.labelsAdded).toContainEqual({ id: "e1", label: "plan:failed" });
+    expect(w.alerts[0]?.dedupKey).toBe("intake-plan-arm:board:e1");
+  });
+
+  it("rewrites planning -> failed with an alert when the spawn fails", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["plan:pending"] })],
+      spawnResult: () => null,
+    });
+    expect(runIntakeOnce(makeDeps(w))).toBe(true);
+    expect(w.labelsRemoved).toContainEqual({ id: "e1", label: "plan:planning" });
+    expect(w.labelsAdded).toContainEqual({ id: "e1", label: "plan:failed" });
+    expect(w.alerts).toHaveLength(1);
+    expect(w.alerts[0].level).toBe("error");
+    expect(w.alerts[0].dedupKey).toBe("intake-plan-spawn:board:e1");
+  });
+
+  it("dispatch epics without plan:* are untouched by the plan loop, and vice versa", () => {
+    const w = makeWorld({
+      epics: [
+        epic({ id: "d1", labels: ["dispatch:auto"] }),
+        epic({ id: "p1", labels: ["plan:pending"] }),
+      ],
+      statuses: { d1: st({ ready: [{ id: "b1", title: "one" }] }) },
+      details: { b1: bead({ id: "b1", title: "one" }) },
+    });
+    expect(runIntakeOnce(makeDeps(w))).toBe(true);
+    // One planner (for p1) + one build worker (for d1's bead) — and the plan
+    // loop never touched d1's labels, nor did dispatch charge p1. Crucially
+    // the dispatch loop never asked for p1's swarm status (w.statuses has no
+    // p1 entry; the dispatch loop would throw on the missing data).
+    expect(w.spawns).toHaveLength(2);
+    const planner = w.spawns.find(s => s.workflow === "planner")!;
+    expect(planner.task).toContain("p1");
+    const builder = w.spawns.find(s => s.workflow === undefined)!;
+    expect(builder.task).toBe("bead b1: one");
+    expect(w.labelsRemoved.filter(l => l.id === "d1" && l.label.startsWith("plan:"))).toHaveLength(0);
+    expect(w.labelsAdded.filter(l => l.id === "p1" && l.label.startsWith("dispatch:"))).toHaveLength(0);
+  });
+
+  it("the planner spawn is exempt from the intake cap (no governor slot consumed)", () => {
+    // Cap 1, already fully consumed by a live intake worker. The planner
+    // still spawns; the bead dispatch does not.
+    const w = makeWorld({
+      epics: [
+        epic({ id: "d1", labels: ["dispatch:auto"] }),
+        epic({ id: "p1", labels: ["plan:pending"] }),
+      ],
+      statuses: {
+        d1: st({
+          active: [{ id: "b0", title: "building", assignee: "busy-worker" }],
+          ready: [{ id: "b1", title: "one" }],
+        }),
+      },
+      details: { b1: bead({ id: "b1" }) },
+      workers: [entry({ name: "busy-worker", agentStatus: "working" })],
+    });
+    runIntakeOnce(makeDeps(w, { cap: 1 }));
+    expect(w.spawns).toHaveLength(1);
+    expect(w.spawns[0].workflow).toBe("planner");
+    // And the planner never charged the budget channel.
+    expect(w.labelsAdded.filter(l => l.label.startsWith("dispatch:spent:"))).toHaveLength(0);
+  });
+
+  it("an epic carrying both plan:pending and dispatch:auto runs both loops", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["plan:pending", "dispatch:auto"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "one" }] }) },
+      details: { b1: bead({ id: "b1", title: "one" }) },
+    });
+    runIntakeOnce(makeDeps(w));
+    expect(w.spawns.map(s => s.workflow)).toContain("planner");
+    expect(w.spawns.some(s => s.task === "bead b1: one")).toBe(true);
   });
 });
 

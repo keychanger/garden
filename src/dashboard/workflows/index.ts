@@ -6,6 +6,7 @@ import { log } from "../log.js";
 import { botanistWorkflow } from "./botanist.js";
 import { defaultWorkflow } from "./default.js";
 import { growWorkflow } from "./grow.js";
+import { plannerWorkflow } from "./planner.js";
 import { trellisWorkflow } from "./trellis.js";
 import type { WorkflowDefinition } from "./types.js";
 
@@ -13,6 +14,7 @@ export type { WorkflowDefinition, StateHandler, HookContext, WorkflowHookHandler
 export { botanistWorkflow } from "./botanist.js";
 export { defaultWorkflow } from "./default.js";
 export { growWorkflow } from "./grow.js";
+export { plannerWorkflow } from "./planner.js";
 export { trellisWorkflow } from "./trellis.js";
 
 const registry = new Map<string, WorkflowDefinition>();
@@ -20,6 +22,7 @@ registry.set(defaultWorkflow.name, defaultWorkflow);
 registry.set(growWorkflow.name, growWorkflow);
 registry.set(trellisWorkflow.name, trellisWorkflow);
 registry.set(botanistWorkflow.name, botanistWorkflow);
+registry.set(plannerWorkflow.name, plannerWorkflow);
 
 // Tracks names we've already warned about, so the operator's logs aren't
 // spammed by every poll cycle on the same stale registry entry.

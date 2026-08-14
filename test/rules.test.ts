@@ -325,3 +325,68 @@ describe("buildWorktreeRules — botanist workflow", () => {
     expect(result).not.toContain("## Grow workflow");
   });
 });
+
+// Planner inverts the posture toward a bead DAG: the deliverable lives in the
+// bd store, so no commits, no pushes, no checks — and the exact bd command
+// contract rides the seed message, not this fragment.
+describe("buildWorktreeRules — planner workflow", () => {
+  it("default workers do NOT include planner paragraphs", async () => {
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("swift-oak");
+    expect(result).not.toContain("Planner workflow");
+    expect(result).not.toContain("BEAD DAG");
+  });
+
+  it("planner option appends the decomposition-posture inversion", async () => {
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("swift-oak", "main", { planner: true });
+    expect(result).toContain("Planner workflow");
+    expect(result).toContain("BEAD DAG");
+    // Explicitly overrides the base's build-worker guidance.
+    expect(result).toContain("that guidance is for build workers");
+    expect(result).toContain("Write beads, not code");
+    // The bd contract lives in the seed; the rules point there.
+    expect(result).toContain("seed message");
+    // The completion protocol: label rewrite, no promote, stop.
+    expect(result).toContain("plan:ready");
+    expect(result).toContain("plan:failed");
+    expect(result).toContain("bd promote");
+  });
+
+  it("suppresses the checks paragraph even when a checksCommand is configured", async () => {
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("swift-oak", "main", {
+      planner: true,
+      checksCommand: "npm run lint && npm run test:coverage",
+    });
+    expect(result).not.toContain("Run checks before you push");
+    expect(result).not.toContain("`npm run lint && npm run test:coverage`");
+  });
+
+  it("planner is mutually exclusive with trellis, grow, and botanist", async () => {
+    const { buildWorktreeRules } = await importRules();
+    expect(() =>
+      buildWorktreeRules("any", "main", {
+        planner: true,
+        grow: { iteration: 1, maxIterations: 5 },
+      }),
+    ).toThrow(/mutually exclusive/);
+    expect(() =>
+      buildWorktreeRules("any", "main", {
+        planner: true,
+        trellis: { relativePath: ".garden/trellises/foo.md" },
+      }),
+    ).toThrow(/mutually exclusive/);
+    expect(() =>
+      buildWorktreeRules("any", "main", { planner: true, botanist: true }),
+    ).toThrow(/mutually exclusive/);
+  });
+
+  it("planner rules do NOT include the other workflows' paragraphs", async () => {
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("swift-oak", "main", { planner: true });
+    expect(result).not.toContain("## Trellis workflow");
+    expect(result).not.toContain("## Grow workflow");
+    expect(result).not.toContain("## Botanist workflow");
+  });
+});

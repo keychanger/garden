@@ -511,6 +511,15 @@ The intake loop (`src/dashboard/poller-intake.ts` + the bd client in `src/dashbo
 - `dispatch:retry:N` — written on a bead each time the reaper recovers a crash (a worker that died mid-build). Crash recoveries only: a worker that died `failing` takes the failed counter below instead, because retries should keep dispatching and quality failures should stop it.
 - `dispatch:failed:N` — garden-written quality-failure counter on a bead (Decision 8), written from the two places garden observes quality failure, both through the shared `incrementFailedLabel` in `beads.ts` (max-wins read, incremented label added before every straggler is removed — the spent counter's partial-write order, so a partial write can only preserve or raise the count): the reaper's failing branch (a bead worker that died parked in `failing`), and the review pipeline's rejection path (`dispatchDefaultVerdict`'s failed branch stamps the bead of a worker carrying `entry.bead`, folding the outcome into the existing review-failed alert; best-effort — the breaker is advisory and may fail open, unlike the budget, so a write failure logs a warning and the failing transition proceeds unchanged). At `BREAKER_THRESHOLD` (2) the frontier excludes the bead — from dispatch (before slots are computed and before the priority sort, so a tripped bead can neither hold a slot open nor outrank an eligible sibling) and from the manual-wave consume rule's frontier — its blocked descendants wait, and board renders the epic chip red.
 
+The `plan:*` family (DELEGATION.md phase 4d + Decision 16) shares the epic as its label surface but drives a SEPARATE loop — a planner decomposes the epic into children; dispatch executes them. Unknown `plan:*` values are ignored on both sides (fail closed); never invent new ones:
+
+- `plan:pending` — board-armed (`S`): decompose this epic. The only spawnable plan state.
+- `plan:planning` — garden-written pre-spawn; a planner owns this epic. The planner worker rewrites it to `plan:ready`/`plan:failed` on completion; intake rewrites it to `plan:failed` when the spawn dies.
+- `plan:ready` — planner-written: draft wisps await board's `S` promotion. Never touched by garden.
+- `plan:failed` — terminal failure; board's `;plan:none` re-arms.
+
+**Plan consume (the planner lifecycle).** The plan-consume loop runs at the top of `runIntakeOnce`, BEFORE the dispatch loop, over epics admitted by the widened `plan:*` filter (an epic carrying both families runs both loops, each keyed on its own labels). For each `plan:pending` epic the label is consumed BEFORE the spawn: remove `plan:pending` first — a failed remove aborts that epic with an error alert (`intake-plan:` dedup key), because proceeding risks duplicate planners on the next wake — then add `plan:planning` (on failure: alert + best-effort `plan:failed`), then spawn exactly ONE planner worker (`--workflow planner`, Opus/xhigh seat) through the intake spawn seam, seeded by `buildPlannerSeed` with the epic id/title, the full pinned design doc, and the verified bd 1.0.3 contract (see WORKFLOWS.md § "Planner workflow" — including the deliberate deviation from DELEGATION.md's `--graph` sketch, whose `--ephemeral` is silently dropped by the installed bd). A spawn failure rewrites `planning` → `failed` with an alert. Only `pending` is spawnable, so repeated poller wakes are idempotent by construction. The planner carries no bead assignee and is deliberately EXEMPT from the intake cap/governor and the budget counter — the governor joins on bd assignees and `budget:N` caps dispatched build sessions, and a planner is neither; it is likewise invisible to the reconcile step (no `bead` field), so a planner orphaned by a board-side `;plan:none` keeps running until removed by `garden workers stop` or the dashboard kill.
+
 **Dispatch pass.** For each open epic carrying any `dispatch:*` label: read the frontier, filter `ready[]` to unassigned beads (assigned-but-open beads stay in `ready[]` on 1.0.3 and carry an `assignee` field), drop beads the circuit breaker excludes (`dispatch:failed:N >= BREAKER_THRESHOLD` — before slots and before the sort), and dispatch up to `min(cap slack, budget remaining, wave size)` — highest priority first (`bd show` supplies priorities; board's reordering steers which beads win scarce slots). Each dispatch: re-check the single bead's assignee with a fresh `bd show` immediately before spawning (the frontier snapshot is stale by then — a claim that raced in skips the bead without charging the budget), pre-charge the spent counter fail-closed, write the seed file, `newWorker({background: true, seedMessageFile})`, then claim the bead AS the worker (`BEADS_ACTOR=<worker-name> bd update <id> --claim`) — one atomic bd write that sets assignee + in_progress, removes the bead from the frontier, and establishes the join. A failed post-spawn claim is retried once before falling back to the worker's own seeded claim, and the seed's protocol footer tells a worker whose claim loses to another actor to stop and mark itself done. The concurrency governor counts live intake workers via that same join (bd assignees with a live registry entry — no invented registry state), and same-pass spawns count immediately.
 
 **The join contract.** Workers of a `beadIntake` project get `BEADS_ACTOR=<worker-name>` and `BEADS_DIR=<project-checkout>/.beads` exported alongside the `GARDEN_*` vars (bootstrap + resume paths, `beadsEnvExports` in `create.ts`), and the sandbox allows writes to the canonical `.beads` dir. `BEADS_ACTOR` makes the bd assignee the garden registry key — board joins bd assignee ↔ registry entry with zero invented state. `BEADS_DIR` is load-bearing: a worktree carries the tracked `.beads` files but not the gitignored Dolt database, so bd run bare in a worktree would bootstrap a divergent local store and the worker's `bd close` would never reach board or intake. The join's registry→bd half is `WorkerEntry.bead`: the bead id stamped onto the worker's entry at creation — by the intake spawn seam (`IntakeSpawnRequest.bead` → `NewWorkerOptions.bead`) and by `garden handoff --bead <id>` for hand-run dispatches, one shared write path. Stamping makes no bd claim (intake claims post-spawn; a handoff worker's own briefed claim is the claim) — the field exists so garden can navigate worker → bead: the removal-time unclaim and reconcile step below, the review-rejection breaker writer, and board's chips before a hand-run handoff's claim lands.
@@ -594,7 +603,7 @@ garden version                     # Print the build version (also --version / -
 
 ### Workers and trellises
 ```
-garden workers new <project> [--workflow trellis|grow|botanist]
+garden workers new <project> [--workflow trellis|grow|botanist|planner]
                              [--trellis <name>]
                              [--seed <text> | --seed-file <path>]
                              [--model <alias-or-id>] [--effort low|medium|high|xhigh|ultra]
@@ -606,12 +615,16 @@ garden workers new <project> [--workflow trellis|grow|botanist]
                                    # design worker (deliverable is a doc, not code) on an Opus/xhigh
                                    # designer seat — --seed/--seed-file optionally inlines the design
                                    # brief; without one no message is sent and the brief arrives as
-                                   # the operator's first message in its pane.
+                                   # the operator's first message in its pane; planner plants a
+                                   # decomposition worker (deliverable is a bead DAG in the bd
+                                   # store) on the same Opus/xhigh seat — normally intake-spawned
+                                   # from a plan:pending epic (see "Bead intake"); the CLI plant is
+                                   # the hand-run path, its optional seed delivered raw.
                                    # --model pins the worker model on any workflow: an Anthropic
                                    # alias or any concrete model id the backend accepts, persisted so
                                    # the pin survives bounce/resume/respawn (account default when absent).
-                                   # --effort sets the reasoning rung (default/grow/botanist; ultra =
-                                   # the ultracode preset: max effort + dynamic workflows).
+                                   # --effort sets the reasoning rung (default/grow/botanist/planner;
+                                   # ultra = the ultracode preset: max effort + dynamic workflows).
                                    # --max-iterations defaults to project.maxGrowIterations or 5.
 garden workers grow [<worker>] [--seed <text> | --seed-file <path> | --goal-file <path>]
                              [--max-iterations N]

@@ -50,6 +50,27 @@
 //                              retry:N because failed should stop dispatch
 //                              and retry should not.
 //
+// The plan:* lifecycle (DELEGATION.md Decision 16, phase 4d) shares the epic
+// as its label surface but is a SEPARATE loop from dispatch — a planner
+// decomposes the epic into children; dispatch executes them:
+//   plan:pending               board-armed (the S key): decompose this epic.
+//                              The ONLY spawnable plan state — consumed to
+//                              plan:planning BEFORE the planner spawns, so
+//                              repeated poller wakes are idempotent by
+//                              construction.
+//   plan:planning              garden-written pre-spawn: a planner owns this
+//                              epic. The planner worker itself rewrites it to
+//                              plan:ready / plan:failed on completion; intake
+//                              rewrites it to plan:failed when the spawn dies.
+//   plan:ready                 planner-written: draft wisps await board's S
+//                              promotion. Never touched by garden.
+//   plan:failed                terminal failure; board's ;plan:none re-arms.
+// Unknown plan:* values are ignored on both sides (fail closed) — never
+// invent new ones. The planner spawn carries no bead assignee and is
+// deliberately EXEMPT from the intake cap/governor and the budget counter:
+// the governor joins on bd assignees, budget counts dispatched build
+// sessions, and a planner is neither.
+//
 // All counter labels parse max-wins across duplicates (both sides of the
 // border do), and garden's own increment/rewrite sites remove every matching
 // straggler.
@@ -200,6 +221,13 @@ export function shouldReapFailing(
 // the fixed protocol footer. The stuck path deviates from the doc's sketch
 // because `bd human <id>` on 1.0.3 only prints a help menu — the real flag is
 // the `human` label plus a comment (surfaced by `bd human list`).
+//
+// A bead carrying the `integration` label (Decision 13, planner-emitted) gets
+// the verify-the-assembly contract in place of the leaf build contract: its
+// worker is the epic's exit gate, dispatched only once every sibling has
+// merged (it blocks-depends on all of them), and its job is to verify the
+// assembled feature — not to build a unit. The claim/close/blocked protocol
+// lines stay identical.
 export function buildBeadSeed(opts: {
   projectName: string;
   epic: { id: string; title: string; design?: string };
@@ -210,6 +238,17 @@ export function buildBeadSeed(opts: {
   const siblings = opts.mergedSiblings.length > 0
     ? `${opts.mergedSiblings.join(", ")} — read their commits on your base branch before starting.`
     : "none yet.";
+  const integration = bead.labels.includes("integration");
+  const contract = integration
+    ? `Your bead is the epic's integration gate: verify the ASSEMBLED feature ` +
+      `against the epic's design doc above, on your base branch — every sibling ` +
+      `bead is already merged there. Run the project's full gates (checks suite, ` +
+      `and anything the design doc names as acceptance). Close ${bead.id} only ` +
+      `when the assembly actually works end to end. File new beads under epic ` +
+      `${epic.id} for defects you find instead of fixing sibling scope yourself ` +
+      `— your deliverable is the verdict and the defect list, plus only the glue ` +
+      `fixes integration itself requires. `
+    : "";
   return [
     `[bead dispatch — ${opts.projectName} epic ${epic.id}: ${epic.title}]`,
     ``,
@@ -225,6 +264,7 @@ export function buildBeadSeed(opts: {
     ``,
     `## Bead protocol`,
     ``,
+    contract +
     `Your bead is ${bead.id}. First action: \`bd update ${bead.id} --claim\`. ` +
     `After your merge lands: \`bd close ${bead.id}\`. ` +
     `If stuck: \`bd update ${bead.id} -s blocked\`, then \`bd label add ${bead.id} human\` ` +
@@ -235,12 +275,83 @@ export function buildBeadSeed(opts: {
   ].join("\n");
 }
 
+// Planner seed (DELEGATION.md phase 4d + Decisions 13/16): the epic, its full
+// pinned design doc, and the exact bd 1.0.3 contract — verbatim enough that a
+// fresh worker cannot get it wrong. The command spellings were re-verified
+// empirically against the installed bd 1.0.3 (2026-08-14) and deviate from
+// the delegation doc's `bd create --graph` sketch deliberately: --graph
+// silently ignores --ephemeral in every spelling (CLI flag, node fields, plan
+// top level), and non-ephemeral children would bypass board's draft-review
+// gate (dimmed wisps, S promotion, ;plan:none discard) — ephemerality is the
+// load-bearing half of the contract, so the seed pins the per-child
+// `bd create --ephemeral --parent` + `bd dep --blocks` spelling that actually
+// produces reviewable wisps. The integration test suite pins these spellings
+// (and the --graph misbehavior) against the real binary.
+export function buildPlannerSeed(opts: {
+  projectName: string;
+  epic: { id: string; title: string; design?: string };
+}): string {
+  const { epic } = opts;
+  const id = epic.id;
+  return [
+    `[plan dispatch — ${opts.projectName} epic ${id}: ${epic.title}]`,
+    ``,
+    `You are the planner for epic ${id}. Decompose its design doc into a`,
+    `dependency-gated bead DAG of EPHEMERAL draft children (wisps) in the`,
+    `project's bd store, then hand the draft back to the operator by rewriting`,
+    `the epic's plan label. You write ONLY to the bd store: no commits, no`,
+    `pushes, no checks, no repo edits. The \`planner\` skill`,
+    `(.claude/skills/planner/) carries the method; this contract is the`,
+    `authority on the exact commands.`,
+    ``,
+    `## Epic design doc`,
+    ``,
+    epic.design?.trim() || "(no design doc pinned on the epic — decompose from the epic's title and description; do not invent scope)",
+    ``,
+    `## The contract (verified bd 1.0.3 spellings — follow verbatim)`,
+    ``,
+    `1. Read the design doc above and draft the child DAG: each child one`,
+    `   worker-session with a crisp deliverable; blocker edges for real ordering`,
+    `   constraints only; include ONE extra child titled and labeled`,
+    `   \`integration\` that every leaf blocks — its worker verifies the`,
+    `   assembled feature once all siblings merge (Decision 13). bd rejects`,
+    `   epic↔task blocks edges in both directions, so the integration bead is a`,
+    `   task like its siblings, never an edge to the epic.`,
+    `2. Create each child as an ephemeral wisp parented to the epic:`,
+    `   \`bd create "<title>" --ephemeral --parent ${id} -d "<description>"\``,
+    `   (add \`-l integration\` on the integration child). Do NOT use`,
+    `   \`bd create --graph\`: on bd 1.0.3 it silently ignores --ephemeral —`,
+    `   you get PERMANENT children that skip the operator's draft-review gate —`,
+    `   and it silently ignores node-level "deps" arrays (an edgeless graph,`,
+    `   no error). NEVER use \`--dry-run\` anywhere: it writes anyway.`,
+    `3. Wire every dependency edge explicitly, one call per edge:`,
+    `   \`bd dep <blocker-id> --blocks <blocked-id>\`, including`,
+    `   \`bd dep <leaf-id> --blocks <integration-id>\` for EVERY leaf.`,
+    `4. Run \`bd dep cycles\` as belt-and-suspenders (must report no cycles),`,
+    `   then sanity-check \`bd swarm status ${id} --json\`: the first wave`,
+    `   ready, the integration child blocked.`,
+    `5. On success: \`bd label remove ${id} plan:planning\` then`,
+    `   \`bd label add ${id} plan:ready\`.`,
+    `   On ANY failure: \`bd label remove ${id} plan:planning\` then`,
+    `   \`bd label add ${id} plan:failed\`. Never leave the epic at`,
+    `   plan:planning.`,
+    `6. Never \`bd promote\` (the operator's S in board owns promotion), never`,
+    `   claim or close beads, never touch beads outside epic ${id}, never`,
+    `   commit code. Then stop — end your turn; no review or merge follows.`,
+  ].join("\n");
+}
+
 // `bead` is stamped onto the worker's registry entry (the registry→bd half of
 // the bead↔worker join — recall/reconcile and removal-time unclaim read it).
+// `workflow` selects the spawned worker's workflow ("planner" for the
+// plan-consume loop; absent = default). A planner spawn carries no bead:
+// planners hold no assignee, so they are invisible to the governor join and
+// to reconcile — cleanup is `garden workers stop` or the dashboard kill.
 export interface IntakeSpawnRequest {
   seed: string;
   task: string;
   bead?: string;
+  workflow?: string;
 }
 
 // bd operations + spawn machinery, injectable for tests. The real deps shell
@@ -265,14 +376,104 @@ export interface IntakeDeps {
   nowMs(): number;
 }
 
-// One intake pass: reap dead workers' beads and reconcile workers whose bead
-// was closed or recalled, then dispatch every dispatch-labeled epic's
-// unassigned ready frontier up to min(cap slack, budget remaining, wave
-// size). Returns true when anything changed (a spawn, a reap, a stop, or a
-// label write).
+// One intake pass: consume plan:pending epics into planner workers, then —
+// over every dispatch-labeled epic — reap dead workers' beads, reconcile
+// workers whose bead was closed or recalled, and dispatch the unassigned
+// ready frontier up to min(cap slack, budget remaining, wave size). Returns
+// true when anything changed (a spawn, a reap, a stop, or a label write).
 export function runIntakeOnce(deps: IntakeDeps): boolean {
-  const epics = deps.listOpenEpics()
-    .filter(e => e.labels.some(l => l.startsWith("dispatch:")));
+  const allEpics = deps.listOpenEpics();
+  // The two label families select independent loops: an epic is planned via
+  // plan:* and dispatched via dispatch:*, and one carrying both runs both
+  // (planning a fresh epic while dispatching its already-promoted children is
+  // a legitimate, if unusual, state).
+  const planEpics = allEpics.filter(e => e.labels.some(l => l.startsWith("plan:")));
+  const epics = allEpics.filter(e => e.labels.some(l => l.startsWith("dispatch:")));
+  // No early return on empty epic sets: the reconcile step below walks
+  // registry workers carrying entry.bead independent of any gated epic
+  // (handoff --bead workers reconcile too).
+
+  let planChanged = false;
+  // Plan-consume loop (DELEGATION.md Decision 16), BEFORE dispatch. Only
+  // plan:pending is spawnable, and it is consumed to plan:planning BEFORE the
+  // spawn — so repeated poller wakes are idempotent by construction (a
+  // planning/ready/failed epic never spawns). The planner is deliberately
+  // exempt from the cap/governor (it holds no bead assignee, so the join
+  // cannot count it) and from the budget counter (budget:N caps dispatched
+  // BUILD sessions).
+  for (const epic of planEpics) {
+    if (!epic.labels.includes("plan:pending")) continue;
+    // Consume FIRST. A failed remove aborts this epic: proceeding would leave
+    // plan:pending in place and risk a duplicate planner on the next wake.
+    if (!deps.removeLabel(epic.id, "plan:pending")) {
+      log.error("intake", "plan:pending consume failed; skipping epic", {
+        data: { project: deps.projectName, epic: epic.id },
+      });
+      deps.alert({
+        level: "error",
+        source: "intake",
+        project: deps.projectName,
+        message:
+          `Epic ${epic.id} (${epic.title}): failed to consume plan:pending — ` +
+          `planner not spawned (proceeding would risk duplicate planners).`,
+        dedupKey: `intake-plan:${deps.projectName}:${epic.id}`,
+      });
+      continue;
+    }
+    planChanged = true;
+    if (!deps.addLabel(epic.id, "plan:planning")) {
+      // pending is gone but planning didn't land — the epic would look
+      // label-less to board. Land plan:failed best-effort so the operator
+      // sees a red chip and can re-arm with ;plan:none.
+      deps.addLabel(epic.id, "plan:failed");
+      log.error("intake", "plan:planning write failed; landed plan:failed", {
+        data: { project: deps.projectName, epic: epic.id },
+      });
+      deps.alert({
+        level: "error",
+        source: "intake",
+        project: deps.projectName,
+        message:
+          `Epic ${epic.id} (${epic.title}): consumed plan:pending but failed to ` +
+          `write plan:planning — landed plan:failed; re-arm from board.`,
+        dedupKey: `intake-plan-arm:${deps.projectName}:${epic.id}`,
+      });
+      continue;
+    }
+    const seed = buildPlannerSeed({
+      projectName: deps.projectName,
+      epic: { id: epic.id, title: epic.title, ...(epic.design ? { design: epic.design } : {}) },
+    });
+    const name = deps.spawn({
+      seed,
+      task: `plan epic ${epic.id}: ${epic.title}`,
+      workflow: "planner",
+    });
+    if (!name) {
+      // The epic is durably at plan:planning with no planner alive — rewrite
+      // to plan:failed so board renders the failure instead of an eternal
+      // ambient "planning".
+      deps.removeLabel(epic.id, "plan:planning");
+      deps.addLabel(epic.id, "plan:failed");
+      log.error("intake", "planner spawn failed; landed plan:failed", {
+        data: { project: deps.projectName, epic: epic.id },
+      });
+      deps.alert({
+        level: "error",
+        source: "intake",
+        project: deps.projectName,
+        message:
+          `Epic ${epic.id} (${epic.title}): planner spawn failed — landed ` +
+          `plan:failed; re-arm from board (;plan:none, then S).`,
+        dedupKey: `intake-plan-spawn:${deps.projectName}:${epic.id}`,
+      });
+      continue;
+    }
+    log.info("intake", "spawned planner for epic", {
+      worker: name,
+      data: { project: deps.projectName, epic: epic.id },
+    });
+  }
 
   const workers = deps.workers();
   const byName = new Map(workers.map(w => [w.name, w]));
@@ -283,7 +484,7 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
     statuses.set(epic.id, st);
   }
 
-  let changed = false;
+  let changed = planChanged;
 
   // Reaper first, across ALL gated epics (including off/dispatched/exhausted
   // — recovery is not dispatch), so a reopened bead re-enters the frontier
@@ -746,6 +947,8 @@ function spawnBeadWorker(projectName: string, req: IntakeSpawnRequest): string |
     // Registry→bd join: recall/reconcile and the removal-time unclaim read
     // entry.bead.
     ...(req.bead ? { bead: req.bead } : {}),
+    // "planner" for the plan-consume loop; absent = default build worker.
+    ...(req.workflow ? { workflow: req.workflow } : {}),
   });
   if (!name) {
     try { fs.unlinkSync(seedFile); } catch { /* ignore */ }

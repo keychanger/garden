@@ -9,6 +9,7 @@ import {
   growWorkflow,
   trellisWorkflow,
   botanistWorkflow,
+  plannerWorkflow,
   getWorkflow,
   registerWorkflow,
   _resetUnknownWarnDedup,
@@ -265,6 +266,49 @@ describe("botanistWorkflow", () => {
     // Other workflows do not skip review.
     expect(defaultWorkflow.skipsReviewMerge).toBeUndefined();
     expect(growWorkflow.skipsReviewMerge).toBeUndefined();
+  });
+});
+
+describe("plannerWorkflow", () => {
+  // Botanist-shaped: reuses default's handlers. A planner writes only to the
+  // bd store, so its branch never gains a tracked commit and handleWorking
+  // idles it after the plan lands; skipsReviewMerge covers the drift case.
+
+  it("is registered under name 'planner'", () => {
+    expect(getWorkflow("planner")).toBe(plannerWorkflow);
+  });
+
+  it("diverges from default only on `working`, like botanist", () => {
+    expect(plannerWorkflow.validTransitions.working).toEqual(["merge-pending", "failing", "done"]);
+    expect(plannerWorkflow.validTransitions.working).not.toContain("reviewing");
+    for (const state of ALL_PR_STATES) {
+      if (state === "working") continue;
+      expect(plannerWorkflow.validTransitions[state]).toEqual(PRE_REFACTOR_VALID_TRANSITIONS[state]);
+    }
+  });
+
+  it("getValidTransitions('planner') returns the planner table", () => {
+    expect(getValidTransitions("planner")).toBe(plannerWorkflow.validTransitions);
+    expect(getValidTransitions("planner").working).toEqual(["merge-pending", "failing", "done"]);
+  });
+
+  it("has a registered handler for every PrState (exhaustiveness)", () => {
+    for (const state of ALL_PR_STATES) {
+      expect(
+        plannerWorkflow.stateHandlers[state],
+        `planner workflow missing handler for state ${state}`,
+      ).toBeDefined();
+    }
+  });
+
+  it("declares the decomposition seat: workerModel 'opus', workerEffort 'xhigh', no reviewerModel", () => {
+    expect(plannerWorkflow.workerModel).toBe("opus");
+    expect(plannerWorkflow.workerEffort).toBe("xhigh");
+    expect(plannerWorkflow.reviewerModel).toBeUndefined();
+  });
+
+  it("skipsReviewMerge is true (its deliverable lives in the bd store, not a commit)", () => {
+    expect(plannerWorkflow.skipsReviewMerge).toBe(true);
   });
 });
 

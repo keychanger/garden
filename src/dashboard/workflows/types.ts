@@ -147,9 +147,20 @@ export const botanistValidTransitions: Record<PrState, PrState[]> = {
   working: ["merge-pending", "failing", "done"],
 };
 
+// Planner skips review for the same structural reason as botanist: its
+// deliverable is a bead DAG written to the project's bd store, never a commit
+// — with zero commits ahead of base it idles after finishing, and a planner
+// that somehow commits rides the same skip-review boundary check (anything
+// outside docs/ parks it in `failing`). Same table shape as botanist.
+export const plannerValidTransitions: Record<PrState, PrState[]> = {
+  ...defaultValidTransitions,
+  working: ["merge-pending", "failing", "done"],
+};
+
 export function getValidTransitions(workflowName: string): Record<PrState, PrState[]> {
   if (workflowName === "trellis") return trellisValidTransitions;
   if (workflowName === "grow") return growValidTransitions;
   if (workflowName === "botanist") return botanistValidTransitions;
+  if (workflowName === "planner") return plannerValidTransitions;
   return defaultValidTransitions;
 }

@@ -36,7 +36,7 @@ export async function workers(args: string[]): Promise<void> {
   }
   throw new Error(
     `Usage:\n`
-    + `  garden workers new <project> [--workflow trellis|grow|botanist] [--base <branch>] [--trellis <name>] `
+    + `  garden workers new <project> [--workflow trellis|grow|botanist|planner] [--base <branch>] [--trellis <name>] `
     + `[--seed <text> | --seed-file <path>] [--model <alias-or-id>] [--effort low|medium|high|xhigh|ultra] [--harness <name>] [--max-iterations N]\n`
     + `  garden workers grow [<worker>] [--seed <text> | --seed-file <path> | --goal-file <path>] `
     + `[--max-iterations N]\n`
@@ -98,8 +98,8 @@ async function newCommand(args: string[]): Promise<void> {
   }
 
   const workflow = flags.get("workflow") ?? "default";
-  if (workflow !== "default" && workflow !== "trellis" && workflow !== "grow" && workflow !== "botanist") {
-    throw new Error(`--workflow must be 'default', 'trellis', 'grow', or 'botanist', got '${workflow}'`);
+  if (workflow !== "default" && workflow !== "trellis" && workflow !== "grow" && workflow !== "botanist" && workflow !== "planner") {
+    throw new Error(`--workflow must be 'default', 'trellis', 'grow', 'botanist', or 'planner', got '${workflow}'`);
   }
 
   // Worker harness (agent CLI). Default workflow only in v1 — trellis/grow
@@ -321,9 +321,79 @@ async function newCommand(args: string[]): Promise<void> {
     return;
   }
 
+  if (workflow === "planner") {
+    if (flags.has("trellis")) {
+      throw new Error("--trellis can only be used with --workflow trellis");
+    }
+    if (flags.has("max-iterations")) {
+      throw new Error("--max-iterations can only be used with --workflow trellis or grow");
+    }
+    if (flags.has("seed") && flags.has("seed-file")) {
+      throw new Error("--seed and --seed-file are mutually exclusive; pass exactly one.");
+    }
+    // The seed is optional and delivered RAW (no framing wrapper): the normal
+    // planner is intake-spawned with a buildPlannerSeed contract already
+    // composed by the poller; the CLI plant exists for hand-run dispatches and
+    // testing, where the operator composes the epic contract themselves.
+    // Without a seed, no message is sent — the decomposition posture is baked
+    // into the system prompt (rules.ts planner branch + the bundled skill) and
+    // the epic brief arrives as the operator's first message in the pane.
+    let seed: string | undefined;
+    if (flags.has("seed")) {
+      seed = flags.get("seed")!;
+    } else if (flags.has("seed-file")) {
+      const seedFilePath = flags.get("seed-file")!;
+      try {
+        seed = fs.readFileSync(seedFilePath, "utf-8");
+      } catch (err) {
+        throw new Error(`--seed-file '${seedFilePath}' could not be read: ${String(err)}`);
+      }
+    }
+    if (seed !== undefined) {
+      seed = seed.trim();
+      if (!seed) {
+        throw new Error("--seed / --seed-file was given but empty; omit it to have the planner wait for the brief in its pane.");
+      }
+    }
+
+    let seedFile: string | undefined;
+    if (seed !== undefined) {
+      seedFile = path.join(
+        SESSIONS_DIR, "seeds",
+        `planner-seed-${projectName}-${Date.now()}.txt`,
+      );
+      fs.mkdirSync(path.dirname(seedFile), { recursive: true });
+      fs.writeFileSync(seedFile, seed);
+    }
+
+    // Planner model/effort default to Opus / xhigh via the workflow definition
+    // (newWorker resolution); --model / --effort override per run.
+    const model = flags.has("model") ? requireModelValue(flags.get("model")!) : undefined;
+    const effortOpts = flags.has("effort") ? parseEffortFlag(flags.get("effort")!) : {};
+    const newName = newWorker({
+      projectName,
+      workflow: "planner",
+      model,
+      ...effortOpts,
+      ...(base ? { base } : {}),
+      ...(seedFile ? { seedMessageFile: seedFile } : {}),
+    });
+    if (!newName) {
+      if (seedFile) { try { fs.unlinkSync(seedFile); } catch { /* ignore */ } }
+      throw new Error(
+        `Failed to spawn planner on '${projectName}'. Is the dashboard running? Check 'garden health'.`,
+      );
+    }
+    const effortLabel = effortOpts.ultracode ? ", effort=ultra" : effortOpts.effort ? `, effort=${effortOpts.effort}` : "";
+    console.log(
+      `Started planner ${projectName}/${newName}${model ? ` (model=${model}${effortLabel})` : effortLabel ? ` (${effortLabel.slice(2)})` : ""}.`,
+    );
+    return;
+  }
+
   // workflow === "trellis"
   if (flags.has("effort")) {
-    throw new Error("--effort is only supported with --workflow default, grow, or botanist (trellis resolves its own model).");
+    throw new Error("--effort is only supported with --workflow default, grow, botanist, or planner (trellis resolves its own model).");
   }
   const trellisName = flags.get("trellis");
   if (!trellisName) {

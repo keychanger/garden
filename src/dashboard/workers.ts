@@ -623,6 +623,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   const bootstrapOpts: WorktreeCommandOptions = { launchPlan };
   if (trellisRelativePath) bootstrapOpts.trellisRelativePath = trellisRelativePath;
   if (workflowName === "botanist") bootstrapOpts.botanist = true;
+  if (workflowName === "planner") bootstrapOpts.planner = true;
   const scriptFile = buildWorktreeBootstrapScript(
     project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
     bootstrapOpts,
@@ -1117,6 +1118,7 @@ export function bounceWorker(projectName: string, workerName: string): void {
     };
   }
   if (entry.workflow === "botanist") resumeOpts.botanist = true;
+  if (entry.workflow === "planner") resumeOpts.planner = true;
   if (entry.worktreePath && projectInfo && entry.branchName) {
     getHarness(launchPlan.harness).installRuntimeConfig(
       entry.worktreePath,

@@ -68,6 +68,14 @@ export interface WorktreeRulesOptions {
    *  and `grow` — a worker is one workflow at a time. See
    *  docs/future/BOTANIST-WORKFLOW.md. */
   botanist?: boolean;
+  /** When set, the rules text inverts the worktree posture for a planner
+   *  (decomposition) worker: the deliverable is a bead DAG written to the
+   *  project's bd store, not code — no commits, no pushes, no checks. The
+   *  exact bd contract (create/dep/label spellings) rides the worker's seed
+   *  message; this fragment only sets the posture. The checks paragraph is
+   *  suppressed (a planner runs no checks). Mutually exclusive with
+   *  `trellis`, `grow`, and `botanist`. */
+  planner?: boolean;
   /** The project's configured `checks` command (from `garden config <project>
    *  checks`). When set, the prompt names the exact command and instructs
    *  the worker to run it green before pushing. The reviewer runs the same
@@ -104,12 +112,33 @@ You are working in an isolated git worktree on branch \`${branchName}\`. Your wo
 
   const baseWithChecks = base + checksParagraph;
 
-  const workflowOpts = [options?.trellis, options?.grow, options?.botanist].filter(Boolean);
+  const workflowOpts = [options?.trellis, options?.grow, options?.botanist, options?.planner].filter(Boolean);
   if (workflowOpts.length > 1) {
     throw new Error(
-      "buildWorktreeRules: trellis, grow, and botanist options are mutually "
-      + "exclusive — a worker is one workflow at a time.",
+      "buildWorktreeRules: trellis, grow, botanist, and planner options are "
+      + "mutually exclusive — a worker is one workflow at a time.",
     );
+  }
+
+  if (options?.planner) {
+    // Planner inverts the action-biased base the same way botanist does, but
+    // toward a different deliverable: a dependency-gated bead DAG in the
+    // project's bd store. The base's commit/push/done guidance is written for
+    // build workers and would drive a planner to invent commits; this fragment
+    // overrides it. The precise bd command spellings live in the seed message
+    // (buildPlannerSeed) — the one source intake controls per epic — so this
+    // fragment deliberately names the posture, not the commands. The checks
+    // paragraph is dropped (`base`, not `baseWithChecks`): a planner runs no
+    // checks.
+    const plannerExtras = `## Planner workflow (decompose, do not build)
+
+**You are a planner — a decomposition worker. Your deliverable is a BEAD DAG written to the project's bd store, not code and not a commit.** This inverts the "commit and push when your task is complete", "invoke the \`done\` skill", and "auto-continue fires after the merge" guidance above — that guidance is for build workers. See the \`planner\` skill (\`.claude/skills/planner/\`) for the method checklist. Your seed message carries the epic, its pinned design doc, and the exact bd command contract — follow it verbatim; it encodes verified bd 1.0.3 behavior and pitfalls.
+
+**Write beads, not code.** Do NOT edit \`src/\`, tests, configs, docs, or build files. Do NOT run \`git add\`/\`git commit\`/\`git push\`, and do NOT run project checks. Your only writes are bd commands against the epic named in your seed.
+
+**Finish by rewriting the epic's plan label and stopping.** On success the epic moves to \`plan:ready\`; on ANY failure land \`plan:failed\` — never leave the epic parked at \`plan:planning\`. Never \`bd promote\` (the operator's promotion gesture in board owns that), and never delete or edit beads outside the epic you were seeded with. Then end your turn: you are done, and no merge or review follows.`;
+
+    return `${base}\n\n${plannerExtras}`;
   }
 
   if (options?.botanist) {

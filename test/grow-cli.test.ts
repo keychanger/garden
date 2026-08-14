@@ -413,7 +413,76 @@ describe("--workflow whitelist", () => {
     const { workers } = await importWorkersCmd();
     await expect(
       workers(["new", "proj", "--workflow", "loop"]),
-    ).rejects.toThrow(/--workflow must be 'default', 'trellis', 'grow', or 'botanist'/);
+    ).rejects.toThrow(/--workflow must be 'default', 'trellis', 'grow', 'botanist', or 'planner'/);
+  });
+});
+
+describe("garden workers new --workflow planner", () => {
+  it("plants a planner with no seed (the brief arrives in the pane)", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    await captureConsoleLog(() =>
+      workers(["new", "proj", "--workflow", "planner"]),
+    );
+    expect(newWorker).toHaveBeenCalledWith({
+      projectName: "proj",
+      workflow: "planner",
+      model: undefined,
+    });
+  });
+
+  it("delivers a --seed raw via seedMessageFile (no framing wrapper)", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    await captureConsoleLog(() =>
+      workers(["new", "proj", "--workflow", "planner", "--seed", "plan epic bd-1"]),
+    );
+    const opts = vi.mocked(newWorker).mock.calls[0][0]!;
+    expect(opts.workflow).toBe("planner");
+    expect(opts.seedMessageFile).toBeDefined();
+    expect(fs.readFileSync(opts.seedMessageFile!, "utf-8")).toBe("plan epic bd-1");
+  });
+
+  it("threads --model and --effort through to newWorker", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    await captureConsoleLog(() =>
+      workers(["new", "proj", "--workflow", "planner", "--model", "sonnet", "--effort", "high"]),
+    );
+    const opts = vi.mocked(newWorker).mock.calls[0][0]!;
+    expect(opts.model).toBe("sonnet");
+    expect(opts.effort).toBe("high");
+  });
+
+  it("keeps the prior rejections: --trellis, --max-iterations, --crew, --harness", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["new", "proj", "--workflow", "planner", "--trellis", "x"]),
+    ).rejects.toThrow(/--trellis can only be used/);
+    await expect(
+      workers(["new", "proj", "--workflow", "planner", "--max-iterations", "3"]),
+    ).rejects.toThrow(/--max-iterations can only be used/);
+    await expect(
+      workers(["new", "proj", "--workflow", "planner", "--crew", "all-claude"]),
+    ).rejects.toThrow(/--crew is only supported/);
+    await expect(
+      workers(["new", "proj", "--workflow", "planner", "--harness", "codex"]),
+    ).rejects.toThrow(/--harness is only supported/);
+  });
+
+  it("rejects an empty --seed", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    await expect(
+      workers(["new", "proj", "--workflow", "planner", "--seed", "   "]),
+    ).rejects.toThrow(/--seed \/ --seed-file was given but empty/);
   });
 });
 
@@ -1135,7 +1204,7 @@ describe("garden workers new --effort", () => {
 
     await expect(
       workers(["new", "proj", "--workflow", "trellis", "--effort", "xhigh"]),
-    ).rejects.toThrow(/--effort is only supported with --workflow default, grow, or botanist/);
+    ).rejects.toThrow(/--effort is only supported with --workflow default, grow, botanist, or planner/);
     expect(newWorker).not.toHaveBeenCalled();
   });
 });

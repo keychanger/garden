@@ -457,6 +457,86 @@ Only when the operator **explicitly approves** ("approve", "ship it", "publish")
 - Do not invent scope. The framing's "out of scope" section bounds your design.
 `;
 
+export const PLANNER_SKILL_DIRNAME = "planner";
+export const PLANNER_SKILL_FILENAME = "SKILL.md";
+
+// Bundled with every worker but only relevant to a planner (decomposition)
+// worker — its frontmatter description gates it at planning time so build
+// workers ignore it. The method as a checklist: read the design doc, draft the
+// DAG, create it as ephemeral wisps with the verified bd 1.0.3 spellings
+// (including the --graph and --dry-run pitfalls), rewrite the epic's plan
+// label, stop. The seed message carries the epic-specific ids; this skill
+// carries the method.
+export const PLANNER_SKILL_CONTENT = `---
+name: planner
+description: The method for a garden planner (decomposition) worker. Use when you are on the planner workflow (garden whoami shows workflow: planner) to decompose an epic's design doc into a dependency-gated bead DAG of ephemeral wisps in the project's bd store, then hand the draft to the operator by rewriting the epic's plan label. The deliverable is beads, not code and not a commit. Do NOT edit src/, tests, docs, or configs; do NOT commit or push.
+---
+
+# Planner: decompose, don't build
+
+You are a planner. Your seed message names an epic, carries its pinned design doc, and states the bd contract. Your job is to cut that design into a dependency-gated DAG of child beads — ephemeral drafts the operator reviews in board and promotes with one keystroke. You write ONLY to the bd store. You never commit, never push, never run checks, and never edit repo files.
+
+## The checklist
+
+### 1. Read the design doc
+It is inlined in your seed. Understand the deliverables, their ordering constraints, and what "assembled and working" means for the whole feature. If the epic has no design doc, decompose from the epic's title and description alone — do not invent scope.
+
+### 2. Draft the DAG
+Sketch the children first (in your head or scratch notes — NOT repo files): each child is one worker-session of work with a crisp deliverable; blocker edges express real ordering constraints only. Prefer a wide frontier (parallelizable siblings) over a chain. Include exactly one extra child titled and labeled \`integration\` that every leaf blocks — its worker verifies the assembled feature against the design doc once all siblings merge.
+
+### 3. Create the wisps (verified bd 1.0.3 spellings)
+Create each child as an ephemeral wisp parented to the epic:
+
+\`\`\`bash
+bd create "<title>" --ephemeral --parent <epic-id> -d "<description>"
+bd create "integration" --ephemeral --parent <epic-id> -l integration -d "Verify the assembled feature against the epic's design doc."
+\`\`\`
+
+Then wire every dependency edge explicitly:
+
+\`\`\`bash
+bd dep <blocker-id> --blocks <blocked-id>     # one call per edge
+bd dep <leaf-id> --blocks <integration-id>    # every leaf blocks the integration bead
+\`\`\`
+
+**Pitfalls (verified against bd 1.0.3 — do not deviate):**
+- Do NOT use \`bd create --graph\`: it silently ignores \`--ephemeral\` (flag and node fields alike), producing permanent children that skip board's draft-review gate. It also silently ignores node-level \`"deps"\` arrays — never express edges inside a JSON node.
+- NEVER use \`--dry-run\`: it writes anyway.
+- The integration bead is a task like its siblings — bd rejects epic↔task \`blocks\` edges in both directions, so never try to make the epic depend on it.
+
+### 4. Validate
+\`bd dep add\` refuses cycle-closing edges at write time; run belt-and-suspenders anyway:
+
+\`\`\`bash
+bd dep cycles     # must report no cycles
+\`\`\`
+
+Then check the frontier reads correctly: \`bd swarm status <epic-id> --json\` — the first wave's children should be ready, the integration bead blocked.
+
+### 5. Rewrite the plan label and stop
+On success:
+
+\`\`\`bash
+bd label remove <epic-id> plan:planning
+bd label add <epic-id> plan:ready
+\`\`\`
+
+On ANY failure (a create/dep/validate step you cannot complete):
+
+\`\`\`bash
+bd label remove <epic-id> plan:planning
+bd label add <epic-id> plan:failed
+\`\`\`
+
+Never leave the epic at \`plan:planning\`. Then END YOUR TURN — you are done. No commit, no push, no review, no merge follows.
+
+## What NOT to do
+- Do not \`bd promote\` anything. The operator's \`S\` in board owns promotion; \`;plan:none\` there discards your draft wholesale.
+- Do not claim, close, or assign beads. Your children carry no assignee until dispatch claims them.
+- Do not edit repo files or run \`git\`/checks. If you catch yourself writing code, stop — that is a build worker's job.
+- Do not touch beads outside your seeded epic.
+`;
+
 export function installClaudeSkills(targetDir: string): void {
   const skillsRoot = path.join(targetDir, ".claude", "skills");
   // Heal the legacy flat-file layout so refreshes/bounces of pre-fix workers stop shadowing the new directory layout.
@@ -466,6 +546,7 @@ export function installClaudeSkills(targetDir: string): void {
   writeSkill(skillsRoot, TRELLIS_AUTHOR_SKILL_DIRNAME, TRELLIS_AUTHOR_SKILL_FILENAME, TRELLIS_AUTHOR_SKILL_CONTENT);
   writeSkill(skillsRoot, GROW_SKILL_DIRNAME, GROW_SKILL_FILENAME, GROW_SKILL_CONTENT);
   writeSkill(skillsRoot, BOTANIST_SKILL_DIRNAME, BOTANIST_SKILL_FILENAME, BOTANIST_SKILL_CONTENT);
+  writeSkill(skillsRoot, PLANNER_SKILL_DIRNAME, PLANNER_SKILL_FILENAME, PLANNER_SKILL_CONTENT);
 }
 
 function writeSkill(skillsRoot: string, dirname: string, filename: string, content: string): void {
