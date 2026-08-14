@@ -12,6 +12,7 @@ import { atomicWriteFile } from "./atomic-write.js";
 import { resolveReviewRole, SAFE_REVIEW_MODEL } from "./roles.js";
 import { reviewerEnvPrefix, reviewerEnvObject } from "./claude-env.js";
 import { extractReviewVerdict } from "./verdict-extract.js";
+import { showBeads, addLabel, removeLabel, incrementFailedLabel } from "./beads.js";
 import { codexStderrSidecar } from "./harness/codex-core.js";
 import { getHarnessCore } from "./harness/core.js";
 import { setDoneSentinel } from "./continue.js";
@@ -1237,13 +1238,19 @@ function dispatchDefaultVerdict(
     scheduleDelayedPoke(projectName, 0);
     return true;
   }
-  // "failed" — reviewer couldn't fix the issues. addAlert also logs.
+  // "failed" — reviewer couldn't fix the issues. A bead-carrying worker's
+  // rejection is one of the two quality-failure observation points feeding
+  // the intake circuit breaker (board docs/DELEGATION.md Decision 8), so the
+  // bead is stamped before the alert composes it in. The worker stays alive
+  // and keeps its bead — it may still be fixed and merge; no reap here.
+  // addAlert also logs.
+  const beadNote = stampBeadReviewFailure(projectName, projectPath, entry);
   addAlert({
     level: "error",
     source: "review",
     project: projectName,
     worker: entry.name,
-    message: `Reviewer could not fix issues for worker ${entry.name}: ${review.body.slice(0, 300)}`,
+    message: `Reviewer could not fix issues for worker ${entry.name}${beadNote}: ${review.body.slice(0, 300)}`,
     // The review body changes between runs, so the default key would
     // never collapse identical failure modes. Key on worker only.
     dedupKey: `review-failed:${projectName}:${entry.name}`,
@@ -1268,6 +1275,42 @@ function dispatchDefaultVerdict(
   });
   refreshDashboard();
   return true;
+}
+
+// Decision 8 writer 2: bump dispatch:failed:N on a rejected worker's bead
+// (max-wins + straggler GC via the shared incrementFailedLabel). Best-effort
+// by contract — the breaker is advisory and may fail open, unlike the budget
+// — so any bd failure only logs a warning and the caller's failing transition
+// proceeds unchanged. Returns a short note folded into the review-failed
+// alert message (empty for workers with no bead). The bd calls run against
+// the project checkout (a worktree's .beads has no database).
+function stampBeadReviewFailure(
+  projectName: string,
+  projectPath: string,
+  entry: WorkerEntry,
+): string {
+  const beadId = entry.bead;
+  if (!beadId) return "";
+  try {
+    const detail = showBeads(projectPath, [beadId])[0];
+    if (!detail) throw new Error(`bd show returned no data for bead ${beadId}`);
+    const { ok, count } = incrementFailedLabel({
+      addLabel: (id, label) => addLabel(projectPath, id, label),
+      removeLabel: (id, label) => removeLabel(projectPath, id, label),
+    }, beadId, detail.labels);
+    if (!ok) throw new Error(`bd label add dispatch:failed:${count} failed`);
+    log.info("poller", "review rejection recorded on bead", {
+      worker: entry.name,
+      data: { project: projectName, bead: beadId, failed: count },
+    });
+    return ` (bead ${beadId} marked dispatch:failed:${count})`;
+  } catch (err) {
+    log.warn("poller", "failed to record review rejection on bead", {
+      worker: entry.name,
+      data: { project: projectName, bead: beadId, error: String(err) },
+    });
+    return ` (bead ${beadId}: dispatch:failed write failed)`;
+  }
 }
 
 // Trellis verdict dispatcher. See WORKFLOWS.md "One iteration, in detail" /

@@ -38,11 +38,17 @@
 //                              (a failed refund overcounts, which fails
 //                              closed). Never spawn an uncounted session.
 //   dispatch:retry:N           garden-written on a bead each time the reaper
-//                              recovers it
-//   dispatch:failed:N          quality-failure counter on a bead (read-only
-//                              here; its writer is future work). At
+//                              recovers a crash (worker died mid-build)
+//   dispatch:failed:N          garden-written quality-failure counter on a
+//                              bead (Decision 8), from the two places garden
+//                              observes quality failure: the reaper branch
+//                              recovering a worker that died `failing`
+//                              (below), and a review rejection of a bead-
+//                              carrying worker (poller-review.ts). At
 //                              BREAKER_THRESHOLD the frontier excludes the
-//                              bead — the circuit breaker's read side.
+//                              bead — the circuit breaker. Distinct from
+//                              retry:N because failed should stop dispatch
+//                              and retry should not.
 //
 // All counter labels parse max-wins across duplicates (both sides of the
 // border do), and garden's own increment/rewrite sites remove every matching
@@ -68,13 +74,14 @@ import {
   intakeStampPath, intakePokePath, writeIntakeError, clearIntakeError,
 } from "./intake-paths.js";
 import { getWorkers, updateWorkerTask, type WorkerEntry } from "./registry.js";
-import { newWorker } from "./workers.js";
+import { newWorker, stopWorkerByName } from "./workers.js";
 import { addAlert } from "./alerts.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { log } from "./log.js";
 import {
   listOpenEpics, swarmStatus, showBeads, claimBead, reopenBead, unassignBead,
-  addLabel, removeLabel, type BeadDetail, type SwarmStatus,
+  addLabel, removeLabel, parseLabelCount, incrementFailedLabel,
+  type BeadDetail, type SwarmStatus,
 } from "./beads.js";
 
 export const DEFAULT_BEAD_INTAKE_CAP = 3;
@@ -90,10 +97,12 @@ export const REAPER_GRACE_MS = 10 * 60_000;
 // `garden status` reads them); re-exported here for the existing importers.
 export { intakeStampPath, intakePokePath } from "./intake-paths.js";
 
-// The circuit breaker's read side (DELEGATION.md Decision 8): a bead whose
+// The circuit breaker's threshold (DELEGATION.md Decision 8): a bead whose
 // dispatch:failed:N reaches this count is excluded from the frontier — its
-// blocked descendants wait, and board renders the epic chip red. Nothing in
-// garden writes dispatch:failed:N yet.
+// blocked descendants wait, and board renders the epic chip red. The label's
+// writers are the reaper's failing branch below and the review pipeline's
+// rejection path (dispatchDefaultVerdict in poller-review.ts), both through
+// incrementFailedLabel in beads.ts.
 export const BREAKER_THRESHOLD = 2;
 
 export interface DispatchState {
@@ -121,19 +130,11 @@ export function parseDispatchState(labels: string[]): DispatchState {
   };
 }
 
-// Max-wins across duplicates (Decision 10): a crashed rewrite can leave two
-// counter labels, and the higher one is the one that fails closed. Rewrite
-// sites remove every matching straggler (see removeCountLabels).
-function parseLabelCount(labels: string[], prefix: string): number | null {
-  let max: number | null = null;
-  for (const l of labels) {
-    if (!l.startsWith(prefix)) continue;
-    const n = Number(l.slice(prefix.length));
-    if (!Number.isInteger(n) || n < 0) continue;
-    if (max === null || n > max) max = n;
-  }
-  return max;
-}
+// parseLabelCount (max-wins across duplicates, Decision 10) lives in beads.ts
+// so poller-review.ts can share the dispatch:failed:N writer without importing
+// this module (poller-review → poller-intake → workers → poller closes a
+// cycle). Rewrite sites here remove every matching straggler (see
+// removeCountLabels).
 
 export function retryCount(labels: string[]): number {
   return parseLabelCount(labels, "dispatch:retry:") ?? 0;
@@ -170,6 +171,26 @@ export function shouldReap(
   if (!entry) return false;
   if (entry.agentStatus !== "exited") return false;
   if ((entry.prState ?? "working") !== "working") return false;
+  const freshness = entry.lastEventAt ?? entry.lastStateChangeAt ?? entry.createdAt ?? 0;
+  if (freshness === 0) return false;
+  return nowMs - freshness > REAPER_GRACE_MS;
+}
+
+// The reaper's second branch (DELEGATION.md Decision 8): a worker that died
+// while parked in `failing` is a QUALITY failure, not a crash — its recovery
+// bumps dispatch:failed:N (feeding the circuit breaker) and explicitly NOT
+// dispatch:retry:N. A separate predicate beside shouldReap because that one's
+// narrowness (prState `working` only) is deliberate and documented; widening
+// it would silently change the crash-recovery contract. A LIVE failing worker
+// keeps its bead — the operator may still redirect it; only provably-dead
+// ones (agent exited, past the same grace) are recovered.
+export function shouldReapFailing(
+  entry: WorkerEntry | undefined,
+  nowMs: number,
+): boolean {
+  if (!entry) return false;
+  if (entry.agentStatus !== "exited") return false;
+  if (entry.prState !== "failing") return false;
   const freshness = entry.lastEventAt ?? entry.lastStateChangeAt ?? entry.createdAt ?? 0;
   if (freshness === 0) return false;
   return nowMs - freshness > REAPER_GRACE_MS;
@@ -236,19 +257,22 @@ export interface IntakeDeps {
   addLabel(id: string, label: string): boolean;
   removeLabel(id: string, label: string): boolean;
   spawn(req: IntakeSpawnRequest): string | null;
+  // Remove a worker end-to-end (the `garden workers stop` back end); false
+  // when the stop failed. The reconcile step is the only caller.
+  stopWorker(name: string): boolean;
   workers(): WorkerEntry[];
   alert(input: Parameters<typeof addAlert>[0]): void;
   nowMs(): number;
 }
 
-// One intake pass over every dispatch-labeled epic: reap dead workers'
-// beads, then dispatch the unassigned ready frontier up to
-// min(cap slack, budget remaining, wave size). Returns true when anything
-// changed (a spawn, a reap, or a label write).
+// One intake pass: reap dead workers' beads and reconcile workers whose bead
+// was closed or recalled, then dispatch every dispatch-labeled epic's
+// unassigned ready frontier up to min(cap slack, budget remaining, wave
+// size). Returns true when anything changed (a spawn, a reap, a stop, or a
+// label write).
 export function runIntakeOnce(deps: IntakeDeps): boolean {
   const epics = deps.listOpenEpics()
     .filter(e => e.labels.some(l => l.startsWith("dispatch:")));
-  if (epics.length === 0) return false;
 
   const workers = deps.workers();
   const byName = new Map(workers.map(w => [w.name, w]));
@@ -263,35 +287,141 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
 
   // Reaper first, across ALL gated epics (including off/dispatched/exhausted
   // — recovery is not dispatch), so a reopened bead re-enters the frontier
-  // computed below on the next pass.
+  // computed below on the next pass. Two recovery branches (DELEGATION.md
+  // Decision 8): a worker that died mid-build takes the retry counter (a
+  // crash — the bead re-dispatches freely); a worker that died parked in
+  // `failing` takes the failed counter (a quality failure — at
+  // BREAKER_THRESHOLD the frontier excludes the bead) and explicitly NO
+  // retry bump.
   for (const epic of epics) {
     const st = statuses.get(epic.id);
     if (!st) continue;
     for (const bead of st.active) {
       if (!bead.assignee) continue;
-      if (!shouldReap(bead.assignee, byName.get(bead.assignee), deps.nowMs())) continue;
+      const worker = byName.get(bead.assignee);
+      const reapCrashed = shouldReap(bead.assignee, worker, deps.nowMs());
+      const reapFailing = !reapCrashed && shouldReapFailing(worker, deps.nowMs());
+      if (!reapCrashed && !reapFailing) continue;
       const detail = deps.showBeads([bead.id])[0];
       if (!detail) throw new Error(`bd show returned no data for bead ${bead.id}`);
-      const retryLabels = detail.labels;
-      const retries = retryCount(retryLabels);
-      if (!deps.reopen(bead.id, `garden intake reaper: worker ${bead.assignee} died`)) continue;
+      const died = reapFailing ? "died in failing state" : "died mid-build";
+      if (!deps.reopen(bead.id, `garden intake reaper: worker ${bead.assignee} ${died}`)) continue;
       deps.unassign(bead.id);
-      removeCountLabels(deps, bead.id, retryLabels, "dispatch:retry:");
-      deps.addLabel(bead.id, `dispatch:retry:${retries + 1}`);
       changed = true;
-      log.warn("intake", "reaped abandoned bead", {
-        data: { project: deps.projectName, bead: bead.id, assignee: bead.assignee, retries: retries + 1 },
-      });
-      deps.alert({
-        level: "warn",
-        source: "intake",
-        project: deps.projectName,
-        worker: bead.assignee,
-        message: `Bead ${bead.id} reopened: worker '${bead.assignee}' died mid-build (retry ${retries + 1}).`,
-        dedupKey: `intake-reap:${deps.projectName}:${bead.id}:${retries + 1}`,
-      });
+      if (reapFailing) {
+        const { ok, count } = incrementFailedLabel(deps, bead.id, detail.labels);
+        if (!ok) {
+          log.warn("intake", "dispatch:failed label write failed on failing reap", {
+            data: { project: deps.projectName, bead: bead.id },
+          });
+        }
+        log.warn("intake", "reaped bead of worker that died failing", {
+          data: { project: deps.projectName, bead: bead.id, assignee: bead.assignee, failed: count },
+        });
+        deps.alert({
+          level: "warn",
+          source: "intake",
+          project: deps.projectName,
+          worker: bead.assignee,
+          message: `Bead ${bead.id} reopened: worker '${bead.assignee}' died in failing state (dispatch:failed:${count}).`,
+          dedupKey: `intake-failed:${deps.projectName}:${bead.id}:${count}`,
+        });
+      } else {
+        const retries = retryCount(detail.labels);
+        removeCountLabels(deps, bead.id, detail.labels, "dispatch:retry:");
+        deps.addLabel(bead.id, `dispatch:retry:${retries + 1}`);
+        log.warn("intake", "reaped abandoned bead", {
+          data: { project: deps.projectName, bead: bead.id, assignee: bead.assignee, retries: retries + 1 },
+        });
+        deps.alert({
+          level: "warn",
+          source: "intake",
+          project: deps.projectName,
+          worker: bead.assignee,
+          message: `Bead ${bead.id} reopened: worker '${bead.assignee}' died mid-build (retry ${retries + 1}).`,
+          dedupKey: `intake-reap:${deps.projectName}:${bead.id}:${retries + 1}`,
+        });
+      }
     }
   }
+
+  // Reconcile (DELEGATION.md Decision 7): stop registry workers whose bead no
+  // longer backs them. Closed bead: the intended lifecycle GC for
+  // background-spawned bead workers — this deliberately sweeps COMPLETED
+  // intake workers too (worker merges, closes its bead, goes done → the next
+  // pass retires it); the Decision-12 guard in the removal tail leaves a
+  // closed bead untouched, so retirement never disturbs the graph.
+  // Foreign-assigned bead: the operator's board-side recall — their claim is
+  // the durable cancel marker, and the same guard preserves it. Keyed on
+  // entry.bead (the registry→bd join), independent of the gated-epic set, so
+  // handoff --bead workers reconcile too; and it runs BEFORE the governor
+  // count so a freed slot is usable in this same pass. Two guards: an
+  // UNASSIGNED bead is skipped (the worker's own claim may still be in flight
+  // after a failed post-spawn claim — not a recall), and workers in pipeline
+  // states are deferred, never yanked mid-headless-pipeline — the next pass
+  // catches them once they exit it.
+  const beadWorkers = workers.filter(w => w.bead);
+  if (beadWorkers.length > 0) {
+    const beadDetails = new Map(
+      deps.showBeads(beadWorkers.map(w => w.bead as string)).map(d => [d.id, d]),
+    );
+    for (const worker of beadWorkers) {
+      const beadId = worker.bead as string;
+      const detail = beadDetails.get(beadId);
+      if (!detail) {
+        // Never stop a worker on missing data (stopping is destructive), and
+        // never abort the whole pass over one stale registry field.
+        log.warn("intake", "bead reconcile: bd show returned no data for bead", {
+          worker: worker.name,
+          data: { project: deps.projectName, bead: beadId },
+        });
+        continue;
+      }
+      const closed = detail.status === "closed";
+      const recalled = !closed && !!detail.assignee && detail.assignee !== worker.name;
+      if (!closed && !recalled) continue;
+      const reason = closed ? "closed" : "recalled";
+      const prState = worker.prState ?? "working";
+      if (prState === "reviewing" || prState === "resolving"
+          || prState === "ci-fixing" || prState === "merge-pending") {
+        log.info("intake", "bead reconcile deferred: worker is mid-pipeline", {
+          worker: worker.name,
+          data: { project: deps.projectName, bead: beadId, reason, prState },
+        });
+        continue;
+      }
+      if (!deps.stopWorker(worker.name)) {
+        log.warn("intake", "bead reconcile: failed to stop worker", {
+          worker: worker.name,
+          data: { project: deps.projectName, bead: beadId, reason },
+        });
+        continue;
+      }
+      byName.delete(worker.name);
+      changed = true;
+      log.info("intake", "stopped worker on bead reconcile", {
+        worker: worker.name,
+        data: { project: deps.projectName, bead: beadId, reason },
+      });
+      if (recalled) {
+        // Only the recall alerts: a closed-bead sweep of a finished worker is
+        // routine lifecycle (logged above, like ci-fix launches), and the
+        // alert surface has no info level.
+        deps.alert({
+          level: "warn",
+          source: "intake",
+          project: deps.projectName,
+          worker: worker.name,
+          message:
+            `Worker '${worker.name}' stopped: bead ${beadId} was recalled `
+            + `(now assigned to '${detail.assignee}').`,
+          dedupKey: `intake-reconcile:${deps.projectName}:${worker.name}`,
+        });
+      }
+    }
+  }
+
+  if (epics.length === 0) return changed;
 
   // Concurrency governor: live intake workers are registry workers whose
   // names appear as assignees on the gated epics' beads (the bd-assignee ==
@@ -586,6 +716,18 @@ function runIntakeOnceReal(projectName: string, project: ProjectConfig): boolean
     addLabel: (id, label) => addLabel(projectPath, id, label),
     removeLabel: (id, label) => removeLabel(projectPath, id, label),
     spawn: (req) => spawnBeadWorker(projectName, req),
+    stopWorker: (name) => {
+      try {
+        stopWorkerByName(projectName, name);
+        return true;
+      } catch (err) {
+        log.warn("intake", "workers stop failed during bead reconcile", {
+          worker: name,
+          data: { project: projectName, error: String(err) },
+        });
+        return false;
+      }
+    },
     workers: () => getWorkers(projectName),
     alert: addAlert,
     nowMs: () => Date.now(),

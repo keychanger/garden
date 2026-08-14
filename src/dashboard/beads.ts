@@ -198,6 +198,55 @@ export function removeLabel(projectPath: string, id: string, label: string): boo
   return runBd(projectPath, ["label", "remove", id, label]).ok;
 }
 
+// Max-wins parse of `<prefix>N` counter labels across duplicates (both sides
+// of the board↔garden border parse this way — board's DELEGATION.md Decision
+// 10): a crashed rewrite can leave two counter labels, and the higher one is
+// the one that fails closed. Garden's rewrite sites remove every matching
+// straggler.
+export function parseLabelCount(labels: string[], prefix: string): number | null {
+  let max: number | null = null;
+  for (const l of labels) {
+    if (!l.startsWith(prefix)) continue;
+    const n = Number(l.slice(prefix.length));
+    if (!Number.isInteger(n) || n < 0) continue;
+    if (max === null || n > max) max = n;
+  }
+  return max;
+}
+
+export interface BeadLabelOps {
+  addLabel(id: string, label: string): boolean;
+  removeLabel(id: string, label: string): boolean;
+}
+
+// The circuit-breaker writer (DELEGATION.md Decision 8): bump a bead's
+// dispatch:failed:N quality-failure counter. Shared by the two places garden
+// observes quality failure — the intake reaper recovering a worker that died
+// `failing` (poller-intake.ts) and a review rejection of a bead-carrying
+// worker (poller-review.ts). Lives here rather than in poller-intake because
+// poller-review cannot import poller-intake without closing the
+// poller-review → poller-intake → workers → poller → poller-review cycle.
+//
+// The incremented label is added BEFORE the stragglers are removed (the
+// spent counter's partial-write order): a failed GC leaves duplicates that
+// max-wins parsing resolves to the new count, so a partial write can only
+// preserve or raise the count, never lose it. `ok` is false when the add
+// itself failed — the count did not land. Best-effort by contract: the
+// breaker is advisory and may fail open, unlike the budget — callers log or
+// alert, never abort their pass.
+export function incrementFailedLabel(
+  ops: BeadLabelOps,
+  beadId: string,
+  labels: string[],
+): { ok: boolean; count: number } {
+  const count = (parseLabelCount(labels, "dispatch:failed:") ?? 0) + 1;
+  if (!ops.addLabel(beadId, `dispatch:failed:${count}`)) return { ok: false, count };
+  for (const l of labels) {
+    if (l.startsWith("dispatch:failed:")) ops.removeLabel(beadId, l);
+  }
+  return { ok: true, count };
+}
+
 export function bdAvailable(): boolean {
   const res = spawnSync("bd", ["--version"], { encoding: "utf8", timeout: 5000 });
   return !res.error && res.status === 0;

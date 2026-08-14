@@ -62,9 +62,10 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
   });
 
   function makeDeps(opts: { workers?: WorkerEntry[]; cap?: number } = {}):
-    IntakeDeps & { spawns: IntakeSpawnRequest[]; alerts: string[] } {
+    IntakeDeps & { spawns: IntakeSpawnRequest[]; alerts: string[]; stops: string[] } {
     const spawns: IntakeSpawnRequest[] = [];
     const alerts: string[] = [];
+    const stops: string[] = [];
     let n = 0;
     return {
       projectName: "intake-it",
@@ -78,11 +79,13 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
       addLabel: (id, label) => addLabel(repo, id, label),
       removeLabel: (id, label) => removeLabel(repo, id, label),
       spawn: (req) => { spawns.push(req); n++; return `it-worker-${n}`; },
+      stopWorker: (name) => { stops.push(name); return true; },
       workers: () => opts.workers ?? [],
       alert: (input) => { alerts.push(`${input.level}:${input.message}`); },
       nowMs: () => Date.now(),
       spawns,
       alerts,
+      stops,
     };
   }
 
@@ -227,5 +230,32 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
       expect(k.status).toBe("in_progress");
       expect(k.assignee).toMatch(/^it-worker-/);
     }
+  }, TEST_TIMEOUT);
+
+  it("stops a displaced worker on the pass after an operator recall, claim intact", () => {
+    // The operator's board-side take-over: reassign the bead away from its
+    // worker with a real bd write (the `c c` gesture is a bd assign).
+    const displaced = showBeads(repo, [childIds[1]])[0].assignee!;
+    expect(displaced).toMatch(/^it-worker-/);
+    bd("assign", childIds[1], "operator-recall");
+
+    const workerEntry: WorkerEntry = {
+      name: displaced, sessionId: "s", task: "", agentStatus: "working",
+      prState: "working", bead: childIds[1],
+    };
+    const deps = makeDeps({ workers: [workerEntry] });
+    expect(runIntakeOnce(deps)).toBe(true);
+    expect(deps.stops).toEqual([displaced]);
+    expect(deps.alerts.some(a => a.startsWith("warn:") && a.includes("recalled"))).toBe(true);
+
+    // The bead stays exactly as the operator left it: assigned to the
+    // foreign actor, in_progress — reconcile stops the worker and writes
+    // nothing to bd, and the removal tail's Decision-12 guard likewise
+    // refuses to unclaim a foreign-assigned bead. The claimed bead is out of
+    // the frontier, so nothing re-dispatches the recalled work either.
+    const after = showBeads(repo, [childIds[1]])[0];
+    expect(after.assignee).toBe("operator-recall");
+    expect(after.status).toBe("in_progress");
+    expect(deps.spawns).toHaveLength(0);
   }, TEST_TIMEOUT);
 });

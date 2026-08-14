@@ -13,7 +13,10 @@ vi.mock("../src/dashboard/log.js", () => ({
 const bd = vi.hoisted(() => ({
   listOpenEpics: vi.fn(() => [] as unknown[]),
 }));
-vi.mock("../src/dashboard/beads.js", () => ({
+vi.mock("../src/dashboard/beads.js", async (importOriginal) => ({
+  // Keep the pure helpers (parseLabelCount, incrementFailedLabel) real; only
+  // the bd shell-outs are stubbed.
+  ...(await importOriginal<typeof import("../src/dashboard/beads.js")>()),
   listOpenEpics: bd.listOpenEpics,
   swarmStatus: vi.fn(() => null),
   showBeads: vi.fn(() => []),
@@ -25,11 +28,13 @@ vi.mock("../src/dashboard/beads.js", () => ({
 }));
 
 import {
-  parseDispatchState, retryCount, failedCount, shouldReap, isIntakeLive, buildBeadSeed,
+  parseDispatchState, retryCount, failedCount, shouldReap, shouldReapFailing,
+  isIntakeLive, buildBeadSeed,
   runIntakeOnce, runBeadIntake, intakeDue, intakeStampPath, intakePokePath,
   BREAKER_THRESHOLD, DEFAULT_BEAD_INTAKE_CAP, INTAKE_MIN_INTERVAL_MS, REAPER_GRACE_MS,
   type IntakeDeps, type IntakeSpawnRequest,
 } from "../src/dashboard/poller-intake.js";
+import { log } from "../src/dashboard/log.js";
 import { intakeErrorPath, readIntakeStatus } from "../src/dashboard/intake-paths.js";
 import type { BeadDetail, SwarmStatus } from "../src/dashboard/beads.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
@@ -140,6 +145,30 @@ describe("shouldReap", () => {
   });
 });
 
+describe("shouldReapFailing", () => {
+  it("reaps only a dead failing worker past the grace period", () => {
+    const old = NOW - REAPER_GRACE_MS - 1;
+    expect(shouldReapFailing(entry({
+      name: "w", agentStatus: "exited", prState: "failing", lastEventAt: old,
+    }), NOW)).toBe(true);
+    expect(shouldReapFailing(entry({
+      name: "w", agentStatus: "exited", prState: "failing", lastEventAt: NOW - 1000,
+    }), NOW)).toBe(false);
+  });
+
+  it("never reaps a live failing worker or a missing entry", () => {
+    const old = NOW - REAPER_GRACE_MS - 1;
+    expect(shouldReapFailing(undefined, NOW)).toBe(false);
+    expect(shouldReapFailing(entry({
+      name: "w", agentStatus: "working", prState: "failing", lastEventAt: old,
+    }), NOW)).toBe(false);
+    // A dead worker still in `working` is shouldReap's crash branch, not this.
+    expect(shouldReapFailing(entry({
+      name: "w", agentStatus: "exited", lastEventAt: old,
+    }), NOW)).toBe(false);
+  });
+});
+
 describe("buildBeadSeed", () => {
   it("carries the bead, the design doc, and the protocol footer", () => {
     const seed = buildBeadSeed({
@@ -187,6 +216,8 @@ interface FakeWorld {
   workers: WorkerEntry[];
   spawns: IntakeSpawnRequest[];
   spawnResult: (n: number) => string | null;
+  stops: string[];
+  stopResult: boolean;
   claims: Array<{ id: string; actor: string }>;
   claimResult: boolean;
   reopens: Array<{ id: string; reason: string }>;
@@ -207,6 +238,8 @@ function makeWorld(over: Partial<FakeWorld> = {}): FakeWorld {
     workers: [],
     spawns: [],
     spawnResult: (n) => `worker-${n}`,
+    stops: [],
+    stopResult: true,
     claims: [],
     claimResult: true,
     reopens: [],
@@ -243,6 +276,11 @@ function makeDeps(w: FakeWorld, over: Partial<IntakeDeps> = {}): IntakeDeps {
       w.spawns.push(req);
       w.ops.push(`spawn:${req.task}`);
       return w.spawnResult(w.spawns.length);
+    },
+    stopWorker: (name) => {
+      w.stops.push(name);
+      w.ops.push(`stop:${name}`);
+      return w.stopResult;
     },
     workers: () => w.workers,
     alert: (input) => {
@@ -778,6 +816,8 @@ describe("runIntakeOnce", () => {
     expect(w.unassigns).toEqual(["b1"]);
     expect(w.labelsRemoved).toContainEqual({ id: "b1", label: "dispatch:retry:1" });
     expect(w.labelsAdded).toContainEqual({ id: "b1", label: "dispatch:retry:2" });
+    // A crash recovery counts retries only — never the quality counter.
+    expect(w.labelsAdded.some(l => l.label.startsWith("dispatch:failed:"))).toBe(false);
     expect(w.alerts).toHaveLength(1);
     expect(w.alerts[0].level).toBe("warn");
   });
@@ -815,6 +855,199 @@ describe("runIntakeOnce", () => {
     });
     expect(runIntakeOnce(makeDeps(w))).toBe(false);
     expect(w.reopens).toHaveLength(0);
+  });
+
+  it("reaps a dead failing worker's bead with the failed counter, not retry", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:dispatched"] })],
+      statuses: {
+        e1: st({ active: [{ id: "b1", title: "t", assignee: "dead-fail" }] }),
+      },
+      details: { b1: bead({ id: "b1" }) },
+      workers: [entry({
+        name: "dead-fail", agentStatus: "exited", prState: "failing",
+        lastEventAt: NOW - REAPER_GRACE_MS - 1,
+      })],
+    });
+    expect(runIntakeOnce(makeDeps(w))).toBe(true);
+    expect(w.reopens.map(r => r.id)).toEqual(["b1"]);
+    expect(w.unassigns).toEqual(["b1"]);
+    expect(w.labelsAdded).toContainEqual({ id: "b1", label: "dispatch:failed:1" });
+    // A quality failure must NOT count as a crash recovery.
+    expect(w.labelsAdded.some(l => l.label.startsWith("dispatch:retry:"))).toBe(false);
+    expect(w.alerts).toHaveLength(1);
+    expect(w.alerts[0].level).toBe("warn");
+    expect(w.alerts[0].dedupKey).toBe("intake-failed:board:b1:1");
+  });
+
+  it("a second failing recovery GCs failed:1 and writes failed:2 (max-wins)", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:dispatched"] })],
+      statuses: {
+        e1: st({ active: [{ id: "b1", title: "t", assignee: "dead-fail" }] }),
+      },
+      details: { b1: bead({ id: "b1", labels: ["dispatch:failed:1"] }) },
+      workers: [entry({
+        name: "dead-fail", agentStatus: "exited", prState: "failing",
+        lastEventAt: NOW - REAPER_GRACE_MS - 1,
+      })],
+    });
+    runIntakeOnce(makeDeps(w));
+    expect(w.labelsAdded).toContainEqual({ id: "b1", label: "dispatch:failed:2" });
+    expect(w.labelsRemoved).toContainEqual({ id: "b1", label: "dispatch:failed:1" });
+    expect(w.alerts[0].dedupKey).toBe("intake-failed:board:b1:2");
+  });
+
+  it("leaves a live failing worker's bead alone", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
+      statuses: {
+        e1: st({ active: [{ id: "b1", title: "t", assignee: "live-fail" }] }),
+      },
+      workers: [entry({
+        name: "live-fail", agentStatus: "working", prState: "failing",
+        lastEventAt: NOW - REAPER_GRACE_MS - 1,
+      })],
+    });
+    expect(runIntakeOnce(makeDeps(w))).toBe(false);
+    expect(w.reopens).toHaveLength(0);
+    expect(w.labelsAdded).toHaveLength(0);
+  });
+
+  it("reconcile stops a worker whose bead is closed, with no alert (routine GC)", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:dispatched"] })],
+      statuses: { e1: st() },
+      details: { b1: bead({ id: "b1", status: "closed", assignee: "w1" }) },
+      workers: [entry({ name: "w1", bead: "b1", prState: "done", agentStatus: "exited" })],
+    });
+    expect(runIntakeOnce(makeDeps(w))).toBe(true);
+    expect(w.stops).toEqual(["w1"]);
+    expect(w.alerts).toHaveLength(0);
+    // Reconcile only stops the worker — it never writes to the bead (the
+    // removal tail's Decision-12 guard leaves a closed bead untouched too).
+    expect(w.reopens).toHaveLength(0);
+    expect(w.unassigns).toHaveLength(0);
+  });
+
+  it("reconcile stops a recalled worker with a warn alert, leaving the claim", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
+      statuses: { e1: st() },
+      details: { b1: bead({ id: "b1", status: "in_progress", assignee: "jic" }) },
+      workers: [entry({ name: "w1", bead: "b1", prState: "working", agentStatus: "working" })],
+    });
+    expect(runIntakeOnce(makeDeps(w))).toBe(true);
+    expect(w.stops).toEqual(["w1"]);
+    expect(w.alerts).toHaveLength(1);
+    expect(w.alerts[0].level).toBe("warn");
+    expect(w.alerts[0].dedupKey).toBe("intake-reconcile:board:w1");
+    expect(w.alerts[0].message).toContain("recalled");
+    expect(w.unassigns).toHaveLength(0);
+  });
+
+  it("reconcile skips an unassigned bead (claim may still be in flight)", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
+      statuses: { e1: st() },
+      details: { b1: bead({ id: "b1", status: "open" }) },
+      workers: [entry({ name: "w1", bead: "b1", prState: "working", agentStatus: "working" })],
+    });
+    expect(runIntakeOnce(makeDeps(w))).toBe(false);
+    expect(w.stops).toHaveLength(0);
+  });
+
+  it("reconcile defers a mid-pipeline worker with a log line, never stopping it", () => {
+    vi.mocked(log.info).mockClear();
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
+      statuses: { e1: st() },
+      details: { b1: bead({ id: "b1", status: "closed", assignee: "w1" }) },
+      workers: [entry({ name: "w1", bead: "b1", prState: "reviewing", agentStatus: "idle" })],
+    });
+    expect(runIntakeOnce(makeDeps(w))).toBe(false);
+    expect(w.stops).toHaveLength(0);
+    expect(vi.mocked(log.info).mock.calls.some(
+      c => String(c[1]).includes("deferred"),
+    )).toBe(true);
+  });
+
+  it("reconcile ignores workers without a bead field", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:dispatched"] })],
+      statuses: { e1: st() },
+      workers: [entry({ name: "w1", prState: "done", agentStatus: "exited" })],
+    });
+    expect(runIntakeOnce(makeDeps(w))).toBe(false);
+    expect(w.stops).toHaveLength(0);
+  });
+
+  it("reconcile runs even with no gated epics (handoff --bead workers)", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["project:x"] })],
+      details: { b1: bead({ id: "b1", status: "closed", assignee: "w1" }) },
+      workers: [entry({ name: "w1", bead: "b1", prState: "done", agentStatus: "exited" })],
+    });
+    expect(runIntakeOnce(makeDeps(w))).toBe(true);
+    expect(w.stops).toEqual(["w1"]);
+  });
+
+  it("reconcile leaves the worker alone when bd show has no data for its bead", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:dispatched"] })],
+      statuses: { e1: st() },
+      workers: [entry({ name: "w1", bead: "gone", prState: "working", agentStatus: "working" })],
+    });
+    expect(runIntakeOnce(makeDeps(w))).toBe(false);
+    expect(w.stops).toHaveLength(0);
+  });
+
+  it("a failed stop leaves the worker counted and stops nothing else", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
+      statuses: {
+        e1: st({
+          active: [{ id: "b1", title: "t", assignee: "w1" }],
+          ready: [{ id: "b2", title: "next" }],
+        }),
+      },
+      details: {
+        b1: bead({ id: "b1", status: "closed", assignee: "w1" }),
+        b2: bead({ id: "b2", title: "next" }),
+      },
+      workers: [entry({ name: "w1", bead: "b1", prState: "working", agentStatus: "working" })],
+      stopResult: false,
+    });
+    runIntakeOnce(makeDeps(w, { cap: 1 }));
+    expect(w.stops).toEqual(["w1"]);
+    // Stop failed → the worker still holds the single slot; nothing spawns.
+    expect(w.spawns).toHaveLength(0);
+  });
+
+  it("a reconcile stop frees a governor slot used in the same pass", () => {
+    // b1 is still active in the (stale) swarm snapshot with w1 as assignee,
+    // but its fresh detail reads closed — the mid-pass close race. The
+    // governor counts assignees from the snapshot, so without the reconcile
+    // stop landing first, w1 would hold the single slot and b2 would wait a
+    // pass.
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
+      statuses: {
+        e1: st({
+          active: [{ id: "b1", title: "t", assignee: "w1" }],
+          ready: [{ id: "b2", title: "next" }],
+        }),
+      },
+      details: {
+        b1: bead({ id: "b1", status: "closed", assignee: "w1" }),
+        b2: bead({ id: "b2", title: "next" }),
+      },
+      workers: [entry({ name: "w1", bead: "b1", prState: "working", agentStatus: "working" })],
+    });
+    runIntakeOnce(makeDeps(w, { cap: 1 }));
+    expect(w.stops).toEqual(["w1"]);
+    expect(w.spawns).toHaveLength(1);
+    expect(w.spawns[0].task).toBe("bead b2: next");
   });
 });
 

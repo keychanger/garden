@@ -216,6 +216,16 @@ vi.mock("../src/rules.js", () => ({
   buildRulesContext: vi.fn(() => "test rules"),
 }));
 
+// The bd shell-outs behind the review-rejection breaker writer. Only the
+// shell-out functions are stubbed; incrementFailedLabel stays real so the
+// max-wins + straggler-GC behavior is exercised through the mocked writes.
+vi.mock("../src/dashboard/beads.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/dashboard/beads.js")>()),
+  showBeads: vi.fn(() => []),
+  addLabel: vi.fn(() => true),
+  removeLabel: vi.fn(() => true),
+}));
+
 // The Haiku verdict-extraction fallback runs (default workflow) before the
 // unparseable-verdict re-review paths. Default it to "no verdict recovered" so
 // the existing unparseable-path tests exercise the fall-through; individual
@@ -294,6 +304,7 @@ import { sweepGhostEntries } from "../src/dashboard/validate.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
 import { recordCiFixOutcome } from "../src/dashboard/telemetry.js";
 import { extractReviewVerdict } from "../src/dashboard/verdict-extract.js";
+import { showBeads, addLabel, removeLabel } from "../src/dashboard/beads.js";
 import {
   MAX_REVIEW_PROMPT_BYTES, reviewPromptBytes,
 } from "../src/dashboard/prompt-compose.js";
@@ -1399,6 +1410,105 @@ describe("poll — reviewing state (async)", () => {
         level: "error",
         source: "review",
         worker: "bold-ash",
+      }),
+    );
+  });
+
+  it("stamps dispatch:failed:N on the bead when a bead-carrying worker's review fails", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123", bead: "gard-b1" }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) return "Cannot fix this.\nFAILED";
+      return "{}";
+    });
+    vi.mocked(showBeads).mockReturnValue([
+      { id: "gard-b1", title: "t", status: "in_progress", priority: 2, labels: ["dispatch:failed:1"] },
+    ]);
+    vi.mocked(addLabel).mockReturnValue(true);
+    vi.mocked(removeLabel).mockReturnValue(true);
+
+    poll("myproject");
+
+    // The write runs against the project checkout (worktrees have no bd DB),
+    // incremented max-wins from the bead's current labels, stragglers GC'd.
+    expect(showBeads).toHaveBeenCalledWith("/repo/myproject", ["gard-b1"]);
+    expect(addLabel).toHaveBeenCalledWith("/repo/myproject", "gard-b1", "dispatch:failed:2");
+    expect(removeLabel).toHaveBeenCalledWith("/repo/myproject", "gard-b1", "dispatch:failed:1");
+    // One alert, with the bead folded into the message — not a second alert.
+    expect(vi.mocked(addAlert).mock.calls.filter(c => c[0].source === "review")).toHaveLength(1);
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("gard-b1 marked dispatch:failed:2"),
+      }),
+    );
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "failing", failingReason: "code" }),
+    );
+  });
+
+  it("makes no bd calls on a failed review when the worker carries no bead", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123" }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) return "Cannot fix this.\nFAILED";
+      return "{}";
+    });
+
+    poll("myproject");
+
+    expect(showBeads).not.toHaveBeenCalled();
+    expect(addLabel).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "failing" }),
+    );
+  });
+
+  it("a bead label-write failure does not change the failing transition", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123", bead: "gard-b1" }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) return "Cannot fix this.\nFAILED";
+      return "{}";
+    });
+    vi.mocked(showBeads).mockReturnValue([
+      { id: "gard-b1", title: "t", status: "in_progress", priority: 2, labels: [] },
+    ]);
+    vi.mocked(addLabel).mockReturnValue(false);
+
+    poll("myproject");
+
+    // Best-effort: the breaker may fail open — the worker still parks in
+    // failing and the alert still fires, naming the failed write.
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "failing", failingReason: "code" }),
+    );
+    expect(addAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("gard-b1: dispatch:failed write failed"),
       }),
     );
   });
