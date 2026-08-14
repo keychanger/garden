@@ -219,12 +219,13 @@ Trellis (spec-driven loop workflow — see WORKFLOWS.md § "Trellis workflow"):
   trellis retire <project> <name>     Mark a trellis retired (filters from picker, refuses new vines)
   trellis revive <project> <name>     Remove the retirement comment
 
-Botanist (design workflow — see docs/future/BOTANIST-WORKFLOW.md):
+Botanist (design workflow — see WORKFLOWS.md § "Botanist workflow"):
   botanist publish [<worker>] --to docs/<name>.md [--dry-run]
                                       Publish an approved design artifact: move it from the worker's
                                       .garden/botanist/ working dir to a tracked docs/ path, commit it,
                                       and mark the botanist done (self-resolves via $GARDEN_WORKER). The
-                                      poller merges it with no reviewer. --dry-run previews, changes nothing.
+                                      poller merges it with no reviewer, then the botanist executes the
+                                      approved handoff plan. --dry-run previews, changes nothing.
 
 Diagnostics (temporary — see src/commands/diag.ts cleanup checklist):
   diag handoff                        Spawn a worker pre-loaded with the latest auto-captured status-pane corruption snapshot

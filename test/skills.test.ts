@@ -112,6 +112,8 @@ describe("installClaudeSkills", () => {
     expect(BOTANIST_SKILL_CONTENT).toContain(
       "garden handoff <project> < .garden/botanist/handoff-brief.md",
     );
+    expect(BOTANIST_SKILL_CONTENT).toContain("inlines the full design");
+    expect(BOTANIST_SKILL_CONTENT).toContain("Do NOT pass `--expect-callback`");
     // Trellis builders stay operator-run — the handoff IPC is default-only.
     expect(BOTANIST_SKILL_CONTENT).toContain("--workflow trellis --trellis");
   });
