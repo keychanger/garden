@@ -19,6 +19,7 @@ import { diaryHasContent } from "../diary.js";
 import { isAwaitingInput } from "../dashboard/continue.js";
 import { deriveCrew, workerMemberName, projectWorkerMemberName } from "../dashboard/crew.js";
 import { unreadAlertCountsByProject } from "../dashboard/alerts.js";
+import { readIntakeStatus } from "../dashboard/intake-paths.js";
 import type { GardenConfig, ProjectConfig } from "../config.js";
 
 // Display states from STATUS.md. These are the only values the renderer ever
@@ -126,6 +127,12 @@ interface ProjectStatusInfo {
   // to the project name in TTY render so off-base workers are visually
   // distinguishable at a glance.
   projectBranch?: string | null;
+  // Bead-intake liveness, emitted only for projects with `beadIntake: true`:
+  // when the last intake pass ran (stamp mtime) and the error the newest pass
+  // caught, if any. board's mirror polls the piped JSON and renders its
+  // `dispatch stalled` chip from these (DELEGATION.md Decision 11).
+  lastIntakeAt?: string;
+  lastIntakeError?: string;
 }
 
 const SPINNER_FRAMES = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u2834", "\u2826", "\u2827", "\u2807", "\u280F"];
@@ -387,6 +394,7 @@ export async function status(args: string[]): Promise<void> {
       isActive: dashState.activeProject === name,
       workers: hasDashboard ? collectWorkers(name, dashState) : [],
       projectBranch: resolveProjectBranch(name),
+      ...(config.projects[name]?.beadIntake === true ? readIntakeStatus(name) : {}),
     };
   });
 
