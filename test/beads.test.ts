@@ -10,7 +10,7 @@ vi.mock("../src/dashboard/log.js", () => ({
 }));
 
 import {
-  listOpenEpics, swarmStatus, showBeads, claimBead, runBd,
+  listOpenEpics, swarmStatus, showBeads, claimBead, runBd, incrementFailedLabel,
 } from "../src/dashboard/beads.js";
 
 function bdOk(stdout: string) {
@@ -98,6 +98,25 @@ describe("claimBead", () => {
   it("reports a foreign claim as failure", () => {
     vi.mocked(spawnSync).mockReturnValueOnce(bdFail("issue already claimed by other"));
     expect(claimBead("/repo", "b1", "swift-oak")).toBe(false);
+  });
+});
+
+describe("incrementFailedLabel", () => {
+  it("adds the max-wins increment before attempting to remove every straggler", () => {
+    const ops: string[] = [];
+    const result = incrementFailedLabel({
+      addLabel: (_id, label) => { ops.push(`add:${label}`); return true; },
+      // A failed cleanup is best-effort: the newly added maximum still makes
+      // the durable count correct, and the remaining duplicate is harmless.
+      removeLabel: (_id, label) => { ops.push(`remove:${label}`); return label !== "dispatch:failed:1"; },
+    }, "b1", ["dispatch:failed:1", "other", "dispatch:failed:3"]);
+
+    expect(result).toEqual({ ok: true, count: 4 });
+    expect(ops).toEqual([
+      "add:dispatch:failed:4",
+      "remove:dispatch:failed:1",
+      "remove:dispatch:failed:3",
+    ]);
   });
 });
 
