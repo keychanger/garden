@@ -444,6 +444,15 @@ describe("newWorker", () => {
     );
   });
 
+  it("stamps the bead id on the worker entry", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ bead: "bd-42" });
+    expect(vi.mocked(addWorker)).toHaveBeenCalledWith(
+      "myproject",
+      expect.objectContaining({ bead: "bd-42" }),
+    );
+  });
+
   it("raises a project-scoped alert when .garden-done is tracked in HEAD", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     vi.mocked(gardenDoneTrackedInHead).mockReturnValue(true);
@@ -1912,6 +1921,30 @@ describe("stopWorkerByName", () => {
     expect(vi.mocked(tmux)).toHaveBeenCalledWith("swap-pane", "-s", "%2", "-t", "%25");
     expect(vi.mocked(removeWorker)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "swift-oak");
+  });
+
+  it("cannot retarget the stop when dashboard focus changes", () => {
+    let stateReads = 0;
+    vi.mocked(readDashState).mockImplementation(() => {
+      stateReads++;
+      return stateReads === 1
+        ? makeState()
+        : makeState({ activeWindowName: "_myproject-worker-calm-elm" });
+    });
+    vi.mocked(getFirstPaneId).mockReturnValue("%25");
+    vi.mocked(findWorkerByName).mockImplementation((_project, worker) => ({
+      name: worker,
+      sessionId: "s1",
+      task: "",
+      branchName: worker,
+      worktreePath: `/wt/${worker}`,
+    }));
+
+    stopWorkerByName("myproject", "swift-oak");
+
+    expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "swift-oak");
+    expect(vi.mocked(removeWorker)).not.toHaveBeenCalledWith("myproject", "calm-elm");
+    expect(stateReads).toBe(1);
   });
 });
 

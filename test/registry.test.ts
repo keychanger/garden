@@ -70,6 +70,8 @@ describe("readRegistry", () => {
       { name: "w", prState: ["reviewing"] },
       { name: "w", sessionId: 7 },
       { name: "w", handoffRequestId: ["forged"] },
+      { name: "w", bead: ["forged"] },
+      { name: "w", bead: "--help" },
       { name: "w", ciNoRuns: { sha: "abc", since: "now" } },
     ]) {
       fs.writeFileSync(REGISTRY_FILE, JSON.stringify({ workers: { proj: [bad] } }));

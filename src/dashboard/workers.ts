@@ -821,7 +821,12 @@ function pickReplacementWorkerWindow(
   return remaining[Math.min(killedIdx, remaining.length - 1)];
 }
 
-export function killPane(): void {
+interface WorkerRemovalTarget {
+  projectName: string;
+  workerName: string;
+}
+
+export function killPane(target?: WorkerRemovalTarget): void {
   // The removal target is captured inside the state lock and finalized after
   // it releases: finalizeWorkerRemoval shells out to bd for the removal-time
   // bead unclaim (up to ~20s per call) and must never run while the dashboard
@@ -833,6 +838,27 @@ export function killPane(): void {
 
   withStateLock(() => {
     const state = readDashState();
+
+    if (target) {
+      const targetWindow = workerWin(target.projectName, target.workerName);
+      const targetIsLiveActivePane = state.activeProject === target.projectName
+        && state.activePaneType === "worker"
+        && state.activeWindowName === targetWindow
+        && state.activePaneId !== null
+        && paneExists(state.activePaneId);
+      if (!targetIsLiveActivePane) {
+        killWindowSafe(targetWindow);
+        if (state.lastActiveWorker[target.projectName] === targetWindow) {
+          delete state.lastActiveWorker[target.projectName];
+        }
+        removalProject = target.projectName;
+        removalWorker = target.workerName;
+        removalEntry = findWorkerByName(target.projectName, target.workerName) ?? null;
+        writeDashState(state);
+        didKill = true;
+        return;
+      }
+    }
 
     if (state.activePaneType === "shell") {
       tmuxDisplay("Cannot kill project shell. Use ⌥x on workers only.");
@@ -1018,27 +1044,12 @@ function unclaimBeadOnRemoval(
 // finalizeWorkerRemoval tail (tombstone, Decision-12 bead unclaim, registry
 // removal, poller-stop check, background git cleanup).
 export function stopWorkerByName(projectName: string, workerName: string): void {
-  const entry = findWorkerByName(projectName, workerName);
-  if (!entry) {
+  if (!findWorkerByName(projectName, workerName)) {
     throw new Error(`No worker '${workerName}' in project '${projectName}'.`);
   }
-  const windowName = workerWin(projectName, workerName);
-  const state = readDashState();
-  if (state.activePaneType === "worker" && state.activeWindowName === windowName) {
-    killPane();
-    return;
-  }
-
-  killWindowSafe(windowName);
-  withStateLock(() => {
-    const s = readDashState();
-    if (s.lastActiveWorker[projectName] === windowName) {
-      delete s.lastActiveWorker[projectName];
-      writeDashState(s);
-    }
-  });
-  finalizeWorkerRemoval(projectName, workerName, entry);
-  refreshDashboard();
+  // Resolve active-vs-parked and kill the requested pane from the same locked
+  // state snapshot. A focus change must never retarget this destructive verb.
+  killPane({ projectName, workerName });
 }
 
 // Kill and restart the Claude process in a worker's pane via `claude --resume`.

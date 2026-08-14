@@ -68,7 +68,7 @@ reads or runs.
 - **Registry forgery guard (partial).** The worker registry lives in the
   sandbox-writable `~/.garden/sessions`. Its read guard (`isWorkerRegistry` in
   `src/dashboard/registry.ts`) type-checks the trusted fields (`prState`, `agentStatus`,
-  `baseBranch`, `branchName`, `worktreePath`, `sessionId`, `handoffRequestId`) so a forged wrong-typed value
+  `baseBranch`, `branchName`, `worktreePath`, `sessionId`, `handoffRequestId`, `bead`) so a forged wrong-typed value
   cannot flow into a path/git/dispatch consumer. This stops malformed forgery; it does
   not stop a well-formed malicious entry (see residuals).
 - **Credential read-deny (opt-in).** With `sandboxDenyCredentials` set on a project,

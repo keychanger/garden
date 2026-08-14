@@ -214,17 +214,12 @@ export function buildBeadSeed(opts: {
   ].join("\n");
 }
 
-// The spawn seam is an options object so later intake extensions widen it
-// without reshaping every fake: `bead` is stamped onto the worker's registry
-// entry (the registry→bd half of the bead↔worker join — recall/reconcile and
-// the removal-time unclaim read it); `workflow` is declared for the planner
-// workflow but not consumed yet — every spawn today uses the default
-// workflow.
+// `bead` is stamped onto the worker's registry entry (the registry→bd half of
+// the bead↔worker join — recall/reconcile and removal-time unclaim read it).
 export interface IntakeSpawnRequest {
   seed: string;
   task: string;
   bead?: string;
-  workflow?: string;
 }
 
 // bd operations + spawn machinery, injectable for tests. The real deps shell
@@ -607,8 +602,7 @@ function spawnBeadWorker(projectName: string, req: IntakeSpawnRequest): string |
     seedMessageFile: seedFile,
     background: true,
     // Registry→bd join: recall/reconcile and the removal-time unclaim read
-    // entry.bead. (req.workflow is declared on the seam but not consumed —
-    // intake spawns default-workflow workers only.)
+    // entry.bead.
     ...(req.bead ? { bead: req.bead } : {}),
   });
   if (!name) {

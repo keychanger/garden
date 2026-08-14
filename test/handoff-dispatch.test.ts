@@ -360,6 +360,20 @@ describe("processPendingHandoffs", () => {
       .toMatch(/shape guard/i);
   });
 
+  it("rejects a flag-shaped bead id from the untrusted request inbox", () => {
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    const reqFile = path.join(reqDir, `${id}.req.json`);
+    const request = JSON.parse(fs.readFileSync(reqFile, "utf8"));
+    request.bead = "--help";
+    fs.writeFileSync(reqFile, JSON.stringify(request));
+
+    processPendingHandoffs();
+
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
+      .toMatch(/shape guard/i);
+  });
+
   it("binds the result path to the request filename rather than a forged body id", () => {
     vi.mocked(newWorker).mockReturnValue("bold-ash");
     const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });

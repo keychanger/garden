@@ -62,6 +62,9 @@ export async function handoff(args: string[]): Promise<void> {
       throw new Error("--bead requires a bead id argument.");
     }
     bead = value.trim();
+    if (bead.length > 128) {
+      throw new Error("--bead id must be 128 characters or fewer.");
+    }
     rest.splice(beadIdx, 2);
   }
 

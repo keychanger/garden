@@ -260,6 +260,10 @@ function boundedString(value: unknown, maxLength: number): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= maxLength;
 }
 
+function validBeadId(value: unknown): value is string {
+  return boundedString(value, 128) && !value.startsWith("-");
+}
+
 function isHandoffRequest(value: unknown): value is HandoffRequest {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const request = value as Record<string, unknown>;
@@ -273,7 +277,7 @@ function isHandoffRequest(value: unknown): value is HandoffRequest {
     && (request.parentProject === undefined || boundedString(request.parentProject, 128))
     && (request.parentWorker === undefined || boundedString(request.parentWorker, 128))
     && (request.ultracode === undefined || typeof request.ultracode === "boolean")
-    && (request.bead === undefined || boundedString(request.bead, 128));
+    && (request.bead === undefined || validBeadId(request.bead));
 }
 
 function parseJson(data: Buffer): unknown {

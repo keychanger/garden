@@ -649,10 +649,11 @@ function withRegistryLock<T>(fn: () => T): T {
 
 // Shape guard for parsed registry. Top-level must be an object with a
 // `workers` field that maps project names to arrays. Per-entry validation
-// requires `name` to be a string and type-checks GUARDED_STRING_FIELDS when
-// present; every other WorkerEntry field is optional and untyped here, and
-// absence is always legal (legacy entries from earlier garden versions don't
-// carry baseBranch, workflow, etc.). A failed check signals hand-edit
+// requires `name` to be a string, type-checks GUARDED_STRING_FIELDS when
+// present, and separately validates the bounded bead id and ciNoRuns stamp;
+// remaining WorkerEntry fields are optional and untyped here, and absence is
+// always legal (legacy entries from earlier garden versions don't carry
+// baseBranch, workflow, etc.). A failed check signals hand-edit
 // corruption, a forged entry, or a half-write that escaped atomic-rename;
 // fall back to empty rather than feed junk into the poller.
 //
@@ -682,6 +683,11 @@ function isWorkerRegistry(x: unknown): x is WorkerRegistry {
       for (const field of GUARDED_STRING_FIELDS) {
         if (entry[field] !== undefined && typeof entry[field] !== "string") return false;
       }
+      if (entry.bead !== undefined
+          && (typeof entry.bead !== "string"
+            || entry.bead.length === 0
+            || entry.bead.length > 128
+            || entry.bead.startsWith("-"))) return false;
       if (entry.ciNoRuns !== undefined) {
         if (!entry.ciNoRuns || typeof entry.ciNoRuns !== "object") return false;
         const stamp = entry.ciNoRuns as Record<string, unknown>;

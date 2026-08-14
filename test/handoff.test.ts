@@ -246,6 +246,12 @@ describe("garden handoff command", () => {
     expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
   });
 
+  it("rejects a bead id that exceeds the dispatch request bound", async () => {
+    await expect(handoff(["other", "--bead", "b".repeat(129), "-m", "msg"]))
+      .rejects.toThrow(/128 characters or fewer/);
+    expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
+  });
+
   it("does not treat --bead or its value as part of the briefing", async () => {
     await captureConsoleLog(() => handoff(["other", "--bead", "bd-7", "-m", "the real briefing"]));
     const seedsDir = path.join(tmpDir, "seeds");
