@@ -216,6 +216,8 @@ describe("buildBeadSeed", () => {
       mergedSiblings: [],
     });
     expect(seed).not.toContain("integration gate");
+    expect(seed).toContain("After your merge lands: `bd close b`");
+    expect(seed).not.toContain("no glue commit is needed");
   });
 
   it("an integration-labeled bead gets the assembly contract, keeping the claim/close protocol", () => {
@@ -232,6 +234,9 @@ describe("buildBeadSeed", () => {
     expect(seed).toContain("full gates");
     expect(seed).toContain("File new beads");
     expect(seed).toContain("instead of fixing sibling scope");
+    expect(seed).toContain("no glue commit is needed");
+    expect(seed).toContain("`bd close board-int` directly");
+    expect(seed).toContain("If you make glue changes");
     // The protocol lines stay identical to the leaf contract.
     expect(seed).toContain("bd update board-int --claim");
     expect(seed).toContain("bd close board-int");
@@ -1213,6 +1218,21 @@ describe("runIntakeOnce — plan:* consume loop", () => {
     expect(w.labelsAdded).toContainEqual({ id: "e1", label: "plan:failed" });
     expect(w.alerts).toHaveLength(1);
     expect(w.alerts[0].level).toBe("error");
+    expect(w.alerts[0].dedupKey).toBe("intake-plan-spawn:board:e1");
+  });
+
+  it("rewrites planning -> failed when the spawn throws", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["plan:pending"] })],
+    });
+    const deps = makeDeps(w, {
+      spawn: () => { throw new Error("tmux new-window failed"); },
+    });
+
+    expect(runIntakeOnce(deps)).toBe(true);
+    expect(w.labelsRemoved).toContainEqual({ id: "e1", label: "plan:planning" });
+    expect(w.labelsAdded).toContainEqual({ id: "e1", label: "plan:failed" });
+    expect(w.alerts).toHaveLength(1);
     expect(w.alerts[0].dedupKey).toBe("intake-plan-spawn:board:e1");
   });
 

@@ -202,8 +202,8 @@ Workers:
                                  the workflow's default worker model. --effort sets the reasoning
                                  rung (ultra = max effort + dynamic workflows; default/grow/
                                  botanist/planner). --harness picks the agent CLI (default
-                                 claude-code; codex = a sandboxed Codex worker, default/botanist
-                                 workflows only).
+                                 claude-code; codex = a sandboxed Codex worker, default workflow
+                                 only).
   workers grow [<worker>] --seed <text> | --seed-file <path> | --goal-file <path>
                                  Convert an active default worker into a grow loop after its
                                  current work merges (self-resolves via $GARDEN_WORKER). The durable

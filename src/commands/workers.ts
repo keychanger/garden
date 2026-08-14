@@ -113,8 +113,8 @@ async function newCommand(args: string[]): Promise<void> {
   if (harness && !isRegisteredHarness(harness)) {
     throw new Error(`--harness must be one of: ${harnessNames().join(", ")}, got '${harness}'`);
   }
-  if (harness && workflow !== "default" && workflow !== "botanist") {
-    throw new Error(`--harness is only supported with --workflow default or botanist (got '${workflow}').`);
+  if (harness && workflow !== "default") {
+    throw new Error(`--harness is only supported with --workflow default (got '${workflow}').`);
   }
 
   // Per-worker base-branch override (all workflows). Precedence over the

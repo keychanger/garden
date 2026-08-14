@@ -249,6 +249,11 @@ export function buildBeadSeed(opts: {
       `— your deliverable is the verdict and the defect list, plus only the glue ` +
       `fixes integration itself requires. `
     : "";
+  const completion = integration
+    ? `If verification passes and no glue commit is needed, ` +
+      `\`bd close ${bead.id}\` directly before marking yourself done. If you ` +
+      `make glue changes, close ${bead.id} only after that merge lands. `
+    : `After your merge lands: \`bd close ${bead.id}\`. `;
   return [
     `[bead dispatch — ${opts.projectName} epic ${epic.id}: ${epic.title}]`,
     ``,
@@ -266,7 +271,7 @@ export function buildBeadSeed(opts: {
     ``,
     contract +
     `Your bead is ${bead.id}. First action: \`bd update ${bead.id} --claim\`. ` +
-    `After your merge lands: \`bd close ${bead.id}\`. ` +
+    completion +
     `If stuck: \`bd update ${bead.id} -s blocked\`, then \`bd label add ${bead.id} human\` ` +
     `and \`bd comment ${bead.id} "<why>"\`. ` +
     `If your \`bd update ${bead.id} --claim\` fails because another actor holds the bead, ` +
@@ -444,11 +449,17 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
       projectName: deps.projectName,
       epic: { id: epic.id, title: epic.title, ...(epic.design ? { design: epic.design } : {}) },
     });
-    const name = deps.spawn({
-      seed,
-      task: `plan epic ${epic.id}: ${epic.title}`,
-      workflow: "planner",
-    });
+    let name: string | null = null;
+    let spawnError: unknown;
+    try {
+      name = deps.spawn({
+        seed,
+        task: `plan epic ${epic.id}: ${epic.title}`,
+        workflow: "planner",
+      });
+    } catch (err) {
+      spawnError = err;
+    }
     if (!name) {
       // The epic is durably at plan:planning with no planner alive — rewrite
       // to plan:failed so board renders the failure instead of an eternal
@@ -456,7 +467,11 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
       deps.removeLabel(epic.id, "plan:planning");
       deps.addLabel(epic.id, "plan:failed");
       log.error("intake", "planner spawn failed; landed plan:failed", {
-        data: { project: deps.projectName, epic: epic.id },
+        data: {
+          project: deps.projectName,
+          epic: epic.id,
+          ...(spawnError ? { error: String(spawnError) } : {}),
+        },
       });
       deps.alert({
         level: "error",
@@ -940,16 +955,22 @@ function spawnBeadWorker(projectName: string, req: IntakeSpawnRequest): string |
   fs.mkdirSync(seedsDir, { recursive: true });
   const seedFile = path.join(seedsDir, `bead-${crypto.randomUUID()}.md`);
   atomicWriteFile(seedFile, req.seed);
-  const name = newWorker({
-    projectName,
-    seedMessageFile: seedFile,
-    background: true,
-    // Registry→bd join: recall/reconcile and the removal-time unclaim read
-    // entry.bead.
-    ...(req.bead ? { bead: req.bead } : {}),
-    // "planner" for the plan-consume loop; absent = default build worker.
-    ...(req.workflow ? { workflow: req.workflow } : {}),
-  });
+  let name: string | null;
+  try {
+    name = newWorker({
+      projectName,
+      seedMessageFile: seedFile,
+      background: true,
+      // Registry→bd join: recall/reconcile and the removal-time unclaim read
+      // entry.bead.
+      ...(req.bead ? { bead: req.bead } : {}),
+      // "planner" for the plan-consume loop; absent = default build worker.
+      ...(req.workflow ? { workflow: req.workflow } : {}),
+    });
+  } catch (err) {
+    try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
+    throw err;
+  }
   if (!name) {
     try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
     return null;

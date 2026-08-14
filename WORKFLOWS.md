@@ -2772,7 +2772,8 @@ pause mechanism.
 
 ### Skip-review merge
 
-`WorkflowDefinition.skipsReviewMerge: true` (botanist only). When a botanist has
+`WorkflowDefinition.skipsReviewMerge: true` is shared by botanist and planner.
+When a botanist has
 commits ahead of base (at publish), `handleWorking` routes `working →
 merge-pending` **directly** — no reviewer, because the operator already reviewed
 the prose at the gate. The reviewer is launched from `handleWorking →
@@ -2898,9 +2899,11 @@ spelling):
 1. Read the design doc (inlined in the seed) and draft the child DAG — one
    worker-session per child, blocker edges for real ordering constraints
    only, plus ONE extra child titled and labeled `integration` that every
-   leaf blocks (its worker verifies the assembled feature; bd rejects
-   epic↔task `blocks` edges in both directions, so the integration bead is a
-   task like its siblings — DELEGATION.md Decision 13).
+   leaf blocks. Its worker verifies the assembled feature: a clean verifier
+   with no glue change closes the integration bead directly; integration glue
+   follows the normal merge-before-close protocol. bd rejects epic↔task
+   `blocks` edges in both directions, so the integration bead is a task like
+   its siblings — DELEGATION.md Decision 13.
 2. Create each child as an ephemeral wisp:
    `bd create "<title>" --ephemeral --parent <epic> -d "<desc>"`
    (`-l integration` on the gate child). Wire every edge explicitly:

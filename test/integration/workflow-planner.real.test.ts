@@ -220,8 +220,10 @@ describe.skipIf(!bdInstalled)("planner contract against real bd", () => {
     expect(gateSpawn).toBeDefined();
     expect(gateSpawn!.seed).toContain("integration gate");
     expect(gateSpawn!.seed).toContain("ASSEMBLED feature");
-    // The protocol lines stay identical to the leaf contract.
+    // Claim stays identical; a clean verification can close without inventing
+    // a commit, while real glue changes still wait for their merge.
     expect(gateSpawn!.seed).toContain(`bd update ${gate} --claim`);
-    expect(gateSpawn!.seed).toContain(`bd close ${gate}`);
+    expect(gateSpawn!.seed).toContain(`bd close ${gate}\` directly`);
+    expect(gateSpawn!.seed).toContain("If you make glue changes");
   }, TEST_TIMEOUT);
 });

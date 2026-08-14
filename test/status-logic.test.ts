@@ -1006,6 +1006,16 @@ describe("identity badges + grammar (Phase 3)", () => {
     expect(line).toContain("framing options");
   });
 
+  it("renders a planner badge without clobbering decomposition activity", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "wiring the DAG", agentStatus: "working",
+        workflow: "planner" },
+    ]);
+    const line = lineFor(renderQuickStatus(state), "bold-ash");
+    expect(line).toContain("planner");
+    expect(line).toContain("wiring the DAG");
+  });
+
   it("renders grow N/M in the detail column (parity with the trellis counter)", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "a", task: "polishing", agentStatus: "working",

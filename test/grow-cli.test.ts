@@ -357,19 +357,12 @@ describe("garden workers new --workflow botanist", () => {
     ).rejects.toThrow(/empty/);
   });
 
-  it("allows --harness (the designer harness) unlike grow/trellis", async () => {
+  it("rejects --harness because alternate workflows are claude-code only", async () => {
     await setupProject("proj");
     const { workers } = await importWorkersCmd();
-    const { newWorker } = await importDashboardWorkers();
-
-    await captureConsoleLog(() =>
+    await expect(
       workers(["new", "proj", "--workflow", "botanist", "--seed", "x", "--harness", "codex"]),
-    );
-
-    expect(newWorker).toHaveBeenCalledWith(expect.objectContaining({
-      workflow: "botanist",
-      harness: "codex",
-    }));
+    ).rejects.toThrow(/--harness is only supported with --workflow default/);
   });
 
   it("rejects --crew (default-only; a botanist runs no reviewer, the builder crew is chosen at handoff)", async () => {

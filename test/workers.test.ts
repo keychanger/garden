@@ -737,6 +737,24 @@ describe("newWorker", () => {
     );
   });
 
+  it("planner: stamps its seat defaults and planner bootstrap posture", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ workflow: "planner" });
+    expect(vi.mocked(addWorker)).toHaveBeenCalledWith(
+      "myproject",
+      expect.objectContaining({
+        workflow: "planner",
+        model: "opus",
+        effort: "xhigh",
+      }),
+    );
+    expect(vi.mocked(buildWorktreeBootstrapScript)).toHaveBeenCalledWith(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash", "fake-uuid-1234",
+      "/home/user/.garden/worktrees/myproject/bold-ash", "main",
+      expect.objectContaining({ planner: true }),
+    );
+  });
+
   // ===== Ultracode preset (garden handoff --ultracode) =====
   // newWorker translates opts.ultracode into two stamped fields: entry.model
   // pinned to Opus and entry.ultracode. These branches are the seam between
@@ -2038,6 +2056,21 @@ describe("bounceWorker", () => {
       { launchPlan: expect.objectContaining({ harness: "claude-code", role: "worker" }) },
     );
     expect(vi.mocked(resolveBaseBranch)).not.toHaveBeenCalled();
+  });
+
+  it("restores planner posture when bouncing a planner", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "sess-abc", task: "",
+      branchName: "swift-oak", worktreePath: "/wt/swift-oak",
+      workflow: "planner",
+    });
+
+    bounceWorker("myproject", "swift-oak");
+
+    expect(vi.mocked(buildWorktreeResumeCommand)).toHaveBeenCalledWith(
+      "myproject", "/repo/myproject", "swift-oak", "swift-oak", "sess-abc", "main",
+      expect.objectContaining({ planner: true }),
+    );
   });
 
   it("uses the parked-window pane id when the worker is not the active one", () => {
