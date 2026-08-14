@@ -250,12 +250,23 @@ function applyAndLog(
   // pane (which only repaints on stateChanged below). See workerSortFreshness.
   if (stateChanged) fields.lastStateChangeAt = now;
 
-  // Capture the transcript path Claude Code reports on the hook input. It
+  // Capture the transcript path the harness reports on the hook input. It
   // rarely changes (once per session), so only write it when it differs —
   // piggybacks on this already-writing path, no extra registry churn. The
-  // history view (⌥h) reads it via resolveTranscriptPath.
+  // history view (⌥h) reads it via resolveTranscriptPath, and for a Codex
+  // worker codex-input.ts watches it for asking/turn-end reconciliation.
+  // Ownership guard: Codex fires the relay for subagent threads it spawns, and
+  // their events carry the SUBAGENT's rollout path — capturing it pointed the
+  // history view, readActivity, and the asking/turn-end reconciler at a side
+  // thread instead of the worker's conversation. Both harnesses embed the
+  // session id in the transcript filename (claude `<id>.jsonl`, codex
+  // `rollout-<ts>-<id>.jsonl`), so a path that doesn't name the worker's own
+  // session belongs to some other thread and is skipped. With no session id
+  // known yet, accept — the id is captured from this same payload below.
   const tp = ctx.input.transcript_path;
-  if (typeof tp === "string" && tp && tp !== ctx.workerInfo.entry.transcriptPath) {
+  const ownSession = ctx.workerInfo.entry.sessionId;
+  if (typeof tp === "string" && tp && tp !== ctx.workerInfo.entry.transcriptPath
+      && (!ownSession || tp.includes(ownSession))) {
     fields.transcriptPath = tp;
   }
 

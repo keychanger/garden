@@ -605,6 +605,46 @@ describe("handleClaudeHook — session id capture (self-assigning harness)", () 
   });
 });
 
+describe("handleClaudeHook — transcript path capture (session ownership)", () => {
+  it("rejects a transcript path from another thread (codex subagent rollout)", async () => {
+    const fs = (await import("node:fs")).default;
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "working",
+      sessionId: "main-thread-id",
+      transcriptPath: "/s/2026/08/07/rollout-2026-08-07T10-21-22-main-thread-id.jsonl",
+    });
+    setCwd("garden", "bold-ash");
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({
+      session_id: "main-thread-id",
+      transcript_path: "/s/2026/08/13/rollout-2026-08-13T17-07-18-subagent-id.jsonl",
+    }));
+    handleClaudeHook("posttooluse");
+    const entry = entries["garden"]?.find(e => e.name === "bold-ash");
+    expect(entry?.transcriptPath).toBe(
+      "/s/2026/08/07/rollout-2026-08-07T10-21-22-main-thread-id.jsonl",
+    );
+  });
+
+  it("accepts a changed transcript path that names the worker's own session (heals a stomped entry)", async () => {
+    const fs = (await import("node:fs")).default;
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "working",
+      sessionId: "main-thread-id",
+      transcriptPath: "/s/2026/08/13/rollout-2026-08-13T17-07-18-subagent-id.jsonl",
+    });
+    setCwd("garden", "bold-ash");
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({
+      session_id: "main-thread-id",
+      transcript_path: "/s/2026/08/07/rollout-2026-08-07T10-21-22-main-thread-id.jsonl",
+    }));
+    handleClaudeHook("posttooluse");
+    const entry = entries["garden"]?.find(e => e.name === "bold-ash");
+    expect(entry?.transcriptPath).toBe(
+      "/s/2026/08/07/rollout-2026-08-07T10-21-22-main-thread-id.jsonl",
+    );
+  });
+});
+
 // pretooluse/posttooluse fire on every Claude tool call and dominate hook
 // traffic. When they don't flip agentStatus or prState, refreshDashboard
 // must NOT cascade — the perf optimization in this commit. Detection: every
