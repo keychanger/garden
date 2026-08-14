@@ -262,11 +262,21 @@ function applyAndLog(
   // session id in the transcript filename (claude `<id>.jsonl`, codex
   // `rollout-<ts>-<id>.jsonl`), so a path that doesn't name the worker's own
   // session belongs to some other thread and is skipped. With no session id
-  // known yet, accept — the id is captured from this same payload below.
+  // known yet, validate against the id from this payload when present; that
+  // is also the id captured below.
   const tp = ctx.input.transcript_path;
   const ownSession = ctx.workerInfo.entry.sessionId;
+  const reportedSession = typeof ctx.input.session_id === "string"
+    ? ctx.input.session_id
+    : "";
+  const transcriptSession = ownSession || reportedSession;
+  const transcriptName = typeof tp === "string" ? path.basename(tp) : "";
+  const ownsTranscript = !transcriptSession
+    || transcriptName === `${transcriptSession}.jsonl`
+    || (transcriptName.startsWith("rollout-")
+      && transcriptName.endsWith(`-${transcriptSession}.jsonl`));
   if (typeof tp === "string" && tp && tp !== ctx.workerInfo.entry.transcriptPath
-      && (!ownSession || tp.includes(ownSession))) {
+      && ownsTranscript) {
     fields.transcriptPath = tp;
   }
 
@@ -276,7 +286,7 @@ function applyAndLog(
   // is what makes bounce/resume work for such a worker: buildResumeCommand
   // reads entry.sessionId to `codex resume <id>`. Guarded on empty so a
   // claude worker's id is never overwritten mid-session.
-  const sid = ctx.input.session_id;
+  const sid = reportedSession;
   if (typeof sid === "string" && sid && !ctx.workerInfo.entry.sessionId) {
     fields.sessionId = sid;
   }

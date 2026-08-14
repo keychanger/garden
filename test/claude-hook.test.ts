@@ -586,12 +586,17 @@ describe("handleClaudeHook — session id capture (self-assigning harness)", () 
     seedWorker("garden", "bold-ash", { agentStatus: "working", sessionId: "" });
     setCwd("garden", "bold-ash");
     vi.mocked(fs.readFileSync).mockReturnValueOnce(
-      JSON.stringify({ session_id: "codex-thread-abc", transcript_path: "/x/rollout.jsonl" }),
+      JSON.stringify({
+        session_id: "codex-thread-abc",
+        transcript_path: "/x/rollout-2026-08-13T17-07-18-codex-thread-abc.jsonl",
+      }),
     );
     handleClaudeHook("posttooluse");
     const entry = entries["garden"]?.find(e => e.name === "bold-ash");
     expect(entry?.sessionId).toBe("codex-thread-abc");
-    expect(entry?.transcriptPath).toBe("/x/rollout.jsonl");
+    expect(entry?.transcriptPath).toBe(
+      "/x/rollout-2026-08-13T17-07-18-codex-thread-abc.jsonl",
+    );
   });
 
   it("does NOT overwrite an existing session id (claude mints its own at creation)", async () => {
@@ -606,6 +611,20 @@ describe("handleClaudeHook — session id capture (self-assigning harness)", () 
 });
 
 describe("handleClaudeHook — transcript path capture (session ownership)", () => {
+  it("rejects another thread's path during first-session capture", async () => {
+    const fs = (await import("node:fs")).default;
+    seedWorker("garden", "bold-ash", { agentStatus: "working", sessionId: "" });
+    setCwd("garden", "bold-ash");
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({
+      session_id: "main-thread-id",
+      transcript_path: "/s/rollout-2026-08-13T17-07-18-subagent-id.jsonl",
+    }));
+    handleClaudeHook("posttooluse");
+    const entry = entries["garden"]?.find(e => e.name === "bold-ash");
+    expect(entry?.sessionId).toBe("main-thread-id");
+    expect(entry?.transcriptPath).toBeUndefined();
+  });
+
   it("rejects a transcript path from another thread (codex subagent rollout)", async () => {
     const fs = (await import("node:fs")).default;
     seedWorker("garden", "bold-ash", {
@@ -623,6 +642,41 @@ describe("handleClaudeHook — transcript path capture (session ownership)", () 
     expect(entry?.transcriptPath).toBe(
       "/s/2026/08/07/rollout-2026-08-07T10-21-22-main-thread-id.jsonl",
     );
+  });
+
+  it("requires the session id in the filename, not elsewhere in the path", async () => {
+    const fs = (await import("node:fs")).default;
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "working",
+      sessionId: "main-thread-id",
+      transcriptPath: "/s/rollout-2026-08-07T10-21-22-main-thread-id.jsonl",
+    });
+    setCwd("garden", "bold-ash");
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({
+      session_id: "main-thread-id",
+      transcript_path: "/s/main-thread-id/rollout-2026-08-13T17-07-18-subagent-id.jsonl",
+    }));
+    handleClaudeHook("posttooluse");
+    const entry = entries["garden"]?.find(e => e.name === "bold-ash");
+    expect(entry?.transcriptPath).toBe(
+      "/s/rollout-2026-08-07T10-21-22-main-thread-id.jsonl",
+    );
+  });
+
+  it("accepts Claude's exact session-id filename", async () => {
+    const fs = (await import("node:fs")).default;
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "working",
+      sessionId: "main-thread-id",
+    });
+    setCwd("garden", "bold-ash");
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({
+      session_id: "main-thread-id",
+      transcript_path: "/s/main-thread-id.jsonl",
+    }));
+    handleClaudeHook("posttooluse");
+    const entry = entries["garden"]?.find(e => e.name === "bold-ash");
+    expect(entry?.transcriptPath).toBe("/s/main-thread-id.jsonl");
   });
 
   it("accepts a changed transcript path that names the worker's own session (heals a stomped entry)", async () => {
