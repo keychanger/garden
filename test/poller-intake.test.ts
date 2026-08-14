@@ -7,12 +7,30 @@ vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+// runBeadIntake's real deps shell out to bd; the error-stamp tests drive the
+// entry point with these controllable, while runIntakeOnce tests keep
+// injecting FakeWorld deps directly.
+const bd = vi.hoisted(() => ({
+  listOpenEpics: vi.fn(() => [] as unknown[]),
+}));
+vi.mock("../src/dashboard/beads.js", () => ({
+  listOpenEpics: bd.listOpenEpics,
+  swarmStatus: vi.fn(() => null),
+  showBeads: vi.fn(() => []),
+  claimBead: vi.fn(() => true),
+  reopenBead: vi.fn(() => true),
+  unassignBead: vi.fn(() => true),
+  addLabel: vi.fn(() => true),
+  removeLabel: vi.fn(() => true),
+}));
+
 import {
-  parseDispatchState, retryCount, shouldReap, isIntakeLive, buildBeadSeed,
-  runIntakeOnce, intakeDue, intakeStampPath, intakePokePath,
-  DEFAULT_BEAD_INTAKE_CAP, INTAKE_MIN_INTERVAL_MS, REAPER_GRACE_MS,
+  parseDispatchState, retryCount, failedCount, shouldReap, isIntakeLive, buildBeadSeed,
+  runIntakeOnce, runBeadIntake, intakeDue, intakeStampPath, intakePokePath,
+  BREAKER_THRESHOLD, DEFAULT_BEAD_INTAKE_CAP, INTAKE_MIN_INTERVAL_MS, REAPER_GRACE_MS,
   type IntakeDeps,
 } from "../src/dashboard/poller-intake.js";
+import { intakeErrorPath, readIntakeStatus } from "../src/dashboard/intake-paths.js";
 import type { BeadDetail, SwarmStatus } from "../src/dashboard/beads.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
@@ -38,14 +56,17 @@ describe("parseDispatchState", () => {
     expect(parseDispatchState(["project:board"]).mode).toBeNull();
   });
 
-  it("parses budget, spent, dispatched, and budget-exhausted", () => {
+  it("parses budget, spent, dispatched, dispatching, and budget-exhausted", () => {
     const ds = parseDispatchState([
-      "budget:5", "dispatch:spent:3", "dispatch:dispatched", "dispatch:budget-exhausted",
+      "budget:5", "dispatch:spent:3", "dispatch:dispatched", "dispatch:dispatching",
+      "dispatch:budget-exhausted",
     ]);
     expect(ds.budget).toBe(5);
     expect(ds.spent).toBe(3);
     expect(ds.dispatched).toBe(true);
+    expect(ds.dispatching).toBe(true);
     expect(ds.budgetExhausted).toBe(true);
+    expect(parseDispatchState([]).dispatching).toBe(false);
   });
 
   it("defaults spent to 0 and budget to null, ignoring malformed counts", () => {
@@ -53,12 +74,27 @@ describe("parseDispatchState", () => {
     expect(ds.budget).toBeNull();
     expect(ds.spent).toBe(0);
   });
+
+  it("parses duplicate counter labels max-wins", () => {
+    const ds = parseDispatchState([
+      "budget:3", "budget:5", "dispatch:spent:4", "dispatch:spent:1",
+    ]);
+    expect(ds.budget).toBe(5);
+    expect(ds.spent).toBe(4);
+  });
 });
 
-describe("retryCount", () => {
-  it("reads dispatch:retry:N and defaults to 0", () => {
+describe("retryCount / failedCount", () => {
+  it("reads dispatch:retry:N max-wins and defaults to 0", () => {
     expect(retryCount(["dispatch:retry:2"])).toBe(2);
+    expect(retryCount(["dispatch:retry:1", "dispatch:retry:3"])).toBe(3);
     expect(retryCount([])).toBe(0);
+  });
+
+  it("reads dispatch:failed:N max-wins and defaults to 0", () => {
+    expect(failedCount(["dispatch:failed:1"])).toBe(1);
+    expect(failedCount(["dispatch:failed:1", "dispatch:failed:2"])).toBe(2);
+    expect(failedCount([])).toBe(0);
   });
 });
 
@@ -121,6 +157,17 @@ describe("buildBeadSeed", () => {
     expect(seed).toContain("board-b0");
   });
 
+  it("tells the worker to stop when its claim loses to another actor", () => {
+    const seed = buildBeadSeed({
+      projectName: "board",
+      epic: { id: "e", title: "t" },
+      bead: bead({ id: "b" }),
+      mergedSiblings: [],
+    });
+    expect(seed).toContain("fails because another actor holds the bead");
+    expect(seed).toContain("stop and mark yourself done");
+  });
+
   it("marks a missing design doc and empty sibling list explicitly", () => {
     const seed = buildBeadSeed({
       projectName: "board",
@@ -146,7 +193,10 @@ interface FakeWorld {
   unassigns: string[];
   labelsAdded: Array<{ id: string; label: string }>;
   labelsRemoved: Array<{ id: string; label: string }>;
-  alerts: Array<{ level: string; message: string }>;
+  alerts: Array<{ level: string; message: string; dedupKey?: string }>;
+  // Interleaved log of label writes and spawns, for ordering assertions
+  // (the budget pre-charge must land before the spawn).
+  ops: string[];
 }
 
 function makeWorld(over: Partial<FakeWorld> = {}): FakeWorld {
@@ -164,6 +214,7 @@ function makeWorld(over: Partial<FakeWorld> = {}): FakeWorld {
     labelsAdded: [],
     labelsRemoved: [],
     alerts: [],
+    ops: [],
     ...over,
   };
 }
@@ -178,14 +229,25 @@ function makeDeps(w: FakeWorld, over: Partial<IntakeDeps> = {}): IntakeDeps {
     claim: (id, actor) => { w.claims.push({ id, actor }); return w.claimResult; },
     reopen: (id, reason) => { w.reopens.push({ id, reason }); return true; },
     unassign: (id) => { w.unassigns.push(id); return true; },
-    addLabel: (id, label) => { w.labelsAdded.push({ id, label }); return true; },
-    removeLabel: (id, label) => { w.labelsRemoved.push({ id, label }); return true; },
+    addLabel: (id, label) => {
+      w.labelsAdded.push({ id, label });
+      w.ops.push(`add:${label}`);
+      return true;
+    },
+    removeLabel: (id, label) => {
+      w.labelsRemoved.push({ id, label });
+      w.ops.push(`remove:${label}`);
+      return true;
+    },
     spawn: (seed, task) => {
       w.spawns.push({ seed, task });
+      w.ops.push(`spawn:${task}`);
       return w.spawnResult(w.spawns.length);
     },
     workers: () => w.workers,
-    alert: (input) => { w.alerts.push({ level: input.level, message: input.message }); },
+    alert: (input) => {
+      w.alerts.push({ level: input.level, message: input.message, dedupKey: input.dedupKey });
+    },
     nowMs: () => NOW,
     ...over,
   };
@@ -217,7 +279,7 @@ describe("runIntakeOnce", () => {
     expect(w.labelsRemoved).toHaveLength(0);
   });
 
-  it("consumes a manual authorization after one dispatching pass", () => {
+  it("consumes a manual authorization in one pass when the wave fits the cap", () => {
     const w = makeWorld({
       epics: [epic({ id: "e1", labels: ["dispatch:manual"] })],
       statuses: { e1: st({ ready: [{ id: "b1", title: "one" }] }) },
@@ -226,6 +288,8 @@ describe("runIntakeOnce", () => {
     runIntakeOnce(makeDeps(w));
     expect(w.labelsRemoved).toContainEqual({ id: "e1", label: "dispatch:manual" });
     expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:dispatched" });
+    // Wave done in one pass: the mid-wave marker never appears.
+    expect(w.labelsAdded).not.toContainEqual({ id: "e1", label: "dispatch:dispatching" });
   });
 
   it("keeps a manual epic armed when the frontier is empty", () => {
@@ -235,6 +299,71 @@ describe("runIntakeOnce", () => {
     });
     expect(runIntakeOnce(makeDeps(w))).toBe(false);
     expect(w.labelsRemoved).toHaveLength(0);
+  });
+
+  it("stays armed with the dispatching marker when the wave outruns the cap", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:manual"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "1" }, { id: "b2", title: "2" }] }) },
+      details: { b1: bead({ id: "b1" }), b2: bead({ id: "b2" }) },
+    });
+    runIntakeOnce(makeDeps(w, { cap: 1 }));
+    expect(w.spawns).toHaveLength(1);
+    expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:dispatching" });
+    expect(w.labelsRemoved).not.toContainEqual({ id: "e1", label: "dispatch:manual" });
+    expect(w.labelsAdded).not.toContainEqual({ id: "e1", label: "dispatch:dispatched" });
+  });
+
+  it("does not re-add the dispatching marker on later throttled passes", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:manual", "dispatch:dispatching", "dispatch:spent:1"] })],
+      statuses: { e1: st({ ready: [{ id: "b2", title: "2" }, { id: "b3", title: "3" }] }) },
+      details: { b2: bead({ id: "b2" }), b3: bead({ id: "b3" }) },
+    });
+    runIntakeOnce(makeDeps(w, { cap: 1 }));
+    expect(w.spawns).toHaveLength(1);
+    expect(w.labelsAdded).not.toContainEqual({ id: "e1", label: "dispatch:dispatching" });
+    expect(w.labelsRemoved).not.toContainEqual({ id: "e1", label: "dispatch:manual" });
+  });
+
+  it("consumes the arm once the marked wave's frontier drains, even with no spawn", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:manual", "dispatch:dispatching"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "t", assignee: "worker-1" }] }) },
+    });
+    expect(runIntakeOnce(makeDeps(w))).toBe(true);
+    expect(w.spawns).toHaveLength(0);
+    expect(w.labelsRemoved).toContainEqual({ id: "e1", label: "dispatch:manual" });
+    expect(w.labelsRemoved).toContainEqual({ id: "e1", label: "dispatch:dispatching" });
+    expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:dispatched" });
+  });
+
+  it("consumes the arm when this pass finishes a previously marked wave", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:manual", "dispatch:dispatching", "dispatch:spent:1"] })],
+      statuses: { e1: st({ ready: [{ id: "b2", title: "2" }] }) },
+      details: { b2: bead({ id: "b2" }) },
+    });
+    runIntakeOnce(makeDeps(w));
+    expect(w.spawns).toHaveLength(1);
+    expect(w.labelsRemoved).toContainEqual({ id: "e1", label: "dispatch:manual" });
+    expect(w.labelsRemoved).toContainEqual({ id: "e1", label: "dispatch:dispatching" });
+    expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:dispatched" });
+  });
+
+  it("GCs the dispatching marker when the epic's mode is not manual", () => {
+    for (const labels of [
+      ["dispatch:auto", "dispatch:dispatching"],
+      ["dispatch:off", "dispatch:dispatching"],
+      ["dispatch:dispatched", "dispatch:dispatching"],
+    ]) {
+      const w = makeWorld({
+        epics: [epic({ id: "e1", labels })],
+        statuses: { e1: st() },
+      });
+      expect(runIntakeOnce(makeDeps(w))).toBe(true);
+      expect(w.labelsRemoved).toContainEqual({ id: "e1", label: "dispatch:dispatching" });
+    }
   });
 
   it("does not dispatch on dispatched, off, or budget-exhausted epics", () => {
@@ -275,6 +404,7 @@ describe("runIntakeOnce", () => {
     expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:budget-exhausted" });
     expect(w.alerts).toHaveLength(1);
     expect(w.alerts[0].level).toBe("error");
+    expect(w.alerts[0].dedupKey).toBe("intake-budget:board:e1");
   });
 
   it("limits a pass to the remaining budget and exhausts on crossing the cap", () => {
@@ -292,6 +422,105 @@ describe("runIntakeOnce", () => {
     expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:budget-exhausted" });
   });
 
+  it("pre-charges the budget before the spawn (never an uncounted session)", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "one" }] }) },
+      details: { b1: bead({ id: "b1", title: "one" }) },
+    });
+    runIntakeOnce(makeDeps(w));
+    const chargeIdx = w.ops.indexOf("add:dispatch:spent:1");
+    const spawnIdx = w.ops.indexOf("spawn:bead b1: one");
+    expect(chargeIdx).toBeGreaterThanOrEqual(0);
+    expect(spawnIdx).toBeGreaterThan(chargeIdx);
+  });
+
+  it("aborts the epic's pass with a distinct alert when a budget write fails", () => {
+    const w = makeWorld({
+      epics: [
+        epic({ id: "e1", labels: ["dispatch:auto"] }),
+        epic({ id: "e2", labels: ["dispatch:auto"] }),
+      ],
+      statuses: {
+        e1: st({ ready: [{ id: "b1", title: "1" }, { id: "b2", title: "2" }] }),
+        e2: st({ ready: [{ id: "b3", title: "3" }] }),
+      },
+      details: { b1: bead({ id: "b1" }), b2: bead({ id: "b2" }), b3: bead({ id: "b3", title: "3" }) },
+    });
+    const deps = makeDeps(w, {
+      addLabel: (id, label) => {
+        w.labelsAdded.push({ id, label });
+        // Break only e1's counter writes; e2's pass must continue.
+        return !(id === "e1" && label.startsWith("dispatch:spent:"));
+      },
+    });
+    expect(runIntakeOnce(deps)).toBe(true);
+    // e1 spawned nothing (charge failed before the first spawn); e2 did.
+    expect(w.spawns).toHaveLength(1);
+    expect(w.spawns[0].task).toBe("bead b3: 3");
+    expect(w.alerts).toHaveLength(1);
+    expect(w.alerts[0].level).toBe("error");
+    expect(w.alerts[0].dedupKey).toBe("intake-budget-write:board:e1");
+  });
+
+  it("aborts on a failed straggler removal too (remove is half the write)", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto", "dispatch:spent:2"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "1" }] }) },
+      details: { b1: bead({ id: "b1" }) },
+    });
+    const deps = makeDeps(w, {
+      removeLabel: (id, label) => {
+        w.labelsRemoved.push({ id, label });
+        return !label.startsWith("dispatch:spent:");
+      },
+    });
+    runIntakeOnce(deps);
+    expect(w.spawns).toHaveLength(0);
+    expect(w.alerts[0]?.dedupKey).toBe("intake-budget-write:board:e1");
+  });
+
+  it("refunds the pre-charge when a spawn fails and halts the pass", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto", "budget:5", "dispatch:spent:2"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "t" }, { id: "b2", title: "t" }] }) },
+      details: { b1: bead({ id: "b1" }), b2: bead({ id: "b2" }) },
+      spawnResult: () => null,
+    });
+    runIntakeOnce(makeDeps(w));
+    expect(w.spawns).toHaveLength(1);
+    expect(w.claims).toHaveLength(0);
+    // Charge: remove spent:2, add spent:3. Refund: remove spent:3, re-add spent:2.
+    expect(w.labelsRemoved).toContainEqual({ id: "e1", label: "dispatch:spent:2" });
+    expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:spent:3" });
+    expect(w.labelsRemoved).toContainEqual({ id: "e1", label: "dispatch:spent:3" });
+    expect(w.labelsAdded.filter(l => l.label === "dispatch:spent:2")).toHaveLength(1);
+  });
+
+  it("does not re-add a zero count when refunding the first charge", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "t" }] }) },
+      details: { b1: bead({ id: "b1" }) },
+      spawnResult: () => null,
+    });
+    runIntakeOnce(makeDeps(w));
+    expect(w.labelsAdded).toEqual([{ id: "e1", label: "dispatch:spent:1" }]);
+    expect(w.labelsRemoved).toEqual([{ id: "e1", label: "dispatch:spent:1" }]);
+  });
+
+  it("GCs duplicate spent stragglers on rewrite, charging from the max", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto", "dispatch:spent:1", "dispatch:spent:3"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "t" }] }) },
+      details: { b1: bead({ id: "b1" }) },
+    });
+    runIntakeOnce(makeDeps(w));
+    expect(w.labelsRemoved).toContainEqual({ id: "e1", label: "dispatch:spent:1" });
+    expect(w.labelsRemoved).toContainEqual({ id: "e1", label: "dispatch:spent:3" });
+    expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:spent:4" });
+  });
+
   it("dispatches higher-priority beads first when slots are scarce", () => {
     const w = makeWorld({
       epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
@@ -306,6 +535,100 @@ describe("runIntakeOnce", () => {
     runIntakeOnce(makeDeps(w, { cap: 1 }));
     expect(w.spawns).toHaveLength(1);
     expect(w.spawns[0].task).toBe("bead b2: high");
+  });
+
+  it("excludes breaker-tripped beads from dispatch at the threshold, not below", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
+      statuses: {
+        e1: st({ ready: [{ id: "b1", title: "tripped" }, { id: "b2", title: "warm" }] }),
+      },
+      details: {
+        b1: bead({ id: "b1", title: "tripped", labels: [`dispatch:failed:${BREAKER_THRESHOLD}`] }),
+        b2: bead({ id: "b2", title: "warm", labels: ["dispatch:failed:1"] }),
+      },
+    });
+    runIntakeOnce(makeDeps(w));
+    expect(w.spawns).toHaveLength(1);
+    expect(w.spawns[0].task).toBe("bead b2: warm");
+  });
+
+  it("computes slots after breaker exclusion so a tripped bead can't starve a live one", () => {
+    // The tripped bead outranks the eligible one on priority; with only one
+    // slot, exclusion-after-sort would hand the slot to the tripped bead and
+    // dispatch nothing.
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto", "budget:1"] })],
+      statuses: {
+        e1: st({ ready: [{ id: "b1", title: "tripped" }, { id: "b2", title: "live" }] }),
+      },
+      details: {
+        b1: bead({ id: "b1", title: "tripped", priority: 0, labels: ["dispatch:failed:2"] }),
+        b2: bead({ id: "b2", title: "live", priority: 3 }),
+      },
+    });
+    runIntakeOnce(makeDeps(w));
+    expect(w.spawns).toHaveLength(1);
+    expect(w.spawns[0].task).toBe("bead b2: live");
+  });
+
+  it("excludes breaker-tripped beads from the manual consume frontier", () => {
+    // The armed wave's only remaining ready bead is tripped: the wave counts
+    // as done and the arm is consumed rather than parked forever.
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:manual"] })],
+      statuses: {
+        e1: st({ ready: [{ id: "b1", title: "1" }, { id: "b2", title: "tripped" }] }),
+      },
+      details: {
+        b1: bead({ id: "b1" }),
+        b2: bead({ id: "b2", labels: ["dispatch:failed:2"] }),
+      },
+    });
+    runIntakeOnce(makeDeps(w));
+    expect(w.spawns).toHaveLength(1);
+    expect(w.labelsRemoved).toContainEqual({ id: "e1", label: "dispatch:manual" });
+    expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:dispatched" });
+  });
+
+  it("skips a bead claimed since the frontier snapshot, without charging", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:manual"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "raced" }, { id: "b2", title: "free" }] }) },
+      details: { b1: bead({ id: "b1", title: "raced" }), b2: bead({ id: "b2", title: "free" }) },
+    });
+    const deps = makeDeps(w, {
+      showBeads: (ids) => ids.map(id =>
+        // The single-bead re-check sees a claim that landed after the batch
+        // frontier read.
+        id === "b1" && ids.length === 1
+          ? { ...w.details[id], assignee: "someone-else" }
+          : w.details[id],
+      ).filter((d): d is BeadDetail => d !== undefined),
+    });
+    runIntakeOnce(deps);
+    expect(w.spawns).toHaveLength(1);
+    expect(w.spawns[0].task).toBe("bead b2: free");
+    expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:spent:1" });
+    expect(w.labelsAdded.filter(l => l.label.startsWith("dispatch:spent:"))).toHaveLength(1);
+    // The raced bead left the frontier, so the wave still consumed.
+    expect(w.labelsRemoved).toContainEqual({ id: "e1", label: "dispatch:manual" });
+  });
+
+  it("retries a failed post-spawn claim once, then leaves it to the worker", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "t" }] }) },
+      details: { b1: bead({ id: "b1" }) },
+      claimResult: false,
+    });
+    expect(runIntakeOnce(makeDeps(w))).toBe(true);
+    expect(w.spawns).toHaveLength(1);
+    expect(w.claims).toEqual([
+      { id: "b1", actor: "worker-1" },
+      { id: "b1", actor: "worker-1" },
+    ]);
+    expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:spent:1" });
   });
 
   it("counts live intake workers against the cap via the assignee join", () => {
@@ -359,30 +682,6 @@ describe("runIntakeOnce", () => {
     expect(w.spawns).toHaveLength(1);
   });
 
-  it("halts the pass without spending budget when a spawn fails", () => {
-    const w = makeWorld({
-      epics: [epic({ id: "e1", labels: ["dispatch:auto", "budget:5"] })],
-      statuses: { e1: st({ ready: [{ id: "b1", title: "t" }, { id: "b2", title: "t" }] }) },
-      details: { b1: bead({ id: "b1" }), b2: bead({ id: "b2" }) },
-      spawnResult: () => null,
-    });
-    expect(runIntakeOnce(makeDeps(w))).toBe(false);
-    expect(w.claims).toHaveLength(0);
-    expect(w.labelsAdded).toHaveLength(0);
-  });
-
-  it("treats a failed post-spawn claim as non-fatal (worker's own claim recovers)", () => {
-    const w = makeWorld({
-      epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
-      statuses: { e1: st({ ready: [{ id: "b1", title: "t" }] }) },
-      details: { b1: bead({ id: "b1" }) },
-      claimResult: false,
-    });
-    expect(runIntakeOnce(makeDeps(w))).toBe(true);
-    expect(w.spawns).toHaveLength(1);
-    expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:spent:1" });
-  });
-
   it("reaps a dead worker's bead: reopen, unassign, retry label", () => {
     const w = makeWorld({
       epics: [epic({ id: "e1", labels: ["dispatch:dispatched"] })],
@@ -403,6 +702,24 @@ describe("runIntakeOnce", () => {
     expect(w.labelsAdded).toContainEqual({ id: "b1", label: "dispatch:retry:2" });
     expect(w.alerts).toHaveLength(1);
     expect(w.alerts[0].level).toBe("warn");
+  });
+
+  it("GCs duplicate retry stragglers on the reaper's bump", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:dispatched"] })],
+      statuses: {
+        e1: st({ active: [{ id: "b1", title: "t", assignee: "dead-worker" }] }),
+      },
+      details: { b1: bead({ id: "b1", labels: ["dispatch:retry:1", "dispatch:retry:2"] }) },
+      workers: [entry({
+        name: "dead-worker", agentStatus: "exited",
+        lastEventAt: NOW - REAPER_GRACE_MS - 1,
+      })],
+    });
+    runIntakeOnce(makeDeps(w));
+    expect(w.labelsRemoved).toContainEqual({ id: "b1", label: "dispatch:retry:1" });
+    expect(w.labelsRemoved).toContainEqual({ id: "b1", label: "dispatch:retry:2" });
+    expect(w.labelsAdded).toContainEqual({ id: "b1", label: "dispatch:retry:3" });
   });
 
   it("does not reap beads held by live workers or foreign actors", () => {
@@ -456,5 +773,45 @@ describe("intakeDue", () => {
     expect(intakeDue(project, Date.now())).toBe(false);
 
     fs.unlinkSync(stamp);
+  });
+});
+
+describe("runBeadIntake error stamp", () => {
+  const project = `intake-err-${process.pid}`;
+  const config = { path: "/nonexistent", beadIntake: true } as const;
+
+  beforeEach(() => {
+    fs.mkdirSync(path.dirname(intakeStampPath(project)), { recursive: true });
+    try { fs.unlinkSync(intakeStampPath(project)); } catch { /* absent */ }
+    try { fs.unlinkSync(intakeErrorPath(project)); } catch { /* absent */ }
+    bd.listOpenEpics.mockReset();
+    bd.listOpenEpics.mockReturnValue([]);
+  });
+
+  it("stamps the error on a throwing pass and clears it on the next clean one", () => {
+    bd.listOpenEpics.mockImplementation(() => { throw new Error("bd exploded"); });
+    expect(runBeadIntake(project, { ...config })).toBe(false);
+    let status = readIntakeStatus(project);
+    expect(status.lastIntakeError).toContain("bd exploded");
+    expect(status.lastIntakeAt).toBeDefined();
+
+    // Clean pass (past the throttle): the error stamp clears.
+    fs.unlinkSync(intakeStampPath(project));
+    bd.listOpenEpics.mockReturnValue([]);
+    runBeadIntake(project, { ...config });
+    status = readIntakeStatus(project);
+    expect(status.lastIntakeError).toBeUndefined();
+    expect(status.lastIntakeAt).toBeDefined();
+  });
+
+  it("a throttled call neither runs a pass nor clears the error", () => {
+    bd.listOpenEpics.mockImplementation(() => { throw new Error("still broken"); });
+    runBeadIntake(project, { ...config });
+    expect(readIntakeStatus(project).lastIntakeError).toContain("still broken");
+    // Immediately again: throttled — stamp untouched, no pass ran.
+    bd.listOpenEpics.mockClear();
+    expect(runBeadIntake(project, { ...config })).toBe(false);
+    expect(bd.listOpenEpics).not.toHaveBeenCalled();
+    expect(readIntakeStatus(project).lastIntakeError).toContain("still broken");
   });
 });

@@ -5,9 +5,22 @@
 // frontier; garden subscribes to it; board steers it via labels on the epic.
 //
 // Label contract (the whole interface between board and this loop):
-//   dispatch:manual            operator-armed, ONE dispatch pass; consumed by
-//                              rewriting to dispatch:dispatched (board's `g`
-//                              re-arms by restoring dispatch:manual)
+//   dispatch:manual            operator-armed authorization for ONE WAVE
+//                              (DELEGATION.md Decision 9): intake keeps
+//                              dispatching under the arm across passes until
+//                              the observed frontier is empty, then consumes
+//                              by rewriting to dispatch:dispatched (board's
+//                              `g` re-arms by restoring dispatch:manual).
+//                              Beads that become ready mid-wave dispatch
+//                              under the same arm — accepted.
+//   dispatch:dispatching       garden-written durable mid-wave marker: the
+//                              armed wave has started but the frontier was
+//                              not yet empty (cap/budget throttled). Lets a
+//                              later empty-frontier pass tell "wave done"
+//                              from "armed, nothing ready yet" (which stays
+//                              armed — the operator's g press is never
+//                              silently eaten). GC'd whenever the epic's
+//                              mode is not manual.
 //   dispatch:auto              wavefront marches unattended
 //   dispatch:off               gate closed (wins over manual/auto)
 //   dispatch:dispatched        garden-written: manual authorization consumed
@@ -17,9 +30,23 @@
 //                              sessions for the epic (retries count)
 //   dispatch:spent:N           garden-written session counter backing budget:N
 //                              (bd labels are the sanctioned durable channel;
-//                              the registry hard-deletes on worker removal)
+//                              the registry hard-deletes on worker removal).
+//                              Written fail-closed (Decision 10): charged
+//                              BEFORE each spawn with both label writes
+//                              checked; a write failure aborts the epic's
+//                              pass, and a spawn failure refunds best-effort
+//                              (a failed refund overcounts, which fails
+//                              closed). Never spawn an uncounted session.
 //   dispatch:retry:N           garden-written on a bead each time the reaper
 //                              recovers it
+//   dispatch:failed:N          quality-failure counter on a bead (read-only
+//                              here; the review pipeline writes it). At
+//                              BREAKER_THRESHOLD the frontier excludes the
+//                              bead — the circuit breaker's read side.
+//
+// All counter labels parse max-wins across duplicates (both sides of the
+// border do), and garden's own increment/rewrite sites remove every matching
+// straggler.
 //
 // Idempotency (bd 1.0.3 route-around): the design doc's `garden-pending`
 // pre-assign + claim-overwrite stack is unimplementable on 1.0.3 — `bd update
@@ -37,6 +64,9 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { SESSIONS_DIR, type ProjectConfig } from "../config.js";
+import {
+  intakeStampPath, intakePokePath, writeIntakeError, clearIntakeError,
+} from "./intake-paths.js";
 import { getWorkers, updateWorkerTask, type WorkerEntry } from "./registry.js";
 import { newWorker } from "./workers.js";
 import { addAlert } from "./alerts.js";
@@ -56,19 +86,20 @@ export const INTAKE_MIN_INTERVAL_MS = 60_000;
 // a bounce's kill→relaunch gap and pane-died flapping.
 export const REAPER_GRACE_MS = 10 * 60_000;
 
-export function intakeStampPath(project: string): string {
-  return path.join(SESSIONS_DIR, `intake-last-${project}`);
-}
+// The stamp paths live in intake-paths.ts (a hook-bundle-safe leaf, because
+// `garden status` reads them); re-exported here for the existing importers.
+export { intakeStampPath, intakePokePath } from "./intake-paths.js";
 
-// Touched by `garden poke` (and board's gate keys, via the same CLI) so the
-// next poller wake runs intake immediately instead of riding the throttle.
-export function intakePokePath(project: string): string {
-  return path.join(SESSIONS_DIR, `intake-poke-${project}`);
-}
+// The circuit breaker's read side (DELEGATION.md Decision 8): a bead whose
+// dispatch:failed:N reaches this count is excluded from the frontier — its
+// blocked descendants wait, and board renders the epic chip red. Nothing here
+// writes dispatch:failed:N; the review pipeline does.
+export const BREAKER_THRESHOLD = 2;
 
 export interface DispatchState {
   mode: "manual" | "auto" | "off" | null;
   dispatched: boolean;
+  dispatching: boolean;
   budget: number | null;
   spent: number;
   budgetExhausted: boolean;
@@ -83,23 +114,33 @@ export function parseDispatchState(labels: string[]): DispatchState {
   return {
     mode,
     dispatched: has("dispatch:dispatched"),
+    dispatching: has("dispatch:dispatching"),
     budget: parseLabelCount(labels, "budget:"),
     spent: parseLabelCount(labels, "dispatch:spent:") ?? 0,
     budgetExhausted: has("dispatch:budget-exhausted"),
   };
 }
 
+// Max-wins across duplicates (Decision 10): a crashed rewrite can leave two
+// counter labels, and the higher one is the one that fails closed. Rewrite
+// sites remove every matching straggler (see removeCountLabels).
 function parseLabelCount(labels: string[], prefix: string): number | null {
+  let max: number | null = null;
   for (const l of labels) {
     if (!l.startsWith(prefix)) continue;
     const n = Number(l.slice(prefix.length));
-    if (Number.isInteger(n) && n >= 0) return n;
+    if (!Number.isInteger(n) || n < 0) continue;
+    if (max === null || n > max) max = n;
   }
-  return null;
+  return max;
 }
 
 export function retryCount(labels: string[]): number {
   return parseLabelCount(labels, "dispatch:retry:") ?? 0;
+}
+
+export function failedCount(labels: string[]): number {
+  return parseLabelCount(labels, "dispatch:failed:") ?? 0;
 }
 
 // A worker occupying an intake slot: registered, not exited, and not parked in
@@ -167,6 +208,8 @@ export function buildBeadSeed(opts: {
     `After your merge lands: \`bd close ${bead.id}\`. ` +
     `If stuck: \`bd update ${bead.id} -s blocked\`, then \`bd label add ${bead.id} human\` ` +
     `and \`bd comment ${bead.id} "<why>"\`. ` +
+    `If your \`bd update ${bead.id} --claim\` fails because another actor holds the bead, ` +
+    `stop and mark yourself done. ` +
     `Sibling beads already merged: ${siblings}`,
   ].join("\n");
 }
@@ -219,10 +262,11 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
       if (!bead.assignee) continue;
       if (!shouldReap(bead.assignee, byName.get(bead.assignee), deps.nowMs())) continue;
       const detail = deps.showBeads([bead.id])[0];
-      const retries = retryCount(detail?.labels ?? []);
+      const retryLabels = detail?.labels ?? [];
+      const retries = retryCount(retryLabels);
       if (!deps.reopen(bead.id, `garden intake reaper: worker ${bead.assignee} died`)) continue;
       deps.unassign(bead.id);
-      if (retries > 0) deps.removeLabel(bead.id, `dispatch:retry:${retries}`);
+      removeCountLabels(deps, bead.id, retryLabels, "dispatch:retry:");
       deps.addLabel(bead.id, `dispatch:retry:${retries + 1}`);
       changed = true;
       log.warn("intake", "reaped abandoned bead", {
@@ -259,6 +303,12 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
     const st = statuses.get(epic.id);
     if (!st) continue;
     const ds = parseDispatchState(epic.labels);
+    // GC the mid-wave marker whenever the epic is not an armed manual gate —
+    // the mode changed (auto/off/cleared) so no wave is in flight to track.
+    if (ds.dispatching && ds.mode !== "manual") {
+      deps.removeLabel(epic.id, "dispatch:dispatching");
+      changed = true;
+    }
     if (ds.mode !== "manual" && ds.mode !== "auto") continue;
     if (ds.mode === "manual" && ds.dispatched) continue;
     if (ds.budgetExhausted) continue;
@@ -269,25 +319,80 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
       continue;
     }
 
-    const frontier = st.ready.filter(b => !b.assignee);
-    if (frontier.length === 0) continue;
+    // The frontier — ONE definition shared by dispatch and the manual-wave
+    // consume rule below: unassigned ready beads not tripped by the circuit
+    // breaker. Exclusion happens before slots are computed and before the
+    // priority sort, so an excluded bead can neither hold a slot open nor
+    // outrank an eligible sibling.
+    const unassigned = st.ready.filter(b => !b.assignee);
+    const frontier = (unassigned.length > 0 ? deps.showBeads(unassigned.map(b => b.id)) : [])
+      .filter(d => {
+        if (failedCount(d.labels) < BREAKER_THRESHOLD) return true;
+        log.info("intake", "bead excluded by circuit breaker", {
+          data: { project: deps.projectName, epic: epic.id, bead: d.id, failed: failedCount(d.labels) },
+        });
+        return false;
+      });
+    // Shrinks as beads leave the frontier this pass (spawned, or found
+    // claimed by the pre-spawn re-check); 0 at the end means the wave the
+    // operator armed is fully dispatched.
+    let frontierLeft = frontier.length;
 
     let slots = deps.cap - live;
     if (ds.budget !== null) slots = Math.min(slots, ds.budget - ds.spent);
     slots = Math.min(slots, frontier.length);
-    if (slots <= 0) continue;
 
     // Priority order (0 = highest) so board's reordering steers which beads
-    // win the slots; the ready refs carry no priority, so fetch details.
-    const details = deps.showBeads(frontier.map(b => b.id))
+    // win the slots; the ready refs carry no priority, so the details do.
+    const details = [...frontier]
       .sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
 
     let spent = ds.spent;
     let spawned = 0;
-    // Whether a dispatch:spent:N label exists to rewrite; after the first
-    // spawn this pass has added one, so only the first removal is conditional.
-    let hasSpentLabel = epic.labels.some(l => l.startsWith("dispatch:spent:"));
-    for (const bead of details.slice(0, slots)) {
+    // The dispatch:spent:N labels currently on the epic (may be several — a
+    // crashed rewrite leaves stragglers); every rewrite removes them all.
+    let spentLabels = epic.labels.filter(l => l.startsWith("dispatch:spent:"));
+    for (const bead of details) {
+      if (spawned >= slots) break;
+      // Spawn-race guard: the frontier snapshot is stale by the time we get
+      // here (another intake pass, an operator claim, a recall). Re-read the
+      // single bead and skip without charging if a claim appeared.
+      const fresh = deps.showBeads([bead.id])[0];
+      if (fresh?.assignee) {
+        frontierLeft--;
+        log.info("intake", "bead claimed since frontier snapshot; skipping", {
+          data: { project: deps.projectName, epic: epic.id, bead: bead.id, assignee: fresh.assignee },
+        });
+        continue;
+      }
+      // Fail-closed pre-charge (Decision 10): count the session BEFORE the
+      // spawn, both writes checked. A failure here means the durable budget
+      // channel is broken — abort this epic's pass (others continue) rather
+      // than spawn a session the counter never sees.
+      const prevSpent = spent;
+      const nextLabel = `dispatch:spent:${spent + 1}`;
+      let chargeOk = removeCountLabels(deps, epic.id, spentLabels, "dispatch:spent:");
+      if (chargeOk) chargeOk = deps.addLabel(epic.id, nextLabel);
+      if (!chargeOk) {
+        log.error("intake", "budget label write failed; aborting epic dispatch pass", {
+          data: { project: deps.projectName, epic: epic.id, bead: bead.id },
+        });
+        deps.alert({
+          level: "error",
+          source: "intake",
+          project: deps.projectName,
+          message:
+            `Epic ${epic.id} (${epic.title}): dispatch:spent label write failed — ` +
+            `dispatch aborted for this epic (budget writes fail closed).`,
+          dedupKey: `intake-budget-write:${deps.projectName}:${epic.id}`,
+        });
+        changed = true;
+        break;
+      }
+      spent++;
+      spentLabels = [nextLabel];
+      changed = true;
+
       const seed = buildBeadSeed({
         projectName: deps.projectName,
         epic: { id: epic.id, title: epic.title, ...(epic.design ? { design: epic.design } : {}) },
@@ -297,37 +402,49 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
       const name = deps.spawn(seed, `bead ${bead.id}: ${bead.title}`);
       if (!name) {
         // Spawn machinery is broken (not bead-specific) — stop the pass
-        // rather than burn the budget against a dead newWorker.
+        // rather than burn the budget against a dead newWorker. Refund the
+        // pre-charge best-effort; a failed refund leaves an overcount, which
+        // fails closed (fewer future sessions, never an uncounted one).
+        const refunded = deps.removeLabel(epic.id, nextLabel)
+          && (prevSpent === 0 || deps.addLabel(epic.id, `dispatch:spent:${prevSpent}`));
         log.error("intake", "spawn failed; halting dispatch pass", {
-          data: { project: deps.projectName, epic: epic.id, bead: bead.id },
+          data: { project: deps.projectName, epic: epic.id, bead: bead.id, refunded },
         });
         break;
       }
-      // Claim AS the worker: the join keystone (see module header). A failure
-      // here is non-fatal — the worker's own seeded claim completes the join.
-      if (!deps.claim(bead.id, name)) {
-        log.warn("intake", "post-spawn claim failed; worker's own claim will retry", {
+      // Claim AS the worker: the join keystone (see module header). One
+      // retry absorbs a transient store-lock loss; a second failure is
+      // non-fatal — the worker's own seeded claim completes the join.
+      if (!deps.claim(bead.id, name) && !deps.claim(bead.id, name)) {
+        log.warn("intake", "post-spawn claim failed twice; worker's own claim will retry", {
           data: { project: deps.projectName, bead: bead.id, worker: name },
         });
       }
-      if (hasSpentLabel) deps.removeLabel(epic.id, `dispatch:spent:${spent}`);
-      spent++;
-      deps.addLabel(epic.id, `dispatch:spent:${spent}`);
-      hasSpentLabel = true;
       spawned++;
+      frontierLeft--;
       live++;
-      changed = true;
       log.info("intake", "dispatched bead to new worker", {
         worker: name,
         data: { project: deps.projectName, epic: epic.id, bead: bead.id, spent },
       });
     }
 
-    if (spawned > 0 && ds.mode === "manual") {
-      // Consume the manual authorization: every spawn traces to one operator
-      // gate action. Board's `g` re-arms by restoring dispatch:manual.
-      deps.removeLabel(epic.id, "dispatch:manual");
-      deps.addLabel(epic.id, "dispatch:dispatched");
+    // True-wave manual consume (Decision 9): the arm covers the WAVE, not one
+    // pass. Consume only when the observed frontier is empty — either this
+    // pass finished it, or an earlier pass's durable dispatch:dispatching
+    // marker says the wave was started and nothing remains. An armed epic
+    // with an untouched non-empty frontier (throttled, aborted, or nothing
+    // ready yet) stays armed; the operator's g press is never silently eaten.
+    if (ds.mode === "manual") {
+      if (frontierLeft === 0 && (spawned > 0 || ds.dispatching)) {
+        deps.removeLabel(epic.id, "dispatch:manual");
+        if (ds.dispatching) deps.removeLabel(epic.id, "dispatch:dispatching");
+        deps.addLabel(epic.id, "dispatch:dispatched");
+        changed = true;
+      } else if (spawned > 0 && !ds.dispatching) {
+        deps.addLabel(epic.id, "dispatch:dispatching");
+        changed = true;
+      }
     }
     if (spawned > 0 && ds.budget !== null && spent >= ds.budget) {
       exhaustBudget(deps, epic, { ...ds, spent });
@@ -336,6 +453,23 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
   }
 
   return changed;
+}
+
+// Remove every label matching a counter prefix (straggler GC for max-wins
+// parsing). Returns false if any removal failed — the caller decides whether
+// that fails the write chain (budget) or is best-effort (retry).
+function removeCountLabels(
+  deps: IntakeDeps,
+  id: string,
+  labels: string[],
+  prefix: string,
+): boolean {
+  let ok = true;
+  for (const l of labels) {
+    if (!l.startsWith(prefix)) continue;
+    if (!deps.removeLabel(id, l)) ok = false;
+  }
+  return ok;
 }
 
 function exhaustBudget(deps: IntakeDeps, epic: BeadDetail, ds: DispatchState): void {
@@ -383,11 +517,30 @@ function stampIntakeRun(project: string): void {
 }
 
 // Poller entry point: throttle, then one pass with the real bd/spawn deps.
+// A pass that throws stamps intake-error-<project> (JSON {at, message}) so
+// `garden status --json` can report lastIntakeError to board's dispatcher-
+// liveness chip (DELEGATION.md Decision 11); a successful pass clears it.
+// The poller's own catch around this call stays as the backstop for throws
+// outside the pass itself.
 export function runBeadIntake(projectName: string, project: ProjectConfig): boolean {
   if (project.beadIntake !== true) return false;
   if (!intakeDue(projectName, Date.now())) return false;
   stampIntakeRun(projectName);
 
+  try {
+    const changed = runIntakeOnceReal(projectName, project);
+    clearIntakeError(projectName);
+    return changed;
+  } catch (err) {
+    writeIntakeError(projectName, String(err));
+    log.error("intake", "intake pass failed", {
+      data: { project: projectName, error: String(err) },
+    });
+    return false;
+  }
+}
+
+function runIntakeOnceReal(projectName: string, project: ProjectConfig): boolean {
   const projectPath = project.path;
   return runIntakeOnce({
     projectName,

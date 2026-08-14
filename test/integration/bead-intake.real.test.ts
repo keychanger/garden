@@ -61,14 +61,14 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
     if (repo) fs.rmSync(repo, { recursive: true, force: true });
   });
 
-  function makeDeps(opts: { workers?: WorkerEntry[] } = {}):
+  function makeDeps(opts: { workers?: WorkerEntry[]; cap?: number } = {}):
     IntakeDeps & { spawns: Array<{ seed: string; task: string }>; alerts: string[] } {
     const spawns: Array<{ seed: string; task: string }> = [];
     const alerts: string[] = [];
     let n = 0;
     return {
       projectName: "intake-it",
-      cap: 10,
+      cap: opts.cap ?? 10,
       listOpenEpics: () => listOpenEpics(repo),
       swarmStatus: (id) => swarmStatus(repo, id),
       showBeads: (ids) => showBeads(repo, ids),
@@ -188,5 +188,42 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
     const deps2 = makeDeps({ workers: [] });
     expect(runIntakeOnce(deps2)).toBe(false);
     expect(deps2.spawns).toHaveLength(0);
+  }, TEST_TIMEOUT);
+
+  it("dispatches a manual wave larger than the cap across passes, consuming only at exhaustion", () => {
+    // Fresh epic: a 2-bead wave under cap 1 (true-wave semantics, Decision 9).
+    const waveEpic = createBead("wave epic", ["-t", "epic"]);
+    const waveKids = [createBead("wave one"), createBead("wave two")];
+    for (const id of waveKids) {
+      bd("link", id, waveEpic, "--type", "parent-child");
+    }
+    bd("label", "add", waveEpic, "dispatch:manual");
+
+    // Pass 1: one slot, one spawn — the arm stays, the mid-wave marker lands.
+    const deps = makeDeps({ cap: 1 });
+    expect(runIntakeOnce(deps)).toBe(true);
+    expect(deps.spawns).toHaveLength(1);
+    let labels = listOpenEpics(repo).find(e => e.id === waveEpic)!.labels;
+    expect(labels).toContain("dispatch:manual");
+    expect(labels).toContain("dispatch:dispatching");
+    expect(labels).not.toContain("dispatch:dispatched");
+
+    // Pass 2: the remaining bead dispatches, the observed frontier drains,
+    // and only now is the authorization consumed.
+    const deps2 = makeDeps({ cap: 1 });
+    expect(runIntakeOnce(deps2)).toBe(true);
+    expect(deps2.spawns).toHaveLength(1);
+    labels = listOpenEpics(repo).find(e => e.id === waveEpic)!.labels;
+    expect(labels).toContain("dispatch:dispatched");
+    expect(labels).not.toContain("dispatch:manual");
+    expect(labels).not.toContain("dispatch:dispatching");
+    expect(labels).toContain("dispatch:spent:2");
+
+    // Both beads claimed as their workers.
+    const kids = showBeads(repo, waveKids);
+    for (const k of kids) {
+      expect(k.status).toBe("in_progress");
+      expect(k.assignee).toMatch(/^it-worker-/);
+    }
   }, TEST_TIMEOUT);
 });
