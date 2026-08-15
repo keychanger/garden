@@ -406,17 +406,42 @@ const onBlockedOnOperator: HookMethod = (ctx) => {
 
 const onToolActivity: HookMethod = (ctx) => {
   if (!ctx.workerInfo) return;
-  // asking → working is the primary path (user answered, Claude resumes).
+  // asking → working is the primary path (user answered, Claude resumes) —
+  // including the permission-approval case, where the approved tool can be any
+  // tool at all, which is why the PostToolUse matcher is a catch-all.
   // idle → working is a self-heal: a PostToolUse arriving while idle means
   // the turn is still active and our state is stale; trust the event.
+  //
+  // Both readings hold only for the worker's OWN thread. Claude Code fires the
+  // parent session's PostToolUse for subagent tool calls too, and a subagent
+  // runs concurrently with a main thread that may be blocked on the operator
+  // or parked after Stop — so its activity is no evidence about either. Left
+  // in, a background agent silently cleared `asking` (dropping the yellow row
+  // that is the operator's only signal the worker needs them) and re-raised a
+  // false `working` after Stop (which defers the merge gate via
+  // isWorkerClaudeWorking). Only agent_id separates the two: session_id and
+  // transcript_path are byte-identical on both, so the transcript-ownership
+  // guard in applyAndLog cannot see this.
   const fields: FieldsDelta = {};
   const cs = ctx.workerInfo.entry.agentStatus;
-  if (cs === "asking" || cs === "idle") {
+  if (!isSubagentEvent(ctx) && (cs === "asking" || cs === "idle")) {
     fields.agentStatus = "working";
   }
   applyAndLog(ctx, fields);
+  // Deliberately outside the guard: a subagent's Edit rewrites the same
+  // worktree the reviewer is certifying, so the cancel is owed either way.
   markReviewInterrupted(ctx);
 };
+
+// True when this tool event came from a subagent rather than the worker's main
+// conversation thread. `agent_id` is documented as present only on subagent
+// tool events; the raising side (onBlockedOnOperator) deliberately does not
+// consult it, since a subagent's permission request blocks the operator just
+// as a main-thread one does — raising the flag on either is right, clearing it
+// on unrelated activity is not.
+function isSubagentEvent(ctx: HookContext): boolean {
+  return typeof ctx.input.agent_id === "string" && ctx.input.agent_id.length > 0;
+}
 
 // Tools that rewrite the worktree. Bash is deliberately absent: a worker
 // answering an operator question mid-review runs read-only Bash (git log, rg)

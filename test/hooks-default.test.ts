@@ -50,10 +50,17 @@ import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 import type { HookContext } from "../src/dashboard/workflows/types.js";
 
-function toolCtx(entry: Partial<WorkerEntry>, toolName?: string): HookContext {
+function toolCtx(
+  entry: Partial<WorkerEntry>,
+  toolName?: string,
+  agentId?: string,
+): HookContext {
+  const input: Record<string, unknown> = {};
+  if (toolName) input.tool_name = toolName;
+  if (agentId) input.agent_id = agentId;
   return {
     event: "posttooluse",
-    input: toolName ? { tool_name: toolName } : {},
+    input,
     workerInfo: {
       project: "myproject",
       name: "bold-ash",
@@ -122,5 +129,72 @@ describe("onToolActivity — mid-review-edit marker", () => {
   it("ignores a tool event with no tool_name (foreign harness relay)", () => {
     workerHookHandlers.onToolActivity(toolCtx({ prState: "reviewing" }));
     expect(interruptStamps()).toHaveLength(0);
+  });
+
+  it("still cancels an in-flight review when a SUBAGENT mutates the worktree", () => {
+    // The agentStatus exclusion below must not reach this: a background
+    // subagent's Edit rewrites the same worktree the reviewer is certifying,
+    // so the cancel is owed regardless of which thread made the edit.
+    workerHookHandlers.onToolActivity(
+      toolCtx({ prState: "reviewing" }, "Edit", "a6159cebbfb14984c"));
+    expect(interruptStamps()).toHaveLength(1);
+    expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
+  });
+});
+
+// agentStatus describes the worker's MAIN conversation thread. A background
+// subagent's tool call says nothing about it — the main thread can sit blocked
+// on an AskUserQuestion (or parked after Stop) while its subagents keep
+// completing tools. Claude Code fires the parent session's PostToolUse for
+// those, carrying `agent_id`; session_id and transcript_path are byte-identical
+// to a main-thread event, so agent_id is the only discriminator.
+describe("onToolActivity — subagent tool calls never move agentStatus", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function statusWrites(): Array<unknown> {
+    return vi.mocked(updateWorkerFields).mock.calls
+      .map(c => (c[2] as Record<string, unknown>).agentStatus)
+      .filter(s => s !== undefined);
+  }
+
+  it("keeps `asking` when a background subagent completes a tool", () => {
+    // The reported bug: a worker called AskUserQuestion (yellow row raised),
+    // then a subagent launched seconds earlier completed a tool and cleared
+    // the flag — the operator's only signal that the worker needs them.
+    workerHookHandlers.onToolActivity(
+      toolCtx({ agentStatus: "asking" }, "Read", "a6159cebbfb14984c"));
+    expect(statusWrites()).toEqual([]);
+  });
+
+  it("keeps `idle` when a background subagent completes a tool", () => {
+    // A false `working` here defers the merge gate (isWorkerClaudeWorking).
+    workerHookHandlers.onToolActivity(
+      toolCtx({ agentStatus: "idle" }, "Bash", "a6159cebbfb14984c"));
+    expect(statusWrites()).toEqual([]);
+  });
+
+  it("still clears `asking` on the worker's OWN tool completion", () => {
+    // The permission-approval path: auto-mode escalates an arbitrary tool, the
+    // operator approves, and that tool's completion is what resumes the turn.
+    // The catch-all PostToolUse matcher exists for this, so it must not regress.
+    workerHookHandlers.onToolActivity(toolCtx({ agentStatus: "asking" }, "Bash"));
+    expect(statusWrites()).toEqual(["working"]);
+  });
+
+  it("still self-heals a stale `idle` on the worker's own tool completion", () => {
+    workerHookHandlers.onToolActivity(toolCtx({ agentStatus: "idle" }, "Read"));
+    expect(statusWrites()).toEqual(["working"]);
+  });
+
+  it("leaves other statuses alone whichever thread the tool ran on", () => {
+    for (const agentId of [undefined, "a6159cebbfb14984c"]) {
+      for (const agentStatus of ["working", "paused", "exited"] as const) {
+        vi.clearAllMocks();
+        workerHookHandlers.onToolActivity(toolCtx({ agentStatus }, "Read", agentId));
+        expect(statusWrites(), `${agentStatus}/${agentId}`).toEqual([]);
+      }
+    }
   });
 });

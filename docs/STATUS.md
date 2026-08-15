@@ -105,12 +105,12 @@ stateDiagram-v2
     asking --> paused : operator hold
 
     idle --> working : UserPromptSubmit
-    idle --> working : PostToolUse (self-heal)
+    idle --> working : PostToolUse (self-heal; own thread only)
     idle --> asking : PreToolUse (self-heal)
     idle --> paused : operator hold
 
     asking --> working : UserPromptSubmit
-    asking --> working : PostToolUse (mid-turn resume)
+    asking --> working : PostToolUse (mid-turn resume; own thread only)
 
     paused --> working : UserPromptSubmit (redirect)
     paused --> idle : operator release
@@ -185,10 +185,10 @@ a terminal state — it returns to `working` when the operator responds
 | working       | failing       | Assembled review prompt exceeds the context ceiling even with the diff reduced to a file summary — `failingReason: "oversized-diff"`, no reviewer launched |
 | working       | failing       | Workflow iteration budget is exhausted before a reviewer can launch |
 | idle          | working       | Worker `UserPromptSubmit`                            |
-| idle          | working       | Worker `PostToolUse` (self-heal; stale idle)         |
+| idle          | working       | Worker `PostToolUse` (self-heal; stale idle) — main thread only, not a subagent's |
 | idle          | asking        | Worker `PreToolUse` (self-heal; stale idle)          |
 | asking        | working       | Worker `UserPromptSubmit`                            |
-| asking        | working       | Worker `PostToolUse` (mid-turn resume)               |
+| asking        | working       | Worker `PostToolUse` (mid-turn resume) — main thread only, not a subagent's |
 | working       | paused        | Operator `hold` action (`garden hold` / `⌥e`)        |
 | asking        | paused        | Operator `hold` action                               |
 | idle          | paused        | Operator `hold` action                               |
@@ -256,7 +256,8 @@ signals the status pane. They drive:
 - `ready → working`, `idle → working`, `asking → working`, `merged → working`, `done → working` (worker's `UserPromptSubmit`)
 - `working → idle`, `working → reviewing` (worker's `Stop`)
 - `working → asking` (worker's `PreToolUse` for user-input tools, `PermissionRequest`)
-- `asking → working` (worker's `PostToolUse` for user-input tools)
+- `asking → working` (worker's `PostToolUse` for user-input tools; a
+  subagent's tool events carry `agent_id` and never move `agentStatus`)
 - `reviewing → merge-pending`, `reviewing → failing` (reviewer's `Stop`)
 - `reviewing → working` (worker's `PostToolUse` for a mutating tool while the
   review is in flight: the hook stamps `reviewInterruptedAt` and pokes the
@@ -690,9 +691,29 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   matcher list. The `idle` path is a self-heal: a tool-use event
   arriving while `idle` means the turn is actually active and the
   registry state is stale (e.g. survived a build migration that left
-  `idle` behind). The practical risk — a stray PostToolUse flipping a
-  genuinely-ended turn back to `working` — is a brief flicker; the
-  next `Stop` re-idles within one tool round.
+  `idle` behind).
+
+  Both readings describe the worker's **main conversation thread**, and
+  hold only for its own tool calls. Claude Code fires the parent
+  session's `PostToolUse` for **subagent** tool calls as well, and a
+  subagent runs concurrently with a main thread that may be blocked on
+  the operator or parked after `Stop` — so its activity is no evidence
+  about either. Such events are identified by the `agent_id` field
+  (present only on subagent tool events) and never move `agentStatus`;
+  `session_id` and `transcript_path` are byte-identical to a main-thread
+  event, so the transcript-ownership guard cannot distinguish them. Left
+  in, a background agent cleared `asking` within seconds of the worker
+  raising it — dropping the yellow row that is the operator's only
+  signal the worker needs them — and re-raised a false `working` after
+  `Stop`, which defers the merge gate (`isWorkerClaudeWorking`) for as
+  long as the subagent runs. The stray-event risk is therefore not the
+  brief flicker it appears: a subagent outlives many tool rounds, so
+  there is no next `Stop` to re-idle it. The exclusion is deliberately
+  one-sided — the raising side (`PreToolUse` / `PermissionRequest`)
+  does not consult `agent_id`, since a subagent's permission request
+  blocks the operator exactly as a main-thread one does. It also does
+  not reach the mid-review mutation marker below: a subagent's `Edit`
+  rewrites the same worktree the reviewer is certifying.
   This hook is also the one place a hook writes a field other than
   `agentStatus`: when the tool was a *mutating* one (`Edit` / `MultiEdit`
   / `Write` / `NotebookEdit` — `Bash` is deliberately exempt, so a
