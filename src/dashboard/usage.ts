@@ -1140,8 +1140,8 @@ export async function refreshUsage(force = false, reason: RefreshReason = "hook"
   const cred = resolved.cred;
 
   // Primary bars from response headers (every cycle); scoped bar from the
-  // throttled oauth endpoint only when due (hourly) and only if the primary
-  // token actually worked. assembleSnapshot folds both into the snapshot.
+  // throttled oauth endpoint only when due and only if the primary token
+  // actually worked. assembleSnapshot folds both into the snapshot.
   const primary = await fetchPrimary(cred.token, prior);
   const scoped = await fetchScopedIfDue(cred.token, prior, force, primary);
   const fetchedAt = new Date().toISOString();

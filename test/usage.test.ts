@@ -829,6 +829,26 @@ describe("renderUsagePane", () => {
     expect(lines[3]).toContain(" 4%");
   });
 
+  it("ignores projection state left by an older snapshot", async () => {
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      data: {
+        weekly: { pct: 64, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
+        scoped: [{ label: "Fable", pct: 81, resetsAt: new Date(now + 4 * 24 * 60 * 60_000).toISOString() }],
+      },
+      scopedActive: true,
+      scopedProjection: {
+        weeklyPct: 60,
+        labels: { Fable: { pct: 81, samples: [{ dw: 4, ds: 12 }] } },
+      },
+    });
+    const render = await importRender();
+    const scopedLine = render(now).split("\n").find((line) => line.includes("fable"))!;
+    expect(scopedLine).toContain(" 81%");
+    expect(scopedLine).not.toContain("~");
+    expect(scopedLine).not.toContain("▓");
+  });
+
   it("renders one row per model-scoped meter, in array order", async () => {
     // The bar count is dynamic: two flat bars plus one per scoped meter. With
     // two scoped models the pane is five lines (blank + 5h + week + two model
