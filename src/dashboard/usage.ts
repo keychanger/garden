@@ -932,13 +932,10 @@ export function advanceScopedProjection(
     const before = prior?.labels[meter.label];
     const samples = before?.samples ? [...before.samples] : [];
     const ds = before ? meter.pct - before.pct : -1;
-    // A bar already at the ceiling could not move, so "weekly advanced, scoped
-    // did not" is true arithmetic but false evidence: it measures the cap, not
-    // the ratio between the two denominators. Banking it would drag the fit
-    // toward zero and under-project for several fetches after the window
-    // resets — and a saturated scoped bar is the normal state on an account
-    // that spends its scoped quota, not a corner case.
-    const saturated = before !== undefined && before.pct >= 100;
+    // Once an interval touches the ceiling, its observed delta is censored:
+    // the bar cannot reveal consumption after it reaches 100%. Banking that
+    // partial movement would drag the fit down and under-project after reset.
+    const saturated = before !== undefined && (before.pct >= 100 || meter.pct >= 100);
     if (banking && before && ds >= 0 && !saturated) {
       samples.push({ dw, ds });
       if (samples.length > RATIO_SAMPLE_CAP) samples.splice(0, samples.length - RATIO_SAMPLE_CAP);

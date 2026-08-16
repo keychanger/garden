@@ -411,12 +411,23 @@ describe("scoped projection", () => {
       expect(scopedRolled?.labels.Fable.samples).toEqual([]);
     });
 
-    it("skips an interval that began with the bar already at the ceiling", () => {
-      // A capped bar cannot move, so ds=0 measures the cap rather than the
-      // ratio; banking it would under-project after the window resets.
-      const capped = advanceScopedProjection(undefined, 60, meters(100));
+    it("skips an interval that reaches the ceiling", () => {
+      // The observed delta is only a lower bound once the bar caps: further
+      // scoped consumption is hidden even though weekly keeps moving.
+      const before = advanceScopedProjection(undefined, 60, meters(90));
+      const capped = advanceScopedProjection(before, 64, meters(100));
+      expect(capped?.labels.Fable.samples).toEqual([]);
+      expect(capped?.weeklyPct).toBe(64); // still re-anchors
+      expect(capped?.labels.Fable.pct).toBe(100);
+    });
+
+    it("skips an interval that began at the ceiling without losing prior samples", () => {
+      const capped = {
+        weeklyPct: 60,
+        labels: { Fable: { pct: 100, samples: [{ dw: 4, ds: 12 }] } },
+      };
       const next = advanceScopedProjection(capped, 64, meters(100));
-      expect(next?.labels.Fable.samples).toEqual([]);
+      expect(next?.labels.Fable.samples).toEqual([{ dw: 4, ds: 12 }]);
       expect(next?.weeklyPct).toBe(64); // still re-anchors
     });
 
