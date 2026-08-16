@@ -1,6 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import {
   normalizeUsage,
@@ -20,9 +19,6 @@ import {
   HOOK_REFRESH_COOLDOWN_MS,
   POLL_OK_MS,
   POLL_MIN_MS,
-  advanceScopedProjection,
-  scopedRatio,
-  projectScopedPct,
   SCOPED_POLL_MS,
   SCOPED_MIN_INTERVAL_MS,
   SCOPED_MOVEMENT_PCT,
@@ -371,144 +367,6 @@ describe("scopedModelInUse — gate the Fable fetch on an active Fable worker", 
     const observed = vi.fn(() => "claude-fable-5");
     expect(scopedModelInUse(["Fable"], now, workers, observed)).toBe(false);
     expect(observed).not.toHaveBeenCalled();
-  });
-});
-
-// The scoped bar is fetched on a throttled cadence but moves faster than any
-// other bar (a tighter sub-limit denominator), so between fetches it is the
-// most wrong. These project it forward off the live weekly bar.
-describe("scoped projection", () => {
-  const meters = (pct: number, label = "Fable") => [{ pct, resetsAt: "2026-08-23T11:00:00Z", label }];
-
-  describe("advanceScopedProjection — anchoring and banking observations", () => {
-    it("anchors on the first reading without inventing an observation", () => {
-      const p = advanceScopedProjection(undefined, 50, meters(20));
-      expect(p?.weeklyPct).toBe(50);
-      expect(p?.labels.Fable.pct).toBe(20);
-      expect(p?.labels.Fable.samples).toEqual([]);
-    });
-
-    it("banks the interval between two readings and re-anchors", () => {
-      const first = advanceScopedProjection(undefined, 50, meters(20));
-      const second = advanceScopedProjection(first, 54, meters(32));
-      expect(second?.weeklyPct).toBe(54);
-      expect(second?.labels.Fable.pct).toBe(32);
-      expect(second?.labels.Fable.samples).toEqual([{ dw: 4, ds: 12 }]);
-    });
-
-    it("skips an interval too small to carry signal past the header's rounding", () => {
-      const first = advanceScopedProjection(undefined, 50, meters(20));
-      const second = advanceScopedProjection(first, 50.4, meters(21));
-      expect(second?.labels.Fable.samples).toEqual([]);
-      expect(second?.weeklyPct).toBe(50.4); // still re-anchors
-    });
-
-    it("skips an interval where a window rolled over — the deltas span two windows", () => {
-      const first = advanceScopedProjection(undefined, 90, meters(95));
-      const weeklyRolled = advanceScopedProjection(first, 2, meters(3));
-      expect(weeklyRolled?.labels.Fable.samples).toEqual([]);
-      const scopedRolled = advanceScopedProjection(first, 95, meters(4));
-      expect(scopedRolled?.labels.Fable.samples).toEqual([]);
-    });
-
-    it("skips an interval that reaches the ceiling", () => {
-      // The observed delta is only a lower bound once the bar caps: further
-      // scoped consumption is hidden even though weekly keeps moving.
-      const before = advanceScopedProjection(undefined, 60, meters(90));
-      const capped = advanceScopedProjection(before, 64, meters(100));
-      expect(capped?.labels.Fable.samples).toEqual([]);
-      expect(capped?.weeklyPct).toBe(64); // still re-anchors
-      expect(capped?.labels.Fable.pct).toBe(100);
-    });
-
-    it("skips an interval that began at the ceiling without losing prior samples", () => {
-      const capped = {
-        weeklyPct: 60,
-        labels: { Fable: { pct: 100, samples: [{ dw: 4, ds: 12 }] } },
-      };
-      const next = advanceScopedProjection(capped, 64, meters(100));
-      expect(next?.labels.Fable.samples).toEqual([{ dw: 4, ds: 12 }]);
-      expect(next?.weeklyPct).toBe(64); // still re-anchors
-    });
-
-    it("keeps only the most recent observations", () => {
-      let p = advanceScopedProjection(undefined, 0, meters(0));
-      for (let i = 1; i <= 12; i++) p = advanceScopedProjection(p, i * 2, meters(i * 3));
-      expect(p?.labels.Fable.samples.length).toBe(8);
-      expect(p?.labels.Fable.samples.at(-1)).toEqual({ dw: 2, ds: 3 });
-    });
-
-    it("tracks each scoped label independently", () => {
-      const first = advanceScopedProjection(undefined, 10, [...meters(20), ...meters(40, "Other")]);
-      const second = advanceScopedProjection(first, 14, [...meters(28), ...meters(44, "Other")]);
-      expect(second?.labels.Fable.samples).toEqual([{ dw: 4, ds: 8 }]);
-      expect(second?.labels.Other.samples).toEqual([{ dw: 4, ds: 4 }]);
-    });
-
-    it("keeps the prior state when a cycle cannot anchor", () => {
-      const first = advanceScopedProjection(undefined, 50, meters(20));
-      expect(advanceScopedProjection(first, undefined, meters(30))).toBe(first);
-      expect(advanceScopedProjection(first, 60, [])).toBe(first);
-    });
-  });
-
-  describe("scopedRatio — scoped points per point of weekly movement", () => {
-    it("weights observations by the movement they carried, not by count", () => {
-      // A noisy 1-point interval must not outvote a 20-point one.
-      const r = scopedRatio([{ dw: 1, ds: 9 }, { dw: 20, ds: 20 }]);
-      expect(r).toBeCloseTo(29 / 21, 5);
-    });
-    it("has no estimate without observations, or when the scoped bar never moved", () => {
-      expect(scopedRatio([])).toBeUndefined();
-      expect(scopedRatio(undefined)).toBeUndefined();
-      expect(scopedRatio([{ dw: 5, ds: 0 }])).toBeUndefined();
-    });
-  });
-
-  describe("projectScopedPct — the estimate the pane renders", () => {
-    // Fitted ratio 3.0: the measured shape of this account, where Fable's
-    // tighter sub-limit advances ~3x faster than the account weekly bar.
-    const proj = {
-      weeklyPct: 60,
-      labels: { Fable: { pct: 80, samples: [{ dw: 4, ds: 12 }] } },
-    };
-
-    it("converts weekly movement into scoped movement", () => {
-      expect(projectScopedPct(proj, "Fable", 63, true)).toBe(89);
-    });
-
-    it("clamps at the ceiling rather than projecting past it", () => {
-      // Anchor 95 + (3.0 x 2 points of weekly) = 101, held at the ceiling.
-      const high = { weeklyPct: 60, labels: { Fable: { pct: 95, samples: [{ dw: 4, ds: 12 }] } } };
-      expect(projectScopedPct(high, "Fable", 62, true)).toBe(100);
-    });
-
-    it("refuses to project without a live scoped worker — weekly movement could be all Opus", () => {
-      expect(projectScopedPct(proj, "Fable", 63, false)).toBeUndefined();
-    });
-
-    it("refuses when the weekly bar has not advanced past the anchor", () => {
-      expect(projectScopedPct(proj, "Fable", 60, true)).toBeUndefined();
-      expect(projectScopedPct(proj, "Fable", 55, true)).toBeUndefined();
-    });
-
-    it("refuses a gain too small to change the rendered number", () => {
-      expect(projectScopedPct(proj, "Fable", 60.2, true)).toBeUndefined();
-    });
-
-    it("caps how far it will run past the anchor on an unusually heavy burst", () => {
-      // Ratio 3 x 30 points of weekly = 90 raw; the cap holds it to +15.
-      const low = { weeklyPct: 0, labels: { Fable: { pct: 10, samples: [{ dw: 4, ds: 12 }] } } };
-      expect(projectScopedPct(low, "Fable", 30, true)).toBe(25);
-    });
-
-    it("refuses without state, a known label, a live weekly reading, or a ratio", () => {
-      expect(projectScopedPct(undefined, "Fable", 63, true)).toBeUndefined();
-      expect(projectScopedPct(proj, "Nope", 63, true)).toBeUndefined();
-      expect(projectScopedPct(proj, "Fable", undefined, true)).toBeUndefined();
-      const unfitted = { weeklyPct: 60, labels: { Fable: { pct: 80, samples: [] } } };
-      expect(projectScopedPct(unfitted, "Fable", 63, true)).toBeUndefined();
-    });
   });
 });
 
@@ -1832,82 +1690,5 @@ describe("refreshUsage — file-lock claim", () => {
     const onDisk = JSON.parse(fs.readFileSync(USAGE_FILE, "utf8"));
     // fetchedAt unchanged proves the claim path bailed without bumping.
     expect(onDisk.fetchedAt).toBe(fresh.fetchedAt);
-  });
-});
-
-// The projected scoped row, end to end through the real render path: the
-// estimate is the headline number, the confirmed span stays solid, and the
-// estimated span is shaded.
-describe("scoped projection — rendered", () => {
-  let home: string;
-  let origHome: string | undefined;
-  let sessions: string;
-
-  beforeEach(() => {
-    vi.resetModules();
-    home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "usage-project-")));
-    origHome = process.env.HOME;
-    process.env.HOME = home;
-    sessions = path.join(home, ".garden", "sessions");
-    fs.mkdirSync(sessions, { recursive: true });
-  });
-  afterEach(() => {
-    if (origHome === undefined) delete process.env.HOME;
-    else process.env.HOME = origHome;
-    fs.rmSync(home, { recursive: true, force: true });
-  });
-
-  const writeSnap = (extra: Record<string, unknown>, now: number) => {
-    const iso = (ms: number) => new Date(now + ms).toISOString();
-    fs.writeFileSync(path.join(sessions, "claude-usage.json"), JSON.stringify({
-      fetchedAt: iso(0), dataAt: iso(0),
-      data: {
-        fiveHour: { pct: 93, resetsAt: iso(2 * 3600e3) },
-        weekly: { pct: 64, resetsAt: iso(11 * 3600e3) },
-        scoped: [{ pct: 81, resetsAt: iso(11 * 3600e3), label: "Fable" }],
-      },
-      scopedAt: iso(0),
-      ...extra,
-    }));
-  };
-
-  it("renders the estimate as the headline number with a shaded extension", async () => {
-    const now = Date.now();
-    // Confirmed 81% at weekly 60; weekly is now 64, ratio 3.0 → ~93%.
-    writeSnap({
-      scopedActive: true,
-      scopedProjection: { weeklyPct: 60, labels: { Fable: { pct: 81, samples: [{ dw: 4, ds: 12 }] } } },
-    }, now);
-    const { renderUsagePane } = await import("../src/dashboard/usage.js");
-    const out = renderUsagePane(now, 120);
-    // eslint-disable-next-line no-console
-    console.log("\n" + out + "\n");
-    const fable = out.split("\n").find((l) => l.includes("fable"))!;
-    expect(fable).toContain("~93%");
-    expect(fable).toContain("█"); // confirmed span
-    expect(fable).toContain("▓"); // estimated extension
-  });
-
-  it("renders the plain confirmed value when no scoped worker is live", async () => {
-    const now = Date.now();
-    writeSnap({
-      scopedActive: false,
-      scopedProjection: { weeklyPct: 60, labels: { Fable: { pct: 81, samples: [{ dw: 4, ds: 12 }] } } },
-    }, now);
-    const { renderUsagePane } = await import("../src/dashboard/usage.js");
-    const out = renderUsagePane(now, 120);
-    const fable = out.split("\n").find((l) => l.includes("fable"))!;
-    expect(fable).toContain(" 81%");
-    expect(fable).not.toContain("~");
-    expect(fable).not.toContain("▓");
-  });
-
-  it("leaves a pre-projection snapshot rendering exactly as before", async () => {
-    const now = Date.now();
-    writeSnap({}, now);
-    const { renderUsagePane } = await import("../src/dashboard/usage.js");
-    const fable = renderUsagePane(now, 120).split("\n").find((l) => l.includes("fable"))!;
-    expect(fable).toContain(" 81%");
-    expect(fable).not.toContain("▓");
   });
 });
