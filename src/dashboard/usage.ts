@@ -84,6 +84,44 @@ export interface UsageData {
   extraUsage?: ExtraUsage;
 }
 
+// State for projecting a scoped bar forward between its (throttled) fetches.
+//
+// The scoped bar is the fastest-moving meter on the pane and the least
+// frequently refreshed — measured on this account, Fable advances around 3x
+// faster than the account weekly bar, because its sub-limit denominator is
+// tighter. That combination is what makes it surprising: it can read 81% while
+// Fable requests are already being rejected.
+//
+// The account weekly bar, by contrast, is live — it rides the primary response
+// headers every poll. Fable consumption necessarily consumes account weekly
+// quota too, so weekly movement since the last scoped fetch is an observable
+// proxy for scoped movement, needing only the conversion factor between the two
+// denominators. That factor is not published, so it is *learned*: each pair of
+// consecutive scoped fetches yields one (Δweekly, Δscoped) observation, and the
+// ratio of their sums is the estimate.
+//
+// Anchored on the last *successful* fetch (not the last attempt, which
+// `weeklyPctAtScoped` tracks for the movement trigger): a 429'd attempt learns
+// nothing and must not move the origin the projection extends from.
+//
+// Display only. `snapshotMeters` — the seam policy reads (the auto-continue
+// gate, trellis's scoped-exhaustion fallback) — deliberately serves the
+// confirmed values, because an estimate good enough to color a bar is not good
+// enough to stop a fleet on.
+export interface ScopedProjection {
+  // Account weekly utilization at the anchoring fetch — the x-origin shared by
+  // every label, since all scoped meters arrive in one response.
+  weeklyPct: number;
+  // Per scoped label: its utilization at that anchor, plus the recent
+  // observations its ratio is fitted from (newest last).
+  labels: Record<string, { pct: number; samples: RatioSample[] }>;
+}
+
+export interface RatioSample {
+  dw: number; // weekly utilization advanced this much between two fetches
+  ds: number; // the scoped bar advanced this much over the same interval
+}
+
 export interface UsageSnapshot {
   fetchedAt: string;       // last fetch attempt (success or failure)
   data?: UsageData;        // last successfully fetched data; preserved across transient errors
@@ -104,6 +142,16 @@ export interface UsageSnapshot {
   // on snapshots written before this field existed and on cycles that never
   // reached a scoped attempt; both degrade to the backstop cadence.
   weeklyPctAtScoped?: number;
+  // Anchor + learned ratios for projecting the scoped bar between fetches (see
+  // ScopedProjection). Absent until two successful scoped fetches have been
+  // observed with weekly movement between them.
+  scopedProjection?: ScopedProjection;
+  // Whether a scoped-model worker was live as of this cycle. Stamped here so
+  // the render path can gate the projection without re-reading the registry and
+  // every live worker's transcript on a repaint — `renderUsagePane` is baked
+  // from paths the hook firehose reaches, and that lookup is what
+  // `anyScopedModelWorkerActive` costs.
+  scopedActive?: boolean;
   // Error from the most recent *surfaced* scoped (oauth-endpoint) fetch attempt,
   // or absent when it succeeded / was not surfaced. Only set when a scoped-model
   // (Fable) worker was actively running at fetch time — a scoped miss during the
@@ -835,6 +883,103 @@ function weeklyBarMoved(baseline: number | undefined, live: number | undefined):
   return live - baseline >= SCOPED_MOVEMENT_PCT;
 }
 
+// -----------------------------------------------------------------------------
+// Scoped projection — estimating the throttled bar between its fetches
+// -----------------------------------------------------------------------------
+
+// An interval contributes an observation only once the weekly bar has moved at
+// least this far. The unified headers quantize utilization to whole percentage
+// points, so a sub-point interval carries no signal — fitting a ratio to it
+// divides by rounding noise and produces a wild slope.
+const RATIO_MIN_WEEKLY_DELTA = 1;
+
+// How many observations the ratio is fitted from. Enough to average over a
+// mixed fleet (the ratio drifts with how much of the weekly burn is the scoped
+// model rather than Opus), few enough to track a lasting change in that mix.
+const RATIO_SAMPLE_CAP = 8;
+
+// Don't render a projection that adds less than this — a sub-point estimate
+// rounds to the anchor anyway, so it would only add a "~" to an unchanged
+// number and imply more precision than exists.
+const PROJECTION_MIN_GAIN = 1;
+
+// Ceiling on how far a projection may run past its anchor. The learned ratio is
+// an average over recent fleet mixes; applied to an unusually Fable-heavy burst
+// it can overshoot. The movement trigger refetches within SCOPED_MIN_INTERVAL_MS
+// of real consumption, so the projection only ever has to bridge a short gap —
+// past this it is extrapolating further than the evidence supports, and a
+// wrong bar is worse than a stale one.
+const PROJECTION_MAX_GAIN = 15;
+
+// Fold a fresh scoped reading into the projection state: re-anchor on it, and
+// bank the interval just closed as an observation. Returns the prior state
+// unchanged when this reading cannot anchor (no live weekly reading, no scoped
+// meters), so a partial cycle never destroys a usable estimate.
+//
+// An interval is only an observation when both bars advanced. Either one
+// falling means its window rolled over mid-interval, which makes the deltas
+// describe two different windows rather than one interval's consumption.
+export function advanceScopedProjection(
+  prior: ScopedProjection | undefined,
+  weeklyPct: number | undefined,
+  scoped: ScopedMeter[] | undefined,
+): ScopedProjection | undefined {
+  if (weeklyPct === undefined || !scoped?.length) return prior;
+  const dw = prior ? weeklyPct - prior.weeklyPct : 0;
+  const banking = dw >= RATIO_MIN_WEEKLY_DELTA;
+  const labels: ScopedProjection["labels"] = {};
+  for (const meter of scoped) {
+    const before = prior?.labels[meter.label];
+    const samples = before?.samples ? [...before.samples] : [];
+    const ds = before ? meter.pct - before.pct : -1;
+    if (banking && before && ds >= 0) {
+      samples.push({ dw, ds });
+      if (samples.length > RATIO_SAMPLE_CAP) samples.splice(0, samples.length - RATIO_SAMPLE_CAP);
+    }
+    labels[meter.label] = { pct: meter.pct, samples };
+  }
+  return { weeklyPct, labels };
+}
+
+// Scoped percentage points per point of account weekly movement, fitted as the
+// ratio of the observations' sums rather than the mean of their individual
+// ratios: summing weights each interval by how much movement it actually
+// carried, so one noisy 1-point interval cannot outvote a 20-point one.
+export function scopedRatio(samples: RatioSample[] | undefined): number | undefined {
+  if (!samples?.length) return undefined;
+  let dw = 0;
+  let ds = 0;
+  for (const s of samples) { dw += s.dw; ds += s.ds; }
+  if (dw < RATIO_MIN_WEEKLY_DELTA || ds <= 0) return undefined;
+  return ds / dw;
+}
+
+// The scoped bar's estimated value right now: its last confirmed reading plus
+// the weekly movement observed since, converted by the learned ratio. Returns
+// undefined whenever the estimate would be unfounded or not worth showing, and
+// every caller renders the plain confirmed value in that case.
+//
+// Gated on a scoped worker being live: weekly movement driven entirely by Opus
+// workers says nothing about the scoped bar, and projecting off it would invent
+// consumption that never happened.
+export function projectScopedPct(
+  proj: ScopedProjection | undefined,
+  label: string,
+  liveWeeklyPct: number | undefined,
+  scopedActive: boolean,
+): number | undefined {
+  if (!scopedActive || !proj || liveWeeklyPct === undefined) return undefined;
+  const entry = proj.labels[label];
+  if (!entry) return undefined;
+  const dw = liveWeeklyPct - proj.weeklyPct;
+  if (dw <= 0) return undefined;
+  const ratio = scopedRatio(entry.samples);
+  if (ratio === undefined) return undefined;
+  const gain = Math.min(ratio * dw, PROJECTION_MAX_GAIN);
+  if (gain < PROJECTION_MIN_GAIN) return undefined;
+  return Math.min(100, entry.pct + gain);
+}
+
 // Whether any worker in the fleet is actively running a model whose weekly
 // quota is the scoped bar (Fable today). "Actively" = the worker's effective
 // model matches a scoped label case-insensitively AND it fired a hook within
@@ -958,6 +1103,7 @@ export function assembleSnapshot(
   primary: PrimaryOutcome,
   scoped: ScopedOutcome,
   prior: UsageSnapshot | null | undefined,
+  scopedActive?: boolean,
 ): UsageSnapshot {
   const data = mergeUsageData(primary.data, scoped.data, prior?.data);
   const gotPrimaryBar = !!(primary.data && (primary.data.fiveHour || primary.data.weekly));
@@ -983,6 +1129,16 @@ export function assembleSnapshot(
     ? (primary.data?.weekly?.pct ?? prior?.weeklyPctAtScoped)
     : prior?.weeklyPctAtScoped;
   if (weeklyPctAtScoped !== undefined) snap.weeklyPctAtScoped = weeklyPctAtScoped;
+  // Re-anchor the projection only on a scoped fetch that actually returned
+  // meters — an attempt that 429'd learns nothing, and moving the anchor onto
+  // an unchanged reading would bank a phantom observation of "weekly moved,
+  // scoped did not" and drag the ratio toward zero.
+  const scopedProjection = scoped.data?.scoped
+    ? advanceScopedProjection(prior?.scopedProjection, primary.data?.weekly?.pct, scoped.data.scoped)
+    : prior?.scopedProjection;
+  if (scopedProjection !== undefined) snap.scopedProjection = scopedProjection;
+  const active = scopedActive ?? prior?.scopedActive;
+  if (active !== undefined) snap.scopedActive = active;
   // Attempted this cycle → this attempt's error is authoritative (undefined on
   // success clears a prior note). Not attempted → carry the prior note forward.
   const scopedError = scoped.fetched ? scoped.error : prior?.scopedError;
@@ -1105,6 +1261,8 @@ export async function refreshUsage(force = false, reason: RefreshReason = "hook"
       ...(prior?.scopedAt ? { scopedAt: prior.scopedAt } : {}),
       ...(prior?.scopedAttemptedAt ? { scopedAttemptedAt: prior.scopedAttemptedAt } : {}),
       ...(prior?.weeklyPctAtScoped !== undefined ? { weeklyPctAtScoped: prior.weeklyPctAtScoped } : {}),
+      ...(prior?.scopedProjection !== undefined ? { scopedProjection: prior.scopedProjection } : {}),
+      ...(prior?.scopedActive !== undefined ? { scopedActive: prior.scopedActive } : {}),
     };
     writeUsageSnapshot(claimSnap);
     return { fetched: true as const, prior };
@@ -1140,12 +1298,18 @@ export async function refreshUsage(force = false, reason: RefreshReason = "hook"
   const cred = resolved.cred;
 
   // Primary bars from response headers (every cycle); scoped bar from the
-  // throttled oauth endpoint only when due (hourly) and only if the primary
-  // token actually worked. assembleSnapshot folds both into the snapshot.
+  // throttled oauth endpoint only when due and only if the primary token
+  // actually worked. assembleSnapshot folds both into the snapshot.
+  //
+  // The scoped-worker check is resolved once here and threaded into both: the
+  // cadence needs it, and the render path needs it persisted (see
+  // `scopedActive`), and it costs a registry read plus a transcript tail read
+  // per live worker — not something to run twice a cycle.
+  const scopedActive = anyScopedModelWorkerActive(prior, Date.now());
   const primary = await fetchPrimary(cred.token, prior);
-  const scoped = await fetchScopedIfDue(cred.token, prior, force, primary);
+  const scoped = await fetchScopedIfDue(cred.token, prior, force, primary, scopedActive);
   const fetchedAt = new Date().toISOString();
-  const snap = assembleSnapshot(fetchedAt, primary, scoped, prior);
+  const snap = assembleSnapshot(fetchedAt, primary, scoped, prior, scopedActive);
   writeUsageSnapshotLocked(snap);
 
   // Recovery from a prior error episode is a lifecycle transition (info); a
@@ -1231,9 +1395,9 @@ async function fetchScopedIfDue(
   prior: UsageSnapshot | null | undefined,
   force: boolean,
   primary: PrimaryOutcome,
+  active: boolean,
 ): Promise<ScopedOutcome> {
   if (primary.error) return { fetched: false };
-  const active = anyScopedModelWorkerActive(prior, Date.now());
   const liveWeeklyPct = primary.data?.weekly?.pct;
   if (!force && !scopedFetchDue(prior, Date.now(), active, liveWeeklyPct)) return { fetched: false };
   // A failure is only worth showing when the bar matters right now.
@@ -1283,6 +1447,12 @@ function finalizeSnapshot(
   }
   if (prior?.weeklyPctAtScoped !== undefined && merged.weeklyPctAtScoped === undefined) {
     merged.weeklyPctAtScoped = prior.weeklyPctAtScoped;
+  }
+  if (prior?.scopedProjection !== undefined && merged.scopedProjection === undefined) {
+    merged.scopedProjection = prior.scopedProjection;
+  }
+  if (prior?.scopedActive !== undefined && merged.scopedActive === undefined) {
+    merged.scopedActive = prior.scopedActive;
   }
   writeUsageSnapshotLocked(merged);
   return merged;
@@ -1415,7 +1585,15 @@ function buildClaudeLines(nowMs: number, paneWidth: number | undefined): string[
     ? computeMeterFit(paneWidth - `  · ${scopedAge}`.length)
     : fit;
   for (const s of d.scoped ?? []) {
-    lines.push(renderMeterLine(s.label.toLowerCase(), s, nowMs, SEVEN_DAY_MS, scopedFit, scopedAge));
+    // The confirmed reading is as old as the last throttled fetch; project it
+    // forward off the live weekly bar when there is a founded estimate to show.
+    const projected = projectScopedPct(
+      snap.scopedProjection,
+      s.label,
+      d.weekly?.pct,
+      snap.scopedActive ?? false,
+    );
+    lines.push(renderMeterLine(s.label.toLowerCase(), s, nowMs, SEVEN_DAY_MS, scopedFit, scopedAge, projected));
   }
   // Extra usage (pay-as-you-go credits) sits below the meters as a dim footnote
   // and above the health tag — real data first, freshness annotation last.
@@ -1612,6 +1790,7 @@ function renderMeterLine(
   windowMs: number | undefined,
   fit: { barWidth: number; showReset: boolean },
   suffix = "",
+  projectedPct?: number,
 ): string {
   const paddedLabel = label.length > LABEL_WIDTH ? label.slice(0, LABEL_WIDTH) : label.padEnd(LABEL_WIDTH);
   if (!meter) return `${INDENT}${paddedLabel}  ${dim("—")}`;
@@ -1631,8 +1810,20 @@ function renderMeterLine(
     const elapsed = windowMs - (resetsAt - nowMs);
     timePct = Math.max(0, Math.min(100, (elapsed / windowMs) * 100));
   }
-  const bar = renderBar(pct, fit.barWidth, timePct);
-  const pctText = `${pct.toFixed(0).padStart(3)}%`;
+  // A projection renders as the bar's estimated *extension*: cells up to the
+  // confirmed reading stay solid, the estimated span is shaded, and the number
+  // is the estimate marked with a tilde. Showing the estimate as the headline
+  // figure is the point — the confirmed value is the one that misleads, since
+  // it can read comfortable while the limit is already rejecting. At the 100%
+  // clamp the tilde is dropped: the bar is pinned to the ceiling, so "100%" is
+  // a statement about the ceiling rather than a false claim of precision, and
+  // it keeps the percentage column the same width as the bars above it.
+  const projecting = projectedPct !== undefined && projectedPct > pct;
+  const shown = projecting ? Math.min(100, projectedPct) : pct;
+  const bar = renderBar(shown, fit.barWidth, timePct, projecting ? pct : undefined);
+  const pctText = projecting && shown < 100
+    ? `~${shown.toFixed(0).padStart(2)}%`
+    : `${shown.toFixed(0).padStart(3)}%`;
   const resetText = fit.showReset && Number.isFinite(resetsAt)
     ? formatDurationBare(resetsAt - nowMs)
     : "";
@@ -1643,9 +1834,16 @@ function renderMeterLine(
   return `${INDENT}${paddedLabel}  ${bar}  ${pctText}${resetPart}${agePart}`;
 }
 
-function renderBar(pct: number, barWidth: number, markerPct?: number): string {
+// `confirmedPct`, when given, splits the filled span: cells up to it are solid
+// (measured), cells beyond it up to `pct` are shaded (estimated). Color comes
+// from the full value, so an estimate crossing into the red band shows red —
+// that crossing is the whole reason to project the bar at all.
+function renderBar(pct: number, barWidth: number, markerPct?: number, confirmedPct?: number): string {
   const raw = (pct / 100) * barWidth;
   const filled = Math.max(0, Math.min(barWidth, pct > 0 ? Math.max(1, Math.round(raw)) : 0));
+  const confirmed = confirmedPct !== undefined
+    ? Math.max(0, Math.min(filled, Math.round((confirmedPct / 100) * barWidth)))
+    : filled;
 
   const colorCode = colorForPct(pct);
   const fg = `\x1b[${colorCode}m`;
@@ -1668,7 +1866,7 @@ function renderBar(pct: number, barWidth: number, markerPct?: number): string {
     } else if (isMarker) {
       result += `${brightFg}│${rst}`;
     } else if (isFilled) {
-      result += `${fg}█${rst}`;
+      result += i < confirmed ? `${fg}█${rst}` : `${fg}▓${rst}`;
     } else {
       result += dim("░");
     }
