@@ -20,6 +20,8 @@ import {
   POLL_OK_MS,
   POLL_MIN_MS,
   SCOPED_POLL_MS,
+  SCOPED_MIN_INTERVAL_MS,
+  SCOPED_MOVEMENT_PCT,
   SCOPED_IDLE_POLL_MS,
   SCOPED_ACTIVE_MS,
   SCOPED_AGE_TAG_AFTER_MS,
@@ -236,6 +238,63 @@ describe("scopedFetchDue — cadence for the throttled scoped fetch", () => {
     };
     expect(scopedFetchDue(snap, now, true)).toBe(false);
   });
+
+  // The movement trigger: the account weekly bar is live off the primary
+  // headers, and Fable spends account weekly quota too, so weekly movement is a
+  // free "the scoped bar has news" signal. It buys freshness inside the hour
+  // the backstop alone could not.
+  describe("movement trigger", () => {
+    const attemptedAgo = (ms: number) => new Date(now - ms).toISOString();
+    const snapAt = (ms: number, weeklyPctAtScoped?: number) => ({
+      fetchedAt: "",
+      scopedAttemptedAt: attemptedAgo(ms),
+      ...(weeklyPctAtScoped !== undefined ? { weeklyPctAtScoped } : {}),
+    });
+
+    it("fires inside the backstop hour once the weekly bar has advanced", () => {
+      const snap = snapAt(SCOPED_MIN_INTERVAL_MS + 1000, 40);
+      expect(scopedFetchDue(snap, now, true, 41)).toBe(true);
+    });
+
+    it("stays quiet when the weekly bar has not moved — no consumption, no news", () => {
+      const snap = snapAt(SCOPED_MIN_INTERVAL_MS + 1000, 40);
+      expect(scopedFetchDue(snap, now, true, 40)).toBe(false);
+    });
+
+    it("honors the interval floor even while the weekly bar climbs", () => {
+      // This floor is the rate bound (max 6 attempts/hour); movement must not
+      // be able to route around it.
+      const snap = snapAt(SCOPED_MIN_INTERVAL_MS - 1000, 40);
+      expect(scopedFetchDue(snap, now, true, 90)).toBe(false);
+    });
+
+    it("ignores movement below one observable tick of the header's precision", () => {
+      const snap = snapAt(SCOPED_MIN_INTERVAL_MS + 1000, 40);
+      expect(scopedFetchDue(snap, now, true, 40 + SCOPED_MOVEMENT_PCT / 2)).toBe(false);
+    });
+
+    it("fires when the weekly bar DROPS — the window rolled and the scoped bar reset with it", () => {
+      const snap = snapAt(SCOPED_MIN_INTERVAL_MS + 1000, 80);
+      expect(scopedFetchDue(snap, now, true, 2)).toBe(true);
+    });
+
+    it("degrades to the backstop when the snapshot predates the baseline field", () => {
+      const legacy = snapAt(SCOPED_MIN_INTERVAL_MS + 1000);
+      expect(scopedFetchDue(legacy, now, true, 99)).toBe(false);
+      const past = snapAt(SCOPED_POLL_MS + 1000);
+      expect(scopedFetchDue(past, now, true, 99)).toBe(true);
+    });
+
+    it("degrades to the backstop when this cycle has no live weekly reading", () => {
+      const snap = snapAt(SCOPED_MIN_INTERVAL_MS + 1000, 40);
+      expect(scopedFetchDue(snap, now, true, undefined)).toBe(false);
+    });
+
+    it("never lets movement override the idle keepalive — non-Fable traffic moves weekly too", () => {
+      const snap = snapAt(SCOPED_POLL_MS + 1000, 40);
+      expect(scopedFetchDue(snap, now, false, 99)).toBe(false);
+    });
+  });
 });
 
 describe("scopedModelInUse — gate the Fable fetch on an active Fable worker", () => {
@@ -364,6 +423,22 @@ describe("assembleSnapshot — folding fetch outcomes into the next snapshot", (
     expect(snap.data?.scoped).toEqual(scopedFable);
     expect(snap.scopedAt).toBe(prior.scopedAt);
     expect(snap.scopedAttemptedAt).toBe(prior.scopedAttemptedAt);
+  });
+
+  // The movement trigger's baseline. It must re-stamp on every scoped attempt,
+  // or the comparison drifts against an ever-older weekly reading and every
+  // subsequent cycle reads as movement.
+  it("re-baselines weeklyPctAtScoped on a scoped attempt", () => {
+    const primary: PrimaryOutcome = { data: { fiveHour: fh, weekly: wk } };
+    const scoped: ScopedOutcome = { fetched: true, data: { scoped: scopedFable } };
+    const snap = assembleSnapshot(fetchedAt, primary, scoped, { ...prior, weeklyPctAtScoped: 55 });
+    expect(snap.weeklyPctAtScoped).toBe(wk.pct);
+  });
+
+  it("carries the prior weeklyPctAtScoped through a cycle with no scoped attempt", () => {
+    const primary: PrimaryOutcome = { data: { fiveHour: fh, weekly: wk } };
+    const snap = assembleSnapshot(fetchedAt, primary, { fetched: false }, { ...prior, weeklyPctAtScoped: 55 });
+    expect(snap.weeklyPctAtScoped).toBe(55);
   });
 
   it("holds dataAt at the prior value when the header fetch failed (bars stay, stale accrues)", () => {

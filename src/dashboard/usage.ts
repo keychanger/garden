@@ -99,6 +99,11 @@ export interface UsageSnapshot {
   // every poll. Absent on all-header cycles and legacy snapshots.
   scopedAt?: string;
   scopedAttemptedAt?: string;
+  // Account weekly utilization observed at the last scoped *attempt* — the
+  // baseline the movement trigger measures against (see scopedFetchDue). Absent
+  // on snapshots written before this field existed and on cycles that never
+  // reached a scoped attempt; both degrade to the backstop cadence.
+  weeklyPctAtScoped?: number;
   // Error from the most recent *surfaced* scoped (oauth-endpoint) fetch attempt,
   // or absent when it succeeded / was not surfaced. Only set when a scoped-model
   // (Fable) worker was actively running at fetch time — a scoped miss during the
@@ -655,13 +660,33 @@ export const AUTH_BACKOFF_MS = 30 * 60 * 1000;
 // cannot widen a 429 cascade.
 export const HOOK_REFRESH_COOLDOWN_MS = 90 * 1000;
 
-// Cadence for the secondary (oauth-endpoint) fetch that supplies the model-
-// scoped weekly bar. The primary 5h/weekly bars refresh every poll from cheap
-// response headers; the scoped bar is a slow-moving 7-day figure the endpoint
-// alone carries, so we hit that throttled endpoint at most once an hour —
-// roughly one request/hour, far under its ~10-12/hour budget. Gates on the last
-// scoped *attempt* (see scopedFetchDue), not the poll cadence.
+// Backstop cadence for the secondary (oauth-endpoint) fetch that supplies the
+// model-scoped weekly bar. The primary 5h/weekly bars refresh every poll from
+// cheap response headers; the scoped bar is a 7-day figure the throttled
+// endpoint alone carries. This is the *ceiling* on how stale the bar may get
+// while a scoped worker runs: the movement trigger below normally refreshes it
+// sooner. Gates on the last scoped *attempt* (see scopedFetchDue), not the poll
+// cadence.
 export const SCOPED_POLL_MS = 60 * 60 * 1000;
+
+// Floor between scoped attempts once the movement trigger is arming them. This
+// is also the rate bound, and the reason no separate request governor exists:
+// every attempt is gated on elapsed-since-the-last-attempt, so a 10-minute
+// floor is at most 6 requests/hour against the endpoint's ~10-12/hour budget —
+// and only during an actively-burning Fable session. An idle fleet still spends
+// nothing, which is strictly cheaper than the flat hourly poll this replaced.
+export const SCOPED_MIN_INTERVAL_MS = 10 * 60 * 1000;
+
+// How far the account weekly bar must advance since the last scoped attempt to
+// arm a new one. Fable consumption necessarily consumes account weekly quota
+// too, so an unmoved weekly bar is proof the scoped bar cannot have moved —
+// and the weekly bar is live (it rides the primary headers every poll). That
+// makes it a free "is there news?" signal, spending a scoped request exactly
+// when there is something new to read. The unified headers report utilization
+// as a 2-decimal fraction, so the smallest observable move is a whole
+// percentage point; this threshold is really "any tick at all", set below one
+// tick rather than at zero so float noise on an unchanged reading can't arm it.
+export const SCOPED_MOVEMENT_PCT = 0.05;
 
 // Cadence when NO worker is actively running a scoped model (e.g. no Fable
 // worker is going). The scoped weekly quota only moves while a scoped-model
@@ -675,13 +700,14 @@ export const SCOPED_POLL_MS = 60 * 60 * 1000;
 export const SCOPED_IDLE_POLL_MS = 12 * 60 * 60 * 1000;
 
 // When the scoped row starts carrying its own age. The row refreshes on its own
-// cadence — hourly at best, the idle keepalive otherwise — so it is legitimately
-// far older than the primary bars, which is why `scopedAt` is excluded from the
-// stale tag (see assembleSnapshot). But an hours-old bar rendered identically to
-// a live one reads as a broken meter rather than a throttled row: it is exactly
-// what a stuck gate looked like. Past the active cadence plus a margin (so an
-// actively-metered row never flickers the tag between hourly refreshes), the row
-// says how old it is.
+// cadence — as often as SCOPED_MIN_INTERVAL_MS while Fable burns, the hourly
+// backstop at worst, the idle keepalive when nothing scoped is running — so it
+// is legitimately older than the primary bars, which is why `scopedAt` is
+// excluded from the stale tag (see assembleSnapshot). But an hours-old bar
+// rendered identically to a live one reads as a broken meter rather than a
+// throttled row: it is exactly what a stuck gate looked like. Past the backstop
+// plus a margin (so an actively-metered row never flickers the tag between
+// refreshes), the row says how old it is.
 export const SCOPED_AGE_TAG_AFTER_MS = SCOPED_POLL_MS + 30 * 60 * 1000;
 
 // A worker counts as "actively using" a scoped model when it fired a Claude
@@ -758,20 +784,52 @@ export function rateLimitBackoff(
 }
 
 // Whether the secondary (oauth-endpoint) scoped fetch is due. Keys on the last
-// scoped *attempt* (success or failure), so a 429'd attempt still waits a full
-// interval before the next try instead of re-firing every poll. The interval
-// depends on whether a scoped-model worker is actively running: hourly while
-// one is (`active`), the slow idle keepalive otherwise. A snapshot that never
-// attempted it (fresh install, legacy shape) is always due — the first fetch
-// also bootstraps the scoped labels the `active` check relies on.
+// scoped *attempt* (success or failure), so a 429'd attempt still waits before
+// the next try instead of re-firing every poll. A snapshot that never attempted
+// it (fresh install, legacy shape) is always due — the first fetch also
+// bootstraps the scoped labels the `active` check relies on.
+//
+// With no scoped-model worker running, the bar cannot move at all: hold the
+// slow idle keepalive and ignore everything else (non-Fable traffic advances
+// the weekly bar without touching the scoped one, so movement means nothing
+// here).
+//
+// While one IS running, the cadence is demand-driven rather than a flat timer.
+// A flat hourly poll spends a request whether or not anything happened and
+// withholds one when a lot did — it was why the bar sat up to an hour behind a
+// burning fleet. Instead: refresh when the live weekly bar shows consumption
+// since the last attempt (`liveWeeklyPct`, free off the primary headers),
+// spaced by SCOPED_MIN_INTERVAL_MS, with SCOPED_POLL_MS as the backstop for the
+// cases movement can't see. Net effect is fresher during a burst AND cheaper
+// when idle.
+//
+// `liveWeeklyPct` is this cycle's primary weekly utilization; omitting it (or
+// having no baseline to compare against, i.e. a snapshot written before this
+// field existed) degrades to the backstop alone — the previous behavior, which
+// is the safe direction for a throttled endpoint.
 export function scopedFetchDue(
   snap: UsageSnapshot | null | undefined,
   nowMs: number,
   active: boolean,
+  liveWeeklyPct?: number,
 ): boolean {
   const attempted = snap?.scopedAttemptedAt ? Date.parse(snap.scopedAttemptedAt) : NaN;
   if (!Number.isFinite(attempted)) return true;
-  return nowMs - attempted >= (active ? SCOPED_POLL_MS : SCOPED_IDLE_POLL_MS);
+  const elapsed = nowMs - attempted;
+  if (!active) return elapsed >= SCOPED_IDLE_POLL_MS;
+  if (elapsed >= SCOPED_POLL_MS) return true;
+  if (elapsed < SCOPED_MIN_INTERVAL_MS) return false;
+  return weeklyBarMoved(snap?.weeklyPctAtScoped, liveWeeklyPct);
+}
+
+// Did the account weekly bar register consumption since the last scoped
+// attempt? A *drop* counts too: the weekly window rolled over, so the scoped
+// bar reset with it and its old value is now meaningless — that is the one
+// moment a stale scoped reading is not merely old but wrong.
+function weeklyBarMoved(baseline: number | undefined, live: number | undefined): boolean {
+  if (baseline === undefined || live === undefined) return false;
+  if (live < baseline) return true;
+  return live - baseline >= SCOPED_MOVEMENT_PCT;
 }
 
 // Whether any worker in the fleet is actively running a model whose weekly
@@ -912,6 +970,16 @@ export function assembleSnapshot(
   if (scopedAt !== undefined) snap.scopedAt = scopedAt;
   const scopedAttemptedAt = scoped.fetched ? fetchedAt : prior?.scopedAttemptedAt;
   if (scopedAttemptedAt !== undefined) snap.scopedAttemptedAt = scopedAttemptedAt;
+  // Re-baseline the movement trigger on every scoped attempt, from THIS cycle's
+  // primary reading rather than the merged `data` (which falls back to the
+  // prior bars when the header fetch failed — a stale baseline would read as
+  // movement on the next cycle and spend a request on nothing). A scoped
+  // attempt implies the primary succeeded, so the fallback is unreachable in
+  // practice and only guards the shape.
+  const weeklyPctAtScoped = scoped.fetched
+    ? (primary.data?.weekly?.pct ?? prior?.weeklyPctAtScoped)
+    : prior?.weeklyPctAtScoped;
+  if (weeklyPctAtScoped !== undefined) snap.weeklyPctAtScoped = weeklyPctAtScoped;
   // Attempted this cycle → this attempt's error is authoritative (undefined on
   // success clears a prior note). Not attempted → carry the prior note forward.
   const scopedError = scoped.fetched ? scoped.error : prior?.scopedError;
@@ -1033,6 +1101,7 @@ export async function refreshUsage(force = false, reason: RefreshReason = "hook"
       ...(prior?.dataAt ? { dataAt: prior.dataAt } : (prior?.fetchedAt && prior.data ? { dataAt: prior.fetchedAt } : {})),
       ...(prior?.scopedAt ? { scopedAt: prior.scopedAt } : {}),
       ...(prior?.scopedAttemptedAt ? { scopedAttemptedAt: prior.scopedAttemptedAt } : {}),
+      ...(prior?.weeklyPctAtScoped !== undefined ? { weeklyPctAtScoped: prior.weeklyPctAtScoped } : {}),
     };
     writeUsageSnapshot(claimSnap);
     return { fetched: true as const, prior };
@@ -1146,8 +1215,9 @@ async function fetchPrimary(
 // The secondary fetch: the model-scoped weekly bar (and extra-usage credits)
 // from the throttled oauth endpoint. Skipped entirely unless the primary token
 // worked (no point pinging the stricter endpoint with a dead/rate-limited
-// token) and the cadence is due — hourly while a scoped-model (Fable) worker is
-// actively running, else the slow idle keepalive (or a forced refresh). Every
+// token) and the cadence is due — movement-triggered while a scoped-model
+// (Fable) worker is actively running, else the slow idle keepalive (or a forced
+// refresh). See scopedFetchDue for the cadence itself. Every
 // failure stays quiet at debug and never touches the primary bars; the scoped
 // bar just keeps its last value. The failure is *surfaced* (onto the scoped
 // row) only when a Fable worker was active or the operator forced it — i.e.
@@ -1161,7 +1231,8 @@ async function fetchScopedIfDue(
 ): Promise<ScopedOutcome> {
   if (primary.error) return { fetched: false };
   const active = anyScopedModelWorkerActive(prior, Date.now());
-  if (!force && !scopedFetchDue(prior, Date.now(), active)) return { fetched: false };
+  const liveWeeklyPct = primary.data?.weekly?.pct;
+  if (!force && !scopedFetchDue(prior, Date.now(), active, liveWeeklyPct)) return { fetched: false };
   // A failure is only worth showing when the bar matters right now.
   const surface = (err: string): string | undefined => (active || force ? err : undefined);
   try {
@@ -1206,6 +1277,9 @@ function finalizeSnapshot(
   if (prior?.scopedAt && merged.scopedAt === undefined) merged.scopedAt = prior.scopedAt;
   if (prior?.scopedAttemptedAt && merged.scopedAttemptedAt === undefined) {
     merged.scopedAttemptedAt = prior.scopedAttemptedAt;
+  }
+  if (prior?.weeklyPctAtScoped !== undefined && merged.weeklyPctAtScoped === undefined) {
+    merged.weeklyPctAtScoped = prior.weeklyPctAtScoped;
   }
   writeUsageSnapshotLocked(merged);
   return merged;
