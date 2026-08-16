@@ -235,8 +235,25 @@ describe("scopedFetchDue — cadence for the throttled scoped fetch", () => {
       fetchedAt: "",
       scopedAt: new Date(now - 3 * SCOPED_POLL_MS).toISOString(),
       scopedAttemptedAt: new Date(now - 60_000).toISOString(),
+      scopedError: "rate-limited",
     };
     expect(scopedFetchDue(snap, now, true)).toBe(false);
+  });
+
+  it("holds a scoped 429 for the hourly backstop even when weekly movement would otherwise arm a retry", () => {
+    const held = {
+      fetchedAt: "",
+      scopedAttemptedAt: new Date(now - SCOPED_MIN_INTERVAL_MS - 1000).toISOString(),
+      scopedError: "rate-limited",
+      weeklyPctAtScoped: 40,
+    };
+    expect(scopedFetchDue(held, now, true, 41)).toBe(false);
+
+    const expired = {
+      ...held,
+      scopedAttemptedAt: new Date(now - SCOPED_POLL_MS - 1000).toISOString(),
+    };
+    expect(scopedFetchDue(expired, now, true, 41)).toBe(true);
   });
 
   // The movement trigger: the account weekly bar is live off the primary

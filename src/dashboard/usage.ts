@@ -91,12 +91,12 @@ export interface UsageSnapshot {
   error?: string;          // present iff the last PRIMARY (header) attempt failed
   retryAfterMs?: number;   // effective backoff before the next attempt (server hint plus our margin/escalation on 429s)
   rateLimitStreak?: number; // consecutive 429s ending at this snapshot; drives the escalating backoff
-  // The model-scoped bar comes from the throttled oauth endpoint on a slower
-  // (hourly) cadence than the primary bars, so its freshness is tracked
-  // separately. `scopedAt` is the last *successful* scoped fetch (bar
+  // The model-scoped bar comes from the throttled oauth endpoint on a slower,
+  // movement-triggered cadence than the primary bars, so its freshness is
+  // tracked separately. `scopedAt` is the last *successful* scoped fetch (bar
   // freshness); `scopedAttemptedAt` is the last scoped *attempt* — success or
-  // failure — and is what spaces the hourly retries so a 429 doesn't re-fire
-  // every poll. Absent on all-header cycles and legacy snapshots.
+  // failure — and is what spaces attempts and holds a 429 for the hourly
+  // backstop. Absent on all-header cycles and legacy snapshots.
   scopedAt?: string;
   scopedAttemptedAt?: string;
   // Account weekly utilization observed at the last scoped *attempt* — the
@@ -817,6 +817,9 @@ export function scopedFetchDue(
   if (!Number.isFinite(attempted)) return true;
   const elapsed = nowMs - attempted;
   if (!active) return elapsed >= SCOPED_IDLE_POLL_MS;
+  // The endpoint's observed 429 carries Retry-After: 3600. Movement may arm a
+  // healthy fetch after ten minutes, but must not route around a known throttle.
+  if (snap?.scopedError === "rate-limited") return elapsed >= SCOPED_POLL_MS;
   if (elapsed >= SCOPED_POLL_MS) return true;
   if (elapsed < SCOPED_MIN_INTERVAL_MS) return false;
   return weeklyBarMoved(snap?.weeklyPctAtScoped, liveWeeklyPct);
