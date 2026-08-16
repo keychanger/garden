@@ -411,6 +411,15 @@ describe("scoped projection", () => {
       expect(scopedRolled?.labels.Fable.samples).toEqual([]);
     });
 
+    it("skips an interval that began with the bar already at the ceiling", () => {
+      // A capped bar cannot move, so ds=0 measures the cap rather than the
+      // ratio; banking it would under-project after the window resets.
+      const capped = advanceScopedProjection(undefined, 60, meters(100));
+      const next = advanceScopedProjection(capped, 64, meters(100));
+      expect(next?.labels.Fable.samples).toEqual([]);
+      expect(next?.weeklyPct).toBe(64); // still re-anchors
+    });
+
     it("keeps only the most recent observations", () => {
       let p = advanceScopedProjection(undefined, 0, meters(0));
       for (let i = 1; i <= 12; i++) p = advanceScopedProjection(p, i * 2, meters(i * 3));
