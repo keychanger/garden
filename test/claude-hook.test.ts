@@ -345,6 +345,19 @@ describe("handleClaudeHook — core events", () => {
     expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/wt/garden/bold-ash/.garden-done");
   });
 
+  it("prompt clears continueSentAt (a landed prompt empties the input box)", () => {
+    // continueSentAt marks a garden paste with no prompt landed since — the
+    // stuck-paste recovery's evidence. Any prompt landing (garden's own or
+    // the operator's) means the box was submitted or superseded, so the
+    // marker must clear or a later operator paste could be misclassified as
+    // garden's stuck text.
+    seedWorker("garden", "bold-ash", { agentStatus: "idle", continueSentAt: 123 });
+    setCwd("garden", "bold-ash");
+    handleClaudeHook("prompt");
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(entry.continueSentAt).toBeUndefined();
+  });
+
   it("prompt does NOT touch the .garden-done sentinel when prState was not merged/done", async () => {
     seedWorker("garden", "bold-ash", {
       agentStatus: "idle",

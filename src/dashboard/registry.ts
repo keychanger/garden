@@ -285,6 +285,15 @@ export interface WorkerEntry {
   // Idempotency guard: if a merge event somehow replays within a short window,
   // we don't double-fire the continue. See dashboard/continue.ts and STATUS.md.
   lastAutoContinueAt?: number;
+  // Timestamp of the last garden-initiated paste into this worker's input box
+  // (continueWorker's success exit — seed, interrupt, post-merge, and handoff
+  // callback alike). Cleared by the UserPromptSubmit hook when ANY prompt
+  // lands, so while set, no prompt has landed since garden last pasted. That
+  // is the evidence the stuck-paste recovery keys on: a draft bearing a
+  // garden-paste signature under this marker is garden's own paste whose
+  // Enter was eaten, and continueWorker re-submits it instead of deferring
+  // behind the operator-draft guard forever. See continue.ts isOwnStuckPaste.
+  continueSentAt?: number;
   // Transient payload for the post-merge auto-continue prompt. finalizeMerge
   // diffs preReviewSha against the merged tip and stores the changed-file list
   // here; continueWorkerAfterMerge reads it to enrich the prompt and clears it

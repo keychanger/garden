@@ -187,6 +187,23 @@ export function pasteAndSubmit(paneId: string, message: string): void {
   setTimeout(sendEnter, 1500);
 }
 
+// Submit whatever already sits in the pane's input box. The recovery half of
+// pasteAndSubmit: when a prior paste's Enter taps were eaten (TUI mid-redraw),
+// the message is still in the box and only the submit is owed. Immediate tap
+// plus one delayed re-tap, mirroring pasteAndSubmit's double-tap.
+export function pressEnter(paneId: string): void {
+  if (!tmuxExecAllowed) return;
+  const sendEnter = (): void => {
+    try {
+      execFileSync("tmux", ["send-keys", "-t", paneId, "Enter"], { stdio: "ignore" });
+    } catch {
+      // Pane gone (worker bounced, dashboard torn down); caller doesn't wait.
+    }
+  };
+  sendEnter();
+  setTimeout(sendEnter, 1500);
+}
+
 export function tmuxOutput(...args: string[]): string {
   // stderr ignored: many tmuxOutput callers (paneExists, windowExists, getPaneTitle)
   // depend on a clean throw-on-miss without noisy stderr.

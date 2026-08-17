@@ -31,7 +31,7 @@ import {
 } from "./create.js";
 import { getHarness } from "./harness/index.js";
 import { resolveWorkerLaunchPlan } from "./launch-plan.js";
-import { dispatchDelayedSeed, paneHasOperatorDraft } from "./continue.js";
+import { dispatchDelayedSeed, paneHasBlockingOperatorDraft } from "./continue.js";
 import { log } from "./log.js";
 import {
   findWorkerByName, updateWorkerFields, type WorkerEntry,
@@ -191,12 +191,14 @@ export function loopAutoContinueAfterMerge(
   // an unsent draft in the input box, defer and leave prState=merged. The
   // merged-state gate-reopen sweep (handleMerged) replays this decision on the
   // next poke, so the iteration resumes once the worker is idle again. Mirrors
-  // continueWorker's paused/draft skips.
+  // continueWorker's paused/draft skips — including its stuck-paste carve-out:
+  // garden's own unsubmitted paste never blocks (the respawn discards it and
+  // re-seeds), or a single eaten Enter would starve the loop forever.
   if (
     entry.agentStatus === "paused"
     || entry.agentStatus === "working"
     || entry.agentStatus === "asking"
-    || paneHasOperatorDraft(paneId)
+    || paneHasBlockingOperatorDraft(paneId, entry)
   ) {
     log.info("workers", `${hooks.logTag} continue deferred, worker active or drafting`, {
       worker: workerName,

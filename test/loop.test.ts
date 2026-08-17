@@ -70,7 +70,7 @@ vi.mock("../src/dashboard/create.js", () => ({
 
 vi.mock("../src/dashboard/continue.js", () => ({
   dispatchDelayedSeed: vi.fn(),
-  paneHasOperatorDraft: vi.fn(() => false),
+  paneHasBlockingOperatorDraft: vi.fn(() => false),
 }));
 
 vi.mock("../src/dashboard/runner.js", () => ({
@@ -96,7 +96,7 @@ import { findWorkerByName, updateWorkerFields } from "../src/dashboard/registry.
 import { readDashState } from "../src/dashboard/state.js";
 import { tryGetProject } from "../src/config.js";
 import { tmux, paneExists, windowExists, getFirstPaneId } from "../src/dashboard/tmux.js";
-import { dispatchDelayedSeed, paneHasOperatorDraft } from "../src/dashboard/continue.js";
+import { dispatchDelayedSeed, paneHasBlockingOperatorDraft } from "../src/dashboard/continue.js";
 import { buildWorktreeWorkerCommand } from "../src/dashboard/create.js";
 import { getHarness } from "../src/dashboard/harness/index.js";
 import { spawn } from "node:child_process";
@@ -160,7 +160,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(paneExists).mockReturnValue(true);
   vi.mocked(windowExists).mockReturnValue(true);
-  vi.mocked(paneHasOperatorDraft).mockReturnValue(false);
+  vi.mocked(paneHasBlockingOperatorDraft).mockReturnValue(false);
   vi.mocked(getFirstPaneId).mockReturnValue("%30");
   vi.mocked(readDashState).mockReturnValue(makeState());
   vi.mocked(tryGetProject).mockReturnValue({ path: "/tmp/projects/myproject" });
@@ -301,7 +301,7 @@ describe("loopAutoContinueAfterMerge", () => {
       activeWindowName: "_myproject-worker-bold-ash",
       activePaneId: "%9",
     }));
-    vi.mocked(paneHasOperatorDraft).mockReturnValue(true);
+    vi.mocked(paneHasBlockingOperatorDraft).mockReturnValue(true);
 
     const result = loopAutoContinueAfterMerge(
       "myproject", "bold-ash", makeHooks(), { trellisRelativePath: ".garden/trellises/foo.md" },

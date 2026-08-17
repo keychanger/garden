@@ -49,6 +49,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   // Default: pane is a live agent (not a bare shell) → continue prompts deliver.
   // The exited-pane test overrides this to true.
   paneRunningOnlyShell: vi.fn(() => false),
+  pressEnter: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/window-names.js", () => ({
@@ -76,7 +77,7 @@ import {
 } from "../src/dashboard/continue.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { findWorkerByName, updateWorkerFields } from "../src/dashboard/registry.js";
-import { tmux, pasteAndSubmit, paneExists, windowExists, getFirstPaneId, capturePaneText, capturePaneCursor, paneRunningOnlyShell } from "../src/dashboard/tmux.js";
+import { tmux, pasteAndSubmit, paneExists, windowExists, getFirstPaneId, capturePaneText, capturePaneCursor, paneRunningOnlyShell, pressEnter } from "../src/dashboard/tmux.js";
 import { recordContinueDispatched } from "../src/dashboard/telemetry.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -126,6 +127,25 @@ const GHOST_BOX = [
   "❯ Try \"how does auth work?\"" + " ".repeat(20),
   RULE,
   "  garden·vain-tall-brush | Opus 4.8 | ctx:10%",
+  "  ⏵⏵ auto mode on (shift+tab to cycle)",
+].join("\n");
+// A stuck garden paste: an earlier continueWorker pasted the prompt but its
+// Enter taps were eaten, so the message sits unsent in the box. Claude Code
+// collapses a multi-line paste to the [Pasted text …] placeholder; smaller
+// pastes render verbatim, so the visible first row starts with the prompt's
+// literal "[garden]" head. Both are garden-paste signatures.
+const STUCK_PLACEHOLDER_BOX = [
+  RULE,
+  "❯ [Pasted text #1 +9 lines]" + " ".repeat(40),
+  RULE,
+  "  garden·bold-ash | Opus 4.8 | ctx:10%",
+  "  ⏵⏵ auto mode on (shift+tab to cycle)",
+].join("\n");
+const STUCK_VERBATIM_BOX = [
+  RULE,
+  "❯ [garden] Your previous changes were reviewed and merged. Before you",
+  RULE,
+  "  garden·bold-ash | Opus 4.8 | ctx:10%",
   "  ⏵⏵ auto mode on (shift+tab to cycle)",
 ].join("\n");
 
@@ -244,8 +264,12 @@ describe("continueWorker", () => {
     expect(pasteAndSubmit).toHaveBeenCalledWith(
       "%9", expect.stringContaining("[garden]"),
     );
+    // Delivery also stamps continueSentAt — the marker the stuck-paste
+    // recovery keys on (cleared by the UserPromptSubmit hook when the
+    // prompt actually lands).
     expect(updateWorkerFields).toHaveBeenCalledWith(
-      "myproject", "bold-ash", { interruptedWhileWorking: undefined },
+      "myproject", "bold-ash",
+      { interruptedWhileWorking: undefined, continueSentAt: expect.any(Number) },
     );
   });
 
@@ -334,6 +358,93 @@ describe("continueWorker", () => {
 
     expect(delivered).toBe(true);
     expect(pasteAndSubmit).toHaveBeenCalledWith("%9", expect.any(String));
+  });
+
+  // The stuck-paste recovery: a garden paste whose Enter taps were eaten sits
+  // unsent in the box, and the draft guard used to misread it as an operator
+  // draft — deferring every retry forever, since a stuck paste never clears
+  // itself (the starvation that made bead workers miss their seeded bd close,
+  // board acceptance run 2026-08-14). continueSentAt proves garden pasted and
+  // no prompt landed since (the prompt hook clears it), and the draft's
+  // garden-paste signature confirms the box holds our own text — so the fix
+  // is to press Enter and submit it, not to re-paste or defer.
+  it("re-submits garden's own stuck paste with Enter instead of deferring (collapsed rendering)", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "",
+      agentStatus: "idle", interruptedWhileWorking: true,
+      continueSentAt: 1_700_000_000_000,
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+    vi.mocked(capturePaneText).mockReturnValue(STUCK_PLACEHOLDER_BOX);
+
+    const delivered = continueWorker("myproject", "bold-ash");
+
+    expect(delivered).toBe(true);
+    expect(pressEnter).toHaveBeenCalledWith("%9");
+    // The message is already in the box — re-pasting would double it.
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
+    // The original paste already recorded its dispatch; the Enter is a
+    // re-submit of that same delivery, not a second one.
+    expect(recordContinueDispatched).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith(
+      "myproject", "bold-ash", { interruptedWhileWorking: undefined },
+    );
+  });
+
+  it("re-submits garden's own stuck paste when the prompt head renders verbatim", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "",
+      agentStatus: "idle", continueSentAt: 1_700_000_000_000,
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+    vi.mocked(capturePaneText).mockReturnValue(STUCK_VERBATIM_BOX);
+
+    expect(continueWorker("myproject", "bold-ash")).toBe(true);
+    expect(pressEnter).toHaveBeenCalledWith("%9");
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
+  });
+
+  it("still defers a signature-bearing draft when garden never pasted (operator's own paste)", () => {
+    // Without continueSentAt there is no evidence the box holds garden's text
+    // — an operator can paste multi-line content too, and submitting their
+    // half-composed message would be exactly the mangling the guard exists
+    // to prevent.
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+    vi.mocked(capturePaneText).mockReturnValue(STUCK_PLACEHOLDER_BOX);
+
+    expect(continueWorker("myproject", "bold-ash")).toBe(false);
+    expect(pressEnter).not.toHaveBeenCalled();
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
+  });
+
+  it("still defers a plain operator draft even when a garden paste is outstanding", () => {
+    // continueSentAt set but the draft carries no garden signature: the
+    // operator cleared our stuck paste and is composing their own message.
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "",
+      agentStatus: "idle", continueSentAt: 1_700_000_000_000,
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+    vi.mocked(capturePaneText).mockReturnValue(DRAFT_BOX);
+
+    expect(continueWorker("myproject", "bold-ash")).toBe(false);
+    expect(pressEnter).not.toHaveBeenCalled();
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
   });
 
   it("delivers when the empty box shows dimmed ghost/placeholder text and the caret is at the origin", () => {

@@ -207,7 +207,7 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
 // ---------------------------------------------------------------------------
 
 type FieldsDelta = Partial<Pick<WorkerEntry,
-  "agentStatus" | "lastEventAt" | "lastStateChangeAt" | "prState" | "task" | "transcriptPath" | "sessionId">>;
+  "agentStatus" | "lastEventAt" | "lastStateChangeAt" | "prState" | "task" | "transcriptPath" | "sessionId" | "continueSentAt">>;
 
 // pretooluse/posttooluse fire on every Claude tool call and dominate hook
 // traffic — a busy agent completes many tools per second, and with N agents in
@@ -364,7 +364,10 @@ const onSessionStart: HookMethod = (ctx) => {
 
 const onPromptSubmitted: HookMethod = (ctx) => {
   if (!ctx.workerInfo) return;
-  const fields: FieldsDelta = { agentStatus: "working" };
+  // A landed prompt (garden's own or the operator's) means the input box was
+  // submitted or superseded — clear the garden-paste marker so a later draft
+  // can't be misread as garden's stuck paste (continue.ts isOwnStuckPaste).
+  const fields: FieldsDelta = { agentStatus: "working", continueSentAt: undefined };
   // Clear merged/done prState on the next prompt — invariant 4 (terminal
   // states are sticky until new input). The hook handler is the only place
   // this clear happens. Also clear the on-disk `.garden-done` sentinel so a

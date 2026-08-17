@@ -25,7 +25,8 @@ import { readDashState } from "./state.js";
 import { findWorkerByName, updateWorkerFields } from "./registry.js";
 import {
   shellEscape, getFirstPaneId, paneExists, windowExists, pasteAndSubmit,
-  capturePaneText, capturePaneCursor, paneRunningOnlyShell, type PaneCursor,
+  pressEnter, capturePaneText, capturePaneCursor, paneRunningOnlyShell,
+  type PaneCursor,
 } from "./tmux.js";
 import { workerWindowName as workerWin } from "./window-names.js";
 import { log } from "./log.js";
@@ -254,6 +255,50 @@ export function paneHasOperatorDraft(paneId: string): boolean {
   return extractOperatorDraft(capturePaneText(paneId), capturePaneCursor(paneId)).length > 0;
 }
 
+// Visible heads a garden-initiated paste can render as in the input box.
+// Every continuation prompt leads with a literal "[garden]" line and handoff
+// seed briefings with "[handoff from …]"; Claude Code collapses a multi-line
+// paste (which all of these are) to the "[Pasted text #N +L lines]"
+// placeholder, so that is the common stuck rendering.
+const GARDEN_PASTE_SIGNATURES = ["[garden]", "[handoff", "[Pasted text"];
+
+// True when the draft in the box is garden's own earlier paste whose Enter
+// taps were eaten, rather than an operator's compose. Two conditions, both
+// load-bearing:
+//  - entry.continueSentAt: garden pasted, and no prompt of ANY kind has
+//    landed since (the UserPromptSubmit hook clears the field) — so the paste
+//    demonstrably never submitted and its text is still in the box.
+//  - a garden-paste signature on the draft's visible head: an operator draft
+//    typed after clearing our stuck text does not match, and keeps the full
+//    defer treatment.
+// Without this, the draft guard starved on garden's own stuck paste — every
+// retry re-captured the same unsent text, read it as an operator draft, and
+// deferred, which is how bead-intake workers missed their seeded `bd close`
+// (board's delegation-loop acceptance run, 2026-08-14). The residual false
+// positive — the operator clears our paste, then pastes multi-line content of
+// their own without submitting, matching "[Pasted text" — requires them to
+// discard a visible garden prompt mid-window and is accepted.
+export function isOwnStuckPaste(
+  entry: { continueSentAt?: number },
+  draft: string,
+): boolean {
+  if (!entry.continueSentAt) return false;
+  return GARDEN_PASTE_SIGNATURES.some((sig) => draft.startsWith(sig));
+}
+
+// The loop workflows' variant of the draft gate (see loop.ts): a draft blocks
+// the cold respawn only when it is a genuine operator compose. Garden's own
+// stuck paste must not block — the respawn discards it and re-seeds, which is
+// the loop-shaped recovery.
+export function paneHasBlockingOperatorDraft(
+  paneId: string,
+  entry: { continueSentAt?: number },
+): boolean {
+  const draft = extractOperatorDraft(capturePaneText(paneId), capturePaneCursor(paneId));
+  if (draft.length === 0) return false;
+  return !isOwnStuckPaste(entry, draft);
+}
+
 // True when the worker's pane currently holds an unsent operator draft. Used by
 // the backoff re-arm to tell a draft-deferred skip apart from the other skip
 // reasons (no pane, agent mid-turn) that should not retry on this loop.
@@ -396,12 +441,29 @@ export function continueWorker(
     });
     return false;
   }
-  // The operator is mid-compose in this pane — pasting now would concatenate
-  // garden's prompt onto their draft and submit the mangled result. Skip; the
-  // dispatch handler's backoff re-arm retries once the box is clear. Leave
-  // interruptedWhileWorking set (unlike the active gate above) so the retry
-  // still knows there is a prompt owed.
-  if (paneHasOperatorDraft(paneId)) {
+  const draft = extractOperatorDraft(capturePaneText(paneId), capturePaneCursor(paneId));
+  if (draft.length > 0) {
+    // Garden's own earlier paste, stuck unsubmitted (Enter eaten). The message
+    // is already in the box — re-pasting would double it, and deferring would
+    // starve forever, since a stuck paste never clears itself. Press Enter to
+    // submit it. No telemetry: the original paste recorded its dispatch, and
+    // this is that same delivery finally landing. continueSentAt stays set
+    // until the prompt hook confirms a landed prompt, so a replay retries the
+    // Enter if this one is eaten too.
+    if (isOwnStuckPaste(entry, draft)) {
+      pressEnter(paneId);
+      updateWorkerFields(projectName, workerName, { interruptedWhileWorking: undefined });
+      log.info("workers", "continue re-submitted stuck garden paste", {
+        worker: workerName,
+        data: { project: projectName, draftHead: draft.slice(0, 40) },
+      });
+      return true;
+    }
+    // The operator is mid-compose in this pane — pasting now would concatenate
+    // garden's prompt onto their draft and submit the mangled result. Skip; the
+    // dispatch handler's backoff re-arm retries once the box is clear. Leave
+    // interruptedWhileWorking set (unlike the active gate above) so the retry
+    // still knows there is a prompt owed.
     log.info("workers", "continue skipped, operator has unsent draft", {
       worker: workerName,
       data: { project: projectName },
@@ -417,7 +479,10 @@ export function continueWorker(
     });
     return false;
   }
-  updateWorkerFields(projectName, workerName, { interruptedWhileWorking: undefined });
+  updateWorkerFields(projectName, workerName, {
+    interruptedWhileWorking: undefined,
+    continueSentAt: Date.now(),
+  });
   log.info("workers", "continue sent", {
     worker: workerName,
     data: { project: projectName },
