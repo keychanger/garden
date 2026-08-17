@@ -330,6 +330,7 @@ describe("loopAutoContinueAfterMerge", () => {
     );
 
     expect(result).toBe(true);
+    expect(paneHasBlockingOperatorDraft).toHaveBeenCalledWith("%9", entry);
 
     // installRuntimeConfig fired before the respawn so settings.json is fresh.
     expect(vi.mocked(getHarness)().installRuntimeConfig).toHaveBeenCalledWith(

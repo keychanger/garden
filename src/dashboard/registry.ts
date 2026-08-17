@@ -658,7 +658,7 @@ function withRegistryLock<T>(fn: () => T): T {
 
 // Shape guard for parsed registry. Top-level must be an object with a
 // `workers` field that maps project names to arrays. Per-entry validation
-// requires `name` to be a string, type-checks GUARDED_STRING_FIELDS when
+// requires `name` to be a string, type-checks the guarded scalar fields when
 // present, and separately validates the bounded bead id and ciNoRuns stamp;
 // remaining WorkerEntry fields are optional and untyped here, and absence is
 // always legal (legacy entries from earlier garden versions don't carry
@@ -668,16 +668,18 @@ function withRegistryLock<T>(fn: () => T): T {
 //
 // The guarded fields are the ones consumed WITHOUT re-validation to build
 // filesystem paths (worktreePath), git targets (baseBranch/branchName), resume
-// identity (sessionId), and lifecycle dispatch (prState/agentStatus). The
-// registry lives in a sandbox-writable dir, so a forged wrong-typed value
-// would otherwise flow straight into those consumers. Type is checked only
-// WHEN PRESENT — the readRegistry migrations backfill several of these AFTER
-// this guard runs, so a presence requirement would quarantine valid old
-// registries.
+// identity (sessionId), and lifecycle dispatch (prState, agentStatus, and
+// continueSentAt). The registry lives in a sandbox-writable dir, so a forged
+// wrong-typed value would otherwise flow straight into those consumers. Type
+// is checked only WHEN PRESENT — the readRegistry migrations backfill several
+// of these AFTER this guard runs, so a presence requirement would quarantine
+// valid old registries.
 const GUARDED_STRING_FIELDS = [
   "prState", "agentStatus", "baseBranch", "branchName", "worktreePath", "sessionId",
   "handoffRequestId",
 ] as const;
+
+const GUARDED_NUMBER_FIELDS = ["continueSentAt"] as const;
 
 function isWorkerRegistry(x: unknown): x is WorkerRegistry {
   if (!x || typeof x !== "object") return false;
@@ -691,6 +693,9 @@ function isWorkerRegistry(x: unknown): x is WorkerRegistry {
       if (typeof entry.name !== "string") return false;
       for (const field of GUARDED_STRING_FIELDS) {
         if (entry[field] !== undefined && typeof entry[field] !== "string") return false;
+      }
+      for (const field of GUARDED_NUMBER_FIELDS) {
+        if (entry[field] !== undefined && typeof entry[field] !== "number") return false;
       }
       if (entry.bead !== undefined
           && (typeof entry.bead !== "string"

@@ -73,7 +73,7 @@ import {
   dispatchDelayedContinue, dispatchDelayedAutoContinue,
   dispatchDelayedSeed, seedWorker, notifyHandoffCallback,
   donePath, isDoneSet, clearDoneSentinel,
-  extractOperatorDraft, rearmContinueIfDrafting,
+  extractOperatorDraft, paneHasBlockingOperatorDraft, rearmContinueIfDrafting,
 } from "../src/dashboard/continue.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { findWorkerByName, updateWorkerFields } from "../src/dashboard/registry.js";
@@ -610,6 +610,21 @@ describe("extractOperatorDraft (cursor-bounded — excludes ghost/placeholder te
 
   it("returns empty when the caret is above the marker row (not on the input line)", () => {
     expect(extractOperatorDraft(DRAFT_BOX, { x: 10, y: 0 })).toBe("");
+  });
+});
+
+describe("paneHasBlockingOperatorDraft", () => {
+  it("does not block a loop respawn on garden's own stuck paste", () => {
+    vi.mocked(capturePaneText).mockReturnValue(STUCK_PLACEHOLDER_BOX);
+    expect(paneHasBlockingOperatorDraft("%9", { continueSentAt: 123 })).toBe(false);
+  });
+
+  it("still blocks an operator paste or plain draft", () => {
+    vi.mocked(capturePaneText).mockReturnValue(STUCK_PLACEHOLDER_BOX);
+    expect(paneHasBlockingOperatorDraft("%9", {})).toBe(true);
+
+    vi.mocked(capturePaneText).mockReturnValue(DRAFT_BOX);
+    expect(paneHasBlockingOperatorDraft("%9", { continueSentAt: 123 })).toBe(true);
   });
 });
 
