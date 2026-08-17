@@ -628,12 +628,16 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
       changed = true;
       log.info("intake", "stopped worker on bead reconcile", {
         worker: worker.name,
-        data: { project: deps.projectName, bead: beadId, reason },
+        data: { project: deps.projectName, bead: beadId, reason, prState },
       });
-      if (recalled) {
-        // Only the recall alerts: a closed-bead sweep of a finished worker is
-        // routine lifecycle (logged above, like ci-fix launches), and the
-        // alert surface has no info level.
+      if (recalled && prState !== "merged" && prState !== "done") {
+        // Only a work-discarding recall alerts: the stop completes an
+        // operator-initiated recall, so once the worker's branch has landed
+        // (merged/done) it is routine lifecycle like the closed-bead sweep —
+        // logged above, not alerted (the alert surface has no info level, and
+        // a warn here read as "something is wrong in garden"). A recall that
+        // yanks a bead from a worker whose work has NOT landed still warns:
+        // in-flight changes are being discarded.
         deps.alert({
           level: "warn",
           source: "intake",

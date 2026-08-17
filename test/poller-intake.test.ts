@@ -1073,6 +1073,24 @@ describe("runIntakeOnce", () => {
     expect(w.unassigns).toHaveLength(0);
   });
 
+  it("reconcile stops a recalled worker whose work already landed (merged) with no alert", () => {
+    // The stop completes an operator-initiated recall and the branch is
+    // already merged — nothing is discarded, so this is routine lifecycle
+    // (logged, like the closed-bead sweep), not an operator alert. The warn
+    // above is reserved for recalls that yank a bead from a worker whose
+    // work has NOT landed.
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
+      statuses: { e1: st() },
+      details: { b1: bead({ id: "b1", status: "in_progress", assignee: "jic" }) },
+      workers: [entry({ name: "w1", bead: "b1", prState: "merged", agentStatus: "idle" })],
+    });
+    expect(runIntakeOnce(makeDeps(w))).toBe(true);
+    expect(w.stops).toEqual(["w1"]);
+    expect(w.alerts).toHaveLength(0);
+    expect(w.unassigns).toHaveLength(0);
+  });
+
   it("reconcile skips an unassigned bead (claim may still be in flight)", () => {
     const w = makeWorld({
       epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
