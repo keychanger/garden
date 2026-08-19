@@ -35,9 +35,9 @@ import { recordContinueDispatched } from "./telemetry.js";
 import { addAlert } from "./alerts.js";
 import { tryGetProject } from "../config.js";
 
-// Which garden-initiated paste this is — the `kind` on the continue.dispatched
-// telemetry event. Not operator prompts: those arrive via UserPromptSubmit and
-// are deliberately not recorded here.
+// Which garden-initiated delivery this is — the `kind` on the
+// continue.dispatched telemetry event. Not operator prompts: those arrive via
+// UserPromptSubmit and are deliberately not recorded here.
 export type ContinueKind = "interrupt" | "post-merge" | "handoff-callback" | "seed";
 
 // The fenced [garden] prefix marks the message as system-injected so the
@@ -488,11 +488,14 @@ export function continueWorker(
     worker: workerName,
     data: { project: projectName },
   });
-  // Ledger the garden-initiated paste at the single success point (after
-  // pasteAndSubmit landed) so the autonomy read can subtract garden's prompts
-  // from the operator's. Only real deliveries count — the skip cases above
-  // returned false without pasting.
-  recordContinueDispatched(projectName, workerName, entry.createdAt, entry.workflow ?? "default", kind);
+  // Seed paste attempts are not prompts until seedWorker observes the
+  // UserPromptSubmit acknowledgment. It records one event at confirmation so
+  // retries swallowed by the TUI cannot inflate the autonomy metric. Other
+  // continue paths retain their paste-success event; they have independent
+  // retry guards that prevent duplicate dispatches.
+  if (kind !== "seed") {
+    recordContinueDispatched(projectName, workerName, entry.createdAt, entry.workflow ?? "default", kind);
+  }
   return true;
 }
 
@@ -767,12 +770,20 @@ export function seedWorker(
 
   // Phase 3 — confirm the paste became a user turn, else retry the paste.
   const verify = (sentStamp: number | undefined, confirmDeadline: number): void => {
-    const verdict = classifySeedDelivery(findWorkerByName(projectName, workerName), sentStamp);
-    if (verdict === "worker-gone") {
+    const entry = findWorkerByName(projectName, workerName);
+    if (!entry) {
       abortWorkerGone();
       return;
     }
+    const verdict = classifySeedDelivery(entry, sentStamp);
     if (verdict === "confirmed") {
+      recordContinueDispatched(
+        projectName,
+        workerName,
+        entry.createdAt,
+        entry.workflow ?? "default",
+        "seed",
+      );
       log.info("workers", "seed confirmed", {
         worker: workerName,
         data: { project: projectName, attempts },

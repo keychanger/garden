@@ -1204,10 +1204,17 @@ describe("seedWorker", () => {
     // Delivery is unconfirmed at this point — the file is the only copy of the
     // briefing, so it must survive until a user turn is observed.
     expect(fs.unlinkSync).not.toHaveBeenCalled();
+    // A paste attempt is not yet a prompt. Counting it before the hook confirms
+    // the user turn would corrupt the autonomy metric when tmux swallows it.
+    expect(recordContinueDispatched).not.toHaveBeenCalled();
 
     promptLands(entry);
     vi.advanceTimersByTime(2000);
     expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
+    expect(recordContinueDispatched).toHaveBeenCalledTimes(1);
+    expect(recordContinueDispatched).toHaveBeenCalledWith(
+      "myproject", "bold-ash", undefined, "default", "seed",
+    );
     expect(addAlert).not.toHaveBeenCalled();
   });
 
@@ -1240,6 +1247,8 @@ describe("seedWorker", () => {
     promptLands(entry);
     vi.advanceTimersByTime(2000);
     expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
+    // Both paste attempts belong to one eventual user turn.
+    expect(recordContinueDispatched).toHaveBeenCalledTimes(1);
     expect(addAlert).not.toHaveBeenCalled();
   });
 
@@ -1261,6 +1270,9 @@ describe("seedWorker", () => {
     expect(alert.message).toContain("/tmp/seed.txt");
     // The briefing is the only copy — losing it would make the alert unactionable.
     expect(fs.unlinkSync).not.toHaveBeenCalled();
+    // Three swallowed paste attempts produced no prompt to subtract from the
+    // transcript's operator-prompt count.
+    expect(recordContinueDispatched).not.toHaveBeenCalled();
   });
 
   it("sends anyway after the 180s ready wait, and still confirms through the verify path", () => {
