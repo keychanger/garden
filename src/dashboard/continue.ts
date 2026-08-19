@@ -22,7 +22,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { DASHBOARD_SESSION } from "../session.js";
 import { readDashState } from "./state.js";
-import { findWorkerByName, updateWorkerFields } from "./registry.js";
+import { findWorkerByName, updateWorkerFields, type AgentStatus } from "./registry.js";
 import {
   shellEscape, getFirstPaneId, paneExists, windowExists, pasteAndSubmit,
   pressEnter, capturePaneText, capturePaneCursor, paneRunningOnlyShell,
@@ -32,6 +32,7 @@ import { workerWindowName as workerWin } from "./window-names.js";
 import { log } from "./log.js";
 import { resolveGardenRunner } from "./runner.js";
 import { recordContinueDispatched } from "./telemetry.js";
+import { addAlert } from "./alerts.js";
 import { tryGetProject } from "../config.js";
 
 // Which garden-initiated paste this is — the `kind` on the continue.dispatched
@@ -642,11 +643,67 @@ export function dispatchDelayedSeed(
   spawnDelayed(gardenRunner, 6000, "_seed-worker", projectName, workerName, messageFile);
 }
 
-// Send a one-shot seed prompt read from a file. The seed dispatch's 6s delay
-// usually covers bootstrap (git fetch, worktree add, npm install, claude TUI
-// init), but a slow network can run longer; poll while the worker is still
-// "loading" and send as soon as it transitions to any other state. Capped at
-// 90s. Always deletes the file at the end.
+// Send a one-shot seed prompt read from a file.
+//
+// A seed is the one prompt a worker cannot recover from losing. An interrupt
+// or post-merge continue has a retry leg, and failing that an operator looking
+// at a worker that is visibly mid-task; a lost seed leaves a live worker parked
+// at an empty prompt with no task at all, which reads as "the workers didn't
+// start" (observed three times on 2026-08-19, including on the launch of the
+// worker that fixed this).
+//
+// So seeding is verified rather than fire-and-forget. tmux load-buffer succeeds
+// whether or not the TUI was accepting input, so the paste itself proves
+// nothing. The ground truth is already in the registry: continueWorker stamps
+// `continueSentAt` when it pastes, and the UserPromptSubmit hook is the only
+// writer that clears it (hooks/default.ts onPromptSubmitted). A stamp that
+// changes after our send therefore means a prompt actually registered as a user
+// turn in the session — the confirmation the send path cannot give us.
+//
+// Three phases: wait out the cold boot, paste, then confirm — retrying the
+// paste on no confirmation and alerting (keeping the seed file) if it never
+// lands. Retries are safe by construction: continueWorker skips a worker that
+// is already mid-turn, and routes a paste still sitting unsent in the box
+// through pressEnter (isOwnStuckPaste) instead of pasting it twice.
+
+const SEED_READY_POLL_MS = 2_000;
+// Cold boot is git fetch + worktree add + npm install + TUI init. Raised from
+// 90s: the old cap was short enough that a slow boot expired it routinely, and
+// expiry meant pasting into a still-loading TUI, which is how the seed was lost.
+const SEED_READY_TIMEOUT_MS = 180_000;
+const SEED_CONFIRM_POLL_MS = 2_000;
+// Generous enough to cover a slow UserPromptSubmit hook write on a loaded
+// machine, short enough that three attempts still fit inside the deadline.
+const SEED_CONFIRM_WINDOW_MS = 45_000;
+const SEED_RETRY_BACKOFF_MS = 5_000;
+// A skip is a transient state the worker leaves on its own (mid-turn, operator
+// drafting, pane not up yet), so it re-polls rather than burning an attempt.
+const SEED_SKIP_RETRY_MS = 5_000;
+const SEED_MAX_ATTEMPTS = 3;
+// Overall bound on the detached seed process, covering the skip loop that
+// deliberately does not consume attempts.
+const SEED_DELIVERY_DEADLINE_MS = 300_000;
+
+/** Whether a sent seed has registered as a user turn yet. Pure, so the
+ *  confirmation rule is testable without a live TUI. Called only after
+ *  continueWorker reported a real send, which is load-bearing for the
+ *  agentStatus arm below. */
+export function classifySeedDelivery(
+  entry: { agentStatus?: AgentStatus; continueSentAt?: number } | undefined,
+  sentStamp: number | undefined,
+): "worker-gone" | "confirmed" | "pending" {
+  if (!entry) return "worker-gone";
+  // The prompt hook cleared the stamp we sent under (or a later paste replaced
+  // it) — a prompt landed.
+  if (sentStamp !== undefined && entry.continueSentAt !== sentStamp) return "confirmed";
+  // Same hook pipeline, corroborating: the worker is visibly running a turn.
+  // Not a stale-status false positive — continueWorker refuses to send to a
+  // working/asking worker, so this state is necessarily new since our send.
+  // Also covers a send whose continueSentAt write we failed to read back.
+  if (entry.agentStatus === "working" || entry.agentStatus === "asking") return "confirmed";
+  return "pending";
+}
+
 export function seedWorker(
   projectName: string,
   workerName: string,
@@ -675,32 +732,121 @@ export function seedWorker(
     try { fs.unlinkSync(messageFile); } catch { /* already gone */ }
   };
 
-  const deadline = Date.now() + 90_000;
-  const poll = (): void => {
-    const entry = findWorkerByName(projectName, workerName);
-    if (!entry) {
-      log.warn("workers", "seed skipped, worker missing", {
+  const abortWorkerGone = (): void => {
+    log.warn("workers", "seed skipped, worker missing", {
+      worker: workerName,
+      data: { project: projectName },
+    });
+    cleanup();
+  };
+
+  // Terminal failure. Deliberately keeps the seed file: it holds the only copy
+  // of the briefing, so naming its path gives the operator (or a bounce) a way
+  // to re-deliver. Never silent — an idle worker with no task is exactly the
+  // symptom this whole path exists to prevent.
+  const giveUp = (reason: string, attempts: number): void => {
+    log.error("workers", "seed delivery failed", {
+      worker: workerName,
+      data: { project: projectName, reason, attempts, seedFile: messageFile },
+    });
+    addAlert({
+      level: "error",
+      source: "workers",
+      project: projectName,
+      worker: workerName,
+      message: `Seed prompt never registered as a user turn (${reason}) — the worker is live but has no task. `
+        + `Re-deliver: garden dashboard _seed-worker ${projectName} ${workerName} ${messageFile}`,
+      dedupKey: `seed-lost:${projectName}:${workerName}:${messageFile}`,
+    });
+  };
+
+  const startedAt = Date.now();
+  const readyDeadline = startedAt + SEED_READY_TIMEOUT_MS;
+  const deliveryDeadline = startedAt + SEED_DELIVERY_DEADLINE_MS;
+  let attempts = 0;
+
+  // Phase 3 — confirm the paste became a user turn, else retry the paste.
+  const verify = (sentStamp: number | undefined, confirmDeadline: number): void => {
+    const verdict = classifySeedDelivery(findWorkerByName(projectName, workerName), sentStamp);
+    if (verdict === "worker-gone") {
+      abortWorkerGone();
+      return;
+    }
+    if (verdict === "confirmed") {
+      log.info("workers", "seed confirmed", {
         worker: workerName,
-        data: { project: projectName },
+        data: { project: projectName, attempts },
       });
       cleanup();
+      return;
+    }
+    if (Date.now() >= confirmDeadline) {
+      if (attempts >= SEED_MAX_ATTEMPTS) {
+        giveUp(`no user turn after ${attempts} sends`, attempts);
+        return;
+      }
+      log.warn("workers", "seed unconfirmed, re-sending", {
+        worker: workerName,
+        data: { project: projectName, attempts },
+      });
+      setTimeout(send, SEED_RETRY_BACKOFF_MS);
+      return;
+    }
+    setTimeout(() => verify(sentStamp, confirmDeadline), SEED_CONFIRM_POLL_MS);
+  };
+
+  // Phase 2 — paste.
+  const send = (): void => {
+    if (Date.now() >= deliveryDeadline) {
+      giveUp("delivery deadline elapsed", attempts);
+      return;
+    }
+    const delivered = continueWorker(projectName, workerName, message, "seed");
+    if (!delivered) {
+      // continueWorker declined: no pane, a bare shell, the worker mid-turn, or
+      // an operator draft in the box. All transient, so re-poll without
+      // consuming an attempt; the delivery deadline is the bound. (A seed whose
+      // own stuck paste does not match a garden signature lands here too — it
+      // reads as an operator draft, and the deadline turns it into a loud
+      // giveUp rather than a silent idle worker.)
+      if (!findWorkerByName(projectName, workerName)) {
+        abortWorkerGone();
+        return;
+      }
+      setTimeout(send, SEED_SKIP_RETRY_MS);
+      return;
+    }
+    attempts += 1;
+    const sentStamp = findWorkerByName(projectName, workerName)?.continueSentAt;
+    verify(sentStamp, Date.now() + SEED_CONFIRM_WINDOW_MS);
+  };
+
+  // Phase 1 — wait out the cold boot.
+  const waitForReady = (): void => {
+    const entry = findWorkerByName(projectName, workerName);
+    if (!entry) {
+      abortWorkerGone();
       return;
     }
     if (entry.agentStatus !== "loading") {
-      continueWorker(projectName, workerName, message, "seed");
-      cleanup();
+      send();
       return;
     }
-    if (Date.now() >= deadline) {
-      log.warn("workers", "seed timed out, sending anyway", {
+    if (Date.now() >= readyDeadline) {
+      // Sending into a still-"loading" TUI is how the seed got swallowed. We
+      // still send rather than wait forever — the status itself may be stale,
+      // since the session-start hook that clears "loading" can be the thing
+      // that was lost — but the send is now verified, so a swallowed paste is
+      // retried instead of lost.
+      log.warn("workers", "seed ready-wait timed out, sending unconfirmed-ready", {
         worker: workerName,
         data: { project: projectName, agentStatus: entry.agentStatus },
       });
-      continueWorker(projectName, workerName, message, "seed");
-      cleanup();
+      send();
       return;
     }
-    setTimeout(poll, 2000);
+    setTimeout(waitForReady, SEED_READY_POLL_MS);
   };
-  poll();
+
+  waitForReady();
 }

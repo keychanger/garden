@@ -67,11 +67,18 @@ vi.mock("../src/dashboard/telemetry.js", () => ({
   recordContinueDispatched: vi.fn(),
 }));
 
+// The seed path raises an operator alert when a briefing never registers as a
+// user turn. Spy it here so the "never silently idle" invariant is asserted
+// rather than written to the real alert store.
+vi.mock("../src/dashboard/alerts.js", () => ({
+  addAlert: vi.fn(),
+}));
+
 import {
   continueWorker, continueWorkerAfterMerge, continueWorkerAfterMergeIfStuck,
   continueWorkerIfStuck,
   dispatchDelayedContinue, dispatchDelayedAutoContinue,
-  dispatchDelayedSeed, seedWorker, notifyHandoffCallback,
+  dispatchDelayedSeed, seedWorker, classifySeedDelivery, notifyHandoffCallback,
   donePath, isDoneSet, clearDoneSentinel,
   extractOperatorDraft, paneHasBlockingOperatorDraft, rearmContinueIfDrafting,
 } from "../src/dashboard/continue.js";
@@ -79,6 +86,7 @@ import { readDashState } from "../src/dashboard/state.js";
 import { findWorkerByName, updateWorkerFields } from "../src/dashboard/registry.js";
 import { tmux, pasteAndSubmit, paneExists, windowExists, getFirstPaneId, capturePaneText, capturePaneCursor, paneRunningOnlyShell, pressEnter } from "../src/dashboard/tmux.js";
 import { recordContinueDispatched } from "../src/dashboard/telemetry.js";
+import { addAlert } from "../src/dashboard/alerts.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { tryGetProject } from "../src/config.js";
@@ -1112,24 +1120,79 @@ describe("dispatchDelayedSeed", () => {
   });
 });
 
+// The seed path's confirmation rule, isolated from the timer loop.
+describe("classifySeedDelivery", () => {
+  it("reports worker-gone when the entry has disappeared", () => {
+    expect(classifySeedDelivery(undefined, 1000)).toBe("worker-gone");
+  });
+
+  it("confirms when the prompt hook cleared the stamp we sent under", () => {
+    expect(classifySeedDelivery({ agentStatus: "ready" }, 1000)).toBe("confirmed");
+  });
+
+  it("confirms when a later paste replaced the stamp", () => {
+    expect(classifySeedDelivery({ agentStatus: "ready", continueSentAt: 2000 }, 1000))
+      .toBe("confirmed");
+  });
+
+  it("confirms on the corroborating agentStatus signal even with the stamp intact", () => {
+    expect(classifySeedDelivery({ agentStatus: "working", continueSentAt: 1000 }, 1000))
+      .toBe("confirmed");
+    expect(classifySeedDelivery({ agentStatus: "asking", continueSentAt: 1000 }, 1000))
+      .toBe("confirmed");
+  });
+
+  it("stays pending while the stamp we sent under is still outstanding", () => {
+    expect(classifySeedDelivery({ agentStatus: "ready", continueSentAt: 1000 }, 1000))
+      .toBe("pending");
+  });
+
+  // A send whose continueSentAt write we couldn't read back must not be
+  // mistaken for a cleared stamp — that would confirm a seed that never landed.
+  it("stays pending on an uncaptured stamp until agentStatus corroborates", () => {
+    expect(classifySeedDelivery({ agentStatus: "ready" }, undefined)).toBe("pending");
+  });
+});
+
 describe("seedWorker", () => {
+  // A registry stand-in that actually applies writes, so continueWorker's
+  // continueSentAt stamp round-trips the way it does on disk — the whole
+  // confirmation rule is built on that field's lifecycle.
+  function fakeRegistry(initial: Record<string, unknown> = {}) {
+    const entry: Record<string, unknown> = {
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "ready", ...initial,
+    };
+    vi.mocked(findWorkerByName).mockImplementation(() => entry as never);
+    vi.mocked(updateWorkerFields).mockImplementation(((_p: string, _w: string, fields: Record<string, unknown>) => {
+      for (const [k, v] of Object.entries(fields)) {
+        if (v === undefined) delete entry[k];
+        else entry[k] = v;
+      }
+    }) as never);
+    return entry;
+  }
+
+  // What the UserPromptSubmit hook does when a prompt actually registers.
+  function promptLands(entry: Record<string, unknown>): void {
+    delete entry.continueSentAt;
+    entry.agentStatus = "working";
+  }
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.mocked(fs.readFileSync).mockReturnValue("[handoff from src/worker]\n\nbriefing body");
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("reads the briefing, sends it once the worker leaves loading, and unlinks the file", () => {
-    vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", agentStatus: "ready",
-    });
-    vi.mocked(readDashState).mockReturnValue(makeState({
-      activeWindowName: "_myproject-worker-bold-ash",
-      activePaneId: "%9",
-    }));
+  it("reads the briefing, sends it once the worker leaves loading, and unlinks only after the prompt registers", () => {
+    const entry = fakeRegistry();
 
     seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
 
@@ -1138,47 +1201,113 @@ describe("seedWorker", () => {
     const message = vi.mocked(pasteAndSubmit).mock.calls[0][1];
     expect(message).toContain("[handoff from src/worker]");
     expect(message).toContain("briefing body");
+    // Delivery is unconfirmed at this point — the file is the only copy of the
+    // briefing, so it must survive until a user turn is observed.
+    expect(fs.unlinkSync).not.toHaveBeenCalled();
+
+    promptLands(entry);
+    vi.advanceTimersByTime(2000);
     expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
+    expect(addAlert).not.toHaveBeenCalled();
   });
 
   it("polls while the worker is still loading and sends as soon as it transitions", () => {
-    let status: "loading" | "ready" = "loading";
-    vi.mocked(findWorkerByName).mockImplementation(() => ({
-      name: "bold-ash", sessionId: "s", task: "", agentStatus: status,
-    }));
-    vi.mocked(readDashState).mockReturnValue(makeState({
-      activeWindowName: "_myproject-worker-bold-ash",
-      activePaneId: "%9",
-    }));
+    const entry = fakeRegistry({ agentStatus: "loading" });
 
     seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
-    // First poll sees "loading" — no send yet.
     expect(vi.mocked(pasteAndSubmit)).not.toHaveBeenCalled();
 
-    // Worker finishes bootstrap; next 2s tick sends the briefing.
-    status = "ready";
+    entry.agentStatus = "ready";
     vi.advanceTimersByTime(2000);
-    expect(vi.mocked(pasteAndSubmit)).toHaveBeenCalled();
-    expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
+    expect(vi.mocked(pasteAndSubmit)).toHaveBeenCalledTimes(1);
   });
 
-  it("times out after 90s if the worker never leaves loading, sends anyway, and unlinks", () => {
-    vi.mocked(findWorkerByName).mockReturnValue({
-      name: "bold-ash", sessionId: "s", task: "", agentStatus: "loading",
-    });
-    vi.mocked(readDashState).mockReturnValue(makeState({
-      activeWindowName: "_myproject-worker-bold-ash",
-      activePaneId: "%9",
-    }));
+  it("re-sends the seed when the first paste never becomes a user turn, and confirms on the retry", () => {
+    const entry = fakeRegistry();
 
     seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
+
+    // 45s confirmation window elapses with continueSentAt still outstanding —
+    // the paste was swallowed by a TUI that wasn't accepting input.
+    vi.advanceTimersByTime(45_000);
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
+    // The window is detected at the first poll past it (t=46s); the 5s retry
+    // backoff then fires a second paste at t=51s.
+    vi.advanceTimersByTime(6_000);
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(2);
+
+    promptLands(entry);
+    vi.advanceTimersByTime(2000);
+    expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
+    expect(addAlert).not.toHaveBeenCalled();
+  });
+
+  it("alerts and keeps the seed file when the briefing never registers after every attempt", () => {
+    fakeRegistry();
+
+    seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
+
+    // Three sends, each followed by an unconfirmed 45s window plus a 5s backoff.
+    vi.advanceTimersByTime(200_000);
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(3);
+
+    expect(addAlert).toHaveBeenCalledTimes(1);
+    const alert = vi.mocked(addAlert).mock.calls[0][0];
+    expect(alert.level).toBe("error");
+    expect(alert.project).toBe("myproject");
+    expect(alert.worker).toBe("bold-ash");
+    // The operator needs the path to re-deliver by hand.
+    expect(alert.message).toContain("/tmp/seed.txt");
+    // The briefing is the only copy — losing it would make the alert unactionable.
+    expect(fs.unlinkSync).not.toHaveBeenCalled();
+  });
+
+  it("sends anyway after the 180s ready wait, and still confirms through the verify path", () => {
+    const entry = fakeRegistry({ agentStatus: "loading" });
+
+    seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
+    expect(vi.mocked(pasteAndSubmit)).not.toHaveBeenCalled();
+
+    // The old 90s cap expired into a fire-and-forget paste; the wait is now
+    // longer, and what follows it is verified rather than assumed.
+    vi.advanceTimersByTime(90_000);
     expect(vi.mocked(pasteAndSubmit)).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(90_000);
-    // After deadline elapses, the next poll sends regardless of status so the
-    // briefing isn't silently lost on a stuck worker.
-    expect(vi.mocked(pasteAndSubmit)).toHaveBeenCalled();
+    expect(vi.mocked(pasteAndSubmit)).toHaveBeenCalledTimes(1);
+
+    promptLands(entry);
+    vi.advanceTimersByTime(2000);
     expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
+  });
+
+  it("retries without consuming a send attempt while continueWorker declines to paste", () => {
+    // Worker is mid-turn: continueWorker refuses to stomp a live prompt.
+    const entry = fakeRegistry({ agentStatus: "working" });
+
+    seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
+    expect(vi.mocked(pasteAndSubmit)).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(20_000);
+    expect(vi.mocked(pasteAndSubmit)).not.toHaveBeenCalled();
+    // No attempt was burned, so no alert has fired despite the elapsed time.
+    expect(addAlert).not.toHaveBeenCalled();
+
+    entry.agentStatus = "ready";
+    vi.advanceTimersByTime(5_000);
+    expect(vi.mocked(pasteAndSubmit)).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up loudly when the worker never accepts a paste before the delivery deadline", () => {
+    fakeRegistry({ agentStatus: "working" });
+
+    seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
+    vi.advanceTimersByTime(310_000);
+
+    expect(vi.mocked(pasteAndSubmit)).not.toHaveBeenCalled();
+    expect(addAlert).toHaveBeenCalledTimes(1);
+    expect(fs.unlinkSync).not.toHaveBeenCalled();
   });
 
   it("aborts and unlinks the file when the worker has already been killed", () => {
@@ -1188,6 +1317,21 @@ describe("seedWorker", () => {
 
     expect(vi.mocked(pasteAndSubmit)).not.toHaveBeenCalled();
     expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
+    // A deliberately removed worker is not a lost seed.
+    expect(addAlert).not.toHaveBeenCalled();
+  });
+
+  it("aborts and unlinks without alerting when the worker is killed mid-verification", () => {
+    fakeRegistry();
+
+    seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
+
+    vi.mocked(findWorkerByName).mockReturnValue(undefined);
+    vi.advanceTimersByTime(2000);
+
+    expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
+    expect(addAlert).not.toHaveBeenCalled();
   });
 
   it("aborts silently when the seed file can't be read (already cleaned up)", () => {
