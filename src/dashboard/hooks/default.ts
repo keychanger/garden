@@ -25,7 +25,7 @@ import { log } from "../log.js";
 // it must not import poller.ts or any state handler.
 import { triggerProjectPoll } from "../poller-fifo.js";
 import {
-  findWorkerByName, updateWorkerFields, type WorkerEntry,
+  findWorkerByName, isDelegating, updateWorkerFields, type WorkerEntry,
 } from "../registry.js";
 import { getPaneTitle } from "../tmux.js";
 import { resolveWorkerActivity } from "../harness/core.js";
@@ -207,7 +207,7 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
 // ---------------------------------------------------------------------------
 
 type FieldsDelta = Partial<Pick<WorkerEntry,
-  "agentStatus" | "lastEventAt" | "lastStateChangeAt" | "prState" | "task" | "transcriptPath" | "sessionId" | "continueSentAt">>;
+  "agentStatus" | "lastEventAt" | "lastStateChangeAt" | "prState" | "task" | "transcriptPath" | "sessionId" | "continueSentAt" | "subagentActivityAt">>;
 
 // pretooluse/posttooluse fire on every Claude tool call and dominate hook
 // traffic — a busy agent completes many tools per second, and with N agents in
@@ -240,7 +240,15 @@ function applyAndLog(
     && (!ctx.workerInfo.entry.task
       || ctx.workerInfo.entry.task === CODEX_AWAITING_TASK
       || ctx.workerInfo.entry.task === ctx.workerInfo.entry.name);
-  if (!stateChanged && !activityUnset
+  // A subagent heartbeat that flips the derived delegating display (an idle
+  // main thread with live subagents renders as `working bg` — isDelegating)
+  // is not just liveness: it must beat the throttle AND repaint, because the
+  // first subagent event after Stop is the only carrier of the idle→working
+  // flip. Steady-state stamps (already delegating) stay throttled.
+  const delegatingChanged = fields.subagentActivityAt !== undefined
+    && isDelegating({ ...ctx.workerInfo.entry, subagentActivityAt: fields.subagentActivityAt }, now)
+      !== isDelegating(ctx.workerInfo.entry, now);
+  if (!stateChanged && !activityUnset && !delegatingChanged
       && now - (ctx.workerInfo.entry.lastEventAt ?? 0) < HOOK_HEARTBEAT_MS) {
     return;
   }
@@ -333,7 +341,7 @@ function applyAndLog(
   // Skip the dashboard cascade when nothing visible changed — pretooluse and
   // posttooluse fire on every Claude tool call and dominate hook traffic, but
   // most don't flip agentStatus (the cs guards above narrow the writes).
-  if (stateChanged || taskChanged) refreshDashboard();
+  if (stateChanged || taskChanged || delegatingChanged) refreshDashboard();
 }
 
 // ---------------------------------------------------------------------------
@@ -427,8 +435,17 @@ const onToolActivity: HookMethod = (ctx) => {
   // guard in applyAndLog cannot see this.
   const fields: FieldsDelta = {};
   const cs = ctx.workerInfo.entry.agentStatus;
-  if (!isSubagentEvent(ctx) && (cs === "asking" || cs === "idle")) {
-    fields.agentStatus = "working";
+  if (!isSubagentEvent(ctx)) {
+    if (cs === "asking" || cs === "idle") fields.agentStatus = "working";
+  } else {
+    // A subagent completing a tool is proof the worker's background work
+    // (Task agents, Workflow runs) is still executing even when the main
+    // thread has parked after Stop. It still never moves agentStatus; the
+    // renderer derives the `working bg` display from this stamp instead
+    // (isDelegating), so a worker waiting on its workflows doesn't read as
+    // finished. Rides the heartbeat throttle in applyAndLog except when the
+    // stamp flips that display.
+    fields.subagentActivityAt = Date.now();
   }
   applyAndLog(ctx, fields);
   // Deliberately outside the guard: a subagent's Edit rewrites the same

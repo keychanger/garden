@@ -160,6 +160,16 @@ export interface WorkerEntry {
   // (hook side) and by transitionState on a prState change (poller side);
   // backfilled in migrateLastStateChangeAt for entries that predate the field.
   lastStateChangeAt?: number;
+  // Epoch ms a SUBAGENT tool event last fired for this worker — a PostToolUse
+  // carrying `agent_id` (Task agents, background Workflow runs). Subagent
+  // events never move agentStatus (hooks/default.ts isSubagentEvent), so a
+  // worker that ends its turn to wait on background work parks at `idle` even
+  // while its subagents keep going; this stamp is what lets the renderer
+  // derive the `working bg` display for that gap (isDelegating below).
+  // Written by applyAndLog riding the 10s hook heartbeat throttle, except
+  // when the stamp flips the derived display — that write goes through
+  // immediately so the row repaints the moment the condition is known.
+  subagentActivityAt?: number;
   // Epoch ms when the worker was created (set in addWorker). Acts as the floor
   // for a brand-new worker's freshness before its first hook fires, so a
   // just-made worker sorts fresh instead of sinking to the bottom. Optional
@@ -611,6 +621,35 @@ export function isWorkerStale(entry: WorkerEntry, now: number = Date.now()): boo
   if (workerSortTier(entry) !== ACTIVE_SORT_TIER) return false;
   if (entry.agentStatus === "paused") return false;
   return now - workerFreshness(entry) > WORKER_STALE_MS;
+}
+
+// Freshness window for the delegating display below. Bounds the one
+// unrecoverable case — subagents that died without a trace (harness crash), so
+// no later event ever supersedes the stamp — and is sized generously because a
+// subagent mid-checks-suite can legitimately go many minutes between tool
+// completions (PostToolUse fires only when a tool finishes). Normal exit needs
+// no window at all: when the background work completes the harness re-invokes
+// the main thread, whose own events bump lastStateChangeAt past the stamp.
+export const SUBAGENT_ACTIVE_WINDOW_MS = 30 * 60_000;
+
+// An idle worker whose subagents are demonstrably still running: the last
+// subagent tool event postdates the main thread's park (lastStateChangeAt —
+// stamped by the Stop that wrote `idle`) and is fresh. The display layer
+// renders this as `working` with a dim `bg` tag (resolveWorkerStatus /
+// stateCell in commands/status.ts) so a worker waiting on its background
+// Workflow/Task agents doesn't read as finished. Display derivation ONLY:
+// agentStatus stays `idle`, no state-machine edge moves, and the poller's
+// isWorkerClaudeWorking is unaffected. `asking` is deliberately excluded —
+// a blocked-on-operator row keeps its yellow flag regardless of subagent
+// activity (the original reason subagent events never move agentStatus).
+export function isDelegating(
+  entry: { agentStatus?: string; subagentActivityAt?: number; lastStateChangeAt?: number } | undefined,
+  now: number = Date.now(),
+): boolean {
+  if (!entry || entry.agentStatus !== "idle") return false;
+  if (entry.subagentActivityAt === undefined) return false;
+  if ((entry.lastStateChangeAt ?? 0) >= entry.subagentActivityAt) return false;
+  return now - entry.subagentActivityAt < SUBAGENT_ACTIVE_WINDOW_MS;
 }
 
 // The authoritative agentStatus for a worker being restored via `claude

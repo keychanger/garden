@@ -62,11 +62,55 @@ is a bug — the PreToolUse hook for the blocking tool (`ExitPlanMode`,
 `AskUserQuestion`) didn't fire or didn't reach the registry. The correct
 state in that situation is `asking`.
 
+### Delegated background work (`working bg`)
+
+A worker can end its turn while background work it launched — Task
+subagents, background Workflow runs — is still executing. Claude Code
+fires `Stop` when the main thread finishes its response, so
+`agentStatus` is honestly `idle`; but the harness re-invokes the worker
+when the background work completes, and to the operator the worker is
+still doing its job. A row that reads `idle` there looks finished when
+it is not.
+
+The subagents themselves are the evidence: Claude Code fires the parent
+session's `PostToolUse` for subagent tool calls, identified by
+`agent_id` (see the PostToolUse writer below). Those events still never
+move `agentStatus`, but each one stamps `subagentActivityAt` on the
+worker entry (riding the 10s hook heartbeat throttle). The renderer —
+not the state machine — derives the display (`isDelegating`,
+`registry.ts`): an `idle` worker whose newest subagent stamp postdates
+its park (`lastStateChangeAt`, the Stop that wrote `idle`) and is
+fresher than `SUBAGENT_ACTIVE_WINDOW_MS` (30 min) renders as `working`
+— spinner and all — with a dim `bg` tag folded into the state cell.
+
+This is a display derivation, not a transition:
+
+- `agentStatus` stays `idle` in the registry. No state-machine edge
+  moves, the review entry path is untouched, and the merge gate
+  (`isWorkerClaudeWorking`) still sees `idle` — background subagents
+  neither queue reviews nor defer merges.
+- `asking` is excluded: the derivation applies to `idle` only, so a
+  worker blocked on the operator keeps its yellow flag no matter how
+  busy its subagents are — the original reason subagent events never
+  move `agentStatus`.
+- The display self-clears through ordinary events: when the background
+  work finishes, the harness re-invokes the main thread, and its own
+  events bump `lastStateChangeAt` past the stamp. The freshness window
+  only bounds the pathological case — subagents that died without a
+  trace (harness crash), leaving no later event to supersede the stamp
+  — and its decay repaints via the watchdog's 60s status re-bake, which
+  re-renders existing state and discovers no transition.
+
+The stamp's flip write — the first subagent event after `Stop` —
+bypasses the heartbeat throttle and triggers a repaint, because it is
+the only carrier of the idle→`working bg` change; steady-state stamps
+stay throttled as ordinary heartbeats.
+
 ### Operator hold (paused)
 
-There is one case where a worker that is *not* working can still legitimately
-display `working`, and it is the reason the `paused` state exists: a **user
-interrupt**. When the operator presses Escape in the worker's Claude pane, the
+Beyond the delegated-background display above, there is one case where a
+worker that is *not* working can still legitimately display `working`,
+and it is the reason the `paused` state exists: a **user interrupt**. When the operator presses Escape in the worker's Claude pane, the
 turn is aborted but **no hook fires** — Claude Code's `Stop` hook does not run
 on a user interrupt, and there is no interrupt/abort hook at all. So the
 registry never hears about the interrupt and the worker stays painted as
@@ -597,7 +641,9 @@ clock. Update the list above when you do.
 ## Detection machinery
 
 The status of every worker is two fields in the registry: `agentStatus`
-and `prState`. There are exactly five writers and one reader. There is
+and `prState` (plus one display-only stamp, `subagentActivityAt` — see
+"Delegated background work"). There are exactly five writers and one
+reader. There is
 no `pgrep`, no marker file, no activity-text parsing, no fallback poll.
 
 ### Writers
@@ -714,6 +760,10 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   blocks the operator exactly as a main-thread one does. It also does
   not reach the mid-review mutation marker below: a subagent's `Edit`
   rewrites the same worktree the reviewer is certifying.
+  A subagent event does write one field of its own: it stamps
+  `subagentActivityAt` (throttled to the 10s heartbeat, except for the
+  write that flips the derived display), the input to the `working bg`
+  display derivation — see "Delegated background work" above.
   This hook is also the one place a hook writes a field other than
   `agentStatus`: when the tool was a *mutating* one (`Edit` / `MultiEdit`
   / `Write` / `NotebookEdit` — `Bash` is deliberately exempt, so a
@@ -813,6 +863,11 @@ Lifecycle states (`reviewing`, `merge-pending`, `resolving`, `ci-fixing`,
 *code* is, not what Claude is doing right now. `merged` and `done` are
 the only ones that clear on `UserPromptSubmit` — that clear is performed
 by the hook handler, not by this combine function.
+
+The "return agentStatus" leaf carries one derived branch: an `idle`
+worker that `isDelegating` (live subagent activity — see "Delegated
+background work") resolves to `working` for display. The registry value
+is untouched; the derivation lives entirely in this one reader.
 
 ### Hook → display pipeline
 

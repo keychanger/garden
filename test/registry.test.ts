@@ -966,6 +966,54 @@ describe("worker ordering helpers", () => {
   });
 });
 
+describe("isDelegating", () => {
+  const now = 1_700_000_000_000;
+
+  it("is true for an idle worker whose subagent activity postdates the park and is fresh", async () => {
+    const { isDelegating } = await importRegistry();
+    expect(isDelegating(mkEntry({
+      name: "a", agentStatus: "idle",
+      lastStateChangeAt: now - 60_000, subagentActivityAt: now - 5_000,
+    }), now)).toBe(true);
+  });
+
+  it("is false when the stamp predates the park — the last subagent event came before Stop", async () => {
+    // The false-tail guard: workflows finished, the main thread resumed and
+    // ended a later turn — the stale stamp must not read as live background
+    // work for the rest of the freshness window.
+    const { isDelegating } = await importRegistry();
+    expect(isDelegating(mkEntry({
+      name: "a", agentStatus: "idle",
+      lastStateChangeAt: now - 5_000, subagentActivityAt: now - 60_000,
+    }), now)).toBe(false);
+  });
+
+  it("decays once the stamp outlives the freshness window (subagents died silently)", async () => {
+    const { isDelegating, SUBAGENT_ACTIVE_WINDOW_MS } = await importRegistry();
+    const stamp = now - SUBAGENT_ACTIVE_WINDOW_MS - 1;
+    expect(isDelegating(mkEntry({
+      name: "a", agentStatus: "idle",
+      lastStateChangeAt: stamp - 60_000, subagentActivityAt: stamp,
+    }), now)).toBe(false);
+  });
+
+  it("never fires for a non-idle main thread — asking keeps its blocked-on-operator flag", async () => {
+    const { isDelegating } = await importRegistry();
+    for (const agentStatus of ["asking", "working", "paused", "exited", "ready"] as const) {
+      expect(isDelegating(mkEntry({
+        name: "a", agentStatus,
+        lastStateChangeAt: now - 60_000, subagentActivityAt: now - 5_000,
+      }), now), agentStatus).toBe(false);
+    }
+  });
+
+  it("is false with no stamp or no entry", async () => {
+    const { isDelegating } = await importRegistry();
+    expect(isDelegating(mkEntry({ name: "a", agentStatus: "idle" }), now)).toBe(false);
+    expect(isDelegating(undefined, now)).toBe(false);
+  });
+});
+
 describe("resolveResumeAgentStatus", () => {
   it("parks an interrupted (mid-turn) worker at the ready cold-start sentinel", async () => {
     const { resolveResumeAgentStatus } = await importRegistry();

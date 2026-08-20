@@ -10,7 +10,7 @@ import { loadConfig, getFocusedProjectNames, allPlotProjectNames, tryGetProject,
 import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
-import { getWorkers, readRegistry, batchUpdateWorkerFields, compareWorkerFreshness, isWorkerStale, type WorkerRegistry } from "../dashboard/registry.js";
+import { getWorkers, readRegistry, batchUpdateWorkerFields, compareWorkerFreshness, isWorkerStale, isDelegating, type WorkerRegistry } from "../dashboard/registry.js";
 import { listHiddenWorkerWindows, windowExists, getFirstPaneId, getPaneTitle } from "../dashboard/tmux.js";
 import { resolveWorkerActivity } from "../dashboard/harness/core.js";
 import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/window-names.js";
@@ -58,6 +58,12 @@ interface WorkerInfo {
   // and it is working the problem. The row stays red and still reads `failing`;
   // only the icon becomes the spinner. See iconFor.
   failingBusy: boolean;
+  // True when the worker's `working` display is derived from live SUBAGENT
+  // activity rather than its own turn (isDelegating — agentStatus is `idle`,
+  // background Workflow/Task agents still running). Drives the dim `bg` tag
+  // in the state cell so the operator can tell why the pane sits at a prompt
+  // while the row spins.
+  delegating: boolean;
   failCount: number;
   // The branch this worker is pinned to merge into. Undefined for legacy
   // entries written before the field existed. The renderer compares it
@@ -475,7 +481,18 @@ function formatStatus(worker: WorkerInfo): string {
 // computeStatusWidth (which measures it) so the measured width and the rendered
 // text can never drift.
 function stateCell(worker: WorkerInfo, now: number): string {
-  return `${formatStatus(worker)}${formatTimeInState(worker.status, worker.lastStateChangeAt, now)}`;
+  return `${formatStatus(worker)}${formatDelegatingSuffix(worker)}${formatTimeInState(worker.status, worker.lastStateChangeAt, now)}`;
+}
+
+// Dim `bg` tag on a row whose `working` is derived from live subagent activity
+// (isDelegating): the worker's own turn ended and its background Workflow/Task
+// agents are still running. Answers the question the bare state can't — why
+// the pane sits at a prompt while the row spins. Gated on the resolved status
+// too, so the tag never rides a prState row (e.g. `reviewing`) that happens to
+// carry a fresh subagent stamp.
+function formatDelegatingSuffix(worker: WorkerInfo): string {
+  if (worker.status !== "working" || !worker.delegating) return "";
+  return " \x1b[90mbg\x1b[0m";
 }
 
 // Width of the state column: the widest state cell across ALL workers on screen,
@@ -626,13 +643,21 @@ function padEndVisible(s: string, width: number): string {
 // `merged`/`done` from prState (on UserPromptSubmit) — this function never
 // mutates state.
 export function resolveWorkerStatus(
-  entry: { agentStatus?: string; prState?: string } | undefined,
+  entry: { agentStatus?: string; prState?: string; subagentActivityAt?: number; lastStateChangeAt?: number } | undefined,
+  now: number = Date.now(),
 ): WorkerStatus {
   const pr = entry?.prState;
   if (pr === "reviewing" || pr === "merge-pending" || pr === "resolving" || pr === "ci-fixing" || pr === "failing" || pr === "merged" || pr === "done") {
     return pr;
   }
   const cs = entry?.agentStatus as ProcessStatus | undefined;
+  // An idle main thread with live subagents is still doing the operator's
+  // work: background Workflow/Task agents run on after the turn ends, and the
+  // harness re-invokes the worker when they finish. Render it as `working`
+  // (with a dim `bg` tag — see stateCell) so the row doesn't read as finished
+  // while the agents beneath it are still going. Display derivation only —
+  // agentStatus stays `idle` in the registry (see isDelegating).
+  if (cs === "idle" && isDelegating(entry, now)) return "working";
   // No agentStatus yet (e.g., entry just created without "loading"): show
   // "ready" as the safest neutral state.
   return cs ?? "ready";
@@ -1066,6 +1091,7 @@ function collectWorkers(
       stale: entry ? isWorkerStale(entry) : false,
       awaitingInput: isAwaitingInput(entry?.worktreePath),
       failingBusy: isFailingBusy(entry),
+      delegating: isDelegating(entry),
       failCount: entry?.failCount ?? 0,
       baseBranch: entry?.baseBranch,
       harness: entry?.harness,
@@ -1094,6 +1120,7 @@ function collectWorkers(
       stale: entry ? isWorkerStale(entry) : false,
       awaitingInput: isAwaitingInput(entry?.worktreePath),
       failingBusy: isFailingBusy(entry),
+      delegating: isDelegating(entry),
       failCount: entry?.failCount ?? 0,
       baseBranch: entry?.baseBranch,
       harness: entry?.harness,

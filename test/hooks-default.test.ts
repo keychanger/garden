@@ -8,7 +8,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
-vi.mock("../src/dashboard/registry.js", () => ({
+// Spread the real module so pure derivations (isDelegating) run for real —
+// the delegating-stamp tests below exercise their actual logic; only the I/O
+// surface is stubbed.
+vi.mock("../src/dashboard/registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/dashboard/registry.js")>()),
   findWorkerByName: vi.fn(),
   updateWorkerFields: vi.fn(),
 }));
@@ -42,11 +46,15 @@ vi.mock("../src/dashboard/git.js", () => ({
 }));
 vi.mock("../src/config.js", () => ({
   tryGetProject: vi.fn(() => ({ path: "/repo/myproject" })),
+  // The real registry module (spread below for its pure derivations) imports
+  // this at module scope; no test here touches the sessions dir.
+  SESSIONS_DIR: "/tmp/garden-test-sessions",
 }));
 
 import { workerHookHandlers } from "../src/dashboard/hooks/default.js";
 import { updateWorkerFields } from "../src/dashboard/registry.js";
 import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
+import { refreshDashboard } from "../src/dashboard/header.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 import type { HookContext } from "../src/dashboard/workflows/types.js";
 
@@ -196,5 +204,61 @@ describe("onToolActivity — subagent tool calls never move agentStatus", () => 
         expect(statusWrites(), `${agentStatus}/${agentId}`).toEqual([]);
       }
     }
+  });
+});
+
+// A subagent tool event never moves agentStatus, but it IS evidence the
+// worker's background work (Task agents, Workflow runs) is still executing —
+// so it stamps subagentActivityAt, from which the renderer derives the
+// `working bg` display for an idle main thread (isDelegating, registry.ts).
+describe("onToolActivity — subagent activity stamp (delegating display)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function stampWrites(): number[] {
+    return vi.mocked(updateWorkerFields).mock.calls
+      .map(c => (c[2] as Record<string, unknown>).subagentActivityAt)
+      .filter((s): s is number => s !== undefined);
+  }
+
+  it("stamps subagentActivityAt on a subagent tool event without touching agentStatus", () => {
+    workerHookHandlers.onToolActivity(
+      toolCtx({ agentStatus: "idle", lastStateChangeAt: Date.now() - 60_000 },
+        "Read", "a6159cebbfb14984c"));
+    expect(stampWrites()).toHaveLength(1);
+    const fields = vi.mocked(updateWorkerFields).mock.calls[0][2] as Record<string, unknown>;
+    expect(fields.agentStatus).toBeUndefined();
+  });
+
+  it("does not stamp on the worker's own tool events", () => {
+    workerHookHandlers.onToolActivity(toolCtx({ agentStatus: "working" }, "Read"));
+    expect(stampWrites()).toHaveLength(0);
+  });
+
+  it("beats the heartbeat throttle and repaints when the stamp flips the delegating display", () => {
+    // The main thread just parked (Stop wrote idle, bumping lastEventAt), so a
+    // plain heartbeat this soon would be throttled away — but this event is
+    // the sole carrier of the idle→`working bg` flip, so it must write and
+    // trigger the dashboard refresh.
+    const now = Date.now();
+    workerHookHandlers.onToolActivity(
+      toolCtx({ agentStatus: "idle", lastStateChangeAt: now - 2_000, lastEventAt: now - 2_000 },
+        "Read", "a6159cebbfb14984c"));
+    expect(stampWrites()).toHaveLength(1);
+    expect(refreshDashboard).toHaveBeenCalled();
+  });
+
+  it("stays throttled while already delegating — steady-state stamps are heartbeats", () => {
+    const now = Date.now();
+    workerHookHandlers.onToolActivity(
+      toolCtx({
+        agentStatus: "idle",
+        lastStateChangeAt: now - 60_000,
+        subagentActivityAt: now - 5_000, // already delegating
+        lastEventAt: now - 5_000,        // within the 10s heartbeat window
+      }, "Read", "a6159cebbfb14984c"));
+    expect(vi.mocked(updateWorkerFields)).not.toHaveBeenCalled();
+    expect(refreshDashboard).not.toHaveBeenCalled();
   });
 });

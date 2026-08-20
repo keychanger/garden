@@ -26,7 +26,9 @@ vi.mock("../src/dashboard/state.js", () => ({
   })),
 }));
 
-vi.mock("../src/dashboard/registry.js", () => ({
+vi.mock("../src/dashboard/registry.js", async (importOriginal) => ({
+  // Spread the real module so pure derivations (isDelegating) run for real.
+  ...(await importOriginal<typeof import("../src/dashboard/registry.js")>()),
   getWorkers: vi.fn(() => []),
   // Stub ordering to the prior alphabetical behavior so these render tests
   // stay order-stable; the real comparator + staleness are unit-tested in
@@ -142,6 +144,24 @@ describe("resolveWorkerStatus", () => {
     expect(resolveWorkerStatus({ agentStatus: "working", prState: "working" })).toBe("working");
     expect(resolveWorkerStatus({ agentStatus: "idle", prState: "working" })).toBe("idle");
   });
+
+  it("derives working for an idle worker whose subagents are still running", () => {
+    const now = 1_700_000_000_000;
+    expect(resolveWorkerStatus({
+      agentStatus: "idle",
+      lastStateChangeAt: now - 60_000, subagentActivityAt: now - 5_000,
+    }, now)).toBe("working");
+    // A stamp predating the park is the false-tail case — stays idle.
+    expect(resolveWorkerStatus({
+      agentStatus: "idle",
+      lastStateChangeAt: now - 5_000, subagentActivityAt: now - 60_000,
+    }, now)).toBe("idle");
+    // A lifecycle prState still wins over the derived display.
+    expect(resolveWorkerStatus({
+      agentStatus: "idle", prState: "reviewing",
+      lastStateChangeAt: now - 60_000, subagentActivityAt: now - 5_000,
+    }, now)).toBe("reviewing");
+  });
 });
 
 describe("worker deduplication", () => {
@@ -188,6 +208,25 @@ describe("status display", () => {
     ]);
     const lines = await captureConsoleLog(() => status([]));
     expect(lines.some(l => l.includes("idle"))).toBe(true);
+  });
+
+  it("shows a delegating idle worker as working with a dim bg tag", async () => {
+    // Main thread parked after Stop, background Workflow/Task agents still
+    // firing subagent tool events — the row must not read as finished.
+    const now = Date.now();
+    vi.mocked(getWorkers).mockReturnValue([
+      {
+        name: "bold-ash", sessionId: "abc", task: "running workflows",
+        agentStatus: "idle",
+        lastStateChangeAt: now - 60_000, subagentActivityAt: now - 5_000,
+      },
+    ]);
+    const lines = await captureConsoleLog(() => status([]));
+    const line = lines.find(l => l.includes("bold-ash"));
+    expect(line).toBeDefined();
+    expect(line).toContain("working");
+    expect(line).toContain("\x1b[90mbg\x1b[0m");
+    expect(line).not.toContain("idle");
   });
 
   it("shows asking from registry and wraps the row in bold-yellow", async () => {
