@@ -2964,6 +2964,46 @@ describe("poll — merge-pending state", () => {
     );
   });
 
+  it("clears done to working when the worker is asking at finalization (missed-question race)", () => {
+    // Observed 2026-08-20 (omi-godot/dark-dull-bough): the worker wrote
+    // .garden-done and pushed, was re-prompted mid-review, and called
+    // AskUserQuestion — agentStatus "asking" — before the merge landed. An
+    // asking worker passes the pre-merge guard (isWorkerClaudeWorking checks
+    // "working" only), and the invariant-4 race-clear also accepted only
+    // "working", so prState parked at done. When the operator answered, the
+    // PostToolUse resume (asking → working) cannot clear a terminal prState —
+    // only UserPromptSubmit can — leaving a phantom `done` row over a
+    // genuinely mid-turn worker.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        agentStatus: "asking",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true, advanced: "worktree" });
+    vi.mocked(isDoneSet).mockReturnValue(true);
+
+    poll("myproject");
+
+    const calls = vi.mocked(updateWorkerFields).mock.calls.filter(
+      c => c[1] === "bold-ash",
+    );
+    // First the merge finalizes to "done" (sentinel present), then the race
+    // check sees the mid-turn agent and clears the terminal state — the row
+    // falls back to agentStatus "asking", the correct blocked-on-you signal.
+    const doneCall = calls.find(c => (c[2] as Record<string, unknown>).prState === "done");
+    const workingCall = calls.find(c => (c[2] as Record<string, unknown>).prState === "working");
+    expect(doneCall).toBeDefined();
+    expect(workingCall).toBeDefined();
+    expect((workingCall![2] as Record<string, unknown>).mergedAt).toBeUndefined();
+    expect(log.info).toHaveBeenCalledWith(
+      "poller", "worker active again, clearing merge state",
+      expect.objectContaining({ worker: "bold-ash" }),
+    );
+  });
+
   it("dispatches auto-continue when worker is idle and no .garden-done sentinel", () => {
     registryMock._setEntries("myproject", [
       makeWorker({

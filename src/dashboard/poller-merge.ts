@@ -833,13 +833,19 @@ function transitionToTerminal(
 
   // STATUS.md invariant 4 race: a prompt hook that landed mid-merge can't
   // clear an active pipeline prState (which `merged`/`done` is at the moment
-  // of write). If the worker is already working again, clear the stale
-  // terminal state immediately so the renderer doesn't show a phantom merge.
+  // of write). If the worker is mid-turn again — working, or blocked on a
+  // question it asked (`asking`, which passes the pre-merge guard and whose
+  // answer resumes the turn via PostToolUse, an event that cannot clear a
+  // terminal prState) — clear the stale terminal state immediately so the
+  // renderer doesn't show a phantom merge, or a phantom `done` over a live
+  // turn. The row falls back to agentStatus, so an asking worker keeps its
+  // blocked-on-you signal; if the turn ends still finished, the untouched
+  // .garden-done sentinel re-trips `done` on that Stop.
   const fresh = findWorkerByName(projectName, entry.name);
-  if (fresh?.agentStatus === "working") {
+  if (fresh?.agentStatus === "working" || fresh?.agentStatus === "asking") {
     log.info("poller", "worker active again, clearing merge state", {
       worker: entry.name,
-      data: { project: projectName, clearedFrom: terminalState },
+      data: { project: projectName, clearedFrom: terminalState, agentStatus: fresh.agentStatus },
     });
     transitionState(projectName, entry.name, "working", {
       mergedAt: undefined,

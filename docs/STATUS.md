@@ -584,8 +584,17 @@ clock. Update the list above when you do.
    prompt hook cannot clear `merged`/`done` (because prState was still
    an active pipeline state at prompt time). `finalizeMerge` handles
    this by checking `agentStatus` after writing the terminal state —
-   if the worker is already working, it transitions immediately to
-   `working`.
+   if the worker is mid-turn (`working`, or `asking` — blocked on a
+   question it raised, which passes the pre-merge guard and whose
+   answer resumes the turn via `PostToolUse`, an event that cannot
+   clear a terminal prState), it transitions immediately to `working`.
+   The row then renders from `agentStatus`, so an asking worker keeps
+   its blocked-on-you signal; a still-present `.garden-done` sentinel
+   re-trips `done` on the turn's eventual no-commit `Stop`. The
+   `asking` half was added after a worker asked a mid-review question,
+   had its merge finalize to `done` while blocked, and stayed painted
+   `done` through the rest of a genuinely active turn (observed
+   2026-08-20).
 
    There is no "merged history" — each cycle is independent. The Stop
    hook only sets `done` (never `merged`); `UserPromptSubmit` is the
