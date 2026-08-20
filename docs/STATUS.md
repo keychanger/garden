@@ -18,7 +18,7 @@ These are the only states the user sees in the status pane.
 |---------------|------|--------------------------------------------------|
 | loading       | `H`  | Worker pane started, bootstrap running, Claude not yet launched. |
 | ready         | `*`  | Fresh worker. Claude loaded, waiting for first input. |
-| working       | `@`  | Claude is generating a response to a submitted prompt. See "What 'working' means" below. |
+| working       | `@`  | Claude is generating a response to a submitted prompt, or the display is deriving `working bg` from live delegated work. See "What 'working' means" below. |
 | asking        | `?`  | Claude is blocked mid-turn waiting for operator input — plan approval, a question answer, or a permission-request escalation. The turn has not ended. |
 | idle          | `#`  | Turn has ended — Claude finished its response and is waiting at the prompt for the next user message. Not in the review cycle. |
 | paused        | `‖`  | Operator interrupted the worker mid-turn and is holding it (the `hold` action / `⌥e`). Distinct from `idle`: the operator deliberately halted active work and intends to redirect. Cleared by the next prompt. See "Operator hold" below. |
@@ -36,8 +36,10 @@ These are the only states the user sees in the status pane.
 
 ### What "working" means
 
-`working` means exactly one thing: **Claude has received a submitted
-prompt and has not yet finished its response.**
+The stored `working` state means exactly one thing: **Claude has received
+a submitted prompt and has not yet finished its response.** The sole
+display-only exception is `working bg`, derived from an honestly `idle`
+stored state as described below.
 
 It starts the instant the `UserPromptSubmit` hook fires. Claude Code's
 authoritative end signal is `Stop`; for Codex, the rollout's final
@@ -764,8 +766,8 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   `subagentActivityAt` (throttled to the 10s heartbeat, except for the
   write that flips the derived display), the input to the `working bg`
   display derivation — see "Delegated background work" above.
-  This hook is also the one place a hook writes a field other than
-  `agentStatus`: when the tool was a *mutating* one (`Edit` / `MultiEdit`
+  This hook also writes `reviewInterruptedAt` when the tool was a
+  *mutating* one (`Edit` / `MultiEdit`
   / `Write` / `NotebookEdit` — `Bash` is deliberately exempt, so a
   read-only Q&A turn costs nothing) and the worker's `prState` is
   `reviewing`, it stamps `reviewInterruptedAt` and pokes the poller. It
