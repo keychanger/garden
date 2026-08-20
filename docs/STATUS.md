@@ -182,10 +182,12 @@ stateDiagram-v2
     ci_fixing --> working : worker push (stale auto-fix)
 
     merged --> working : UserPromptSubmit (auto-continue, no sentinel)
+    merged --> working : finalize race (agent already working/asking)
     merged --> done : Stop hook + .garden-done present + no commits ahead
     merge_pending --> done : queue: ff merge with .garden-done present
     idle --> done : Stop hook + .garden-done present
     done --> working : UserPromptSubmit (operator nudged)
+    done --> working : finalize race (agent already working/asking)
     done --> reviewing : holistic interposition (multi-phase default, >=2 merges)
 
     failing --> working : worker push + 30s debounce
@@ -259,8 +261,10 @@ a terminal state — it returns to `working` when the operator responds
 | ci-fixing     | failing       | ci-fix `Stop`, budget exhausted with `failingReason: "ci"` |
 | ci-fixing     | working       | Worker push event (commits during auto-fix, agent aborted) |
 | merged        | working       | Worker `UserPromptSubmit` (transient cleared)        |
+| merged        | working       | Merge finalization race: worker is already `working` or `asking` after the terminal write |
 | merged        | done          | Worker `Stop` with no commits ahead AND `.garden-done` present |
 | done          | working       | Worker `UserPromptSubmit` (operator nudged)          |
+| done          | working       | Merge finalization race: worker is already `working` or `asking` after the terminal write |
 | done          | reviewing     | Holistic interposition: multi-phase default worker (≥2 merges) — poller launches whole-task review |
 | failing       | working       | Worker push event + 30s debounce                     |
 | any           | exited        | tmux `pane-died` hook                                |
@@ -598,7 +602,8 @@ clock. Update the list above when you do.
 
    There is no "merged history" — each cycle is independent. The Stop
    hook only sets `done` (never `merged`); `UserPromptSubmit` is the
-   only path out of either terminal state toward active work.
+   normal path out of either settled terminal state toward active work;
+   the finalization race above is the narrow exception.
 
 5. **There is no `pushed` state.** Earlier versions of this system carried
    an internal `pushed` lifecycle state between "commits exist" and

@@ -639,9 +639,9 @@ function padEndVisible(s: string, width: number): string {
 // Combine agentStatus and prState into a single display state.
 // Lifecycle states (reviewing, merge-pending, failing, merged, done) take
 // priority because they describe where the worker's *code* is, not what
-// Claude is doing right now. The hook handler is the only place that clears
-// `merged`/`done` from prState (on UserPromptSubmit) — this function never
-// mutates state.
+// Claude is doing right now. `merged`/`done` clear on UserPromptSubmit or when
+// merge finalization detects that the worker is already mid-turn; this function
+// never mutates state.
 export function resolveWorkerStatus(
   entry: { agentStatus?: string; prState?: string; subagentActivityAt?: number; lastStateChangeAt?: number } | undefined,
   now: number = Date.now(),
