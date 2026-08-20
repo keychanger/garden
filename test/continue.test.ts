@@ -80,7 +80,8 @@ import {
   dispatchDelayedContinue, dispatchDelayedAutoContinue,
   dispatchDelayedSeed, seedWorker, classifySeedDelivery, notifyHandoffCallback,
   donePath, isDoneSet, clearDoneSentinel,
-  extractOperatorDraft, paneHasBlockingOperatorDraft, rearmContinueIfDrafting,
+  extractOperatorDraft, extractDraftInfo, isOwnStuckPaste,
+  paneHasBlockingOperatorDraft, rearmContinueIfDrafting,
 } from "../src/dashboard/continue.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { findWorkerByName, updateWorkerFields } from "../src/dashboard/registry.js";
@@ -633,6 +634,75 @@ describe("paneHasBlockingOperatorDraft", () => {
 
     vi.mocked(capturePaneText).mockReturnValue(DRAFT_BOX);
     expect(paneHasBlockingOperatorDraft("%9", { continueSentAt: 123 })).toBe(true);
+  });
+});
+
+describe("extractDraftInfo (wrap reporting)", () => {
+  it("reports wrapped when the caret sits below the marker row", () => {
+    const info = extractDraftInfo(DRAFT_BOX, { x: 4, y: 2 });
+    expect(info.text).toBe("the quick brown fox");
+    expect(info.wrapped).toBe(true);
+  });
+
+  it("is not wrapped when the caret is on the marker row", () => {
+    expect(extractDraftInfo(DRAFT_BOX, { x: 21, y: 1 }).wrapped).toBe(false);
+  });
+
+  // Wrap can't be established without a caret, and guessing would let the
+  // prefix arm accept a short draft it must not.
+  it("is not wrapped when the cursor is unknown", () => {
+    expect(extractDraftInfo(DRAFT_BOX, null).wrapped).toBe(false);
+  });
+});
+
+// The signature-free arms that let a stuck SINGLE-LINE seed be recognized.
+// The false-positive direction is the one that matters: a wrong `true` presses
+// Enter on an operator's half-typed message.
+describe("isOwnStuckPaste (pending-text arms)", () => {
+  const sent = { continueSentAt: 123 };
+  const pending = (text: string, wrapped = false) => ({ text, wrapped });
+
+  it("recognizes a signature-free single-line seed sitting unsent in full", () => {
+    expect(isOwnStuckPaste(sent, "refactor the parser", pending("refactor the parser")))
+      .toBe(true);
+  });
+
+  it("tolerates capture padding and collapsed whitespace", () => {
+    expect(isOwnStuckPaste(sent, "refactor   the parser", pending("refactor the parser")))
+      .toBe(true);
+  });
+
+  it("does NOT match an operator draft that is merely a prefix of our message", () => {
+    expect(isOwnStuckPaste(sent, "refactor", pending("refactor the parser")))
+      .toBe(false);
+  });
+
+  it("accepts an exact prefix only once the draft has demonstrably wrapped", () => {
+    const msg = "refactor the parser and then rewrite every call site in the tree";
+    expect(isOwnStuckPaste(sent, "refactor the parser and then", pending(msg, true)))
+      .toBe(true);
+    // Same draft, unwrapped — a plausible partial compose, so it must defer.
+    expect(isOwnStuckPaste(sent, "refactor the parser and then", pending(msg, false)))
+      .toBe(false);
+  });
+
+  it("does not match a wrapped draft that diverges from our message", () => {
+    expect(isOwnStuckPaste(sent, "something else entirely", pending("refactor the parser", true)))
+      .toBe(false);
+  });
+
+  it("still requires an outstanding continueSentAt", () => {
+    expect(isOwnStuckPaste({}, "refactor the parser", pending("refactor the parser")))
+      .toBe(false);
+  });
+
+  it("keeps working on signatures when no pending text is supplied", () => {
+    expect(isOwnStuckPaste(sent, "[garden] continue")).toBe(true);
+    expect(isOwnStuckPaste(sent, "refactor the parser")).toBe(false);
+  });
+
+  it("never matches an empty draft", () => {
+    expect(isOwnStuckPaste(sent, "", pending(""))).toBe(false);
   });
 });
 
@@ -1320,6 +1390,38 @@ describe("seedWorker", () => {
     expect(vi.mocked(pasteAndSubmit)).not.toHaveBeenCalled();
     expect(addAlert).toHaveBeenCalledTimes(1);
     expect(fs.unlinkSync).not.toHaveBeenCalled();
+  });
+
+  // The gap this closes end-to-end: before the pending-text arms, a stuck
+  // single-line seed matched no garden signature, so the retry read it as an
+  // operator draft and deferred until the deadline turned it into an alert.
+  it("presses Enter on its own stuck single-line seed instead of deferring on it", () => {
+    vi.mocked(fs.readFileSync).mockReturnValue("refactor the parser");
+    const entry = fakeRegistry();
+
+    seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
+    expect(entry.continueSentAt).toBeTypeOf("number");
+
+    // The paste landed in the box but its Enter taps were eaten: the text is
+    // sitting there unsent, and no prompt hook has fired to clear the stamp.
+    vi.mocked(capturePaneText).mockReturnValue([
+      RULE,
+      "❯ refactor the parser" + " ".repeat(40),
+      RULE,
+    ].join("\n"));
+
+    vi.advanceTimersByTime(51_000);
+
+    // Recognized as ours: submitted, not re-pasted (which would double it) and
+    // not deferred (which would starve until the alert).
+    expect(pressEnter).toHaveBeenCalled();
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
+
+    promptLands(entry);
+    vi.advanceTimersByTime(2000);
+    expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
+    expect(addAlert).not.toHaveBeenCalled();
   });
 
   it("aborts and unlinks the file when the worker has already been killed", () => {

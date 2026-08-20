@@ -231,7 +231,19 @@ const MAX_DRAFT_RETRIES = 15;
 // holds text); a caret above it is not on the input line. When the cursor is
 // unknown (null — pane unreachable), fall back to the whole post-marker
 // remainder. Returns "" when the box is empty or no prompt line is visible.
-export function extractOperatorDraft(captured: string, cursor: PaneCursor | null): string {
+export interface DraftInfo {
+  /** The operator's unsent text, as extracted from the marker row. */
+  text: string;
+  /** True when the caret sits on a row BELOW the marker — the draft is longer
+   *  than one visual row, so `text` holds only its first row. Load-bearing for
+   *  recognizing a stuck single-line paste (see isOwnStuckPaste): a wrapped
+   *  draft is necessarily a full row long, which is what makes an exact
+   *  prefix match against our own pending text safe without a length floor.
+   *  False whenever the cursor is unknown, since wrap cannot be established. */
+  wrapped: boolean;
+}
+
+export function extractDraftInfo(captured: string, cursor: PaneCursor | null): DraftInfo {
   const lines = captured.split("\n");
   let markerRow = -1;
   let markerCol = -1;
@@ -243,13 +255,17 @@ export function extractOperatorDraft(captured: string, cursor: PaneCursor | null
       break;
     }
   }
-  if (markerRow === -1) return "";
+  if (markerRow === -1) return { text: "", wrapped: false };
 
   const inputStart = markerCol + PROMPT_MARKER.length;
-  if (!cursor) return lines[markerRow].slice(inputStart).trim();
-  if (cursor.y < markerRow) return "";
-  if (cursor.y > markerRow) return lines[markerRow].slice(inputStart).trim();
-  return lines[markerRow].slice(inputStart, cursor.x).trim();
+  if (!cursor) return { text: lines[markerRow].slice(inputStart).trim(), wrapped: false };
+  if (cursor.y < markerRow) return { text: "", wrapped: false };
+  if (cursor.y > markerRow) return { text: lines[markerRow].slice(inputStart).trim(), wrapped: true };
+  return { text: lines[markerRow].slice(inputStart, cursor.x).trim(), wrapped: false };
+}
+
+export function extractOperatorDraft(captured: string, cursor: PaneCursor | null): string {
+  return extractDraftInfo(captured, cursor).text;
 }
 
 export function paneHasOperatorDraft(paneId: string): boolean {
@@ -259,8 +275,10 @@ export function paneHasOperatorDraft(paneId: string): boolean {
 // Visible heads a garden-initiated paste can render as in the input box.
 // Every continuation prompt leads with a literal "[garden]" line and handoff
 // seed briefings with "[handoff from …]"; Claude Code collapses a multi-line
-// paste (which all of these are) to the "[Pasted text #N +L lines]"
-// placeholder, so that is the common stuck rendering.
+// paste to the "[Pasted text #N +L lines]" placeholder, so that is the common
+// stuck rendering. These cover every prompt garden composes itself; an
+// operator-authored single-line seed carries no such head, which is why
+// isOwnStuckPaste also compares against the pending text directly.
 const GARDEN_PASTE_SIGNATURES = ["[garden]", "[handoff", "[Pasted text"];
 
 // True when the draft in the box is garden's own earlier paste whose Enter
@@ -279,12 +297,44 @@ const GARDEN_PASTE_SIGNATURES = ["[garden]", "[handoff", "[Pasted text"];
 // positive — the operator clears our paste, then pastes multi-line content of
 // their own without submitting, matching "[Pasted text" — requires them to
 // discard a visible garden prompt mid-window and is accepted.
+// Whitespace-normalized for comparison: capture-pane pads the input row and a
+// wrapped row breaks at a space the raw message does not, so raw equality would
+// miss matches that are plainly the same text.
+function normalizeDraft(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
+/** What continueWorker is about to paste, for recognizing a stuck copy of it. */
+export interface PendingPaste {
+  text: string;
+  wrapped: boolean;
+}
+
 export function isOwnStuckPaste(
   entry: { continueSentAt?: number },
   draft: string,
+  pending?: PendingPaste,
 ): boolean {
   if (!entry.continueSentAt) return false;
-  return GARDEN_PASTE_SIGNATURES.some((sig) => draft.startsWith(sig));
+  if (GARDEN_PASTE_SIGNATURES.some((sig) => draft.startsWith(sig))) return true;
+  if (!pending) return false;
+
+  // Signature-free arm, for a SINGLE-LINE paste (a multi-line one renders as
+  // the "[Pasted text …]" placeholder the signatures already catch). We know
+  // exactly what we pasted, so compare against it rather than guess from the
+  // head. `continueSentAt` is already established above, so the box holds
+  // either our stuck paste or something typed after it.
+  const seen = normalizeDraft(draft);
+  const sent = normalizeDraft(pending.text);
+  if (seen.length === 0) return false;
+  // Fits in the box: require the WHOLE message. A partial operator compose
+  // cannot equal the full text, so this arm carries no false-positive risk.
+  if (seen === sent) return true;
+  // Wrapped: the box holds more than we can see, so `seen` is the first visual
+  // row and equality is unavailable. An exact prefix match is safe here without
+  // an arbitrary length floor precisely BECAUSE it wrapped — the operator would
+  // have to have retyped a full row of our message character-for-character.
+  return pending.wrapped && sent.startsWith(seen);
 }
 
 // The loop workflows' variant of the draft gate (see loop.ts): a draft blocks
@@ -442,7 +492,8 @@ export function continueWorker(
     });
     return false;
   }
-  const draft = extractOperatorDraft(capturePaneText(paneId), capturePaneCursor(paneId));
+  const draftInfo = extractDraftInfo(capturePaneText(paneId), capturePaneCursor(paneId));
+  const draft = draftInfo.text;
   if (draft.length > 0) {
     // Garden's own earlier paste, stuck unsubmitted (Enter eaten). The message
     // is already in the box — re-pasting would double it, and deferring would
@@ -451,7 +502,7 @@ export function continueWorker(
     // this is that same delivery finally landing. continueSentAt stays set
     // until the prompt hook confirms a landed prompt, so a replay retries the
     // Enter if this one is eaten too.
-    if (isOwnStuckPaste(entry, draft)) {
+    if (isOwnStuckPaste(entry, draft, { text, wrapped: draftInfo.wrapped })) {
       pressEnter(paneId);
       updateWorkerFields(projectName, workerName, { interruptedWhileWorking: undefined });
       log.info("workers", "continue re-submitted stuck garden paste", {
@@ -815,11 +866,11 @@ export function seedWorker(
     const delivered = continueWorker(projectName, workerName, message, "seed");
     if (!delivered) {
       // continueWorker declined: no pane, a bare shell, the worker mid-turn, or
-      // an operator draft in the box. All transient, so re-poll without
-      // consuming an attempt; the delivery deadline is the bound. (A seed whose
-      // own stuck paste does not match a garden signature lands here too — it
-      // reads as an operator draft, and the deadline turns it into a loud
-      // giveUp rather than a silent idle worker.)
+      // a genuine operator draft in the box. All transient, so re-poll without
+      // consuming an attempt; the delivery deadline is the bound. (A stuck copy
+      // of our OWN seed no longer lands here — the draft guard recognizes it by
+      // comparing against the text we are re-sending, signature or not, and
+      // presses Enter instead.)
       if (!findWorkerByName(projectName, workerName)) {
         abortWorkerGone();
         return;
