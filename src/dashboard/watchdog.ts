@@ -48,6 +48,7 @@ import {
   captureCodexUsageLatest, probeCodexUsageIfStale, CODEX_PROBE_INTERVAL_MS,
 } from "./codex-usage.js";
 import { startCodexInputWatcher } from "./codex-input.js";
+import { healWorkerWindows } from "./window-heal.js";
 import {
   commitsBehindOrigin, gardenInstallRepo, listWorktreeDirs, workerCleanupMarkerPath,
 } from "./git.js";
@@ -651,6 +652,15 @@ export async function runWatchdogLoop(): Promise<void> {
         (project) => startProjectPoller(project, gardenRunner),
       );
       tick(lastPokeAt, Date.now());
+      // Re-file worker windows whose name disagrees with the worker their pane
+      // holds (a misfiled rename makes a live worker invisible in the status
+      // pane), BEFORE orphan detection so it judges the healed names. Under the
+      // state lock so the heal cannot observe a navigation swap mid-flight.
+      try {
+        withStateLock(() => healWorkerWindows());
+      } catch (err) {
+        log.warn("watchdog", "window heal failed", { data: { error: String(err) } });
+      }
       alertOrphanedWindows(readRegistry());
       // Advance the status pane's time-in-state suffixes ("reviewing 12m" ->
       // "13m"). Content-deduped inside, so this is a no-op when nothing is in

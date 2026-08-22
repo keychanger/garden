@@ -424,6 +424,34 @@ export function renameWindow(oldName: string, newName: string): void {
   } catch { log.debug("tmux", "renameWindow failed", { data: { oldName, newName } }); }
 }
 
+// Rename by window id (@N) — the only rename that stays correct when window
+// names are duplicated. A name target on tmux >= 3.x FAILS outright ("can't
+// find window") once two windows share the name, and the silent no-op left the
+// just-swapped pane filed under the wrong name — the corruption engine behind
+// workers vanishing from the status pane. Returns false on failure so callers
+// can surface it instead of swallowing a misfile.
+export function renameWindowById(windowId: string, newName: string): boolean {
+  try {
+    tmux("rename-window", "-t", windowId, newName);
+    return true;
+  } catch {
+    log.warn("tmux", "renameWindowById failed", { data: { windowId, newName } });
+    return false;
+  }
+}
+
+export function resizeWindowById(windowId: string, width: number, height: number): void {
+  try {
+    tmux("resize-window", "-t", windowId, "-x", String(width), "-y", String(height));
+  } catch { /* ignore — window may not exist */ }
+}
+
+export function killWindowById(windowId: string): void {
+  try {
+    tmux("kill-window", "-t", windowId);
+  } catch { /* ignore — window may not exist */ }
+}
+
 export function getPaneSize(paneId: string): { width: number; height: number } | null {
   try {
     const out = tmuxOutput("display-message", "-t", paneId, "-p", "#{pane_width} #{pane_height}");
@@ -436,10 +464,12 @@ export function getPaneSize(paneId: string): { width: number; height: number } |
 }
 
 export interface SessionPane {
+  windowId: string;
   windowName: string;
   paneId: string;
   width: number;
   height: number;
+  panePath: string;
 }
 
 // One-shot snapshot of every pane in the dashboard session with its id and
@@ -447,22 +477,33 @@ export interface SessionPane {
 // and "size of pane X" from a single tmux fork. The swapDirect hot path
 // (operator ⌥-key pane switch) asked four of those questions separately —
 // paneExists + getFirstPaneId + two getPaneSize — i.e. four synchronous tmux
-// forks per keystroke; this collapses them to one.
+// forks per keystroke; this collapses them to one. windowId is the unambiguous
+// handle for mutations: window NAMES can be duplicated (a respawn race, a
+// misfiled rename), and every name-targeted tmux mutation either errors or
+// picks an arbitrary duplicate. panePath is last in the format because a path
+// may itself contain the separator.
 export function listSessionPanes(): SessionPane[] {
   try {
     const out = tmuxOutput(
       "list-panes", "-s", "-t", DASHBOARD_SESSION,
-      "-F", "#{window_name}\t#{pane_id}\t#{pane_width}\t#{pane_height}",
+      "-F", "#{window_id}\t#{window_name}\t#{pane_id}\t#{pane_width}\t#{pane_height}\t#{pane_current_path}",
     );
     const result: SessionPane[] = [];
     for (const line of out.split("\n")) {
       if (!line) continue;
       const parts = line.split("\t");
-      if (parts.length < 4) continue;
-      const width = parseInt(parts[2], 10);
-      const height = parseInt(parts[3], 10);
+      if (parts.length < 6) continue;
+      const width = parseInt(parts[3], 10);
+      const height = parseInt(parts[4], 10);
       if (!Number.isFinite(width) || !Number.isFinite(height)) continue;
-      result.push({ windowName: parts[0], paneId: parts[1], width, height });
+      result.push({
+        windowId: parts[0],
+        windowName: parts[1],
+        paneId: parts[2],
+        width,
+        height,
+        panePath: parts.slice(5).join("\t"),
+      });
     }
     return result;
   } catch {

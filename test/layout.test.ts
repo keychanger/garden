@@ -10,11 +10,14 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   getFirstPaneId: vi.fn(),
   windowExists: vi.fn(() => false),
   killWindowSafe: vi.fn(),
-  renameWindow: vi.fn(),
   paneExists: vi.fn(() => true),
   getPaneSize: vi.fn(() => ({ width: 129, height: 58 })),
   resizeWindow: vi.fn(),
   listSessionPanes: vi.fn(() => []),
+  renameWindowById: vi.fn(() => true),
+  resizeWindowById: vi.fn(),
+  killWindowById: vi.fn(),
+  paneRunningOnlyShell: vi.fn(() => true),
 }));
 
 vi.mock("../src/dashboard/log.js", () => ({
@@ -27,8 +30,16 @@ vi.mock("../src/dashboard/log.js", () => ({
 }));
 
 import { parkToHidden, restoreFromHidden, swapToHidden, swapDirect } from "../src/dashboard/layout.js";
-import { tmux, newDashboardWindowPaned, getFirstPaneId, windowExists, killWindowSafe, renameWindow, paneExists, getPaneSize, resizeWindow, listSessionPanes } from "../src/dashboard/tmux.js";
+import {
+  tmux, newDashboardWindowPaned, getFirstPaneId, killWindowSafe, paneExists,
+  getPaneSize, resizeWindow, listSessionPanes, renameWindowById, resizeWindowById,
+  killWindowById, paneRunningOnlyShell, type SessionPane,
+} from "../src/dashboard/tmux.js";
 import type { DashboardState } from "../src/dashboard/state.js";
+
+function pane(windowId: string, windowName: string, paneId: string, extra: Partial<SessionPane> = {}): SessionPane {
+  return { windowId, windowName, paneId, width: 129, height: 58, panePath: "/tmp", ...extra };
+}
 
 function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
   return {
@@ -45,7 +56,9 @@ function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(paneExists).mockReturnValue(true);
-  vi.mocked(windowExists).mockReturnValue(false);
+  vi.mocked(listSessionPanes).mockReturnValue([]);
+  vi.mocked(paneRunningOnlyShell).mockReturnValue(true);
+  vi.mocked(renameWindowById).mockReturnValue(true);
 });
 
 describe("parkToHidden", () => {
@@ -75,12 +88,31 @@ describe("parkToHidden", () => {
     );
   });
 
-  it("always kills existing window before creating", () => {
+  it("kills a stale same-named window holding a bare shell, by window id", () => {
     vi.mocked(newDashboardWindowPaned).mockReturnValue("%10");
+    vi.mocked(listSessionPanes).mockReturnValue([
+      pane("@7", "_garden-worker-bold-ash", "%30"),
+      pane("@8", "_garden-worker-other", "%31"),
+    ]);
     const state = makeState();
     parkToHidden("_garden-worker-bold-ash", state);
 
-    expect(vi.mocked(killWindowSafe)).toHaveBeenCalledWith("_garden-worker-bold-ash");
+    expect(vi.mocked(killWindowById)).toHaveBeenCalledWith("@7");
+    expect(vi.mocked(killWindowById)).not.toHaveBeenCalledWith("@8");
+    expect(vi.mocked(renameWindowById)).not.toHaveBeenCalled();
+  });
+
+  it("quarantines instead of killing a stale window whose pane runs a live process", () => {
+    vi.mocked(newDashboardWindowPaned).mockReturnValue("%10");
+    vi.mocked(paneRunningOnlyShell).mockReturnValue(false);
+    vi.mocked(listSessionPanes).mockReturnValue([
+      pane("@7", "_garden-worker-bold-ash", "%30"),
+    ]);
+    const state = makeState();
+    parkToHidden("_garden-worker-bold-ash", state);
+
+    expect(vi.mocked(killWindowById)).not.toHaveBeenCalled();
+    expect(vi.mocked(renameWindowById)).toHaveBeenCalledWith("@7", "_stray-7");
   });
 
   it("returns null when activePaneId is missing", () => {
@@ -107,21 +139,28 @@ describe("parkToHidden", () => {
 });
 
 describe("restoreFromHidden", () => {
-  it("swaps target pane into right slot and kills hidden window", () => {
-    vi.mocked(getFirstPaneId).mockReturnValue("%20");
+  it("swaps target pane into right slot and kills exactly that window by id", () => {
+    vi.mocked(listSessionPanes).mockReturnValue([
+      pane("@5", "_garden-worker-calm-bay", "%20"),
+      // A duplicate of the restore name — must survive: it may hold a live
+      // misfiled pane, and only the consumed window may die.
+      pane("@6", "_garden-worker-calm-bay", "%21"),
+    ]);
     const state = makeState();
     restoreFromHidden("_garden-worker-calm-bay", state);
 
-    expect(vi.mocked(resizeWindow)).toHaveBeenCalledWith("_garden-worker-calm-bay", 129, 58);
+    expect(vi.mocked(resizeWindowById)).toHaveBeenCalledWith("@5", 129, 58);
     expect(vi.mocked(tmux)).toHaveBeenCalledWith(
       "swap-pane", "-s", "%2", "-t", "%20"
     );
-    expect(vi.mocked(killWindowSafe)).toHaveBeenCalledWith("_garden-worker-calm-bay");
+    expect(vi.mocked(killWindowById)).toHaveBeenCalledWith("@5");
+    expect(vi.mocked(killWindowById)).not.toHaveBeenCalledWith("@6");
+    expect(vi.mocked(killWindowSafe)).not.toHaveBeenCalled();
     expect(state.activePaneId).toBe("%20");
   });
 
   it("is a no-op when target window has no pane", () => {
-    vi.mocked(getFirstPaneId).mockReturnValue(null);
+    vi.mocked(listSessionPanes).mockReturnValue([]);
     const state = makeState();
     restoreFromHidden("_garden-worker-missing", state);
 
@@ -130,7 +169,9 @@ describe("restoreFromHidden", () => {
   });
 
   it("is a no-op when activePaneId is null", () => {
-    vi.mocked(getFirstPaneId).mockReturnValue("%20");
+    vi.mocked(listSessionPanes).mockReturnValue([
+      pane("@5", "_garden-worker-calm-bay", "%20"),
+    ]);
     const state = makeState({ activePaneId: null });
     restoreFromHidden("_garden-worker-calm-bay", state);
 
@@ -141,7 +182,9 @@ describe("restoreFromHidden", () => {
 describe("swapToHidden", () => {
   it("parks then restores in sequence", () => {
     vi.mocked(newDashboardWindowPaned).mockReturnValue("%10");
-    vi.mocked(getFirstPaneId).mockReturnValue("%20");
+    vi.mocked(listSessionPanes).mockReturnValue([
+      pane("@5", "_garden-worker-calm-bay", "%20"),
+    ]);
 
     const state = makeState();
     swapToHidden("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
@@ -156,14 +199,14 @@ describe("swapDirect", () => {
   // Snapshot returned by the single listSessionPanes() fork: the active pane
   // (%2) lives in the visible main window; the restore target (%20) lives in
   // its hidden window.
-  function snapshot(targetSize = { width: 129, height: 58 }) {
+  function snapshot(targetSize: Partial<SessionPane> = {}) {
     return [
-      { windowName: "main", paneId: "%2", width: 129, height: 58 },
-      { windowName: "_garden-worker-calm-bay", paneId: "%20", ...targetSize },
+      pane("@1", "main", "%2"),
+      pane("@5", "_garden-worker-calm-bay", "%20", targetSize),
     ];
   }
 
-  it("swaps panes and renames window in one step", () => {
+  it("swaps panes and renames the swapped window by id", () => {
     vi.mocked(listSessionPanes).mockReturnValue(snapshot());
     const state = makeState();
     const result = swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
@@ -172,10 +215,27 @@ describe("swapDirect", () => {
     expect(vi.mocked(tmux)).toHaveBeenCalledWith(
       "swap-pane", "-s", "%2", "-t", "%20"
     );
-    expect(vi.mocked(renameWindow)).toHaveBeenCalledWith(
-      "_garden-worker-calm-bay", "_garden-worker-bold-ash"
+    expect(vi.mocked(renameWindowById)).toHaveBeenCalledWith(
+      "@5", "_garden-worker-bold-ash"
     );
     expect(state.activePaneId).toBe("%20");
+  });
+
+  it("renames the exact window it swapped even when the restore name is duplicated", () => {
+    vi.mocked(listSessionPanes).mockReturnValue([
+      pane("@1", "main", "%2"),
+      pane("@5", "_garden-worker-calm-bay", "%20"),
+      pane("@9", "_garden-worker-calm-bay", "%29"),
+    ]);
+    const state = makeState();
+    const result = swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
+
+    expect(result).toBe(true);
+    // The pane swapped and the window renamed must be the same window — a
+    // name-target rename fails outright under duplicates, which misfiled the
+    // parked pane and cascaded into the duplicate-window corruption.
+    expect(vi.mocked(tmux)).toHaveBeenCalledWith("swap-pane", "-s", "%2", "-t", "%20");
+    expect(vi.mocked(renameWindowById)).toHaveBeenCalledWith("@5", "_garden-worker-bold-ash");
   });
 
   it("resolves the whole swap from a single tmux fork (no per-question forks)", () => {
@@ -193,14 +253,14 @@ describe("swapDirect", () => {
     vi.mocked(listSessionPanes).mockReturnValue(snapshot());
     const state = makeState();
     swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
-    expect(vi.mocked(resizeWindow)).not.toHaveBeenCalled();
+    expect(vi.mocked(resizeWindowById)).not.toHaveBeenCalled();
   });
 
-  it("resizes when hidden pane differs from visible slot size", () => {
+  it("resizes by window id when hidden pane differs from visible slot size", () => {
     vi.mocked(listSessionPanes).mockReturnValue(snapshot({ width: 100, height: 40 }));
     const state = makeState();
     swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
-    expect(vi.mocked(resizeWindow)).toHaveBeenCalledWith("_garden-worker-calm-bay", 129, 58);
+    expect(vi.mocked(resizeWindowById)).toHaveBeenCalledWith("@5", 129, 58);
   });
 
   it("does not create or kill any windows", () => {
@@ -210,6 +270,7 @@ describe("swapDirect", () => {
 
     expect(vi.mocked(newDashboardWindowPaned)).not.toHaveBeenCalled();
     expect(vi.mocked(killWindowSafe)).not.toHaveBeenCalled();
+    expect(vi.mocked(killWindowById)).not.toHaveBeenCalled();
   });
 
   it("returns false when active pane is missing", () => {
@@ -222,7 +283,7 @@ describe("swapDirect", () => {
   it("returns false when the active pane is dead (absent from the snapshot)", () => {
     // %2 not present — the visible pane died between events.
     vi.mocked(listSessionPanes).mockReturnValue([
-      { windowName: "_garden-worker-calm-bay", paneId: "%20", width: 129, height: 58 },
+      pane("@5", "_garden-worker-calm-bay", "%20"),
     ]);
     const state = makeState();
     const result = swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
@@ -233,7 +294,7 @@ describe("swapDirect", () => {
   it("returns false when target window is missing", () => {
     // Only the active pane is present; the restore window has no pane.
     vi.mocked(listSessionPanes).mockReturnValue([
-      { windowName: "main", paneId: "%2", width: 129, height: 58 },
+      pane("@1", "main", "%2"),
     ]);
     const state = makeState();
     const result = swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);

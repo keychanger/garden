@@ -1,7 +1,7 @@
 // Pane parking and restoring: swaps content between the visible right slot
 // and hidden tmux windows so the layout tree is never modified.
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, newDashboardWindowPaned, getFirstPaneId, killWindowSafe, renameWindow, paneExists, getPaneSize, resizeWindow, listSessionPanes } from "./tmux.js";
+import { tmux, newDashboardWindowPaned, getFirstPaneId, killWindowSafe, paneExists, getPaneSize, resizeWindow, listSessionPanes, renameWindowById, resizeWindowById, killWindowById, paneRunningOnlyShell } from "./tmux.js";
 import type { DashboardState } from "./state.js";
 import { log } from "./log.js";
 
@@ -10,6 +10,27 @@ import { log } from "./log.js";
  * After this, the right slot contains a temporary empty shell.
  * Returns the temp pane ID now in the right slot.
  */
+// A window already carrying the park name is state desync — the name should
+// have been consumed when its content was restored. It is usually a dead temp
+// shell, but a misfiled rename can leave a LIVE agent pane under the wrong
+// name, and killing every same-named window (the old behavior) destroyed live
+// workers along with the stale temp. Kill only bare shells; quarantine anything
+// live under a _stray- name (no -worker- pattern, so the status pane and the
+// orphan-window alert ignore it) for the watchdog's window heal to re-file.
+function clearStaleWindows(windowName: string): void {
+  for (const pane of listSessionPanes()) {
+    if (pane.windowName !== windowName) continue;
+    if (paneRunningOnlyShell(pane.paneId)) {
+      killWindowById(pane.windowId);
+    } else {
+      renameWindowById(pane.windowId, `_stray-${pane.windowId.replace(/^@/, "")}`);
+      log.warn("layout", "quarantined live pane under stale window name", {
+        data: { windowName, windowId: pane.windowId, panePath: pane.panePath },
+      });
+    }
+  }
+}
+
 export function parkToHidden(windowName: string, state: DashboardState): string | null {
   if (!state.activePaneId || !paneExists(state.activePaneId)) {
     log.warn("layout", "parkToHidden: active pane missing or dead");
@@ -18,7 +39,7 @@ export function parkToHidden(windowName: string, state: DashboardState): string 
 
   const visibleSize = getPaneSize(state.activePaneId);
 
-  killWindowSafe(windowName);
+  clearStaleWindows(windowName);
 
   const tempPaneId = newDashboardWindowPaned(windowName);
   if (!tempPaneId) {
@@ -46,8 +67,12 @@ export function parkToHidden(windowName: string, state: DashboardState): string 
  * The hidden window is killed afterward.
  */
 export function restoreFromHidden(windowName: string, state: DashboardState): void {
-  const targetPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
-  if (!targetPaneId || !state.activePaneId) {
+  // Resolve by enumeration, then mutate by window id: a name target is
+  // ambiguous (or errors outright) once duplicate names exist, and the
+  // post-swap kill must remove exactly the window whose pane was consumed —
+  // a name-wide kill would take any duplicates' live panes with it.
+  const target = listSessionPanes().find(p => p.windowName === windowName);
+  if (!target || !state.activePaneId) {
     log.warn("layout", "restoreFromHidden: missing pane");
     return;
   }
@@ -56,13 +81,13 @@ export function restoreFromHidden(windowName: string, state: DashboardState): vo
   // does not trigger a SIGWINCH reflow on the content being restored.
   const visibleSize = getPaneSize(state.activePaneId);
   if (visibleSize) {
-    resizeWindow(windowName, visibleSize.width, visibleSize.height);
+    resizeWindowById(target.windowId, visibleSize.width, visibleSize.height);
   }
 
-  tmux("swap-pane", "-s", state.activePaneId, "-t", targetPaneId);
-  killWindowSafe(windowName);
+  tmux("swap-pane", "-s", state.activePaneId, "-t", target.paneId);
+  killWindowById(target.windowId);
   log.debug("layout", "restored from hidden", { data: { windowName } });
-  state.activePaneId = targetPaneId;
+  state.activePaneId = target.paneId;
 }
 
 /**
@@ -106,13 +131,18 @@ export function swapDirect(parkWindowName: string, restoreWindowName: string, st
 
   // Resize only when size drifted — unconditional resize fires SIGWINCH and forces a Claude redraw per tab.
   if (active.width !== target.width || active.height !== target.height) {
-    resizeWindow(restoreWindowName, active.width, active.height);
+    resizeWindowById(target.windowId, active.width, active.height);
   }
 
   // Direct swap: visible content goes to hidden window, hidden content comes to visible slot
   tmux("swap-pane", "-s", state.activePaneId, "-t", targetPaneId);
-  // Rename the hidden window (now holding old visible content) to the park name
-  renameWindow(restoreWindowName, parkWindowName);
+  // Rename the hidden window (now holding old visible content) to the park
+  // name — by window ID, never by name: a name target fails outright when the
+  // name is duplicated, and the silently-swallowed failure left the parked
+  // pane filed under the restore name. Each later navigation then renamed yet
+  // another worker's window into the same name — the duplicate-window cascade
+  // that made workers vanish from the status pane.
+  renameWindowById(target.windowId, parkWindowName);
 
   log.debug("layout", "swapDirect", { data: { from: parkWindowName, to: restoreWindowName } });
   state.activePaneId = targetPaneId;
