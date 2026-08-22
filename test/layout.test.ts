@@ -16,7 +16,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   listSessionPanes: vi.fn(() => []),
   renameWindowById: vi.fn(() => true),
   resizeWindowById: vi.fn(),
-  killWindowById: vi.fn(),
+  killWindowById: vi.fn(() => true),
   paneRunningOnlyShell: vi.fn(() => true),
 }));
 
@@ -59,6 +59,7 @@ beforeEach(() => {
   vi.mocked(listSessionPanes).mockReturnValue([]);
   vi.mocked(paneRunningOnlyShell).mockReturnValue(true);
   vi.mocked(renameWindowById).mockReturnValue(true);
+  vi.mocked(killWindowById).mockReturnValue(true);
 });
 
 describe("parkToHidden", () => {
@@ -113,6 +114,33 @@ describe("parkToHidden", () => {
 
     expect(vi.mocked(killWindowById)).not.toHaveBeenCalled();
     expect(vi.mocked(renameWindowById)).toHaveBeenCalledWith("@7", "_stray-7");
+  });
+
+  it("does not create a duplicate when a live stale window cannot be quarantined", () => {
+    vi.mocked(paneRunningOnlyShell).mockReturnValue(false);
+    vi.mocked(renameWindowById).mockReturnValue(false);
+    vi.mocked(listSessionPanes).mockReturnValue([
+      pane("@7", "_garden-worker-bold-ash", "%30"),
+    ]);
+
+    expect(() => parkToHidden("_garden-worker-bold-ash", makeState())).toThrow(
+      "Could not clear stale tmux window '_garden-worker-bold-ash'",
+    );
+    expect(vi.mocked(newDashboardWindowPaned)).not.toHaveBeenCalled();
+    expect(vi.mocked(tmux)).not.toHaveBeenCalled();
+  });
+
+  it("does not create a duplicate when a stale shell window cannot be killed", () => {
+    vi.mocked(killWindowById).mockReturnValue(false);
+    vi.mocked(listSessionPanes).mockReturnValue([
+      pane("@7", "_garden-worker-bold-ash", "%30"),
+    ]);
+
+    expect(() => parkToHidden("_garden-worker-bold-ash", makeState())).toThrow(
+      "Could not clear stale tmux window '_garden-worker-bold-ash'",
+    );
+    expect(vi.mocked(newDashboardWindowPaned)).not.toHaveBeenCalled();
+    expect(vi.mocked(tmux)).not.toHaveBeenCalled();
   });
 
   it("returns null when activePaneId is missing", () => {
@@ -193,6 +221,18 @@ describe("swapToHidden", () => {
     const swapCalls = vi.mocked(tmux).mock.calls.filter(c => c[0] === "swap-pane");
     expect(swapCalls.length).toBe(2);
   });
+
+  it("does not restore when parking failed", () => {
+    vi.mocked(paneExists).mockReturnValue(false);
+    vi.mocked(listSessionPanes).mockReturnValue([
+      pane("@5", "_garden-worker-calm-bay", "%20"),
+    ]);
+
+    swapToHidden("_garden-worker-bold-ash", "_garden-worker-calm-bay", makeState());
+
+    expect(vi.mocked(tmux)).not.toHaveBeenCalled();
+    expect(vi.mocked(killWindowById)).not.toHaveBeenCalled();
+  });
 });
 
 describe("swapDirect", () => {
@@ -236,6 +276,35 @@ describe("swapDirect", () => {
     // parked pane and cascaded into the duplicate-window corruption.
     expect(vi.mocked(tmux)).toHaveBeenCalledWith("swap-pane", "-s", "%2", "-t", "%20");
     expect(vi.mocked(renameWindowById)).toHaveBeenCalledWith("@5", "_garden-worker-bold-ash");
+  });
+
+  it("rolls back and requests the fallback when the post-swap rename fails", () => {
+    vi.mocked(listSessionPanes).mockReturnValue(snapshot());
+    vi.mocked(renameWindowById).mockReturnValue(false);
+    const state = makeState();
+
+    const result = swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
+
+    expect(result).toBe(false);
+    expect(vi.mocked(tmux).mock.calls.filter(c => c[0] === "swap-pane")).toEqual([
+      ["swap-pane", "-s", "%2", "-t", "%20"],
+      ["swap-pane", "-s", "%2", "-t", "%20"],
+    ]);
+    expect(state.activePaneId).toBe("%2");
+  });
+
+  it("keeps state aligned with the completed swap when rename and rollback both fail", () => {
+    vi.mocked(listSessionPanes).mockReturnValue(snapshot());
+    vi.mocked(renameWindowById).mockReturnValue(false);
+    vi.mocked(tmux)
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => { throw new Error("rollback failed"); });
+    const state = makeState();
+
+    const result = swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state);
+
+    expect(result).toBe(true);
+    expect(state.activePaneId).toBe("%20");
   });
 
   it("resolves the whole swap from a single tmux fork (no per-question forks)", () => {

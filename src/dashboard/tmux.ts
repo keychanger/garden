@@ -446,10 +446,13 @@ export function resizeWindowById(windowId: string, width: number, height: number
   } catch { /* ignore — window may not exist */ }
 }
 
-export function killWindowById(windowId: string): void {
+export function killWindowById(windowId: string): boolean {
   try {
     tmux("kill-window", "-t", windowId);
-  } catch { /* ignore — window may not exist */ }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function getPaneSize(paneId: string): { width: number; height: number } | null {

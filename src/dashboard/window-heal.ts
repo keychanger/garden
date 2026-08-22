@@ -136,7 +136,6 @@ export function healWorkerWindows(): number {
         `(tmux kill-window -t ${c.windowId} if that is the surplus). [window-dup]`,
       dedupKey: `window-heal-conflict:${c.expected}:${c.windowId}`,
     });
-    log.warn("watchdog", "duplicate windows for one worker", { data: c });
   }
   return healed;
 }

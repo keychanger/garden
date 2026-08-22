@@ -51,9 +51,13 @@ import {
   dedupeWindows,
   killWindowsByName,
   renameWindow,
+  renameWindowById,
   getPaneSize,
   resizeWindow,
+  resizeWindowById,
   killWindowSafe,
+  killWindowById,
+  listSessionPanes,
   getPanePid,
   paneRunningOnlyShell,
   paneRunningEditor,
@@ -618,6 +622,80 @@ describe("renameWindow", () => {
     mockExecFileSync.mockImplementation(() => { throw new Error("fail"); });
     renameWindow("old", "new");
     expect(log.debug).toHaveBeenCalledWith("tmux", "renameWindow failed", { data: { oldName: "old", newName: "new" } });
+  });
+});
+
+describe("window-id mutations", () => {
+  it("renames by the unambiguous tmux window id and reports success", () => {
+    mockExecFileSync.mockReturnValue(undefined);
+    expect(renameWindowById("@7", "_garden-worker-bold-ash")).toBe(true);
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      ["rename-window", "-t", "@7", "_garden-worker-bold-ash"],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+  });
+
+  it("reports a failed id-targeted rename", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("gone"); });
+    expect(renameWindowById("@7", "new-name")).toBe(false);
+    expect(log.warn).toHaveBeenCalledWith(
+      "tmux",
+      "renameWindowById failed",
+      { data: { windowId: "@7", newName: "new-name" } },
+    );
+  });
+
+  it("resizes and kills by window id", () => {
+    mockExecFileSync.mockReturnValue(undefined);
+    resizeWindowById("@7", 120, 40);
+    expect(killWindowById("@7")).toBe(true);
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      ["resize-window", "-t", "@7", "-x", "120", "-y", "40"],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      ["kill-window", "-t", "@7"],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+  });
+
+  it("reports a failed id-targeted kill", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("gone"); });
+    expect(killWindowById("@7")).toBe(false);
+  });
+});
+
+describe("listSessionPanes", () => {
+  it("parses window ids and preserves tabs in the trailing pane path", () => {
+    mockExecFileSync.mockReturnValue(
+      "@5\t_garden-worker-bold-ash\t%20\t129\t58\t/worktree/with\ttab\n" +
+      "@6\tbad\t%21\tnan\t58\t/tmp\n",
+    );
+
+    expect(listSessionPanes()).toEqual([{
+      windowId: "@5",
+      windowName: "_garden-worker-bold-ash",
+      paneId: "%20",
+      width: 129,
+      height: 58,
+      panePath: "/worktree/with\ttab",
+    }]);
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      [
+        "list-panes", "-s", "-t", "garden-dashboard", "-F",
+        "#{window_id}\t#{window_name}\t#{pane_id}\t#{pane_width}\t#{pane_height}\t#{pane_current_path}",
+      ],
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] },
+    );
+  });
+
+  it("returns an empty snapshot when tmux cannot enumerate the session", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("no server"); });
+    expect(listSessionPanes()).toEqual([]);
   });
 });
 

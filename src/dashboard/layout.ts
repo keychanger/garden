@@ -17,18 +17,21 @@ import { log } from "./log.js";
 // workers along with the stale temp. Kill only bare shells; quarantine anything
 // live under a _stray- name (no -worker- pattern, so the status pane and the
 // orphan-window alert ignore it) for the watchdog's window heal to re-file.
-function clearStaleWindows(windowName: string): void {
+function clearStaleWindows(windowName: string): boolean {
   for (const pane of listSessionPanes()) {
     if (pane.windowName !== windowName) continue;
     if (paneRunningOnlyShell(pane.paneId)) {
-      killWindowById(pane.windowId);
+      if (!killWindowById(pane.windowId)) return false;
     } else {
-      renameWindowById(pane.windowId, `_stray-${pane.windowId.replace(/^@/, "")}`);
+      if (!renameWindowById(pane.windowId, `_stray-${pane.windowId.replace(/^@/, "")}`)) {
+        return false;
+      }
       log.warn("layout", "quarantined live pane under stale window name", {
         data: { windowName, windowId: pane.windowId, panePath: pane.panePath },
       });
     }
   }
+  return true;
 }
 
 export function parkToHidden(windowName: string, state: DashboardState): string | null {
@@ -39,7 +42,10 @@ export function parkToHidden(windowName: string, state: DashboardState): string 
 
   const visibleSize = getPaneSize(state.activePaneId);
 
-  clearStaleWindows(windowName);
+  if (!clearStaleWindows(windowName)) {
+    log.error("layout", "parkToHidden: could not clear stale window", { data: { windowName } });
+    throw new Error(`Could not clear stale tmux window '${windowName}'`);
+  }
 
   const tempPaneId = newDashboardWindowPaned(windowName);
   if (!tempPaneId) {
@@ -94,7 +100,7 @@ export function restoreFromHidden(windowName: string, state: DashboardState): vo
  * Park current content and restore from another hidden window in one step.
  */
 export function swapToHidden(parkWindowName: string, restoreWindowName: string, state: DashboardState): void {
-  parkToHidden(parkWindowName, state);
+  if (!parkToHidden(parkWindowName, state)) return;
   restoreFromHidden(restoreWindowName, state);
 }
 
@@ -142,7 +148,27 @@ export function swapDirect(parkWindowName: string, restoreWindowName: string, st
   // pane filed under the restore name. Each later navigation then renamed yet
   // another worker's window into the same name — the duplicate-window cascade
   // that made workers vanish from the status pane.
-  renameWindowById(target.windowId, parkWindowName);
+  if (!renameWindowById(target.windowId, parkWindowName)) {
+    // The swap already happened, so returning false without undoing it would
+    // make the caller's temp-window fallback operate on stale pane state.
+    // Put the panes back first; the fallback can then retry the whole move from
+    // the same state it started with.
+    try {
+      tmux("swap-pane", "-s", state.activePaneId, "-t", targetPaneId);
+      log.warn("layout", "swapDirect: rename failed; rolled back swap", {
+        data: { windowId: target.windowId, parkWindowName, restoreWindowName },
+      });
+      return false;
+    } catch (err) {
+      // If rollback itself fails, the requested pane is already visible. Keep
+      // state aligned with tmux and let the watchdog heal the hidden name.
+      log.error("layout", "swapDirect: rename and rollback failed", {
+        data: { windowId: target.windowId, parkWindowName, restoreWindowName, error: String(err) },
+      });
+      state.activePaneId = targetPaneId;
+      return true;
+    }
+  }
 
   log.debug("layout", "swapDirect", { data: { from: parkWindowName, to: restoreWindowName } });
   state.activePaneId = targetPaneId;

@@ -1,4 +1,4 @@
-// Liveness watchdog: a slow recurring tick with three duties, plus one
+// Liveness watchdog: a slow recurring tick with four duties, plus one
 // event-driven Codex rollout listener.
 //
 // 1. Re-poke projects holding workers stranded in active states. The state
@@ -25,6 +25,10 @@
 // the hourly housekeeping throttle) means disk nothing owns. Detection only in
 // both cases — the watchdog never reconstructs an entry and never deletes a
 // tree; it makes the casualty visible so the operator can decide.
+//
+// 4. Re-file worker windows whose names disagree with the registered worktree
+// their panes occupy. This repairs the status-visibility casualty of a failed
+// post-swap rename without guessing when two panes claim the same worker.
 //
 // The rollout listener translates Codex's hookless request_user_input call and
 // result records into the shared asking/working worker states. It is driven by
