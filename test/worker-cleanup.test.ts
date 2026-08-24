@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { useTmpHome } from "./helpers.js";
@@ -7,6 +7,19 @@ import { useTmpHome } from "./helpers.js";
 // from HOME at import — so import dynamically AFTER useTmpHome redirects HOME
 // (same pattern as watchdog-housekeeping.test.ts).
 const env = useTmpHome();
+
+beforeEach(() => {
+  fs.writeFileSync(
+    path.join(env.gardenDir, "config.yml"),
+    [
+      "projects:",
+      "  garden:", "    path: /repo",
+      "  wolf:", "    path: /repo",
+      "  leadingtone-io:", "    path: /repo",
+      "",
+    ].join("\n"),
+  );
+});
 
 async function importCleanup() {
   return await import("../src/dashboard/worker-cleanup.js");
@@ -52,6 +65,9 @@ describe("worker cleanup requests", () => {
     expect(isWorkerCleanupRequest({ project: "p", worker: "w", repoPath: "/r", attempts: 0 })).toBe(true);
     expect(isWorkerCleanupRequest({ project: "p", worker: "w", attempts: 0 })).toBe(false);
     expect(isWorkerCleanupRequest({ project: "", worker: "w", repoPath: "/r", attempts: 0 })).toBe(false);
+    expect(isWorkerCleanupRequest({ project: "p", worker: "w", repoPath: "/r", attempts: -1 })).toBe(false);
+    expect(isWorkerCleanupRequest({ project: "p", worker: "w", repoPath: "/r", attempts: Number.NaN })).toBe(false);
+    expect(isWorkerCleanupRequest({ project: "p", worker: "w", repoPath: "/r", attempts: 0, branchName: 42 })).toBe(false);
     expect(isWorkerCleanupRequest(null)).toBe(false);
   });
 });
@@ -70,11 +86,14 @@ describe("dueCleanupRequests", () => {
 
   it("returns only requests past the retry window", async () => {
     const { dueCleanupRequests, CLEANUP_RETRY_AFTER_MS } = await importCleanup();
-    await seed("garden", "stale-one", CLEANUP_RETRY_AFTER_MS + 60_000);
-    await seed("wolf", "fresh-one", 5_000);
+    await seed("garden", "bold-calm-ash", CLEANUP_RETRY_AFTER_MS + 60_000);
+    await seed("wolf", "brisk-firm-oak", 5_000);
 
     const due = dueCleanupRequests(now);
-    expect(due.map(r => r.worker)).toEqual(["stale-one"]);
+    expect(due.map(r => r.worker)).toEqual(["bold-calm-ash"]);
+    // Selection claims the request by mtime, so the next watchdog tick cannot
+    // launch a duplicate child while the first one is still running.
+    expect(dueCleanupRequests(now + 60_000)).toEqual([]);
   });
 
   it("recovers identity from the body, not the filename", async () => {
@@ -89,7 +108,7 @@ describe("dueCleanupRequests", () => {
     expect(due[0].worker).toBe("numb-clear-vow");
   });
 
-  it("ignores unrelated session files and unparseable markers", async () => {
+  it("ignores unrelated session files and retires unparseable markers", async () => {
     const { dueCleanupRequests, CLEANUP_RETRY_AFTER_MS } = await importCleanup();
     const oldAge = CLEANUP_RETRY_AFTER_MS * 10;
     for (const name of ["dashboard.registry.json", "dashboard.log", "bootstrap-garden-elk.sh"]) {
@@ -102,6 +121,8 @@ describe("dueCleanupRequests", () => {
     age(junk, oldAge, now);
 
     expect(dueCleanupRequests(now)).toEqual([]);
+    expect(fs.existsSync(junk)).toBe(false);
+    expect(fs.existsSync(path.join(env.sessionsDir, "dashboard.registry.json"))).toBe(true);
   });
 });
 
@@ -136,8 +157,8 @@ describe("sweepWorkerCleanups (watchdog)", () => {
     });
     age(workerCleanupMarkerPath("leadingtone-io", "numb-clear-vow"), CLEANUP_RETRY_AFTER_MS * 2, now);
     writeWorkerCleanupRequest({
-      project: "garden", worker: "just-dispatched",
-      repoPath: "/repo", branchName: "just-dispatched", attempts: 0,
+      project: "garden", worker: "brisk-firm-oak",
+      repoPath: "/repo", branchName: "brisk-firm-oak", attempts: 0,
     });
 
     expect(sweepWorkerCleanups(now, "true")).toBe(1);

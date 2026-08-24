@@ -21,9 +21,16 @@ function branches(repo: string): string[] {
 let wtPath: string;
 
 beforeEach(() => {
-  // No origin remote: the ls-remote step must degrade to "not on origin" and
-  // skip the delete, exactly as the old `| grep -q .` pipeline did.
-  wtPath = path.join(env.home, "wt", "numb-clear-vow");
+  // No origin remote: there is no remote branch to delete, so local cleanup
+  // succeeds without turning the intentional absence into a retry.
+  wtPath = path.join(
+    env.home, ".garden", "worktrees", "leadingtone-io", "numb-clear-vow",
+  );
+  fs.mkdirSync(path.dirname(wtPath), { recursive: true });
+  fs.writeFileSync(
+    path.join(env.gardenDir, "config.yml"),
+    `projects:\n  leadingtone-io:\n    path: ${env.repoPath}\n`,
+  );
   git(env.repoPath, "worktree", "add", "-b", "numb-clear-vow", wtPath);
 });
 
@@ -60,9 +67,12 @@ describe("runWorkerCleanup (real git)", () => {
     // needing a sandbox.
     const { runWorkerCleanup, readWorkerCleanupRequest } =
       await import("../../src/dashboard/worker-cleanup.js");
-    const file = await seed({ repoPath: path.join(env.home, "not-a-repo") });
+    const file = await seed();
+    const hiddenRepo = `${env.repoPath}.temporarily-unavailable`;
+    fs.renameSync(env.repoPath, hiddenRepo);
 
     runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+    fs.renameSync(hiddenRepo, env.repoPath);
 
     // Nothing was destroyed, and the request survives for the watchdog retry.
     expect(fs.existsSync(wtPath)).toBe(true);
@@ -104,12 +114,12 @@ describe("runWorkerCleanup (real git)", () => {
     const { runWorkerCleanup, CLEANUP_MAX_ATTEMPTS } =
       await import("../../src/dashboard/worker-cleanup.js");
     const { readAlerts } = await import("../../src/dashboard/alerts.js");
-    const file = await seed({
-      repoPath: path.join(env.home, "not-a-repo"),
-      attempts: CLEANUP_MAX_ATTEMPTS - 1,
-    });
+    const file = await seed({ attempts: CLEANUP_MAX_ATTEMPTS - 1 });
+    const hiddenRepo = `${env.repoPath}.temporarily-unavailable`;
+    fs.renameSync(env.repoPath, hiddenRepo);
 
     runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+    fs.renameSync(hiddenRepo, env.repoPath);
 
     // The request is retired so the standing leak is reported by the orphan
     // sweep (which names size and age) rather than by an endless retry — and
@@ -125,5 +135,32 @@ describe("runWorkerCleanup (real git)", () => {
     const { runWorkerCleanup } = await import("../../src/dashboard/worker-cleanup.js");
     runWorkerCleanup("leadingtone-io", "never-requested");
     expect(fs.existsSync(wtPath)).toBe(true);
+  });
+
+  it("rejects a worker-writable request that targets a different branch", async () => {
+    const { runWorkerCleanup } = await import("../../src/dashboard/worker-cleanup.js");
+    const file = await seed({ branchName: "main" });
+
+    runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+    expect(branches(env.repoPath)).toContain("main");
+    expect(branches(env.repoPath)).toContain("numb-clear-vow");
+    expect(fs.existsSync(wtPath)).toBe(true);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it("keeps the request when a configured origin cannot be inspected", async () => {
+    const { runWorkerCleanup, readWorkerCleanupRequest } =
+      await import("../../src/dashboard/worker-cleanup.js");
+    const missingOrigin = path.join(env.home, "missing-origin.git");
+    git(env.repoPath, "remote", "add", "origin", missingOrigin);
+    const file = await seed();
+
+    runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+    // Local cleanup may finish, but the request remains until Garden can prove
+    // whether the configured remote branch still needs deletion.
+    expect(readWorkerCleanupRequest(file)?.attempts).toBe(1);
+    expect(readWorkerCleanupRequest(file)?.lastError).toContain("inspect origin branch");
   });
 });

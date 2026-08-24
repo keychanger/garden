@@ -246,18 +246,6 @@ export function workerCleanupMarkerPath(project: string, worker: string): string
   return path.join(SESSIONS_DIR, `worker-cleanup-${project}-${worker}`);
 }
 
-// True when the branch exists in this repo's local refs. Lets a cleanup retry
-// skip a `branch -D` whose target an earlier attempt already deleted, so a
-// partial success is not re-reported as a failure.
-export function branchExistsLocally(repoPath: string, branchName: string): boolean {
-  try {
-    git(repoPath, "show-ref", "--verify", "--quiet", `refs/heads/${branchName}`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // Run one worker-cleanup git step, returning null on success or git's own
 // stderr on failure. The cleanup path needs the error TEXT, not a boolean and
 // not a log line: it reports the reason to the operator and decides whether to
@@ -272,13 +260,17 @@ export function gitCleanupStep(repoPath: string, args: string[]): string | null 
   }
 }
 
-// gitCleanupStep for a step read for its output rather than its exit status.
-// Null means the command failed (offline origin, no remote configured).
-export function gitCleanupOutput(repoPath: string, args: string[]): string | null {
+// gitCleanupStep for a step whose output determines what cleanup remains.
+// Preserve the error text: treating every failure as empty output would turn
+// an inaccessible repo or offline origin into a false "already absent".
+export function gitCleanupOutput(
+  repoPath: string,
+  args: string[],
+): { ok: true; output: string } | { ok: false; error: string } {
   try {
-    return git(repoPath, ...args);
-  } catch {
-    return null;
+    return { ok: true, output: git(repoPath, ...args) };
+  } catch (err) {
+    return { ok: false, error: gitErrText(err) || `git ${args[0]} failed` };
   }
 }
 

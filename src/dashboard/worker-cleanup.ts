@@ -24,14 +24,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { SESSIONS_DIR } from "../config.js";
+import { SESSIONS_DIR, tryGetProject } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import {
-  workerCleanupMarkerPath, branchExistsLocally, gitCleanupStep, gitCleanupOutput,
+  workerCleanupMarkerPath, worktreePath as canonicalWorktreePath,
+  gitCleanupStep, gitCleanupOutput,
 } from "./git.js";
 import { shellEscape } from "./tmux.js";
 import { addAlert } from "./alerts.js";
 import { log } from "./log.js";
+import { isGeneratedWorkerName } from "./names.js";
+import { findWorkerByName } from "./registry.js";
+import { withFileLock } from "./file-lock.js";
 
 // Filename prefix the watchdog sweep scans for. Kept next to the path builder
 // it must agree with (workerCleanupMarkerPath in git.ts) — project and worker
@@ -70,7 +74,10 @@ export function isWorkerCleanupRequest(v: unknown): v is WorkerCleanupRequest {
   return typeof r.project === "string" && r.project !== ""
     && typeof r.worker === "string" && r.worker !== ""
     && typeof r.repoPath === "string" && r.repoPath !== ""
-    && typeof r.attempts === "number";
+    && (r.worktreePath === undefined || typeof r.worktreePath === "string")
+    && (r.branchName === undefined || typeof r.branchName === "string")
+    && Number.isSafeInteger(r.attempts) && (r.attempts as number) >= 0
+    && (r.lastError === undefined || typeof r.lastError === "string");
 }
 
 export function writeWorkerCleanupRequest(req: WorkerCleanupRequest): void {
@@ -86,8 +93,8 @@ export function readWorkerCleanupRequest(file: string): WorkerCleanupRequest | n
     return isWorkerCleanupRequest(parsed) ? parsed : null;
   } catch {
     // Absent, unreadable, or a pre-upgrade empty marker written by the old
-    // `sh -c` path. Either way there is no request to act on; an empty marker
-    // ages out when its own cleanup finishes or the operator removes it.
+    // `sh -c` path. Either way there is no request to act on; the due-request
+    // sweep retires a stale marker so it cannot suppress orphan detection.
     return null;
   }
 }
@@ -98,8 +105,51 @@ export function clearWorkerCleanupRequest(project: string, worker: string): void
   } catch { /* already gone, or raced with another run */ }
 }
 
-// Requests old enough to re-dispatch. Reads only SESSIONS_DIR — no git, no
-// registry — so the sweep's selection is testable on its own.
+function safePathComponent(value: string): boolean {
+  return value !== "." && value !== ".." && path.basename(value) === value;
+}
+
+// SESSIONS_DIR is worker-writable request IPC. Its contents therefore cannot
+// authorize an unsandboxed watchdog to choose arbitrary git targets. Bind a
+// request back to Garden's own project/worker layout before any git command:
+// configured checkout, generated worker identity, canonical worktree, matching
+// branch, and no live registry entry (a forged request must not kill a sibling).
+function cleanupRequestError(req: WorkerCleanupRequest): string | null {
+  if (!safePathComponent(req.project) || !isGeneratedWorkerName(req.worker)) {
+    return "identity is not a Garden project/worker pair";
+  }
+  const project = tryGetProject(req.project);
+  if (!project) return `project '${req.project}' is not configured`;
+  if (path.resolve(req.repoPath) !== path.resolve(project.path)) {
+    return "repo path does not match the configured project";
+  }
+  if (req.worktreePath !== undefined
+      && path.resolve(req.worktreePath) !== path.resolve(canonicalWorktreePath(req.project, req.worker))) {
+    return "worktree path is outside the canonical worker location";
+  }
+  if (req.branchName !== undefined && req.branchName !== req.worker) {
+    return "branch does not match the worker identity";
+  }
+  if (req.worktreePath === undefined && req.branchName === undefined) {
+    return "request has no cleanup target";
+  }
+  if (findWorkerByName(req.project, req.worker)) {
+    return "worker still has a live registry entry";
+  }
+  return null;
+}
+
+function rejectCleanupRequest(file: string, req: WorkerCleanupRequest, reason: string): void {
+  try { fs.rmSync(file, { force: true }); } catch { /* best-effort retirement */ }
+  log.warn("cleanup", "rejected unsafe cleanup request", {
+    worker: req.worker,
+    data: { project: req.project, reason },
+  });
+}
+
+// Requests old enough to re-dispatch. The mtime update claims each selected
+// request for one retry window, so a 60s watchdog tick does not launch another
+// child every minute while the prior cleanup is still running.
 export function dueCleanupRequests(nowMs: number): WorkerCleanupRequest[] {
   let names: string[];
   try {
@@ -117,7 +167,26 @@ export function dueCleanupRequests(nowMs: number): WorkerCleanupRequest[] {
       continue;
     }
     const req = readWorkerCleanupRequest(file);
-    if (req) due.push(req);
+    if (!req) {
+      // Legacy empty markers and malformed worker-writable requests cannot be
+      // executed safely. Retire them once stale so they stop reading as
+      // "cleanup in flight" to resurrection and the orphan-worktree sweep.
+      try { fs.rmSync(file, { force: true }); } catch { /* best-effort retirement */ }
+      log.warn("cleanup", "retired unreadable cleanup request", { data: { file } });
+      continue;
+    }
+    const error = cleanupRequestError(req);
+    if (error) {
+      rejectCleanupRequest(file, req, error);
+      continue;
+    }
+    try {
+      const claimedAt = new Date(nowMs);
+      fs.utimesSync(file, claimedAt, claimedAt);
+    } catch {
+      continue;
+    }
+    due.push(req);
   }
   return due;
 }
@@ -161,12 +230,55 @@ export function dispatchWorkerCleanup(
 // whether its target still exists) so a retry after a partial success finishes
 // the remainder instead of reporting the already-done half as a failure.
 export function runWorkerCleanup(project: string, worker: string): void {
+  // Validate the CLI identity before composing its marker path. This hidden
+  // route is callable, and path separators in either argument must never turn
+  // a cleanup lookup/clear into traversal outside SESSIONS_DIR.
+  if (!safePathComponent(project) || !isGeneratedWorkerName(worker)) {
+    log.warn("cleanup", "rejected invalid cleanup command identity", {
+      worker,
+      data: { project },
+    });
+    return;
+  }
   const file = workerCleanupMarkerPath(project, worker);
   const req = readWorkerCleanupRequest(file);
   if (!req) return;
+  if (req.project !== project || req.worker !== worker) {
+    rejectCleanupRequest(file, req, "request body does not match its command identity");
+    return;
+  }
+  const validationError = cleanupRequestError(req);
+  if (validationError) {
+    rejectCleanupRequest(file, req, validationError);
+    return;
+  }
+
+  try {
+    withFileLock(`${file}.lock`, () => executeWorkerCleanup(req), {
+      deadlineMs: 250,
+      name: "worker-cleanup",
+    });
+  } catch (err) {
+    // A concurrent cleanup owns the lock, or the lock path was temporarily
+    // unavailable. The request remains; the watchdog will retry if needed.
+    log.warn("cleanup", "cleanup execution deferred", {
+      worker,
+      data: { project, error: String(err) },
+    });
+  }
+}
+
+function executeWorkerCleanup(req: WorkerCleanupRequest): void {
+  const { project, worker } = req;
+  const configured = tryGetProject(project);
+  if (!configured) return; // validated immediately before the lock
 
   const failures: string[] = [];
-  const { repoPath, worktreePath, branchName } = req;
+  const repoPath = configured.path;
+  const worktreePath = req.worktreePath
+    ? canonicalWorktreePath(project, worker)
+    : undefined;
+  const branchName = req.branchName ? worker : undefined;
 
   if (worktreePath && fs.existsSync(worktreePath)) {
     const err = gitCleanupStep(repoPath, ["worktree", "remove", worktreePath, "--force"]);
@@ -183,13 +295,34 @@ export function runWorkerCleanup(project: string, worker: string): void {
   // Order matters: git refuses to delete a branch that is still checked out in
   // a worktree, so a failed worktree removal makes this fail too. Reporting
   // both is correct — they share one cause and one remedy.
-  if (branchName && branchExistsLocally(repoPath, branchName)) {
-    const err = gitCleanupStep(repoPath, ["branch", "-D", branchName]);
-    if (err) failures.push(`branch -D: ${err}`);
-  }
-  if (branchName && branchExistsOnOriginQuiet(repoPath, branchName)) {
-    const err = gitCleanupStep(repoPath, ["push", "origin", "--delete", branchName]);
-    if (err) failures.push(`push origin --delete: ${err}`);
+  if (branchName) {
+    const local = gitCleanupOutput(
+      repoPath,
+      ["for-each-ref", "--format=%(refname)", `refs/heads/${branchName}`],
+    );
+    if (!local.ok) {
+      failures.push(`inspect local branch: ${local.error}`);
+    } else if (local.output.trim() !== "") {
+      const err = gitCleanupStep(repoPath, ["branch", "-D", branchName]);
+      if (err) failures.push(`branch -D: ${err}`);
+    }
+
+    const origin = gitCleanupOutput(repoPath, ["remote", "get-url", "origin"]);
+    if (!origin.ok) {
+      // A project without an origin has no remote branch to delete. Every
+      // other failure (not-a-repo, permission denial) is real and retryable.
+      if (!/No such remote ['\"]?origin/i.test(origin.error)) {
+        failures.push(`inspect origin: ${origin.error}`);
+      }
+    } else {
+      const remote = gitCleanupOutput(repoPath, ["ls-remote", "--heads", "origin", branchName]);
+      if (!remote.ok) {
+        failures.push(`inspect origin branch: ${remote.error}`);
+      } else if (remote.output.trim() !== "") {
+        const err = gitCleanupStep(repoPath, ["push", "origin", "--delete", branchName]);
+        if (err) failures.push(`push origin --delete: ${err}`);
+      }
+    }
   }
 
   if (failures.length === 0) {
@@ -239,13 +372,4 @@ export function runWorkerCleanup(project: string, worker: string): void {
     worker,
     data: { project, attempts, error: detail },
   });
-}
-
-// `git ls-remote --heads origin <branch>` with the old script's semantics:
-// non-empty output means the branch is on origin. Any failure (offline, no
-// remote) reports absent, which skips the delete — the same outcome the old
-// `| grep -q .` pipeline produced.
-function branchExistsOnOriginQuiet(repoPath: string, branchName: string): boolean {
-  const out = gitCleanupOutput(repoPath, ["ls-remote", "--heads", "origin", branchName]);
-  return out !== null && out.trim() !== "";
 }
