@@ -715,14 +715,35 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   } catch (err) {
     // addWorker (and trellis model resolution) already wrote the registry
     // entry; if pane creation fails it would otherwise sit in agentStatus=
-    // "loading" forever with no worktree and no pane. Roll back so the next
-    // attempt isn't blocked by name collision and the dashboard isn't lying
-    // about pending workers.
+    // "loading" forever with no pane. Roll back so the next attempt isn't
+    // blocked by name collision and the dashboard isn't lying about pending
+    // workers.
     // Pre-work rollback: a stamped `bead` field may exist, but no bd claim
     // does (intake claims only after newWorker returns; a handoff worker's
     // claim is its own first action), so raw removeWorker without the
     // finalizeWorkerRemoval bead-unclaim tail is deliberate.
+    //
+    // Unlike the trellis-model rollback above, this one can NOT assume "no
+    // worktree created". The bootstrap script (git fetch, worktree add, npm
+    // install) runs inside the pane, so once respawn-pane has handed it off
+    // it is already running detached — a throw from any later step leaves it
+    // alive, and it goes on to build the worktree for an entry that no longer
+    // exists. Three such spawns leaked 1.5GB of unowned worktrees (plus two
+    // live windows the watchdog then alerted on hourly) on 2026-08-24, when a
+    // stale right-pane id failed every swap-pane across two projects.
+    //
+    // Order is load-bearing: kill the window FIRST so the bootstrap is dead
+    // before cleanup runs. Cleaning up first would race the surviving script
+    // into re-creating the tree we just removed. The cleanup request is then
+    // written unconditionally rather than gated on the worktree existing —
+    // the bootstrap may not have got that far, and every cleanup step skips a
+    // target that is already gone, so the no-op case is free while the
+    // partially-created case (worktree metadata but no checkout, or the
+    // reverse) is exactly what its remove + prune + branch -D sequence and
+    // the watchdog's retry are built to finish.
+    killWindowSafe(workerWindowName);
     removeWorker(targetProject, workerName);
+    backgroundGitCleanup(targetProject, workerName, project.path, wtPath, branchName);
     log.error("workers", "tmux pane creation failed; rolled back registry entry", {
       worker: workerName,
       data: { project: targetProject, error: String(err) },

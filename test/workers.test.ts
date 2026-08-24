@@ -651,6 +651,48 @@ describe("newWorker", () => {
     expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("other", "bold-ash");
   });
 
+  it("rollback kills the window and requests git cleanup, so a failed spawn can't leak its worktree", () => {
+    // The failure that actually leaks: respawn-pane has already handed the
+    // bootstrap script (git fetch, worktree add, npm install) to the pane, so
+    // a throw from the later swap-pane leaves it running detached and it
+    // builds a worktree for an entry that no longer exists. Rolling back the
+    // registry alone left 1.5GB of unowned worktrees on 2026-08-24.
+    vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
+    vi.mocked(restoreFromHidden).mockImplementationOnce(() => {
+      throw new Error("tmux swap-pane failed: can't find pane: %1138");
+    });
+
+    expect(() => newWorker()).toThrow(/can't find pane/);
+
+    expect(vi.mocked(killWindowSafe)).toHaveBeenCalledWith("_myproject-worker-bold-ash");
+    expect(vi.mocked(writeWorkerCleanupRequest)).toHaveBeenCalledWith({
+      project: "myproject",
+      worker: "bold-ash",
+      repoPath: "/repo/myproject",
+      worktreePath: "/home/user/.garden/worktrees/myproject/bold-ash",
+      branchName: "bold-ash",
+      attempts: 0,
+    });
+    expect(vi.mocked(dispatchWorkerCleanup)).toHaveBeenCalled();
+  });
+
+  it("rollback kills the window before dispatching cleanup, so the bootstrap can't rebuild the tree", () => {
+    // Ordering is the whole fix: the bootstrap is still running when the
+    // rollback starts. Cleaning up first would race it into re-creating the
+    // worktree that cleanup just removed, leaking it again.
+    vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
+    vi.mocked(restoreFromHidden).mockImplementationOnce(() => {
+      throw new Error("tmux swap-pane failed: can't find pane: %1138");
+    });
+    const order: string[] = [];
+    vi.mocked(killWindowSafe).mockImplementationOnce(() => { order.push("kill"); });
+    vi.mocked(dispatchWorkerCleanup).mockImplementationOnce(() => { order.push("cleanup"); });
+
+    expect(() => newWorker()).toThrow(/can't find pane/);
+
+    expect(order).toEqual(["kill", "cleanup"]);
+  });
+
   it("background handoff: bails (returns null) when target project is unknown, without touching state", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     vi.mocked(tryGetProject).mockReturnValueOnce(undefined);
