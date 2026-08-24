@@ -44,7 +44,7 @@ import type { WorkerLaunchPlan } from "./harness/types.js";
 import { resolveGardenRunner } from "./runner.js";
 import {
   worktreePath, resolveBaseBranch, resolveSpawnBase, branchExistsOnOrigin, tryPublishBranch,
-  gardenDoneTrackedInHead, getRemoteTrackingSha,
+  gardenDoneTrackedInHead, getRemoteTrackingSha, localBranchExists,
 } from "./git.js";
 import { writeWorkerCleanupRequest, dispatchWorkerCleanup } from "./worker-cleanup.js";
 import { addAlert } from "./alerts.js";
@@ -630,6 +630,12 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   );
 
   const workerWindowName = workerWin(targetProject, workerName);
+  // A generated name can outlive its registry entry when an older cleanup
+  // failed. This spawn does not own such a worktree/branch yet, so a rollback
+  // must not delete it merely because pane creation failed before bootstrap.
+  const preexistingWorktree = fs.existsSync(wtPath);
+  const preexistingBranch = localBranchExists(project.path, branchName)
+    || branchExistsOnOrigin(project.path, branchName);
 
   let stateForRefresh = initialState;
   const bootstrapCmd = `sh ${shellEscape(scriptFile)}`;
@@ -740,10 +746,18 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // target that is already gone, so the no-op case is free while the
     // partially-created case (worktree metadata but no checkout, or the
     // reverse) is exactly what its remove + prune + branch -D sequence and
-    // the watchdog's retry are built to finish.
+    // the watchdog's retry are built to finish. Targets that predated this
+    // spawn are excluded: they may be the only surviving copy of an older
+    // worker's unmerged work, and this attempt never owned them.
     killWindowSafe(workerWindowName);
     removeWorker(targetProject, workerName);
-    backgroundGitCleanup(targetProject, workerName, project.path, wtPath, branchName);
+    backgroundGitCleanup(
+      targetProject,
+      workerName,
+      project.path,
+      preexistingWorktree ? undefined : wtPath,
+      preexistingBranch ? undefined : branchName,
+    );
     log.error("workers", "tmux pane creation failed; rolled back registry entry", {
       worker: workerName,
       data: { project: targetProject, error: String(err) },

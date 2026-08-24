@@ -170,7 +170,8 @@ vi.mock("../src/dashboard/git.js", () => ({
   worktreePath: vi.fn(() => "/home/user/.garden/worktrees/myproject/bold-ash"),
   resolveBaseBranch: vi.fn(() => "main"),
   resolveSpawnBase: vi.fn((_project: unknown, override?: string) => override ?? "main"),
-  branchExistsOnOrigin: vi.fn(() => true),
+  branchExistsOnOrigin: vi.fn((_repo: string, branch: string) => branch === "main"),
+  localBranchExists: vi.fn(() => false),
   tryPublishBranch: vi.fn(() => ({ ok: true })),
   gardenDoneTrackedInHead: vi.fn(() => false),
   getRemoteTrackingSha: vi.fn(() => "basesha1234"),
@@ -249,7 +250,7 @@ import { getHarness } from "../src/dashboard/harness/index.js";
 import { resolveGardenRunner } from "../src/dashboard/runner.js";
 import {
   worktreePath, resolveBaseBranch, resolveSpawnBase, branchExistsOnOrigin, tryPublishBranch,
-  gardenDoneTrackedInHead,
+  gardenDoneTrackedInHead, localBranchExists,
 } from "../src/dashboard/git.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { writeWorkerCleanupRequest, dispatchWorkerCleanup } from "../src/dashboard/worker-cleanup.js";
@@ -691,6 +692,26 @@ describe("newWorker", () => {
     expect(() => newWorker()).toThrow(/can't find pane/);
 
     expect(order).toEqual(["kill", "cleanup"]);
+  });
+
+  it("rollback does not delete same-name resources that predated this spawn", () => {
+    // A removed worker can leave its branch/worktree behind after cleanup
+    // exhaustion. If a later random name collides and pane creation fails
+    // before bootstrap, that attempt never owned the old resources.
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(fs.existsSync).mockImplementation(
+      file => file === "/home/user/.garden/worktrees/myproject/bold-ash",
+    );
+    vi.mocked(localBranchExists).mockReturnValueOnce(true);
+    vi.mocked(newDashboardWindowPaned).mockImplementationOnce(() => {
+      throw new Error("tmux new-window failed: Operation not permitted");
+    });
+
+    expect(() => newWorker()).toThrow(/Operation not permitted/);
+
+    expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "bold-ash");
+    expect(vi.mocked(writeWorkerCleanupRequest)).not.toHaveBeenCalled();
+    expect(vi.mocked(dispatchWorkerCleanup)).not.toHaveBeenCalled();
   });
 
   it("background handoff: bails (returns null) when target project is unknown, without touching state", () => {
