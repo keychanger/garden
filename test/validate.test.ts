@@ -5,6 +5,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   windowExists: vi.fn(() => true),
   getFirstPaneId: vi.fn(() => "%99"),
   listHiddenWorkerWindows: vi.fn(() => []),
+  listSessionPanes: vi.fn(() => []),
   killWindowSafe: vi.fn(),
   tmuxSplit: vi.fn(() => "%50"),
   setPaneTitle: vi.fn(),
@@ -63,6 +64,7 @@ vi.mock("../src/dashboard/poller.js", () => ({
 
 vi.mock("../src/dashboard/create.js", () => ({
   createGardenGrowhouseWindow: vi.fn(),
+  createShellWindow: vi.fn(),
   USAGE_PANE_HEIGHT: 5,
 }));
 
@@ -72,6 +74,7 @@ vi.mock("../src/dashboard/runner.js", () => ({
 
 vi.mock("../src/dashboard/layout.js", () => ({
   gardenRestoreFromHidden: vi.fn(),
+  restoreFromHidden: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/header.js", () => ({
@@ -90,11 +93,12 @@ vi.mock("../src/dashboard/alerts.js", () => ({
 }));
 
 import fs from "node:fs";
-import { validateAndHeal, sweepGhostEntries, healStatusPane, cleanContextFiles, cleanOrphanedReviewWindows } from "../src/dashboard/validate.js";
+import { validateAndHeal, sweepGhostEntries, healStatusPane, healActivePane, cleanContextFiles, cleanOrphanedReviewWindows } from "../src/dashboard/validate.js";
 import { readDashState, writeDashState, withStateLock } from "../src/dashboard/state.js";
-import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, tmuxSplit } from "../src/dashboard/tmux.js";
+import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, listSessionPanes, tmuxSplit } from "../src/dashboard/tmux.js";
 import { readRegistry, writeRegistry, mutateRegistry } from "../src/dashboard/registry.js";
 import type { DashboardState } from "../src/dashboard/state.js";
+import { restoreFromHidden } from "../src/dashboard/layout.js";
 import { HEADLESS_RUNS_DIR } from "../src/paths.js";
 
 import { setPaneTitle, setPaneLabel, disablePaneInput, lockPaneMouse } from "../src/dashboard/tmux.js";
@@ -108,6 +112,7 @@ function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
     activePaneId: "%2",
     activePaneType: "worker",
     activeWindowName: "_garden-worker-bold-ash",
+    lastActiveWorker: {},
     ...overrides,
   };
 }
@@ -116,7 +121,53 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(paneExists).mockReturnValue(true);
   vi.mocked(windowExists).mockReturnValue(true);
+  // clearAllMocks clears calls, not implementations — reset the ones tests
+  // re-point so a return value cannot leak into the next test.
+  vi.mocked(tmuxSplit).mockReturnValue("%50");
+  vi.mocked(listSessionPanes).mockReturnValue([]);
+  vi.mocked(getFirstPaneId).mockReturnValue("%99");
+  vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+  vi.mocked(restoreFromHidden).mockImplementation(() => {});
   vi.mocked(readRegistry).mockReturnValue({ workers: {} });
+});
+
+describe("healActivePane", () => {
+  it("no-ops without taking the state lock when the slot is healthy", () => {
+    vi.mocked(paneExists).mockReturnValue(true);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    healActivePane();
+    expect(withStateLock).not.toHaveBeenCalled();
+    expect(writeDashState).not.toHaveBeenCalled();
+  });
+
+  it("no-ops when state names no pane at all", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ activePaneId: null }));
+    healActivePane();
+    expect(withStateLock).not.toHaveBeenCalled();
+  });
+
+  it("repairs and persists under the state lock when the slot is dead", () => {
+    vi.mocked(paneExists).mockImplementation((id: string) => id !== "%2");
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(listSessionPanes).mockReturnValue([]);
+    vi.mocked(tmuxSplit).mockReturnValue("%50");
+
+    healActivePane();
+
+    expect(withStateLock).toHaveBeenCalled();
+    const written = vi.mocked(writeDashState).mock.calls[0][0];
+    expect(written.activePaneId).toBe("%50");
+  });
+
+  it("swallows a contended state lock instead of throwing into the tick", () => {
+    vi.mocked(paneExists).mockImplementation((id: string) => id !== "%2");
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(withStateLock).mockImplementationOnce(() => {
+      throw new Error("lock held");
+    });
+    expect(() => healActivePane()).not.toThrow();
+    expect(writeDashState).not.toHaveBeenCalled();
+  });
 });
 
 describe("healStatusPane", () => {
@@ -186,38 +237,93 @@ describe("validateAndHeal", () => {
     expect(healed.gardenShellPaneId).toBeNull();
   });
 
-  it("recovers activePaneId from named window when pane is dead", () => {
+  it("adopts the pane occupying the right slot when only the recorded id went stale", () => {
+    // The three left-column panes are pinned by id in state, so a fourth pane
+    // in `main` is the right slot by elimination. It still holds the
+    // operator's content, so adopting the id is the entire repair — refilling
+    // would swap out a pane they can see.
     vi.mocked(paneExists).mockImplementation((id: string) => id !== "%2");
-    vi.mocked(getFirstPaneId).mockReturnValue("%10");
-    const state = makeState();
-    const healed = validateAndHeal(state);
-    expect(healed.activePaneId).toBe("%10");
+    vi.mocked(listSessionPanes).mockReturnValue([
+      { windowId: "@0", windowName: "main", paneId: "%0", width: 40, height: 10, panePath: "/" },
+      { windowId: "@0", windowName: "main", paneId: "%3", width: 40, height: 5, panePath: "/" },
+      { windowId: "@0", windowName: "main", paneId: "%1", width: 40, height: 20, panePath: "/" },
+      { windowId: "@0", windowName: "main", paneId: "%7", width: 80, height: 35, panePath: "/" },
+    ]);
+
+    const healed = validateAndHeal(makeState());
+
+    expect(healed.activePaneId).toBe("%7");
+    expect(tmuxSplit).not.toHaveBeenCalled();
+    expect(restoreFromHidden).not.toHaveBeenCalled();
   });
 
-  it("falls back to worker window when active window is also gone", () => {
+  it("recreates the right slot full-height when its pane is gone from the layout", () => {
+    // A dead pane is dropped from the layout entirely, so there is no fourth
+    // pane to adopt and the slot has to be split back in. -f is what makes it
+    // span the window instead of only the growhouse pane's height.
     vi.mocked(paneExists).mockImplementation((id: string) => id !== "%2");
-    vi.mocked(windowExists).mockImplementation((name: string) =>
-      name !== "_garden-worker-bold-ash"
-    );
-    vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_garden-worker-calm-bay"]);
-    vi.mocked(getFirstPaneId).mockReturnValue("%20");
-    const state = makeState();
-    const healed = validateAndHeal(state);
-    expect(healed.activePaneId).toBe("%20");
-    expect(healed.activeWindowName).toBe("_garden-worker-calm-bay");
-    expect(healed.activePaneType).toBe("worker");
-  });
-
-  it("nulls everything when no recovery is possible", () => {
-    vi.mocked(paneExists).mockImplementation((id: string) => id !== "%2");
+    vi.mocked(listSessionPanes).mockReturnValue([
+      { windowId: "@0", windowName: "main", paneId: "%0", width: 40, height: 10, panePath: "/" },
+      { windowId: "@0", windowName: "main", paneId: "%3", width: 40, height: 5, panePath: "/" },
+      { windowId: "@0", windowName: "main", paneId: "%1", width: 40, height: 20, panePath: "/" },
+    ]);
+    vi.mocked(tmuxSplit).mockReturnValue("%50");
     vi.mocked(windowExists).mockReturnValue(false);
     vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
-    vi.mocked(getFirstPaneId).mockReturnValue(null);
-    const state = makeState();
-    const healed = validateAndHeal(state);
+
+    const healed = validateAndHeal(makeState());
+
+    expect(tmuxSplit).toHaveBeenCalledWith(
+      "-f", "-h", "-t", expect.stringContaining(":main"), "-l", "60%", "-c", "/tmp/garden",
+    );
+    expect(healed.activePaneId).toBe("%50");
+  });
+
+  it("refills a recreated slot from the operator's last worker window", () => {
+    vi.mocked(paneExists).mockImplementation((id: string) => id !== "%2");
+    vi.mocked(listSessionPanes).mockReturnValue([]);
+    vi.mocked(tmuxSplit).mockReturnValue("%50");
+    // No parking window; two hidden workers, one of them the last one focused.
+    vi.mocked(windowExists).mockImplementation((name: string) => name !== "_garden-active");
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([
+      "_garden-worker-calm-bay", "_garden-worker-bold-ash",
+    ]);
+    vi.mocked(restoreFromHidden).mockImplementation((_win: string, st: DashboardState) => {
+      st.activePaneId = "%60";
+    });
+
+    const healed = validateAndHeal(makeState({
+      lastActiveWorker: { garden: "_garden-worker-bold-ash" },
+    }));
+
+    expect(restoreFromHidden).toHaveBeenCalledWith(
+      "_garden-worker-bold-ash", expect.anything(),
+    );
+    expect(healed.activePaneId).toBe("%60");
+    expect(healed.activePaneType).toBe("worker");
+    expect(healed.activeWindowName).toBe("_garden-worker-bold-ash");
+  });
+
+  it("nulls the slot out when even the split fails", () => {
+    // Callers read a null slot as "decline to swap" — strictly better than
+    // handing them another id that names nothing.
+    vi.mocked(paneExists).mockImplementation((id: string) => id !== "%2");
+    vi.mocked(listSessionPanes).mockReturnValue([]);
+    vi.mocked(tmuxSplit).mockReturnValue("");
+
+    const healed = validateAndHeal(makeState());
+
     expect(healed.activePaneId).toBeNull();
     expect(healed.activePaneType).toBeNull();
     expect(healed.activeWindowName).toBeNull();
+  });
+
+  it("leaves a healthy right slot untouched", () => {
+    vi.mocked(paneExists).mockReturnValue(true);
+    const state = makeState();
+    const healed = validateAndHeal(state);
+    expect(healed.activePaneId).toBe("%2");
+    expect(tmuxSplit).not.toHaveBeenCalled();
   });
 
   it("preserves registry entries for missing windows, marks them exited, and alerts", async () => {

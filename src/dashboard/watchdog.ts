@@ -1,4 +1,4 @@
-// Liveness watchdog: a slow recurring tick with four duties, plus one
+// Liveness watchdog: a slow recurring tick with five duties, plus one
 // event-driven Codex rollout listener.
 //
 // 1. Re-poke projects holding workers stranded in active states. The state
@@ -29,6 +29,14 @@
 // 4. Re-file worker windows whose names disagree with the registered worktree
 // their panes occupy. This repairs the status-visibility casualty of a failed
 // post-swap rename without guessing when two panes claim the same worker.
+//
+// 5. Repair a right slot whose pane died (see healActivePane). activePaneId is
+// the one pane id in state that no fixed role pins — it is learned from swaps
+// that succeeded — so a dead one is self-sustaining: every park, swap, and
+// spawn fails against it, and a failed swap never writes a replacement. The
+// heal exists in validate.ts but its only other callers are attach and
+// `garden health --fix`, neither of which runs while a session simply stays
+// attached, which is exactly when the wedge happens.
 //
 // The rollout listener translates Codex's hookless request_user_input call and
 // result records into the shared asking/working worker states. It is driven by
@@ -644,6 +652,9 @@ export async function runWatchdogLoop(): Promise<void> {
   // surface minimal; header.ts is heavy and this module is start/stop-imported by
   // poller.ts. Re-bakes the status pane each tick so time-in-state suffixes tick.
   const { refreshStatusElapsed, refreshDashboard } = await import("./header.js");
+  // Dynamic for the cycle, like the poller above: validate.ts statically
+  // imports poller.ts, which statically imports this module for start/stopWatchdog.
+  const { healActivePane } = await import("./validate.js");
   startCodexInputWatcher(refreshDashboard);
   const gardenRunner = resolveGardenRunner();
   // Damping state lives in the loop closure: it persists across ticks and
@@ -689,6 +700,18 @@ export async function runWatchdogLoop(): Promise<void> {
         withStateLock(() => healWorkerWindows());
       } catch (err) {
         log.warn("watchdog", "window heal failed", { data: { error: String(err) } });
+      }
+      // Repair a right slot whose pane died. validateAndHeal covers this on
+      // attach and `garden health --fix` on demand, and neither runs while a
+      // session simply stays attached — which is exactly when a dead slot
+      // wedges every navigation, kill, and spawn behind a pane id that names
+      // nothing, with a dashboard rebuild as the operator's only way out.
+      // After the window heal so it judges healed names, before orphan
+      // detection so a window consumed by the refill is not then reported.
+      try {
+        healActivePane();
+      } catch (err) {
+        log.warn("watchdog", "right slot heal failed", { data: { error: String(err) } });
       }
       alertOrphanedWindows(readRegistry());
       // Retry any worker cleanup whose own dispatch failed. On the fast 60s

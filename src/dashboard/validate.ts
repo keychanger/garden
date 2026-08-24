@@ -4,17 +4,18 @@ import path from "node:path";
 import { SESSIONS_DIR, loadConfig } from "../config.js";
 import { type DashboardState, readDashState, writeDashState, withStateLock } from "./state.js";
 import { mutateRegistry, readRegistry, type WorkerRegistry } from "./registry.js";
-import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, killWindowSafe, tmuxSplit, setPaneTitle, setPaneLabel, tmux, disablePaneInput, lockPaneMouse, renameWindow } from "./tmux.js";
+import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, listSessionPanes, killWindowSafe, tmuxSplit, setPaneTitle, setPaneLabel, tmux, disablePaneInput, lockPaneMouse, renameWindow } from "./tmux.js";
 import { log } from "./log.js";
 import { worktreeExists, removeWorktree, pruneWorktrees } from "./git.js";
 import { startProjectPoller, projectPollerRunning } from "./poller.js";
-import { createGardenGrowhouseWindow, USAGE_PANE_HEIGHT } from "./create.js";
+import { createGardenGrowhouseWindow, createShellWindow, USAGE_PANE_HEIGHT } from "./create.js";
 import { resolveGardenRunner } from "./runner.js";
-import { gardenWindowName, workerWindowName } from "./window-names.js";
+import { gardenWindowName, workerWindowName, parkingWindowName, shellWindowName } from "./window-names.js";
 import { buildStatusCommand, buildUsageCommand } from "./header.js";
-import { gardenRestoreFromHidden } from "./layout.js";
+import { gardenRestoreFromHidden, restoreFromHidden } from "./layout.js";
 import { addAlert } from "./alerts.js";
 import { HEADLESS_RUNS_DIR } from "../paths.js";
+import { DASHBOARD_SESSION } from "../session.js";
 import {
   headlessArtifactNames,
   isHeadlessArtifactName,
@@ -238,6 +239,183 @@ export function sweepGhostEntries(): boolean {
   return dropped;
 }
 
+// The dashboard's four panes all live in one window, created at attach time.
+const MAIN_WINDOW = "main";
+
+/**
+ * Recover a right slot whose pane is gone.
+ *
+ * `activePaneId` names whatever pane currently occupies the visible right
+ * slot. Unlike the status/usage/growhouse ids it is pinned to no fixed role —
+ * the slot's occupant changes on every navigation swap, so state learns the id
+ * only from a swap that already succeeded. That makes a dead `activePaneId`
+ * self-sustaining: every park, swap, and spawn fails against it, and a failed
+ * swap never writes a replacement id, so the dashboard stays wedged until
+ * someone rebuilds it from scratch.
+ *
+ * Repair in ascending order of disruption:
+ *   1. Adopt the pane already sitting in the slot, when only the id drifted.
+ *   2. Recreate the slot, when its pane died and tmux reflowed the window
+ *      without it, then swap the project's content back in.
+ *   3. Null the slot out, when even the split fails — a caller that sees null
+ *      declines to swap rather than swapping against a corpse.
+ *
+ * Returns `state` unchanged when the slot is healthy, so callers can treat
+ * identity as "nothing to persist".
+ */
+export function healActivePaneInState(state: DashboardState): DashboardState {
+  if (!state.activePaneId || paneExists(state.activePaneId)) return state;
+
+  const healed: DashboardState = { ...state };
+
+  const occupant = findRightSlotPane(healed);
+  if (occupant) {
+    // The slot itself is intact and holds real content; only our record of
+    // which pane that is went stale. Adopting the id is the whole repair —
+    // refilling would swap out content the operator can see.
+    healed.activePaneId = occupant;
+    log.info("validate", "adopted the pane occupying the right slot", {
+      data: { staleId: state.activePaneId, paneId: occupant },
+    });
+    return healed;
+  }
+
+  const recreated = recreateRightSlot(healed);
+  if (!recreated) {
+    healed.activePaneId = null;
+    healed.activePaneType = null;
+    healed.activeWindowName = null;
+    log.warn("validate", "right slot pane is gone and could not be recreated", {
+      data: { staleId: state.activePaneId },
+    });
+    return healed;
+  }
+
+  // The fresh split holds a bare shell, not the content state still claims.
+  healed.activePaneId = recreated;
+  healed.activePaneType = null;
+  healed.activeWindowName = null;
+  log.info("validate", "recreated the right slot", {
+    data: { staleId: state.activePaneId, paneId: recreated },
+  });
+  refillRightSlot(healed);
+  return healed;
+}
+
+/**
+ * The pane sitting in the right slot, or null when the slot is gone.
+ *
+ * Identified by elimination rather than by position: the other three panes in
+ * `main` are pinned by id in state, so any fourth pane is the right slot. When
+ * a pane dies tmux drops it from the layout entirely, so "no fourth pane" is
+ * exactly the case that needs a new split.
+ */
+function findRightSlotPane(state: DashboardState): string | null {
+  const pinned = new Set(
+    [state.statusPaneId, state.usagePaneId, state.gardenShellPaneId]
+      .filter((id): id is string => !!id),
+  );
+  const occupant = listSessionPanes()
+    .filter(p => p.windowName === MAIN_WINDOW)
+    .find(p => !pinned.has(p.paneId));
+  return occupant ? occupant.paneId : null;
+}
+
+/**
+ * Split a new right slot back into the main window.
+ *
+ * `-f` is load-bearing: the original slot was split off before the left column
+ * was subdivided, so it spans the window's full height. A plain split off the
+ * growhouse pane would come up only as tall as that pane and strand the status
+ * and usage panes at full width above it.
+ */
+function recreateRightSlot(state: DashboardState): string | null {
+  const projectPath = state.activeProject
+    ? loadConfig().projects[state.activeProject]?.path
+    : undefined;
+  const args = ["-f", "-h", "-t", `${DASHBOARD_SESSION}:${MAIN_WINDOW}`, "-l", "60%"];
+  if (projectPath) args.push("-c", projectPath);
+  try {
+    return tmuxSplit(...args) || null;
+  } catch (err) {
+    log.warn("validate", "right slot split failed", { data: { error: String(err) } });
+    return null;
+  }
+}
+
+/**
+ * Swap the active project's content into a freshly recreated slot, so the
+ * repair leaves a usable dashboard rather than an empty shell the operator has
+ * to navigate out of by hand. Preference order matches a project switch: the
+ * parked pane, then the last worker the operator looked at, then any worker,
+ * then the project shell.
+ */
+function refillRightSlot(state: DashboardState): void {
+  const project = state.activeProject;
+  if (!project) return;
+
+  const target = pickRefillTarget(project, state);
+  if (!target) return;
+
+  const before = state.activePaneId;
+  restoreFromHidden(target.window, state);
+  if (state.activePaneId === before) return;
+
+  state.activePaneType = target.type;
+  state.activeWindowName = target.window;
+  log.info("validate", "refilled the right slot", {
+    data: { project, window: target.window },
+  });
+}
+
+function pickRefillTarget(
+  project: string,
+  state: DashboardState,
+): { window: string; type: "worker" | "shell" } | null {
+  const parked = parkingWindowName(project);
+  if (windowExists(parked)) return { window: parked, type: "worker" };
+
+  const workers = listHiddenWorkerWindows(project);
+  const preferred = state.lastActiveWorker[project];
+  if (preferred && workers.includes(preferred)) {
+    return { window: preferred, type: "worker" };
+  }
+  if (workers.length > 0) return { window: workers[0], type: "worker" };
+
+  const shell = shellWindowName(project);
+  if (!windowExists(shell)) {
+    const projectPath = loadConfig().projects[project]?.path;
+    if (!projectPath) return null;
+    createShellWindow(project, projectPath);
+  }
+  return windowExists(shell) ? { window: shell, type: "shell" } : null;
+}
+
+/**
+ * Right-slot heal as a standalone step, for callers that hold no state of
+ * their own. Mirrors healStatusPane: probe lock-free (this runs on the
+ * watchdog's 60s tick and the healthy case must stay free), then repair and
+ * persist under the lock so it cannot revert a concurrent navigation.
+ */
+export function healActivePane(): void {
+  const probe = readDashState();
+  if (!probe.activePaneId || paneExists(probe.activePaneId)) return;
+
+  try {
+    withStateLock(() => {
+      const state = readDashState();
+      const healed = healActivePaneInState(state);
+      if (healed !== state) writeDashState(healed);
+    });
+  } catch (err) {
+    // Contended lock (an attach-time heal, a navigation swap). The next tick
+    // retries; never throw into the watchdog's tick body.
+    log.warn("validate", "healActivePane skipped: state lock unavailable", {
+      data: { error: String(err) },
+    });
+  }
+}
+
 /**
  * Validate dashboard state against tmux reality and heal inconsistencies.
  * Returns the healed state (may be identical if everything is consistent).
@@ -265,43 +443,10 @@ export function validateAndHeal(state: DashboardState): DashboardState {
   healed = healGardenPaneInState(healed);
   let changed = healed !== state;
 
-  if (healed.activePaneId && !paneExists(healed.activePaneId)) {
-    log.warn("validate", "activePaneId is stale, attempting recovery");
+  const withRightSlot = healActivePaneInState(healed);
+  if (withRightSlot !== healed) {
+    healed = withRightSlot;
     changed = true;
-
-    // Try to recover from the named window
-    let recovered = false;
-    if (healed.activeWindowName && windowExists(healed.activeWindowName)) {
-      const paneId = getFirstPaneId(healed.activeWindowName);
-      if (paneId) {
-        healed.activePaneId = paneId;
-        log.info("validate", "recovered activePaneId from window");
-        recovered = true;
-      }
-    }
-
-    // Fall back to any worker window for the active project
-    if (!recovered && healed.activeProject) {
-      const workers = listHiddenWorkerWindows(healed.activeProject);
-      for (const win of workers) {
-        const paneId = getFirstPaneId(win);
-        if (paneId) {
-          healed.activePaneId = paneId;
-          healed.activePaneType = "worker";
-          healed.activeWindowName = win;
-          log.info("validate", "recovered activePaneId from worker window");
-          recovered = true;
-          break;
-        }
-      }
-    }
-
-    if (!recovered) {
-      healed.activePaneId = null;
-      healed.activePaneType = null;
-      healed.activeWindowName = null;
-      log.warn("validate", "could not recover activePaneId");
-    }
   }
 
   // Validate registry against tmux windows. When a registered worker has
