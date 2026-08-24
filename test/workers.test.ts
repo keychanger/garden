@@ -92,7 +92,9 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   paneExists: vi.fn(() => true),
   windowExists: vi.fn(() => true),
   listHiddenWorkerWindows: vi.fn(() => []),
+  listSessionPanes: vi.fn(() => []),
   killWindowSafe: vi.fn(),
+  tmuxSplit: vi.fn(() => "%50"),
   getPaneSize: vi.fn(() => ({ width: 120, height: 50 })),
   resizeWindow: vi.fn(),
 }));
@@ -234,7 +236,7 @@ import { refreshDashboard } from "../src/dashboard/header.js";
 import {
   tmux, tmuxDisplay, newDashboardWindowPaned, setPaneLabel, setPaneVar,
   getFirstPaneId, paneExists, windowExists,
-  listHiddenWorkerWindows, killWindowSafe,
+  listHiddenWorkerWindows, listSessionPanes, killWindowSafe, tmuxSplit,
   getPaneSize, resizeWindow,
 } from "../src/dashboard/tmux.js";
 import { generateWorkerName } from "../src/dashboard/names.js";
@@ -288,6 +290,8 @@ beforeEach(() => {
   vi.mocked(newDashboardWindowPaned).mockReturnValue("%10");
   vi.mocked(getFirstPaneId).mockReturnValue("%20");
   vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+  vi.mocked(listSessionPanes).mockReturnValue([]);
+  vi.mocked(tmuxSplit).mockReturnValue("%50");
   vi.mocked(getWorkers).mockReturnValue([]);
   vi.mocked(findWorkerByName).mockReturnValue(null);
   vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 50 });
@@ -1413,17 +1417,29 @@ describe("killPane", () => {
     expect(vi.mocked(removeWorker)).not.toHaveBeenCalled();
   });
 
-  it("shows error when no pane exists", () => {
+  it("repairs when state names no right pane", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ activePaneId: null }));
     killPane();
-    expect(vi.mocked(tmuxDisplay)).toHaveBeenCalledWith("No pane to kill.");
+    expect(vi.mocked(tmuxSplit)).toHaveBeenCalled();
+    expect(vi.mocked(writeDashState)).toHaveBeenCalledWith(
+      expect.objectContaining({ activePaneId: "%50" }),
+    );
+    expect(vi.mocked(removeWorker)).not.toHaveBeenCalled();
   });
 
   it("shows error when pane does not exist in tmux", () => {
     vi.mocked(paneExists).mockReturnValue(false);
     vi.mocked(readDashState).mockReturnValue(makeState());
+
     killPane();
-    expect(vi.mocked(tmuxDisplay)).toHaveBeenCalledWith("No pane to kill.");
+
+    expect(vi.mocked(tmuxSplit)).toHaveBeenCalled();
+    const written = vi.mocked(writeDashState).mock.calls[0][0];
+    expect(written.activePaneId).toBe("%50");
+    expect(vi.mocked(removeWorker)).not.toHaveBeenCalled();
+    expect(vi.mocked(tmuxDisplay)).toHaveBeenCalledWith(
+      "Right pane was gone — restored it. Press ⌥x again to kill a worker.",
+    );
   });
 
   it("silently writes state and returns when activeProject is null", () => {

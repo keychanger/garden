@@ -258,13 +258,13 @@ const MAIN_WINDOW = "main";
  *   2. Recreate the slot, when its pane died and tmux reflowed the window
  *      without it, then swap the project's content back in.
  *   3. Null the slot out, when even the split fails — a caller that sees null
- *      declines to swap rather than swapping against a corpse.
+ *      declines to swap, and the watchdog retries the split on its next tick.
  *
  * Returns `state` unchanged when the slot is healthy, so callers can treat
  * identity as "nothing to persist".
  */
 export function healActivePaneInState(state: DashboardState): DashboardState {
-  if (!state.activePaneId || paneExists(state.activePaneId)) return state;
+  if (state.activePaneId && paneExists(state.activePaneId)) return state;
 
   const healed: DashboardState = { ...state };
 
@@ -288,7 +288,11 @@ export function healActivePaneInState(state: DashboardState): DashboardState {
     log.warn("validate", "right slot pane is gone and could not be recreated", {
       data: { staleId: state.activePaneId },
     });
-    return healed;
+    return state.activePaneId === null
+      && state.activePaneType === null
+      && state.activeWindowName === null
+      ? state
+      : healed;
   }
 
   // The fresh split holds a bare shell, not the content state still claims.
@@ -399,7 +403,7 @@ function pickRefillTarget(
  */
 export function healActivePane(): void {
   const probe = readDashState();
-  if (!probe.activePaneId || paneExists(probe.activePaneId)) return;
+  if (probe.activePaneId && paneExists(probe.activePaneId)) return;
 
   try {
     withStateLock(() => {

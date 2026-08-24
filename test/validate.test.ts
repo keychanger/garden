@@ -140,10 +140,15 @@ describe("healActivePane", () => {
     expect(writeDashState).not.toHaveBeenCalled();
   });
 
-  it("no-ops when state names no pane at all", () => {
+  it("retries repair when a prior split failure left the slot null", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ activePaneId: null }));
+    vi.mocked(listSessionPanes).mockReturnValue([]);
+    vi.mocked(tmuxSplit).mockReturnValue("%50");
     healActivePane();
-    expect(withStateLock).not.toHaveBeenCalled();
+    expect(withStateLock).toHaveBeenCalled();
+    expect(writeDashState).toHaveBeenCalledWith(
+      expect.objectContaining({ activePaneId: "%50" }),
+    );
   });
 
   it("repairs and persists under the state lock when the slot is dead", () => {
@@ -316,6 +321,20 @@ describe("validateAndHeal", () => {
     expect(healed.activePaneId).toBeNull();
     expect(healed.activePaneType).toBeNull();
     expect(healed.activeWindowName).toBeNull();
+  });
+
+  it("retries a failed split when the slot was already null", () => {
+    vi.mocked(listSessionPanes).mockReturnValue([]);
+    vi.mocked(tmuxSplit).mockReturnValue("%51");
+
+    const healed = validateAndHeal(makeState({
+      activePaneId: null,
+      activePaneType: null,
+      activeWindowName: null,
+    }));
+
+    expect(tmuxSplit).toHaveBeenCalled();
+    expect(healed.activePaneId).toBe("%51");
   });
 
   it("leaves a healthy right slot untouched", () => {

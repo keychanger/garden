@@ -21,7 +21,8 @@ These extend the global rules in `<garden-repo>/rules.md`.
 
 - The right pane is permanent. Never destroy or recreate it in normal operation — move
   content via swap-pane only. The single exception is repair: when its pane has already
-  died, `healActivePaneInState` (validate.ts) splits the slot back in and refills it,
+  died or its id is missing, `healActivePaneInState` (validate.ts) splits the slot back
+  in and refills it,
   because `activePaneId` is learned only from swaps that succeeded, so a dead one blocks
   every later swap from ever replacing it. Repair belongs there and nowhere else.
 - Hidden tmux windows use underscore-prefixed names (`_<project>-worker-N`, `_<project>-shell`).

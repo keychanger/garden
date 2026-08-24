@@ -30,7 +30,8 @@
 // their panes occupy. This repairs the status-visibility casualty of a failed
 // post-swap rename without guessing when two panes claim the same worker.
 //
-// 5. Repair a right slot whose pane died (see healActivePane). activePaneId is
+// 5. Repair a right slot whose pane died or whose id is missing (see
+// healActivePane). activePaneId is
 // the one pane id in state that no fixed role pins — it is learned from swaps
 // that succeeded — so a dead one is self-sustaining: every park, swap, and
 // spawn fails against it, and a failed swap never writes a replacement. The

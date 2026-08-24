@@ -8,6 +8,7 @@ import {
 } from "./claude-env.js";
 import { readDashState, writeDashState, withStateLock } from "./state.js";
 import { parkToHidden, restoreFromHidden } from "./layout.js";
+import { healActivePaneInState } from "./validate.js";
 import { refreshDashboard, setPaneProjectColor } from "./header.js";
 import {
   tmux, tmuxDisplay, newDashboardWindowPaned, setPaneLabel, setPaneVar, shellEscape,
@@ -890,7 +891,13 @@ export function killPane(target?: WorkerRemovalTarget): void {
         removalProject = target.projectName;
         removalWorker = target.workerName;
         removalEntry = findWorkerByName(target.projectName, target.workerName) ?? null;
-        writeDashState(state);
+        log.info("workers", "kill: removed a window outside the right slot", {
+          worker: target.workerName,
+          data: { project: target.projectName, window: targetWindow },
+        });
+        // This branch also handles a target whose visible pane already died.
+        // Repair that slot before persisting the stale id back to state.
+        writeDashState(healActivePaneInState(state));
         didKill = true;
         return;
       }
@@ -898,6 +905,19 @@ export function killPane(target?: WorkerRemovalTarget): void {
 
     if (state.activePaneType === "shell") {
       tmuxDisplay("Cannot kill project shell. Use ⌥x on workers only.");
+      return;
+    }
+
+    // A dead active pane is the slot itself failing, not a worker to kill.
+    // Repair it before refusing so the operator's kill shortcut can recover
+    // the dashboard without removing a worker that is still registered.
+    const slotHealed = healActivePaneInState(state);
+    if (slotHealed !== state) {
+      writeDashState(slotHealed);
+      log.warn("workers", "kill: right slot was gone, repaired it instead", {
+        data: { project: state.activeProject, paneId: slotHealed.activePaneId },
+      });
+      tmuxDisplay("Right pane was gone — restored it. Press ⌥x again to kill a worker.");
       return;
     }
 
@@ -935,6 +955,14 @@ export function killPane(target?: WorkerRemovalTarget): void {
           const nextEntry = findWorkerByName(state.activeProject, nextLabel);
           if (nextEntry?.task) setPaneVar(targetPaneId, "garden_task", nextEntry.task);
         }
+        log.info("workers", "kill: swapped a sibling worker into the right slot", {
+          worker: parseWorkerSuffix(killedWindowName ?? "") ?? undefined,
+          data: { project: state.activeProject, killed: killedWindowName, replacement: targetWindow },
+        });
+      } else {
+        log.warn("workers", "kill: replacement window has no pane; right slot left as-is", {
+          data: { project: state.activeProject, replacement: targetWindow },
+        });
       }
     } else {
       const shellTarget = shellWin(state.activeProject);
@@ -950,6 +978,14 @@ export function killPane(target?: WorkerRemovalTarget): void {
         state.activePaneId = shellPaneId;
         state.activePaneType = "shell";
         state.activeWindowName = shellTarget;
+        log.info("workers", "kill: swapped the project shell into the right slot", {
+          worker: parseWorkerSuffix(killedWindowName ?? "") ?? undefined,
+          data: { project: state.activeProject, killed: killedWindowName },
+        });
+      } else {
+        log.warn("workers", "kill: project shell has no pane; right slot left as-is", {
+          data: { project: state.activeProject, shell: shellTarget },
+        });
       }
     }
 
