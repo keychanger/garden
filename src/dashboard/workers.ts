@@ -1,7 +1,6 @@
 // Worker lifecycle: creation and destruction of Claude worker sessions.
 import path from "node:path";
 import fs from "node:fs";
-import { spawn } from "node:child_process";
 import { DASHBOARD_SESSION } from "../session.js";
 import { getProject, tryGetProject, loadConfig, plotsMap, type ProjectConfig } from "../config.js";
 import {
@@ -45,8 +44,9 @@ import type { WorkerLaunchPlan } from "./harness/types.js";
 import { resolveGardenRunner } from "./runner.js";
 import {
   worktreePath, resolveBaseBranch, resolveSpawnBase, branchExistsOnOrigin, tryPublishBranch,
-  gardenDoneTrackedInHead, getRemoteTrackingSha, workerCleanupMarkerPath,
+  gardenDoneTrackedInHead, getRemoteTrackingSha,
 } from "./git.js";
+import { writeWorkerCleanupRequest, dispatchWorkerCleanup } from "./worker-cleanup.js";
 import { addAlert } from "./alerts.js";
 import { showBeads, reopenBead, unassignBead } from "./beads.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
@@ -1298,6 +1298,17 @@ function resolveWorkerPaneId(project: string, worker: string): string | null {
   return null;
 }
 
+// Hand a removed worker's worktree/branch cleanup to the `_worker-cleanup`
+// subcommand, via a request file the watchdog can retry.
+//
+// This function's caller is whatever process removed the worker, and that is
+// not always allowed to write the project checkout: `garden` invoked from
+// inside an agent's sandbox can kill the pane and delete the registry entry
+// (both land in permitted paths) and then be denied every git step. The old
+// implementation composed the git commands inline with `2>/dev/null || true`,
+// so that denial produced a leaked worktree and not one byte of diagnostics.
+// Writing the request first means a failed fast path is recoverable: the
+// watchdog re-dispatches it from its own always-unsandboxed process.
 function backgroundGitCleanup(
   project: string,
   worker: string,
@@ -1305,27 +1316,14 @@ function backgroundGitCleanup(
   wtPath: string | undefined,
   branchName: string | undefined,
 ): void {
-  const parts: string[] = [];
-  if (wtPath) {
-    parts.push(`git -C ${shellEscape(repoPath)} worktree remove ${shellEscape(wtPath)} --force`);
-  }
-  if (branchName) {
-    parts.push(`git -C ${shellEscape(repoPath)} branch -D ${shellEscape(branchName)}`);
-    parts.push(
-      `git -C ${shellEscape(repoPath)} ls-remote --heads origin ${shellEscape(branchName)}`
-      + ` | grep -q . && git -C ${shellEscape(repoPath)} push origin --delete ${shellEscape(branchName)}`,
-    );
-  }
-  if (parts.length === 0) return;
-  const marker = workerCleanupMarkerPath(project, worker);
-  fs.writeFileSync(marker, "");
-  const cleanup = parts.map(p => `(${p}) 2>/dev/null || true`).join("; ");
-  const script = `${cleanup}; rm -f ${shellEscape(marker)}`;
-  try {
-    const child = spawn("sh", ["-c", script], { detached: true, stdio: "ignore" });
-    child.unref();
-  } catch (err) {
-    fs.rmSync(marker, { force: true });
-    throw err;
-  }
+  if (!wtPath && !branchName) return;
+  writeWorkerCleanupRequest({
+    project,
+    worker,
+    repoPath,
+    worktreePath: wtPath,
+    branchName,
+    attempts: 0,
+  });
+  dispatchWorkerCleanup(resolveGardenRunner(), project, worker);
 }

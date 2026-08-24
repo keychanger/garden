@@ -48,6 +48,7 @@ import { triggerProjectPoll } from "./poller-fifo.js";
 import { addAlert } from "./alerts.js";
 import { log, truncateLog } from "./log.js";
 import { sweepSpawnDrafts } from "./spawn-draft.js";
+import { dueCleanupRequests, dispatchWorkerCleanup } from "./worker-cleanup.js";
 import {
   captureCodexUsageLatest, probeCodexUsageIfStale, CODEX_PROBE_INTERVAL_MS,
 } from "./codex-usage.js";
@@ -599,6 +600,30 @@ export function alertOrphanedWorktrees(nowMs: number): number {
 // bounding: it belongs on this throttle rather than the 60s tick because it walks
 // directories to size what it finds, and an unclaimed worktree that has sat for
 // months is not news that needs reporting within a minute.
+// Re-dispatch worker-cleanup requests that are still on disk. The removing
+// process already fired one attempt; a request that outlived
+// CLEANUP_RETRY_AFTER_MS means that attempt did not finish the job — most often
+// because it ran inside an agent sandbox that denies writes to the project
+// checkout, and so failed every git step. The watchdog is never sandboxed, so
+// its re-dispatch is the one that succeeds.
+//
+// Dispatched detached rather than run inline: removing a worktree holding a
+// full node_modules and deleting an origin branch are seconds-to-minutes of
+// work, and an overrunning iteration is read by absorbSleep as machine-suspend
+// time — doing this on the tick's own thread would shift live review timers.
+export function sweepWorkerCleanups(nowMs: number, gardenRunner: string): number {
+  const due = dueCleanupRequests(nowMs);
+  for (const req of due) {
+    dispatchWorkerCleanup(gardenRunner, req.project, req.worker);
+  }
+  if (due.length > 0) {
+    log.info("watchdog", "re-dispatched stalled worker cleanups", {
+      data: { count: due.length, workers: due.map(r => `${r.project}/${r.worker}`) },
+    });
+  }
+  return due.length;
+}
+
 export function housekeeping(nowMs: number): void {
   truncateLog();
   sweepBootstrapScripts(nowMs);
@@ -666,6 +691,15 @@ export async function runWatchdogLoop(): Promise<void> {
         log.warn("watchdog", "window heal failed", { data: { error: String(err) } });
       }
       alertOrphanedWindows(readRegistry());
+      // Retry any worker cleanup whose own dispatch failed. On the fast 60s
+      // tick rather than hourly housekeeping: this is a recovery path for a
+      // leak that is actively occupying disk, and the sweep is a readdir that
+      // matches nothing in the steady state.
+      try {
+        sweepWorkerCleanups(Date.now(), gardenRunner);
+      } catch (err) {
+        log.warn("watchdog", "worker cleanup sweep failed", { data: { error: String(err) } });
+      }
       // Advance the status pane's time-in-state suffixes ("reviewing 12m" ->
       // "13m"). Content-deduped inside, so this is a no-op when nothing is in
       // flight. Wrapped separately (it runs after tick/alerts, which are already

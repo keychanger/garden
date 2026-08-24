@@ -177,6 +177,16 @@ vi.mock("../src/dashboard/git.js", () => ({
   workerCleanupMarkerPath: vi.fn(() => "/tmp/fake-sessions/worker-cleanup-myproject-swift-oak"),
 }));
 
+// The removal tail no longer composes git commands itself — it writes a
+// cleanup request and dispatches the subcommand that executes it (see
+// worker-cleanup.ts). Asserting the handoff is what these tests own; the git
+// itself is covered against a real repo in
+// test/integration/worker-cleanup.real.test.ts.
+vi.mock("../src/dashboard/worker-cleanup.js", () => ({
+  writeWorkerCleanupRequest: vi.fn(),
+  dispatchWorkerCleanup: vi.fn(),
+}));
+
 vi.mock("../src/dashboard/alerts.js", () => ({
   addAlert: vi.fn(),
 }));
@@ -242,6 +252,7 @@ import {
   gardenDoneTrackedInHead,
 } from "../src/dashboard/git.js";
 import { addAlert } from "../src/dashboard/alerts.js";
+import { writeWorkerCleanupRequest, dispatchWorkerCleanup } from "../src/dashboard/worker-cleanup.js";
 import { recordWorkerCreated, recordWorkerRemoved } from "../src/dashboard/telemetry.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "../src/dashboard/poller.js";
 import { workerWindowName as workerWin, shellWindowName as shellWin, parseWorkerSuffix } from "../src/dashboard/window-names.js";
@@ -1622,7 +1633,7 @@ describe("killPane", () => {
     expect(written.lastActiveWorker["myproject"]).toBeUndefined();
   });
 
-  it("spawns background git cleanup after kill", () => {
+  it("requests git cleanup after kill", () => {
     const state = makeState();
     vi.mocked(readDashState).mockReturnValue(state);
     vi.mocked(getFirstPaneId).mockReturnValue("%25");
@@ -1634,13 +1645,18 @@ describe("killPane", () => {
 
     killPane();
 
-    expect(vi.mocked(spawn)).toHaveBeenCalledWith(
-      "sh", ["-c", expect.stringContaining("worktree remove")],
-      { detached: true, stdio: "ignore" },
-    );
+    expect(vi.mocked(writeWorkerCleanupRequest)).toHaveBeenCalledWith({
+      project: "myproject",
+      worker: "swift-oak",
+      repoPath: "/repo/myproject",
+      worktreePath: "/wt/swift-oak",
+      branchName: "swift-oak",
+      attempts: 0,
+    });
+    expect(vi.mocked(dispatchWorkerCleanup)).toHaveBeenCalled();
   });
 
-  it("does not spawn cleanup when no worker entry found", () => {
+  it("does not request cleanup when no worker entry found", () => {
     const state = makeState();
     vi.mocked(readDashState).mockReturnValue(state);
     vi.mocked(getFirstPaneId).mockReturnValue("%25");
@@ -1649,7 +1665,7 @@ describe("killPane", () => {
 
     killPane();
 
-    expect(vi.mocked(spawn)).not.toHaveBeenCalled();
+    expect(vi.mocked(dispatchWorkerCleanup)).not.toHaveBeenCalled();
   });
 
   it("refreshes dashboard after kill", () => {
@@ -1887,10 +1903,10 @@ describe("stopWorkerByName", () => {
       "myproject", "swift-oak", 42, "default", { ...entry },
     );
     expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "swift-oak");
-    expect(vi.mocked(spawn)).toHaveBeenCalledWith(
-      "sh", ["-c", expect.stringContaining("worktree remove")],
-      { detached: true, stdio: "ignore" },
+    expect(vi.mocked(writeWorkerCleanupRequest)).toHaveBeenCalledWith(
+      expect.objectContaining({ worker: "swift-oak", worktreePath: "/wt/swift-oak", attempts: 0 }),
     );
+    expect(vi.mocked(dispatchWorkerCleanup)).toHaveBeenCalled();
     expect(vi.mocked(refreshDashboard)).toHaveBeenCalled();
   });
 

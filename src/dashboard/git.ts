@@ -246,6 +246,42 @@ export function workerCleanupMarkerPath(project: string, worker: string): string
   return path.join(SESSIONS_DIR, `worker-cleanup-${project}-${worker}`);
 }
 
+// True when the branch exists in this repo's local refs. Lets a cleanup retry
+// skip a `branch -D` whose target an earlier attempt already deleted, so a
+// partial success is not re-reported as a failure.
+export function branchExistsLocally(repoPath: string, branchName: string): boolean {
+  try {
+    git(repoPath, "show-ref", "--verify", "--quiet", `refs/heads/${branchName}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Run one worker-cleanup git step, returning null on success or git's own
+// stderr on failure. The cleanup path needs the error TEXT, not a boolean and
+// not a log line: it reports the reason to the operator and decides whether to
+// retry. removeWorktree/deleteBranch above log-and-swallow instead, which is
+// right for their callers and wrong for this one.
+export function gitCleanupStep(repoPath: string, args: string[]): string | null {
+  try {
+    git(repoPath, ...args);
+    return null;
+  } catch (err) {
+    return gitErrText(err) || `git ${args[0]} failed`;
+  }
+}
+
+// gitCleanupStep for a step read for its output rather than its exit status.
+// Null means the command failed (offline origin, no remote configured).
+export function gitCleanupOutput(repoPath: string, args: string[]): string | null {
+  try {
+    return git(repoPath, ...args);
+  } catch {
+    return null;
+  }
+}
+
 export function removeWorktree(repoPath: string, wtPath: string): void {
   try {
     git(repoPath, "worktree", "remove", wtPath, "--force");

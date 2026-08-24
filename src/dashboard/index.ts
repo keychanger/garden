@@ -389,6 +389,20 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     await runHolisticBacktest(args.slice(1));
     return;
   }
+  if (sub === "_worker-cleanup") {
+    // Executes one worker-cleanup request (see worker-cleanup.ts). Dispatched
+    // detached by the removal tail and re-dispatched by the watchdog sweep, so
+    // this route is reached from both a possibly-sandboxed and an always-
+    // unsandboxed parent. Dynamically imported to keep git + alerts out of
+    // every other route's parse.
+    const [, projectName, workerName] = args;
+    if (!projectName || !workerName) {
+      throw new Error("usage: garden dashboard _worker-cleanup <project> <worker>");
+    }
+    const { runWorkerCleanup } = await import("./worker-cleanup.js");
+    runWorkerCleanup(projectName, workerName);
+    return;
+  }
   if (sub === "_usage-poll-loop") {
     await runUsagePollerLoop();
     return;

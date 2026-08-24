@@ -12,7 +12,8 @@
 //   - Best-effort: a telemetry failure must never break the poller or a worker
 //     launch. Every write is wrapped and swallows, exactly like log.ts.
 //   - THIN: registry.ts (which reaches the dist/hook.js bundle) may import this,
-//     so the module's import closure stays fs/path/crypto/config only. Callers
+//     so the module's import closure stays fs/path/crypto/config plus log.js
+//     (itself fs/path/config/atomic-write, and already in that bundle). Callers
 //     construct the already-primitive payloads (harness/model/crew/rulesHash are
 //     resolved caller-side, in CLI-only modules); this module only serializes.
 //   - Denormalized config: worker.created freezes the full configuration onto
@@ -24,6 +25,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { GARDEN_DIR } from "../config.js";
+import { log } from "./log.js";
 
 // Resolved lazily (not a module-top const) so importing this module is pure —
 // it touches no filesystem path and reads GARDEN_DIR only when actually
@@ -147,14 +149,33 @@ export function shardName(date: Date = new Date()): string {
   return `events-${date.toISOString().slice(0, 7)}.jsonl`; // events-YYYY-MM.jsonl
 }
 
+// One log line per process, not per event: a process that cannot write the
+// ledger cannot write the next event either, and the lifecycle sites call this
+// several times per worker. Per-process is the right granularity anyway —
+// garden execs a fresh CLI per poll, so this resets naturally.
+let writeFailureLogged = false;
+
 function write(line: Record<string, unknown>): void {
   try {
     const dir = telemetryDir();
     fs.mkdirSync(dir, { recursive: true });
     const entry = { v: SCHEMA_VERSION, ts: new Date().toISOString(), ...line };
     fs.appendFileSync(path.join(dir, shardName()), JSON.stringify(entry) + "\n");
-  } catch {
-    /* telemetry must never crash the app */
+  } catch (err) {
+    // Still swallowed — telemetry must never crash the app — but no longer
+    // invisible. A silent swallow here cost real evidence: `garden` run inside
+    // an agent sandbox is denied ~/.garden/telemetry while ~/.garden/sessions
+    // stays writable, so two workers' entire lifecycle records went missing
+    // while their log lines landed normally, and `garden stats` under-counted
+    // with nothing anywhere to say why.
+    if (!writeFailureLogged) {
+      writeFailureLogged = true;
+      try {
+        log.warn("telemetry", "ledger write failed; events from this process are lost", {
+          data: { event: String(line.event ?? "unknown"), error: String(err) },
+        });
+      } catch { /* the log is best-effort too */ }
+    }
   }
 }
 

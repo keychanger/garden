@@ -5,7 +5,7 @@ import { useTmpHome } from "./helpers.js";
 
 // Registers beforeEach/afterEach that point GARDEN_DIR at a fresh tmp HOME and
 // vi.resetModules() between tests, so each dynamic import re-resolves the dir.
-useTmpHome();
+const env = useTmpHome();
 
 async function importTelemetry() {
   return await import("../src/dashboard/telemetry.js");
@@ -297,5 +297,34 @@ describe("telemetry", () => {
     expect(() =>
       t.recordStateTransition("p", "w", undefined, "default", "working", "reviewing"),
     ).not.toThrow();
+  });
+});
+
+describe("telemetry write failures", () => {
+  // A silent swallow here hid two workers' entire lifecycle records: `garden`
+  // run inside an agent sandbox is denied ~/.garden/telemetry while
+  // ~/.garden/sessions stays writable, so the log looked healthy and the ledger
+  // quietly under-counted. The write still must not throw — but it must say so.
+  function blockTelemetryDir(gardenDir: string): void {
+    fs.mkdirSync(gardenDir, { recursive: true });
+    // A regular file where the directory belongs makes mkdirSync fail the same
+    // way a sandbox denial does, without needing one.
+    fs.writeFileSync(path.join(gardenDir, "telemetry"), "");
+  }
+
+  it("logs once per process and never throws", async () => {
+    const t = await importTelemetry();
+    blockTelemetryDir(env.gardenDir);
+
+    expect(() => {
+      t.recordOperatorAction("garden", "elk", 1, "default", "kick");
+      t.recordOperatorAction("garden", "elk", 1, "default", "bounce");
+      t.recordOperatorAction("garden", "elk", 1, "default", "hold");
+    }).not.toThrow();
+
+    const logFile = path.join(env.sessionsDir, "dashboard.log");
+    const lines = fs.readFileSync(logFile, "utf-8").trim().split("\n")
+      .filter(l => l.includes("ledger write failed"));
+    expect(lines).toHaveLength(1);
   });
 });
