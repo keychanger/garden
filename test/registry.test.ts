@@ -74,6 +74,7 @@ describe("readRegistry", () => {
       { name: "w", bead: "--help" },
       { name: "w", ciNoRuns: { sha: "abc", since: "now" } },
       { name: "w", continueSentAt: "recent" },
+      { name: "w", titleGeneratedAt: "recent" },
     ]) {
       fs.writeFileSync(REGISTRY_FILE, JSON.stringify({ workers: { proj: [bad] } }));
       expect(readRegistry()).toEqual({ workers: {} });
@@ -89,6 +90,7 @@ describe("readRegistry", () => {
         handoffRequestId: "00000000-0000-4000-8000-000000000000",
         ciNoRuns: { sha: "deadbeef", since: 123 },
         continueSentAt: 456,
+        titleGeneratedAt: 789,
       }] },
     }));
     expect(readRegistry().workers.proj[0]).toMatchObject({
@@ -96,6 +98,7 @@ describe("readRegistry", () => {
       handoffRequestId: "00000000-0000-4000-8000-000000000000",
       ciNoRuns: { sha: "deadbeef", since: 123 },
       continueSentAt: 456,
+      titleGeneratedAt: 789,
     });
   });
 });

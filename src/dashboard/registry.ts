@@ -739,7 +739,7 @@ const GUARDED_STRING_FIELDS = [
   "handoffRequestId",
 ] as const;
 
-const GUARDED_NUMBER_FIELDS = ["continueSentAt"] as const;
+const GUARDED_NUMBER_FIELDS = ["continueSentAt", "titleGeneratedAt"] as const;
 
 function isWorkerRegistry(x: unknown): x is WorkerRegistry {
   if (!x || typeof x !== "object") return false;

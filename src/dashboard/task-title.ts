@@ -22,7 +22,9 @@ import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { tryGetProject } from "../config.js";
 import { reviewerEnvObject } from "./claude-env.js";
-import { CODEX_AWAITING_TASK, readCodexOpeningPrompt } from "./harness/codex-core.js";
+import {
+  CODEX_AWAITING_TASK, initialCodexActivity, readCodexOpeningPrompt,
+} from "./harness/codex-core.js";
 import { getHarnessCore } from "./harness/core.js";
 import { log } from "./log.js";
 import { readRegistry, updateWorkerFieldsIf, type WorkerEntry, type WorkerRegistry } from "./registry.js";
@@ -93,6 +95,13 @@ export interface GenerateTitleOptions {
   timeoutMs?: number;
 }
 
+export interface RunWorkerTitleOptions {
+  /** Title generator override (tests). */
+  generateTitle?: typeof generateTaskTitle;
+  /** Clock override (tests). */
+  now?: () => number;
+}
+
 export function generateTaskTitle(
   openingPrompt: string,
   opts: GenerateTitleOptions = {},
@@ -103,7 +112,9 @@ export function generateTaskTitle(
 
   let res: ReturnType<typeof spawnSync>;
   try {
-    res = spawnSync("claude", ["-p", "--model", opts.model ?? TITLE_MODEL], {
+    res = spawnSync("claude", [
+      "-p", "--model", opts.model ?? TITLE_MODEL, "--tools", "",
+    ], {
       input: buildTitlePrompt(input),
       env: opts.env,
       encoding: "utf-8",
@@ -120,13 +131,20 @@ export function generateTaskTitle(
     });
     return null;
   }
+  if (res.status !== 0) {
+    log.warn("title", "generation exited unsuccessfully", {
+      data: { status: res.status, signal: res.signal ?? undefined },
+    });
+    return null;
+  }
   return sanitizeTitle(typeof res.stdout === "string" ? res.stdout : "");
 }
 
-// Workers whose row would otherwise read as a truncated prompt: a harness that
-// writes no title of its own, no title attempt recorded yet, and a real prompt
-// already landed (a worker still showing its creation placeholder has nothing
-// to title). Pure over a registry snapshot so the selection is testable.
+// Workers whose row might still read as a truncated prompt: a harness that
+// writes no title of its own, no title attempt recorded yet, and a non-placeholder
+// task. The detached route confirms from the transcript that the prompt really
+// landed and that this task is still its opening-prompt fallback before claiming
+// the attempt. Pure over a registry snapshot so the cheap sweep is testable.
 export function titleCandidates(
   registry: WorkerRegistry,
 ): Array<{ project: string; worker: string }> {
@@ -184,24 +202,35 @@ export function dispatchWorkerTitle(
 // ever runs, so a slow call cannot be double-dispatched by the next tick and a
 // failing one cannot re-spend on every tick forever. The cost of that is an
 // un-titled row after a transient failure — which is exactly today's behavior.
-export function runWorkerTitle(project: string, worker: string): void {
+export function runWorkerTitle(
+  project: string,
+  worker: string,
+  opts: RunWorkerTitleOptions = {},
+): void {
   if (!safeProjectName(project) || !isGeneratedWorkerName(worker)) {
     log.warn("title", "rejected invalid title command identity", { worker, data: { project } });
     return;
   }
+
+  // A creation-time seed can set entry.task before verified delivery. Wait
+  // until Codex's rollout contains the real opening prompt, then require the
+  // task to still be the fallback derived from that prompt. If a plan step has
+  // already replaced it, live activity already gives the row a better answer
+  // and must never be overwritten by a seed-derived topic.
+  const snapshot = readRegistry().workers[project]?.find(e => e.name === worker);
+  if (!snapshot || !needsTaskTitle(snapshot)) return;
+  const transcript = getHarnessCore(snapshot.harness).resolveTranscriptPath(snapshot);
+  const opening = transcript ? readCodexOpeningPrompt(transcript) : null;
+  if (!opening) return;
+  const openingTask = initialCodexActivity(opening);
+
   const claimed = updateWorkerFieldsIf(project, worker, entry =>
-    needsTaskTitle(entry)
-      ? { fields: { titleGeneratedAt: Date.now() }, result: entry.task }
+    needsTaskTitle(entry) && entry.task === openingTask
+      ? { fields: { titleGeneratedAt: (opts.now ?? Date.now)() }, result: entry.task }
       : { fields: null, result: null });
   if (!claimed) return;
 
-  const entry = readRegistry().workers[project]?.find(e => e.name === worker);
-  const transcript = entry ? getHarnessCore(entry.harness).resolveTranscriptPath(entry) : null;
-  const opening = transcript ? readCodexOpeningPrompt(transcript) : null;
-  // The registry's task is the seed's first line capped at 120 chars; the
-  // transcript holds the whole prompt, which is what the topic is actually in.
-  const source = opening ?? claimed;
-  const title = generateTaskTitle(source, {
+  const title = (opts.generateTitle ?? generateTaskTitle)(opening, {
     env: { ...process.env, ...reviewerEnvObject(tryGetProject(project) ?? {}) },
   });
   if (!title) return;

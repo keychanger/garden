@@ -137,6 +137,7 @@ export function rebuildEntry(t: Tombstone, now: number = Date.now()): WorkerEntr
   if (e.holisticTouchedFiles !== undefined) rebuilt.holisticTouchedFiles = e.holisticTouchedFiles;
   if (e.holisticRationale !== undefined) rebuilt.holisticRationale = e.holisticRationale;
   if (e.lastReview !== undefined) rebuilt.lastReview = e.lastReview;
+  if (e.titleGeneratedAt !== undefined) rebuilt.titleGeneratedAt = e.titleGeneratedAt;
   if (e.trellis !== undefined) rebuilt.trellis = e.trellis;
   if (e.grow !== undefined) rebuilt.grow = e.grow;
   return rebuilt;

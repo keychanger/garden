@@ -114,6 +114,7 @@ describe("rebuildEntry", () => {
       mergedAt: "2026-07-30T20:49:16.235Z",
       failCount: 1,
       lastReview: { verdict: "fixed", at: 5, body: "ok" },
+      titleGeneratedAt: 8,
       // Transients that must not survive the rebuild:
       pendingReviewAt: 123,
       reviewWindowName: "_proj-review-oak",
@@ -140,6 +141,7 @@ describe("rebuildEntry", () => {
     expect(rebuilt.crew).toBe("claude-codex");
     expect(rebuilt.failCount).toBe(1);
     expect(rebuilt.lastReview).toEqual({ verdict: "fixed", at: 5, body: "ok" });
+    expect(rebuilt.titleGeneratedAt).toBe(8);
     expect(rebuilt.createdAt).toBe(1_000);
     expect("pendingReviewAt" in rebuilt).toBe(false);
     expect("reviewWindowName" in rebuilt).toBe(false);
