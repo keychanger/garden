@@ -1299,6 +1299,39 @@ describe("seedWorker", () => {
     expect(vi.mocked(pasteAndSubmit)).toHaveBeenCalledTimes(1);
   });
 
+  // Codex fires SessionStart at the first TURN, so "loading" only clears once a
+  // prompt lands — and this wait is what withholds the prompt. Before the
+  // harness boot probe, every Codex handoff sat dead for the full 180s backstop
+  // (verified on lean-stout-quartz, 2026-08-25).
+  it("sends to a loading Codex worker as soon as its composer is painted", () => {
+    fakeRegistry({ agentStatus: "loading", harness: "codex" });
+    vi.mocked(capturePaneText).mockReturnValue("+ npm ci\nadded 214 packages");
+
+    seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
+    expect(vi.mocked(pasteAndSubmit)).not.toHaveBeenCalled();
+
+    // The TUI paints its composer; agentStatus is still "loading" and stays so
+    // until the seed itself prompts the worker.
+    vi.mocked(capturePaneText).mockReturnValue("\u203a Ask Codex to do anything");
+    vi.advanceTimersByTime(2000);
+    expect(vi.mocked(pasteAndSubmit)).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps waiting on agentStatus for a loading claude-code worker", () => {
+    const entry = fakeRegistry({ agentStatus: "loading" });
+    // A pane that would satisfy Codex's probe must not shortcut claude-code's
+    // wait — its SessionStart fires at boot, so agentStatus is the real signal.
+    vi.mocked(capturePaneText).mockReturnValue("\u203a Ask Codex to do anything");
+
+    seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
+    vi.advanceTimersByTime(60_000);
+    expect(vi.mocked(pasteAndSubmit)).not.toHaveBeenCalled();
+
+    entry.agentStatus = "ready";
+    vi.advanceTimersByTime(2000);
+    expect(vi.mocked(pasteAndSubmit)).toHaveBeenCalledTimes(1);
+  });
+
   it("re-sends the seed when the first paste never becomes a user turn, and confirms on the retry", () => {
     const entry = fakeRegistry();
 

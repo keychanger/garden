@@ -763,3 +763,51 @@ describe("codex -c hook injection (worker turn-end relay)", () => {
     expect(cmd).toContain("--dangerously-bypass-hook-trust");
   });
 });
+
+// Codex fires SessionStart at the first turn, not at boot, so a Codex worker
+// stays at agentStatus "loading" until something prompts it — while the seed
+// path withholds the prompt until "loading" clears. Every handoff into a Codex
+// worker paid the full 180s backstop before the briefing appeared. The composer
+// glyph is the boot signal that breaks the deadlock.
+describe("promptReady (harness boot probe)", () => {
+  // A real booted-but-unprompted Codex pane (lean-stout-quartz, 2026-08-25).
+  const BOOTED = [
+    "",
+    "› Ask Codex to do anything",
+    "",
+    "  gpt-5.6-sol high · ~/.garden/worktrees/leadingtone-io/lean-stout-quartz",
+  ].join("\n");
+
+  it("reports a booted Codex composer as ready", async () => {
+    const { getHarnessCore } = await importCore();
+    expect(getHarnessCore("codex").promptReady!(BOOTED)).toBe(true);
+  });
+
+  it("does not report a pane still running the bootstrap as ready", async () => {
+    const { getHarnessCore } = await importCore();
+    const booting = "+ npm ci\nadded 214 packages\n$ codex --sandbox workspace-write";
+    expect(getHarnessCore("codex").promptReady!(booting)).toBe(false);
+  });
+
+  it("is not defined for claude-code, whose SessionStart fires at boot", async () => {
+    const { getHarnessCore } = await importCore();
+    expect(getHarnessCore("claude-code").promptReady).toBeUndefined();
+  });
+
+  it("never captures the pane for a harness with no probe", async () => {
+    const { harnessSignalsPromptReady } = await importCore();
+    const capture = vi.fn(() => BOOTED);
+    expect(harnessSignalsPromptReady("claude-code", capture)).toBe(false);
+    expect(capture).not.toHaveBeenCalled();
+  });
+
+  it("reports not-ready when the worker has no pane to capture", async () => {
+    const { harnessSignalsPromptReady } = await importCore();
+    expect(harnessSignalsPromptReady("codex", () => null)).toBe(false);
+  });
+
+  it("reports ready from a booted Codex pane", async () => {
+    const { harnessSignalsPromptReady } = await importCore();
+    expect(harnessSignalsPromptReady("codex", () => BOOTED)).toBe(true);
+  });
+});

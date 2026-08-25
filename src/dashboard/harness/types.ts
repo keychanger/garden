@@ -171,6 +171,21 @@ export interface HarnessCore {
    *  Called from the status render paths and the hook path, so it must stay
    *  bounded — tail-read the transcript, never parse it whole. */
   readActivity?(entry: WorkerEntry): string | null;
+  /** Does this pane's text show the harness's TUI booted and accepting a
+   *  prompt? Defined only by a harness whose SessionStart-equivalent hook
+   *  fires at the first TURN rather than at boot, which makes garden's
+   *  `agentStatus === "loading"` self-clearing assumption circular: nothing
+   *  clears "loading" until a prompt lands, and the seed path waits for
+   *  "loading" to clear before sending one. Codex is such a harness (verified
+   *  2026-08-25: its SessionStart arrived 0.6s AFTER the seed paste and 3min
+   *  after launch), so it probes its own composer glyph instead.
+   *
+   *  Omitting it keeps the default behavior (wait on agentStatus alone), and
+   *  the caller passes the pane text as a thunk, so a harness that omits it
+   *  never pays a capture-pane fork. Consulted ONLY while a worker is still
+   *  "loading" and has therefore never been prompted, so the pane holds the
+   *  harness's own boot output and nothing a conversation could forge. */
+  promptReady?(paneText: string): boolean;
 }
 
 export interface HarnessAdapter extends HarnessCore {

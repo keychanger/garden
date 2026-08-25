@@ -47,6 +47,21 @@ export function resolveWorkerActivity(
   return core.readActivity ? core.readActivity(entry) : paneTitle();
 }
 
+// Has this worker's harness painted a prompt-ready TUI? Only a harness whose
+// boot signal is not its SessionStart hook defines the probe (see
+// HarnessCore.promptReady); every other harness answers false and the caller
+// falls back to its agentStatus check unchanged. `paneText` is a thunk so a
+// harness without a probe never pays the capture-pane fork.
+export function harnessSignalsPromptReady(
+  harnessName: string | undefined,
+  paneText: () => string | null,
+): boolean {
+  const core = getHarnessCore(harnessName);
+  if (!core.promptReady) return false;
+  const text = paneText();
+  return text ? core.promptReady(text) : false;
+}
+
 // Is this a registered harness name? Config-set and launch-plan paths validate
 // STRICTLY with this rather than relying on getHarnessCore's read-path
 // fallback.

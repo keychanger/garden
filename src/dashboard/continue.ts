@@ -29,6 +29,7 @@ import {
   type PaneCursor,
 } from "./tmux.js";
 import { workerWindowName as workerWin } from "./window-names.js";
+import { harnessSignalsPromptReady } from "./harness/core.js";
 import { log } from "./log.js";
 import { resolveGardenRunner } from "./runner.js";
 import { recordContinueDispatched } from "./telemetry.js";
@@ -891,6 +892,18 @@ export function seedWorker(
       return;
     }
     if (entry.agentStatus !== "loading") {
+      send();
+      return;
+    }
+    // Some harnesses fire their SessionStart-equivalent at the first TURN, not
+    // at boot, so "loading" cannot clear until a prompt lands — and this wait is
+    // what withholds that prompt. Those harnesses report boot from their own
+    // pane instead (HarnessCore.promptReady); the rest answer false here and
+    // fall through to the agentStatus wait exactly as before.
+    if (harnessSignalsPromptReady(entry.harness, () => {
+      const paneId = resolveWorkerPaneId(projectName, workerName);
+      return paneId ? capturePaneText(paneId) : null;
+    })) {
       send();
       return;
     }

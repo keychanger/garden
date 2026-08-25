@@ -27,6 +27,10 @@ import type { AgentCommandOptions, HarnessCore, HeadlessCommandOptions } from ".
 
 export const CODEX_AWAITING_TASK = "awaiting task";
 
+// Codex's TUI input glyph (U+203A), the counterpart to Claude Code's `❯`.
+// Its presence in the pane means the composer is painted and taking input.
+const CODEX_PROMPT_MARKER = "\u203a";
+
 // Garden's lifecycle hooks for a Codex WORKER, injected into the launch command
 // as `-c` config overrides rather than a .codex/hooks.json file. Verified
 // 2026-07-06 (codex 0.142.5): a linked git worktree does NOT load hooks from a
@@ -388,6 +392,23 @@ export const codexCore: HarnessCore = {
   // model-written phrase describing current work). Before any plan exists,
   // fall back ONCE to the opening prompt — that is what Codex itself extracts
   // as the thread title, and it keeps a fresh worker's row from reading blank.
+  // Codex fires SessionStart at the first TURN, not at boot (verified
+  // 2026-08-25 on lean-stout-quartz: launch 18:28:32, SessionStart 18:31:39,
+  // 0.6s AFTER the seed paste that caused it). So a Codex worker sits at
+  // agentStatus "loading" until something prompts it, and the seed path — which
+  // waits for "loading" to clear before prompting — deadlocked until its 180s
+  // backstop fired. Every handoff into a Codex worker paid a flat three-minute
+  // dead pane before the briefing appeared.
+  //
+  // The composer glyph is the boot signal instead: Codex paints `› Ask Codex to
+  // do anything` once its TUI is accepting input, and nothing before it does.
+  // The rollout file is NOT usable here — it is born at the first turn and its
+  // session_meta timestamp is back-stamped to session start, so its existence
+  // says the same thing SessionStart does, only later.
+  promptReady(paneText: string): boolean {
+    return paneText.split("\n").some((line) => line.trimStart().startsWith(CODEX_PROMPT_MARKER));
+  },
+
   readActivity(entry: WorkerEntry): string | null {
     const transcript = codexCore.resolveTranscriptPath(entry);
     if (!transcript || !isReadable(transcript)) return null;
