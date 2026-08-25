@@ -53,6 +53,9 @@ export const PR_STATE_KIND: Record<PrState, { pollerOwed: boolean; windowed: boo
 // verdict". Persisted on WorkerEntry.trellis.lastVerdict for trellis vines.
 export type TrellisVerdict = "ALIGNED" | "DRIFT" | "FAILED" | "FLAGGED";
 
+// Why the clean-tree gate held a review back. See WorkerEntry.reviewBlockedReason.
+export type ReviewBlockedReason = "dirty" | "indeterminate";
+
 // Reason a worker is in `failing`. Allowed values per WORKFLOWS.md
 // "Worker entry additions" + "Equilibrium and termination". Default
 // workflow uses "code" and "unparseable-verdict"; trellis adds the rest.
@@ -181,6 +184,17 @@ export interface WorkerEntry {
   // when launchReview runs. Per STATUS.md invariant 2: "working is the only
   // entry point to the review cycle" — pendingReviewAt makes that explicit.
   pendingReviewAt?: number;
+  // Why a review could not be armed or launched for a worker that HAS commits
+  // ahead of base: the clean-tree gate (hooks/default.ts routeStopHookEnd and
+  // handleWorking's launch-point backstop) refused because the worktree was
+  // not provably clean. "dirty" = git reported tracked/untracked changes,
+  // "indeterminate" = git could not be run, which fails closed the same way.
+  // Without this the stall is invisible: pendingReviewAt is never set, so the
+  // row renders a plain `idle` indistinguishable from a worker that is simply
+  // done, and the only evidence is one info line in the log. Cleared the
+  // moment a review is armed or launched, and when the branch has nothing to
+  // review. Rendered as a yellow row flag by the status pane.
+  reviewBlockedReason?: ReviewBlockedReason;
   // Epoch ms when a mutating tool call (Edit/Write) completed on the worker
   // while its review was in flight (stamped by hooks/default.ts). The reviewer
   // shares the worker's worktree, so the tree under review is being rewritten;
@@ -1158,6 +1172,25 @@ export function updateWorkerFields(
     applyWorkerFields(entry, fields, project, workerName);
     writeRegistry(registry);
   });
+}
+
+// Record (or clear) why the clean-tree gate is holding a worker's review back.
+// Both writers sit on hot paths — the Stop hook fires every turn and the poller
+// re-evaluates on every poke — and the blocked state is a STANDING condition
+// that persists until the operator cleans the tree, so writing it unconditionally
+// would take the registry lock on every poll to store the value it already
+// holds. `entry` is the caller's fresh read, so comparing against it collapses
+// the steady state to zero writes.
+// Returns whether it actually wrote, so callers can gate a dashboard repaint
+// on a real change rather than repainting for a condition already on screen.
+export function setReviewBlockedReason(
+  project: string,
+  entry: WorkerEntry,
+  reason: ReviewBlockedReason | undefined,
+): boolean {
+  if (entry.reviewBlockedReason === reason) return false;
+  updateWorkerFields(project, entry.name, { reviewBlockedReason: reason });
+  return true;
 }
 
 export interface ConditionalWorkerUpdate<T> {

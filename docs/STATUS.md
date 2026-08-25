@@ -212,6 +212,12 @@ The two normal exits from `working` via `Stop` are the core branching point:
   certify a stale tree and force-push under live edits. An indeterminate
   cleanliness check fails closed the same way. The next clean-tree `Stop`
   re-arms the review.
+  The refusal is recorded on the entry as `reviewBlockedReason`
+  (`"dirty"` or `"indeterminate"`), cleared when a review is armed or
+  launched and when the branch no longer has commits ahead. This state has
+  no `prState` of its own, so without that field the row is a plain `idle`
+  — indistinguishable from a worker that finished with nothing to review.
+  The status pane renders it as a yellow `dirty tree` / `tree unknown` flag.
 
 `working` also exits to `asking` mid-turn (PreToolUse / PermissionRequest)
 when Claude needs operator input before it can continue. `asking` is not

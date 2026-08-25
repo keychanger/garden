@@ -84,7 +84,7 @@ vi.mock("../src/output.js", () => ({
   isTTY: true,
 }));
 
-import { status, renderQuickStatus, resolveWorkerStatus, dimRow, truncateToVisibleWidth, visibleWidth, formatTimeInState, formatGateSuffix, _resetStatusBranchCacheForTest } from "../src/commands/status.js";
+import { status, renderQuickStatus, resolveWorkerStatus, dimRow, truncateToVisibleWidth, visibleWidth, formatTimeInState, formatGateSuffix, formatReviewBlockedFlag, _resetStatusBranchCacheForTest } from "../src/commands/status.js";
 import { getAutoContinueConfig, projectUsageGateExempt } from "../src/config.js";
 import { currentBranchFast, branchExistsOnOrigin } from "../src/dashboard/git.js";
 import { unreadAlertCountsByProject } from "../src/dashboard/alerts.js";
@@ -1306,6 +1306,35 @@ describe("formatGateSuffix", () => {
   it("is empty for non-merged states even when the gate is closed", () => {
     for (const st of ["working", "reviewing", "done", "failing", "asking"] as const) {
       expect(formatGateSuffix(st, true)).toBe("");
+    }
+  });
+});
+
+describe("formatReviewBlockedFlag", () => {
+  const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+
+  it("flags an idle row whose review is held back by a dirty worktree", () => {
+    const out = formatReviewBlockedFlag("idle", "dirty");
+    expect(stripAnsi(out)).toBe(" dirty tree");
+    expect(out).toContain("\x1b[33m");        // yellow — operator-actionable
+    expect(out.endsWith("\x1b[0m")).toBe(true);
+  });
+
+  it("distinguishes an indeterminate tree from a known-dirty one", () => {
+    // Both fail closed in the gate, but they need different operator actions:
+    // one is "clean your tree", the other is "git itself did not answer".
+    expect(stripAnsi(formatReviewBlockedFlag("idle", "indeterminate"))).toBe(" tree unknown");
+  });
+
+  it("is empty when no reason is recorded", () => {
+    expect(formatReviewBlockedFlag("idle", undefined)).toBe("");
+  });
+
+  it("is empty for every non-idle state", () => {
+    // A `working` worker has an agent on the problem and is not stuck; every
+    // other state has a state cell that already says more than this flag would.
+    for (const st of ["working", "reviewing", "merge-pending", "done", "failing", "asking"] as const) {
+      expect(formatReviewBlockedFlag(st, "dirty")).toBe("");
     }
   });
 });

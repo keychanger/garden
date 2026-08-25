@@ -140,6 +140,15 @@ vi.mock("../src/dashboard/registry.js", () => {
         return list?.find(e => e.name === name);
       },
     ),
+    // Mirrors the real write-only-on-change helper so the poller tests
+    // exercise the same no-op-when-unchanged path production takes.
+    setReviewBlockedReason: vi.fn(
+      (project: string, entry: { name: string; reviewBlockedReason?: string }, reason?: string) => {
+        if (entry.reviewBlockedReason === reason) return false;
+        updateWorkerFields(project, entry.name, { reviewBlockedReason: reason });
+        return true;
+      },
+    ),
     _setEntries: (project: string, list: import("../src/dashboard/registry.js").WorkerEntry[]) => {
       entries[project] = list;
     },
@@ -591,6 +600,47 @@ describe("poll — working state", () => {
       expect.stringContaining("review"),
       expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
     );
+  });
+
+  it("records why the launch-point clean-tree backstop deferred, so the row can show it", () => {
+    // pendingReviewAt can outlive the clean tree it was armed on. The deferral
+    // is otherwise invisible: prState stays `working`, the row renders `idle`,
+    // and the operator sees nothing distinguishing it from a finished worker.
+    vi.mocked(isWorktreeDirty).mockReturnValue(true);
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "working",
+        agentStatus: "idle",
+        pendingReviewAt: Date.now(),
+      }),
+    ]);
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ reviewBlockedReason: "dirty" }));
+    // pendingReviewAt must survive: the next clean-tree Stop re-drives the launch.
+    const entry = vi.mocked(findWorkerByName)("myproject", "bold-ash")!;
+    expect(entry.pendingReviewAt).toBeDefined();
+  });
+
+  it("clears the blocked reason when a provably clean tree lets the review launch", () => {
+    // The stale-working escape hatch launches with no Stop hook involved, so
+    // the hook's arming path cannot be the only place the flag is cleared.
+    vi.mocked(isWorktreeDirty).mockReturnValue(false);
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "working",
+        agentStatus: "idle",
+        pendingReviewAt: Date.now(),
+        reviewBlockedReason: "dirty",
+      }),
+    ]);
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ reviewBlockedReason: undefined }));
   });
 
   it("defers review launch when agentStatus=working is stale but worktree dirtiness is indeterminate", () => {

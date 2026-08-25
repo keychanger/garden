@@ -71,23 +71,35 @@ vi.mock("../src/dashboard/state.js", () => ({
   })),
 }));
 
-vi.mock("../src/dashboard/registry.js", () => ({
-  readRegistry: vi.fn(() => ({ workers: entries })),
-  getWorkers: vi.fn((project: string) => entries[project] ?? []),
-  findWorkerByName: vi.fn(
-    (project: string, name: string) =>
-      (entries[project] ?? []).find(e => e.name === name),
-  ),
-  updateWorkerFields: vi.fn(
+vi.mock("../src/dashboard/registry.js", () => {
+  const updateWorkerFields = vi.fn(
     (project: string, name: string, fields: Record<string, unknown>) => {
       const list = entries[project];
       if (!list) return;
       const entry = list.find(e => e.name === name);
       if (entry) Object.assign(entry, fields);
     },
-  ),
-  batchUpdateWorkerFields: vi.fn(),
-}));
+  );
+  return {
+    readRegistry: vi.fn(() => ({ workers: entries })),
+    getWorkers: vi.fn((project: string) => entries[project] ?? []),
+    findWorkerByName: vi.fn(
+      (project: string, name: string) =>
+        (entries[project] ?? []).find(e => e.name === name),
+    ),
+    updateWorkerFields,
+    // Mirrors the real write-only-on-change helper so the hook tests exercise
+    // the same no-op-when-unchanged path production takes.
+    setReviewBlockedReason: vi.fn(
+      (project: string, entry: { name: string; reviewBlockedReason?: string }, reason?: string) => {
+        if (entry.reviewBlockedReason === reason) return false;
+        updateWorkerFields(project, entry.name, { reviewBlockedReason: reason });
+        return true;
+      },
+    ),
+    batchUpdateWorkerFields: vi.fn(),
+  };
+});
 
 vi.mock("../src/dashboard/git.js", () => ({
   resolveBaseBranch: vi.fn(() => "main"),
@@ -507,7 +519,79 @@ describe("handleClaudeHook — core events", () => {
         data: expect.objectContaining({ dirty: "indeterminate" }),
       }),
     );
+    expect(entry.reviewBlockedReason).toBe("indeterminate");
     expect(addAlert).not.toHaveBeenCalled();
+  });
+
+  it("records WHY a dirty worktree blocked the review so the row can show it", async () => {
+    // The stall this makes visible: commits ahead, nothing dirty about them,
+    // but a stray untracked file means no review is ever armed. prState stays
+    // unset, so the row renders a plain `idle` — identical to a worker that
+    // finished — and the only other evidence is one info log line.
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "working",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+    });
+    setCwd("garden", "bold-ash");
+
+    const { execFileSync } = await import("node:child_process");
+    vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[] | undefined;
+      if (argv?.[0] === "rev-list") return "1" as unknown as Buffer;
+      if (argv?.[0] === "status") return "?? poetry.lock\n" as unknown as Buffer;
+      return "" as unknown as Buffer;
+    });
+
+    handleClaudeHook("stop");
+
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(entry.pendingReviewAt).toBeUndefined();
+    expect(entry.reviewBlockedReason).toBe("dirty");
+  });
+
+  it("clears the blocked reason once the tree is clean and the review arms", async () => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "working",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+      reviewBlockedReason: "dirty",
+    });
+    setCwd("garden", "bold-ash");
+
+    const { execFileSync } = await import("node:child_process");
+    vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[] | undefined;
+      if (argv?.[0] === "rev-list") return "1" as unknown as Buffer;
+      return "" as unknown as Buffer;
+    });
+
+    handleClaudeHook("stop");
+
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(typeof entry.pendingReviewAt).toBe("number");
+    expect(entry.reviewBlockedReason).toBeUndefined();
+  });
+
+  it("clears the blocked reason when the branch no longer has commits to review", async () => {
+    // The commits the gate was holding are gone (merged, reset, rebased away),
+    // so the flag must not outlive them on the row.
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "working",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+      reviewBlockedReason: "dirty",
+    });
+    setCwd("garden", "bold-ash");
+
+    const { execFileSync } = await import("node:child_process");
+    vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[] | undefined;
+      if (argv?.[0] === "rev-list") return "0" as unknown as Buffer;
+      return "" as unknown as Buffer;
+    });
+
+    handleClaudeHook("stop");
+
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(entry.reviewBlockedReason).toBeUndefined();
   });
 
   it("stop fires base-drift alert when rev-list against origin/<base> throws", async () => {

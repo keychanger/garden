@@ -10,7 +10,7 @@ import { loadConfig, getFocusedProjectNames, allPlotProjectNames, tryGetProject,
 import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
-import { getWorkers, readRegistry, batchUpdateWorkerFields, compareWorkerFreshness, isWorkerStale, isDelegating, type WorkerRegistry } from "../dashboard/registry.js";
+import { getWorkers, readRegistry, batchUpdateWorkerFields, compareWorkerFreshness, isWorkerStale, isDelegating, type ReviewBlockedReason, type WorkerRegistry } from "../dashboard/registry.js";
 import { listHiddenWorkerWindows, windowExists, getFirstPaneId, getPaneTitle } from "../dashboard/tmux.js";
 import { resolveWorkerActivity } from "../dashboard/harness/core.js";
 import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/window-names.js";
@@ -122,6 +122,12 @@ interface WorkerInfo {
     budget?: number;
     failingSha?: string;
   };
+  // Why this worker's review is being held back by the clean-tree gate
+  // (entry.reviewBlockedReason) — it has commits ahead of base, but the
+  // worktree is dirty, so neither the Stop hook nor the poller will arm a
+  // review. Without a flag the row is a plain `idle`, indistinguishable from
+  // a worker that finished with nothing to review. Renders yellow.
+  reviewBlocked?: ReviewBlockedReason;
 }
 
 interface ProjectStatusInfo {
@@ -270,7 +276,8 @@ function collectSegments(worker: WorkerInfo, ctx: RowRenderCtx): RowSegments {
     // The pinned model is grey identity like the badges above; renderWorkerRow
     // trails the whole cluster after the detail (see there for why).
     model: worker.model ? greyBadge(worker.model) : "",
-    flags: `${formatAwaitingInputGlyph(worker)}${formatGateSuffix(worker.status, ctx.gateClosed)}${formatCiBracket(worker.ci)}`,
+    flags: `${formatAwaitingInputGlyph(worker)}${formatGateSuffix(worker.status, ctx.gateClosed)}`
+      + `${formatReviewBlockedFlag(worker.status, worker.reviewBlocked)}${formatCiBracket(worker.ci)}`,
     status: worker.status,
     stale: worker.stale,
   };
@@ -1048,6 +1055,25 @@ export function formatTimeInState(
 // Only `merged` strands on the gate: `done` opted out via its own sentinel, and
 // active states aren't waiting on it. Placed last on the row like the
 // time-in-state suffix so it stays ANSI-clean and truncates first.
+// A worker that pushed real commits but whose review the clean-tree gate is
+// refusing to arm (see WorkerEntry.reviewBlockedReason). This is the one stall
+// with no state of its own: prState is never set, so the row reads `idle` and
+// looks exactly like a worker that finished — the operator's only other
+// evidence is one info line in the log. Rendered only while the row is `idle`;
+// a worker that is `working` has an agent on the problem and is not stuck, and
+// every other status has its own state cell already saying more than this
+// would. Yellow, and short: flags never truncate, so every column this takes
+// comes out of the detail the row would otherwise show.
+export function formatReviewBlockedFlag(
+  status: WorkerStatus,
+  reason: ReviewBlockedReason | undefined,
+): string {
+  if (status !== "idle" || reason === undefined) return "";
+  return reason === "dirty"
+    ? " \x1b[33mdirty tree\x1b[0m"
+    : " \x1b[33mtree unknown\x1b[0m";
+}
+
 export function formatGateSuffix(status: WorkerStatus, gateClosed: boolean): string {
   if (status !== "merged" || !gateClosed) return "";
   return " \x1b[33mgate closed\x1b[0m";
@@ -1103,6 +1129,7 @@ function collectWorkers(
       trellis: trellisInfoFor(entry),
       holisticFinal: entry?.holisticFinalActive,
       ci: ciInfoFor(entry),
+      reviewBlocked: entry?.reviewBlockedReason,
     });
   }
 
@@ -1132,6 +1159,7 @@ function collectWorkers(
       trellis: trellisInfoFor(entry),
       holisticFinal: entry?.holisticFinalActive,
       ci: ciInfoFor(entry),
+      reviewBlocked: entry?.reviewBlockedReason,
     });
   }
 

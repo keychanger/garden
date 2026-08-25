@@ -25,7 +25,7 @@ import { log } from "../log.js";
 // it must not import poller.ts or any state handler.
 import { triggerProjectPoll } from "../poller-fifo.js";
 import {
-  findWorkerByName, isDelegating, updateWorkerFields, type WorkerEntry,
+  findWorkerByName, isDelegating, setReviewBlockedReason, updateWorkerFields, type WorkerEntry,
 } from "../registry.js";
 import { getPaneTitle } from "../tmux.js";
 import { resolveWorkerActivity } from "../harness/core.js";
@@ -145,9 +145,20 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
             dirty: dirty === null ? "indeterminate" : true,
           },
         });
+        // Persist WHY, so the operator can see it. Skipping here leaves the
+        // worker at a plain `idle` with pendingReviewAt unset — visually
+        // identical to a worker that finished and has nothing to review — and
+        // the only evidence anywhere is the log line above. The row flag this
+        // drives is the difference between "done" and "stuck on a stray file".
+        if (setReviewBlockedReason(projectName, entry, dirty === null ? "indeterminate" : "dirty")) {
+          refreshDashboard();
+        }
         return;
       }
-      updateWorkerFields(projectName, workerName, { pendingReviewAt: Date.now() });
+      updateWorkerFields(projectName, workerName, {
+        pendingReviewAt: Date.now(),
+        reviewBlockedReason: undefined,
+      });
       triggerProjectPoll(projectName);
       log.info("hook", "stop hook marked pending review", {
         worker: workerName,
@@ -155,6 +166,10 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
       });
       return;
     }
+    // Nothing ahead of base: whatever blocked a review earlier is moot (the
+    // commits it was gating on are gone — merged, reset, or rebased away), so
+    // the flag must not outlive them on the row.
+    setReviewBlockedReason(projectName, entry, undefined);
     // No commits ahead + sentinel present → terminal "done" state, the
     // operator-actionable cleanup signal. STATUS.md invariant 4 path 2:
     // sentinel was set after auto-continue cleared the transient merged.

@@ -30,7 +30,7 @@ import { persistIteration } from "./loop.js";
 import { buildReviewPrompt } from "./prompts.js";
 import { MAX_REVIEW_PROMPT_BYTES, reviewPromptBytes } from "./prompt-compose.js";
 import {
-  findWorkerByName, updateWorkerFields,
+  findWorkerByName, setReviewBlockedReason, updateWorkerFields,
   type WorkerEntry,
 } from "./registry.js";
 import { windowExists, killWindowSafe, listAllWindowNames } from "./tmux.js";
@@ -170,11 +170,13 @@ export function handleWorking(
     // the worktree has uncommitted changes: that would clobber a live worker's
     // edits. Defer unless the tree is provably clean (an indeterminate git
     // result is treated as dirty).
-    if (isWorktreeDirty(wtPath) !== false) {
+    const staleDirty = isWorktreeDirty(wtPath);
+    if (staleDirty !== false) {
       log.debug("poller", "stale-working review deferred: worktree not provably clean", {
         worker: entry.name,
         data: { project: projectName },
       });
+      setReviewBlockedReason(projectName, entry, staleDirty === null ? "indeterminate" : "dirty");
       return false;
     }
     log.warn("poller", "agentStatus=working is stale; proceeding with review launch", {
@@ -245,14 +247,24 @@ export function handleWorking(
   // never proceed unless it is provably clean — an indeterminate git result
   // counts as dirty. pendingReviewAt stays set; the next clean-tree Stop (or
   // any sibling poke) re-drives the launch.
-  if (isWorktreeDirty(wtPath) !== false) {
+  const dirty = isWorktreeDirty(wtPath);
+  if (dirty !== false) {
     log.info("poller", "review deferred: worktree not provably clean", {
       worker: entry.name,
       data: { project: projectName },
     });
+    // Gate the repaint on a real change: this branch runs on EVERY poke while
+    // the tree stays dirty, and the flag it draws is a standing condition.
+    if (setReviewBlockedReason(projectName, entry, dirty === null ? "indeterminate" : "dirty")) {
+      refreshDashboard();
+    }
     return false;
   }
 
+  // Provably clean and about to launch — clear the flag here rather than only
+  // in the Stop hook's arming path, which the stale-working escape hatch above
+  // bypasses entirely (no hook fires for a worker whose agent is hung).
+  setReviewBlockedReason(projectName, entry, undefined);
   return launchReview(projectName, projectPath, baseBranch, entry);
 }
 
