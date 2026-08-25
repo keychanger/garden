@@ -474,6 +474,13 @@ export interface WorkerEntry {
   // on default and trellis workers. updateWorkerFields deep-merges this
   // sub-object (same pattern as `trellis`).
   grow?: GrowData;
+  // Epoch ms a thread-title generation was ATTEMPTED for this worker (see
+  // task-title.ts). Claimed before the model call and never released, so the
+  // attempt runs at most once per worker: a slow call cannot be double-
+  // dispatched by the next watchdog tick, and a failing one cannot re-spend on
+  // every tick forever. Absent on every claude-code worker — that harness
+  // writes its own rolling pane title and needs no help naming the thread.
+  titleGeneratedAt?: number;
 }
 
 /** Trellis-workflow per-worker data. All fields except `name` and `path`

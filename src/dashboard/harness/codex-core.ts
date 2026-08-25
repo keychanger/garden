@@ -836,6 +836,15 @@ function stepsFromSource(src: string): PlanStep[] {
 // The opening operator prompt, condensed — Codex extracts the same message as
 // the thread title, so this is its own naming of the thread.
 function firstPromptLine(transcriptPath: string): string | null {
+  const opening = readCodexOpeningPrompt(transcriptPath);
+  return opening ? condense(opening) || null : null;
+}
+
+// The operator's opening prompt, whole. firstPromptLine condenses this to one
+// bounded line for the status row; the thread-title generator (task-title.ts)
+// wants the full text, because the topic of a briefing is routinely stated
+// past its first line and the row's 120-char cut throws that away.
+export function readCodexOpeningPrompt(transcriptPath: string): string | null {
   let head: string;
   try {
     head = readHead(transcriptPath, ACTIVITY_HEAD_BYTES);
@@ -852,8 +861,7 @@ function firstPromptLine(transcriptPath: string): string | null {
     }
     const text = codexUserMessage(rec)?.text ?? responseItemUserText(rec);
     if (text === null || INJECTED_CONTEXT_RE.test(text)) continue;
-    const condensed = condense(text);
-    if (condensed) return condensed;
+    if (text.trim()) return text.trim();
   }
   return null;
 }

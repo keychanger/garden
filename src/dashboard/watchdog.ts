@@ -58,6 +58,7 @@ import { addAlert } from "./alerts.js";
 import { log, truncateLog } from "./log.js";
 import { sweepSpawnDrafts } from "./spawn-draft.js";
 import { dueCleanupRequests, dispatchWorkerCleanup } from "./worker-cleanup.js";
+import { titleCandidates, dispatchWorkerTitle } from "./task-title.js";
 import {
   captureCodexUsageLatest, probeCodexUsageIfStale, CODEX_PROBE_INTERVAL_MS,
 } from "./codex-usage.js";
@@ -633,6 +634,24 @@ export function sweepWorkerCleanups(nowMs: number, gardenRunner: string): number
   return due.length;
 }
 
+// Give a thread title to any worker whose row would otherwise read as a
+// truncated copy of its opening prompt — a harness that writes no rolling pane
+// title of its own (see task-title.ts). Dispatched detached, like the cleanup
+// sweep above and for the same reason: the model call must not run on the
+// tick's thread, where an overrun is read by absorbSleep as suspend time.
+//
+// On the fast tick rather than hourly because the row is unreadable until the
+// title lands, and a worker is created at an arbitrary moment. It costs nothing
+// in the steady state: the claim is stamped before the call and never released,
+// so each worker matches this sweep exactly once in its life.
+export function sweepWorkerTitles(gardenRunner: string, registry: WorkerRegistry): number {
+  const due = titleCandidates(registry);
+  for (const { project, worker } of due) {
+    dispatchWorkerTitle(gardenRunner, project, worker);
+  }
+  return due.length;
+}
+
 export function housekeeping(nowMs: number): void {
   truncateLog();
   sweepBootstrapScripts(nowMs);
@@ -714,7 +733,16 @@ export async function runWatchdogLoop(): Promise<void> {
       } catch (err) {
         log.warn("watchdog", "right slot heal failed", { data: { error: String(err) } });
       }
-      alertOrphanedWindows(readRegistry());
+      const registry = readRegistry();
+      alertOrphanedWindows(registry);
+      // Title the threads of workers whose harness writes no pane title of its
+      // own, so their rows name a topic instead of the first 120 chars of the
+      // operator's prompt.
+      try {
+        sweepWorkerTitles(gardenRunner, registry);
+      } catch (err) {
+        log.warn("watchdog", "worker title sweep failed", { data: { error: String(err) } });
+      }
       // Retry any worker cleanup whose own dispatch failed. On the fast 60s
       // tick rather than hourly housekeeping: this is a recovery path for a
       // leak that is actively occupying disk, and the sweep is a readdir that

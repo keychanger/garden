@@ -709,6 +709,15 @@ describe("codex readActivity (status-pane summary)", () => {
     expect(getHarnessCore("codex").readActivity!(entry)).toBeNull();
   });
 
+  // The title generator (task-title.ts) titles from the WHOLE opening prompt:
+  // a briefing routinely states its subject past the first line, which the
+  // row's one-line cut throws away.
+  it("exposes the whole opening prompt, past the line the row shows", async () => {
+    const { readCodexOpeningPrompt } = await import("../src/dashboard/harness/codex-core.js");
+    expect(readCodexOpeningPrompt(path.join(HERE, "fixtures/codex/rollout-response-messages.jsonl")))
+      .toBe("Investigate why Codex workers have blank task summaries.\nPlease implement the fix.");
+  });
+
   it("heals a task left as the worker's own name by the default codex title", async () => {
     const { getHarnessCore } = await importCore();
     const entry = entryFor("rollout-sample.jsonl", { task: "weak-brave-snow" });

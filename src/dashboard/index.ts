@@ -403,6 +403,19 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     runWorkerCleanup(projectName, workerName);
     return;
   }
+  if (sub === "_worker-title") {
+    // Generates one worker's thread title (see task-title.ts). Dispatched
+    // detached by the watchdog sweep so the model call never runs on the
+    // liveness tick's own thread. Dynamically imported to keep the Haiku
+    // spawn path out of every other route's parse.
+    const [, projectName, workerName] = args;
+    if (!projectName || !workerName) {
+      throw new Error("usage: garden dashboard _worker-title <project> <worker>");
+    }
+    const { runWorkerTitle } = await import("./task-title.js");
+    runWorkerTitle(projectName, workerName);
+    return;
+  }
   if (sub === "_usage-poll-loop") {
     await runUsagePollerLoop();
     return;
