@@ -1178,9 +1178,9 @@ export function updateWorkerFields(
 // Both writers sit on hot paths — the Stop hook fires every turn and the poller
 // re-evaluates on every poke — and the blocked state is a STANDING condition
 // that persists until the operator cleans the tree, so writing it unconditionally
-// would take the registry lock on every poll to store the value it already
-// holds. `entry` is the caller's fresh read, so comparing against it collapses
-// the steady state to zero writes.
+// would rewrite the registry on every poll to store the value it already holds.
+// Compare against the locked snapshot rather than the caller's prior read: a
+// concurrent hook/poller write may have changed the reason in between.
 // Returns whether it actually wrote, so callers can gate a dashboard repaint
 // on a real change rather than repainting for a condition already on screen.
 export function setReviewBlockedReason(
@@ -1188,9 +1188,13 @@ export function setReviewBlockedReason(
   entry: WorkerEntry,
   reason: ReviewBlockedReason | undefined,
 ): boolean {
-  if (entry.reviewBlockedReason === reason) return false;
-  updateWorkerFields(project, entry.name, { reviewBlockedReason: reason });
-  return true;
+  return updateWorkerFieldsIf(project, entry.name, current => {
+    const changed = current.reviewBlockedReason !== reason;
+    return {
+      fields: changed ? { reviewBlockedReason: reason } : null,
+      result: changed,
+    };
+  }) ?? false;
 }
 
 export interface ConditionalWorkerUpdate<T> {

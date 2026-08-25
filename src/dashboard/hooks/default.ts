@@ -25,7 +25,8 @@ import { log } from "../log.js";
 // it must not import poller.ts or any state handler.
 import { triggerProjectPoll } from "../poller-fifo.js";
 import {
-  findWorkerByName, isDelegating, setReviewBlockedReason, updateWorkerFields, type WorkerEntry,
+  findWorkerByName, isDelegating, setReviewBlockedReason, updateWorkerFields,
+  updateWorkerFieldsIf, type WorkerEntry,
 } from "../registry.js";
 import { getPaneTitle } from "../tmux.js";
 import { resolveWorkerActivity } from "../harness/core.js";
@@ -155,10 +156,14 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
         }
         return;
       }
-      updateWorkerFields(projectName, workerName, {
-        pendingReviewAt: Date.now(),
-        reviewBlockedReason: undefined,
-      });
+      const reviewBlockCleared = updateWorkerFieldsIf(projectName, workerName, current => ({
+        fields: {
+          pendingReviewAt: Date.now(),
+          reviewBlockedReason: undefined,
+        },
+        result: current.reviewBlockedReason !== undefined,
+      })) ?? false;
+      if (reviewBlockCleared) refreshDashboard();
       triggerProjectPoll(projectName);
       log.info("hook", "stop hook marked pending review", {
         worker: workerName,
@@ -169,7 +174,9 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
     // Nothing ahead of base: whatever blocked a review earlier is moot (the
     // commits it was gating on are gone — merged, reset, or rebased away), so
     // the flag must not outlive them on the row.
-    setReviewBlockedReason(projectName, entry, undefined);
+    if (setReviewBlockedReason(projectName, entry, undefined)) {
+      refreshDashboard();
+    }
     // No commits ahead + sentinel present → terminal "done" state, the
     // operator-actionable cleanup signal. STATUS.md invariant 4 path 2:
     // sentinel was set after auto-continue cleared the transient merged.

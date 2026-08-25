@@ -30,7 +30,7 @@ import { persistIteration } from "./loop.js";
 import { buildReviewPrompt } from "./prompts.js";
 import { MAX_REVIEW_PROMPT_BYTES, reviewPromptBytes } from "./prompt-compose.js";
 import {
-  findWorkerByName, setReviewBlockedReason, updateWorkerFields,
+  findWorkerByName, setReviewBlockedReason, updateWorkerFields, updateWorkerFieldsIf,
   type WorkerEntry,
 } from "./registry.js";
 import { windowExists, killWindowSafe, listAllWindowNames } from "./tmux.js";
@@ -211,7 +211,11 @@ export function handleWorking(
   if (!ahead) {
     // Stop hook said commits existed; they no longer do (force-pushed away,
     // base advanced past us, etc.). Clear the flag — nothing to review.
-    updateWorkerFields(projectName, entry.name, { pendingReviewAt: undefined });
+    const reviewBlockCleared = updateWorkerFieldsIf(projectName, entry.name, current => ({
+      fields: { pendingReviewAt: undefined, reviewBlockedReason: undefined },
+      result: current.reviewBlockedReason !== undefined,
+    })) ?? false;
+    if (reviewBlockCleared) refreshDashboard();
     return false;
   }
 

@@ -88,6 +88,18 @@ vi.mock("../src/dashboard/registry.js", () => {
         (entries[project] ?? []).find(e => e.name === name),
     ),
     updateWorkerFields,
+    updateWorkerFieldsIf: vi.fn(
+      (project: string, name: string, decide: (entry: { name: string }) => {
+        fields: Record<string, unknown> | null;
+        result: unknown;
+      }) => {
+        const entry = entries[project]?.find(candidate => candidate.name === name);
+        if (!entry) return undefined;
+        const decision = decide(entry);
+        if (decision.fields !== null) updateWorkerFields(project, name, decision.fields);
+        return decision.result;
+      },
+    ),
     // Mirrors the real write-only-on-change helper so the hook tests exercise
     // the same no-op-when-unchanged path production takes.
     setReviewBlockedReason: vi.fn(

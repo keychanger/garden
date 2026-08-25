@@ -413,6 +413,21 @@ describe("updateWorkerFields", () => {
   });
 });
 
+describe("setReviewBlockedReason", () => {
+  it("writes only when the locked entry's reason changes", async () => {
+    const { addWorker, getWorkers, setReviewBlockedReason } = await importRegistry();
+    addWorker("proj", { name: "bold-ash", sessionId: "a", task: "" });
+
+    const initial = getWorkers("proj")[0];
+    expect(setReviewBlockedReason("proj", initial, "dirty")).toBe(true);
+    expect(getWorkers("proj")[0].reviewBlockedReason).toBe("dirty");
+
+    expect(setReviewBlockedReason("proj", initial, "dirty")).toBe(false);
+    expect(setReviewBlockedReason("proj", initial, undefined)).toBe(true);
+    expect(getWorkers("proj")[0].reviewBlockedReason).toBeUndefined();
+  });
+});
+
 // The compare-and-set primitive transitionState is built on: the decision runs
 // against the locked snapshot, so a caller can read the current entry and
 // choose whether to write inside a single registry transaction.

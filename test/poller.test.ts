@@ -714,20 +714,29 @@ describe("poll — working state", () => {
     expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", expect.any(Number));
   });
 
-  it("clears pendingReviewAt when commits no longer exist", () => {
+  it("clears pendingReviewAt and a stale blocked reason when commits no longer exist", () => {
     // Stop hook said commits existed; by the time the poller wakes, they're
     // gone (force-pushed away, base advanced past them, etc.). Clear the
     // flag so we don't keep retrying.
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
+      makeWorker({
+        prState: "working",
+        agentStatus: "idle",
+        pendingReviewAt: Date.now(),
+        reviewBlockedReason: "dirty",
+      }),
     ]);
     vi.mocked(hasCommitsAhead).mockReturnValue(false);
 
     poll("myproject");
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
-      expect.objectContaining({ pendingReviewAt: undefined }),
+      expect.objectContaining({
+        pendingReviewAt: undefined,
+        reviewBlockedReason: undefined,
+      }),
     );
+    expect(refreshDashboard).toHaveBeenCalled();
     expect(forcePushBranch).not.toHaveBeenCalled();
     // No review launched: clearing and launching both null pendingReviewAt, so
     // the assertion above cannot tell them apart — pin down that the false
