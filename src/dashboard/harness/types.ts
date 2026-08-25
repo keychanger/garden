@@ -178,7 +178,7 @@ export interface HarnessCore {
    *  clears "loading" until a prompt lands, and the seed path waits for
    *  "loading" to clear before sending one. Codex is such a harness (verified
    *  2026-08-25: its SessionStart arrived 0.6s AFTER the seed paste and 3min
-   *  after launch), so it probes its own composer glyph instead.
+   *  after launch), so it probes its own empty-composer signature instead.
    *
    *  Omitting it keeps the default behavior (wait on agentStatus alone), and
    *  the caller passes the pane text as a thunk, so a harness that omits it

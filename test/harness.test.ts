@@ -767,8 +767,8 @@ describe("codex -c hook injection (worker turn-end relay)", () => {
 // Codex fires SessionStart at the first turn, not at boot, so a Codex worker
 // stays at agentStatus "loading" until something prompts it — while the seed
 // path withholds the prompt until "loading" clears. Every handoff into a Codex
-// worker paid the full 180s backstop before the briefing appeared. The composer
-// glyph is the boot signal that breaks the deadlock.
+// worker paid the full 180s backstop before the briefing appeared. The empty
+// composer signature is the boot signal that breaks the deadlock.
 describe("promptReady (harness boot probe)", () => {
   // A real booted-but-unprompted Codex pane (lean-stout-quartz, 2026-08-25).
   const BOOTED = [
