@@ -778,9 +778,38 @@ describe("promptReady (harness boot probe)", () => {
     "  gpt-5.6-sol high · ~/.garden/worktrees/leadingtone-io/lean-stout-quartz",
   ].join("\n");
 
+  // A real Codex startup dialog (captured 2026-08-25 booting against an
+  // untrusted cwd). Codex reuses the composer glyph as its selection cursor, so
+  // this pane is NOT ready even though it carries a `›` row.
+  const TRUST_DIALOG = [
+    "> You are in /private/tmp/scratch/codex-cwd",
+    "",
+    "  Do you trust the contents of this directory? Working with untrusted contents comes with",
+    "  higher risk of prompt injection.",
+    "",
+    "› 1. Yes, continue",
+    "  2. No, quit",
+    "",
+    "  Press enter to continue",
+  ].join("\n");
+
   it("reports a booted Codex composer as ready", async () => {
     const { getHarnessCore } = await importCore();
     expect(getHarnessCore("codex").promptReady!(BOOTED)).toBe(true);
+  });
+
+  // The glyph alone would say "ready" here and the seed would be pasted into a
+  // menu, where Enter picks a menu item and the briefing is lost to a retry.
+  it("does not report a Codex startup dialog as ready", async () => {
+    const { getHarnessCore } = await importCore();
+    expect(getHarnessCore("codex").promptReady!(TRUST_DIALOG)).toBe(false);
+  });
+
+  // A composer holding text has no placeholder, so the probe declines and the
+  // wait falls back to its agentStatus backstop — the safe direction.
+  it("does not report a composer that already holds text as ready", async () => {
+    const { getHarnessCore } = await importCore();
+    expect(getHarnessCore("codex").promptReady!("› half-typed operator message")).toBe(false);
   });
 
   it("does not report a pane still running the bootstrap as ready", async () => {

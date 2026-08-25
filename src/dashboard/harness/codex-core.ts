@@ -28,8 +28,21 @@ import type { AgentCommandOptions, HarnessCore, HeadlessCommandOptions } from ".
 export const CODEX_AWAITING_TASK = "awaiting task";
 
 // Codex's TUI input glyph (U+203A), the counterpart to Claude Code's `❯`.
-// Its presence in the pane means the composer is painted and taking input.
+// NOT sufficient on its own to mean "composer": Codex reuses it as the
+// selection cursor in its startup dialogs, where the row reads
+// `› 1. Yes, continue` (the directory-trust prompt — observed 2026-08-25
+// booting a real Codex against an untrusted cwd). So the ready probe pairs it
+// with the placeholder Codex paints into an EMPTY composer, which is what a
+// pre-seed worker's box always holds.
+//
+// Pairing them is deliberately precise rather than permissive, because the two
+// failure directions are not symmetric. A false negative costs the 180s
+// agentStatus backstop — exactly the behavior that predates this probe. A false
+// positive pastes the briefing into a menu, where Enter picks a menu item and
+// the seed is lost to a retry. A future Codex whose placeholder text differs
+// therefore degrades to the backstop, never to a misdirected paste.
 const CODEX_PROMPT_MARKER = "\u203a";
+const CODEX_COMPOSER_PLACEHOLDER = "Ask Codex to do anything";
 
 // Garden's lifecycle hooks for a Codex WORKER, injected into the launch command
 // as `-c` config overrides rather than a .codex/hooks.json file. Verified
@@ -400,13 +413,19 @@ export const codexCore: HarnessCore = {
   // backstop fired. Every handoff into a Codex worker paid a flat three-minute
   // dead pane before the briefing appeared.
   //
-  // The composer glyph is the boot signal instead: Codex paints `› Ask Codex to
-  // do anything` once its TUI is accepting input, and nothing before it does.
+  // The composer is the boot signal instead: Codex paints `› Ask Codex to do
+  // anything` once its TUI is accepting input (measured ~1s from launch), and
+  // nothing before it does. Matching the glyph ALONE is not enough — see
+  // CODEX_PROMPT_MARKER for the startup dialog that reuses it.
   // The rollout file is NOT usable here — it is born at the first turn and its
   // session_meta timestamp is back-stamped to session start, so its existence
   // says the same thing SessionStart does, only later.
   promptReady(paneText: string): boolean {
-    return paneText.split("\n").some((line) => line.trimStart().startsWith(CODEX_PROMPT_MARKER));
+    return paneText.split("\n").some((line) => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith(CODEX_PROMPT_MARKER)) return false;
+      return trimmed.slice(CODEX_PROMPT_MARKER.length).trim() === CODEX_COMPOSER_PLACEHOLDER;
+    });
   },
 
   readActivity(entry: WorkerEntry): string | null {
