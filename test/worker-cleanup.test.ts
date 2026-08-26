@@ -41,6 +41,7 @@ describe("worker cleanup requests", () => {
       repoPath: "/repo",
       worktreePath: "/wt",
       branchName: "numb-clear-vow",
+      protectedPids: [123, 456],
       attempts: 0,
     });
 
@@ -48,6 +49,7 @@ describe("worker cleanup requests", () => {
     const read = readWorkerCleanupRequest(file);
     expect(read?.worker).toBe("numb-clear-vow");
     expect(read?.worktreePath).toBe("/wt");
+    expect(read?.protectedPids).toEqual([123, 456]);
     expect(read?.attempts).toBe(0);
   });
 
@@ -68,6 +70,7 @@ describe("worker cleanup requests", () => {
     expect(isWorkerCleanupRequest({ project: "p", worker: "w", repoPath: "/r", attempts: -1 })).toBe(false);
     expect(isWorkerCleanupRequest({ project: "p", worker: "w", repoPath: "/r", attempts: Number.NaN })).toBe(false);
     expect(isWorkerCleanupRequest({ project: "p", worker: "w", repoPath: "/r", attempts: 0, branchName: 42 })).toBe(false);
+    expect(isWorkerCleanupRequest({ project: "p", worker: "w", repoPath: "/r", attempts: 0, protectedPids: [1] })).toBe(false);
     expect(isWorkerCleanupRequest(null)).toBe(false);
   });
 });

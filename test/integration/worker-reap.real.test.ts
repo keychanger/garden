@@ -51,6 +51,18 @@ function detachedSleeper(cwd: string): number {
   return pid;
 }
 
+function detachedTermIgnoringProcess(cwd: string): number {
+  const started = spawnSync(
+    "sh",
+    ["-c", `sh -c 'trap "" TERM; while :; do sleep 1; done' >/dev/null 2>&1 & echo $!`],
+    { cwd, encoding: "utf-8" },
+  );
+  const pid = Number.parseInt(started.stdout.trim(), 10);
+  if (!Number.isSafeInteger(pid)) throw new Error(`no pid from sh: ${started.stdout}`);
+  spawned.push(pid);
+  return pid;
+}
+
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -105,6 +117,17 @@ describe.skipIf(!processTableReadable())("reapWorktreeProcesses", () => {
     expect(alive(pid)).toBe(false);
   });
 
+  it("escalates only after re-confirming a TERM-ignoring process cwd", async () => {
+    const worktree = tmpDir("garden-reap-");
+    const pid = detachedTermIgnoringProcess(worktree);
+    await waitForCwd(pid);
+
+    const outcome = reapWorktreeProcesses(worktree);
+
+    expect(outcome!.killed).toContain(pid);
+    expect(outcome!.survived).toEqual([]);
+  });
+
   it("leaves a process in a neighboring directory alone", async () => {
     const worktree = tmpDir("garden-reap-");
     const neighbor = tmpDir("garden-reap-");
@@ -115,6 +138,17 @@ describe.skipIf(!processTableReadable())("reapWorktreeProcesses", () => {
 
     expect(outcome).not.toBeNull();
     expect([...outcome!.terminated, ...outcome!.killed]).not.toContain(spared);
+    expect(alive(spared)).toBe(true);
+  });
+
+  it("preserves an initiator pid captured before detached cleanup", async () => {
+    const worktree = tmpDir("garden-reap-");
+    const spared = detachedSleeper(worktree);
+    await waitForCwd(spared);
+
+    const outcome = reapWorktreeProcesses(worktree, new Set([spared]));
+
+    expect(outcome).toEqual({ terminated: [], killed: [], survived: [] });
     expect(alive(spared)).toBe(true);
   });
 

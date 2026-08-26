@@ -64,6 +64,10 @@ export interface WorkerCleanupRequest {
   repoPath: string;
   worktreePath?: string;
   branchName?: string;
+  // Ancestors of the process that requested detached cleanup. Exclusions are
+  // safe to accept from worker-writable IPC; they can narrow but never widen
+  // the canonical cwd-based target set.
+  protectedPids?: number[];
   // Completed attempts. Incremented only by a run that actually failed.
   attempts: number;
   lastError?: string;
@@ -77,6 +81,9 @@ export function isWorkerCleanupRequest(v: unknown): v is WorkerCleanupRequest {
     && typeof r.repoPath === "string" && r.repoPath !== ""
     && (r.worktreePath === undefined || typeof r.worktreePath === "string")
     && (r.branchName === undefined || typeof r.branchName === "string")
+    && (r.protectedPids === undefined || (Array.isArray(r.protectedPids)
+      && r.protectedPids.length <= 64
+      && r.protectedPids.every((pid) => Number.isSafeInteger(pid) && (pid as number) > 1)))
     && Number.isSafeInteger(r.attempts) && (r.attempts as number) >= 0
     && (r.lastError === undefined || typeof r.lastError === "string");
 }
@@ -287,7 +294,9 @@ function executeWorkerCleanup(req: WorkerCleanupRequest): void {
   // reaping produces an orphan husk instead of a clean removal. Runs whether or
   // not the directory currently exists: on the watchdog's retry the husk IS the
   // resurrection, and its author is still holding it.
-  if (worktreePath) reapAndLog(project, worker, worktreePath);
+  if (worktreePath) {
+    reapAndLog(project, worker, worktreePath, new Set(req.protectedPids));
+  }
 
   if (worktreePath && fs.existsSync(worktreePath)) {
     const err = gitCleanupStep(repoPath, ["worktree", "remove", worktreePath, "--force"]);

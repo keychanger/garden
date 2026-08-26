@@ -190,6 +190,10 @@ vi.mock("../src/dashboard/worker-cleanup.js", () => ({
   dispatchWorkerCleanup: vi.fn(),
 }));
 
+vi.mock("../src/dashboard/worker-reap.js", () => ({
+  captureAncestorPids: vi.fn(() => [101, 102]),
+}));
+
 vi.mock("../src/dashboard/alerts.js", () => ({
   addAlert: vi.fn(),
 }));
@@ -676,6 +680,7 @@ describe("newWorker", () => {
       repoPath: "/repo/myproject",
       worktreePath: "/home/user/.garden/worktrees/myproject/bold-ash",
       branchName: "bold-ash",
+      protectedPids: [101, 102],
       attempts: 0,
     });
     expect(vi.mocked(dispatchWorkerCleanup)).toHaveBeenCalled();
@@ -1730,6 +1735,7 @@ describe("killPane", () => {
       repoPath: "/repo/myproject",
       worktreePath: "/wt/swift-oak",
       branchName: "swift-oak",
+      protectedPids: [101, 102],
       attempts: 0,
     });
     expect(vi.mocked(dispatchWorkerCleanup)).toHaveBeenCalled();

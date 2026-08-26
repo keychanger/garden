@@ -48,6 +48,7 @@ import {
   gardenDoneTrackedInHead, getRemoteTrackingSha, localBranchExists,
 } from "./git.js";
 import { writeWorkerCleanupRequest, dispatchWorkerCleanup } from "./worker-cleanup.js";
+import { captureAncestorPids } from "./worker-reap.js";
 import { addAlert } from "./alerts.js";
 import { showBeads, reopenBead, unassignBead } from "./beads.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
@@ -1394,6 +1395,7 @@ function backgroundGitCleanup(
     repoPath,
     worktreePath: wtPath,
     branchName,
+    protectedPids: captureAncestorPids(),
     attempts: 0,
   });
   dispatchWorkerCleanup(resolveGardenRunner(), project, worker);

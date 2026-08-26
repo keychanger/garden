@@ -109,12 +109,20 @@ export function ancestorPids(psOutput: string, self: number): Set<number> {
   return chain;
 }
 
-function isAlive(pid: number): boolean {
+export function captureAncestorPids(): number[] {
+  const ps = spawnSync("ps", ["-Ao", "pid,ppid"], { encoding: "utf-8" });
+  if (!ps.error && typeof ps.stdout === "string" && ps.stdout !== "") {
+    return [...ancestorPids(ps.stdout, process.pid)];
+  }
+  return [process.pid, process.ppid].filter((pid) => pid > 1);
+}
+
+export function processIsAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== "ESRCH";
   }
 }
 
@@ -150,7 +158,10 @@ function readProcessTable(): { cwds: string; ps: string } | null {
 // Kill every process living inside `root`. Best-effort by design: the caller's
 // contract is the git cleanup, and a reap that could not run must never fail
 // the removal it precedes. Returns null when the process table was unreadable.
-export function reapWorktreeProcesses(root: string): ReapOutcome | null {
+export function reapWorktreeProcesses(
+  root: string,
+  preservedPids: ReadonlySet<number> = new Set(),
+): ReapOutcome | null {
   const table = readProcessTable();
   if (!table) return null;
 
@@ -166,18 +177,33 @@ export function reapWorktreeProcesses(root: string): ReapOutcome | null {
     // an unresolved path still matches when no component is a symlink.
   }
 
-  const targets = selectReapTargets(
-    table.cwds, resolved, ancestorPids(table.ps, process.pid),
-  );
+  const protectedPids = ancestorPids(table.ps, process.pid);
+  for (const pid of preservedPids) protectedPids.add(pid);
+  const targets = selectReapTargets(table.cwds, resolved, protectedPids);
   if (targets.length === 0) return { terminated: [], killed: [], survived: [] };
 
   for (const pid of targets) trySignal(pid, "SIGTERM");
 
   const deadline = Date.now() + TERM_GRACE_MS;
-  let stubborn = targets.filter(isAlive);
+  let stubborn = targets.filter(processIsAlive);
   while (stubborn.length > 0 && Date.now() < deadline) {
     sleepSync(POLL_MS);
-    stubborn = stubborn.filter(isAlive);
+    stubborn = stubborn.filter(processIsAlive);
+  }
+
+  if (stubborn.length > 0) {
+    const refreshed = readProcessTable();
+    if (!refreshed) {
+      return {
+        terminated: targets.filter((pid) => !stubborn.includes(pid)),
+        killed: [],
+        survived: stubborn,
+      };
+    }
+    const stillInWorktree = new Set(
+      selectReapTargets(refreshed.cwds, resolved, protectedPids),
+    );
+    stubborn = stubborn.filter((pid) => stillInWorktree.has(pid));
   }
 
   // SIGKILL cannot be caught or ignored, so a delivered one IS the kill —
@@ -200,8 +226,13 @@ export function reapWorktreeProcesses(root: string): ReapOutcome | null {
 
 // Reap and report. Split from reapWorktreeProcesses so the decision to log
 // stays out of the part under test.
-export function reapAndLog(project: string, worker: string, root: string): void {
-  const outcome = reapWorktreeProcesses(root);
+export function reapAndLog(
+  project: string,
+  worker: string,
+  root: string,
+  preservedPids: ReadonlySet<number> = new Set(),
+): void {
+  const outcome = reapWorktreeProcesses(root, preservedPids);
   if (!outcome) {
     log.debug("cleanup", "process reap skipped; process table unreadable", {
       worker,

@@ -1,5 +1,7 @@
-import { describe, it, expect } from "vitest";
-import { selectReapTargets, ancestorPids } from "../src/dashboard/worker-reap.js";
+import { describe, it, expect, vi } from "vitest";
+import {
+  selectReapTargets, ancestorPids, processIsAlive,
+} from "../src/dashboard/worker-reap.js";
 
 // `lsof -d cwd -F pn` emits one field per line: p<pid> opens a process block,
 // n<path> carries its cwd.
@@ -82,5 +84,17 @@ describe("ancestorPids", () => {
   it("terminates on a cyclic table", () => {
     const cyclic = [" 10    20", " 20    10"].join("\n");
     expect(ancestorPids(cyclic, 10)).toEqual(new Set([10, 20]));
+  });
+});
+
+describe("processIsAlive", () => {
+  it("distinguishes a missing process from one we cannot signal", () => {
+    const kill = vi.spyOn(process, "kill");
+    const error = (code: string) => Object.assign(new Error(code), { code });
+    kill.mockImplementationOnce(() => { throw error("ESRCH"); });
+    kill.mockImplementationOnce(() => { throw error("EPERM"); });
+
+    expect(processIsAlive(100)).toBe(false);
+    expect(processIsAlive(200)).toBe(true);
   });
 });
