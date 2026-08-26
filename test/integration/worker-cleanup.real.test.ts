@@ -14,6 +14,25 @@ function git(cwd: string, ...args: string[]): string {
   return r.stdout.trim();
 }
 
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The reap needs a readable process table; a sandboxed runner is denied `ps`
+// and `lsof`, which is exactly the degradation the shipped code handles by
+// leaving the work to the unsandboxed watchdog retry.
+function processTableReadable(): boolean {
+  const cwds = spawnSync("lsof", ["-d", "cwd", "-F", "pn"], { encoding: "utf8" });
+  const ps = spawnSync("ps", ["-Ao", "pid,ppid"], { encoding: "utf8" });
+  return !cwds.error && !ps.error
+    && (cwds.stdout ?? "") !== "" && (ps.stdout ?? "") !== "";
+}
+
 function branches(repo: string): string[] {
   return git(repo, "branch", "--format=%(refname:short)").split("\n").filter(Boolean);
 }
@@ -148,6 +167,34 @@ describe("runWorkerCleanup (real git)", () => {
     expect(fs.existsSync(wtPath)).toBe(true);
     expect(fs.existsSync(file)).toBe(false);
   });
+
+  // End-to-end proof of the ordering the fix depends on: the daemon must be
+  // dead BEFORE git removes the tree, or its next write recreates the path and
+  // leaves the husk the watchdog reports as an orphaned worktree an hour later.
+  it.skipIf(!processTableReadable())(
+    "kills a daemonized process living in the worktree before removing it",
+    async () => {
+      const { runWorkerCleanup } = await import("../../src/dashboard/worker-cleanup.js");
+      await seed();
+      // Parent exits immediately, so the sleeper is reparented to init — the
+      // shape that survives a pane kill and that ancestry checks miss.
+      const started = spawnSync("sh", ["-c", "sleep 120 >/dev/null 2>&1 & echo $!"], {
+        cwd: wtPath, encoding: "utf8",
+      });
+      const pid = Number.parseInt(started.stdout.trim(), 10);
+      expect(Number.isSafeInteger(pid)).toBe(true);
+      expect(alive(pid)).toBe(true);
+
+      try {
+        runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+        expect(alive(pid)).toBe(false);
+        expect(fs.existsSync(wtPath)).toBe(false);
+      } finally {
+        try { process.kill(pid, "SIGKILL"); } catch { /* already reaped */ }
+      }
+    },
+  );
 
   it("keeps the request when a configured origin cannot be inspected", async () => {
     const { runWorkerCleanup, readWorkerCleanupRequest } =

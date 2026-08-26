@@ -36,6 +36,7 @@ import { log } from "./log.js";
 import { isGeneratedWorkerName } from "./names.js";
 import { findWorkerByName } from "./registry.js";
 import { withFileLock } from "./file-lock.js";
+import { reapAndLog } from "./worker-reap.js";
 
 // Filename prefix the watchdog sweep scans for. Kept next to the path builder
 // it must agree with (workerCleanupMarkerPath in git.ts) — project and worker
@@ -279,6 +280,14 @@ function executeWorkerCleanup(req: WorkerCleanupRequest): void {
     ? canonicalWorktreePath(project, worker)
     : undefined;
   const branchName = req.branchName ? worker : undefined;
+
+  // Kill anything still living in the worktree before git deletes it. A worker
+  // that daemonized a dev server leaves it running past the pane, and its next
+  // write recreates the directory git just removed — so removing without
+  // reaping produces an orphan husk instead of a clean removal. Runs whether or
+  // not the directory currently exists: on the watchdog's retry the husk IS the
+  // resurrection, and its author is still holding it.
+  if (worktreePath) reapAndLog(project, worker, worktreePath);
 
   if (worktreePath && fs.existsSync(worktreePath)) {
     const err = gitCleanupStep(repoPath, ["worktree", "remove", worktreePath, "--force"]);
