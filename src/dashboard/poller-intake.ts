@@ -75,10 +75,10 @@
 // border do), and garden's own increment/rewrite sites remove every matching
 // straggler.
 //
-// Idempotency (bd 1.0.3 route-around): the design doc's `garden-pending`
-// pre-assign + claim-overwrite stack is unimplementable on 1.0.3 — `bd update
-// --claim` never overwrites a foreign assignee, and a same-actor claim on a
-// pre-assigned open bead is a no-op that does NOT set in_progress. Instead
+// Idempotency (bd route-around, verified on 1.0.3 and 1.2.2): the design doc's
+// `garden-pending` pre-assign + claim-overwrite stack is unimplementable — `bd
+// update --claim` never overwrites a foreign assignee, and a same-actor claim
+// on a pre-assigned open bead is a no-op that does NOT set in_progress. Instead
 // intake claims the bead AS the worker (BEADS_ACTOR=<worker-name>) right
 // after the spawn returns the name: one atomic write sets assignee +
 // in_progress, removes the bead from the ready frontier, and establishes the

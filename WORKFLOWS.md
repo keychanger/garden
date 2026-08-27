@@ -2892,9 +2892,9 @@ disagrees with this section, the code is wrong.**
 The planner's exact bd commands ride its seed message (`buildPlannerSeed`,
 `poller-intake.ts`) — the rules inversion (`rules.ts` planner branch) and the
 bundled `planner` skill carry the posture and method, the seed carries the
-epic-specific spellings. The contract, all verified against the installed
-bd 1.0.3 (`test/integration/workflow-planner.real.test.ts` pins every
-spelling):
+epic-specific spellings. The contract was first verified against bd 1.0.3 and
+re-verified against the installed bd 1.2.2
+(`test/integration/workflow-planner.real.test.ts` pins every spelling):
 
 1. Read the design doc (inlined in the seed) and draft the child DAG — one
    worker-session per child, blocker edges for real ordering constraints
@@ -2919,16 +2919,15 @@ spelling):
 
 **Deliberate deviation from DELEGATION.md's sketch:** the doc's phase-4d
 inventory wanted ONE `bd create --graph --ephemeral` call with top-level
-`edges[]`. Empirically (2026-08-14, installed 1.0.3), `--graph` **silently
-ignores `--ephemeral`** in every spelling (CLI flag, node-level fields, plan
-top level) — the children come out permanent, which would bypass board's
-draft-review gate entirely (dimmed wisps, `S` promotion, `;plan:none`
-discard all key on `ephemeral:true`). Ephemerality is the load-bearing half
-of the contract, so the seed pins the per-child spelling above instead; a
-canary integration test pins the `--graph` misbehavior so a future bd that
-fixes it prompts reconsidering the single-call form. The doc's other
-`--graph` warning (node-level `deps` arrays silently ignored) and the
-`--dry-run` trap (it writes anyway) are carried into the seed verbatim.
+`edges[]`. On bd 1.0.3, `--graph` silently ignored `--ephemeral` and produced
+permanent children that bypassed board's draft-review gate. As of bd 1.2.2 it
+honors `--ephemeral`, but it silently drops `--parent` and still ignores
+node-level `deps` arrays. The resulting children are ephemeral but never enter
+the epic's swarm frontier, so intake never dispatches them. The seed therefore
+continues to pin the per-child create plus explicit-edge spelling above; the
+canary integration test tracks which `--graph` drop is currently
+disqualifying so a future fix prompts reconsidering the single-call form. The
+`--dry-run` trap (it writes anyway) is carried into the seed verbatim.
 
 ### The workflow definition
 

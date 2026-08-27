@@ -143,7 +143,7 @@ describe("installClaudeSkills", () => {
     expect(PLANNER_SKILL_CONTENT).toContain("--ephemeral --parent");
     expect(PLANNER_SKILL_CONTENT).toContain("bd dep");
     expect(PLANNER_SKILL_CONTENT).toContain("--blocks");
-    // The verified 1.0.3 pitfalls (the reason --graph is banned here).
+    // The empirically verified pitfalls (the reason --graph is banned here).
     expect(PLANNER_SKILL_CONTENT).toContain("bd create --graph");
     expect(PLANNER_SKILL_CONTENT).toContain("--dry-run");
     expect(PLANNER_SKILL_CONTENT).toContain("bd dep cycles");
