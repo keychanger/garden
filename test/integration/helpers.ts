@@ -35,7 +35,16 @@ export function useGitTmpHome() {
 
   afterEach(() => {
     process.env.HOME = originalHome;
-    fs.rmSync(tmpHome, { recursive: true, force: true });
+    // Retries absorb a teardown race unique to the integration suite: the CLI
+    // and hook bundles these tests spawn synchronously go on to spawn DETACHED
+    // children of their own (the alerts repaint, the usage refresh), which
+    // outlive the spawnSync that started them and keep writing under this tmp
+    // HOME while the recursive delete walks it — surfacing as an ENOTEMPTY
+    // thrown out of afterEach, failing a test whose assertions all passed. The
+    // window is short but real, and widens on a machine fast enough to reach
+    // teardown before the detached writer flushes. maxRetries covers exactly
+    // this class (ENOTEMPTY/EBUSY/EPERM); force already covers an absent path.
+    fs.rmSync(tmpHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
   return {
