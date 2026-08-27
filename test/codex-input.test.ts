@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
@@ -285,6 +286,36 @@ describe("startCodexInputWatcher", () => {
     } finally {
       watchSpy.mockRestore();
       vi.useRealTimers();
+    }
+  });
+
+  it("arms the watcher on a machine where Codex has never run", () => {
+    // A fresh workstation has no ~/.codex/sessions until Codex's first run, so
+    // fs.watch threw ENOENT and this watcher — which has no retry — stayed dead
+    // for the whole life of the watchdog process that started it. Codex workers
+    // then showed no `asking` status and lost missed-turn-end healing, the class
+    // that strands a worker in merge-pending indefinitely.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "garden-codex-home-"));
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = home;
+    const sessionsDir = path.join(home, "sessions");
+    const watcher = new EventEmitter();
+    const watchSpy = vi.spyOn(fs, "watch").mockImplementation(((
+      _path: fs.PathLike,
+      _options: fs.WatchOptions,
+      _listener: fs.WatchListener<string>,
+    ) => watcher as fs.FSWatcher) as typeof fs.watch);
+
+    try {
+      startCodexInputWatcher(vi.fn());
+
+      expect(fs.existsSync(sessionsDir)).toBe(true);
+      expect(watchSpy).toHaveBeenCalledWith(sessionsDir, expect.anything(), expect.anything());
+    } finally {
+      watchSpy.mockRestore();
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 });

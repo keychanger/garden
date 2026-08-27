@@ -130,6 +130,13 @@ export function startCodexInputWatcher(onStateChange: () => void): void {
 
   reconcile();
   try {
+    // Codex creates this lazily on its first run, so on a workstation where it
+    // has never run the directory is absent and fs.watch throws ENOENT. There is
+    // no retry below — the watcher would stay dead for the whole life of the
+    // watchdog process that started it, costing every Codex worker its `asking`
+    // status and its missed-turn-end healing. Creating the directory is exactly
+    // what Codex itself does on first run, and is a no-op on every later boot.
+    fs.mkdirSync(sessionsDir, { recursive: true });
     const watcher = fs.watch(sessionsDir, { recursive: true }, (_event, filename) => {
       if (filename && !String(filename).endsWith(".jsonl")) return;
       const nextPath = filename ? path.resolve(sessionsDir, String(filename)) : undefined;
