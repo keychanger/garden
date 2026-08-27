@@ -132,7 +132,7 @@ You are working in an isolated git worktree on branch \`${branchName}\`. Your wo
     // checks.
     const plannerExtras = `## Planner workflow (decompose, do not build)
 
-**You are a planner — a decomposition worker. Your deliverable is a BEAD DAG written to the project's bd store, not code and not a commit.** This inverts the "commit and push when your task is complete", "invoke the \`done\` skill", and "auto-continue fires after the merge" guidance above — that guidance is for build workers. See the \`planner\` skill (\`.claude/skills/planner/\`) for the method checklist. Your seed message carries the epic, its pinned design doc, and the exact bd command contract — follow it verbatim; it encodes verified bd 1.0.3 behavior and pitfalls.
+**You are a planner — a decomposition worker. Your deliverable is a BEAD DAG written to the project's bd store, not code and not a commit.** This inverts the "commit and push when your task is complete", "invoke the \`done\` skill", and "auto-continue fires after the merge" guidance above — that guidance is for build workers. See the \`planner\` skill (\`.claude/skills/planner/\`) for the method checklist. Your seed message carries the epic, its pinned design doc, and the exact bd command contract — follow it verbatim; it encodes empirically verified bd behavior and pitfalls.
 
 **Write beads, not code.** Do NOT edit \`src/\`, tests, configs, docs, or build files. Do NOT run \`git add\`/\`git commit\`/\`git push\`, and do NOT run project checks. Your only writes are bd commands against the epic named in your seed.
 

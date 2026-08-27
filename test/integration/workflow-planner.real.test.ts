@@ -1,14 +1,21 @@
 // The planner contract against a REAL bd database: every command spelling the
 // planner seed (buildPlannerSeed) instructs a worker to run must be executable
-// on the installed bd 1.0.3, because the planner follows the seed verbatim.
+// on the installed bd, because the planner follows the seed verbatim.
 // Pins: per-child `bd create --ephemeral --parent` produces children that are
 // linked into the epic's swarm frontier AND ephemeral (board's draft-review
 // gate reads `ephemeral:true` from bd export), `bd dep <blocker> --blocks
 // <blocked>` wires the integration gate, `bd dep cycles` exits clean, and the
 // plan:* label rewrites round-trip. Also pins the reason the seed DEVIATES
-// from DELEGATION.md's `bd create --graph --ephemeral` sketch: --graph
-// silently drops ephemerality (the canary test below) — if a future bd honors
-// it, that test fails and the single-call graph contract can be reconsidered.
+// from DELEGATION.md's `bd create --graph --ephemeral` sketch — see the canary
+// below, which tracks WHICH of --graph's drops is currently disqualifying.
+//
+// Re-verified against bd 1.2.2 (2026-08-27), which moved twice from the 1.0.3
+// these spellings were first pinned to. Both drifts are behavioral, not
+// cosmetic, so they are recorded at their assertion sites:
+//   - bare `bd export` no longer emits ephemeral beads at all; --all does, with
+//     the `ephemeral` field intact (see exportedEphemeral).
+//   - `bd create --graph` now HONORS --ephemeral but drops --parent (see the
+//     canary).
 // Skipped when bd is not installed (CI runners); test/poller-intake.test.ts
 // covers the loop logic with fakes.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -45,8 +52,15 @@ describe.skipIf(!bdInstalled)("planner contract against real bd", () => {
 
   // bd export emits JSONL; the `ephemeral` field is what board's draft
   // rendering (and the promote/discard gate) keys on.
+  //
+  // --all is load-bearing as of bd 1.2.2: a bare `bd export` now omits
+  // ephemeral beads entirely rather than emitting them with `ephemeral:true`,
+  // so every wisp this suite creates was absent from the map and each lookup
+  // read `undefined` instead of `true`. --all restores them with the field
+  // intact. Garden's runtime never shells out to `bd export` — only this
+  // suite and board's draft gate do — so the drift is a board-side concern.
   function exportedEphemeral(): Map<string, boolean> {
-    const out = bd("export");
+    const out = bd("export", "--all");
     const map = new Map<string, boolean>();
     for (const line of out.split("\n")) {
       const trimmed = line.trim();
@@ -128,22 +142,47 @@ describe.skipIf(!bdInstalled)("planner contract against real bd", () => {
     expect(removeLabel({ path: repo }, epicId, "plan:ready")).toBe(true);
   }, TEST_TIMEOUT);
 
-  it("canary: bd create --graph silently drops --ephemeral (why the seed forbids it)", () => {
+  it("canary: bd create --graph drops --parent, orphaning children from the frontier", () => {
     // DELEGATION.md's phase-4d sketch wanted ONE `bd create --graph
-    // --ephemeral` call. On the installed 1.0.3 the flag is silently ignored
-    // — the children come out permanent, which would bypass board's
-    // draft-review gate entirely — so buildPlannerSeed pins the per-child
-    // spelling instead. If this canary fails, --graph started honoring
-    // ephemerality and the single-call contract can be reconsidered.
+    // --ephemeral` call. buildPlannerSeed pins the per-child spelling instead,
+    // and this canary tracks which of --graph's drops currently justifies that.
+    //
+    // On 1.0.3 the disqualifier was ephemerality: --graph ignored --ephemeral,
+    // so children came out permanent and bypassed board's draft-review gate.
+    // bd 1.2.2 fixed that — the children below ARE ephemeral — but --graph
+    // still drops --parent and still ignores node-level `deps`. Unparented
+    // children never enter the epic's swarm frontier, which is the exact link
+    // the intake loop reads to find dispatchable work, so a --graph plan would
+    // produce wisps no worker is ever spawned for. The per-child spelling
+    // stays. If this canary fails, --graph started honoring --parent too and
+    // the single-call contract can be reconsidered.
     const plan = path.join(repo, "graph-plan.json");
     fs.writeFileSync(plan, JSON.stringify({
-      nodes: [{ key: "g1", title: "graph canary", type: "task" }],
+      nodes: [
+        { key: "g1", title: "graph canary", type: "task" },
+        { key: "g2", title: "graph canary dependent", type: "task", deps: ["g1"] },
+      ],
       edges: [],
     }));
-    const out = bd("create", "--graph", plan, "--ephemeral", "--json");
+    const out = bd("create", "--graph", plan, "--ephemeral", "--parent", epicId, "--json");
     const ids = (JSON.parse(out) as { ids: Record<string, string> }).ids;
     expect(ids.g1).toBeTruthy();
-    expect(exportedEphemeral().get(ids.g1)).toBe(false);
+    expect(ids.g2).toBeTruthy();
+
+    // Ephemerality: honored as of 1.2.2.
+    expect(exportedEphemeral().get(ids.g1)).toBe(true);
+
+    // --parent: dropped. Neither child reaches the epic's frontier, and the
+    // node-level `deps` array is silently ignored (no edge, no error).
+    const frontier = swarmStatus({ path: repo }, epicId);
+    const seen = [
+      ...(frontier?.ready ?? []), ...(frontier?.blocked ?? []),
+      ...(frontier?.active ?? []), ...(frontier?.completed ?? []),
+    ].map(b => b.id);
+    expect(seen).not.toContain(ids.g1);
+    expect(seen).not.toContain(ids.g2);
+    const g2 = JSON.parse(bd("show", ids.g2, "--json")) as Array<{ dependency_count?: number }>;
+    expect(g2[0].dependency_count ?? 0).toBe(0);
   }, TEST_TIMEOUT);
 
   it("the plan-consume loop moves a real epic pending -> planning and spawns one planner", () => {

@@ -268,10 +268,13 @@ describe("buildPlannerSeed", () => {
   it("pins the verified wisp-create and edge spellings with the --graph and --dry-run warnings", () => {
     expect(seed).toContain("--ephemeral --parent board-e1");
     expect(seed).toContain("bd dep <blocker-id> --blocks <blocked-id>");
-    // The 1.0.3 pitfalls: --graph loses ephemerality and node-level deps;
-    // --dry-run writes anyway.
+    // The --graph pitfalls: it drops --parent (so the children never reach the
+    // epic's swarm frontier and no worker is spawned for them) and ignores
+    // node-level deps; --dry-run writes anyway. On bd 1.0.3 the disqualifying
+    // drop was --ephemeral instead; workflow-planner.real.test.ts is the canary
+    // that tracks which drop currently holds against the installed binary.
     expect(seed).toContain("bd create --graph");
-    expect(seed).toContain("silently ignores --ephemeral");
+    expect(seed).toContain("silently drops --parent");
     expect(seed).toContain('"deps"');
     expect(seed).toContain("--dry-run");
     expect(seed).toContain("bd dep cycles");

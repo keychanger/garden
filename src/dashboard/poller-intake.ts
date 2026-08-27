@@ -283,17 +283,23 @@ export function buildBeadSeed(opts: {
 }
 
 // Planner seed (DELEGATION.md phase 4d + Decisions 13/16): the epic, its full
-// pinned design doc, and the exact bd 1.0.3 contract — verbatim enough that a
-// fresh worker cannot get it wrong. The command spellings were re-verified
-// empirically against the installed bd 1.0.3 (2026-08-14) and deviate from
-// the delegation doc's `bd create --graph` sketch deliberately: --graph
-// silently ignores --ephemeral in every spelling (CLI flag, node fields, plan
-// top level), and non-ephemeral children would bypass board's draft-review
-// gate (dimmed wisps, S promotion, ;plan:none discard) — ephemerality is the
-// load-bearing half of the contract, so the seed pins the per-child
-// `bd create --ephemeral --parent` + `bd dep --blocks` spelling that actually
-// produces reviewable wisps. The integration test suite pins these spellings
-// (and the --graph misbehavior) against the real binary.
+// pinned design doc, and the exact bd contract — verbatim enough that a fresh
+// worker cannot get it wrong. The command spellings were verified empirically
+// against bd 1.0.3 (2026-08-14) and re-verified against bd 1.2.2 (2026-08-27);
+// they deviate from the delegation doc's `bd create --graph` sketch
+// deliberately, though the disqualifying drop has since moved:
+//   - on 1.0.3, --graph ignored --ephemeral, so children came out permanent and
+//     bypassed board's draft-review gate (dimmed wisps, S promotion, ;plan:none
+//     discard).
+//   - on 1.2.2 --ephemeral is honored, but --graph drops --parent and still
+//     ignores node-level `deps`. Unparented children never enter the epic's
+//     swarm frontier, which is the link runIntakeOnce reads to find
+//     dispatchable work — a --graph plan yields wisps no worker is ever
+//     spawned for.
+// Either way the per-child `bd create --ephemeral --parent` + `bd dep --blocks`
+// spelling is the one that produces reviewable, dispatchable wisps. The
+// integration test suite pins these spellings — and tracks which --graph drop
+// is currently disqualifying — against the real binary.
 export function buildPlannerSeed(opts: {
   projectName: string;
   epic: { id: string; title: string; design?: string };
@@ -315,7 +321,7 @@ export function buildPlannerSeed(opts: {
     ``,
     epic.design?.trim() || "(no design doc pinned on the epic — decompose from the epic's title and description; do not invent scope)",
     ``,
-    `## The contract (verified bd 1.0.3 spellings — follow verbatim)`,
+    `## The contract (empirically verified spellings — follow verbatim)`,
     ``,
     `1. Read the design doc above and draft the child DAG: each child one`,
     `   worker-session with a crisp deliverable; blocker edges for real ordering`,
@@ -327,8 +333,8 @@ export function buildPlannerSeed(opts: {
     `2. Create each child as an ephemeral wisp parented to the epic:`,
     `   \`bd create "<title>" --ephemeral --parent ${id} -d "<description>"\``,
     `   (add \`-l integration\` on the integration child). Do NOT use`,
-    `   \`bd create --graph\`: on bd 1.0.3 it silently ignores --ephemeral —`,
-    `   you get PERMANENT children that skip the operator's draft-review gate —`,
+    `   \`bd create --graph\`: it silently drops --parent, so the children never`,
+    `   enter the epic's swarm frontier and no worker is ever spawned for them —`,
     `   and it silently ignores node-level "deps" arrays (an edgeless graph,`,
     `   no error). NEVER use \`--dry-run\` anywhere: it writes anyway.`,
     `3. Wire every dependency edge explicitly, one call per edge:`,

@@ -463,7 +463,7 @@ export const PLANNER_SKILL_FILENAME = "SKILL.md";
 // Bundled with every worker but only relevant to a planner (decomposition)
 // worker — its frontmatter description gates it at planning time so build
 // workers ignore it. The method as a checklist: read the design doc, draft the
-// DAG, create it as ephemeral wisps with the verified bd 1.0.3 spellings
+// DAG, create it as ephemeral wisps with the empirically verified bd spellings
 // (including the --graph and --dry-run pitfalls), rewrite the epic's plan
 // label, stop. The seed message carries the epic-specific ids; this skill
 // carries the method.
@@ -484,7 +484,7 @@ It is inlined in your seed. Understand the deliverables, their ordering constrai
 ### 2. Draft the DAG
 Sketch the children first (in your head or scratch notes — NOT repo files): each child is one worker-session of work with a crisp deliverable; blocker edges express real ordering constraints only. Prefer a wide frontier (parallelizable siblings) over a chain. Include exactly one extra child titled and labeled \`integration\` that every leaf blocks — its worker verifies the assembled feature against the design doc once all siblings merge.
 
-### 3. Create the wisps (verified bd 1.0.3 spellings)
+### 3. Create the wisps (empirically verified spellings)
 Create each child as an ephemeral wisp parented to the epic:
 
 \`\`\`bash
@@ -499,8 +499,8 @@ bd dep <blocker-id> --blocks <blocked-id>     # one call per edge
 bd dep <leaf-id> --blocks <integration-id>    # every leaf blocks the integration bead
 \`\`\`
 
-**Pitfalls (verified against bd 1.0.3 — do not deviate):**
-- Do NOT use \`bd create --graph\`: it silently ignores \`--ephemeral\` (flag and node fields alike), producing permanent children that skip board's draft-review gate. It also silently ignores node-level \`"deps"\` arrays — never express edges inside a JSON node.
+**Pitfalls (empirically verified against the installed bd — do not deviate):**
+- Do NOT use \`bd create --graph\`: it silently drops \`--parent\`, so the children never enter the epic's swarm frontier and garden never spawns a worker for any of them. It also silently ignores node-level \`"deps"\` arrays — never express edges inside a JSON node.
 - NEVER use \`--dry-run\`: it writes anyway.
 - The integration bead is a task like its siblings — bd rejects epic↔task \`blocks\` edges in both directions, so never try to make the epic depend on it.
 

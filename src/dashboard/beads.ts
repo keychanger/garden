@@ -1,5 +1,6 @@
 // bd (beads) shell-out client for the bead-intake loop. Wraps the installed
-// bd binary (verified against bd 1.0.3) with cwd pinned to the project
+// bd binary (verified against bd 1.0.3, re-verified on 1.2.2) with cwd
+// pinned to the project
 // checkout so every call hits the project's canonical .beads store — never a
 // worktree copy (worktrees carry the tracked .beads files but not the
 // gitignored Dolt database, so bd there would bootstrap a divergent local DB).
@@ -8,7 +9,7 @@
 // bd surfaces cannot resolve different stores. This also replaces an ambient
 // BEADS_DIR inherited when garden is invoked from another project's worker.
 //
-// Verified 1.0.3 behavior this module encodes:
+// Verified behavior this module encodes (1.0.3, still true on 1.2.2):
 // - `bd update --claim` sets assignee+in_progress on an UNASSIGNED bead, is a
 //   success no-op when the bead is already assigned to the same actor, and
 //   ERRORS when assigned to anyone else. It never overwrites a foreign claim.
