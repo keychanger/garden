@@ -1116,10 +1116,14 @@ describe("poll — review/resolve timeout", () => {
       }),
     ]);
     vi.mocked(windowExists).mockReturnValue(true);
+    vi.mocked(hasRebaseInProgress).mockReturnValue(true);
 
     poll("myproject");
 
     expect(killWindowSafe).toHaveBeenCalledWith("_myproject-review-bold-ash");
+    // A killed resolver can strand Git mid-rebase. The re-queued reviewer must
+    // start from a clean branch state; completed resolver commits still remain.
+    expect(abortRebase).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
     expect(addAlert).toHaveBeenCalledWith(
       expect.objectContaining({
         level: "error",

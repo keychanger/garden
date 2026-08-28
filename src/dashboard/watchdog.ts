@@ -70,9 +70,11 @@ import {
 import { readDashState, writeDashState, withStateLock } from "./state.js";
 import { getBuildBranch, loadConfig } from "../config.js";
 import { GARDEN_VERSION } from "../version.js";
+import { withFileLock } from "./file-lock.js";
 
 export const WATCHDOG_TICK_MS = 60_000;
 export const WATCHDOG_THRESHOLD_MS = 5 * 60_000;
+export const WATCHDOG_SPAWN_LOCK_FILE = path.join(SESSIONS_DIR, "watchdog.spawn.lock");
 // A watchdog loop iteration that overran its intended cadence by more than this
 // means the process was suspended (machine sleep / clock jump) — a real suspend
 // is minutes-to-hours, an over-long tick body is seconds. One full extra tick of
@@ -847,10 +849,15 @@ function sleep(ms: number): Promise<void> {
 // -----------------------------------------------------------------------------
 
 export function startWatchdog(gardenRunner: string): void {
-  const window = watchdogWindowName();
-  if (windowExists(window)) return;
-  newDashboardWindow(window, "bash", "-c", `${gardenRunner} dashboard _watchdog-loop 2>/dev/null`);
-  log.info("watchdog", "spawned window", { data: { window } });
+  // Every project poller can repair this fleet-wide singleton. Serialize the
+  // check-and-spawn so concurrent polls cannot all observe a missing window
+  // and create duplicate watchdog loops before tmux registers the first one.
+  withFileLock(WATCHDOG_SPAWN_LOCK_FILE, () => {
+    const window = watchdogWindowName();
+    if (windowExists(window)) return;
+    newDashboardWindow(window, "bash", "-c", `${gardenRunner} dashboard _watchdog-loop 2>/dev/null`);
+    log.info("watchdog", "spawned window", { data: { window } });
+  }, { name: "watchdog-spawn" });
 }
 
 export function stopWatchdog(): void {

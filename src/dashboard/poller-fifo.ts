@@ -57,8 +57,8 @@ export function triggerProjectPoll(projectName: string): void {
 // orphan accumulation.
 //
 // Why the sleep is chunked with a FIFO-existence check rather than one
-// `sleep ${delaySec}`: the review-timeout poke schedules a full hour out, and
-// a single sleep lives that whole hour even after its FIFO is gone — every
+// `sleep ${delaySec}`: the review-timeout poke schedules two hours out, and a
+// single sleep lives that whole interval even after its FIFO is gone — every
 // integration-test run leaves several such orphans (the test's tmp HOME is
 // deleted at teardown seconds later), and they accumulated into hundreds of
 // lingering bash/sleep pairs. Checking `[ -p ]` between short chunks lets the

@@ -1006,7 +1006,7 @@ const TIME_IN_STATE_STATES = new Set<WorkerStatus>([
 // to flag "taking unusually long." Only the otherwise-uncolored pipeline states
 // escalate — `asking`/`failing` rows are already whole-row colored (bold-yellow
 // / bold-red via colorizeRow), so their elapsed stays dim rather than fight the
-// row color. All thresholds sit well under the hard REVIEW_TIMEOUT_MS (60m)
+// row color. All thresholds sit well under the hard REVIEW_TIMEOUT_MS (120m)
 // kill so "slow" reads long before "killed."
 const TIME_IN_STATE_SOFT_MS: Partial<Record<WorkerStatus, number>> = {
   reviewing: 10 * 60_000,

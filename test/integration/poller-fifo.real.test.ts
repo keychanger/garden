@@ -122,7 +122,7 @@ describe("scheduleDelayedPoke (real FIFO, real child process)", () => {
 
   it("exits without poking or creating a junk file when the FIFO is gone", async () => {
     // Regression for the orphaned-timer leak: the detached writer used to
-    // sleep its full delay (an hour for review-timeout pokes) no matter what,
+    // sleep its full delay (two hours for review-timeout pokes) no matter what,
     // and its final `1<>` open is O_CREAT — after test teardown deleted the
     // FIFO, the printf left a junk regular file at the path. The chunked loop
     // checks the FIFO before each chunk and must exit at the first check.

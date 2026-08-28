@@ -17,8 +17,8 @@ import { codexStderrSidecar } from "./harness/codex-core.js";
 import { getHarnessCore } from "./harness/core.js";
 import { setDoneSentinel } from "./continue.js";
 import {
-  forcePushBranch, getBranchHeadSha, getCommitSummary, getRemoteTrackingSha,
-  getDiffNumstat, hasCommitsAhead, getChangedFiles, isWorktreeDirty,
+  abortRebase, forcePushBranch, getBranchHeadSha, getCommitSummary, getRemoteTrackingSha,
+  getDiffNumstat, hasCommitsAhead, getChangedFiles, hasRebaseInProgress, isWorktreeDirty,
 } from "./git.js";
 import { getWorkflow } from "./workflows/index.js";
 import { isPublishablePath } from "./botanist-paths.js";
@@ -1664,6 +1664,10 @@ export function handleReviewTimeout(
     message: `${kind === "review" ? "Reviewer" : "Resolver"} for ${entry.name} exceeded ${Math.floor(REVIEW_TIMEOUT_MS / 60000)}-minute timeout and was killed. Check the worktree for hung subprocesses (commonly tests with no timeout blocked by the sandbox).`,
   });
   const wtPath = entry.worktreePath ?? projectPath;
+  // A killed reviewer or resolver can leave Git's rebase metadata behind.
+  // Clear only an unfinished rebase; completed commits remain on the branch
+  // for the kick-recoverable review to certify, as the timeout contract says.
+  if (hasRebaseInProgress(wtPath)) abortRebase(wtPath);
   const headSha = getBranchHeadSha(wtPath);
   transitionState(projectName, entry.name, "failing", {
     failCount: (entry.failCount ?? 0) + 1,

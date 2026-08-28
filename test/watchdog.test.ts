@@ -16,6 +16,10 @@ vi.mock("../src/dashboard/alerts.js", () => ({
   addAlert: vi.fn(),
 }));
 
+vi.mock("../src/dashboard/file-lock.js", () => ({
+  withFileLock: vi.fn((_path: string, fn: () => unknown) => fn()),
+}));
+
 vi.mock("../src/dashboard/registry.js", async (importActual) => {
   // Spread the real module so PR_STATE_KIND (the state-classification table the
   // watchdog derives its sets from) stays live; only readRegistry is faked.
@@ -81,7 +85,7 @@ import {
   latestActivityMs, isWatchedState, isWorkerStale, hasLiveWork, tick,
   healProjectPollers, alertOrphanedWindows, WATCHDOG_THRESHOLD_MS,
   absorbSleep, WATCHDOG_TICK_MS, SLEEP_SLACK_MS, startWatchdog,
-  refreshBuildStaleness,
+  refreshBuildStaleness, WATCHDOG_SPAWN_LOCK_FILE,
 } from "../src/dashboard/watchdog.js";
 import { commitsBehindOrigin, gardenInstallRepo } from "../src/dashboard/git.js";
 import { loadConfig } from "../src/config.js";
@@ -89,6 +93,7 @@ import { writeDashState } from "../src/dashboard/state.js";
 import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
 import { newDashboardWindow, windowExists, listAllWindowNames } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
+import { withFileLock } from "../src/dashboard/file-lock.js";
 import type { WorkerEntry, PrState } from "../src/dashboard/registry.js";
 
 const windowExistsMock = vi.mocked(windowExists);
@@ -577,6 +582,11 @@ describe("startWatchdog", () => {
     expect(call[0]).toBe("_garden-watchdog");
     expect(call).toContain("bash");
     expect(String(call.at(-1))).toContain("_watchdog-loop");
+    expect(withFileLock).toHaveBeenCalledWith(
+      WATCHDOG_SPAWN_LOCK_FILE,
+      expect.any(Function),
+      { name: "watchdog-spawn" },
+    );
   });
 
   it("is a no-op when the watchdog window already exists", () => {
