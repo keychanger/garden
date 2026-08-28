@@ -128,7 +128,16 @@ export const claudeCodeCore: HarnessCore = {
     // `--effort` is a top-level claude flag, so it composes with `-p` exactly
     // as it does with the interactive launch (verified against 2.1.215).
     const effortFlag = plan.effort ? ` --effort ${shellEscape(plan.effort)}` : "";
-    return `${opts.inlineEnv}${plan.envPrefix}claude -p${modelFlag}${effortFlag}`
+    // `--permission-mode acceptEdits` is load-bearing: the worktree's
+    // .claude/settings.json sets `defaultMode: auto`, but auto mode never
+    // engages under `-p` (verified 2.1.251 — no auto_mode attachment in any
+    // headless transcript), so every Edit/Write falls to a permission prompt
+    // that a headless session has nobody to answer and is rejected. Reviewers
+    // survived that only by editing through Bash heredocs (Bash is auto-allowed
+    // under the sandbox); an Opus reviewer that declined the workaround
+    // reported FAILED on a sound branch. acceptEdits grants exactly the file
+    // edits inside the worktree that the review contract already assumes.
+    return `${opts.inlineEnv}${plan.envPrefix}claude -p --permission-mode acceptEdits${modelFlag}${effortFlag}`
       + ` < ${shellEscape(opts.promptFile)} > ${shellEscape(opts.resultFile)} 2>&1`;
   },
 

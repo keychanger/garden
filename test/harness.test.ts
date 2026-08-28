@@ -224,7 +224,7 @@ describe("claude-code adapter dialect", () => {
       inlineEnv: "GARDEN_REVIEWER=1 ",
     });
     expect(cmd).toBe(
-      "GARDEN_REVIEWER=1 CLAUDE_CONFIG_DIR=/p claude -p --model opus < /tmp/p.txt > /tmp/r.txt 2>&1",
+      "GARDEN_REVIEWER=1 CLAUDE_CONFIG_DIR=/p claude -p --permission-mode acceptEdits --model opus < /tmp/p.txt > /tmp/r.txt 2>&1",
     );
   });
 
@@ -240,7 +240,7 @@ describe("claude-code adapter dialect", () => {
       }),
       inlineEnv: "",
     });
-    expect(cmd).toBe("claude -p --model opus --effort max < /tmp/p.txt > /tmp/r.txt 2>&1");
+    expect(cmd).toBe("claude -p --permission-mode acceptEdits --model opus --effort max < /tmp/p.txt > /tmp/r.txt 2>&1");
   });
 
   it("omits --effort entirely when unset, keeping the pre-dial command byte-identical", async () => {
@@ -249,7 +249,7 @@ describe("claude-code adapter dialect", () => {
       promptFile: "/tmp/p.txt", resultFile: "/tmp/r.txt",
       launchPlan: headlessPlan("claude-code"), inlineEnv: "",
     });
-    expect(cmd).toBe("claude -p < /tmp/p.txt > /tmp/r.txt 2>&1");
+    expect(cmd).toBe("claude -p --permission-mode acceptEdits < /tmp/p.txt > /tmp/r.txt 2>&1");
     expect(cmd).not.toContain("--effort");
   });
 

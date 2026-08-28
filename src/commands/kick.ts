@@ -7,14 +7,16 @@ import { resolveWorkerArg } from "./resolve-worker.js";
 
 // Failing reasons where the worker's *code* is fine and the failure is on the
 // reviewer side — Anthropic API blip, reviewer crashed mid-stream, reviewer
-// went off-rails without emitting a verdict. For these, `kick` re-queues the
-// review without requiring new commits. For everything else (code failure,
-// trellis-flagged, iteration-budget, ci), new commits or the specific
-// workflow command are the right recovery — kick should refuse.
+// went off-rails without emitting a verdict, reviewer killed by the wall-clock
+// cap before it could emit one. For these, `kick` re-queues the review without
+// requiring new commits. For everything else (code failure, trellis-flagged,
+// iteration-budget, ci), new commits or the specific workflow command are the
+// right recovery — kick should refuse.
 const REVIEW_SIDE_FAILING_REASONS: ReadonlySet<FailingReason> = new Set<FailingReason>([
   "unparseable-verdict",
   "transient-review",
   "quota",
+  "review-timeout",
 ]);
 
 export async function kick(args: string[]): Promise<void> {

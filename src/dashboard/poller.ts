@@ -21,6 +21,7 @@ import { log } from "./log.js";
 import { pollerWindowName } from "./window-names.js";
 import { stopUsagePoller, startUsagePoller } from "./usage-poller.js";
 import { stopWatchdog, startWatchdog } from "./watchdog.js";
+import { resolveGardenRunner } from "./runner.js";
 import {
   signalFifoPath, ensureSignalFifo, triggerProjectPoll, pollerSpawnLockPath,
 } from "./poller-fifo.js";
@@ -39,6 +40,19 @@ export { killReviewWindow } from "./poller-review.js";
 // Main poll entry point — called by `garden dashboard _poll <project>`
 export function poll(projectName: string): boolean {
   healStatusPane();
+  // The watchdog respawns dead project pollers, but nothing respawned the
+  // watchdog: once its window died, every duty it owns — poller healing,
+  // stranded-worker re-pokes, sleep discounting, the review-timeout backstop —
+  // stayed dead until the next dashboard attach or rebuild. Observed
+  // 2026-08-28: watchdog and two project pollers gone together, a worker
+  // unprocessed for hours and a review timeout fired 40 min late. Pollers
+  // are the fleet's other long-lived processes, so each poll re-arms the
+  // watchdog when its window is missing (startWatchdog is a no-op otherwise).
+  try {
+    startWatchdog(resolveGardenRunner());
+  } catch (err) {
+    log.warn("poller", "failed to ensure watchdog", { data: { error: String(err) } });
+  }
   // Sweep ghost registry entries cross-project. validateAndHeal already does
   // this at attach time, but mid-session ghosts (e.g. a fan-out handoff with
   // partial bootstrap failures) would otherwise linger and keep the plot

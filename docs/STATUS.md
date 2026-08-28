@@ -392,9 +392,15 @@ cannot be expressed as "wait for an event":
 - **`failing → working` debounce (30 s)** — preventing review storms on
   a worker that's actively failing in a tight loop. Started on a push
   event in the failing state. Source: `poller-state.ts` DEBOUNCE_MS.
-- **Reviewer / resolver wall-clock cap (60 min)** — kills a hung
+- **Reviewer / resolver wall-clock cap (120 min)** — kills a hung
   subprocess (e.g. `npm test` with no timeout, blocked by the sandbox)
   so the state machine can escalate to `failing` instead of wedging.
+  The park carries `failingReason: "review-timeout"` — the agent was
+  killed before it could judge the branch, so `garden kick` re-queues the
+  review with no new commit (anything the reviewer committed is still on
+  the branch and is re-reviewed). Sized from the ledger: p99 review
+  duration is 25 min; the only runs past 60 min were API-latency stalls
+  and a checks suite queued behind siblings, not hangs.
   Source: `poller-review.ts` REVIEW_TIMEOUT_MS, scheduled by
   `scheduleReviewTimeoutPoke` at agent launch. This cap is wall-clock
   (`Date.now() - reviewStartedAt`), so machine sleep would otherwise count
@@ -407,6 +413,10 @@ cannot be expressed as "wait for an event":
   poll cycle picks up the just-written `pendingReviewAt`. Logically a
   hand-off, not a wait. Source: `poller-review.ts` after the
   reviewer-committed-work re-queue transition.
+- **Failing-debounce hand-off re-poke (0 s)** — the same hand-off after
+  `handleFailing` moves a worker `failing → working`: the transition emits
+  no event, so without it the review launch waited for the watchdog's
+  stale re-poke. Source: `poller-state.ts` handleFailing.
 - **Unparseable-verdict no-commit retry (15 s, budget 2)** — when the
   reviewer ends its turn without a parseable verdict AND committed
   nothing, the diff is unchanged and usually fine (a benign reviewer

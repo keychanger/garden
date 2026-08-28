@@ -82,6 +82,12 @@ export type FailingReason =
   // until it clears. `garden kick` accepts this reason and re-queues the review
   // with no new commit (see commands/kick.ts).
   | "quota"
+  // Set by handleReviewTimeout (poller-review.ts) when a reviewer or resolver
+  // window outlived REVIEW_TIMEOUT_MS and was killed before it emitted a
+  // verdict. The code is not at fault — the agent never got to judge it, and
+  // anything it committed is still on the branch — so `garden kick` accepts
+  // this reason and re-queues the review with no new commit.
+  | "review-timeout"
   // Set by the poller's CI gate (poller-ci.ts) when GitHub Actions reports
   // any failed/cancelled/timed-out check-run on the worker's branch HEAD.
   // The merge is held until the operator pushes a new commit that turns

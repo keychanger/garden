@@ -245,6 +245,34 @@ describe("kick command", () => {
     expect(lines.join("\n")).toContain("recovered from failing (quota)");
   });
 
+  it("recovers a failing worker whose reason is review-timeout", async () => {
+    // The reviewer outlived REVIEW_TIMEOUT_MS and was killed before it could
+    // emit a verdict. The branch was never judged, so a kick re-queues the
+    // review over the same commits (plus anything the reviewer committed).
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "failing",
+        failingReason: "review-timeout",
+        failingSha: "abc123",
+      }),
+    ]);
+
+    const lines = await captureConsoleLog(() => kick(["bold-ash"]));
+
+    expect(updateWorkerFields).toHaveBeenCalledWith(
+      "myproject",
+      "bold-ash",
+      expect.objectContaining({
+        prState: "working",
+        pendingReviewAt: expect.any(Number),
+        failingReason: undefined,
+        failingSha: undefined,
+      }),
+    );
+    expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
+    expect(lines.join("\n")).toContain("recovered from failing (review-timeout)");
+  });
+
   it("refuses to recover a failing worker whose reason is 'code'", async () => {
     // Code-side failures require a new commit to retry — kick should refuse
     // and point the operator at the right recovery path.

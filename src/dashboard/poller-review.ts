@@ -58,8 +58,13 @@ export { reviewPromptPath, reviewResultPath } from "./headless-paths.js";
 // is still alive past this, the poller kills it and escalates to `failing`.
 // Catches hung subprocesses the reviewer can't escape from (e.g. a `npm test`
 // that blocks forever because tests have no timeout and the sandbox silently
-// denies their network calls).
-export const REVIEW_TIMEOUT_MS = 60 * 60 * 1000;
+// denies their network calls). Sized from the ledger: across 801 reviews the
+// median was 5.6 min and p99 25 min, and the only runs past 60 min were three
+// on one day — two stalled on 15-17 min API retry gaps, one queued 75 min
+// behind a contended checks suite — none hung, and one was killed nine seconds
+// after committing its fix. Two hours keeps the hang backstop while clearing
+// a bad day; the park it produces is `review-timeout`, kick-recoverable.
+export const REVIEW_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
 // Cap on the reviewer body stored in the durable lastReview snapshot (registry
 // is read/written on the hook hot path, so the blob stays bounded). The tail is
@@ -1662,7 +1667,11 @@ export function handleReviewTimeout(
   const headSha = getBranchHeadSha(wtPath);
   transitionState(projectName, entry.name, "failing", {
     failCount: (entry.failCount ?? 0) + 1,
-    failingReason: "code",
+    // A timeout says nothing about the code — the agent was killed before it
+    // could speak. Any work it committed is still on the branch, so a re-run
+    // re-reviews it. Kick-recoverable (commands/kick.ts) and still resumed by
+    // a new commit through the ordinary failing debounce.
+    failingReason: "review-timeout",
     failingSha: headSha ?? undefined,
     lastSeenSha: headSha ?? undefined,
     lastShaChangeAt: new Date().toISOString(),

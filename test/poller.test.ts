@@ -964,7 +964,7 @@ describe("poll — working state", () => {
     // (Node terminates unref'd timers when the event loop empties) — a hung
     // reviewer never got pinged, the worker wedged in `reviewing`, the merge
     // never happened, and post-merge auto-continue never fired.
-    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 60 * 60 * 1000);
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 2 * 60 * 60 * 1000);
   });
 
   // Fleet-wide review concurrency cap (garden-level limits.maxConcurrentReviews).
@@ -1060,13 +1060,13 @@ describe("poll — working state", () => {
 
 describe("poll — review/resolve timeout", () => {
   // The cap is `Date.now() - reviewStartedAt > REVIEW_TIMEOUT_MS` (strict >).
-  // At exactly 60 minutes the reviewer is NOT yet timed out; at 60 minutes +
+  // At exactly 120 minutes the reviewer is NOT yet timed out; at 120 minutes +
   // 1ms it IS. These two boundary tests pin the > vs >= semantics. Keep this
   // in lockstep with REVIEW_TIMEOUT_MS in src/dashboard/poller-review.ts.
-  const REVIEW_TIMEOUT_MS = 60 * 60 * 1000;
+  const REVIEW_TIMEOUT_MS = 2 * 60 * 60 * 1000;
   const PAST_CAP_AGO = Date.now() - REVIEW_TIMEOUT_MS - 60 * 1000;
 
-  it("reviewing → failing when the reviewer exceeds the 60-minute cap", () => {
+  it("reviewing → failing when the reviewer exceeds the 120-minute cap", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "reviewing",
@@ -1087,7 +1087,7 @@ describe("poll — review/resolve timeout", () => {
         level: "error",
         source: "review",
         worker: "bold-ash",
-        message: expect.stringContaining("60-minute timeout"),
+        message: expect.stringContaining("120-minute timeout"),
       }),
     );
     const call = vi.mocked(updateWorkerFields).mock.calls.find(
@@ -1096,6 +1096,9 @@ describe("poll — review/resolve timeout", () => {
     expect(call).toBeDefined();
     const fields = call![2] as Record<string, unknown>;
     expect(fields.failCount).toBe(1);
+    // A timeout is a reviewer-side failure: the reason is the kick-recoverable
+    // "review-timeout", never "code" — the agent never judged the branch.
+    expect(fields.failingReason).toBe("review-timeout");
     expect(fields.reviewWindowName).toBeUndefined();
     expect(fields.reviewStartedAt).toBeUndefined();
   });
@@ -1157,7 +1160,7 @@ describe("poll — review/resolve timeout", () => {
 
     expect(killWindowSafe).not.toHaveBeenCalled();
     const timeoutAlert = vi.mocked(addAlert).mock.calls.find(
-      c => String((c[0] as { message: string }).message).includes("60-minute timeout"),
+      c => String((c[0] as { message: string }).message).includes("120-minute timeout"),
     );
     expect(timeoutAlert).toBeUndefined();
   });
@@ -1181,7 +1184,7 @@ describe("poll — review/resolve timeout", () => {
     expect(updateWorkerFields).not.toHaveBeenCalled();
   });
 
-  it("does NOT time out at exactly 60 minutes (boundary, > cap)", () => {
+  it("does NOT time out at exactly 120 minutes (boundary, > cap)", () => {
     // Freeze Date.now so the elapsed = REVIEW_TIMEOUT_MS exactly. Without
     // this, coverage instrumentation slows the run enough that real-clock
     // drift between setup and the poller's `Date.now()` call pushes
@@ -1203,7 +1206,7 @@ describe("poll — review/resolve timeout", () => {
 
       expect(killWindowSafe).not.toHaveBeenCalled();
       const timeoutAlert = vi.mocked(addAlert).mock.calls.find(
-        c => String((c[0] as { message: string }).message).includes("60-minute timeout"),
+        c => String((c[0] as { message: string }).message).includes("120-minute timeout"),
       );
       expect(timeoutAlert).toBeUndefined();
     } finally {
@@ -1211,7 +1214,7 @@ describe("poll — review/resolve timeout", () => {
     }
   });
 
-  it("times out at 60 minutes + 1ms (boundary, just past cap)", () => {
+  it("times out at 120 minutes + 1ms (boundary, just past cap)", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
         prState: "reviewing",
@@ -1227,7 +1230,7 @@ describe("poll — review/resolve timeout", () => {
     expect(killWindowSafe).toHaveBeenCalledWith("_myproject-review-bold-ash");
     expect(addAlert).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: expect.stringContaining("60-minute timeout"),
+        message: expect.stringContaining("120-minute timeout"),
       }),
     );
   });
@@ -2912,13 +2915,13 @@ describe("poll — holistic final review (interposed whole-task review)", () => 
   });
 
   it("timeout: parks in failing and clears the holistic markers (no misroute on re-open)", () => {
-    // Reviewer window still alive past the 60-min cap → handleReviewTimeout.
+    // Reviewer window still alive past the 120-min cap → handleReviewTimeout.
     // The shared timeout path must clear holisticFinalActive/holisticReviewMode
     // so a later failing → working → reviewing re-open is routed to the
     // per-phase reviewer, not misrouted back to handleHolisticFinalReview.
     setHolistic({
       holisticReviewMode: "fix",
-      reviewStartedAt: Date.now() - 60 * 60 * 1000 - 60_000,
+      reviewStartedAt: Date.now() - 2 * 60 * 60 * 1000 - 60_000,
     });
     vi.mocked(windowExists).mockReturnValue(true); // window alive = timeout, not completion
     poll("myproject");
@@ -4970,7 +4973,7 @@ describe("poll — ci-fixing state", () => {
   });
 
   it("times out to failing and resets the ci-fix budget", () => {
-    const REVIEW_TIMEOUT_MS = 60 * 60 * 1000;
+    const REVIEW_TIMEOUT_MS = 2 * 60 * 60 * 1000;
     setupCiFix({
       ciFixAttempts: 2,
       reviewStartedAt: Date.now() - REVIEW_TIMEOUT_MS - 60 * 1000,
@@ -5227,6 +5230,9 @@ describe("poll — failing state", () => {
       lastSeenSha: undefined,
       lastStateChangeAt: expect.any(Number),
     });
+    // The transition emits no event of its own; without an immediate re-poke
+    // the review launch waits for the watchdog's stale re-poke (minutes).
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 0);
   });
 
   it("stays in failing if debounce not elapsed", () => {
@@ -5727,6 +5733,29 @@ describe("poll — alerts", () => {
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "failing", failCount: 2 }),
     );
+  });
+});
+
+describe("poll — watchdog self-heal", () => {
+  // The watchdog respawns dead pollers; the pollers must return the favor or
+  // a dead watchdog stays dead until the next attach (observed 2026-08-28:
+  // review timeout fired 40 min late, a worker unprocessed for hours).
+  it("respawns the watchdog when its window is missing", () => {
+    vi.mocked(windowExists).mockImplementation((name: string) => name !== "_garden-watchdog");
+
+    poll("myproject");
+
+    const windowNames = vi.mocked(newDashboardWindow).mock.calls.map(c => c[0] as string);
+    expect(windowNames).toContain("_garden-watchdog");
+  });
+
+  it("leaves a live watchdog alone", () => {
+    vi.mocked(windowExists).mockReturnValue(true);
+
+    poll("myproject");
+
+    const windowNames = vi.mocked(newDashboardWindow).mock.calls.map(c => c[0] as string);
+    expect(windowNames).not.toContain("_garden-watchdog");
   });
 });
 

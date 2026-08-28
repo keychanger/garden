@@ -259,6 +259,11 @@ export function handleFailing(
       failingReason: undefined,
       lastSeenSha: undefined,
     });
+    // Hand off to handleWorking now. The transition itself emits no event, so
+    // the review launch otherwise waited for the next unrelated poke — the
+    // watchdog's 5-min stale re-poke in practice (observed 14 min on
+    // 2026-08-28). Same 0 s re-poke the unparseable-verdict re-queue uses.
+    scheduleDelayedPoke(projectName, 0);
     return true;
   }
   return false;
