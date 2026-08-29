@@ -118,12 +118,7 @@ export function tmuxBatch(...groups: string[][]): void {
   }
 }
 
-// Paste a message into a Claude pane and submit it. The 300ms gap between
-// the paste and `Enter` matters on cold-start panes (`claude --resume` after
-// a dashboard restart, fresh sessions for handoff/seed): claude's TUI
-// finishes binding its input handler / settles paste-detection during this
-// window, so the Enter actually triggers submit instead of being absorbed
-// into the paste burst.
+// Paste a message into an agent pane and submit it.
 //
 // Delivery routes through a tmux buffer (load-buffer reads from stdin,
 // paste-buffer floods the bytes into the pane) instead of `send-keys -l`.
@@ -132,27 +127,61 @@ export function tmuxBatch(...groups: string[][]): void {
 // the new worker parked at status:ready with a never-delivered seed. Buffers
 // are byte streams with no argv exposure, so multi-MB seeds work uniformly.
 //
-// Submit fires TWO Enter keystrokes — one at 300ms, one at 1500ms — both via
-// setTimeout, so the function returns immediately after the paste. The second
-// Enter is the cold-respawn safety net: on a freshly respawned `claude
-// --resume` TUI (the per-iteration trellis/grow reseed, handoff seeds) the
-// status hook can report the pane non-loading a beat before the TUI finishes
-// binding paste-detection, so the 300ms Enter lands inside the bracketed-paste
-// burst and is absorbed as content instead of submitting — the prompt then
-// sits unsent in the input box until an operator hits Enter by hand. The
-// 1500ms Enter submits that buffered text once the TUI has settled. Sending a
-// second Enter unconditionally is safe: if the first already submitted,
-// Claude's prompt box is empty and an empty prompt is never submitted (no-op),
-// and Enter during generation is ignored.
+// `paste-buffer -p` brackets the payload in the terminal's paste control codes
+// (ESC[200~ / ESC[201~) when the TUI has requested bracketed-paste mode. This
+// is load-bearing, not cosmetic. Unbracketed, two things went wrong at once:
+// paste-buffer replaces every LF with CR, so each blank line between our prompt
+// paragraphs reached the TUI as a bare Enter keystroke, and the TUI had only an
+// arrival-timing heuristic to tell a paste from fast typing. Prompts therefore
+// landed TRUNCATED — the head dropped, an arbitrary mid-sentence suffix
+// submitted as the whole message. Measured across retained worker transcripts
+// on 2026-08-29: 7 of 11 post-merge auto-continue prompts arrived truncated,
+// down to as little as the trailing 20 characters, across four workers in three
+// projects. A worker then acted on a decontextualized fragment. Inside paste
+// brackets every byte is content, so no embedded newline can submit early and
+// no heuristic has to guess. On a TUI that has not requested bracketed paste
+// tmux inserts nothing, so `-p` is a safe no-op there.
+//
+// Submit then waits for the composer to actually hold the paste rather than
+// guessing with a fixed delay. The caret is the harness-agnostic signal: it
+// sits at the end of composed text, so a caret that has MOVED from its
+// pre-paste position and then held still for one poll means the burst has been
+// ingested and rendered (including the collapsed "[Pasted text #N +L lines]"
+// placeholder a large paste renders as). The blind 300ms Enter this replaces
+// fired mid-burst — in the wan-smooth-mead case the prompt registered 312ms
+// after the paste carrying 20 of its ~2000 characters. Polling costs one
+// `display-message` fork per 100ms for at most PASTE_SETTLE_TIMEOUT_MS, and
+// only on prompt delivery (merge continues, seeds, interrupt recovery) — never
+// on the hook firehose. Every exit submits: an unreadable caret (sandbox, pane
+// gone) or a blown deadline falls back to submitting anyway, so the worst case
+// is the old behavior rather than a prompt that never lands.
+//
+// A confirming Enter follows PASTE_CONFIRM_ENTER_MS later — the cold-respawn
+// safety net. On a freshly respawned TUI (per-iteration trellis/grow reseed,
+// handoff seeds) the first Enter can still be absorbed while the TUI finishes
+// binding its input handler, leaving the prompt sitting unsent until an
+// operator hits Enter by hand. Sending a second Enter unconditionally is safe:
+// if the first already submitted, the prompt box is empty and an empty prompt
+// is never submitted (no-op), and Enter during generation is ignored.
 //
 // In one-shot CLI contexts (the _continue-worker / _seed-worker subcommand
-// handlers etc.) Node keeps the process alive until the later timer fires, so
-// both Enters land. In long-lived contexts (the poller's merge handler, the
-// dashboard) the caller's stack no longer blocks per Submit. Previously this
-// was a synchronous `execFileSync("sleep", "0.3")` that monopolized the tick.
+// handlers etc.) Node keeps the process alive until the pending timers fire, so
+// the poll and both Enters land. In long-lived contexts (the poller's merge
+// handler, the dashboard) the caller's stack no longer blocks on delivery.
+const PASTE_SETTLE_POLL_MS = 100;
+const PASTE_SETTLE_TIMEOUT_MS = 3_000;
+const PASTE_CONFIRM_ENTER_MS = 1_200;
+// Fallback gap when the caret cannot be read at all, matching the fixed delay
+// this wait replaced.
+const PASTE_BLIND_ENTER_MS = 300;
+
 let pasteBufferCounter = 0;
 export function pasteAndSubmit(paneId: string, message: string): void {
   if (!tmuxExecAllowed) return;
+  // Snapshot the caret BEFORE the paste; the settle wait below is "it moved
+  // from here and then held still". Null (sandbox, pane gone) disables the
+  // wait rather than blocking delivery.
+  const cursorBefore = capturePaneCursor(paneId);
   const bufferName = `garden-paste-${process.pid}-${++pasteBufferCounter}`;
   try {
     execFileSync("tmux", ["load-buffer", "-b", bufferName, "-"], {
@@ -164,7 +193,7 @@ export function pasteAndSubmit(paneId: string, message: string): void {
     throw new Error(`tmux load-buffer failed${stderr ? `: ${stderr}` : ""}`);
   }
   try {
-    execFileSync("tmux", ["paste-buffer", "-d", "-b", bufferName, "-t", paneId], {
+    execFileSync("tmux", ["paste-buffer", "-d", "-p", "-b", bufferName, "-t", paneId], {
       stdio: ["ignore", "ignore", "pipe"],
     });
   } catch (err) {
@@ -183,8 +212,33 @@ export function pasteAndSubmit(paneId: string, message: string): void {
       // wait for confirmation, so swallow.
     }
   };
-  setTimeout(sendEnter, 300);
-  setTimeout(sendEnter, 1500);
+  const submit = (): void => {
+    sendEnter();
+    setTimeout(sendEnter, PASTE_CONFIRM_ENTER_MS);
+  };
+  if (!cursorBefore) {
+    setTimeout(submit, PASTE_BLIND_ENTER_MS);
+    return;
+  }
+  const deadline = Date.now() + PASTE_SETTLE_TIMEOUT_MS;
+  let previous: PaneCursor | null = null;
+  const poll = (): void => {
+    const current = capturePaneCursor(paneId);
+    // Caret unreadable or out of patience: submit on the old blind terms.
+    if (!current || Date.now() >= deadline) {
+      submit();
+      return;
+    }
+    const moved = current.x !== cursorBefore.x || current.y !== cursorBefore.y;
+    const held = previous !== null && current.x === previous.x && current.y === previous.y;
+    if (moved && held) {
+      submit();
+      return;
+    }
+    previous = current;
+    setTimeout(poll, PASTE_SETTLE_POLL_MS);
+  };
+  setTimeout(poll, PASTE_SETTLE_POLL_MS);
 }
 
 // Submit whatever already sits in the pane's input box. The recovery half of

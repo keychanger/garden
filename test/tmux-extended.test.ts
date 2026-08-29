@@ -941,9 +941,10 @@ describe("getPaneLabel", () => {
 // ===========================================================================
 
 describe("pasteAndSubmit", () => {
-  // pasteAndSubmit returns synchronously after load-buffer + paste-buffer;
-  // two Enter keystrokes fire on setTimeouts at 300ms and 1500ms (the second
-  // is the cold-respawn safety net for an Enter absorbed into the paste burst).
+  // pasteAndSubmit returns synchronously after load-buffer + paste-buffer, then
+  // polls the caret until the composer holds the paste before submitting. A
+  // confirming Enter follows 1200ms later (the cold-respawn safety net for a
+  // first Enter absorbed while the TUI was still binding its input handler).
   // Use fake timers so tests can advance to the Enters without real wallclock
   // waits, and so tests that don't care about Enter aren't tripped by a stray
   // timer.
@@ -980,11 +981,13 @@ describe("pasteAndSubmit", () => {
     const pasteCall = calls.find(c => c.argv[0] === "paste-buffer");
     expect(pasteCall).toBeDefined();
     const bufferName = loadBufferCall!.argv[2];
-    expect(pasteCall!.argv).toEqual(["paste-buffer", "-d", "-b", bufferName, "-t", "%42"]);
+    expect(pasteCall!.argv).toEqual(["paste-buffer", "-d", "-p", "-b", bufferName, "-t", "%42"]);
 
-    // Before the 300ms gap elapses, Enter has NOT been sent. The function
-    // returns immediately after the paste so the caller's stack doesn't
-    // block on a synchronous sleep.
+    // This mock returns undefined for display-message, so capturePaneCursor
+    // reads null and delivery takes the blind fallback: Enter at 300ms.
+    // Before that gap elapses, Enter has NOT been sent. The function returns
+    // immediately after the paste so the caller's stack doesn't block on a
+    // synchronous sleep.
     expect(calls.find(c => c.argv[0] === "send-keys")).toBeUndefined();
 
     // After the 300ms paste-detection gap, the first Enter fires.
@@ -993,10 +996,10 @@ describe("pasteAndSubmit", () => {
     expect(enterCalls()).toHaveLength(1);
     expect(enterCalls()[0].argv).toEqual(["send-keys", "-t", "%42", "Enter"]);
 
-    // A confirming Enter fires at 1500ms — the cold-respawn safety net. If the
-    // first Enter was absorbed into the paste burst (status hook reported the
-    // pane ready before its TUI bound paste-detection), this one submits the
-    // buffered prompt once the TUI has settled.
+    // A confirming Enter fires 1200ms later — the cold-respawn safety net. If
+    // the first Enter was absorbed into the paste burst (status hook reported
+    // the pane ready before its TUI bound paste-detection), this one submits
+    // the buffered prompt once the TUI has settled.
     vi.advanceTimersByTime(1200);
     expect(enterCalls()).toHaveLength(2);
     expect(enterCalls()[1].argv).toEqual(["send-keys", "-t", "%42", "Enter"]);
@@ -1057,6 +1060,86 @@ describe("pasteAndSubmit", () => {
     // between paste and Enter; caller doesn't wait for confirmation).
     expect(() => vi.advanceTimersByTime(300)).not.toThrow();
     expect(argvSeen.find(a => a[0] === "send-keys")).toBeDefined();
+  });
+
+  // Drive capturePaneCursor with a scripted sequence of "x,y" readings: the
+  // first is the pre-paste snapshot, the rest are successive settle polls.
+  function mockCursorSequence(readings: (string | null)[]): () => string[][] {
+    const argvSeen: string[][] = [];
+    let next = 0;
+    mockExecFileSync.mockImplementation((_cmd: string, argv: string[]) => {
+      argvSeen.push(argv);
+      if (argv[0] !== "display-message") return undefined;
+      const reading = readings[Math.min(next, readings.length - 1)];
+      next++;
+      if (reading === null) throw new Error("pane gone");
+      return reading;
+    });
+    return () => argvSeen.filter(a => a[0] === "send-keys" && a.includes("Enter"));
+  }
+
+  // The truncation regression (2026-08-29): a blind Enter fired mid-burst and
+  // submitted a fragment of the prompt. Enter must wait until the caret has
+  // moved off its pre-paste position AND held still for a poll, proving the
+  // composer ingested and rendered the whole paste.
+  it("waits for the composer to hold the paste before pressing Enter", () => {
+    // Pre-paste caret at 5,10; the paste lands it at 40,10 and it stays there.
+    const enters = mockCursorSequence(["5,10", "40,10", "40,10"]);
+
+    pasteAndSubmit("%7", "[garden] a merge notification");
+    expect(enters()).toHaveLength(0);
+
+    // First poll: caret has moved, but has not yet been observed twice, so it
+    // could still be mid-render. No Enter.
+    vi.advanceTimersByTime(100);
+    expect(enters()).toHaveLength(0);
+
+    // Second poll: same position — settled. Enter fires, well before the
+    // 300ms the old fixed delay would have used.
+    vi.advanceTimersByTime(100);
+    expect(enters()).toHaveLength(1);
+
+    // The confirming Enter still follows.
+    vi.advanceTimersByTime(1200);
+    expect(enters()).toHaveLength(2);
+  });
+
+  it("does not press Enter while the caret is still moving", () => {
+    // Caret keeps advancing: the TUI is still ingesting the burst.
+    const enters = mockCursorSequence(["0,10", "12,10", "31,10", "58,10"]);
+
+    pasteAndSubmit("%7", "long prompt");
+    vi.advanceTimersByTime(300);
+    // The old code submitted here regardless. Nothing has settled, so nothing
+    // is submitted.
+    expect(enters()).toHaveLength(0);
+  });
+
+  it("submits anyway once the settle wait times out", () => {
+    // Caret never moves (TUI wedged, or the paste rendered nowhere visible).
+    // Delivery must not be lost — falling back to submitting is the old
+    // behavior, which is the acceptable worst case.
+    const enters = mockCursorSequence(["9,10"]);
+
+    pasteAndSubmit("%7", "prompt");
+    vi.advanceTimersByTime(2900);
+    expect(enters()).toHaveLength(0);
+    vi.advanceTimersByTime(200);
+    expect(enters()).toHaveLength(1);
+  });
+
+  it("falls back to the fixed delay when the caret cannot be read", () => {
+    // Sandboxed or dead pane: capturePaneCursor returns null and the settle
+    // wait is skipped entirely rather than blocking delivery.
+    const enters = mockCursorSequence([null]);
+
+    pasteAndSubmit("%7", "prompt");
+    expect(enters()).toHaveLength(0);
+    vi.advanceTimersByTime(300);
+    expect(enters()).toHaveLength(1);
+    // No polling happened — the single Enter came from the blind path.
+    vi.advanceTimersByTime(1200);
+    expect(enters()).toHaveLength(2);
   });
 });
 
