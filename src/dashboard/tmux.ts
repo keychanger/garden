@@ -139,8 +139,8 @@ export function tmuxBatch(...groups: string[][]): void {
 // down to as little as the trailing 20 characters, across four workers in three
 // projects. A worker then acted on a decontextualized fragment. Inside paste
 // brackets every byte is content, so no embedded newline can submit early and
-// no heuristic has to guess. On a TUI that has not requested bracketed paste
-// tmux inserts nothing, so `-p` is a safe no-op there.
+// no heuristic has to guess. On a TUI that has not requested bracketed paste,
+// tmux omits the control codes and inserts the payload normally.
 //
 // Submit then waits for the composer to actually hold the paste rather than
 // guessing with a fixed delay. The caret is the harness-agnostic signal: it
@@ -216,16 +216,25 @@ export function pasteAndSubmit(paneId: string, message: string): void {
     sendEnter();
     setTimeout(sendEnter, PASTE_CONFIRM_ENTER_MS);
   };
+  const blindSubmitAt = Date.now() + PASTE_BLIND_ENTER_MS;
+  const submitAfterBlindGap = (): void => {
+    setTimeout(submit, Math.max(0, blindSubmitAt - Date.now()));
+  };
   if (!cursorBefore) {
-    setTimeout(submit, PASTE_BLIND_ENTER_MS);
+    submitAfterBlindGap();
     return;
   }
   const deadline = Date.now() + PASTE_SETTLE_TIMEOUT_MS;
   let previous: PaneCursor | null = null;
   const poll = (): void => {
     const current = capturePaneCursor(paneId);
-    // Caret unreadable or out of patience: submit on the old blind terms.
-    if (!current || Date.now() >= deadline) {
+    // Caret unreadable: preserve the old minimum delay. Out of patience:
+    // submit immediately because the fallback gap elapsed long ago.
+    if (!current) {
+      submitAfterBlindGap();
+      return;
+    }
+    if (Date.now() >= deadline) {
       submit();
       return;
     }

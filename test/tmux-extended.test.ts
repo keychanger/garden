@@ -1141,6 +1141,18 @@ describe("pasteAndSubmit", () => {
     vi.advanceTimersByTime(1200);
     expect(enters()).toHaveLength(2);
   });
+
+  it("preserves the fixed delay when the caret becomes unreadable after paste", () => {
+    const enters = mockCursorSequence(["5,10", null]);
+
+    pasteAndSubmit("%7", "prompt");
+    vi.advanceTimersByTime(100);
+    expect(enters()).toHaveLength(0);
+    vi.advanceTimersByTime(199);
+    expect(enters()).toHaveLength(0);
+    vi.advanceTimersByTime(1);
+    expect(enters()).toHaveLength(1);
+  });
 });
 
 describe("listAllWindowNames", () => {
