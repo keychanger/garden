@@ -1,4 +1,4 @@
-// Scaffolds a new project: creates a private GitHub repo under the gh-authed account, then mkdir + git init + push, then registers it (and adds to active plot if any).
+// Scaffolds a new project: creates a private GitHub repo under the gh-authed account (or --org), then mkdir + git init + push, then registers it (and adds to active plot if any).
 import path from "node:path";
 import fs from "node:fs";
 import readline from "node:readline";
@@ -10,10 +10,7 @@ import { refreshDashboard } from "../dashboard/header.js";
 import { validateProjectName } from "./add.js";
 
 export async function create(args: string[]): Promise<void> {
-  const rawPath = args[0];
-  if (!rawPath) {
-    throw new Error("Usage: garden create <path>");
-  }
+  const { rawPath, org } = parseCreateArgs(args);
   const resolved = path.resolve(rawPath);
   const name = path.basename(resolved);
   validateProjectName(name);
@@ -45,11 +42,11 @@ export async function create(args: string[]): Promise<void> {
   await ensureGhAuth();
 
   // Remote-first: any failure here must abort before we touch the filesystem.
-  const ghUser = currentGhUser();
-  const slug = `${ghUser}/${name}`;
+  const owner = org ?? currentGhUser();
+  const slug = `${owner}/${name}`;
   console.log(`Creating GitHub repo ${slug}...`);
   try {
-    execFileSync("gh", ["repo", "create", name, "--private"], { stdio: "inherit" });
+    execFileSync("gh", ["repo", "create", slug, "--private"], { stdio: "inherit" });
   } catch {
     throw new Error(
       `'gh repo create ${slug}' failed (see gh's error above). Auth pre-flight passed, so re-running 'gh auth login' will not change this.`,
@@ -97,6 +94,38 @@ export async function create(args: string[]): Promise<void> {
   }
 
   if (dashboardExists()) refreshDashboard();
+}
+
+const USAGE = "Usage: garden create <path> [--org <org>]";
+
+function parseCreateArgs(args: string[]): { rawPath: string; org?: string } {
+  let rawPath: string | undefined;
+  let org: string | undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--org") {
+      const value = args[++i];
+      if (!value || value.startsWith("-")) {
+        throw new Error("--org requires an organization name.");
+      }
+      if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(value)) {
+        throw new Error(
+          `--org '${value}' is not a valid GitHub owner name (letters, digits and hyphens only).`,
+        );
+      }
+      org = value;
+    } else if (arg.startsWith("-")) {
+      throw new Error(`Unknown flag '${arg}'. ${USAGE}`);
+    } else if (rawPath === undefined) {
+      rawPath = arg;
+    } else {
+      throw new Error(`Unexpected argument '${arg}'. ${USAGE}`);
+    }
+  }
+
+  if (!rawPath) throw new Error(USAGE);
+  return { rawPath, org };
 }
 
 function currentGhUser(): string {

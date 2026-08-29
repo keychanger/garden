@@ -590,7 +590,7 @@ Planner follows botanist's status-decoration form: a grey `planner` identity bad
 ```
 garden init                        # Initialize ~/.garden, check for tmux
 garden add [path]                  # Add a project (defaults to cwd, name = basename)
-garden create <path>               # Scaffold a new project: mkdir, git init -b main, private GitHub repo under the gh-authed account, add to active plot
+garden create <path> [--org <org>] # Scaffold a new project: mkdir, git init -b main, private GitHub repo under <org> (else the gh-authed account), add to active plot
 garden remove <name>               # Remove a project
 garden list                        # List all projects
 garden config <project> [key] [val]  # View or set project config

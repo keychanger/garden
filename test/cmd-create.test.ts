@@ -66,6 +66,29 @@ describe("garden create", () => {
     await expect(create([])).rejects.toThrow("Usage: garden create");
   });
 
+  it("rejects an unknown flag and a second positional argument", async () => {
+    await setup();
+    const { create } = await importCreate();
+    await expect(create([path.join(tmpHome, "p"), "--nope"])).rejects.toThrow("Unknown flag '--nope'");
+    await expect(create([path.join(tmpHome, "p"), "extra"])).rejects.toThrow("Unexpected argument 'extra'");
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a missing or malformed --org value before any side effects", async () => {
+    await setup();
+    const { create } = await importCreate();
+    const target = path.join(tmpHome, "orgless");
+    await expect(create([target, "--org"])).rejects.toThrow("--org requires an organization name");
+    await expect(create([target, "--org", "--private"])).rejects.toThrow(
+      "--org requires an organization name",
+    );
+    await expect(create([target, "--org", "Bad Org/x"])).rejects.toThrow(
+      "is not a valid GitHub owner name",
+    );
+    expect(fs.existsSync(target)).toBe(false);
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
   it("rejects names with reserved tmux substrings before any side effects", async () => {
     await setup();
     const { create } = await importCreate();
@@ -146,7 +169,7 @@ describe("garden create", () => {
 
     const calls = execFileSyncMock.mock.calls.map(c => [c[0], c[1]]);
     expect(calls).toEqual([
-      ["gh", ["repo", "create", "shiny", "--private"]],
+      ["gh", ["repo", "create", "tester/shiny", "--private"]],
       ["git", ["init", "-b", "main"]],
       ["git", ["add", "README.md"]],
       ["git", ["commit", "-m", "Initial commit"]],
@@ -199,6 +222,34 @@ describe("garden create", () => {
     expect(remoteAddCall?.[1]).toEqual([
       "remote", "add", "origin", "https://github.com/tester/webby.git",
     ]);
+  });
+
+  it("creates the repo under --org and points origin at the org slug", async () => {
+    const config = await setup();
+    config.saveConfig({ projects: {}, plots: { all: { projects: [] } } });
+    activePlot = "all";
+    spawnSyncMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "gh" && args[0] === "api" && args[1] === "user") return { status: 0, stdout: "tester\n" };
+      if (cmd === "gh" && args[0] === "config") return { status: 0, stdout: "ssh\n" };
+      return { status: 0 };
+    });
+
+    const target = path.join(tmpHome, "orgproj");
+    const { create } = await importCreate();
+    await create([target, "--org", "Leading-Tone"]);
+
+    const calls = execFileSyncMock.mock.calls.map(c => [c[0], c[1]]);
+    expect(calls).toContainEqual(["gh", ["repo", "create", "Leading-Tone/orgproj", "--private"]]);
+    expect(calls).toContainEqual([
+      "git",
+      ["remote", "add", "origin", "git@github.com:Leading-Tone/orgproj.git"],
+    ]);
+    // The org is the owner, so the authenticated user is never consulted.
+    expect(
+      spawnSyncMock.mock.calls.some(c => c[0] === "gh" && (c[1] as string[])[0] === "api"),
+    ).toBe(false);
+
+    expect(config.loadConfig().projects["orgproj"].path).toBe(target);
   });
 
   it("aborts before any side effects when gh is not authenticated and stdin is not a TTY", async () => {

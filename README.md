@@ -56,9 +56,10 @@ garden dashboard                # attach the tmux dashboard
   or a remote — but running a worker on it later does: every project needs a git
   `origin` remote (workers branch from `origin/<base>`). A project with no origin
   fails at worker-spawn time, not at `add` time.
-- **`garden create <path>`** is the heavier path: it requires gh auth and creates
-  a new **private** GitHub repo remote-first, then scaffolds and pushes it. Use
-  `add` unless you specifically want garden to make the repo.
+- **`garden create <path> [--org <org>]`** is the heavier path: it requires gh
+  auth and creates a new **private** GitHub repo remote-first, then scaffolds and
+  pushes it. The repo lands under the gh-authed account unless `--org` names an
+  organization. Use `add` unless you specifically want garden to make the repo.
 
 Run `garden help` for the full command surface, or `garden <cmd> --help` for one
 command's arguments.
