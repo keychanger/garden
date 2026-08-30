@@ -30,7 +30,10 @@ import {
 } from "./tmux.js";
 import { workerWindowName as workerWin } from "./window-names.js";
 import { harnessSignalsPromptReady } from "./harness/core.js";
-import { classifyPromptDelivery, readLandedPrompt } from "./prompt-verify.js";
+import {
+  classifyPromptDelivery,
+  readLandedPrompt,
+} from "./prompt-verify.js";
 import { log } from "./log.js";
 import { resolveGardenRunner } from "./runner.js";
 import { recordContinueDispatched } from "./telemetry.js";
@@ -464,6 +467,7 @@ function verifyPromptDelivery(
   workerName: string,
   sent: string,
   landedBefore: string | null,
+  sentStamp: number,
   kind: ContinueKind,
   resent: boolean,
 ): void {
@@ -471,13 +475,21 @@ function verifyPromptDelivery(
   const poll = (): void => {
     const entry = findWorkerByName(projectName, workerName);
     if (!entry) return;
+    const landed = readLandedPrompt(entry.harness, entry.transcriptPath);
     const verdict = classifyPromptDelivery(
       sent,
-      readLandedPrompt(entry.harness, entry.transcriptPath),
-      landedBefore,
+      landed,
+      entry.continueSentAt === sentStamp ? landedBefore : null,
     );
     if (verdict === "intact") {
       if (resent) {
+        recordContinueDispatched(
+          projectName,
+          workerName,
+          entry.createdAt,
+          entry.workflow ?? "default",
+          kind,
+        );
         log.info("workers", "prompt re-delivery landed intact", {
           worker: workerName,
           data: { project: projectName, kind },
@@ -485,11 +497,30 @@ function verifyPromptDelivery(
       }
       return;
     }
-    if (verdict === "truncated") {
-      onTruncated(projectName, workerName, sent, kind, resent);
+    if (verdict === "truncated" && landed !== null) {
+      if (resent) {
+        recordContinueDispatched(
+          projectName,
+          workerName,
+          entry.createdAt,
+          entry.workflow ?? "default",
+          kind,
+        );
+      }
+      onTruncated(projectName, workerName, sent, landed, kind, resent);
       return;
     }
-    if (Date.now() >= deadline) return;
+    if (Date.now() >= deadline) {
+      if (resent) {
+        alertTruncatedPrompt(
+          projectName,
+          workerName,
+          kind,
+          "garden could not verify that the corrective paste landed",
+        );
+      }
+      return;
+    }
     setTimeout(poll, VERIFY_POLL_MS);
   };
   setTimeout(poll, VERIFY_POLL_MS);
@@ -499,6 +530,7 @@ function onTruncated(
   projectName: string,
   workerName: string,
   sent: string,
+  landed: string,
   kind: ContinueKind,
   resent: boolean,
 ): void {
@@ -522,7 +554,18 @@ function onTruncated(
     return;
   }
   const paneId = resolveWorkerPaneId(projectName, workerName);
-  if (!paneId) return;
+  if (!paneId) {
+    alertTruncatedPrompt(projectName, workerName, kind, "garden could not find its pane to re-deliver it");
+    return;
+  }
+  // continueWorker applies the same guard before every ordinary delivery. A
+  // worker can exit in the interval between submitting the fragment and this
+  // watcher observing it; pasting the corrective message into the replacement
+  // shell could execute commands quoted in the prompt.
+  if (paneRunningOnlyShell(paneId)) {
+    alertTruncatedPrompt(projectName, workerName, kind, "the worker has exited");
+    return;
+  }
   // An operator mid-compose owns the box; concatenating onto their draft is the
   // harm the draft guard exists to prevent, and is worse than the fragment.
   if (paneHasOperatorDraft(paneId)) {
@@ -530,6 +573,7 @@ function onTruncated(
       worker: workerName,
       data: { project: projectName, kind },
     });
+    alertTruncatedPrompt(projectName, workerName, kind, "an operator draft is in the input box");
     return;
   }
   const message = `${TRUNCATION_RESEND_PREAMBLE}\n\n${sent}`;
@@ -544,9 +588,32 @@ function onTruncated(
       worker: workerName,
       data: { project: projectName, kind, error: String(err) },
     });
+    alertTruncatedPrompt(projectName, workerName, kind, "the corrective paste failed");
     return;
   }
-  verifyPromptDelivery(projectName, workerName, message, null, kind, true);
+  const sentStamp = Date.now();
+  updateWorkerFields(projectName, workerName, { continueSentAt: sentStamp });
+  // The original fragment remains the newest transcript prompt until the
+  // corrective paste registers. Keep it as the resend baseline so ordinary
+  // transcript lag is `pending`, not a false second truncation.
+  verifyPromptDelivery(projectName, workerName, message, landed, sentStamp, kind, true);
+}
+
+function alertTruncatedPrompt(
+  projectName: string,
+  workerName: string,
+  kind: ContinueKind,
+  reason: string,
+): void {
+  addAlert({
+    level: "error",
+    source: "workers",
+    project: projectName,
+    worker: workerName,
+    message: `The ${kind} prompt reached this worker truncated, but ${reason}. `
+      + "It is acting on a fragment; re-send the prompt by hand.",
+    dedupKey: `prompt-truncated:${projectName}:${workerName}:${kind}`,
+  });
 }
 
 const TRUNCATION_RESEND_PREAMBLE =
@@ -655,9 +722,10 @@ export function continueWorker(
     });
     return false;
   }
+  const sentStamp = Date.now();
   updateWorkerFields(projectName, workerName, {
     interruptedWhileWorking: undefined,
-    continueSentAt: Date.now(),
+    continueSentAt: sentStamp,
   });
   log.info("workers", "continue sent", {
     worker: workerName,
@@ -671,7 +739,7 @@ export function continueWorker(
   if (kind !== "seed") {
     recordContinueDispatched(projectName, workerName, entry.createdAt, entry.workflow ?? "default", kind);
   }
-  verifyPromptDelivery(projectName, workerName, text, landedBefore, kind, false);
+  verifyPromptDelivery(projectName, workerName, text, landedBefore, sentStamp, kind, false);
   return true;
 }
 

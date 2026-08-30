@@ -257,6 +257,7 @@ export function readLatestPrompt(transcriptPath: string): string | null {
       continue;
     }
     if (!obj || typeof obj !== "object" || obj.type !== "user") continue;
+    if (obj.isSidechain === true || obj.isMeta === true) continue;
     const text = userText(obj);
     if (text === null) continue;
     const source = typeof obj.promptSource === "string" ? obj.promptSource : undefined;

@@ -35,10 +35,10 @@ describe("classifyPromptDelivery", () => {
     expect(classifyPromptDelivery(SENT, SENT.slice(0, 120), null)).toBe("truncated");
   });
 
-  // An exact landing wins over change detection, so a retry leg re-sending the
-  // same text does not read as "nothing landed yet" forever.
-  it("reports a re-send of identical text intact despite an identical baseline", () => {
-    expect(classifyPromptDelivery(SENT, SENT, SENT)).toBe("intact");
+  // The watcher clears this baseline once the prompt hook acknowledges a new
+  // turn. Until then, identical text is the old tail, not a new delivery.
+  it("keeps an identical baseline pending until the transcript advances", () => {
+    expect(classifyPromptDelivery(SENT, SENT, SENT)).toBe("pending");
   });
 
   it("stays pending while the transcript still shows the pre-paste prompt", () => {
@@ -60,6 +60,15 @@ describe("classifyPromptDelivery", () => {
   it("stays pending when the landed text merely overlaps ours", () => {
     expect(classifyPromptDelivery(SENT, "find more to do. Also please rebase.", null)).toBe("pending");
   });
+
+  it("stays pending on a middle-only substring rather than guessing truncation", () => {
+    expect(classifyPromptDelivery(SENT, "reviewed and merged. Do NOT invent", null)).toBe("pending");
+  });
+
+  it("stays pending on a short common prefix or suffix", () => {
+    expect(classifyPromptDelivery(SENT, "[garden]", null)).toBe("pending");
+    expect(classifyPromptDelivery(SENT, "more to do.", null)).toBe("pending");
+  });
 });
 
 describe("readLandedPrompt", () => {
@@ -80,6 +89,14 @@ describe("readLandedPrompt", () => {
       JSON.stringify({ type: "user", promptSource: "typed", message: { content: "older prompt" } }),
       JSON.stringify({ type: "assistant", message: { model: "claude-opus-5", content: [] } }),
       JSON.stringify({ type: "user", promptSource: "typed", message: { content: SENT } }),
+      JSON.stringify({
+        type: "user", promptSource: "typed", isSidechain: true,
+        message: { content: "subagent prompt" },
+      }),
+      JSON.stringify({
+        type: "user", promptSource: "typed", isMeta: true,
+        message: { content: "[Image: source: /tmp/screenshot.png]" },
+      }),
       // A task notification is a user-role record but not a prompt; counting it
       // would report "a prompt landed" for something the operator never sent.
       JSON.stringify({

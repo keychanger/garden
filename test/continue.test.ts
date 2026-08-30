@@ -1601,14 +1601,22 @@ describe("continueWorker delivery verification", () => {
     + "[garden] Your previous changes were reviewed and merged. This prompt is the "
     + "merge notification, not an instruction to find more to do.";
   const FRAGMENT = " to find more to do.";
+  let verificationEntry: Record<string, unknown>;
 
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.mocked(findWorkerByName).mockReturnValue({
+    verificationEntry = {
       name: "bold-ash", sessionId: "s", task: "",
       agentStatus: "idle", harness: "claude-code",
       transcriptPath: "/tmp/t.jsonl",
-    });
+    };
+    vi.mocked(findWorkerByName).mockImplementation(() => verificationEntry as never);
+    vi.mocked(updateWorkerFields).mockImplementation(((_p: string, _w: string, fields: Record<string, unknown>) => {
+      for (const [key, value] of Object.entries(fields)) {
+        if (value === undefined) delete verificationEntry[key];
+        else verificationEntry[key] = value;
+      }
+    }) as never);
     // Default: nothing readable. Each test arms what it needs.
     vi.mocked(readLandedPrompt).mockReturnValue(null);
   });
@@ -1635,6 +1643,21 @@ describe("continueWorker delivery verification", () => {
     expect(addAlert).not.toHaveBeenCalled();
   });
 
+  it("does not accept an identical old prompt until the transcript advances", () => {
+    vi.mocked(readLandedPrompt).mockReturnValue(MESSAGE);
+    send();
+
+    // First poll still sees the exact baseline. Text equality alone is not a
+    // delivery signal when consecutive continuation prompts are identical.
+    vi.advanceTimersByTime(2_000);
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
+
+    vi.mocked(readLandedPrompt).mockReturnValue(FRAGMENT);
+    delete verificationEntry.continueSentAt;
+    vi.advanceTimersByTime(2_000);
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(2);
+  });
+
   // The regression: the prompt submits, so every pre-existing signal reads as
   // success, and only the transcript shows a fragment landed.
   it("re-delivers the full prompt when only a fragment lands", () => {
@@ -1654,16 +1677,54 @@ describe("continueWorker delivery verification", () => {
 
   it("stops after one re-delivery and alerts when the resend truncates too", () => {
     send();
-    vi.mocked(readLandedPrompt).mockReturnValue(FRAGMENT);
+    vi.mocked(readLandedPrompt)
+      .mockReturnValueOnce(FRAGMENT)
+      .mockReturnValue("merge notification, not an instruction to find more to do.");
 
     // First poll re-delivers; the resend's own watcher sees a fragment again.
     vi.advanceTimersByTime(10_000);
 
     expect(pasteAndSubmit).toHaveBeenCalledTimes(2);
+    expect(recordContinueDispatched).toHaveBeenCalledTimes(2);
     expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
       level: "error",
       worker: "bold-ash",
       message: expect.stringContaining("truncated twice"),
+    }));
+  });
+
+  it("does not mistake the original fragment for a second truncation while the resend is pending", () => {
+    send();
+    vi.mocked(readLandedPrompt).mockReturnValue(FRAGMENT);
+
+    vi.advanceTimersByTime(2_000);
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(2);
+    const resend = sentText(1);
+
+    // The old fragment remains the transcript tail for another poll. It is the
+    // resend baseline, not evidence that the corrective paste truncated too.
+    vi.advanceTimersByTime(2_000);
+    expect(addAlert).not.toHaveBeenCalled();
+
+    vi.mocked(readLandedPrompt).mockReturnValue(resend);
+    vi.advanceTimersByTime(2_000);
+    expect(addAlert).not.toHaveBeenCalled();
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(2);
+    expect(recordContinueDispatched).toHaveBeenCalledTimes(2);
+  });
+
+  it("alerts when the corrective paste never becomes a transcript prompt", () => {
+    send();
+    vi.mocked(readLandedPrompt).mockReturnValue(FRAGMENT);
+
+    vi.advanceTimersByTime(30_000);
+
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(2);
+    expect(recordContinueDispatched).toHaveBeenCalledTimes(1);
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      level: "error",
+      worker: "bold-ash",
+      message: expect.stringContaining("could not verify"),
     }));
   });
 
@@ -1677,7 +1738,41 @@ describe("continueWorker delivery verification", () => {
     vi.advanceTimersByTime(5_000);
 
     expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
-    expect(addAlert).not.toHaveBeenCalled();
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      level: "error",
+      worker: "bold-ash",
+      message: expect.stringContaining("operator draft"),
+    }));
+  });
+
+  it("does not paste a corrective prompt into the shell after the worker exits", () => {
+    send();
+    vi.mocked(readLandedPrompt).mockReturnValue(FRAGMENT);
+    vi.mocked(paneRunningOnlyShell).mockReturnValue(true);
+
+    vi.advanceTimersByTime(2_000);
+
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      level: "error",
+      worker: "bold-ash",
+      message: expect.stringContaining("worker has exited"),
+    }));
+  });
+
+  it("alerts when the corrective paste fails", () => {
+    send();
+    vi.mocked(readLandedPrompt).mockReturnValue(FRAGMENT);
+    vi.mocked(pasteAndSubmit).mockImplementationOnce(() => { throw new Error("tmux died"); });
+
+    vi.advanceTimersByTime(2_000);
+
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(2);
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      level: "error",
+      worker: "bold-ash",
+      message: expect.stringContaining("corrective paste failed"),
+    }));
   });
 
   it("gives up quietly when the prompt never lands, leaving the retry legs to it", () => {

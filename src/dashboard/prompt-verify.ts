@@ -62,16 +62,22 @@ function normalizePrompt(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+// The observed corruption left a 20-character suffix. Shorter overlaps are
+// too easy for an unrelated operator message to share with a continuation and
+// are not strong enough evidence to justify an automatic second prompt.
+const MIN_TRUNCATED_PROMPT_CHARS = 16;
+
 /** Did the prompt we pasted land intact? Pure, so the rule is testable without
  *  a live TUI.
  *
- *  - `intact`    — the landed text IS ours. Checked BEFORE any change
- *                  detection, so re-sending identical text (the retry legs do)
- *                  still classifies correctly.
- *  - `truncated` — the landed text is a proper fragment OF ours. Deliberately
- *                  narrow: only the observed failure shape is actionable, and
- *                  re-delivering on anything else would risk double-prompting a
- *                  worker over a comparison quirk.
+ *  - `intact`    — the landed text IS ours and differs from the caller's active
+ *                  baseline. The watcher clears that baseline when the prompt
+ *                  hook acknowledges a new user turn, allowing repeated
+ *                  identical prompts.
+ *  - `truncated` — the landed text is a substantial proper prefix or suffix OF
+ *                  ours. Deliberately narrow: only the observed failure shape
+ *                  is actionable, and re-delivering on anything else would
+ *                  risk double-prompting a worker over a comparison quirk.
  *  - `pending`   — nothing new has landed yet, or what landed is unrelated (the
  *                  operator typed over us, a system message raced in). The
  *                  caller keeps waiting and ultimately does nothing. */
@@ -84,8 +90,9 @@ export function classifyPromptDelivery(
   const want = normalizePrompt(sent);
   const got = normalizePrompt(landed);
   if (!got) return "pending";
-  if (got === want) return "intact";
   if (landedBefore !== null && got === normalizePrompt(landedBefore)) return "pending";
-  if (want.includes(got)) return "truncated";
+  if (got === want) return "intact";
+  if (got.length >= MIN_TRUNCATED_PROMPT_CHARS
+    && (want.startsWith(got) || want.endsWith(got))) return "truncated";
   return "pending";
 }
