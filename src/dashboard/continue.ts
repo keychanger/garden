@@ -470,11 +470,17 @@ function verifyPromptDelivery(
   sentStamp: number,
   kind: ContinueKind,
   resent: boolean,
+  seedFile?: string,
 ): void {
   const deadline = Date.now() + VERIFY_WINDOW_MS;
   const poll = (): void => {
     const entry = findWorkerByName(projectName, workerName);
-    if (!entry) return;
+    if (!entry) {
+      if (seedFile) {
+        try { fs.unlinkSync(seedFile); } catch { /* already gone */ }
+      }
+      return;
+    }
     const landed = readLandedPrompt(entry.harness, entry.transcriptPath);
     const verdict = classifyPromptDelivery(
       sent,
@@ -483,6 +489,9 @@ function verifyPromptDelivery(
     );
     if (verdict === "intact") {
       if (resent) {
+        if (seedFile) {
+          try { fs.unlinkSync(seedFile); } catch { /* already gone */ }
+        }
         recordContinueDispatched(
           projectName,
           workerName,
@@ -507,7 +516,7 @@ function verifyPromptDelivery(
           kind,
         );
       }
-      onTruncated(projectName, workerName, sent, landed, kind, resent);
+      onTruncated(projectName, workerName, sent, landed, kind, resent, seedFile);
       return;
     }
     if (Date.now() >= deadline) {
@@ -517,6 +526,7 @@ function verifyPromptDelivery(
           workerName,
           kind,
           "garden could not verify that the corrective paste landed",
+          seedFile,
         );
       }
       return;
@@ -533,6 +543,7 @@ function onTruncated(
   landed: string,
   kind: ContinueKind,
   resent: boolean,
+  seedFile?: string,
 ): void {
   // Second strike: the resend truncated too, so the delivery path itself is
   // broken rather than having lost one race. Stop — a third paste would only
@@ -548,14 +559,19 @@ function onTruncated(
       project: projectName,
       worker: workerName,
       message: `The ${kind} prompt reached this worker truncated twice — it is acting on a fragment. `
-        + "Re-send it by hand; garden will not paste a third copy.",
+        + recoveryInstruction(
+          projectName,
+          workerName,
+          seedFile,
+          "Re-send it by hand; garden will not paste a third copy.",
+        ),
       dedupKey: `prompt-truncated:${projectName}:${workerName}:${kind}`,
     });
     return;
   }
   const paneId = resolveWorkerPaneId(projectName, workerName);
   if (!paneId) {
-    alertTruncatedPrompt(projectName, workerName, kind, "garden could not find its pane to re-deliver it");
+    alertTruncatedPrompt(projectName, workerName, kind, "garden could not find its pane to re-deliver it", seedFile);
     return;
   }
   // continueWorker applies the same guard before every ordinary delivery. A
@@ -563,7 +579,7 @@ function onTruncated(
   // watcher observing it; pasting the corrective message into the replacement
   // shell could execute commands quoted in the prompt.
   if (paneRunningOnlyShell(paneId)) {
-    alertTruncatedPrompt(projectName, workerName, kind, "the worker has exited");
+    alertTruncatedPrompt(projectName, workerName, kind, "the worker has exited", seedFile);
     return;
   }
   // An operator mid-compose owns the box; concatenating onto their draft is the
@@ -573,10 +589,10 @@ function onTruncated(
       worker: workerName,
       data: { project: projectName, kind },
     });
-    alertTruncatedPrompt(projectName, workerName, kind, "an operator draft is in the input box");
+    alertTruncatedPrompt(projectName, workerName, kind, "an operator draft is in the input box", seedFile);
     return;
   }
-  const message = `${TRUNCATION_RESEND_PREAMBLE}\n\n${sent}`;
+  const message = correctivePrompt(sent);
   log.warn("workers", "prompt landed truncated, re-delivering", {
     worker: workerName,
     data: { project: projectName, kind, bytes: Buffer.byteLength(sent, "utf8") },
@@ -588,7 +604,7 @@ function onTruncated(
       worker: workerName,
       data: { project: projectName, kind, error: String(err) },
     });
-    alertTruncatedPrompt(projectName, workerName, kind, "the corrective paste failed");
+    alertTruncatedPrompt(projectName, workerName, kind, "the corrective paste failed", seedFile);
     return;
   }
   const sentStamp = Date.now();
@@ -596,7 +612,7 @@ function onTruncated(
   // The original fragment remains the newest transcript prompt until the
   // corrective paste registers. Keep it as the resend baseline so ordinary
   // transcript lag is `pending`, not a false second truncation.
-  verifyPromptDelivery(projectName, workerName, message, landed, sentStamp, kind, true);
+  verifyPromptDelivery(projectName, workerName, message, landed, sentStamp, kind, true, seedFile);
 }
 
 function alertTruncatedPrompt(
@@ -604,6 +620,7 @@ function alertTruncatedPrompt(
   workerName: string,
   kind: ContinueKind,
   reason: string,
+  seedFile?: string,
 ): void {
   addAlert({
     level: "error",
@@ -611,15 +628,31 @@ function alertTruncatedPrompt(
     project: projectName,
     worker: workerName,
     message: `The ${kind} prompt reached this worker truncated, but ${reason}. `
-      + "It is acting on a fragment; re-send the prompt by hand.",
+      + "It is acting on a fragment; "
+      + recoveryInstruction(projectName, workerName, seedFile, "re-send the prompt by hand."),
     dedupKey: `prompt-truncated:${projectName}:${workerName}:${kind}`,
   });
+}
+
+function recoveryInstruction(
+  projectName: string,
+  workerName: string,
+  seedFile: string | undefined,
+  fallback: string,
+): string {
+  return seedFile
+    ? `the full briefing remains at ${seedFile}. Re-deliver: garden dashboard _seed-worker ${projectName} ${workerName} ${seedFile}`
+    : fallback;
 }
 
 const TRUNCATION_RESEND_PREAMBLE =
   "[garden] The message you just received was delivered truncated — you saw only "
   + "a fragment of it, so disregard what you read into that fragment. Here is the "
   + "full message:";
+
+function correctivePrompt(sent: string): string {
+  return `${TRUNCATION_RESEND_PREAMBLE}\n\n${sent}`;
+}
 
 // (entry/pane missing, worker mid-turn, or send-keys threw). Callers that need
 // to know whether delivery happened — the post-merge retry leg, and the
@@ -629,6 +662,7 @@ export function continueWorker(
   workerName: string,
   message?: string,
   kind: ContinueKind = "interrupt",
+  seedFile?: string,
 ): boolean {
   const entry = findWorkerByName(projectName, workerName);
   if (!entry) return false;
@@ -739,7 +773,7 @@ export function continueWorker(
   if (kind !== "seed") {
     recordContinueDispatched(projectName, workerName, entry.createdAt, entry.workflow ?? "default", kind);
   }
-  verifyPromptDelivery(projectName, workerName, text, landedBefore, sentStamp, kind, false);
+  verifyPromptDelivery(projectName, workerName, text, landedBefore, sentStamp, kind, false, seedFile);
   return true;
 }
 
@@ -1032,6 +1066,19 @@ export function seedWorker(
         worker: workerName,
         data: { project: projectName, attempts },
       });
+      const landed = readLandedPrompt(entry.harness, entry.transcriptPath);
+      const originalVerdict = classifyPromptDelivery(message, landed, null);
+      const correctionVerdict = classifyPromptDelivery(correctivePrompt(message), landed, null);
+      if (originalVerdict === "intact" || correctionVerdict === "intact") {
+        cleanup();
+        return;
+      }
+      if (landed !== null
+          && (originalVerdict === "truncated" || correctionVerdict === "truncated")) {
+        // The content verifier owns the corrective send and removes the seed
+        // file only after that second user turn is observed intact.
+        return;
+      }
       cleanup();
       return;
     }
@@ -1056,7 +1103,7 @@ export function seedWorker(
       giveUp("delivery deadline elapsed", attempts);
       return;
     }
-    const delivered = continueWorker(projectName, workerName, message, "seed");
+    const delivered = continueWorker(projectName, workerName, message, "seed", messageFile);
     if (!delivered) {
       // continueWorker declined: no pane, a bare shell, the worker mid-turn, or
       // a genuine operator draft in the box. All transient, so re-poll without

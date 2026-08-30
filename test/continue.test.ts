@@ -1363,6 +1363,61 @@ describe("seedWorker", () => {
     expect(addAlert).not.toHaveBeenCalled();
   });
 
+  it("keeps the seed file when a truncated landing cannot be corrected", () => {
+    const message = "refactor the parser and update every caller before running the full suite";
+    const fragment = " before running the full suite";
+    vi.mocked(fs.readFileSync).mockReturnValue(message);
+    const entry = fakeRegistry();
+    vi.mocked(readLandedPrompt).mockReturnValue(fragment);
+    vi.mocked(pasteAndSubmit)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => { throw new Error("tmux died"); });
+
+    seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
+    promptLands(entry);
+    vi.advanceTimersByTime(60_000);
+
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining("corrective paste failed"),
+    }));
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining("/tmp/seed.txt"),
+    }));
+    expect(fs.unlinkSync).not.toHaveBeenCalledWith("/tmp/seed.txt");
+  });
+
+  it("cleans up a retained seed after the corrective prompt lands intact", () => {
+    const message = "refactor the parser and update every caller before running the full suite";
+    const fragment = " before running the full suite";
+    vi.mocked(fs.readFileSync).mockReturnValue(message);
+    const entry = fakeRegistry();
+    vi.mocked(readLandedPrompt).mockReturnValue(fragment);
+
+    seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
+    promptLands(entry);
+    vi.advanceTimersByTime(2_100);
+
+    const correction = vi.mocked(pasteAndSubmit).mock.calls[1][1] as string;
+    vi.mocked(readLandedPrompt).mockReturnValue(correction);
+    promptLands(entry);
+    vi.advanceTimersByTime(2_000);
+
+    expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
+  });
+
+  it("cleans up the seed file when the content lands intact", () => {
+    const message = "refactor the parser and update every caller";
+    vi.mocked(fs.readFileSync).mockReturnValue(message);
+    const entry = fakeRegistry();
+    vi.mocked(readLandedPrompt).mockReturnValue(message);
+
+    seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
+    promptLands(entry);
+    vi.advanceTimersByTime(2_000);
+
+    expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
+  });
+
   it("alerts and keeps the seed file when the briefing never registers after every attempt", () => {
     fakeRegistry();
 
