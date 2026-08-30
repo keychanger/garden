@@ -30,6 +30,7 @@ import {
 } from "./tmux.js";
 import { workerWindowName as workerWin } from "./window-names.js";
 import { harnessSignalsPromptReady } from "./harness/core.js";
+import { classifyPromptDelivery, readLandedPrompt } from "./prompt-verify.js";
 import { log } from "./log.js";
 import { resolveGardenRunner } from "./runner.js";
 import { recordContinueDispatched } from "./telemetry.js";
@@ -434,6 +435,125 @@ export function notifyHandoffCallback(opts: {
 // over the pane's stdin. Skips if the worker has already started working
 // (operator typed something first) to avoid stomping on a real prompt.
 // Returns true when the prompt was actually pasted, false when it was skipped
+// ---------------------------------------------------------------------------
+// Delivery verification
+// ---------------------------------------------------------------------------
+
+// The check that catches a prompt which reached the TUI mangled. The rule
+// itself lives in prompt-verify.ts (a hook-bundle leaf, see that file);
+// this is the watcher that acts on it.
+const VERIFY_POLL_MS = 1_500;
+// Bounds how long a delivering process lingers when nothing ever lands. The
+// healthy path exits on the first poll (the prompt hook fires within ~300ms of
+// submit), so this window is paid only when the prompt genuinely never arrived
+// — and that case is already covered by the *-if-stuck retry legs.
+const VERIFY_WINDOW_MS = 20_000;
+
+// Watch for the pasted prompt to land, and re-deliver it once if it lands
+// truncated. Best-effort throughout: any unreadable transcript leaves delivery
+// exactly on its pre-existing terms rather than guessing.
+//
+// Re-delivery deliberately bypasses continueWorker: a truncated prompt has
+// already submitted, so the worker reads as `working` and continueWorker would
+// refuse it — the very state our own mangled prompt caused. Pasting into a
+// working pane is safe (the TUI queues it for the next turn), which is also
+// what makes the re-send useful rather than merely noisy: the worker is at that
+// moment acting on a fragment, and the resend is what tells it so.
+function verifyPromptDelivery(
+  projectName: string,
+  workerName: string,
+  sent: string,
+  landedBefore: string | null,
+  kind: ContinueKind,
+  resent: boolean,
+): void {
+  const deadline = Date.now() + VERIFY_WINDOW_MS;
+  const poll = (): void => {
+    const entry = findWorkerByName(projectName, workerName);
+    if (!entry) return;
+    const verdict = classifyPromptDelivery(
+      sent,
+      readLandedPrompt(entry.harness, entry.transcriptPath),
+      landedBefore,
+    );
+    if (verdict === "intact") {
+      if (resent) {
+        log.info("workers", "prompt re-delivery landed intact", {
+          worker: workerName,
+          data: { project: projectName, kind },
+        });
+      }
+      return;
+    }
+    if (verdict === "truncated") {
+      onTruncated(projectName, workerName, sent, kind, resent);
+      return;
+    }
+    if (Date.now() >= deadline) return;
+    setTimeout(poll, VERIFY_POLL_MS);
+  };
+  setTimeout(poll, VERIFY_POLL_MS);
+}
+
+function onTruncated(
+  projectName: string,
+  workerName: string,
+  sent: string,
+  kind: ContinueKind,
+  resent: boolean,
+): void {
+  // Second strike: the resend truncated too, so the delivery path itself is
+  // broken rather than having lost one race. Stop — a third paste would only
+  // add another fragment to a worker already holding two.
+  if (resent) {
+    log.error("workers", "prompt re-delivery truncated again", {
+      worker: workerName,
+      data: { project: projectName, kind },
+    });
+    addAlert({
+      level: "error",
+      source: "workers",
+      project: projectName,
+      worker: workerName,
+      message: `The ${kind} prompt reached this worker truncated twice — it is acting on a fragment. `
+        + "Re-send it by hand; garden will not paste a third copy.",
+      dedupKey: `prompt-truncated:${projectName}:${workerName}:${kind}`,
+    });
+    return;
+  }
+  const paneId = resolveWorkerPaneId(projectName, workerName);
+  if (!paneId) return;
+  // An operator mid-compose owns the box; concatenating onto their draft is the
+  // harm the draft guard exists to prevent, and is worse than the fragment.
+  if (paneHasOperatorDraft(paneId)) {
+    log.warn("workers", "prompt truncated, resend deferred to operator draft", {
+      worker: workerName,
+      data: { project: projectName, kind },
+    });
+    return;
+  }
+  const message = `${TRUNCATION_RESEND_PREAMBLE}\n\n${sent}`;
+  log.warn("workers", "prompt landed truncated, re-delivering", {
+    worker: workerName,
+    data: { project: projectName, kind, bytes: Buffer.byteLength(sent, "utf8") },
+  });
+  try {
+    pasteAndSubmit(paneId, message);
+  } catch (err) {
+    log.warn("workers", "prompt re-delivery paste failed", {
+      worker: workerName,
+      data: { project: projectName, kind, error: String(err) },
+    });
+    return;
+  }
+  verifyPromptDelivery(projectName, workerName, message, null, kind, true);
+}
+
+const TRUNCATION_RESEND_PREAMBLE =
+  "[garden] The message you just received was delivered truncated — you saw only "
+  + "a fragment of it, so disregard what you read into that fragment. Here is the "
+  + "full message:";
+
 // (entry/pane missing, worker mid-turn, or send-keys threw). Callers that need
 // to know whether delivery happened — the post-merge retry leg, and the
 // changed-files preamble cleanup — branch on this; the interrupt path ignores it.
@@ -523,6 +643,9 @@ export function continueWorker(
     });
     return false;
   }
+  // Baseline for verification: the newest prompt already in the transcript, so
+  // the watcher below can tell ours apart from what was there before.
+  const landedBefore = readLandedPrompt(entry.harness, entry.transcriptPath);
   try {
     pasteAndSubmit(paneId, text);
   } catch (err) {
@@ -548,6 +671,7 @@ export function continueWorker(
   if (kind !== "seed") {
     recordContinueDispatched(projectName, workerName, entry.createdAt, entry.workflow ?? "default", kind);
   }
+  verifyPromptDelivery(projectName, workerName, text, landedBefore, kind, false);
   return true;
 }
 

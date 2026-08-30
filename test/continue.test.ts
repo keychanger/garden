@@ -70,6 +70,13 @@ vi.mock("../src/dashboard/telemetry.js", () => ({
 // The seed path raises an operator alert when a briefing never registers as a
 // user turn. Spy it here so the "never silently idle" invariant is asserted
 // rather than written to the real alert store.
+// Keep the real classifier — these tests exercise the actual rule — and stub
+// only the transcript read, which is the live-TUI dependency.
+vi.mock("../src/dashboard/prompt-verify.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/dashboard/prompt-verify.js")>()),
+  readLandedPrompt: vi.fn(),
+}));
+
 vi.mock("../src/dashboard/alerts.js", () => ({
   addAlert: vi.fn(),
 }));
@@ -88,6 +95,7 @@ import { findWorkerByName, updateWorkerFields } from "../src/dashboard/registry.
 import { tmux, pasteAndSubmit, paneExists, windowExists, getFirstPaneId, capturePaneText, capturePaneCursor, paneRunningOnlyShell, pressEnter } from "../src/dashboard/tmux.js";
 import { recordContinueDispatched } from "../src/dashboard/telemetry.js";
 import { addAlert } from "../src/dashboard/alerts.js";
+import { readLandedPrompt } from "../src/dashboard/prompt-verify.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { tryGetProject } from "../src/config.js";
@@ -1577,5 +1585,116 @@ describe("notifyHandoffCallback", () => {
     });
 
     expect(pasteAndSubmit).not.toHaveBeenCalled();
+  });
+});
+
+
+// ===========================================================================
+// Delivery verification — the content check that catches a mangled paste
+// ===========================================================================
+
+describe("continueWorker delivery verification", () => {
+  // The real post-merge prompt shape, abridged; FRAGMENT is the suffix that
+  // actually reached wan-smooth-mead on 2026-08-29.
+  const MESSAGE =
+    "[garden] You are working in your own git worktree on branch `bold-ash`.\n\n"
+    + "[garden] Your previous changes were reviewed and merged. This prompt is the "
+    + "merge notification, not an instruction to find more to do.";
+  const FRAGMENT = " to find more to do.";
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "",
+      agentStatus: "idle", harness: "claude-code",
+      transcriptPath: "/tmp/t.jsonl",
+    });
+    // Default: nothing readable. Each test arms what it needs.
+    vi.mocked(readLandedPrompt).mockReturnValue(null);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function send(): void {
+    continueWorker("myproject", "bold-ash", MESSAGE, "post-merge");
+  }
+
+  /** The text pasted by the nth pasteAndSubmit call. */
+  function sentText(call = 0): string {
+    return vi.mocked(pasteAndSubmit).mock.calls[call][1] as string;
+  }
+
+  it("does not re-deliver when the prompt lands intact", () => {
+    send();
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
+    vi.mocked(readLandedPrompt).mockReturnValue(MESSAGE);
+
+    vi.advanceTimersByTime(5_000);
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
+    expect(addAlert).not.toHaveBeenCalled();
+  });
+
+  // The regression: the prompt submits, so every pre-existing signal reads as
+  // success, and only the transcript shows a fragment landed.
+  it("re-delivers the full prompt when only a fragment lands", () => {
+    send();
+    vi.mocked(readLandedPrompt).mockReturnValue(FRAGMENT);
+
+    vi.advanceTimersByTime(2_000);
+
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(2);
+    const resend = sentText(1);
+    // Carries the whole original, plus a preamble telling the worker to
+    // disregard what it read into the fragment it is already acting on.
+    expect(resend).toContain(MESSAGE);
+    expect(resend).toContain("delivered truncated");
+    expect(addAlert).not.toHaveBeenCalled();
+  });
+
+  it("stops after one re-delivery and alerts when the resend truncates too", () => {
+    send();
+    vi.mocked(readLandedPrompt).mockReturnValue(FRAGMENT);
+
+    // First poll re-delivers; the resend's own watcher sees a fragment again.
+    vi.advanceTimersByTime(10_000);
+
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(2);
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      level: "error",
+      worker: "bold-ash",
+      message: expect.stringContaining("truncated twice"),
+    }));
+  });
+
+  it("does not paste over an operator draft, even to fix a truncation", () => {
+    send();
+    vi.mocked(readLandedPrompt).mockReturnValue(FRAGMENT);
+    // Operator started typing after our fragment landed.
+    vi.mocked(capturePaneText).mockReturnValue(DRAFT_BOX);
+    vi.mocked(capturePaneCursor).mockReturnValue({ x: 21, y: 1 });
+
+    vi.advanceTimersByTime(5_000);
+
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
+    expect(addAlert).not.toHaveBeenCalled();
+  });
+
+  it("gives up quietly when the prompt never lands, leaving the retry legs to it", () => {
+    send();
+    vi.mocked(readLandedPrompt).mockReturnValue("an unrelated operator message");
+
+    vi.advanceTimersByTime(60_000);
+
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
+    expect(addAlert).not.toHaveBeenCalled();
+  });
+
+  it("cannot verify without a readable transcript, and does nothing", () => {
+    send();
+    vi.advanceTimersByTime(60_000);
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
+    expect(addAlert).not.toHaveBeenCalled();
+    expect(sentText()).toBe(MESSAGE);
   });
 });

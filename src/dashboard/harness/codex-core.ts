@@ -844,6 +844,38 @@ function firstPromptLine(transcriptPath: string): string | null {
 // bounded line for the status row; the thread-title generator (task-title.ts)
 // wants the full text, because the topic of a briefing is routinely stated
 // past its first line and the row's 120-char cut throws that away.
+// The newest genuine operator prompt in the rollout, verbatim — the Codex half
+// of delivery verification (see continue.ts verifyPromptDelivery). Mirrors
+// readCodexOpeningPrompt but scans the TAIL backwards for the most recent
+// prompt rather than the head for the first, and returns the text uncondensed:
+// the caller compares it against what garden pasted, so any trimming would
+// manufacture a mismatch.
+export function readCodexLatestPrompt(transcriptPath: string): string | null {
+  let tail: string;
+  try {
+    tail = readTail(transcriptPath, ACTIVITY_TAIL_BYTES);
+  } catch {
+    return null;
+  }
+  const lines = tail.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+    let rec: CodexLine;
+    try {
+      rec = JSON.parse(line) as CodexLine;
+    } catch {
+      // A tail read can land mid-line; only the first fragment is unparseable
+      // and it would be skipped anyway.
+      continue;
+    }
+    const text = codexUserMessage(rec)?.text ?? responseItemUserText(rec);
+    if (text === null || INJECTED_CONTEXT_RE.test(text)) continue;
+    if (text.trim()) return text;
+  }
+  return null;
+}
+
 export function readCodexOpeningPrompt(transcriptPath: string): string | null {
   let head: string;
   try {

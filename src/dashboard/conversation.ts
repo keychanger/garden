@@ -158,6 +158,10 @@ export function sumTranscriptUsage(transcriptPath: string | null): TranscriptUsa
 // first candidate; the window only needs to be wide enough to clear a trailing
 // run of user/tool lines.
 const MODEL_TAIL_BYTES = 256 * 1024;
+// A landed prompt sits at the very end of the file; garden's own continuation
+// prompts are ~2KB and handoff seeds have run to ~16KB, so this clears the
+// largest by a wide margin while staying a bounded read.
+const PROMPT_TAIL_BYTES = 256 * 1024;
 
 // The model a worker is ACTUALLY running, from the newest assistant message in
 // its transcript. `WorkerEntry.model` records only an explicit pin, so an
@@ -208,6 +212,72 @@ export function readLatestTranscriptModel(transcriptPath: string): string | unde
     if (typeof message?.model === "string" && message.model) return message.model;
   }
   return undefined;
+}
+
+// The newest genuine user prompt in the transcript, verbatim. Delivery
+// verification compares it against the text garden pasted (see continue.ts
+// verifyPromptDelivery), so unlike readConversation it must NOT collapse,
+// label, or truncate anything — a `[garden]` continuation is returned in full,
+// not as its marker.
+//
+// Bounded tail read like readLatestTranscriptModel: a prompt landing now is at
+// the very end of the file, and a whole-file parse on every delivery would put
+// transcript-sized work on a path that runs per prompt. Injected system
+// messages (task notifications, slash-command echoes) are skipped — they are
+// user-role records that would otherwise read as "a prompt landed".
+export function readLatestPrompt(transcriptPath: string): string | null {
+  let raw: string;
+  let partialHead = false;
+  try {
+    const size = fs.statSync(transcriptPath).size;
+    const start = Math.max(0, size - PROMPT_TAIL_BYTES);
+    partialHead = start > 0;
+    const fd = fs.openSync(transcriptPath, "r");
+    try {
+      const buf = Buffer.alloc(Math.min(size, PROMPT_TAIL_BYTES));
+      const read = fs.readSync(fd, buf, 0, buf.length, start);
+      raw = buf.subarray(0, read).toString("utf-8");
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+  const lines = raw.split("\n");
+  // Reading from an offset can land mid-line; that fragment is not parseable
+  // JSON and would only ever be skipped, but drop it explicitly.
+  if (partialHead) lines.shift();
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (!line || !line.includes('"user"')) continue;
+    let obj: Record<string, unknown>;
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!obj || typeof obj !== "object" || obj.type !== "user") continue;
+    const text = userText(obj);
+    if (text === null) continue;
+    const source = typeof obj.promptSource === "string" ? obj.promptSource : undefined;
+    if (isInjectedSystemMessage(text, source)) continue;
+    if (text.trim()) return text;
+  }
+  return null;
+}
+
+// The text of a user-role record, joining multi-part content. Null when the
+// record carries no text at all (a tool_result or image-only turn).
+function userText(obj: Record<string, unknown>): string | null {
+  const content = (obj.message as { content?: unknown } | undefined)?.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return null;
+  const parts = content
+    .filter((p): p is { type: string; text: string } =>
+      !!p && typeof p === "object" && (p as { type?: unknown }).type === "text"
+      && typeof (p as { text?: unknown }).text === "string")
+    .map(p => p.text);
+  return parts.length > 0 ? parts.join("") : null;
 }
 
 // Read the tail of the transcript and return the last `maxTurns` turns in
