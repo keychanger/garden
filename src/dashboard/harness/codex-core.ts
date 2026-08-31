@@ -18,7 +18,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveBeadsDir } from "../../config.js";
-import { promptTurn, summarizeTurn } from "../conversation.js";
+import { promptTurn, readTurnsFromTail, summarizeTurn } from "../conversation.js";
 import type { ToolUse, Turn } from "../conversation.js";
 import type { WorkerEntry } from "../registry.js";
 import { shellEscape, pasteAndSubmit } from "../tmux.js";
@@ -322,72 +322,7 @@ export const codexCore: HarnessCore = {
   //     reads in the same words as a Claude one ("edited calc.py · ran tests").
   readTurns(transcriptPath: string | null, maxTurns = DEFAULT_MAX_TURNS): Turn[] {
     if (!transcriptPath || !isReadable(transcriptPath)) return [];
-    let raw: string;
-    try {
-      raw = readCapped(transcriptPath);
-    } catch {
-      return [];
-    }
-    const turns: Turn[] = [];
-    let pending: { tools: ToolUse[]; firstText: string; ts: string } | null = null;
-    let seenUser = false;
-
-    const flush = (): void => {
-      if (pending && (pending.tools.length > 0 || pending.firstText)) {
-        const { text, verb } = summarizeTurn(pending.tools, pending.firstText);
-        turns.push({ role: "assistant", text, verb, ts: pending.ts });
-      }
-      pending = null;
-    };
-
-    for (const line of raw.split("\n")) {
-      if (!line.trim()) continue;
-      let rec: CodexLine;
-      try {
-        rec = JSON.parse(line) as CodexLine;
-      } catch {
-        continue;
-      }
-      const p = rec.payload;
-      if (!p || typeof p !== "object") continue;
-      const ts = rec.timestamp ?? "";
-
-      const userMessage = codexUserMessage(rec);
-      if (userMessage) {
-        const turn = promptTurn(userMessage.text, ts, userMessage.image);
-        if (!turn) continue;
-        flush();
-        turns.push(turn);
-        pending = { tools: [], firstText: "", ts };
-        seenUser = true;
-        continue;
-      }
-      // Drop dangling activity from a head the byte cap clipped, matching
-      // readConversation: an assistant turn with no prompt above it is noise.
-      if (!seenUser) continue;
-      if (!pending) pending = { tools: [], firstText: "", ts };
-
-      if (rec.type === "response_item" && (p.type === "function_call" || p.type === "custom_tool_call")) {
-        pending.tools.push(...codexToolUses(p));
-        continue;
-      }
-      if (rec.type === "event_msg" && p.type === "web_search_end") {
-        pending.tools.push({ name: "WebSearch", input: {} });
-        continue;
-      }
-      const changed = codexAppliedChanges(rec);
-      if (changed) {
-        pending.tools.push(...editToolUses(changed));
-        continue;
-      }
-      const agentMessage = codexAgentMessage(rec);
-      if (agentMessage) {
-        if (!pending.firstText) pending.firstText = agentMessage;
-        if (ts) pending.ts = ts;
-      }
-    }
-    flush();
-    return turns.slice(-maxTurns);
+    return readTurnsFromTail(transcriptPath, parseCodexTurns).slice(-maxTurns);
   },
 
   // The status pane's "what is this worker doing" summary. Codex has a
@@ -447,10 +382,73 @@ export const codexCore: HarnessCore = {
   },
 };
 
+// The parse half of readTurns, run once per tail window by readTurnsFromTail.
+function parseCodexTurns(lines: Iterable<string>): Turn[] {
+  const turns: Turn[] = [];
+  let pending: { tools: ToolUse[]; firstText: string; ts: string } | null = null;
+  let seenUser = false;
+
+  const flush = (): void => {
+    if (pending && (pending.tools.length > 0 || pending.firstText)) {
+      const { text, verb } = summarizeTurn(pending.tools, pending.firstText);
+      turns.push({ role: "assistant", text, verb, ts: pending.ts });
+    }
+    pending = null;
+  };
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let rec: CodexLine;
+    try {
+      rec = JSON.parse(line) as CodexLine;
+    } catch {
+      continue;
+    }
+    const p = rec.payload;
+    if (!p || typeof p !== "object") continue;
+    const ts = rec.timestamp ?? "";
+
+    const userMessage = codexUserMessage(rec);
+    if (userMessage) {
+      const turn = promptTurn(userMessage.text, ts, userMessage.image);
+      if (!turn) continue;
+      flush();
+      turns.push(turn);
+      pending = { tools: [], firstText: "", ts };
+      seenUser = true;
+      continue;
+    }
+    // Drop dangling activity from a head the byte cap clipped, matching
+    // readConversation: an assistant turn with no prompt above it is noise.
+    if (!seenUser) continue;
+    if (!pending) pending = { tools: [], firstText: "", ts };
+
+    if (rec.type === "response_item" && (p.type === "function_call" || p.type === "custom_tool_call")) {
+      pending.tools.push(...codexToolUses(p));
+      continue;
+    }
+    if (rec.type === "event_msg" && p.type === "web_search_end") {
+      pending.tools.push({ name: "WebSearch", input: {} });
+      continue;
+    }
+    const changed = codexAppliedChanges(rec);
+    if (changed) {
+      pending.tools.push(...editToolUses(changed));
+      continue;
+    }
+    const agentMessage = codexAgentMessage(rec);
+    if (agentMessage) {
+      if (!pending.firstText) pending.firstText = agentMessage;
+      if (ts) pending.ts = ts;
+    }
+  }
+  flush();
+  return turns;
+}
+
 // --- transcript helpers (light; no heavy deps) ---
 
 const DEFAULT_MAX_TURNS = 12;
-const MAX_BYTES = 16 * 1024 * 1024;
 
 interface CodexLine {
   type?: string;
@@ -760,7 +758,7 @@ export function initialCodexActivity(seed?: string): string {
 // (garden's rules ride the worktree AGENTS.md) up front, measured at 70-90KB
 // for real garden workers — so the head bound has a wide margin over that, and
 // the read stops once the opening prompt replaces the creation placeholder.
-// Both stay well under readTurns' 16MB cap: readActivity runs on
+// Both stay well under readTurns' escalating tail: readActivity runs on
 // the status render and hook paths, readTurns only when the history view is open.
 const ACTIVITY_TAIL_BYTES = 256 * 1024;
 const ACTIVITY_HEAD_BYTES = 512 * 1024;
@@ -951,21 +949,6 @@ function isReadable(p: string): boolean {
     return true;
   } catch {
     return false;
-  }
-}
-
-function readCapped(p: string): string {
-  const stat = fs.statSync(p);
-  if (stat.size <= MAX_BYTES) return fs.readFileSync(p, "utf-8");
-  // Tail the last MAX_BYTES; accept a possibly-clipped head (same posture as
-  // conversation.ts's claude reader).
-  const fd = fs.openSync(p, "r");
-  try {
-    const buf = Buffer.alloc(MAX_BYTES);
-    fs.readSync(fd, buf, 0, MAX_BYTES, stat.size - MAX_BYTES);
-    return buf.toString("utf-8");
-  } finally {
-    fs.closeSync(fd);
   }
 }
 

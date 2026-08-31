@@ -42,7 +42,14 @@ const EDIT_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
 // the history pane — so a full read at human-interaction cadence is cheap.
 // The cap is a backstop against a pathologically huge transcript stalling the
 // render; beyond it we tail the last chunk and accept a possibly-clipped head.
-const MAX_BYTES = 16 * 1024 * 1024;
+// It escalates rather than being fixed — see readTurnsFromTail.
+const TAIL_FIRST_BYTES = 16 * 1024 * 1024;
+const TAIL_MAX_BYTES = 128 * 1024 * 1024;
+const TAIL_GROWTH = 4;
+// Exchanges we try to have in view before accepting a clipped head. Well under
+// the 40 the history pane renders: the point is that the view spans days of a
+// long-lived worker, not that every window recovers a full pane.
+const TAIL_TARGET_PROMPTS = 8;
 const DEFAULT_MAX_TURNS = 12;
 
 // Resolve the transcript file for a worker: prefer the hook-captured path, fall
@@ -281,37 +288,91 @@ function userText(obj: Record<string, unknown>): string | null {
   return parts.length > 0 ? parts.join("") : null;
 }
 
+// Read the tail of a transcript as lines, dropping the leading fragment when
+// the window clipped the head (it may also start mid-UTF-8 sequence). Decodes
+// per line rather than materializing the whole window as one string, so a
+// hundred-megabyte window costs the buffer and nothing more.
+function* tailLines(fd: number, size: number, window: number): Generator<string> {
+  const buf = Buffer.allocUnsafe(window);
+  fs.readSync(fd, buf, 0, window, size - window);
+  let start = 0;
+  if (window < size) {
+    const nl = buf.indexOf(0x0a);
+    if (nl < 0) return;
+    start = nl + 1;
+  }
+  for (;;) {
+    const nl = buf.indexOf(0x0a, start);
+    if (nl < 0) {
+      if (start < window) yield buf.toString("utf-8", start, window);
+      return;
+    }
+    yield buf.toString("utf-8", start, nl);
+    start = nl + 1;
+  }
+}
+
+// Parse a transcript's tail, widening the window until enough exchanges are in
+// view or the whole file has been read. Shared by every harness reader.
+//
+// A fixed tail is the wrong bound because a transcript's bytes-per-exchange
+// varies by orders of magnitude: a Codex rollout inlines every command's stdout
+// (a four-day worker measured 178MB, 78% of it shell output), so a flat 16MB
+// held only 4 of its 32 prompts and the history view silently showed the last
+// few hours of a four-day run. Escalation is driven by what the parse actually
+// recovered, so a normal transcript still costs exactly one 16MB read and a
+// fat one pays only for the width it needs. The ceiling is the backstop.
+// Injectable so the escalation is testable at kilobyte scale — the real
+// bounds would need hundred-megabyte fixtures to exercise.
+export interface TailBounds {
+  firstBytes?: number;   // first window read
+  maxBytes?: number;     // ceiling; past it we accept a clipped head
+  targetPrompts?: number; // exchanges that end the widening
+}
+
+export function readTurnsFromTail(
+  transcriptPath: string | null,
+  parse: (lines: Iterable<string>) => Turn[],
+  bounds: TailBounds = {},
+): Turn[] {
+  if (!transcriptPath) return [];
+  const firstBytes = bounds.firstBytes ?? TAIL_FIRST_BYTES;
+  const maxBytes = Math.max(bounds.maxBytes ?? TAIL_MAX_BYTES, firstBytes);
+  const targetPrompts = bounds.targetPrompts ?? TAIL_TARGET_PROMPTS;
+  let fd: number;
+  try {
+    fd = fs.openSync(transcriptPath, "r");
+  } catch {
+    return [];
+  }
+  try {
+    const size = fs.fstatSync(fd).size;
+    let window = Math.min(firstBytes, size);
+    for (;;) {
+      const turns = parse(tailLines(fd, size, window));
+      if (window >= size || window >= maxBytes) return turns;
+      if (turns.filter(t => t.role !== "assistant").length >= targetPrompts) return turns;
+      window = Math.min(window * TAIL_GROWTH, size, maxBytes);
+    }
+  } catch {
+    return [];
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 // Read the tail of the transcript and return the last `maxTurns` turns in
 // chronological order (oldest first). Fails soft: any I/O or parse error, or a
 // schema we don't recognize, yields an empty array rather than throwing.
 export function readConversation(
   transcriptPath: string | null,
   maxTurns = DEFAULT_MAX_TURNS,
+  bounds?: TailBounds,
 ): Turn[] {
-  if (!transcriptPath) return [];
-  let raw: string;
-  let partialHead = false;
-  try {
-    const fd = fs.openSync(transcriptPath, "r");
-    try {
-      const size = fs.fstatSync(fd).size;
-      const start = Math.max(0, size - MAX_BYTES);
-      partialHead = start > 0;
-      const len = size - start;
-      const buf = Buffer.allocUnsafe(len);
-      fs.readSync(fd, buf, 0, len, start);
-      raw = buf.toString("utf-8");
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return [];
-  }
+  return readTurnsFromTail(transcriptPath, parseClaudeTurns, bounds).slice(-maxTurns);
+}
 
-  const lines = raw.split("\n");
-  // The first line is likely truncated when we started mid-file; drop it.
-  if (partialHead) lines.shift();
-
+function parseClaudeTurns(lines: Iterable<string>): Turn[] {
   const turns: Turn[] = [];
   let pending: { tools: ToolUse[]; firstText: string; ts: string } | null = null;
   let seenUser = false;
@@ -384,7 +445,7 @@ export function readConversation(
   }
   flush();
 
-  return turns.slice(-maxTurns);
+  return turns;
 }
 
 export interface ToolUse {

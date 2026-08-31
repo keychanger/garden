@@ -408,6 +408,54 @@ describe("readConversation", () => {
     });
   });
 
+  it("widens the tail until enough exchanges are in view", () => {
+    // Two prompts sit in the last 400 bytes; the rest are buried behind
+    // kilobytes of tool output, the shape a Codex rollout takes at scale.
+    const lines: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < 6; i++) {
+      lines.push(user(`q${i}`));
+      lines.push(assistant([{ type: "tool_use", name: "Bash", input: { command: "x".repeat(2000) } }]));
+    }
+    const p = writeTranscript(lines);
+
+    const narrow = readConversation(p, 40, { firstBytes: 400, maxBytes: 400, targetPrompts: 4 });
+    expect(narrow.filter(t => t.role !== "assistant").length).toBeLessThan(4);
+
+    const widened = readConversation(p, 40, { firstBytes: 400, maxBytes: 1 << 20, targetPrompts: 4 });
+    const prompts = widened.filter(t => t.role !== "assistant");
+    expect(prompts.length).toBeGreaterThanOrEqual(4);
+    expect(prompts[prompts.length - 1].text).toBe("q5");
+  });
+
+  it("stops widening at the ceiling and returns the clipped view", () => {
+    const lines: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < 6; i++) {
+      lines.push(user(`q${i}`));
+      lines.push(assistant([{ type: "tool_use", name: "Bash", input: { command: "x".repeat(2000) } }]));
+    }
+    const p = writeTranscript(lines);
+    // Target is unreachable within the ceiling: we take what fits rather than
+    // reading the whole file or failing.
+    const turns = readConversation(p, 40, { firstBytes: 500, maxBytes: 3000, targetPrompts: 99 });
+    const prompts = turns.filter(t => t.role !== "assistant");
+    expect(prompts.length).toBeGreaterThan(0);
+    expect(prompts[prompts.length - 1].text).toBe("q5");
+    expect(prompts.map(t => t.text)).not.toContain("q0");
+  });
+
+  it("drops the fragment line a clipped head leaves", () => {
+    const p = writeTranscript([
+      user("first", "2026-05-30T17:00:00Z"),
+      user("second", "2026-05-30T17:01:00Z"),
+    ]);
+    const size = fs.statSync(p).size;
+    // A window landing mid-first-record must not yield a half-parsed turn.
+    const turns = readConversation(p, 40, { firstBytes: size - 10, maxBytes: size - 10, targetPrompts: 99 });
+    expect(turns).toEqual([
+      { role: "user", text: "second", ts: "2026-05-30T17:01:00Z" },
+    ]);
+  });
+
   it("returns [] for a missing or null path", () => {
     expect(readConversation(null)).toEqual([]);
     expect(readConversation(path.join(tmp.sessionsDir, "nope.jsonl"))).toEqual([]);
