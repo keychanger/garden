@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import {
   readConversation,
+  readTurnsFromTail,
   classifyVerb,
   summarizeTurn,
   resolveTranscriptPath,
@@ -409,7 +410,7 @@ describe("readConversation", () => {
   });
 
   it("widens the tail until enough exchanges are in view", () => {
-    // Two prompts sit in the last 400 bytes; the rest are buried behind
+    // The first window recovers too few prompts; the rest are buried behind
     // kilobytes of tool output, the shape a Codex rollout takes at scale.
     const lines: Array<Record<string, unknown>> = [];
     for (let i = 0; i < 6; i++) {
@@ -454,6 +455,20 @@ describe("readConversation", () => {
     expect(turns).toEqual([
       { role: "user", text: "second", ts: "2026-05-30T17:01:00Z" },
     ]);
+  });
+
+  it("decodes only bytes actually read when the transcript shrinks", () => {
+    const p = path.join(tmp.sessionsDir, "shrinking.jsonl");
+    const retained = `${JSON.stringify(user("still here"))}\n`;
+    fs.writeFileSync(p, retained + "x".repeat(1000));
+    const originalSize = fs.statSync(p).size;
+
+    const turns = readTurnsFromTail(p, lines => {
+      fs.truncateSync(p, Buffer.byteLength(retained));
+      return Array.from(lines, text => ({ role: "user" as const, text, ts: "" }));
+    }, { firstBytes: originalSize, maxBytes: originalSize });
+
+    expect(turns.map(t => t.text)).toEqual([JSON.stringify(user("still here"))]);
   });
 
   it("returns [] for a missing or null path", () => {

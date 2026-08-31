@@ -1,7 +1,7 @@
-// Per-worker conversation history, read straight from Claude Code's session
-// transcript JSONL — the single source of truth, so history is retroactive for
-// workers that predate this feature. Feeds the bottom-left "history" dashboard
-// view (⌥h) to remind the operator what they last asked a worker. (The view is
+// Per-worker conversation history, read straight from the harness transcript
+// JSONL — the single source of truth, so history is retroactive for workers
+// that predate this feature. Feeds the bottom-left "history" dashboard view
+// (⌥h) to remind the operator what they last asked a worker. (The view is
 // "history"; this module parses the underlying conversation transcript.)
 //
 // The transcript path is captured from the hook input (`transcript_path`) and
@@ -34,15 +34,10 @@ export interface Turn {
 // ExitPlanMode, Task) with no edit → "planned". No tools at all → "answered".
 const EDIT_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
 
-// Read the whole transcript so we capture the operator's prompts even when
-// they cluster at the start of a long single-worker session (the prompts are
-// exactly what this view is for, and they're often followed by megabytes of
-// tool activity). The mode-gate in writeHistoryRendered already keeps this
-// parse off the hook firehose — it only runs while the operator is looking at
-// the history pane — so a full read at human-interaction cadence is cheap.
-// The cap is a backstop against a pathologically huge transcript stalling the
-// render; beyond it we tail the last chunk and accept a possibly-clipped head.
-// It escalates rather than being fixed — see readTurnsFromTail.
+// Read an escalating transcript tail so prompt-heavy histories reach back
+// beyond a fixed byte window without making a pathological transcript
+// unbounded. The mode-gate in writeHistoryRendered keeps this parse off the
+// hook firehose — it runs only while the operator is looking at history.
 const TAIL_FIRST_BYTES = 16 * 1024 * 1024;
 const TAIL_MAX_BYTES = 128 * 1024 * 1024;
 const TAIL_GROWTH = 4;
@@ -294,20 +289,21 @@ function userText(obj: Record<string, unknown>): string | null {
 // hundred-megabyte window costs the buffer and nothing more.
 function* tailLines(fd: number, size: number, window: number): Generator<string> {
   const buf = Buffer.allocUnsafe(window);
-  fs.readSync(fd, buf, 0, window, size - window);
+  const bytesRead = fs.readSync(fd, buf, 0, window, size - window);
+  const data = buf.subarray(0, bytesRead);
   let start = 0;
   if (window < size) {
-    const nl = buf.indexOf(0x0a);
+    const nl = data.indexOf(0x0a);
     if (nl < 0) return;
     start = nl + 1;
   }
   for (;;) {
-    const nl = buf.indexOf(0x0a, start);
+    const nl = data.indexOf(0x0a, start);
     if (nl < 0) {
-      if (start < window) yield buf.toString("utf-8", start, window);
+      if (start < bytesRead) yield data.toString("utf-8", start);
       return;
     }
-    yield buf.toString("utf-8", start, nl);
+    yield data.toString("utf-8", start, nl);
     start = nl + 1;
   }
 }
