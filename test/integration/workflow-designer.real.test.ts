@@ -1,9 +1,9 @@
-// Integration test for the botanist workflow's skip-review merge on real fs/git.
-// Drives a botanist through the full publish → merge path: publishBotanistArtifact
+// Integration test for the designer workflow's skip-review merge on real fs/git.
+// Drives a designer through the full publish → merge path: publishDesignerArtifact
 // moves the drafted artifact to a tracked docs/ path, commits it, and marks the
 // worker done; poll() then routes working → merge-pending → merged/done with NO
 // reviewer window ever opened. Also verifies the writeable-path guard parks a
-// code-committing botanist in `failing`.
+// code-committing designer in `failing`.
 //
 // Tmux and dashboard refresh are mocked (no real panes); the merge itself runs
 // real git against a bare origin.
@@ -82,16 +82,16 @@ beforeEach(() => {
   );
 });
 
-async function plantBotanist(fields: Record<string, unknown> = {}): Promise<void> {
+async function plantDesigner(fields: Record<string, unknown> = {}): Promise<void> {
   const { addWorker } = await import("../../src/dashboard/registry.js");
   addWorker(PROJECT, {
     name: WORKER,
-    sessionId: "botanist-session",
+    sessionId: "designer-session",
     task: "",
     branchName: WORKER,
     baseBranch: "main",
     worktreePath,
-    workflow: "botanist",
+    workflow: "designer",
     prState: "working",
     agentStatus: "idle",
     ...fields,
@@ -110,23 +110,23 @@ async function commitInWorktree(relPath: string, contents: string): Promise<void
   git(worktreePath, "push", "origin", WORKER);
 }
 
-describe("botanist workflow — skip-review merge on real fs/git", () => {
+describe("designer workflow — skip-review merge on real fs/git", () => {
   it("publishes an artifact and merges it with NO reviewer, finalizing to done", async () => {
     const { createWorktree } = await import("../../src/dashboard/git.js");
-    const { publishBotanistArtifact, BOTANIST_ARTIFACT_REL } =
-      await import("../../src/dashboard/botanist-publish.js");
+    const { publishDesignerArtifact, DESIGNER_ARTIFACT_REL } =
+      await import("../../src/dashboard/designer-publish.js");
     const { poll } = await import("../../src/dashboard/poller.js");
     const { findWorkerByName } = await import("../../src/dashboard/registry.js");
     const { newDashboardWindow } = await import("../../src/dashboard/tmux.js");
 
-    await plantBotanist({ pendingReviewAt: Date.now() });
+    await plantDesigner({ pendingReviewAt: Date.now() });
     createWorktree(projectPath, worktreePath, WORKER);
 
     // Draft the artifact, then publish it via the real handler (move → docs/,
     // commit, write .garden-done).
-    fs.mkdirSync(path.join(worktreePath, ".garden", "botanist"), { recursive: true });
-    fs.writeFileSync(path.join(worktreePath, BOTANIST_ARTIFACT_REL), "# Design\n\nApproved.\n");
-    const result = publishBotanistArtifact(worktreePath, "docs/future/design.md");
+    fs.mkdirSync(path.join(worktreePath, ".garden", "designer"), { recursive: true });
+    fs.writeFileSync(path.join(worktreePath, DESIGNER_ARTIFACT_REL), "# Design\n\nApproved.\n");
+    const result = publishDesignerArtifact(worktreePath, "docs/future/design.md");
     expect(result.ok).toBe(true);
     expect(fs.existsSync(path.join(worktreePath, "docs/future/design.md"))).toBe(true);
     expect(fs.existsSync(path.join(worktreePath, ".garden-done"))).toBe(true);
@@ -153,19 +153,19 @@ describe("botanist workflow — skip-review merge on real fs/git", () => {
     expect(mainFiles).toContain("docs/future/design.md");
   });
 
-  it("parks a botanist that committed code (outside docs/) in failing with botanist-scope", async () => {
+  it("parks a designer that committed code (outside docs/) in failing with designer-scope", async () => {
     const { poll } = await import("../../src/dashboard/poller.js");
     const { findWorkerByName } = await import("../../src/dashboard/registry.js");
     const { newDashboardWindow } = await import("../../src/dashboard/tmux.js");
 
-    await plantBotanist({ pendingReviewAt: Date.now() });
-    await commitInWorktree("src-sneaky.ts", "// a botanist that drifted into building\n");
+    await plantDesigner({ pendingReviewAt: Date.now() });
+    await commitInWorktree("src-sneaky.ts", "// a designer that drifted into building\n");
 
     poll(PROJECT);
 
     const entry = findWorkerByName(PROJECT, WORKER);
     expect(entry?.prState).toBe("failing");
-    expect(entry?.failingReason).toBe("botanist-scope");
+    expect(entry?.failingReason).toBe("designer-scope");
 
     // It did not merge and no reviewer ran.
     const reviewWindowOpened = vi.mocked(newDashboardWindow).mock.calls.some(

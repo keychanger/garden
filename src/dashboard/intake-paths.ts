@@ -1,5 +1,5 @@
 // Bead-intake on-disk stamp paths and their status reader. A deliberate leaf
-// (fs/path/config only, like botanist-paths.ts): `garden status` reports
+// (fs/path/config only, like designer-paths.ts): `garden status` reports
 // intake liveness (DELEGATION.md Decision 11) and status.ts is reachable from
 // dist/hook.js via header.ts, so these paths cannot live in poller-intake.ts
 // — the hook-bundle guard forbids any dashboard/poller-* module there.

@@ -8,7 +8,7 @@ import { WORKER_EFFORT_LEVELS, isWorkerEffort } from "../dashboard/create.js";
 import { isRegisteredHarness, harnessNames, canonicalHarnessName } from "../dashboard/harness/core.js";
 import { getCrew, listCrews } from "../dashboard/crew.js";
 import { buildGrowIteration1Seed, GROW_GOAL_FILE_REL } from "../dashboard/grow-continue.js";
-import { buildBotanistSeed } from "../dashboard/botanist-prompts.js";
+import { buildDesignerSeed } from "../dashboard/designer-prompts.js";
 import {
   readRegistry, findWorkerByName, updateWorkerFields,
   type WorkerEntry,
@@ -36,7 +36,7 @@ export async function workers(args: string[]): Promise<void> {
   }
   throw new Error(
     `Usage:\n`
-    + `  garden workers new <project> [--workflow trellis|grow|botanist|planner] [--base <branch>] [--trellis <name>] `
+    + `  garden workers new <project> [--workflow trellis|grow|designer|planner] [--base <branch>] [--trellis <name>] `
     + `[--seed <text> | --seed-file <path>] [--model <alias-or-id>] [--effort low|medium|high|xhigh|ultra] [--harness <name>] [--max-iterations N]\n`
     + `  garden workers grow [<worker>] [--seed <text> | --seed-file <path> | --goal-file <path>] `
     + `[--max-iterations N]\n`
@@ -98,8 +98,8 @@ async function newCommand(args: string[]): Promise<void> {
   }
 
   const workflow = flags.get("workflow") ?? "default";
-  if (workflow !== "default" && workflow !== "trellis" && workflow !== "grow" && workflow !== "botanist" && workflow !== "planner") {
-    throw new Error(`--workflow must be 'default', 'trellis', 'grow', 'botanist', or 'planner', got '${workflow}'`);
+  if (workflow !== "default" && workflow !== "trellis" && workflow !== "grow" && workflow !== "designer" && workflow !== "planner") {
+    throw new Error(`--workflow must be 'default', 'trellis', 'grow', 'designer', or 'planner', got '${workflow}'`);
   }
 
   // Worker harness (agent CLI). Default workflow only in v1 — trellis/grow
@@ -245,7 +245,7 @@ async function newCommand(args: string[]): Promise<void> {
     return;
   }
 
-  if (workflow === "botanist") {
+  if (workflow === "designer") {
     if (flags.has("trellis")) {
       throw new Error("--trellis can only be used with --workflow trellis");
     }
@@ -253,7 +253,7 @@ async function newCommand(args: string[]): Promise<void> {
       throw new Error("--max-iterations can only be used with --workflow trellis or grow");
     }
     // --crew is already rejected for any non-default workflow by the shared
-    // guard above (a botanist runs no reviewer, so its own review crew is moot;
+    // guard above (a designer runs no reviewer, so its own review crew is moot;
     // the downstream builder's crew is a separate --handoff-crew, Phase 4).
     if (flags.has("seed") && flags.has("seed-file")) {
       throw new Error("--seed and --seed-file are mutually exclusive; pass exactly one.");
@@ -261,7 +261,7 @@ async function newCommand(args: string[]): Promise<void> {
     // The seed is optional: with one, the ask is inlined and the worker starts
     // framing immediately (the scripted-plant path); without one, no message
     // is sent at all — the design posture is baked into the system prompt
-    // (rules.ts botanist branch + the bundled skill) and the brief arrives as
+    // (rules.ts designer branch + the bundled skill) and the brief arrives as
     // the operator's first message in the pane, the same instant-spawn
     // behavior as the workflow picker's row.
     let seed: string | undefined;
@@ -278,21 +278,21 @@ async function newCommand(args: string[]): Promise<void> {
     if (seed !== undefined) {
       seed = seed.trim();
       if (!seed) {
-        throw new Error("--seed / --seed-file was given but empty; omit it to have the botanist wait for the brief in its pane.");
+        throw new Error("--seed / --seed-file was given but empty; omit it to have the designer wait for the brief in its pane.");
       }
     }
 
     // Plant-time prompt, delivered via seedMessageFile (like grow's iter-1
-    // seed). A botanist does not loop, so the seed is not stored on the
+    // seed). A designer does not loop, so the seed is not stored on the
     // entry; it only kicks off the frame → options pipeline.
     let seedFile: string | undefined;
     if (seed !== undefined) {
       seedFile = path.join(
         SESSIONS_DIR, "seeds",
-        `botanist-seed-${projectName}-${Date.now()}.txt`,
+        `designer-seed-${projectName}-${Date.now()}.txt`,
       );
       fs.mkdirSync(path.dirname(seedFile), { recursive: true });
-      fs.writeFileSync(seedFile, buildBotanistSeed(seed));
+      fs.writeFileSync(seedFile, buildDesignerSeed(seed));
     }
 
     // Designer model/effort default to Opus / xhigh via the workflow definition
@@ -301,7 +301,7 @@ async function newCommand(args: string[]): Promise<void> {
     const effortOpts = flags.has("effort") ? parseEffortFlag(flags.get("effort")!) : {};
     const newName = newWorker({
       projectName,
-      workflow: "botanist",
+      workflow: "designer",
       model,
       ...effortOpts,
       ...(harness ? { harness } : {}),
@@ -311,12 +311,12 @@ async function newCommand(args: string[]): Promise<void> {
     if (!newName) {
       if (seedFile) { try { fs.unlinkSync(seedFile); } catch { /* ignore */ } }
       throw new Error(
-        `Failed to spawn botanist on '${projectName}'. Is the dashboard running? Check 'garden health'.`,
+        `Failed to spawn designer on '${projectName}'. Is the dashboard running? Check 'garden health'.`,
       );
     }
     const effortLabel = effortOpts.ultracode ? ", effort=ultra" : effortOpts.effort ? `, effort=${effortOpts.effort}` : "";
     console.log(
-      `Started botanist ${projectName}/${newName}${model ? ` (model=${model}${effortLabel})` : effortLabel ? ` (${effortLabel.slice(2)})` : ""}${harness ? ` [harness=${harness}]` : ""}.`,
+      `Started designer ${projectName}/${newName}${model ? ` (model=${model}${effortLabel})` : effortLabel ? ` (${effortLabel.slice(2)})` : ""}${harness ? ` [harness=${harness}]` : ""}.`,
     );
     return;
   }
@@ -393,7 +393,7 @@ async function newCommand(args: string[]): Promise<void> {
 
   // workflow === "trellis"
   if (flags.has("effort")) {
-    throw new Error("--effort is only supported with --workflow default, grow, botanist, or planner (trellis resolves its own model).");
+    throw new Error("--effort is only supported with --workflow default, grow, designer, or planner (trellis resolves its own model).");
   }
   const trellisName = flags.get("trellis");
   if (!trellisName) {

@@ -785,6 +785,31 @@ describe("trellis WorkerEntry fields", () => {
     expect((w as Record<string, unknown>).lastHookAt).toBeUndefined();
   });
 
+  it("readRegistry migrates the legacy 'botanist' workflow name to 'designer'", async () => {
+    // The design workflow was renamed; entries written before the rename and
+    // the tombstones `garden resurrect` restores from carry the old name.
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const { SESSIONS_DIR } = await import("../src/config.js");
+    const registryFile = path.join(SESSIONS_DIR, "dashboard.registry.json");
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    fs.writeFileSync(registryFile, JSON.stringify({
+      workers: {
+        proj: [
+          { name: "old-design", sessionId: "s1", task: "", workflow: "botanist", prState: "failing", failingReason: "botanist-scope" },
+          { name: "builder", sessionId: "s2", task: "", workflow: "default" },
+        ],
+      },
+    }, null, 2));
+
+    const { readRegistry } = await importRegistry();
+    const [design, builder] = readRegistry().workers.proj;
+    expect(design.workflow).toBe("designer");
+    expect(design.failingReason).toBe("designer-scope");
+    expect(builder.workflow).toBe("default");
+    expect(builder.failingReason).toBeUndefined();
+  });
+
   it("keeps the new status fields when both old and new names are present", async () => {
     // A fresh old-binary write landing on an already-migrated entry leaves
     // both names on disk; the migrated name is authoritative and the legacy

@@ -19,7 +19,7 @@ import { growAutoContinueAfterMerge } from "./grow-continue.js";
 import { trellisAutoContinueAfterMerge } from "./trellis-continue.js";
 import {
   runTrellisPicker, plantVineFromPicker, spawnTrellisAuthor, runReviveSubmenu,
-  runWorkflowPicker, plantGrowFromPicker, plantBotanistFromPicker,
+  runWorkflowPicker, plantGrowFromPicker, plantDesignerFromPicker,
   runComposeBaseSubmenu, runComposeCrewSubmenu, runComposeMemberSubmenu,
   runComposeModelSubmenu, runComposeEffortSubmenu,
   stageSpawnDraft, composeDefaultFromPicker,
@@ -353,8 +353,8 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     if (args[1]) plantGrowFromPicker(args[1], args.slice(2).join(" "));
     return;
   }
-  if (sub === "_botanist-plant") {
-    if (args[1]) plantBotanistFromPicker(args[1]);
+  if (sub === "_designer-plant") {
+    if (args[1]) plantDesignerFromPicker(args[1]);
     return;
   }
   if (sub === "_trellis-plant") {

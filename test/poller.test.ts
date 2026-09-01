@@ -747,9 +747,9 @@ describe("poll — working state", () => {
     );
   });
 
-  it("botanist (skipsReviewMerge) with a docs-only diff goes straight to merge-pending, no reviewer", () => {
+  it("designer (skipsReviewMerge) with a docs-only diff goes straight to merge-pending, no reviewer", () => {
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(), workflow: "botanist" }),
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(), workflow: "designer" }),
     ]);
     vi.mocked(getChangedFiles).mockReturnValue(["docs/future/notification-levels.md"]);
 
@@ -768,16 +768,16 @@ describe("poll — working state", () => {
     );
   });
 
-  it("botanist committing a file outside docs/ parks in failing with an operator alert", () => {
+  it("designer committing a file outside docs/ parks in failing with an operator alert", () => {
     registryMock._setEntries("myproject", [
-      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(), workflow: "botanist" }),
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(), workflow: "designer" }),
     ]);
     vi.mocked(getChangedFiles).mockReturnValue(["docs/future/ok.md", "src/dashboard/sneaky.ts"]);
 
     poll("myproject");
 
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
-      expect.objectContaining({ prState: "failing", failingReason: "botanist-scope" }),
+      expect.objectContaining({ prState: "failing", failingReason: "designer-scope" }),
     );
     expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "merge-pending" }),
@@ -3124,7 +3124,7 @@ describe("poll — merge-pending state", () => {
   });
 
   it("merges to `merged` (not done) but skips auto-continue when .garden-awaiting-input is set (human gate)", () => {
-    // A mid-task worker paused at a human gate (botanist/plan) wrote
+    // A mid-task worker paused at a human gate (designer/plan) wrote
     // .garden-awaiting-input, not .garden-done: the merge still finalizes to the
     // transient `merged` beat, but the post-merge auto-continue is suppressed —
     // the operator's next prompt is the resume, not a garden paste.

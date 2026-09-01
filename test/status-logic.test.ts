@@ -529,19 +529,19 @@ describe("renderQuickStatus", () => {
 
   it("renders a yellow ? for a worker holding the .garden-awaiting-input sentinel", () => {
     // Real sentinel file drives the real isAwaitingInput (node:fs is not mocked).
-    const wt = fs.mkdtempSync(path.join(os.tmpdir(), "botanist-glyph-"));
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), "designer-glyph-"));
     fs.writeFileSync(path.join(wt, ".garden-awaiting-input"), "");
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "designing", agentStatus: "idle", prState: "working", workflow: "botanist", worktreePath: wt } as ReturnType<typeof getWorkers>[number],
+      { name: "bold-ash", sessionId: "abc", task: "designing", agentStatus: "idle", prState: "working", workflow: "designer", worktreePath: wt } as ReturnType<typeof getWorkers>[number],
     ]);
     const result = renderQuickStatus(state);
     expect(result).toContain("\x1b[33m?\x1b[0m");
   });
 
   it("omits the ? when no sentinel is present", () => {
-    const wt = fs.mkdtempSync(path.join(os.tmpdir(), "botanist-glyph-"));
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), "designer-glyph-"));
     vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "abc", task: "designing", agentStatus: "idle", prState: "working", workflow: "botanist", worktreePath: wt } as ReturnType<typeof getWorkers>[number],
+      { name: "bold-ash", sessionId: "abc", task: "designing", agentStatus: "idle", prState: "working", workflow: "designer", worktreePath: wt } as ReturnType<typeof getWorkers>[number],
     ]);
     const result = renderQuickStatus(state);
     expect(result).not.toContain("\x1b[33m?\x1b[0m");
@@ -1034,13 +1034,13 @@ describe("identity badges + grammar (Phase 3)", () => {
     expect(widened.indexOf("wiring auth")).toBeGreaterThan(compact.indexOf("wiring auth"));
   });
 
-  it("renders a botanist badge in the identity cluster without clobbering activity", () => {
+  it("renders a designer badge in the identity cluster without clobbering activity", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "a", task: "framing options", agentStatus: "working",
-        workflow: "botanist" },
+        workflow: "designer" },
     ]);
     const line = lineFor(renderQuickStatus(state), "bold-ash");
-    expect(line).toContain("botanist");
+    expect(line).toContain("designer");
     // Identity rides the badge cluster, so the live activity keeps the detail slot.
     expect(line).toContain("framing options");
   });

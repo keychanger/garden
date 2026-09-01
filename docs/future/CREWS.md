@@ -148,7 +148,7 @@ role garden does not have. The `default` workflow's roles are **worker**
 (builds), **reviewer**, **resolver**, and **ci-fix**. "Claude plans" collapses
 to "Claude worker" in current terms. A distinct **plan/design role** is a
 genuinely good future (see Futures) and is exactly the territory of
-[`BOTANIST-WORKFLOW.md`](BOTANIST-WORKFLOW.md) and
+[`DESIGNER-WORKFLOW.md`](DESIGNER-WORKFLOW.md) and
 [`PLAN-WORKFLOW.md`](PLAN-WORKFLOW.md) — but it does not exist in the pipeline
 yet, and a crew selector must not be designed around a role that isn't wired.
 
@@ -552,7 +552,7 @@ members, and the operator picks a fleet in one word.
 - **A real plan/design role.** The honest home for "Claude plans, Codex
   builds." If `resolveRole` resolves arbitrary roles, adding a `plan` role is
   data, not a fork — and it slots directly into
-  [`BOTANIST-WORKFLOW.md`](BOTANIST-WORKFLOW.md) /
+  [`DESIGNER-WORKFLOW.md`](DESIGNER-WORKFLOW.md) /
   [`PLAN-WORKFLOW.md`](PLAN-WORKFLOW.md).
 - **Metering goes blind across harnesses.** Codex has no machine-readable
   quota endpoint; the auto-continue gate reads Anthropic buckets. A full-Codex
@@ -609,7 +609,7 @@ members, and the operator picks a fleet in one word.
   of Codex-as-second-harness and the macOS/self-push and `recoverSessionId`
   caveats. (Its "zero code" claim for the adapter is stale — see Status.)
 - [`WORKFLOWS.md`](../../WORKFLOWS.md) — the workflow axis crews compose with.
-- [`BOTANIST-WORKFLOW.md`](BOTANIST-WORKFLOW.md),
+- [`DESIGNER-WORKFLOW.md`](DESIGNER-WORKFLOW.md),
   [`PLAN-WORKFLOW.md`](PLAN-WORKFLOW.md) — the plan/design-role future.
 - [`MODEL-SELECTION.md`](MODEL-SELECTION.md) — the model dimension of the role
   matrix and the metering-gate future.

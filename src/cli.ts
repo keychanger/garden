@@ -189,13 +189,13 @@ Dashboard:
   version, --version, -v         Print the garden build version (git short SHA, or "dev" under tsx)
 
 Workers:
-  workers new <project> [--workflow default|trellis|grow|botanist|planner] [--model <alias-or-id>] [--effort low|medium|high|xhigh|ultra]
+  workers new <project> [--workflow default|trellis|grow|designer|planner] [--model <alias-or-id>] [--effort low|medium|high|xhigh|ultra]
                         [--harness codex] [--crew <name>] [--base <branch>] [--trellis <name>]
                         [--seed <text> | --seed-file <path>] [--max-iterations N]
                                  Spawn a new worker. default plants an interactive worker;
                                  trellis plants a vine bound to the named trellis (--trellis);
                                  grow plants a bounded hardening loop from a --seed / --seed-file
-                                 (--max-iterations caps the passes, default 5); botanist plants a
+                                 (--max-iterations caps the passes, default 5); designer plants a
                                  design worker whose deliverable is a doc, not code (Opus/xhigh
                                  designer seat) — --seed / --seed-file optionally inlines the design
                                  brief, and without one no message is sent — the brief arrives
@@ -205,7 +205,7 @@ Workers:
                                  epic — see DESIGN.md "Bead intake"). --model overrides
                                  the workflow's default worker model. --effort sets the reasoning
                                  rung (ultra = max effort + dynamic workflows; default/grow/
-                                 botanist/planner). --harness picks the agent CLI (default
+                                 designer/planner). --harness picks the agent CLI (default
                                  claude-code; codex = a sandboxed Codex worker, default workflow
                                  only).
   workers grow [<worker>] --seed <text> | --seed-file <path> | --goal-file <path>
@@ -227,12 +227,12 @@ Trellis (spec-driven loop workflow — see WORKFLOWS.md § "Trellis workflow"):
   trellis retire <project> <name>     Mark a trellis retired (filters from picker, refuses new vines)
   trellis revive <project> <name>     Remove the retirement comment
 
-Botanist (design workflow — see WORKFLOWS.md § "Botanist workflow"):
-  botanist publish [<worker>] --to docs/<name>.md [--dry-run]
+Designer (design workflow — see WORKFLOWS.md § "Designer workflow"):
+  designer publish [<worker>] --to docs/<name>.md [--dry-run]
                                       Publish an approved design artifact: move it from the worker's
-                                      .garden/botanist/ working dir to a tracked docs/ path, commit it,
-                                      and mark the botanist done (self-resolves via $GARDEN_WORKER). The
-                                      botanist then executes the approved handoff plan while the poller
+                                      .garden/designer/ working dir to a tracked docs/ path, commit it,
+                                      and mark the designer done (self-resolves via $GARDEN_WORKER). The
+                                      designer then executes the approved handoff plan while the poller
                                       merges the doc with no reviewer. --dry-run previews, changes nothing.
 
 Diagnostics (temporary — see src/commands/diag.ts cleanup checklist):

@@ -266,22 +266,22 @@ describe("buildWorktreeRules — grow workflow", () => {
   });
 });
 
-// Botanist inverts the action-biased worktree posture: design (surface options,
+// Designer inverts the action-biased worktree posture: design (surface options,
 // ask questions, write docs) instead of build, and suppress the checks paragraph.
-describe("buildWorktreeRules — botanist workflow", () => {
-  it("default workers do NOT include botanist paragraphs", async () => {
+describe("buildWorktreeRules — designer workflow", () => {
+  it("default workers do NOT include designer paragraphs", async () => {
     const { buildWorktreeRules } = await importRules();
     const result = buildWorktreeRules("swift-oak");
-    expect(result).not.toContain("Botanist workflow");
+    expect(result).not.toContain("Designer workflow");
     expect(result).not.toContain("design, do not build");
   });
 
-  it("botanist option appends the design-posture inversion", async () => {
+  it("designer option appends the design-posture inversion", async () => {
     const { buildWorktreeRules } = await importRules();
-    const result = buildWorktreeRules("swift-oak", "main", { botanist: true });
-    expect(result).toContain("Botanist workflow");
+    const result = buildWorktreeRules("swift-oak", "main", { designer: true });
+    expect(result).toContain("Designer workflow");
     expect(result).toContain("DESIGN ARTIFACT");
-    expect(result).toContain(".garden/botanist/");
+    expect(result).toContain(".garden/designer/");
     expect(result).toContain("Surface alternatives");
     // Explicitly overrides the base's build-worker guidance.
     expect(result).toContain("that guidance is for build workers");
@@ -294,33 +294,33 @@ describe("buildWorktreeRules — botanist workflow", () => {
   it("suppresses the checks paragraph even when a checksCommand is configured", async () => {
     const { buildWorktreeRules } = await importRules();
     const result = buildWorktreeRules("swift-oak", "main", {
-      botanist: true,
+      designer: true,
       checksCommand: "npm run lint && npm run test:coverage",
     });
-    // A botanist runs no checks — the checks paragraph must not appear.
+    // A designer runs no checks — the checks paragraph must not appear.
     expect(result).not.toContain("Run checks before you push");
     expect(result).not.toContain("`npm run lint && npm run test:coverage`");
   });
 
-  it("botanist is mutually exclusive with trellis and grow", async () => {
+  it("designer is mutually exclusive with trellis and grow", async () => {
     const { buildWorktreeRules } = await importRules();
     expect(() =>
       buildWorktreeRules("any", "main", {
-        botanist: true,
+        designer: true,
         grow: { iteration: 1, maxIterations: 5 },
       }),
     ).toThrow(/mutually exclusive/);
     expect(() =>
       buildWorktreeRules("any", "main", {
-        botanist: true,
+        designer: true,
         trellis: { relativePath: ".garden/trellises/foo.md" },
       }),
     ).toThrow(/mutually exclusive/);
   });
 
-  it("botanist rules do NOT include trellis or grow paragraphs", async () => {
+  it("designer rules do NOT include trellis or grow paragraphs", async () => {
     const { buildWorktreeRules } = await importRules();
-    const result = buildWorktreeRules("swift-oak", "main", { botanist: true });
+    const result = buildWorktreeRules("swift-oak", "main", { designer: true });
     expect(result).not.toContain("## Trellis workflow");
     expect(result).not.toContain("## Grow workflow");
   });
@@ -363,7 +363,7 @@ describe("buildWorktreeRules — planner workflow", () => {
     expect(result).not.toContain("`npm run lint && npm run test:coverage`");
   });
 
-  it("planner is mutually exclusive with trellis, grow, and botanist", async () => {
+  it("planner is mutually exclusive with trellis, grow, and designer", async () => {
     const { buildWorktreeRules } = await importRules();
     expect(() =>
       buildWorktreeRules("any", "main", {
@@ -378,7 +378,7 @@ describe("buildWorktreeRules — planner workflow", () => {
       }),
     ).toThrow(/mutually exclusive/);
     expect(() =>
-      buildWorktreeRules("any", "main", { planner: true, botanist: true }),
+      buildWorktreeRules("any", "main", { planner: true, designer: true }),
     ).toThrow(/mutually exclusive/);
   });
 
@@ -387,6 +387,6 @@ describe("buildWorktreeRules — planner workflow", () => {
     const result = buildWorktreeRules("swift-oak", "main", { planner: true });
     expect(result).not.toContain("## Trellis workflow");
     expect(result).not.toContain("## Grow workflow");
-    expect(result).not.toContain("## Botanist workflow");
+    expect(result).not.toContain("## Designer workflow");
   });
 });

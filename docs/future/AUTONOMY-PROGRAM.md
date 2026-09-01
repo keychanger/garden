@@ -79,7 +79,7 @@ almost entirely onto docs that already exist:
 | Automatic model router (tier/effort/provider) | `MODEL-SELECTION.md` | speculative, authoritative |
 | Per-project model pins + hardening/hygiene passes | `PROJECT-CUSTOMIZATION.md` | speculative, authoritative |
 | Deferred / cross-horizon coherence review | `SCHEDULED-HORIZON-REVIEW.md` | speculative, authoritative |
-| Design-mode authoring workflow (spec → handoff) | `BOTANIST-WORKFLOW.md` | speculative, authoritative |
+| Design-mode authoring workflow (spec → handoff) | `DESIGNER-WORKFLOW.md` | speculative, authoritative |
 | Multi-model / harness substrate (provider layer shipped) | `MULTI-MODEL.md` | Phases 1-3 shipped |
 
 Two consequences worth stating plainly:
@@ -287,7 +287,7 @@ Phase-0 utilization win.
   defect class that grows precisely when more parallel workers land — has no
   gate. The post-merge sibling-overlap set already computed in
   `poller-merge.ts` is the natural trigger.
-- **`docs/README.md` index gap (mechanical):** `BOTANIST-WORKFLOW.md` exists
+- **`docs/README.md` index gap (mechanical):** `DESIGNER-WORKFLOW.md` exists
   on disk but is absent from the index table; this doc adds both rows.
 
 ## 7. References
@@ -300,6 +300,6 @@ Phase-0 utilization win.
 | `docs/future/SPRIG.md` | idle-quota work generator; operator-curated flat backlog; risk tiers; premature-`.garden-done` fix |
 | `docs/future/PROJECT-CUSTOMIZATION.md` | per-project model pins, hardening passes, hygiene/`garden health` diagnostic |
 | `docs/future/SCHEDULED-HORIZON-REVIEW.md` | deferred cross-horizon drift review |
-| `docs/future/BOTANIST-WORKFLOW.md` | design-mode authoring workflow (spec → handoff) |
+| `docs/future/DESIGNER-WORKFLOW.md` | design-mode authoring workflow (spec → handoff) |
 | `docs/MULTI-MODEL.md` | provider layer (shipped) + harness adapter registry (Codex = Layer-3 target) |
 | `docs/STATUS.md` | worker status state machine, no-polling invariant |

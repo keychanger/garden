@@ -81,12 +81,12 @@ export interface WorkflowDefinition {
    *  sits beneath `--model` (per-spawn > project > this workflow default >
    *  account default). Consumed by newWorker's effort resolution. When unset
    *  (default/grow/trellis), no workflow-level effort default applies.
-   *  Botanist sets "xhigh": design is judgment-heavy. */
+   *  Designer sets "xhigh": design is judgment-heavy. */
   workerEffort?: string;
   /** When true, the worker's branch merges WITHOUT a reviewer. handleWorking
    *  routes working → merge-pending directly (never launching a review) once
    *  commits are ahead of base, after enforcing that the committed diff touches
-   *  only publishable paths. Used by botanist: its artifact is prose the
+   *  only publishable paths. Used by designer: its artifact is prose the
    *  operator already reviewed at the human gate, so there is no code to
    *  critique. The merge/CI gate still applies. When unset (default/grow/
    *  trellis), the normal review-then-merge lifecycle runs. */
@@ -136,22 +136,22 @@ export const trellisValidTransitions: Record<PrState, PrState[]> = defaultValidT
 // state) without fighting the type system or callers.
 export const growValidTransitions: Record<PrState, PrState[]> = defaultValidTransitions;
 
-// Botanist skips review: a botanist goes working → merge-pending directly (no
+// Designer skips review: a designer goes working → merge-pending directly (no
 // reviewer — its artifact is prose the operator reviewed at the gate), or
 // working → failing on a writeable-path violation (it committed code, not just
 // docs). It never enters `reviewing`. Every other state reuses default's edges
 // (a docs branch can still hit a rebase conflict → resolving, red CI →
 // ci-fixing). `done → reviewing` stays reachable-in-table but unused.
-export const botanistValidTransitions: Record<PrState, PrState[]> = {
+export const designerValidTransitions: Record<PrState, PrState[]> = {
   ...defaultValidTransitions,
   working: ["merge-pending", "failing", "done"],
 };
 
-// Planner skips review for the same structural reason as botanist: its
+// Planner skips review for the same structural reason as designer: its
 // deliverable is a bead DAG written to the project's bd store, never a commit
 // — with zero commits ahead of base it idles after finishing, and a planner
 // that somehow commits rides the same skip-review boundary check (anything
-// outside docs/ parks it in `failing`). Same table shape as botanist.
+// outside docs/ parks it in `failing`). Same table shape as designer.
 export const plannerValidTransitions: Record<PrState, PrState[]> = {
   ...defaultValidTransitions,
   working: ["merge-pending", "failing", "done"],
@@ -160,7 +160,7 @@ export const plannerValidTransitions: Record<PrState, PrState[]> = {
 export function getValidTransitions(workflowName: string): Record<PrState, PrState[]> {
   if (workflowName === "trellis") return trellisValidTransitions;
   if (workflowName === "grow") return growValidTransitions;
-  if (workflowName === "botanist") return botanistValidTransitions;
+  if (workflowName === "designer") return designerValidTransitions;
   if (workflowName === "planner") return plannerValidTransitions;
   return defaultValidTransitions;
 }

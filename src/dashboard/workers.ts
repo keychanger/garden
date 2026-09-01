@@ -455,7 +455,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   const projectModel = projectDefaultsApply
     ? (workerCrew?.worker.model ?? project.model ?? projectCrew?.worker.model)
     : undefined;
-  // Workflow-level model/effort defaults (the botanist designer seat → Opus /
+  // Workflow-level model/effort defaults (the designer designer seat → Opus /
   // xhigh) sit one layer beneath the per-spawn and project defaults, mirroring
   // how trellis reads workflow.workerModel per iteration. Not applied for
   // trellis, which resolves its own model per iteration and carries no effort.
@@ -466,16 +466,16 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   const ultracode = reqUltracode && workflowName !== "trellis";
   // Model precedence: per-spawn --model > the ultracode preset's Opus pin
   // (an explicit per-spawn gesture, more specific than a project default) >
-  // project.model > the workflow's own default (botanist Opus) > account/
+  // project.model > the workflow's own default (designer Opus) > account/
   // provider default.
   const effectiveModel = ultracode
     ? (opts.model ?? ULTRACODE_MODEL)
     : (opts.model ?? projectModel ?? workflowModelDefault);
-  // Per-worker effort rung for default/grow/botanist. Suppressed for trellis
+  // Per-worker effort rung for default/grow/designer. Suppressed for trellis
   // (own model resolution) and when ultracode is set (that preset already
   // fixes max effort — the composer/CLI keep them mutually exclusive, this is
   // defense-in-depth so a caller passing both never double-sets effort). The
-  // workflow default (botanist xhigh) fills in when no per-spawn/project rung
+  // workflow default (designer xhigh) fills in when no per-spawn/project rung
   // was requested.
   const effectiveEffort = !ultracode && workflowName !== "trellis"
     ? (reqEffort ?? workflowEffortDefault)
@@ -624,7 +624,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   // production spawn carries the resolved launch plan through this boundary.
   const bootstrapOpts: WorktreeCommandOptions = { launchPlan };
   if (trellisRelativePath) bootstrapOpts.trellisRelativePath = trellisRelativePath;
-  if (workflowName === "botanist") bootstrapOpts.botanist = true;
+  if (workflowName === "designer") bootstrapOpts.designer = true;
   if (workflowName === "planner") bootstrapOpts.planner = true;
   const scriptFile = buildWorktreeBootstrapScript(
     project.name, project.path, workerName, branchName, sessionId, wtPath, baseBranch,
@@ -1189,7 +1189,7 @@ export function bounceWorker(projectName: string, workerName: string): void {
       maxIterations: entry.grow.maxIterations ?? 5,
     };
   }
-  if (entry.workflow === "botanist") resumeOpts.botanist = true;
+  if (entry.workflow === "designer") resumeOpts.designer = true;
   if (entry.workflow === "planner") resumeOpts.planner = true;
   if (entry.worktreePath && projectInfo && entry.branchName) {
     getHarness(launchPlan.harness).installRuntimeConfig(

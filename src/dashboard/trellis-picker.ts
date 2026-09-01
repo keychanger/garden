@@ -443,7 +443,7 @@ export function composerEfforts(harness: string): string[] {
 // including its own genuine "ultra" reasoning level — is a plain
 // `model_reasoning_effort` value, and ultracode has no analog, so the whole
 // ladder passes through untranslated. Used by every consume path so the mapping
-// lives in one place. `harness` absent = claude-code (the grow/botanist plant
+// lives in one place. `harness` absent = claude-code (the grow/designer plant
 // paths, which are claude-code-only workflows).
 export function draftLaunchOpts(
   draft: SpawnDraftPatch,
@@ -498,7 +498,7 @@ export function buildWorkflowPickerPlan(
   const p = shellEscape(projectName);
   const rows: MenuRow[] = [
     { label: "(d) default — fast worker", key: "d", run: `${runner} dashboard _compose-default ${p}` },
-    { label: "(o) botanist — design a doc, then hand off", key: "o", run: `${runner} dashboard _botanist-plant ${p}` },
+    { label: "(s) designer — design a doc, then hand off", key: "s", run: `${runner} dashboard _designer-plant ${p}` },
     { label: "(t) trellis — pick a frozen design doc", key: "t", tmux: shellCmdTrellisPicker(runner, projectName) },
     { label: "(h) hoop — bounded iteration loop", key: "h", tmux: shellCmdGrowPlant(runner, projectName) },
     { sep: true, label: "" },
@@ -663,7 +663,7 @@ export function runComposeEffortSubmenu(projectName: string): void {
   runMenu(buildComposeEffortSubmenuPlan(projectName, efforts, draft.effort, resolveGardenRunner()));
 }
 
-// Launch opts for the claude-code-only workflows (grow, botanist). They cannot
+// Launch opts for the claude-code-only workflows (grow, designer). They cannot
 // honor a build member — `--harness` is default-workflow-only — so a draft
 // staged for a foreign harness would otherwise hand them that harness's model
 // and effort while spawning claude: `--model gpt-5.6-sol` on a Claude worker.
@@ -813,15 +813,15 @@ export function plantGrowFromPicker(projectName: string, seed: string): void {
   });
 }
 
-// Invoked by `_botanist-plant <project>` (the botanist row of the workflow
-// picker). Spawns the botanist immediately with no seed message at all — the
-// design posture is baked into the worker's system prompt (rules.ts botanist
+// Invoked by `_designer-plant <project>` (the designer row of the workflow
+// picker). Spawns the designer immediately with no seed message at all — the
+// design posture is baked into the worker's system prompt (rules.ts designer
 // branch + the bundled skill), and the operator's design brief arrives as
 // their first message in the pane (a better channel than tmux command-prompt:
 // multi-line, no shell-metacharacter fragility). The designer model/effort
 // default (Opus/xhigh) is applied in newWorker, and the composer's
 // model/effort/base dims still layer on top.
-export function plantBotanistFromPicker(projectName: string): void {
+export function plantDesignerFromPicker(projectName: string): void {
   const project = tryGetProject(projectName);
   if (!project) {
     tmuxDisplay(`Unknown project '${projectName}'.`);
@@ -831,7 +831,7 @@ export function plantBotanistFromPicker(projectName: string): void {
   const draft = consumeSpawnDraft(projectName);
   const newName = newWorker({
     projectName,
-    workflow: "botanist",
+    workflow: "designer",
     ...(draft.base ? { base: draft.base } : {}),
     // Model/effort dims layer over the workflow's Opus/xhigh default; crew and
     // build member are default-only and not consumed, so a foreign-harness
@@ -839,10 +839,10 @@ export function plantBotanistFromPicker(projectName: string): void {
     ...claudeOnlyLaunchOpts(project, draft),
   });
   if (!newName) {
-    tmuxDisplay(`Failed to plant botanist on '${projectName}'. Is the dashboard running?`);
+    tmuxDisplay(`Failed to plant designer on '${projectName}'. Is the dashboard running?`);
     return;
   }
-  log.info("workflow-picker", "planted botanist", {
+  log.info("workflow-picker", "planted designer", {
     worker: newName, data: { project: projectName },
   });
 }

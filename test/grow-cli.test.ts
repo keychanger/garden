@@ -294,22 +294,22 @@ describe("garden workers new --workflow grow", () => {
   });
 });
 
-describe("garden workers new --workflow botanist", () => {
-  it("plants a botanist with --seed, workflow botanist, and a botanist seed file", async () => {
+describe("garden workers new --workflow designer", () => {
+  it("plants a designer with --seed, workflow designer, and a designer seed file", async () => {
     await setupProject("proj");
     const { workers } = await importWorkersCmd();
     const { newWorker } = await importDashboardWorkers();
 
     await captureConsoleLog(() =>
-      workers(["new", "proj", "--workflow", "botanist", "--seed", "rethink error surfacing"]),
+      workers(["new", "proj", "--workflow", "designer", "--seed", "rethink error surfacing"]),
     );
 
     expect(newWorker).toHaveBeenCalledWith(expect.objectContaining({
       projectName: "proj",
-      workflow: "botanist",
-      seedMessageFile: expect.stringMatching(/botanist-seed-proj-\d+\.txt$/),
+      workflow: "designer",
+      seedMessageFile: expect.stringMatching(/designer-seed-proj-\d+\.txt$/),
     }));
-    // A botanist does not loop, so its seed is not stored on the entry (no grow
+    // A designer does not loop, so its seed is not stored on the entry (no grow
     // sub-object). The Opus/xhigh designer default is applied in newWorker (not
     // the CLI), so the CLI passes model/effort undefined here.
     const call = (newWorker as unknown as { mock: { calls: Array<[Record<string, unknown>]> } }).mock.calls.at(-1)![0];
@@ -317,21 +317,21 @@ describe("garden workers new --workflow botanist", () => {
     expect(call.model).toBeUndefined();
   });
 
-  it("writes the botanist framing into the seed file", async () => {
+  it("writes the designer framing into the seed file", async () => {
     await setupProject("proj");
     const { workers } = await importWorkersCmd();
     const { newWorker } = await importDashboardWorkers();
 
     await captureConsoleLog(() =>
-      workers(["new", "proj", "--workflow", "botanist", "--seed", "notification levels"]),
+      workers(["new", "proj", "--workflow", "designer", "--seed", "notification levels"]),
     );
 
     const call = (newWorker as unknown as { mock: { calls: Array<[Record<string, unknown>]> } }).mock.calls.at(-1)![0];
     const seedFile = call.seedMessageFile as string;
     const contents = fs.readFileSync(seedFile, "utf-8");
-    expect(contents).toContain("botanist");
+    expect(contents).toContain("designer");
     expect(contents).toContain("notification levels");
-    expect(contents).toContain(".garden/botanist/framing.md");
+    expect(contents).toContain(".garden/designer/framing.md");
     expect(contents).toContain("END YOUR TURN");
   });
 
@@ -341,11 +341,11 @@ describe("garden workers new --workflow botanist", () => {
     const { newWorker } = await importDashboardWorkers();
 
     await captureConsoleLog(() =>
-      workers(["new", "proj", "--workflow", "botanist"]),
+      workers(["new", "proj", "--workflow", "designer"]),
     );
 
     const call = (newWorker as unknown as { mock: { calls: Array<[Record<string, unknown>]> } }).mock.calls.at(-1)![0];
-    expect(call.workflow).toBe("botanist");
+    expect(call.workflow).toBe("designer");
     expect(call.seedMessageFile).toBeUndefined();
   });
 
@@ -353,7 +353,7 @@ describe("garden workers new --workflow botanist", () => {
     await setupProject("proj");
     const { workers } = await importWorkersCmd();
     await expect(
-      workers(["new", "proj", "--workflow", "botanist", "--seed", "   "]),
+      workers(["new", "proj", "--workflow", "designer", "--seed", "   "]),
     ).rejects.toThrow(/empty/);
   });
 
@@ -361,15 +361,15 @@ describe("garden workers new --workflow botanist", () => {
     await setupProject("proj");
     const { workers } = await importWorkersCmd();
     await expect(
-      workers(["new", "proj", "--workflow", "botanist", "--seed", "x", "--harness", "codex"]),
+      workers(["new", "proj", "--workflow", "designer", "--seed", "x", "--harness", "codex"]),
     ).rejects.toThrow(/--harness is only supported with --workflow default/);
   });
 
-  it("rejects --crew (default-only; a botanist runs no reviewer, the builder crew is chosen at handoff)", async () => {
+  it("rejects --crew (default-only; a designer runs no reviewer, the builder crew is chosen at handoff)", async () => {
     await setupProject("proj");
     const { workers } = await importWorkersCmd();
     await expect(
-      workers(["new", "proj", "--workflow", "botanist", "--seed", "x", "--crew", "all-codex"]),
+      workers(["new", "proj", "--workflow", "designer", "--seed", "x", "--crew", "all-codex"]),
     ).rejects.toThrow(/--crew is only supported with --workflow default/);
   });
 });
@@ -406,7 +406,7 @@ describe("--workflow whitelist", () => {
     const { workers } = await importWorkersCmd();
     await expect(
       workers(["new", "proj", "--workflow", "loop"]),
-    ).rejects.toThrow(/--workflow must be 'default', 'trellis', 'grow', 'botanist', or 'planner'/);
+    ).rejects.toThrow(/--workflow must be 'default', 'trellis', 'grow', 'designer', or 'planner'/);
   });
 });
 
@@ -1197,7 +1197,7 @@ describe("garden workers new --effort", () => {
 
     await expect(
       workers(["new", "proj", "--workflow", "trellis", "--effort", "xhigh"]),
-    ).rejects.toThrow(/--effort is only supported with --workflow default, grow, botanist, or planner/);
+    ).rejects.toThrow(/--effort is only supported with --workflow default, grow, designer, or planner/);
     expect(newWorker).not.toHaveBeenCalled();
   });
 });

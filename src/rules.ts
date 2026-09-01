@@ -61,20 +61,20 @@ export interface WorktreeRulesOptions {
     maxIterations: number;
   };
   /** When set, the rules text inverts the action-biased worktree posture for a
-   *  botanist (design) worker: surface alternatives instead of picking the
+   *  designer (design-workflow) worker: surface alternatives instead of picking the
    *  first, ask clarifying questions, write design artifacts (not code), and
    *  pause for the operator rather than push per turn. The checks paragraph is
-   *  suppressed (a botanist runs no checks). Mutually exclusive with `trellis`
+   *  suppressed (a designer runs no checks). Mutually exclusive with `trellis`
    *  and `grow` — a worker is one workflow at a time. See
-   *  docs/future/BOTANIST-WORKFLOW.md. */
-  botanist?: boolean;
+   *  docs/future/DESIGNER-WORKFLOW.md. */
+  designer?: boolean;
   /** When set, the rules text inverts the worktree posture for a planner
    *  (decomposition) worker: the deliverable is a bead DAG written to the
    *  project's bd store, not code — no commits, no pushes, no checks. The
    *  exact bd contract (create/dep/label spellings) rides the worker's seed
    *  message; this fragment only sets the posture. The checks paragraph is
    *  suppressed (a planner runs no checks). Mutually exclusive with
-   *  `trellis`, `grow`, and `botanist`. */
+   *  `trellis`, `grow`, and `designer`. */
   planner?: boolean;
   /** The project's configured `checks` command (from `garden config <project>
    *  checks`). When set, the prompt names the exact command and instructs
@@ -112,16 +112,16 @@ You are working in an isolated git worktree on branch \`${branchName}\`. Your wo
 
   const baseWithChecks = base + checksParagraph;
 
-  const workflowOpts = [options?.trellis, options?.grow, options?.botanist, options?.planner].filter(Boolean);
+  const workflowOpts = [options?.trellis, options?.grow, options?.designer, options?.planner].filter(Boolean);
   if (workflowOpts.length > 1) {
     throw new Error(
-      "buildWorktreeRules: trellis, grow, botanist, and planner options are "
+      "buildWorktreeRules: trellis, grow, designer, and planner options are "
       + "mutually exclusive — a worker is one workflow at a time.",
     );
   }
 
   if (options?.planner) {
-    // Planner inverts the action-biased base the same way botanist does, but
+    // Planner inverts the action-biased base the same way designer does, but
     // toward a different deliverable: a dependency-gated bead DAG in the
     // project's bd store. The base's commit/push/done guidance is written for
     // build workers and would drive a planner to invent commits; this fragment
@@ -141,8 +141,8 @@ You are working in an isolated git worktree on branch \`${branchName}\`. Your wo
     return `${base}\n\n${plannerExtras}`;
   }
 
-  if (options?.botanist) {
-    // Botanist inverts the action-biased base. Design and build are different
+  if (options?.designer) {
+    // Designer inverts the action-biased base. Design and build are different
     // cognitive modes; a worker told to "make the call and move on" ships the
     // first plausible approach before the operator can redirect. This fragment
     // reframes the posture and, critically, overrides the base's "commit and
@@ -150,19 +150,19 @@ You are working in an isolated git worktree on branch \`${branchName}\`. Your wo
     // guidance (lines above) which is written for build workers. It cannot
     // delete the global rules.md "make your best judgment and proceed" line, so
     // it counter-instructs it explicitly. The checks paragraph is dropped
-    // entirely (a botanist runs no checks) by returning `base`, not
+    // entirely (a designer runs no checks) by returning `base`, not
     // `baseWithChecks`.
-    const botanistExtras = `## Botanist workflow (design, do not build)
+    const designerExtras = `## Designer workflow (design, do not build)
 
-**You are a botanist — a design worker. Your deliverable is a DESIGN ARTIFACT (a document), not code.** This inverts the "commit and push when your task is complete", "invoke the \`done\` skill", and "auto-continue fires after the merge" guidance above — that guidance is for build workers. It also overrides the global rule "make your best judgment and proceed": for design, a wrong first guess wastes far more than a clarifying question. See the \`botanist\` skill (\`.claude/skills/botanist/\`) for the full four-phase method. The operator's design brief arrives as their first message in this pane (unless it was already inlined in a plant-time seed message); when it does, start the pipeline — frame, then options + questions, then pause at the gate.
+**You are a designer. Your deliverable is a DESIGN ARTIFACT (a document), not code.** This inverts the "commit and push when your task is complete", "invoke the \`done\` skill", and "auto-continue fires after the merge" guidance above — that guidance is for build workers. It also overrides the global rule "make your best judgment and proceed": for design, a wrong first guess wastes far more than a clarifying question. See the \`designer\` skill (\`.claude/skills/designer/\`) for the full four-phase method. The operator's design brief arrives as their first message in this pane (unless it was already inlined in a plant-time seed message); when it does, start the pipeline — frame, then options + questions, then pause at the gate.
 
 **Surface alternatives; do not pick the first plausible one.** Before committing to an approach, sketch at least two as short narrative descriptions of how each would work end to end, and name the load-bearing tradeoff between them. Ask the operator numbered, specific clarifying questions whenever scope is genuinely ambiguous — a round trip costs far less than designing the wrong thing.
 
-**Write artifacts, not code.** Do NOT edit \`src/\`, tests, configs, or build files. Your working notes live in \`.garden/botanist/\` at your worktree root (\`framing.md\`, \`options.md\`, \`questions.md\`, \`artifact.md\`) — this directory is git-excluded and intentionally uncommitted; it is your memory across turns, not a commit. Do NOT run \`git add\`/\`git commit\`/\`git push\` during the design phases, and do NOT run project checks.
+**Write artifacts, not code.** Do NOT edit \`src/\`, tests, configs, or build files. Your working notes live in \`.garden/designer/\` at your worktree root (\`framing.md\`, \`options.md\`, \`questions.md\`, \`artifact.md\`) — this directory is git-excluded and intentionally uncommitted; it is your memory across turns, not a commit. Do NOT run \`git add\`/\`git commit\`/\`git push\` during the design phases, and do NOT run project checks.
 
 **Operator-in-the-loop is the default.** When you have written your options and questions, \`touch .garden-awaiting-input\` at your worktree root (it shows a \`?\` on your dashboard row so the operator knows you are waiting on them) and END YOUR TURN to hand control to the operator — they answer in chat, and you resume on their next message. You are not stuck and you are not done; you are waiting. Only when the operator explicitly approves the artifact do you publish it: move it to a tracked \`docs/future/<name>.md\` path, then commit and push that single doc so it merges into history for a downstream builder to pick up.`;
 
-    return `${base}\n\n${botanistExtras}`;
+    return `${base}\n\n${designerExtras}`;
   }
 
   if (options?.trellis) {

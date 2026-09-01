@@ -3,7 +3,7 @@
 // warn-on-invalid-transition pattern (registry consistency bugs surface in
 // logs without breaking production).
 import { log } from "../log.js";
-import { botanistWorkflow } from "./botanist.js";
+import { designerWorkflow } from "./designer.js";
 import { defaultWorkflow } from "./default.js";
 import { growWorkflow } from "./grow.js";
 import { plannerWorkflow } from "./planner.js";
@@ -11,7 +11,7 @@ import { trellisWorkflow } from "./trellis.js";
 import type { WorkflowDefinition } from "./types.js";
 
 export type { WorkflowDefinition, StateHandler, HookContext, WorkflowHookHandlers, HookMethod } from "./types.js";
-export { botanistWorkflow } from "./botanist.js";
+export { designerWorkflow } from "./designer.js";
 export { defaultWorkflow } from "./default.js";
 export { growWorkflow } from "./grow.js";
 export { plannerWorkflow } from "./planner.js";
@@ -21,7 +21,7 @@ const registry = new Map<string, WorkflowDefinition>();
 registry.set(defaultWorkflow.name, defaultWorkflow);
 registry.set(growWorkflow.name, growWorkflow);
 registry.set(trellisWorkflow.name, trellisWorkflow);
-registry.set(botanistWorkflow.name, botanistWorkflow);
+registry.set(designerWorkflow.name, designerWorkflow);
 registry.set(plannerWorkflow.name, plannerWorkflow);
 
 // Tracks names we've already warned about, so the operator's logs aren't

@@ -48,7 +48,7 @@ interface WorkerInfo {
   // (blocked, new, in-flight, done) are never stale-dimmed.
   stale: boolean;
   // True when the worker holds the `.garden-awaiting-input` sentinel — a
-  // botanist (or future plan worker) paused at the human gate, waiting on the
+  // designer (or future plan worker) paused at the human gate, waiting on the
   // operator. Distinct from the mid-turn `asking` state (a first-class status):
   // the worker is still in poller state `working`, it just wrote the sentinel
   // and ended its turn. Renders a `?` in the row flags.
@@ -797,20 +797,20 @@ export function formatTrellisBracket(t: WorkerInfo["trellis"]): string {
 // CI_FIX_BUDGET_DISPLAY is inlined to preserve. `detail` fills the elastic
 // detail column; a vine shows its bracket, a grow loop its "grow N/M" counter
 // (the parity fix — trellis had a counter, grow had nothing). `badge` joins
-// the grey trailing identity cluster — the botanist tag lives there.
+// the grey trailing identity cluster — the designer tag lives there.
 function workflowRowDecor(worker: WorkerInfo): { badge?: string; detail?: string } {
   switch (worker.workflow) {
     case "trellis":
       return { detail: formatTrellisBracket(worker.trellis) };
     case "grow":
       return { detail: `grow ${worker.grow?.iteration ?? 0}/${worker.grow?.maxIterations ?? 0}` };
-    case "botanist":
+    case "designer":
       // Identity, not activity: the badge joins the grey trailing cluster so
       // the live activity text keeps the detail slot (a static detail here
       // would clobber it).
-      return { badge: "botanist" };
+      return { badge: "designer" };
     case "planner":
-      // Same identity-not-activity call as botanist: the planner's live
+      // Same identity-not-activity call as designer: the planner's live
       // activity keeps the detail slot.
       return { badge: "planner" };
     default:

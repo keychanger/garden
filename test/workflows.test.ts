@@ -8,7 +8,7 @@ import {
   defaultWorkflow,
   growWorkflow,
   trellisWorkflow,
-  botanistWorkflow,
+  designerWorkflow,
   plannerWorkflow,
   getWorkflow,
   registerWorkflow,
@@ -219,50 +219,50 @@ describe("growWorkflow", () => {
   });
 });
 
-describe("botanistWorkflow", () => {
-  // Phase 2 skeleton: reuses default's handlers (a botanist's design phases
+describe("designerWorkflow", () => {
+  // Phase 2 skeleton: reuses default's handlers (a designer's design phases
   // produce no tracked commit, so handleWorking never launches a review — the
   // worker idles at the human gate). The skip-review merge divergence is Phase 3.
 
-  it("is registered under name 'botanist'", () => {
-    expect(getWorkflow("botanist")).toBe(botanistWorkflow);
+  it("is registered under name 'designer'", () => {
+    expect(getWorkflow("designer")).toBe(designerWorkflow);
   });
 
   it("diverges from default only on `working`: skip-review goes to merge-pending/failing, never reviewing", () => {
     // Every other state reuses default's edges (a docs branch can still hit a
     // rebase conflict -> resolving, red CI -> ci-fixing).
-    expect(botanistWorkflow.validTransitions.working).toEqual(["merge-pending", "failing", "done"]);
-    expect(botanistWorkflow.validTransitions.working).not.toContain("reviewing");
+    expect(designerWorkflow.validTransitions.working).toEqual(["merge-pending", "failing", "done"]);
+    expect(designerWorkflow.validTransitions.working).not.toContain("reviewing");
     for (const state of ALL_PR_STATES) {
       if (state === "working") continue;
-      expect(botanistWorkflow.validTransitions[state]).toEqual(PRE_REFACTOR_VALID_TRANSITIONS[state]);
+      expect(designerWorkflow.validTransitions[state]).toEqual(PRE_REFACTOR_VALID_TRANSITIONS[state]);
     }
   });
 
-  it("getValidTransitions('botanist') returns the botanist table (live path, not the dead field)", () => {
-    expect(getValidTransitions("botanist")).toBe(botanistWorkflow.validTransitions);
-    expect(getValidTransitions("botanist").working).toEqual(["merge-pending", "failing", "done"]);
+  it("getValidTransitions('designer') returns the designer table (live path, not the dead field)", () => {
+    expect(getValidTransitions("designer")).toBe(designerWorkflow.validTransitions);
+    expect(getValidTransitions("designer").working).toEqual(["merge-pending", "failing", "done"]);
   });
 
   it("has a registered handler for every PrState (exhaustiveness)", () => {
     for (const state of ALL_PR_STATES) {
       expect(
-        botanistWorkflow.stateHandlers[state],
-        `botanist workflow missing handler for state ${state}`,
+        designerWorkflow.stateHandlers[state],
+        `designer workflow missing handler for state ${state}`,
       ).toBeDefined();
     }
   });
 
   it("declares the designer seat: workerModel 'opus', workerEffort 'xhigh', no reviewerModel", () => {
     // Design is judgment-heavy, so the designer defaults to Opus at max effort.
-    // No reviewerModel — a botanist branch runs no reviewer.
-    expect(botanistWorkflow.workerModel).toBe("opus");
-    expect(botanistWorkflow.workerEffort).toBe("xhigh");
-    expect(botanistWorkflow.reviewerModel).toBeUndefined();
+    // No reviewerModel — a designer branch runs no reviewer.
+    expect(designerWorkflow.workerModel).toBe("opus");
+    expect(designerWorkflow.workerEffort).toBe("xhigh");
+    expect(designerWorkflow.reviewerModel).toBeUndefined();
   });
 
   it("skipsReviewMerge is true (its artifact is prose the operator reviewed at the gate)", () => {
-    expect(botanistWorkflow.skipsReviewMerge).toBe(true);
+    expect(designerWorkflow.skipsReviewMerge).toBe(true);
     // Other workflows do not skip review.
     expect(defaultWorkflow.skipsReviewMerge).toBeUndefined();
     expect(growWorkflow.skipsReviewMerge).toBeUndefined();
@@ -270,7 +270,7 @@ describe("botanistWorkflow", () => {
 });
 
 describe("plannerWorkflow", () => {
-  // Botanist-shaped: reuses default's handlers. A planner writes only to the
+  // Designer-shaped: reuses default's handlers. A planner writes only to the
   // bd store, so its branch never gains a tracked commit and handleWorking
   // idles it after the plan lands; skipsReviewMerge covers the drift case.
 
@@ -278,7 +278,7 @@ describe("plannerWorkflow", () => {
     expect(getWorkflow("planner")).toBe(plannerWorkflow);
   });
 
-  it("diverges from default only on `working`, like botanist", () => {
+  it("diverges from default only on `working`, like designer", () => {
     expect(plannerWorkflow.validTransitions.working).toEqual(["merge-pending", "failing", "done"]);
     expect(plannerWorkflow.validTransitions.working).not.toContain("reviewing");
     for (const state of ALL_PR_STATES) {

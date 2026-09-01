@@ -788,32 +788,32 @@ describe("newWorker", () => {
     );
   });
 
-  // ===== Botanist designer seat (workflow-level model/effort default) =====
-  // The botanist workflow declares workerModel: "opus" + workerEffort: "xhigh".
+  // ===== Designer designer seat (workflow-level model/effort default) =====
+  // The designer workflow declares workerModel: "opus" + workerEffort: "xhigh".
   // newWorker layers those beneath a per-spawn --model/--effort, exactly as it
   // layers project.model/effort for default/grow. This is the seam that makes
   // the workflow-level default load-bearing (it was inert before Phase 2).
 
-  it("botanist: stamps the Opus/xhigh designer default from the workflow definition", () => {
+  it("designer: stamps the Opus/xhigh designer default from the workflow definition", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
-    newWorker({ workflow: "botanist" });
+    newWorker({ workflow: "designer" });
     expect(vi.mocked(addWorker)).toHaveBeenCalledWith(
       "myproject",
       expect.objectContaining({
-        workflow: "botanist",
+        workflow: "designer",
         model: "opus",
         effort: "xhigh",
       }),
     );
   });
 
-  it("botanist: an explicit --model / --effort overrides the workflow default", () => {
+  it("designer: an explicit --model / --effort overrides the workflow default", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
-    newWorker({ workflow: "botanist", model: "sonnet", effort: "high" });
+    newWorker({ workflow: "designer", model: "sonnet", effort: "high" });
     expect(vi.mocked(addWorker)).toHaveBeenCalledWith(
       "myproject",
       expect.objectContaining({
-        workflow: "botanist",
+        workflow: "designer",
         model: "sonnet",
         effort: "high",
       }),

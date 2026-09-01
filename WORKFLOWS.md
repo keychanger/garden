@@ -2714,15 +2714,15 @@ the convert step; amend is unbounded.
   diffs") could fire a `failing/stagnation` alert. Deferred — the
   iteration cap is the primary safety net.
 
-## Botanist workflow
+## Designer workflow
 
-Spec for the **botanist** workflow: a **design** worker whose unit of output
-is a design artifact (a document), **not code**. A botanist frames a problem,
+Spec for the **designer** workflow: a **design** worker whose unit of output
+is a design artifact (a document), **not code**. A designer frames a problem,
 sketches alternatives, asks the operator clarifying questions, converges on an
 approach, and publishes the approved artifact to a tracked `docs/` path for a
 downstream builder to implement. **If the code disagrees with this section, the
 code is wrong.** Design doc (superseded by this section once shipped):
-`docs/future/BOTANIST-WORKFLOW.md`.
+`docs/future/DESIGNER-WORKFLOW.md`.
 
 ### Why this exists
 
@@ -2730,7 +2730,7 @@ Design and build are different cognitive modes. Garden's other workers are
 action-biased ("make your best judgment and proceed", "never produce partial
 work and stop") — correct for implementation, actively harmful for design,
 where a worker told to "make the call and move on" ships the first plausible
-approach before the operator can redirect. Botanist inverts that posture: its
+approach before the operator can redirect. Designer inverts that posture: its
 job is to think out loud with the operator and produce a document the operator
 reads, edits, and approves. Once separate, the design and build **seats** no
 longer have to be the same model — a strong designer (Opus) can hand off to a
@@ -2739,8 +2739,8 @@ cheaper or different-blind-spots builder (the multi-model pipeline).
 ### The four-phase pipeline
 
 All four phases run inside the `working` poller state (the poller never sees the
-boundaries; the botanist tracks them by file existence under
-`<worktree>/.garden/botanist/`, which is git-excluded and intentionally
+boundaries; the designer tracks them by file existence under
+`<worktree>/.garden/designer/`, which is git-excluded and intentionally
 uncommitted — working memory, not commits):
 
 1. **Frame** — read the seed, scan the repo, write `framing.md` (goal,
@@ -2748,16 +2748,16 @@ uncommitted — working memory, not commits):
 2. **Options** — write `options.md` (2–3 approaches as narrative sketches, each
    naming its load-bearing tradeoff) and `questions.md` (numbered, specific).
    Then `touch .garden-awaiting-input` and end the turn — the human gate.
-3. **Converge** (loops) — the operator answers in chat; the botanist captures
+3. **Converge** (loops) — the operator answers in chat; the designer captures
    `answers.md`, drafts `artifact.md`, and re-enters the gate as many times as
    the operator wants more options. Ends when the operator approves.
-4. **Publish** — `garden botanist publish` moves the artifact to a tracked
-   `docs/` path, commits it, and writes `.garden-done`; the botanist then
+4. **Publish** — `garden designer publish` moves the artifact to a tracked
+   `docs/` path, commits it, and writes `.garden-done`; the designer then
    executes the handoff plan the operator approved (see Handoff below).
 
 ### The human gate
 
-`.garden-awaiting-input` is a general human-gate sentinel; botanist is its one
+`.garden-awaiting-input` is a general human-gate sentinel; designer is its one
 user today (the shipped planner workflow has no mid-run gate — its review
 gate is board-side promotion).
 Auto-continue skips a worker holding it (`autoContinueSkipReason`,
@@ -2765,33 +2765,33 @@ Auto-continue skips a worker holding it (`autoContinueSkipReason`,
 `.garden-done`, a gated worker holds it while `prState` is still `working`).
 The status pane shows a yellow `?` on a worker holding it (`formatAwaitingInputGlyph`,
 `status.ts`). Note the gate is milder than it looks: because the phase-1–3
-artifacts are git-excluded, a botanist's design turns produce no tracked commit,
+artifacts are git-excluded, a designer's design turns produce no tracked commit,
 so `routeStopHookEnd` sees zero commits ahead and the worker simply idles — the
 sentinel is the operator-visible signal + a robustness backstop, not the primary
 pause mechanism.
 
 ### Skip-review merge
 
-`WorkflowDefinition.skipsReviewMerge: true` is shared by botanist and planner.
-When a botanist has
+`WorkflowDefinition.skipsReviewMerge: true` is shared by designer and planner.
+When a designer has
 commits ahead of base (at publish), `handleWorking` routes `working →
 merge-pending` **directly** — no reviewer, because the operator already reviewed
 the prose at the gate. The reviewer is launched from `handleWorking →
 launchReview`, so "skip review" lives in that handler, not the merge handler.
-`botanistValidTransitions` diverges from default only on `working`
+`designerValidTransitions` diverges from default only on `working`
 (`["merge-pending", "failing", "done"]`, never `reviewing`). The CI/merge gate
-still applies. Botanist is excluded from the holistic whole-task review
+still applies. Designer is excluded from the holistic whole-task review
 (`evaluateHolisticGate`'s `workflow === "default"` clause), which would otherwise
 re-launch a reviewer and defeat skip-review.
 
 ### Scope enforcement
 
-A botanist's only committable output is a tracked doc under `docs/`
-(`isPublishablePath`, `botanist-paths.ts`; `.garden/` is git-excluded so its
+A designer's only committable output is a tracked doc under `docs/`
+(`isPublishablePath`, `designer-paths.ts`; `.garden/` is git-excluded so its
 artifacts never appear in a diff). Before the skip-review transition,
-`handleWorking` checks the committed diff: a file outside `docs/` (a botanist
+`handleWorking` checks the committed diff: a file outside `docs/` (a designer
 that drifted into building code) parks the worker in `failing` with
-`failingReason: "botanist-scope"` and an operator alert. It is not
+`failingReason: "designer-scope"` and an operator alert. It is not
 operator-action-gated — removing the offending files and re-pushing auto-retries
 the publish after the failing debounce.
 
@@ -2799,25 +2799,25 @@ the publish after the failing debounce.
 
 | Seat | What fills it | How selected |
 |---|---|---|
-| **Designer** | the botanist worker itself | its own harness/model; defaults to Opus at `xhigh` effort (`workflow.workerModel`/`workerEffort`), overridable per run via `--model`/`--effort`/`--harness` (a Codex designer works) |
-| **Builder** | a downstream worker spawned at handoff | default-workflow: spawned by the botanist via `garden handoff` on approval; trellis: the operator-run plant command (see below) |
+| **Designer** | the designer worker itself | its own harness/model; defaults to Opus at `xhigh` effort (`workflow.workerModel`/`workerEffort`), overridable per run via `--model`/`--effort`/`--harness` (a Codex designer works) |
+| **Builder** | a downstream worker spawned at handoff | default-workflow: spawned by the designer via `garden handoff` on approval; trellis: the operator-run plant command (see below) |
 | **Reviewer** | the builder's reviewer | stays strong first-party by default (the shipped crew safety invariant) |
 
 ### Handoff
 
-Approval-driven, botanist-executed for the default case: the converge gate's
+Approval-driven, designer-executed for the default case: the converge gate's
 approval ask states the handoff plan alongside the final artifact, so one
-"approve" authorizes both — publish, then build. On approval the botanist
+"approve" authorizes both — publish, then build. On approval the designer
 publishes first (a failed publish must not leave a builder working from an
 unpublished design), then spawns a **default-workflow builder** itself through
 the existing `garden handoff` IPC, seeded from
-`.garden/botanist/handoff-brief.md` — a self-contained briefing that inlines the
+`.garden/designer/handoff-brief.md` — a self-contained briefing that inlines the
 full design, because the child branches from `origin/<base>` before the
 published doc merges, so the doc path does not yet exist in its worktree. The
 operator redirects in the approval itself: a **trellis builder** (operator-run
 and two-step, because the handoff IPC spawns default-workflow workers only and
 `--trellis` resolves a *named*, tagged trellis inside the project's trellis dir
-— see "Plant-time pre-flight" — never a `docs/` path: the botanist bakes the
+— see "Plant-time pre-flight" — never a `docs/` path: the designer bakes the
 trellis spine into the artifact before publish, and after the merge the
 operator copies the doc into the trellis dir and plants it by name, `garden
 workers new <project> --workflow trellis --trellis <name>`), or **no
@@ -2832,34 +2832,34 @@ neither of which the skill-level path requires.
 ### Triggering
 
 ```bash
-garden workers new <project> --workflow botanist                     # brief arrives in the pane
-garden workers new <project> --workflow botanist --seed "…"          # or --seed-file: inline the brief
-garden workers new <project> --workflow botanist --harness codex     # a Codex designer
+garden workers new <project> --workflow designer                     # brief arrives in the pane
+garden workers new <project> --workflow designer --seed "…"          # or --seed-file: inline the brief
+garden workers new <project> --workflow designer --harness codex     # a Codex designer
 ```
 
-The `⌥⇧N` workflow picker's `(o)` row plants a botanist instantly (`(b)` is the
-base-branch composer row) — no design prompt is collected in the tmux UI. The
+The `⌥⇧N` workflow picker's `(s)` row plants a designer instantly (`(d)` is the
+default-worker row) — no design prompt is collected in the tmux UI. The
 seed is optional everywhere: without one, no plant-time message is sent at all —
 the design posture is baked into the worker's system prompt (the `rules.ts`
-botanist branch + the bundled skill) and the operator's design brief arrives as
+designer branch + the bundled skill) and the operator's design brief arrives as
 the first message in its pane (multi-line, conversational, no shell-escaping
 constraints); with `--seed`/`--seed-file` (the scripted-plant path) the brief is
 inlined via the seed message and framing starts immediately. `--crew` is
-rejected for a botanist (it runs no reviewer; the builder crew is chosen at
+rejected for a designer (it runs no reviewer; the builder crew is chosen at
 handoff).
 
 ### Code layout
 
-- `workflows/botanist.ts` — the definition (reuses default's 8 state handlers;
+- `workflows/designer.ts` — the definition (reuses default's 8 state handlers;
   `skipsReviewMerge`, `workerModel: "opus"`, `workerEffort: "xhigh"`).
-- `botanist-paths.ts` — `isPublishablePath` leaf, letting the poller enforce the
+- `designer-paths.ts` — `isPublishablePath` leaf, letting the poller enforce the
   boundary without importing the publish mutation path.
-- `botanist-publish.ts` — `publishBotanistArtifact` (move + commit + `.garden-done`;
+- `designer-publish.ts` — `publishDesignerArtifact` (move + commit + `.garden-done`;
   no push — the poller merge pushes).
-- `botanist-prompts.ts` — `buildBotanistSeed` (plant-time framing; only used
+- `designer-prompts.ts` — `buildDesignerSeed` (plant-time framing; only used
   when `--seed`/`--seed-file` inlines a brief — seedless plants send no message).
-- `commands/botanist.ts` — `garden botanist publish [<worker>] --to <path> [--dry-run]`.
-- The rules inversion (`rules.ts` botanist branch), the bundled `botanist` skill
+- `commands/designer.ts` — `garden designer publish [<worker>] --to <path> [--dry-run]`.
+- The rules inversion (`rules.ts` designer branch), the bundled `designer` skill
   (`skills.ts`), the picker row (`trellis-picker.ts`), and the `?` glyph
   (`status.ts`).
 
@@ -2869,7 +2869,7 @@ handoff).
   `--handoff-crew` on publish) — see Handoff above; the default-builder case
   ships skill-level.
 - **`--artifact-type`** (trellis/memo/freeform) — subsumed by the publish `--to` path.
-- **`garden workers botanist`** to convert an active default worker mid-run.
+- **`garden workers designer`** to convert an active default worker mid-run.
 - **Designer-in-the-crew-name** (the `<designer>-<builder>-<reviewer>` triple) —
   needs the role-agnostic `resolveRole` CREWS scoped.
 
@@ -2931,15 +2931,15 @@ disqualifying so a future fix prompts reconsidering the single-call form. The
 
 ### The workflow definition
 
-Botanist-shaped and data-only: reuses default's 8 state handlers,
+Designer-shaped and data-only: reuses default's 8 state handlers,
 `workerModel: "opus"` + `workerEffort: "xhigh"` (decomposition is
 judgment-heavy — the designer seat), `skipsReviewMerge: true`. A planner
 writes only to the bd store, so its branch never gains a tracked commit —
 `handleWorking` sees zero commits and the worker idles after finishing, like
-a botanist at its human gate; a planner that drifts into committing rides the
-same publishable-path boundary check as botanist (anything outside `docs/`
+a designer at its human gate; a planner that drifts into committing rides the
+same publishable-path boundary check as designer (anything outside `docs/`
 parks it in `failing`). `plannerValidTransitions` diverges from default only
-on `working` (`["merge-pending", "failing", "done"]`), exactly like botanist.
+on `working` (`["merge-pending", "failing", "done"]`), exactly like designer.
 
 ### Spawning
 
@@ -2962,7 +2962,7 @@ is `garden workers stop` or the dashboard `⌥x` kill.
 [--effort …] [--base …]` plants one from the CLI (hand-run dispatch and
 testing). The seed is optional and delivered RAW — no framing wrapper, since
 intake composes the contract seed itself; without one, no message is sent and
-the brief arrives as the operator's first pane message (the botanist
+the brief arrives as the operator's first pane message (the designer
 pattern). A planner spawned outside a `beadIntake` project has no
 `BEADS_DIR`/`BEADS_ACTOR` env, so its bd calls would hit a worktree-local
 store — plant planners on opted-in projects.

@@ -9,7 +9,7 @@
 //
 // This module is a string-only leaf with no imports on purpose: prompt-compose
 // reaches it from the lean dist/hook.js closure, and codex.ts (git/fs/exec) must
-// not be dragged in behind it. Same split rationale as botanist-paths.ts.
+// not be dragged in behind it. Same split rationale as designer-paths.ts.
 
 export const AGENTS_MARKER = "<!-- garden worker rules (managed by garden; not committed) -->";
 

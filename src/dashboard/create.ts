@@ -36,7 +36,7 @@ import {
   HANDOFF_SKILL_CONTENT, HANDOFF_SKILL_DIRNAME, HANDOFF_SKILL_FILENAME,
   TRELLIS_AUTHOR_SKILL_CONTENT, TRELLIS_AUTHOR_SKILL_DIRNAME, TRELLIS_AUTHOR_SKILL_FILENAME,
   GROW_SKILL_CONTENT, GROW_SKILL_DIRNAME, GROW_SKILL_FILENAME,
-  BOTANIST_SKILL_CONTENT, BOTANIST_SKILL_DIRNAME, BOTANIST_SKILL_FILENAME,
+  DESIGNER_SKILL_CONTENT, DESIGNER_SKILL_DIRNAME, DESIGNER_SKILL_FILENAME,
   PLANNER_SKILL_CONTENT, PLANNER_SKILL_DIRNAME, PLANNER_SKILL_FILENAME,
 } from "./skills.js";
 import {
@@ -142,7 +142,7 @@ export function ensureDashboard(): void {
                 maxIterations: entry.grow.maxIterations ?? 5,
               };
             }
-            if (entry.workflow === "botanist") runtimeRulesOpts.botanist = true;
+            if (entry.workflow === "designer") runtimeRulesOpts.designer = true;
             if (entry.workflow === "planner") runtimeRulesOpts.planner = true;
             const launchPlan = resolveWorkerLaunchPlan({
               project: proj,
@@ -681,12 +681,12 @@ export interface WorktreeCommandOptions {
    *  claude-code adapter. Threaded by resume/bounce/loop callers from the
    *  entry; spawn-time selection arrives with the second adapter. */
   harness?: string;
-  /** When set, buildWorktreeRules inverts the worktree posture for a botanist
+  /** When set, buildWorktreeRules inverts the worktree posture for a designer
    *  (design) worker and suppresses the checks paragraph. Threaded from the
-   *  spawn (workflow === "botanist") and re-derived on resume/bounce from
+   *  spawn (workflow === "designer") and re-derived on resume/bounce from
    *  `entry.workflow` so the inversion survives the worker's lifetime.
    *  Mutually exclusive with `trellisRelativePath` / `grow`. */
-  botanist?: boolean;
+  designer?: boolean;
   /** When set, buildWorktreeRules inverts the worktree posture for a planner
    *  (decomposition) worker — the deliverable is a bead DAG in the bd store,
    *  not code — and suppresses the checks paragraph. Threaded from the spawn
@@ -706,7 +706,7 @@ export function buildWorktreeWorkerCommand(
 ): string {
   const contextFile = writeWorktreeContextFile(
     projectName, projectPath, branchName, baseBranch,
-    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow, botanist: opts?.botanist, planner: opts?.planner },
+    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow, designer: opts?.designer, planner: opts?.planner },
   );
   const project = resolveProjectForHooks(projectName, projectPath);
   const launchPlan = commandLaunchPlan(project, opts, false);
@@ -738,8 +738,8 @@ function commandLaunchPlan(
     ? "trellis"
     : opts?.grow
       ? "grow"
-      : opts?.botanist
-        ? "botanist"
+      : opts?.designer
+        ? "designer"
         : opts?.planner
           ? "planner"
           : "default";
@@ -812,7 +812,7 @@ export function buildWorktreeBootstrapScript(
   // Write the context file eagerly (fast, just file I/O)
   const contextFile = writeWorktreeContextFile(
     projectName, projectPath, branchName, baseBranch,
-    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow, botanist: opts?.botanist, planner: opts?.planner },
+    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow, designer: opts?.designer, planner: opts?.planner },
   );
 
   const fifoLit = shellEscape(signalFifoPath(projectName));
@@ -869,9 +869,9 @@ export function buildWorktreeBootstrapScript(
   const growSkillLit = shellEscape(GROW_SKILL_CONTENT);
   const growSkillDirnameLit = shellEscape(GROW_SKILL_DIRNAME);
   const growSkillFilenameLit = shellEscape(GROW_SKILL_FILENAME);
-  const botanistSkillLit = shellEscape(BOTANIST_SKILL_CONTENT);
-  const botanistSkillDirnameLit = shellEscape(BOTANIST_SKILL_DIRNAME);
-  const botanistSkillFilenameLit = shellEscape(BOTANIST_SKILL_FILENAME);
+  const designerSkillLit = shellEscape(DESIGNER_SKILL_CONTENT);
+  const designerSkillDirnameLit = shellEscape(DESIGNER_SKILL_DIRNAME);
+  const designerSkillFilenameLit = shellEscape(DESIGNER_SKILL_FILENAME);
   const plannerSkillLit = shellEscape(PLANNER_SKILL_CONTENT);
   const plannerSkillDirnameLit = shellEscape(PLANNER_SKILL_DIRNAME);
   const plannerSkillFilenameLit = shellEscape(PLANNER_SKILL_FILENAME);
@@ -1076,8 +1076,8 @@ mkdir -p ${wtPathLit}/.claude/skills/${trellisAuthorSkillDirnameLit}
 printf '%s' ${trellisAuthorSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${trellisAuthorSkillDirnameLit}/${trellisAuthorSkillFilenameLit}
 mkdir -p ${wtPathLit}/.claude/skills/${growSkillDirnameLit}
 printf '%s' ${growSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${growSkillDirnameLit}/${growSkillFilenameLit}
-mkdir -p ${wtPathLit}/.claude/skills/${botanistSkillDirnameLit}
-printf '%s' ${botanistSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${botanistSkillDirnameLit}/${botanistSkillFilenameLit}
+mkdir -p ${wtPathLit}/.claude/skills/${designerSkillDirnameLit}
+printf '%s' ${designerSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${designerSkillDirnameLit}/${designerSkillFilenameLit}
 mkdir -p ${wtPathLit}/.claude/skills/${plannerSkillDirnameLit}
 printf '%s' ${plannerSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${plannerSkillDirnameLit}/${plannerSkillFilenameLit}
 
@@ -1087,7 +1087,7 @@ printf '%s' ${plannerSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${plan
 # trellis-lessons.md) — none of these belong in version control. .garden-done
 # is the auto-continue suppression sentinel; the done skill description
 # advertises this exclusion as the reason workers should not \`git add\` it.
-# .garden-awaiting-input is the human-gate sentinel (botanist/plan), excluded
+# .garden-awaiting-input is the human-gate sentinel (designer/plan), excluded
 # for the same reason.
 EXCLUDE_FILE="$(git -C ${wtPathLit} rev-parse --git-common-dir)/info/exclude"
 for pattern in .claude/ .garden-hooks/ .garden/ .garden-done .garden-awaiting-input; do
@@ -1162,7 +1162,7 @@ export function respawnWorkerWindow(
       maxIterations: entry.grow.maxIterations ?? 5,
     };
   }
-  if (entry.workflow === "botanist") resumeOpts.botanist = true;
+  if (entry.workflow === "designer") resumeOpts.designer = true;
   if (entry.workflow === "planner") resumeOpts.planner = true;
   if (entry.worktreePath && wtExists(entry.worktreePath)) {
     installPollTriggerHook(entry.worktreePath, resolveGardenRunner(), projectName);
@@ -1241,7 +1241,7 @@ export function buildWorktreeResumeCommand(
 ): string {
   const contextFile = writeWorktreeContextFile(
     projectName, projectPath, branchName, baseBranch,
-    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow, botanist: opts?.botanist, planner: opts?.planner },
+    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow, designer: opts?.designer, planner: opts?.planner },
   );
   const gardenRunner = resolveGardenRunner();
   const project = resolveProjectForHooks(projectName, projectPath);
@@ -1316,7 +1316,7 @@ function writeWorktreeContextFile(
   opts?: {
     trellisRelativePath?: string;
     grow?: { iteration: number; maxIterations: number };
-    botanist?: boolean;
+    designer?: boolean;
     planner?: boolean;
   },
 ): string {
@@ -1336,7 +1336,7 @@ export function buildWorktreeContextText(
   opts?: {
     trellisRelativePath?: string;
     grow?: { iteration: number; maxIterations: number };
-    botanist?: boolean;
+    designer?: boolean;
     planner?: boolean;
   },
 ): string {
@@ -1350,7 +1350,7 @@ export function buildWorktreeContextText(
         ? { trellis: { relativePath: opts.trellisRelativePath } }
         : {}),
       ...(opts?.grow ? { grow: opts.grow } : {}),
-      ...(opts?.botanist ? { botanist: true } : {}),
+      ...(opts?.designer ? { designer: true } : {}),
       ...(opts?.planner ? { planner: true } : {}),
       ...(checksCommand ? { checksCommand } : {}),
     },

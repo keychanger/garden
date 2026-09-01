@@ -8,14 +8,14 @@
 // `plan:ready` (or `plan:failed`). board renders the draft dimmed and the
 // operator's S promotes it — the planner itself never promotes.
 //
-// The workflow reuses the DEFAULT state handlers, exactly like botanist. The
+// The workflow reuses the DEFAULT state handlers, exactly like designer. The
 // decomposition posture comes from the rules inversion (src/rules.ts planner
 // branch) and the bundled `planner` skill; the exact bd contract rides the
 // intake-built seed (buildPlannerSeed). Because a planner writes only to the
 // bd store, its branch never gains a tracked commit — handleWorking sees zero
-// commits ahead and the worker idles after finishing, like a botanist at its
+// commits ahead and the worker idles after finishing, like a designer at its
 // human gate. skipsReviewMerge covers the drift case: a planner that somehow
-// commits rides the same publishable-path boundary check as botanist.
+// commits rides the same publishable-path boundary check as designer.
 import { handleCiFixing } from "../poller-ci-fix.js";
 import { handleMergePending, handleMerged } from "../poller-merge.js";
 import { handleResolving } from "../poller-resolve.js";
@@ -38,7 +38,7 @@ export const plannerWorkflow: WorkflowDefinition = {
   },
   // The decomposition seat: cutting a design doc into a dependency-gated DAG
   // is judgment-heavy, so a planner defaults to Opus at max reasoning effort
-  // — the same designer-seat defaults as botanist, layered beneath a
+  // — the same designer-seat defaults as designer, layered beneath a
   // per-spawn --model / --effort.
   workerModel: "opus",
   workerEffort: "xhigh",

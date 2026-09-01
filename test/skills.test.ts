@@ -24,9 +24,9 @@ import {
   GROW_SKILL_DIRNAME,
   GROW_SKILL_FILENAME,
   GROW_SKILL_CONTENT,
-  BOTANIST_SKILL_DIRNAME,
-  BOTANIST_SKILL_FILENAME,
-  BOTANIST_SKILL_CONTENT,
+  DESIGNER_SKILL_DIRNAME,
+  DESIGNER_SKILL_FILENAME,
+  DESIGNER_SKILL_CONTENT,
   PLANNER_SKILL_DIRNAME,
   PLANNER_SKILL_FILENAME,
   PLANNER_SKILL_CONTENT,
@@ -88,37 +88,37 @@ describe("installClaudeSkills", () => {
     expect(vi.mocked(fs.writeFileSync).mock.calls.length).toBe(firstWriteCalls * 2);
   });
 
-  it("writes the botanist skill alongside the others", () => {
+  it("writes the designer skill alongside the others", () => {
     installClaudeSkills("/Users/x/.garden/worktrees/myproject/bold-ash");
     expect(fs.mkdirSync).toHaveBeenCalledWith(
-      "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/botanist",
+      "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/designer",
       { recursive: true },
     );
     expect(fs.writeFileSync).toHaveBeenCalledWith(
-      expect.stringContaining("/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/botanist/SKILL.md."),
-      BOTANIST_SKILL_CONTENT,
+      expect.stringContaining("/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/designer/SKILL.md."),
+      DESIGNER_SKILL_CONTENT,
     );
   });
 
-  it("botanist skill declares its name in frontmatter and forbids editing code", () => {
-    expect(BOTANIST_SKILL_CONTENT).toMatch(/^---\nname: botanist\n/);
-    expect(BOTANIST_SKILL_DIRNAME).toBe("botanist");
-    expect(BOTANIST_SKILL_FILENAME).toBe("SKILL.md");
-    expect(BOTANIST_SKILL_CONTENT).toContain("design artifact");
-    expect(BOTANIST_SKILL_CONTENT).toContain("Do not edit");
+  it("designer skill declares its name in frontmatter and forbids editing code", () => {
+    expect(DESIGNER_SKILL_CONTENT).toMatch(/^---\nname: designer\n/);
+    expect(DESIGNER_SKILL_DIRNAME).toBe("designer");
+    expect(DESIGNER_SKILL_FILENAME).toBe("SKILL.md");
+    expect(DESIGNER_SKILL_CONTENT).toContain("design artifact");
+    expect(DESIGNER_SKILL_CONTENT).toContain("Do not edit");
   });
 
-  it("botanist skill has the botanist run the approved handoff itself", () => {
+  it("designer skill has the designer run the approved handoff itself", () => {
     // The approval ask carries the handoff plan, and the default plan is a
-    // botanist-spawned default-workflow builder seeded from the brief file.
-    expect(BOTANIST_SKILL_CONTENT).toContain("state your handoff plan");
-    expect(BOTANIST_SKILL_CONTENT).toContain(
-      "garden handoff <project> < .garden/botanist/handoff-brief.md",
+    // designer-spawned default-workflow builder seeded from the brief file.
+    expect(DESIGNER_SKILL_CONTENT).toContain("state your handoff plan");
+    expect(DESIGNER_SKILL_CONTENT).toContain(
+      "garden handoff <project> < .garden/designer/handoff-brief.md",
     );
-    expect(BOTANIST_SKILL_CONTENT).toContain("inlines the full design");
-    expect(BOTANIST_SKILL_CONTENT).toContain("Do NOT pass `--expect-callback`");
+    expect(DESIGNER_SKILL_CONTENT).toContain("inlines the full design");
+    expect(DESIGNER_SKILL_CONTENT).toContain("Do NOT pass `--expect-callback`");
     // Trellis builders stay operator-run — the handoff IPC is default-only.
-    expect(BOTANIST_SKILL_CONTENT).toContain("--workflow trellis --trellis");
+    expect(DESIGNER_SKILL_CONTENT).toContain("--workflow trellis --trellis");
   });
 
   it("writes the planner skill alongside the others", () => {

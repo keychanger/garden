@@ -410,7 +410,7 @@ const onPromptSubmitted: HookMethod = (ctx) => {
     clearDoneSentinel(ctx.workerInfo.entry.worktreePath);
   }
   // Clear the human-gate sentinel unconditionally: a worker paused for operator
-  // input (botanist/plan) holds it while prState is still `working`, so unlike
+  // input (designer/plan) holds it while prState is still `working`, so unlike
   // the done-sentinel its clear is not gated on a terminal prState. The
   // operator's prompt is the resume signal.
   clearAwaitingInput(ctx.workerInfo.entry.worktreePath);

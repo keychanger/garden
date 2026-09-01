@@ -4,23 +4,23 @@ vi.mock("../src/dashboard/registry.js", () => ({
   findWorkerByName: vi.fn(),
   readRegistry: vi.fn(() => ({ workers: {} })),
 }));
-vi.mock("../src/dashboard/botanist-publish.js", () => ({
-  BOTANIST_PUBLISH_ROOT: "docs/",
-  publishBotanistArtifact: vi.fn(() => ({ ok: true, message: "published ok" })),
+vi.mock("../src/dashboard/designer-publish.js", () => ({
+  DESIGNER_PUBLISH_ROOT: "docs/",
+  publishDesignerArtifact: vi.fn(() => ({ ok: true, message: "published ok" })),
 }));
 vi.mock("../src/config.js", () => ({
   tryGetProject: vi.fn(),
 }));
 
-import { botanist } from "../src/commands/botanist.js";
+import { designer } from "../src/commands/designer.js";
 import { findWorkerByName } from "../src/dashboard/registry.js";
-import { publishBotanistArtifact } from "../src/dashboard/botanist-publish.js";
+import { publishDesignerArtifact } from "../src/dashboard/designer-publish.js";
 import { tryGetProject } from "../src/config.js";
 
-function seedBotanist() {
+function seedDesigner() {
   vi.mocked(findWorkerByName).mockReturnValue({
     name: "bold-ash",
-    workflow: "botanist",
+    workflow: "designer",
     worktreePath: "/tmp/wt/proj/bold-ash",
   } as ReturnType<typeof findWorkerByName>);
 }
@@ -32,12 +32,12 @@ beforeEach(() => {
   process.env.GARDEN_PROJECT = "proj";
 });
 
-describe("garden botanist publish", () => {
-  it("delegates to publishBotanistArtifact with the resolved worktree and --to path", async () => {
-    seedBotanist();
+describe("garden designer publish", () => {
+  it("delegates to publishDesignerArtifact with the resolved worktree and --to path", async () => {
+    seedDesigner();
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    await botanist(["publish", "--to", "docs/future/design.md"]);
-    expect(publishBotanistArtifact).toHaveBeenCalledWith(
+    await designer(["publish", "--to", "docs/future/design.md"]);
+    expect(publishDesignerArtifact).toHaveBeenCalledWith(
       "/tmp/wt/proj/bold-ash",
       "docs/future/design.md",
       { dryRun: false, project: "proj" },
@@ -46,10 +46,10 @@ describe("garden botanist publish", () => {
   });
 
   it("threads --dry-run through", async () => {
-    seedBotanist();
+    seedDesigner();
     vi.spyOn(console, "log").mockImplementation(() => {});
-    await botanist(["publish", "--to", "docs/future/design.md", "--dry-run"]);
-    expect(publishBotanistArtifact).toHaveBeenCalledWith(
+    await designer(["publish", "--to", "docs/future/design.md", "--dry-run"]);
+    expect(publishDesignerArtifact).toHaveBeenCalledWith(
       "/tmp/wt/proj/bold-ash",
       "docs/future/design.md",
       { dryRun: true, project: "proj" },
@@ -57,7 +57,7 @@ describe("garden botanist publish", () => {
   });
 
   it("threads the project's configured trellisDir into the publish guidance", async () => {
-    seedBotanist();
+    seedDesigner();
     vi.mocked(tryGetProject).mockReturnValue({
       name: "proj",
       path: "/tmp/proj",
@@ -65,9 +65,9 @@ describe("garden botanist publish", () => {
     });
     vi.spyOn(console, "log").mockImplementation(() => {});
 
-    await botanist(["publish", "--to", "docs/future/design.md"]);
+    await designer(["publish", "--to", "docs/future/design.md"]);
 
-    expect(publishBotanistArtifact).toHaveBeenCalledWith(
+    expect(publishDesignerArtifact).toHaveBeenCalledWith(
       "/tmp/wt/proj/bold-ash",
       "docs/future/design.md",
       { dryRun: false, project: "proj", trellisDir: "docs/trellises" },
@@ -75,40 +75,40 @@ describe("garden botanist publish", () => {
   });
 
   it("requires --to", async () => {
-    seedBotanist();
-    await expect(botanist(["publish"])).rejects.toThrow(/--to is required/);
-    expect(publishBotanistArtifact).not.toHaveBeenCalled();
+    seedDesigner();
+    await expect(designer(["publish"])).rejects.toThrow(/--to is required/);
+    expect(publishDesignerArtifact).not.toHaveBeenCalled();
   });
 
   it("self-resolves the worker from $GARDEN_WORKER when no arg is given", async () => {
-    seedBotanist();
+    seedDesigner();
     vi.spyOn(console, "log").mockImplementation(() => {});
-    await botanist(["publish", "--to", "docs/x.md"]);
+    await designer(["publish", "--to", "docs/x.md"]);
     expect(findWorkerByName).toHaveBeenCalledWith("proj", "bold-ash");
   });
 
   it("errors when GARDEN_WORKER is unset and no worker arg is given", async () => {
     delete process.env.GARDEN_WORKER;
-    await expect(botanist(["publish", "--to", "docs/x.md"])).rejects.toThrow(/GARDEN_WORKER not set/);
+    await expect(designer(["publish", "--to", "docs/x.md"])).rejects.toThrow(/GARDEN_WORKER not set/);
   });
 
-  it("rejects a non-botanist worker", async () => {
+  it("rejects a non-designer worker", async () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "bold-ash",
       workflow: "default",
       worktreePath: "/tmp/wt/proj/bold-ash",
     } as ReturnType<typeof findWorkerByName>);
-    await expect(botanist(["publish", "--to", "docs/x.md"])).rejects.toThrow(/is not a botanist/);
-    expect(publishBotanistArtifact).not.toHaveBeenCalled();
+    await expect(designer(["publish", "--to", "docs/x.md"])).rejects.toThrow(/is not a designer/);
+    expect(publishDesignerArtifact).not.toHaveBeenCalled();
   });
 
   it("surfaces a publish failure as a thrown error", async () => {
-    seedBotanist();
-    vi.mocked(publishBotanistArtifact).mockReturnValue({ ok: false, message: "no artifact to publish" });
-    await expect(botanist(["publish", "--to", "docs/x.md"])).rejects.toThrow(/no artifact to publish/);
+    seedDesigner();
+    vi.mocked(publishDesignerArtifact).mockReturnValue({ ok: false, message: "no artifact to publish" });
+    await expect(designer(["publish", "--to", "docs/x.md"])).rejects.toThrow(/no artifact to publish/);
   });
 
   it("rejects an unknown subcommand", async () => {
-    await expect(botanist(["frobnicate"])).rejects.toThrow(/Usage/);
+    await expect(designer(["frobnicate"])).rejects.toThrow(/Usage/);
   });
 });

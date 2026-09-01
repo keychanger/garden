@@ -174,7 +174,7 @@ export function setDoneSentinel(worktreePath: string | undefined): void {
 }
 
 // Sentinel suppressing auto-continue while a worker is mid-task but waiting on
-// operator input (the human gate shared with the botanist/plan workflows). Like
+// operator input (the human gate shared with the designer/plan workflows). Like
 // .garden-done it lives at the worktree root and its mere presence is the
 // signal, but the semantics differ: .garden-done means "finished, do not
 // continue me"; .garden-awaiting-input means "paused for the operator, resume

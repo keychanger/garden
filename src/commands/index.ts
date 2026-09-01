@@ -43,7 +43,7 @@ import { reply } from "./reply.js";
 import { workers } from "./workers.js";
 import { resurrect } from "./resurrect.js";
 import { trellis } from "./trellis.js";
-import { botanist } from "./botanist.js";
+import { designer } from "./designer.js";
 import { diag } from "./diag.js";
 import { checks } from "./checks.js";
 
@@ -96,7 +96,7 @@ export const commands: Record<string, Command> = {
   workers,
   resurrect,
   trellis,
-  botanist,
+  designer,
   diag,
   checks,
 };

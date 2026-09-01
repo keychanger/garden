@@ -1,15 +1,15 @@
-// `garden botanist <subcommand>` — botanist (design) worker CLI.
+// `garden designer <subcommand>` — design worker CLI.
 //
-// Today the only subcommand is `publish`: a botanist invokes it from its own
+// Today the only subcommand is `publish`: a designer invokes it from its own
 // pane after the operator approves the design artifact. It moves the artifact to
 // a tracked docs/ path, commits it, and marks the worker done; the poller then
 // merges it with no reviewer (see handleWorking's skip-review path). Self-resolves
 // the worker via $GARDEN_WORKER, mirroring `garden workers grow` / `garden whoami`.
 import { readRegistry, findWorkerByName, type WorkerEntry } from "../dashboard/registry.js";
-import { publishBotanistArtifact, BOTANIST_PUBLISH_ROOT } from "../dashboard/botanist-publish.js";
+import { publishDesignerArtifact, DESIGNER_PUBLISH_ROOT } from "../dashboard/designer-publish.js";
 import { tryGetProject } from "../config.js";
 
-export async function botanist(args: string[]): Promise<void> {
+export async function designer(args: string[]): Promise<void> {
   const sub = args[0];
   if (sub === "publish") {
     await publishCommand(args.slice(1));
@@ -17,7 +17,7 @@ export async function botanist(args: string[]): Promise<void> {
   }
   throw new Error(
     "Usage:\n"
-    + `  garden botanist publish [<worker>] --to ${BOTANIST_PUBLISH_ROOT}<name>.md [--dry-run]`,
+    + `  garden designer publish [<worker>] --to ${DESIGNER_PUBLISH_ROOT}<name>.md [--dry-run]`,
   );
 }
 
@@ -45,14 +45,14 @@ async function publishCommand(args: string[]): Promise<void> {
   if (positional.length > 1) {
     throw new Error(
       `Unexpected extra arguments: ${positional.slice(1).map(a => `'${a}'`).join(", ")}. `
-      + `Usage: garden botanist publish [<worker>] --to ${BOTANIST_PUBLISH_ROOT}<name>.md [--dry-run]`,
+      + `Usage: garden designer publish [<worker>] --to ${DESIGNER_PUBLISH_ROOT}<name>.md [--dry-run]`,
     );
   }
 
   const to = flags.get("to");
   if (!to) {
     throw new Error(
-      `--to is required: the tracked destination for the artifact, e.g. --to ${BOTANIST_PUBLISH_ROOT}future/<name>.md`,
+      `--to is required: the tracked destination for the artifact, e.g. --to ${DESIGNER_PUBLISH_ROOT}future/<name>.md`,
     );
   }
 
@@ -60,7 +60,7 @@ async function publishCommand(args: string[]): Promise<void> {
   const workerName = positional[0] ?? process.env.GARDEN_WORKER;
   if (!workerName) {
     throw new Error(
-      "Not in a worker shell (GARDEN_WORKER not set). Pass a worker name: garden botanist publish <worker> --to ...",
+      "Not in a worker shell (GARDEN_WORKER not set). Pass a worker name: garden designer publish <worker> --to ...",
     );
   }
 
@@ -82,10 +82,10 @@ async function publishCommand(args: string[]): Promise<void> {
   if (!entry || !projectName) {
     throw new Error(`Worker '${workerName}' not found in registry.`);
   }
-  if (entry.workflow !== "botanist") {
+  if (entry.workflow !== "designer") {
     throw new Error(
-      `Worker '${workerName}' is not a botanist (workflow: ${entry.workflow ?? "default"}). `
-      + `garden botanist publish only applies to botanist workers.`,
+      `Worker '${workerName}' is not a designer (workflow: ${entry.workflow ?? "default"}). `
+      + `garden designer publish only applies to designer workers.`,
     );
   }
   if (!entry.worktreePath) {
@@ -93,7 +93,7 @@ async function publishCommand(args: string[]): Promise<void> {
   }
 
   const trellisDir = tryGetProject(projectName)?.trellisDir;
-  const result = publishBotanistArtifact(entry.worktreePath, to, {
+  const result = publishDesignerArtifact(entry.worktreePath, to, {
     dryRun,
     project: projectName,
     ...(trellisDir ? { trellisDir } : {}),

@@ -12,11 +12,11 @@
 > instantiation of this design (read a pinned doc, emit wisps + an
 > integration bead, `bd dep cycles`, stop). When plan proper ships, it
 > should absorb or supersede that planner rather than coexist with it.
-> Plan is **not** superseded by botanist — they are siblings by design:
-> botanist produces the approved design *document*; plan decomposes an
+> Plan is **not** superseded by designer — they are siblings by design:
+> designer produces the approved design *document*; plan decomposes an
 > approved document into the executable beads *graph*. One line item here
 > is already free: the `.garden-awaiting-input` human-gate sentinel
-> shipped with botanist.
+> shipped with designer.
 
 Design document for `plan`, garden's planned fourth workflow. Plan would
 convert a human-described feature into a graph of beads with dependencies,

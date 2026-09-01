@@ -55,7 +55,7 @@ import {
   buildComposeEffortSubmenuPlan, buildComposeMemberSubmenuPlan, draftLaunchOpts,
   composerModels, composerEfforts, effectiveBuildMember, claudeOnlyLaunchOpts,
   providerModelAliases, memberProvider,
-  plantGrowFromPicker, plantBotanistFromPicker, stageSpawnDraft,
+  plantGrowFromPicker, plantDesignerFromPicker, stageSpawnDraft,
 } from "../src/dashboard/trellis-picker.js";
 import { newWorker } from "../src/dashboard/workers.js";
 import { tryGetProject, loadConfig } from "../src/config.js";
@@ -75,7 +75,7 @@ describe("buildWorkflowPickerPlan", () => {
   it("returns the d/o/t/h workflow rows, a separator, then the w/m/e/c/b composer rows", () => {
     const rows = buildWorkflowPickerPlan("proj", RUNNER).rows;
     expect(rows[0].key).toBe("d");
-    expect(rows[1].key).toBe("o"); // botanist ('b' is the base-branch composer row)
+    expect(rows[1].key).toBe("s"); // designer ('d' is the default row)
     expect(rows[2].key).toBe("t");
     expect(rows[3].key).toBe("h"); // hoop — the grow workflow's operator-facing name
     expect(rows[4].sep).toBe(true);
@@ -114,9 +114,9 @@ describe("buildWorkflowPickerPlan", () => {
     expect(rows[3].tmux).toContain("%%");
   });
 
-  it("the botanist row spawns instantly — no command-prompt for a design brief", () => {
+  it("the designer row spawns instantly — no command-prompt for a design brief", () => {
     const row = buildWorkflowPickerPlan("proj", RUNNER).rows[1];
-    expect(row.run).toContain("dashboard _botanist-plant");
+    expect(row.run).toContain("dashboard _designer-plant");
     expect(row.run).toContain("proj");
     expect(row.tmux).toBeUndefined();
   });
@@ -467,7 +467,7 @@ describe("claudeOnlyLaunchOpts", () => {
   });
 
   it("drops model and effort when the draft stages a foreign build member", () => {
-    // grow/botanist are claude-code-only, so a codex-staged model would
+    // grow/designer are claude-code-only, so a codex-staged model would
     // otherwise reach a Claude worker as `--model gpt-5.6-sol`.
     expect(claudeOnlyLaunchOpts({}, { member: "codex", model: "gpt-5.6-sol", effort: "max" }))
       .toEqual({});
@@ -639,25 +639,25 @@ describe("plantGrowFromPicker", () => {
   });
 });
 
-// ─── plantBotanistFromPicker ──────────────────────────────────────────────
+// ─── plantDesignerFromPicker ──────────────────────────────────────────────
 
-describe("plantBotanistFromPicker", () => {
+describe("plantDesignerFromPicker", () => {
   it("rejects when the project is unknown", () => {
     vi.mocked(tryGetProject).mockReturnValue(undefined);
-    plantBotanistFromPicker("ghost");
+    plantDesignerFromPicker("ghost");
     expect(tmuxDisplay).toHaveBeenCalledWith(expect.stringContaining("Unknown project"));
     expect(newWorker).not.toHaveBeenCalled();
   });
 
-  it("plants a botanist with no seed message — the brief arrives in the pane", () => {
+  it("plants a designer with no seed message — the brief arrives in the pane", () => {
     vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/proj" });
-    plantBotanistFromPicker("proj");
+    plantDesignerFromPicker("proj");
     expect(newWorker).toHaveBeenCalledWith(expect.objectContaining({
       projectName: "proj",
-      workflow: "botanist",
+      workflow: "designer",
     }));
     // No plant-time message (the system prompt carries the design posture),
-    // and a botanist does not loop — no grow sub-object.
+    // and a designer does not loop — no grow sub-object.
     const call = vi.mocked(newWorker).mock.calls.at(-1)![0] as Record<string, unknown>;
     expect(call.seedMessageFile).toBeUndefined();
     expect(call.grow).toBeUndefined();
@@ -666,7 +666,7 @@ describe("plantBotanistFromPicker", () => {
   it("reports the failure when newWorker fails", () => {
     vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/proj" });
     vi.mocked(newWorker).mockReturnValueOnce(null);
-    plantBotanistFromPicker("proj");
-    expect(tmuxDisplay).toHaveBeenCalledWith(expect.stringContaining("Failed to plant botanist"));
+    plantDesignerFromPicker("proj");
+    expect(tmuxDisplay).toHaveBeenCalledWith(expect.stringContaining("Failed to plant designer"));
   });
 });

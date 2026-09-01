@@ -101,12 +101,12 @@ export type FailingReason =
   // review through the normal failing debounce. `garden kick` does
   // NOT accept it — kicking an unchanged diff re-fails identically.
   | "oversized-diff"
-  // Set by handleWorking's skip-review path (poller-review.ts) when a botanist
+  // Set by handleWorking's skip-review path (poller-review.ts) when a designer
   // (skipsReviewMerge) branch committed files outside the publishable docs/
-  // boundary — a botanist that drifted into building code. NOT an operator-
+  // boundary — a designer that drifted into building code. NOT an operator-
   // action reason: removing the offending files and re-pushing auto-retries the
   // publish after the failing debounce.
-  | "botanist-scope";
+  | "designer-scope";
 
 // Failing reasons that park the worker until the operator runs a specific
 // command (a trellis disposition) — pushing new commits does NOT auto-resume
@@ -911,6 +911,7 @@ export function readRegistry(): WorkerRegistry {
       migrateLegacyStatusFields(e);
       migrateCreatedAt(e);
       migrateLastStateChangeAt(e);
+      migrateLegacyWorkflowNames(e);
     }
   }
   cachedRegistry = { mtimeMs: stat.mtimeMs, size: stat.size, value: raw };
@@ -960,6 +961,14 @@ function migrateLegacyTrellisFields(entry: WorkerEntry): void {
 // Idempotent: migrated entries pass through untouched, and when both names
 // are somehow present the new name wins. The next writeRegistry persists
 // the new shape, exactly like the trellis migration above.
+// The design workflow shipped as "botanist" and was renamed; entries written
+// before the rename (and tombstones `garden resurrect` restores from) still
+// carry the old workflow name and failing reason.
+function migrateLegacyWorkflowNames(entry: WorkerEntry): void {
+  if (entry.workflow === "botanist") entry.workflow = "designer";
+  if ((entry.failingReason as string) === "botanist-scope") entry.failingReason = "designer-scope";
+}
+
 function migrateLegacyStatusFields(entry: WorkerEntry): void {
   const e = entry as unknown as Record<string, unknown>;
   if (e.claudeStatus !== undefined) {
