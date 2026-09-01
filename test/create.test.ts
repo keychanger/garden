@@ -756,6 +756,22 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(script).not.toContain("/.claude/settings.local.json");
   });
 
+  it("installs the status-line script that the fresh worker settings reference", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "main",
+    );
+    const call = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    );
+    expect(call).toBeDefined();
+    const script = call![1] as string;
+    expect(script).toContain("/.claude/statusline.mjs");
+    expect(script).toContain("remaining_percentage");
+    expect(script).toMatch(/chmod 555 .*\.claude\/statusline\.mjs/);
+  });
+
   it("inlines the bundled `done` skill at .claude/skills/done/SKILL.md so new workers can invoke it without a refresh round-trip", () => {
     process.argv[1] = "/usr/local/bin/garden";
     buildWorktreeBootstrapScript(
