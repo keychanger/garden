@@ -4,6 +4,9 @@ import path from "node:path";
 import os from "node:os";
 
 vi.mock("../src/config.js", () => ({
+  // The crew check resolves names against config; an empty one still carries
+  // the generated builtins, which is what these tests name.
+  loadConfig: () => ({ projects: {} }),
   SESSIONS_DIR: "",
 }));
 
@@ -326,6 +329,46 @@ describe("processPendingHandoffs", () => {
       projectName: "wolf",
       ultracode: true,
     }));
+  });
+
+  it("passes the crew to newWorker when the request carries it", () => {
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed, crew: "codex-claude" });
+    processPendingHandoffs();
+    expect(vi.mocked(newWorker)).toHaveBeenCalledWith(expect.objectContaining({
+      projectName: "wolf",
+      crew: "codex-claude",
+    }));
+  });
+
+  it("omits the crew field from the newWorker call when the request has none", () => {
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    processPendingHandoffs();
+    const call = vi.mocked(newWorker).mock.calls[0][0];
+    expect(call && "crew" in call).toBe(false);
+  });
+
+  it("refuses a crew name that resolves to nothing rather than spawning on the project default", () => {
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed, crew: "no-such-crew" });
+    processPendingHandoffs();
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
+      .toMatch(/unknown crew 'no-such-crew'/);
+  });
+
+  it("rejects a request whose crew field is not a bounded string", () => {
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    const reqFile = path.join(reqDir, `${id}.req.json`);
+    const request = JSON.parse(fs.readFileSync(reqFile, "utf8"));
+    request.crew = ["codex-claude"];
+    fs.writeFileSync(reqFile, JSON.stringify(request));
+
+    processPendingHandoffs();
+
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
+      .toMatch(/shape guard/i);
   });
 
   it("passes the bead id to newWorker when the request carries it", () => {

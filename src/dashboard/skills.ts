@@ -250,6 +250,16 @@ EOF
 
 The flag composes with \`--expect-callback\` and \`-m\`. It configures the worker's launch only; it does not by itself force the first task to run as a multi-agent workflow. If the operator wants that, say so in the briefing (the worker will honor the ultracode keyword) — otherwise the worker simply runs at max effort with workflows available on demand.
 
+### Crew (\`--crew\`)
+
+The new worker spawns under a crew — who builds and who reviews it. Without \`--crew\`, it inherits the crew stamped on YOUR worker entry (the one you were spawned with), if any; otherwise it takes the target project's own crew binding. A designer's builder therefore lands on the same crew whose design seat produced the design, with nothing in the briefing to arrange it. Pass \`--crew <name>\` only when the operator asked for a different one (\`garden crew list\` names them).
+
+\`\`\`bash
+garden handoff <target-project> --crew codex-claude <<'EOF'
+<briefing>
+EOF
+\`\`\`
+
 ### Callback mode (\`--expect-callback\`)
 
 Pass \`--expect-callback\` when you want to know how the handoff turned out — typically a pass-the-baton handoff where the operator asked you to wait for the result before proceeding, or a debugging request where the child's findings unblock your own next step.
@@ -444,7 +454,7 @@ Only when the operator **explicitly approves** ("approve", "ship it", "publish")
 1. Make sure your finished artifact is at \`.garden/designer/artifact.md\`.
 2. Run \`garden designer publish --to docs/future/<name>.md\` (pick a descriptive \`<name>\`). This moves the artifact to that tracked path, commits it, and marks you done — the poller then merges it with **no reviewer** (the operator already reviewed the prose at the gate). Pass \`--dry-run\` first to preview. The target MUST be under \`docs/\` — a designer publishes docs, not code, and the merge refuses anything else. Do NOT publish to \`.garden/\` (git-excluded, would never merge). Do NOT hand-commit code files: committing anything outside \`docs/\` parks you in \`failing\`.
 3. Execute the handoff plan the operator approved. Publish first, then hand off — never the reverse: a failed publish must not leave a builder working from an unpublished design.
-   - **Default builder** (the default plan): write \`.garden/designer/handoff-brief.md\` — a self-contained implementation briefing that **inlines the full design**. The new worker branches from \`origin/<base>\` before your doc merges, so the published path does not exist in its worktree yet; name \`docs/future/<name>.md\` as where the canonical copy will land. Then run \`garden handoff <project> < .garden/designer/handoff-brief.md\` (add \`--ultracode\` only if the operator asked for it) and report the new worker's name. Do NOT pass \`--expect-callback\` — a later callback would submit a new prompt and reopen the completed designer.
+   - **Default builder** (the default plan): write \`.garden/designer/handoff-brief.md\` — a self-contained implementation briefing that **inlines the full design**. The new worker branches from \`origin/<base>\` before your doc merges, so the published path does not exist in its worktree yet; name \`docs/future/<name>.md\` as where the canonical copy will land. Then run \`garden handoff <project> < .garden/designer/handoff-brief.md\` (add \`--ultracode\` only if the operator asked for it) and report the new worker's name. The builder inherits your crew automatically — the crew whose design seat you fill also names who builds and who reviews — so pass \`--crew <name>\` only when the operator asked for a different one. Do NOT pass \`--expect-callback\` — a later callback would submit a new prompt and reopen the completed designer.
    - **Trellis builder**: this route is operator-run and two-step — the handoff mechanism spawns default-workflow workers only, and \`--trellis\` resolves a *named*, tagged trellis inside the project checkout's configured trellis dir (\`.garden/trellises/\` by default), never a \`docs/\` path. Before publishing, format the artifact with the trellis spine (see the \`trellis-author\` skill: the \`<!-- trellis: v1 -->\` tag in the first lines, the spec sentinel, the recommended sections). Then publish as usual and give the operator the exact two-step command printed by publish, run in the project checkout after the merge lands: it copies \`docs/future/<name>.md\` to the project's configured \`trellisDir\` as \`<name>.md\`, then runs \`garden workers new <project> --workflow trellis --trellis <name>\`. For a non-default builder crew, they set it on the project first (\`garden config <project> crew <name>\`) — per-spawn \`--crew\` is default-workflow only today, so it cannot ride the trellis plant.
    - **No builder**: just report the publish.
 

@@ -19,6 +19,8 @@ import { CONTROL_DIR } from "../paths.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { getWorkers } from "./registry.js";
 import { newWorker } from "./workers.js";
+import { getCrew } from "./crew.js";
+import { loadConfig } from "../config.js";
 import { log } from "./log.js";
 
 const UUID_SOURCE = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
@@ -109,6 +111,12 @@ export interface HandoffRequest {
   // is created with the ultracode preset (Opus + max effort + dynamic-workflow
   // trigger). See `NewWorkerOptions.ultracode`.
   ultracode?: boolean;
+  // Set when the source worker invoked `garden handoff --crew <name>`, or
+  // when it carried a per-worker crew of its own that the CLI forwarded. The
+  // child spawns under that crew (its build member and review family). A
+  // name only — resolved against garden config at spawn, so the untrusted
+  // request can name a crew but not define one. See `NewWorkerOptions.crew`.
+  crew?: string;
   // Set when the source worker invoked `garden handoff --bead <id>`. Stamped
   // onto the child's registry entry (the registry→bd bead↔worker join); the
   // dispatch makes no bd claim — the child's own briefed claim is the claim.
@@ -129,6 +137,7 @@ export function submitHandoffRequest(opts: {
   parentProject?: string;
   parentWorker?: string;
   ultracode?: boolean;
+  crew?: string;
   bead?: string;
 }): string {
   fs.mkdirSync(requestsDir(), { recursive: true });
@@ -142,6 +151,7 @@ export function submitHandoffRequest(opts: {
     parentProject: opts.parentProject,
     parentWorker: opts.parentWorker,
     ultracode: opts.ultracode,
+    crew: opts.crew,
     bead: opts.bead,
   };
   atomicWriteFile(requestPath(id), JSON.stringify(req), { mode: 0o600 });
@@ -277,6 +287,7 @@ function isHandoffRequest(value: unknown): value is HandoffRequest {
     && (request.parentProject === undefined || boundedString(request.parentProject, 128))
     && (request.parentWorker === undefined || boundedString(request.parentWorker, 128))
     && (request.ultracode === undefined || typeof request.ultracode === "boolean")
+    && (request.crew === undefined || boundedString(request.crew, 128))
     && (request.bead === undefined || validBeadId(request.bead));
 }
 
@@ -424,6 +435,14 @@ function processClaim(claimFile: string, filenameId: string): void {
     return;
   }
 
+  // A crew is resolved by name at spawn, and newWorker treats a name it
+  // cannot resolve as "no crew" — silently spawning on the project default
+  // when the caller asked for something specific. Refuse here instead.
+  if (request.crew && !getCrew(request.crew, loadConfig())) {
+    rejectClaim(claimFile, filenameId, `unknown crew '${request.crew}'`);
+    return;
+  }
+
   let response: HandoffResponse;
   try {
     // Only propagate parent linkage when --expect-callback was set AND both
@@ -443,6 +462,7 @@ function processClaim(claimFile: string, filenameId: string): void {
       handoffRequestId: request.id,
       ...(handoffCallback ? { handoffCallback } : {}),
       ...(request.ultracode ? { ultracode: true } : {}),
+      ...(request.crew ? { crew: request.crew } : {}),
       ...(request.bead ? { bead: request.bead } : {}),
     });
     const reconciledWorker = workerName ?? findExistingWorker(request);

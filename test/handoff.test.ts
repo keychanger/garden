@@ -20,12 +20,17 @@ vi.mock("../src/dashboard/poller-fifo.js", () => ({
   triggerProjectPoll: vi.fn(),
 }));
 
+vi.mock("../src/dashboard/registry.js", () => ({
+  findWorkerByName: vi.fn(),
+}));
+
 import { handoff } from "../src/commands/handoff.js";
 import { tryGetProject, loadConfig } from "../src/config.js";
 import {
   submitHandoffRequest, waitForHandoffResponse, withdrawPendingHandoffRequest,
 } from "../src/dashboard/handoff-dispatch.js";
 import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
+import { findWorkerByName } from "../src/dashboard/registry.js";
 
 const cfg = await import("../src/config.js") as unknown as { SESSIONS_DIR: string };
 
@@ -228,6 +233,65 @@ describe("garden handoff command", () => {
     expect(call.ultracode).toBe(true);
     expect(call.expectCallback).toBe(true);
     expect(lines.join("\n")).toMatch(/ultracode mode; callback requested/);
+  });
+
+  it("threads --crew <name> into the dispatch request and notes it in the success line", async () => {
+    const lines = await captureConsoleLog(() => handoff(["other", "--crew", "codex-claude", "-m", "build it"]));
+    const call = vi.mocked(submitHandoffRequest).mock.calls[0][0];
+    expect(call.crew).toBe("codex-claude");
+    expect(lines.join("\n")).toMatch(/crew codex-claude/);
+    expect(lines.join("\n")).not.toMatch(/inherited/);
+  });
+
+  it("does not treat --crew or its value as part of the briefing", async () => {
+    await captureConsoleLog(() => handoff(["other", "--crew", "all-codex", "-m", "the real briefing"]));
+    const seedsDir = path.join(tmpDir, "seeds");
+    const body = fs.readFileSync(path.join(seedsDir, fs.readdirSync(seedsDir)[0]), "utf8");
+    expect(body).toContain("the real briefing");
+    expect(body).not.toContain("all-codex");
+  });
+
+  it("rejects --crew without a value, and an unknown crew, before dispatching", async () => {
+    await expect(handoff(["other", "--crew"])).rejects.toThrow(/--crew requires a crew name/);
+    await expect(handoff(["other", "--crew", "-m", "msg"])).rejects.toThrow(/--crew requires a crew name/);
+    await expect(handoff(["other", "--crew", "no-such-crew", "-m", "msg"])).rejects.toThrow(/Unknown crew 'no-such-crew'.*all-claude/);
+    expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
+  });
+
+  it("inherits the calling worker's own crew when --crew is not passed", async () => {
+    // A designer's design seat came from its crew; its builder lands on the
+    // same crew's build + review halves with nothing in the brief to say so.
+    process.env.GARDEN_PROJECT = "src";
+    process.env.GARDEN_WORKER = "blue-pine";
+    vi.mocked(findWorkerByName).mockReturnValue({ name: "blue-pine", crew: "codex-claude" } as ReturnType<typeof findWorkerByName>);
+    const lines = await captureConsoleLog(() => handoff(["other", "-m", "msg"]));
+    expect(vi.mocked(findWorkerByName)).toHaveBeenCalledWith("src", "blue-pine");
+    const call = vi.mocked(submitHandoffRequest).mock.calls[0][0];
+    expect(call.crew).toBe("codex-claude");
+    expect(lines.join("\n")).toMatch(/crew codex-claude \(inherited\)/);
+  });
+
+  it("an explicit --crew outranks the inherited one", async () => {
+    process.env.GARDEN_PROJECT = "src";
+    process.env.GARDEN_WORKER = "blue-pine";
+    vi.mocked(findWorkerByName).mockReturnValue({ name: "blue-pine", crew: "codex-claude" } as ReturnType<typeof findWorkerByName>);
+    await captureConsoleLog(() => handoff(["other", "--crew", "all-claude", "-m", "msg"]));
+    expect(vi.mocked(submitHandoffRequest).mock.calls[0][0].crew).toBe("all-claude");
+  });
+
+  it("forwards no crew when the calling worker carries none, or when run outside a worker pane", async () => {
+    process.env.GARDEN_PROJECT = "src";
+    process.env.GARDEN_WORKER = "blue-pine";
+    vi.mocked(findWorkerByName).mockReturnValue({ name: "blue-pine" } as ReturnType<typeof findWorkerByName>);
+    await captureConsoleLog(() => handoff(["other", "-m", "msg"]));
+    expect(vi.mocked(submitHandoffRequest).mock.calls[0][0].crew).toBeUndefined();
+
+    delete process.env.GARDEN_PROJECT;
+    delete process.env.GARDEN_WORKER;
+    vi.mocked(findWorkerByName).mockClear();
+    await captureConsoleLog(() => handoff(["other", "-m", "msg"]));
+    expect(vi.mocked(findWorkerByName)).not.toHaveBeenCalled();
+    expect(vi.mocked(submitHandoffRequest).mock.calls[1][0].crew).toBeUndefined();
   });
 
   it("threads --bead <id> into the dispatch request", async () => {

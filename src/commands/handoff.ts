@@ -15,6 +15,8 @@ import {
   submitHandoffRequest, waitForHandoffResponse, withdrawPendingHandoffRequest,
 } from "../dashboard/handoff-dispatch.js";
 import { triggerProjectPoll } from "../dashboard/poller-fifo.js";
+import { getCrew, listCrews } from "../dashboard/crew.js";
+import { findWorkerByName } from "../dashboard/registry.js";
 
 const HANDOFF_CLAIM_TIMEOUT_MS = 15_000;
 const HANDOFF_PROCESSING_TIMEOUT_MS = 75_000;
@@ -23,11 +25,13 @@ export async function handoff(args: string[]): Promise<void> {
   const targetProject = args[0];
   if (!targetProject || targetProject.startsWith("-")) {
     throw new Error(
-      "Usage: garden handoff <target-project> [--expect-callback] [--ultracode] [--bead <id>] [-m \"message\"]\n"
-      + "       garden handoff <target-project> [--expect-callback] [--ultracode] [--bead <id>] < message-file\n"
-      + "       garden handoff <target-project> [--expect-callback] [--ultracode] [--bead <id>] <<'EOF' ... EOF\n"
+      "Usage: garden handoff <target-project> [--expect-callback] [--ultracode] [--crew <name>] [--bead <id>] [-m \"message\"]\n"
+      + "       garden handoff <target-project> [--expect-callback] [--ultracode] [--crew <name>] [--bead <id>] < message-file\n"
+      + "       garden handoff <target-project> [--expect-callback] [--ultracode] [--crew <name>] [--bead <id>] <<'EOF' ... EOF\n"
       + "\n"
       + "  --ultracode  create the new worker in ultracode mode (Opus + max effort + dynamic workflows)\n"
+      + "  --crew <n>   spawn the new worker under this crew (build member + review family); without it,\n"
+      + "               the worker inherits the crew stamped on the calling worker's own entry, if any\n"
       + "  --bead <id>  stamp the bead id on the new worker's registry entry (the bead↔worker join;\n"
       + "               makes no bd claim — the worker's own briefed claim is the claim)",
     );
@@ -68,6 +72,25 @@ export async function handoff(args: string[]): Promise<void> {
     rest.splice(beadIdx, 2);
   }
 
+  // --crew <name>: the crew the child spawns under (its build member and
+  // review family). Value-carrying, so both tokens come out before the
+  // briefing scan, like --bead. Validated here, in the caller's process,
+  // rather than left to resolve as an inert dangling name at spawn.
+  const crewIdx = rest.indexOf("--crew");
+  let crew: string | undefined;
+  if (crewIdx !== -1) {
+    const value = rest[crewIdx + 1];
+    if (!value || !value.trim() || value.startsWith("-")) {
+      throw new Error("--crew requires a crew name argument.");
+    }
+    crew = value.trim();
+    const cfg = loadConfig();
+    if (!getCrew(crew, cfg)) {
+      throw new Error(`Unknown crew '${crew}'. Available: ${listCrews(cfg).map((c) => c.name).join(", ")}.`);
+    }
+    rest.splice(crewIdx, 2);
+  }
+
   const briefing = await readBriefing(rest);
   if (!briefing.trim()) {
     throw new Error("Empty briefing. Pass -m \"<text>\" or pipe a message via stdin.");
@@ -81,6 +104,20 @@ export async function handoff(args: string[]): Promise<void> {
       + "(GARDEN_PROJECT and GARDEN_WORKER must be set). There's no parent "
       + "to call back to from a bare shell.",
     );
+  }
+  // Without --crew, the child inherits the crew stamped on THIS worker's
+  // entry. A designer's design seat came from that crew, so its builder gets
+  // the same crew's build and review halves with nothing in the brief to
+  // say so; a default worker spawned with --crew passes its crew along the
+  // same way. A worker with no per-worker crew forwards nothing, and the
+  // child resolves the target project's own binding.
+  let inheritedCrew = false;
+  if (!crew && sourceProject && sourceWorker) {
+    const own = findWorkerByName(sourceProject, sourceWorker)?.crew;
+    if (own) {
+      crew = own;
+      inheritedCrew = true;
+    }
   }
   const callbackTag = expectCallback ? " — callback requested" : "";
   const prefix = sourceProject && sourceWorker
@@ -103,6 +140,7 @@ export async function handoff(args: string[]): Promise<void> {
     parentProject: sourceProject,
     parentWorker: sourceWorker,
     ultracode,
+    crew,
     bead,
   });
 
@@ -154,6 +192,7 @@ export async function handoff(args: string[]): Promise<void> {
 
   const notes = [
     ultracode ? "ultracode mode" : null,
+    crew ? `crew ${crew}${inheritedCrew ? " (inherited)" : ""}` : null,
     expectCallback ? "callback requested on terminal state" : null,
     bead ? `bead ${bead}` : null,
   ].filter(Boolean);

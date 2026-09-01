@@ -188,11 +188,16 @@ harness both builds and reviews. For members `{claude, codex}` + a configured
 | `deepseek-claude` | claude-code + deepseek provider | claude-code |
 | `deepseek-codex` | claude-code + deepseek provider | codex |
 
-Builtins carry a **harness pairing only**. That is not an oversight — it is the
-structural limit of a generated namespace. Adding a model dim to a generated
-set means names like `sonnet-xhigh-claude-opus-claude`, and 2 harnesses × 4
-model aliases × 5 effort rungs × 2 reviewers = 80 of them. This limit is why
-the 2026-07-16 composer decision put model/effort *outside* crews.
+Builtins originally carried a **harness pairing only** — the structural limit
+of a generated namespace: adding a model dim per crew means names like
+`sonnet-xhigh-claude-opus-claude`, and 2 harnesses × 4 model aliases × 5 effort
+rungs × 2 reviewers = 80 of them. This limit is why the 2026-07-16 composer
+decision put model/effort *outside* crews. **Since 2026-09-01** they carry one
+*ladder per harness* instead (`SEAT_MODELS`): the strong model fills the
+designer and reviewer seats, the middle one the builder — `claude-codex` is
+Fable ⇢ Opus → Sol and `codex-claude` is Sol ⇢ Terra → Fable. One ladder per
+harness is expressible without naming it; a rung per crew still is not, and
+stays the province of stored crews.
 
 **Stored (operator-named).** `crews` in `~/.garden/config.yml` — garden-level,
 like `providers` and `claudeProfiles`, since a crew is a shared resource
@@ -550,10 +555,12 @@ members, and the operator picks a fleet in one word.
   variant (two reviewers of different harnesses must both pass) is the
   high-assurance endpoint.
 - **A real plan/design role.** The honest home for "Claude plans, Codex
-  builds." If `resolveRole` resolves arbitrary roles, adding a `plan` role is
-  data, not a fork — and it slots directly into
-  [`DESIGNER-WORKFLOW.md`](DESIGNER-WORKFLOW.md) /
-  [`PLAN-WORKFLOW.md`](PLAN-WORKFLOW.md).
+  builds." **Shipped 2026-09-01 as the crew's design seat** — `CrewSpec.designer`,
+  read by a designer-workflow spawn and forwarded to the builder at handoff
+  (WORKFLOWS.md § "Designer workflow", "The three seats"). Not via a generalized
+  `resolveRole`: the seat is a third member on the crew, resolved in `newWorker`
+  like the worker half, which was the smaller change. A planner seat would be
+  the same shape ([`PLAN-WORKFLOW.md`](PLAN-WORKFLOW.md)).
 - **Metering goes blind across harnesses.** Codex has no machine-readable
   quota endpoint; the auto-continue gate reads Anthropic buckets. A full-Codex
   fleet silently loses the usage gate (same as provider-backed projects

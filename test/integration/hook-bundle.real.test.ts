@@ -18,8 +18,12 @@ import path from "node:path";
 
 // The workflow/poller split reduced the measured minified bundle from 249.0KB
 // to 120.8KB. Keep enough headroom for small hook-path changes without letting
-// a state-handler graph quietly return.
-const HOOK_BUNDLE_CEILING_BYTES = 128 * 1024;
+// a state-handler graph quietly return. Raised from 128KB to 132KB when the
+// crew design seat landed (crew.ts reaches the hook via usage.ts's
+// codexInFleet; the measured bundle was 127.9KB, 129 bytes under the old
+// ceiling) — a retained state-handler graph is ~120KB, so 4KB of headroom
+// still cannot hide one.
+const HOOK_BUNDLE_CEILING_BYTES = 132 * 1024;
 // skills.ts contributes only a tree-shaken sliver today (<100 bytes); a
 // retained skills bundle is ~28kb. The threshold sits well between.
 const SKILLS_BYTES_CEILING = 2 * 1024;

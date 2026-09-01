@@ -2799,9 +2799,13 @@ the publish after the failing debounce.
 
 | Seat | What fills it | How selected |
 |---|---|---|
-| **Designer** | the designer worker itself | its own harness/model; defaults to Opus at `xhigh` effort (`workflow.workerModel`/`workerEffort`), overridable per run via `--model`/`--effort`/`--harness` (a Codex designer works) |
-| **Builder** | a downstream worker spawned at handoff | default-workflow: spawned by the designer via `garden handoff` on approval; trellis: the operator-run plant command (see below) |
-| **Reviewer** | the builder's reviewer | stays strong first-party by default (the shipped crew safety invariant) |
+| **Designer** | the designer worker itself | the crew's **design seat** (`designerSeat`, `crew.ts`): per-worker `--crew`, else the project's bound crew — harness, provider, model, and effort together; a builtin's seat is its harness ladder's strong model (`claude-codex` → Fable, `codex-claude` → Codex's Sol), a stored crew naming no designer derives the seat from its review half. Beneath that, the workflow default (Opus at `xhigh`, `workflow.workerModel`/`workerEffort`); above it, per-run `--model`/`--effort`/`--harness`. A Codex designer launches (the adapter admits the workflow) |
+| **Builder** | a downstream worker spawned at handoff | default-workflow: spawned by the designer via `garden handoff` on approval, **inheriting the designer's crew** (its build half — `claude-codex` builds on Opus, `codex-claude` on Terra); trellis: the operator-run plant command (see below) |
+| **Reviewer** | the builder's reviewer | the same crew's review half (`claude-codex` → Codex's Sol, `codex-claude` → Fable); strong first-party by default (the shipped crew safety invariant) |
+
+So one crew spells the whole shape — a strong model designs, a lesser one
+implements, a strong one reviews — and binding it to a project (or passing
+`--crew` at plant) is the only configuration the pipeline needs.
 
 ### Handoff
 
@@ -2821,13 +2825,14 @@ and two-step, because the handoff IPC spawns default-workflow workers only and
 trellis spine into the artifact before publish, and after the merge the
 operator copies the doc into the trellis dir and plants it by name, `garden
 workers new <project> --workflow trellis --trellis <name>`), or **no
-builder**. A non-default builder crew is set on the project first (`garden
-config <project> crew <name>`), since per-spawn `--crew` is default-workflow
-only today (see CREWS). The publish command prints both routes as a reminder.
-Full assisted handoff (the doc's Phase 2 — `--handoff <workflow>` /
-`--handoff-crew` on publish, trellis auto-spawn) remains deferred: it needs the
-shared, security-sensitive handoff IPC extended and per-spawn crew-for-trellis,
-neither of which the skill-level path requires.
+builder**. The builder's crew is the designer's own: `garden handoff` forwards
+the crew stamped on the calling worker's entry (`entry.crew`, from the
+designer's `--crew`), and a designer on a project-bound crew spawns a builder
+that resolves the same binding; `garden handoff --crew <name>` names a
+different one when the operator asks. A trellis builder takes the project's
+crew (per-spawn `--crew` is default+designer only; see CREWS). The publish
+command prints both routes as a reminder. Trellis auto-spawn remains deferred:
+it needs per-spawn crew-for-trellis, which the skill-level path does not.
 
 ### Triggering
 
@@ -2835,6 +2840,7 @@ neither of which the skill-level path requires.
 garden workers new <project> --workflow designer                     # brief arrives in the pane
 garden workers new <project> --workflow designer --seed "…"          # or --seed-file: inline the brief
 garden workers new <project> --workflow designer --harness codex     # a Codex designer
+garden workers new <project> --workflow designer --crew codex-claude # design seat from the crew; the builder inherits it
 ```
 
 The `⌥⇧N` workflow picker's `(s)` row plants a designer instantly (`(d)` is the
@@ -2844,9 +2850,9 @@ the design posture is baked into the worker's system prompt (the `rules.ts`
 designer branch + the bundled skill) and the operator's design brief arrives as
 the first message in its pane (multi-line, conversational, no shell-escaping
 constraints); with `--seed`/`--seed-file` (the scripted-plant path) the brief is
-inlined via the seed message and framing starts immediately. `--crew` is
-rejected for a designer (it runs no reviewer; the builder crew is chosen at
-handoff).
+inlined via the seed message and framing starts immediately. `--crew` names the
+crew whose design seat fills this designer and whose build/review halves its
+builder will inherit at handoff; without it the project's bound crew applies.
 
 ### Code layout
 
@@ -2862,16 +2868,17 @@ handoff).
 - The rules inversion (`rules.ts` designer branch), the bundled `designer` skill
   (`skills.ts`), the picker row (`trellis-picker.ts`), and the `?` glyph
   (`status.ts`).
+- The design seat: `CrewSpec.designer` + `designerSeat` (`crew.ts`), read by
+  `newWorker` for a designer spawn; `garden handoff --crew` / the CLI's
+  inheritance of the caller's `entry.crew` (`commands/handoff.ts`).
 
 ### Deferred
 
-- **Full assisted handoff** (trellis auto-spawn, `--handoff <workflow>` /
-  `--handoff-crew` on publish) — see Handoff above; the default-builder case
-  ships skill-level.
+- **Trellis auto-spawn at handoff** (`--handoff <workflow>` on publish) — see
+  Handoff above; the default-builder case ships skill-level, and the builder
+  crew now rides the handoff itself.
 - **`--artifact-type`** (trellis/memo/freeform) — subsumed by the publish `--to` path.
 - **`garden workers designer`** to convert an active default worker mid-run.
-- **Designer-in-the-crew-name** (the `<designer>-<builder>-<reviewer>` triple) —
-  needs the role-agnostic `resolveRole` CREWS scoped.
 
 ## Planner workflow
 

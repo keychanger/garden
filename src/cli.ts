@@ -182,6 +182,8 @@ Dashboard:
   handoff <project> [-m "<msg>"] Spawn a fresh worker on <project> seeded with a briefing (stdin or -m)
                                  Add --expect-callback to receive a one-shot prompt at this pane when the child terminates
                                  Add --ultracode to create the worker in ultracode mode (Opus + max effort + dynamic workflows)
+                                 Add --crew <name> to spawn it under that crew; without it the worker inherits the calling
+                                   worker's own crew (a designer's builder lands on the crew that designed), else the project's
                                  Add --bead <id> to stamp the bead↔worker join on the new worker's registry entry (no bd claim is made)
   reply [-m "<msg>"]             Stage a freeform note for the parent that handed off to this worker (delivered with the callback)
   auto [on|off|status]           Toggle the global auto-continue gate
@@ -202,8 +204,8 @@ Workers:
                                  trellis plants a vine bound to the named trellis (--trellis);
                                  grow plants a bounded hardening loop from a --seed / --seed-file
                                  (--max-iterations caps the passes, default 5); designer plants a
-                                 design worker whose deliverable is a doc, not code (Opus/xhigh
-                                 designer seat) — --seed / --seed-file optionally inlines the design
+                                 design worker whose deliverable is a doc, not code, on the crew's
+                                 design seat (else Opus/xhigh) — --seed / --seed-file optionally inlines the design
                                  brief, and without one no message is sent — the brief arrives
                                  as your first message in its pane; planner plants a decomposition
                                  worker whose deliverable is a bead DAG in the project's bd store
@@ -212,8 +214,10 @@ Workers:
                                  the workflow's default worker model. --effort sets the reasoning
                                  rung (ultra = max effort + dynamic workflows; default/grow/
                                  designer/planner). --harness picks the agent CLI (default
-                                 claude-code; codex = a sandboxed Codex worker, default workflow
-                                 only).
+                                 claude-code; codex = a sandboxed Codex worker; default and
+                                 designer workflows). --crew spawns under a crew (default: its
+                                 build + review halves; designer: its design seat, forwarded to
+                                 the builder at handoff).
   workers grow [<worker>] --seed <text> | --seed-file <path> | --goal-file <path>
                                  Convert an active default worker into a grow loop after its
                                  current work merges (self-resolves via $GARDEN_WORKER). The durable
