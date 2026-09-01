@@ -455,7 +455,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   const projectModel = projectDefaultsApply
     ? (workerCrew?.worker.model ?? project.model ?? projectCrew?.worker.model)
     : undefined;
-  // Workflow-level model/effort defaults (the designer designer seat → Opus /
+  // Workflow-level model/effort defaults (the designer seat → Opus /
   // xhigh) sit one layer beneath the per-spawn and project defaults, mirroring
   // how trellis reads workflow.workerModel per iteration. Not applied for
   // trellis, which resolves its own model per iteration and carries no effort.
