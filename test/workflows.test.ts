@@ -220,9 +220,10 @@ describe("growWorkflow", () => {
 });
 
 describe("designerWorkflow", () => {
-  // Phase 2 skeleton: reuses default's handlers (a designer's design phases
+  // Reuses default's handlers (a designer's design phases
   // produce no tracked commit, so handleWorking never launches a review — the
-  // worker idles at the human gate). The skip-review merge divergence is Phase 3.
+  // worker idles at the human gate). Its transition table carries the shipped
+  // skip-review merge divergence used when the approved doc is published.
 
   it("is registered under name 'designer'", () => {
     expect(getWorkflow("designer")).toBe(designerWorkflow);

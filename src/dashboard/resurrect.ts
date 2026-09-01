@@ -120,7 +120,9 @@ export function rebuildEntry(t: Tombstone, now: number = Date.now()): WorkerEntr
   if (e.baseBranch !== undefined) rebuilt.baseBranch = e.baseBranch;
   if (e.baseBranchSha !== undefined) rebuilt.baseBranchSha = e.baseBranchSha;
   if (e.createdAt !== undefined) rebuilt.createdAt = e.createdAt;
-  if (e.workflow !== undefined) rebuilt.workflow = e.workflow;
+  if (e.workflow !== undefined) {
+    rebuilt.workflow = e.workflow === "botanist" ? "designer" : e.workflow;
+  }
   if (e.harness !== undefined) rebuilt.harness = e.harness;
   if (e.provider !== undefined) rebuilt.provider = e.provider;
   if (e.model !== undefined) rebuilt.model = e.model;

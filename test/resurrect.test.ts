@@ -100,6 +100,17 @@ describe("searchTombstones", () => {
 });
 
 describe("rebuildEntry", () => {
+  it("canonicalizes a legacy botanist tombstone before the worker is relaunched", async () => {
+    const { telemetry, resurrect } = await mods();
+    telemetry.recordWorkerRemoved("proj", "oak", 1, "botanist", baseEntry("oak", {
+      workflow: "botanist",
+    }));
+
+    const rebuilt = resurrect.rebuildEntry(resurrect.listTombstones()[0]);
+
+    expect(rebuilt.workflow).toBe("designer");
+  });
+
   it("keeps identity, config, and history counters; drops transient state", async () => {
     const { telemetry, resurrect } = await mods();
     telemetry.recordWorkerRemoved("proj", "oak", 1, "default", baseEntry("oak", {

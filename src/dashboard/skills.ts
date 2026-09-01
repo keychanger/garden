@@ -539,8 +539,17 @@ Never leave the epic at \`plan:planning\`. Then END YOUR TURN — you are done. 
 
 export function installClaudeSkills(targetDir: string): void {
   const skillsRoot = path.join(targetDir, ".claude", "skills");
+  // Preserve uncommitted design state for workers created before the workflow
+  // rename. Only rename when the new directory is absent so a partial/manual
+  // migration can never overwrite newer designer state.
+  const legacyDesignerState = path.join(targetDir, ".garden", "botanist");
+  const designerState = path.join(targetDir, ".garden", "designer");
+  if (fs.existsSync(legacyDesignerState) && !fs.existsSync(designerState)) {
+    fs.renameSync(legacyDesignerState, designerState);
+  }
   // Heal the legacy flat-file layout so refreshes/bounces of pre-fix workers stop shadowing the new directory layout.
   fs.rmSync(path.join(skillsRoot, "done.md"), { force: true });
+  fs.rmSync(path.join(skillsRoot, "botanist"), { recursive: true, force: true });
   writeSkill(skillsRoot, DONE_SKILL_DIRNAME, DONE_SKILL_FILENAME, DONE_SKILL_CONTENT);
   writeSkill(skillsRoot, HANDOFF_SKILL_DIRNAME, HANDOFF_SKILL_FILENAME, HANDOFF_SKILL_CONTENT);
   writeSkill(skillsRoot, TRELLIS_AUTHOR_SKILL_DIRNAME, TRELLIS_AUTHOR_SKILL_FILENAME, TRELLIS_AUTHOR_SKILL_CONTENT);

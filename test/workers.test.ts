@@ -788,7 +788,7 @@ describe("newWorker", () => {
     );
   });
 
-  // ===== Designer designer seat (workflow-level model/effort default) =====
+  // ===== Designer seat (workflow-level model/effort default) =====
   // The designer workflow declares workerModel: "opus" + workerEffort: "xhigh".
   // newWorker layers those beneath a per-spawn --model/--effort, exactly as it
   // layers project.model/effort for default/grow. This is the seam that makes

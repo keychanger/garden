@@ -7,6 +7,7 @@ vi.mock("node:fs", () => ({
     renameSync: vi.fn(),
     unlinkSync: vi.fn(),
     rmSync: vi.fn(),
+    existsSync: vi.fn(() => false),
   },
 }));
 
@@ -35,6 +36,7 @@ import {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(fs.existsSync).mockReturnValue(false);
 });
 
 describe("installClaudeSkills", () => {
@@ -97,6 +99,36 @@ describe("installClaudeSkills", () => {
     expect(fs.writeFileSync).toHaveBeenCalledWith(
       expect.stringContaining("/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/designer/SKILL.md."),
       DESIGNER_SKILL_CONTENT,
+    );
+  });
+
+  it("migrates a legacy botanist working directory without overwriting designer state", () => {
+    const target = "/Users/x/.garden/worktrees/myproject/bold-ash";
+    vi.mocked(fs.existsSync).mockImplementation(file =>
+      file === `${target}/.garden/botanist`,
+    );
+
+    installClaudeSkills(target);
+
+    expect(fs.renameSync).toHaveBeenCalledWith(
+      `${target}/.garden/botanist`,
+      `${target}/.garden/designer`,
+    );
+
+    vi.clearAllMocks();
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    installClaudeSkills(target);
+    expect(fs.renameSync).not.toHaveBeenCalledWith(
+      `${target}/.garden/botanist`,
+      `${target}/.garden/designer`,
+    );
+  });
+
+  it("removes the legacy botanist skill when refreshing a worktree", () => {
+    installClaudeSkills("/Users/x/.garden/worktrees/myproject/bold-ash");
+    expect(fs.rmSync).toHaveBeenCalledWith(
+      "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/botanist",
+      { recursive: true, force: true },
     );
   });
 
