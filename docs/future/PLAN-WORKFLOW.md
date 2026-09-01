@@ -264,7 +264,7 @@ detects which phase to resume by checking which files exist (e.g.,
 
 Beads lives at `~/.beads/`. This is the beads-native convention and
 the path that `bd` resolves with no `BEADS_DIR` override and no
-project-local `.beads/` directory in cwd. Garden, board, and clio
+project-local `.beads/` directory in cwd. Garden, board, and sky
 all see the same store with no special wiring.
 
 **Garden sets `BEADS_DIR=~/.beads/` in every worker's tmux env**,
@@ -283,7 +283,7 @@ beads-dir <path>` flag that wins over the env injection. Out of
 scope for Phase 1.
 
 Rejected: per-project DBs as the default. The medium-term vision
-(garden + board + clio with cross-cutting human/agent dependency
+(garden + board + sky with cross-cutting human/agent dependency
 mapping) requires a single graph. Per-project DBs would force every
 tool to aggregate, and cross-project dependencies become awkward.
 Two-level (gastown's town + rig pattern) adds complexity that solves
@@ -306,7 +306,7 @@ Every bead created by plan gets:
   safeguards" below) hard-fails if any `bd create` line in
   `beads.sh` lacks it.
 - `garden:source` — marks the bead as garden-created (vs.
-  operator-typed in board). Useful for audit and for clio later.
+  operator-typed in board). Useful for audit and for sky later.
 
 Bead IDs are beads' default hash format (`<prefix>-a1b2`). Garden
 does not invent IDs.

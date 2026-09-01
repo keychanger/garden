@@ -251,8 +251,8 @@ gates the entire origination layer; it should be made before either ships.
 
 **Resolved 2026-07-24 — beads.** The operator committed to the bd/beads
 substrate. The deciding factor was the stack above garden, not the corpus's
-internal trade-offs: board is a beads TUI and clio already reads `bd export`,
-so the "sit at the board with clio while garden executes" vision requires
+internal trade-offs: board is a beads TUI and sky already reads `bd export`,
+so the "sit at the board with sky while garden executes" vision requires
 the shared graph both of those tools already speak. The consumption side
 ships first — the board→garden delegation loop specced in board's
 `docs/future/DELEGATION.md` (ready-frontier intake, `BEADS_ACTOR` join,
