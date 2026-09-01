@@ -364,7 +364,16 @@ describe("codex adapter dialect", () => {
     expect(resume).toContain("codex resume 019f-abc --dangerously-bypass-hook-trust");
     expect(resume).toContain("-s workspace-write");
     expect(resume).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+
+    // The status line is pinned on both the fresh launch and the resume: the
+    // key replaces Codex's default list wholesale, so the two default items
+    // ride along with the context reading garden is actually adding.
+    const statusLine =
+      `-c 'tui.status_line=["model-with-reasoning", "context-remaining", "current-dir"]'`;
+    expect(fresh).toContain(statusLine);
+    expect(resume).toContain(statusLine);
   });
+
 
   it("renders the effort rung as model_reasoning_effort, and keeps ultracode a no-op", async () => {
     const { getHarnessCore } = await importCore();

@@ -18,13 +18,58 @@ import { execFileSync } from "node:child_process";
 import type { ProjectConfig } from "../../config.js";
 import { atomicWriteFile } from "../atomic-write.js";
 import { getRemoteHost } from "../git.js";
-import { resolveHookRunner, hookCompileCachePrefix } from "../runner.js";
+import { resolveHookRunner, hookCompileCachePrefix, resolveNodeBin } from "../runner.js";
 import { buildSandboxConfig, type SandboxConfig } from "../sandbox.js";
+import { shellEscape } from "../tmux.js";
 import { installClaudeSkills } from "../skills.js";
 import { claudeCodeCore } from "./claude-code-core.js";
 import type { HarnessAdapter } from "./types.js";
 
-export function buildSettingsJson(hookRunner: string, sandbox: SandboxConfig): string {
+// The status line: model, reasoning effort, and remaining context window,
+// painted under the composer for the life of the session. Claude Code renders
+// none of these persistently on its own — the model and effort are visible only
+// right after a /model or /effort, and context usage only via /context — which
+// leaves an operator scanning a fleet of worker panes unable to tell what a
+// given worker is running on or how close it is to a compaction.
+//
+// Shipped as a file rather than an inline `node -e` because the command lands
+// inside a JSON string that a shell then parses: a file keeps the script
+// readable and the quoting to one shellEscape. Claude Code feeds it the session
+// JSON on stdin (model.display_name, effort.level, context_window.*) and prints
+// whatever the script writes to stdout.
+export const STATUS_LINE_FILENAME = "statusline.mjs";
+
+export const STATUS_LINE_SCRIPT = `// Written by garden (src/dashboard/harness/claude-code.ts). Edits are overwritten.
+let raw = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { raw += chunk; });
+process.stdin.on("end", () => {
+  let s;
+  try { s = JSON.parse(raw); } catch { return; }
+  const parts = [];
+  if (s.model && s.model.display_name) parts.push(s.model.display_name);
+  if (s.effort && s.effort.level) parts.push(s.effort.level);
+  const ctx = s.context_window || {};
+  if (typeof ctx.remaining_percentage === "number") {
+    const pct = Math.round(ctx.remaining_percentage);
+    const size = ctx.context_window_size;
+    parts.push(typeof size === "number" && size > 0
+      ? pct + "% of " + Math.round(size / 1000) + "k context left"
+      : pct + "% context left");
+  }
+  process.stdout.write(parts.join(" \u00b7 "));
+});
+`;
+
+// The settings.json `statusLine.command`, executed by Claude Code through a
+// shell. Node is resolved the same way every other baked garden command
+// resolves it (a stable PATH symlink, never a versioned Cellar path).
+export function statusLineCommand(targetDir: string): string {
+  const script = path.join(targetDir, ".claude", STATUS_LINE_FILENAME);
+  return `${shellEscape(resolveNodeBin())} ${shellEscape(script)}`;
+}
+
+export function buildSettingsJson(hookRunner: string, sandbox: SandboxConfig, statusLineCmd: string): string {
   // The hook commands are written into JSON and ultimately executed by Claude
   // Code as shell commands. The hook runner targets the minimal dist/hook.js
   // bundle (resolveHookRunner) so each per-tool-call fire parses only the
@@ -72,6 +117,7 @@ export function buildSettingsJson(hookRunner: string, sandbox: SandboxConfig): s
       }],
     },
     sandbox,
+    statusLine: { type: "command", command: statusLineCmd },
     permissions: {
       defaultMode: "auto",
       // Every subcommand of a compound bash call must match a rule, so tmux chains like `tmux ... | head` still prompt without tail-utility allowances.
@@ -110,12 +156,16 @@ function sandboxForTarget(targetDir: string, project: ProjectConfig): SandboxCon
 // least resistance "ask the operator" rather than "edit the file."
 function installRuntimeConfig(targetDir: string, project: ProjectConfig): void {
   const sandbox = sandboxForTarget(targetDir, project);
-  const json = buildSettingsJson(resolveHookRunner(), sandbox);
+  const json = buildSettingsJson(resolveHookRunner(), sandbox, statusLineCommand(targetDir));
   const settingsPath = path.join(targetDir, ".claude", "settings.json");
   // atomicWriteFile preserves the mode through tmp→rename. If the file
   // already exists with a different mode (operator chmod, agent
   // tampering), the rename replaces it with the read-only version.
   atomicWriteFile(settingsPath, json, { mode: 0o444 });
+  // 0o555 for the same reason settings.json is 0o444: the status line is a
+  // command garden bakes into settings.json, so the script it points at is part
+  // of the same trust boundary and is rewritten on every refresh/bounce.
+  atomicWriteFile(path.join(targetDir, ".claude", STATUS_LINE_FILENAME), STATUS_LINE_SCRIPT, { mode: 0o555 });
   installClaudeSkills(targetDir);
   ensureWorktreeExcludes(targetDir);
 }

@@ -46,7 +46,7 @@ import {
 import { getHarness } from "./harness/index.js";
 import { resolveWorkerLaunchPlan } from "./launch-plan.js";
 import type { WorkerLaunchPlan } from "./harness/types.js";
-import { buildSettingsJson } from "./harness/claude-code.js";
+import { buildSettingsJson, statusLineCommand, STATUS_LINE_FILENAME, STATUS_LINE_SCRIPT } from "./harness/claude-code.js";
 import { gardenWindowName, shellWindowName as shellWin, workerWindowName as workerWin, isGardenWindow } from "./window-names.js";
 
 const DASHBOARD_COLS = 250;
@@ -855,8 +855,10 @@ export function buildWorktreeBootstrapScript(
     worktreePath: wtPath,
     project: launchPlan.runtimeProject,
     remoteHost: getRemoteHost(project.path),
-  }));
+  }), statusLineCommand(wtPath));
   const settingsJsonLit = shellEscape(settingsJson);
+  const statusLineScriptLit = shellEscape(STATUS_LINE_SCRIPT);
+  const statusLineFilenameLit = shellEscape(STATUS_LINE_FILENAME);
   const doneSkillLit = shellEscape(DONE_SKILL_CONTENT);
   const doneSkillDirnameLit = shellEscape(DONE_SKILL_DIRNAME);
   const doneSkillFilenameLit = shellEscape(DONE_SKILL_FILENAME);
@@ -1066,6 +1068,10 @@ git -C ${wtPathLit} config --worktree core.hooksPath ${hooksDirLit}
 mkdir -p ${wtPathLit}/.claude
 printf '%s' ${settingsJsonLit} | atomic_write ${wtPathLit}/.claude/settings.json
 chmod 444 ${wtPathLit}/.claude/settings.json
+
+# The status-line script settings.json points at (model / effort / context left).
+printf '%s' ${statusLineScriptLit} | atomic_write ${wtPathLit}/.claude/${statusLineFilenameLit}
+chmod 555 ${wtPathLit}/.claude/${statusLineFilenameLit}
 
 # Install garden-bundled skills (see src/dashboard/skills.ts). Layout: .claude/skills/<name>/SKILL.md.
 mkdir -p ${wtPathLit}/.claude/skills/${doneSkillDirnameLit}

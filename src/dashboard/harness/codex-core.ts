@@ -131,6 +131,20 @@ function codexSandboxFlags(
     + ` -c ${shellEscape(rootsToml)}`;
 }
 
+// Codex's status line, pinned to the items garden wants on every worker pane:
+// model + reasoning effort, remaining context, and the working directory.
+// Codex already ships model-with-reasoning and current-dir by default; the
+// context reading is the addition, and because the key replaces the list
+// wholesale rather than extending it, the defaults are restated here. Verified
+// against codex 0.152.0, which renders it as
+// `gpt-5.6-sol high · Context 100% left · /private/tmp`.
+const CODEX_STATUS_LINE_ITEMS = ["model-with-reasoning", "context-remaining", "current-dir"];
+
+function codexStatusLineFlag(): string {
+  const toml = `tui.status_line=[${CODEX_STATUS_LINE_ITEMS.map(i => JSON.stringify(i)).join(", ")}]`;
+  return ` -c ${shellEscape(toml)}`;
+}
+
 // Codex/OpenAI transient backend errors (rate limit / 5xx / overload /
 // stream drop) worth a retry, vs. a genuine review failure. Scanned over the
 // last few non-empty lines of the STDERR sidecar (where codex exec emits
@@ -259,9 +273,10 @@ export const codexCore: HarnessCore = {
     const trust = "--dangerously-bypass-hook-trust";
     const sandbox = codexSandboxFlags(plan.runtimeProject, opts.worktreeGitDir);
     const hooks = codexHookFlags(resolveHookRunner());
+    const statusLine = codexStatusLineFlag();
     return opts.resume
-      ? `${plan.envPrefix}codex resume ${shellEscape(opts.sessionId)} ${trust} ${sandbox} ${hooks}${modelFlag}${effortFlag}`
-      : `${plan.envPrefix}codex ${trust} ${sandbox} ${hooks}${modelFlag}${effortFlag}`;
+      ? `${plan.envPrefix}codex resume ${shellEscape(opts.sessionId)} ${trust} ${sandbox} ${hooks}${modelFlag}${effortFlag}${statusLine}`
+      : `${plan.envPrefix}codex ${trust} ${sandbox} ${hooks}${modelFlag}${effortFlag}${statusLine}`;
   },
 
   // Headless one-shot (reviewer/resolver/ci-fix) — the spike-verified path.

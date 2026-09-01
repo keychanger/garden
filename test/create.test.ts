@@ -293,6 +293,23 @@ describe("claude-code adapter installRuntimeConfig", () => {
     );
   });
 
+  it("points the status line at a statusline.mjs it also installs", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
+    const parsed = JSON.parse(settingsJsonContent());
+    expect(parsed.statusLine.type).toBe("command");
+    expect(parsed.statusLine.command).toContain("/repo/myproject/.claude/statusline.mjs");
+
+    const writes = vi.mocked(fs.writeFileSync).mock.calls;
+    const scriptCall = writes.find(c => /\.claude\/statusline\.mjs\.[0-9a-f-]+\.tmp$/.test(String(c[0])));
+    expect(scriptCall).toBeDefined();
+    // The three readings the operator asked to see on every worker pane.
+    const script = String(scriptCall![1]);
+    expect(script).toContain("model.display_name");
+    expect(script).toContain("effort.level");
+    expect(script).toContain("remaining_percentage");
+  });
+
   it("sets permissions.defaultMode to auto and pre-allows tmux plus read-only tail utilities so compound tmux chains don't escalate", () => {
     process.argv[1] = "/usr/local/bin/garden";
     claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
