@@ -1,7 +1,11 @@
 // Crews: named bundles of role -> "member" assignments, sugar over the
 // per-role resolution (project.harness/provider for the worker, project.roles
-// for the review family). A crew is a pair of members — `<worker>-<reviewer>`,
-// with `all-X` sugar when one harness both builds and reviews.
+// for the review family). A crew names three seats: who DESIGNS (the designer
+// workflow), who BUILDS, and who REVIEWS. The name pairs the build and review
+// halves — `<worker>-<reviewer>`, with `all-X` sugar when one harness both
+// builds and reviews — because those two are what every default worker
+// exercises; the designer seat rides the same name and is read only by a
+// designer spawn.
 //
 // A MEMBER is data, not code: the registered harnesses (claude, codex, ...)
 // plus one per configured provider (a claude-code worker against that backend,
@@ -61,6 +65,11 @@ export interface CrewMember {
 
 export interface CrewSpec {
   name: string;
+  /** The design seat, read by a designer-workflow spawn. Absent on a stored
+   *  crew that names none — designerSeat() then derives it from the review
+   *  half, since the model strong enough to be the safety net is the one to
+   *  choose the approach. */
+  designer?: CrewMember;
   worker: CrewMember;
   /** Applies uniformly to reviewer / resolver / ci-fix in v1. */
   review: CrewMember;
@@ -89,20 +98,49 @@ export function reviewerMembers(config: GardenConfig): CrewMember[] {
   return listMembers(config).filter((m) => !m.provider);
 }
 
+// The seat ladder each harness's generated crews carry. "strong" fills the two
+// seats whose product is judgment — the designer, who chooses the approach,
+// and the reviewer, who is the safety net; "middle" fills the builder, who
+// implements an approach already chosen and is reviewed by a strong model. So
+// `claude-codex` designs on Fable, builds on Opus, and reviews on Codex's top
+// model, and `codex-claude` is its mirror. Provider members carry no ladder:
+// their model vocabulary is the provider's own modelMap.
+const SEAT_MODELS: Record<string, { strong: string; middle: string }> = {
+  "claude-code": { strong: "fable", middle: "opus" },
+  codex: { strong: "gpt-5.6-sol", middle: "gpt-5.6-terra" },
+};
+
+function seat(member: CrewMember, tier: "strong" | "middle"): CrewMember {
+  const ladder = member.provider ? undefined : SEAT_MODELS[member.harness];
+  return ladder ? { ...member, model: ladder[tier] } : member;
+}
+
+// The member that fills a crew's design seat. A stored crew that names no
+// designer derives one from its review half: the same member and model, minus
+// the review effort (a headless reviewer's ladder ends in "max", which is not
+// a worker rung). The workflow default then supplies the designer's effort.
+export function designerSeat(spec: CrewSpec): CrewMember {
+  if (spec.designer) return spec.designer;
+  const { effort: _effort, ...member } = spec.review;
+  return member;
+}
+
 function crewName(worker: CrewMember, review: CrewMember): string {
   if (!worker.provider && worker.harness === review.harness) return `all-${review.name}`;
   return `${worker.name}-${review.name}`;
 }
 
-// One-line recipe: `claude opus/xhigh → claude opus`. The arrow reads
-// build-then-review, matching the `<worker>-<reviewer>` builtin naming. Shared
-// by `garden crew list/show` and the ⌥⇧C picker.
+// One-line recipe: `claude fable ⇢ claude opus/xhigh → claude opus`. The
+// arrows read design-then-build-then-review; the designer segment appears only
+// when the crew names that seat. Shared by `garden crew list/show` and the ⌥⇧C
+// picker.
 export function formatRecipe(spec: CrewSpec): string {
   const half = (m: CrewMember): string => {
     const dims = [m.model, m.effort].filter(Boolean).join("/");
     return dims ? `${m.name} ${dims}` : m.name;
   };
-  return `${half(spec.worker)} → ${half(spec.review)}`;
+  const designer = spec.designer ? `${half(spec.designer)} ⇢ ` : "";
+  return `${designer}${half(spec.worker)} → ${half(spec.review)}`;
 }
 
 // Look up a member by its operator-facing name.
@@ -110,14 +148,21 @@ export function findMember(name: string, config: GardenConfig): CrewMember | nul
   return listMembers(config).find((m) => m.name === name) ?? null;
 }
 
-// The generated builtin crews: (every member) x (every reviewer member). These
-// carry no model/effort — that is exactly what a generated namespace cannot
-// express, and the reason stored crews exist.
+// The generated builtin crews: (every member) x (every reviewer member), each
+// seat pinned by the member's harness ladder (SEAT_MODELS). Effort is left to
+// the workflow and account defaults — a generated namespace can express one
+// ladder per harness, not a rung per crew, which is what stored crews are for.
 export function builtinCrews(config: GardenConfig): CrewSpec[] {
   const crews: CrewSpec[] = [];
   for (const w of listMembers(config)) {
     for (const r of reviewerMembers(config)) {
-      crews.push({ name: crewName(w, r), worker: w, review: r, builtin: true });
+      crews.push({
+        name: crewName(w, r),
+        designer: seat(w, "strong"),
+        worker: seat(w, "middle"),
+        review: seat(r, "strong"),
+        builtin: true,
+      });
     }
   }
   return crews;
@@ -144,7 +189,9 @@ export function storedCrews(config: GardenConfig): CrewSpec[] {
   for (const [name, def] of Object.entries(config.crews ?? {})) {
     const worker = resolveRole(def.worker, config, true);
     const review = resolveRole(def.review, config, false);
-    if (worker && review) crews.push({ name, worker, review, builtin: false });
+    const designer = def.designer ? resolveRole(def.designer, config, true) : undefined;
+    if (!worker || !review || designer === null) continue;
+    crews.push({ name, ...(designer ? { designer } : {}), worker, review, builtin: false });
   }
   return crews;
 }
@@ -337,6 +384,17 @@ export function validateCrewDef(def: StoredCrew, config: GardenConfig): void {
   }
   if (def.worker.effort && !(CREW_EFFORT_VALUES as readonly string[]).includes(def.worker.effort)) {
     throw new Error(`effort must be one of: ${CREW_EFFORT_VALUES.join(", ")}, got '${def.worker.effort}'`);
+  }
+  // The design seat may be any member: a designer runs no reviewer, so a
+  // provider there defeats nothing. Its effort is a worker rung — the designer
+  // is an interactive worker, not a headless run.
+  if (def.designer) {
+    if (!findMember(def.designer.member, config)) {
+      throw new Error(`Unknown member '${def.designer.member}'. Available: ${names.join(", ")}`);
+    }
+    if (def.designer.effort && !(CREW_EFFORT_VALUES as readonly string[]).includes(def.designer.effort)) {
+      throw new Error(`designer effort must be one of: ${CREW_EFFORT_VALUES.join(", ")}, got '${def.designer.effort}'`);
+    }
   }
 }
 

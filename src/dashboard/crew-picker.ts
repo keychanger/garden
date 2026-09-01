@@ -49,15 +49,13 @@ export function buildCrewPickerPlan(
   crews: CrewSpec[],
   runner: string,
 ): CrewPickerPlan {
-  // A stored crew's recipe is the whole point of naming it — `heavy` says
-  // nothing without `claude opus/xhigh → claude opus` beside it. Builtins are
-  // self-describing (the name IS the pairing), so they stay bare.
+  // A crew's recipe is the whole point of naming it — `heavy` says nothing
+  // without `claude opus/xhigh → claude opus` beside it, and a builtin's name
+  // says only its harness pairing, not the seat models it carries.
   const width = Math.max(...crews.map((c) => c.name.length), 0);
   const items: CrewMenuItem[] = crews.map((crew, i) => {
-    const recipe = crew.builtin ? "" : `  ${formatRecipe(crew)}`;
-    const name = recipe ? crew.name.padEnd(width) : crew.name;
     return {
-      label: `${name}${recipe}${crew.name === current ? "  ✓" : ""}`,
+      label: `${crew.name.padEnd(width)}  ${formatRecipe(crew)}${crew.name === current ? "  ✓" : ""}`,
       key: i < 9 ? String(i + 1) : "",
       command: menuRunShell(`${runner} dashboard _crew-set ${shellEscape(projectName)} ${shellEscape(crew.name)}`),
     };
@@ -109,6 +107,9 @@ export function buildCrewComposerPlan(
     command: menuRunShell(`${runner} dashboard _crew-dim ${shellEscape(projectName)} ${shellEscape(field)}`),
   });
   const items: CrewMenuItem[] = [
+    d("designer", "d", draft.designer, "(reviewer's member)"),
+    d("designer-model", "n", draft.designerModel, "(inherit)"),
+    d("designer-effort", "f", draft.designerEffort, "(inherit)"),
     d("worker", "w", draft.worker, "(required)"),
     d("model", "m", draft.workerModel, "(inherit)"),
     d("effort", "e", draft.workerEffort, "(inherit)"),
@@ -138,7 +139,8 @@ export function buildCrewComposerPlan(
     command: menuRunShell(`${runner} dashboard _crew-cancel ${shellEscape(projectName)}`),
   });
 
-  const recipe = `${draft.worker ?? "?"}${dims(draft.workerModel, draft.workerEffort)}`
+  const recipe = (draft.designer ? `${draft.designer}${dims(draft.designerModel, draft.designerEffort)} ⇢ ` : "")
+    + `${draft.worker ?? "?"}${dims(draft.workerModel, draft.workerEffort)}`
     + ` → ${draft.review ?? "?"}${dims(draft.reviewModel, draft.reviewEffort)}`;
   const verb = draft.editing ? `Edit crew '${draft.editing}'` : "New crew";
   return { title: `${verb} (${recipe})`, items };
@@ -320,6 +322,9 @@ export function runCrewEdit(projectName: string, crewName: string): void {
     return;
   }
   seedCrewDraft(crewName, {
+    ...(spec.designer ? { designer: spec.designer.name } : {}),
+    ...(spec.designer?.model ? { designerModel: spec.designer.model } : {}),
+    ...(spec.designer?.effort ? { designerEffort: spec.designer.effort } : {}),
     worker: spec.worker.name,
     ...(spec.worker.model ? { workerModel: spec.worker.model } : {}),
     ...(spec.worker.effort ? { workerEffort: spec.worker.effort } : {}),
@@ -337,6 +342,14 @@ export function runCrewDimSubmenu(projectName: string, field: string): void {
   const runner = resolveGardenRunner();
   const plan = (() => {
     switch (field) {
+      case "designer":
+        // Any member may design (a designer runs no reviewer); the clear row
+        // hands the seat back to the review half.
+        return buildCrewDimSubmenuPlan(projectName, field, listMembers(config).map((m) => m.name), draft.designer, "derive from reviewer", runner);
+      case "designer-model":
+        return buildCrewDimSubmenuPlan(projectName, field, CREW_MODEL_CHOICES, draft.designerModel, "inherit — no model pinned", runner);
+      case "designer-effort":
+        return buildCrewDimSubmenuPlan(projectName, field, CREW_EFFORT_CHOICES, draft.designerEffort, "inherit — no effort pinned", runner);
       case "worker":
         return buildCrewDimSubmenuPlan(projectName, field, listMembers(config).map((m) => m.name), draft.worker, null, runner);
       case "reviewer":
@@ -367,6 +380,9 @@ export function runCrewDimSubmenu(projectName: string, field: string): void {
 export function setCrewDimFromPicker(projectName: string, field: string, value: string): void {
   const patch: CrewDraft = {};
   switch (field) {
+    case "designer": patch.designer = value; break;
+    case "designer-model": patch.designerModel = value; break;
+    case "designer-effort": patch.designerEffort = value; break;
     case "worker": patch.worker = value; break;
     case "reviewer": patch.review = value; break;
     case "model": patch.workerModel = value; break;
@@ -395,6 +411,10 @@ export function saveCrewFromPicker(projectName: string, crewName: string): void 
     tmuxDisplay("Pick a worker and a reviewer first.");
     return;
   }
+  if ((draft.designerModel || draft.designerEffort) && !draft.designer) {
+    tmuxDisplay("Pick a designer member to pin its model or effort.");
+    return;
+  }
   const config = loadConfig();
   // A new crew must not silently replace an existing one; editing targets the
   // name it was seeded with, so a collision there is the expected overwrite.
@@ -404,6 +424,15 @@ export function saveCrewFromPicker(projectName: string, crewName: string): void 
   }
   try {
     saveCrew(name, {
+      ...(draft.designer
+        ? {
+          designer: {
+            member: draft.designer,
+            ...(draft.designerModel ? { model: draft.designerModel } : {}),
+            ...(draft.designerEffort ? { effort: draft.designerEffort } : {}),
+          },
+        }
+        : {}),
       worker: {
         member: draft.worker,
         ...(draft.workerModel ? { model: draft.workerModel } : {}),

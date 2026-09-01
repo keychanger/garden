@@ -92,17 +92,23 @@ Projects:
                                  e.g. 'config <p> role reviewer harness codex' for a Codex reviewer
   config <project> crew [<name>] Bind the project to a crew ('none' unbinds). See 'garden crew'.
   crew [list|show|add|edit|remove|apply]
-                                 Manage crews: who builds and who reviews, and how strong.
+                                 Manage crews: who designs, who builds, who reviews, and how strong.
                                  Builtin names are <worker>-<reviewer> (all-X sugar): all-claude,
                                  all-codex, codex-claude, claude-codex, plus <provider>-claude /
                                  <provider>-codex per configured provider (e.g. deepseek-claude).
                                  A provider can build but never reviews (safety net).
-                                 Builtins carry a harness pairing only; define your own to pin
-                                 model and effort too:
-                                   crew add heavy --worker claude --model opus --effort xhigh \\
+                                 Builtins carry each harness's seat ladder — the strong model
+                                 designs and reviews, the middle one builds (claude-codex: fable
+                                 designs, opus builds, codex reviews; codex-claude is its mirror).
+                                 Define your own to pin any seat's model and effort:
+                                   crew add heavy --designer claude --designer-model fable \\
+                                     --worker claude --model opus --effort xhigh \\
                                      --review claude --review-model opus --review-effort max
                                    crew add cheap --from all-claude --model sonnet --effort medium
                                    crew apply heavy myproject
+                                 A crew naming no designer derives that seat from its reviewer;
+                                 --designer none hands it back. A designer-workflow spawn reads
+                                 the seat (workers new --workflow designer [--crew <name>]).
                                  Projects bind by REFERENCE, so 'crew edit' re-targets every
                                  project on that crew at its next spawn/review. A project's own
                                  config keys override the crew.

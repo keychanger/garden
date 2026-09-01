@@ -208,6 +208,9 @@ export interface CrewRole {
 // The generated set survives as builtins (listCrews merges both); a stored crew
 // wins on name collision.
 export interface StoredCrew {
+  /** The design seat (designer workflow). Optional: a crew naming none
+   *  derives its designer from the review half (crew.ts designerSeat). */
+  designer?: CrewRole;
   worker: CrewRole;
   review: CrewRole;
 }

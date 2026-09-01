@@ -43,11 +43,39 @@ describe("garden crew add/edit", () => {
       worker: { member: "claude", model: "sonnet" },
       review: { member: "codex" },
     });
-    // Cloning a builtin is the documented way to "edit" one.
+    // Cloning a builtin carries its seat ladder over, so the clone starts
+    // from what the builtin actually runs.
     await crew(["add", "from-builtin", "--from", "all-codex"]);
     expect(loadConfig().crews?.["from-builtin"]).toEqual({
-      worker: { member: "codex" }, review: { member: "codex" },
+      designer: { member: "codex", model: "gpt-5.6-sol" },
+      worker: { member: "codex", model: "gpt-5.6-terra" },
+      review: { member: "codex", model: "gpt-5.6-sol" },
     });
+  });
+
+  it("--designer names the design seat, and 'none' hands it back to the reviewer", async () => {
+    const { crew, loadConfig } = await setup();
+    const { getCrew, designerSeat } = await import("../src/dashboard/crew.js");
+    await crew([
+      "add", "studio", "--designer", "claude", "--designer-model", "fable", "--designer-effort", "xhigh",
+      "--worker", "claude", "--model", "opus", "--review", "claude", "--review-model", "fable",
+    ]);
+    expect(loadConfig().crews?.studio).toEqual({
+      designer: { member: "claude", model: "fable", effort: "xhigh" },
+      worker: { member: "claude", model: "opus" },
+      review: { member: "claude", model: "fable" },
+    });
+    await crew(["edit", "studio", "--designer", "none"]);
+    expect(loadConfig().crews?.studio?.designer).toBeUndefined();
+    // With no seat named, the designer derives from the review half.
+    expect(designerSeat(getCrew("studio", loadConfig())!).model).toBe("fable");
+  });
+
+  it("rejects a designer model or effort without a design seat to hang it on", async () => {
+    const { crew } = await setup();
+    await expect(
+      crew(["add", "x", "--worker", "claude", "--review", "claude", "--designer-model", "fable"]),
+    ).rejects.toThrow(/--designer-model \/ --designer-effort need a design seat/);
   });
 
   it("edit changes one dimension and leaves the rest standing", async () => {
@@ -103,8 +131,9 @@ describe("garden crew add/edit", () => {
     const { crew, loadConfig } = await setup();
     await crew(["edit", "all-codex", "--model", "opus"]);
     expect(loadConfig().crews?.["all-codex"]).toEqual({
+      designer: { member: "codex", model: "gpt-5.6-sol" },
       worker: { member: "codex", model: "opus" },
-      review: { member: "codex" },
+      review: { member: "codex", model: "gpt-5.6-sol" },
     });
     const { getCrew } = await import("../src/dashboard/crew.js");
     expect(getCrew("all-codex", loadConfig())!.builtin).toBe(false);

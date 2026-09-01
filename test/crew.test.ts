@@ -24,7 +24,7 @@ vi.mock("../src/dashboard/header.js", () => ({ refreshDashboard: vi.fn() }));
 const { listMembers, reviewerMembers, listCrews, getCrew, deriveCrew, applyCrew,
   workerMemberName, projectWorkerMemberName, builtinCrews, storedCrews,
   resolveProjectCrew, crewOverridden, clearCrew, saveCrew, deleteCrew,
-  isBuiltinCrew, validateCrewDef, formatRecipe } =
+  isBuiltinCrew, validateCrewDef, formatRecipe, designerSeat } =
   await import("../src/dashboard/crew.js");
 const { buildCrewPickerPlan, buildCrewComposerPlan, buildCrewDimSubmenuPlan, buildStoredCrewPickerPlan } =
   await import("../src/dashboard/crew-picker.js");
@@ -156,9 +156,10 @@ describe("applyCrew", () => {
 
   it("preserves a per-role model when only the harness is crew-managed", () => {
     store.value.projects.garden.roles = { reviewer: { model: "opus" } };
-    applyCrew("garden", getCrew("codex-claude", store.value)!);
-    // codex-claude review = claude-code (default harness) -> harness cleared,
-    // but the pinned model stays.
+    saveCrew("bare", { worker: { member: "codex" }, review: { member: "claude" } });
+    applyCrew("garden", getCrew("bare", store.value)!);
+    // review = claude-code (default harness) -> harness cleared, but a model
+    // the crew does not pin stays.
     expect(store.value.projects.garden.roles?.reviewer?.model).toBe("opus");
   });
 
@@ -273,13 +274,59 @@ describe("stored crews", () => {
     expect(storedCrews(store.value)).toHaveLength(0);
   });
 
-  it("builtins never carry model or effort", () => {
+  it("builtins carry each harness's seat ladder: strong designs and reviews, middle builds", () => {
+    const byName = Object.fromEntries(builtinCrews(store.value).map((c) => [c.name, c]));
+    const seats = (name: string) => [byName[name].designer!.model, byName[name].worker.model, byName[name].review.model];
+    expect(seats("claude-codex")).toEqual(["fable", "opus", "gpt-5.6-sol"]);
+    expect(seats("codex-claude")).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "fable"]);
+    expect(seats("all-claude")).toEqual(["fable", "opus", "fable"]);
+    expect(seats("all-codex")).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-sol"]);
     for (const c of builtinCrews(store.value)) {
-      expect(c.worker.model).toBeUndefined();
+      // Effort is the workflow's and the account's call, never the ladder's.
+      expect(c.designer!.effort).toBeUndefined();
       expect(c.worker.effort).toBeUndefined();
-      expect(c.review.model).toBeUndefined();
+      expect(c.review.effort).toBeUndefined();
       expect(c.builtin).toBe(true);
     }
+  });
+
+  it("a provider member carries no ladder — its models are the provider's own vocabulary", () => {
+    const c = builtinCrews(withDeepseek()).find((cr) => cr.name === "deepseek-claude")!;
+    expect(c.designer).toEqual({ name: "deepseek", harness: "claude-code", provider: "deepseek" });
+    expect(c.worker.model).toBeUndefined();
+    expect(c.review.model).toBe("fable");
+  });
+
+  it("a stored crew naming no designer derives the seat from its review half, minus the review effort", () => {
+    saveCrew("heavy", {
+      worker: { member: "claude", model: "opus", effort: "xhigh" },
+      review: { member: "codex", model: "gpt-5.6-sol", effort: "max" },
+    });
+    const spec = getCrew("heavy", store.value)!;
+    expect(spec.designer).toBeUndefined();
+    expect(designerSeat(spec)).toEqual({ name: "codex", harness: "codex", model: "gpt-5.6-sol" });
+    expect(formatRecipe(spec)).toBe("claude opus/xhigh → codex gpt-5.6-sol/max");
+  });
+
+  it("a stored crew may name any member as designer, provider included, and the recipe leads with it", () => {
+    store.value = withDeepseek({ projects: { garden: { path: "/p" } } });
+    saveCrew("studio", {
+      designer: { member: "deepseek", effort: "high" },
+      worker: { member: "claude", model: "opus" },
+      review: { member: "claude", model: "fable" },
+    });
+    const spec = getCrew("studio", store.value)!;
+    expect(designerSeat(spec)).toEqual({ name: "deepseek", harness: "claude-code", provider: "deepseek", effort: "high" });
+    expect(formatRecipe(spec)).toBe("deepseek high ⇢ claude opus → claude fable");
+  });
+
+  it("rejects an unknown designer member and a designer effort off the worker ladder", () => {
+    expect(() => validateCrewDef({
+      designer: { member: "nobody" }, worker: { member: "claude" }, review: { member: "claude" },
+    }, store.value)).toThrow(/Unknown member 'nobody'/);
+    expect(() => validateCrewDef({
+      designer: { member: "claude", effort: "max" }, worker: { member: "claude" }, review: { member: "claude" },
+    }, store.value)).toThrow(/designer effort must be one of/);
   });
 
   it("deleting a crew reports its bound projects and leaves the reference inert", () => {
@@ -414,9 +461,10 @@ describe("buildCrewPickerPlan", () => {
     ], runner);
     expect(labels(withStored)).toContain("edit crew…");
     expect(labels(withStored)).toContain("delete crew…");
-    // A stored crew shows its recipe; a builtin's name already IS its recipe.
+    // Every crew shows its recipe: a builtin's name says only its harness
+    // pairing, not the seat models it carries.
     expect(labels(withStored).find((l) => l.startsWith("heavy"))).toContain("claude opus → claude");
-    expect(labels(withStored).find((l) => l.startsWith("all-codex"))).toBe("all-codex");
+    expect(labels(withStored).find((l) => l.startsWith("all-codex"))).toContain("codex gpt-5.6-sol ⇢ codex gpt-5.6-terra → codex gpt-5.6-sol");
     // Exactly one rule divides the pick list from the management rows — the
     // runner must map `sep` rows through, or each becomes three blank items.
     expect(withStored.items.filter((i) => i.sep)).toHaveLength(1);
@@ -481,11 +529,19 @@ describe("crew composer plans", () => {
     }, runner);
     expect(plan.title).toBe("New crew (claude opus/xhigh → codex)");
     const labels = plan.items.map((i) => i.label);
+    expect(labels).toContain("designer: (reviewer's member)");
     expect(labels).toContain("worker: claude");
     expect(labels).toContain("model: opus");
     expect(labels).toContain("effort: xhigh");
     expect(labels).toContain("reviewer: codex");
     expect(labels).toContain("review-model: (safe default)");
+  });
+
+  it("leads the title with a staged design seat", () => {
+    const plan = buildCrewComposerPlan("garden", {
+      designer: "claude", designerModel: "fable", worker: "claude", workerModel: "opus", review: "codex",
+    }, runner);
+    expect(plan.title).toBe("New crew (claude fable ⇢ claude opus → codex)");
   });
 
   it("withholds save until both halves are named", () => {

@@ -149,11 +149,11 @@ describe("resolveReviewRole", () => {
     expect(r.harness).toBe("codex");
   });
 
-  it("an all-claude crew keeps the default claude-code reviewer", async () => {
+  it("an all-claude crew reviews on claude-code with the ladder's strong model", async () => {
     const { resolveReviewRole } = await importRoles();
     const r = resolveReviewRole(project(), "default", "reviewer", emptyConfig, { crew: "all-claude" });
     expect(r.harness).toBe("claude-code");
-    expect(r.model).toBe("opus");
+    expect(r.model).toBe("fable");
   });
 
   it("is byte-identical to before when entry / entry.crew is unset (backward compat)", async () => {

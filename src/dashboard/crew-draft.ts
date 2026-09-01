@@ -21,6 +21,9 @@ export const CREW_DRAFT_MAX_AGE_MS = 15 * 60_000;
 export interface CrewDraft {
   /** Name being edited; absent for a new crew (prompted at save). */
   editing?: string;
+  designer?: string;
+  designerModel?: string;
+  designerEffort?: string;
   worker?: string;
   workerModel?: string;
   workerEffort?: string;
@@ -29,7 +32,10 @@ export interface CrewDraft {
   reviewEffort?: string;
 }
 
-const DRAFT_FIELDS = ["editing", "worker", "workerModel", "workerEffort", "review", "reviewModel", "reviewEffort"] as const;
+const DRAFT_FIELDS = [
+  "editing", "designer", "designerModel", "designerEffort",
+  "worker", "workerModel", "workerEffort", "review", "reviewModel", "reviewEffort",
+] as const;
 
 function draftPath(): string {
   return path.join(SESSIONS_DIR, "crew-draft.json");

@@ -115,6 +115,32 @@ describe("composing and saving a crew from the menu", () => {
   });
 });
 
+describe("the design seat in the composer", () => {
+  it("stages a designer with its own model and effort, and saves the seat", () => {
+    setCrewDimFromPicker("garden", "designer", "claude");
+    setCrewDimFromPicker("garden", "designer-model", "fable");
+    setCrewDimFromPicker("garden", "designer-effort", "xhigh");
+    setCrewDimFromPicker("garden", "worker", "claude");
+    setCrewDimFromPicker("garden", "reviewer", "codex");
+    saveCrewFromPicker("garden", "studio");
+    expect(store.value.crews?.studio).toEqual({
+      designer: { member: "claude", model: "fable", effort: "xhigh" },
+      worker: { member: "claude" },
+      review: { member: "codex" },
+    });
+  });
+
+  it("refuses a designer model with no designer member to hang it on", () => {
+    setCrewDimFromPicker("garden", "designer-model", "fable");
+    setCrewDimFromPicker("garden", "worker", "claude");
+    setCrewDimFromPicker("garden", "reviewer", "codex");
+    displayed.lines = [];
+    saveCrewFromPicker("garden", "studio");
+    expect(store.value.crews?.studio).toBeUndefined();
+    expect(displayed.lines.join()).toMatch(/Pick a designer member/);
+  });
+});
+
 describe("review effort in the composer", () => {
   it("stages and saves a reviewer effort alongside the worker's", () => {
     setCrewDimFromPicker("garden", "worker", "claude");
@@ -183,7 +209,12 @@ describe("editing a builtin materializes an override", () => {
   // drops the override and the builtin comes back. Lossless in both directions.
   it("seeds the draft from the builtin and stamps it as the edit target", () => {
     runCrewEdit("garden", "all-codex");
-    expect(readCrewDraft()).toEqual({ editing: "all-codex", worker: "codex", review: "codex" });
+    expect(readCrewDraft()).toEqual({
+      editing: "all-codex",
+      designer: "codex", designerModel: "gpt-5.6-sol",
+      worker: "codex", workerModel: "gpt-5.6-terra",
+      review: "codex", reviewModel: "gpt-5.6-sol",
+    });
   });
 
   it("saving writes a stored crew that shadows the builtin", () => {
@@ -191,7 +222,9 @@ describe("editing a builtin materializes an override", () => {
     setCrewDimFromPicker("garden", "model", "opus");
     saveCrewFromPicker("garden", "all-codex");
     expect(store.value.crews?.["all-codex"]).toEqual({
-      worker: { member: "codex", model: "opus" }, review: { member: "codex" },
+      designer: { member: "codex", model: "gpt-5.6-sol" },
+      worker: { member: "codex", model: "opus" },
+      review: { member: "codex", model: "gpt-5.6-sol" },
     });
     const spec = getCrew("all-codex", store.value)!;
     expect(spec.builtin).toBe(false);
@@ -205,7 +238,7 @@ describe("editing a builtin materializes an override", () => {
     expect(store.value.crews).toBeUndefined();
     const spec = getCrew("all-codex", store.value)!;
     expect(spec.builtin).toBe(true);
-    expect(spec.worker.model).toBeUndefined();
+    expect(spec.worker.model).toBe("gpt-5.6-terra");
     // The message must distinguish this from deleting a name outright.
     expect(displayed.lines.join()).toMatch(/Override removed: all-codex is the builtin again/);
   });

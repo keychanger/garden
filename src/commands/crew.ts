@@ -42,6 +42,17 @@ function crewData(spec: CrewSpec, config: GardenConfig): Record<string, unknown>
     name: spec.name,
     builtin: spec.builtin,
     recipe: formatRecipe(spec),
+    ...(spec.designer
+      ? {
+        designer: {
+          member: spec.designer.name,
+          harness: spec.designer.harness,
+          ...(spec.designer.provider ? { provider: spec.designer.provider } : {}),
+          ...(spec.designer.model ? { model: spec.designer.model } : {}),
+          ...(spec.designer.effort ? { effort: spec.designer.effort } : {}),
+        },
+      }
+      : {}),
     worker: {
       member: spec.worker.name,
       harness: spec.worker.harness,
@@ -84,9 +95,9 @@ function handleList(): void {
   }
   if (stored.length === 0) {
     console.log("");
-    console.log("  No crews defined — the builtins carry a harness pairing only.");
-    console.log("  Define one with a model/effort recipe:");
-    console.log("    garden crew add heavy --worker claude --model opus --effort xhigh --review claude --review-model opus");
+    console.log("  No crews defined — the builtins carry each harness's seat ladder only.");
+    console.log("  Define one to pin your own models and efforts:");
+    console.log("    garden crew add heavy --designer claude --designer-model fable --worker claude --model opus --effort xhigh --review claude --review-model opus");
   }
 }
 
@@ -101,6 +112,12 @@ function handleShow(args: string[]): void {
     const lines = [
       `  ${spec.name}${spec.builtin ? "  (builtin)" : ""}`,
       `    recipe:  ${formatRecipe(spec)}`,
+      `    designer: ${spec.designer
+        ? `member=${spec.designer.name} harness=${spec.designer.harness}`
+          + (spec.designer.provider ? ` provider=${spec.designer.provider}` : "")
+          + (spec.designer.model ? ` model=${spec.designer.model}` : "")
+          + (spec.designer.effort ? ` effort=${spec.designer.effort}` : "")
+        : "(derived from review)"}`,
       `    worker:  member=${spec.worker.name} harness=${spec.worker.harness}`
         + (spec.worker.provider ? ` provider=${spec.worker.provider}` : "")
         + (spec.worker.model ? ` model=${spec.worker.model}` : "")
@@ -115,6 +132,9 @@ function handleShow(args: string[]): void {
 }
 
 interface WriteFlags {
+  designer?: string;
+  designerModel?: string;
+  designerEffort?: string;
   worker?: string;
   model?: string;
   effort?: string;
@@ -127,6 +147,9 @@ interface WriteFlags {
 function parseWriteFlags(args: string[]): WriteFlags {
   const flags: WriteFlags = {};
   const map: Record<string, keyof WriteFlags> = {
+    "--designer": "designer",
+    "--designer-model": "designerModel",
+    "--designer-effort": "designerEffort",
     "--worker": "worker",
     "--model": "model",
     "--effort": "effort",
@@ -148,7 +171,7 @@ function parseWriteFlags(args: string[]): WriteFlags {
 function handleWrite(args: string[], mode: "add" | "edit"): void {
   const name = args[0];
   if (!name || name.startsWith("--")) {
-    throw new Error(`Usage: garden crew ${mode} <name> [--from <crew>] [--worker <member>] [--model <m>] [--effort <e>] [--review <member>] [--review-model <m>] [--review-effort <e>]`);
+    throw new Error(`Usage: garden crew ${mode} <name> [--from <crew>] [--designer <member>|none] [--designer-model <m>] [--designer-effort <e>] [--worker <member>] [--model <m>] [--effort <e>] [--review <member>] [--review-model <m>] [--review-effort <e>]`);
   }
   const flags = parseWriteFlags(args.slice(1));
   const config = loadConfig();
@@ -169,6 +192,15 @@ function handleWrite(args: string[], mode: "add" | "edit"): void {
   // --from seeds every dimension from another crew (builtin or stored) so
   // "clone and tweak" is a single call — the common agentic gesture.
   const seedFrom = (src: CrewSpec): StoredCrew => ({
+    ...(src.designer
+      ? {
+        designer: {
+          member: src.designer.name,
+          ...(src.designer.model ? { model: src.designer.model } : {}),
+          ...(src.designer.effort ? { effort: src.designer.effort } : {}),
+        },
+      }
+      : {}),
     worker: {
       member: src.worker.name,
       ...(src.worker.model ? { model: src.worker.model } : {}),
@@ -189,7 +221,11 @@ function handleWrite(args: string[], mode: "add" | "edit"): void {
     // DELTA against it, rather than forcing the operator to restate both halves.
     base = seedFrom(requireCrew(name, config));
   } else if (existing) {
-    base = { worker: { ...existing.worker }, review: { ...existing.review } };
+    base = {
+      ...(existing.designer ? { designer: { ...existing.designer } } : {}),
+      worker: { ...existing.worker },
+      review: { ...existing.review },
+    };
   } else {
     if (!flags.worker || !flags.review) {
       throw new Error(
@@ -201,6 +237,17 @@ function handleWrite(args: string[], mode: "add" | "edit"): void {
     base = { worker: { member: flags.worker }, review: { member: flags.review } };
   }
 
+  // The design seat is optional, so `--designer none` drops the whole seat
+  // (the crew then derives its designer from the review half again).
+  if (flags.designer === "none") delete base.designer;
+  else if (flags.designer) base.designer = { ...(base.designer ?? {}), member: flags.designer };
+  if ((flags.designerModel || flags.designerEffort) && !base.designer) {
+    throw new Error("--designer-model / --designer-effort need a design seat: pass --designer <member> too.");
+  }
+  if (base.designer) {
+    applyDim(base.designer, "model", flags.designerModel);
+    applyDim(base.designer, "effort", flags.designerEffort);
+  }
   if (flags.worker) base.worker.member = flags.worker;
   if (flags.review) base.review.member = flags.review;
   applyDim(base.worker, "model", flags.model);
