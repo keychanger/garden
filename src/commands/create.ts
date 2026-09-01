@@ -137,7 +137,7 @@ function currentGhUser(): string {
 }
 
 function remoteUrlFor(slug: string): string {
-  const r = spawnSync("gh", ["config", "get", "git_protocol"], { encoding: "utf-8" });
+  const r = spawnSync("gh", ["config", "get", "-h", "github.com", "git_protocol"], { encoding: "utf-8" });
   const protocol = r.status === 0 ? (r.stdout ?? "").trim() : "";
   return protocol === "ssh"
     ? `git@github.com:${slug}.git`

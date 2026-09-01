@@ -202,6 +202,31 @@ describe("garden create", () => {
     expect(loaded.projects["denied"]).toBeUndefined();
   });
 
+  it("reads git_protocol scoped to github.com, not the global default", async () => {
+    const config = await setup();
+    config.saveConfig({ projects: {}, plots: { all: { projects: [] } } });
+    activePlot = "all";
+    spawnSyncMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "gh" && args[0] === "api" && args[1] === "user") return { status: 0, stdout: "tester\n" };
+      if (cmd === "gh" && args[0] === "config") {
+        const hostScoped = args[2] === "-h" && args[3] === "github.com";
+        return { status: 0, stdout: hostScoped ? "ssh\n" : "https\n" };
+      }
+      return { status: 0 };
+    });
+
+    const target = path.join(tmpHome, "hosty");
+    const { create } = await importCreate();
+    await create([target]);
+
+    const remoteAddCall = execFileSyncMock.mock.calls.find(
+      c => c[0] === "git" && Array.isArray(c[1]) && (c[1] as string[])[0] === "remote",
+    );
+    expect(remoteAddCall?.[1]).toEqual([
+      "remote", "add", "origin", "git@github.com:tester/hosty.git",
+    ]);
+  });
+
   it("uses HTTPS remote when gh git_protocol is not ssh", async () => {
     const config = await setup();
     config.saveConfig({ projects: {}, plots: { all: { projects: [] } } });
