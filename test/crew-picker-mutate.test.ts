@@ -48,7 +48,7 @@ beforeEach(() => {
 });
 
 const { setCrewDimFromPicker, saveCrewFromPicker, deleteCrewFromPicker, cancelCrewComposer,
-  runStoredCrewPicker, runCrewEdit } =
+  runCrewPicker, runStoredCrewPicker, runCrewEdit } =
   await import("../src/dashboard/crew-picker.js");
 const { readCrewDraft, writeCrewDraft, seedCrewDraft } = await import("../src/dashboard/crew-draft.js");
 const { runMenu } = await import("../src/dashboard/menu.js");
@@ -112,6 +112,19 @@ describe("composing and saving a crew from the menu", () => {
     expect(() => saveCrewFromPicker("garden", "bad")).not.toThrow();
     expect(store.value.crews).toBeUndefined();
     expect(displayed.lines.join()).toMatch(/cannot review/);
+  });
+});
+
+describe("binding selection in the crew picker", () => {
+  it("marks only an explicit project binding, not the inferred harness pairing", () => {
+    runCrewPicker("garden");
+    let plan = vi.mocked(runMenu).mock.calls.at(-1)![0];
+    expect(plan.rows.some((row) => row.label.includes("✓"))).toBe(false);
+
+    store.value.projects.garden.crew = "all-claude";
+    runCrewPicker("garden");
+    plan = vi.mocked(runMenu).mock.calls.at(-1)![0];
+    expect(plan.rows.find((row) => row.label.startsWith("all-claude"))?.label).toContain("✓");
   });
 });
 

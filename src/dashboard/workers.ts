@@ -23,7 +23,7 @@ import {
   type AgentStatus, type WorkerEntry,
 } from "./registry.js";
 import { recordWorkerCreated, recordOperatorAction, recordWorkerRemoved, shortHash, type RoleSnapshot } from "./telemetry.js";
-import { deriveCrew, designerSeat, getCrew, resolveProjectCrew } from "./crew.js";
+import { designerSeat, getCrew, resolveProjectCrew } from "./crew.js";
 import { resolveReviewRole, type ReviewRole } from "./roles.js";
 import { buildRulesContext } from "../rules.js";
 import { GARDEN_VERSION } from "../version.js";
@@ -793,7 +793,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   // aggregation. The full configuration snapshot is frozen onto the event
   // because config is mutable (a crew swap rewrites harness/roles) and can't
   // be reconstructed by joining against live config later. Best-effort: the
-  // snapshot helpers (deriveCrew / resolveReviewRole / buildRulesContext)
+  // snapshot helpers (resolveReviewRole / buildRulesContext)
   // read files and config, so guard the whole block — a telemetry failure
   // must never abort a worker launch.
   try {
@@ -814,7 +814,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       provider: rawProvider ?? null,
       model: resolvedModel ?? null,
       ultracode,
-      crew: opts.crew ?? deriveCrew(project, cfg),
+      crew: opts.crew ?? project.crew ?? null,
       roles: {
         reviewer: roleSnapshot("reviewer"),
         resolver: roleSnapshot("resolver"),

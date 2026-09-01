@@ -930,6 +930,13 @@ describe("identity badges + grammar (Phase 3)", () => {
     expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}claude-codex${RESET}`);
   });
 
+  it("badges an explicit all-claude worker on an unbound project because the builtin now carries model pins", () => {
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", crew: "all-claude" },
+    ]);
+    expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}all-claude${RESET}`);
+  });
+
   it("shows the crew badge only on the FOCUSED project's header", () => {
     const cfg = { projects: {
       garden: { path: "/tmp/garden", harness: "codex" },   // active project, non-default crew

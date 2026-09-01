@@ -88,7 +88,7 @@ Projects:
                                  project's own .beads; see 'garden poke')
   config <project> role [<role> [harness|model|effort] [value]]
                                  Per-role review harness/model/effort (role: reviewer|resolver|ci-fix)
-                                 effort is claude-code-only: low|medium|high|xhigh|max
+                                 effort levels for either harness: low|medium|high|xhigh|max
                                  e.g. 'config <p> role reviewer harness codex' for a Codex reviewer
   config <project> crew [<name>] Bind the project to a crew ('none' unbinds). See 'garden crew'.
   crew [list|show|add|edit|remove|apply]
@@ -183,7 +183,8 @@ Dashboard:
                                  Add --expect-callback to receive a one-shot prompt at this pane when the child terminates
                                  Add --ultracode to create the worker in ultracode mode (Opus + max effort + dynamic workflows)
                                  Add --crew <name> to spawn it under that crew; without it the worker inherits the calling
-                                   worker's own crew (a designer's builder lands on the crew that designed), else the project's
+                                   worker's own crew (a designer's builder lands on the crew that designed); otherwise the
+                                   target project's binding applies
                                  Add --bead <id> to stamp the bead↔worker join on the new worker's registry entry (no bd claim is made)
   reply [-m "<msg>"]             Stage a freeform note for the parent that handed off to this worker (delivered with the callback)
   auto [on|off|status]           Toggle the global auto-continue gate
@@ -217,7 +218,8 @@ Workers:
                                  claude-code; codex = a sandboxed Codex worker; default and
                                  designer workflows). --crew spawns under a crew (default: its
                                  build + review halves; designer: its design seat, forwarded to
-                                 the builder at handoff).
+                                 the builder at handoff). On designer, --harness may override the
+                                 design-seat harness while the crew still rides the handoff.
   workers grow [<worker>] --seed <text> | --seed-file <path> | --goal-file <path>
                                  Convert an active default worker into a grow loop after its
                                  current work merges (self-resolves via $GARDEN_WORKER). The durable

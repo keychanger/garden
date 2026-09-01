@@ -378,6 +378,24 @@ describe("garden workers new --workflow designer", () => {
     expect(lines.join("\n")).toMatch(/\[crew=codex-claude\]/);
   });
 
+  it("allows --harness to override a crew's design seat while retaining the crew for handoff", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+    await captureConsoleLog(() =>
+      workers([
+        "new", "proj", "--workflow", "designer", "--seed", "x",
+        "--crew", "codex-claude", "--harness", "claude", "--model", "opus",
+      ]),
+    );
+    expect(newWorker).toHaveBeenCalledWith(expect.objectContaining({
+      workflow: "designer",
+      crew: "codex-claude",
+      harness: "claude-code",
+      model: "opus",
+    }));
+  });
+
   it("still rejects --harness and --crew on the loop workflows", async () => {
     await setupProject("proj");
     const { workers } = await importWorkersCmd();

@@ -125,11 +125,11 @@ async function newCommand(args: string[]): Promise<void> {
     throw new Error("--base requires a non-empty branch name");
   }
 
-  // Per-worker crew (default workflow only, mutually exclusive with --harness):
-  // sets the build member — harness AND provider — plus the live review family.
-  // A provider-backed worker member is accepted: entry.provider carries the
-  // backend for this worker alone, so `--crew deepseek-claude` is a cheap
-  // builder with a first-party reviewer.
+  // Per-worker crew: on the default workflow it selects the build member —
+  // harness AND provider — plus the live review family, so a separate
+  // --harness would be contradictory. On designer, --harness is an allowed
+  // per-run override of the crew's design seat while the crew remains stamped
+  // for the downstream builder to inherit.
   const crew = flags.get("crew");
   if (crew !== undefined) {
     const cfg = loadConfig();
@@ -137,7 +137,7 @@ async function newCommand(args: string[]): Promise<void> {
     if (!spec) {
       throw new Error(`--crew must be one of: ${listCrews(cfg).map(c => c.name).join(", ")}, got '${crew}'`);
     }
-    if (harness) {
+    if (harness && workflow === "default") {
       throw new Error("--crew and --harness are mutually exclusive (a crew already selects the worker harness).");
     }
     if (workflow !== "default" && workflow !== "designer") {

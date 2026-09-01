@@ -11,7 +11,7 @@ import { runMenu } from "./menu.js";
 import { refreshDashboard } from "./header.js";
 import { log } from "./log.js";
 import {
-  listCrews, deriveCrew, getCrew, applyCrew, formatRecipe,
+  listCrews, getCrew, applyCrew, formatRecipe,
   listMembers, reviewerMembers, saveCrew, deleteCrew, builtinCrews, type CrewSpec,
 } from "./crew.js";
 import { readCrewDraft, writeCrewDraft, clearCrewDraft, seedCrewDraft, type CrewDraft } from "./crew-draft.js";
@@ -250,7 +250,7 @@ export function runCrewPicker(explicitProject?: string): void {
   const config = loadConfig();
   const plan = buildCrewPickerPlan(
     projectName,
-    deriveCrew(project, config),
+    project.crew ?? null,
     listCrews(config),
     resolveGardenRunner(),
   );

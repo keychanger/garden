@@ -438,9 +438,16 @@ function processClaim(claimFile: string, filenameId: string): void {
   // A crew is resolved by name at spawn, and newWorker treats a name it
   // cannot resolve as "no crew" — silently spawning on the project default
   // when the caller asked for something specific. Refuse here instead.
-  if (request.crew && !getCrew(request.crew, loadConfig())) {
-    rejectClaim(claimFile, filenameId, `unknown crew '${request.crew}'`);
-    return;
+  if (request.crew) {
+    try {
+      if (!getCrew(request.crew, loadConfig())) {
+        rejectClaim(claimFile, filenameId, `unknown crew '${request.crew}'`);
+        return;
+      }
+    } catch (err) {
+      rejectClaim(claimFile, filenameId, `could not resolve crew '${request.crew}': ${String(err)}`);
+      return;
+    }
   }
 
   let response: HandoffResponse;

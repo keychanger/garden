@@ -6,7 +6,7 @@ import os from "node:os";
 vi.mock("../src/config.js", () => ({
   // The crew check resolves names against config; an empty one still carries
   // the generated builtins, which is what these tests name.
-  loadConfig: () => ({ projects: {} }),
+  loadConfig: vi.fn(() => ({ projects: {} })),
   SESSIONS_DIR: "",
 }));
 
@@ -36,6 +36,7 @@ import {
 } from "../src/dashboard/handoff-dispatch.js";
 import { newWorker } from "../src/dashboard/workers.js";
 import { getWorkers } from "../src/dashboard/registry.js";
+import { loadConfig } from "../src/config.js";
 
 const cfg = await import("../src/config.js") as unknown as { SESSIONS_DIR: string };
 const gardenPaths = await import("../src/paths.js") as unknown as { CONTROL_DIR: string };
@@ -65,6 +66,7 @@ function resultPath(id: string): string {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(loadConfig).mockReturnValue({ projects: {} });
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "garden-handoff-dispatch-test-"));
   cfg.SESSIONS_DIR = tmpDir;
   controlDir = path.join(tmpDir, "control");
@@ -355,6 +357,18 @@ describe("processPendingHandoffs", () => {
     expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
     expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
       .toMatch(/unknown crew 'no-such-crew'/);
+  });
+
+  it("returns an error receipt when crew resolution fails instead of stranding the claim", () => {
+    vi.mocked(loadConfig).mockImplementationOnce(() => {
+      throw new Error("config is unreadable");
+    });
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed, crew: "all-claude" });
+
+    expect(() => processPendingHandoffs()).not.toThrow();
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
+      .toMatch(/could not resolve crew 'all-claude'.*config is unreadable/);
   });
 
   it("rejects a request whose crew field is not a bounded string", () => {

@@ -202,8 +202,10 @@ interface RowRenderCtx {
   // provider). A worker whose member differs gets a grey badge.
   projectMember: string;
   projectProvider?: string;
-  // The project's default crew — the baseline a per-worker crew override
-  // (entry.crew) is compared against for the row's crew badge.
+  // The project's explicit crew binding — the baseline a per-worker crew
+  // override (entry.crew) is compared against for the row's crew badge. An
+  // unbound project's inferred harness pairing is not a crew: builtin crews
+  // now carry model pins that do not apply implicitly.
   projectCrew: string;
 }
 
@@ -461,7 +463,7 @@ export async function status(args: string[]): Promise<void> {
           : collectMissingBases(project.name, projectConfig?.path, definedBases(project.workers)),
         projectMember: projectConfig ? projectWorkerMemberName(projectConfig, config) : "claude",
         projectProvider: projectConfig?.provider,
-        projectCrew: projectConfig ? (deriveCrew(projectConfig, config) ?? "custom") : "custom",
+        projectCrew: projectConfig?.crew ?? "",
       };
       const segments = project.workers.map(w => collectSegments(w, ctx));
       for (const seg of segments) {
@@ -1257,7 +1259,7 @@ export function renderQuickStatus(
           : collectMissingBases(name, projectConfig?.path, definedBases(workers)),
         projectMember: projectConfig ? projectWorkerMemberName(projectConfig, config) : "claude",
         projectProvider: projectConfig?.provider,
-        projectCrew: projectConfig ? (deriveCrew(projectConfig, config) ?? "custom") : "custom",
+        projectCrew: projectConfig?.crew ?? "",
       };
       const segments = workers.map(w => collectSegments(w, ctx));
       for (const seg of segments) {

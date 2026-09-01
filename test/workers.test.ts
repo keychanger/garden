@@ -871,6 +871,20 @@ describe("newWorker", () => {
     expect(entry.effort).toBe("xhigh");
   });
 
+  it("designer: a per-spawn harness overrides the crew seat while the crew remains stamped", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({
+      workflow: "designer",
+      crew: "codex-claude",
+      harness: "claude",
+      model: "opus",
+    });
+    const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.crew).toBe("codex-claude");
+    expect(entry.harness).toBe("claude-code");
+    expect(entry.model).toBe("opus");
+  });
+
   it("designer: the project's bound crew supplies the seat, and a per-spawn --model still wins", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     vi.mocked(tryGetProject).mockReturnValueOnce({
@@ -1377,6 +1391,13 @@ describe("newWorker", () => {
     expect(snapshot.roles.reviewer.harness).toBe("codex");
     expect(snapshot.roles.resolver.harness).toBe("codex");
     expect(snapshot.roles.ciFix.harness).toBe("codex");
+  });
+
+  it("crew: an unbound project's telemetry does not claim the model-pinned all-claude builtin", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker();
+    const snapshot = vi.mocked(recordWorkerCreated).mock.calls.at(-1)![3] as { crew?: string | null };
+    expect(snapshot.crew).toBeNull();
   });
 
   it("harness: canonicalizes the 'claude' alias to claude-code", () => {
