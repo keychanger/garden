@@ -357,20 +357,36 @@ describe("garden workers new --workflow designer", () => {
     ).rejects.toThrow(/empty/);
   });
 
-  it("rejects --harness because alternate workflows are claude-code only", async () => {
+  it("accepts --harness codex — a Codex designer is default-shaped from the harness's side", async () => {
     await setupProject("proj");
     const { workers } = await importWorkersCmd();
-    await expect(
+    const { newWorker } = await importDashboardWorkers();
+    await captureConsoleLog(() =>
       workers(["new", "proj", "--workflow", "designer", "--seed", "x", "--harness", "codex"]),
-    ).rejects.toThrow(/--harness is only supported with --workflow default/);
+    );
+    expect(newWorker).toHaveBeenCalledWith(expect.objectContaining({ workflow: "designer", harness: "codex" }));
   });
 
-  it("rejects --crew (default-only; a designer runs no reviewer, the builder crew is chosen at handoff)", async () => {
+  it("accepts --crew, which names the design seat and rides the entry to the handoff", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+    const lines = await captureConsoleLog(() =>
+      workers(["new", "proj", "--workflow", "designer", "--seed", "x", "--crew", "codex-claude"]),
+    );
+    expect(newWorker).toHaveBeenCalledWith(expect.objectContaining({ workflow: "designer", crew: "codex-claude" }));
+    expect(lines.join("\n")).toMatch(/\[crew=codex-claude\]/);
+  });
+
+  it("still rejects --harness and --crew on the loop workflows", async () => {
     await setupProject("proj");
     const { workers } = await importWorkersCmd();
     await expect(
-      workers(["new", "proj", "--workflow", "designer", "--seed", "x", "--crew", "all-codex"]),
-    ).rejects.toThrow(/--crew is only supported with --workflow default/);
+      workers(["new", "proj", "--workflow", "grow", "--seed", "x", "--harness", "codex"]),
+    ).rejects.toThrow(/--harness is only supported with --workflow default or designer/);
+    await expect(
+      workers(["new", "proj", "--workflow", "grow", "--seed", "x", "--crew", "all-codex"]),
+    ).rejects.toThrow(/--crew is only supported with --workflow default or designer/);
   });
 });
 

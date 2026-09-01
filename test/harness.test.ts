@@ -467,7 +467,7 @@ describe("codex adapter dialect", () => {
     expect(getHarnessCore("codex").capabilities).toEqual({
       turnEnd: true, promptSubmitted: true, toolActivity: true, askingSignal: true,
       resume: true, sandbox: true, skills: false,
-      providerProfiles: false, workerWorkflows: ["default"],
+      providerProfiles: false, workerWorkflows: ["default", "designer"],
       headlessRoles: ["reviewer", "resolver", "ciFix"],
     });
   });

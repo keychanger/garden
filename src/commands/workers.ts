@@ -113,8 +113,8 @@ async function newCommand(args: string[]): Promise<void> {
   if (harness && !isRegisteredHarness(harness)) {
     throw new Error(`--harness must be one of: ${harnessNames().join(", ")}, got '${harness}'`);
   }
-  if (harness && workflow !== "default") {
-    throw new Error(`--harness is only supported with --workflow default (got '${workflow}').`);
+  if (harness && workflow !== "default" && workflow !== "designer") {
+    throw new Error(`--harness is only supported with --workflow default or designer (got '${workflow}').`);
   }
 
   // Per-worker base-branch override (all workflows). Precedence over the
@@ -140,8 +140,8 @@ async function newCommand(args: string[]): Promise<void> {
     if (harness) {
       throw new Error("--crew and --harness are mutually exclusive (a crew already selects the worker harness).");
     }
-    if (workflow !== "default") {
-      throw new Error(`--crew is only supported with --workflow default (got '${workflow}').`);
+    if (workflow !== "default" && workflow !== "designer") {
+      throw new Error(`--crew is only supported with --workflow default or designer (got '${workflow}').`);
     }
   }
 
@@ -252,9 +252,9 @@ async function newCommand(args: string[]): Promise<void> {
     if (flags.has("max-iterations")) {
       throw new Error("--max-iterations can only be used with --workflow trellis or grow");
     }
-    // --crew is already rejected for any non-default workflow by the shared
-    // guard above (a designer runs no reviewer, so its own review crew is moot;
-    // the downstream builder's crew is a separate --handoff-crew, Phase 4).
+    // --crew names the design seat (newWorker reads the crew's designer half)
+    // and is stamped on the entry so the designer's handoff forwards the same
+    // crew to the builder it spawns.
     if (flags.has("seed") && flags.has("seed-file")) {
       throw new Error("--seed and --seed-file are mutually exclusive; pass exactly one.");
     }
@@ -295,8 +295,9 @@ async function newCommand(args: string[]): Promise<void> {
       fs.writeFileSync(seedFile, buildDesignerSeed(seed));
     }
 
-    // Designer model/effort default to Opus / xhigh via the workflow definition
-    // (newWorker resolution); --model / --effort override per run.
+    // Designer model/effort come from the crew's design seat, else the
+    // workflow's Opus / xhigh default (newWorker resolution); --model /
+    // --effort override per run.
     const model = flags.has("model") ? requireModelValue(flags.get("model")!) : undefined;
     const effortOpts = flags.has("effort") ? parseEffortFlag(flags.get("effort")!) : {};
     const newName = newWorker({
@@ -305,6 +306,7 @@ async function newCommand(args: string[]): Promise<void> {
       model,
       ...effortOpts,
       ...(harness ? { harness } : {}),
+      ...(crew ? { crew } : {}),
       ...(base ? { base } : {}),
       ...(seedFile ? { seedMessageFile: seedFile } : {}),
     });
@@ -316,7 +318,7 @@ async function newCommand(args: string[]): Promise<void> {
     }
     const effortLabel = effortOpts.ultracode ? ", effort=ultra" : effortOpts.effort ? `, effort=${effortOpts.effort}` : "";
     console.log(
-      `Started designer ${projectName}/${newName}${model ? ` (model=${model}${effortLabel})` : effortLabel ? ` (${effortLabel.slice(2)})` : ""}${harness ? ` [harness=${harness}]` : ""}.`,
+      `Started designer ${projectName}/${newName}${model ? ` (model=${model}${effortLabel})` : effortLabel ? ` (${effortLabel.slice(2)})` : ""}${harness ? ` [harness=${harness}]` : ""}${crew ? ` [crew=${crew}]` : ""}.`,
     );
     return;
   }

@@ -23,7 +23,7 @@ import {
   type AgentStatus, type WorkerEntry,
 } from "./registry.js";
 import { recordWorkerCreated, recordOperatorAction, recordWorkerRemoved, shortHash, type RoleSnapshot } from "./telemetry.js";
-import { deriveCrew, getCrew, resolveProjectCrew } from "./crew.js";
+import { deriveCrew, designerSeat, getCrew, resolveProjectCrew } from "./crew.js";
 import { resolveReviewRole, type ReviewRole } from "./roles.js";
 import { buildRulesContext } from "../rules.js";
 import { GARDEN_VERSION } from "../version.js";
@@ -104,10 +104,12 @@ export interface NewWorkerOptions {
   // branchExistsOnOrigin / tryPublishBranch chain as any resolved base, then
   // pinned to entry.baseBranch.
   base?: string;
-  // Per-worker crew (`workers new --crew`). Sets BOTH halves at spawn: the
-  // build member — harness AND provider, mutually exclusive with --harness —
-  // and the review family (stamped on entry.crew, applied live by
-  // resolveReviewRole). Default workflow only, like --harness.
+  // Per-worker crew (`workers new --crew`). For a default worker it sets BOTH
+  // halves at spawn: the build member — harness AND provider, mutually
+  // exclusive with --harness — and the review family (stamped on entry.crew,
+  // applied live by resolveReviewRole). For a designer it supplies the design
+  // seat instead, and the stamped entry.crew is what `garden handoff` forwards
+  // to the builder it spawns. Default and designer workflows only.
   crew?: string;
   // Workflow that drives the new worker's lifecycle. Defaults to "default".
   // Trellis vines pass "trellis" along with the trellis.name/trellis.path
@@ -228,9 +230,21 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   const projectHarness = workflowName === "default"
     ? (project.harness ?? projectCrew?.worker.harness)
     : undefined;
+  // The DESIGN seat. A designer spawn reads its crew — the per-worker crew,
+  // else the project's bound one — for who designs and how strong, the way a
+  // default spawn reads the crew's worker half. It supplies harness, provider,
+  // model, and effort together; an explicit per-spawn flag still outranks
+  // each, and the workflow's own Opus/xhigh default remains the floor for a
+  // designer with no crew at all. The flat project keys (harness/model/effort)
+  // stay default+grow only: they describe the project's builders.
+  const designSeat = workflowName === "designer" && (workerCrew ?? projectCrew)
+    ? designerSeat((workerCrew ?? projectCrew)!)
+    : undefined;
   let rawHarness: string | undefined;
   if (opts.harness) {
     rawHarness = opts.harness;
+  } else if (designSeat) {
+    rawHarness = designSeat.harness;
   } else if (opts.crew) {
     rawHarness = workerCrew?.worker.harness ?? projectHarness;
   } else {
@@ -255,11 +269,11 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   const projectProvider = project.provider ?? projectCrew?.worker.provider;
   // Was a build member named for THIS worker at all? Only then does the pair
   // rule apply; otherwise the project key answers, exactly as before.
-  const memberNamed = workflowName === "default"
-    && Boolean(opts.harness || opts.provider || (opts.crew && workerCrew));
+  const memberNamed = designSeat !== undefined
+    || (workflowName === "default" && Boolean(opts.harness || opts.provider || (opts.crew && workerCrew)));
   const namedProvider = opts.harness || opts.provider
     ? opts.provider
-    : workerCrew?.worker.provider;
+    : (designSeat ?? workerCrew?.worker)?.provider;
   // The provider this worker actually launches against.
   const rawProvider = memberNamed ? namedProvider : projectProvider;
   // What gets PERSISTED. A named member is recorded even when its provider is
@@ -445,7 +459,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   // project's bound crew below it.
   const crewEffort = projectDefaultsApply
     ? (workerCrew?.worker.effort ?? project.effort ?? projectCrew?.worker.effort)
-    : undefined;
+    : designSeat?.effort;
   let reqUltracode = opts.ultracode === true;
   let reqEffort = opts.effort;
   if (!reqUltracode && reqEffort === undefined && crewEffort) {
@@ -454,7 +468,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   }
   const projectModel = projectDefaultsApply
     ? (workerCrew?.worker.model ?? project.model ?? projectCrew?.worker.model)
-    : undefined;
+    : designSeat?.model;
   // Workflow-level model/effort defaults (the designer/planner seats → Opus /
   // xhigh) sit one layer beneath the per-spawn and project defaults, mirroring
   // how trellis reads workflow.workerModel per iteration. Not applied for

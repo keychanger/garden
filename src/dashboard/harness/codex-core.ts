@@ -210,7 +210,12 @@ export const codexCore: HarnessCore = {
     sandbox: true,
     skills: false,
     providerProfiles: false,
-    workerWorkflows: ["default"],
+    // The designer workflow is default-shaped from the harness's side: an
+    // interactive session whose inverted posture rides the composed AGENTS.md
+    // and whose skill is a file in the worktree the rules point at. The loop
+    // workflows (grow/trellis) stay claude-code only: their cold-respawn
+    // identity and per-iteration model resolution are not wired for Codex.
+    workerWorkflows: ["default", "designer"],
     headlessRoles: ["reviewer", "resolver", "ciFix"],
   },
 

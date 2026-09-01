@@ -820,6 +820,98 @@ describe("newWorker", () => {
     );
   });
 
+  // ===== Designer seat from the crew =====
+  // A designer spawn reads its crew's design seat — per-worker --crew first,
+  // else the project's bound crew — for harness/provider/model/effort, with
+  // the workflow default beneath and a per-spawn flag above.
+
+  const STUDIO = {
+    projects: {}, plots: {},
+    crews: {
+      studio: {
+        designer: { member: "claude", model: "fable", effort: "high" },
+        worker: { member: "claude", model: "opus" },
+        review: { member: "codex" },
+      },
+      derived: {
+        worker: { member: "claude", model: "sonnet" },
+        review: { member: "claude", model: "fable", effort: "max" },
+      },
+    },
+  };
+
+  it("designer: reads the crew's design seat, not its build half, and stamps entry.crew", () => {
+    vi.mocked(loadConfig).mockReturnValue(STUDIO as ReturnType<typeof loadConfig>);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ workflow: "designer", crew: "studio" });
+    const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.workflow).toBe("designer");
+    expect(entry.crew).toBe("studio");
+    expect(entry.harness).toBe("claude-code");
+    expect(entry.model).toBe("fable");
+    expect(entry.effort).toBe("high");
+  });
+
+  it("designer: a crew naming no designer derives the seat from its review half, with the workflow's effort", () => {
+    vi.mocked(loadConfig).mockReturnValue(STUDIO as ReturnType<typeof loadConfig>);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ workflow: "designer", crew: "derived" });
+    const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.model).toBe("fable");
+    // The review effort ("max") is a headless rung; the designer keeps xhigh.
+    expect(entry.effort).toBe("xhigh");
+  });
+
+  it("designer: the builtin codex-claude designs on Codex's strong model", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ workflow: "designer", crew: "codex-claude" });
+    const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.harness).toBe("codex");
+    expect(entry.model).toBe("gpt-5.6-sol");
+    expect(entry.effort).toBe("xhigh");
+  });
+
+  it("designer: the project's bound crew supplies the seat, and a per-spawn --model still wins", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", crew: "claude-codex",
+    } as ReturnType<typeof tryGetProject>);
+    newWorker({ workflow: "designer" });
+    let entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.model).toBe("fable");
+    expect(entry.harness).toBe("claude-code");
+
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", crew: "claude-codex",
+    } as ReturnType<typeof tryGetProject>);
+    newWorker({ workflow: "designer", model: "sonnet" });
+    entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.model).toBe("sonnet");
+
+    // The same crew's BUILD half is what a default worker gets.
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", crew: "claude-codex",
+    } as ReturnType<typeof tryGetProject>);
+    newWorker({});
+    entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.model).toBe("opus");
+  });
+
+  it("designer: a provider-backed design seat pins its backend like a provider build member", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: {}, plots: {},
+      providers: { deepseek: { baseUrl: "https://api.deepseek.example/anthropic", authTokenEnv: "GARDEN_TEST_PROVIDER_KEY" } },
+      crews: { cheap: { designer: { member: "deepseek" }, worker: { member: "claude" }, review: { member: "claude" } } },
+    } as unknown as ReturnType<typeof loadConfig>);
+    process.env.GARDEN_TEST_PROVIDER_KEY = "test-token";
+    vi.mocked(dashboardExists).mockReturnValue(true);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    expect(newWorker({ workflow: "designer", crew: "cheap" })).toBe("bold-ash");
+    const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.harness).toBe("claude-code");
+    expect(entry.provider).toBe("deepseek");
+  });
+
   it("planner: stamps its seat defaults and planner bootstrap posture", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     newWorker({ workflow: "planner" });
