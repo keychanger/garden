@@ -48,7 +48,18 @@ Your LAST line of output must be exactly one of:
 - \`DONE\` — the rebase completed cleanly and HEAD is ready for merge.
 - \`FAILED\` — the conflict is unresolvable or you could not complete the rebase.
 
-Write a brief summary of what you did above the verdict line."
+Write a brief summary of what you did above the verdict line.
+
+You are running headless. This process exits when your turn ends, so this
+single response IS your whole run. Never launch a command in the background:
+nothing re-invokes you when it finishes, so its completion notification never
+arrives and your run dies as progress narration. Run every command in the
+foreground and wait for it, however many minutes it takes. If one command
+would outlast the tool timeout, split it into foreground chunks that each
+finish — never background it. Do NOT defer the verdict to a background task,
+async workflow, or a later message, and do NOT end with a sentence like
+"I'll report the verdict when the run completes." A response whose last line
+is not the verdict token is treated as a failed run."
 `;
 
 exports[`prompt output snapshots (workflow-refactor regression net) > buildResolvePrompt — with task and previous review body 1`] = `
@@ -107,7 +118,18 @@ Your LAST line of output must be exactly one of:
 - \`DONE\` — the rebase completed cleanly and HEAD is ready for merge.
 - \`FAILED\` — the conflict is unresolvable or you could not complete the rebase.
 
-Write a brief summary of what you did above the verdict line."
+Write a brief summary of what you did above the verdict line.
+
+You are running headless. This process exits when your turn ends, so this
+single response IS your whole run. Never launch a command in the background:
+nothing re-invokes you when it finishes, so its completion notification never
+arrives and your run dies as progress narration. Run every command in the
+foreground and wait for it, however many minutes it takes. If one command
+would outlast the tool timeout, split it into foreground chunks that each
+finish — never background it. Do NOT defer the verdict to a background task,
+async workflow, or a later message, and do NOT end with a sentence like
+"I'll report the verdict when the run completes." A response whose last line
+is not the verdict token is treated as a failed run."
 `;
 
 exports[`prompt output snapshots (workflow-refactor regression net) > buildReviewPrompt — default fixture, no checks 1`] = `
@@ -219,12 +241,18 @@ The verdict is one of:
 Your LAST line must START with the bare token (CLEAN, FIXED, or FAILED).
 Trailing commentary on that line is fine, e.g. \`CLEAN — ready to merge\`.
 
-You are running headless: this single response IS the review. Do NOT defer
-the verdict to a background task, async workflow, or a later message, and do
-NOT end with a sentence like "I'll wait for the result before rendering the
-verdict." If you ran any sub-analysis, fold its result in and emit the verdict
-token as the final line of THIS response. A response without the token is
-treated as a failed review."
+You are running headless. This process exits when your turn ends, so this
+single response IS your whole run. Never launch a command in the background:
+nothing re-invokes you when it finishes, so its completion notification never
+arrives and your run dies as progress narration. Run every command in the
+foreground and wait for it, however many minutes it takes. If one command
+would outlast the tool timeout, split it into foreground chunks that each
+finish — never background it. Do NOT defer the verdict to a background task,
+async workflow, or a later message, and do NOT end with a sentence like
+"I'll report the verdict when the run completes." A response whose last line
+is not the verdict token is treated as a failed run.
+If you ran any sub-analysis, fold its result in and emit the verdict token as
+the final line of THIS response."
 `;
 
 exports[`prompt output snapshots (workflow-refactor regression net) > buildReviewPrompt — with checks command configured 1`] = `
@@ -251,6 +279,12 @@ Run: \`garden checks myproject\`
 This executes the project's checks command (\`npm test\`) under
 a machine-wide concurrency gate — a "waiting for a free checks slot" line
 means queued behind another suite, not hung.
+
+Run it in the FOREGROUND and wait for it, however long it takes. Never
+background it: your process exits when this turn ends, so a backgrounded
+run is orphaned and you are never re-invoked to read its result. If the
+whole suite would outlast the tool timeout, run it as several foreground
+chunks (a subset of paths per call) and combine the results yourself.
 
 If checks fail, fix the issues and re-run until they pass.
 If you cannot fix them, report FAILED.
@@ -347,12 +381,18 @@ The verdict is one of:
 Your LAST line must START with the bare token (CLEAN, FIXED, or FAILED).
 Trailing commentary on that line is fine, e.g. \`CLEAN — ready to merge\`.
 
-You are running headless: this single response IS the review. Do NOT defer
-the verdict to a background task, async workflow, or a later message, and do
-NOT end with a sentence like "I'll wait for the result before rendering the
-verdict." If you ran any sub-analysis, fold its result in and emit the verdict
-token as the final line of THIS response. A response without the token is
-treated as a failed review."
+You are running headless. This process exits when your turn ends, so this
+single response IS your whole run. Never launch a command in the background:
+nothing re-invokes you when it finishes, so its completion notification never
+arrives and your run dies as progress narration. Run every command in the
+foreground and wait for it, however many minutes it takes. If one command
+would outlast the tool timeout, split it into foreground chunks that each
+finish — never background it. Do NOT defer the verdict to a background task,
+async workflow, or a later message, and do NOT end with a sentence like
+"I'll report the verdict when the run completes." A response whose last line
+is not the verdict token is treated as a failed run.
+If you ran any sub-analysis, fold its result in and emit the verdict token as
+the final line of THIS response."
 `;
 
 exports[`prompt output snapshots (workflow-refactor regression net) > buildReviewPrompt — with spec file in changed set 1`] = `
@@ -493,12 +533,18 @@ The verdict is one of:
 Your LAST line must START with the bare token (CLEAN, FIXED, or FAILED).
 Trailing commentary on that line is fine, e.g. \`CLEAN — ready to merge\`.
 
-You are running headless: this single response IS the review. Do NOT defer
-the verdict to a background task, async workflow, or a later message, and do
-NOT end with a sentence like "I'll wait for the result before rendering the
-verdict." If you ran any sub-analysis, fold its result in and emit the verdict
-token as the final line of THIS response. A response without the token is
-treated as a failed review."
+You are running headless. This process exits when your turn ends, so this
+single response IS your whole run. Never launch a command in the background:
+nothing re-invokes you when it finishes, so its completion notification never
+arrives and your run dies as progress narration. Run every command in the
+foreground and wait for it, however many minutes it takes. If one command
+would outlast the tool timeout, split it into foreground chunks that each
+finish — never background it. Do NOT defer the verdict to a background task,
+async workflow, or a later message, and do NOT end with a sentence like
+"I'll report the verdict when the run completes." A response whose last line
+is not the verdict token is treated as a failed run.
+If you ran any sub-analysis, fold its result in and emit the verdict token as
+the final line of THIS response."
 `;
 
 exports[`prompt output snapshots (workflow-refactor regression net) > buildReviewPrompt — with worker task set 1`] = `
@@ -614,10 +660,16 @@ The verdict is one of:
 Your LAST line must START with the bare token (CLEAN, FIXED, or FAILED).
 Trailing commentary on that line is fine, e.g. \`CLEAN — ready to merge\`.
 
-You are running headless: this single response IS the review. Do NOT defer
-the verdict to a background task, async workflow, or a later message, and do
-NOT end with a sentence like "I'll wait for the result before rendering the
-verdict." If you ran any sub-analysis, fold its result in and emit the verdict
-token as the final line of THIS response. A response without the token is
-treated as a failed review."
+You are running headless. This process exits when your turn ends, so this
+single response IS your whole run. Never launch a command in the background:
+nothing re-invokes you when it finishes, so its completion notification never
+arrives and your run dies as progress narration. Run every command in the
+foreground and wait for it, however many minutes it takes. If one command
+would outlast the tool timeout, split it into foreground chunks that each
+finish — never background it. Do NOT defer the verdict to a background task,
+async workflow, or a later message, and do NOT end with a sentence like
+"I'll report the verdict when the run completes." A response whose last line
+is not the verdict token is treated as a failed run.
+If you ran any sub-analysis, fold its result in and emit the verdict token as
+the final line of THIS response."
 `;

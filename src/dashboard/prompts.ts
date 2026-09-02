@@ -27,6 +27,26 @@ export {
 
 // --- Review sections ---
 
+// A headless agent's process exits when its turn ends, so a backgrounded
+// command is orphaned and its completion notification never arrives. Stating
+// only the rule ("do not defer the verdict") was not enough: reviewers
+// rationalized around it — "the background checks job already notifies on
+// completion, so no monitor is needed" — and ended six consecutive wolf
+// reviews as progress narration with no verdict. Name the mechanism.
+export const headlessSingleTurnNote: readonly string[] = [
+  "You are running headless. This process exits when your turn ends, so this",
+  "single response IS your whole run. Never launch a command in the background:",
+  "nothing re-invokes you when it finishes, so its completion notification never",
+  "arrives and your run dies as progress narration. Run every command in the",
+  "foreground and wait for it, however many minutes it takes. If one command",
+  "would outlast the tool timeout, split it into foreground chunks that each",
+  "finish — never background it. Do NOT defer the verdict to a background task,",
+  "async workflow, or a later message, and do NOT end with a sentence like",
+  "\"I'll report the verdict when the run completes.\" A response whose last line",
+  "is not the verdict token is treated as a failed run.",
+];
+
+
 export const reviewIntroSection: PromptSection = {
   name: "intro",
   render: () => "You are reviewing a branch before merge. Complete these steps in order:",
@@ -75,6 +95,12 @@ export const reviewChecksStepSection: PromptSection = {
       `This executes the project's checks command (\`${ctx.data.checksCommand}\`) under`,
       "a machine-wide concurrency gate — a \"waiting for a free checks slot\" line",
       "means queued behind another suite, not hung.",
+      "",
+      "Run it in the FOREGROUND and wait for it, however long it takes. Never",
+      "background it: your process exits when this turn ends, so a backgrounded",
+      "run is orphaned and you are never re-invoked to read its result. If the",
+      "whole suite would outlast the tool timeout, run it as several foreground",
+      "chunks (a subset of paths per call) and combine the results yourself.",
       "",
       "If checks fail, fix the issues and re-run until they pass.",
       "If you cannot fix them, report FAILED.",
@@ -237,12 +263,9 @@ export const reviewVerdictFormatSection: PromptSection = {
     "Your LAST line must START with the bare token (CLEAN, FIXED, or FAILED).",
     "Trailing commentary on that line is fine, e.g. `CLEAN — ready to merge`.",
     "",
-    "You are running headless: this single response IS the review. Do NOT defer",
-    "the verdict to a background task, async workflow, or a later message, and do",
-    "NOT end with a sentence like \"I'll wait for the result before rendering the",
-    "verdict.\" If you ran any sub-analysis, fold its result in and emit the verdict",
-    "token as the final line of THIS response. A response without the token is",
-    "treated as a failed review.",
+    ...headlessSingleTurnNote,
+    "If you ran any sub-analysis, fold its result in and emit the verdict token as",
+    "the final line of THIS response.",
   ].join("\n"),
 };
 
@@ -349,6 +372,8 @@ export const resolveVerdictFormatSection: PromptSection = {
     "- `FAILED` — the conflict is unresolvable or you could not complete the rebase.",
     "",
     "Write a brief summary of what you did above the verdict line.",
+    "",
+    ...headlessSingleTurnNote,
   ].join("\n"),
 };
 
@@ -457,7 +482,8 @@ export const ciFixStepsSection: PromptSection = {
       "   improve unrelated things.",
       "",
       "3. Run the project's local checks if applicable, to verify your fix before",
-      "   pushing. If the failure is reproducible locally, fix and verify; if it is",
+      "   pushing — in the foreground, never backgrounded (see the output-format",
+      "   note). If the failure is reproducible locally, fix and verify; if it is",
       "   not (e.g. CI-environment-specific), explain that in your commit message.",
       "",
       `4. Commit with a clear message prefixed with \"ci-fix: \". Push to \`origin/${branchName}\`.`,
@@ -504,6 +530,8 @@ export const ciFixVerdictFormatSection: PromptSection = {
     "  fix would require out-of-scope changes, etc.). Explain above.",
     "",
     "Write a brief summary of what you found and did above the verdict line.",
+    "",
+    ...headlessSingleTurnNote,
   ].join("\n"),
 };
 
@@ -606,9 +634,10 @@ export const holisticActionSection: PromptSection = {
       if (ctx.data.checksCommand) {
         lines.push(
           ``,
-          `If you commit a fix, run \`garden checks ${ctx.projectName}\` and make it pass before you`,
-          `finish (it runs \`${ctx.data.checksCommand}\` under a machine-wide slot gate). If checks`,
-          `cannot be made to pass, report FAILED.`,
+          `If you commit a fix, run \`garden checks ${ctx.projectName}\` in the FOREGROUND and make it`,
+          `pass before you finish (it runs \`${ctx.data.checksCommand}\` under a machine-wide slot`,
+          `gate). Never background it — see the output-format note. If checks cannot be made to`,
+          `pass, report FAILED.`,
         );
       }
     }
@@ -648,8 +677,8 @@ export const holisticVerdictFormatSection: PromptSection = {
         "- `FAILED` — you found cross-phase defects (listed above). Analysis-only: you did NOT fix them.",
         "",
         "Never emit FIXED — this pass makes no edits. Your LAST line must START with the bare token.",
-        "You are running headless: this single response IS the review. Do NOT defer the verdict to a",
-        "background task or a later message.",
+        "",
+        ...headlessSingleTurnNote,
       ].join("\n");
     }
     return [
@@ -662,8 +691,8 @@ export const holisticVerdictFormatSection: PromptSection = {
       "- `FAILED` — you found defects but could not fix them (explain above).",
       "",
       "Your LAST line must START with the bare token (CLEAN, FIXED, or FAILED).",
-      "You are running headless: this single response IS the review. Do NOT defer the verdict to a",
-      "background task or a later message.",
+      "",
+      ...headlessSingleTurnNote,
     ].join("\n");
   },
 };

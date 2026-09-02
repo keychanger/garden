@@ -420,3 +420,53 @@ describe("prompt output snapshots (workflow-refactor regression net)", () => {
     expect(result).toMatchSnapshot();
   });
 });
+
+// A headless agent's process exits when its turn ends, so a backgrounded
+// command is orphaned and never reports back. Six consecutive wolf reviews
+// died as progress narration ("I'll wait for the completion notification")
+// after backgrounding `garden checks`, so every headless role must carry the
+// mechanism, not just the rule.
+describe("headless single-turn discipline", () => {
+  const buildersWithoutChecks = {
+    review: () => buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry()),
+    resolve: () => buildResolvePrompt("myproject", "/repo/myproject", "main", makeEntry()),
+    ciFix: () => buildCiFixPrompt("myproject", "/repo/myproject", "main", makeEntry()),
+    holistic: () => buildHolisticFinalReviewPrompt(
+      "myproject", "/repo/myproject", "main",
+      makeEntry({ baseBranchSha: "base123", holisticTouchedFiles: ["src/foo.ts"] }),
+    ),
+  };
+
+  beforeEach(() => {
+    vi.mocked(resolveHolisticDiff).mockReturnValue("holistic diff");
+  });
+
+  for (const [role, build] of Object.entries(buildersWithoutChecks)) {
+    it(`${role} prompt forbids backgrounding and says why`, () => {
+      const result = build()!;
+      expect(result).toContain("Never launch a command in the background");
+      expect(result).toContain("This process exits when your turn ends");
+    });
+  }
+
+  it("holistic shadow mode carries it too", () => {
+    const result = buildHolisticFinalReviewPrompt(
+      "myproject", "/repo/myproject", "main",
+      makeEntry({
+        baseBranchSha: "base123",
+        holisticTouchedFiles: ["src/foo.ts"],
+        holisticReviewMode: "shadow",
+      }),
+    )!;
+    expect(result).toContain("Never launch a command in the background");
+  });
+
+  it("the checks step tells the reviewer to run checks in the foreground", () => {
+    vi.mocked(tryGetProject).mockReturnValue(
+      { path: "/repo/myproject", checks: "npm test" } as ReturnType<typeof tryGetProject>,
+    );
+    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry())!;
+    expect(result).toContain("Run it in the FOREGROUND");
+    expect(result).toContain("several foreground");
+  });
+});
