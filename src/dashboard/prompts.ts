@@ -46,7 +46,6 @@ export const headlessSingleTurnNote: readonly string[] = [
   "is not the verdict token is treated as a failed run.",
 ];
 
-
 export const reviewIntroSection: PromptSection = {
   name: "intro",
   render: () => "You are reviewing a branch before merge. Complete these steps in order:",

@@ -137,6 +137,12 @@ describe("trellisVerdictFormatSection", () => {
     expect(out).toContain("(trellis line 47)");
   });
 
+  it("forbids background work in the headless review", () => {
+    const out = trellisVerdictFormatSection.render(ctx({}));
+    expect(out).toContain("Never launch a command in the background");
+    expect(out).toContain("This process exits when your turn ends");
+  });
+
   it("has name 'verdict-format' to mirror the default review section", () => {
     expect(trellisVerdictFormatSection.name).toBe("verdict-format");
   });

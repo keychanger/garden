@@ -30,6 +30,7 @@ import {
   reviewDiffSection,
   reviewDocumentationSection,
   reviewTestFilesSection,
+  headlessSingleTurnNote,
 } from "./prompts.js";
 import type { WorkerEntry } from "./registry.js";
 
@@ -167,6 +168,8 @@ export const trellisVerdictFormatSection: PromptSection = {
     "",
     "Use only one verdict. The verdict word must be the last non-empty",
     "line of your review.",
+    "",
+    ...headlessSingleTurnNote,
   ].join("\n"),
 };
 
