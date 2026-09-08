@@ -103,11 +103,14 @@ export function reviewerMembers(config: GardenConfig): CrewMember[] {
 // and the reviewer, who is the safety net; "middle" fills the builder, who
 // implements an approach already chosen and is reviewed by a strong model. So
 // `claude-codex` designs on Fable, builds on Opus, and reviews on Codex's top
-// model, and `codex-claude` is its mirror. Provider members carry no ladder:
-// their model vocabulary is the provider's own modelMap.
+// model. Codex runs Sol on every seat: its next rung down is far enough
+// below Sol that a builder on it is not worth the saving, and Sol is already
+// what an unpinned Codex launch takes (`DEFAULT_CODEX_MODEL`). Provider
+// members carry no ladder: their model vocabulary is the provider's own
+// modelMap.
 const SEAT_MODELS: Record<string, { strong: string; middle: string }> = {
   "claude-code": { strong: "fable", middle: "opus" },
-  codex: { strong: "gpt-5.6-sol", middle: "gpt-5.6-terra" },
+  codex: { strong: "gpt-5.6-sol", middle: "gpt-5.6-sol" },
 };
 
 function seat(member: CrewMember, tier: "strong" | "middle"): CrewMember {

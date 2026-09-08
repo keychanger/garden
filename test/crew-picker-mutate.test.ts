@@ -225,7 +225,7 @@ describe("editing a builtin materializes an override", () => {
     expect(readCrewDraft()).toEqual({
       editing: "all-codex",
       designer: "codex", designerModel: "gpt-5.6-sol",
-      worker: "codex", workerModel: "gpt-5.6-terra",
+      worker: "codex", workerModel: "gpt-5.6-sol",
       review: "codex", reviewModel: "gpt-5.6-sol",
     });
   });
@@ -251,7 +251,7 @@ describe("editing a builtin materializes an override", () => {
     expect(store.value.crews).toBeUndefined();
     const spec = getCrew("all-codex", store.value)!;
     expect(spec.builtin).toBe(true);
-    expect(spec.worker.model).toBe("gpt-5.6-terra");
+    expect(spec.worker.model).toBe("gpt-5.6-sol");
     // The message must distinguish this from deleting a name outright.
     expect(displayed.lines.join()).toMatch(/Override removed: all-codex is the builtin again/);
   });

@@ -195,7 +195,9 @@ rungs × 2 reviewers = 80 of them. This limit is why the 2026-07-16 composer
 decision put model/effort *outside* crews. **Since 2026-09-01** they carry one
 *ladder per harness* instead (`SEAT_MODELS`): the strong model fills the
 designer and reviewer seats, the middle one the builder — `claude-codex` is
-Fable ⇢ Opus → Sol and `codex-claude` is Sol ⇢ Terra → Fable. One ladder per
+Fable ⇢ Opus → Sol and `codex-claude` is Sol ⇢ Sol → Fable (Codex's ladder is
+Sol on every seat: the rung below it is too far down to be worth a cheaper
+builder). One ladder per
 harness is expressible without naming it; a rung per crew still is not, and
 stays the province of stored crews.
 

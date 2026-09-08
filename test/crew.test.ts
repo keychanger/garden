@@ -278,9 +278,9 @@ describe("stored crews", () => {
     const byName = Object.fromEntries(builtinCrews(store.value).map((c) => [c.name, c]));
     const seats = (name: string) => [byName[name].designer!.model, byName[name].worker.model, byName[name].review.model];
     expect(seats("claude-codex")).toEqual(["fable", "opus", "gpt-5.6-sol"]);
-    expect(seats("codex-claude")).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "fable"]);
+    expect(seats("codex-claude")).toEqual(["gpt-5.6-sol", "gpt-5.6-sol", "fable"]);
     expect(seats("all-claude")).toEqual(["fable", "opus", "fable"]);
-    expect(seats("all-codex")).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-sol"]);
+    expect(seats("all-codex")).toEqual(["gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol"]);
     for (const c of builtinCrews(store.value)) {
       // Effort is the workflow's and the account's call, never the ladder's.
       expect(c.designer!.effort).toBeUndefined();
@@ -464,7 +464,7 @@ describe("buildCrewPickerPlan", () => {
     // Every crew shows its recipe: a builtin's name says only its harness
     // pairing, not the seat models it carries.
     expect(labels(withStored).find((l) => l.startsWith("heavy"))).toContain("claude opus → claude");
-    expect(labels(withStored).find((l) => l.startsWith("all-codex"))).toContain("codex gpt-5.6-sol ⇢ codex gpt-5.6-terra → codex gpt-5.6-sol");
+    expect(labels(withStored).find((l) => l.startsWith("all-codex"))).toContain("codex gpt-5.6-sol ⇢ codex gpt-5.6-sol → codex gpt-5.6-sol");
     // Exactly one rule divides the pick list from the management rows — the
     // runner must map `sep` rows through, or each becomes three blank items.
     expect(withStored.items.filter((i) => i.sep)).toHaveLength(1);

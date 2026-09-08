@@ -48,7 +48,7 @@ describe("garden crew add/edit", () => {
     await crew(["add", "from-builtin", "--from", "all-codex"]);
     expect(loadConfig().crews?.["from-builtin"]).toEqual({
       designer: { member: "codex", model: "gpt-5.6-sol" },
-      worker: { member: "codex", model: "gpt-5.6-terra" },
+      worker: { member: "codex", model: "gpt-5.6-sol" },
       review: { member: "codex", model: "gpt-5.6-sol" },
     });
   });
