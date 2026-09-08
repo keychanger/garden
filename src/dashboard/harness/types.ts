@@ -186,6 +186,24 @@ export interface HarnessCore {
    *  "loading" and has therefore never been prompted, so the pane holds the
    *  harness's own boot output and nothing a conversation could forge. */
   promptReady?(paneText: string): boolean;
+  /** The model this worker is ACTUALLY running, from the harness's own
+   *  transcript — as opposed to `entry.model`, the pin garden launched it
+   *  with. Defined only by a harness that can drift from its pin AND names
+   *  the model in the same vocabulary on both sides, because the caller
+   *  compares the two for exact equality and shows a divergence to the
+   *  operator (see model-drift.ts). Codex qualifies: `-m` takes a concrete
+   *  slug and `turn_context` reports that same slug back.
+   *
+   *  claude-code deliberately omits it. Its pin is an ALIAS ("opus") that
+   *  resolves through the account default or a provider's modelMap, while its
+   *  transcript records the concrete id the backend answered with — so equality
+   *  would report drift on every healthy worker. A harness in that position
+   *  needs the normalization before it can define this, not a looser compare.
+   *
+   *  Null means "no reading" — never "matches the pin". Swept on the watchdog
+   *  tick, so it must stay bounded: tail-read the transcript, never parse it
+   *  whole. */
+  readRunningModel?(entry: WorkerEntry): string | null;
 }
 
 export interface HarnessAdapter extends HarnessCore {

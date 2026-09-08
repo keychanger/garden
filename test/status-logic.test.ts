@@ -888,6 +888,7 @@ describe("explicit baseBranch (configured project)", () => {
 // truncation priority, and the ⚠n header token.
 describe("identity badges + grammar (Phase 3)", () => {
   const GREY = "\x1b[90m";
+  const YELLOW = "\x1b[33m";
   const RESET = "\x1b[0m";
   const state = {
     activeProject: "garden",
@@ -968,6 +969,39 @@ describe("identity badges + grammar (Phase 3)", () => {
         trellis: { name: "auth", iteration: 2, maxIterations: 30, workerModel: "opus" } },
     ]);
     expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}opus${RESET}`);
+  });
+
+  it("renders the OBSERVED model, yellow beside the pin, when the harness moved off it", () => {
+    // codex 0.153.4 switched a live worker off `gpt-5.6-sol` seven seconds into
+    // its boot. The row named the pin for the rest of the worker's life while
+    // the worker's own pane said astra — this is the row that stops lying.
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle",
+        model: "gpt-5.6-sol", runningModel: "gpt-6-astra" },
+    ]);
+    const line = lineFor(renderQuickStatus(state), "bold-ash");
+    expect(line).toContain(`${YELLOW}gpt-6-astra ≠ gpt-5.6-sol${RESET}`);
+    expect(line).not.toContain(`${GREY}gpt-5.6-sol${RESET}`);
+  });
+
+  it("stays grey and byte-identical when the observed model matches the pin", () => {
+    const pinnedOnly = [
+      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle" as const, model: "sonnet" },
+    ];
+    vi.mocked(getWorkers).mockReturnValue(pinnedOnly);
+    const before = lineFor(renderQuickStatus(state), "bold-ash");
+
+    vi.mocked(getWorkers).mockReturnValue([{ ...pinnedOnly[0], runningModel: "sonnet" }]);
+    expect(lineFor(renderQuickStatus(state), "bold-ash")).toBe(before);
+  });
+
+  it("shows an unpinned worker's observed model as plain grey identity", () => {
+    // Nothing to diverge from: the worker was launched on the harness default,
+    // which is what it is running.
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", runningModel: "gpt-6-astra" },
+    ]);
+    expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}gpt-6-astra${RESET}`);
   });
 
   it("rides the model AFTER the detail and does not dead-space a model-less sibling", () => {

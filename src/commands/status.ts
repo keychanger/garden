@@ -86,6 +86,12 @@ interface WorkerInfo {
   // project reads as one.
   provider?: string;
   model?: string;
+  // The model the worker is OBSERVED to be running (entry.runningModel), when
+  // its harness can read it back. The row renders THIS in place of the pin
+  // whenever both are known — the pin is intent, and a harness that moved off
+  // it leaves the pin naming a model no longer in use. Yellow when the two
+  // disagree; grey and indistinguishable from before when they agree.
+  runningModel?: string;
   workflow?: string;
   // Per-worker crew override (entry.crew). When set and differing from the
   // project's default crew, the row shows a grey crew badge (which encodes the
@@ -237,6 +243,18 @@ function greyBadge(text: string): string {
   return `\x1b[90m${text}\x1b[0m`;
 }
 
+// The model tag in the identity cluster. Normally the grey pin, as before. When
+// the harness reports a DIFFERENT model than the one garden pinned, the tag
+// names what is actually running and turns yellow with the pin after it —
+// the same grey/yellow split the base-branch hint uses for "this worker is not
+// where you think it is". Both models are shown because knowing only that the
+// pin was overruled does not tell the operator what to restore it to.
+function formatModelTag(model?: string, runningModel?: string): string {
+  if (!runningModel) return model ? greyBadge(model) : "";
+  if (!model || model === runningModel) return greyBadge(runningModel);
+  return `\x1b[33m${runningModel} ≠ ${model}\x1b[0m`;
+}
+
 // Below this many columns of detail budget, drop the badge cluster as a unit so
 // the detail (what the worker is doing) isn't squeezed to nothing on a narrow
 // pane — the "badges drop before detail is lost" half of the truncation rule.
@@ -275,9 +293,9 @@ function collectSegments(worker: WorkerInfo, ctx: RowRenderCtx): RowSegments {
     state: stateCell(worker, ctx.now),
     badges,
     detail: holisticDetail ?? decor.detail ?? (worker.activity ?? ""),
-    // The pinned model is grey identity like the badges above; renderWorkerRow
-    // trails the whole cluster after the detail (see there for why).
-    model: worker.model ? greyBadge(worker.model) : "",
+    // The model is grey identity like the badges above; renderWorkerRow trails
+    // the whole cluster after the detail (see there for why).
+    model: formatModelTag(worker.model, worker.runningModel),
     flags: `${formatAwaitingInputGlyph(worker)}${formatGateSuffix(worker.status, ctx.gateClosed)}`
       + `${formatReviewBlockedFlag(worker.status, worker.reviewBlocked)}${formatCiBracket(worker.ci)}`,
     status: worker.status,
@@ -1125,6 +1143,7 @@ function collectWorkers(
       harness: entry?.harness,
       provider: entry?.provider,
       model: entry?.model ?? entry?.trellis?.workerModel,
+      runningModel: entry?.runningModel,
       workflow: entry?.workflow,
       crew: entry?.crew,
       grow: growInfoFor(entry),
@@ -1155,6 +1174,7 @@ function collectWorkers(
       harness: entry?.harness,
       provider: entry?.provider,
       model: entry?.model ?? entry?.trellis?.workerModel,
+      runningModel: entry?.runningModel,
       workflow: entry?.workflow,
       crew: entry?.crew,
       grow: growInfoFor(entry),

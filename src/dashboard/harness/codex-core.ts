@@ -400,6 +400,11 @@ export const codexCore: HarnessCore = {
     const unset = !entry.task || entry.task === entry.name || entry.task === CODEX_AWAITING_TASK;
     return unset ? firstPromptLine(transcript) : null;
   },
+
+  readRunningModel(entry: WorkerEntry): string | null {
+    const transcript = codexCore.resolveTranscriptPath(entry);
+    return transcript ? readCodexRunningModel(transcript) : null;
+  },
 };
 
 // The parse half of readTurns, run once per tail window by readTurnsFromTail.
@@ -490,6 +495,7 @@ interface CodexPayload {
   input?: unknown;
   changes?: unknown;
   item?: unknown;
+  model?: unknown;
 }
 
 export interface CodexInputRequestState {
@@ -587,6 +593,53 @@ export function readCodexTurnState(transcriptPath: string): CodexTurnState | nul
   }
   if (complete === null || (complete && changedAt === 0)) return null;
   return { complete, changedAt };
+}
+
+// The model Codex is ACTUALLY running, read from its own record. Garden pins
+// the model with `-m` at launch, but the pin is not a guarantee: on 2026-09-08
+// codex 0.153.4 switched a live worker from the pinned `gpt-5.6-sol` to
+// `gpt-6-astra` seven seconds after boot (its new-model notice, on the first
+// session after a Homebrew upgrade), persisted that model into
+// `$CODEX_HOME/config.toml`, and recorded a `<model_switch>` developer message.
+// The pane's own status line said astra for the rest of the worker's life while
+// garden's status pane kept naming the pin — the row was the only wrong one.
+//
+// `turn_context` carries the model for its turn, one record per turn, so the
+// NEWEST one is the live answer. The head fallback is not belt-and-braces: a
+// worker still on its FIRST turn has its only turn_context in the preamble
+// (line 8 of the rollout that motivated this, still on that turn 2.3MB later),
+// so a tail-only read would stay blind for exactly as long as the switched turn
+// runs — which is the whole window in which the operator can still redirect it.
+// The head read is paid only when the tail came up empty.
+export function readCodexRunningModel(transcriptPath: string): string | null {
+  if (!isReadable(transcriptPath)) return null;
+  try {
+    return newestTurnContextModel(readTail(transcriptPath, ACTIVITY_TAIL_BYTES))
+      ?? newestTurnContextModel(readHead(transcriptPath, ACTIVITY_HEAD_BYTES));
+  } catch {
+    return null;
+  }
+}
+
+// Scans backwards and stops at the first turn_context found, so cost is a few
+// lines once a turn has started. Either window can clip a record at its open
+// edge; unparseable lines are skipped, which covers it.
+function newestTurnContextModel(window: string): string | null {
+  const lines = window.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line || !line.includes("turn_context")) continue;
+    let rec: CodexLine;
+    try {
+      rec = JSON.parse(line) as CodexLine;
+    } catch {
+      continue;
+    }
+    if (rec.type !== "turn_context") continue;
+    const model = rec.payload?.model;
+    if (typeof model === "string" && model) return model;
+  }
+  return null;
 }
 
 interface CodexCompletedItem {

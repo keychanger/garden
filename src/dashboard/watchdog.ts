@@ -63,6 +63,7 @@ import {
   captureCodexUsageLatest, probeCodexUsageIfStale, CODEX_PROBE_INTERVAL_MS,
 } from "./codex-usage.js";
 import { startCodexInputWatcher } from "./codex-input.js";
+import { sweepWorkerModels } from "./model-drift.js";
 import { healWorkerWindows } from "./window-heal.js";
 import {
   commitsBehindOrigin, gardenInstallRepo, listWorktreeDirs, workerCleanupMarkerPath,
@@ -744,6 +745,16 @@ export async function runWatchdogLoop(): Promise<void> {
         sweepWorkerTitles(gardenRunner, registry);
       } catch (err) {
         log.warn("watchdog", "worker title sweep failed", { data: { error: String(err) } });
+      }
+      // Read each worker's model back from its harness, so the row names what
+      // it is actually running rather than the pin garden launched it with —
+      // a harness can move a live session off its pin (see model-drift.ts) and
+      // nothing else in the fleet would ever notice. Repaints only when a
+      // reading moves; the steady state is a bounded transcript tail read.
+      try {
+        if (sweepWorkerModels(registry) > 0) refreshDashboard();
+      } catch (err) {
+        log.warn("watchdog", "worker model sweep failed", { data: { error: String(err) } });
       }
       // Retry any worker cleanup whose own dispatch failed. On the fast 60s
       // tick rather than hourly housekeeping: this is a recovery path for a

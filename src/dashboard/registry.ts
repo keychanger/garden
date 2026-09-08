@@ -442,6 +442,16 @@ export interface WorkerEntry {
   // vines use `trellis.workerModel` instead (iteration-resolved with the
   // Sonnet-exhaustion fallback). See docs/MULTI-MODEL.md "Layer 2".
   model?: string;
+  // The model the worker is OBSERVED to be running, read back from the
+  // harness's own transcript (model-drift.ts). Intent lives in `model` above
+  // and is never overwritten by this: a harness can switch the model out from
+  // under the pin (codex 0.153.4's new-model notice did, seven seconds after
+  // boot), and healing the pin to match would make the accident permanent —
+  // the next bounce would relaunch on the drifted model. So the two are stored
+  // side by side and the status row renders the observation, flagged when it
+  // disagrees with the pin. Undefined until the harness answers, and only ever
+  // set by a harness that defines HarnessCore.readRunningModel.
+  runningModel?: string;
   // Per-worker crew (`workers new --crew`). Names a crew
   // (see crew.ts). Its BUILD half is resolved into entry.harness/provider at
   // spawn; its REVIEW half is applied live by resolveReviewRole (roles.ts),

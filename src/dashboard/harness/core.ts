@@ -62,6 +62,15 @@ export function harnessSignalsPromptReady(
   return text ? core.promptReady(text) : false;
 }
 
+// The model this worker is actually running, for a harness that can read it
+// back (HarnessCore.readRunningModel). Null for every other harness and for a
+// worker whose transcript has not answered yet — in both cases the caller keeps
+// whatever it last observed rather than concluding the pin is being honored.
+export function resolveWorkerRunningModel(entry: WorkerEntry): string | null {
+  const core = getHarnessCore(entry.harness);
+  return core.readRunningModel ? core.readRunningModel(entry) : null;
+}
+
 // Is this a registered harness name? Config-set and launch-plan paths validate
 // STRICTLY with this rather than relying on getHarnessCore's read-path
 // fallback.
