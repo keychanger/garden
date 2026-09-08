@@ -403,7 +403,7 @@ export const codexCore: HarnessCore = {
 
   readRunningModel(entry: WorkerEntry): string | null {
     const transcript = codexCore.resolveTranscriptPath(entry);
-    return transcript ? readCodexRunningModel(transcript) : null;
+    return transcript ? readCodexRunningModel(transcript, entry.runningModel) : null;
   },
 };
 
@@ -605,17 +605,32 @@ export function readCodexTurnState(transcriptPath: string): CodexTurnState | nul
 // garden's status pane kept naming the pin — the row was the only wrong one.
 //
 // `turn_context` carries the model for its turn, one record per turn, so the
-// NEWEST one is the live answer. The head fallback is not belt-and-braces: a
-// worker still on its FIRST turn has its only turn_context in the preamble
-// (line 8 of the rollout that motivated this, still on that turn 2.3MB later),
-// so a tail-only read would stay blind for exactly as long as the switched turn
-// runs — which is the whole window in which the operator can still redirect it.
-// The head read is paid only when the tail came up empty.
-export function readCodexRunningModel(transcriptPath: string): string | null {
+// NEWEST one is the live answer. Start with the ordinary activity tail, then
+// widen to a bounded 4MB when a long-running turn pushed its context farther
+// back. A fixed 256KB tail was not enough: on a later 600KB turn it found no
+// context and the head fallback returned the FIRST turn's model as if it were
+// current.
+//
+// The head fallback remains load-bearing for a worker still on its FIRST turn:
+// the motivating context sat on line 8 while that turn grew to 2.3MB. It is
+// used only before garden has an observation. Once one exists, exhausting the
+// bounded tail means "no new reading", not permission to replace it with a
+// potentially stale first-turn value.
+const MODEL_TAIL_MAX_BYTES = 4 * 1024 * 1024;
+
+export function readCodexRunningModel(
+  transcriptPath: string,
+  previousModel?: string,
+): string | null {
   if (!isReadable(transcriptPath)) return null;
   try {
-    return newestTurnContextModel(readTail(transcriptPath, ACTIVITY_TAIL_BYTES))
-      ?? newestTurnContextModel(readHead(transcriptPath, ACTIVITY_HEAD_BYTES));
+    for (let bytes = ACTIVITY_TAIL_BYTES; bytes <= MODEL_TAIL_MAX_BYTES; bytes *= 4) {
+      const model = newestTurnContextModel(readTail(transcriptPath, bytes));
+      if (model) return model;
+    }
+    return previousModel === undefined
+      ? newestTurnContextModel(readHead(transcriptPath, ACTIVITY_HEAD_BYTES))
+      : null;
   } catch {
     return null;
   }

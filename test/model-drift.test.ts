@@ -5,6 +5,7 @@ import path from "node:path";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 const workers: Record<string, WorkerEntry[]> = {};
+let beforeUpdate: (() => void) | undefined;
 
 vi.mock("../src/dashboard/registry.js", () => ({
   readRegistry: vi.fn(() => ({ workers })),
@@ -13,6 +14,8 @@ vi.mock("../src/dashboard/registry.js", () => ({
     workerName: string,
     decide: (entry: WorkerEntry) => { fields: Partial<WorkerEntry> | null; result: unknown },
   ) => {
+    beforeUpdate?.();
+    beforeUpdate = undefined;
     const entry = workers[project]?.find(candidate => candidate.name === workerName);
     if (!entry) return undefined;
     const decision = decide(entry);
@@ -85,6 +88,7 @@ afterAll(() => {
 
 beforeEach(() => {
   for (const key of Object.keys(workers)) delete workers[key];
+  beforeUpdate = undefined;
   vi.mocked(addAlert).mockClear();
 });
 
@@ -94,13 +98,24 @@ describe("readCodexRunningModel", () => {
       .toBe("gpt-6-astra");
   });
 
-  it("falls back to the head when the turn has outgrown the tail window", () => {
+  it("widens the tail to find the newest context on a later long turn", () => {
+    // Both contexts sit outside the initial 256KB tail, while the file head
+    // contains only the stale first one. The old reader returned Sol here.
+    const file = rollout("later-long-turn", ["gpt-5.6-sol", "gpt-6-astra"], 600 * 1024);
+    expect(readCodexRunningModel(file, "gpt-5.6-sol")).toBe("gpt-6-astra");
+  });
+
+  it("falls back to the head for an unobserved first turn beyond the bounded tail", () => {
     // The motivating shape: a worker still on its FIRST turn, whose only
-    // turn_context sits in the preamble far above any tail read. 400KB of
-    // padding clears the 256KB tail bound.
-    const file = rollout("first-turn", ["gpt-6-astra"], 400 * 1024);
-    expect(fs.statSync(file).size).toBeGreaterThan(256 * 1024);
+    // turn_context sits in the preamble far above the bounded tail scan.
+    const file = rollout("first-turn", ["gpt-6-astra"], 5 * 1024 * 1024);
+    expect(fs.statSync(file).size).toBeGreaterThan(4 * 1024 * 1024);
     expect(readCodexRunningModel(file)).toBe("gpt-6-astra");
+  });
+
+  it("does not mistake the first turn for the newest after the bounded tail is exhausted", () => {
+    const file = rollout("later-huge-turn", ["gpt-5.6-sol", "gpt-6-astra"], 5 * 1024 * 1024);
+    expect(readCodexRunningModel(file, "gpt-5.6-sol")).toBeNull();
   });
 
   it("answers null for a rollout with no turn_context and for a missing file", () => {
@@ -178,6 +193,33 @@ describe("sweepWorkerModels", () => {
     // The alert store dedups too, but the sweep must not depend on that: an
     // unchanged reading is not news and does no work at all.
     expect(sweepWorkerModels({ workers } as never)).toBe(0);
+    expect(vi.mocked(addAlert)).not.toHaveBeenCalled();
+  });
+
+  it("uses a pin changed concurrently with the sweep", () => {
+    const live = worker({
+      model: "gpt-5.6-sol",
+      transcriptPath: rollout("concurrent-pin", ["gpt-6-astra"]),
+    });
+    workers.wolf = [live];
+    const snapshot = { workers: { wolf: [{ ...live }] } };
+    beforeUpdate = () => { live.model = "gpt-6-astra"; };
+
+    expect(sweepWorkerModels(snapshot as never)).toBe(1);
+    expect(live.runningModel).toBe("gpt-6-astra");
+    expect(vi.mocked(addAlert)).not.toHaveBeenCalled();
+  });
+
+  it("does not record a reading after the worker exits during the sweep", () => {
+    const live = worker({
+      model: "gpt-5.6-sol",
+      transcriptPath: rollout("exited-during-read", ["gpt-6-astra"]),
+    });
+    workers.wolf = [live];
+    beforeUpdate = () => { live.agentStatus = "exited"; };
+
+    expect(sweepWorkerModels({ workers } as never)).toBe(0);
+    expect(live.runningModel).toBeUndefined();
     expect(vi.mocked(addAlert)).not.toHaveBeenCalled();
   });
 

@@ -201,8 +201,8 @@ export interface HarnessCore {
    *  needs the normalization before it can define this, not a looser compare.
    *
    *  Null means "no reading" — never "matches the pin". Swept on the watchdog
-   *  tick, so it must stay bounded: tail-read the transcript, never parse it
-   *  whole. */
+   *  tick, so it must stay bounded: read bounded transcript windows, never
+   *  parse it whole. */
   readRunningModel?(entry: WorkerEntry): string | null;
 }
 

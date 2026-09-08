@@ -54,14 +54,17 @@ export function sweepWorkerModels(registry: WorkerRegistry): number {
       const observed = resolveWorkerRunningModel(entry);
       if (!observed || observed === entry.runningModel) continue;
       // Guarded on the value this sweep read, so a concurrent writer's newer
-      // observation is never rolled back to ours.
-      const applied = updateWorkerFieldsIf(project, entry.name, current =>
-        current.runningModel === entry.runningModel
-          ? { fields: { runningModel: observed }, result: true }
-          : { fields: null, result: false });
-      if (!applied) continue;
+      // observation is never rolled back to ours. Return the locked snapshot
+      // with the observation applied: the operator may have changed the pin
+      // since this sweep began, and alerting against the stale outer snapshot
+      // would report drift that no longer exists.
+      const updated = updateWorkerFieldsIf(project, entry.name, current =>
+        current.agentStatus !== "exited" && current.runningModel === entry.runningModel
+          ? { fields: { runningModel: observed }, result: { ...current, runningModel: observed } }
+          : { fields: null, result: null });
+      if (!updated) continue;
       moved++;
-      reportReading(project, { ...entry, runningModel: observed });
+      reportReading(project, updated);
     }
   }
   return moved;
