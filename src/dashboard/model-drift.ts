@@ -16,7 +16,6 @@
 // bounce would then relaunch on the drifted model deliberately. So the row
 // renders the observation and colors it when the two disagree (status.ts), and
 // `⌥i` -> model still restores the intent.
-import { addAlert } from "./alerts.js";
 import { resolveWorkerRunningModel } from "./harness/core.js";
 import { log } from "./log.js";
 import { updateWorkerFieldsIf, type WorkerEntry, type WorkerRegistry } from "./registry.js";
@@ -56,8 +55,8 @@ export function sweepWorkerModels(registry: WorkerRegistry): number {
       // Guarded on the value this sweep read, so a concurrent writer's newer
       // observation is never rolled back to ours. Return the locked snapshot
       // with the observation applied: the operator may have changed the pin
-      // since this sweep began, and alerting against the stale outer snapshot
-      // would report drift that no longer exists.
+      // since this sweep began, and reporting against the stale outer snapshot
+      // would name a drift that no longer exists.
       const updated = updateWorkerFieldsIf(project, entry.name, current =>
         current.agentStatus !== "exited" && current.runningModel === entry.runningModel
           ? { fields: { runningModel: observed }, result: { ...current, runningModel: observed } }
@@ -70,31 +69,22 @@ export function sweepWorkerModels(registry: WorkerRegistry): number {
   return moved;
 }
 
-// Announce a reading that moved. Drift is an alert because it is silent
-// otherwise and expensive to discover late — the motivating worker spent 13
-// minutes on the wrong model; agreement is a log line, since it is the answer
-// the operator already expects.
+// Log a reading that moved — one line per change, since the sweep only reports
+// what it actually wrote. Deliberately NOT an alert: the operator changes a
+// worker's model routinely (`⌥i` -> model, or `/model` typed into the pane),
+// which produces exactly the reading a harness switching a session on its own
+// does, and there is no signal in the transcript that separates the two. An
+// alert on every model change would be noise on the surface reserved for things
+// that need attention now. The row is the surface for this instead: it names the
+// running model where it used to assert the pin, so a divergence is visible at
+// the moment the operator looks at the fleet — which is what was actually broken
+// when a worker ran 13 minutes on a model nobody had chosen. Drift stays `warn`
+// so `garden logs -l warn` reconstructs what a branch was built on.
 function reportReading(project: string, entry: WorkerEntry): void {
-  const pin = pinnedModel(entry);
-  const data = { project, model: entry.runningModel, pinned: pin };
-  if (!hasModelDrift(entry)) {
+  const data = { project, model: entry.runningModel, pinned: pinnedModel(entry) };
+  if (hasModelDrift(entry)) {
+    log.warn("model-drift", "running model differs from the pin", { worker: entry.name, data });
+  } else {
     log.info("model-drift", "observed running model", { worker: entry.name, data });
-    return;
   }
-  log.warn("model-drift", "running model differs from the pin", { worker: entry.name, data });
-  addAlert({
-    level: "warn",
-    source: "model-drift",
-    project,
-    worker: entry.name,
-    // States what was observed and nothing about why. Several distinct causes
-    // produce this reading — the harness moved a live session off the pin, a
-    // resume did not adopt a newly-set pin, or the pin changed and the worker
-    // has not taken a turn since — and the alert cannot tell them apart.
-    message: `${entry.name} ran ${entry.runningModel} on its most recent turn; its pinned model is ${pin}.`,
-    // Both models in the key: a worker that drifts, is bounced back, then drifts
-    // again to a different model is a new fact worth a new alert, while the same
-    // standing drift re-observed is not.
-    dedupKey: `model-drift:${project}:${entry.name}:${pin}:${entry.runningModel}`,
-  });
 }

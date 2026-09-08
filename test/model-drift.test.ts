@@ -28,16 +28,13 @@ vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock("../src/dashboard/alerts.js", () => ({ addAlert: vi.fn() }));
-
 vi.mock("../src/dashboard/tmux.js", () => ({
   shellEscape: vi.fn((value: string) => value),
   pasteAndSubmit: vi.fn(),
   stripControlSequences: vi.fn((value: string) => value),
 }));
 
-const { addAlert } = await import("../src/dashboard/alerts.js");
-const { sweepWorkerModels } = await import("../src/dashboard/model-drift.js");
+const { hasModelDrift, sweepWorkerModels } = await import("../src/dashboard/model-drift.js");
 const { readCodexRunningModel } = await import("../src/dashboard/harness/codex-core.js");
 
 let dir: string;
@@ -89,7 +86,6 @@ afterAll(() => {
 beforeEach(() => {
   for (const key of Object.keys(workers)) delete workers[key];
   beforeUpdate = undefined;
-  vi.mocked(addAlert).mockClear();
 });
 
 describe("readCodexRunningModel", () => {
@@ -133,7 +129,7 @@ describe("readCodexRunningModel", () => {
 });
 
 describe("sweepWorkerModels", () => {
-  it("records the running model and alerts when it differs from the pin", () => {
+  it("records the running model when it differs from the pin", () => {
     workers.wolf = [worker({
       model: "gpt-5.6-sol",
       transcriptPath: rollout("drifted", ["gpt-5.6-sol", "gpt-6-astra"]),
@@ -144,14 +140,9 @@ describe("sweepWorkerModels", () => {
     // The pin is intent and is never healed to match — a bounce must relaunch
     // on what the operator asked for, not on what the harness substituted.
     expect(workers.wolf[0].model).toBe("gpt-5.6-sol");
-    expect(vi.mocked(addAlert)).toHaveBeenCalledOnce();
-    const alert = vi.mocked(addAlert).mock.calls[0][0];
-    expect(alert.level).toBe("warn");
-    expect(alert.message).toContain("gpt-6-astra");
-    expect(alert.message).toContain("gpt-5.6-sol");
   });
 
-  it("records a reading that matches the pin without alerting", () => {
+  it("records a reading that matches the pin", () => {
     workers.wolf = [worker({
       model: "gpt-5.6-sol",
       transcriptPath: rollout("honored", ["gpt-5.6-sol"]),
@@ -159,15 +150,14 @@ describe("sweepWorkerModels", () => {
 
     expect(sweepWorkerModels({ workers } as never)).toBe(1);
     expect(workers.wolf[0].runningModel).toBe("gpt-5.6-sol");
-    expect(vi.mocked(addAlert)).not.toHaveBeenCalled();
   });
 
-  it("does not alert an unpinned worker — it has no intent to violate", () => {
+  it("reports an unpinned worker as undrifted — it has no intent to violate", () => {
     workers.wolf = [worker({ transcriptPath: rollout("unpinned", ["gpt-6-astra"]) })];
 
     expect(sweepWorkerModels({ workers } as never)).toBe(1);
     expect(workers.wolf[0].runningModel).toBe("gpt-6-astra");
-    expect(vi.mocked(addAlert)).not.toHaveBeenCalled();
+    expect(hasModelDrift(workers.wolf[0])).toBe(false);
   });
 
   it("compares a trellis vine against its own workerModel pin", () => {
@@ -178,22 +168,19 @@ describe("sweepWorkerModels", () => {
     })];
 
     sweepWorkerModels({ workers } as never);
-    expect(vi.mocked(addAlert)).toHaveBeenCalledOnce();
-    expect(vi.mocked(addAlert).mock.calls[0][0].message).toContain("gpt-5.6-sol");
+    expect(hasModelDrift(workers.wolf[0])).toBe(true);
   });
 
-  it("re-sweeps a standing drift without re-writing or re-alerting", () => {
+  it("re-sweeps a standing drift without re-writing", () => {
     workers.wolf = [worker({
       model: "gpt-5.6-sol",
       transcriptPath: rollout("standing", ["gpt-6-astra"]),
     })];
 
     expect(sweepWorkerModels({ workers } as never)).toBe(1);
-    vi.mocked(addAlert).mockClear();
-    // The alert store dedups too, but the sweep must not depend on that: an
-    // unchanged reading is not news and does no work at all.
+    // An unchanged reading is not news: the operator routinely changes a
+    // worker's model, and a standing divergence must cost nothing per tick.
     expect(sweepWorkerModels({ workers } as never)).toBe(0);
-    expect(vi.mocked(addAlert)).not.toHaveBeenCalled();
   });
 
   it("uses a pin changed concurrently with the sweep", () => {
@@ -207,7 +194,10 @@ describe("sweepWorkerModels", () => {
 
     expect(sweepWorkerModels(snapshot as never)).toBe(1);
     expect(live.runningModel).toBe("gpt-6-astra");
-    expect(vi.mocked(addAlert)).not.toHaveBeenCalled();
+    // The reading is judged against the pin as it stands under the lock, not
+    // the one the outer scan saw — so a pin the operator moved to meet the
+    // running model reads as agreement, never as drift.
+    expect(hasModelDrift(live)).toBe(false);
   });
 
   it("does not record a reading after the worker exits during the sweep", () => {
@@ -220,7 +210,6 @@ describe("sweepWorkerModels", () => {
 
     expect(sweepWorkerModels({ workers } as never)).toBe(0);
     expect(live.runningModel).toBeUndefined();
-    expect(vi.mocked(addAlert)).not.toHaveBeenCalled();
   });
 
   it("skips a worker whose pane is gone", () => {
@@ -243,6 +232,5 @@ describe("sweepWorkerModels", () => {
 
     expect(sweepWorkerModels({ workers } as never)).toBe(0);
     expect(workers.garden[0].runningModel).toBeUndefined();
-    expect(vi.mocked(addAlert)).not.toHaveBeenCalled();
   });
 });
