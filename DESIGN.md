@@ -427,7 +427,6 @@ The dashboard surfaces important events as alerts — persistent messages that r
 - Local base ref could not be advanced after merge — only when it diverged from origin with real local-only content (warn), is checked out in another worktree (warn), the on-base checkout is dirty (warn), or it is wedged/unfetchable (`stuck`, error); a clean off-base ref advance and an auto-healed redundant local commit are both silent. Each alert fires only on entry into the state, not every merge cycle
 - Repeated failures (3+ consecutive failures on the same worker)
 - Base-branch drift after worker creation (Stop hook cannot count commits against `origin/<pinned-base>`; deduped to one firing per worker per hour)
-- Running-model drift when a harness reports a model different from the worker's pin (source: `model-drift`, level: `warn`; deduped on the pinned/running pair)
 - Auto-continue auto-disabled by usage threshold (source: `usage`, level: `warn`)
 - `.garden-done` tracked in HEAD of the project main at worker spawn (source: `create`, level: `warn`; deduped per project per hour).
 - Orphaned worker window: a live tmux worker window with no registry entry (the create/sweep race casualty; source: `watchdog`, level: `warn`; deduped per orphan per hour).
