@@ -98,8 +98,9 @@ Projects:
                                  <provider>-codex per configured provider (e.g. deepseek-claude).
                                  A provider can build but never reviews (safety net).
                                  Builtins carry each harness's seat ladder — the strong model
-                                 designs and reviews, the middle one builds (claude-codex: fable
-                                 designs, opus builds, codex reviews; codex-claude is its mirror).
+                                 designs and reviews; the builder tier is harness-specific
+                                 (claude-codex: fable designs, opus builds, codex reviews;
+                                 codex-claude: sol designs and builds, fable reviews).
                                  Define your own to pin any seat's model and effort:
                                    crew add heavy --designer claude --designer-model fable \\
                                      --worker claude --model opus --effort xhigh \\
