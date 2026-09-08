@@ -243,16 +243,21 @@ function greyBadge(text: string): string {
   return `\x1b[90m${text}\x1b[0m`;
 }
 
-// The model tag in the identity cluster. Normally the grey pin, as before. When
-// the harness reports a DIFFERENT model than the one garden pinned, the tag
-// names what is actually running and turns yellow with the pin after it —
-// the same grey/yellow split the base-branch hint uses for "this worker is not
-// where you think it is". Both models are shown because knowing only that the
-// pin was overruled does not tell the operator what to restore it to.
+// The model tag in the identity cluster: the model the harness reports running
+// when it reports one, else the pin. When the two disagree the tag names both,
+// `<running> ≠ <pinned>` — knowing only that the pin was overruled does not tell
+// the operator what to restore it to.
+//
+// Stays grey in every case. A divergence is routine, not a fault: the operator
+// changes a worker's model often enough (`⌥i` -> model, `/model` in the pane)
+// that a status color here would mark deliberate work as a problem. This is
+// identity — what the worker runs — and grey is what identity wears, the same
+// way the base badge renders `→ <base>` quietly. The row telling the truth is
+// the whole point; making it shout was not (operator call, 2026-09-08).
 function formatModelTag(model?: string, runningModel?: string): string {
   if (!runningModel) return model ? greyBadge(model) : "";
   if (!model || model === runningModel) return greyBadge(runningModel);
-  return `\x1b[33m${runningModel} ≠ ${model}\x1b[0m`;
+  return greyBadge(`${runningModel} ≠ ${model}`);
 }
 
 // Below this many columns of detail budget, drop the badge cluster as a unit so

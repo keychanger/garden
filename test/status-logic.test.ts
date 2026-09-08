@@ -971,7 +971,7 @@ describe("identity badges + grammar (Phase 3)", () => {
     expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}opus${RESET}`);
   });
 
-  it("renders the OBSERVED model, yellow beside the pin, when the harness moved off it", () => {
+  it("renders the OBSERVED model beside the pin when the harness moved off it", () => {
     // codex 0.153.4 switched a live worker off `gpt-5.6-sol` seven seconds into
     // its boot. The row named the pin for the rest of the worker's life while
     // the worker's own pane said astra — this is the row that stops lying.
@@ -980,8 +980,10 @@ describe("identity badges + grammar (Phase 3)", () => {
         model: "gpt-5.6-sol", runningModel: "gpt-6-astra" },
     ]);
     const line = lineFor(renderQuickStatus(state), "bold-ash");
-    expect(line).toContain(`${YELLOW}gpt-6-astra ≠ gpt-5.6-sol${RESET}`);
-    expect(line).not.toContain(`${GREY}gpt-5.6-sol${RESET}`);
+    // Grey, not a status color: the operator changes models deliberately often
+    // enough that colouring this would mark routine work as a fault.
+    expect(line).toContain(`${GREY}gpt-6-astra ≠ gpt-5.6-sol${RESET}`);
+    expect(line).not.toContain(YELLOW);
   });
 
   it("stays grey and byte-identical when the observed model matches the pin", () => {
