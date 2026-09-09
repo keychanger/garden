@@ -416,6 +416,28 @@ describe("handleClaudeHook — core events", () => {
     expect(fs.unlinkSync).not.toHaveBeenCalledWith("/tmp/wt/garden/bold-ash/.garden-done");
   });
 
+  // The prompt IS the answer the worker was blocked on, so the question stops
+  // being true. Both halves of a block clear together — the sentinel that
+  // suppresses auto-continue and the field that flags the row — or the operator
+  // keeps being asked for something they already gave.
+  it("prompt clears a blocked question along with the human-gate sentinel", async () => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "idle",
+      prState: "merged",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+      blockedQuestion: "Commit binary ledgers?",
+    });
+    setCwd("garden", "bold-ash");
+
+    const fs = (await import("node:fs")).default;
+    handleClaudeHook("prompt");
+
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(entry.blockedQuestion).toBeUndefined();
+    expect(entry.agentStatus).toBe("working");
+    expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/wt/garden/bold-ash/.garden-awaiting-input");
+  });
+
   it("stop sets idle from any prior state", () => {
     seedWorker("garden", "bold-ash", { agentStatus: "working" });
     setCwd("garden", "bold-ash");

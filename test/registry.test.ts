@@ -927,6 +927,31 @@ describe("worker ordering helpers", () => {
     // paused (operator hold) is an active/recent state, not a "needs you" one.
     expect(workerSortTier(mkEntry({ name: "k", agentStatus: "paused" }))).toBe(2);
     expect(workerSortTier(mkEntry({ name: "j", prState: "done" }))).toBe(4);
+    expect(workerSortTier(mkEntry({ name: "l", blockedQuestion: "Which shape?" }))).toBe(0);
+  });
+
+  // The failure this exists for: a worker that pushed a phase, stopped to ask,
+  // and had its branch merged sits at prState `merged` — the in-flight band,
+  // which descends toward done and sinks BELOW every active worker. The row the
+  // operator most needs to see was the hardest one to find.
+  it("a blocked question outranks the in-flight band it would otherwise sink into", async () => {
+    const { workerSortTier } = await importRegistry();
+    expect(workerSortTier(mkEntry({ name: "m", prState: "merged" }))).toBe(3);
+    expect(workerSortTier(mkEntry({
+      name: "m", prState: "merged", blockedQuestion: "Commit binary ledgers?",
+    }))).toBe(0);
+  });
+
+  // Blocked rows are never stale-dimmed: the dim is scoped to the active band,
+  // and a standing question can legitimately go unanswered for over a day
+  // without becoming less urgent.
+  it("a blocked worker is not stale-dimmed however long it waits", async () => {
+    const { isWorkerStale, WORKER_STALE_MS } = await importRegistry();
+    const old = Date.now() - WORKER_STALE_MS - 60_000;
+    expect(isWorkerStale(mkEntry({ name: "n", agentStatus: "idle", lastEventAt: old }))).toBe(true);
+    expect(isWorkerStale(mkEntry({
+      name: "n", agentStatus: "idle", lastEventAt: old, blockedQuestion: "Which shape?",
+    }))).toBe(false);
   });
 
   it("the in-flight band sits below active but is still classified by prState", async () => {

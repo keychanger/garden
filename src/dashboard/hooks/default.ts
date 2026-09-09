@@ -229,7 +229,7 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
 // ---------------------------------------------------------------------------
 
 type FieldsDelta = Partial<Pick<WorkerEntry,
-  "agentStatus" | "lastEventAt" | "lastStateChangeAt" | "prState" | "task" | "transcriptPath" | "sessionId" | "continueSentAt" | "subagentActivityAt">>;
+  "agentStatus" | "lastEventAt" | "lastStateChangeAt" | "prState" | "task" | "transcriptPath" | "sessionId" | "continueSentAt" | "subagentActivityAt" | "blockedQuestion">>;
 
 // pretooluse/posttooluse fire on every Claude tool call and dominate hook
 // traffic — a busy agent completes many tools per second, and with N agents in
@@ -410,10 +410,14 @@ const onPromptSubmitted: HookMethod = (ctx) => {
     clearDoneSentinel(ctx.workerInfo.entry.worktreePath);
   }
   // Clear the human-gate sentinel unconditionally: a worker paused for operator
-  // input (designer/plan) holds it while prState is still `working`, so unlike
-  // the done-sentinel its clear is not gated on a terminal prState. The
-  // operator's prompt is the resume signal.
+  // input (designer/plan, or `garden blocked`) holds it while prState is still
+  // `working`, so unlike the done-sentinel its clear is not gated on a terminal
+  // prState. The operator's prompt is the resume signal.
   clearAwaitingInput(ctx.workerInfo.entry.worktreePath);
+  // The prompt is the answer the worker was blocked on, so the question stops
+  // being true here — same signal, one field. Unconditional for the same reason:
+  // a blocked worker's prState is whatever it was when it stopped to ask.
+  if (ctx.workerInfo.entry.blockedQuestion !== undefined) fields.blockedQuestion = undefined;
   applyAndLog(ctx, fields);
 };
 

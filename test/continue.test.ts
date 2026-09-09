@@ -8,6 +8,7 @@ vi.mock("node:fs", () => ({
   default: {
     existsSync: vi.fn(() => false),
     unlinkSync: vi.fn(),
+    writeFileSync: vi.fn(),
     readFileSync: vi.fn(() => "seed body"),
   },
 }));
@@ -87,6 +88,7 @@ import {
   dispatchDelayedContinue, dispatchDelayedAutoContinue,
   dispatchDelayedSeed, seedWorker, classifySeedDelivery, notifyHandoffCallback,
   donePath, isDoneSet, clearDoneSentinel,
+  awaitingInputPath, isAwaitingInput, setAwaitingInput, clearAwaitingInput,
   extractOperatorDraft, extractDraftInfo, isOwnStuckPaste,
   paneHasBlockingOperatorDraft, rearmContinueIfDrafting,
 } from "../src/dashboard/continue.js";
@@ -1137,6 +1139,34 @@ describe("continueWorkerAfterMerge", () => {
     // every all-undefined object as equal, so not.toHaveBeenCalledWith can't
     // distinguish the interrupted-clear from the pending-clear.)
     expect(updateWorkerFields).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("human-gate sentinel helpers", () => {
+  const wt = "/Users/x/.garden/worktrees/myproject/bold-ash";
+
+  it("awaitingInputPath joins the worktree root with .garden-awaiting-input", () => {
+    expect(awaitingInputPath(wt)).toBe(`${wt}/.garden-awaiting-input`);
+  });
+
+  it("setAwaitingInput writes an empty file — its presence is the whole signal", () => {
+    setAwaitingInput(wt);
+    expect(fs.writeFileSync).toHaveBeenCalledWith(`${wt}/.garden-awaiting-input`, "");
+  });
+
+  it("isAwaitingInput reflects fs.existsSync at the sentinel path", () => {
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true);
+    expect(isAwaitingInput(wt)).toBe(true);
+    vi.mocked(fs.existsSync).mockReturnValueOnce(false);
+    expect(isAwaitingInput(wt)).toBe(false);
+  });
+
+  it("tolerates a vanished worktree and a legacy entry with no path", () => {
+    vi.mocked(fs.writeFileSync).mockImplementationOnce(() => { throw new Error("ENOENT"); });
+    expect(() => setAwaitingInput(wt)).not.toThrow();
+    setAwaitingInput(undefined);
+    clearAwaitingInput(undefined);
+    expect(isAwaitingInput(undefined)).toBe(false);
   });
 });
 

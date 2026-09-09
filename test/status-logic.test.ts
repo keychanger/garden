@@ -1455,3 +1455,60 @@ describe("formatReviewBlockedFlag", () => {
     }
   });
 });
+
+describe("blocked-on-operator row", () => {
+  const YELLOW = "\x1b[33m";
+  const stripAnsi = (x: string) => x.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+  const state = {
+    activeProject: "garden",
+    statusPaneId: "%0",
+    gardenShellPaneId: "%1",
+    activePaneId: "%2",
+    activePaneType: "worker" as const,
+    activeWindowName: "_garden-worker-bold-ash",
+  };
+  const lineFor = (result: string, name: string): string =>
+    result.split("\n").find(l => l.includes(name)) ?? "";
+
+  beforeEach(() => {
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
+  });
+
+  it("shows the question as the row's description", async () => {
+    vi.mocked(getWorkers).mockReturnValue([{
+      name: "bold-ash", sessionId: "a", task: "reworking the evening", agentStatus: "idle",
+      blockedQuestion: "Commit binary ledgers?",
+    }]);
+    expect(stripAnsi(lineFor(renderQuickStatus(state), "bold-ash")))
+      .toContain("Commit binary ledgers?");
+  });
+
+  // The question outranks the activity summary because the activity describes
+  // work that is finished, and the question describes the only thing left.
+  it("displaces the activity summary rather than sitting beside it", async () => {
+    vi.mocked(getWorkers).mockReturnValue([{
+      name: "bold-ash", sessionId: "a", task: "reworking the evening", agentStatus: "idle",
+      blockedQuestion: "Commit binary ledgers?",
+    }]);
+    expect(lineFor(renderQuickStatus(state), "bold-ash")).not.toContain("reworking the evening");
+  });
+
+  // The glyph lives in the never-truncating flags, so a narrow pane still says
+  // "blocked" once the question text has been squeezed away.
+  it("flags the row from the registry field alone, with no sentinel on disk", async () => {
+    vi.mocked(getWorkers).mockReturnValue([{
+      name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle",
+      blockedQuestion: "Which shape?",
+    }]);
+    expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${YELLOW}?`);
+  });
+
+  it("leaves an unblocked row untouched", async () => {
+    vi.mocked(getWorkers).mockReturnValue([{
+      name: "bold-ash", sessionId: "a", task: "reworking the evening", agentStatus: "idle",
+    }]);
+    const line = lineFor(renderQuickStatus(state), "bold-ash");
+    expect(stripAnsi(line)).toContain("reworking the evening");
+    expect(line).not.toContain(`${YELLOW}?`);
+  });
+});

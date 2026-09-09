@@ -25,6 +25,7 @@ import { bounce } from "./bounce.js";
 import { hold } from "./hold.js";
 import { pause } from "./pause.js";
 import { resume } from "./resume.js";
+import { blocked } from "./blocked.js";
 import { claudeProfile } from "./claude-profile.js";
 import { crew } from "./crew.js";
 import { provider } from "./provider.js";
@@ -77,6 +78,7 @@ export const commands: Record<string, Command> = {
   hold,
   pause,
   resume,
+  blocked,
   "claude-profile": claudeProfile,
   crew,
   provider,

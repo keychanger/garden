@@ -52,7 +52,9 @@ import { captureAncestorPids } from "./worker-reap.js";
 import { addAlert } from "./alerts.js";
 import { showBeads, reopenBead, unassignBead } from "./beads.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
-import { dispatchDelayedContinue, dispatchDelayedSeed } from "./continue.js";
+import {
+  clearDoneSentinel, dispatchDelayedContinue, dispatchDelayedSeed, setAwaitingInput,
+} from "./continue.js";
 import { swapVisibleToProject } from "./navigate.js";
 import { workerWindowName as workerWin, parkingWindowName, shellWindowName as shellWin, parseWorkerSuffix } from "./window-names.js";
 
@@ -1337,6 +1339,82 @@ export function holdWorker(project: string, worker: string): HoldDecision {
   refreshDashboard();
   recordOperatorAction(project, worker, entry?.createdAt, entry?.workflow ?? "default", "hold");
   return decision;
+}
+
+// Longest question `garden blocked` will record. The text rides an alert and a
+// status row, so an essay would push the useful part off both; a worker with
+// more to say puts it in its pane and names the decision here.
+export const MAX_BLOCKED_QUESTION_LEN = 280;
+
+export interface BlockedResult {
+  ok: boolean;
+  message: string;
+}
+
+// Park a worker as "blocked on the operator" — the third exit from a turn,
+// beside "keep going" (end the turn, let auto-continue advance you) and "done"
+// (.garden-done). It exists because those two were the only exits available: a
+// worker that has pushed a phase and genuinely cannot proceed without an
+// operator decision had to either write .garden-done — which reads as finished,
+// and arms the holistic whole-task review over a task that is two phases short
+// — or end its turn silently, which reads as an ordinary idle. Neither told the
+// operator their answer was the blocker, so the fact reached exactly one
+// surface: a pane message nobody away from the dashboard was reading.
+//
+// Three writes, deliberately together so no caller can land a partial state:
+//   - the .garden-awaiting-input sentinel, which is what autoContinueSkipReason
+//     already reads to suppress the post-merge prompt;
+//   - .garden-done removed, making the two exits mutually exclusive by
+//     construction — a blocked worker can never finalize as `done`, and so can
+//     never trip the holistic gate;
+//   - entry.blockedQuestion, which lifts the row to the blocked-on-you tier and
+//     carries the question onto it.
+// Plus the alert, which is the surface that actually reaches an absent operator.
+// The operator's next prompt clears all of it (hooks/default.ts).
+export function blockWorker(project: string, worker: string, question: string): BlockedResult {
+  const trimmed = question.trim();
+  if (!trimmed) {
+    return { ok: false, message: "A question is required: garden blocked \"<what you need decided>\"" };
+  }
+  const entry = findWorkerByName(project, worker);
+  if (!entry) return { ok: false, message: `No worker found with name '${worker}'` };
+  if (!entry.worktreePath) {
+    return {
+      ok: false,
+      message:
+        `Worker ${project}/${worker} has no worktreePath in the registry — cannot write the `
+        + `human-gate sentinel, so auto-continue would override the block.`,
+    };
+  }
+  const text = trimmed.length > MAX_BLOCKED_QUESTION_LEN
+    ? `${trimmed.slice(0, MAX_BLOCKED_QUESTION_LEN - 1)}\u2026`
+    : trimmed;
+
+  setAwaitingInput(entry.worktreePath);
+  clearDoneSentinel(entry.worktreePath);
+  updateWorkerFields(project, worker, { blockedQuestion: text });
+  refreshDashboard();
+  log.info("workers", "worker blocked on operator", {
+    worker,
+    data: { project, question: text },
+  });
+  // Stable dedup key on the worker, not the message: a worker re-asking a
+  // reworded version of the same blocker inside the hour is the same standing
+  // condition, and the row already shows the current text.
+  addAlert({
+    level: "warn",
+    source: "workers",
+    project,
+    worker,
+    message: `${worker} is waiting on your decision: ${text}`,
+    dedupKey: `blocked:${project}:${worker}`,
+  });
+  return {
+    ok: true,
+    message:
+      `Blocked ${worker} on your decision. Auto-continue is suppressed and the row is flagged; `
+      + `your next prompt to the pane clears it.`,
+  };
 }
 
 // Release a held worker back to idle without sending a prompt. The next

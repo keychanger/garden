@@ -201,6 +201,20 @@ export interface WorkerEntry {
   // moment a review is armed or launched, and when the branch has nothing to
   // review. Rendered as a yellow row flag by the status pane.
   reviewBlockedReason?: ReviewBlockedReason;
+  // The question a worker stopped to ask the operator, written by
+  // `garden blocked` (dashboard/workers.ts blockWorker). Its PRESENCE is the
+  // "blocked on the operator" signal — workerSortTier lifts the row to the
+  // blocked-on-you tier and the status pane renders the text — and it exists
+  // because the alternative exits are both indistinguishable from progress:
+  // `.garden-done` reads as finished (bold green check, and it arms the
+  // holistic whole-task review on a task that is not whole), while ending the
+  // turn with no commits reads as an ordinary idle. Neither says "your answer
+  // is the blocker", so an operator away from the pane saw nothing at all.
+  // Orthogonal to prState by design: a worker can be blocked while `merged`,
+  // or with no prState at all, so this is a field rather than a state. Cleared
+  // by the operator's next prompt (hooks/default.ts onPromptSubmitted), which
+  // is also what clears the sentinel that gates auto-continue.
+  blockedQuestion?: string;
   // Epoch ms when a mutating tool call (Edit/Write) completed on the worker
   // while its review was in flight (stamped by hooks/default.ts). The reviewer
   // shares the worker's worktree, so the tree under review is being rewritten;
@@ -598,7 +612,8 @@ export function workerSortFreshness(entry: WorkerEntry): number {
 // from top to bottom: things that need you sit at the top, then the work
 // descends through active → in-flight → done as it heads toward merge.
 // Predicates are checked top-down, first match wins:
-//   0  needs you      — blocked on the operator (failing / asking)
+//   0  needs you      — blocked on the operator (failing / asking, or stopped
+//                      to ask via `garden blocked` — see blockedQuestion)
 //   1  new            — launched, awaiting its first prompt (loading / ready)
 //   2  active/recent  — working / idle / paused / exited; ordered by freshness,
 //                       dims when stale (paused excepted — see isWorkerStale)
@@ -614,7 +629,8 @@ export function workerSortFreshness(entry: WorkerEntry): number {
 export const ACTIVE_SORT_TIER = 2;
 export function workerSortTier(entry: WorkerEntry): number {
   const pr = entry.prState;
-  if (pr === "failing" || entry.agentStatus === "asking") return 0;
+  if (pr === "failing" || entry.agentStatus === "asking"
+      || entry.blockedQuestion !== undefined) return 0;
   if (pr === "done") return 4;
   if (pr === "reviewing" || pr === "resolving" || pr === "ci-fixing"
       || pr === "merge-pending" || pr === "merged") return 3;

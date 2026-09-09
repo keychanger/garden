@@ -194,6 +194,16 @@ export function clearAwaitingInput(worktreePath: string | undefined): void {
   try { fs.unlinkSync(awaitingInputPath(worktreePath)); } catch { /* not present */ }
 }
 
+// Written on the worker's behalf by `garden blocked` (workers.ts blockWorker)
+// so the question and the auto-continue suppression are stamped in one place.
+// The file is empty — its presence is the signal; the question itself lives on
+// WorkerEntry.blockedQuestion, where the row renderer and the alert can read it
+// without a filesystem hop.
+export function setAwaitingInput(worktreePath: string | undefined): void {
+  if (!worktreePath) return;
+  try { fs.writeFileSync(awaitingInputPath(worktreePath), ""); } catch { /* worktree gone */ }
+}
+
 function resolveWorkerPaneId(project: string, worker: string): string | null {
   const windowName = workerWin(project, worker);
   const state = readDashState();

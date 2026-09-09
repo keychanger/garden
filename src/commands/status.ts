@@ -54,6 +54,13 @@ interface WorkerInfo {
   // the worker is still in poller state `working`, it just wrote the sentinel
   // and ended its turn. Renders a `?` in the row flags.
   awaitingInput: boolean;
+  // The question a worker stopped to ask, from entry.blockedQuestion (written
+  // by `garden blocked`). Takes the elastic detail column ahead of activity —
+  // for a row waiting on the operator, what it needs decided IS the row's
+  // description, and the detail column is the one that truncates gracefully.
+  // The `?` glyph above carries the same fact into the never-truncating flags,
+  // so a narrow pane still says "blocked" even when the text is gone.
+  blockedQuestion?: string;
   // True when the row's state comes from prState `failing` but the agent is
   // mid-turn (agentStatus `working`) — the operator prompted the failed worker
   // and it is working the problem. The row stays red and still reads `failing`;
@@ -316,7 +323,10 @@ function collectSegments(worker: WorkerInfo, ctx: RowRenderCtx): RowSegments {
     name: worker.name,
     state: stateCell(worker, ctx.now),
     badges,
-    detail: holisticDetail ?? decor.detail ?? (worker.activity ?? ""),
+    // A pending question outranks every other detail: the worker is stopped
+    // until the operator answers, so its last activity summary describes work
+    // that is over, and the question describes the only thing left to do.
+    detail: worker.blockedQuestion ?? holisticDetail ?? decor.detail ?? (worker.activity ?? ""),
     // The model is grey identity like the badges above; renderWorkerRow trails
     // the whole cluster after the detail (see there for why).
     model: formatModelTag(worker.model, worker.runningModel, ctx.projectModel),
@@ -1005,7 +1015,13 @@ function definedBases(workers: WorkerInfo[]): string[] {
 // present). A status-class flag folded into seg.flags so it never truncates —
 // "waiting on you", read at the end of the row like the gate/CI markers.
 function formatAwaitingInputGlyph(worker: WorkerInfo): string {
-  return worker.awaitingInput ? " \x1b[33m?\x1b[0m" : "";
+  // Either source counts. The sentinel is the designer/plan gate's bare `touch`;
+  // blockedQuestion is `garden blocked`, which writes both — but the sentinel
+  // lives in the worktree and the field in the registry, so a worktree that has
+  // gone missing must not silently drop the flag off a row the operator is still
+  // being asked to answer.
+  return (worker.awaitingInput || worker.blockedQuestion !== undefined)
+    ? " \x1b[33m?\x1b[0m" : "";
 }
 
 // Dimmed pencil appended to a project's header row when its diary holds
@@ -1161,6 +1177,7 @@ function collectWorkers(
       lastStateChangeAt: entry?.lastStateChangeAt,
       stale: entry ? isWorkerStale(entry) : false,
       awaitingInput: isAwaitingInput(entry?.worktreePath),
+      blockedQuestion: entry?.blockedQuestion,
       failingBusy: isFailingBusy(entry),
       delegating: isDelegating(entry),
       failCount: entry?.failCount ?? 0,
@@ -1192,6 +1209,7 @@ function collectWorkers(
       lastStateChangeAt: entry?.lastStateChangeAt,
       stale: entry ? isWorkerStale(entry) : false,
       awaitingInput: isAwaitingInput(entry?.worktreePath),
+      blockedQuestion: entry?.blockedQuestion,
       failingBusy: isFailingBusy(entry),
       delegating: isDelegating(entry),
       failCount: entry?.failCount ?? 0,
